@@ -213,6 +213,13 @@ h1{margin:2px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em}
 .tree-container{padding:4px 0}.tree-branch{font-size:9px;letter-spacing:.06em;text-transform:uppercase;flex:0 0 58px}.tree-branch.init{color:var(--vio)}
 .tree-image{margin-left:auto;max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media(max-width:720px){.tree-hint,.tree-image{display:none}.tree-pod-head{flex-wrap:wrap}.tree-container{flex-wrap:wrap}}
+.consolebar{display:grid;grid-template-columns:1.4fr 1fr .8fr auto;gap:10px;align-items:end}.consolebar .f{margin:0}
+.console-security{margin:12px 0 8px;padding:8px 10px;border-radius:9px;background:rgba(74,158,255,.08);border:1px solid rgba(74,158,255,.2);color:var(--mut);font-size:11px}
+.consolestate{padding:6px 9px;border-radius:8px 8px 0 0;background:#18191d;color:var(--ok);font:600 10.5px/1.2 "JetBrains Mono",monospace;border:1px solid #292b31;border-bottom:0}
+.consoleview{height:min(48vh,440px);margin:0;padding:13px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#090a0c;color:#d7dae0;border:1px solid #292b31;
+  font:500 12px/1.5 "JetBrains Mono",monospace;tab-size:4}.console-stderr{color:#ff9fa3}
+.consoleinput{display:flex;gap:8px;margin-top:9px}.consoleinput textarea{min-height:38px;max-height:100px;resize:vertical;font-family:"JetBrains Mono",monospace}
+@media(max-width:820px){.consolebar{grid-template-columns:1fr 1fr}.consolebar .btn{align-self:stretch}.consoleview{height:42vh}}
 .btn.pri{background:#fff;color:#0a0a0b;border-color:#fff}
 .btn.pri:hover{background:#ededf2;box-shadow:0 8px 26px rgba(255,255,255,.2)}
 .btn.sm{padding:6px 11px;font-size:12px;border-radius:9px}

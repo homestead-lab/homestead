@@ -80,6 +80,12 @@ async function applyDeepLink(v, params) {
       detail = params.workload + " logs";
       open = () => wlLogs(params.ns, pod, params.workload, true);
     }
+  } else if (v === "workloads" && params.panel === "console" && params.ns && params.workload) {
+    const workload = (STATE.data.wl || []).find(x => x.ns === params.ns && x.name === params.workload);
+    if (workload) {
+      detail = params.workload + " console";
+      open = () => wlConsole(params.ns, params.workload, true);
+    }
   } else if (v === "storage" && params.panel === "edit" && params.ns && params.volume) {
     const volume = (STATE.data.vols || []).find(x =>
       (x.namespace || "lab") === params.ns && (x.pvc_name || x.name) === params.volume);

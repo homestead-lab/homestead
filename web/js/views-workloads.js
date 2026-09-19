@@ -121,6 +121,7 @@ function renderWorkloads() {
         ${updateError ? `<div class="updateerror">Image check: ${esc(updateError.error)}</div>` : ""}
         <div class="row wacts">
           <button class="btn sm" title="View live container logs" onclick="wlLogs('${w.ns}','${w.pods[0] ? w.pods[0].name : ""}','${w.name}')">${icon("log")}Logs</button>
+          <button class="btn sm" title="Open an audited interactive shell in a running container" data-need="operator" onclick="wlConsole('${w.ns}','${w.name}')">${icon("console")}Console</button>
           <button class="btn sm" title="Edit image, resources, environment, storage and hardware" onclick="wlEdit('${w.ns}','${w.name}')">${icon("edit")}Edit</button>
           <button class="btn sm" title="Move this workload to another eligible host" data-need="operator" onclick="moveWorkload('${w.name}','${w.ns}')">${icon("move")}Move</button>
           <button class="btn sm" title="Restart all pods in this workload" onclick="wlRestart('${w.ns}','${w.name}')">${icon("restart")}Restart</button>
@@ -270,6 +271,112 @@ window.wlLogs = (ns, pod, workload = "", fromRoute = false) => {
   openLogs(pod, `/api/logs?ns=${encodeURIComponent(ns)}&pod=${encodeURIComponent(pod)}`);
 };
 window.jobLogs = (ns, job) => openLogs(job, `/api/logs?ns=${encodeURIComponent(ns)}&job=${encodeURIComponent(job)}`);
+
+/* ---------------- interactive container console ---------------- */
+window.wlConsole = (ns, name, fromRoute = false) => {
+  const workload = (STATE.data.wl || []).find(x => x.ns === ns && x.name === name);
+  if (!workload) return toast("Workload details are not available yet", "bad");
+  const pods = (workload.pods || []).filter(p => p.phase === "Running" && (p.containers || []).some(c => c.kind === "app"));
+  if (!fromRoute && window.setModalRoute) setModalRoute({ panel: "console", ns, workload: name }, name + " console");
+  window.__consoleWorkload = workload;
+  modal("Console · " + name, `<div class="consolebar">
+      <div class="f"><label>Pod</label><select id="consolePod" onchange="consolePodChanged()">
+        ${pods.map(p => `<option value="${esc(p.name)}">${esc(p.name)} · ${esc(p.node || "unscheduled")}</option>`).join("")}
+      </select></div>
+      <div class="f"><label>Container</label><select id="consoleContainer"></select></div>
+      <div class="f"><label>Shell ${tip("Automatic tries /bin/sh, /bin/bash, then /bin/ash. Select one explicitly if the image uses a known shell.")}</label><select id="consoleShell">
+        <option value="auto">automatic</option><option value="/bin/sh">/bin/sh</option><option value="/bin/bash">/bin/bash</option><option value="/bin/ash">/bin/ash</option>
+      </select></div>
+      <button class="btn pri" id="consoleConnect" onclick="consoleConnect()">Connect</button>
+    </div>
+    ${pods.length ? `<div class="console-security">Operator-only · session start and stop are audited; commands and output are not recorded.</div>
+      <div class="consolestate" id="consoleState">not connected</div>
+      <pre class="consoleview" id="consoleView" tabindex="0" aria-label="Container terminal output">Choose a pod and container, then connect.</pre>
+      <div class="consoleinput"><textarea id="consoleInput" rows="1" spellcheck="false" autocomplete="off" placeholder="Type a command · Enter sends · Shift+Enter adds a line"></textarea>
+        <button class="btn" onclick="consoleSend()">Send</button></div>`
+      : `<div class="empty"><b>No running pod with an application container</b><br><span class="dim">Start the workload and wait until its pod is running.</span></div>`}`, true);
+  if (pods.length) consolePodChanged();
+};
+
+window.consolePodChanged = () => {
+  const podName = $("#consolePod")?.value;
+  const pod = (window.__consoleWorkload?.pods || []).find(p => p.name === podName);
+  const select = $("#consoleContainer");
+  if (!select) return;
+  select.innerHTML = (pod?.containers || []).filter(c => c.kind === "app")
+    .map(c => `<option value="${esc(c.name)}">${esc(c.name)} · ${esc(c.state || "unknown")}</option>`).join("");
+};
+
+function consoleWrite(data, stream = "stdout") {
+  const view = $("#consoleView");
+  if (!view) return;
+  if (view.dataset.empty !== "0") { view.textContent = ""; view.dataset.empty = "0"; }
+  const span = document.createElement("span");
+  span.className = stream === "stderr" ? "console-stderr" : "";
+  span.textContent = data;
+  view.appendChild(span);
+  if (view.textContent.length > 250000) view.removeChild(view.firstChild);
+  view.scrollTop = view.scrollHeight;
+}
+
+function consoleSize() {
+  const view = $("#consoleView");
+  if (!view) return { cols: 80, rows: 24 };
+  return { cols: Math.max(20, Math.floor(view.clientWidth / 8.2)), rows: Math.max(5, Math.floor(view.clientHeight / 18)) };
+}
+
+window.consoleConnect = (attempt = 0) => {
+  if (window.__consoleSocket) window.__consoleSocket.close();
+  const pod = $("#consolePod")?.value, container = $("#consoleContainer")?.value;
+  if (!pod || !container) return toast("Choose a running pod and container", "bad");
+  const shells = ["/bin/sh", "/bin/bash", "/bin/ash"];
+  const selected = $("#consoleShell").value;
+  const shell = selected === "auto" ? shells[Math.min(attempt, shells.length - 1)] : selected;
+  const ns = window.__consoleWorkload.ns;
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  const query = new URLSearchParams({ ns, pod, container, shell });
+  const socket = new WebSocket(`${protocol}//${location.host}/api/console?${query}`);
+  window.__consoleSocket = socket;
+  window.__consoleAttempt = attempt;
+  $("#consoleState").textContent = `connecting · ${shell}`;
+  $("#consoleConnect").textContent = "Reconnect";
+  socket.onopen = () => {
+    $("#consoleState").textContent = `connected · ${shell}`;
+    socket.send(JSON.stringify({ type: "resize", ...consoleSize() }));
+    $("#consoleInput").focus();
+  };
+  socket.onmessage = event => {
+    let message;
+    try { message = JSON.parse(event.data); } catch (_) { return; }
+    if (message.type === "output") consoleWrite(message.data, message.stream);
+    else if (message.type === "error") {
+      const canFallback = selected === "auto" && attempt < shells.length - 1 && /not found|executable|no such file/i.test(message.data || "");
+      if (canFallback) { consoleWrite(`\r\n${shell} unavailable; trying ${shells[attempt + 1]}…\r\n`, "stderr"); return consoleConnect(attempt + 1); }
+      consoleWrite(`\r\n${message.data || "Console error"}\r\n`, "stderr");
+    } else if (message.type === "disconnected") $("#consoleState").textContent = `disconnected · ${message.reason || "session ended"}`;
+  };
+  socket.onclose = () => { if (window.__consoleSocket === socket) $("#consoleState").textContent = "disconnected · use Reconnect to try again"; };
+  socket.onerror = () => { if (window.__consoleSocket === socket) $("#consoleState").textContent = "connection unavailable · check role and pod state"; };
+  if (window.__consoleResize) window.__consoleResize.disconnect();
+  window.__consoleResize = new ResizeObserver(() => {
+    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "resize", ...consoleSize() }));
+  });
+  window.__consoleResize.observe($("#consoleView"));
+};
+
+window.consoleSend = () => {
+  const input = $("#consoleInput"), socket = window.__consoleSocket;
+  if (!input || !socket || socket.readyState !== WebSocket.OPEN) return toast("Connect the console first", "bad");
+  socket.send(JSON.stringify({ type: "input", data: input.value + "\n" }));
+  input.value = "";
+};
+document.addEventListener("keydown", event => {
+  if (event.target?.id !== "consoleInput") return;
+  if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); consoleSend(); }
+  else if (event.key.toLowerCase() === "c" && event.ctrlKey && window.__consoleSocket?.readyState === WebSocket.OPEN) {
+    event.preventDefault(); window.__consoleSocket.send(JSON.stringify({ type: "input", data: "\u0003" }));
+  }
+});
 
 /* ---------------- deploy ---------------- */
 let DCFG = { name: "", image: "", icon: "", namespace: "lab", replicas: 1, cpu: "50m", memory: "128Mi",

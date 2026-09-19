@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HARVUI_VERSION = os.environ.get("HARVUI_VERSION", "1.11.0")
+HARVUI_VERSION = os.environ.get("HARVUI_VERSION", "1.12.0")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1235,6 +1235,7 @@ import harvui_place as PLACE
 import harvui_hardware as HW
 import harvui_updates as UPDATES
 import harvui_operations as OPS
+import harvui_console as CONSOLE
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
 LC.bind(kget, ksend, SYS_NS, _cache, HW.features)
 IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.features)
@@ -1243,6 +1244,7 @@ LH.bind(kget, ksend, _cache)
 PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.features)
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS)
 OPS.bind(kget, DATA_DIR, UPDATES.progress)
+CONSOLE_PROXY = CONSOLE.ConsoleProxy(API, TOKEN, CTX, DATA_DIR, SYS_NS, {DEFAULT_NS}, kget)
 
 # Browser routes serve the same authenticated application shell. Keep this an
 # explicit allowlist: an unknown path must not accidentally shadow an API 404.
@@ -1287,6 +1289,8 @@ def needed_role(path, method):
         return "admin"
     if path == "/api/settings" and method != "GET":
         return "admin"
+    if path == "/api/console":
+        return "operator"
     if path in ADMIN_ROUTES:
         return "admin"
     return "viewer" if method == "GET" else "operator"
@@ -1377,6 +1381,8 @@ class H(BaseHTTPRequestHandler):
         try:
             if self._guard(p):
                 return
+            if p == "/api/console":
+                return CONSOLE_PROXY.handle(self, self.user, q)
             if is_spa_route(p) or p == "/index.html":
                 return self._file(f"{WEBROOT}/index.html", "text/html; charset=utf-8")
             if p.startswith("/js/") and p.endswith(".js") and ".." not in p:

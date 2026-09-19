@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HARVUI_VERSION = "1.11.0";
+const HARVUI_VERSION = "1.12.0";
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
   disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 },
@@ -144,6 +144,8 @@ function closeModal(updateRoute = true) {
   $("#modal").classList.add("hidden");
   if (window.__logTimer) { clearInterval(window.__logTimer); window.__logTimer = null; }
   if (window.__updateTimer) { clearInterval(window.__updateTimer); window.__updateTimer = null; }
+  if (window.__consoleSocket) { window.__consoleSocket.close(); window.__consoleSocket = null; }
+  if (window.__consoleResize) { window.__consoleResize.disconnect(); window.__consoleResize = null; }
   if (updateRoute && window.clearModalRoute) window.clearModalRoute();
 }
 
@@ -208,7 +210,7 @@ window.addEventListener("scroll", () => hideTooltip(), true);
 window.addEventListener("resize", () => hideTooltip());
 
 const ACTION_ICONS = [
-  [/^logs?\b/, "log"], [/^edit\b/, "edit"], [/^(move|migrate)\b/, "move"],
+  [/^logs?\b/, "log"], [/^console\b/, "console"], [/^edit\b/, "edit"], [/^(move|migrate)\b/, "move"],
   [/^(restart|reboot)\b/, "restart"], [/^(delete|remove)\b/, "trash"],
   [/^start\b/, "play"], [/^(stop|shut down)\b/, "stop"],
   [/^rollback\b/, "rollback"], [/^update\b/, "update"],

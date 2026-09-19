@@ -87,6 +87,32 @@ subjects:
     name: harvui
     namespace: lab
 ---
+# Interactive exec is deliberately namespace-scoped. The ClusterRole above does
+# not grant pods/exec anywhere else, and the backend also enforces this boundary.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: harvui-console
+  namespace: lab
+rules:
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: harvui-console
+  namespace: lab
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: harvui-console
+subjects:
+  - kind: ServiceAccount
+    name: harvui
+    namespace: lab
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -109,7 +135,7 @@ metadata:
   labels:
     app: harvui
   annotations:
-    harvui.io/update-sources: '{"harvui":"ghcr.io/wjcloudy/harvui:1.10.0"}'
+    harvui.io/update-sources: '{"harvui":"ghcr.io/wjcloudy/harvui:1.12.0"}'
 spec:
   replicas: 1
   strategy:
@@ -159,7 +185,7 @@ spec:
               mountPath: /data
       containers:
         - name: harvui
-          image: ghcr.io/wjcloudy/harvui:1.10.0
+          image: ghcr.io/wjcloudy/harvui:1.12.0
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT
