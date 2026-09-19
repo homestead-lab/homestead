@@ -293,9 +293,11 @@ h1{margin:2px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em}
 .av.appav{overflow:hidden;background:rgba(255,255,255,.08)}.av.appav img{width:100%;height:100%;object-fit:contain;padding:3px}
 .tip{display:inline-grid;place-items:center;width:16px;height:16px;margin-left:3px;border-radius:50%;
   color:var(--low);border:1px solid rgba(74,158,255,.35);font:700 10px/1 sans-serif;cursor:help;position:relative;vertical-align:1px}
-.tip:hover::after,.tip:focus::after{content:attr(data-tip);position:absolute;left:50%;bottom:calc(100% + 9px);transform:translateX(-50%);
-  width:260px;padding:9px 11px;border-radius:10px;background:#111216;border:1px solid var(--line2);color:#e5e5ea;
-  font:500 11.5px/1.45 Inter,system-ui,sans-serif;text-transform:none;letter-spacing:0;box-shadow:0 14px 40px rgba(0,0,0,.7);z-index:90}
+.uitooltip{position:fixed;z-index:10000;width:max-content;max-width:min(280px,calc(100vw - 20px));padding:9px 11px;
+  border-radius:10px;background:#111216;border:1px solid var(--line2);color:#e5e5ea;pointer-events:none;
+  font:500 11.5px/1.45 Inter,system-ui,sans-serif;text-transform:none;letter-spacing:0;
+  box-shadow:0 14px 40px rgba(0,0,0,.7)}
+.uitooltip[hidden]{display:none}
 
 /* detail rows (right-panel style) */
 .drow{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid rgba(255,255,255,.045)}

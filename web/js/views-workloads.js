@@ -95,7 +95,7 @@ function renderWorkloads() {
           ${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</div>
         ${updateError ? `<div class="updateerror">Image check: ${esc(updateError.error)}</div>` : ""}
         <div class="row wacts">
-          <button class="btn sm" title="View live container logs" onclick="wlLogs('${w.ns}','${w.pods[0] ? w.pods[0].name : ""}')">${icon("log")}Logs</button>
+          <button class="btn sm" title="View live container logs" onclick="wlLogs('${w.ns}','${w.pods[0] ? w.pods[0].name : ""}','${w.name}')">${icon("log")}Logs</button>
           <button class="btn sm" title="Edit image, resources, environment, storage and hardware" onclick="wlEdit('${w.ns}','${w.name}')">${icon("edit")}Edit</button>
           <button class="btn sm" title="Move this workload to another eligible host" data-need="operator" onclick="moveWorkload('${w.name}','${w.ns}')">${icon("move")}Move</button>
           <button class="btn sm" title="Restart all pods in this workload" onclick="wlRestart('${w.ns}','${w.name}')">${icon("restart")}Restart</button>
@@ -239,7 +239,8 @@ window.imageRollbackApply = async (ns, name) => {
     monitorImageRollout(ns, name);
   } catch (e) { $("#mbody").innerHTML = `<div class="empty"><b>Rollback could not start</b><br><span class="dim">${esc(e.message)}</span></div>`; }
 };
-window.wlLogs = (ns, pod) => {
+window.wlLogs = (ns, pod, workload = "", fromRoute = false) => {
+  if (!fromRoute && window.setModalRoute) setModalRoute({ panel: "logs", ns, workload: workload || pod }, (workload || pod) + " logs");
   if (!pod) return modal("Logs unavailable", '<div class="empty"><b>No running pod</b><br><span class="dim small">Start the container and wait for Kubernetes to create a pod.</span></div>');
   openLogs(pod, `/api/logs?ns=${encodeURIComponent(ns)}&pod=${encodeURIComponent(pod)}`);
 };

@@ -12,8 +12,9 @@ Legend: **🔨 active** · **⬜ queued** · **⚠️ design decision** · **✅
 
 Work through this roadmap in order, keeping the live cluster usable after each
 increment. The application shell, operation model, transition-aware health,
-and dashboard telemetry polish shipped in v1.10.0. The active milestone is
-finishing resource-detail deep links, followed by consistent actions and help.
+and dashboard telemetry polish shipped in v1.10.0. Refresh-safe node,
+container-edit, container-log, and volume-edit URLs plus URL-backed search ship
+in v1.10.1. The active milestone is consistent actions and help.
 
 ## Product rules
 
@@ -34,7 +35,7 @@ finishing resource-detail deep links, followed by consistent actions and help.
 These are first because every subsequent feature needs navigable URLs, shared
 status semantics, and a consistent way to report background work.
 
-#### 1.1 Direct routes and breadcrumbs — 🔨 primary routes shipped in v1.10.0
+#### 1.1 Direct routes and breadcrumbs — ✅ shipped in v1.10.1
 
 - Give every primary view a stable URL such as `/containers`, `/volumes`,
   `/networking`, `/system/cluster`, and `/settings`.
@@ -64,7 +65,7 @@ status semantics, and a consistent way to report background work.
 - **Done when:** creating a normal container produces a transient activity
   state, not a cluster-degraded alert.
 
-#### 1.4 Consistent actions and help — ⬜ queued (container actions started)
+#### 1.4 Consistent actions and help — 🔨 active
 
 - Add recognizable icons to actions such as Logs, Edit, Move, Console,
   Restart, and Delete while retaining visible labels where ambiguity is likely.

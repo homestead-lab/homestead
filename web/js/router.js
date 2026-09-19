@@ -58,16 +58,29 @@
     return route.path + (suffix ? "?" + suffix : "");
   }
 
-  function breadcrumbs(view) {
-    const route = ROUTES[view] || ROUTES.dash;
-    if (view === "dash" || !ROUTES[view]) {
-      return [{ label: route.label, url: route.path, current: true }];
+  function queryParams(search) {
+    const query = new URLSearchParams(String(search || "").replace(/^\?/, ""));
+    const out = {};
+    for (const [key, value] of query.entries()) {
+      if (Object.prototype.hasOwnProperty.call(out, key)) {
+        out[key] = Array.isArray(out[key]) ? [...out[key], value] : [out[key], value];
+      } else out[key] = value;
     }
-    return [
-      { label: ROUTES.dash.label, url: ROUTES.dash.path, current: false },
-      { label: route.label, url: route.path, current: true },
-    ];
+    return out;
   }
 
-  return Object.freeze({ ROUTES, normalizePath, resolve, urlFor, breadcrumbs });
+  function breadcrumbs(view, detail) {
+    const route = ROUTES[view] || ROUTES.dash;
+    if ((view === "dash" || !ROUTES[view]) && !detail) {
+      return [{ label: route.label, url: route.path, current: true }];
+    }
+    const items = [
+      { label: ROUTES.dash.label, url: ROUTES.dash.path, current: false },
+      { label: route.label, url: route.path, current: !detail },
+    ];
+    if (detail) items.push({ label: String(detail), url: "", current: true });
+    return items;
+  }
+
+  return Object.freeze({ ROUTES, normalizePath, resolve, urlFor, queryParams, breadcrumbs });
 });

@@ -18,36 +18,119 @@ const VIEWS = {
   settings:  ["Settings",       "system",    viewSettings,  false],
 };
 
-function renderBreadcrumb(v) {
+const FILTERABLE_VIEWS = new Set(["workloads", "storage", "images", "events", "store"]);
+
+function routeParamsForView(v, extra = {}) {
+  const params = FILTERABLE_VIEWS.has(v) && STATE.q ? { q: STATE.q } : {};
+  return Object.assign(params, extra);
+}
+
+function renderBreadcrumb(v, detail = "") {
   const host = $("#crumb");
-  host.innerHTML = HarvRouter.breadcrumbs(v).map((item, index) => {
+  host.innerHTML = HarvRouter.breadcrumbs(v, detail).map((item, index) => {
     const sep = index ? '<span class="crumbsep" aria-hidden="true">/</span>' : "";
     return sep + (item.current
       ? `<span aria-current="page">${esc(item.label)}</span>`
-      : `<a href="${esc(item.url)}" data-route-view="dash">${esc(item.label)}</a>`);
+      : `<a href="${esc(item.url)}" data-route-view="${esc(HarvRouter.resolve(item.url).view)}">${esc(item.label)}</a>`);
   }).join("");
   $$("a[data-route-view]", host).forEach(a => a.onclick = e => {
     e.preventDefault(); go(a.dataset.routeView);
   });
 }
+window.renderBreadcrumb = renderBreadcrumb;
+
+function setModalRoute(params, detail) {
+  STATE.modalRoute = true;
+  STATE.modalDetail = detail || "";
+  const url = HarvRouter.urlFor(STATE.view, routeParamsForView(STATE.view, params));
+  const current = window.location.pathname + window.location.search;
+  if (url !== current) window.history.pushState({ view: STATE.view, modal: true }, "", url);
+  renderBreadcrumb(STATE.view, STATE.modalDetail);
+}
+window.setModalRoute = setModalRoute;
+
+function clearModalRoute() {
+  if (!STATE.modalRoute) return;
+  STATE.modalRoute = false;
+  STATE.modalDetail = "";
+  STATE.deepLinkToken = "";
+  const url = HarvRouter.urlFor(STATE.view, routeParamsForView(STATE.view));
+  window.history.replaceState({ view: STATE.view }, "", url);
+  renderBreadcrumb(STATE.view);
+}
+window.clearModalRoute = clearModalRoute;
+
+async function applyDeepLink(v, params) {
+  const token = window.location.pathname + window.location.search;
+  if (STATE.deepLinkToken === token) return;
+  STATE.deepLinkToken = token;
+
+  let detail = "";
+  let open = null;
+  if (v === "nodes" && params.node) {
+    detail = params.node;
+    open = () => nodeDetail(params.node, true);
+  } else if (v === "workloads" && params.panel === "edit" && params.ns && params.workload) {
+    detail = params.workload;
+    open = () => wlEdit(params.ns, params.workload, true);
+  } else if (v === "workloads" && params.panel === "logs" && params.ns && params.workload) {
+    const workload = (STATE.data.wl || []).find(x => x.ns === params.ns && x.name === params.workload);
+    const pod = workload?.pods?.[0]?.name || "";
+    if (workload) {
+      detail = params.workload + " logs";
+      open = () => wlLogs(params.ns, pod, params.workload, true);
+    }
+  } else if (v === "storage" && params.panel === "edit" && params.ns && params.volume) {
+    const volume = (STATE.data.vols || []).find(x =>
+      (x.namespace || "lab") === params.ns && (x.pvc_name || x.name) === params.volume);
+    if (volume) {
+      detail = params.volume;
+      open = () => volumeEdit(volume, true);
+    }
+  }
+
+  const requested = params.node || params.panel;
+  if (!open) {
+    if (requested) {
+      toast("That linked resource is no longer available", "bad");
+      STATE.modalRoute = true;
+      clearModalRoute();
+    }
+    return;
+  }
+  STATE.modalRoute = true;
+  STATE.modalDetail = detail;
+  renderBreadcrumb(v, detail);
+  open();
+}
 
 function go(v, options = {}) {
   if (!VIEWS[v]) return;
+  if (!$("#modal").classList.contains("hidden")) closeModal(false);
   STATE.view = v;
+  const locationParams = options.fromLocation ? HarvRouter.queryParams(window.location.search) : null;
+  if (locationParams) {
+    STATE.q = typeof locationParams.q === "string" ? locationParams.q.trim() : "";
+    $("#globalSearch").value = STATE.q;
+  }
   const [t, , fn] = VIEWS[v];
   $("#title").textContent = t;
   renderBreadcrumb(v);
   document.title = `${t} · HarvUI`;
   if (options.history !== false) {
-    const url = HarvRouter.urlFor(v, options.params);
+    const url = HarvRouter.urlFor(v, options.params || routeParamsForView(v));
     const current = window.location.pathname + window.location.search;
     if (url !== current) window.history[options.replace ? "replaceState" : "pushState"]({ view: v }, "", url);
   }
+  STATE.modalRoute = false;
+  STATE.modalDetail = "";
+  STATE.deepLinkToken = "";
   $$("#nav a").forEach(a => a.classList.toggle("on", a.dataset.view === v));
   closeNav();
   resetPaint();
   V().innerHTML = `<div class="empty"><span class="spin2"></span>loading…</div>`;
-  Promise.resolve(fn()).catch(e => { resetPaint(); V().innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
+  Promise.resolve(fn()).then(() => applyDeepLink(v, locationParams || options.params || {}))
+    .catch(e => { resetPaint(); V().innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
 }
 window.go = go;
 
@@ -80,9 +163,9 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
 /* ---------------- nav ---------------- */
 $$("#nav a").forEach(a => a.onclick = e => { e.preventDefault(); go(a.dataset.view); });
 window.addEventListener("popstate", () => {
-  closeModal();
+  closeModal(false);
   const route = HarvRouter.resolve(window.location.pathname);
-  go(route.view, { history: false });
+  go(route.view, { history: false, fromLocation: true });
 });
 function openNav() { document.body.classList.add("navopen"); }
 function closeNav() { document.body.classList.remove("navopen"); }
@@ -131,6 +214,10 @@ async function globalSearch(q) {
 }
 $("#globalSearch").addEventListener("input", e => {
   STATE.q = e.target.value.trim();
+  if (FILTERABLE_VIEWS.has(STATE.view)) {
+    const url = HarvRouter.urlFor(STATE.view, routeParamsForView(STATE.view));
+    window.history.replaceState({ view: STATE.view }, "", url);
+  }
   if (STATE.view === "workloads") renderWorkloads();
   else if (STATE.view === "storage") viewStorage();
   else if (STATE.view === "images") viewImages();

@@ -1,7 +1,8 @@
 /* Edit / move containers, node power actions, VMs, images, schedules, import */
 
 /* ---------------- edit a container ---------------- */
-window.wlEdit = async (ns, name) => {
+window.wlEdit = async (ns, name, fromRoute = false) => {
+  if (!fromRoute && window.setModalRoute) setModalRoute({ panel: "edit", ns, workload: name }, name);
   modal("Edit · " + name, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
   try {
     const [w, liveNodes] = await Promise.all([

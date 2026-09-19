@@ -206,7 +206,7 @@ async function afterAuth() {
   paintWho();
   await loadHealthSettings();
   const route = HarvRouter.resolve(window.location.pathname);
-  go(route.view, { history: false });
+  go(route.view, { history: false, fromLocation: true });
   startLoop();
   if (window.startOperationChecks) window.startOperationChecks();
   if (window.startUpdateChecks) window.startUpdateChecks();

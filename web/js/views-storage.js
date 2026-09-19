@@ -191,12 +191,15 @@ window.volumeCreateNow = async () => {
   try { await api("/api/volumes/create", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(`${body.name} created`, "ok"); closeModal(); resetPaint(); viewStorage(); } catch (e) { toast(e.message, "bad"); }
 };
-window.volumeEdit = x => modal("Edit · " + (x.pvc_name || x.name), `
+window.volumeEdit = (x, fromRoute = false) => {
+  if (!fromRoute && window.setModalRoute) setModalRoute({ panel: "edit", ns: x.namespace || "lab", volume: x.pvc_name || x.name }, x.pvc_name || x.name);
+  modal("Edit · " + (x.pvc_name || x.name), `
   <div class="f2"><div class="f"><label>Size (GB) ${tip("Volumes can be grown but not shrunk.")}</label><input id="ve_size" type="number" min="${Math.ceil(x.size_gb)}" value="${Math.ceil(x.size_gb)}"></div>
   <div class="f"><label>Replica count</label><input id="ve_reps" type="number" min="1" max="5" value="${x.replicas}"></div></div>
   <div class="note"><b>${esc((x.access_modes || []).join(", ") || "Access mode unknown")}</b> · ${esc(x.storage_class || "storage class unknown")}<br>
   Kubernetes locks access mode and storage class after a claim is bound. To change RWO ↔ RWX, create a new volume and migrate the data.</div>
   <div class="row" style="margin-top:16px"><button class="btn pri" onclick="volumeEditNow('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}')">Save</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+};
 window.volumeEditNow = async (namespace, name) => {
   const body = { namespace, name, size_gb: +$("#ve_size").value, replicas: +$("#ve_reps").value };
   try { await api("/api/volumes/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });

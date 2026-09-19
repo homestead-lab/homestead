@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HARVUI_VERSION = "1.10.0";
+const HARVUI_VERSION = "1.10.1";
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
   disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 },
@@ -136,14 +136,75 @@ function modal(t, h, wide) {
   $(".modalbox").classList.toggle("wide", !!wide);
   $("#modal").classList.remove("hidden");
 }
-function closeModal() {
+function closeModal(updateRoute = true) {
   if (window.__hardwareReturn && /hardware feature/i.test($("#mtitle").textContent)) {
     return hardwareManagerBack();
   }
   $("#modal").classList.add("hidden");
   if (window.__logTimer) { clearInterval(window.__logTimer); window.__logTimer = null; }
   if (window.__updateTimer) { clearInterval(window.__updateTimer); window.__updateTimer = null; }
+  if (updateRoute && window.clearModalRoute) window.clearModalRoute();
 }
+
+/* ---------------- shared, viewport-safe tooltips ---------------- */
+let tooltipOwner = null;
+function tooltipTarget(node) {
+  return node instanceof Element ? node.closest("[data-tip],[title]") : null;
+}
+function hideTooltip(owner) {
+  if (owner && owner !== tooltipOwner) return;
+  const bubble = $("#uiTooltip");
+  if (bubble) bubble.hidden = true;
+  if (tooltipOwner) tooltipOwner.removeAttribute("aria-describedby");
+  tooltipOwner = null;
+}
+function showTooltip(owner) {
+  if (!owner) return;
+  const nativeTitle = owner.getAttribute("title");
+  if (nativeTitle && !owner.dataset.tip) owner.dataset.tip = nativeTitle;
+  if (nativeTitle) owner.removeAttribute("title");
+  const message = owner.dataset.tip;
+  if (!message) return;
+
+  let bubble = $("#uiTooltip");
+  if (!bubble) {
+    bubble = document.createElement("div");
+    bubble.id = "uiTooltip";
+    bubble.className = "uitooltip";
+    bubble.setAttribute("role", "tooltip");
+    document.body.appendChild(bubble);
+  }
+  hideTooltip();
+  tooltipOwner = owner;
+  owner.setAttribute("aria-describedby", "uiTooltip");
+  if (!owner.getAttribute("aria-label") && owner.matches(".iconbtn")) owner.setAttribute("aria-label", message);
+  bubble.textContent = message;
+  bubble.hidden = false;
+
+  const rect = owner.getBoundingClientRect();
+  const gap = 9;
+  const margin = 10;
+  const width = bubble.offsetWidth;
+  const height = bubble.offsetHeight;
+  const left = Math.max(margin, Math.min(rect.left + rect.width / 2 - width / 2, window.innerWidth - width - margin));
+  const above = rect.top - height - gap;
+  const top = above >= margin ? above : Math.min(window.innerHeight - height - margin, rect.bottom + gap);
+  bubble.style.left = Math.round(left) + "px";
+  bubble.style.top = Math.round(Math.max(margin, top)) + "px";
+}
+document.addEventListener("pointerover", e => {
+  const owner = tooltipTarget(e.target);
+  if (owner && !owner.contains(e.relatedTarget)) showTooltip(owner);
+});
+document.addEventListener("pointerout", e => {
+  if (tooltipOwner && tooltipOwner.contains(e.target) && !tooltipOwner.contains(e.relatedTarget)) hideTooltip(tooltipOwner);
+});
+document.addEventListener("focusin", e => showTooltip(tooltipTarget(e.target)));
+document.addEventListener("focusout", e => {
+  if (tooltipOwner && tooltipOwner.contains(e.target)) hideTooltip(tooltipOwner);
+});
+window.addEventListener("scroll", () => hideTooltip(), true);
+window.addEventListener("resize", () => hideTooltip());
 
 /* ---------------- no-flash rendering ----------------
    Re-rendering innerHTML on every poll is what makes the page flash and lose

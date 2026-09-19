@@ -172,7 +172,8 @@ function nodeCard(n) {
     </div></div>`;
 }
 
-window.nodeDetail = async name => {
+window.nodeDetail = async (name, fromRoute = false) => {
+  if (!fromRoute && window.setModalRoute) setModalRoute({ node: name }, name);
   modal("Node · " + name, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
   try {
     const n = await api("/api/node?name=" + encodeURIComponent(name));

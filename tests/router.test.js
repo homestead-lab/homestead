@@ -38,4 +38,15 @@ test("breadcrumbs link child views back to dashboard", () => {
   assert.deepEqual(router.breadcrumbs("dash"), [
     { label: "Dashboard", url: "/", current: true },
   ]);
+  assert.deepEqual(router.breadcrumbs("nodes", "harvester-node1"), [
+    { label: "Dashboard", url: "/", current: false },
+    { label: "Nodes", url: "/nodes", current: false },
+    { label: "harvester-node1", url: "", current: true },
+  ]);
+});
+
+test("query parsing retains filters and repeated values", () => {
+  assert.deepEqual(router.queryParams("?q=media+files&state=attached&state=faulted"), {
+    q: "media files", state: ["attached", "faulted"],
+  });
 });
