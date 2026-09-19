@@ -6,8 +6,14 @@ Everything destructive here is guarded. The guards are the point of this module 
 the raw API calls are three lines each.
 """
 import json
+import os
 import time
 import urllib.error
+
+# Rebooting a host needs a privileged pod that enters the host namespaces.
+# That is a real escape hatch, so it is off unless the operator opts in on the
+# Deployment with ENABLE_NODE_POWER=true.
+NODE_POWER_ENABLED = os.environ.get("ENABLE_NODE_POWER", "").lower() in ("1", "true", "yes")
 
 # injected by server.py so this module stays import-cycle free
 kget = ksend = None
@@ -177,6 +183,11 @@ def node_power(node, action, drain_first=True):
     the node that enters the host's namespaces and asks systemd. The pod is the
     only way in without SSH credentials.
     """
+    if not NODE_POWER_ENABLED:
+        raise PermissionError(
+            "Host power control is disabled. It needs a privileged helper pod that enters the "
+            "host namespaces, so it ships off. Set ENABLE_NODE_POWER=true on the harvui "
+            "Deployment to turn it on. Cordon and drain work regardless.")
     if action not in ("reboot", "poweroff"):
         raise ValueError("action must be reboot or poweroff")
     ok, why, rep = node_action_check(node, action)

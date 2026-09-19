@@ -10,6 +10,7 @@ Step 2 is the part that takes real time, so it runs as a Job we can poll.
 """
 import json
 import re
+import shlex
 import time
 import urllib.error
 
@@ -103,9 +104,11 @@ def browse_source(name, path=None):
     """
     s = _source(name)
     p = path or s.get("base_path", "/mnt/user/appdata")
-    script = (f"sshpass -p \"$SRC_PASS\" ssh -o StrictHostKeyChecking=no "
-              f"-o UserKnownHostsFile=/dev/null {s['user']}@{s['host']} "
-              f"'ls -1 {p} 2>/dev/null | head -200'")
+    remote_cmd = f"ls -1 {shlex.quote(p)} 2>/dev/null | head -200"
+    script = ("sshpass -p \"$SRC_PASS\" ssh -o StrictHostKeyChecking=no "
+              "-o UserKnownHostsFile=/dev/null "
+              + shlex.quote(f"{s['user']}@{s['host']}") + " "
+              + shlex.quote(remote_cmd))
     return run_probe(f"browse-{name}", script, s)
 
 
@@ -175,15 +178,18 @@ def import_container(cfg):
     except urllib.error.HTTPError:
         pass
 
+    # remote_path arrives from the UI, so every interpolated value is quoted.
+    spec = shlex.quote(f"{src['user']}@{src['host']}:{remote.rstrip('/')}/")
+    banner = shlex.quote(f"==> copying {src['host']}:{remote} -> /appdata")
     script = (
         "set -e\n"
         "apk add --no-cache rsync openssh-client sshpass >/dev/null 2>&1\n"
-        "echo '==> copying %s:%s -> /appdata'\n"
+        f"echo {banner}\n"
         "sshpass -p \"$SRC_PASS\" rsync -aH --info=progress2 --no-perms --no-owner --no-group "
         "-e 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' "
-        "\"%s@%s:%s/\" /appdata/\n"
+        f"{spec} /appdata/\n"
         "echo '==> done'; du -sh /appdata\n"
-    ) % (src["host"], remote, src["user"], src["host"], remote.rstrip("/"))
+    )
 
     body = {
         "apiVersion": "batch/v1", "kind": "Job",

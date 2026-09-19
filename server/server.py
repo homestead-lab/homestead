@@ -939,7 +939,8 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/shares":
                 return self._send(200, list_shares())
             if p == "/api/quorum":
-                return self._send(200, LC.quorum_report())
+                r = LC.quorum_report(); r["power_enabled"] = LC.NODE_POWER_ENABLED
+                return self._send(200, r)
             if p == "/api/vms":
                 return self._send(200, cached("vms", 5, IMP.list_vms))
             if p == "/api/vmimages":

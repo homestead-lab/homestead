@@ -87,6 +87,7 @@ window.nodeActions = async name => {
   try { qr = await api("/api/quorum"); } catch (e) { }
   const isEtcd = (qr.members || []).includes(name);
   const risky = isEtcd && qr.can_lose < 1;
+  const off = qr.power_enabled === false;
   modal("Host actions · " + name, `
     <div class="grid g2" style="gap:12px">
       <div class="card flat"><div class="ctitle">Scheduling</div>
@@ -107,7 +108,11 @@ window.nodeActions = async name => {
       </div>
     </div>
     <div class="sec">Power</div>
-    ${risky ? `<div class="note" style="border-color:rgba(255,77,79,.35);background:rgba(255,77,79,.08);color:#ffb4b8">
+    ${off ? `<div class="note"><b>Host power control is disabled.</b> Rebooting needs a privileged
+        helper pod that enters the host namespaces, so it ships off. Set
+        <span class="mono">ENABLE_NODE_POWER=true</span> on the harvui Deployment to enable it.
+        Cordon and drain above work regardless.</div>`
+      : risky ? `<div class="note" style="border-color:rgba(255,77,79,.35);background:rgba(255,77,79,.08);color:#ffb4b8">
         <b>Blocked.</b> ${(qr.ready || []).length} of ${qr.total} etcd members are ready and quorum needs
         ${qr.quorum_needs}. Taking this host down would lose the cluster. Bring the other members back first.</div>`
       : `<p class="muted small">The host is cordoned and drained first, then a privileged helper pod
