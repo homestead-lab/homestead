@@ -548,3 +548,23 @@ html[data-motion="off"] .uptime .ld{animation:none}
   .f2,.f3{grid-template-columns:1fr}
   .opts{grid-template-columns:1fr 1fr}
 }
+
+/* ---------------- auth ---------------- */
+#gate{position:fixed;inset:0;z-index:200;display:grid;place-items:center;padding:22px;
+  background:rgba(4,4,6,.72);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
+#gate.hidden{display:none}
+.gatebox{width:min(400px,94vw);border-radius:22px;padding:30px;
+  background:linear-gradient(158deg,rgba(255,255,255,.1),rgba(255,255,255,.035));
+  backdrop-filter:blur(40px) saturate(1.3);-webkit-backdrop-filter:blur(40px) saturate(1.3);
+  border:1px solid var(--line2);box-shadow:0 34px 90px rgba(0,0,0,.7);
+  animation:pop .35s var(--e)}
+.gatebox .mark{width:46px;height:46px;border-radius:14px;font-size:21px;margin:0 auto 16px}
+.gatebox h2{margin:0 0 4px;text-align:center;font-size:19px;font-weight:700}
+.gatebox p.sub{margin:0 0 22px;text-align:center;color:var(--mut);font-size:12.5px}
+.gateerr{border-radius:11px;padding:10px 13px;font-size:12.5px;margin-bottom:14px;
+  background:rgba(255,77,79,.11);border:1px solid rgba(255,77,79,.3);color:#ffb4b8}
+.gatehint{margin-top:16px;font-size:11px;color:var(--dim);text-align:center;line-height:1.6}
+.whoami{display:flex;align-items:center;gap:9px;padding:5px 12px 5px 5px;border-radius:999px;cursor:pointer;
+  background:rgba(255,255,255,.05);border:1px solid var(--line);transition:all .2s var(--e)}
+.whoami:hover{background:rgba(255,255,255,.1);border-color:var(--line2)}
+.whoami .nm{font-size:12.5px;font-weight:620}

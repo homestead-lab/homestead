@@ -59,16 +59,31 @@ Set on the Deployment:
 | `SMB_NAMESPACE` | `lab` | where the samba deployment lives |
 | `STORAGE_CLASS` | `longhorn-r2` | StorageClass for new volumes |
 | `LB_IP` | — | VIP that kube-vip advertises for services |
+| `SESSION_TTL_HOURS` | `12` | how long a sign-in lasts |
+| `ENABLE_NODE_POWER` | unset | `true` allows host reboot/shutdown |
 
 ## Security
 
-> **HarvUI has no authentication.** Anyone who can reach its port can deploy and
-> delete workloads. It is intended for a trusted LAN. Do not expose it to the
-> internet. Adding auth is tracked in [PLAN.md](PLAN.md).
+**Authentication.** On first visit HarvUI asks you to create an administrator
+account; until then every API route returns 401. Passwords are PBKDF2-HMAC-SHA256
+(600k iterations, per-user salt) stored in the `harvui-auth` Secret. Sessions are
+stateless HMAC-signed tokens in an `HttpOnly; SameSite=Strict` cookie, valid 12
+hours, so a pod restart does not sign everyone out. Mutating requests must also
+carry an `X-HarvUI-Auth` header, which a cross-site form cannot set. Login is
+rate-limited to 8 attempts per 5 minutes per client. Changing a password bumps a
+per-user version counter, which invalidates that user's other sessions.
 
-The ServiceAccount is scoped in `deploy/deploy.yaml`: read on nodes, pods,
-Longhorn and KubeVirt; write limited to Deployments, Services, PVCs and
-ConfigMaps.
+> **Transport is plain HTTP.** The session cookie cannot be marked `Secure`, so
+> it travels in the clear on your LAN. Put HarvUI behind a TLS ingress before
+> trusting it on an untrusted network, and never expose it to the internet.
+
+> **Host power control is disabled by default.** Reboot/shutdown creates a
+> privileged pod that enters the host namespaces. Set `ENABLE_NODE_POWER=true`
+> on the Deployment to enable it. Cordon and drain work regardless.
+
+> **There are no roles.** Every account can deploy, move, drain and delete.
+
+The ServiceAccount is scoped in `deploy/deploy.yaml`.
 
 ## Licence
 

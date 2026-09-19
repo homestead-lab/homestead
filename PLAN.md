@@ -113,8 +113,8 @@ Phases 1–3 are solid.
 
 ## Not yet scheduled
 
-- **Authentication.** HarvUI is unauthenticated, and it can now edit, move, drain,
-  migrate and import. This is the highest-priority remaining item by some margin.
+- ~~**Authentication.**~~ ✅ Done — accounts, sessions, CSRF, rate limiting.
+  Still missing: roles (every account is an admin) and TLS.
 - Backups / restore of workload definitions.
 - Multi-cluster.
 
@@ -148,7 +148,7 @@ Phases 1–4 are deployed and reachable at the cluster VIP. Remaining:
 
 | Item | Why it is still open |
 |---|---|
-| Authentication | Nothing gates the UI. Now the top priority. |
+| ~~Authentication~~ | ✅ Done. Follow-ups: **TLS** (cookie cannot be `Secure` over HTTP) and **roles** (no read-only accounts yet). |
 | 2.5a node temperatures | Needs a privileged DaemonSet reading `/sys/class/thermal`. |
 | 3.6 pod↔container regrouping | Needs a clear model for what "merge two workloads" should mean. |
 | 4.5b VM import | Disk conversion (qcow2/vmdk → PVC) via CDI; separate from container import. |

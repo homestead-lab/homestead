@@ -44,6 +44,7 @@ window.refresh = refresh;
 let timer = null;
 function startLoop() {
   clearInterval(timer);
+  clearInterval(window.__loopTimer);
   const s = Math.max(5, +SET.refresh || 15);
   timer = setInterval(() => {
     if (document.hidden) return;                       // tab in background
@@ -51,6 +52,7 @@ function startLoop() {
     if ($("#drawer").classList.contains("open")) return;   // settings open
     refresh();
   }, s * 1000);
+  window.__loopTimer = timer;
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 
@@ -117,5 +119,6 @@ window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", ()
 });
 window.addEventListener("resize", () => { if (STATE.view === "flow") drawArch(); });
 
-go("dash");
-startLoop();
+/* boot is driven by auth.js -> afterAuth(), so the app never renders
+   (or starts polling) before we know who is signed in. */
+window.__loopTimer = null;

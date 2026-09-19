@@ -867,8 +867,14 @@ sys.modules["harvui_shim"] = _shim
 
 import harvui_lifecycle as LC
 import harvui_imports as IMP
+import harvui_auth as AUTH
 LC.bind(kget, ksend, SYS_NS, _cache)
 IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache)
+AUTH.bind(kget, ksend, DEFAULT_NS)
+
+# Paths reachable without a session. Everything else needs one.
+PUBLIC = {"/healthz", "/style.css", "/index.html", "/",
+          "/api/auth/login", "/api/auth/state", "/api/auth/setup"}
 
 
 # ---------------------------------------------------------------- HTTP
@@ -877,6 +883,8 @@ class H(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *a):
         pass
+
+    _extra_headers = None
 
     def _send(self, code, body, ctype="application/json"):
         if isinstance(body, (dict, list)):
@@ -887,6 +895,8 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for k, v in (self._extra_headers or []):
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
@@ -897,14 +907,56 @@ class H(BaseHTTPRequestHandler):
         except FileNotFoundError:
             self._send(404, {"error": "not found"})
 
+    # ---------------------------------------------------------- auth
+    def _cookies(self):
+        raw = self.headers.get("Cookie") or ""
+        out = {}
+        for part in raw.split(";"):
+            if "=" in part:
+                k, v = part.strip().split("=", 1)
+                out[k] = v
+        return out
+
+    def _set_cookie(self, token, clear=False):
+        if clear:
+            self._extra_headers.append(
+                ("Set-Cookie", f"{AUTH.COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"))
+        else:
+            self._extra_headers.append(
+                ("Set-Cookie", f"{AUTH.COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; "
+                               f"Max-Age={AUTH.SESSION_TTL}"))
+
+    def _who(self):
+        return AUTH.verify_token(self._cookies().get(AUTH.COOKIE))
+
+    def _guard(self, path):
+        """Returns None when the request may proceed, or sends the refusal."""
+        if path in PUBLIC or (path.startswith("/js/") and path.endswith(".js")):
+            return None
+        user = self._who()
+        if not user:
+            self._send(401, {"error": "not signed in", "auth": False})
+            return True
+        # CSRF: the cookie is SameSite=Strict, and mutations additionally require a
+        # header that a cross-site form cannot set.
+        if self.command in ("POST", "DELETE", "PUT", "PATCH"):
+            if self.headers.get("X-HarvUI-Auth") != "1":
+                self._send(403, {"error": "missing X-HarvUI-Auth header"})
+                return True
+        self.user = user
+        return None
+
     def _body(self):
         n = int(self.headers.get("Content-Length") or 0)
         return json.loads(self.rfile.read(n).decode()) if n else {}
 
     def do_GET(self):
+        self._extra_headers = []
         u = urllib.parse.urlparse(self.path)
         p, q = u.path, urllib.parse.parse_qs(u.query)
         try:
+            if self._guard(p):
+                return
             if p == "/" or p == "/index.html":
                 return self._file(f"{WEBROOT}/index.html", "text/html; charset=utf-8")
             if p.startswith("/js/") and p.endswith(".js") and ".." not in p:
@@ -915,6 +967,10 @@ class H(BaseHTTPRequestHandler):
                 return self._file(f"{WEBROOT}/style.css", "text/css")
             if p == "/healthz":
                 return self._send(200, {"ok": True})
+            if p == "/api/auth/state":
+                return self._send(200, {"setup": AUTH.needs_setup(), "user": self._who()})
+            if p == "/api/auth/users":
+                return self._send(200, AUTH.list_users())
             if p == "/api/overview":
                 return self._send(200, cached("ov", 5, get_overview))
             if p == "/api/nodes":
@@ -1009,10 +1065,43 @@ class H(BaseHTTPRequestHandler):
             return self._send(500, {"error": str(e)})
 
     def do_POST(self):
+        self._extra_headers = []
         u = urllib.parse.urlparse(self.path)
         p = u.path
         try:
+            if self._guard(p):
+                return
             b = self._body()
+            addr = self.headers.get("X-Forwarded-For") or self.client_address[0]
+            if p == "/api/auth/setup":
+                AUTH.create_user(b.get("username"), b.get("password"), first_only=True)
+                tok = AUTH.issue_token((b.get("username") or "").strip().lower())
+                self._set_cookie(tok)
+                return self._send(200, {"ok": True, "user": b.get("username")})
+            if p == "/api/auth/login":
+                try:
+                    tok = AUTH.login(b.get("username"), b.get("password"), addr)
+                except PermissionError as e:
+                    return self._send(401, {"error": str(e)})
+                self._set_cookie(tok)
+                return self._send(200, {"ok": True, "user": (b.get("username") or "").strip().lower()})
+            if p == "/api/auth/logout":
+                self._set_cookie("", clear=True)
+                return self._send(200, {"ok": True})
+            if p == "/api/auth/password":
+                AUTH.change_password(self.user, b.get("old"), b.get("new"))
+                self._set_cookie(AUTH.issue_token(self.user))
+                return self._send(200, {"ok": True})
+            if p == "/api/auth/users":
+                AUTH.create_user(b.get("username"), b.get("password"))
+                return self._send(200, {"ok": True, "users": AUTH.list_users()})
+            if p == "/api/auth/users/delete":
+                AUTH.delete_user(b.get("username"), self.user)
+                return self._send(200, {"ok": True, "users": AUTH.list_users()})
+            if p == "/api/auth/signout-everywhere":
+                AUTH.logout_everywhere(self.user)
+                self._set_cookie("", clear=True)
+                return self._send(200, {"ok": True})
             if p == "/api/deploy":
                 dep, svc = build_deployment(b)
                 ns = dep["metadata"]["namespace"]
@@ -1106,13 +1195,20 @@ class H(BaseHTTPRequestHandler):
                 dep, svc = build_deployment(b)
                 return self._send(200, {"deployment": dep, "service": svc})
             return self._send(404, {"error": "no route"})
+        except PermissionError as e:
+            return self._send(403, {"error": str(e)})
+        except ValueError as e:
+            return self._send(400, {"error": str(e)})
         except urllib.error.HTTPError as e:
             return self._send(e.code, {"error": e.read().decode("utf-8", "replace")[:600]})
         except Exception as e:
             return self._send(500, {"error": str(e)})
 
     def do_DELETE(self):
+        self._extra_headers = []
         u = urllib.parse.urlparse(self.path)
+        if self._guard(urllib.parse.urlparse(self.path).path):
+            return
         parts = [x for x in u.path.split("/") if x]
         try:
             if len(parts) == 4 and parts[:2] == ["api", "workload"]:

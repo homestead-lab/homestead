@@ -54,6 +54,8 @@
   </defs>
 </svg>
 
+<div id="gate" class="hidden"><div class="gatebox" id="gatebox"></div></div>
+
 <div id="app">
   <aside class="side">
     <div class="brand">
@@ -101,6 +103,8 @@
         </div>
         <div class="iconbtn" id="refresh" title="Refresh"><svg><use href="#i-refresh"/></svg></div>
         <div class="iconbtn" id="opensettings" title="Settings"><svg><use href="#i-gear"/></svg></div>
+        <div class="whoami" id="whoami" title="Account"><div class="av" id="whoav">?</div>
+          <span class="nm" id="whonm">—</span></div>
       </div>
     </header>
     <div class="page" id="views"></div>
@@ -125,6 +129,12 @@
   <div class="dsec"><h5>Motion</h5><p>Animated data-flow along connectors</p>
     <div class="opts" id="optMotion" style="grid-template-columns:repeat(2,1fr)">
       <div class="opt" data-v="on">On</div><div class="opt" data-v="off">Reduced</div></div></div>
+  <div class="dsec"><h5>Account</h5><p>Signed in as <b id="setUser">—</b></p>
+    <div class="row" style="gap:8px">
+      <button class="btn sm" onclick="pwChange()">Change password</button>
+      <button class="btn sm" onclick="manageUsers()">Users</button>
+      <button class="btn sm danger" onclick="doLogout()">Sign out</button>
+    </div></div>
   <div class="dsec"><h5>Cluster</h5>
     <div class="drow"><div class="dl">VIP</div><div class="dv mono" id="setVip">—</div></div>
     <div class="drow"><div class="dl">Nodes</div><div class="dv mono" id="setNodes">—</div></div>
@@ -143,5 +153,6 @@
 <script src="/js/views-storage.js"></script>
 <script src="/js/views-lifecycle.js"></script>
 <script src="/js/app.js"></script>
+<script src="/js/auth.js"></script>
 </body>
 </html>
