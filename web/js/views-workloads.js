@@ -11,11 +11,19 @@ async function viewWorkloads() {
 const updateKey = (ns, name) => `${ns}/${name}`;
 const workloadUpdate = (ns, name) => (STATE.data.imageUpdateMap || {})[updateKey(ns, name)];
 
-function paintUpdateBadge(count) {
+function paintUpdateBadge(count, errors = 0) {
   const badge = $("#updateBadge");
-  if (!badge) return;
-  badge.textContent = count;
-  badge.classList.toggle("hidden", !count);
+  if (badge) {
+    badge.textContent = count;
+    badge.classList.toggle("hidden", !count);
+  }
+  const notice = $("#updateNotice"), noticeBadge = $("#updateNoticeBadge");
+  if (!notice || !noticeBadge) return;
+  const total = count + errors;
+  notice.classList.toggle("hidden", !total);
+  notice.classList.toggle("has-errors", !!errors);
+  noticeBadge.textContent = total;
+  notice.setAttribute("aria-label", `${count} image update${count === 1 ? "" : "s"} available${errors ? `, ${errors} registry check failure${errors === 1 ? "" : "s"}` : ""}`);
 }
 
 function workloadHierarchy(w) {
@@ -53,11 +61,16 @@ async function loadImageUpdates(force = false, quiet = false) {
     STATE.data.imageUpdates = report;
     STATE.data.imageUpdateMap = Object.fromEntries((report.workloads || [])
       .map(x => [updateKey(x.ns, x.name), x]));
-    paintUpdateBadge(report.updates || 0);
+    paintUpdateBadge(report.updates || 0, report.errors || 0);
     const previous = +(localStorage.getItem("harvui.update-count") || 0);
-    if (!quiet && report.updates > previous)
+    const preferences = STATE.data.appSettings?.updates || {};
+    if (!quiet && preferences.notify_available !== false && report.updates > previous)
       toast(`${report.updates} container image update${report.updates === 1 ? "" : "s"} available`, "ok");
+    const previousErrors = +(localStorage.getItem("harvui.update-errors") || 0);
+    if (!quiet && preferences.notify_failures !== false && report.errors > previousErrors)
+      toast(`${report.errors} image registry check${report.errors === 1 ? " needs" : "s need"} attention`, "bad");
     localStorage.setItem("harvui.update-count", report.updates || 0);
+    localStorage.setItem("harvui.update-errors", report.errors || 0);
     return report;
   } catch (e) {
     if (!quiet) toast("Image update check failed · " + e.message, "bad");
@@ -72,6 +85,43 @@ window.startUpdateChecks = () => {
     if (!document.hidden) loadImageUpdates(false, false);
   }, 15 * 60 * 1000);
 };
+
+window.imageUpdateCenter = async () => {
+  let report = STATE.data.imageUpdates;
+  if (!report) {
+    modal("Image updates", '<div class="empty"><span class="spin2"></span>checking registries…</div>');
+    report = await loadImageUpdates(false, true);
+  }
+  if (!report) return;
+  const affected = (report.workloads || []).filter(w => w.available || w.images?.some(image => image.error));
+  const policy = report.policy || {};
+  modal("Image updates", `<div class="update-center">
+    <div class="note"><b>${esc(policy.policy === "notify_only" ? "Notify only" : policy.policy === "maintenance_window" ? "Maintenance window" : "Approval required")}</b>
+      ${esc(policy.reason || "Every rollout requires an explicit review.")}</div>
+    ${affected.length ? `<div class="settings-list">${affected.map(w => {
+      const failures = (w.images || []).filter(image => image.error);
+      return `<div class="settings-list-row update-center-row"><div><b>${esc(w.name)}</b><div class="dim xs mono">${esc(w.ns)}</div>
+        ${failures.map(image => `<div class="updateerror">${esc(image.container)} · ${esc(image.error)}</div>`).join("")}</div>
+        <div class="row">${w.available ? '<span class="pill warn">update available</span>' : ""}
+        ${failures.length ? '<span class="pill crit">check failed</span>' : ""}
+        <button class="btn sm" onclick="openUpdateWorkload('${esc(w.name)}')">Open</button></div></div>`;
+    }).join("")}</div>` : '<div class="empty small">Images are current and registry checks succeeded.</div>'}
+    <div class="row" style="margin-top:16px"><button class="btn" onclick="closeModal();go('workloads')">Open Containers</button>
+      <button class="btn" onclick="checkImageUpdates()">Check now</button></div></div>`, true);
+};
+window.openUpdateWorkload = name => {
+  closeModal();
+  STATE.q = name;
+  $("#globalSearch").value = name;
+  go("workloads", { params: { q: name } });
+};
+const updateNoticeButton = $("#updateNotice");
+if (updateNoticeButton) {
+  updateNoticeButton.onclick = () => imageUpdateCenter();
+  updateNoticeButton.onkeydown = event => {
+    if (event.key === "Enter" || event.key === " ") { event.preventDefault(); imageUpdateCenter(); }
+  };
+}
 
 function renderWorkloads() {
   const q = STATE.q.toLowerCase();
@@ -187,6 +237,8 @@ window.imageUpdateReview = (ns, name) => {
   const update = workloadUpdate(ns, name);
   if (!update) return toast("Run an image check first", "bad");
   const changes = update.images.filter(x => x.available);
+  const policy = STATE.data.imageUpdates?.policy || {};
+  const blocked = policy.allows_install === false;
   modal("Update · " + name, `<div class="update-review">
     <div class="note"><b>Managed update.</b> HarvUI will pin the selected registry manifest by digest,
       monitor Kubernetes readiness, and keep the current immutable image ready for rollback.</div>
@@ -195,7 +247,11 @@ window.imageUpdateReview = (ns, name) => {
       <div><span>Running</span><code>${esc(x.deployed)}</code></div>
       <div><span>Install</span><code>${esc(x.candidate)}@${esc((x.remote_digest || "").slice(0, 19))}…</code></div>
     </div>`).join("")}
-    <div class="row" style="margin-top:18px"><button class="btn pri" data-need="operator"
+    <div class="note ${blocked ? "dependency-danger" : ""}"><b>Cluster policy · ${esc(policy.policy === "notify_only" ? "notify only" : policy.policy === "maintenance_window" ? "maintenance window" : "approval required")}</b>
+      ${esc(policy.reason || "Review and approve this digest-pinned rollout.")}</div>
+    <label class="switch update-approval ${blocked ? "hidden" : ""}"><input type="checkbox" id="updateApprove"
+      onchange="document.getElementById('updateInstall').disabled=!this.checked"> I reviewed the image change and approve this rollout</label>
+    <div class="row" style="margin-top:18px"><button class="btn pri" id="updateInstall" data-need="operator" ${blocked ? "disabled" : "disabled"}
       onclick="imageUpdateApply('${esc(ns)}','${esc(name)}')">Install update</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div></div>`, true);
   if (window.applyRole) window.applyRole();
@@ -205,7 +261,7 @@ window.imageUpdateApply = async (ns, name) => {
   try {
     modal("Updating · " + name, '<div class="empty"><span class="spin2"></span> preparing managed rollout…</div>', true);
     await api("/api/image-updates/apply", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ns, name }) });
+      body: JSON.stringify({ ns, name, approved: true }) });
     monitorImageRollout(ns, name);
   } catch (e) { $("#mbody").innerHTML = `<div class="empty"><b>Update could not start</b><br><span class="dim">${esc(e.message)}</span></div>`; }
 };

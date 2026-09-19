@@ -121,10 +121,18 @@ Installing the update pins the selected manifest digest, watches Deployment and
 pod readiness, and keeps the previous digest for one-click rollback. The UI
 automatically reconnects while HarvUI replaces itself.
 
+Available updates and registry-check failures also appear in the global header
+without repeated alert noise. Settings → Container image update policy supports
+notify-only, explicit operator approval, or a UTC maintenance window. These
+rules are enforced by the server, every rollout still requires acknowledgement,
+and semantic-version discovery never silently crosses a major release. Image
+pulls, updates, and rollbacks remain visible in the persistent Activity tray
+through browser refreshes and HarvUI restarts.
+
 Command-line deployment is also available:
 
 ```bash
-TAG=1.12.1 HOST=rancher@192.0.2.210 ./scripts/deploy.sh
+TAG=1.13.0 HOST=rancher@192.0.2.210 ./scripts/deploy.sh
 ```
 
 ## Image update behaviour

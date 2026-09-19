@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HARVUI_VERSION = os.environ.get("HARVUI_VERSION", "1.12.1")
+HARVUI_VERSION = os.environ.get("HARVUI_VERSION", "1.13.0")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -25,7 +25,14 @@ DEFAULT_APP_SETTINGS = {
         "memory": {"warning": 70, "critical": 88},
         "disk": {"warning": 75, "critical": 90},
         "temperature": {"warning": 70, "critical": 85},
-    }
+    },
+    "updates": {
+        "policy": "approval_required",
+        "notify_available": True,
+        "notify_failures": True,
+        "maintenance": {"days": [0, 1, 2, 3, 4, 5, 6],
+                        "start": "02:00", "duration_minutes": 120},
+    },
 }
 
 SYS_NS = {
@@ -144,7 +151,7 @@ def parse_mem(s):
 
 
 def validate_app_settings(value):
-    """Validate and normalize the cluster-wide UI health thresholds."""
+    """Validate and normalize cluster-wide UI and workload-update policy."""
     incoming = (value or {}).get("thresholds") or {}
     out = json.loads(json.dumps(DEFAULT_APP_SETTINGS))
     for metric, defaults in out["thresholds"].items():
@@ -156,7 +163,73 @@ def validate_app_settings(value):
             unit = "°C" if metric == "temperature" else "%"
             raise ValueError(f"{metric} thresholds must be ordered between 1 and {upper}{unit}")
         out["thresholds"][metric] = {"warning": warning, "critical": critical}
+    update_in = (value or {}).get("updates") or {}
+    policy = str(update_in.get("policy", out["updates"]["policy"]))
+    if policy not in ("notify_only", "approval_required", "maintenance_window"):
+        raise ValueError("update policy must be notify_only, approval_required, or maintenance_window")
+    out["updates"]["policy"] = policy
+    for key in ("notify_available", "notify_failures"):
+        supplied = update_in.get(key, out["updates"][key])
+        if not isinstance(supplied, bool):
+            raise ValueError(f"{key} must be true or false")
+        out["updates"][key] = supplied
+    maintenance = update_in.get("maintenance") or {}
+    start = str(maintenance.get("start", out["updates"]["maintenance"]["start"]))
+    if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", start):
+        raise ValueError("maintenance start must use 24-hour HH:MM UTC")
+    try:
+        duration = int(maintenance.get("duration_minutes",
+                                       out["updates"]["maintenance"]["duration_minutes"]))
+        days = sorted(set(int(day) for day in maintenance.get(
+            "days", out["updates"]["maintenance"]["days"])))
+    except (TypeError, ValueError):
+        raise ValueError("maintenance days and duration are invalid")
+    if not days or any(day < 0 or day > 6 for day in days):
+        raise ValueError("maintenance days must contain values from 0 (Monday) to 6 (Sunday)")
+    if duration < 15 or duration > 1440:
+        raise ValueError("maintenance duration must be between 15 and 1440 minutes")
+    out["updates"]["maintenance"] = {
+        "days": days, "start": start, "duration_minutes": duration}
     return out
+
+
+def update_policy_status(settings=None, now=None):
+    """Return whether a manual managed update may start at the current UTC time."""
+    update = (settings or get_app_settings()).get("updates") or DEFAULT_APP_SETTINGS["updates"]
+    policy = update.get("policy", "approval_required")
+    maintenance = update.get("maintenance") or DEFAULT_APP_SETTINGS["updates"]["maintenance"]
+    current = time.gmtime(time.time() if now is None else now)
+    hour, minute = (int(part) for part in maintenance["start"].split(":"))
+    start_minute = hour * 60 + minute
+    current_minute = current.tm_hour * 60 + current.tm_min
+    duration = int(maintenance["duration_minutes"])
+    # A window may cross midnight. In that case early minutes belong to the
+    # previous configured day, not the current one.
+    today_open = current.tm_wday in maintenance["days"] and (
+        start_minute <= current_minute < min(1440, start_minute + duration))
+    previous_day = (current.tm_wday - 1) % 7
+    carry = max(0, start_minute + duration - 1440)
+    carry_open = previous_day in maintenance["days"] and current_minute < carry
+    window_open = bool(today_open or carry_open)
+    if policy == "notify_only":
+        allowed, reason = False, "Cluster policy is notify only; an admin must change it before installing."
+    elif policy == "maintenance_window" and not window_open:
+        allowed, reason = False, (f"Updates are limited to the {maintenance['start']} UTC "
+                                  f"maintenance window ({duration} minutes).")
+    else:
+        allowed, reason = True, "Explicit operator approval is required before rollout."
+    return {"policy": policy, "allows_install": allowed, "requires_approval": True,
+            "reason": reason, "window_open": window_open,
+            "maintenance": json.loads(json.dumps(maintenance))}
+
+
+def enforce_update_policy(body, settings=None, now=None):
+    status = update_policy_status(settings, now)
+    if not status["allows_install"]:
+        raise PermissionError(status["reason"])
+    if body.get("approved") is not True:
+        raise PermissionError("explicit approval is required before installing an image update")
+    return status
 
 
 def get_app_settings():
@@ -1411,10 +1484,12 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("wl", 5, get_workloads))
             if p == "/api/image-updates":
                 force = (q.get("force") or ["0"])[0].lower() in ("1", "true", "yes")
-                return self._send(200, cached("image-updates" if not force else
-                                              "image-updates-force:" + str(int(time.time() / 10)),
-                                              600 if not force else 8,
-                                              lambda: UPDATES.scan(force)))
+                report = json.loads(json.dumps(cached(
+                    "image-updates" if not force else
+                    "image-updates-force:" + str(int(time.time() / 10)),
+                    600 if not force else 8, lambda: UPDATES.scan(force))))
+                report["policy"] = update_policy_status()
+                return self._send(200, report)
             if p == "/api/image-updates/progress":
                 return self._send(200, UPDATES.progress(q["ns"][0], q["name"][0]))
             if p == "/api/operations":
@@ -1617,11 +1692,13 @@ class H(BaseHTTPRequestHandler):
                 _cache.pop("wl", None)
                 return self._send(200, {"ok": True})
             if p == "/api/image-updates/apply":
+                enforce_update_policy(b)
                 result = UPDATES.apply_update(b["ns"], b["name"])
                 result["operation"] = OPS.start(
                     "image-update", f"Update {b['name']}",
                     {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
-                    "/containers", {"namespace": b["ns"], "name": b["name"]})
+                    "/containers?" + urllib.parse.urlencode({"q": b["name"]}),
+                    {"namespace": b["ns"], "name": b["name"]})
                 _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("image-updates", None)
                 return self._send(200, result)
             if p == "/api/image-updates/rollback":
@@ -1629,7 +1706,8 @@ class H(BaseHTTPRequestHandler):
                 result["operation"] = OPS.start(
                     "image-rollback", f"Roll back {b['name']}",
                     {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
-                    "/containers", {"namespace": b["ns"], "name": b["name"]})
+                    "/containers?" + urllib.parse.urlencode({"q": b["name"]}),
+                    {"namespace": b["ns"], "name": b["name"]})
                 _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("image-updates", None)
                 return self._send(200, result)
             if p == "/api/shares":

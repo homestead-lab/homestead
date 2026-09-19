@@ -184,6 +184,10 @@ h1{margin:2px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em}
   background:rgba(255,255,255,.05);border:1px solid var(--line);color:var(--mut);transition:all .22s var(--e)
 }
 .iconbtn:hover{color:var(--tx);background:rgba(255,255,255,.1);transform:translateY(-1px)}
+.update-notice{position:relative;color:var(--med)}.update-notice.has-errors{color:var(--crit)}
+.update-notice>span{position:absolute;right:-4px;top:-5px;min-width:18px;height:18px;padding:0 5px;border-radius:99px;
+  display:grid;place-items:center;background:var(--med);color:#15100a;font:750 9px/1 "JetBrains Mono",monospace;
+  box-shadow:0 0 0 2px var(--surf)}.update-notice.has-errors>span{background:var(--crit);color:#fff}
 .spinning{animation:rot .9s linear infinite}
 @keyframes rot{to{transform:rotate(360deg)}}
 
@@ -426,8 +430,11 @@ select option{background:#151517}
 .role-summary{display:flex;flex-direction:column;gap:4px;padding:13px;border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.025)}
 .role-legend{display:grid;gap:8px;margin-top:14px}.role-legend>div{display:grid;grid-template-columns:75px 1fr;align-items:start;gap:9px}.role-legend .rolechip{justify-self:start}
 .about-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:15px}.about-grid>div{display:flex;flex-direction:column;gap:5px;padding:13px;border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.025)}.about-grid span{color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.07em}.about-grid b{font-size:13px;overflow-wrap:anywhere}
+.update-policy-grid{display:grid;grid-template-columns:minmax(240px,.8fr) minmax(260px,1fr);gap:14px;align-items:start;margin-bottom:14px}
+.update-notify-options{display:grid;gap:8px;padding-top:21px}.maintenance-fields{grid-column:1/-1;display:grid;grid-template-columns:180px 180px 1fr;gap:12px;padding:13px;border:1px solid var(--line);border-radius:13px;background:rgba(255,255,255,.025);transition:opacity .2s var(--e)}
+.maintenance-fields.muted-policy{opacity:.45}.update-days>div{display:flex;gap:5px;flex-wrap:wrap}.daypick input{position:absolute;opacity:0;pointer-events:none}.daypick span{display:grid;place-items:center;min-width:40px;height:35px;padding:0 8px;border:1px solid var(--line);border-radius:9px;color:var(--dim);font-size:10px;cursor:pointer}.daypick input:checked+span{border-color:var(--line2);background:rgba(255,255,255,.12);color:var(--tx)}
 
-@media(max-width:900px){.settings-grid,.threshold-grid{grid-template-columns:1fr}.settings-wide{grid-column:auto}.about-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:900px){.settings-grid,.threshold-grid,.update-policy-grid{grid-template-columns:1fr}.settings-wide{grid-column:auto}.about-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.maintenance-fields{grid-column:auto;grid-template-columns:1fr 1fr}.update-days{grid-column:1/-1}.update-notify-options{padding-top:0}}
 @media(max-width:560px){.threshold-card{align-items:flex-start;flex-direction:column}.threshold-values{width:100%}.threshold-values label{flex:1}.about-grid{grid-template-columns:1fr}.settings-card-head{flex-wrap:wrap}}
 .split{display:grid;grid-template-columns:1.55fr 1fr;gap:15px;align-items:start}
 @media(max-width:1060px){.split{grid-template-columns:1fr}}
@@ -606,6 +613,8 @@ html[data-motion="off"] .uptime .ld{animation:none}
 .updatebar>div{display:flex;flex-direction:column;gap:3px}.updatebar span{font-size:11px;color:var(--dim)}
 .updateerror{margin-top:9px;padding:8px 10px;border-radius:9px;color:#ffb4b8;background:rgba(255,77,79,.07);border:1px solid rgba(255,77,79,.18);font-size:10.5px}
 .update-review{display:grid;gap:12px}.update-image{display:grid;gap:9px;padding:14px;border:1px solid var(--line);border-radius:13px;background:var(--surf2)}
+.update-approval{padding:11px 12px;border:1px solid var(--line);border-radius:11px;background:rgba(255,255,255,.025)}
+.update-center-row{align-items:flex-start}.update-center-row>div:first-child{min-width:0;flex:1}.update-center-row .updateerror{margin-top:6px}
 .update-image>div:not(.between){display:grid;grid-template-columns:68px 1fr;gap:10px;align-items:start}.update-image span{color:var(--dim);font-size:10.5px}
 .update-image code{font-size:11px;color:var(--mut);word-break:break-all}
 .rollout-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.rollout-meter{height:7px;margin:14px 0 18px;border-radius:99px;overflow:hidden;background:rgba(255,255,255,.08)}

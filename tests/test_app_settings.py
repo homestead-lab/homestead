@@ -1,4 +1,6 @@
 import sys
+import calendar
+import time
 import unittest
 from pathlib import Path
 
@@ -14,6 +16,7 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual({"cpu", "memory", "disk", "temperature"}, set(settings["thresholds"]))
         self.assertLess(settings["thresholds"]["memory"]["warning"],
                         settings["thresholds"]["memory"]["critical"])
+        self.assertEqual("approval_required", settings["updates"]["policy"])
 
     def test_partial_update_uses_defaults_for_other_metrics(self):
         settings = server.validate_app_settings({
@@ -37,6 +40,39 @@ class AppSettingsTests(unittest.TestCase):
             server.validate_app_settings({
                 "thresholds": {"disk": {"warning": 90, "critical": 110}},
             })
+
+    def test_update_policy_validation(self):
+        settings = server.validate_app_settings({"updates": {
+            "policy": "maintenance_window", "notify_available": False,
+            "notify_failures": True,
+            "maintenance": {"days": [0, 2, 4], "start": "23:30", "duration_minutes": 90},
+        }})
+        self.assertEqual([0, 2, 4], settings["updates"]["maintenance"]["days"])
+        with self.assertRaisesRegex(ValueError, "update policy"):
+            server.validate_app_settings({"updates": {"policy": "automatic"}})
+        with self.assertRaisesRegex(ValueError, "HH:MM"):
+            server.validate_app_settings({"updates": {
+                "maintenance": {"start": "2am"}}})
+
+    def test_maintenance_window_handles_midnight_and_approval(self):
+        settings = server.validate_app_settings({"updates": {
+            "policy": "maintenance_window",
+            "maintenance": {"days": [0], "start": "23:30", "duration_minutes": 90},
+        }})
+        monday = calendar.timegm(time.strptime("2026-09-21T23:45:00Z", "%Y-%m-%dT%H:%M:%SZ"))
+        tuesday_carry = calendar.timegm(time.strptime("2026-09-22T00:30:00Z", "%Y-%m-%dT%H:%M:%SZ"))
+        tuesday_closed = calendar.timegm(time.strptime("2026-09-22T01:15:00Z", "%Y-%m-%dT%H:%M:%SZ"))
+        self.assertTrue(server.update_policy_status(settings, monday)["allows_install"])
+        self.assertTrue(server.update_policy_status(settings, tuesday_carry)["allows_install"])
+        self.assertFalse(server.update_policy_status(settings, tuesday_closed)["allows_install"])
+        with self.assertRaisesRegex(PermissionError, "explicit approval"):
+            server.enforce_update_policy({}, settings, monday)
+        self.assertTrue(server.enforce_update_policy({"approved": True}, settings, monday)["allows_install"])
+
+    def test_notify_only_is_enforced_server_side(self):
+        settings = server.validate_app_settings({"updates": {"policy": "notify_only"}})
+        with self.assertRaisesRegex(PermissionError, "notify only"):
+            server.enforce_update_policy({"approved": True}, settings)
 
 
 if __name__ == "__main__":

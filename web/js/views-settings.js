@@ -23,6 +23,9 @@ async function viewSettings() {
   ]);
   STATE.data.ov = overview || STATE.data.ov;
   const thresholds = settings.thresholds || HEALTH_DEFAULTS.thresholds;
+  const updates = settings.updates || { policy: "approval_required", notify_available: true,
+    notify_failures: true, maintenance: { days: [0, 1, 2, 3, 4, 5, 6], start: "02:00", duration_minutes: 120 } };
+  const maintenance = updates.maintenance || {};
   const info = settings.info || {};
   const nodes = overview?.nodes || STATE.data.nodes || [];
   const hardwareRows = features.map(f => {
@@ -47,6 +50,31 @@ async function viewSettings() {
           ${thresholdEditor("temperature", "CPU temperature", "°C", "Host thermal warning", thresholds.temperature)}
         </div>
         <div class="note"><b>Warning</b> changes the metric and node card to yellow. <b>Critical</b> changes them to red. A node uses the most severe result across CPU, memory, disk, and temperature.</div>
+      </section>
+
+      <section class="card flat settings-wide">
+        <div class="settings-card-head"><div><div class="ctitle">Container image update policy</div>
+          <div class="csub">Controls registry notifications and when a reviewed rollout may start; major releases are never selected automatically</div></div>
+          ${can("admin") ? '<button class="btn pri" onclick="saveUpdateSettings()">Save update policy</button>' : '<span class="pill neutral">admin managed</span>'}</div>
+        <div class="update-policy-grid">
+          <div class="f"><label>Policy ${tip("Notify only blocks installs. Approval required permits a reviewed manual rollout. Maintenance window permits reviewed rollouts only during the configured UTC window.")}</label>
+            <select id="set_update_policy" ${can("admin") ? "" : "disabled"} onchange="updatePolicyFields()">
+              <option value="notify_only" ${updates.policy === "notify_only" ? "selected" : ""}>Notify only — block installs</option>
+              <option value="approval_required" ${updates.policy === "approval_required" ? "selected" : ""}>Approval required — manual rollout</option>
+              <option value="maintenance_window" ${updates.policy === "maintenance_window" ? "selected" : ""}>Maintenance window — manual rollout in window</option>
+            </select></div>
+          <div class="update-notify-options">
+            <label class="switch"><input id="set_notify_available" type="checkbox" ${updates.notify_available !== false ? "checked" : ""} ${can("admin") ? "" : "disabled"}> Notify when new images are available</label>
+            <label class="switch"><input id="set_notify_failures" type="checkbox" ${updates.notify_failures !== false ? "checked" : ""} ${can("admin") ? "" : "disabled"}> Notify when a registry check fails</label>
+          </div>
+          <div id="maintenanceFields" class="maintenance-fields ${updates.policy === "maintenance_window" ? "" : "muted-policy"}">
+            <div class="f"><label>Start time (UTC)</label><input id="set_update_start" type="time" value="${esc(maintenance.start || "02:00")}" ${can("admin") ? "" : "disabled"}></div>
+            <div class="f"><label>Duration (minutes)</label><input id="set_update_duration" type="number" min="15" max="1440" step="15" value="${+(maintenance.duration_minutes || 120)}" ${can("admin") ? "" : "disabled"}></div>
+            <div class="f update-days"><label>Days (UTC)</label><div>${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day, index) =>
+              `<label class="daypick"><input type="checkbox" class="set_update_day" value="${index}" ${(maintenance.days || []).includes(index) ? "checked" : ""} ${can("admin") ? "" : "disabled"}><span>${day}</span></label>`).join("")}</div></div>
+          </div>
+        </div>
+        <div class="note"><b>No silent upgrades.</b> Every install still shows the exact current and candidate image and requires an operator acknowledgement. Semantic-version discovery stays within the current major release.</div>
       </section>
 
       <section class="card flat">
@@ -83,7 +111,8 @@ async function viewSettings() {
 
 window.saveHealthSettings = async () => {
   const read = id => ({ warning: +$("#set_" + id + "_warn").value, critical: +$("#set_" + id + "_crit").value });
-  const body = { thresholds: { cpu: read("cpu"), memory: read("memory"), disk: read("disk"), temperature: read("temperature") } };
+  const body = { thresholds: { cpu: read("cpu"), memory: read("memory"), disk: read("disk"), temperature: read("temperature") },
+    updates: STATE.data.appSettings?.updates };
   try {
     const saved = await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     HEALTH = { thresholds: { ...HEALTH_DEFAULTS.thresholds, ...(saved.thresholds || {}) } };
@@ -93,3 +122,28 @@ window.saveHealthSettings = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
+window.updatePolicyFields = () => {
+  const fields = $("#maintenanceFields");
+  if (fields) fields.classList.toggle("muted-policy", $("#set_update_policy").value !== "maintenance_window");
+};
+
+window.saveUpdateSettings = async () => {
+  const current = STATE.data.appSettings || {};
+  const body = { thresholds: current.thresholds || HEALTH_DEFAULTS.thresholds, updates: {
+    policy: $("#set_update_policy").value,
+    notify_available: $("#set_notify_available").checked,
+    notify_failures: $("#set_notify_failures").checked,
+    maintenance: {
+      start: $("#set_update_start").value,
+      duration_minutes: +$("#set_update_duration").value,
+      days: $$(".set_update_day:checked").map(input => +input.value),
+    },
+  } };
+  try {
+    const saved = await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    STATE.data.appSettings = saved;
+    toast("image update policy saved", "ok");
+    await loadImageUpdates(false, true);
+    viewSettings();
+  } catch (e) { toast(e.message, "bad"); }
+};

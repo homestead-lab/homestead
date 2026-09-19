@@ -17,7 +17,7 @@ container-edit, container-log, and volume-edit URLs plus URL-backed search ship
 in v1.10.1. Consistent action icons, keyboard focus, and viewport-safe tooltips
 ship in v1.10.2. The explicit Deployment → pod → container hierarchy ships in
 v1.11.0. The namespace-scoped interactive container console ships in v1.12.1.
-The active milestone is completing image-update notifications and policies.
+The active milestone is exposing rollback-image inventory and safe cleanup.
 
 ## Product rules
 
@@ -113,13 +113,11 @@ status semantics, and a consistent way to report background work.
 - **Done when:** an authorized operator can open, use, resize, and close a shell
   without affecting the running workload.
 
-#### 2.3 Managed image updates and notifications — ✅ core shipped / 🔨 follow-up active
+#### 2.3 Managed image updates and notifications — ✅ shipped in v1.13.0
 
 Already shipped: registry digest/version checks, multi-architecture awareness,
 private pull-secret support, monitored rollout, self-update, deterministic
 rollback, and persisted history.
-
-Remaining:
 
 - Surface available-update and failed-update notifications outside the
   Containers page without creating alert noise.
@@ -129,7 +127,7 @@ Remaining:
 - **Done when:** a discovered update can be reviewed, installed, monitored, and
   rolled back from one coherent flow, including HarvUI itself.
 
-#### 2.4 Rollback-image inventory and cleanup — ⬜ queued
+#### 2.4 Rollback-image inventory and cleanup — 🔨 active
 
 - Mark cached images retained for rollback and show their workload/version,
   size, nodes, and retention reason in Image Cache.
