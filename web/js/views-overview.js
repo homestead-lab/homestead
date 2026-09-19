@@ -15,8 +15,11 @@ async function viewDash() {
   ]);
   STATE.data.ov = o; STATE.data.stor = st;
   const hp = $("#healthPill");
-  hp.className = "pill " + (o.health === "healthy" ? "ok" : o.health === "degraded" ? "med" : "crit");
-  hp.textContent = o.health.toUpperCase();
+  const healthState = o.health_state || o.health;
+  hp.className = "pill " + (healthState === "healthy" ? "ok" :
+    healthState === "critical" ? "crit" : healthState === "degraded" ? "med" : "low");
+  hp.textContent = healthState.toUpperCase();
+  hp.title = o.health_summary || "";
   $("#lbinfo").textContent = o.lb_ip ? "VIP " + o.lb_ip : "";
   const sv = $("#setVip"), sn = $("#setNodes");
   if (sv) sv.textContent = o.lb_ip || "—";
@@ -39,10 +42,16 @@ async function viewDash() {
   <div class="phead">
     <div><h2>Cluster overview</h2><p>Live health, capacity and placement across ${o.nodes_total} node${o.nodes_total > 1 ? "s" : ""}</p></div>
     <div class="row hide-sm">
-      <button class="btn" onclick="go('flow')">Architecture</button>
       <button class="btn pri" onclick="go('deploy')">＋ Deploy</button>
     </div>
   </div>
+
+  ${(o.health_issues || []).length ? `<div class="clusteralert ${o.health === "critical" ? "critical" : ""}">
+    <div><b>${o.health === "critical" ? "Cluster needs attention" : "Cluster is degraded"}</b>
+      <span>${esc(o.health_summary)}</span></div>
+    <button class="btn sm" onclick="go('${o.health_issues.some(x => x.kind === "Node") ? "nodes" :
+      o.health_issues.some(x => x.kind === "Volume") ? "storage" : "workloads"}')">Review</button>
+  </div>` : ""}
 
   <div class="grid g3 stagger">
     <div class="card glow ${worstMetricClass([{ value: o.cpu_pct, metric: "cpu" }, { value: o.mem_pct, metric: "memory" }])}">

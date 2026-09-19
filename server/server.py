@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HARVUI_VERSION = os.environ.get("HARVUI_VERSION", "1.9.4")
+HARVUI_VERSION = os.environ.get("HARVUI_VERSION", "1.10.0")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -418,17 +418,55 @@ def get_workloads():
         pspec = d["spec"]["template"]["spec"]
         annotations = d["metadata"].get("annotations", {}) or {}
         hardware = HW.workload_features(pspec, annotations)
+        pod_rows = []
+        transition_ages = []
+        fatal_waits = []
+        fatal_reasons = {"ImagePullBackOff", "ErrImagePull", "CrashLoopBackOff",
+                         "CreateContainerConfigError", "CreateContainerError"}
+        for p in mine:
+            conditions = {c.get("type"): c for c in p.get("status", {}).get("conditions", []) or []}
+            ready = conditions.get("Ready", {}).get("status") == "True"
+            waits = []
+            for cs in p.get("status", {}).get("containerStatuses", []) or []:
+                waiting = (cs.get("state", {}).get("waiting") or {})
+                if waiting:
+                    reason = waiting.get("reason", "Waiting")
+                    waits.append({"container": cs.get("name", ""), "reason": reason,
+                                  "message": (waiting.get("message") or "")[:220]})
+                    if reason in fatal_reasons:
+                        fatal_waits.append(f"{p['metadata']['name']}: {reason}")
+            if not ready:
+                transition_ages.append(age_secs(p["metadata"].get("creationTimestamp")))
+            pod_rows.append({"name": p["metadata"]["name"], "phase": p["status"].get("phase"),
+                             "node": p["spec"].get("nodeName", ""), "ready": ready,
+                             "waiting": waits,
+                             "uptime": age_secs(p["status"].get("startTime")),
+                             "restarts": sum(c.get("restartCount", 0) for c in
+                                             p["status"].get("containerStatuses", []) or [])})
+        progress_errors = [c.get("message") or c.get("reason") or "rollout failed"
+                           for c in st.get("conditions", []) or []
+                           if c.get("type") == "Progressing" and c.get("status") == "False"]
+        template_annotations = d["spec"].get("template", {}).get("metadata", {}).get("annotations", {}) or {}
+        rollout_at = (template_annotations.get("harvui.io/update-rollout-at") or
+                      template_annotations.get("harvui.io/restartedAt"))
+        if rollout_at:
+            transition_ages.append(age_secs(rollout_at))
+        if not transition_ages:
+            transition_ages.append(age_secs(d["metadata"].get("creationTimestamp")))
         out.append({
             "ns": ns, "name": name, "uptime": uptime,
             "ready": st.get("readyReplicas", 0) or 0,
             "desired": d["spec"].get("replicas", 0) or 0,
+            "available": st.get("availableReplicas", 0) or 0,
+            "updated": st.get("updatedReplicas", 0) or 0,
+            "unavailable": st.get("unavailableReplicas", 0) or 0,
+            "generation": d["metadata"].get("generation", 0) or 0,
+            "observed_generation": st.get("observedGeneration", 0) or 0,
+            "transition_age": min(transition_ages),
+            "problems": fatal_waits + progress_errors,
             "images": [c["image"] for c in pspec.get("containers", [])],
             "nodes": sorted({p["spec"].get("nodeName", "") for p in mine if p["spec"].get("nodeName")}),
-            "pods": [{"name": p["metadata"]["name"], "phase": p["status"].get("phase"),
-                      "node": p["spec"].get("nodeName", ""),
-                      "uptime": age_secs(p["status"].get("startTime")),
-                      "restarts": sum(c.get("restartCount", 0) for c in p["status"].get("containerStatuses", []) or [])}
-                     for p in mine],
+            "pods": pod_rows,
             "cpu": round(cpu, 3), "mem_mb": round(mem / 1024**2, 1),
             "ports": ports,
             "gpu": "igpu" in hardware,
@@ -436,6 +474,66 @@ def get_workloads():
             "icon": annotations.get("harvui.io/icon", ""),
         })
     return sorted(out, key=lambda x: (x["ns"], x["name"]))
+
+
+def classify_cluster_health(nodes, workloads, volumes, startup_grace=300):
+    """Separate real availability faults from normal workload transitions."""
+    issues, activities = [], []
+    for node in nodes:
+        if node.get("status") != "Ready":
+            issues.append({"severity": "critical", "kind": "Node",
+                           "name": node.get("name", "unknown"),
+                           "reason": f"node is {node.get('status') or 'not ready'}"})
+    for volume in volumes:
+        robustness = str(volume.get("robustness", "") or "").lower()
+        label = volume.get("pvc_name") or volume.get("name") or "unknown"
+        if robustness == "faulted":
+            issues.append({"severity": "critical", "kind": "Volume", "name": label,
+                           "reason": "Longhorn reports the volume faulted"})
+        elif robustness == "degraded":
+            issues.append({"severity": "degraded", "kind": "Volume", "name": label,
+                           "reason": "Longhorn is rebuilding or missing a replica"})
+    for workload in workloads:
+        desired = int(workload.get("desired", 0) or 0)
+        ready = int(workload.get("ready", 0) or 0)
+        generation = int(workload.get("generation", 0) or 0)
+        observed = int(workload.get("observed_generation", 0) or 0)
+        updated = int(workload.get("updated", 0) or 0)
+        transitioning = (ready < desired or updated < desired or observed < generation or
+                          int(workload.get("unavailable", 0) or 0) > 0)
+        if desired == 0 or not transitioning:
+            continue
+        name = workload.get("name", "unknown")
+        namespace = workload.get("ns", "")
+        resource = f"{namespace}/{name}" if namespace else name
+        problems = workload.get("problems") or []
+        if problems:
+            issues.append({"severity": "degraded", "kind": "Workload", "name": resource,
+                           "reason": str(problems[0])[:260]})
+            continue
+        age = int(workload.get("transition_age", startup_grace + 1) or 0)
+        if age <= startup_grace:
+            updating = int(workload.get("available", 0) or 0) > 0 and (
+                updated < desired or observed < generation)
+            activities.append({"state": "updating" if updating else "starting",
+                               "kind": "Workload", "name": resource,
+                               "reason": f"{ready}/{desired} replicas ready"})
+        else:
+            issues.append({"severity": "degraded", "kind": "Workload", "name": resource,
+                           "reason": f"only {ready}/{desired} replicas ready after {age // 60}m"})
+    health = "critical" if any(x["severity"] == "critical" for x in issues) else (
+        "degraded" if issues else "healthy")
+    activity = "updating" if any(x["state"] == "updating" for x in activities) else (
+        "starting" if activities else "idle")
+    state = health if health != "healthy" else (activity if activity != "idle" else "healthy")
+    if issues:
+        summary = "; ".join(f"{x['kind']} {x['name']}: {x['reason']}" for x in issues[:4])
+    elif activities:
+        summary = "; ".join(f"{x['kind']} {x['name']}: {x['reason']}" for x in activities[:4])
+    else:
+        summary = "All nodes, workloads, and attached volumes are healthy"
+    return {"health": health, "health_state": state, "health_summary": summary,
+            "health_issues": issues, "activities": activities}
 
 
 def get_overview():
@@ -447,14 +545,13 @@ def get_overview():
     usrp = [p for p in pods if p["metadata"]["namespace"] not in SYS_NS]
     deg = [v for v in vols if v["robustness"] == "degraded"]
     flt = [v for v in vols if v["robustness"] == "faulted"]
-    down = [n for n in nodes if n["status"] != "Ready"]
-    health = "critical" if (down or flt) else ("degraded" if (deg or any(p["status"].get("phase") in ("Failed", "Pending") for p in usrp)) else "healthy")
+    health = classify_cluster_health(nodes, wl, vols)
     tcap = sum(n["cpu_cap"] for n in nodes) or 1
     tuse = sum(n["cpu_used"] for n in nodes)
     mcap = sum(n["mem_cap_gb"] for n in nodes) or 1
     muse = sum(n["mem_used_gb"] for n in nodes)
     return {
-        "health": health,
+        **health,
         "nodes": nodes,
         "nodes_ready": len([n for n in nodes if n["status"] == "Ready"]),
         "nodes_total": len(nodes),
@@ -1093,6 +1190,7 @@ import harvui_longhorn as LH
 import harvui_place as PLACE
 import harvui_hardware as HW
 import harvui_updates as UPDATES
+import harvui_operations as OPS
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
 LC.bind(kget, ksend, SYS_NS, _cache, HW.features)
 IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.features)
@@ -1100,9 +1198,24 @@ AUTH.bind(kget, ksend, DEFAULT_NS)
 LH.bind(kget, ksend, _cache)
 PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.features)
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS)
+OPS.bind(kget, DATA_DIR, UPDATES.progress)
+
+# Browser routes serve the same authenticated application shell. Keep this an
+# explicit allowlist: an unknown path must not accidentally shadow an API 404.
+SPA_ROUTES = frozenset({
+    "/", "/architecture", "/nodes", "/deploy", "/containers", "/vms",
+    "/app-store", "/shares", "/volumes", "/image-cache", "/data-protection",
+    "/schedules", "/import", "/events", "/settings",
+})
+
+
+def is_spa_route(path):
+    clean = (path or "/").rstrip("/") or "/"
+    return clean in SPA_ROUTES
+
 
 # Paths reachable without a session. Everything else needs one.
-PUBLIC = {"/healthz", "/style.css", "/index.html", "/",
+PUBLIC = {"/healthz", "/style.css", "/index.html",
           "/api/auth/login", "/api/auth/state", "/api/auth/setup"}
 
 # Role needed per route. Rules:
@@ -1189,7 +1302,7 @@ class H(BaseHTTPRequestHandler):
 
     def _guard(self, path):
         """Returns None when the request may proceed, or sends the refusal."""
-        if path in PUBLIC or (path.startswith("/js/") and path.endswith(".js")):
+        if is_spa_route(path) or path in PUBLIC or (path.startswith("/js/") and path.endswith(".js")):
             return None
         who = self._who()
         if not who:
@@ -1220,7 +1333,7 @@ class H(BaseHTTPRequestHandler):
         try:
             if self._guard(p):
                 return
-            if p == "/" or p == "/index.html":
+            if is_spa_route(p) or p == "/index.html":
                 return self._file(f"{WEBROOT}/index.html", "text/html; charset=utf-8")
             if p.startswith("/js/") and p.endswith(".js") and ".." not in p:
                 return self._file(f"{WEBROOT}/{os.path.basename(p)}", "application/javascript")
@@ -1254,6 +1367,8 @@ class H(BaseHTTPRequestHandler):
                                               lambda: UPDATES.scan(force)))
             if p == "/api/image-updates/progress":
                 return self._send(200, UPDATES.progress(q["ns"][0], q["name"][0]))
+            if p == "/api/operations":
+                return self._send(200, OPS.list_operations())
             if p == "/api/volumes":
                 return self._send(200, cached("vol", 8, get_volumes))
             if p == "/api/events":
@@ -1433,7 +1548,10 @@ class H(BaseHTTPRequestHandler):
                     except urllib.error.HTTPError as e:
                         if e.code != 409: raise
                 _cache.pop("wl", None); _cache.pop("ov", None)
-                return self._send(200, {"ok": True, "name": dep["metadata"]["name"]})
+                op = OPS.start("deployment", f"Deploy {dep['metadata']['name']}",
+                               {"kind": "Deployment", "name": dep["metadata"]["name"], "namespace": ns},
+                               "/containers", {"namespace": ns, "name": dep["metadata"]["name"]})
+                return self._send(200, {"ok": True, "name": dep["metadata"]["name"], "operation": op})
             if p == "/api/scale":
                 ns, name, n = b["ns"], b["name"], int(b["replicas"])
                 ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}/scale",
@@ -1450,10 +1568,18 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if p == "/api/image-updates/apply":
                 result = UPDATES.apply_update(b["ns"], b["name"])
+                result["operation"] = OPS.start(
+                    "image-update", f"Update {b['name']}",
+                    {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
+                    "/containers", {"namespace": b["ns"], "name": b["name"]})
                 _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("image-updates", None)
                 return self._send(200, result)
             if p == "/api/image-updates/rollback":
                 result = UPDATES.rollback(b["ns"], b["name"])
+                result["operation"] = OPS.start(
+                    "image-rollback", f"Roll back {b['name']}",
+                    {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
+                    "/containers", {"namespace": b["ns"], "name": b["name"]})
                 _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("image-updates", None)
                 return self._send(200, result)
             if p == "/api/shares":
@@ -1474,7 +1600,10 @@ class H(BaseHTTPRequestHandler):
                     except urllib.error.HTTPError as e:
                         if e.code != 409: raise
                 _cache.pop("wl", None)
-                return self._send(200, {"ok": True, "name": cfg["name"]})
+                op = OPS.start("deployment", f"Install {cfg['name']}",
+                               {"kind": "Deployment", "name": cfg["name"], "namespace": ns},
+                               "/containers", {"namespace": ns, "name": cfg["name"]})
+                return self._send(200, {"ok": True, "name": cfg["name"], "operation": op})
             if p == "/api/edit":
                 return self._send(200, LC.edit_workload(b))
             if p == "/api/move":
@@ -1485,7 +1614,12 @@ class H(BaseHTTPRequestHandler):
                     if not node:
                         return self._send(409, {"error": "no host can take this workload — "
                                                 "check hardware requirements", "plan": pl})
-                return self._send(200, PLACE.move(b["ns"], b["name"], node, b.get("pin", False)))
+                result = PLACE.move(b["ns"], b["name"], node, b.get("pin", False))
+                result["operation"] = OPS.start(
+                    "deployment", f"Move {b['name']}",
+                    {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
+                    "/containers", {"namespace": b["ns"], "name": b["name"]})
+                return self._send(200, result)
             if p == "/api/node/cordon":
                 return self._send(200, LC.set_cordon(b["node"], b.get("cordon", True)))
             if p == "/api/node/hardware":
@@ -1510,13 +1644,25 @@ class H(BaseHTTPRequestHandler):
                 except PermissionError as e:
                     return self._send(409, {"error": str(e)})
             if p == "/api/vm/migrate":
-                return self._send(200, LC.vm_migrate(b.get("ns", DEFAULT_NS), b["name"], b.get("target")))
+                ns = b.get("ns", DEFAULT_NS)
+                result = LC.vm_migrate(ns, b["name"], b.get("target"))
+                if result.get("migration"):
+                    result["operation"] = OPS.start(
+                        "vm-migration", f"Migrate {b['name']}",
+                        {"kind": "VirtualMachine", "name": b["name"], "namespace": ns},
+                        "/vms", {"namespace": ns, "name": result["migration"]})
+                return self._send(200, result)
             if p == "/api/vm/power":
                 return self._send(200, LC.vm_power(b.get("ns", DEFAULT_NS), b["name"], b["action"]))
             if p == "/api/vm/create":
                 return self._send(200, IMP.create_vm(b))
             if p == "/api/images/prepull":
-                return self._send(200, IMP.prepull(b["image"], b.get("nodes")))
+                result = IMP.prepull(b["image"], b.get("nodes"))
+                result["operation"] = OPS.start(
+                    "image-pull", f"Pull {b['image']}",
+                    {"kind": "Image", "name": b["image"], "namespace": DEFAULT_NS},
+                    "/image-cache", {"namespace": DEFAULT_NS, "name": result["daemonset"]})
+                return self._send(200, result)
             if p == "/api/volumes/create":
                 return self._send(200, create_volume(b))
             if p == "/api/volumes/edit":
@@ -1533,7 +1679,13 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/lh/snapshot/delete":
                 return self._send(200, LH.delete_snapshot(b["name"]))
             if p == "/api/lh/backup":
-                return self._send(200, LH.create_backup(b["volume"], b.get("name")))
+                result = LH.create_backup(b["volume"], b.get("name"))
+                if result.get("backup"):
+                    result["operation"] = OPS.start(
+                        "backup", f"Back up {b['volume']}",
+                        {"kind": "Volume", "name": b["volume"], "namespace": "longhorn-system"},
+                        "/data-protection", {"namespace": "longhorn-system", "name": result["backup"]})
+                return self._send(200, result)
             if p == "/api/lh/target":
                 return self._send(200, LH.set_backup_target(
                     b["url"], b.get("secret", ""), b.get("poll", "5m")))
@@ -1556,7 +1708,14 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/sources/inspect":
                 return self._send(200, IMP.inspect_source_container(b["name"], b["container"]))
             if p == "/api/import":
-                return self._send(200, IMP.import_container(b))
+                result = IMP.import_container(b)
+                result["operation"] = OPS.start(
+                    "import", f"Import {b['name']}",
+                    {"kind": "Job", "name": result["job"], "namespace": DEFAULT_NS},
+                    "/import", {"namespace": DEFAULT_NS, "name": result["job"]})
+                return self._send(200, result)
+            if p == "/api/operations/dismiss":
+                return self._send(200, OPS.dismiss(b["id"]))
             if p == "/api/preview":
                 dep, svc = build_deployment(b)
                 return self._send(200, {"deployment": dep, "service": svc})

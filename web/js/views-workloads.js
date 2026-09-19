@@ -95,15 +95,15 @@ function renderWorkloads() {
           ${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</div>
         ${updateError ? `<div class="updateerror">Image check: ${esc(updateError.error)}</div>` : ""}
         <div class="row wacts">
-          <button class="btn sm" onclick="wlLogs('${w.ns}','${w.pods[0] ? w.pods[0].name : ""}')">Logs</button>
-          <button class="btn sm" onclick="wlEdit('${w.ns}','${w.name}')">Edit</button>
-          <button class="btn sm" data-need="operator" onclick="moveWorkload('${w.name}','${w.ns}')">Move</button>
-          <button class="btn sm" onclick="wlRestart('${w.ns}','${w.name}')">Restart</button>
-          ${update?.available ? `<button class="btn sm pri" data-need="operator" onclick="imageUpdateReview('${w.ns}','${w.name}')">Update</button>` : ""}
-          ${update?.can_rollback ? `<button class="btn sm" data-need="operator" onclick="imageRollback('${w.ns}','${w.name}')">Rollback</button>` : ""}
-          ${off ? `<button class="btn sm" onclick="wlScale('${w.ns}','${w.name}',1)">Start</button>`
-                : `<button class="btn sm" onclick="wlScale('${w.ns}','${w.name}',0)">Stop</button>`}
-          <button class="btn sm danger" onclick="wlDelete('${w.ns}','${w.name}')">Delete</button>
+          <button class="btn sm" title="View live container logs" onclick="wlLogs('${w.ns}','${w.pods[0] ? w.pods[0].name : ""}')">${icon("log")}Logs</button>
+          <button class="btn sm" title="Edit image, resources, environment, storage and hardware" onclick="wlEdit('${w.ns}','${w.name}')">${icon("edit")}Edit</button>
+          <button class="btn sm" title="Move this workload to another eligible host" data-need="operator" onclick="moveWorkload('${w.name}','${w.ns}')">${icon("move")}Move</button>
+          <button class="btn sm" title="Restart all pods in this workload" onclick="wlRestart('${w.ns}','${w.name}')">${icon("restart")}Restart</button>
+          ${update?.available ? `<button class="btn sm pri" title="Review and install the available image update" data-need="operator" onclick="imageUpdateReview('${w.ns}','${w.name}')">${icon("update")}Update</button>` : ""}
+          ${update?.can_rollback ? `<button class="btn sm" title="Restore the exact image digest saved before the last update" data-need="operator" onclick="imageRollback('${w.ns}','${w.name}')">${icon("rollback")}Rollback</button>` : ""}
+          ${off ? `<button class="btn sm" title="Start this workload" onclick="wlScale('${w.ns}','${w.name}',1)">${icon("play")}Start</button>`
+                : `<button class="btn sm" title="Scale this workload to zero" onclick="wlScale('${w.ns}','${w.name}',0)">${icon("stop")}Stop</button>`}
+          <button class="btn sm danger" title="Delete the workload; persistent volumes are kept" onclick="wlDelete('${w.ns}','${w.name}')">${icon("trash")}Delete</button>
         </div></div>`;
     }).join("") || `<div class="empty">nothing here yet</div>`}</div>`);
 }

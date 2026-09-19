@@ -86,6 +86,7 @@ window.doLogout = async () => {
   ME = null;
   clearInterval(window.__loopTimer);
   clearInterval(window.__imageUpdateLoop);
+  clearTimeout(window.__operationTimer);
   loginForm();
 };
 
@@ -204,8 +205,10 @@ $("#whoami").onclick = () => go("settings");
 async function afterAuth() {
   paintWho();
   await loadHealthSettings();
-  go("dash");
+  const route = HarvRouter.resolve(window.location.pathname);
+  go(route.view, { history: false });
   startLoop();
+  if (window.startOperationChecks) window.startOperationChecks();
   if (window.startUpdateChecks) window.startUpdateChecks();
 }
 

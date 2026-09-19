@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HARVUI_VERSION = "1.9.4";
+const HARVUI_VERSION = "1.10.0";
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
   disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 },
@@ -29,6 +29,7 @@ async function loadHealthSettings(force = false) {
   return s;
 }
 const tip = (text, label = "?") => `<span class="tip" tabindex="0" aria-label="${esc(text)}" data-tip="${esc(text)}">${esc(label)}</span>`;
+const icon = name => `<svg class="btnicon" aria-hidden="true"><use href="#i-${esc(name)}"/></svg>`;
 const appAvatar = (name, icon, cls = "") => icon
   ? `<span class="av appav ${cls}"><img src="${esc(icon)}" alt="" referrerpolicy="no-referrer" onerror="this.parentNode.innerHTML='${esc(String(name || "?").slice(0, 2).toUpperCase())}'"></span>`
   : `<span class="av ${cls}">${esc(String(name || "?").slice(0, 2).toUpperCase())}</span>`;
@@ -69,6 +70,7 @@ async function api(path, opts) {
   const ct = r.headers.get("content-type") || "";
   const b = ct.includes("json") ? await r.json() : await r.text();
   if (!r.ok) throw new Error((b && b.error) || r.statusText);
+  if (b && b.operation && window.noteOperation) window.noteOperation(b.operation);
   return b;
 }
 
@@ -179,7 +181,15 @@ function morph(a, b) {
   }
 }
 function syncAttrs(x, y) {
-  for (const at of [...y.attributes]) if (x.getAttribute(at.name) !== at.value) x.setAttribute(at.name, at.value);
+  for (const at of [...y.attributes]) if (x.getAttribute(at.name) !== at.value) {
+    const animateSpark = at.name === "d" && x.closest(".spark") &&
+      (x.classList.contains("ln") || x.classList.contains("fl"));
+    x.setAttribute(at.name, at.value);
+    if (animateSpark && SET.motion !== "off" && x.animate) {
+      x.animate([{ transform: "translateX(7px)", opacity: .72 }, { transform: "translateX(0)", opacity: 1 }],
+        { duration: 420, easing: "cubic-bezier(.2,.8,.2,1)" });
+    }
+  }
   for (const at of [...x.attributes]) if (!y.hasAttribute(at.name)) x.removeAttribute(at.name);
 }
 function resetPaint() { const h = V(); delete h.dataset.painted; h.innerHTML = ""; }
@@ -195,10 +205,8 @@ function sparkline(vals, { w = 300, h = 74 } = {}) {
     const [x0, y0] = pts[i - 1], [x1, y1] = pts[i], cx = (x0 + x1) / 2;
     d += ` C ${cx},${y0} ${cx},${y1} ${x1},${y1}`;
   }
-  const last = pts[pts.length - 1];
   return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
-    <path class="fl" d="${d} L ${w},${h} L 0,${h} Z"/><path class="ln" d="${d}"/>
-    <circle class="kn" cx="${last[0]}" cy="${last[1]}" r="3.2"/></svg>`;
+    <path class="fl" d="${d} L ${w},${h} L 0,${h} Z"/><path class="ln" d="${d}"/></svg>`;
 }
 function dualSpark(a, b, { w = 300, h = 74 } = {}) {
   const all = [...(a || []), ...(b || [])];
@@ -214,8 +222,7 @@ function dualSpark(a, b, { w = 300, h = 74 } = {}) {
       const [x0, y0] = pts[i - 1], [x1, y1] = pts[i], cx = (x0 + x1) / 2;
       d += ` C ${cx},${y0} ${cx},${y1} ${x1},${y1}`;
     }
-    const last = pts[pts.length - 1];
-    return `<path class="ln ${cl}" d="${d}"/><circle class="kn ${cl}" cx="${last[0]}" cy="${last[1]}" r="3"/>`;
+    return `<path class="ln ${cl}" d="${d}"/>`;
   };
   return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
     ${line(a, "s1")}${line(b, "s2")}</svg>`;

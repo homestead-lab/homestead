@@ -18,12 +18,31 @@ const VIEWS = {
   settings:  ["Settings",       "system",    viewSettings,  false],
 };
 
-function go(v) {
+function renderBreadcrumb(v) {
+  const host = $("#crumb");
+  host.innerHTML = HarvRouter.breadcrumbs(v).map((item, index) => {
+    const sep = index ? '<span class="crumbsep" aria-hidden="true">/</span>' : "";
+    return sep + (item.current
+      ? `<span aria-current="page">${esc(item.label)}</span>`
+      : `<a href="${esc(item.url)}" data-route-view="dash">${esc(item.label)}</a>`);
+  }).join("");
+  $$("a[data-route-view]", host).forEach(a => a.onclick = e => {
+    e.preventDefault(); go(a.dataset.routeView);
+  });
+}
+
+function go(v, options = {}) {
   if (!VIEWS[v]) return;
   STATE.view = v;
-  const [t, c, fn] = VIEWS[v];
+  const [t, , fn] = VIEWS[v];
   $("#title").textContent = t;
-  $("#crumb").textContent = c;
+  renderBreadcrumb(v);
+  document.title = `${t} · HarvUI`;
+  if (options.history !== false) {
+    const url = HarvRouter.urlFor(v, options.params);
+    const current = window.location.pathname + window.location.search;
+    if (url !== current) window.history[options.replace ? "replaceState" : "pushState"]({ view: v }, "", url);
+  }
   $$("#nav a").forEach(a => a.classList.toggle("on", a.dataset.view === v));
   closeNav();
   resetPaint();
@@ -59,7 +78,12 @@ function startLoop() {
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 
 /* ---------------- nav ---------------- */
-$$("#nav a").forEach(a => a.onclick = () => go(a.dataset.view));
+$$("#nav a").forEach(a => a.onclick = e => { e.preventDefault(); go(a.dataset.view); });
+window.addEventListener("popstate", () => {
+  closeModal();
+  const route = HarvRouter.resolve(window.location.pathname);
+  go(route.view, { history: false });
+});
 function openNav() { document.body.classList.add("navopen"); }
 function closeNav() { document.body.classList.remove("navopen"); }
 $("#hamburger").onclick = () => document.body.classList.toggle("navopen");
