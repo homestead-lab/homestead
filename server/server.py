@@ -29,7 +29,18 @@ _lock = threading.Lock()
 
 # rolling time-series so the UI can draw real sparklines (not decoration)
 HIST_MAX = 120
-HIST = {"t": [], "cpu": [], "mem": [], "wl_pods": [], "sys_pods": [], "vol_bad": []}
+HIST = {"t": [], "cpu": [], "mem": [], "wl_pods": [], "sys_pods": [], "vol_bad": [],
+        "net_rx": [], "net_tx": []}
+_RATE = {}   # key -> (counter, timestamp) for per-node byte counters
+
+
+def rate(key, value, now=None):
+    now = now or time.time()
+    prev = _RATE.get(key)
+    _RATE[key] = (value, now)
+    if not prev or now <= prev[1] or value < prev[0]:
+        return 0.0
+    return (value - prev[0]) / (now - prev[1])
 
 
 def _sampler():
@@ -43,6 +54,8 @@ def _sampler():
                 HIST["wl_pods"].append(o["workload_pods"])
                 HIST["sys_pods"].append(o["system_pods"])
                 HIST["vol_bad"].append(o["vol_degraded"] + o["vol_faulted"])
+                HIST["net_rx"].append(round(sum(n.get("rx_mbps", 0) for n in o["nodes"]), 2))
+                HIST["net_tx"].append(round(sum(n.get("tx_mbps", 0) for n in o["nodes"]), 2))
                 for k in HIST:
                     if len(HIST[k]) > HIST_MAX:
                         HIST[k] = HIST[k][-HIST_MAX:]
@@ -119,6 +132,33 @@ def parse_mem(s):
 
 
 # ---------------------------------------------------------------- collectors
+def node_stats(name):
+    """Per-node network + filesystem counters from the kubelet summary API."""
+    try:
+        s = kget(f"/api/v1/nodes/{name}/proxy/stats/summary", timeout=8)
+    except Exception:
+        return {}
+    nd = s.get("node", {}) or {}
+    net = nd.get("network", {}) or {}
+    ifaces = net.get("interfaces") or []
+    pick = next((i for i in ifaces if i.get("name") == "mgmt-br"), None) or            next((i for i in ifaces if (i.get("rxBytes") or 0) > 0), None) or {}
+    rx, tx = pick.get("rxBytes") or 0, pick.get("txBytes") or 0
+    now = time.time()
+    fs = nd.get("fs", {}) or {}
+    runtime = (s.get("node", {}).get("runtime", {}) or {}).get("imageFs", {}) or {}
+    return {
+        "net_iface": pick.get("name", ""),
+        "rx_mbps": round(rate(f"{name}:rx", rx, now) * 8 / 1e6, 2),
+        "tx_mbps": round(rate(f"{name}:tx", tx, now) * 8 / 1e6, 2),
+        "rx_total_gb": round(rx / 1024**3, 1),
+        "tx_total_gb": round(tx / 1024**3, 1),
+        "fs_used_gb": round((fs.get("usedBytes") or 0) / 1024**3, 1),
+        "fs_cap_gb": round((fs.get("capacityBytes") or 0) / 1024**3, 1),
+        "fs_pct": round((fs.get("usedBytes") or 0) / (fs.get("capacityBytes") or 1) * 100, 1),
+        "img_used_gb": round((runtime.get("usedBytes") or 0) / 1024**3, 1),
+    }
+
+
 def get_nodes():
     nodes = kget("/api/v1/nodes")
     try:
@@ -163,6 +203,12 @@ def get_nodes():
             "kernel": n["status"].get("nodeInfo", {}).get("kernelVersion", ""),
             "os": n["status"].get("nodeInfo", {}).get("osImage", ""),
             "schedulable": not n.get("spec", {}).get("unschedulable", False),
+            "addresses": {a["type"]: a["address"] for a in n["status"].get("addresses", [])},
+            "info": n["status"].get("nodeInfo", {}),
+            "conditions": [{"type": c["type"], "status": c["status"], "reason": c.get("reason", "")}
+                           for c in n["status"].get("conditions", [])],
+            "created": n["metadata"].get("creationTimestamp", ""),
+            **node_stats(name),
         })
     return out
 
@@ -176,8 +222,18 @@ def get_volumes():
     for v in vols:
         st = v.get("status", {})
         sp = v.get("spec", {})
+        ks = st.get("kubernetesStatus", {}) or {}
+        wls = ks.get("workloadsStatus") or []
         out.append({
             "name": v["metadata"]["name"],
+            "pvc_name": ks.get("pvcName", ""),
+            "namespace": ks.get("namespace", ""),
+            "attached_to": ", ".join(sorted({w.get("workloadName") or w.get("podName") or ""
+                                             for w in wls if w.get("workloadName") or w.get("podName")})),
+            "pod_status": ", ".join(sorted({w.get("podStatus", "") for w in wls if w.get("podStatus")})),
+            "last_used": ks.get("lastPodRefAt") or ks.get("lastPVCRefAt") or "",
+            "last_used_secs": age_secs(ks.get("lastPodRefAt") or ks.get("lastPVCRefAt") or ""),
+            "created": v["metadata"].get("creationTimestamp", ""),
             "state": st.get("state", "?"),
             "robustness": st.get("robustness", "?"),
             "node": st.get("currentNodeID", ""),
@@ -518,6 +574,43 @@ def get_flow():
     }
 
 
+def get_storage():
+    """Cluster storage rollup for the dashboard: capacity, usage, replica health."""
+    vols = get_volumes()
+    try:
+        lhnodes = kget("/apis/longhorn.io/v1beta2/nodes").get("items", [])
+    except Exception:
+        lhnodes = []
+    cap = avail = 0
+    disks = []
+    for n in lhnodes:
+        for did, d in (n.get("status", {}).get("diskStatus", {}) or {}).items():
+            c = d.get("storageMaximum") or 0
+            a = d.get("storageAvailable") or 0
+            cap += c
+            avail += a
+            disks.append({"node": n["metadata"]["name"],
+                          "cap_gb": round(c / 1024**3, 1),
+                          "avail_gb": round(a / 1024**3, 1),
+                          "sched_gb": round((d.get("storageScheduled") or 0) / 1024**3, 1)})
+    prov = sum(v["size_gb"] for v in vols)
+    used = sum(v["actual_gb"] for v in vols)
+    return {
+        "cap_gb": round(cap / 1024**3, 1),
+        "avail_gb": round(avail / 1024**3, 1),
+        "used_gb": round((cap - avail) / 1024**3, 1),
+        "used_pct": round((cap - avail) / cap * 100, 1) if cap else 0,
+        "provisioned_gb": round(prov, 1),
+        "actual_gb": round(used, 1),
+        "volumes": len(vols),
+        "healthy": len([v for v in vols if v["robustness"] == "healthy"]),
+        "degraded": len([v for v in vols if v["robustness"] == "degraded"]),
+        "faulted": len([v for v in vols if v["robustness"] == "faulted"]),
+        "attached": len([v for v in vols if v["state"] == "attached"]),
+        "disks": disks,
+    }
+
+
 # ---------------------------------------------------------------- mutations
 def build_deployment(cfg):
     name = cfg["name"]
@@ -794,6 +887,8 @@ class H(BaseHTTPRequestHandler):
         try:
             if p == "/" or p == "/index.html":
                 return self._file(f"{WEBROOT}/index.html", "text/html; charset=utf-8")
+            if p.startswith("/js/") and p.endswith(".js") and ".." not in p:
+                return self._file(f"{WEBROOT}/{os.path.basename(p)}", "application/javascript")
             if p == "/app.js":
                 return self._file(f"{WEBROOT}/app.js", "application/javascript")
             if p == "/style.css":
@@ -810,6 +905,12 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("vol", 8, get_volumes))
             if p == "/api/events":
                 return self._send(200, cached("ev", 10, get_events))
+            if p == "/api/storage":
+                return self._send(200, cached("stor", 10, get_storage))
+            if p == "/api/node":
+                return self._send(200, cached("node:" + (q.get("name") or [""])[0], 5,
+                                  lambda: next((n for n in get_nodes()
+                                                if n["name"] == (q.get("name") or [""])[0]), {})))
             if p == "/api/history":
                 with _lock:
                     return self._send(200, {k: list(v) for k, v in HIST.items()})
