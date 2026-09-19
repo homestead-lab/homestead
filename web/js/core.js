@@ -6,8 +6,8 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HARVUI_VERSION = "1.15.3";
-const ICON_CACHE_EPOCH = Date.now();
+const HARVUI_VERSION = "1.15.4";
+const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
   disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 },
@@ -32,8 +32,27 @@ async function loadHealthSettings(force = false) {
 const tip = (text, label = "?") => `<span class="tip" tabindex="0" aria-label="${esc(text)}" data-tip="${esc(text)}">${esc(label)}</span>`;
 const icon = name => `<svg class="btnicon" aria-hidden="true"><use href="#i-${esc(name)}"/></svg>`;
 const appAvatar = (name, icon, cls = "") => icon
-  ? `<span class="av appav ${cls}"><img src="${esc(icon.startsWith("/api/icons/") ? `${icon}?v=${HARVUI_VERSION}-${ICON_CACHE_EPOCH}` : icon)}" alt="" referrerpolicy="no-referrer" onerror="this.parentNode.innerHTML='${esc(String(name || "?").slice(0, 2).toUpperCase())}'"></span>`
+  ? `<span class="av appav ${cls}"><span class="avfallback">${esc(String(name || "?").slice(0, 2).toUpperCase())}</span><img ${icon.startsWith("/api/icons/") ? `data-icon-src="${esc(icon)}"` : `src="${esc(icon)}"`} alt="" referrerpolicy="no-referrer" onload="this.previousElementSibling.hidden=true" onerror="this.remove()"></span>`
   : `<span class="av ${cls}">${esc(String(name || "?").slice(0, 2).toUpperCase())}</span>`;
+
+function loadAppIcons(root = document) {
+  root.querySelectorAll("img[data-icon-src]").forEach(img => {
+    if (img.dataset.iconLoading) return;
+    img.dataset.iconLoading = "1";
+    const url = img.dataset.iconSrc;
+    let pending = ICON_BLOBS.get(url);
+    if (!pending) {
+      pending = fetch(url, { credentials: "same-origin", cache: "no-store" }).then(response => {
+        if (!response.ok) throw new Error(`icon request failed (${response.status})`);
+        return response.blob();
+      }).then(blob => URL.createObjectURL(blob));
+      ICON_BLOBS.set(url, pending);
+      pending.catch(() => ICON_BLOBS.delete(url));
+    }
+    pending.then(objectUrl => { if (img.isConnected) img.src = objectUrl; })
+      .catch(() => { if (img.isConnected) img.remove(); });
+  });
+}
 
 const fmtUp = sec => {
   if (!sec || sec < 0) return "—";
@@ -234,6 +253,7 @@ function paint(html) {
   if (!host.dataset.painted) {
     host.innerHTML = html;
     enhanceActions(host);
+    loadAppIcons(host);
     host.dataset.painted = "1";
     host.dataset.sig = html.length + ":" + STATE.view;
     if (window.applyRole) window.applyRole();
@@ -243,6 +263,7 @@ function paint(html) {
   next.innerHTML = html;
   enhanceActions(next);
   morph(host, next);
+  loadAppIcons(host);
   if (window.applyRole) window.applyRole();
 }
 function morph(a, b) {
