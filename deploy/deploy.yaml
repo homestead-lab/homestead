@@ -127,8 +127,6 @@ spec:
         lab-workload: "true"
     spec:
       serviceAccountName: harvui
-      imagePullSecrets:
-        - name: harvui-ghcr
       securityContext:
         runAsNonRoot: true
         fsGroup: 10001

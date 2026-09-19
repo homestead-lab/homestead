@@ -54,10 +54,8 @@ git tag v1.9.1
 git push origin v1.9.1
 ```
 
-The package remains private when the repository/package is private. If the
-package was created previously, ensure the repository has **Actions access** in
-the package settings. The OCI source label in the image links new packages back
-to this repository.
+The official package is public and can be pulled without registry credentials.
+The OCI source label in the image links releases back to this repository.
 
 ## Fresh-cluster installation
 
@@ -73,27 +71,7 @@ kubectl get storageclass
 The supplied manifest uses `longhorn-r2`. Change `storageClassName` if the fresh
 cluster uses another Longhorn class.
 
-### 2. Allow the cluster to pull the private GHCR image
-
-Create a GitHub **personal access token (classic)** with only `read:packages`.
-Authorize it for SSO as well if the GitHub organization requires SSO. Then
-create the Kubernetes pull secret without putting the token in a file:
-
-```bash
-kubectl create namespace lab --dry-run=client -o yaml | kubectl apply -f -
-read -rsp "GHCR read token: " CR_PAT; echo
-kubectl -n lab create secret docker-registry harvui-ghcr \
-  --docker-server=ghcr.io \
-  --docker-username=YOUR_GITHUB_LOGIN \
-  --docker-password="$CR_PAT" \
-  --dry-run=client -o yaml | kubectl apply -f -
-unset CR_PAT
-```
-
-GitHub documents the `read:packages` requirement in
-[Working with the Container registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
-
-### 3. Configure and install
+### 2. Configure and install
 
 Review these values in `deploy/deploy.yaml` before applying it:
 
@@ -114,7 +92,12 @@ Open the Service address on port `8088`. The first visit creates the initial
 administrator. Authentication is stored in a Kubernetes Secret, independently
 of the container and Longhorn volume.
 
-### 4. Optional node telemetry
+For a private fork/package, add an `imagePullSecrets` entry to the Deployment
+and create a `docker-registry` secret using a classic GitHub token with only
+`read:packages`. GitHub documents this in
+[Working with the Container registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
+
+### 3. Optional node telemetry
 
 Kubernetes does not expose physical temperatures, host device inventory, or
 per-disk throughput. Install the non-privileged node probe to enable those views:
