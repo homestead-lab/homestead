@@ -1,0 +1,146 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: harvui
+  namespace: lab
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: harvui
+rules:
+  - apiGroups: [""]
+    resources: [nodes, namespaces, events, persistentvolumes]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [nodes/proxy, nodes/stats, nodes/metrics]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [pods, pods/log]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [services, persistentvolumeclaims, configmaps]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["apps"]
+    resources: [deployments, deployments/scale, replicasets, statefulsets, daemonsets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: [nodes, pods]
+    verbs: [get, list]
+  - apiGroups: ["storage.k8s.io"]
+    resources: [storageclasses]
+    verbs: [get, list]
+  - apiGroups: ["longhorn.io"]
+    resources: [volumes, nodes, replicas, engines, settings]
+    verbs: [get, list]
+  - apiGroups: ["kubevirt.io"]
+    resources: [virtualmachines, virtualmachineinstances]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: harvui
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: harvui
+subjects:
+  - kind: ServiceAccount
+    name: harvui
+    namespace: lab
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: harvui
+  namespace: lab
+  labels:
+    app: harvui
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: harvui
+  template:
+    metadata:
+      labels:
+        app: harvui
+        lab-workload: "true"
+      annotations:
+        checksum/code: "v1"
+    spec:
+      serviceAccountName: harvui
+      terminationGracePeriodSeconds: 5
+      tolerations:
+        - key: node.kubernetes.io/unreachable
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 15
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 15
+      containers:
+        - name: harvui
+          image: python:3.12-alpine
+          command: ["python3", "/srv/server.py"]
+          env:
+            - name: PORT
+              value: "8080"
+            - name: WEBROOT
+              value: "/web"
+            - name: DEFAULT_NS
+              value: "lab"
+            - name: SMB_NAMESPACE
+              value: "lab"
+            - name: STORAGE_CLASS
+              value: "longhorn-r2"
+            - name: LB_IP
+              value: "192.0.2.242"
+          ports:
+            - containerPort: 8080
+              name: http
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          volumeMounts:
+            - name: code
+              mountPath: /srv
+            - name: web
+              mountPath: /web
+      volumes:
+        - name: code
+          configMap:
+            name: harvui-server
+        - name: web
+          configMap:
+            name: harvui-web
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: harvui
+  namespace: lab
+  labels:
+    app: harvui
+  annotations:
+    kube-vip.io/loadbalancerIPs: 192.0.2.242
+spec:
+  type: LoadBalancer
+  selector:
+    app: harvui
+  ports:
+    - name: http
+      port: 8088
+      targetPort: 8080
+      protocol: TCP
