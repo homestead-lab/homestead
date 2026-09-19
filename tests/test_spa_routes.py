@@ -41,7 +41,7 @@ class SpaRouteTests(unittest.TestCase):
 
     def test_bundled_svg_asset_is_served_with_svg_mime_type(self):
         handler = object.__new__(server.H)
-        handler.path = "/assets/homestead-mark.svg?v=2.0.3"
+        handler.path = "/assets/homestead-mark.svg?v=2.1.0"
         handler.command = "GET"
         handler.headers = {}
         served = []

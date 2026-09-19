@@ -24,7 +24,7 @@ passthrough, image updates and failover constraints into approachable controls.
 | **Dashboard** | Cluster CPU/RAM/network/disk telemetry, transition-aware health, top consumers, configurable warnings |
 | **Containers** | Deploy, edit, move, start/stop, logs, logos, hardware passthrough, image update checks, monitored rollout and deterministic rollback |
 | **Architecture** | VIP → workload → claim → Longhorn volume → replica dependency view |
-| **Storage** | RWO/RWX volume creation and growth, usage, health, snapshots, backups and recurring jobs |
+| **Storage** | RWO/RWX volume creation, growth and guarded deletion, usage, health, snapshots, backups and recurring jobs |
 | **Hardware** | Host device browser and reusable mappings for iGPU, Coral, USB/PCIe and other devices |
 | **Import** | Unraid/Docker workload and appdata import with editable seed configuration |
 | **Administration** | Direct URLs/breadcrumbs, persistent activity tray, viewer/operator/admin roles, appearance, thresholds and version details |
@@ -48,11 +48,11 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.0.3`, the workflow publishes:
+For a release such as `v2.1.0`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.0.3
-ghcr.io/wjcloudy/homestead:2.0
+ghcr.io/wjcloudy/homestead:2.1.0
+ghcr.io/wjcloudy/homestead:2.1
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
 ghcr.io/wjcloudy/homestead:sha-<commit>
@@ -62,8 +62,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.0.3
-git push origin v2.0.3
+git tag v2.1.0
+git push origin v2.1.0
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -154,7 +154,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.0.3 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.1.0 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -182,6 +182,23 @@ host RKE2 `crictl` binary and containerd socket, run as root without Linux
 capabilities or privilege escalation, and report progress through Activity.
 Kubernetes Node status exposes only each node's largest cached images; smaller
 entries may not appear in the table and Homestead will not attempt to remove them.
+
+## Safe volume deletion
+
+Volume deletion is available only to administrators and always starts with a
+fresh impact preview. Homestead checks pods and workload controllers, VM disk
+references, live Longhorn attachment, replica count, written data, snapshots,
+external backups, and the PV reclaim policy. Any workload reference or active
+attachment blocks deletion; Homestead never stops or rewrites a workload as a
+side effect of deleting storage.
+
+After a claim is detached and unreferenced, the administrator explicitly
+chooses between deleting the PVC while forcing its PV to `Retain`, or permanently
+deleting the PVC and backing Longhorn data with the PV policy set to `Delete`.
+The exact claim name must be typed before either action. System namespaces and
+Homestead's own `harvui-data` claim are protected, and the supplied RBAC grants
+only the additional PV `patch` permission required to make the chosen reclaim
+behavior deterministic.
 
 ## Workload logos
 
