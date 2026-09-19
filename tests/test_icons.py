@@ -27,6 +27,7 @@ class IconCacheTests(unittest.TestCase):
             path, mime = icons.resolve(url, data_dir)
             self.assertEqual("image/png", mime)
             self.assertEqual(PNG, Path(path).read_bytes())
+            self.assertTrue(icons.data_url(url, data_dir).startswith("data:image/png;base64,"))
 
     def test_private_and_credentialed_sources_are_rejected(self):
         with mock.patch.object(icons.socket, "getaddrinfo", return_value=[
@@ -40,7 +41,7 @@ class IconCacheTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "supported"):
             icons._sniff_mime(b"<svg><script>alert(1)</script></svg>")
         with tempfile.TemporaryDirectory() as data_dir, mock.patch.object(
-                icons, "_download", side_effect=ValueError("logo is too large (maximum 2 MiB)")):
+                icons, "_download", side_effect=ValueError("logo is too large (maximum 256 KiB)")):
             with self.assertRaisesRegex(ValueError, "too large"):
                 icons.persist("https://example.com/large.png", data_dir)
 
@@ -78,6 +79,15 @@ class IconCacheTests(unittest.TestCase):
         self.assertTrue(server.is_public_path("/api/icons/" + "a" * 64 + ".png"))
         self.assertFalse(server.is_public_path("/api/workloads"))
         self.assertFalse(server.is_public_path("/api/icons"))
+
+    def test_workload_display_uses_persisted_bytes_not_remote_source(self):
+        with tempfile.TemporaryDirectory() as data_dir, \
+                mock.patch.object(icons, "_download", return_value=(PNG, "image/png")):
+            reference = icons.persist("https://example.com/logo.png", data_dir)
+            with mock.patch.object(server, "DATA_DIR", data_dir):
+                rendered = server.display_icon({"harvui.io/icon": reference})
+        self.assertTrue(rendered.startswith("data:image/png;base64,"))
+        self.assertNotIn("example.com", rendered)
 
 
 if __name__ == "__main__":

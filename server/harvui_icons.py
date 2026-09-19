@@ -7,6 +7,7 @@ HarvUI's Longhorn-backed DATA_DIR so rollouts do not depend on the source URL.
 """
 import hashlib
 import ipaddress
+import base64
 import os
 import re
 import socket
@@ -15,7 +16,7 @@ import urllib.parse
 import urllib.request
 
 
-MAX_ICON_BYTES = 2 * 1024 * 1024
+MAX_ICON_BYTES = 256 * 1024
 MIME_EXTENSIONS = {
     "image/png": "png",
     "image/jpeg": "jpg",
@@ -82,7 +83,7 @@ def _download(url):
         declared = (response.headers.get_content_type() or "").lower()
         data = response.read(MAX_ICON_BYTES + 1)
     if len(data) > MAX_ICON_BYTES:
-        raise ValueError("logo is too large (maximum 2 MiB)")
+        raise ValueError("logo is too large (maximum 256 KiB)")
     mime = _sniff_mime(data)
     if declared and declared not in MIME_EXTENSIONS and declared != "application/octet-stream":
         raise ValueError("logo server did not return an image")
@@ -131,3 +132,26 @@ def resolve(path, data_dir):
     if not target.startswith(root) or not os.path.isfile(target):
         raise FileNotFoundError("icon not found")
     return target, mime
+
+
+_DATA_URL_CACHE = {}
+
+
+def data_url(reference, data_dir):
+    """Return a bounded in-API representation for a cached icon."""
+    if not str(reference or "").startswith("/api/icons/"):
+        return reference or ""
+    path, mime = resolve(reference, data_dir)
+    stat = os.stat(path)
+    key = (path, stat.st_mtime_ns, stat.st_size)
+    cached = _DATA_URL_CACHE.get(key)
+    if cached:
+        return cached
+    if stat.st_size > MAX_ICON_BYTES:
+        raise ValueError("cached logo exceeds the 256 KiB display limit")
+    with open(path, "rb") as handle:
+        encoded = base64.b64encode(handle.read()).decode("ascii")
+    value = f"data:{mime};base64,{encoded}"
+    _DATA_URL_CACHE.clear()
+    _DATA_URL_CACHE[key] = value
+    return value

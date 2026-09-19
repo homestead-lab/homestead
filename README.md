@@ -132,7 +132,7 @@ through browser refreshes and HarvUI restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=1.15.4 HOST=rancher@192.0.2.210 ./scripts/deploy.sh
+TAG=1.15.5 HOST=rancher@192.0.2.210 ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -166,7 +166,7 @@ entries may not appear in the table and HarvUI will not attempt to remove them.
 Container create, edit, import, and App Store flows accept an optional public
 HTTP(S) raster-image URL. Before changing the workload, HarvUI validates the
 destination, blocks private/link-local address resolution and credentialed
-URLs, limits the response to 2 MiB, and stores the verified image by content
+URLs, limits the response to 256 KiB, and stores the verified image by content
 hash under `$DATA_DIR/icons`. Deployments keep both the same-origin cached URL
 and the original source annotation, so cards do not depend on the remote host
 and the source remains editable. SVG is deliberately not accepted. Cached

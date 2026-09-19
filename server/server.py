@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HARVUI_VERSION = os.environ.get("HARVUI_VERSION", "1.15.4")
+HARVUI_VERSION = os.environ.get("HARVUI_VERSION", "1.15.5")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -588,7 +588,7 @@ def get_workloads():
             "ports": ports,
             "gpu": "igpu" in hardware,
             "hardware": hardware,
-            "icon": annotations.get("harvui.io/icon", ""),
+            "icon": display_icon(annotations),
         })
     return sorted(out, key=lambda x: (x["ns"], x["name"]))
 
@@ -812,7 +812,7 @@ def get_flow2():
             "cpu": round(cu, 3), "mem_mb": round(mu / 1048576, 1),
             "ns": p["metadata"]["namespace"],
             "image": (p["spec"].get("containers") or [{}])[0].get("image", ""),
-            "icon": dep_meta.get((p["metadata"]["namespace"], app), {}).get("harvui.io/icon", ""),
+            "icon": display_icon(dep_meta.get((p["metadata"]["namespace"], app), {})),
             "hardware": HW.workload_features(p["spec"], dep_meta.get((p["metadata"]["namespace"], app), {})),
             "gpu": any("dri" in (m.get("mountPath") or "")
                        for c in p["spec"].get("containers", []) for m in (c.get("volumeMounts") or [])),
@@ -1321,6 +1321,14 @@ PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.featur
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS)
 OPS.bind(kget, DATA_DIR, UPDATES.progress)
 CONSOLE_PROXY = CONSOLE.ConsoleProxy(API, TOKEN, CTX, DATA_DIR, SYS_NS, {DEFAULT_NS}, kget)
+
+
+def display_icon(annotations):
+    reference = (annotations or {}).get("harvui.io/icon", "")
+    try:
+        return ICONS.data_url(reference, DATA_DIR)
+    except (FileNotFoundError, ValueError, OSError):
+        return ""
 
 # Browser routes serve the same authenticated application shell. Keep this an
 # explicit allowlist: an unknown path must not accidentally shadow an API 404.
