@@ -11,8 +11,9 @@ Legend: **🔨 active** · **⬜ queued** · **⚠️ design decision** · **✅
 ## Current goal
 
 Work through this roadmap in order, keeping the live cluster usable after each
-increment. The first milestone is the application shell and operation model;
-later workload, storage, and system actions depend on those foundations.
+increment. The application shell, operation model, transition-aware health,
+and dashboard telemetry polish shipped in v1.10.0. The active milestone is
+finishing resource-detail deep links, followed by consistent actions and help.
 
 ## Product rules
 
@@ -33,7 +34,7 @@ later workload, storage, and system actions depend on those foundations.
 These are first because every subsequent feature needs navigable URLs, shared
 status semantics, and a consistent way to report background work.
 
-#### 1.1 Direct routes and breadcrumbs — 🔨 active
+#### 1.1 Direct routes and breadcrumbs — 🔨 primary routes shipped in v1.10.0
 
 - Give every primary view a stable URL such as `/containers`, `/volumes`,
   `/networking`, `/system/cluster`, and `/settings`.
@@ -43,7 +44,7 @@ status semantics, and a consistent way to report background work.
 - **Done when:** pasting or refreshing any primary/detail URL returns to the
   same view, Back/Forward works, and breadcrumbs never lead to a dead state.
 
-#### 1.2 Global active-jobs tray — ⬜ queued
+#### 1.2 Global active-jobs tray — ✅ shipped in v1.10.0
 
 - Add a compact top or bottom tray for image pulls, deployments, imports,
   updates, migrations, backups, SMART tests, and other long operations.
@@ -54,7 +55,7 @@ status semantics, and a consistent way to report background work.
 - **Done when:** starting an image download and refreshing HarvUI does not lose
   its progress or result.
 
-#### 1.3 Honest health during transitions — ⬜ queued
+#### 1.3 Honest health during transitions — ✅ shipped in v1.10.0
 
 - Distinguish `starting`, `updating`, `degraded`, `blocked`, and `failed`.
 - A healthy cluster rolling out or starting a workload must not be labelled
@@ -63,7 +64,7 @@ status semantics, and a consistent way to report background work.
 - **Done when:** creating a normal container produces a transient activity
   state, not a cluster-degraded alert.
 
-#### 1.4 Consistent actions and help — ⬜ queued
+#### 1.4 Consistent actions and help — ⬜ queued (container actions started)
 
 - Add recognizable icons to actions such as Logs, Edit, Move, Console,
   Restart, and Delete while retaining visible labels where ambiguity is likely.
@@ -74,7 +75,7 @@ status semantics, and a consistent way to report background work.
 - **Done when:** the same action has the same icon, label, tooltip, and disabled
   explanation everywhere it appears.
 
-#### 1.5 Dashboard telemetry polish — ⬜ queued
+#### 1.5 Dashboard telemetry polish — ✅ shipped in v1.10.0
 
 - Remove the stretched point marker from sparklines.
 - Animate/scroll new samples smoothly without rebuilding the whole chart.
