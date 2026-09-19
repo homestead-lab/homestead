@@ -13,9 +13,9 @@ Legend: **✅ done** · **🔨 in progress** · **⬜ queued** · **⚠️ needs
 | # | Item | Status | Notes |
 |---|---|---|---|
 | 1.1 | GitHub repo, private, under `wjcloudy` | ✅ | this repo |
-| 1.2 | Split frontend into modules (`js/core.js`, `js/charts.js`, `js/views/*.js`) | 🔨 | `app.js` is ~44 KB and growing; ConfigMap limit is 1 MB total |
-| 1.3 | **No-flash refresh** — diff state, patch the DOM, never re-render the view | 🔨 | today every poll rebuilds `innerHTML`, which is what makes it flash |
-| 1.4 | Mobile: sidebar collapses to a hamburger drawer; tables become cards | 🔨 | below 900 px |
+| 1.2 | Split frontend into modules | ✅ | `core.js` + `views-overview/workloads/storage/lifecycle.js`; backend split into `harvui_lifecycle.py` + `harvui_imports.py` |
+| 1.3 | **No-flash refresh** — diff state, patch the DOM, never re-render the view | ✅ | today every poll rebuilds `innerHTML`, which is what makes it flash |
+| 1.4 | Mobile: sidebar collapses to a hamburger drawer; tables become cards | ✅ | below 900 px |
 | 1.5 | Remove sparkline band + mid dot | ✅ | as requested |
 
 ### On websockets (1.3)
@@ -40,12 +40,12 @@ polling interval under ~5 s is genuinely needed.
 
 | # | Item | Status |
 |---|---|---|
-| 2.1 | Volumes: what they're attached to + last-used time | 🔨 |
-| 2.2 | Dashboard: merge CPU + memory into one box | 🔨 |
-| 2.3 | Dashboard: new box for network + disk throughput | 🔨 |
-| 2.4 | Replace "Pod distribution" donut with storage breakdown, free space and replica health | 🔨 |
-| 2.5 | Node cards: network traffic + temperatures | 🔨 |
-| 2.6 | Click a node → detail modal | 🔨 |
+| 2.1 | Volumes: attached-to + last-used | ✅ |
+| 2.2 | Dashboard: merge CPU + memory | ✅ |
+| 2.3 | Dashboard: network + disk throughput | ✅ |
+| 2.4 | Storage breakdown replaces pod-distribution donut | ✅ |
+| 2.5 | Node cards: network traffic | ✅ (temps ⬜, see 2.5a) |
+| 2.6 | Click a node → detail modal | ✅ |
 | 2.7 | Uptime on containers and in the architecture view | ✅ |
 | 2.8 | Clickable access links to each service UI | ✅ |
 | 2.9 | Architecture hover dims everything not on the path | ✅ |
@@ -61,11 +61,11 @@ avoids pulling in Prometheus.
 
 | # | Item | Status | Notes |
 |---|---|---|---|
-| 3.1 | Edit container settings (image, env, ports, volumes, resources) | ⬜ | |
+| 3.1 | Edit container settings | ✅ | image, resources, env, replicas, iGPU, node pin |
 | 3.2 | Edit / delete shares | ✅ delete, ⬜ edit | |
-| 3.3 | Move a container between hosts | ⬜ | node pin + drain-and-reschedule |
-| 3.4 | Move a VM between hosts | ⬜ | KubeVirt live migration |
-| 3.5 | **Reboot / shut down a node** | ⚠️ | see below |
+| 3.3 | Move a container between hosts | ✅ | node pin + Recreate rollout |
+| 3.4 | Move a VM between hosts | ✅ | KubeVirt live migration |
+| 3.5 | **Reboot / shut down a node** | ✅ built, ⚠️ **off by default** | needs `ENABLE_NODE_POWER=true`; cordon/drain/quorum guard all live |
 | 3.6 | Change pod → container groupings | ⬜ | merge/split containers across pods |
 
 ### ⚠️ On host reboot/shutdown (3.5)
@@ -86,11 +86,11 @@ This is genuinely destructive and I want it gated, not just confirmed:
 
 | # | Item | Status | Notes |
 |---|---|---|---|
-| 4.1 | Deploy VMs (easy interface) | ⬜ | KubeVirt `VirtualMachine` + DataVolume; needs an image source |
-| 4.2 | Image cache page (container + VM images) | ⬜ | per-node image inventory, prune, pre-pull |
-| 4.3 | Schedules / jobs configuration | ⬜ | CronJob CRUD — backups, prunes, restarts |
-| 4.4 | Import sources in settings | ⬜ | registered Unraid/Proxmox hosts + credentials |
-| 4.5 | Import VMs / containers **with appdata** | ⬜ | the largest item — see below |
+| 4.1 | Deploy VMs | ✅ | VM + DataVolume, Harvester image or cloud-image URL |
+| 4.2 | Image cache page | ✅ | per-node inventory + pre-pull; prune ⬜ |
+| 4.3 | Schedules / jobs | ✅ | CronJob CRUD + run-now |
+| 4.4 | Import sources | ✅ | ConfigMap + Secret, with SSH browse |
+| 4.5 | Import containers **with appdata** | ✅ containers, ⬜ VMs | rsync Job into a Longhorn PVC |
 
 ### On import (4.5)
 
@@ -113,8 +113,8 @@ Phases 1–3 are solid.
 
 ## Not yet scheduled
 
-- **Authentication.** HarvUI is unauthenticated. Before it does anything in
-  Phase 3, this matters much more than it does today.
+- **Authentication.** HarvUI is unauthenticated, and it can now edit, move, drain,
+  migrate and import. This is the highest-priority remaining item by some margin.
 - Backups / restore of workload definitions.
 - Multi-cluster.
 
@@ -138,3 +138,19 @@ server/
 ```
 
 Frontend splits the same way under `web/js/views/`.
+
+
+---
+
+## Status after 2026-09-19
+
+Phases 1–4 are deployed and reachable at the cluster VIP. Remaining:
+
+| Item | Why it is still open |
+|---|---|
+| Authentication | Nothing gates the UI. Now the top priority. |
+| 2.5a node temperatures | Needs a privileged DaemonSet reading `/sys/class/thermal`. |
+| 3.6 pod↔container regrouping | Needs a clear model for what "merge two workloads" should mean. |
+| 4.5b VM import | Disk conversion (qcow2/vmdk → PVC) via CDI; separate from container import. |
+| Image prune | Listing and pre-pull are done; deleting cached images needs CRI access. |
+| Share editing | Delete exists; editing size/permissions in place does not. |
