@@ -202,6 +202,17 @@ h1{margin:2px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em}
 .btn:active{transform:translateY(0)}
 .btn:focus-visible,.iconbtn:focus-visible,.tip:focus-visible{outline:2px solid var(--low);outline-offset:2px}
 .btn:disabled,.btn[aria-disabled="true"]{opacity:.45;cursor:not-allowed;transform:none;box-shadow:none}
+.workloadtree{margin:12px 0 2px;border:1px solid var(--line);border-radius:11px;background:rgba(255,255,255,.025)}
+.workloadtree summary{display:flex;align-items:center;gap:7px;padding:8px 10px;cursor:pointer;color:var(--mut);font-size:11.5px;list-style:none}
+.workloadtree summary::-webkit-details-marker{display:none}.workloadtree summary::before{content:"›";font-size:17px;line-height:1;transition:transform .2s var(--e)}
+.workloadtree[open] summary::before{transform:rotate(90deg)}.tree-kind,.tree-branch{font-weight:700;color:var(--low)}
+.tree-arrow{color:var(--dim)}.tree-hint{margin-left:auto;color:var(--dim)}
+.tree-body{padding:0 10px 9px}.tree-pod{border-top:1px solid rgba(255,255,255,.055);padding:9px 0 2px}
+.tree-pod-head,.tree-container{display:flex;align-items:center;gap:8px;min-width:0;font-size:11.5px}
+.tree-pod-head .pill,.tree-container .pill{padding:2px 7px;font-size:9.5px}.tree-containers{margin:7px 0 0 15px;padding-left:12px;border-left:1px solid var(--line)}
+.tree-container{padding:4px 0}.tree-branch{font-size:9px;letter-spacing:.06em;text-transform:uppercase;flex:0 0 58px}.tree-branch.init{color:var(--vio)}
+.tree-image{margin-left:auto;max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:720px){.tree-hint,.tree-image{display:none}.tree-pod-head{flex-wrap:wrap}.tree-container{flex-wrap:wrap}}
 .btn.pri{background:#fff;color:#0a0a0b;border-color:#fff}
 .btn.pri:hover{background:#ededf2;box-shadow:0 8px 26px rgba(255,255,255,.2)}
 .btn.sm{padding:6px 11px;font-size:12px;border-radius:9px}

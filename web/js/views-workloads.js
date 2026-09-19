@@ -18,6 +18,30 @@ function paintUpdateBadge(count) {
   badge.classList.toggle("hidden", !count);
 }
 
+function workloadHierarchy(w) {
+  const pods = w.pods || [];
+  const podCount = w.pod_count ?? pods.length;
+  const containerCount = w.container_count ?? pods.reduce((n, p) => n + (p.container_count || p.containers?.filter(c => c.kind !== "init").length || 0), 0);
+  const podLabel = `${podCount} pod${podCount === 1 ? "" : "s"}`;
+  const containerLabel = `${containerCount} container${containerCount === 1 ? "" : "s"}`;
+  return `<details class="workloadtree">
+    <summary><span class="tree-kind">${esc(w.kind || "Deployment")}</span><span class="tree-arrow">→</span>
+      <span>${podLabel}</span><span class="tree-arrow">→</span><span>${containerLabel}</span>
+      <span class="tree-hint">show runtime objects</span></summary>
+    <div class="tree-body">${pods.map(p => `<div class="tree-pod">
+      <div class="tree-pod-head"><span class="tree-branch">Pod</span><b class="mono">${esc(p.name)}</b>
+        <span class="pill ${p.ready ? "ok" : p.phase === "Pending" ? "med" : "crit"}">${p.ready ? "ready" : esc(p.phase || "pending")}</span>
+        <span class="dim xs">${esc(p.node || "unscheduled")}${p.restarts ? ` · ${p.restarts} restart${p.restarts === 1 ? "" : "s"}` : ""}</span></div>
+      <div class="tree-containers">${(p.containers || []).map(c => `<div class="tree-container">
+        <span class="tree-branch ${c.kind === "init" ? "init" : ""}">${c.kind === "init" ? "Init" : "Container"}</span>
+        <b>${esc(c.name)}</b><span class="pill ${c.ready || (c.kind === "init" && c.state === "Completed") ? "ok" : c.state === "running" ? "med" : "low"}">${esc(c.state || "pending")}</span>
+        ${c.restarts ? `<span class="tag warn">${c.restarts} restart${c.restarts === 1 ? "" : "s"}</span>` : ""}
+        <span class="mono dim tree-image">${esc(c.image || "image unavailable")}</span>
+      </div>`).join("") || `<div class="dim xs">Container detail is unavailable for this pod.</div>`}</div>
+    </div>`).join("") || `<div class="dim xs">No pods exist yet. The workload controller will create them when replicas are above zero.</div>`}</div>
+  </details>`;
+}
+
 async function loadImageUpdates(force = false, quiet = false) {
   const requestId = (window.__imageUpdateRequestId || 0) + 1;
   window.__imageUpdateRequestId = requestId;
@@ -93,6 +117,7 @@ function renderWorkloads() {
         </div>
         <div class="dim xs mono wimg">${w.images.map(esc).join(" · ")}
           ${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</div>
+        ${workloadHierarchy(w)}
         ${updateError ? `<div class="updateerror">Image check: ${esc(updateError.error)}</div>` : ""}
         <div class="row wacts">
           <button class="btn sm" title="View live container logs" onclick="wlLogs('${w.ns}','${w.pods[0] ? w.pods[0].name : ""}','${w.name}')">${icon("log")}Logs</button>

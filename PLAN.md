@@ -15,7 +15,8 @@ increment. The application shell, operation model, transition-aware health,
 and dashboard telemetry polish shipped in v1.10.0. Refresh-safe node,
 container-edit, container-log, and volume-edit URLs plus URL-backed search ship
 in v1.10.1. Consistent action icons, keyboard focus, and viewport-safe tooltips
-ship in v1.10.2. The active milestone is the workload/pod/container hierarchy.
+ship in v1.10.2. The explicit Deployment → pod → container hierarchy ships in
+v1.11.0. The active milestone is the interactive container console.
 
 ## Product rules
 
@@ -88,7 +89,7 @@ status semantics, and a consistent way to report background work.
 
 ### 2. Workload model and operations
 
-#### 2.1 Make pods, workloads, and containers explicit — 🔨 active
+#### 2.1 Make pods, workloads, and containers explicit — ✅ shipped in v1.11.0
 
 - Present the hierarchy as workload/controller → pods → containers, with the
   common one-workload/one-container case visually compact.
@@ -100,7 +101,7 @@ status semantics, and a consistent way to report background work.
 - **Done when:** users can see why pod and container counts differ and which
   objects will restart together.
 
-#### 2.2 Interactive container console — ⬜ queued
+#### 2.2 Interactive container console — 🔨 active
 
 - Add a browser terminal alongside Logs, with container selection for
   multi-container pods, shell discovery, resize, reconnect, and clear RBAC or

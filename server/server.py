@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HARVUI_VERSION = os.environ.get("HARVUI_VERSION", "1.10.2")
+HARVUI_VERSION = os.environ.get("HARVUI_VERSION", "1.11.0")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -374,6 +374,45 @@ def get_volumes():
     return sorted(out, key=lambda x: x["name"])
 
 
+def pod_container_rows(pod):
+    """Return an explicit, UI-safe view of init and app containers in a pod."""
+    spec = pod.get("spec", {}) or {}
+    status = pod.get("status", {}) or {}
+    groups = [
+        ("init", spec.get("initContainers", []) or [], status.get("initContainerStatuses", []) or []),
+        ("app", spec.get("containers", []) or [], status.get("containerStatuses", []) or []),
+    ]
+    rows = []
+    for kind, containers, statuses in groups:
+        by_name = {x.get("name", ""): x for x in statuses}
+        for container in containers:
+            name = container.get("name", "")
+            cs = by_name.get(name, {})
+            state_obj = cs.get("state", {}) or {}
+            waiting = state_obj.get("waiting") or {}
+            terminated = state_obj.get("terminated") or {}
+            if waiting:
+                state = waiting.get("reason") or "waiting"
+                message = waiting.get("message") or ""
+            elif terminated:
+                state = terminated.get("reason") or "terminated"
+                message = terminated.get("message") or ""
+            elif state_obj.get("running"):
+                state, message = "running", ""
+            else:
+                state, message = "pending", ""
+            rows.append({
+                "name": name,
+                "kind": kind,
+                "image": container.get("image", ""),
+                "ready": bool(cs.get("ready", False)),
+                "state": state,
+                "message": str(message)[:220],
+                "restarts": int(cs.get("restartCount", 0) or 0),
+            })
+    return rows
+
+
 def get_workloads():
     deps = kget("/apis/apps/v1/deployments").get("items", [])
     pods = kget("/api/v1/pods").get("items", [])
@@ -437,10 +476,13 @@ def get_workloads():
                         fatal_waits.append(f"{p['metadata']['name']}: {reason}")
             if not ready:
                 transition_ages.append(age_secs(p["metadata"].get("creationTimestamp")))
+            containers = pod_container_rows(p)
             pod_rows.append({"name": p["metadata"]["name"], "phase": p["status"].get("phase"),
                              "node": p["spec"].get("nodeName", ""), "ready": ready,
                              "waiting": waits,
                              "uptime": age_secs(p["status"].get("startTime")),
+                             "containers": containers,
+                             "container_count": len([c for c in containers if c["kind"] == "app"]),
                              "restarts": sum(c.get("restartCount", 0) for c in
                                              p["status"].get("containerStatuses", []) or [])})
         progress_errors = [c.get("message") or c.get("reason") or "rollout failed"
@@ -454,7 +496,7 @@ def get_workloads():
         if not transition_ages:
             transition_ages.append(age_secs(d["metadata"].get("creationTimestamp")))
         out.append({
-            "ns": ns, "name": name, "uptime": uptime,
+            "ns": ns, "name": name, "kind": "Deployment", "uptime": uptime,
             "ready": st.get("readyReplicas", 0) or 0,
             "desired": d["spec"].get("replicas", 0) or 0,
             "available": st.get("availableReplicas", 0) or 0,
@@ -467,6 +509,8 @@ def get_workloads():
             "images": [c["image"] for c in pspec.get("containers", [])],
             "nodes": sorted({p["spec"].get("nodeName", "") for p in mine if p["spec"].get("nodeName")}),
             "pods": pod_rows,
+            "pod_count": len(pod_rows),
+            "container_count": sum(p["container_count"] for p in pod_rows),
             "cpu": round(cpu, 3), "mem_mb": round(mem / 1024**2, 1),
             "ports": ports,
             "gpu": "igpu" in hardware,
