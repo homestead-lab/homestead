@@ -113,7 +113,7 @@ status semantics, and a consistent way to report background work.
 - **Done when:** an authorized operator can open, use, resize, and close a shell
   without affecting the running workload.
 
-#### 2.3 Managed image updates and notifications — ✅ shipped in v1.13.0
+#### 2.3 Managed image updates and notifications — ✅ shipped in v1.13.1
 
 Already shipped: registry digest/version checks, multi-architecture awareness,
 private pull-secret support, monitored rollout, self-update, deterministic

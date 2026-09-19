@@ -56,8 +56,14 @@ async function loadImageUpdates(force = false, quiet = false) {
   try {
     const report = await api(`/api/image-updates${force ? "?force=1" : ""}`);
     // A forced check can overtake the quiet background check kicked off by
-    // viewWorkloads. Never let the older response replace fresher registry data.
+    // viewWorkloads. A later request may also return the older non-force cache,
+    // so compare server timestamps as well as request order.
     if (requestId !== window.__imageUpdateRequestId) return report;
+    const existing = STATE.data.imageUpdates;
+    if (HarvUpdateState.isStale(existing, report)) {
+      existing.policy = report.policy || existing.policy;
+      return existing;
+    }
     STATE.data.imageUpdates = report;
     STATE.data.imageUpdateMap = Object.fromEntries((report.workloads || [])
       .map(x => [updateKey(x.ns, x.name), x]));
