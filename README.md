@@ -48,6 +48,19 @@ First install also needs the RBAC and Deployment:
 kubectl apply -f deploy/deploy.yaml
 ```
 
+## Optional: node temperatures
+
+Kubernetes exposes no thermal data. `deploy/nodeprobe.yaml` adds a small
+DaemonSet that reads the host's sensors:
+
+```bash
+kubectl apply -f deploy/nodeprobe.yaml
+```
+
+It mounts `/sys` **read-only**, is **not privileged**, drops all capabilities
+and uses a read-only root filesystem. It serves one JSON document on a
+cluster-internal port. HarvUI works without it and says so on the node page.
+
 ## Configuration
 
 Set on the Deployment:

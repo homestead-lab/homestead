@@ -181,7 +181,7 @@ have it when you do not.
 
 | Item | Notes |
 |---|---|
-| 2.5a node temperatures | Needs a DaemonSet with a read-only `/sys` hostPath. |
+| ~~2.5a node temperatures~~ | ✅ `deploy/nodeprobe.yaml` — read-only `/sys`, unprivileged, all caps dropped. |
 | 3.6 pod↔container regrouping | Needs a clear model for merge/split first. |
 | 4.5b VM import | qcow2/vmdk → PVC via CDI. |
 | Image prune | Kubernetes has no delete-image API; needs CRI access on the node. |

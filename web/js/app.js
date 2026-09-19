@@ -76,10 +76,22 @@ $("#globalSearch").addEventListener("input", e => {
   else if (STATE.view === "storage") viewStorage();
   else if (STATE.view === "images") viewImages();
 });
+/* mobile: search collapses behind an icon so the bar has room for the title */
+const sbtn = $("#searchbtn");
+if (sbtn) sbtn.onclick = () => {
+  document.body.classList.add("searching");
+  setTimeout(() => $("#globalSearch").focus(), 40);
+};
+$("#globalSearch").addEventListener("blur", () => {
+  if (!$("#globalSearch").value) document.body.classList.remove("searching");
+});
 $("#mclose").onclick = closeModal;
 $("#modal").onclick = e => { if (e.target.id === "modal") closeModal(); };
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape") { closeModal(); closeNav(); $("#drawer").classList.remove("open"); }
+  if (e.key === "Escape") {
+    closeModal(); closeNav(); $("#drawer").classList.remove("open");
+    document.body.classList.remove("searching");
+  }
   if (e.key === "/" && document.activeElement.tagName !== "INPUT") { e.preventDefault(); $("#globalSearch").focus(); }
 });
 

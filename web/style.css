@@ -572,3 +572,45 @@ html[data-motion="off"] .uptime .ld{animation:none}
 .rolechip{padding:3px 9px;font-size:10px;letter-spacing:.04em;text-transform:uppercase}
 body[data-role="viewer"] .btn.pri:not([data-keep]),
 body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
+
+/* ---------------- top bar layout fix ----------------
+   The left block previously had no flex sizing, so space-between gave it 0px
+   and the hamburger + title vanished on narrow screens. */
+.topleft{display:flex;align-items:center;gap:12px;flex:1 1 auto;min-width:0}
+.topleft h1{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.topright{flex:0 0 auto}
+#searchbtn{display:none}
+
+@media(max-width:900px){
+  .top{gap:8px;padding:0 12px}
+  .topright{gap:6px}
+  .iconbtn{width:34px;height:34px;font-size:13px}
+  .iconbtn svg{width:15px;height:15px}
+  h1{font-size:16px}
+  .crumb{font-size:9.5px;letter-spacing:.09em}
+
+  /* search collapses to an icon; tapping it overlays the bar */
+  #searchbtn{display:grid}
+  .searchwrap{position:absolute;left:10px;right:10px;top:50%;transform:translateY(-50%);
+    z-index:6;display:none}
+  body.searching .searchwrap{display:flex}
+  body.searching .topleft,body.searching #searchbtn,
+  body.searching #refresh,body.searching #opensettings,body.searching .whoami{display:none}
+  .searchwrap .search{width:100%}
+  .searchwrap .search:focus{width:100%}
+
+  /* avatar only — the name and role live in the drawer */
+  .whoami{padding:3px;gap:0}
+  .whoami .nm,.whoami .rolechip{display:none}
+  .av{width:28px;height:28px;font-size:10px}
+}
+@media(max-width:420px){
+  .top{padding:0 10px}
+  .topleft{gap:8px}
+  .crumb{display:none}
+}
+
+/* temperatures */
+.t-ok{color:var(--ok)} .t-warm{color:var(--med)} .t-hot{color:var(--crit)}
+.bignum.t-hot,.midnum.t-hot{color:var(--crit)}
+.bignum.t-warm,.midnum.t-warm{color:var(--med)}

@@ -1,3 +1,6 @@
+const tempCls = c => c == null ? "" : c >= 85 ? "t-hot" : c >= 70 ? "t-warm" : "t-ok";
+const tempTag = c => c == null ? "" : c >= 85 ? "bad" : c >= 70 ? "warn" : "";
+
 /* Dashboard, Nodes, node detail modal */
 
 async function viewDash() {
@@ -127,6 +130,10 @@ function nodeCard(n) {
         ${meter(n.mem_pct, 'style="margin:5px 0 11px"')}
         <div class="between"><span class="dim xs">NETWORK</span>
           <span class="small mono">↓${(n.rx_mbps || 0).toFixed(1)} ↑${(n.tx_mbps || 0).toFixed(1)} <span class="dim">Mb/s</span></span></div>
+        ${n.temps && n.temps.cpu_c != null ? `<div class="between" style="margin-top:9px">
+          <span class="dim xs">TEMP</span>
+          <span class="small mono ${tempCls(n.temps.cpu_c)}"><b>${n.temps.cpu_c}°C</b>
+            ${n.temps.max_c > n.temps.cpu_c ? `<span class="dim">max ${n.temps.max_c}°</span>` : ""}</span></div>` : ""}
       </div>
       <div style="text-align:right">
         <div class="midnum">${n.pods}</div><div class="dim xs">pods</div>
@@ -185,12 +192,24 @@ window.nodeDetail = async name => {
           `<span class="tag ${c.type === "Ready" ? (c.status === "True" ? "ok" : "bad")
             : (c.status === "True" ? "warn" : "")}">${esc(c.type)}: ${esc(c.status)}</span>`).join("")}</div>
       </div>
+      <div class="card flat" style="margin-top:16px"><div class="ctitle">Temperatures</div>
+        ${n.temps && n.temps.sensors ? `
+          <div class="row" style="margin-top:12px;gap:26px">
+            <div><div class="bignum ${tempCls(n.temps.cpu_c)}">${n.temps.cpu_c ?? "—"}<span class="unit">°C</span></div>
+              <div class="csub">CPU package</div></div>
+            <div><div class="midnum ${tempCls(n.temps.max_c)}">${n.temps.max_c ?? "—"}<span class="unit">°C</span></div>
+              <div class="csub">hottest sensor</div></div>
+          </div>
+          <div style="margin-top:14px">${[...(n.temps.hwmon || []), ...(n.temps.thermal || [])]
+            .sort((a, b) => b.celsius - a.celsius).slice(0, 14)
+            .map(t => `<span class="tag ${tempTag(t.celsius)}">${esc(t.chip ? t.chip + " " : "")}${esc(t.name)} ${t.celsius}°</span>`).join("")}</div>`
+        : `<div class="note" style="margin-top:12px"><b>No thermal data.</b> Kubernetes exposes none —
+           it needs the optional node probe. Apply
+           <span class="mono">deploy/nodeprobe.yaml</span> to enable it; it mounts
+           <span class="mono">/sys</span> read-only, drops all capabilities and is not privileged.</div>`}
+      </div>
       <div class="row" style="margin-top:16px">
-        <button class="btn" onclick="nodeActions('${esc(n.name)}')">Host actions…</button></div>
-      <div class="note" style="margin-top:16px">
-        <b>Temperatures are not shown.</b> Kubernetes exposes no thermal data — it needs a
-        privileged DaemonSet reading <code>/sys/class/thermal</code> on each host. Tracked as 2.5a in the plan.
-      </div>`;
+        <button class="btn" onclick="nodeActions('${esc(n.name)}')">Host actions…</button></div>`;
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
 
@@ -201,13 +220,14 @@ async function viewNodes() {
    <div class="nodegrid stagger">${n.map(nodeCard).join("")}</div>
    <div class="sec">Detail</div>
    <div class="card flat pad0"><div class="tblwrap"><table class="tbl"><thead><tr>
-     <th>Node</th><th>Roles</th><th>CPU</th><th>Memory</th><th>Network</th><th>Disk</th><th>Pods</th><th>iGPU</th></tr></thead><tbody>
+     <th>Node</th><th>Roles</th><th>CPU</th><th>Memory</th><th>Network</th><th>Temp</th><th>Disk</th><th>Pods</th><th>iGPU</th></tr></thead><tbody>
    ${n.map(x => `<tr class="clickable" onclick="nodeDetail('${esc(x.name)}')">
      <td><b>${esc(x.name)}</b><div class="dim xs">${esc(x.kernel)}</div></td>
      <td>${x.roles.map(r => `<span class="tag">${esc(r)}</span>`).join("")}</td>
      <td style="min-width:120px">${meter(x.cpu_pct)}<div class="dim xs mono" style="margin-top:4px">${x.cpu_pct}% of ${x.cpu_cap}</div></td>
      <td style="min-width:120px">${meter(x.mem_pct)}<div class="dim xs mono" style="margin-top:4px">${x.mem_used_gb}/${x.mem_cap_gb} GB</div></td>
      <td class="mono small">↓${(x.rx_mbps || 0).toFixed(1)}<br>↑${(x.tx_mbps || 0).toFixed(1)}</td>
+     <td class="mono ${tempCls(x.temps && x.temps.cpu_c)}">${x.temps && x.temps.cpu_c != null ? x.temps.cpu_c + "°" : '<span class="dim">—</span>'}</td>
      <td style="min-width:100px">${meter(x.fs_pct || 0)}<div class="dim xs mono" style="margin-top:4px">${x.fs_used_gb}/${x.fs_cap_gb}G</div></td>
      <td class="mono"><b>${x.pods_wl}</b><div class="dim xs">${x.pods_sys} sys</div></td>
      <td>${x.igpu ? '<span class="tag gpu">yes</span>' : '<span class="dim">—</span>'}</td></tr>`).join("")}

@@ -133,6 +133,37 @@ def parse_mem(s):
 
 
 # ---------------------------------------------------------------- collectors
+_TEMP_CACHE = {"at": 0, "data": {}}
+
+
+def node_temps():
+    """Temperatures from the optional harvui-nodeprobe DaemonSet.
+
+    Absent probe is not an error — it just means no thermal data, which the UI
+    reports rather than showing a blank gauge.
+    """
+    if time.time() - _TEMP_CACHE["at"] < 20:
+        return _TEMP_CACHE["data"]
+    out = {}
+    try:
+        pods = kget(f"/api/v1/namespaces/{DEFAULT_NS}/pods"
+                    "?labelSelector=app%3Dharvui-nodeprobe").get("items", [])
+    except Exception:
+        pods = []
+    for p in pods:
+        ip = p.get("status", {}).get("podIP")
+        node = p.get("spec", {}).get("nodeName")
+        if not ip or not node or p.get("status", {}).get("phase") != "Running":
+            continue
+        try:
+            with urllib.request.urlopen(f"http://{ip}:9099/", timeout=4) as r:
+                out[node] = json.loads(r.read().decode())
+        except Exception:
+            continue
+    _TEMP_CACHE.update(at=time.time(), data=out)
+    return out
+
+
 def node_stats(name):
     """Per-node network + filesystem counters from the kubelet summary API."""
     try:
@@ -172,6 +203,7 @@ def get_nodes():
     except Exception:
         vmis = []
 
+    temps = node_temps()
     out = []
     for n in nodes.get("items", []):
         name = n["metadata"]["name"]
@@ -210,6 +242,7 @@ def get_nodes():
                            for c in n["status"].get("conditions", [])],
             "created": n["metadata"].get("creationTimestamp", ""),
             **node_stats(name),
+            "temps": temps.get(name),
         })
     return out
 

@@ -1,8 +1,28 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark" data-bg="gold">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<script>
+/* Runs before the stylesheet paints, so the saved theme/background/blur is
+   already on <html> for the very first frame. Keep this inline and tiny. */
+(function () {
+  try {
+    var s = JSON.parse(localStorage.getItem("harvui.settings") || "{}");
+    var d = s.theme === "light" ? false
+          : s.theme === "auto" ? !matchMedia("(prefers-color-scheme: light)").matches
+          : true;
+    var r = document.documentElement;
+    r.dataset.theme = d ? "dark" : "light";
+    r.dataset.bg = s.bg || "gold";
+    r.dataset.motion = s.motion || "on";
+    r.style.setProperty("--blur", (s.blur == null ? 26 : s.blur) + "px");
+  } catch (e) {
+    document.documentElement.dataset.theme = "dark";
+    document.documentElement.dataset.bg = "gold";
+  }
+})();
+</script>
 <title>HarvUI</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%23fff'/><text x='50' y='72' font-size='62' font-weight='800' text-anchor='middle' fill='%230a0a0b' font-family='sans-serif'>H</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -92,14 +112,15 @@
   <div id="navscrim"></div>
   <main class="main">
     <header class="top">
-      <div class="row" style="gap:12px;min-width:0">
+      <div class="topleft">
         <div class="iconbtn only-sm" id="hamburger" title="Menu"><svg><use href="#i-menu"/></svg></div>
       <div>
         <div class="crumb" id="crumb">overview</div>
         <h1 id="title">Dashboard</h1>
       </div></div>
       <div class="topright">
-        <div class="searchwrap">
+        <div class="iconbtn only-sm" id="searchbtn" title="Search"><svg><use href="#i-search"/></svg></div>
+        <div class="searchwrap" id="searchwrap">
           <span class="sicon"><svg width="14" height="14"><use href="#i-search"/></svg></span>
           <input id="globalSearch" class="search" placeholder="Search workloads, nodes, volumes…">
         </div>

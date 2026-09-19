@@ -1,0 +1,171 @@
+# HarvUI node probe — optional.
+#
+# Kubernetes exposes no thermal data, so temperatures need something reading the
+# host's /sys. This DaemonSet does that and nothing else:
+#
+#   * /sys is mounted READ-ONLY — it cannot change anything on the host
+#   * no privileged flag, no host PID/IPC/network, no capabilities added
+#   * it serves one JSON document on a ClusterIP port, reachable only in-cluster
+#
+# Apply it only if you want temperatures and fan/voltage sensors. HarvUI works
+# fine without it and will say so on the node detail page.
+#
+#   kubectl apply -f deploy/nodeprobe.yaml
+#
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: harvui-nodeprobe
+  namespace: lab
+data:
+  probe.py: |
+    #!/usr/bin/env python3
+    """Read thermal + hwmon sensors from a read-only /sys and serve them as JSON."""
+    import json, os, socket
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    SYS = "/host/sys"
+
+    def _read(p):
+        try:
+            with open(p) as f:
+                return f.read().strip()
+        except Exception:
+            return None
+
+    def thermal():
+        out = []
+        base = os.path.join(SYS, "class/thermal")
+        if not os.path.isdir(base):
+            return out
+        for z in sorted(os.listdir(base)):
+            if not z.startswith("thermal_zone"):
+                continue
+            t = _read(os.path.join(base, z, "temp"))
+            if t is None:
+                continue
+            try:
+                c = round(int(t) / 1000.0, 1)
+            except ValueError:
+                continue
+            if not (-50 < c < 200):      # ignore obviously bogus zones
+                continue
+            out.append({"name": _read(os.path.join(base, z, "type")) or z,
+                        "zone": z, "celsius": c})
+        return out
+
+    def hwmon():
+        out = []
+        base = os.path.join(SYS, "class/hwmon")
+        if not os.path.isdir(base):
+            return out
+        for h in sorted(os.listdir(base)):
+            d = os.path.join(base, h)
+            chip = _read(os.path.join(d, "name")) or h
+            try:
+                files = os.listdir(d)
+            except Exception:
+                continue
+            for f in sorted(files):
+                if not (f.startswith("temp") and f.endswith("_input")):
+                    continue
+                raw = _read(os.path.join(d, f))
+                if raw is None:
+                    continue
+                try:
+                    c = round(int(raw) / 1000.0, 1)
+                except ValueError:
+                    continue
+                if not (-50 < c < 200):
+                    continue
+                label = _read(os.path.join(d, f.replace("_input", "_label"))) or f[:-6]
+                out.append({"chip": chip, "name": label, "celsius": c})
+        return out
+
+    def payload():
+        t, hw = thermal(), hwmon()
+        allt = [x["celsius"] for x in t] + [x["celsius"] for x in hw]
+        # prefer a package/core sensor for the headline number
+        pkg = next((x["celsius"] for x in hw
+                    if "package" in (x["name"] or "").lower()
+                    or "tctl" in (x["name"] or "").lower()), None)
+        if pkg is None:
+            pkg = next((x["celsius"] for x in t
+                        if "x86_pkg" in (x["name"] or "").lower()), None)
+        return {"node": os.environ.get("NODE_NAME", socket.gethostname()),
+                "cpu_c": pkg if pkg is not None else (max(allt) if allt else None),
+                "max_c": max(allt) if allt else None,
+                "thermal": t, "hwmon": hw,
+                "sensors": len(t) + len(hw)}
+
+    class H(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+        def log_message(self, *a): pass
+        def do_GET(self):
+            b = json.dumps(payload()).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+
+    if __name__ == "__main__":
+        ThreadingHTTPServer(("0.0.0.0", 9099), H).serve_forever()
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: harvui-nodeprobe
+  namespace: lab
+  labels:
+    app: harvui-nodeprobe
+spec:
+  selector:
+    matchLabels:
+      app: harvui-nodeprobe
+  template:
+    metadata:
+      labels:
+        app: harvui-nodeprobe
+    spec:
+      terminationGracePeriodSeconds: 2
+      tolerations:
+        - operator: Exists          # sensors from every node, including tainted ones
+      containers:
+        - name: probe
+          image: python:3.12-alpine
+          command: ["python3", "/srv/probe.py"]
+          ports:
+            - containerPort: 9099
+              name: http
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          resources:
+            requests:
+              cpu: 5m
+              memory: 24Mi
+            limits:
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: code
+              mountPath: /srv
+              readOnly: true
+            - name: sys
+              mountPath: /host/sys
+              readOnly: true
+      volumes:
+        - name: code
+          configMap:
+            name: harvui-nodeprobe
+        - name: sys
+          hostPath:
+            path: /sys
+            type: Directory
