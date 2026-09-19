@@ -22,7 +22,7 @@ RUN addgroup -S -g 10001 harvui && adduser -S -D -H -u 10001 -G harvui harvui \
 
 COPY --chown=harvui:harvui server/*.py /srv/
 COPY --chown=harvui:harvui web/index.html web/style.css /web/
-COPY --chown=harvui:harvui web/js/*.js /web/
+COPY --chown=harvui:harvui web/js/*.js /web/js/
 COPY --chown=harvui:harvui web/assets/*.svg /web/assets/
 
 USER 10001:10001

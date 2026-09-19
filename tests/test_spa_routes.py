@@ -41,7 +41,7 @@ class SpaRouteTests(unittest.TestCase):
 
     def test_bundled_svg_asset_is_served_with_svg_mime_type(self):
         handler = object.__new__(server.H)
-        handler.path = "/assets/homestead-mark.svg?v=2.0.2"
+        handler.path = "/assets/homestead-mark.svg?v=2.0.3"
         handler.command = "GET"
         handler.headers = {}
         served = []
@@ -49,6 +49,19 @@ class SpaRouteTests(unittest.TestCase):
         handler.do_GET()
         self.assertEqual(
             [(f"{server.WEBROOT}/assets/homestead-mark.svg", "image/svg+xml")],
+            served,
+        )
+
+    def test_browser_script_path_matches_source_and_container_layout(self):
+        handler = object.__new__(server.H)
+        handler.path = "/js/router.js"
+        handler.command = "GET"
+        handler.headers = {}
+        served = []
+        handler._file = lambda path, content_type: served.append((path, content_type))
+        handler.do_GET()
+        self.assertEqual(
+            [(f"{server.WEBROOT}/js/router.js", "application/javascript")],
             served,
         )
 

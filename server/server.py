@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.0.2"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.0.3"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1520,7 +1520,7 @@ class H(BaseHTTPRequestHandler):
             if is_spa_route(p) or p == "/index.html":
                 return self._file(f"{WEBROOT}/index.html", "text/html; charset=utf-8")
             if p.startswith("/js/") and p.endswith(".js") and ".." not in p:
-                return self._file(f"{WEBROOT}/{os.path.basename(p)}", "application/javascript")
+                return self._file(f"{WEBROOT}/js/{os.path.basename(p)}", "application/javascript")
             if is_asset_path(p):
                 return self._file(f"{WEBROOT}/assets/{os.path.basename(p)}", "image/svg+xml")
             if p == "/app.js":
