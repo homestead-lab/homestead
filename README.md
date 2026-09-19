@@ -62,7 +62,10 @@ The OCI source label in the image links releases back to this repository.
 ### 1. Check Longhorn storage
 
 HarvUI persists registry update history and cache on a 2 GiB Longhorn RWX
-volume. Confirm the StorageClass used in `deploy/deploy.yaml` exists:
+volume. A tightly scoped init container assigns that volume to HarvUI's
+non-root UID on first start; the application container itself remains
+non-root with a read-only root filesystem. Confirm the StorageClass used in
+`deploy/deploy.yaml` exists:
 
 ```bash
 kubectl get storageclass
