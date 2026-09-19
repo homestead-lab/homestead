@@ -32,6 +32,8 @@ function renderWorkloads() {
         <div class="dim xs mono wimg">${w.images.map(esc).join(" · ")}${w.gpu ? ' <span class="tag gpu">iGPU</span>' : ""}</div>
         <div class="row wacts">
           <button class="btn sm" onclick="wlLogs('${w.ns}','${w.pods[0] ? w.pods[0].name : ""}')">Logs</button>
+          <button class="btn sm" onclick="wlEdit('${w.ns}','${w.name}')">Edit</button>
+          <button class="btn sm" onclick="wlMove('${w.ns}','${w.name}')">Move</button>
           <button class="btn sm" onclick="wlRestart('${w.ns}','${w.name}')">Restart</button>
           ${off ? `<button class="btn sm" onclick="wlScale('${w.ns}','${w.name}',1)">Start</button>`
                 : `<button class="btn sm" onclick="wlScale('${w.ns}','${w.name}',0)">Stop</button>`}

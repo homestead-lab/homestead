@@ -5,10 +5,14 @@ const VIEWS = {
   flow:      ["Architecture",   "overview",  viewFlow,      true],
   nodes:     ["Nodes",          "overview",  viewNodes,     true],
   workloads: ["Containers",     "workloads", viewWorkloads, true],
+  vms:       ["Virtual Machines","workloads", viewVMs,       true],
   deploy:    ["Deploy",         "workloads", () => viewDeploy(), false],
   store:     ["App Store",      "workloads", viewStore,     false],
   shares:    ["Network Shares", "storage",   viewShares,    false],
   storage:   ["Volumes",        "storage",   viewStorage,   true],
+  images:    ["Image Cache",    "storage",   viewImages,    false],
+  schedules: ["Schedules",      "system",    viewSchedules, true],
+  imports:   ["Import",         "system",    viewImport,    false],
   events:    ["Events",         "system",    viewEvents,    true],
 };
 
@@ -67,6 +71,7 @@ $("#globalSearch").addEventListener("input", e => {
   STATE.q = e.target.value.trim();
   if (STATE.view === "workloads") renderWorkloads();
   else if (STATE.view === "storage") viewStorage();
+  else if (STATE.view === "images") viewImages();
 });
 $("#mclose").onclick = closeModal;
 $("#modal").onclick = e => { if (e.target.id === "modal") closeModal(); };

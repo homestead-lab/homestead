@@ -111,7 +111,11 @@ function nodeCard(n) {
         <div><div style="font-weight:680">${esc(n.name)}</div>
           <div class="dim xs">${n.roles.join(" · ")}</div></div>
       </div>
-      <span class="pill ${bad ? "crit" : "low"}">${n.status}</span>
+      <div class="row" style="gap:7px">
+        ${n.schedulable === false ? '<span class="pill med">cordoned</span>' : ""}
+        <span class="pill ${bad ? "crit" : "low"}">${n.status}</span>
+        <button class="btn sm" onclick="event.stopPropagation();nodeActions('${esc(n.name)}')">⋯</button>
+      </div>
     </div>
     <div class="row" style="margin-top:16px;gap:14px;align-items:flex-start">
       <div style="flex:1;min-width:0">
@@ -181,6 +185,8 @@ window.nodeDetail = async name => {
           `<span class="tag ${c.type === "Ready" ? (c.status === "True" ? "ok" : "bad")
             : (c.status === "True" ? "warn" : "")}">${esc(c.type)}: ${esc(c.status)}</span>`).join("")}</div>
       </div>
+      <div class="row" style="margin-top:16px">
+        <button class="btn" onclick="nodeActions('${esc(n.name)}')">Host actions…</button></div>
       <div class="note" style="margin-top:16px">
         <b>Temperatures are not shown.</b> Kubernetes exposes no thermal data — it needs a
         privileged DaemonSet reading <code>/sys/class/thermal</code> on each host. Tracked as 2.5a in the plan.

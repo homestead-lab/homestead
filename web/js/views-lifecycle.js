@@ -1,0 +1,443 @@
+/* Edit / move containers, node power actions, VMs, images, schedules, import */
+
+/* ---------------- edit a container ---------------- */
+window.wlEdit = async (ns, name) => {
+  modal("Edit · " + name, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
+  try {
+    const w = await api(`/api/workload?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`);
+    const nodes = (STATE.data.ov ? STATE.data.ov.nodes : []).filter(n => n.schedulable !== false);
+    $("#mbody").innerHTML = `
+      <div class="f"><label>Image</label><input type="text" id="e_image" value="${esc(w.image)}"></div>
+      <div class="f2">
+        <div class="f"><label>CPU request</label><input type="text" id="e_cpu" value="${esc(w.cpu)}" placeholder="50m"></div>
+        <div class="f"><label>Memory request</label><input type="text" id="e_mem" value="${esc(w.memory)}" placeholder="128Mi"></div>
+      </div>
+      <div class="f2">
+        <div class="f"><label>Replicas</label><input type="number" id="e_rep" value="${w.replicas}" min="0" max="5"></div>
+        <div class="f"><label>Pin to node</label><select id="e_node">
+          <option value="">any node</option>
+          ${nodes.map(n => `<option value="${esc(n.name)}" ${n.name === w.node ? "selected" : ""}>${esc(n.name)}</option>`).join("")}
+        </select></div>
+      </div>
+      <label class="switch"><input type="checkbox" id="e_gpu" ${w.gpu ? "checked" : ""}> Intel iGPU <span class="tag gpu">/dev/dri</span></label>
+      <div class="sec">Environment</div>
+      <div id="e_env"></div><button class="btn sm" onclick="editAddEnv()">＋ add variable</button>
+      ${w.volumes.length ? `<div class="sec">Mounted volumes</div><div>${w.volumes.map(v =>
+        `<span class="tag info">${esc(v.source || "?")} → ${esc(v.path)}</span>`).join("")}
+        <div class="dim xs" style="margin-top:8px">Volumes cannot be changed in place — a mount change needs a redeploy.</div></div>` : ""}
+      <div class="row" style="margin-top:22px">
+        <button class="btn pri" onclick="editSave('${esc(ns)}','${esc(name)}')">Save &amp; restart</button>
+        <button class="btn" onclick="closeModal()">Cancel</button>
+      </div>
+      <div class="note" style="margin-top:14px">Saving rolls the pod. With a ReadWriteOnce volume
+      the old pod must fully stop before the new one starts, so expect a short outage.</div>`;
+    Object.entries(w.env || {}).forEach(([k, v]) => editAddEnv(k, v));
+    if (!Object.keys(w.env || {}).length) editAddEnv();
+  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+};
+window.editAddEnv = (k = "", v = "") => {
+  const d = document.createElement("div"); d.className = "f3";
+  d.innerHTML = `<div><label>Key</label><input class="ek" type="text" value="${esc(k)}"></div>
+    <div><label>Value</label><input class="ev" type="text" value="${esc(v)}"></div>
+    <button class="btn sm danger" onclick="this.parentNode.remove()">✕</button>`;
+  $("#e_env").appendChild(d);
+};
+window.editSave = async (ns, name) => {
+  const env = {};
+  $$("#e_env .f3").forEach(r => { const k = $(".ek", r).value.trim(); if (k) env[k] = $(".ev", r).value; });
+  const body = { ns, name, image: $("#e_image").value.trim(), cpu: $("#e_cpu").value.trim(),
+    memory: $("#e_mem").value.trim(), replicas: +$("#e_rep").value, gpu: $("#e_gpu").checked, env };
+  try {
+    await api("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const node = $("#e_node").value;
+    await api("/api/move", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ns, name, node: node || null }) });
+    toast(`${name} updated`, "ok"); closeModal(); setTimeout(() => refresh(true), 1200);
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+/* ---------------- move a container ---------------- */
+window.wlMove = async (ns, name) => {
+  const nodes = (STATE.data.ov ? STATE.data.ov.nodes : []);
+  modal("Move · " + name, `
+    <p class="muted small">Pick the host this workload should run on. HarvUI pins it with a
+    node selector and rolls the pod.</p>
+    <div class="f" style="margin-top:14px"><label>Target host</label><select id="mv_node">
+      <option value="">any node (unpin)</option>
+      ${nodes.map(n => `<option value="${esc(n.name)}">${esc(n.name)} · ${n.cpu_pct}% cpu, ${n.mem_pct}% ram${n.igpu ? " · iGPU" : ""}</option>`).join("")}
+    </select></div>
+    <div class="row" style="margin-top:18px">
+      <button class="btn pri" onclick="doMove('${esc(ns)}','${esc(name)}')">Move</button>
+      <button class="btn" onclick="closeModal()">Cancel</button></div>
+    <div class="note" style="margin-top:14px">This is a stop-then-start, not a live move —
+    a ReadWriteOnce volume can only attach to one node at a time.</div>`);
+};
+window.doMove = async (ns, name) => {
+  try {
+    const node = $("#mv_node").value;
+    await api("/api/move", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ns, name, node: node || null }) });
+    toast(`${name} → ${node || "any node"}`, "ok"); closeModal(); setTimeout(() => refresh(true), 1400);
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+/* ---------------- node power ---------------- */
+window.nodeActions = async name => {
+  let qr = {};
+  try { qr = await api("/api/quorum"); } catch (e) { }
+  const isEtcd = (qr.members || []).includes(name);
+  const risky = isEtcd && qr.can_lose < 1;
+  modal("Host actions · " + name, `
+    <div class="grid g2" style="gap:12px">
+      <div class="card flat"><div class="ctitle">Scheduling</div>
+        <p class="muted small" style="margin:6px 0 14px">Cordon stops new pods landing here.
+        Drain evicts the ones already running.</p>
+        <div class="row">
+          <button class="btn" onclick="nodeCordon('${esc(name)}',true)">Cordon</button>
+          <button class="btn" onclick="nodeCordon('${esc(name)}',false)">Uncordon</button>
+          <button class="btn" onclick="nodeDrain('${esc(name)}')">Drain</button>
+        </div></div>
+      <div class="card flat"><div class="ctitle">Quorum</div>
+        <div class="drow"><div class="dl">etcd members</div><div class="dv mono">${qr.total || "?"}</div></div>
+        <div class="drow"><div class="dl">Ready</div><div class="dv mono">${(qr.ready || []).length}</div></div>
+        <div class="drow"><div class="dl">Needs</div><div class="dv mono">${qr.quorum_needs || "?"}</div></div>
+        <div class="drow"><div class="dl">Can lose</div><div class="dv mono">
+          <span class="pill ${qr.can_lose > 0 ? "ok" : "crit"}">${qr.can_lose ?? "?"}</span></div></div>
+        ${isEtcd ? '<div class="dim xs" style="margin-top:8px">This host is an etcd member.</div>' : ""}
+      </div>
+    </div>
+    <div class="sec">Power</div>
+    ${risky ? `<div class="note" style="border-color:rgba(255,77,79,.35);background:rgba(255,77,79,.08);color:#ffb4b8">
+        <b>Blocked.</b> ${(qr.ready || []).length} of ${qr.total} etcd members are ready and quorum needs
+        ${qr.quorum_needs}. Taking this host down would lose the cluster. Bring the other members back first.</div>`
+      : `<p class="muted small">The host is cordoned and drained first, then a privileged helper pod
+         asks systemd. Type the host name to confirm.</p>
+      <div class="f" style="margin-top:12px"><label>Type <b class="mono">${esc(name)}</b> to confirm</label>
+        <input type="text" id="pw_confirm" placeholder="${esc(name)}" autocomplete="off"></div>
+      <label class="switch"><input type="checkbox" id="pw_drain" checked> Drain workloads first (recommended)</label>
+      <div class="row">
+        <button class="btn danger" onclick="nodePower('${esc(name)}','reboot')">Reboot host</button>
+        <button class="btn danger" onclick="nodePower('${esc(name)}','poweroff')">Shut down host</button>
+      </div>`}`, true);
+};
+window.nodeCordon = async (node, cordon) => {
+  try {
+    await api("/api/node/cordon", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node, cordon }) });
+    toast(`${node} ${cordon ? "cordoned" : "uncordoned"}`, "ok"); refresh(true);
+  } catch (e) { toast(e.message, "bad"); }
+};
+window.nodeDrain = async node => {
+  if (!confirm(`Drain ${node}?\n\nEvicts your workloads so they reschedule elsewhere.\nDaemonSets and system pods are left alone.`)) return;
+  toast("draining…");
+  try {
+    const r = await api("/api/node/drain", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node }) });
+    toast(`evicted ${r.evicted.length} pod(s)`, "ok"); refresh(true);
+  } catch (e) { toast(e.message, "bad"); }
+};
+window.nodePower = async (node, action) => {
+  const c = $("#pw_confirm").value.trim();
+  if (c !== node) return toast("type the host name exactly to confirm", "bad");
+  try {
+    const r = await api("/api/node/power", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node, action, drain: $("#pw_drain").checked, confirm: c }) });
+    modal("Host " + action, `<pre>${esc(r.steps.join("\n"))}</pre>
+      <div class="note" style="margin-top:12px">The host will go down shortly. It stays cordoned —
+      uncordon it from this dialog once it is back.</div>`);
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+/* ---------------- VMs ---------------- */
+async function viewVMs() {
+  const [vms, nodes] = await Promise.all([api("/api/vms"), api("/api/nodes").catch(() => [])]);
+  paint(`<div class="phead"><div><h2>Virtual machines</h2>
+      <p>${vms.length} VM${vms.length === 1 ? "" : "s"} · KubeVirt on Longhorn</p></div>
+      <button class="btn pri" onclick="vmNew()">＋ New VM</button></div>
+    ${vms.length ? `<div class="cardlist">${vms.map(v => `<div class="card flat wcard">
+      <div class="between">
+        <div class="row" style="gap:10px"><div class="av n3">${esc(v.name.slice(0, 2).toUpperCase())}</div>
+          <div><div style="font-weight:680">${esc(v.name)}</div><div class="dim xs">${esc(v.ns)} · ${esc(v.node || "unscheduled")}</div></div></div>
+        <span class="pill ${v.phase === "Running" ? "ok" : v.phase === "Stopped" ? "low" : "med"}">${esc(v.phase)}</span>
+      </div>
+      <div class="wmeta">
+        <div><div class="dim xs">CPU</div><div class="mono small">${v.cores} cores</div></div>
+        <div><div class="dim xs">RAM</div><div class="mono small">${esc(v.memory)}</div></div>
+        <div><div class="dim xs">IP</div><div class="mono small">${esc(v.ip || "—")}</div></div>
+        <div><div class="dim xs">MIGRATE</div><div>${v.migratable ? '<span class="tag ok">live</span>' : '<span class="dim">no</span>'}</div></div>
+      </div>
+      <div class="row wacts">
+        ${v.running ? `<button class="btn sm" onclick="vmPower('${esc(v.ns)}','${esc(v.name)}','stop')">Stop</button>
+          <button class="btn sm" onclick="vmPower('${esc(v.ns)}','${esc(v.name)}','restart')">Restart</button>`
+          : `<button class="btn sm" onclick="vmPower('${esc(v.ns)}','${esc(v.name)}','start')">Start</button>`}
+        ${v.migratable ? `<button class="btn sm" onclick="vmMove('${esc(v.ns)}','${esc(v.name)}')">Move host</button>` : ""}
+      </div></div>`).join("")}</div>`
+    : `<div class="empty">No virtual machines yet — create one to get started.</div>`}`);
+  STATE.data.nodes = nodes;
+}
+window.vmPower = async (ns, name, action) => {
+  try {
+    await api("/api/vm/power", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ns, name, action }) });
+    toast(`${name} ${action}`, "ok"); setTimeout(() => refresh(true), 1500);
+  } catch (e) { toast(e.message, "bad"); }
+};
+window.vmMove = (ns, name) => {
+  const nodes = STATE.data.nodes || [];
+  modal("Migrate · " + name, `
+    <p class="muted small">KubeVirt live-migrates the VM — memory is copied while it keeps running,
+    so there is no downtime.</p>
+    <div class="f" style="margin-top:14px"><label>Target host</label><select id="vm_target">
+      <option value="">let KubeVirt choose</option>
+      ${nodes.map(n => `<option value="${esc(n.name)}">${esc(n.name)}</option>`).join("")}</select></div>
+    <div class="row" style="margin-top:16px">
+      <button class="btn pri" onclick="doVmMove('${esc(ns)}','${esc(name)}')">Migrate</button>
+      <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+};
+window.doVmMove = async (ns, name) => {
+  try {
+    const r = await api("/api/vm/migrate", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ns, name, target: $("#vm_target").value || null }) });
+    toast(`migration ${r.migration} started`, "ok"); closeModal(); setTimeout(() => refresh(true), 2000);
+  } catch (e) { toast(e.message, "bad"); }
+};
+window.vmNew = async () => {
+  const imgs = await api("/api/vmimages").catch(() => []);
+  modal("New virtual machine", `
+    <div class="f"><label>Name</label><input type="text" id="v_name" placeholder="ubuntu-test"></div>
+    <div class="f2">
+      <div class="f"><label>CPU cores</label><input type="number" id="v_cores" value="2" min="1" max="16"></div>
+      <div class="f"><label>Memory</label><input type="text" id="v_mem" value="2Gi"></div>
+    </div>
+    <div class="f2">
+      <div class="f"><label>Disk (GB)</label><input type="number" id="v_disk" value="20" min="5"></div>
+      <div class="f"><label>Root password</label><input type="text" id="v_pass" value="harvui"></div>
+    </div>
+    <div class="f"><label>Boot image</label>
+      ${imgs.length ? `<select id="v_img"><option value="">blank disk</option>
+        ${imgs.map(i => `<option value="${esc(i.name)}">${esc(i.display)} (${i.size_gb}G)</option>`).join("")}</select>`
+        : `<input type="text" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img">
+           <div class="dim xs" style="margin-top:6px">No Harvester images found — paste a cloud image URL instead.</div>`}</div>
+    <div class="row" style="margin-top:18px">
+      <button class="btn pri" onclick="doVmCreate()">Create VM</button>
+      <button class="btn" onclick="closeModal()">Cancel</button></div>
+    <div class="note" style="margin-top:14px">The disk is provisioned as a Longhorn DataVolume.
+    A cloud image download can take several minutes before the VM will boot.</div>`, true);
+};
+window.doVmCreate = async () => {
+  const body = { name: $("#v_name").value.trim(), cores: +$("#v_cores").value,
+    memory: $("#v_mem").value.trim(), disk_gb: +$("#v_disk").value, password: $("#v_pass").value,
+    image_id: $("#v_img") ? $("#v_img").value : "", image_url: $("#v_url") ? $("#v_url").value.trim() : "" };
+  if (!body.name) return toast("name is required", "bad");
+  try {
+    await api("/api/vm/create", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    toast(`${body.name} created`, "ok"); closeModal(); go("vms");
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+/* ---------------- image cache ---------------- */
+async function viewImages() {
+  const d = await api("/api/images");
+  const q = STATE.q.toLowerCase();
+  const imgs = d.images.filter(i => !i.name.toLowerCase().includes("pause") && (!q || i.name.toLowerCase().includes(q)));
+  paint(`<div class="phead"><div><h2>Image cache</h2>
+      <p>${d.distinct} distinct images across ${d.nodes.length} nodes · pre-pull to make failover instant</p></div></div>
+    <div class="grid g3" style="margin-bottom:18px">
+      ${d.nodes.map(n => `<div class="card flat"><div class="ctitle">${esc(n.node)}</div>
+        <div class="bignum" style="margin-top:8px">${n.total_gb}<span class="unit">GB</span></div>
+        <div class="csub">${n.count} images cached</div></div>`).join("")}
+    </div>
+    <div class="card flat pad0"><div class="tblwrap"><table class="tbl"><thead><tr>
+      <th>Image</th><th>Size</th><th>Cached on</th><th></th></tr></thead><tbody>
+      ${imgs.slice(0, 80).map(i => {
+        const missing = d.node_names.filter(n => !i.nodes.includes(n));
+        return `<tr><td class="mono small" style="word-break:break-all">${esc(i.name)}</td>
+        <td class="mono">${i.size_mb >= 1024 ? (i.size_mb / 1024).toFixed(1) + " GB" : i.size_mb + " MB"}</td>
+        <td>${i.nodes.map(n => `<span class="tag ok">${esc(n.replace("harvester-", ""))}</span>`).join("")}
+            ${missing.map(n => `<span class="tag">${esc(n.replace("harvester-", ""))} ✕</span>`).join("")}</td>
+        <td>${missing.length ? `<button class="btn sm" onclick="prepull('${esc(i.name)}')">Pre-pull</button>` : '<span class="dim xs">everywhere</span>'}</td></tr>`;
+      }).join("") || `<tr><td colspan=4 class="empty">none</td></tr>`}
+    </tbody></table></div></div>`);
+}
+window.prepull = async image => {
+  try {
+    await api("/api/images/prepull", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image }) });
+    toast("pre-pull started on all nodes", "ok");
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+/* ---------------- schedules ---------------- */
+async function viewSchedules() {
+  const js = await api("/api/schedules");
+  paint(`<div class="phead"><div><h2>Schedules</h2>
+      <p>${js.length} scheduled job${js.length === 1 ? "" : "s"} · standard cron syntax</p></div>
+      <button class="btn pri" onclick="jobEdit()">＋ New schedule</button></div>
+    <div class="card flat pad0"><div class="tblwrap"><table class="tbl"><thead><tr>
+      <th>Name</th><th>Schedule</th><th>Image</th><th>Last run</th><th>State</th><th></th></tr></thead><tbody>
+      ${js.map(j => `<tr>
+        <td><b>${esc(j.name)}</b></td>
+        <td class="mono">${esc(j.schedule)}</td>
+        <td class="mono small dim">${esc(j.image)}</td>
+        <td class="small dim">${esc((j.last || "—").replace("T", " ").replace("Z", ""))}</td>
+        <td>${j.suspend ? '<span class="pill low">paused</span>'
+            : j.active ? '<span class="pill med">running</span>' : '<span class="pill ok">active</span>'}</td>
+        <td><div class="row" style="gap:6px">
+          <button class="btn sm" onclick="jobRun('${esc(j.name)}')">Run now</button>
+          <button class="btn sm" onclick='jobEdit(${JSON.stringify(j).replace(/'/g, "&#39;")})'>Edit</button>
+          <button class="btn sm danger" onclick="jobDel('${esc(j.name)}')">✕</button>
+        </div></td></tr>`).join("") || `<tr><td colspan=6 class="empty">no schedules yet</td></tr>`}
+    </tbody></table></div></div>`);
+}
+window.jobEdit = (j) => {
+  j = j || { name: "", schedule: "0 3 * * *", image: "alpine:3.20", command: "" };
+  modal(j.name ? "Edit · " + j.name : "New schedule", `
+    <div class="f"><label>Name</label><input type="text" id="j_name" value="${esc(j.name)}" ${j.name ? "readonly" : ""} placeholder="nightly-prune"></div>
+    <div class="f"><label>Cron schedule</label><input type="text" id="j_sched" value="${esc(j.schedule)}">
+      <div class="dim xs" style="margin-top:6px">min hour day month weekday · e.g. <span class="mono">0 3 * * *</span> = 03:00 daily</div></div>
+    <div class="f"><label>Image</label><input type="text" id="j_image" value="${esc(j.image || "alpine:3.20")}"></div>
+    <div class="f"><label>Command</label><textarea id="j_cmd" rows="4" placeholder="echo hello">${esc(j.command || "")}</textarea></div>
+    <label class="switch"><input type="checkbox" id="j_susp" ${j.suspend ? "checked" : ""}> Paused</label>
+    <div class="row" style="margin-top:16px">
+      <button class="btn pri" onclick="jobSave()">Save</button>
+      <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+};
+window.jobSave = async () => {
+  const body = { name: $("#j_name").value.trim(), schedule: $("#j_sched").value.trim(),
+    image: $("#j_image").value.trim(), command: $("#j_cmd").value, suspend: $("#j_susp").checked };
+  if (!body.name || !body.command) return toast("name and command are required", "bad");
+  try {
+    await api("/api/schedules", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    toast("schedule saved", "ok"); closeModal(); resetPaint(); viewSchedules();
+  } catch (e) { toast(e.message, "bad"); }
+};
+window.jobRun = async name => {
+  try { await api("/api/schedules/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+    toast(`${name} started`, "ok"); } catch (e) { toast(e.message, "bad"); }
+};
+window.jobDel = async name => {
+  if (!confirm(`Delete schedule "${name}"?`)) return;
+  try { await api("/api/schedules/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+    toast("deleted", "ok"); resetPaint(); viewSchedules(); } catch (e) { toast(e.message, "bad"); }
+};
+
+/* ---------------- import ---------------- */
+async function viewImport() {
+  const [srcs, jobs] = await Promise.all([api("/api/sources"), api("/api/imports").catch(() => [])]);
+  STATE.data.srcs = srcs;
+  paint(`<div class="phead"><div><h2>Import</h2>
+      <p>Bring containers and their appdata across from another host</p></div>
+      <button class="btn pri" onclick="srcAdd()">＋ Add source</button></div>
+
+    <div class="sec">Sources</div>
+    <div class="grid g3">${srcs.map(s => `<div class="card flat">
+      <div class="between"><div><div class="ctitle">${esc(s.name)}</div>
+        <div class="csub">${esc(s.kind)} · ${esc(s.user)}@${esc(s.host)}</div></div>
+        <button class="btn sm danger" onclick="srcDel('${esc(s.name)}')">✕</button></div>
+      <div class="drow"><div class="dl">Base path</div><div class="dv mono small">${esc(s.base_path)}</div></div>
+      <button class="btn wide" style="margin-top:12px" onclick="srcBrowse('${esc(s.name)}')">Browse appdata</button>
+    </div>`).join("") || `<div class="empty">No import sources yet. Add the host you want to pull from.</div>`}</div>
+
+    ${jobs.length ? `<div class="sec">Transfers</div>
+    <div class="card flat pad0"><div class="tblwrap"><table class="tbl"><thead><tr>
+      <th>App</th><th>Job</th><th>State</th><th>Started</th><th></th></tr></thead><tbody>
+      ${jobs.map(j => `<tr><td><b>${esc(j.app || "—")}</b></td>
+        <td class="mono small dim">${esc(j.name)}</td>
+        <td><span class="pill ${j.state === "done" ? "ok" : j.state === "failed" ? "crit" : "med"}">${esc(j.state)}</span></td>
+        <td class="small dim">${esc((j.start || "").replace("T", " ").replace("Z", ""))}</td>
+        <td><button class="btn sm" onclick="wlLogs('lab','${esc(j.name)}')">Logs</button></td></tr>`).join("")}
+    </tbody></table></div></div>` : ""}
+
+    <div class="note" style="margin-top:20px">
+      <b>What import does.</b> It creates a Longhorn volume, runs an rsync job that copies the remote
+      appdata directory into it, and creates the workload pointing at that volume — left stopped so you can
+      start it once the copy finishes. Path mappings from the source host do not carry over; the appdata
+      lands at the mount path you choose.
+    </div>`);
+}
+window.srcAdd = () => modal("Add import source", `
+  <div class="f"><label>Name</label><input type="text" id="sc_name" placeholder="unraid"></div>
+  <div class="f2">
+    <div class="f"><label>Host</label><input type="text" id="sc_host" placeholder="192.0.2.177"></div>
+    <div class="f"><label>Type</label><select id="sc_kind">
+      <option value="unraid">Unraid</option><option value="proxmox">Proxmox</option><option value="ssh">Generic SSH</option></select></div>
+  </div>
+  <div class="f2">
+    <div class="f"><label>Username</label><input type="text" id="sc_user" value="root"></div>
+    <div class="f"><label>Password</label><input type="password" id="sc_pass"></div>
+  </div>
+  <div class="f"><label>Appdata base path</label><input type="text" id="sc_path" value="/mnt/user/appdata"></div>
+  <div class="row" style="margin-top:16px">
+    <button class="btn pri" onclick="doSrcAdd()">Add source</button>
+    <button class="btn" onclick="closeModal()">Cancel</button></div>
+  <div class="note" style="margin-top:14px">The password is stored in a Kubernetes Secret in the
+  <span class="mono">lab</span> namespace, not in the ConfigMap. Anyone with cluster access can read it.</div>`);
+window.doSrcAdd = async () => {
+  const body = { name: $("#sc_name").value.trim(), host: $("#sc_host").value.trim(),
+    user: $("#sc_user").value.trim(), password: $("#sc_pass").value,
+    kind: $("#sc_kind").value, base_path: $("#sc_path").value.trim() };
+  if (!body.name || !body.host) return toast("name and host are required", "bad");
+  try {
+    await api("/api/sources", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    toast("source added", "ok"); closeModal(); resetPaint(); viewImport();
+  } catch (e) { toast(e.message, "bad"); }
+};
+window.srcDel = async name => {
+  if (!confirm(`Remove import source "${name}"?`)) return;
+  try { await api("/api/sources/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+    toast("removed", "ok"); resetPaint(); viewImport(); } catch (e) { toast(e.message, "bad"); }
+};
+window.srcBrowse = async name => {
+  modal("Browse · " + name, `<div class="empty"><span class="spin2"></span>connecting to host — this runs a
+    one-shot pod, so it takes ~20s</div>`, true);
+  try {
+    const r = await api("/api/sources/browse", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }) });
+    const src = (STATE.data.srcs || []).find(s => s.name === name) || {};
+    const entries = r.entries.filter(e => !e.startsWith("==") && !/^(WARNING|Permission|Warning)/i.test(e));
+    $("#mbody").innerHTML = entries.length
+      ? `<p class="muted small">${entries.length} directories under <span class="mono">${esc(src.base_path)}</span>. Pick one to import.</p>
+         <div class="apps" style="margin-top:14px;grid-template-columns:repeat(auto-fill,minmax(200px,1fr))">
+         ${entries.map(e => `<div class="card flat" style="padding:13px">
+           <div style="font-weight:660;word-break:break-all">${esc(e)}</div>
+           <button class="btn wide sm" style="margin-top:10px"
+             onclick="importSetup('${esc(name)}','${esc(e)}')">Import</button></div>`).join("")}</div>`
+      : `<div class="empty">Nothing returned. Check the credentials and that
+         <span class="mono">${esc(src.base_path)}</span> exists on ${esc(src.host)}.</div>`;
+  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+};
+window.importSetup = (source, dir) => {
+  const src = (STATE.data.srcs || []).find(s => s.name === source) || {};
+  const name = dir.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 38);
+  modal("Import · " + dir, `
+    <div class="f2">
+      <div class="f"><label>Workload name</label><input type="text" id="im_name" value="${esc(name)}"></div>
+      <div class="f"><label>Volume size (GB)</label><input type="number" id="im_size" value="10" min="1"></div>
+    </div>
+    <div class="f"><label>Remote path</label>
+      <input type="text" id="im_path" value="${esc((src.base_path || "") + "/" + dir)}"></div>
+    <div class="f"><label>Docker image to run it with</label>
+      <input type="text" id="im_image" placeholder="lscr.io/linuxserver/${esc(name)}:latest"></div>
+    <div class="f2">
+      <div class="f"><label>Mount appdata at</label><input type="text" id="im_mount" value="/config"></div>
+      <div class="f"><label>Port (optional)</label><input type="number" id="im_port" placeholder="8080"></div>
+    </div>
+    <label class="switch"><input type="checkbox" id="im_start" checked> Leave stopped until the copy finishes</label>
+    <div class="row" style="margin-top:16px">
+      <button class="btn pri" onclick="doImport('${esc(source)}')">Start import</button>
+      <button class="btn" onclick="closeModal()">Cancel</button></div>
+    <div class="note" style="margin-top:14px">The copy runs as a Job — you can close this and watch it
+    on the Import page. Large appdata directories can take a while.</div>`, true);
+};
+window.doImport = async source => {
+  const port = +$("#im_port").value;
+  const body = { source, name: $("#im_name").value.trim(), remote_path: $("#im_path").value.trim(),
+    image: $("#im_image").value.trim(), mount_path: $("#im_mount").value.trim(),
+    size_gb: +$("#im_size").value, start_after_copy: $("#im_start").checked,
+    ports: port ? [{ container: port, host: port, expose: true }] : [] };
+  if (!body.name || !body.image) return toast("workload name and image are required", "bad");
+  try {
+    const r = await api("/api/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    toast(`import started (${r.job})`, "ok"); closeModal(); resetPaint(); viewImport();
+  } catch (e) { toast(e.message, "bad"); }
+};

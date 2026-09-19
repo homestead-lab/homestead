@@ -43,6 +43,10 @@
     <symbol id="i-list" viewBox="0 0 24 24"><path d="M8.5 6.5h11M8.5 12h11M8.5 17.5h11"/><circle cx="4.6" cy="6.5" r="1.2"/><circle cx="4.6" cy="12" r="1.2"/><circle cx="4.6" cy="17.5" r="1.2"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.6"/><path d="M15.6 15.6 20.5 20.5"/></symbol>
     <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20.3 12a8.3 8.3 0 1 1-2.6-6"/><path d="M20.3 4v5.2h-5.2"/></symbol>
+    <symbol id="i-vm" viewBox="0 0 24 24"><rect x="2.6" y="4.2" width="18.8" height="12.4" rx="2"/><path d="M8.5 20.4h7M12 16.6v3.8"/><rect x="7" y="8" width="10" height="4.8" rx="1"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3 21 7.6 12 12.2 3 7.6z"/><path d="M3 12.4 12 17l9-4.6M3 16.8 12 21.4l9-4.6"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6"/><path d="M12 7.2V12l3.2 2"/></symbol>
+    <symbol id="i-import" viewBox="0 0 24 24"><path d="M12 3.4v10.4M8.2 10.2 12 14l3.8-3.8"/><path d="M4.2 15.4v3a2 2 0 0 0 2 2h11.6a2 2 0 0 0 2-2v-3"/></symbol>
     <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
     <symbol id="i-x" viewBox="0 0 24 24"><path d="M6.4 6.4 17.6 17.6M17.6 6.4 6.4 17.6"/></symbol>
     <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.1"/><path d="M19.2 14.6a1.5 1.5 0 0 0 .3 1.65l.05.06a1.8 1.8 0 1 1-2.56 2.56l-.05-.06a1.5 1.5 0 0 0-1.65-.3 1.5 1.5 0 0 0-.91 1.38v.16a1.8 1.8 0 1 1-3.6 0v-.09a1.5 1.5 0 0 0-.98-1.37 1.5 1.5 0 0 0-1.65.3l-.06.06a1.8 1.8 0 1 1-2.56-2.56l.06-.06a1.5 1.5 0 0 0 .3-1.65 1.5 1.5 0 0 0-1.38-.91h-.16a1.8 1.8 0 1 1 0-3.6h.09a1.5 1.5 0 0 0 1.37-.98 1.5 1.5 0 0 0-.3-1.65l-.06-.06a1.8 1.8 0 1 1 2.56-2.56l.06.06a1.5 1.5 0 0 0 1.65.3h.07a1.5 1.5 0 0 0 .91-1.38v-.16a1.8 1.8 0 1 1 3.6 0v.09a1.5 1.5 0 0 0 .91 1.38 1.5 1.5 0 0 0 1.65-.3l.06-.06a1.8 1.8 0 1 1 2.56 2.56l-.06.06a1.5 1.5 0 0 0-.3 1.65v.07a1.5 1.5 0 0 0 1.38.91h.16a1.8 1.8 0 1 1 0 3.6h-.09a1.5 1.5 0 0 0-1.38.91z"/></symbol>
@@ -64,11 +68,15 @@
       <div class="navlbl">Workloads</div>
       <a data-view="workloads"><svg><use href="#i-box"/></svg>Containers</a>
       <a data-view="deploy"><svg><use href="#i-plus"/></svg>Deploy</a>
+      <a data-view="vms"><svg><use href="#i-vm"/></svg>Virtual Machines</a>
       <a data-view="store"><svg><use href="#i-store"/></svg>App Store</a>
       <div class="navlbl">Storage</div>
       <a data-view="shares"><svg><use href="#i-share"/></svg>Network Shares</a>
       <a data-view="storage"><svg><use href="#i-disk"/></svg>Volumes</a>
+      <a data-view="images"><svg><use href="#i-layers"/></svg>Image Cache</a>
       <div class="navlbl">System</div>
+      <a data-view="schedules"><svg><use href="#i-clock"/></svg>Schedules</a>
+      <a data-view="imports"><svg><use href="#i-import"/></svg>Import</a>
       <a data-view="events"><svg><use href="#i-list"/></svg>Events</a>
     </nav>
     <div class="sidefoot">
@@ -133,6 +141,7 @@
 <script src="/js/views-overview.js"></script>
 <script src="/js/views-workloads.js"></script>
 <script src="/js/views-storage.js"></script>
+<script src="/js/views-lifecycle.js"></script>
 <script src="/js/app.js"></script>
 </body>
 </html>

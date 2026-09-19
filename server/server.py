@@ -11,6 +11,7 @@ API = "https://kubernetes.default.svc"
 TOKEN = open(f"{SA}/token").read().strip() if os.path.exists(f"{SA}/token") else ""
 CTX = ssl.create_default_context(cafile=f"{SA}/ca.crt") if os.path.exists(f"{SA}/ca.crt") else ssl._create_unverified_context()
 WEBROOT = os.environ.get("WEBROOT", "/web")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 SMB_NAMESPACE = os.environ.get("SMB_NAMESPACE", "lab")
 DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
@@ -851,6 +852,25 @@ def apply_samba(shares, password=None):
     return ksend("PUT", f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments/samba", dep)
 
 
+def raw_get(path, timeout=20):
+    """Plain-text GET against the API (pod logs and similar)."""
+    req = urllib.request.Request(API + path, headers={"Authorization": f"Bearer {TOKEN}"})
+    with urllib.request.urlopen(req, context=CTX, timeout=timeout) as r:
+        return r.read().decode("utf-8", "replace")
+
+
+# expose a tiny shim module so helper modules can reach raw_get without a cycle
+import types as _types
+_shim = _types.ModuleType("harvui_shim")
+_shim.raw_get = raw_get
+sys.modules["harvui_shim"] = _shim
+
+import harvui_lifecycle as LC
+import harvui_imports as IMP
+LC.bind(kget, ksend, SYS_NS, _cache)
+IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache)
+
+
 # ---------------------------------------------------------------- HTTP
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -918,6 +938,40 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("flow2", 8, get_flow2))
             if p == "/api/shares":
                 return self._send(200, list_shares())
+            if p == "/api/quorum":
+                return self._send(200, LC.quorum_report())
+            if p == "/api/vms":
+                return self._send(200, cached("vms", 5, IMP.list_vms))
+            if p == "/api/vmimages":
+                return self._send(200, cached("vmimg", 30, IMP.list_vm_images))
+            if p == "/api/images":
+                return self._send(200, cached("imgcache", 30, IMP.image_cache))
+            if p == "/api/schedules":
+                return self._send(200, cached("cron", 8, IMP.list_jobs))
+            if p == "/api/sources":
+                return self._send(200, IMP.list_sources())
+            if p == "/api/imports":
+                return self._send(200, IMP.import_status())
+            if p == "/api/workload":
+                ns, nm = q["ns"][0], q["name"][0]
+                d = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{nm}")
+                c = d["spec"]["template"]["spec"]["containers"][0]
+                return self._send(200, {
+                    "ns": ns, "name": nm, "image": c.get("image", ""),
+                    "replicas": d["spec"].get("replicas", 1),
+                    "cpu": c.get("resources", {}).get("requests", {}).get("cpu", ""),
+                    "memory": c.get("resources", {}).get("requests", {}).get("memory", ""),
+                    "env": {e["name"]: e.get("value", "") for e in c.get("env", []) or []},
+                    "ports": [{"container": x.get("containerPort"), "name": x.get("name", "")}
+                              for x in c.get("ports", []) or []],
+                    "gpu": d["spec"]["template"]["spec"].get("nodeSelector", {}).get("hardware/igpu") == "true",
+                    "node": d["spec"]["template"]["spec"].get("nodeSelector", {}).get("kubernetes.io/hostname", ""),
+                    "volumes": [{"path": m.get("mountPath"), "source": next(
+                        (v.get("persistentVolumeClaim", {}).get("claimName", "")
+                         for v in d["spec"]["template"]["spec"].get("volumes", [])
+                         if v["name"] == m["name"]), "")}
+                        for m in c.get("volumeMounts", []) or []],
+                })
             if p == "/api/namespaces":
                 return self._send(200, sorted(n["metadata"]["name"] for n in kget("/api/v1/namespaces")["items"]))
             if p == "/api/storageclasses":
@@ -1008,6 +1062,45 @@ class H(BaseHTTPRequestHandler):
                         if e.code != 409: raise
                 _cache.pop("wl", None)
                 return self._send(200, {"ok": True, "name": cfg["name"]})
+            if p == "/api/edit":
+                return self._send(200, LC.edit_workload(b))
+            if p == "/api/move":
+                return self._send(200, LC.move_workload(b["ns"], b["name"], b.get("node")))
+            if p == "/api/node/cordon":
+                return self._send(200, LC.set_cordon(b["node"], b.get("cordon", True)))
+            if p == "/api/node/drain":
+                return self._send(200, LC.drain(b["node"], b.get("grace", 30), b.get("system", False)))
+            if p == "/api/node/power":
+                if b.get("confirm") != b.get("node"):
+                    return self._send(400, {"error": "confirmation must repeat the node name"})
+                try:
+                    return self._send(200, LC.node_power(b["node"], b["action"], b.get("drain", True)))
+                except PermissionError as e:
+                    return self._send(409, {"error": str(e)})
+            if p == "/api/vm/migrate":
+                return self._send(200, LC.vm_migrate(b.get("ns", DEFAULT_NS), b["name"], b.get("target")))
+            if p == "/api/vm/power":
+                return self._send(200, LC.vm_power(b.get("ns", DEFAULT_NS), b["name"], b["action"]))
+            if p == "/api/vm/create":
+                return self._send(200, IMP.create_vm(b))
+            if p == "/api/images/prepull":
+                return self._send(200, IMP.prepull(b["image"], b.get("nodes")))
+            if p == "/api/schedules":
+                IMP.save_job(b); return self._send(200, {"ok": True})
+            if p == "/api/schedules/delete":
+                return self._send(200, IMP.del_job(b["name"]))
+            if p == "/api/schedules/run":
+                IMP.run_job_now(b["name"]); return self._send(200, {"ok": True})
+            if p == "/api/sources":
+                return self._send(200, {"ok": True, "sources": IMP.add_source(
+                    b["name"], b["host"], b["user"], b.get("password"),
+                    b.get("kind", "unraid"), b.get("base_path", "/mnt/user/appdata"))})
+            if p == "/api/sources/delete":
+                return self._send(200, {"ok": True, "sources": IMP.del_source(b["name"])})
+            if p == "/api/sources/browse":
+                return self._send(200, {"entries": IMP.browse_source(b["name"], b.get("path"))})
+            if p == "/api/import":
+                return self._send(200, IMP.import_container(b))
             if p == "/api/preview":
                 dep, svc = build_deployment(b)
                 return self._send(200, {"deployment": dep, "service": svc})
