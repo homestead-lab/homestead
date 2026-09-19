@@ -4,24 +4,41 @@
 window.wlEdit = async (ns, name) => {
   modal("Edit · " + name, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
   try {
-    const w = await api(`/api/workload?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`);
-    const nodes = (STATE.data.ov ? STATE.data.ov.nodes : []).filter(n => n.schedulable !== false);
+    const [w, liveNodes] = await Promise.all([
+      api(`/api/workload?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`),
+      loadHardwareFeatures().then(() => api("/api/nodes").catch(() => [])),
+    ]);
+    if (liveNodes.length) STATE.data.nodes = liveNodes;
+    const nodes = (liveNodes.length ? liveNodes : (STATE.data.ov ? STATE.data.ov.nodes : [])).filter(n => n.schedulable !== false);
+    const seeds = w.seed_configs || [];
     $("#mbody").innerHTML = `
       <div class="f"><label>Image</label><input type="text" id="e_image" value="${esc(w.image)}"></div>
+      <div class="f"><label>Container logo ${tip("Optional HTTPS image URL shown on container and architecture cards.")}</label><input type="url" id="e_icon" value="${esc(w.icon || "")}" placeholder="https://…/icon.png"></div>
       <div class="f2">
-        <div class="f"><label>CPU request</label><input type="text" id="e_cpu" value="${esc(w.cpu)}" placeholder="50m"></div>
-        <div class="f"><label>Memory request</label><input type="text" id="e_mem" value="${esc(w.memory)}" placeholder="128Mi"></div>
+        <div class="f"><label>CPU reserved ${tip("Guaranteed scheduling capacity. 1000m = one core; it is not a hard usage limit.")}</label><input type="text" id="e_cpu" value="${esc(w.cpu)}" placeholder="50m"></div>
+        <div class="f"><label>Memory reserved ${tip("Guaranteed scheduling capacity in Mi or Gi; it is not a hard usage limit.")}</label><input type="text" id="e_mem" value="${esc(w.memory)}" placeholder="128Mi"></div>
       </div>
       <div class="f2">
         <div class="f"><label>Replicas</label><input type="number" id="e_rep" value="${w.replicas}" min="0" max="5"></div>
-        <div class="f"><label>Pin to node</label><select id="e_node">
+        <div class="f"><label>Preferred node ${tip("A preference guides placement but still allows failover. Use Move for hardware-aware choices and optional hard pinning.")}</label><select id="e_node">
           <option value="">any node</option>
           ${nodes.map(n => `<option value="${esc(n.name)}" ${n.name === w.node ? "selected" : ""}>${esc(n.name)}</option>`).join("")}
         </select></div>
       </div>
-      <label class="switch"><input type="checkbox" id="e_gpu" ${w.gpu ? "checked" : ""}> Intel iGPU <span class="tag gpu">/dev/dri</span></label>
+      <div class="hwchoices">
+        ${hardwareChoices("e_hw", w.hardware || [])}
+      </div>
       <div class="sec">Environment</div>
       <div id="e_env"></div><button class="btn sm" onclick="editAddEnv()">＋ add variable</button>
+      ${seeds.length ? `<div class="sec">Startup seed config ${tip("This ConfigMap is copied into the container's persistent storage by an init container before every start. It is authoritative: editing only the mounted file will be overwritten on restart.")}</div>
+        <div class="note seed-note"><b>Authoritative startup configuration.</b> Saving here updates the ConfigMap and restarts the workload so the init container copies the new value into appdata.</div>
+        ${seeds.map((s, i) => `<div class="seed-editor card flat">
+          <div class="between seed-head"><div><b>${esc(s.key)}</b><div class="dim xs mono">ConfigMap ${esc(s.config_map)} · init ${esc(s.init_container)}</div></div><span class="pill info">seeded on start</span></div>
+          <label for="e_seed_${i}">Contents</label>
+          <textarea id="e_seed_${i}" class="e_seed mono" rows="14"
+            data-init="${esc(s.init_container)}" data-config-map="${esc(s.config_map)}" data-key="${esc(s.key)}">${esc(s.value)}</textarea>
+          ${s.command ? `<div class="dim xs mono seed-command">${esc(s.command)}</div>` : ""}
+        </div>`).join("")}` : ""}
       ${w.volumes.length ? `<div class="sec">Mounted volumes</div><div>${w.volumes.map(v =>
         `<span class="tag info">${esc(v.source || "?")} → ${esc(v.path)}</span>`).join("")}
         <div class="dim xs" style="margin-top:8px">Volumes cannot be changed in place — a mount change needs a redeploy.</div></div>` : ""}
@@ -45,8 +62,13 @@ window.editAddEnv = (k = "", v = "") => {
 window.editSave = async (ns, name) => {
   const env = {};
   $$("#e_env .f3").forEach(r => { const k = $(".ek", r).value.trim(); if (k) env[k] = $(".ev", r).value; });
-  const body = { ns, name, image: $("#e_image").value.trim(), cpu: $("#e_cpu").value.trim(),
-    memory: $("#e_mem").value.trim(), replicas: +$("#e_rep").value, gpu: $("#e_gpu").checked, env };
+  const hardware = selectedHardware("e_hw");
+  const seed_configs = $$("#mbody .e_seed").map(el => ({
+    init_container: el.dataset.init, config_map: el.dataset.configMap,
+    key: el.dataset.key, value: el.value,
+  }));
+  const body = { ns, name, image: $("#e_image").value.trim(), icon: $("#e_icon").value.trim(), cpu: $("#e_cpu").value.trim(),
+    memory: $("#e_mem").value.trim(), replicas: +$("#e_rep").value, gpu: hardware.includes("igpu"), hardware, env, seed_configs };
   try {
     await api("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const node = $("#e_node").value;
@@ -57,7 +79,7 @@ window.editSave = async (ns, name) => {
 };
 
 /* ---------------- move a container ---------------- */
-window.wlMove = async (ns, name) => {
+window.wlMoveLegacy = async (ns, name) => {
   const nodes = (STATE.data.ov ? STATE.data.ov.nodes : []);
   modal("Move · " + name, `
     <p class="muted small">Pick the host this workload should run on. HarvUI pins it with a
@@ -83,8 +105,9 @@ window.doMove = async (ns, name) => {
 
 /* ---------------- node power ---------------- */
 window.nodeActions = async name => {
-  let qr = {};
-  try { qr = await api("/api/quorum"); } catch (e) { }
+  let qr = {}, impact = { workloads: [], stranded: [] };
+  try { [qr, impact] = await Promise.all([api("/api/quorum"), api(`/api/node/impact?node=${encodeURIComponent(name)}`)]); } catch (e) { }
+  window.__nodeImpact = impact;
   const isEtcd = (qr.members || []).includes(name);
   const risky = isEtcd && qr.can_lose < 1;
   const off = qr.power_enabled === false;
@@ -97,6 +120,7 @@ window.nodeActions = async name => {
           <button class="btn" onclick="nodeCordon('${esc(name)}',true)">Cordon</button>
           <button class="btn" onclick="nodeCordon('${esc(name)}',false)">Uncordon</button>
           <button class="btn" onclick="nodeDrain('${esc(name)}')">Drain</button>
+          <button class="btn" onclick="evacuateNode('${esc(name)}')">Move all off</button>
         </div></div>
       <div class="card flat"><div class="ctitle">Quorum</div>
         <div class="drow"><div class="dl">etcd members</div><div class="dv mono">${qr.total || "?"}</div></div>
@@ -107,6 +131,9 @@ window.nodeActions = async name => {
         ${isEtcd ? '<div class="dim xs" style="margin-top:8px">This host is an etcd member.</div>' : ""}
       </div>
     </div>
+    <div class="sec">Workload dependencies</div>
+    ${(impact.workloads || []).length ? `<div class="dependency-list">${impactRows(impact)}</div>` : '<div class="empty small">No user workloads are currently running on this host.</div>'}
+    ${(impact.stranded || []).length ? `<div class="note dependency-danger" style="margin-top:12px"><b>Stopping this host strands ${impact.stranded.length} workload${impact.stranded.length === 1 ? "" : "s"}.</b> ${impact.stranded.map(w => `<span class="mono">${esc(w.name)}</span>`).join(", ")} cannot run on any other ready host with the required hardware.</div>` : `<div class="note" style="margin-top:12px">Every current user workload has at least one compatible destination.</div>`}
     <div class="sec">Power</div>
     ${off ? `<div class="note"><b>Host power control is disabled.</b> Rebooting needs a privileged
         helper pod that enters the host namespaces, so it ships off. Set
@@ -120,6 +147,7 @@ window.nodeActions = async name => {
       <div class="f" style="margin-top:12px"><label>Type <b class="mono">${esc(name)}</b> to confirm</label>
         <input type="text" id="pw_confirm" placeholder="${esc(name)}" autocomplete="off"></div>
       <label class="switch"><input type="checkbox" id="pw_drain" checked> Drain workloads first (recommended)</label>
+      ${(impact.stranded || []).length ? `<label class="switch dependency-confirm"><input type="checkbox" id="pw_allow"> I understand ${impact.stranded.map(w => esc(w.name)).join(", ")} will remain down until compatible hardware is available</label>` : ""}
       <div class="row">
         <button class="btn danger" onclick="nodePower('${esc(name)}','reboot')">Reboot host</button>
         <button class="btn danger" onclick="nodePower('${esc(name)}','poweroff')">Shut down host</button>
@@ -133,20 +161,17 @@ window.nodeCordon = async (node, cordon) => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.nodeDrain = async node => {
-  if (!confirm(`Drain ${node}?\n\nEvicts your workloads so they reschedule elsewhere.\nDaemonSets and system pods are left alone.`)) return;
-  toast("draining…");
-  try {
-    const r = await api("/api/node/drain", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ node }) });
-    toast(`evicted ${r.evicted.length} pod(s)`, "ok"); refresh(true);
-  } catch (e) { toast(e.message, "bad"); }
+  evacuateNode(node);
 };
 window.nodePower = async (node, action) => {
   const c = $("#pw_confirm").value.trim();
   if (c !== node) return toast("type the host name exactly to confirm", "bad");
+  if ((window.__nodeImpact?.stranded || []).length && !$("#pw_allow")?.checked)
+    return toast("confirm the workloads that will remain down", "bad");
   try {
     const r = await api("/api/node/power", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ node, action, drain: $("#pw_drain").checked, confirm: c }) });
+      body: JSON.stringify({ node, action, drain: $("#pw_drain").checked, confirm: c,
+        allow_stranded: !!$("#pw_allow")?.checked }) });
     modal("Host " + action, `<pre>${esc(r.steps.join("\n"))}</pre>
       <div class="note" style="margin-top:12px">The host will go down shortly. It stays cordoned —
       uncordon it from this dialog once it is back.</div>`);
@@ -244,9 +269,13 @@ window.doVmCreate = async () => {
 async function viewImages() {
   const d = await api("/api/images");
   const q = STATE.q.toLowerCase();
-  const imgs = d.images.filter(i => !i.name.toLowerCase().includes("pause") && (!q || i.name.toLowerCase().includes(q)));
+  const core = n => /(^|\/)(rancher|harvester|longhornio|kubevirt|cdi-|cilium|kube-|metrics-server|registry\.k8s\.io|pause|traefik|fleet|system-upgrade|k8snetworkplumbingwg|multus|whereabouts|suse\/sles\/)/i.test(n);
+  const all = d.images.filter(i => !q || i.name.toLowerCase().includes(q));
+  const hidden = all.filter(i => core(i.name)).length;
+  const imgs = all.filter(i => STATE.showCoreImages || !core(i.name));
   paint(`<div class="phead"><div><h2>Image cache</h2>
-      <p>${d.distinct} distinct images across ${d.nodes.length} nodes · pre-pull to make failover instant</p></div></div>
+      <p>${imgs.length} app images across ${d.nodes.length} nodes · ${hidden && !STATE.showCoreImages ? `${hidden} Harvester/system images hidden` : `${d.distinct} total`}</p></div>
+      <label class="switch"><input type="checkbox" ${STATE.showCoreImages ? "checked" : ""} onchange="STATE.showCoreImages=this.checked;viewImages()"> Show Harvester/system images</label></div>
     <div class="grid g3" style="margin-bottom:18px">
       ${d.nodes.map(n => `<div class="card flat"><div class="ctitle">${esc(n.node)}</div>
         <div class="bignum" style="margin-top:8px">${n.total_gb}<span class="unit">GB</span></div>
@@ -328,6 +357,8 @@ window.jobDel = async name => {
 
 /* ---------------- import ---------------- */
 async function viewImport() {
+  const [, nodes] = await Promise.all([loadHardwareFeatures(), api("/api/nodes").catch(() => [])]);
+  if (nodes.length) STATE.data.nodes = nodes;
   const [srcs, jobs] = await Promise.all([api("/api/sources"), api("/api/imports").catch(() => [])]);
   STATE.data.srcs = srcs;
   paint(`<div class="phead"><div><h2>Import</h2>
@@ -350,7 +381,7 @@ async function viewImport() {
         <td class="mono small dim">${esc(j.name)}</td>
         <td><span class="pill ${j.state === "done" ? "ok" : j.state === "failed" ? "crit" : "med"}">${esc(j.state)}</span></td>
         <td class="small dim">${esc((j.start || "").replace("T", " ").replace("Z", ""))}</td>
-        <td><button class="btn sm" onclick="wlLogs('lab','${esc(j.name)}')">Logs</button></td></tr>`).join("")}
+        <td><button class="btn sm" onclick="jobLogs('lab','${esc(j.name)}')">Logs</button></td></tr>`).join("")}
     </tbody></table></div></div>` : ""}
 
     <div class="note" style="margin-top:20px">
@@ -396,37 +427,66 @@ window.srcBrowse = async name => {
   modal("Browse · " + name, `<div class="empty"><span class="spin2"></span>connecting to host — this runs a
     one-shot pod, so it takes ~20s</div>`, true);
   try {
-    const r = await api("/api/sources/browse", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }) });
+    const [r, dc] = await Promise.all([
+      api("/api/sources/browse", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }),
+      api("/api/sources/containers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }).catch(() => ({ containers: [] })),
+    ]);
     const src = (STATE.data.srcs || []).find(s => s.name === name) || {};
     const entries = r.entries.filter(e => !e.startsWith("==") && !/^(WARNING|Permission|Warning)/i.test(e));
-    $("#mbody").innerHTML = entries.length
-      ? `<p class="muted small">${entries.length} directories under <span class="mono">${esc(src.base_path)}</span>. Pick one to import.</p>
+    $("#mbody").innerHTML = `${dc.containers.length ? `<div class="ctitle">Docker containers found</div>
+      <p class="muted small">Choose a container to carry over its image, ports, environment variables, icon and appdata mount automatically.</p>
+      <div class="apps importapps" style="margin-top:14px">${dc.containers.map(c => `<div class="card flat importapp">
+        <div class="between"><b>${esc(c.name)}</b><span class="pill ${c.state === "running" ? "ok" : "low"}">${esc(c.state || "unknown")}</span></div>
+        <div class="mono xs dim" style="margin-top:7px;word-break:break-all">${esc(c.image)}</div>
+        <button class="btn pri wide sm" style="margin-top:10px" onclick="inspectImport('${esc(name)}','${esc(c.name)}')">Import container</button></div>`).join("")}</div>
+      <div class="sec">Appdata folders</div>` : ""}` + (entries.length
+      ? `<p class="muted small">${entries.length} directories under <span class="mono">${esc(src.base_path)}</span>. Use this when Docker metadata is unavailable.</p>
          <div class="apps" style="margin-top:14px;grid-template-columns:repeat(auto-fill,minmax(200px,1fr))">
          ${entries.map(e => `<div class="card flat" style="padding:13px">
            <div style="font-weight:660;word-break:break-all">${esc(e)}</div>
            <button class="btn wide sm" style="margin-top:10px"
              onclick="importSetup('${esc(name)}','${esc(e)}')">Import</button></div>`).join("")}</div>`
-      : `<div class="empty">Nothing returned. Check the credentials and that
-         <span class="mono">${esc(src.base_path)}</span> exists on ${esc(src.host)}.</div>`;
+      : `<div class="empty">No appdata folders returned. Check the credentials and that
+         <span class="mono">${esc(src.base_path)}</span> exists on ${esc(src.host)}.</div>`);
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
-window.importSetup = (source, dir) => {
+window.inspectImport = async (source, container) => {
+  $("#mbody").innerHTML = '<div class="empty"><span class="spin2"></span>reading Docker configuration…</div>';
+  try {
+    const cfg = await api("/api/sources/inspect", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: source, container }) });
+    importSetup(source, container, cfg);
+  } catch (e) { $("#mbody").innerHTML = `<div class="empty"><b>Could not inspect ${esc(container)}</b><br><span class="dim small">${esc(e.message)}</span></div>`; }
+};
+window.importSetup = (source, dir, cfg = {}) => {
   const src = (STATE.data.srcs || []).find(s => s.name === source) || {};
-  const name = dir.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 38);
+  const name = (cfg.name || dir).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 38);
+  STATE.data.importCfg = cfg;
   modal("Import · " + dir, `
     <div class="f2">
       <div class="f"><label>Workload name</label><input type="text" id="im_name" value="${esc(name)}"></div>
       <div class="f"><label>Volume size (GB)</label><input type="number" id="im_size" value="10" min="1"></div>
     </div>
     <div class="f"><label>Remote path</label>
-      <input type="text" id="im_path" value="${esc((src.base_path || "") + "/" + dir)}"></div>
-    <div class="f"><label>Docker image to run it with</label>
-      <input type="text" id="im_image" placeholder="lscr.io/linuxserver/${esc(name)}:latest"></div>
-    <div class="f2">
-      <div class="f"><label>Mount appdata at</label><input type="text" id="im_mount" value="/config"></div>
-      <div class="f"><label>Port (optional)</label><input type="number" id="im_port" placeholder="8080"></div>
-    </div>
+      <input type="text" id="im_path" value="${esc(cfg.remote_path || ((src.base_path || "") + "/" + dir))}"></div>
+    <div class="f"><label>Docker image ${tip("Read from Docker on the source host. You can change the tag before importing.")}</label>
+      <input type="text" id="im_image" value="${esc(cfg.image || "")}" placeholder="lscr.io/linuxserver/${esc(name)}:latest"></div>
+    <div class="f"><label>Logo URL</label><input type="url" id="im_icon" value="${esc(cfg.icon || "")}" placeholder="https://…/icon.png"></div>
+    <div class="sec">Hardware requirements ${tip("Docker device mappings are pre-selected. Add or remove features before import; placement will be limited to nodes that provide every selected feature.")}</div>
+    <div class="hwchoices">${hardwareChoices("im_hw", cfg.hardware || [])}</div>
+    <div class="f"><label>Mount appdata inside the container ${tip("This is the path the app sees inside the container, usually /config. The copied files themselves live on a Longhorn volume, not at this path on a Harvester node.")}</label>
+      <input type="text" id="im_mount" value="${esc(cfg.mount_path || "/config")}">
+      <div class="dim xs" style="margin-top:6px">Source files → Longhorn PVC <span class="mono">${esc(name)}-appdata</span> → this path inside the container.</div></div>
+    <div class="sec">Network</div><div class="f2"><div class="f"><label>Docker network → Kubernetes</label><select id="im_net"><option value="loadbalancer">LAN access (VIP)</option><option value="internal">Cluster only</option><option value="host" ${cfg.network_mode === "host" ? "selected" : ""}>Host network (advanced)</option></select></div>
+      <div class="f"><label>VIP allocation ${tip("Choose a new automatic or specific VIP for apps such as Pi-hole that need port 53 on their own address.")}</label><select id="im_vip"><option value="shared">Shared HarvUI VIP</option><option value="auto">New automatic VIP</option><option value="manual">Specific VIP</option></select></div></div>
+    <div class="f"><label>Specific VIP (only for manual)</label><input id="im_ip" placeholder="192.0.2.250"></div>
+    <div class="sec">Port mappings ${tip("Container port is what the app listens on. LAN port is what you open from another device. TCP and UDP mappings are kept separately.")}</div>
+    <div id="im_ports">${(cfg.ports || []).map(p => `<div class="f4 im-port"><div><label>Container</label><input class="ipc" type="number" value="${p.container}"></div><div><label>LAN</label><input class="iph" type="number" value="${p.host}"></div><div><label>Protocol</label><select class="ipp"><option ${p.protocol === "TCP" ? "selected" : ""}>TCP</option><option ${p.protocol === "UDP" ? "selected" : ""}>UDP</option></select></div><label class="switch"><input class="ipe" type="checkbox" ${p.expose !== false ? "checked" : ""}>Expose</label></div>`).join("")}</div>
+    <button class="btn sm" onclick="imAddPort()">＋ add port</button>
+    <div class="sec">Environment variables ${tip("Copied from Docker inspect. Review secrets and host-specific paths before starting the imported app.")}</div>
+    <div id="im_env">${Object.entries(cfg.env || {}).map(([k,v]) => `<div class="f2 im-env"><div class="f"><label>Variable</label><input class="iek" value="${esc(k)}"></div><div class="f"><label>Value</label><input class="iev" value="${esc(v)}"></div></div>`).join("")}</div>
+    <button class="btn sm" onclick="imAddEnv()">＋ add variable</button>
+    ${(cfg.mounts || []).filter(m => m.source !== cfg.remote_path).length ? `<div class="note" style="margin-top:14px"><b>Other Docker paths need review.</b> This import copies the appdata path only. Docker also mounted: ${(cfg.mounts || []).filter(m => m.source !== cfg.remote_path).map(m => `<span class="mono">${esc(m.source)} → ${esc(m.path)}</span>`).join(", ")}</div>` : ""}
     <label class="switch"><input type="checkbox" id="im_start" checked> Leave stopped until the copy finishes</label>
     <div class="row" style="margin-top:16px">
       <button class="btn pri" onclick="doImport('${esc(source)}')">Start import</button>
@@ -434,12 +494,16 @@ window.importSetup = (source, dir) => {
     <div class="note" style="margin-top:14px">The copy runs as a Job — you can close this and watch it
     on the Import page. Large appdata directories can take a while.</div>`, true);
 };
+window.imAddPort = () => { $("#im_ports").insertAdjacentHTML("beforeend", '<div class="f4 im-port"><div><label>Container</label><input class="ipc" type="number"></div><div><label>LAN</label><input class="iph" type="number"></div><div><label>Protocol</label><select class="ipp"><option>TCP</option><option>UDP</option></select></div><label class="switch"><input class="ipe" type="checkbox" checked>Expose</label></div>'); };
+window.imAddEnv = () => { $("#im_env").insertAdjacentHTML("beforeend", '<div class="f2 im-env"><div class="f"><label>Variable</label><input class="iek"></div><div class="f"><label>Value</label><input class="iev"></div></div>'); };
 window.doImport = async source => {
-  const port = +$("#im_port").value;
+  const env = {}; $$(".im-env").forEach(r => { const k = $(".iek", r).value.trim(); if (k) env[k] = $(".iev", r).value; });
+  const cfg = STATE.data.importCfg || {};
   const body = { source, name: $("#im_name").value.trim(), remote_path: $("#im_path").value.trim(),
-    image: $("#im_image").value.trim(), mount_path: $("#im_mount").value.trim(),
+    image: $("#im_image").value.trim(), icon: $("#im_icon").value.trim(), mount_path: $("#im_mount").value.trim(),
     size_gb: +$("#im_size").value, start_after_copy: $("#im_start").checked,
-    ports: port ? [{ container: port, host: port, expose: true }] : [] };
+    ports: $$(".im-port").map(r => ({ container: +$(".ipc", r).value, host: +$(".iph", r).value || +$(".ipc", r).value, protocol: $(".ipp", r).value, expose: $(".ipe", r).checked })).filter(p => p.container),
+    env, hardware: selectedHardware("im_hw"), network_mode: $("#im_net").value, vip_mode: $("#im_vip").value, lb_ip: $("#im_ip").value.trim() };
   if (!body.name || !body.image) return toast("workload name and image are required", "bad");
   try {
     const r = await api("/api/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });

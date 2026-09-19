@@ -186,4 +186,27 @@ have it when you do not.
 | 4.5b VM import | qcow2/vmdk → PVC via CDI. |
 | Image prune | Kubernetes has no delete-image API; needs CRI access on the node. |
 | Share editing | Delete exists; resize and permission edits do not. |
+
+### Unraid-style usability pass
+
+- ✅ Import reads Docker inspect metadata from the source: image, icon, ports,
+  protocols, environment, appdata mount, other mounts, and device mappings.
+- ✅ Container logos persist as workload annotations and render on container and
+  architecture cards.
+- ✅ Networking distinguishes cluster-only, shared VIP, automatic dedicated VIP,
+  manual VIP, and advanced host-network modes; ports retain TCP/UDP.
+- ✅ iGPU remains built in; every other hardware feature is configurable by name,
+  passthrough path/type and optional USB VID:PID matches. Deploy, edit, import,
+  architecture and move flows all consume the same feature registry.
+- ✅ Hardware features can be created by browsing a selected node's probed
+  device tree; deploy/edit/import show both mappings and eligible hosts.
+- ✅ Node evacuation and power actions preflight placement dependencies and
+  require explicit acknowledgement when a workload has no failover host.
+- ✅ Logs follow automatically and explain empty, pending, and unavailable states.
+- ✅ Volumes show per-volume usage, detached health as unknown, RWO/RWX, create,
+  grow, and replica-count editing.
+- ✅ Image cache hides Harvester/system images by default with an opt-in toggle.
+- ✅ Global search returns containers, nodes, and volumes from every page.
+- ✅ Events show up to 120 rows in a denser view with warning filtering.
+- ✅ Architecture defaults to a top-down VIP → workload → volume → replica layout.
 | Backup restore | Backups are listed but restoring to a new PVC is not wired up. |

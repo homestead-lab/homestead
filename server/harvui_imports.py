@@ -17,12 +17,15 @@ import urllib.error
 kget = ksend = create_pvc = build_deployment = None
 NS = "lab"
 _cache = {}
+hardware_features = lambda: []
 
 
-def bind(_kget, _ksend, _create_pvc, _build_dep, _ns, _cache_ref):
-    global kget, ksend, create_pvc, build_deployment, NS, _cache
+def bind(_kget, _ksend, _create_pvc, _build_dep, _ns, _cache_ref, _hardware_features=None):
+    global kget, ksend, create_pvc, build_deployment, NS, _cache, hardware_features
     kget, ksend, create_pvc, build_deployment = _kget, _ksend, _create_pvc, _build_dep
     NS, _cache = _ns, _cache_ref
+    if _hardware_features:
+        hardware_features = _hardware_features
 
 
 def _bust(*keys):
@@ -106,10 +109,102 @@ def browse_source(name, path=None):
     p = path or s.get("base_path", "/mnt/user/appdata")
     remote_cmd = f"ls -1 {shlex.quote(p)} 2>/dev/null | head -200"
     script = ("sshpass -p \"$SRC_PASS\" ssh -o StrictHostKeyChecking=no "
+              "-o LogLevel=ERROR "
               "-o UserKnownHostsFile=/dev/null "
               + shlex.quote(f"{s['user']}@{s['host']}") + " "
               + shlex.quote(remote_cmd))
     return run_probe(f"browse-{name}", script, s)
+
+
+def _ssh_script(src, remote_cmd):
+    return ("sshpass -p \"$SRC_PASS\" ssh -o StrictHostKeyChecking=no "
+            "-o LogLevel=ERROR "
+            "-o UserKnownHostsFile=/dev/null "
+            + shlex.quote(f"{src['user']}@{src['host']}") + " "
+            + shlex.quote(remote_cmd))
+
+
+def source_containers(name):
+    """List Docker containers on an Unraid/generic Docker source.
+
+    Docker's JSON line format gives us the real image reference instead of
+    asking the user to remember or retype it during import.
+    """
+    src = _source(name)
+    lines = run_probe(f"containers-{name}", _ssh_script(
+        src, "docker ps -a --format '{{json .}}' 2>/dev/null | head -200"), src)
+    out = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except Exception:
+            continue
+        nm = row.get("Names") or row.get("Name") or ""
+        if nm:
+            out.append({"name": nm, "image": row.get("Image", ""),
+                        "state": row.get("State", ""), "status": row.get("Status", "")})
+    return sorted(out, key=lambda x: x["name"].lower())
+
+
+def inspect_source_container(name, container):
+    """Translate Docker inspect fields into HarvUI's deploy/import model."""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", container or ""):
+        raise ValueError("invalid container name")
+    src = _source(name)
+    lines = run_probe(f"inspect-{name}", _ssh_script(
+        src, f"docker inspect {shlex.quote(container)} 2>/dev/null"), src)
+    try:
+        # Kubernetes combines a probe container's stdout and stderr.  SSH can
+        # therefore put a host-key notice ahead of Docker's JSON on older
+        # sources.  Decode the first JSON value instead of assuming byte zero.
+        text = "\n".join(lines)
+        starts = [i for i in (text.find("["), text.find("{")) if i >= 0]
+        if not starts:
+            raise ValueError("Docker returned no JSON")
+        raw, _ = json.JSONDecoder().raw_decode(text[min(starts):])
+        item = raw[0] if isinstance(raw, list) else raw
+    except Exception as e:
+        raise ValueError(f"could not inspect {container}: {e}")
+    config, host = item.get("Config", {}) or {}, item.get("HostConfig", {}) or {}
+    env = {}
+    for pair in config.get("Env", []) or []:
+        key, sep, val = pair.partition("=")
+        if sep and key not in ("PATH", "HOSTNAME", "HOME", "TERM"):
+            env[key] = val
+    ports = []
+    bindings = host.get("PortBindings", {}) or {}
+    exposed = config.get("ExposedPorts", {}) or {}
+    for spec in sorted(set(bindings) | set(exposed)):
+        num, _, proto = spec.partition("/")
+        if not num.isdigit():
+            continue
+        vals = bindings.get(spec) or [{}]
+        hp = next((x.get("HostPort") for x in vals if x.get("HostPort")), num)
+        ports.append({"container": int(num), "host": int(hp),
+                      "protocol": (proto or "tcp").upper(), "expose": True})
+    mounts = [{"source": m.get("Source", ""), "path": m.get("Destination", ""),
+               "type": m.get("Type", "")}
+              for m in item.get("Mounts", []) or [] if m.get("Destination")]
+    app_mount = next((m for m in mounts if m["source"].startswith(src.get("base_path", "/mnt/user/appdata"))), None)
+    labels = config.get("Labels", {}) or {}
+    devices = host.get("Devices", []) or []
+    paths = " ".join([d.get("PathOnHost", "") for d in devices] + (host.get("Binds", []) or [])).lower()
+    hardware = []
+    for feature in hardware_features():
+        host_path = feature.get("host_path", "").lower().rstrip("/")
+        if host_path and (host_path in paths or any(
+                str(d.get("PathOnHost", "")).lower().startswith(host_path + "/") for d in devices)):
+            hardware.append(feature["id"])
+    return {
+        "name": (item.get("Name") or container).lstrip("/"),
+        "image": config.get("Image", ""),
+        "icon": labels.get("net.unraid.docker.icon", "") or labels.get("harvui.icon", ""),
+        "webui": labels.get("net.unraid.docker.webui", ""),
+        "env": env, "ports": ports, "mounts": mounts,
+        "remote_path": app_mount["source"] if app_mount else src.get("base_path", "/mnt/user/appdata") + "/" + container,
+        "mount_path": app_mount["path"] if app_mount else "/config",
+        "network_mode": host.get("NetworkMode", "bridge"), "hardware": hardware,
+    }
 
 
 def run_probe(tag, script, src, timeout=70):
@@ -219,6 +314,9 @@ def import_container(cfg):
             "ports": cfg.get("ports") or [], "env": cfg.get("env") or {},
             "volumes": [{"path": cfg.get("mount_path", "/config"), "source": pvc, "type": "pvc"}],
             "gpu": bool(cfg.get("gpu")),
+            "hardware": cfg.get("hardware") or [], "icon": cfg.get("icon", ""),
+            "network_mode": cfg.get("network_mode", "loadbalancer"),
+            "vip_mode": cfg.get("vip_mode", "shared"), "lb_ip": cfg.get("lb_ip", ""),
         }
         dep, svc = build_deployment(dcfg)
         try:

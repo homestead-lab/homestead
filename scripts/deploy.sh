@@ -1,26 +1,29 @@
 #!/usr/bin/env bash
-# Push HarvUI into the cluster. Code ships as ConfigMaps, so there is no image build.
+# Deploy a published HarvUI image to a Harvester/RKE2 host.
 set -euo pipefail
+
 NS="${NS:-lab}"
 HOST="${HOST:-rancher@192.0.2.210}"
+IMAGE="${IMAGE:-ghcr.io/wjcloudy/harvui}"
+TAG="${TAG:-1.9.0}"
+INSTALL_NODE_PROBE="${INSTALL_NODE_PROBE:-true}"
 K='sudo -n /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml'
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REMOTE="/tmp/harvui-release"
 
-echo "==> copying sources to $HOST"
-ssh "$HOST" 'mkdir -p /tmp/harvui/js'
-scp "$ROOT"/server/server.py        "$HOST":/tmp/harvui/
-scp "$ROOT"/web/index.html          "$HOST":/tmp/harvui/
-scp "$ROOT"/web/style.css           "$HOST":/tmp/harvui/
-scp "$ROOT"/web/js/*.js             "$HOST":/tmp/harvui/js/
+echo "==> uploading Kubernetes manifests"
+ssh "$HOST" "mkdir -p $REMOTE"
+scp "$ROOT/deploy/deploy.yaml" "$ROOT/deploy/nodeprobe.yaml" "$HOST:$REMOTE/"
 
-echo "==> updating ConfigMaps"
-ssh "$HOST" "$K -n $NS create configmap harvui-server \
-    --from-file=server.py=/tmp/harvui/server.py \
-    --dry-run=client -o yaml | $K apply -f -"
-ssh "$HOST" "$K -n $NS create configmap harvui-web \
-    --from-file=/tmp/harvui/index.html --from-file=/tmp/harvui/style.css \
-    --from-file=/tmp/harvui/js --dry-run=client -o yaml | $K apply -f -"
+echo "==> applying HarvUI resources"
+ssh "$HOST" "$K apply -f $REMOTE/deploy.yaml"
+ssh "$HOST" "$K -n $NS set image deployment/harvui harvui=$IMAGE:$TAG"
 
-echo "==> rolling out"
-ssh "$HOST" "$K -n $NS rollout restart deploy/harvui"
-ssh "$HOST" "$K -n $NS rollout status deploy/harvui --timeout=180s"
+if [[ "$INSTALL_NODE_PROBE" == "true" ]]; then
+  echo "==> applying optional node telemetry probe"
+  ssh "$HOST" "$K apply -f $REMOTE/nodeprobe.yaml"
+fi
+
+echo "==> waiting for $IMAGE:$TAG"
+ssh "$HOST" "$K -n $NS rollout status deployment/harvui --timeout=300s"
+ssh "$HOST" "$K -n $NS get deployment/harvui pvc/harvui-data service/harvui"

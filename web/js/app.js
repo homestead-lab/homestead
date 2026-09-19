@@ -15,6 +15,7 @@ const VIEWS = {
   schedules: ["Schedules",      "system",    viewSchedules, true],
   imports:   ["Import",         "system",    viewImport,    false],
   events:    ["Events",         "system",    viewEvents,    true],
+  settings:  ["Settings",       "system",    viewSettings,  false],
 };
 
 function go(v) {
@@ -70,11 +71,53 @@ $("#refresh").onclick = e => {
   setTimeout(() => b.classList.remove("spinning"), 900);
   refresh(true);
 };
+let searchTimer = null;
+async function globalSearch(q) {
+  const wrap = $("#searchwrap");
+  let out = $("#searchResults");
+  if (!out) {
+    out = document.createElement("div"); out.id = "searchResults"; out.className = "searchresults hidden";
+    wrap.appendChild(out);
+  }
+  if (!q) { out.classList.add("hidden"); out.innerHTML = ""; return; }
+  out.classList.remove("hidden");
+  out.innerHTML = '<div class="searchloading"><span class="spin2"></span> searching…</div>';
+  try {
+    const [wls, nodes, vols] = await Promise.all([
+      STATE.data.wl ? Promise.resolve(STATE.data.wl) : api("/api/workloads"),
+      STATE.data.nodes ? Promise.resolve(STATE.data.nodes) : api("/api/nodes"),
+      STATE.data.vols ? Promise.resolve(STATE.data.vols) : api("/api/volumes"),
+    ]);
+    STATE.data.wl = wls; STATE.data.nodes = nodes; STATE.data.vols = vols;
+    const s = q.toLowerCase();
+    const hits = [
+      ...wls.filter(x => [x.name, x.ns, ...(x.images || []), ...(x.nodes || [])].join(" ").toLowerCase().includes(s))
+        .map(x => ({ view: "workloads", kind: "Container", name: x.name, sub: `${x.ns} · ${(x.nodes || []).join(", ") || "unscheduled"}`, icon: x.icon })),
+      ...nodes.filter(x => [x.name, x.os, ...(x.roles || []), ...(x.workloads || [])].join(" ").toLowerCase().includes(s))
+        .map(x => ({ view: "nodes", kind: "Node", name: x.name, sub: `${x.status} · ${x.pods_wl || 0} workloads` })),
+      ...vols.filter(x => [x.name, x.pvc_name, x.namespace, x.attached_to].join(" ").toLowerCase().includes(s))
+        .map(x => ({ view: "storage", kind: "Volume", name: x.pvc_name || x.name, sub: `${x.size_gb} GB · ${x.state}` })),
+    ].slice(0, 12);
+    out.innerHTML = hits.length ? hits.map((x, i) => `<button class="sresult" data-view="${x.view}" ${i === 0 ? 'data-first="1"' : ""}>
+      ${x.icon ? `<img src="${esc(x.icon)}" alt="" onerror="this.remove()">` : '<span class="smark">⌕</span>'}
+      <span><b>${esc(x.name)}</b><small>${esc(x.kind)} · ${esc(x.sub)}</small></span></button>`).join("")
+      : `<div class="searchloading">No containers, nodes or volumes match “${esc(q)}”.</div>`;
+    $$(".sresult", out).forEach(b => b.onclick = () => { out.classList.add("hidden"); go(b.dataset.view); });
+  } catch (e) { out.innerHTML = `<div class="searchloading">Search unavailable · ${esc(e.message)}</div>`; }
+}
 $("#globalSearch").addEventListener("input", e => {
   STATE.q = e.target.value.trim();
   if (STATE.view === "workloads") renderWorkloads();
   else if (STATE.view === "storage") viewStorage();
   else if (STATE.view === "images") viewImages();
+  else if (STATE.view === "events") viewEvents();
+  clearTimeout(searchTimer); searchTimer = setTimeout(() => globalSearch(STATE.q), 180);
+});
+$("#globalSearch").addEventListener("keydown", e => {
+  if (e.key === "Enter") { const first = $("#searchResults .sresult[data-first]"); if (first) first.click(); }
+});
+document.addEventListener("click", e => {
+  if (!e.target.closest("#searchwrap")) $("#searchResults")?.classList.add("hidden");
 });
 /* mobile: search collapses behind an icon so the bar has room for the title */
 const sbtn = $("#searchbtn");

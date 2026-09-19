@@ -16,6 +16,17 @@ SMB_NAMESPACE = os.environ.get("SMB_NAMESPACE", "lab")
 DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
+DATA_DIR = os.environ.get("DATA_DIR", "/data")
+HARVUI_VERSION = os.environ.get("HARVUI_VERSION", "1.9.0")
+
+DEFAULT_APP_SETTINGS = {
+    "thresholds": {
+        "cpu": {"warning": 70, "critical": 88},
+        "memory": {"warning": 70, "critical": 88},
+        "disk": {"warning": 75, "critical": 90},
+        "temperature": {"warning": 70, "critical": 85},
+    }
+}
 
 SYS_NS = {
     "kube-system", "kube-public", "kube-node-lease", "harvester-system", "harvester-public",
@@ -132,6 +143,65 @@ def parse_mem(s):
     except: return 0
 
 
+def validate_app_settings(value):
+    """Validate and normalize the cluster-wide UI health thresholds."""
+    incoming = (value or {}).get("thresholds") or {}
+    out = json.loads(json.dumps(DEFAULT_APP_SETTINGS))
+    for metric, defaults in out["thresholds"].items():
+        supplied = incoming.get(metric) or {}
+        warning = int(supplied.get("warning", defaults["warning"]))
+        critical = int(supplied.get("critical", defaults["critical"]))
+        upper = 120 if metric == "temperature" else 100
+        if warning < 1 or critical > upper or warning >= critical:
+            unit = "°C" if metric == "temperature" else "%"
+            raise ValueError(f"{metric} thresholds must be ordered between 1 and {upper}{unit}")
+        out["thresholds"][metric] = {"warning": warning, "critical": critical}
+    return out
+
+
+def get_app_settings():
+    try:
+        cm = kget(f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/harvui-settings")
+        raw = json.loads((cm.get("data") or {}).get("settings.json", "{}"))
+        return validate_app_settings(raw)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return validate_app_settings({})
+        raise
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return validate_app_settings({})
+
+
+def save_app_settings(value):
+    settings = validate_app_settings(value)
+    body = {"apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {"name": "harvui-settings", "namespace": DEFAULT_NS,
+                         "labels": {"harvui.io/managed": "true"}},
+            "data": {"settings.json": json.dumps(settings, indent=2)}}
+    try:
+        current = kget(f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/harvui-settings")
+        body["metadata"]["resourceVersion"] = current["metadata"]["resourceVersion"]
+        ksend("PUT", f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/harvui-settings", body)
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+        ksend("POST", f"/api/v1/namespaces/{DEFAULT_NS}/configmaps", body)
+    _cache.pop("settings", None)
+    return settings
+
+
+def app_settings_payload():
+    settings = json.loads(json.dumps(cached("settings", 15, get_app_settings)))
+    try:
+        kube = kget("/version").get("gitVersion", "")
+    except Exception:
+        kube = ""
+    settings["info"] = {"version": HARVUI_VERSION, "namespace": DEFAULT_NS,
+                        "storage_class": STORAGE_CLASS, "vip": LB_IP,
+                        "kubernetes": kube}
+    return settings
+
+
 # ---------------------------------------------------------------- collectors
 _TEMP_CACHE = {"at": 0, "data": {}}
 
@@ -218,7 +288,18 @@ def get_nodes():
         cmem = parse_mem(cap.get("memory"))
         npods = [p for p in pods.get("items", []) if p.get("spec", {}).get("nodeName") == name]
         wl = sorted({p["metadata"].get("labels", {}).get("app") or p["metadata"]["name"].rsplit("-", 2)[0]
-                     for p in npods if p["metadata"]["namespace"] not in SYS_NS})
+                     for p in npods if p["metadata"]["namespace"] not in SYS_NS
+                     and not p["metadata"].get("labels", {}).get("harvui.io/task")
+                     and (p["metadata"].get("labels", {}).get("app") or "") not in
+                         ("harvui-nodeprobe", "image-prepull")})
+        probed = (temps.get(name) or {}).get("devices") or {}
+        annotations = n["metadata"].get("annotations", {}) or {}
+        try:
+            labels, auto_hardware = HW.reconcile_node(name, labels, annotations, probed)
+        except Exception:
+            auto_hardware = {x for x in annotations.get(HW.AUTO_ANNOTATION, "").split(",") if x}
+        hardware_inventory = HW.inventory(labels, probed, auto_hardware)
+        hardware = {x["id"]: x["available"] for x in hardware_inventory}
         out.append({
             "name": name,
             "status": "Ready" if conds.get("Ready") == "True" else "NotReady",
@@ -231,12 +312,16 @@ def get_nodes():
             "pods_sys": len([p for p in npods if p["metadata"]["namespace"] in SYS_NS]),
             "pods_wl": len([p for p in npods if p["metadata"]["namespace"] not in SYS_NS]),
             "vms": len([v for v in vmis if v.get("status", {}).get("nodeName") == name]),
-            "igpu": labels.get("hardware/igpu") == "true",
+            "igpu": hardware["igpu"],
+            "hardware": hardware,
+            "hardware_inventory": hardware_inventory,
             "workloads": wl,
             "kernel": n["status"].get("nodeInfo", {}).get("kernelVersion", ""),
             "os": n["status"].get("nodeInfo", {}).get("osImage", ""),
             "schedulable": not n.get("spec", {}).get("unschedulable", False),
             "addresses": {a["type"]: a["address"] for a in n["status"].get("addresses", [])},
+            "allocatable": n["status"].get("allocatable", {}),
+            "labels": labels,
             "info": n["status"].get("nodeInfo", {}),
             "conditions": [{"type": c["type"], "status": c["status"], "reason": c.get("reason", "")}
                            for c in n["status"].get("conditions", [])],
@@ -252,12 +337,19 @@ def get_volumes():
         vols = kget("/apis/longhorn.io/v1beta2/volumes").get("items", [])
     except Exception:
         return []
+    try:
+        pvcs = {(p["metadata"]["namespace"], p["metadata"]["name"]): p
+                for p in kget("/api/v1/persistentvolumeclaims").get("items", [])}
+    except Exception:
+        pvcs = {}
     out = []
     for v in vols:
         st = v.get("status", {})
         sp = v.get("spec", {})
         ks = st.get("kubernetesStatus", {}) or {}
         wls = ks.get("workloadsStatus") or []
+        pvc_obj = pvcs.get((ks.get("namespace", ""), ks.get("pvcName", "")), {})
+        pvc_spec = pvc_obj.get("spec", {}) or {}
         out.append({
             "name": v["metadata"]["name"],
             "pvc_name": ks.get("pvcName", ""),
@@ -274,6 +366,9 @@ def get_volumes():
             "size_gb": round(int(sp.get("size", 0) or 0) / 1024**3, 1),
             "replicas": sp.get("numberOfReplicas", 0),
             "actual_gb": round(int(st.get("actualSize", 0) or 0) / 1024**3, 2),
+            "used_pct": round((int(st.get("actualSize", 0) or 0) / max(int(sp.get("size", 0) or 0), 1)) * 100, 1),
+            "access_modes": pvc_spec.get("accessModes", []) or [],
+            "storage_class": pvc_spec.get("storageClassName", ""),
             "pvc": v["metadata"].get("annotations", {}).get("longhorn.io/volume-scheduling-error", "") or "",
         })
     return sorted(out, key=lambda x: x["name"])
@@ -320,11 +415,14 @@ def get_workloads():
         starts = [p["status"].get("startTime") for p in mine if p["status"].get("startTime")]
         uptime = max([age_secs(x) for x in starts], default=0) if starts else 0
         st = d.get("status", {})
+        pspec = d["spec"]["template"]["spec"]
+        annotations = d["metadata"].get("annotations", {}) or {}
+        hardware = HW.workload_features(pspec, annotations)
         out.append({
             "ns": ns, "name": name, "uptime": uptime,
             "ready": st.get("readyReplicas", 0) or 0,
             "desired": d["spec"].get("replicas", 0) or 0,
-            "images": [c["image"] for c in d["spec"]["template"]["spec"].get("containers", [])],
+            "images": [c["image"] for c in pspec.get("containers", [])],
             "nodes": sorted({p["spec"].get("nodeName", "") for p in mine if p["spec"].get("nodeName")}),
             "pods": [{"name": p["metadata"]["name"], "phase": p["status"].get("phase"),
                       "node": p["spec"].get("nodeName", ""),
@@ -333,7 +431,9 @@ def get_workloads():
                      for p in mine],
             "cpu": round(cpu, 3), "mem_mb": round(mem / 1024**2, 1),
             "ports": ports,
-            "gpu": d["spec"]["template"]["spec"].get("nodeSelector", {}).get("hardware/igpu") == "true",
+            "gpu": "igpu" in hardware,
+            "hardware": hardware,
+            "icon": annotations.get("harvui.io/icon", ""),
         })
     return sorted(out, key=lambda x: (x["ns"], x["name"]))
 
@@ -374,7 +474,7 @@ def get_overview():
 
 def get_events():
     try:
-        ev = kget("/api/v1/events?limit=60")
+        ev = kget("/api/v1/events?limit=160")
     except Exception:
         return []
     items = ev.get("items", [])
@@ -387,7 +487,8 @@ def get_events():
         "msg": (e.get("message") or "")[:160],
         "type": e.get("type", "Normal"),
         "time": e.get("lastTimestamp") or e.get("eventTime") or "",
-    } for e in items[:40]]
+        "count": e.get("count", 1),
+    } for e in items[:120]]
 
 
 def get_flow2():
@@ -408,6 +509,12 @@ def get_flow2():
         vmis = kget("/apis/kubevirt.io/v1/virtualmachineinstances").get("items", [])
     except Exception:
         vmis = []
+    try:
+        dep_meta = {(d["metadata"]["namespace"], d["metadata"]["name"]):
+                    d["metadata"].get("annotations", {}) or {}
+                    for d in kget("/apis/apps/v1/deployments").get("items", [])}
+    except Exception:
+        dep_meta = {}
 
     # --- volumes, keyed by their PVC name where possible
     vols, vol_by_pvc = [], {}
@@ -491,6 +598,8 @@ def get_flow2():
             "cpu": round(cu, 3), "mem_mb": round(mu / 1048576, 1),
             "ns": p["metadata"]["namespace"],
             "image": (p["spec"].get("containers") or [{}])[0].get("image", ""),
+            "icon": dep_meta.get((p["metadata"]["namespace"], app), {}).get("harvui.io/icon", ""),
+            "hardware": HW.workload_features(p["spec"], dep_meta.get((p["metadata"]["namespace"], app), {})),
             "gpu": any("dri" in (m.get("mountPath") or "")
                        for c in p["spec"].get("containers", []) for m in (c.get("volumeMounts") or [])),
             "claims": claims, "ports": ports_by_app.get(app, []),
@@ -500,7 +609,7 @@ def get_flow2():
         wls.append({"id": "w:vm-" + nm, "name": nm, "kind": "vm", "ns": v["metadata"]["namespace"],
                     "node": v.get("status", {}).get("nodeName", ""), "phase": v.get("status", {}).get("phase", ""),
                     "uptime": 0, "cpu": 0, "mem_mb": 0,
-                    "image": "", "gpu": False, "claims": [], "ports": []})
+                    "image": "", "gpu": False, "hardware": [], "claims": [], "ports": []})
 
     return {
         "nodes": [{"id": "n:" + k, "name": k, "copies": sorted(v, key=lambda x: x["vol"])}
@@ -637,9 +746,10 @@ def get_storage():
         "provisioned_gb": round(prov, 1),
         "actual_gb": round(used, 1),
         "volumes": len(vols),
-        "healthy": len([v for v in vols if v["robustness"] == "healthy"]),
-        "degraded": len([v for v in vols if v["robustness"] == "degraded"]),
-        "faulted": len([v for v in vols if v["robustness"] == "faulted"]),
+        "healthy": len([v for v in vols if v["state"] == "attached" and v["robustness"] == "healthy"]),
+        "degraded": len([v for v in vols if v["state"] == "attached" and v["robustness"] == "degraded"]),
+        "faulted": len([v for v in vols if v["state"] == "attached" and v["robustness"] == "faulted"]),
+        "unknown": len([v for v in vols if v["state"] != "attached"]),
         "attached": len([v for v in vols if v["state"] == "attached"]),
         "disks": disks,
     }
@@ -672,11 +782,26 @@ def build_deployment(cfg):
 
     podspec = {"containers": [c]}
     if volumes: podspec["volumes"] = volumes
+    hardware = set(cfg.get("hardware") or [])
     if cfg.get("gpu"):
-        podspec["nodeSelector"] = {"hardware/igpu": "true"}
+        hardware.add("igpu")
+    devices = {f["id"]: HW.mount_spec(f) for f in HW.features()}
+    unknown = hardware - set(devices)
+    if unknown:
+        raise ValueError("unknown hardware feature(s): " + ", ".join(sorted(unknown)))
+    for hw in hardware:
+        if hw not in devices:
+            continue
+        dev = devices[hw]
+        podspec.setdefault("nodeSelector", {})[dev["label"]] = "true"
         podspec["containers"][0].setdefault("securityContext", {})["privileged"] = True
-        podspec["containers"][0].setdefault("volumeMounts", []).append({"name": "dri", "mountPath": "/dev/dri"})
-        podspec.setdefault("volumes", []).append({"name": "dri", "hostPath": {"path": "/dev/dri", "type": "Directory"}})
+        podspec["containers"][0].setdefault("volumeMounts", []).append(
+            {"name": dev["name"], "mountPath": dev["container_path"]})
+        podspec.setdefault("volumes", []).append(
+            {"name": dev["name"], "hostPath": {"path": dev["host_path"], "type": dev["path_type"]}})
+    if cfg.get("network_mode") == "host":
+        podspec["hostNetwork"] = True
+        podspec["dnsPolicy"] = "ClusterFirstWithHostNet"
     if cfg.get("node"):
         podspec.setdefault("nodeSelector", {})["kubernetes.io/hostname"] = cfg["node"]
     podspec["tolerations"] = [
@@ -685,33 +810,96 @@ def build_deployment(cfg):
     ]
     dep = {
         "apiVersion": "apps/v1", "kind": "Deployment",
-        "metadata": {"name": name, "namespace": ns, "labels": {"app": name, "harvui.io/managed": "true"}},
+        "metadata": {"name": name, "namespace": ns, "labels": {"app": name, "harvui.io/managed": "true"},
+                     "annotations": ({**({"harvui.io/icon": cfg.get("icon", "")} if cfg.get("icon") else {}),
+                                      **({"harvui.io/hardware": ",".join(sorted(hardware))} if hardware else {})})},
         "spec": {"replicas": int(cfg.get("replicas", 1)), "strategy": {"type": "Recreate"},
                  "selector": {"matchLabels": {"app": name}},
                  "template": {"metadata": {"labels": {"app": name, "lab-workload": "true"}}, "spec": podspec}},
     }
     svc = None
     exposed = [p for p in cfg.get("ports") or [] if p.get("expose")]
-    if exposed:
+    if exposed and cfg.get("network_mode") != "host":
+        mode = cfg.get("vip_mode", "shared")
+        vip = cfg.get("lb_ip") if mode == "manual" else (LB_IP if mode == "shared" else "")
+        svc_type = "ClusterIP" if cfg.get("network_mode") == "internal" else "LoadBalancer"
         svc = {
             "apiVersion": "v1", "kind": "Service",
             "metadata": {"name": name, "namespace": ns, "labels": {"app": name, "harvui.io/managed": "true"},
-                         "annotations": {"kube-vip.io/loadbalancerIPs": cfg.get("lb_ip") or LB_IP} if (cfg.get("lb_ip") or LB_IP) else {}},
-            "spec": {"type": "LoadBalancer", "selector": {"app": name},
-                     "ports": [{"name": (p.get("name") or f"p{p['container']}")[:15],
-                                "port": int(p.get("host") or p["container"]),
-                                "targetPort": int(p["container"]), "protocol": "TCP"} for p in exposed]},
+                         "annotations": {"kube-vip.io/loadbalancerIPs": vip} if vip and svc_type == "LoadBalancer" else {}},
+            "spec": {"type": svc_type, "selector": {"app": name},
+                      "ports": [{"name": (p.get("name") or f"p{p['container']}")[:15],
+                                 "port": int(p.get("host") or p["container"]),
+                                 "targetPort": int(p["container"]),
+                                 "protocol": str(p.get("protocol", "TCP")).upper()} for p in exposed]},
         }
     return dep, svc
 
 
-def create_pvc(ns, name, size_gb, sc=None):
+def create_pvc(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce"):
     body = {"apiVersion": "v1", "kind": "PersistentVolumeClaim",
             "metadata": {"name": name, "namespace": ns, "labels": {"harvui.io/managed": "true"}},
-            "spec": {"accessModes": ["ReadWriteOnce"],
+            "spec": {"accessModes": [access_mode],
                      "storageClassName": sc or STORAGE_CLASS,
                      "resources": {"requests": {"storage": f"{size_gb}Gi"}}}}
     return ksend("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", body)
+
+
+def create_volume(cfg):
+    name = (cfg.get("name") or "").strip().lower()
+    ns = cfg.get("namespace") or DEFAULT_NS
+    if not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?", name):
+        raise ValueError("volume name must be lowercase letters, numbers and dashes")
+    size = int(cfg.get("size_gb", 10))
+    if size < 1:
+        raise ValueError("volume size must be at least 1 GB")
+    mode = cfg.get("access_mode", "ReadWriteOnce")
+    if mode not in ("ReadWriteOnce", "ReadWriteMany"):
+        raise ValueError("access mode must be ReadWriteOnce or ReadWriteMany")
+    out = create_pvc(ns, name, size, cfg.get("storage_class") or STORAGE_CLASS, mode)
+    for k in list(_cache):
+        if k.startswith(("vol", "stor", "flow")):
+            _cache.pop(k, None)
+    return {"ok": True, "name": name, "namespace": ns, "pvc": out}
+
+
+def edit_volume(cfg):
+    """Grow a PVC and optionally change Longhorn replica count."""
+    ns, name = cfg.get("namespace") or DEFAULT_NS, cfg["name"]
+    pvc = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}")
+    if cfg.get("size_gb"):
+        pvc["spec"]["resources"]["requests"]["storage"] = f"{int(cfg['size_gb'])}Gi"
+        ksend("PUT", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}", pvc)
+    reps = cfg.get("replicas")
+    vol_name = pvc.get("spec", {}).get("volumeName")
+    if reps is not None and vol_name:
+        ksend("PATCH", f"/apis/longhorn.io/v1beta2/volumes/{vol_name}",
+              {"spec": {"numberOfReplicas": int(reps)}}, ctype="application/merge-patch+json")
+    for k in list(_cache):
+        if k.startswith(("vol", "stor", "flow")):
+            _cache.pop(k, None)
+    return {"ok": True, "name": name}
+
+
+def set_node_hardware(cfg):
+    name = cfg["node"]
+    selected = set(cfg.get("features") or [])
+    # Backward-compatible body accepted from pre-v1.3 clients.
+    if cfg.get("igpu"): selected.add("igpu")
+    if cfg.get("coral_pcie"): selected.add("coral_pcie")
+    if cfg.get("coral_usb"): selected.add("coral_usb")
+    known = {f["id"] for f in HW.features()}
+    if selected - known:
+        raise ValueError("unknown hardware feature(s): " + ", ".join(sorted(selected - known)))
+    labels = {f["label"]: "true" if f["id"] in selected else "false" for f in HW.features()}
+    # These are deliberate overrides, so remove them from the auto-managed set.
+    ksend("PATCH", f"/api/v1/nodes/{name}", {"metadata": {"labels": labels,
+          "annotations": {HW.AUTO_ANNOTATION: None}}},
+          ctype="application/merge-patch+json")
+    for k in list(_cache):
+        if k.startswith(("nodes", "ov")):
+            _cache.pop(k, None)
+    return {"ok": True, "node": name}
 
 
 # ---------------------------------------------------------------- app store
@@ -902,10 +1090,16 @@ import harvui_lifecycle as LC
 import harvui_imports as IMP
 import harvui_auth as AUTH
 import harvui_longhorn as LH
-LC.bind(kget, ksend, SYS_NS, _cache)
-IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache)
+import harvui_place as PLACE
+import harvui_hardware as HW
+import harvui_updates as UPDATES
+HW.bind(kget, ksend, DEFAULT_NS, _cache)
+LC.bind(kget, ksend, SYS_NS, _cache, HW.features)
+IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.features)
 AUTH.bind(kget, ksend, DEFAULT_NS)
 LH.bind(kget, ksend, _cache)
+PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.features)
+UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR)
 
 # Paths reachable without a session. Everything else needs one.
 PUBLIC = {"/healthz", "/style.css", "/index.html", "/",
@@ -919,8 +1113,9 @@ PUBLIC = {"/healthz", "/style.css", "/index.html", "/",
 # but a viewer who hand-crafts the request still gets a 403.
 ADMIN_ROUTES = {
     "/api/auth/users", "/api/auth/users/delete", "/api/auth/role",
-    "/api/node/power", "/api/node/drain", "/api/node/cordon",
-    "/api/sources", "/api/sources/delete", "/api/sources/browse", "/api/import",
+    "/api/node/power", "/api/node/drain", "/api/node/cordon", "/api/node/hardware",
+    "/api/sources", "/api/sources/delete", "/api/sources/browse",
+    "/api/sources/containers", "/api/sources/inspect", "/api/import",
     "/api/shares", "/api/shares/delete",
     "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete",
 }
@@ -931,6 +1126,10 @@ SELF_ROUTES = {"/api/auth/logout", "/api/auth/password", "/api/auth/signout-ever
 def needed_role(path, method):
     if path in SELF_ROUTES:
         return "viewer"
+    if path == "/api/hardware/features" and method != "GET":
+        return "admin"
+    if path == "/api/settings" and method != "GET":
+        return "admin"
     if path in ADMIN_ROUTES:
         return "admin"
     return "viewer" if method == "GET" else "operator"
@@ -1039,12 +1238,22 @@ class H(BaseHTTPRequestHandler):
                                         "roles": list(AUTH.ROLES)})
             if p == "/api/auth/users":
                 return self._send(200, AUTH.list_users())
+            if p == "/api/settings":
+                return self._send(200, app_settings_payload())
             if p == "/api/overview":
                 return self._send(200, cached("ov", 5, get_overview))
             if p == "/api/nodes":
                 return self._send(200, cached("nodes", 5, get_nodes))
             if p == "/api/workloads":
                 return self._send(200, cached("wl", 5, get_workloads))
+            if p == "/api/image-updates":
+                force = (q.get("force") or ["0"])[0].lower() in ("1", "true", "yes")
+                return self._send(200, cached("image-updates" if not force else
+                                              "image-updates-force:" + str(int(time.time() / 10)),
+                                              600 if not force else 8,
+                                              lambda: UPDATES.scan(force)))
+            if p == "/api/image-updates/progress":
+                return self._send(200, UPDATES.progress(q["ns"][0], q["name"][0]))
             if p == "/api/volumes":
                 return self._send(200, cached("vol", 8, get_volumes))
             if p == "/api/events":
@@ -1062,6 +1271,15 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("flow2", 8, get_flow2))
             if p == "/api/shares":
                 return self._send(200, list_shares())
+            if p == "/api/move/plan":
+                return self._send(200, PLACE.plan(
+                    q["ns"][0], q["name"][0],
+                    float((q.get("cpu") or [0])[0]), float((q.get("mem") or [0])[0])))
+            if p == "/api/node/impact":
+                node = (q.get("node") or [""])[0]
+                if not node:
+                    return self._send(400, {"error": "node is required"})
+                return self._send(200, cached("impact:" + node, 5, lambda: PLACE.impact(node)))
             if p == "/api/quorum":
                 r = LC.quorum_report(); r["power_enabled"] = LC.NODE_POWER_ENABLED
                 return self._send(200, r)
@@ -1071,6 +1289,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("vmimg", 30, IMP.list_vm_images))
             if p == "/api/images":
                 return self._send(200, cached("imgcache", 30, IMP.image_cache))
+            if p == "/api/hardware/features":
+                return self._send(200, cached("hardware:features", 15, HW.features))
             if p == "/api/schedules":
                 return self._send(200, cached("cron", 8, IMP.list_jobs))
             if p == "/api/lh/overview":
@@ -1089,6 +1309,8 @@ class H(BaseHTTPRequestHandler):
                 ns, nm = q["ns"][0], q["name"][0]
                 d = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{nm}")
                 c = d["spec"]["template"]["spec"]["containers"][0]
+                pspec = d["spec"]["template"]["spec"]
+                hardware = HW.workload_features(pspec, d["metadata"].get("annotations", {}) or {})
                 return self._send(200, {
                     "ns": ns, "name": nm, "image": c.get("image", ""),
                     "replicas": d["spec"].get("replicas", 1),
@@ -1097,11 +1319,14 @@ class H(BaseHTTPRequestHandler):
                     "env": {e["name"]: e.get("value", "") for e in c.get("env", []) or []},
                     "ports": [{"container": x.get("containerPort"), "name": x.get("name", "")}
                               for x in c.get("ports", []) or []],
-                    "gpu": d["spec"]["template"]["spec"].get("nodeSelector", {}).get("hardware/igpu") == "true",
-                    "node": d["spec"]["template"]["spec"].get("nodeSelector", {}).get("kubernetes.io/hostname", ""),
+                    "gpu": "igpu" in hardware,
+                    "hardware": hardware,
+                    "icon": d["metadata"].get("annotations", {}).get("harvui.io/icon", ""),
+                    "node": pspec.get("nodeSelector", {}).get("kubernetes.io/hostname", ""),
+                    "seed_configs": LC.seed_configs(ns, d),
                     "volumes": [{"path": m.get("mountPath"), "source": next(
                         (v.get("persistentVolumeClaim", {}).get("claimName", "")
-                         for v in d["spec"]["template"]["spec"].get("volumes", [])
+                          for v in pspec.get("volumes", [])
                          if v["name"] == m["name"]), "")}
                         for m in c.get("volumeMounts", []) or []],
                 })
@@ -1128,9 +1353,17 @@ class H(BaseHTTPRequestHandler):
                     apps = [a for a in apps if cat in (a["cat"] or "").lower()]
                 return self._send(200, {"total": len(apps), "apps": apps[:60]})
             if p == "/api/logs":
-                ns, pod = q["ns"][0], q["pod"][0]
+                ns = q["ns"][0]
+                pod = (q.get("pod") or [""])[0]
+                job = (q.get("job") or [""])[0]
+                if job and not pod:
+                    matches = kget(f"/api/v1/namespaces/{ns}/pods?labelSelector=job-name%3D{urllib.parse.quote(job)}").get("items", [])
+                    pod = matches[0]["metadata"]["name"] if matches else ""
+                if not pod:
+                    return self._send(404, {"error": "Logs are not available yet because no pod exists."})
+                tail = max(20, min(1000, int((q.get("tail") or [300])[0])))
                 req = urllib.request.Request(
-                    f"{API}/api/v1/namespaces/{ns}/pods/{pod}/log?tailLines=200",
+                    f"{API}/api/v1/namespaces/{ns}/pods/{pod}/log?tailLines={tail}&timestamps=true",
                     headers={"Authorization": f"Bearer {TOKEN}"})
                 with urllib.request.urlopen(req, context=CTX, timeout=15) as r:
                     return self._send(200, r.read().decode("utf-8", "replace"), "text/plain; charset=utf-8")
@@ -1182,6 +1415,8 @@ class H(BaseHTTPRequestHandler):
                 AUTH.logout_everywhere(self.user)
                 self._set_cookie("", clear=True)
                 return self._send(200, {"ok": True})
+            if p == "/api/settings":
+                return self._send(200, {"ok": True, **save_app_settings(b)})
             if p == "/api/deploy":
                 dep, svc = build_deployment(b)
                 ns = dep["metadata"]["namespace"]
@@ -1213,6 +1448,14 @@ class H(BaseHTTPRequestHandler):
                       ctype="application/merge-patch+json")
                 _cache.pop("wl", None)
                 return self._send(200, {"ok": True})
+            if p == "/api/image-updates/apply":
+                result = UPDATES.apply_update(b["ns"], b["name"])
+                _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("image-updates", None)
+                return self._send(200, result)
+            if p == "/api/image-updates/rollback":
+                result = UPDATES.rollback(b["ns"], b["name"])
+                _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("image-updates", None)
+                return self._send(200, result)
             if p == "/api/shares":
                 s = create_share(b["name"], int(b.get("size_gb", 10)), b.get("user", "lab"),
                                  b.get("password"), b.get("public", False))
@@ -1235,14 +1478,33 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/edit":
                 return self._send(200, LC.edit_workload(b))
             if p == "/api/move":
-                return self._send(200, LC.move_workload(b["ns"], b["name"], b.get("node")))
+                node = b.get("node")
+                if b.get("auto"):
+                    pl = PLACE.plan(b["ns"], b["name"], b.get("cpu", 0), b.get("mem_mb", 0))
+                    node = pl["recommended"]
+                    if not node:
+                        return self._send(409, {"error": "no host can take this workload — "
+                                                "check hardware requirements", "plan": pl})
+                return self._send(200, PLACE.move(b["ns"], b["name"], node, b.get("pin", False)))
             if p == "/api/node/cordon":
                 return self._send(200, LC.set_cordon(b["node"], b.get("cordon", True)))
+            if p == "/api/node/hardware":
+                return self._send(200, set_node_hardware(b))
+            if p == "/api/hardware/features":
+                return self._send(200, HW.save_features(b.get("features")))
             if p == "/api/node/drain":
+                impact = PLACE.impact(b["node"])
+                if impact["stranded"] and not b.get("allow_stranded"):
+                    return self._send(409, {"error": "some workloads have no eligible failover host",
+                                            "impact": impact})
                 return self._send(200, LC.drain(b["node"], b.get("grace", 30), b.get("system", False)))
             if p == "/api/node/power":
                 if b.get("confirm") != b.get("node"):
                     return self._send(400, {"error": "confirmation must repeat the node name"})
+                impact = PLACE.impact(b["node"])
+                if impact["stranded"] and not b.get("allow_stranded"):
+                    return self._send(409, {"error": "some workloads have no eligible failover host",
+                                            "impact": impact})
                 try:
                     return self._send(200, LC.node_power(b["node"], b["action"], b.get("drain", True)))
                 except PermissionError as e:
@@ -1255,6 +1517,10 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, IMP.create_vm(b))
             if p == "/api/images/prepull":
                 return self._send(200, IMP.prepull(b["image"], b.get("nodes")))
+            if p == "/api/volumes/create":
+                return self._send(200, create_volume(b))
+            if p == "/api/volumes/edit":
+                return self._send(200, edit_volume(b))
             if p == "/api/lh/job":
                 return self._send(200, LH.save_job(b))
             if p == "/api/lh/job/delete":
@@ -1285,6 +1551,10 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "sources": IMP.del_source(b["name"])})
             if p == "/api/sources/browse":
                 return self._send(200, {"entries": IMP.browse_source(b["name"], b.get("path"))})
+            if p == "/api/sources/containers":
+                return self._send(200, {"containers": IMP.source_containers(b["name"])})
+            if p == "/api/sources/inspect":
+                return self._send(200, IMP.inspect_source_container(b["name"], b["container"]))
             if p == "/api/import":
                 return self._send(200, IMP.import_container(b))
             if p == "/api/preview":

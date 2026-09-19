@@ -1,4 +1,9 @@
 apiVersion: v1
+kind: Namespace
+metadata:
+  name: lab
+---
+apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: harvui
@@ -82,6 +87,20 @@ subjects:
     name: harvui
     namespace: lab
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: harvui-data
+  namespace: lab
+  labels:
+    app: harvui
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: longhorn-r2
+  resources:
+    requests:
+      storage: 2Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -89,10 +108,15 @@ metadata:
   namespace: lab
   labels:
     app: harvui
+  annotations:
+    harvui.io/update-sources: '{"harvui":"ghcr.io/wjcloudy/harvui:1.9.0"}'
 spec:
   replicas: 1
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app: harvui
@@ -101,11 +125,15 @@ spec:
       labels:
         app: harvui
         lab-workload: "true"
-      annotations:
-        checksum/code: "v1"
     spec:
       serviceAccountName: harvui
-      terminationGracePeriodSeconds: 5
+      imagePullSecrets:
+        - name: harvui-ghcr
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+      terminationGracePeriodSeconds: 10
       tolerations:
         - key: node.kubernetes.io/unreachable
           operator: Exists
@@ -117,13 +145,15 @@ spec:
           tolerationSeconds: 15
       containers:
         - name: harvui
-          image: python:3.12-alpine
-          command: ["python3", "/srv/server.py"]
+          image: ghcr.io/wjcloudy/harvui:1.9.0
+          imagePullPolicy: IfNotPresent
           env:
             - name: PORT
               value: "8080"
             - name: WEBROOT
               value: "/web"
+            - name: DATA_DIR
+              value: "/data"
             - name: DEFAULT_NS
               value: "lab"
             - name: SMB_NAMESPACE
@@ -139,24 +169,34 @@ spec:
             requests:
               cpu: 50m
               memory: 96Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           readinessProbe:
             httpGet:
               path: /healthz
               port: 8080
             initialDelaySeconds: 3
+            timeoutSeconds: 3
             periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 15
+            timeoutSeconds: 3
+            periodSeconds: 20
           volumeMounts:
-            - name: code
-              mountPath: /srv
-            - name: web
-              mountPath: /web
+            - name: data
+              mountPath: /data
       volumes:
-        - name: code
-          configMap:
-            name: harvui-server
-        - name: web
-          configMap:
-            name: harvui-web
+        - name: data
+          persistentVolumeClaim:
+            claimName: harvui-data
 ---
 apiVersion: v1
 kind: Service

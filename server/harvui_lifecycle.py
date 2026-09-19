@@ -6,6 +6,7 @@ Everything destructive here is guarded. The guards are the point of this module 
 the raw API calls are three lines each.
 """
 import json
+import hashlib
 import os
 import time
 import urllib.error
@@ -19,17 +20,86 @@ NODE_POWER_ENABLED = os.environ.get("ENABLE_NODE_POWER", "").lower() in ("1", "t
 kget = ksend = None
 SYS_NS = set()
 _cache = {}
+hardware_features = lambda: []
 
 
-def bind(_kget, _ksend, _sys_ns, _cache_ref):
-    global kget, ksend, SYS_NS, _cache
+def bind(_kget, _ksend, _sys_ns, _cache_ref, _hardware_features=None):
+    global kget, ksend, SYS_NS, _cache, hardware_features
     kget, ksend, SYS_NS, _cache = _kget, _ksend, _sys_ns, _cache_ref
+    if _hardware_features:
+        hardware_features = _hardware_features
 
 
 def _bust(*keys):
     for k in list(_cache):
         if not keys or any(k.startswith(x) for x in keys):
             _cache.pop(k, None)
+
+
+def seed_configs(ns, dep):
+    """Return editable ConfigMap data consumed by Deployment init containers.
+
+    A common container pattern seeds a persistent appdata volume from a
+    ConfigMap before the main container starts.  The ConfigMap is therefore the
+    authoritative value, even though users naturally discover the file in the
+    mounted volume first.  Surface every ConfigMap mounted by an init container
+    without making assumptions about its command or destination path.
+    """
+    spec = dep.get("spec", {}).get("template", {}).get("spec", {})
+    sources = {
+        v.get("name"): (v.get("configMap") or {}).get("name")
+        for v in spec.get("volumes", []) or []
+        if (v.get("configMap") or {}).get("name")
+    }
+    found = []
+    seen = set()
+    for init in spec.get("initContainers", []) or []:
+        for mount in init.get("volumeMounts", []) or []:
+            cm_name = sources.get(mount.get("name"))
+            marker = (init.get("name", ""), cm_name)
+            if not cm_name or marker in seen:
+                continue
+            seen.add(marker)
+            cm = kget(f"/api/v1/namespaces/{ns}/configmaps/{cm_name}")
+            for key, value in sorted((cm.get("data") or {}).items()):
+                found.append({
+                    "init_container": init.get("name", ""),
+                    "config_map": cm_name,
+                    "key": key,
+                    "value": value,
+                    "source_path": mount.get("mountPath", ""),
+                    "command": " ".join((init.get("command") or []) + (init.get("args") or [])),
+                })
+    return found
+
+
+def _save_seed_configs(ns, dep, requested):
+    """Update only ConfigMap keys already wired to this Deployment's init containers."""
+    if not requested:
+        return
+    allowed = {
+        (x["init_container"], x["config_map"], x["key"])
+        for x in seed_configs(ns, dep)
+    }
+    updates = {}
+    for item in requested:
+        marker = (item.get("init_container", ""), item.get("config_map", ""), item.get("key", ""))
+        if marker not in allowed:
+            raise ValueError("seed config is not attached to this workload")
+        value = item.get("value", "")
+        if not isinstance(value, str):
+            raise ValueError("seed config value must be text")
+        if len(value.encode("utf-8")) > 512 * 1024:
+            raise ValueError("seed config value is too large (maximum 512 KiB)")
+        updates.setdefault(item["config_map"], {})[item["key"]] = value
+    for cm_name, values in updates.items():
+        cm = kget(f"/api/v1/namespaces/{ns}/configmaps/{cm_name}")
+        data = cm.setdefault("data", {})
+        for key, value in values.items():
+            if key not in data:
+                raise ValueError("seed config key no longer exists")
+            data[key] = value
+        ksend("PUT", f"/api/v1/namespaces/{ns}/configmaps/{cm_name}", cm)
 
 
 # --------------------------------------------------------------- edit
@@ -39,6 +109,9 @@ def edit_workload(cfg):
     dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     spec = dep["spec"]["template"]["spec"]
     c = spec["containers"][0]
+
+    if "seed_configs" in cfg:
+        _save_seed_configs(ns, dep, cfg.get("seed_configs") or [])
 
     if cfg.get("image"):
         c["image"] = cfg["image"]
@@ -61,19 +134,53 @@ def edit_workload(cfg):
             c.pop("ports", None)
     if "replicas" in cfg:
         dep["spec"]["replicas"] = int(cfg["replicas"])
-    if "gpu" in cfg:
+    if "hardware" in cfg or "gpu" in cfg:
+        wanted = set(cfg.get("hardware") or [])
+        if cfg.get("gpu"):
+            wanted.add("igpu")
+        devices = {}
+        for f in hardware_features():
+            slug = f["id"].replace("_", "-")[:50].strip("-")
+            vn = f"hw-{slug}-{hashlib.sha1(f['id'].encode()).hexdigest()[:6]}"
+            devices[f["id"]] = (f["label"], vn, f["host_path"],
+                                 f["container_path"], f["path_type"])
+        unknown = wanted - set(devices)
+        if unknown:
+            raise ValueError("unknown hardware feature(s): " + ", ".join(sorted(unknown)))
         sel = spec.setdefault("nodeSelector", {})
-        if cfg["gpu"]:
-            sel["hardware/igpu"] = "true"
-        else:
-            sel.pop("hardware/igpu", None)
-        if not sel:
-            spec.pop("nodeSelector", None)
+        mounts = c.setdefault("volumeMounts", [])
+        volumes = spec.setdefault("volumes", [])
+        managed_names = {v[1] for v in devices.values()} | {"dri", "coral", "coral-usb"}
+        mounts[:] = [m for m in mounts if m.get("name") not in managed_names]
+        volumes[:] = [v for v in volumes if v.get("name") not in managed_names]
+        for hw, (label, vn, host_path, container_path, typ) in devices.items():
+            if hw in wanted:
+                sel[label] = "true"
+                c.setdefault("securityContext", {})["privileged"] = True
+                mounts.append({"name": vn, "mountPath": container_path})
+                volumes.append({"name": vn, "hostPath": {"path": host_path, "type": typ}})
+            else:
+                sel.pop(label, None)
+        # Clear legacy labels after the matching configurable feature is removed.
+        known_labels = {f["label"] for f in hardware_features()}
+        for label in list(sel):
+            if label.startswith(("hardware/", "hardware.harvui.io/")) and label not in known_labels:
+                sel.pop(label, None)
+        if not mounts: c.pop("volumeMounts", None)
+        if not volumes: spec.pop("volumes", None)
+        if not sel: spec.pop("nodeSelector", None)
+        ann = dep["metadata"].setdefault("annotations", {})
+        if wanted: ann["harvui.io/hardware"] = ",".join(sorted(wanted))
+        else: ann.pop("harvui.io/hardware", None)
+    if "icon" in cfg:
+        ann = dep["metadata"].setdefault("annotations", {})
+        if cfg["icon"]: ann["harvui.io/icon"] = cfg["icon"]
+        else: ann.pop("harvui.io/icon", None)
 
     dep["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[
         "harvui.io/editedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ")
     out = ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
-    _bust("wl", "ov", "flow")
+    _bust("wl", "ov", "flow", "impact:")
     return {"ok": True, "name": name}
 
 
@@ -141,7 +248,7 @@ def set_cordon(node, unschedulable):
     ksend("PATCH", f"/api/v1/nodes/{node}",
           {"spec": {"unschedulable": bool(unschedulable)}},
           ctype="application/merge-patch+json")
-    _bust("nodes", "ov", "node:")
+    _bust("nodes", "ov", "node:", "impact:")
     return {"ok": True, "node": node, "cordoned": bool(unschedulable)}
 
 
@@ -172,7 +279,7 @@ def drain(node, grace=30, include_system=False):
             evicted.append(f"{ns}/{name}")
         except urllib.error.HTTPError as e:
             skipped.append(f"{ns}/{name} (HTTP {e.code})")
-    _bust("wl", "ov", "nodes", "flow")
+    _bust("wl", "ov", "nodes", "flow", "impact:")
     return {"ok": True, "node": node, "evicted": evicted, "skipped": skipped}
 
 

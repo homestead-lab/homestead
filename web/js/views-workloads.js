@@ -1,25 +1,82 @@
 /* Containers, Deploy, App Store */
 
-async function viewWorkloads() { STATE.data.wl = await api("/api/workloads"); renderWorkloads(); }
+async function viewWorkloads() {
+  STATE.data.wl = await api("/api/workloads");
+  renderWorkloads();
+  loadImageUpdates(false, true).then(() => {
+    if (STATE.view === "workloads" && $("#modal").classList.contains("hidden")) renderWorkloads();
+  });
+}
+
+const updateKey = (ns, name) => `${ns}/${name}`;
+const workloadUpdate = (ns, name) => (STATE.data.imageUpdateMap || {})[updateKey(ns, name)];
+
+function paintUpdateBadge(count) {
+  const badge = $("#updateBadge");
+  if (!badge) return;
+  badge.textContent = count;
+  badge.classList.toggle("hidden", !count);
+}
+
+async function loadImageUpdates(force = false, quiet = false) {
+  try {
+    const report = await api(`/api/image-updates${force ? "?force=1" : ""}`);
+    STATE.data.imageUpdates = report;
+    STATE.data.imageUpdateMap = Object.fromEntries((report.workloads || [])
+      .map(x => [updateKey(x.ns, x.name), x]));
+    paintUpdateBadge(report.updates || 0);
+    const previous = +(localStorage.getItem("harvui.update-count") || 0);
+    if (!quiet && report.updates > previous)
+      toast(`${report.updates} container image update${report.updates === 1 ? "" : "s"} available`, "ok");
+    localStorage.setItem("harvui.update-count", report.updates || 0);
+    return report;
+  } catch (e) {
+    if (!quiet) toast("Image update check failed · " + e.message, "bad");
+    return null;
+  }
+}
+window.loadImageUpdates = loadImageUpdates;
+window.startUpdateChecks = () => {
+  clearInterval(window.__imageUpdateLoop);
+  setTimeout(() => loadImageUpdates(false, false), 3500);
+  window.__imageUpdateLoop = setInterval(() => {
+    if (!document.hidden) loadImageUpdates(false, false);
+  }, 15 * 60 * 1000);
+};
 
 function renderWorkloads() {
   const q = STATE.q.toLowerCase();
   const rows = (STATE.data.wl || []).filter(x => !q || x.name.includes(q) || x.ns.includes(q) ||
     x.images.join(" ").toLowerCase().includes(q) || x.nodes.join(" ").includes(q));
+  const report = STATE.data.imageUpdates;
+  const updateCount = report?.updates || 0;
+  const updateErrors = report?.errors || 0;
   paint(`<div class="phead">
       <div><h2>Containers</h2><p>${rows.length} workload${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""} · Harvester system pods hidden</p></div>
-      <button class="btn pri hide-sm" data-need="operator" onclick="go('deploy')">＋ Deploy</button></div>
+      <div class="row"><button class="btn" onclick="checkImageUpdates()">↻ Check images</button>
+      <button class="btn pri hide-sm" data-need="operator" onclick="go('deploy')">＋ Deploy</button></div></div>
+
+    ${updateCount ? `<div class="updatebar"><div><b>${updateCount} update${updateCount === 1 ? "" : "s"} available</b>
+      <span>Registry manifests were compared with the digests running in Kubernetes.</span></div>
+      <span class="pill warn">review below</span></div>` : updateErrors ? `<div class="updatebar"><div><b>${updateErrors} registry check${updateErrors === 1 ? " needs" : "s need"} attention</b>
+      <span>See the affected container cards and check their imagePullSecrets.</span></div><span class="pill crit">check failed</span></div>` : report ? `<div class="updatebar quiet"><div><b>Images are current</b>
+      <span>Last checked ${esc(new Date(report.checked_at).toLocaleString())}</span></div><span class="pill ok">up to date</span></div>` : ""}
 
     <div class="cardlist">${rows.map(w => {
       const ok = w.ready === w.desired && w.desired > 0, off = w.desired === 0;
+      const update = workloadUpdate(w.ns, w.name);
+      const updateError = update?.images?.find(x => x.error);
       return `<div class="wcard card flat">
         <div class="between">
           <div class="row" style="gap:10px;min-width:0">
-            <div class="av">${esc(w.name.slice(0, 2).toUpperCase())}</div>
+            ${appAvatar(w.name, w.icon)}
             <div style="min-width:0"><div style="font-weight:680">${esc(w.name)}</div>
-              <div class="dim xs">${esc(w.ns)} · ${esc(w.nodes.join(", ") || "unscheduled")}</div></div>
+              <div class="dim xs">${esc(w.ns)} · <span class="nodelink"
+                onclick="moveWorkload('${w.name}','${w.ns}')">${esc(w.nodes.join(", ") || "unscheduled")}</span></div></div>
           </div>
-          <span class="pill ${ok ? "ok" : off ? "low" : "crit"}">${w.ready}/${w.desired}</span>
+          <div class="row">${update?.available ? '<span class="pill warn">update available</span>' : ""}
+          ${updateError ? `<span class="pill low" title="${esc(updateError.error)}">registry check unavailable</span>` : ""}
+          <span class="pill ${ok ? "ok" : off ? "low" : "crit"}">${w.ready}/${w.desired}</span></div>
         </div>
         <div class="wmeta">
           <div><div class="dim xs">UPTIME</div>${w.uptime ? upChip(w.uptime) : '<span class="dim">—</span>'}</div>
@@ -29,12 +86,16 @@ function renderWorkloads() {
             ? `<span class="plink" title="Open ${esc(svcUrl(p.ip, p.port))}" onclick="openSvc('${esc(p.ip)}',${p.port})">${p.port}<svg class="ext" width="9" height="9"><use href="#i-ext"/></svg></span>`
             : `<span class="tag">${p.port}</span>`).join("") || '<span class="dim">—</span>'}</div></div>
         </div>
-        <div class="dim xs mono wimg">${w.images.map(esc).join(" · ")}${w.gpu ? ' <span class="tag gpu">iGPU</span>' : ""}</div>
+        <div class="dim xs mono wimg">${w.images.map(esc).join(" · ")}
+          ${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</div>
+        ${updateError ? `<div class="updateerror">Image check: ${esc(updateError.error)}</div>` : ""}
         <div class="row wacts">
           <button class="btn sm" onclick="wlLogs('${w.ns}','${w.pods[0] ? w.pods[0].name : ""}')">Logs</button>
           <button class="btn sm" onclick="wlEdit('${w.ns}','${w.name}')">Edit</button>
-          <button class="btn sm" onclick="wlMove('${w.ns}','${w.name}')">Move</button>
+          <button class="btn sm" data-need="operator" onclick="moveWorkload('${w.name}','${w.ns}')">Move</button>
           <button class="btn sm" onclick="wlRestart('${w.ns}','${w.name}')">Restart</button>
+          ${update?.available ? `<button class="btn sm pri" data-need="operator" onclick="imageUpdateReview('${w.ns}','${w.name}')">Update</button>` : ""}
+          ${update?.can_rollback ? `<button class="btn sm" data-need="operator" onclick="imageRollback('${w.ns}','${w.name}')">Rollback</button>` : ""}
           ${off ? `<button class="btn sm" onclick="wlScale('${w.ns}','${w.name}',1)">Start</button>`
                 : `<button class="btn sm" onclick="wlScale('${w.ns}','${w.name}',0)">Stop</button>`}
           <button class="btn sm danger" onclick="wlDelete('${w.ns}','${w.name}')">Delete</button>
@@ -62,21 +123,131 @@ window.wlDelete = async (ns, name) => {
     toast(`${name} deleted`, "ok"); setTimeout(() => refresh(true), 900);
   } catch (e) { toast(e.message, "bad"); }
 };
-window.wlLogs = async (ns, pod) => {
-  if (!pod) return toast("no running pod", "bad");
-  modal("Logs · " + pod, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
-  try { const t = await api(`/api/logs?ns=${ns}&pod=${pod}`);
-    $("#mbody").innerHTML = `<pre>${esc(t) || "(empty)"}</pre>`;
-    const pre = $("#mbody pre"); pre.scrollTop = pre.scrollHeight;
-  } catch (e) { $("#mbody").innerHTML = `<pre>${esc(e.message)}</pre>`; }
+function openLogs(title, path) {
+  if (window.__logTimer) clearInterval(window.__logTimer);
+  modal("Logs · " + title, `<div class="logtools"><span id="logstate"><span class="spin2"></span> connecting</span>
+    <label class="switch"><input type="checkbox" id="logfollow" checked> Follow latest</label></div>
+    <pre class="logview">waiting for log output…</pre>`, true);
+  const poll = async () => {
+    if ($("#modal").classList.contains("hidden")) return clearInterval(window.__logTimer);
+    try {
+      const t = await api(path + (path.includes("?") ? "&" : "?") + "tail=500");
+      const pre = $("#mbody .logview"); if (!pre) return;
+      pre.textContent = t || "(the container is running but has not written any logs yet)";
+      $("#logstate").innerHTML = '<span class="ld"></span> live · refreshes every 2s';
+      if ($("#logfollow")?.checked) pre.scrollTop = pre.scrollHeight;
+    } catch (e) {
+      const pre = $("#mbody .logview"); if (pre) pre.textContent = "Logs unavailable\n\n" + e.message;
+      if ($("#logstate")) $("#logstate").innerHTML = '<span class="cd badbg"></span> unavailable';
+    }
+  };
+  poll(); window.__logTimer = setInterval(poll, 2000);
+}
+
+window.checkImageUpdates = async () => {
+  const button = typeof event !== "undefined" ? event.currentTarget : null;
+  if (button) { button.disabled = true; button.textContent = "Checking registries…"; }
+  const report = await loadImageUpdates(true, false);
+  if (button) { button.disabled = false; button.textContent = "↻ Check images"; }
+  if (report && STATE.view === "workloads") renderWorkloads();
 };
 
+window.imageUpdateReview = (ns, name) => {
+  const update = workloadUpdate(ns, name);
+  if (!update) return toast("Run an image check first", "bad");
+  const changes = update.images.filter(x => x.available);
+  modal("Update · " + name, `<div class="update-review">
+    <div class="note"><b>Managed update.</b> HarvUI will pin the selected registry manifest by digest,
+      monitor Kubernetes readiness, and keep the current immutable image ready for rollback.</div>
+    ${changes.map(x => `<div class="update-image">
+      <div class="between"><b>${esc(x.container)}</b><span class="tag warn">${esc(x.candidate_tag || "new digest")}</span></div>
+      <div><span>Running</span><code>${esc(x.deployed)}</code></div>
+      <div><span>Install</span><code>${esc(x.candidate)}@${esc((x.remote_digest || "").slice(0, 19))}…</code></div>
+    </div>`).join("")}
+    <div class="row" style="margin-top:18px"><button class="btn pri" data-need="operator"
+      onclick="imageUpdateApply('${esc(ns)}','${esc(name)}')">Install update</button>
+      <button class="btn" onclick="closeModal()">Cancel</button></div></div>`, true);
+  if (window.applyRole) window.applyRole();
+};
+
+window.imageUpdateApply = async (ns, name) => {
+  try {
+    modal("Updating · " + name, '<div class="empty"><span class="spin2"></span> preparing managed rollout…</div>', true);
+    await api("/api/image-updates/apply", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ns, name }) });
+    monitorImageRollout(ns, name);
+  } catch (e) { $("#mbody").innerHTML = `<div class="empty"><b>Update could not start</b><br><span class="dim">${esc(e.message)}</span></div>`; }
+};
+
+function rolloutMarkup(s) {
+  const pct = s.desired ? Math.min(100, Math.round(s.ready / s.desired * 100)) : (s.phase === "ready" ? 100 : 0);
+  return `<div class="rollout-head"><span class="pill ${s.phase === "ready" ? "ok" : s.phase === "failed" ? "crit" : "warn"}">${esc(s.phase)}</span>
+    <span class="mono small">${s.ready}/${s.desired} ready · ${s.updated}/${s.desired} updated</span></div>
+    <div class="rollout-meter"><span style="width:${pct}%"></span></div>
+    <div class="rollout-steps">
+      <div class="${s.observed_generation >= s.generation ? "done" : "active"}"><i></i><span><b>Deployment accepted</b><small>Generation ${s.generation}</small></span></div>
+      <div class="${s.updated >= s.desired ? "done" : "active"}"><i></i><span><b>New image pulled</b><small>${s.updated} replacement pod${s.updated === 1 ? "" : "s"} created</small></span></div>
+      <div class="${s.phase === "ready" ? "done" : s.phase === "failed" ? "failed" : "active"}"><i></i><span><b>Readiness checks</b><small>${s.ready} pod${s.ready === 1 ? "" : "s"} serving</small></span></div>
+    </div>
+    ${s.problems?.length ? `<div class="gateerr">${s.problems.map(esc).join("<br>")}</div>` : ""}
+    <div class="podprogress">${(s.pods || []).map(p => `<div><span><b>${esc(p.name)}</b><small>${esc(p.node || "scheduling")}</small></span>
+      <span class="pill ${p.phase === "Running" ? "ok" : "warn"}">${esc(p.waiting?.[0]?.reason || p.phase)}</span></div>`).join("")}</div>
+    <div class="row" style="margin-top:18px">
+      ${s.can_rollback ? `<button class="btn ${s.phase === "failed" ? "danger" : ""}" data-need="operator" onclick="imageRollback('${esc(s.ns)}','${esc(s.name)}')">Rollback</button>` : ""}
+      ${s.phase === "ready" ? '<button class="btn pri" onclick="closeModal();go(\'workloads\')">Done</button>' : '<button class="btn" onclick="closeModal()">Monitor in background</button>'}
+    </div>`;
+}
+
+window.monitorImageRollout = (ns, name) => {
+  if (window.__updateTimer) clearInterval(window.__updateTimer);
+  modal("Rollout · " + name, '<div class="empty"><span class="spin2"></span> waiting for Kubernetes…</div>', true);
+  let misses = 0;
+  const poll = async () => {
+    if ($("#modal").classList.contains("hidden")) return clearInterval(window.__updateTimer);
+    try {
+      const s = await api(`/api/image-updates/progress?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`);
+      misses = 0; $("#mbody").innerHTML = rolloutMarkup(s);
+      if (window.applyRole) window.applyRole();
+      if (s.phase === "ready" || s.phase === "failed") {
+        clearInterval(window.__updateTimer); window.__updateTimer = null;
+        setTimeout(() => loadImageUpdates(true, true), 1000);
+      }
+    } catch (e) {
+      misses++;
+      $("#mbody").innerHTML = `<div class="empty"><span class="spin2"></span><b>Reconnecting to HarvUI…</b><br>
+        <span class="dim small">The control-panel container may be replacing itself (${misses}). Monitoring will resume automatically.</span></div>`;
+    }
+  };
+  poll(); window.__updateTimer = setInterval(poll, 2000);
+};
+
+window.imageRollback = async (ns, name) => {
+  modal("Rollback · " + name, `<div class="note"><b>Restore the image saved before the last managed update?</b>
+    The previous digest is immutable, so this does not depend on the registry tag still pointing at it.</div>
+    <div class="row" style="margin-top:18px"><button class="btn danger" data-need="operator" onclick="imageRollbackApply('${esc(ns)}','${esc(name)}')">Start rollback</button>
+    <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+  if (window.applyRole) window.applyRole();
+};
+window.imageRollbackApply = async (ns, name) => {
+  try {
+    await api("/api/image-updates/rollback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ns, name }) });
+    monitorImageRollout(ns, name);
+  } catch (e) { $("#mbody").innerHTML = `<div class="empty"><b>Rollback could not start</b><br><span class="dim">${esc(e.message)}</span></div>`; }
+};
+window.wlLogs = (ns, pod) => {
+  if (!pod) return modal("Logs unavailable", '<div class="empty"><b>No running pod</b><br><span class="dim small">Start the container and wait for Kubernetes to create a pod.</span></div>');
+  openLogs(pod, `/api/logs?ns=${encodeURIComponent(ns)}&pod=${encodeURIComponent(pod)}`);
+};
+window.jobLogs = (ns, job) => openLogs(job, `/api/logs?ns=${encodeURIComponent(ns)}&job=${encodeURIComponent(job)}`);
+
 /* ---------------- deploy ---------------- */
-let DCFG = { name: "", image: "", namespace: "lab", replicas: 1, cpu: "50m", memory: "128Mi",
-             ports: [], env: {}, volumes: [], gpu: false };
+let DCFG = { name: "", image: "", icon: "", namespace: "lab", replicas: 1, cpu: "50m", memory: "128Mi",
+             ports: [], env: {}, volumes: [], hardware: [], network_mode: "loadbalancer", vip_mode: "shared", lb_ip: "" };
 async function viewDeploy(pre) {
+  const [, liveNodes] = await Promise.all([loadHardwareFeatures(), api("/api/nodes").catch(() => [])]);
+  if (liveNodes.length) STATE.data.nodes = liveNodes;
   if (pre) DCFG = Object.assign({ namespace: "lab", replicas: 1, cpu: "50m", memory: "128Mi",
-    ports: [], env: {}, volumes: [], gpu: false }, pre);
+    ports: [], env: {}, volumes: [], hardware: [], network_mode: "loadbalancer", vip_mode: "shared", lb_ip: "" }, pre);
   const nss = await api("/api/namespaces").catch(() => ["lab"]);
   resetPaint();
   paint(`<div class="phead"><div><h2>Deploy a container</h2>
@@ -84,16 +255,31 @@ async function viewDeploy(pre) {
   <div class="split">
     <div class="card flat">
       <div class="f"><label>Name</label><input type="text" id="d_name" value="${esc(DCFG.name)}" placeholder="my-app"></div>
-      <div class="f"><label>Docker image</label><input type="text" id="d_image" value="${esc(DCFG.image)}" placeholder="nginx:alpine · ghcr.io/user/app:tag"></div>
+      <div class="f"><label>Docker image ${tip("The registry image and tag Kubernetes will pull, for example ghcr.io/home-assistant/home-assistant:stable")}</label><input type="text" id="d_image" value="${esc(DCFG.image)}" placeholder="nginx:alpine · ghcr.io/user/app:tag"></div>
+      <div class="f"><label>Container logo ${tip("Optional HTTPS image URL shown on container cards. App Store installs fill this automatically.")}</label><input type="url" id="d_icon" value="${esc(DCFG.icon || "")}" placeholder="https://…/icon.png"></div>
       <div class="f2">
         <div class="f"><label>Namespace</label><select id="d_ns">${nss.map(n => `<option ${n === DCFG.namespace ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
         <div class="f"><label>Replicas</label><input type="number" id="d_rep" value="${DCFG.replicas}" min="0" max="5"></div>
       </div>
       <div class="f2">
-        <div class="f"><label>CPU request</label><input type="text" id="d_cpu" value="${esc(DCFG.cpu)}"></div>
-        <div class="f"><label>Memory request</label><input type="text" id="d_mem" value="${esc(DCFG.memory)}"></div>
+        <div class="f"><label>CPU reserved ${tip("The scheduler guarantees this much CPU capacity. 1000m = one CPU core; 50m = 5% of one core. This is not a hard limit.")}</label><input type="text" id="d_cpu" value="${esc(DCFG.cpu)}" placeholder="50m"></div>
+        <div class="f"><label>Memory reserved ${tip("The scheduler keeps this much RAM available for the container. Mi means mebibytes and Gi means gibibytes. This is not a hard limit.")}</label><input type="text" id="d_mem" value="${esc(DCFG.memory)}" placeholder="128Mi"></div>
       </div>
-      <label class="switch"><input type="checkbox" id="d_gpu" ${DCFG.gpu ? "checked" : ""}> Give this container the Intel iGPU <span class="tag gpu">/dev/dri</span></label>
+      <div class="sec">Hardware ${tip("HarvUI adds the device path and schedules only onto nodes marked as having that hardware.")}</div>
+      <div class="hwchoices">
+        ${hardwareChoices("d_hw", (DCFG.hardware || []).concat(DCFG.gpu && !(DCFG.hardware || []).includes("igpu") ? ["igpu"] : []))}
+      </div>
+      <div class="sec">Network ${tip("Kubernetes replaces Docker bridge networking with Services. Use a dedicated VIP for apps such as Pi-hole that need their own address or common ports.")}</div>
+      <div class="f2"><div class="f"><label>Access mode</label><select id="d_net">
+        <option value="loadbalancer" ${DCFG.network_mode === "loadbalancer" ? "selected" : ""}>LAN access (VIP)</option>
+        <option value="internal" ${DCFG.network_mode === "internal" ? "selected" : ""}>Cluster only</option>
+        <option value="host" ${DCFG.network_mode === "host" ? "selected" : ""}>Host network (advanced)</option></select></div>
+        <div class="f"><label>VIP allocation</label><select id="d_vip_mode">
+          <option value="shared" ${DCFG.vip_mode === "shared" ? "selected" : ""}>Shared HarvUI VIP</option>
+          <option value="auto" ${DCFG.vip_mode === "auto" ? "selected" : ""}>New automatic VIP</option>
+          <option value="manual" ${DCFG.vip_mode === "manual" ? "selected" : ""}>Specific VIP</option></select></div></div>
+      <div class="f" id="d_vip_wrap"><label>Specific VIP</label><input id="d_lb_ip" value="${esc(DCFG.lb_ip || "")}" placeholder="192.0.2.250"></div>
+      <div class="note"><b>Docker bridge → Kubernetes Service.</b> Shared VIP reuses ${esc((STATE.data.ov && STATE.data.ov.lb_ip) || "the cluster VIP")} on a unique LAN port. New automatic VIP asks kube-vip IPAM for another address. Specific VIP is ideal for Pi-hole/DNS when port 53 must live on its own address. Host network binds directly on one node and reduces failover safety.</div>
       <div class="sec">Ports</div><div id="d_ports"></div><button class="btn sm" onclick="addPort()">＋ add port</button>
       <div class="sec">Storage</div><div id="d_vols"></div><button class="btn sm" onclick="addVol()">＋ add volume</button>
       <div class="sec">Environment</div><div id="d_env"></div><button class="btn sm" onclick="addEnv()">＋ add variable</button>
@@ -107,17 +293,21 @@ async function viewDeploy(pre) {
       <button class="btn pri wide" style="margin-top:18px" onclick="doDeploy()">Deploy</button></div>
   </div>`);
   renderPorts(); renderVols(); renderEnv(); syncSummary();
-  ["d_name", "d_image", "d_ns", "d_rep", "d_cpu", "d_mem", "d_gpu"].forEach(id => {
+  ["d_name", "d_image", "d_icon", "d_ns", "d_rep", "d_cpu", "d_mem", "d_net", "d_vip_mode", "d_lb_ip"].forEach(id => {
     const el = $("#" + id); if (!el) return;
     el.addEventListener("input", syncSummary); el.addEventListener("change", syncSummary);
   });
+  $$(".d_hw").forEach(el => el.addEventListener("change", syncSummary));
 }
 function collect() {
   DCFG.name = $("#d_name").value.trim(); DCFG.image = $("#d_image").value.trim();
   DCFG.namespace = $("#d_ns").value; DCFG.replicas = +$("#d_rep").value;
-  DCFG.cpu = $("#d_cpu").value.trim(); DCFG.memory = $("#d_mem").value.trim(); DCFG.gpu = $("#d_gpu").checked;
+  DCFG.cpu = $("#d_cpu").value.trim(); DCFG.memory = $("#d_mem").value.trim(); DCFG.icon = $("#d_icon").value.trim();
+  DCFG.hardware = selectedHardware("d_hw");
+  DCFG.gpu = DCFG.hardware.includes("igpu"); DCFG.network_mode = $("#d_net").value;
+  DCFG.vip_mode = $("#d_vip_mode").value; DCFG.lb_ip = $("#d_lb_ip").value.trim();
   DCFG.ports = $$("#d_ports .f3").map(r => ({ container: +$(".pc", r).value,
-    host: +$(".ph", r).value || +$(".pc", r).value, expose: $(".pe", r).checked }));
+    host: +$(".ph", r).value || +$(".pc", r).value, protocol: $(".pp", r).value, expose: $(".pe", r).checked }));
   DCFG.volumes = $$("#d_vols .f3").map(r => ({ path: $(".vp", r).value.trim(), source: $(".vs", r).value.trim(),
     type: $(".vt", r).value, size_gb: 5, create: $(".vt", r).value === "pvc" }));
   DCFG.env = {}; $$("#d_env .f3").forEach(r => { const k = $(".ek", r).value.trim(); if (k) DCFG.env[k] = $(".ev", r).value; });
@@ -125,21 +315,24 @@ function collect() {
 }
 function syncSummary() {
   const c = collect();
+  const vipWrap = $("#d_vip_wrap"); if (vipWrap) vipWrap.style.display = c.network_mode === "loadbalancer" && c.vip_mode === "manual" ? "block" : "none";
   const row = (i, l, v) => `<div class="drow"><div class="di">${i}</div><div class="dl">${l}</div><div class="dv">${v}</div></div>`;
   $("#d_summary").innerHTML =
     row("◈", "Name", c.name ? `<b>${esc(c.name)}</b>` : '<span class="dim">—</span>') +
     row("❏", "Image", c.image ? `<span class="small mono">${esc(c.image)}</span>` : '<span class="dim">—</span>') +
     row("⌗", "Namespace", esc(c.namespace)) + row("⧉", "Replicas", c.replicas) +
     row("◴", "Requests", `<span class="small mono">${esc(c.cpu)} · ${esc(c.memory)}</span>`) +
-    row("▤", "iGPU", c.gpu ? '<span class="tag gpu">enabled</span>' : '<span class="dim">no</span>') +
+    row("▤", "Hardware", c.hardware.length ? hardwareTags(c.hardware) : '<span class="dim">none</span>') +
+    row("◎", "Network", `<span class="small">${esc(c.network_mode)}${c.network_mode === "loadbalancer" ? ` · ${esc(c.vip_mode)} VIP` : ""}</span>`) +
     row("⇄", "Ports", c.ports.length ? c.ports.map(p => `<span class="tag ${p.expose ? "info" : ""}">${p.host}→${p.container}</span>`).join("") : '<span class="dim">—</span>') +
     row("▥", "Storage", c.volumes.length ? c.volumes.map(v => `<span class="tag">${esc(v.source || "?")}</span>`).join("") : '<span class="dim">—</span>') +
     row("≡", "Env vars", Object.keys(c.env).length ? `<span class="tag">${Object.keys(c.env).length} set</span>` : '<span class="dim">—</span>');
 }
-function addPort(cp = "", hp = "", ex = true) {
-  const d = document.createElement("div"); d.className = "f3";
+function addPort(cp = "", hp = "", ex = true, protocol = "TCP") {
+  const d = document.createElement("div"); d.className = "f4";
   d.innerHTML = `<div><label>Container port</label><input class="pc" type="number" value="${cp}"></div>
-    <div><label>Exposed port</label><input class="ph" type="number" value="${hp}"></div>
+    <div><label>LAN port</label><input class="ph" type="number" value="${hp}"></div>
+    <div><label>Protocol</label><select class="pp"><option ${protocol === "TCP" ? "selected" : ""}>TCP</option><option ${protocol === "UDP" ? "selected" : ""}>UDP</option></select></div>
     <label class="switch" style="margin:0 0 10px"><input class="pe" type="checkbox" ${ex ? "checked" : ""}>LB</label>`;
   $("#d_ports").appendChild(d); d.addEventListener("input", syncSummary); syncSummary();
 }
@@ -157,7 +350,7 @@ function addEnv(k = "", v = "") {
     <div><label>Value</label><input class="ev" type="text" value="${esc(v)}"></div><div></div>`;
   $("#d_env").appendChild(d); d.addEventListener("input", syncSummary); syncSummary();
 }
-function renderPorts() { $("#d_ports").innerHTML = ""; (DCFG.ports || []).forEach(p => addPort(p.container, p.host, p.expose !== false)); }
+function renderPorts() { $("#d_ports").innerHTML = ""; (DCFG.ports || []).forEach(p => addPort(p.container, p.host, p.expose !== false, p.protocol || "TCP")); }
 function renderVols() { $("#d_vols").innerHTML = ""; (DCFG.volumes || []).forEach(v => addVol(v.path, v.source, v.type)); }
 function renderEnv() { $("#d_env").innerHTML = ""; Object.entries(DCFG.env || {}).forEach(([k, v]) => addEnv(k, v)); }
 window.addPort = addPort; window.addVol = addVol; window.addEnv = addEnv;
@@ -214,6 +407,6 @@ window.storeInstall = i => {
   STATE.view = "deploy";
   $$("#nav a").forEach(x => x.classList.toggle("on", x.dataset.view === "deploy"));
   $("#title").textContent = "Deploy"; $("#crumb").textContent = "workloads";
-  viewDeploy({ name, image: a.repo, ports, env, volumes: vols });
+  viewDeploy({ name, image: a.repo, icon: a.icon || "", ports, env, volumes: vols });
   toast(`"${a.name}" loaded — check storage paths before deploying`);
 };

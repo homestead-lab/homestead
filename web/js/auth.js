@@ -85,6 +85,7 @@ window.doLogout = async () => {
   try { await fetch("/api/auth/logout", { method: "POST" }); } catch (e) { }
   ME = null;
   clearInterval(window.__loopTimer);
+  clearInterval(window.__imageUpdateLoop);
   loginForm();
 };
 
@@ -190,7 +191,7 @@ function paintWho() {
   $$("[data-need]").forEach(el => el.classList.toggle("hidden", !can(el.dataset.need)));
 }
 window.applyRole = paintWho;
-$("#whoami").onclick = () => $("#drawer").classList.add("open");
+$("#whoami").onclick = () => go("settings");
 
 /* boot: decide between setup, sign-in, and running the app */
 (async () => {
@@ -200,10 +201,12 @@ $("#whoami").onclick = () => $("#drawer").classList.add("open");
   ME = st.user; ROLE = st.role || "admin"; ungate(); afterAuth();
 })();
 
-function afterAuth() {
+async function afterAuth() {
   paintWho();
+  await loadHealthSettings();
   go("dash");
   startLoop();
+  if (window.startUpdateChecks) window.startUpdateChecks();
 }
 
 window.setRole = async (name, role) => {

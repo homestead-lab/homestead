@@ -1,0 +1,13 @@
+.git
+.github
+.agents
+.codex
+__pycache__
+*.pyc
+tests
+docs
+deploy
+scripts
+PLAN.md
+*.local
+.env

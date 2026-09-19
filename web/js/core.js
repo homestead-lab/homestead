@@ -6,8 +6,32 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const sev = p => p >= 88 ? "b" : p >= 70 ? "w" : "";
-const gcls = p => p >= 88 ? "g-bad" : p >= 70 ? "g-warn" : "g-ok";
+const HARVUI_VERSION = "1.9.0";
+const HEALTH_DEFAULTS = { thresholds: {
+  cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
+  disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 },
+} };
+let HEALTH = JSON.parse(JSON.stringify(HEALTH_DEFAULTS));
+const healthPair = metric => HEALTH.thresholds?.[metric] || { warning: 70, critical: 88 };
+const sev = (p, metric = "cpu") => {
+  const t = healthPair(metric); return p >= t.critical ? "b" : p >= t.warning ? "w" : "";
+};
+const gcls = (p, metric = "cpu") => sev(p, metric) === "b" ? "g-bad" : sev(p, metric) === "w" ? "g-warn" : "g-ok";
+const worstMetricClass = metrics => {
+  const levels = metrics.map(x => sev(x.value ?? 0, x.metric));
+  return levels.includes("b") ? "g-bad" : levels.includes("w") ? "g-warn" : "g-ok";
+};
+async function loadHealthSettings(force = false) {
+  if (STATE.data.appSettings && !force) return STATE.data.appSettings;
+  const s = await api("/api/settings").catch(() => HEALTH_DEFAULTS);
+  HEALTH = { thresholds: { ...HEALTH_DEFAULTS.thresholds, ...(s.thresholds || {}) } };
+  STATE.data.appSettings = s;
+  return s;
+}
+const tip = (text, label = "?") => `<span class="tip" tabindex="0" aria-label="${esc(text)}" data-tip="${esc(text)}">${esc(label)}</span>`;
+const appAvatar = (name, icon, cls = "") => icon
+  ? `<span class="av appav ${cls}"><img src="${esc(icon)}" alt="" referrerpolicy="no-referrer" onerror="this.parentNode.innerHTML='${esc(String(name || "?").slice(0, 2).toUpperCase())}'"></span>`
+  : `<span class="av ${cls}">${esc(String(name || "?").slice(0, 2).toUpperCase())}</span>`;
 
 const fmtUp = sec => {
   if (!sec || sec < 0) return "—";
@@ -17,6 +41,7 @@ const fmtUp = sec => {
   return `${m}m`;
 };
 const fmtAgo = sec => sec ? fmtUp(sec) + " ago" : "—";
+const ageSecs = iso => iso ? Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000)) : 0;
 const upChip = sec => `<span class="uptime"><span class="ld"></span>${fmtUp(sec)}</span>`;
 const svcUrl = (ip, port) => `${[443, 8443, 9443].includes(+port) ? "https" : "http"}://${ip}:${port}`;
 window.openSvc = (ip, port) => window.open(svcUrl(ip, port), "_blank", "noopener");
@@ -47,6 +72,56 @@ async function api(path, opts) {
   return b;
 }
 
+/* ---------------- configurable hardware ---------------- */
+async function loadHardwareFeatures(force = false) {
+  if (!force && Array.isArray(STATE.data.hardwareFeatures)) return STATE.data.hardwareFeatures;
+  STATE.data.hardwareFeatures = await api("/api/hardware/features");
+  return STATE.data.hardwareFeatures;
+}
+function hardwareDef(id) {
+  return (STATE.data.hardwareFeatures || []).find(x => x.id === id) ||
+    { id, name: id.replace(/[_-]+/g, " "), host_path: "" };
+}
+const hardwareName = id => hardwareDef(id).name;
+const hardwareTags = ids => (ids || []).map(id => {
+  const f = hardwareDef(id);
+  return `<span class="tag hw" title="${esc(f.host_path || "Configured hardware feature")}">${esc(f.name)}</span>`;
+}).join("");
+function hardwareChoices(cls, selected = []) {
+  const chosen = new Set(selected || []);
+  const nodes = STATE.data.nodes || STATE.data.ov?.nodes || [];
+  const choices = (STATE.data.hardwareFeatures || []).map(f => {
+    const hosts = nodes.filter(n => (n.hardware || {})[f.id]).map(n => n.name);
+    return `<label class="switch hwchoice">
+    <input type="checkbox" class="${esc(cls)}" data-hwid="${esc(f.id)}" ${chosen.has(f.id) ? "checked" : ""}>
+    <span><b>${esc(f.name)}</b>${f.builtin ? ' <span class="tag">built in</span>' : ""}
+    <span class="tag hw">${esc(f.host_path)} → ${esc(f.container_path || f.host_path)}</span>
+    ${f.usb_ids?.length ? `<span class="dim xs"> USB ${esc(f.usb_ids.join(", "))}</span>` : ""}
+    <span class="dim xs hw-hosts">${hosts.length ? `${hosts.length} host${hosts.length === 1 ? "" : "s"}: ${esc(hosts.map(x => x.replace("harvester-", "")).join(", "))}` : "no eligible host detected"}</span></span></label>`;
+  }).join("");
+  return choices + `<button class="btn sm hw-manage" type="button" onclick="openHardwareManager('${esc(cls)}')">Browse host devices / add mapping</button>`;
+}
+const selectedHardware = cls => $$(`.${cls}:checked`).map(x => x.dataset.hwid);
+window.openHardwareManager = cls => {
+  const active = !$("#modal").classList.contains("hidden") && $("#mtitle").textContent !== "Hardware features";
+  if (active) {
+    const body = $("#mbody"), fragment = document.createDocumentFragment();
+    const selected = selectedHardware(cls);
+    while (body.firstChild) fragment.appendChild(body.firstChild);
+    window.__hardwareReturn = { title: $("#mtitle").textContent, fragment, wide: $(".modalbox").classList.contains("wide"), cls, selected };
+  }
+  hardwareFeatureSettings();
+};
+window.hardwareManagerBack = () => {
+  const back = window.__hardwareReturn;
+  if (!back) return closeModal();
+  $("#mtitle").textContent = back.title; $("#mbody").replaceChildren(back.fragment);
+  $(".modalbox").classList.toggle("wide", back.wide);
+  const host = $("#mbody .hwchoices");
+  if (host) host.innerHTML = hardwareChoices(back.cls, back.selected);
+  window.__hardwareReturn = null;
+};
+
 /* ---------------- toast / modal ---------------- */
 function toast(msg, kind = "") {
   const d = document.createElement("div");
@@ -59,7 +134,14 @@ function modal(t, h, wide) {
   $(".modalbox").classList.toggle("wide", !!wide);
   $("#modal").classList.remove("hidden");
 }
-function closeModal() { $("#modal").classList.add("hidden"); }
+function closeModal() {
+  if (window.__hardwareReturn && /hardware feature/i.test($("#mtitle").textContent)) {
+    return hardwareManagerBack();
+  }
+  $("#modal").classList.add("hidden");
+  if (window.__logTimer) { clearInterval(window.__logTimer); window.__logTimer = null; }
+  if (window.__updateTimer) { clearInterval(window.__updateTimer); window.__updateTimer = null; }
+}
 
 /* ---------------- no-flash rendering ----------------
    Re-rendering innerHTML on every poll is what makes the page flash and lose
@@ -176,5 +258,5 @@ function trend(vals) {
   if (Math.abs(d) < 1) return `<span class="badge">steady</span>`;
   return `<span class="badge">${d > 0 ? "+" : ""}${d}% <span class="arw">${d > 0 ? "↑" : "↓"}</span></span>`;
 }
-const meter = (pct, extra = "") =>
-  `<div class="meter ${sev(pct)}" ${extra}><span style="width:${Math.min(100, pct)}%"></span></div>`;
+const meter = (pct, extra = "", metric = "cpu") =>
+  `<div class="meter ${sev(pct, metric)}" ${extra}><span style="width:${Math.min(100, pct)}%"></span></div>`;

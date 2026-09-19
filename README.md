@@ -1,102 +1,193 @@
 # HarvUI
 
-An Unraid-style control panel for a Harvester / Longhorn / KubeVirt cluster.
-
-Runs as a single container inside the cluster. Pure Python standard library on the
-backend — **no pip install at runtime, no build step, no framework** — so it starts
-even when the node has no internet access.
+An Unraid-style control panel for a Harvester, Longhorn, and KubeVirt homelab.
+HarvUI runs inside the cluster, talks directly to the Kubernetes API through a
+dedicated ServiceAccount, and has no runtime framework or package downloads.
 
 ![status](https://img.shields.io/badge/status-alpha-orange) ![license](https://img.shields.io/badge/license-MIT-blue)
 
----
-
-## What it does
+## Highlights
 
 | Area | Capability |
 |---|---|
-| **Dashboard** | Live cluster CPU/RAM with real sparklines (server keeps a rolling series), node health, top consumers |
-| **Architecture** | Storage replicas → Longhorn volume → claim → workload → port → VIP, with hover path tracing |
-| **Containers** | Search, logs, restart, start/stop, delete, clickable links straight to each service's UI |
-| **Deploy** | Unraid-style form: image, ports, volumes, env, iGPU toggle, with a live config summary and manifest preview |
-| **App Store** | Live Unraid Community Applications catalogue, converted to Kubernetes workloads |
-| **Shares** | SMB shares backed by replicated Longhorn volumes |
-| **Volumes / Nodes / Events** | Longhorn health, node detail, cluster activity |
+| **Dashboard** | Cluster CPU/RAM/network/disk telemetry, node health, top consumers, configurable warnings |
+| **Containers** | Deploy, edit, move, start/stop, logs, logos, hardware passthrough, image update checks, monitored rollout and deterministic rollback |
+| **Architecture** | VIP → workload → claim → Longhorn volume → replica dependency view |
+| **Storage** | RWO/RWX volume creation and growth, usage, health, snapshots, backups and recurring jobs |
+| **Hardware** | Host device browser and reusable mappings for iGPU, Coral, USB/PCIe and other devices |
+| **Import** | Unraid/Docker workload and appdata import with editable seed configuration |
+| **Administration** | Viewer/operator/admin roles, appearance, thresholds, version and installation details |
 
-## Layout
+## Repository layout
 
+```text
+Dockerfile                    production container image
+server/server.py              stdlib HTTP server and Kubernetes API client
+server/harvui_updates.py      OCI registry checks, rollout monitoring, rollback
+web/                          dependency-free browser UI
+deploy/deploy.yaml            namespace, RBAC, Longhorn PVC, Deployment, Service
+deploy/nodeprobe.yaml         optional per-node telemetry and device inventory
+.github/workflows/ci.yml      tests and container build validation
+.github/workflows/release.yml multi-architecture GHCR release pipeline
+scripts/deploy.sh             deploy a published image through an RKE2 host
 ```
-server/server.py     stdlib HTTP server + Kubernetes API client
-web/index.html       shell, SVG icon sprite, settings drawer
-web/style.css        design system (glass surfaces, themes)
-web/js/app.js        views and chart primitives
-deploy/deploy.yaml   ServiceAccount, RBAC, Deployment, Service
-scripts/deploy.sh    push sources into the cluster as ConfigMaps
+
+## Container releases
+
+Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
+`amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
+For a release such as `v1.9.0`, the workflow publishes:
+
+```text
+ghcr.io/wjcloudy/harvui:1.9.0
+ghcr.io/wjcloudy/harvui:1.9
+ghcr.io/wjcloudy/harvui:1
+ghcr.io/wjcloudy/harvui:latest
+ghcr.io/wjcloudy/harvui:sha-<commit>
 ```
 
-Code ships as ConfigMaps mounted into a stock `python:3.12-alpine` image, so
-iterating is an `apply` plus a `rollout restart` — never an image rebuild.
-
-## Deploying
+The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
+password is stored in the repository. Create and publish a release with:
 
 ```bash
-NS=lab HOST=rancher@192.0.2.210 ./scripts/deploy.sh
+git tag v1.9.0
+git push origin v1.9.0
 ```
 
-First install also needs the RBAC and Deployment:
+The package remains private when the repository/package is private. If the
+package was created previously, ensure the repository has **Actions access** in
+the package settings. The OCI source label in the image links new packages back
+to this repository.
+
+## Fresh-cluster installation
+
+### 1. Check Longhorn storage
+
+HarvUI persists registry update history and cache on a 2 GiB Longhorn RWX
+volume. Confirm the StorageClass used in `deploy/deploy.yaml` exists:
+
+```bash
+kubectl get storageclass
+```
+
+The supplied manifest uses `longhorn-r2`. Change `storageClassName` if the fresh
+cluster uses another Longhorn class.
+
+### 2. Allow the cluster to pull the private GHCR image
+
+Create a GitHub **personal access token (classic)** with only `read:packages`.
+Authorize it for SSO as well if the GitHub organization requires SSO. Then
+create the Kubernetes pull secret without putting the token in a file:
+
+```bash
+kubectl create namespace lab --dry-run=client -o yaml | kubectl apply -f -
+read -rsp "GHCR read token: " CR_PAT; echo
+kubectl -n lab create secret docker-registry harvui-ghcr \
+  --docker-server=ghcr.io \
+  --docker-username=YOUR_GITHUB_LOGIN \
+  --docker-password="$CR_PAT" \
+  --dry-run=client -o yaml | kubectl apply -f -
+unset CR_PAT
+```
+
+GitHub documents the `read:packages` requirement in
+[Working with the Container registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
+
+### 3. Configure and install
+
+Review these values in `deploy/deploy.yaml` before applying it:
+
+- `image`: published image/tag to run;
+- `storageClassName`: Longhorn StorageClass;
+- `LB_IP` and `kube-vip.io/loadbalancerIPs`: HarvUI's LAN address;
+- `DEFAULT_NS`: default namespace for newly created workloads.
+
+Then install and wait for readiness:
 
 ```bash
 kubectl apply -f deploy/deploy.yaml
+kubectl -n lab rollout status deployment/harvui --timeout=5m
+kubectl -n lab get deployment/harvui pvc/harvui-data service/harvui
 ```
 
-## Optional: node temperatures
+Open the Service address on port `8088`. The first visit creates the initial
+administrator. Authentication is stored in a Kubernetes Secret, independently
+of the container and Longhorn volume.
 
-Kubernetes exposes no thermal data. `deploy/nodeprobe.yaml` adds a small
-DaemonSet that reads the host's sensors:
+### 4. Optional node telemetry
+
+Kubernetes does not expose physical temperatures, host device inventory, or
+per-disk throughput. Install the non-privileged node probe to enable those views:
 
 ```bash
 kubectl apply -f deploy/nodeprobe.yaml
+kubectl -n lab rollout status daemonset/harvui-nodeprobe --timeout=5m
 ```
 
-It mounts `/sys` **read-only**, is **not privileged**, drops all capabilities
-and uses a read-only root filesystem. It serves one JSON document on a
-cluster-internal port. HarvUI works without it and says so on the node page.
+The probe mounts `/sys`, `/proc`, and `/dev` read-only, drops all capabilities,
+and uses a read-only root filesystem. HarvUI works without it.
+
+## Updating HarvUI
+
+HarvUI appears in its own Containers page. **Check images** compares the running
+digest with GHCR, and a newer stable semver tag is suggested when one exists.
+Installing the update pins the selected manifest digest, watches Deployment and
+pod readiness, and keeps the previous digest for one-click rollback. The UI
+automatically reconnects while HarvUI replaces itself.
+
+Command-line deployment is also available:
+
+```bash
+TAG=1.9.0 HOST=rancher@192.0.2.210 ./scripts/deploy.sh
+```
+
+## Image update behaviour
+
+- Public Docker Hub and OCI registries are checked anonymously.
+- Private registries use only the workload's referenced `imagePullSecrets` (or
+  its ServiceAccount pull secrets). Credentials never enter API responses or
+  update-history files.
+- Mutable tags such as `latest` are compared by digest.
+- Stable `v1.2.3`/`1.2.3` images can move to the newest stable version in the
+  same major release. Pre-releases and major-version jumps are not automatic.
+- Multi-architecture index digests and their platform-specific child digests
+  are treated as the same release, avoiding false update notifications.
+- Rollback restores the exact previous digest rather than trusting a mutable tag.
 
 ## Configuration
 
-Set on the Deployment:
-
-| Env | Default | Meaning |
+| Environment variable | Default | Meaning |
 |---|---|---|
-| `PORT` | `8080` | listen port |
-| `DEFAULT_NS` | `lab` | namespace new workloads land in |
-| `SMB_NAMESPACE` | `lab` | where the samba deployment lives |
-| `STORAGE_CLASS` | `longhorn-r2` | StorageClass for new volumes |
-| `LB_IP` | — | VIP that kube-vip advertises for services |
-| `SESSION_TTL_HOURS` | `12` | how long a sign-in lasts |
-| `ENABLE_NODE_POWER` | unset | `true` allows host reboot/shutdown |
+| `PORT` | `8080` | HTTP listen port |
+| `WEBROOT` | `/web` | bundled static UI directory |
+| `DATA_DIR` | `/data` | persistent update history/cache directory |
+| `DEFAULT_NS` | `lab` | namespace for new workloads |
+| `SMB_NAMESPACE` | `lab` | namespace containing the managed Samba deployment |
+| `STORAGE_CLASS` | `longhorn-r2` | default StorageClass for new volumes |
+| `LB_IP` | empty | shared kube-vip address |
+| `SESSION_TTL_HOURS` | `12` | signed session lifetime |
+| `ENABLE_NODE_POWER` | unset | `true` enables guarded reboot/shutdown actions |
 
-## Security
+## Local verification
 
-**Authentication.** On first visit HarvUI asks you to create an administrator
-account; until then every API route returns 401. Passwords are PBKDF2-HMAC-SHA256
-(600k iterations, per-user salt) stored in the `harvui-auth` Secret. Sessions are
-stateless HMAC-signed tokens in an `HttpOnly; SameSite=Strict` cookie, valid 12
-hours, so a pod restart does not sign everyone out. Mutating requests must also
-carry an `X-HarvUI-Auth` header, which a cross-site form cannot set. Login is
-rate-limited to 8 attempts per 5 minutes per client. Changing a password bumps a
-per-user version counter, which invalidates that user's other sessions.
+The production image contains no build tools. CI performs the checks before the
+image is published:
 
-> **Transport is plain HTTP.** The session cookie cannot be marked `Secure`, so
-> it travels in the clear on your LAN. Put HarvUI behind a TLS ingress before
-> trusting it on an untrusted network, and never expose it to the internet.
+```bash
+python -m unittest discover -s tests -v
+for file in web/js/*.js; do node --check "$file"; done
+docker build --build-arg VERSION=dev -t harvui:dev .
+```
 
-> **Host power control is disabled by default.** Reboot/shutdown creates a
-> privileged pod that enters the host namespaces. Set `ENABLE_NODE_POWER=true`
-> on the Deployment to enable it. Cordon and drain work regardless.
+## Security notes
 
-> **There are no roles.** Every account can deploy, move, drain and delete.
+Passwords use PBKDF2-HMAC-SHA256 with per-user salts in the `harvui-auth`
+Secret. Sessions are HMAC-signed, `HttpOnly`, `SameSite=Strict` cookies and all
+mutations require a custom anti-CSRF header. Roles are enforced server-side.
 
-The ServiceAccount is scoped in `deploy/deploy.yaml`.
+The supplied Service is plain HTTP. Put it behind TLS before exposing HarvUI
+outside a trusted LAN. Host power control is disabled by default because it
+requires a short-lived privileged helper pod.
 
 ## Licence
 
