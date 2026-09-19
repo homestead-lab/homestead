@@ -397,6 +397,8 @@ def image_retention_inventory():
         pods = []
     for pod in pods:
         meta, spec, status = pod.get("metadata", {}), pod.get("spec", {}), pod.get("status", {})
+        if status.get("phase") in ("Succeeded", "Failed") or meta.get("deletionTimestamp"):
+            continue
         statuses = {row.get("name"): row for row in
                     (status.get("initContainerStatuses", []) or []) +
                     (status.get("containerStatuses", []) or [])}

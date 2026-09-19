@@ -276,7 +276,7 @@ async function viewImages() {
   const hidden = all.filter(i => core(i.name)).length;
   const imgs = all.filter(i => STATE.showCoreImages || !core(i.name));
   paint(`<div class="phead"><div><h2>Image cache</h2>
-      <p>${imgs.length} app images across ${d.nodes.length} nodes · ${d.protected || 0} active/rollback retained · ${hidden && !STATE.showCoreImages ? `${hidden} Harvester/system images hidden` : `${d.distinct} total`}</p></div>
+      <p>${imgs.length} app images across ${d.nodes.length} nodes · ${d.protected || 0} active/rollback retained · ${hidden && !STATE.showCoreImages ? `${hidden} Harvester/system images hidden` : `${d.distinct} total`} ${tip("Kubernetes reports each node's largest cached images. Smaller cache entries may not appear and cannot be removed here.")}</p></div>
       <label class="switch"><input type="checkbox" ${STATE.showCoreImages ? "checked" : ""} onchange="STATE.showCoreImages=this.checked;viewImages()"> Show Harvester/system images</label></div>
     <div class="grid g3" style="margin-bottom:18px">
       ${d.nodes.map(n => `<div class="card flat"><div class="ctitle">${esc(n.node)}</div>

@@ -132,7 +132,7 @@ through browser refreshes and HarvUI restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=1.14.0 HOST=rancher@192.0.2.210 ./scripts/deploy.sh
+TAG=1.14.1 HOST=rancher@192.0.2.210 ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -158,6 +158,8 @@ starting one short-lived cleanup pod per node; active, rollback, and recognized
 Harvester/Kubernetes platform images are refused. Cleanup pods mount only the
 host RKE2 `crictl` binary and containerd socket, run as root without Linux
 capabilities or privilege escalation, and report progress through Activity.
+Kubernetes Node status exposes only each node's largest cached images; smaller
+entries may not appear in the table and HarvUI will not attempt to remove them.
 
 ## Configuration
 

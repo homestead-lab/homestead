@@ -127,7 +127,7 @@ rollback, and persisted history.
 - **Done when:** a discovered update can be reviewed, installed, monitored, and
   rolled back from one coherent flow, including HarvUI itself.
 
-#### 2.4 Rollback-image inventory and cleanup — ✅ shipped in v1.14.0
+#### 2.4 Rollback-image inventory and cleanup — ✅ shipped in v1.14.1
 
 - Mark cached images retained for rollback and show their workload/version,
   size, nodes, and retention reason in Image Cache.

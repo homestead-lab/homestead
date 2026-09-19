@@ -31,6 +31,11 @@ class ImageCacheTests(unittest.TestCase):
                 {"name": "nginx", "imageID": "docker-pullable://docker.io/library/nginx@" + self.active},
                 {"name": "redis", "imageID": ""},
             ]},
+        }, {
+            "metadata": {"name": "finished-job", "namespace": "lab"},
+            "spec": {"containers": [{"name": "job", "image": "example.test/unused@" + self.unused}]},
+            "status": {"phase": "Succeeded", "containerStatuses": [{
+                "name": "job", "imageID": "example.test/unused@" + self.unused}]},
         }]
         deployments = [{
             "metadata": {"name": "web", "namespace": "lab", "annotations": {
