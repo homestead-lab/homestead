@@ -377,8 +377,11 @@ def progress(ns, name, dep=None):
     pods = _matching_pods(dep, kget("/api/v1/pods").get("items", []))
     spec, status = dep.get("spec", {}), dep.get("status", {})
     desired = int(spec.get("replicas", 0) or 0)
+    replicas = int(status.get("replicas", 0) or 0)
     updated = int(status.get("updatedReplicas", 0) or 0)
     ready = int(status.get("readyReplicas", 0) or 0)
+    available = int(status.get("availableReplicas", 0) or 0)
+    unavailable = int(status.get("unavailableReplicas", 0) or 0)
     generation = int(dep["metadata"].get("generation", 0) or 0)
     observed = int(status.get("observedGeneration", 0) or 0)
     problems = []
@@ -398,10 +401,15 @@ def progress(ns, name, dep=None):
     for condition in status.get("conditions", []) or []:
         if condition.get("type") == "Progressing" and condition.get("status") == "False":
             problems.append(condition.get("message") or condition.get("reason") or "rollout failed")
-    complete = observed >= generation and updated == desired and ready == desired
+    # During a maxSurge rollout, an old ready pod can satisfy readyReplicas while
+    # the new updated pod is still pulling. Do not declare success until the
+    # surge pod has replaced it and every desired updated replica is available.
+    complete = (observed >= generation and replicas == desired and updated == desired and
+                ready == desired and available == desired and unavailable == 0)
     phase = "failed" if problems else ("ready" if complete else "progressing")
     return {"ns": ns, "name": name, "phase": phase, "desired": desired,
-            "updated": updated, "ready": ready, "generation": generation,
+            "replicas": replicas, "updated": updated, "ready": ready,
+            "available": available, "unavailable": unavailable, "generation": generation,
             "observed_generation": observed, "pods": pod_rows, "problems": problems,
             "images": {c["name"]: c.get("image", "") for c in
                        spec.get("template", {}).get("spec", {}).get("containers", [])},

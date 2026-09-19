@@ -20,7 +20,8 @@ DEPLOYMENT = {
             "spec": {"containers": [{"name": "demo", "image": "nginx:1.27.0"}]},
         },
     },
-    "status": {"observedGeneration": 2, "updatedReplicas": 1, "readyReplicas": 1},
+    "status": {"observedGeneration": 2, "replicas": 1, "updatedReplicas": 1,
+               "readyReplicas": 1, "availableReplicas": 1, "unavailableReplicas": 0},
 }
 
 
@@ -131,6 +132,19 @@ class ImageUpdateTests(unittest.TestCase):
         updates.rollback("lab", "demo")
         restored = self.dep["spec"]["template"]["spec"]["containers"][0]["image"]
         self.assertEqual("docker.io/library/nginx@sha256:" + "d" * 64, restored)
+
+    def test_progress_waits_for_surge_replacement_to_be_ready(self):
+        self.dep["status"].update({"replicas": 2, "updatedReplicas": 1,
+                                   "readyReplicas": 1, "availableReplicas": 1,
+                                   "unavailableReplicas": 1})
+        result = updates.progress("lab", "demo", self.dep)
+        self.assertEqual("progressing", result["phase"])
+
+        self.dep["status"].update({"replicas": 1, "updatedReplicas": 1,
+                                   "readyReplicas": 1, "availableReplicas": 1,
+                                   "unavailableReplicas": 0})
+        result = updates.progress("lab", "demo", self.dep)
+        self.assertEqual("ready", result["phase"])
 
 
 if __name__ == "__main__":
