@@ -14,6 +14,8 @@ Design notes, because the choices matter more than the code:
 * Login is rate-limited per client address. It is a lab tool, but an
   unauthenticated endpoint that does 600k PBKDF2 rounds is a free DoS
   otherwise.
+* Roles are enforced **server-side, per route**. Hiding a button is a courtesy,
+  not a control — a viewer who crafts the request by hand still gets a 403.
 """
 import base64
 import hashlib
@@ -31,6 +33,18 @@ SECRET_NAME = "harvui-auth"
 ITERATIONS = 600_000
 SESSION_TTL = int(os.environ.get("SESSION_TTL_HOURS", "12")) * 3600
 COOKIE = "harvui_session"
+
+# viewer < operator < admin
+ROLES = ("viewer", "operator", "admin")
+ROLE_RANK = {r: i for i, r in enumerate(ROLES)}
+
+
+def rank(role):
+    return ROLE_RANK.get(role or "viewer", 0)
+
+
+def allows(user_role, needed):
+    return rank(user_role) >= rank(needed)
 
 _store_cache = {"at": 0, "data": None}
 _attempts = {}          # addr -> [(timestamp), ...]
@@ -94,8 +108,30 @@ def user_count():
 
 
 def list_users():
-    return [{"name": u, "created": v.get("created", ""), "last_login": v.get("last_login", "")}
+    return [{"name": u, "role": v.get("role", "admin"), "created": v.get("created", ""),
+             "last_login": v.get("last_login", "")}
             for u, v in sorted(_load().get("users", {}).items())]
+
+
+def role_of(username):
+    return _load().get("users", {}).get(username, {}).get("role", "viewer")
+
+
+def set_role(username, role, acting_as):
+    if role not in ROLES:
+        raise ValueError(f"role must be one of {', '.join(ROLES)}")
+    data = _load(force=True)
+    u = data.get("users", {}).get(username)
+    if not u:
+        raise ValueError("no such user")
+    if username == acting_as and role != "admin":
+        raise PermissionError("you cannot remove your own admin role")
+    admins = [n for n, v in data["users"].items() if v.get("role", "admin") == "admin"]
+    if admins == [username] and role != "admin":
+        raise PermissionError("cannot demote the only administrator")
+    u["role"] = role
+    _save(data)
+    return {"ok": True, "user": username, "role": role}
 
 
 # ------------------------------------------------------------------ passwords
@@ -105,7 +141,7 @@ def _hash(password, salt):
     ).decode()
 
 
-def create_user(username, password, first_only=False):
+def create_user(username, password, first_only=False, role="operator"):
     username = (username or "").strip().lower()
     if not username or not username.isascii() or len(username) < 3 or len(username) > 32:
         raise ValueError("username must be 3-32 ASCII characters")
@@ -114,14 +150,20 @@ def create_user(username, password, first_only=False):
     data = _load(force=True)
     if first_only and data.get("users"):
         raise PermissionError("setup has already been completed")
+    if first_only:
+        role = "admin"          # whoever sets the system up owns it
+    if role not in ROLES:
+        raise ValueError(f"role must be one of {', '.join(ROLES)}")
+    if username in data.get("users", {}):
+        raise ValueError("that username already exists")
     salt = base64.b64encode(secrets.token_bytes(16)).decode()
     data.setdefault("users", {})[username] = {
-        "salt": salt, "hash": _hash(password, salt), "ver": 1,
+        "salt": salt, "hash": _hash(password, salt), "ver": 1, "role": role,
         "created": time.strftime("%Y-%m-%d %H:%M"), "last_login": "",
     }
     _signing_key(data)
     _save(data)
-    return {"ok": True, "user": username}
+    return {"ok": True, "user": username, "role": role}
 
 
 def change_password(username, old, new):
@@ -145,6 +187,9 @@ def delete_user(username, acting_as):
         raise PermissionError("cannot delete the only account")
     if username == acting_as:
         raise PermissionError("cannot delete the account you are signed in as")
+    admins = [n for n, v in data["users"].items() if v.get("role", "admin") == "admin"]
+    if admins == [username]:
+        raise PermissionError("cannot delete the only administrator")
     data["users"].pop(username)
     _save(data)
     return {"ok": True}
@@ -171,7 +216,8 @@ def _sign(payload_b64, key):
 def issue_token(username):
     data = _load()
     u = data["users"][username]
-    payload = {"u": username, "v": u.get("ver", 1), "exp": int(time.time()) + SESSION_TTL}
+    payload = {"u": username, "v": u.get("ver", 1), "r": u.get("role", "admin"),
+               "exp": int(time.time()) + SESSION_TTL}
     raw = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
     return f"{raw}.{_sign(raw, _signing_key(data))}"
 
@@ -194,7 +240,9 @@ def verify_token(token):
     u = data.get("users", {}).get(payload.get("u"))
     if not u or u.get("ver", 1) != payload.get("v"):
         return None          # password changed or user removed
-    return payload["u"]
+    # role is re-read from the store, never trusted from the token, so a
+    # demotion takes effect immediately rather than at the next sign-in
+    return {"user": payload["u"], "role": u.get("role", "admin")}
 
 
 def login(username, password, addr):

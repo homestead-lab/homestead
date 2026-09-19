@@ -70,11 +70,13 @@ function paint(html) {
     host.innerHTML = html;
     host.dataset.painted = "1";
     host.dataset.sig = html.length + ":" + STATE.view;
+    if (window.applyRole) window.applyRole();
     return;
   }
   const next = document.createElement("div");
   next.innerHTML = html;
   morph(host, next);
+  if (window.applyRole) window.applyRole();
 }
 function morph(a, b) {
   // fast path: identical markup, nothing to do

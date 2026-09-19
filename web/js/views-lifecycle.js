@@ -158,7 +158,7 @@ async function viewVMs() {
   const [vms, nodes] = await Promise.all([api("/api/vms"), api("/api/nodes").catch(() => [])]);
   paint(`<div class="phead"><div><h2>Virtual machines</h2>
       <p>${vms.length} VM${vms.length === 1 ? "" : "s"} · KubeVirt on Longhorn</p></div>
-      <button class="btn pri" onclick="vmNew()">＋ New VM</button></div>
+      <button class="btn pri" data-need="operator" onclick="vmNew()">＋ New VM</button></div>
     ${vms.length ? `<div class="cardlist">${vms.map(v => `<div class="card flat wcard">
       <div class="between">
         <div class="row" style="gap:10px"><div class="av n3">${esc(v.name.slice(0, 2).toUpperCase())}</div>
@@ -277,7 +277,7 @@ async function viewSchedules() {
   const js = await api("/api/schedules");
   paint(`<div class="phead"><div><h2>Schedules</h2>
       <p>${js.length} scheduled job${js.length === 1 ? "" : "s"} · standard cron syntax</p></div>
-      <button class="btn pri" onclick="jobEdit()">＋ New schedule</button></div>
+      <button class="btn pri" data-need="operator" onclick="jobEdit()">＋ New schedule</button></div>
     <div class="card flat pad0"><div class="tblwrap"><table class="tbl"><thead><tr>
       <th>Name</th><th>Schedule</th><th>Image</th><th>Last run</th><th>State</th><th></th></tr></thead><tbody>
       ${js.map(j => `<tr>
@@ -332,7 +332,7 @@ async function viewImport() {
   STATE.data.srcs = srcs;
   paint(`<div class="phead"><div><h2>Import</h2>
       <p>Bring containers and their appdata across from another host</p></div>
-      <button class="btn pri" onclick="srcAdd()">＋ Add source</button></div>
+      <button class="btn pri" data-need="admin" onclick="srcAdd()">＋ Add source</button></div>
 
     <div class="sec">Sources</div>
     <div class="grid g3">${srcs.map(s => `<div class="card flat">

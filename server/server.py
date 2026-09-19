@@ -876,6 +876,29 @@ AUTH.bind(kget, ksend, DEFAULT_NS)
 PUBLIC = {"/healthz", "/style.css", "/index.html", "/",
           "/api/auth/login", "/api/auth/state", "/api/auth/setup"}
 
+# Role needed per route. Rules:
+#   * any GET needs at least "viewer"
+#   * any mutation defaults to "operator"
+#   * routes below override that, and everything sensitive is "admin"
+# Enforced here, server-side. The UI hides what you cannot do as a courtesy,
+# but a viewer who hand-crafts the request still gets a 403.
+ADMIN_ROUTES = {
+    "/api/auth/users", "/api/auth/users/delete", "/api/auth/role",
+    "/api/node/power", "/api/node/drain", "/api/node/cordon",
+    "/api/sources", "/api/sources/delete", "/api/sources/browse", "/api/import",
+    "/api/shares", "/api/shares/delete",
+}
+# things a signed-in user may always do to their own account
+SELF_ROUTES = {"/api/auth/logout", "/api/auth/password", "/api/auth/signout-everywhere"}
+
+
+def needed_role(path, method):
+    if path in SELF_ROUTES:
+        return "viewer"
+    if path in ADMIN_ROUTES:
+        return "admin"
+    return "viewer" if method == "GET" else "operator"
+
 
 # ---------------------------------------------------------------- HTTP
 class H(BaseHTTPRequestHandler):
@@ -933,8 +956,8 @@ class H(BaseHTTPRequestHandler):
         """Returns None when the request may proceed, or sends the refusal."""
         if path in PUBLIC or (path.startswith("/js/") and path.endswith(".js")):
             return None
-        user = self._who()
-        if not user:
+        who = self._who()
+        if not who:
             self._send(401, {"error": "not signed in", "auth": False})
             return True
         # CSRF: the cookie is SameSite=Strict, and mutations additionally require a
@@ -943,7 +966,12 @@ class H(BaseHTTPRequestHandler):
             if self.headers.get("X-HarvUI-Auth") != "1":
                 self._send(403, {"error": "missing X-HarvUI-Auth header"})
                 return True
-        self.user = user
+        self.user, self.role = who["user"], who["role"]
+        need = needed_role(path, self.command)
+        if not AUTH.allows(self.role, need):
+            self._send(403, {"error": f"your role ({self.role}) cannot do this — {need} required",
+                             "role": self.role, "needed": need})
+            return True
         return None
 
     def _body(self):
@@ -968,7 +996,11 @@ class H(BaseHTTPRequestHandler):
             if p == "/healthz":
                 return self._send(200, {"ok": True})
             if p == "/api/auth/state":
-                return self._send(200, {"setup": AUTH.needs_setup(), "user": self._who()})
+                who = self._who()
+                return self._send(200, {"setup": AUTH.needs_setup(),
+                                        "user": who["user"] if who else None,
+                                        "role": who["role"] if who else None,
+                                        "roles": list(AUTH.ROLES)})
             if p == "/api/auth/users":
                 return self._send(200, AUTH.list_users())
             if p == "/api/overview":
@@ -1093,7 +1125,11 @@ class H(BaseHTTPRequestHandler):
                 self._set_cookie(AUTH.issue_token(self.user))
                 return self._send(200, {"ok": True})
             if p == "/api/auth/users":
-                AUTH.create_user(b.get("username"), b.get("password"))
+                AUTH.create_user(b.get("username"), b.get("password"),
+                                 role=b.get("role", "operator"))
+                return self._send(200, {"ok": True, "users": AUTH.list_users()})
+            if p == "/api/auth/role":
+                AUTH.set_role(b["username"], b["role"], self.user)
                 return self._send(200, {"ok": True, "users": AUTH.list_users()})
             if p == "/api/auth/users/delete":
                 AUTH.delete_user(b.get("username"), self.user)

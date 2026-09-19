@@ -1,6 +1,8 @@
 /* Sign-in gate, account controls, and the 401 handler that wraps every call */
 
-let ME = null;
+let ME = null, ROLE = null;
+const RANK = { viewer: 0, operator: 1, admin: 2 };
+window.can = need => RANK[ROLE] >= RANK[need];
 
 /* Every mutating call carries this header. The cookie is SameSite=Strict, so a
    cross-site form cannot ride along; the header a cross-site form cannot set. */
@@ -59,7 +61,7 @@ async function doLogin() {
       body: JSON.stringify({ username, password }) });
     const b = await r.json();
     if (!r.ok) return loginForm(b.error || "Sign-in failed");
-    ME = b.user; ungate(); afterAuth();
+    ME = b.user; ROLE = b.role || "admin"; ungate(); afterAuth();
   } catch (e) { loginForm(e.message); }
 }
 
@@ -75,7 +77,7 @@ async function doSetup() {
       body: JSON.stringify({ username, password }) });
     const b = await r.json();
     if (!r.ok) return loginForm(b.error || "Setup failed", true);
-    ME = b.user; ungate(); afterAuth();
+    ME = b.user; ROLE = "admin"; ungate(); afterAuth();
   } catch (e) { loginForm(e.message, true); }
 }
 
@@ -112,11 +114,15 @@ window.manageUsers = async () => {
     const us = await api("/api/auth/users");
     $("#mbody").innerHTML = `
       <div class="card flat pad0" style="margin-bottom:16px"><div class="tblwrap"><table class="tbl">
-        <thead><tr><th>User</th><th>Created</th><th>Last sign-in</th><th></th></tr></thead><tbody>
+        <thead><tr><th>User</th><th>Role</th><th>Last sign-in</th><th></th></tr></thead><tbody>
         ${us.map(u => `<tr><td><div class="row" style="gap:9px">
             <div class="av">${esc(u.name.slice(0, 2).toUpperCase())}</div><b>${esc(u.name)}</b>
             ${u.name === ME ? '<span class="tag ok">you</span>' : ""}</div></td>
-          <td class="dim small mono">${esc(u.created || "—")}</td>
+          <td><select onchange="setRole('${esc(u.name)}',this.value)" ${u.name === ME ? "disabled" : ""}
+              style="padding:5px 9px;font-size:12px;width:auto">
+            ${["viewer", "operator", "admin"].map(r =>
+              `<option value="${r}" ${u.role === r ? "selected" : ""}>${r}</option>`).join("")}
+          </select></td>
           <td class="dim small mono">${esc(u.last_login || "never")}</td>
           <td>${u.name === ME || us.length === 1 ? '<span class="dim xs">—</span>'
             : `<button class="btn sm danger" onclick="delUser('${esc(u.name)}')">Remove</button>`}</td>
@@ -126,15 +132,23 @@ window.manageUsers = async () => {
         <div class="f"><label>Username</label><input type="text" id="nu_user" autocapitalize="none"></div>
         <div class="f"><label>Password</label><input type="password" id="nu_pass" autocomplete="new-password"></div>
       </div>
+      <div class="f"><label>Role</label><select id="nu_role">
+        <option value="viewer">viewer — read only</option>
+        <option value="operator" selected>operator — manage workloads</option>
+        <option value="admin">admin — everything, including hosts and import</option>
+      </select></div>
       <button class="btn pri" onclick="addUser()">Add user</button>
-      <div class="note" style="margin-top:16px">Every account has the same rights — there are no
-      roles yet, so anyone you add can deploy, move and delete workloads.</div>`;
+      <div class="note" style="margin-top:16px"><b>viewer</b> can look but not touch.
+      <b>operator</b> can deploy, edit, move, start and stop workloads and VMs.
+      <b>admin</b> adds user management, host cordon/drain/power, shares, and import —
+      which stores credentials for other machines.</div>`;
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
 window.addUser = async () => {
   try {
     await api("/api/auth/users", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: $("#nu_user").value.trim(), password: $("#nu_pass").value }) });
+      body: JSON.stringify({ username: $("#nu_user").value.trim(), password: $("#nu_pass").value,
+        role: $("#nu_role").value }) });
     toast("user added", "ok"); manageUsers();
   } catch (e) { toast(e.message, "bad"); }
 };
@@ -153,16 +167,29 @@ window.api = async (path, opts) => {
   try { return await _api(path, opts); }
   catch (e) {
     if (/not signed in/i.test(e.message)) { ME = null; loginForm("Session expired — sign in again"); }
+    else if (/cannot do this/i.test(e.message)) toast(e.message, "bad");
     throw e;
   }
 };
 
+function roleClass(r) {
+  return "pill " + (r === "admin" ? "ok" : r === "operator" ? "low" : "neutral");
+}
 function paintWho() {
   if (!ME) return;
   $("#whonm").textContent = ME;
   $("#whoav").textContent = ME.slice(0, 2).toUpperCase();
+  const wr = $("#whorole");
+  if (wr) { wr.textContent = ROLE; wr.className = roleClass(ROLE) + " rolechip"; }
   const su = $("#setUser"); if (su) su.textContent = ME;
+  const sr = $("#setRole");
+  if (sr) { sr.textContent = ROLE; sr.className = roleClass(ROLE) + " rolechip"; }
+  document.body.dataset.role = ROLE;
+  // hide anything the signed-in role cannot use. The server enforces it too;
+  // this only keeps the UI honest.
+  $$("[data-need]").forEach(el => el.classList.toggle("hidden", !can(el.dataset.need)));
 }
+window.applyRole = paintWho;
 $("#whoami").onclick = () => $("#drawer").classList.add("open");
 
 /* boot: decide between setup, sign-in, and running the app */
@@ -170,7 +197,7 @@ $("#whoami").onclick = () => $("#drawer").classList.add("open");
   const st = await authState();
   if (st.setup) return loginForm(null, true);
   if (!st.user) return loginForm();
-  ME = st.user; ungate(); afterAuth();
+  ME = st.user; ROLE = st.role || "admin"; ungate(); afterAuth();
 })();
 
 function afterAuth() {
@@ -178,3 +205,11 @@ function afterAuth() {
   go("dash");
   startLoop();
 }
+
+window.setRole = async (name, role) => {
+  try {
+    await api("/api/auth/role", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: name, role }) });
+    toast(name + " is now " + role, "ok"); manageUsers();
+  } catch (e) { toast(e.message, "bad"); manageUsers(); }
+};

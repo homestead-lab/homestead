@@ -104,7 +104,7 @@
         <div class="iconbtn" id="refresh" title="Refresh"><svg><use href="#i-refresh"/></svg></div>
         <div class="iconbtn" id="opensettings" title="Settings"><svg><use href="#i-gear"/></svg></div>
         <div class="whoami" id="whoami" title="Account"><div class="av" id="whoav">?</div>
-          <span class="nm" id="whonm">—</span></div>
+          <span class="nm" id="whonm">—</span><span class="pill neutral rolechip" id="whorole">—</span></div>
       </div>
     </header>
     <div class="page" id="views"></div>
@@ -129,10 +129,10 @@
   <div class="dsec"><h5>Motion</h5><p>Animated data-flow along connectors</p>
     <div class="opts" id="optMotion" style="grid-template-columns:repeat(2,1fr)">
       <div class="opt" data-v="on">On</div><div class="opt" data-v="off">Reduced</div></div></div>
-  <div class="dsec"><h5>Account</h5><p>Signed in as <b id="setUser">—</b></p>
+  <div class="dsec"><h5>Account</h5><p>Signed in as <b id="setUser">—</b> <span class="pill neutral rolechip" id="setRole">—</span></p>
     <div class="row" style="gap:8px">
       <button class="btn sm" onclick="pwChange()">Change password</button>
-      <button class="btn sm" onclick="manageUsers()">Users</button>
+      <button class="btn sm" data-need="admin" onclick="manageUsers()">Users</button>
       <button class="btn sm danger" onclick="doLogout()">Sign out</button>
     </div></div>
   <div class="dsec"><h5>Cluster</h5>

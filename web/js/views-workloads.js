@@ -8,7 +8,7 @@ function renderWorkloads() {
     x.images.join(" ").toLowerCase().includes(q) || x.nodes.join(" ").includes(q));
   paint(`<div class="phead">
       <div><h2>Containers</h2><p>${rows.length} workload${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""} · Harvester system pods hidden</p></div>
-      <button class="btn pri hide-sm" onclick="go('deploy')">＋ Deploy</button></div>
+      <button class="btn pri hide-sm" data-need="operator" onclick="go('deploy')">＋ Deploy</button></div>
 
     <div class="cardlist">${rows.map(w => {
       const ok = w.ready === w.desired && w.desired > 0, off = w.desired === 0;
