@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HARVUI_VERSION = "1.15.5";
+const HARVUI_VERSION = "1.15.6";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -32,10 +32,22 @@ async function loadHealthSettings(force = false) {
 const tip = (text, label = "?") => `<span class="tip" tabindex="0" aria-label="${esc(text)}" data-tip="${esc(text)}">${esc(label)}</span>`;
 const icon = name => `<svg class="btnicon" aria-hidden="true"><use href="#i-${esc(name)}"/></svg>`;
 const appAvatar = (name, icon, cls = "") => icon
-  ? `<span class="av appav ${cls}"><span class="avfallback">${esc(String(name || "?").slice(0, 2).toUpperCase())}</span><img ${icon.startsWith("/api/icons/") ? `data-icon-src="${esc(icon)}"` : `src="${esc(icon)}"`} alt="" referrerpolicy="no-referrer" onload="this.previousElementSibling.hidden=true" onerror="this.remove()"></span>`
+  ? `<span class="av appav ${cls}"><span class="avfallback">${esc(String(name || "?").slice(0, 2).toUpperCase())}</span><img ${icon.startsWith("/api/icons/") ? `data-icon-src="${esc(icon)}"` : `src="${esc(icon)}"`} alt="" referrerpolicy="no-referrer"></span>`
   : `<span class="av ${cls}">${esc(String(name || "?").slice(0, 2).toUpperCase())}</span>`;
 
 function loadAppIcons(root = document) {
+  root.querySelectorAll(".appav img").forEach(img => {
+    if (img.dataset.iconWired) return;
+    img.dataset.iconWired = "1";
+    const loaded = () => { if (img.previousElementSibling) img.previousElementSibling.hidden = true; };
+    const failed = () => img.remove();
+    img.addEventListener("load", loaded, { once: true });
+    img.addEventListener("error", failed, { once: true });
+    if (img.complete) {
+      if (img.naturalWidth) loaded();
+      else if (img.getAttribute("src")) failed();
+    }
+  });
   root.querySelectorAll("img[data-icon-src]").forEach(img => {
     if (img.dataset.iconLoading) return;
     img.dataset.iconLoading = "1";

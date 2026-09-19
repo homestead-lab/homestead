@@ -74,6 +74,8 @@ class IconCacheTests(unittest.TestCase):
         self.assertIn('fetch(url, { credentials: "same-origin", cache: "no-store" })', core)
         self.assertIn("URL.createObjectURL(blob)", core)
         self.assertIn("loadAppIcons(host)", core)
+        self.assertIn('img.addEventListener("load", loaded', core)
+        self.assertIn('img.addEventListener("error", failed', core)
 
     def test_only_content_addressed_icon_route_is_public(self):
         self.assertTrue(server.is_public_path("/api/icons/" + "a" * 64 + ".png"))
