@@ -45,8 +45,13 @@ rules:
     resources: [storageclasses]
     verbs: [get, list]
   - apiGroups: ["longhorn.io"]
-    resources: [volumes, nodes, replicas, engines, settings]
-    verbs: [get, list]
+    resources: [nodes, replicas, engines, settings, backupvolumes]
+    verbs: [get, list, watch]
+  # data protection: recurring jobs, snapshots, backups, and volume labels
+  # (group membership is a label on the volume)
+  - apiGroups: ["longhorn.io"]
+    resources: [volumes, recurringjobs, snapshots, backups, backuptargets]
+    verbs: [get, list, watch, create, update, patch, delete]
   - apiGroups: ["batch"]
     resources: [jobs, cronjobs]
     verbs: [get, list, watch, create, update, patch, delete]

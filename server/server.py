@@ -868,9 +868,11 @@ sys.modules["harvui_shim"] = _shim
 import harvui_lifecycle as LC
 import harvui_imports as IMP
 import harvui_auth as AUTH
+import harvui_longhorn as LH
 LC.bind(kget, ksend, SYS_NS, _cache)
 IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache)
 AUTH.bind(kget, ksend, DEFAULT_NS)
+LH.bind(kget, ksend, _cache)
 
 # Paths reachable without a session. Everything else needs one.
 PUBLIC = {"/healthz", "/style.css", "/index.html", "/",
@@ -887,6 +889,7 @@ ADMIN_ROUTES = {
     "/api/node/power", "/api/node/drain", "/api/node/cordon",
     "/api/sources", "/api/sources/delete", "/api/sources/browse", "/api/import",
     "/api/shares", "/api/shares/delete",
+    "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete",
 }
 # things a signed-in user may always do to their own account
 SELF_ROUTES = {"/api/auth/logout", "/api/auth/password", "/api/auth/signout-everywhere"}
@@ -1037,6 +1040,14 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("imgcache", 30, IMP.image_cache))
             if p == "/api/schedules":
                 return self._send(200, cached("cron", 8, IMP.list_jobs))
+            if p == "/api/lh/overview":
+                return self._send(200, cached("lhov", 8, LH.overview))
+            if p == "/api/lh/snapshots":
+                vol = (q.get("volume") or [None])[0]
+                return self._send(200, LH.snapshots(vol))
+            if p == "/api/lh/backups":
+                vol = (q.get("volume") or [None])[0]
+                return self._send(200, LH.backups(vol))
             if p == "/api/sources":
                 return self._send(200, IMP.list_sources())
             if p == "/api/imports":
@@ -1211,6 +1222,22 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, IMP.create_vm(b))
             if p == "/api/images/prepull":
                 return self._send(200, IMP.prepull(b["image"], b.get("nodes")))
+            if p == "/api/lh/job":
+                return self._send(200, LH.save_job(b))
+            if p == "/api/lh/job/delete":
+                return self._send(200, LH.delete_job(b["name"]))
+            if p == "/api/lh/assign":
+                return self._send(200, LH.bulk_assign(
+                    b["volumes"], b["name"], b.get("kind", "group"), b.get("enabled", True)))
+            if p == "/api/lh/snapshot":
+                return self._send(200, LH.create_snapshot(b["volume"], b.get("name")))
+            if p == "/api/lh/snapshot/delete":
+                return self._send(200, LH.delete_snapshot(b["name"]))
+            if p == "/api/lh/backup":
+                return self._send(200, LH.create_backup(b["volume"], b.get("name")))
+            if p == "/api/lh/target":
+                return self._send(200, LH.set_backup_target(
+                    b["url"], b.get("secret", ""), b.get("poll", "5m")))
             if p == "/api/schedules":
                 IMP.save_job(b); return self._send(200, {"ok": True})
             if p == "/api/schedules/delete":

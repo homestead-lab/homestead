@@ -89,6 +89,7 @@ This is genuinely destructive and I want it gated, not just confirmed:
 | 4.1 | Deploy VMs | ✅ | VM + DataVolume, Harvester image or cloud-image URL |
 | 4.2 | Image cache page | ✅ | per-node inventory + pre-pull; prune ⬜ |
 | 4.3 | Schedules / jobs | ✅ | CronJob CRUD + run-now |
+| 4.6 | **Longhorn data protection** | ✅ | recurring jobs, groups, snapshots, backups, backup target |
 | 4.4 | Import sources | ✅ | ConfigMap + Secret, with SSH browse |
 | 4.5 | Import containers **with appdata** | ✅ containers, ⬜ VMs | rsync Job into a Longhorn PVC |
 
@@ -154,3 +155,35 @@ Phases 1–4 are deployed and reachable at the cluster VIP. Remaining:
 | 4.5b VM import | Disk conversion (qcow2/vmdk → PVC) via CDI; separate from container import. |
 | Image prune | Listing and pre-pull are done; deleting cached images needs CRI access. |
 | Share editing | Delete exists; editing size/permissions in place does not. |
+
+
+---
+
+## Data protection (4.6)
+
+Built on Longhorn's own model rather than a parallel one:
+
+* **RecurringJob** — task (snapshot / backup / trim / cleanup), cron, retain,
+  concurrency, and the groups it protects.
+* **Groups are labels on the volume** — `recurring-job-group.longhorn.io/<g>`
+  and `recurring-job.longhorn.io/<job>`. Assigning a volume is a label patch,
+  not a controller, which is why group membership is cheap.
+* `default` is special: Longhorn puts every new volume in it, so one job
+  targeting `default` covers the whole cluster automatically.
+* **Backup target** is a `BackupTarget` CR (newer Longhorn), not the old
+  `backup-target` setting. Snapshots work without one; backups do not.
+
+Coverage is shown as a percentage with the uncovered volumes named, because
+"protected" is the number that actually matters and it is easy to think you
+have it when you do not.
+
+### Still open after 2026-09-19
+
+| Item | Notes |
+|---|---|
+| 2.5a node temperatures | Needs a DaemonSet with a read-only `/sys` hostPath. |
+| 3.6 pod↔container regrouping | Needs a clear model for merge/split first. |
+| 4.5b VM import | qcow2/vmdk → PVC via CDI. |
+| Image prune | Kubernetes has no delete-image API; needs CRI access on the node. |
+| Share editing | Delete exists; resize and permission edits do not. |
+| Backup restore | Backups are listed but restoring to a new PVC is not wired up. |

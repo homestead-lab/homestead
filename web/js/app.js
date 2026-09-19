@@ -11,6 +11,7 @@ const VIEWS = {
   shares:    ["Network Shares", "storage",   viewShares,    false],
   storage:   ["Volumes",        "storage",   viewStorage,   true],
   images:    ["Image Cache",    "storage",   viewImages,    false],
+  protect:   ["Data Protection","storage",   viewProtect,   true],
   schedules: ["Schedules",      "system",    viewSchedules, true],
   imports:   ["Import",         "system",    viewImport,    false],
   events:    ["Events",         "system",    viewEvents,    true],
