@@ -22,6 +22,7 @@ import urllib.request
 kget = ksend = None
 DEFAULT_NS = "lab"
 DATA_DIR = "/data"
+SYSTEM_NAMESPACES = set()
 TRACKED = "harvui.io/update-sources"
 PREVIOUS = "harvui.io/update-previous"
 LAST_ACTION = "harvui.io/update-action"
@@ -36,9 +37,10 @@ _CACHE = {}
 _CACHE_LOCK = threading.Lock()
 
 
-def bind(_kget, _ksend, default_ns="lab", data_dir="/data"):
-    global kget, ksend, DEFAULT_NS, DATA_DIR
+def bind(_kget, _ksend, default_ns="lab", data_dir="/data", system_namespaces=None):
+    global kget, ksend, DEFAULT_NS, DATA_DIR, SYSTEM_NAMESPACES
     kget, ksend, DEFAULT_NS, DATA_DIR = _kget, _ksend, default_ns, data_dir
+    SYSTEM_NAMESPACES = set(system_namespaces or ())
 
 
 def parse_image(ref):
@@ -277,8 +279,7 @@ def _check_deployment(dep, pods, force=False):
 
 def scan(force=False):
     deps = [d for d in kget("/apis/apps/v1/deployments").get("items", [])
-            if d["metadata"]["namespace"] not in {
-                "kube-system", "cattle-system", "longhorn-system", "harvester-system"}]
+            if d["metadata"]["namespace"] not in SYSTEM_NAMESPACES]
     pods = kget("/api/v1/pods").get("items", [])
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, max(1, len(deps)))) as pool:
         futures = [pool.submit(_check_deployment, dep, pods, force) for dep in deps]

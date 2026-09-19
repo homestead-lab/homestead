@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HARVUI_VERSION = os.environ.get("HARVUI_VERSION", "1.9.1")
+HARVUI_VERSION = os.environ.get("HARVUI_VERSION", "1.9.2")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1099,7 +1099,7 @@ IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.featu
 AUTH.bind(kget, ksend, DEFAULT_NS)
 LH.bind(kget, ksend, _cache)
 PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.features)
-UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR)
+UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS)
 
 # Paths reachable without a session. Everything else needs one.
 PUBLIC = {"/healthz", "/style.css", "/index.html", "/",

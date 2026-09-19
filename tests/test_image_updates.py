@@ -80,6 +80,34 @@ class ImageUpdateTests(unittest.TestCase):
             updates.registry_tags, updates.manifest_info = original_tags, original_manifest
             updates._secret_credentials = original_creds
 
+    def test_scan_uses_shared_system_namespace_filter(self):
+        user = copy.deepcopy(self.dep)
+        system = copy.deepcopy(self.dep)
+        system["metadata"].update({"namespace": "cattle-fleet-local-system", "name": "fleet"})
+
+        def get(path):
+            if path == "/apis/apps/v1/deployments":
+                return {"items": [system, user]}
+            if path == "/api/v1/pods":
+                return {"items": []}
+            raise AssertionError(path)
+
+        original = updates._check_deployment
+        try:
+            updates.bind(get, lambda *args, **kwargs: None, "lab", self.tmp.name,
+                         {"cattle-fleet-local-system"})
+            updates._check_deployment = lambda dep, pods, force=False: {
+                "ns": dep["metadata"]["namespace"], "name": dep["metadata"]["name"],
+                "images": [], "available": False, "can_rollback": False,
+                "last_action": "",
+            }
+            report = updates.scan()
+        finally:
+            updates._check_deployment = original
+
+        self.assertEqual([("lab", "demo")],
+                         [(x["ns"], x["name"]) for x in report["workloads"]])
+
     def test_apply_pins_digest_and_records_exact_rollback(self):
         digest = "sha256:" + "c" * 64
         original = updates._check_deployment
