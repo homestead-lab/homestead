@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HARVUI_VERSION = "1.10.1";
+const HARVUI_VERSION = "1.10.2";
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
   disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 },
@@ -133,6 +133,7 @@ function toast(msg, kind = "") {
 function modal(t, h, wide) {
   $("#mtitle").textContent = t;
   $("#mbody").innerHTML = h;
+  enhanceActions($("#mbody"));
   $(".modalbox").classList.toggle("wide", !!wide);
   $("#modal").classList.remove("hidden");
 }
@@ -206,6 +207,22 @@ document.addEventListener("focusout", e => {
 window.addEventListener("scroll", () => hideTooltip(), true);
 window.addEventListener("resize", () => hideTooltip());
 
+const ACTION_ICONS = [
+  [/^logs?\b/, "log"], [/^edit\b/, "edit"], [/^(move|migrate)\b/, "move"],
+  [/^(restart|reboot)\b/, "restart"], [/^(delete|remove)\b/, "trash"],
+  [/^start\b/, "play"], [/^(stop|shut down)\b/, "stop"],
+  [/^rollback\b/, "rollback"], [/^update\b/, "update"],
+];
+function enhanceActions(root = document) {
+  $$("button.btn", root).forEach(button => {
+    if ($(".btnicon", button)) return;
+    const label = button.textContent.trim().replace(/^[＋↻←]+\s*/, "").toLowerCase();
+    const match = ACTION_ICONS.find(([pattern]) => pattern.test(label));
+    if (match) button.insertAdjacentHTML("afterbegin", icon(match[1]));
+  });
+}
+window.enhanceActions = enhanceActions;
+
 /* ---------------- no-flash rendering ----------------
    Re-rendering innerHTML on every poll is what makes the page flash and lose
    scroll/hover. paint() only touches nodes whose content actually changed. */
@@ -213,6 +230,7 @@ function paint(html) {
   const host = V();
   if (!host.dataset.painted) {
     host.innerHTML = html;
+    enhanceActions(host);
     host.dataset.painted = "1";
     host.dataset.sig = html.length + ":" + STATE.view;
     if (window.applyRole) window.applyRole();
@@ -220,6 +238,7 @@ function paint(html) {
   }
   const next = document.createElement("div");
   next.innerHTML = html;
+  enhanceActions(next);
   morph(host, next);
   if (window.applyRole) window.applyRole();
 }

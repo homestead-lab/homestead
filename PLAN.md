@@ -14,7 +14,8 @@ Work through this roadmap in order, keeping the live cluster usable after each
 increment. The application shell, operation model, transition-aware health,
 and dashboard telemetry polish shipped in v1.10.0. Refresh-safe node,
 container-edit, container-log, and volume-edit URLs plus URL-backed search ship
-in v1.10.1. The active milestone is consistent actions and help.
+in v1.10.1. Consistent action icons, keyboard focus, and viewport-safe tooltips
+ship in v1.10.2. The active milestone is the workload/pod/container hierarchy.
 
 ## Product rules
 
@@ -65,7 +66,7 @@ status semantics, and a consistent way to report background work.
 - **Done when:** creating a normal container produces a transient activity
   state, not a cluster-degraded alert.
 
-#### 1.4 Consistent actions and help — 🔨 active
+#### 1.4 Consistent actions and help — ✅ shipped in v1.10.2
 
 - Add recognizable icons to actions such as Logs, Edit, Move, Console,
   Restart, and Delete while retaining visible labels where ambiguity is likely.
@@ -87,7 +88,7 @@ status semantics, and a consistent way to report background work.
 
 ### 2. Workload model and operations
 
-#### 2.1 Make pods, workloads, and containers explicit — ⬜ queued
+#### 2.1 Make pods, workloads, and containers explicit — 🔨 active
 
 - Present the hierarchy as workload/controller → pods → containers, with the
   common one-workload/one-container case visually compact.
