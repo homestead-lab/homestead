@@ -67,6 +67,11 @@ class IconCacheTests(unittest.TestCase):
         })
         self.assertEqual("https://example.com/demo.png", cfg["icon"])
 
+    def test_cached_icon_requests_are_release_versioned(self):
+        core = (ROOT / "web" / "js" / "core.js").read_text(encoding="utf-8")
+        self.assertIn('icon.startsWith("/api/icons/")', core)
+        self.assertIn('`${icon}?v=${HARVUI_VERSION}`', core)
+
 
 if __name__ == "__main__":
     unittest.main()

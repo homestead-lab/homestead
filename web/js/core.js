@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HARVUI_VERSION = "1.15.0";
+const HARVUI_VERSION = "1.15.1";
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
   disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 },
@@ -31,7 +31,7 @@ async function loadHealthSettings(force = false) {
 const tip = (text, label = "?") => `<span class="tip" tabindex="0" aria-label="${esc(text)}" data-tip="${esc(text)}">${esc(label)}</span>`;
 const icon = name => `<svg class="btnicon" aria-hidden="true"><use href="#i-${esc(name)}"/></svg>`;
 const appAvatar = (name, icon, cls = "") => icon
-  ? `<span class="av appav ${cls}"><img src="${esc(icon)}" alt="" referrerpolicy="no-referrer" onerror="this.parentNode.innerHTML='${esc(String(name || "?").slice(0, 2).toUpperCase())}'"></span>`
+  ? `<span class="av appav ${cls}"><img src="${esc(icon.startsWith("/api/icons/") ? `${icon}?v=${HARVUI_VERSION}` : icon)}" alt="" referrerpolicy="no-referrer" onerror="this.parentNode.innerHTML='${esc(String(name || "?").slice(0, 2).toUpperCase())}'"></span>`
   : `<span class="av ${cls}">${esc(String(name || "?").slice(0, 2).toUpperCase())}</span>`;
 
 const fmtUp = sec => {

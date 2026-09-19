@@ -17,7 +17,7 @@ container-edit, container-log, and volume-edit URLs plus URL-backed search ship
 in v1.10.1. Consistent action icons, keyboard focus, and viewport-safe tooltips
 ship in v1.10.2. The explicit Deployment → pod → container hierarchy ships in
 v1.11.0. The namespace-scoped interactive container console ships in v1.12.1.
-The persistent App Store logo pipeline ships in v1.15.0. The active milestone
+The persistent App Store logo pipeline ships in v1.15.1. The active milestone
 is safe volume deletion with attachment and data-loss impact checks.
 
 ## Product rules
@@ -139,7 +139,7 @@ rollback, and persisted history.
 - **Done when:** users can reclaim cache space without removing an image needed
   by a running workload or advertised rollback.
 
-#### 2.5 App Store logo import and persistence — ✅ shipped in v1.15.0
+#### 2.5 App Store logo import and persistence — ✅ shipped in v1.15.1
 
 - Carry the source icon through preview, create, edit, and update flows.
 - Persist icons with HarvUI-owned configuration so image updates and pod
