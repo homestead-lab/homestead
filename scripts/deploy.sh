@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Deploy a published HarvUI image to a Harvester/RKE2 host.
+# Deploy a published Homestead image to a Harvester/RKE2 host.
 set -euo pipefail
 
 NS="${NS:-lab}"
 HOST="${HOST:-rancher@192.0.2.210}"
-IMAGE="${IMAGE:-ghcr.io/wjcloudy/harvui}"
-TAG="${TAG:-1.15.6}"
+IMAGE="${IMAGE:-ghcr.io/wjcloudy/homestead}"
+TAG="${TAG:-2.0.0}"
 INSTALL_NODE_PROBE="${INSTALL_NODE_PROBE:-true}"
 K='sudo -n /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml'
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -15,7 +15,7 @@ echo "==> uploading Kubernetes manifests"
 ssh "$HOST" "mkdir -p $REMOTE"
 scp "$ROOT/deploy/deploy.yaml" "$ROOT/deploy/nodeprobe.yaml" "$HOST:$REMOTE/"
 
-echo "==> applying HarvUI resources"
+echo "==> applying Homestead resources"
 ssh "$HOST" "$K apply -f $REMOTE/deploy.yaml"
 ssh "$HOST" "$K -n $NS set image deployment/harvui harvui=$IMAGE:$TAG"
 

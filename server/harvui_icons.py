@@ -3,7 +3,7 @@
 Remote icon URLs are operator input, so fetching them is an SSRF boundary. We
 only resolve public HTTP(S) hosts, re-check redirects, cap the response size,
 and accept a small set of raster formats. Files are content-addressed beneath
-HarvUI's Longhorn-backed DATA_DIR so rollouts do not depend on the source URL.
+Homestead's Longhorn-backed DATA_DIR so rollouts do not depend on the source URL.
 """
 import hashlib
 import ipaddress
@@ -75,7 +75,7 @@ def _download(url):
     _validate_public_url(url)
     opener = urllib.request.build_opener(_SafeRedirect())
     req = urllib.request.Request(url, headers={
-        "User-Agent": "HarvUI icon cache",
+        "User-Agent": "Homestead icon cache",
         "Accept": "image/png,image/jpeg,image/gif,image/webp,image/x-icon",
     })
     with opener.open(req, timeout=15) as response:

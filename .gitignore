@@ -3,3 +3,14 @@ __pycache__/
 .DS_Store
 *.local
 .env
+
+# Local product/agent working notes. Keep these out of the public repository.
+/PLAN.md
+/CLAUDE.md
+/claude.md
+/AGENTS.md
+/.agents/
+/.codex/
+/*.local.md
+node_modules/
+release-assets/

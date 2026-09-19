@@ -1,4 +1,4 @@
-/* HarvUI — router, settings drawer, mobile nav, quiet refresh loop */
+/* Homestead — router, settings drawer, mobile nav, quiet refresh loop */
 
 const VIEWS = {
   dash:      ["Dashboard",      "overview",  viewDash,      true],
@@ -122,7 +122,7 @@ function go(v, options = {}) {
   const [t, , fn] = VIEWS[v];
   $("#title").textContent = t;
   renderBreadcrumb(v);
-  document.title = `${t} · HarvUI`;
+  document.title = `${t} · Homestead`;
   if (options.history !== false) {
     const url = HarvRouter.urlFor(v, options.params || routeParamsForView(v));
     const current = window.location.pathname + window.location.search;

@@ -136,7 +136,9 @@ metadata:
   labels:
     app: harvui
   annotations:
-    harvui.io/update-sources: '{"harvui":"ghcr.io/wjcloudy/harvui:1.15.6"}'
+    # harvui.io is retained as the legacy compatibility domain so existing
+    # update history, workload metadata, and rollback state survive the rename.
+    harvui.io/update-sources: '{"harvui":"ghcr.io/wjcloudy/homestead:2.0.0"}'
 spec:
   replicas: 1
   strategy:
@@ -169,7 +171,7 @@ spec:
           tolerationSeconds: 15
       initContainers:
         - name: data-permissions
-          image: ghcr.io/wjcloudy/harvui@sha256:d694a2827e7ba069f79d3c8c881dbe3f40246ce93844c0c1c9cea5f98c12835f
+          image: ghcr.io/wjcloudy/homestead:2.0.0
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "chown 10001:10001 /data && chmod 0770 /data"]
           securityContext:
@@ -186,7 +188,7 @@ spec:
               mountPath: /data
       containers:
         - name: harvui
-          image: ghcr.io/wjcloudy/harvui:1.15.6
+          image: ghcr.io/wjcloudy/homestead:2.0.0
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT
@@ -195,6 +197,8 @@ spec:
               value: "/web"
             - name: DATA_DIR
               value: "/data"
+            - name: HOMESTEAD_VERSION
+              value: "2.0.0"
             - name: DEFAULT_NS
               value: "lab"
             - name: SMB_NAMESPACE

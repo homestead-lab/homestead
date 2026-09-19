@@ -98,7 +98,7 @@ async function viewSettings() {
       <section class="card flat settings-wide">
         <div class="ctitle">About this installation</div><div class="csub">Runtime and cluster connection details</div>
         <div class="about-grid">
-          <div><span>HarvUI</span><b>v${esc(info.version || HARVUI_VERSION)}</b></div>
+          <div><span>Homestead</span><b>v${esc(info.version || HOMESTEAD_VERSION)}</b></div>
           <div><span>Kubernetes</span><b>${esc(info.kubernetes || "—")}</b></div>
           <div><span>Default namespace</span><b class="mono">${esc(info.namespace || "lab")}</b></div>
           <div><span>Storage class</span><b class="mono">${esc(info.storage_class || "—")}</b></div>

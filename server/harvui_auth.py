@@ -1,12 +1,12 @@
 """
-Authentication for HarvUI.
+Authentication for Homestead.
 
 Design notes, because the choices matter more than the code:
 
 * Passwords are PBKDF2-HMAC-SHA256 with a per-user salt and 600k iterations
   (OWASP's 2023 floor). stdlib only — no bcrypt/argon2 dependency.
 * Sessions are *stateless signed tokens*, not server-side session objects.
-  HarvUI's pod restarts on every deploy; server-side sessions would log
+  Homestead's pod restarts on every deploy; server-side sessions would log
   everyone out each time. The signing key lives in the same Secret as the
   users, so tokens survive a restart but die if the Secret is rotated.
 * Every user record carries a `ver`. Bumping it invalidates that user's

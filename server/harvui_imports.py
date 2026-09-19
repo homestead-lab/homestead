@@ -148,7 +148,7 @@ def source_containers(name):
 
 
 def inspect_source_container(name, container):
-    """Translate Docker inspect fields into HarvUI's deploy/import model."""
+    """Translate Docker inspect fields into Homestead's deploy/import model."""
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", container or ""):
         raise ValueError("invalid container name")
     src = _source(name)
@@ -529,7 +529,7 @@ def cleanup_image(digest, nodes=None):
                          for row in image.get("retained_by", [])})
         raise PermissionError("image is protected by " + ", ".join(owners))
     if image.get("system"):
-        raise PermissionError("Harvester and Kubernetes platform images cannot be cleaned from HarvUI")
+        raise PermissionError("Harvester and Kubernetes platform images cannot be cleaned from Homestead")
     selected = sorted(set(nodes or image["nodes"]))
     if not selected or any(node not in image["nodes"] for node in selected):
         raise ValueError("cleanup nodes must currently cache this digest")
@@ -672,6 +672,9 @@ def create_vm(cfg):
     disk = int(cfg.get("disk_gb", 20))
     sc = cfg.get("storage_class", "longhorn-r2")
     dv = f"{name}-disk"
+    password = str(cfg.get("password") or "")
+    if not cfg.get("cloud_init") and len(password) < 10:
+        raise ValueError("root password must be at least 10 characters")
 
     src = {"blank": {}}
     if cfg.get("image_url"):
@@ -683,7 +686,7 @@ def create_vm(cfg):
         "#cloud-config\n"
         f"hostname: {name}\n"
         "ssh_pwauth: true\n"
-        f"password: {cfg.get('password', 'harvui')}\n"
+        f"password: {password}\n"
         "chpasswd: {expire: false}\n")
 
     vm = {

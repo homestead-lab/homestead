@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 80" role="img" aria-labelledby="title desc">
+  <title id="title">Homestead</title>
+  <desc id="desc">Homestead cluster management logo.</desc>
+  <rect width="360" height="80" rx="18" fill="#101416"/>
+  <g transform="translate(2 2)">
+    <rect width="76" height="76" rx="19" fill="#101416"/>
+    <path d="m14 34 24-21 24 21" fill="none" stroke="#F8B84E" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M21 31v11c0 4 3 7 7 7h20c4 0 7-3 7-7V31" fill="none" stroke="#F7F4EA" stroke-width="6" stroke-linecap="round"/>
+    <path d="M29 49V38h9v11" fill="none" stroke="#F7F4EA" stroke-width="5"/>
+    <path d="M14 57c8-5 17-5 26 0s16 5 22 0" fill="none" stroke="#30BA78" stroke-width="5" stroke-linecap="round"/>
+    <path d="M17 66c7-3 14-3 21 0s14 3 20 0" fill="none" stroke="#2453FF" stroke-width="4" stroke-linecap="round"/>
+  </g>
+  <text x="96" y="51" fill="#F7F4EA" font-family="Poppins, Inter, system-ui, sans-serif" font-size="39" font-weight="650" letter-spacing="-.6">Homestead</text>
+</svg>

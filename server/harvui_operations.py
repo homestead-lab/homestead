@@ -1,7 +1,7 @@
 """Persistent, user-visible operation tracking.
 
-The durable record lives on HarvUI's Longhorn volume, while live progress is
-derived from Kubernetes resources. This means a browser refresh or HarvUI pod
+The durable record lives on Homestead's Longhorn volume, while live progress is
+derived from Kubernetes resources. This means a browser refresh or Homestead pod
 restart cannot lose an in-flight image pull, rollout, import, migration, or
 backup. Only identifiers and status are stored; request bodies and credentials
 are deliberately excluded.

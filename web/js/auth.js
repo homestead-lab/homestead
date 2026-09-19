@@ -28,8 +28,8 @@ function ungate() { $("#gate").classList.add("hidden"); }
 
 function loginForm(err, setup) {
   gate(`
-    <div class="mark">H</div>
-    <h2>${setup ? "Set up HarvUI" : "HarvUI"}</h2>
+    <img class="mark" src="/assets/homestead-mark.svg" alt="">
+    <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}
     <div class="f"><label>Username</label>
@@ -41,7 +41,7 @@ function loginForm(err, setup) {
     <button class="btn pri wide" id="lg_go">${setup ? "Create account" : "Sign in"}</button>
     ${setup ? `<div class="gatehint">Minimum 10 characters. Stored as PBKDF2-SHA256 with a
       per-user salt in a Kubernetes Secret — never in plain text.</div>`
-      : `<div class="gatehint">HarvUI can deploy, move and delete workloads.<br>Sessions last 12 hours.</div>`}`);
+      : `<div class="gatehint">Homestead can deploy, move and delete workloads.<br>Sessions last 12 hours.</div>`}`);
   const go = () => setup ? doSetup() : doLogin();
   $("#lg_go").onclick = go;
   ["lg_user", "lg_pass", "lg_pass2"].forEach(id => {

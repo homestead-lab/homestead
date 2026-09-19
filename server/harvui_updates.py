@@ -152,7 +152,7 @@ def _open(req, credential=None, timeout=12):
 
 def _registry_json(parsed, path, auths, accept="application/json"):
     url = f"https://{parsed['endpoint']}/v2/{parsed['repo']}/{path}"
-    req = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": "HarvUI/1.9"})
+    req = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": "Homestead/2.0"})
     with _open(req, _credential(auths, parsed)) as response:
         body = response.read()
         return body, response.headers

@@ -1,4 +1,4 @@
-/* HarvUI core — DOM helpers, settings, no-flash rendering, chart primitives */
+/* Homestead core — DOM helpers, settings, no-flash rendering, chart primitives */
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const V = () => $("#views");
@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HARVUI_VERSION = "1.15.6";
+const HOMESTEAD_VERSION = "2.0.0";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -82,7 +82,8 @@ window.openSvc = (ip, port) => window.open(svcUrl(ip, port), "_blank", "noopener
 /* ---------------- settings ---------------- */
 const SET = Object.assign(
   { theme: "dark", bg: "gold", blur: 26, motion: "on", refresh: 15 },
-  JSON.parse(localStorage.getItem("harvui.settings") || "{}"));
+  JSON.parse(localStorage.getItem("homestead.settings") ||
+    localStorage.getItem("harvui.settings") || "{}"));
 
 function applySettings() {
   const root = document.documentElement;
@@ -92,7 +93,7 @@ function applySettings() {
   root.dataset.bg = SET.bg;
   root.style.setProperty("--blur", SET.blur + "px");
   root.dataset.motion = SET.motion;
-  localStorage.setItem("harvui.settings", JSON.stringify(SET));
+  localStorage.setItem("homestead.settings", JSON.stringify(SET));
 }
 applySettings();
 

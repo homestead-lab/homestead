@@ -1,10 +1,21 @@
-# HarvUI
+# Homestead
 
-An Unraid-style control panel for a Harvester, Longhorn, and KubeVirt homelab.
-HarvUI runs inside the cluster, talks directly to the Kubernetes API through a
-dedicated ServiceAccount, and has no runtime framework or package downloads.
+<p align="center">
+  <img src="web/assets/homestead-lockup.svg" width="360" alt="Homestead — friendly cluster management for your homelab">
+</p>
 
-![status](https://img.shields.io/badge/status-alpha-orange) ![license](https://img.shields.io/badge/license-MIT-blue)
+**Homestead is an open-source, Unraid-style homelab dashboard and container
+management UI for Harvester HCI, Rancher, Longhorn, Fleet, KubeVirt and
+Kubernetes.** It runs inside your cluster, talks directly to the Kubernetes API
+through a dedicated ServiceAccount, and turns workloads, storage, hardware
+passthrough, image updates and failover constraints into approachable controls.
+
+[![CI](https://github.com/wjcloudy/homestead/actions/workflows/ci.yml/badge.svg)](https://github.com/wjcloudy/homestead/actions/workflows/ci.yml)
+[![Container](https://img.shields.io/badge/ghcr.io-homestead-2453ff?logo=docker)](https://github.com/wjcloudy/homestead/pkgs/container/homestead)
+![status](https://img.shields.io/badge/status-alpha-f59e0b)
+![license](https://img.shields.io/badge/license-MIT-30ba78)
+
+![Homestead cluster dashboard](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-dashboard.png)
 
 ## Highlights
 
@@ -25,10 +36,11 @@ Dockerfile                    production container image
 server/server.py              stdlib HTTP server and Kubernetes API client
 server/harvui_updates.py      OCI registry checks, rollout monitoring, rollback
 web/                          dependency-free browser UI
+web/assets/                   Homestead SVG identity
 deploy/deploy.yaml            namespace, RBAC, Longhorn PVC, Deployment, Service
 deploy/nodeprobe.yaml         optional per-node telemetry and device inventory
 .github/workflows/ci.yml      tests and container build validation
-.github/workflows/release.yml multi-architecture GHCR release pipeline
+.github/workflows/release.yml multi-architecture GHCR and screenshot release pipeline
 scripts/deploy.sh             deploy a published image through an RKE2 host
 ```
 
@@ -36,33 +48,38 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v1.10.0`, the workflow publishes:
+For a release such as `v2.0.0`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/harvui:1.10.0
-ghcr.io/wjcloudy/harvui:1.10
-ghcr.io/wjcloudy/harvui:1
-ghcr.io/wjcloudy/harvui:latest
-ghcr.io/wjcloudy/harvui:sha-<commit>
+ghcr.io/wjcloudy/homestead:2.0.0
+ghcr.io/wjcloudy/homestead:2.0
+ghcr.io/wjcloudy/homestead:2
+ghcr.io/wjcloudy/homestead:latest
+ghcr.io/wjcloudy/homestead:sha-<commit>
 ```
 
 The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v1.10.0
-git push origin v1.10.0
+git tag v2.0.0
+git push origin v2.0.0
 ```
 
-The official package is public and can be pulled without registry credentials.
+The official Homestead package is public and can be pulled without registry credentials.
 The OCI source label in the image links releases back to this repository.
+
+Each tagged release also launches Homestead against deterministic demo data,
+captures polished Dashboard, Containers, and Architecture views in headless
+Chromium, and attaches them to the GitHub release. The stable screenshot above
+always follows the latest release; no live cluster data or credentials are used.
 
 ## Fresh-cluster installation
 
 ### 1. Check Longhorn storage
 
-HarvUI persists registry update history and cache on a 2 GiB Longhorn RWX
-volume. A tightly scoped init container assigns that volume to HarvUI's
+Homestead persists registry update history and cache on a 2 GiB Longhorn RWX
+volume. A tightly scoped init container assigns that volume to Homestead's
 non-root UID on first start; the application container itself remains
 non-root with a read-only root filesystem. Confirm the StorageClass used in
 `deploy/deploy.yaml` exists:
@@ -80,7 +97,7 @@ Review these values in `deploy/deploy.yaml` before applying it:
 
 - `image`: published image/tag to run;
 - `storageClassName`: Longhorn StorageClass;
-- `LB_IP` and `kube-vip.io/loadbalancerIPs`: HarvUI's LAN address;
+- `LB_IP` and `kube-vip.io/loadbalancerIPs`: Homestead's LAN address;
 - `DEFAULT_NS`: default namespace for newly created workloads.
 
 Then install and wait for readiness:
@@ -90,6 +107,11 @@ kubectl apply -f deploy/deploy.yaml
 kubectl -n lab rollout status deployment/harvui --timeout=5m
 kubectl -n lab get deployment/harvui pvc/harvui-data service/harvui
 ```
+
+The Kubernetes resources and `harvui.io/*` metadata intentionally keep their
+original names. This is an upgrade-compatibility boundary: applying the
+Homestead manifest reuses the existing PVC, authentication Secret, settings,
+icons, operations, and rollback history instead of creating a parallel install.
 
 Open the Service address on port `8088`. The first visit creates the initial
 administrator. Authentication is stored in a Kubernetes Secret, independently
@@ -111,15 +133,15 @@ kubectl -n lab rollout status daemonset/harvui-nodeprobe --timeout=5m
 ```
 
 The probe mounts `/sys`, `/proc`, and `/dev` read-only, drops all capabilities,
-and uses a read-only root filesystem. HarvUI works without it.
+and uses a read-only root filesystem. Homestead works without it.
 
-## Updating HarvUI
+## Updating Homestead
 
-HarvUI appears in its own Containers page. **Check images** compares the running
+Homestead appears in its own Containers page. **Check images** compares the running
 digest with GHCR, and a newer stable semver tag is suggested when one exists.
 Installing the update pins the selected manifest digest, watches Deployment and
 pod readiness, and keeps the previous digest for one-click rollback. The UI
-automatically reconnects while HarvUI replaces itself.
+automatically reconnects while Homestead replaces itself.
 
 Available updates and registry-check failures also appear in the global header
 without repeated alert noise. Settings → Container image update policy supports
@@ -127,12 +149,12 @@ notify-only, explicit operator approval, or a UTC maintenance window. These
 rules are enforced by the server, every rollout still requires acknowledgement,
 and semantic-version discovery never silently crosses a major release. Image
 pulls, updates, and rollbacks remain visible in the persistent Activity tray
-through browser refreshes and HarvUI restarts.
+through browser refreshes and Homestead restarts.
 
 Command-line deployment is also available:
 
 ```bash
-TAG=1.15.6 HOST=rancher@192.0.2.210 ./scripts/deploy.sh
+TAG=2.0.0 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -159,12 +181,12 @@ Harvester/Kubernetes platform images are refused. Cleanup pods mount only the
 host RKE2 `crictl` binary and containerd socket, run as root without Linux
 capabilities or privilege escalation, and report progress through Activity.
 Kubernetes Node status exposes only each node's largest cached images; smaller
-entries may not appear in the table and HarvUI will not attempt to remove them.
+entries may not appear in the table and Homestead will not attempt to remove them.
 
 ## Workload logos
 
 Container create, edit, import, and App Store flows accept an optional public
-HTTP(S) raster-image URL. Before changing the workload, HarvUI validates the
+HTTP(S) raster-image URL. Before changing the workload, Homestead validates the
 destination, blocks private/link-local address resolution and credentialed
 URLs, limits the response to 256 KiB, and stores the verified image by content
 hash under `$DATA_DIR/icons`. Deployments keep both the same-origin cached URL
@@ -196,7 +218,7 @@ image is published:
 ```bash
 python -m unittest discover -s tests -v
 for file in web/js/*.js; do node --check "$file"; done
-docker build --build-arg VERSION=dev -t harvui:dev .
+docker build --build-arg VERSION=dev -t homestead:dev .
 ```
 
 ## Security notes
@@ -213,7 +235,7 @@ container, checks the browser origin, and keeps the service-account token on the
 server. Session start/stop metadata is written to
 `$DATA_DIR/console-audit.jsonl`; terminal input and output are not recorded.
 
-The supplied Service is plain HTTP. Put it behind TLS before exposing HarvUI
+The supplied Service is plain HTTP. Put it behind TLS before exposing Homestead
 outside a trusted LAN. Host power control is disabled by default because it
 requires a short-lived privileged helper pod.
 

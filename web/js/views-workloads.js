@@ -68,15 +68,15 @@ async function loadImageUpdates(force = false, quiet = false) {
     STATE.data.imageUpdateMap = Object.fromEntries((report.workloads || [])
       .map(x => [updateKey(x.ns, x.name), x]));
     paintUpdateBadge(report.updates || 0, report.errors || 0);
-    const previous = +(localStorage.getItem("harvui.update-count") || 0);
+    const previous = +(localStorage.getItem("homestead.update-count") || localStorage.getItem("harvui.update-count") || 0);
     const preferences = STATE.data.appSettings?.updates || {};
     if (!quiet && preferences.notify_available !== false && report.updates > previous)
       toast(`${report.updates} container image update${report.updates === 1 ? "" : "s"} available`, "ok");
-    const previousErrors = +(localStorage.getItem("harvui.update-errors") || 0);
+    const previousErrors = +(localStorage.getItem("homestead.update-errors") || localStorage.getItem("harvui.update-errors") || 0);
     if (!quiet && preferences.notify_failures !== false && report.errors > previousErrors)
       toast(`${report.errors} image registry check${report.errors === 1 ? " needs" : "s need"} attention`, "bad");
-    localStorage.setItem("harvui.update-count", report.updates || 0);
-    localStorage.setItem("harvui.update-errors", report.errors || 0);
+    localStorage.setItem("homestead.update-count", report.updates || 0);
+    localStorage.setItem("homestead.update-errors", report.errors || 0);
     return report;
   } catch (e) {
     if (!quiet) toast("Image update check failed · " + e.message, "bad");
@@ -246,7 +246,7 @@ window.imageUpdateReview = (ns, name) => {
   const policy = STATE.data.imageUpdates?.policy || {};
   const blocked = policy.allows_install === false;
   modal("Update · " + name, `<div class="update-review">
-    <div class="note"><b>Managed update.</b> HarvUI will pin the selected registry manifest by digest,
+    <div class="note"><b>Managed update.</b> Homestead will pin the selected registry manifest by digest,
       monitor Kubernetes readiness, and keep the current immutable image ready for rollback.</div>
     ${changes.map(x => `<div class="update-image">
       <div class="between"><b>${esc(x.container)}</b><span class="tag warn">${esc(x.candidate_tag || "new digest")}</span></div>
@@ -307,7 +307,7 @@ window.monitorImageRollout = (ns, name) => {
       }
     } catch (e) {
       misses++;
-      $("#mbody").innerHTML = `<div class="empty"><span class="spin2"></span><b>Reconnecting to HarvUI…</b><br>
+      $("#mbody").innerHTML = `<div class="empty"><span class="spin2"></span><b>Reconnecting to Homestead…</b><br>
         <span class="dim small">The control-panel container may be replacing itself (${misses}). Monitoring will resume automatically.</span></div>`;
     }
   };
@@ -451,12 +451,12 @@ async function viewDeploy(pre) {
   const nss = await api("/api/namespaces").catch(() => ["lab"]);
   resetPaint();
   paint(`<div class="phead"><div><h2>Deploy a container</h2>
-      <p>Point at any Docker image, map ports and storage — HarvUI builds the Kubernetes objects</p></div></div>
+      <p>Point at any Docker image, map ports and storage — Homestead builds the Kubernetes objects</p></div></div>
   <div class="split">
     <div class="card flat">
       <div class="f"><label>Name</label><input type="text" id="d_name" value="${esc(DCFG.name)}" placeholder="my-app"></div>
       <div class="f"><label>Docker image ${tip("The registry image and tag Kubernetes will pull, for example ghcr.io/home-assistant/home-assistant:stable")}</label><input type="text" id="d_image" value="${esc(DCFG.image)}" placeholder="nginx:alpine · ghcr.io/user/app:tag"></div>
-      <div class="f"><label>Container logo ${tip("Optional public HTTPS image URL. HarvUI validates and saves a private copy on its persistent volume, so the logo survives source outages and upgrades.")}</label><input type="url" id="d_icon" value="${esc(DCFG.icon || "")}" placeholder="https://…/icon.png"></div>
+      <div class="f"><label>Container logo ${tip("Optional public HTTPS image URL. Homestead validates and saves a private copy on its persistent volume, so the logo survives source outages and upgrades.")}</label><input type="url" id="d_icon" value="${esc(DCFG.icon || "")}" placeholder="https://…/icon.png"></div>
       <div class="f2">
         <div class="f"><label>Namespace</label><select id="d_ns">${nss.map(n => `<option ${n === DCFG.namespace ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
         <div class="f"><label>Replicas</label><input type="number" id="d_rep" value="${DCFG.replicas}" min="0" max="5"></div>
@@ -465,7 +465,7 @@ async function viewDeploy(pre) {
         <div class="f"><label>CPU reserved ${tip("The scheduler guarantees this much CPU capacity. 1000m = one CPU core; 50m = 5% of one core. This is not a hard limit.")}</label><input type="text" id="d_cpu" value="${esc(DCFG.cpu)}" placeholder="50m"></div>
         <div class="f"><label>Memory reserved ${tip("The scheduler keeps this much RAM available for the container. Mi means mebibytes and Gi means gibibytes. This is not a hard limit.")}</label><input type="text" id="d_mem" value="${esc(DCFG.memory)}" placeholder="128Mi"></div>
       </div>
-      <div class="sec">Hardware ${tip("HarvUI adds the device path and schedules only onto nodes marked as having that hardware.")}</div>
+      <div class="sec">Hardware ${tip("Homestead adds the device path and schedules only onto nodes marked as having that hardware.")}</div>
       <div class="hwchoices">
         ${hardwareChoices("d_hw", (DCFG.hardware || []).concat(DCFG.gpu && !(DCFG.hardware || []).includes("igpu") ? ["igpu"] : []))}
       </div>
@@ -475,7 +475,7 @@ async function viewDeploy(pre) {
         <option value="internal" ${DCFG.network_mode === "internal" ? "selected" : ""}>Cluster only</option>
         <option value="host" ${DCFG.network_mode === "host" ? "selected" : ""}>Host network (advanced)</option></select></div>
         <div class="f"><label>VIP allocation</label><select id="d_vip_mode">
-          <option value="shared" ${DCFG.vip_mode === "shared" ? "selected" : ""}>Shared HarvUI VIP</option>
+          <option value="shared" ${DCFG.vip_mode === "shared" ? "selected" : ""}>Shared Homestead VIP</option>
           <option value="auto" ${DCFG.vip_mode === "auto" ? "selected" : ""}>New automatic VIP</option>
           <option value="manual" ${DCFG.vip_mode === "manual" ? "selected" : ""}>Specific VIP</option></select></div></div>
       <div class="f" id="d_vip_wrap"><label>Specific VIP</label><input id="d_lb_ip" value="${esc(DCFG.lb_ip || "")}" placeholder="192.0.2.250"></div>

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HarvUI - a friendly control panel for Harvester / Longhorn / KubeVirt.
+Homestead - a friendly homelab control plane for Harvester, Rancher and Longhorn.
 Pure Python stdlib: no pip install at runtime, so it starts even with no internet.
 """
 import json, os, re, ssl, sys, time, threading, urllib.request, urllib.parse, urllib.error
@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HARVUI_VERSION = os.environ.get("HARVUI_VERSION", "1.15.6")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.0.0"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -269,7 +269,7 @@ def app_settings_payload():
         kube = kget("/version").get("gitVersion", "")
     except Exception:
         kube = ""
-    settings["info"] = {"version": HARVUI_VERSION, "namespace": DEFAULT_NS,
+    settings["info"] = {"version": HOMESTEAD_VERSION, "namespace": DEFAULT_NS,
                         "storage_class": STORAGE_CLASS, "vip": LB_IP,
                         "kubernetes": kube}
     return settings
@@ -1123,7 +1123,7 @@ CA_FEED = "https://raw.githubusercontent.com/Squidly271/AppFeed/master/applicati
 
 def fetch_appstore():
     def go():
-        req = urllib.request.Request(CA_FEED, headers={"User-Agent": "HarvUI/1.0"})
+        req = urllib.request.Request(CA_FEED, headers={"User-Agent": "Homestead/2.0"})
         with urllib.request.urlopen(req, timeout=60) as r:
             data = json.loads(r.read().decode("utf-8", "replace"))
         apps = data.get("applist", data if isinstance(data, list) else [])
@@ -1231,6 +1231,8 @@ def save_shares(shares):
 
 
 def create_share(name, size_gb, user, password, public):
+    if not public and not password:
+        raise ValueError("a password is required for a private share")
     pvc = f"share-{name}"
     try:
         create_pvc(SMB_NAMESPACE, pvc, size_gb)
@@ -1279,7 +1281,11 @@ def apply_samba(shares, password=None):
         owner = s.get("user") or "lab"
         # name ; path ; browse ; readonly ; guest ; users
         args += ["-s", f"{s['name']};{mp};yes;no;{guest};{owner}"]
-        users[owner] = s.get("password") or password or "LabPass2026"
+        share_password = s.get("password") or password
+        if not guest and not share_password:
+            raise ValueError(f"share {s['name']} needs a password before Samba can be updated")
+        if share_password:
+            users[owner] = share_password
     for u, pw in users.items():
         args += ["-u", f"{u};{pw}"]
     args += ["-g", "server min protocol = SMB2"]
@@ -1946,5 +1952,5 @@ class H(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8080"))
     threading.Thread(target=_sampler, daemon=True).start()
-    print(f"HarvUI listening on :{port}", flush=True)
+    print(f"Homestead listening on :{port}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", port), H).serve_forever()

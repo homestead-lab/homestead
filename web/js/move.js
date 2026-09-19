@@ -38,7 +38,7 @@ window.moveWorkload = async (name, ns) => {
   const viable = (plan.candidates || []).filter(n => n.ok && !n.current);
   window.__moveStranded = !viable.length;
   $("#mbody").innerHTML = `
-    <div class="between"><p class="muted small">Currently on <b>${esc(here || "no node")}</b>. Pick an eligible host or let HarvUI choose the best fit.</p>
+    <div class="between"><p class="muted small">Currently on <b>${esc(here || "no node")}</b>. Pick an eligible host or let Homestead choose the best fit.</p>
       ${plan.recommended ? `<button class="btn pri sm" onclick="pickMove('${esc(plan.recommended)}')">Best fit · ${esc(plan.recommended.replace("harvester-", ""))}</button>` : ""}</div>
     ${(req.devices || []).length || (req.features || []).length || Object.keys(req.labels || {}).length ? `<div class="constraintbar"><b>Required</b>
       ${(req.devices || []).map(d => `<span class="tag hw">${esc(d.label)}</span>`).join("")}

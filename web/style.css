@@ -1,4 +1,4 @@
-/* HarvUI — premium dark control surface */
+/* Homestead — premium dark control surface */
 :root{
   --hdr:74px; --blur:26px;
   --bg:#070708; --surf:#111113; --surf2:#161618; --surf3:#1d1d20;
@@ -106,8 +106,9 @@ a{color:inherit;text-decoration:none}
 }
 .brand{display:flex;gap:12px;align-items:center;padding:0 20px;height:var(--hdr,74px);
   border-bottom:1px solid var(--line);flex:0 0 auto}
-.mark{width:36px;height:36px;border-radius:12px;display:grid;place-items:center;font-weight:800;font-size:17px;
-  background:linear-gradient(145deg,#fff,#b4b4bb);color:#0a0a0b;box-shadow:0 6px 20px rgba(255,255,255,.15)}
+.mark,.brandmark{width:36px;height:36px;border-radius:12px;display:grid;place-items:center;font-weight:800;font-size:17px;
+  background:#101416;color:#fff;box-shadow:0 6px 20px rgba(245,158,11,.18)}
+.brandmark{object-fit:contain;flex:0 0 auto}
 .bname{font-weight:700;letter-spacing:.02em;font-size:15px}
 .bver{font-size:10.5px;color:var(--dim);letter-spacing:.04em}
 #nav{padding:16px 12px;display:flex;flex-direction:column;gap:3px;flex:1;overflow-y:auto}

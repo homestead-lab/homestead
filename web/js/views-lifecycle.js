@@ -14,7 +14,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     const seeds = w.seed_configs || [];
     $("#mbody").innerHTML = `
       <div class="f"><label>Image</label><input type="text" id="e_image" value="${esc(w.image)}"></div>
-      <div class="f"><label>Container logo ${tip("Optional public HTTPS image URL. HarvUI validates it and keeps a persistent local copy while retaining this source for later edits.")}</label><input type="url" id="e_icon" value="${esc(w.icon || "")}" placeholder="https://…/icon.png"></div>
+      <div class="f"><label>Container logo ${tip("Optional public HTTPS image URL. Homestead validates it and keeps a persistent local copy while retaining this source for later edits.")}</label><input type="url" id="e_icon" value="${esc(w.icon || "")}" placeholder="https://…/icon.png"></div>
       <div class="f2">
         <div class="f"><label>CPU reserved ${tip("Guaranteed scheduling capacity. 1000m = one core; it is not a hard usage limit.")}</label><input type="text" id="e_cpu" value="${esc(w.cpu)}" placeholder="50m"></div>
         <div class="f"><label>Memory reserved ${tip("Guaranteed scheduling capacity in Mi or Gi; it is not a hard usage limit.")}</label><input type="text" id="e_mem" value="${esc(w.memory)}" placeholder="128Mi"></div>
@@ -83,7 +83,7 @@ window.editSave = async (ns, name) => {
 window.wlMoveLegacy = async (ns, name) => {
   const nodes = (STATE.data.ov ? STATE.data.ov.nodes : []);
   modal("Move · " + name, `
-    <p class="muted small">Pick the host this workload should run on. HarvUI pins it with a
+    <p class="muted small">Pick the host this workload should run on. Homestead pins it with a
     node selector and rolls the pod.</p>
     <div class="f" style="margin-top:14px"><label>Target host</label><select id="mv_node">
       <option value="">any node (unpin)</option>
@@ -242,7 +242,7 @@ window.vmNew = async () => {
     </div>
     <div class="f2">
       <div class="f"><label>Disk (GB)</label><input type="number" id="v_disk" value="20" min="5"></div>
-      <div class="f"><label>Root password</label><input type="text" id="v_pass" value="harvui"></div>
+      <div class="f"><label>Root password</label><input type="password" id="v_pass" autocomplete="new-password" placeholder="Set an initial password"></div>
     </div>
     <div class="f"><label>Boot image</label>
       ${imgs.length ? `<select id="v_img"><option value="">blank disk</option>
@@ -260,6 +260,7 @@ window.doVmCreate = async () => {
     memory: $("#v_mem").value.trim(), disk_gb: +$("#v_disk").value, password: $("#v_pass").value,
     image_id: $("#v_img") ? $("#v_img").value : "", image_url: $("#v_url") ? $("#v_url").value.trim() : "" };
   if (!body.name) return toast("name is required", "bad");
+  if (body.password.length < 10) return toast("root password must be at least 10 characters", "bad");
   try {
     await api("/api/vm/create", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(`${body.name} created`, "ok"); closeModal(); go("vms");
@@ -517,7 +518,7 @@ window.importSetup = (source, dir, cfg = {}) => {
       <input type="text" id="im_mount" value="${esc(cfg.mount_path || "/config")}">
       <div class="dim xs" style="margin-top:6px">Source files → Longhorn PVC <span class="mono">${esc(name)}-appdata</span> → this path inside the container.</div></div>
     <div class="sec">Network</div><div class="f2"><div class="f"><label>Docker network → Kubernetes</label><select id="im_net"><option value="loadbalancer">LAN access (VIP)</option><option value="internal">Cluster only</option><option value="host" ${cfg.network_mode === "host" ? "selected" : ""}>Host network (advanced)</option></select></div>
-      <div class="f"><label>VIP allocation ${tip("Choose a new automatic or specific VIP for apps such as Pi-hole that need port 53 on their own address.")}</label><select id="im_vip"><option value="shared">Shared HarvUI VIP</option><option value="auto">New automatic VIP</option><option value="manual">Specific VIP</option></select></div></div>
+      <div class="f"><label>VIP allocation ${tip("Choose a new automatic or specific VIP for apps such as Pi-hole that need port 53 on their own address.")}</label><select id="im_vip"><option value="shared">Shared Homestead VIP</option><option value="auto">New automatic VIP</option><option value="manual">Specific VIP</option></select></div></div>
     <div class="f"><label>Specific VIP (only for manual)</label><input id="im_ip" placeholder="192.0.2.250"></div>
     <div class="sec">Port mappings ${tip("Container port is what the app listens on. LAN port is what you open from another device. TCP and UDP mappings are kept separately.")}</div>
     <div id="im_ports">${(cfg.ports || []).map(p => `<div class="f4 im-port"><div><label>Container</label><input class="ipc" type="number" value="${p.container}"></div><div><label>LAN</label><input class="iph" type="number" value="${p.host}"></div><div><label>Protocol</label><select class="ipp"><option ${p.protocol === "TCP" ? "selected" : ""}>TCP</option><option ${p.protocol === "UDP" ? "selected" : ""}>UDP</option></select></div><label class="switch"><input class="ipe" type="checkbox" ${p.expose !== false ? "checked" : ""}>Expose</label></div>`).join("")}</div>

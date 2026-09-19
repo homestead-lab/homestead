@@ -1,4 +1,4 @@
-/* HarvUI route definitions and pure URL helpers.
+/* Homestead route definitions and pure URL helpers.
    Kept independent of the DOM so the browser and Node tests exercise the same
    canonical route behavior. */
 (function (root, factory) {

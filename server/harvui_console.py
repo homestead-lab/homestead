@@ -1,6 +1,6 @@
-"""Interactive Kubernetes exec WebSocket proxy for HarvUI.
+"""Interactive Kubernetes exec WebSocket proxy for Homestead.
 
-The browser never receives the service-account token.  HarvUI terminates the
+The browser never receives the service-account token.  Homestead terminates the
 browser WebSocket, opens a second v4.channel.k8s.io WebSocket to the apiserver,
 and translates small JSON messages to Kubernetes channel frames.
 """

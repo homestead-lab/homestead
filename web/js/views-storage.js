@@ -226,7 +226,7 @@ async function viewShares() {
       <div class="f" style="margin-top:16px"><label>Share name</label><input type="text" id="sh_name" placeholder="media"></div>
       <div class="f2"><div class="f"><label>Size (GB)</label><input type="number" id="sh_size" value="10" min="1"></div>
         <div class="f"><label>Username</label><input type="text" id="sh_user" value="lab"></div></div>
-      <div class="f"><label>Password</label><input type="text" id="sh_pass" value="LabPass2026"></div>
+      <div class="f"><label>Password</label><input type="password" id="sh_pass" autocomplete="new-password" placeholder="Required unless guest access is enabled"></div>
       <label class="switch"><input type="checkbox" id="sh_pub"> Allow guest access</label>
       <button class="btn pri wide" onclick="mkShare()">Create share</button>
       <div class="dim xs" style="margin-top:12px">Creating or removing a share restarts samba, so open SMB sessions drop briefly.</div></div>
@@ -235,6 +235,7 @@ async function viewShares() {
 window.mkShare = async () => {
   const name = $("#sh_name").value.trim();
   if (!/^[a-z0-9-]{2,30}$/.test(name)) return toast("lowercase letters, numbers and dashes only", "bad");
+  if (!$("#sh_pub").checked && !$("#sh_pass").value) return toast("a password is required for a private share", "bad");
   try {
     await api("/api/shares", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, size_gb: +$("#sh_size").value, user: $("#sh_user").value.trim(),
