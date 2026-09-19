@@ -269,13 +269,14 @@ window.doVmCreate = async () => {
 /* ---------------- image cache ---------------- */
 async function viewImages() {
   const d = await api("/api/images");
+  STATE.data.imageCache = d;
   const q = STATE.q.toLowerCase();
-  const core = n => /(^|\/)(rancher|harvester|longhornio|kubevirt|cdi-|cilium|kube-|metrics-server|registry\.k8s\.io|pause|traefik|fleet|system-upgrade|k8snetworkplumbingwg|multus|whereabouts|suse\/sles\/)/i.test(n);
+  const core = n => /(^|\/)(rancher|harvester|longhornio|kubevirt|cdi-|cilium|kube-|metrics-server|registry\.k8s\.io|pause|traefik|fleet|system-upgrade|k8snetworkplumbingwg|multus|whereabouts|kubeovn|calico|canal|flannel|coredns|etcd|rke2|neuvector|suse\/sles\/)/i.test(n);
   const all = d.images.filter(i => !q || i.name.toLowerCase().includes(q));
   const hidden = all.filter(i => core(i.name)).length;
   const imgs = all.filter(i => STATE.showCoreImages || !core(i.name));
   paint(`<div class="phead"><div><h2>Image cache</h2>
-      <p>${imgs.length} app images across ${d.nodes.length} nodes · ${hidden && !STATE.showCoreImages ? `${hidden} Harvester/system images hidden` : `${d.distinct} total`}</p></div>
+      <p>${imgs.length} app images across ${d.nodes.length} nodes · ${d.protected || 0} active/rollback retained · ${hidden && !STATE.showCoreImages ? `${hidden} Harvester/system images hidden` : `${d.distinct} total`}</p></div>
       <label class="switch"><input type="checkbox" ${STATE.showCoreImages ? "checked" : ""} onchange="STATE.showCoreImages=this.checked;viewImages()"> Show Harvester/system images</label></div>
     <div class="grid g3" style="margin-bottom:18px">
       ${d.nodes.map(n => `<div class="card flat"><div class="ctitle">${esc(n.node)}</div>
@@ -283,15 +284,21 @@ async function viewImages() {
         <div class="csub">${n.count} images cached</div></div>`).join("")}
     </div>
     <div class="card flat pad0"><div class="tblwrap"><table class="tbl"><thead><tr>
-      <th>Image</th><th>Size</th><th>Cached on</th><th></th></tr></thead><tbody>
+      <th>Image</th><th>Size</th><th>Cached on</th><th>Retention</th><th></th></tr></thead><tbody>
       ${imgs.slice(0, 80).map(i => {
         const missing = d.node_names.filter(n => !i.nodes.includes(n));
+        const retained = i.retained_by || [];
+        const retention = retained.length ? retained.slice(0, 3).map(r => `<span class="tag ${r.reason === "rollback" ? "warn" : "ok"}"
+          title="${esc(r.namespace)} · ${esc(r.workload)} · ${esc(r.container)}">${r.reason === "rollback" ? "rollback" : "active"} · ${esc(r.workload)}</span>`).join("") +
+          (retained.length > 3 ? `<span class="tag">+${retained.length - 3}</span>` : "") : '<span class="tag">unreferenced</span>';
         return `<tr><td class="mono small" style="word-break:break-all">${esc(i.name)}</td>
         <td class="mono">${i.size_mb >= 1024 ? (i.size_mb / 1024).toFixed(1) + " GB" : i.size_mb + " MB"}</td>
         <td>${i.nodes.map(n => `<span class="tag ok">${esc(n.replace("harvester-", ""))}</span>`).join("")}
             ${missing.map(n => `<span class="tag">${esc(n.replace("harvester-", ""))} ✕</span>`).join("")}</td>
-        <td>${missing.length ? `<button class="btn sm" onclick="prepull('${esc(i.name)}')">Pre-pull</button>` : '<span class="dim xs">everywhere</span>'}</td></tr>`;
-      }).join("") || `<tr><td colspan=4 class="empty">none</td></tr>`}
+        <td><div class="row" style="gap:5px">${retention}</div></td>
+        <td><div class="row" style="gap:6px">${missing.length ? `<button class="btn sm" onclick="prepull('${esc(i.name)}')">Pre-pull</button>` : '<span class="dim xs">everywhere</span>'}
+          ${!i.protected && !i.system && i.digest ? `<button class="btn sm danger" data-need="admin" onclick="imageCleanupReview('${esc(i.digest)}')">Clean up</button>` : ""}</div></td></tr>`;
+      }).join("") || `<tr><td colspan=5 class="empty">none</td></tr>`}
     </tbody></table></div></div>`);
 }
 window.prepull = async image => {
@@ -450,6 +457,37 @@ window.srcBrowse = async name => {
       : `<div class="empty">No appdata folders returned. Check the credentials and that
          <span class="mono">${esc(src.base_path)}</span> exists on ${esc(src.host)}.</div>`);
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+};
+
+window.imageCleanupReview = digest => {
+  const image = (STATE.data.imageCache?.images || []).find(row => row.digest === digest);
+  if (!image) return toast("refresh Image Cache before cleaning this image", "bad");
+  if (image.protected || image.system) return toast("this image is protected and cannot be cleaned", "bad");
+  const perNode = image.size_mb >= 1024 ? `${(image.size_mb / 1024).toFixed(1)} GB` : `${image.size_mb} MB`;
+  modal("Clean cached image", `<div class="update-review">
+    <div class="note dependency-danger"><b>This deletes only the cached image layers, not a workload.</b>
+      A future start may be slower while the registry image is downloaded again. Active, immediate rollback, and platform images are blocked server-side.</div>
+    <div class="update-image"><div><span>Image</span><code>${esc(image.name)}</code></div>
+      <div><span>Digest</span><code>${esc(digest)}</code></div><div><span>Per node</span><code>${esc(perNode)}</code></div></div>
+    <div class="f"><label>Remove from nodes</label><div class="cleanup-nodes">${image.nodes.map(node =>
+      `<label class="switch"><input class="cleanup-node" type="checkbox" value="${esc(node)}" checked onchange="imageCleanupGate()"> ${esc(node)}</label>`).join("")}</div></div>
+    <div class="f"><label>Type CLEAN to confirm</label><input id="cleanupConfirm" autocomplete="off" oninput="imageCleanupGate()" placeholder="CLEAN"></div>
+    <div class="row"><button id="cleanupGo" class="btn danger" data-need="admin" disabled onclick="imageCleanupApply('${esc(digest)}')">Remove cached image</button>
+      <button class="btn" onclick="closeModal()">Cancel</button></div></div>`, true);
+  if (window.applyRole) window.applyRole();
+};
+window.imageCleanupGate = () => {
+  const button = $("#cleanupGo");
+  if (button) button.disabled = $("#cleanupConfirm")?.value !== "CLEAN" || !$(".cleanup-node:checked");
+};
+window.imageCleanupApply = async digest => {
+  const nodes = $$(".cleanup-node:checked").map(input => input.value);
+  try {
+    const result = await api("/api/images/cleanup", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ digest, nodes }) });
+    toast(`cleanup started on ${result.nodes.length} node${result.nodes.length === 1 ? "" : "s"}`, "ok");
+    closeModal();
+  } catch (error) { toast(error.message, "bad"); }
 };
 window.inspectImport = async (source, container) => {
   $("#mbody").innerHTML = '<div class="empty"><span class="spin2"></span>reading Docker configuration…</div>';

@@ -166,11 +166,34 @@ def _backup(item):
     return "running", progress, f"Backup {state or 'pending'}"
 
 
+def _image_cleanup(item):
+    ref = item["ref"]
+    pods = [kget(f"/api/v1/namespaces/{ref['namespace']}/pods/{name}")
+            for name in ref.get("pods", [])]
+    complete = 0
+    for pod in pods:
+        status = pod.get("status", {}) or {}
+        phase = status.get("phase", "Pending")
+        states = [row.get("state", {}) for row in status.get("containerStatuses", []) or []]
+        failed = next((state.get("terminated") for state in states
+                       if (state.get("terminated") or {}).get("exitCode", 0) != 0), None)
+        if phase == "Failed" or failed:
+            detail = (failed or {}).get("message") or (failed or {}).get("reason") or status.get("message")
+            return "failed", round(complete / max(1, len(pods)) * 100), detail or "Image cleanup failed"
+        if phase == "Succeeded":
+            complete += 1
+    if pods and complete == len(pods):
+        return "succeeded", 100, f"Image removed from {complete}/{len(pods)} nodes"
+    progress = round(complete / max(1, len(pods)) * 90)
+    return "running", progress, f"Image removed from {complete}/{len(pods)} nodes"
+
+
 RESOLVERS = {
     "deployment": _deployment,
     "image-update": _deployment,
     "image-rollback": _deployment,
     "image-pull": _prepull,
+    "image-cleanup": _image_cleanup,
     "import": _job,
     "vm-migration": _migration,
     "backup": _backup,

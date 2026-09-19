@@ -9,6 +9,7 @@ ConfigMap, with credentials in a Secret. Importing a container means:
 Step 2 is the part that takes real time, so it runs as a Job we can poll.
 """
 import json
+import hashlib
 import re
 import shlex
 import time
@@ -359,30 +360,126 @@ def import_status():
 
 
 # --------------------------------------------------------------- image cache
+def _canonical_image(ref):
+    ref = re.sub(r"^(?:docker-pullable|docker)://", "", str(ref or "").strip())
+    if not ref:
+        return ""
+    name = ref.split("@", 1)[0]
+    slash, colon = name.rfind("/"), name.rfind(":")
+    suffix = ref[len(name):] if "@" in ref else (name[colon:] if colon > slash else ":latest")
+    if colon > slash and "@" not in ref:
+        name = name[:colon]
+    first = name.split("/", 1)[0]
+    if not ("." in first or ":" in first or first == "localhost"):
+        name = "docker.io/" + (("library/" + name) if "/" not in name else name)
+    return name + suffix
+
+
+def _image_digest(ref):
+    match = re.search(r"sha256:[0-9a-f]{64}", str(ref or ""), re.I)
+    return match.group(0).lower() if match else ""
+
+
+def _system_image(ref):
+    return bool(re.search(
+        r"(^|/)(rancher|harvester|longhornio|kubevirt|cdi-|cilium|kube-|metrics-server|"
+        r"registry\.k8s\.io|pause|traefik|fleet|system-upgrade|k8snetworkplumbingwg|"
+        r"multus|whereabouts|kubeovn|calico|canal|flannel|coredns|etcd|rke2|neuvector|"
+        r"suse/sles/)", str(ref or ""), re.I))
+
+
+def image_retention_inventory():
+    """Images Kubernetes still needs now or for the immediate managed rollback."""
+    retained = []
+    try:
+        pods = kget("/api/v1/pods").get("items", [])
+    except Exception:
+        pods = []
+    for pod in pods:
+        meta, spec, status = pod.get("metadata", {}), pod.get("spec", {}), pod.get("status", {})
+        statuses = {row.get("name"): row for row in
+                    (status.get("initContainerStatuses", []) or []) +
+                    (status.get("containerStatuses", []) or [])}
+        owner = next(iter(meta.get("ownerReferences", []) or []), {})
+        workload = (meta.get("labels", {}) or {}).get("app") or owner.get("name") or meta.get("name", "")
+        for container in (spec.get("initContainers", []) or []) + (spec.get("containers", []) or []):
+            ref = container.get("image", "")
+            image_id = (statuses.get(container.get("name")) or {}).get("imageID", "")
+            retained.append({
+                "ref": _canonical_image(ref), "digest": _image_digest(image_id) or _image_digest(ref),
+                "reason": "active", "namespace": meta.get("namespace", ""),
+                "workload": workload, "container": container.get("name", ""),
+            })
+    try:
+        deployments = kget("/apis/apps/v1/deployments").get("items", [])
+    except Exception:
+        deployments = []
+    for dep in deployments:
+        meta = dep.get("metadata", {})
+        try:
+            previous = json.loads((meta.get("annotations", {}) or {}).get(
+                "harvui.io/update-previous", "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            previous = {}
+        for container, ref in (previous.get("images") or {}).items():
+            retained.append({
+                "ref": _canonical_image(ref), "digest": _image_digest(ref),
+                "reason": "rollback", "namespace": meta.get("namespace", ""),
+                "workload": meta.get("name", ""), "container": container,
+                "retained_at": previous.get("at", ""),
+            })
+    # Deduplicate pods belonging to the same workload and digest while keeping
+    # rollback and active reasons distinct.
+    unique = {}
+    for row in retained:
+        key = (row["reason"], row["namespace"], row["workload"], row["container"],
+               row["digest"] or row["ref"])
+        unique[key] = row
+    return list(unique.values())
+
+
 def image_cache():
     """What container images each node already has on disk."""
     nodes = kget("/api/v1/nodes").get("items", [])
+    retained = image_retention_inventory()
     per_node, totals = [], {}
     for n in nodes:
         name = n["metadata"]["name"]
         imgs = n["status"].get("images", []) or []
         rows = []
         for i in imgs:
-            tag = (i.get("names") or ["<none>"])[-1]
+            names = sorted(set(i.get("names") or ["<none>"]))
+            digest_name = next((ref for ref in names if _image_digest(ref)), "")
+            tag = next((ref for ref in names if not _image_digest(ref)), digest_name or "<none>")
+            digest = _image_digest(digest_name)
+            identity = digest or _canonical_image(tag) or tag
             sz = round((i.get("sizeBytes") or 0) / 1024**2, 1)
-            rows.append({"name": tag, "size_mb": sz})
-            totals[tag] = totals.get(tag, {"size_mb": sz, "nodes": []})
-            totals[tag]["nodes"].append(name)
+            rows.append({"name": tag, "names": names, "digest": digest, "size_mb": sz})
+            totals[identity] = totals.get(identity, {"name": tag, "names": set(),
+                                                       "digest": digest, "size_mb": sz, "nodes": []})
+            totals[identity]["names"].update(names)
+            totals[identity]["nodes"].append(name)
         rows.sort(key=lambda x: -x["size_mb"])
         per_node.append({"node": name, "count": len(rows),
                          "total_gb": round(sum(r["size_mb"] for r in rows) / 1024, 1),
                          "images": rows[:60]})
-    shared = [{"name": k, "size_mb": v["size_mb"], "nodes": sorted(set(v["nodes"]))}
-              for k, v in totals.items()]
+    shared = []
+    for value in totals.values():
+        aliases = {_canonical_image(ref) for ref in value["names"]}
+        reasons = [row for row in retained if
+                   (value["digest"] and row["digest"] == value["digest"]) or
+                   (not row["digest"] and row["ref"] in aliases)]
+        shared.append({"name": value["name"], "names": sorted(value["names"]),
+                       "digest": value["digest"], "size_mb": value["size_mb"],
+                       "nodes": sorted(set(value["nodes"])),
+                       "system": _system_image(value["name"]),
+                       "protected": bool(reasons), "retained_by": reasons})
     shared.sort(key=lambda x: -x["size_mb"])
     return {"nodes": per_node, "images": shared[:200],
             "distinct": len(shared),
-            "node_names": [n["metadata"]["name"] for n in nodes]}
+            "node_names": [n["metadata"]["name"] for n in nodes],
+            "retained": retained,
+            "protected": sum(1 for image in shared if image["protected"])}
 
 
 def prepull(image, nodes=None):
@@ -413,6 +510,79 @@ def prepull(image, nodes=None):
         pass
     ksend("POST", f"/apis/apps/v1/namespaces/{NS}/daemonsets", body)
     return {"ok": True, "daemonset": name, "image": image}
+
+
+def cleanup_image(digest, nodes=None):
+    """Start one tightly scoped CRI removal pod per selected cache node."""
+    digest = str(digest or "").lower()
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise ValueError("cleanup requires an exact sha256 image digest")
+    report = image_cache()
+    image = next((row for row in report["images"] if row.get("digest") == digest), None)
+    if not image:
+        raise ValueError("that digest is not present in the node image cache")
+    if image.get("protected"):
+        owners = sorted({f"{row['reason']}:{row['namespace']}/{row['workload']}"
+                         for row in image.get("retained_by", [])})
+        raise PermissionError("image is protected by " + ", ".join(owners))
+    if image.get("system"):
+        raise PermissionError("Harvester and Kubernetes platform images cannot be cleaned from HarvUI")
+    selected = sorted(set(nodes or image["nodes"]))
+    if not selected or any(node not in image["nodes"] for node in selected):
+        raise ValueError("cleanup nodes must currently cache this digest")
+    image_ref = next((ref for ref in image.get("names", []) if _image_digest(ref) == digest), "")
+    if not image_ref:
+        raise ValueError("the cache did not report a removable repository digest")
+    pods = []
+    for node in selected:
+        suffix = hashlib.sha256((digest + "|" + node).encode()).hexdigest()[:10]
+        pod_name = "harvui-image-clean-" + suffix
+        body = {
+            "apiVersion": "v1", "kind": "Pod",
+            "metadata": {"name": pod_name, "namespace": NS,
+                         "labels": {"app": "harvui-image-cleaner", "harvui.io/task": "image-cleanup"},
+                         "annotations": {"harvui.io/image-digest": digest,
+                                         "harvui.io/cache-node": node}},
+            "spec": {"nodeName": node, "restartPolicy": "Never",
+                     "terminationGracePeriodSeconds": 1,
+                     "tolerations": [{"operator": "Exists"}],
+                     "containers": [{
+                         "name": "cleanup", "image": "python:3.12-alpine",
+                         "command": ["/usr/local/bin/crictl", "--runtime-endpoint",
+                                     "unix:///host/run/k3s/containerd/containerd.sock",
+                                     "--image-endpoint",
+                                     "unix:///host/run/k3s/containerd/containerd.sock",
+                                     "rmi", image_ref],
+                         "resources": {"requests": {"cpu": "5m", "memory": "16Mi"},
+                                       "limits": {"memory": "48Mi"}},
+                         "securityContext": {"runAsUser": 0, "runAsGroup": 0,
+                                             "runAsNonRoot": False,
+                                             "allowPrivilegeEscalation": False,
+                                             "readOnlyRootFilesystem": True,
+                                             "capabilities": {"drop": ["ALL"]}},
+                         "volumeMounts": [
+                             {"name": "crictl", "mountPath": "/usr/local/bin/crictl", "readOnly": True},
+                             {"name": "runtime", "mountPath": "/host/run/k3s/containerd", "readOnly": True},
+                         ],
+                     }],
+                     "volumes": [
+                         {"name": "crictl", "hostPath": {
+                             "path": "/var/lib/rancher/rke2/bin/crictl", "type": "File"}},
+                         {"name": "runtime", "hostPath": {
+                             "path": "/run/k3s/containerd", "type": "Directory"}},
+                     ]},
+        }
+        try:
+            ksend("DELETE", f"/api/v1/namespaces/{NS}/pods/{pod_name}")
+            time.sleep(.2)
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+        ksend("POST", f"/api/v1/namespaces/{NS}/pods", body)
+        pods.append(pod_name)
+    _bust("imgcache")
+    return {"ok": True, "digest": digest, "image": image_ref,
+            "nodes": selected, "pods": pods}
 
 
 # --------------------------------------------------------------- schedules

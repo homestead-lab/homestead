@@ -615,6 +615,7 @@ html[data-motion="off"] .uptime .ld{animation:none}
 .update-review{display:grid;gap:12px}.update-image{display:grid;gap:9px;padding:14px;border:1px solid var(--line);border-radius:13px;background:var(--surf2)}
 .update-approval{padding:11px 12px;border:1px solid var(--line);border-radius:11px;background:rgba(255,255,255,.025)}
 .update-center-row{align-items:flex-start}.update-center-row>div:first-child{min-width:0;flex:1}.update-center-row .updateerror{margin-top:6px}
+.cleanup-nodes{display:flex;gap:8px;flex-wrap:wrap}.cleanup-nodes .switch{margin:0;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.025);font-family:"JetBrains Mono",monospace;font-size:10.5px}
 .update-image>div:not(.between){display:grid;grid-template-columns:68px 1fr;gap:10px;align-items:start}.update-image span{color:var(--dim);font-size:10.5px}
 .update-image code{font-size:11px;color:var(--mut);word-break:break-all}
 .rollout-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.rollout-meter{height:7px;margin:14px 0 18px;border-radius:99px;overflow:hidden;background:rgba(255,255,255,.08)}

@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HARVUI_VERSION = os.environ.get("HARVUI_VERSION", "1.13.1")
+HARVUI_VERSION = os.environ.get("HARVUI_VERSION", "1.14.0")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1349,6 +1349,7 @@ ADMIN_ROUTES = {
     "/api/sources", "/api/sources/delete", "/api/sources/browse",
     "/api/sources/containers", "/api/sources/inspect", "/api/import",
     "/api/shares", "/api/shares/delete",
+    "/api/images/cleanup",
     "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete",
 }
 # things a signed-in user may always do to their own account
@@ -1790,6 +1791,13 @@ class H(BaseHTTPRequestHandler):
                     "image-pull", f"Pull {b['image']}",
                     {"kind": "Image", "name": b["image"], "namespace": DEFAULT_NS},
                     "/image-cache", {"namespace": DEFAULT_NS, "name": result["daemonset"]})
+                return self._send(200, result)
+            if p == "/api/images/cleanup":
+                result = IMP.cleanup_image(b.get("digest"), b.get("nodes"))
+                result["operation"] = OPS.start(
+                    "image-cleanup", f"Clean cached image {result['digest'][:19]}…",
+                    {"kind": "Image", "name": result["image"], "namespace": DEFAULT_NS},
+                    "/image-cache", {"namespace": DEFAULT_NS, "pods": result["pods"]})
                 return self._send(200, result)
             if p == "/api/volumes/create":
                 return self._send(200, create_volume(b))

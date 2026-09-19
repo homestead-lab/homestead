@@ -132,7 +132,7 @@ through browser refreshes and HarvUI restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=1.13.1 HOST=rancher@192.0.2.210 ./scripts/deploy.sh
+TAG=1.14.0 HOST=rancher@192.0.2.210 ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -147,6 +147,17 @@ TAG=1.13.1 HOST=rancher@192.0.2.210 ./scripts/deploy.sh
 - Multi-architecture index digests and their platform-specific child digests
   are treated as the same release, avoiding false update notifications.
 - Rollback restores the exact previous digest rather than trusting a mutable tag.
+
+## Image cache cleanup
+
+Image Cache groups kubelet aliases by digest and labels images retained by a
+running pod or the immediate managed-update rollback. Admins can remove an
+unreferenced application digest from selected nodes after an impact preview and
+typed confirmation. The backend rechecks live references immediately before
+starting one short-lived cleanup pod per node; active, rollback, and recognized
+Harvester/Kubernetes platform images are refused. Cleanup pods mount only the
+host RKE2 `crictl` binary and containerd socket, run as root without Linux
+capabilities or privilege escalation, and report progress through Activity.
 
 ## Configuration
 

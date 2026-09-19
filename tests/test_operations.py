@@ -70,6 +70,20 @@ class OperationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "active operation"):
             operations.dismiss(item["id"])
 
+    def test_image_cleanup_tracks_each_node_pod(self):
+        operations.start(
+            "image-cleanup", "Clean image", {"kind": "Image", "name": "repo@sha256:abc"},
+            "/image-cache", {"namespace": "lab", "pods": ["clean-a", "clean-b"]})
+        for name in ("clean-a", "clean-b"):
+            self.objects[f"/api/v1/namespaces/lab/pods/{name}"] = {
+                "status": {"phase": "Running", "containerStatuses": []}}
+        self.assertEqual("running", operations.list_operations()[0]["status"])
+        self.objects["/api/v1/namespaces/lab/pods/clean-a"]["status"]["phase"] = "Succeeded"
+        self.objects["/api/v1/namespaces/lab/pods/clean-b"]["status"]["phase"] = "Succeeded"
+        complete = operations.list_operations()[0]
+        self.assertEqual("succeeded", complete["status"])
+        self.assertEqual(100, complete["progress"])
+
 
 if __name__ == "__main__":
     unittest.main()

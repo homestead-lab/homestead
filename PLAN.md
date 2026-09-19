@@ -17,7 +17,7 @@ container-edit, container-log, and volume-edit URLs plus URL-backed search ship
 in v1.10.1. Consistent action icons, keyboard focus, and viewport-safe tooltips
 ship in v1.10.2. The explicit Deployment → pod → container hierarchy ships in
 v1.11.0. The namespace-scoped interactive container console ships in v1.12.1.
-The active milestone is exposing rollback-image inventory and safe cleanup.
+The active milestone is verifying and finishing persistent App Store logos.
 
 ## Product rules
 
@@ -127,7 +127,7 @@ rollback, and persisted history.
 - **Done when:** a discovered update can be reviewed, installed, monitored, and
   rolled back from one coherent flow, including HarvUI itself.
 
-#### 2.4 Rollback-image inventory and cleanup — 🔨 active
+#### 2.4 Rollback-image inventory and cleanup — ✅ shipped in v1.14.0
 
 - Mark cached images retained for rollback and show their workload/version,
   size, nodes, and retention reason in Image Cache.
@@ -138,7 +138,7 @@ rollback, and persisted history.
 - **Done when:** users can reclaim cache space without removing an image needed
   by a running workload or advertised rollback.
 
-#### 2.5 App Store logo import and persistence — ⬜ verify and finish
+#### 2.5 App Store logo import and persistence — 🔨 active
 
 - Carry the source icon through preview, create, edit, and update flows.
 - Persist icons with HarvUI-owned configuration so image updates and pod

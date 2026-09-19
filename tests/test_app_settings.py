@@ -74,6 +74,9 @@ class AppSettingsTests(unittest.TestCase):
         with self.assertRaisesRegex(PermissionError, "notify only"):
             server.enforce_update_policy({"approved": True}, settings)
 
+    def test_image_cleanup_is_admin_only(self):
+        self.assertEqual("admin", server.needed_role("/api/images/cleanup", "POST"))
+
 
 if __name__ == "__main__":
     unittest.main()
