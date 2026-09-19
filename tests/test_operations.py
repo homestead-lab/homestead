@@ -92,7 +92,7 @@ class OperationTests(unittest.TestCase):
                          "pv": "pv-scratch", "volume": "lh-scratch"})
         pvc_path = "/api/v1/namespaces/lab/persistentvolumeclaims/scratch"
         pv_path = "/api/v1/persistentvolumes/pv-scratch"
-        lh_path = "/apis/longhorn.io/v1beta2/volumes/lh-scratch"
+        lh_path = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/lh-scratch"
         self.objects[pvc_path] = {"metadata": {"deletionTimestamp": "now"}}
         self.objects[pv_path] = {"metadata": {"name": "pv-scratch"}}
         self.objects[lh_path] = {"metadata": {"name": "lh-scratch"}}

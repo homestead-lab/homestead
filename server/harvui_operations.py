@@ -211,7 +211,8 @@ def _volume_delete(item):
     pv = _get_or_none(f"/api/v1/persistentvolumes/{ref['pv']}") if ref.get("pv") else None
     if pv is not None:
         return "running", 70, "Claim deleted; removing the backing persistent volume"
-    volume = (_get_or_none(f"/apis/longhorn.io/v1beta2/volumes/{ref['volume']}")
+    volume = (_get_or_none(
+        f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/{ref['volume']}")
               if ref.get("volume") else None)
     if volume is not None:
         return "running", 90, "Persistent volume deleted; Longhorn is removing replica data"

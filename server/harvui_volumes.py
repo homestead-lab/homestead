@@ -12,6 +12,7 @@ kget = ksend = snapshots = backups = None
 cache = None
 SYSTEM_NAMESPACES = set()
 DEFAULT_NAMESPACE = "lab"
+LONGHORN_NAMESPACE = "longhorn-system"
 
 
 def bind(_kget, _ksend, _snapshots, _backups, _cache, system_namespaces, default_namespace):
@@ -172,7 +173,8 @@ def deletion_plan(namespace, name):
     longhorn_inventory_complete = True
     if longhorn_name and (not driver or "longhorn" in driver):
         try:
-            longhorn = kget(f"/apis/longhorn.io/v1beta2/volumes/{longhorn_name}")
+            longhorn = kget(
+                f"/apis/longhorn.io/v1beta2/namespaces/{LONGHORN_NAMESPACE}/volumes/{longhorn_name}")
         except urllib.error.HTTPError as error:
             longhorn_inventory_complete = False
             warnings.append("the Longhorn backing volume no longer exists" if error.code == 404

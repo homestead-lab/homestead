@@ -46,7 +46,7 @@ class VolumeDeletionTests(unittest.TestCase):
             "spec": {"persistentVolumeReclaimPolicy": policy,
                      "csi": {"driver": "driver.longhorn.io", "volumeHandle": "lh-1"}},
         }
-        self.objects["/apis/longhorn.io/v1beta2/volumes/lh-1"] = {
+        self.objects["/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/lh-1"] = {
             "metadata": {"name": "lh-1"},
             "spec": {"numberOfReplicas": 3},
             "status": {"state": state, "currentNodeID": node,
