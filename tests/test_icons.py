@@ -72,6 +72,11 @@ class IconCacheTests(unittest.TestCase):
         self.assertIn('icon.startsWith("/api/icons/")', core)
         self.assertIn('`${icon}?v=${HARVUI_VERSION}`', core)
 
+    def test_only_content_addressed_icon_route_is_public(self):
+        self.assertTrue(server.is_public_path("/api/icons/" + "a" * 64 + ".png"))
+        self.assertFalse(server.is_public_path("/api/workloads"))
+        self.assertFalse(server.is_public_path("/api/icons"))
+
 
 if __name__ == "__main__":
     unittest.main()

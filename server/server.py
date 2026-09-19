@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HARVUI_VERSION = os.environ.get("HARVUI_VERSION", "1.15.1")
+HARVUI_VERSION = os.environ.get("HARVUI_VERSION", "1.15.2")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1340,6 +1340,13 @@ def is_spa_route(path):
 PUBLIC = {"/healthz", "/style.css", "/index.html",
           "/api/auth/login", "/api/auth/state", "/api/auth/setup"}
 
+
+def is_public_path(path):
+    # Cached icons contain only size/type-validated images fetched from public
+    # URLs. Serving their content-addressed paths without a session lets
+    # browsers load them as subresources even when cookies are restricted.
+    return path in PUBLIC or path.startswith("/api/icons/")
+
 # Role needed per route. Rules:
 #   * any GET needs at least "viewer"
 #   * any mutation defaults to "operator"
@@ -1456,7 +1463,7 @@ class H(BaseHTTPRequestHandler):
 
     def _guard(self, path):
         """Returns None when the request may proceed, or sends the refusal."""
-        if is_spa_route(path) or path in PUBLIC or (path.startswith("/js/") and path.endswith(".js")):
+        if is_spa_route(path) or is_public_path(path) or (path.startswith("/js/") and path.endswith(".js")):
             return None
         who = self._who()
         if not who:

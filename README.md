@@ -132,7 +132,7 @@ through browser refreshes and HarvUI restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=1.15.1 HOST=rancher@192.0.2.210 ./scripts/deploy.sh
+TAG=1.15.2 HOST=rancher@192.0.2.210 ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -169,7 +169,10 @@ destination, blocks private/link-local address resolution and credentialed
 URLs, limits the response to 2 MiB, and stores the verified image by content
 hash under `$DATA_DIR/icons`. Deployments keep both the same-origin cached URL
 and the original source annotation, so cards do not depend on the remote host
-and the source remains editable. SVG is deliberately not accepted.
+and the source remains editable. SVG is deliberately not accepted. Cached
+content-addressed image paths are public so browser image loads do not depend
+on session cookies; workload data and original source annotations remain
+authenticated.
 
 ## Configuration
 

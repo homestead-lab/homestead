@@ -136,7 +136,7 @@ metadata:
   labels:
     app: harvui
   annotations:
-    harvui.io/update-sources: '{"harvui":"ghcr.io/wjcloudy/harvui:1.15.1"}'
+    harvui.io/update-sources: '{"harvui":"ghcr.io/wjcloudy/harvui:1.15.2"}'
 spec:
   replicas: 1
   strategy:
@@ -186,7 +186,7 @@ spec:
               mountPath: /data
       containers:
         - name: harvui
-          image: ghcr.io/wjcloudy/harvui:1.15.1
+          image: ghcr.io/wjcloudy/harvui:1.15.2
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT
