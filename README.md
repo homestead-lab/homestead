@@ -36,10 +36,10 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v1.9.3`, the workflow publishes:
+For a release such as `v1.9.4`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/harvui:1.9.3
+ghcr.io/wjcloudy/harvui:1.9.4
 ghcr.io/wjcloudy/harvui:1.9
 ghcr.io/wjcloudy/harvui:1
 ghcr.io/wjcloudy/harvui:latest
@@ -50,8 +50,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v1.9.3
-git push origin v1.9.3
+git tag v1.9.4
+git push origin v1.9.4
 ```
 
 The official package is public and can be pulled without registry credentials.
@@ -121,7 +121,7 @@ automatically reconnects while HarvUI replaces itself.
 Command-line deployment is also available:
 
 ```bash
-TAG=1.9.3 HOST=rancher@192.0.2.210 ./scripts/deploy.sh
+TAG=1.9.4 HOST=rancher@192.0.2.210 ./scripts/deploy.sh
 ```
 
 ## Image update behaviour

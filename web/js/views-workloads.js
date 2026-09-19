@@ -19,8 +19,13 @@ function paintUpdateBadge(count) {
 }
 
 async function loadImageUpdates(force = false, quiet = false) {
+  const requestId = (window.__imageUpdateRequestId || 0) + 1;
+  window.__imageUpdateRequestId = requestId;
   try {
     const report = await api(`/api/image-updates${force ? "?force=1" : ""}`);
+    // A forced check can overtake the quiet background check kicked off by
+    // viewWorkloads. Never let the older response replace fresher registry data.
+    if (requestId !== window.__imageUpdateRequestId) return report;
     STATE.data.imageUpdates = report;
     STATE.data.imageUpdateMap = Object.fromEntries((report.workloads || [])
       .map(x => [updateKey(x.ns, x.name), x]));
