@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.0.1"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.0.2"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1359,7 +1359,12 @@ def is_public_path(path):
     # Cached icons contain only size/type-validated images fetched from public
     # URLs. Serving their content-addressed paths without a session lets
     # browsers load them as subresources even when cookies are restricted.
-    return path in PUBLIC or path.startswith("/api/icons/")
+    return path in PUBLIC or is_asset_path(path) or path.startswith("/api/icons/")
+
+
+def is_asset_path(path):
+    """Allow only flat, bundled SVG assets; never user-controlled filesystem paths."""
+    return bool(re.fullmatch(r"/assets/[A-Za-z0-9][A-Za-z0-9._-]*\.svg", path or ""))
 
 # Role needed per route. Rules:
 #   * any GET needs at least "viewer"
@@ -1516,6 +1521,8 @@ class H(BaseHTTPRequestHandler):
                 return self._file(f"{WEBROOT}/index.html", "text/html; charset=utf-8")
             if p.startswith("/js/") and p.endswith(".js") and ".." not in p:
                 return self._file(f"{WEBROOT}/{os.path.basename(p)}", "application/javascript")
+            if is_asset_path(p):
+                return self._file(f"{WEBROOT}/assets/{os.path.basename(p)}", "image/svg+xml")
             if p == "/app.js":
                 return self._file(f"{WEBROOT}/app.js", "application/javascript")
             if p == "/style.css":

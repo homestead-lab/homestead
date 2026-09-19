@@ -85,7 +85,7 @@ jobs:
       - name: Capture deterministic product screenshots
         shell: bash
         run: |
-          python -m http.server 4173 --directory web >/tmp/homestead-demo.log 2>&1 &
+          PORT=4173 WEBROOT=web DATA_DIR=/tmp/homestead-demo-data python server/server.py >/tmp/homestead-demo.log 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid"' EXIT
           node scripts/capture_screenshots.mjs
