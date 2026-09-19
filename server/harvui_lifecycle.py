@@ -174,8 +174,12 @@ def edit_workload(cfg):
         else: ann.pop("harvui.io/hardware", None)
     if "icon" in cfg:
         ann = dep["metadata"].setdefault("annotations", {})
-        if cfg["icon"]: ann["harvui.io/icon"] = cfg["icon"]
-        else: ann.pop("harvui.io/icon", None)
+        if cfg["icon"]:
+            ann["harvui.io/icon"] = cfg["icon"]
+            ann["harvui.io/icon-source"] = cfg.get("icon_source", cfg["icon"])
+        else:
+            ann.pop("harvui.io/icon", None)
+            ann.pop("harvui.io/icon-source", None)
 
     dep["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[
         "harvui.io/editedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ")

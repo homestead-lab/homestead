@@ -456,7 +456,7 @@ async function viewDeploy(pre) {
     <div class="card flat">
       <div class="f"><label>Name</label><input type="text" id="d_name" value="${esc(DCFG.name)}" placeholder="my-app"></div>
       <div class="f"><label>Docker image ${tip("The registry image and tag Kubernetes will pull, for example ghcr.io/home-assistant/home-assistant:stable")}</label><input type="text" id="d_image" value="${esc(DCFG.image)}" placeholder="nginx:alpine · ghcr.io/user/app:tag"></div>
-      <div class="f"><label>Container logo ${tip("Optional HTTPS image URL shown on container cards. App Store installs fill this automatically.")}</label><input type="url" id="d_icon" value="${esc(DCFG.icon || "")}" placeholder="https://…/icon.png"></div>
+      <div class="f"><label>Container logo ${tip("Optional public HTTPS image URL. HarvUI validates and saves a private copy on its persistent volume, so the logo survives source outages and upgrades.")}</label><input type="url" id="d_icon" value="${esc(DCFG.icon || "")}" placeholder="https://…/icon.png"></div>
       <div class="f2">
         <div class="f"><label>Namespace</label><select id="d_ns">${nss.map(n => `<option ${n === DCFG.namespace ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
         <div class="f"><label>Replicas</label><input type="number" id="d_rep" value="${DCFG.replicas}" min="0" max="5"></div>
@@ -585,7 +585,7 @@ window.storeSearch = async () => {
     $("#s_res").innerHTML = r.apps.length
       ? `<div class="dim small" style="margin-bottom:12px">${r.total} match${r.total === 1 ? "" : "es"} · showing ${r.apps.length}</div>
         <div class="apps stagger">${r.apps.map((a, i) => `<div class="card app">
-          <div class="row" style="gap:11px">${a.icon ? `<img class="ico" src="${esc(a.icon)}" onerror="this.style.display='none'">` : ""}
+          <div class="row" style="gap:11px">${a.icon ? `<img class="ico" src="${esc(a.icon)}" referrerpolicy="no-referrer" onerror="this.style.display='none'">` : ""}
             <div style="min-width:0"><div class="nm">${esc(a.name)}</div>
             ${a.cat ? `<span class="tag">${esc(a.cat.split(" ")[0])}</span>` : ""}</div></div>
           <div class="ds">${esc(a.desc || "No description provided.")}</div>

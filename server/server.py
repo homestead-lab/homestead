@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HARVUI_VERSION = os.environ.get("HARVUI_VERSION", "1.14.1")
+HARVUI_VERSION = os.environ.get("HARVUI_VERSION", "1.15.0")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1026,6 +1026,7 @@ def build_deployment(cfg):
         "apiVersion": "apps/v1", "kind": "Deployment",
         "metadata": {"name": name, "namespace": ns, "labels": {"app": name, "harvui.io/managed": "true"},
                      "annotations": ({**({"harvui.io/icon": cfg.get("icon", "")} if cfg.get("icon") else {}),
+                                      **({"harvui.io/icon-source": cfg.get("icon_source", cfg.get("icon", ""))} if cfg.get("icon") else {}),
                                       **({"harvui.io/hardware": ",".join(sorted(hardware))} if hardware else {})})},
         "spec": {"replicas": int(cfg.get("replicas", 1)), "strategy": {"type": "Recreate"},
                  "selector": {"matchLabels": {"app": name}},
@@ -1168,7 +1169,8 @@ def template_to_cfg(app):
         elif typ == "Path" and tgt:
             vols.append({"path": tgt, "source": "", "type": "pvc"})
     return {"name": re.sub(r"[^a-z0-9-]", "-", app["name"].lower()).strip("-")[:40],
-            "image": app["repo"], "ports": ports, "env": envs, "volumes": vols}
+            "image": app["repo"], "icon": app.get("icon") or "",
+            "ports": ports, "env": envs, "volumes": vols}
 
 
 # ---------------------------------------------------------------- SMB shares
@@ -1309,6 +1311,7 @@ import harvui_hardware as HW
 import harvui_updates as UPDATES
 import harvui_operations as OPS
 import harvui_console as CONSOLE
+import harvui_icons as ICONS
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
 LC.bind(kget, ksend, SYS_NS, _cache, HW.features)
 IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.features)
@@ -1370,6 +1373,20 @@ def needed_role(path, method):
     return "viewer" if method == "GET" else "operator"
 
 
+def persist_icon_config(cfg):
+    """Replace a remote logo with a persistent same-origin cache reference."""
+    if "icon" not in cfg:
+        return cfg
+    source = str(cfg.get("icon") or "").strip()
+    if not source:
+        cfg["icon"] = ""
+        cfg["icon_source"] = ""
+        return cfg
+    cfg["icon"] = ICONS.persist(source, DATA_DIR)
+    cfg["icon_source"] = source
+    return cfg
+
+
 # ---------------------------------------------------------------- HTTP
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -1399,6 +1416,21 @@ class H(BaseHTTPRequestHandler):
                 self._send(200, f.read(), ctype)
         except FileNotFoundError:
             self._send(404, {"error": "not found"})
+
+    def _icon(self, request_path):
+        try:
+            path, ctype = ICONS.resolve(request_path, DATA_DIR)
+            with open(path, "rb") as handle:
+                body = handle.read()
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "private, max-age=31536000, immutable")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(body)
+        except FileNotFoundError:
+            self._send(404, {"error": "icon not found"})
 
     # ---------------------------------------------------------- auth
     def _cookies(self):
@@ -1457,6 +1489,8 @@ class H(BaseHTTPRequestHandler):
                 return
             if p == "/api/console":
                 return CONSOLE_PROXY.handle(self, self.user, q)
+            if p.startswith("/api/icons/"):
+                return self._icon(p)
             if is_spa_route(p) or p == "/index.html":
                 return self._file(f"{WEBROOT}/index.html", "text/html; charset=utf-8")
             if p.startswith("/js/") and p.endswith(".js") and ".." not in p:
@@ -1562,7 +1596,9 @@ class H(BaseHTTPRequestHandler):
                               for x in c.get("ports", []) or []],
                     "gpu": "igpu" in hardware,
                     "hardware": hardware,
-                    "icon": d["metadata"].get("annotations", {}).get("harvui.io/icon", ""),
+                    "icon": d["metadata"].get("annotations", {}).get(
+                        "harvui.io/icon-source",
+                        d["metadata"].get("annotations", {}).get("harvui.io/icon", "")),
                     "node": pspec.get("nodeSelector", {}).get("kubernetes.io/hostname", ""),
                     "seed_configs": LC.seed_configs(ns, d),
                     "volumes": [{"path": m.get("mountPath"), "source": next(
@@ -1659,6 +1695,7 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/settings":
                 return self._send(200, {"ok": True, **save_app_settings(b)})
             if p == "/api/deploy":
+                persist_icon_config(b)
                 dep, svc = build_deployment(b)
                 ns = dep["metadata"]["namespace"]
                 for v in b.get("volumes") or []:
@@ -1720,6 +1757,7 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/appstore/install":
                 cfg = template_to_cfg(b["app"])
                 cfg.update(b.get("overrides") or {})
+                persist_icon_config(cfg)
                 dep, svc = build_deployment(cfg)
                 ns = dep["metadata"]["namespace"]
                 ksend("POST", f"/apis/apps/v1/namespaces/{ns}/deployments", dep)
@@ -1734,6 +1772,7 @@ class H(BaseHTTPRequestHandler):
                                "/containers", {"namespace": ns, "name": cfg["name"]})
                 return self._send(200, {"ok": True, "name": cfg["name"], "operation": op})
             if p == "/api/edit":
+                persist_icon_config(b)
                 return self._send(200, LC.edit_workload(b))
             if p == "/api/move":
                 node = b.get("node")
@@ -1844,6 +1883,7 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/sources/inspect":
                 return self._send(200, IMP.inspect_source_container(b["name"], b["container"]))
             if p == "/api/import":
+                persist_icon_config(b)
                 result = IMP.import_container(b)
                 result["operation"] = OPS.start(
                     "import", f"Import {b['name']}",

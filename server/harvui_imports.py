@@ -316,6 +316,7 @@ def import_container(cfg):
             "volumes": [{"path": cfg.get("mount_path", "/config"), "source": pvc, "type": "pvc"}],
             "gpu": bool(cfg.get("gpu")),
             "hardware": cfg.get("hardware") or [], "icon": cfg.get("icon", ""),
+            "icon_source": cfg.get("icon_source", cfg.get("icon", "")),
             "network_mode": cfg.get("network_mode", "loadbalancer"),
             "vip_mode": cfg.get("vip_mode", "shared"), "lb_ip": cfg.get("lb_ip", ""),
         }

@@ -14,7 +14,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     const seeds = w.seed_configs || [];
     $("#mbody").innerHTML = `
       <div class="f"><label>Image</label><input type="text" id="e_image" value="${esc(w.image)}"></div>
-      <div class="f"><label>Container logo ${tip("Optional HTTPS image URL shown on container and architecture cards.")}</label><input type="url" id="e_icon" value="${esc(w.icon || "")}" placeholder="https://…/icon.png"></div>
+      <div class="f"><label>Container logo ${tip("Optional public HTTPS image URL. HarvUI validates it and keeps a persistent local copy while retaining this source for later edits.")}</label><input type="url" id="e_icon" value="${esc(w.icon || "")}" placeholder="https://…/icon.png"></div>
       <div class="f2">
         <div class="f"><label>CPU reserved ${tip("Guaranteed scheduling capacity. 1000m = one core; it is not a hard usage limit.")}</label><input type="text" id="e_cpu" value="${esc(w.cpu)}" placeholder="50m"></div>
         <div class="f"><label>Memory reserved ${tip("Guaranteed scheduling capacity in Mi or Gi; it is not a hard usage limit.")}</label><input type="text" id="e_mem" value="${esc(w.memory)}" placeholder="128Mi"></div>

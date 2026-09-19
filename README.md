@@ -132,7 +132,7 @@ through browser refreshes and HarvUI restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=1.14.1 HOST=rancher@192.0.2.210 ./scripts/deploy.sh
+TAG=1.15.0 HOST=rancher@192.0.2.210 ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -161,13 +161,23 @@ capabilities or privilege escalation, and report progress through Activity.
 Kubernetes Node status exposes only each node's largest cached images; smaller
 entries may not appear in the table and HarvUI will not attempt to remove them.
 
+## Workload logos
+
+Container create, edit, import, and App Store flows accept an optional public
+HTTP(S) raster-image URL. Before changing the workload, HarvUI validates the
+destination, blocks private/link-local address resolution and credentialed
+URLs, limits the response to 2 MiB, and stores the verified image by content
+hash under `$DATA_DIR/icons`. Deployments keep both the same-origin cached URL
+and the original source annotation, so cards do not depend on the remote host
+and the source remains editable. SVG is deliberately not accepted.
+
 ## Configuration
 
 | Environment variable | Default | Meaning |
 |---|---|---|
 | `PORT` | `8080` | HTTP listen port |
 | `WEBROOT` | `/web` | bundled static UI directory |
-| `DATA_DIR` | `/data` | persistent update history/cache directory |
+| `DATA_DIR` | `/data` | persistent operation history, audit, and workload-icon cache directory |
 | `DEFAULT_NS` | `lab` | namespace for new workloads |
 | `SMB_NAMESPACE` | `lab` | namespace containing the managed Samba deployment |
 | `STORAGE_CLASS` | `longhorn-r2` | default StorageClass for new volumes |
