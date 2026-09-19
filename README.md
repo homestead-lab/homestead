@@ -132,7 +132,7 @@ through browser refreshes and HarvUI restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=1.15.2 HOST=rancher@192.0.2.210 ./scripts/deploy.sh
+TAG=1.15.3 HOST=rancher@192.0.2.210 ./scripts/deploy.sh
 ```
 
 ## Image update behaviour

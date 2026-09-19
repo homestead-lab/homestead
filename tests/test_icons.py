@@ -70,7 +70,8 @@ class IconCacheTests(unittest.TestCase):
     def test_cached_icon_requests_are_release_versioned(self):
         core = (ROOT / "web" / "js" / "core.js").read_text(encoding="utf-8")
         self.assertIn('icon.startsWith("/api/icons/")', core)
-        self.assertIn('`${icon}?v=${HARVUI_VERSION}`', core)
+        self.assertIn("const ICON_CACHE_EPOCH = Date.now()", core)
+        self.assertIn('`${icon}?v=${HARVUI_VERSION}-${ICON_CACHE_EPOCH}`', core)
 
     def test_only_content_addressed_icon_route_is_public(self):
         self.assertTrue(server.is_public_path("/api/icons/" + "a" * 64 + ".png"))
