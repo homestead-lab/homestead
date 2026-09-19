@@ -124,7 +124,7 @@ automatically reconnects while HarvUI replaces itself.
 Command-line deployment is also available:
 
 ```bash
-TAG=1.10.0 HOST=rancher@192.0.2.210 ./scripts/deploy.sh
+TAG=1.12.1 HOST=rancher@192.0.2.210 ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -170,6 +170,14 @@ docker build --build-arg VERSION=dev -t harvui:dev .
 Passwords use PBKDF2-HMAC-SHA256 with per-user salts in the `harvui-auth`
 Secret. Sessions are HMAC-signed, `HttpOnly`, `SameSite=Strict` cookies and all
 mutations require a custom anti-CSRF header. Roles are enforced server-side.
+
+Interactive container consoles require operator access. The supplied manifest
+grants `pods/exec` only through the `harvui-console` Role in the `lab`
+namespace—not through the cluster-wide role. The proxy independently restricts
+sessions to `DEFAULT_NS`, validates the exact running pod and application
+container, checks the browser origin, and keeps the service-account token on the
+server. Session start/stop metadata is written to
+`$DATA_DIR/console-audit.jsonl`; terminal input and output are not recorded.
 
 The supplied Service is plain HTTP. Put it behind TLS before exposing HarvUI
 outside a trusted LAN. Host power control is disabled by default because it

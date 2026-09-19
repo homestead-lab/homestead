@@ -16,7 +16,8 @@ and dashboard telemetry polish shipped in v1.10.0. Refresh-safe node,
 container-edit, container-log, and volume-edit URLs plus URL-backed search ship
 in v1.10.1. Consistent action icons, keyboard focus, and viewport-safe tooltips
 ship in v1.10.2. The explicit Deployment → pod → container hierarchy ships in
-v1.11.0. The active milestone is the interactive container console.
+v1.11.0. The namespace-scoped interactive container console ships in v1.12.1.
+The active milestone is completing image-update notifications and policies.
 
 ## Product rules
 
@@ -101,7 +102,7 @@ status semantics, and a consistent way to report background work.
 - **Done when:** users can see why pod and container counts differ and which
   objects will restart together.
 
-#### 2.2 Interactive container console — 🔨 active
+#### 2.2 Interactive container console — ✅ shipped in v1.12.1
 
 - Add a browser terminal alongside Logs, with container selection for
   multi-container pods, shell discovery, resize, reconnect, and clear RBAC or
@@ -112,7 +113,7 @@ status semantics, and a consistent way to report background work.
 - **Done when:** an authorized operator can open, use, resize, and close a shell
   without affecting the running workload.
 
-#### 2.3 Managed image updates and notifications — ✅ core shipped / ⬜ follow-up
+#### 2.3 Managed image updates and notifications — ✅ core shipped / 🔨 follow-up active
 
 Already shipped: registry digest/version checks, multi-architecture awareness,
 private pull-secret support, monitored rollout, self-update, deterministic

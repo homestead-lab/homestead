@@ -97,7 +97,8 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: [pods/exec]
-    verbs: [create]
+    # create covers the traditional POST upgrade; get covers modern WebSocket GET.
+    verbs: [create, get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -135,7 +136,7 @@ metadata:
   labels:
     app: harvui
   annotations:
-    harvui.io/update-sources: '{"harvui":"ghcr.io/wjcloudy/harvui:1.12.0"}'
+    harvui.io/update-sources: '{"harvui":"ghcr.io/wjcloudy/harvui:1.12.1"}'
 spec:
   replicas: 1
   strategy:
@@ -185,7 +186,7 @@ spec:
               mountPath: /data
       containers:
         - name: harvui
-          image: ghcr.io/wjcloudy/harvui:1.12.0
+          image: ghcr.io/wjcloudy/harvui:1.12.1
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT
