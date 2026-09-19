@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HARVUI_VERSION = os.environ.get("HARVUI_VERSION", "1.9.0")
+HARVUI_VERSION = os.environ.get("HARVUI_VERSION", "1.9.1")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {

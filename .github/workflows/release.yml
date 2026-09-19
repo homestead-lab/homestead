@@ -9,7 +9,6 @@ permissions:
   contents: read
   packages: write
   id-token: write
-  attestations: write
 
 concurrency:
   group: publish-${{ github.ref }}
@@ -79,9 +78,3 @@ jobs:
           sbom: true
       - name: Published digest
         run: echo "${{ env.IMAGE }}@${{ steps.build.outputs.digest }}"
-      - uses: actions/attest-build-provenance@v2
-        if: startsWith(github.ref, 'refs/tags/v')
-        with:
-          subject-name: ${{ env.IMAGE }}
-          subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: true
