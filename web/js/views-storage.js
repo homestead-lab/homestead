@@ -172,7 +172,10 @@ async function viewStorage() {
      <td class="mono"><b>${x.replicas}</b></td>
      <td style="min-width:130px">${meter(x.used_pct || 0)}<div class="between dim xs mono" style="margin-top:4px"><span>${x.actual_gb} GB</span><span>${x.size_gb} GB</span></div></td>
      <td class="small dim">${x.state === "attached" ? '<span class="tag ok">in use</span>' : esc(fmtAgo(x.last_used_secs))}</td>
-     <td><button class="btn sm" data-need="operator" onclick='volumeEdit(${JSON.stringify(x).replace(/'/g, "&#39;")})'>Edit</button></td>
+     <td><div class="row" style="gap:6px;flex-wrap:nowrap">
+       <button class="btn sm" data-need="operator" onclick='volumeEdit(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("edit")}Edit</button>
+       <button class="btn sm danger" data-need="admin" title="Review attachment and data-loss impact before deleting" onclick='volumeDelete(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("trash")}Delete</button>
+     </div></td>
       </tr>`).join("") || `<tr><td colspan=9 class="empty">none</td></tr>`}
    </tbody></table></div></div>`);
 }
@@ -204,6 +207,96 @@ window.volumeEditNow = async (namespace, name) => {
   const body = { namespace, name, size_gb: +$("#ve_size").value, replicas: +$("#ve_reps").value };
   try { await api("/api/volumes/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(`${name} updated`, "ok"); closeModal(); resetPaint(); viewStorage(); } catch (e) { toast(e.message, "bad"); }
+};
+
+function volumeDeleteConfirmationValid(name, value) {
+  return String(value || "").trim() === String(name || "");
+}
+window.volumeDeleteConfirmationValid = volumeDeleteConfirmationValid;
+
+function volumeImpactCount(value, singular, plural) {
+  return `<div class="volume-impact"><b>${esc(value)}</b><span>${esc(value === 1 ? singular : plural)}</span></div>`;
+}
+
+window.volumeDelete = async x => {
+  const namespace = x.namespace || "lab", name = x.pvc_name || x.name;
+  modal("Delete volume · " + name,
+    '<div class="empty"><span class="spin2"></span> checking mounts, snapshots, backups and reclaim policy…</div>', true);
+  let p;
+  try {
+    p = await api(`/api/volumes/delete-plan?ns=${encodeURIComponent(namespace)}&name=${encodeURIComponent(name)}`);
+  } catch (e) {
+    return void ($("#mbody").innerHTML = `<div class="note dependency-danger"><b>Impact check failed.</b> ${esc(e.message)}</div>
+      <div class="row" style="margin-top:16px"><button class="btn" onclick="closeModal()">Close</button></div>`);
+  }
+  window.__volumeDeletePlan = p;
+  const mounts = (p.consumers || []).map(c => `<div class="dependency-row ${c.active ? "stranded" : ""}">
+    <div><b>${esc(c.kind)} · ${esc(c.name)}</b><div class="dim xs">${esc(c.namespace)} · ${esc(c.detail || (c.active ? "active" : "inactive"))}</div></div>
+    <div class="small mono">${(c.mounts || []).map(m => `${esc(m.container)}:${esc(m.path || m.container_kind)}${m.read_only ? " · read-only" : ""}`).join("<br>") || "claim reference"}</div>
+  </div>`).join("");
+  const lh = p.longhorn || {}, pv = p.pv || {};
+  const blocked = p.blocked;
+  const permanentBlocked = !p.actions?.delete_data?.enabled;
+  const warningRows = (p.warnings || []).map(w => `<li>${esc(w)}</li>`).join("");
+  $("#mbody").innerHTML = `
+    ${blocked ? `<div class="note dependency-danger"><b>Deletion is blocked.</b><ul>${p.blocking_reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>`
+      : `<div class="note"><b>Impact check passed.</b> This claim is detached and has no active workload references. Choose what should happen to its backing data.</div>`}
+    <div class="volume-impact-grid">
+      ${volumeImpactCount(lh.actual_gb ?? "?", "GB written", "GB written")}
+      ${volumeImpactCount(lh.replicas ?? "?", "replica", "replicas")}
+      ${volumeImpactCount(p.snapshots?.count ?? "?", "snapshot on volume", "snapshots on volume")}
+      ${volumeImpactCount(p.backups?.count ?? "?", "external backup", "external backups")}
+    </div>
+    <div class="note"><b>Current objects</b><br>
+      Claim <span class="mono">${esc(p.namespace)}/${esc(p.name)}</span> · ${esc(p.phase)} · ${esc(p.requested_storage || "size unknown")}<br>
+      PV <span class="mono">${esc(pv.name || "not bound")}</span> · reclaim policy <b>${esc(pv.reclaim_policy || "unknown")}</b><br>
+      Longhorn <span class="mono">${esc(lh.name || "not found")}</span> · ${esc(lh.state || "unknown")}${lh.attached_node ? ` on ${esc(lh.attached_node)}` : ""}
+    </div>
+    <div class="sec">1 · Detach</div>
+    <div class="note ${p.actions?.detach?.complete ? "" : "dependency-danger"}">
+      <b>${p.actions?.detach?.complete ? "Already detached." : "Stop and unmount this claim first."}</b>
+      Detaching keeps the PVC and all data. Homestead will not silently rewrite or stop the workloads listed below.
+    </div>
+    ${mounts ? `<div class="dependency-list" style="margin-top:10px">${mounts}</div>` : '<div class="empty small">No pods, controllers, jobs or virtual machines reference this claim.</div>'}
+    <div class="sec">2 · Choose deletion result</div>
+    <div class="volume-delete-grid">
+      <label class="volume-delete-option ${blocked ? "disabled" : ""}"><input type="radio" name="vd_action" value="delete_claim" onchange="volumeDeleteGate()" ${blocked ? "disabled" : ""}>
+        <span><b>Delete claim, keep data</b><small>Homestead changes the PV policy to Retain, then deletes the PVC. The released data needs Kubernetes/Longhorn administration to recover or remove later.</small></span></label>
+      <label class="volume-delete-option danger ${permanentBlocked ? "disabled" : ""}"><input type="radio" name="vd_action" value="delete_data" onchange="volumeDeleteGate()" ${permanentBlocked ? "disabled" : ""}>
+        <span><b>Permanently delete data</b><small>Homestead changes the PV policy to Delete. The PVC, PV, Longhorn volume, replicas and ${p.snapshots?.count || 0} on-volume snapshot(s) are removed. ${p.backups?.count || 0} external backup(s) remain.</small></span></label>
+    </div>
+    ${warningRows ? `<div class="note dependency-danger"><b>Incomplete impact inventory</b><ul>${warningRows}</ul></div>` : ""}
+    <div class="sec">3 · Confirm</div>
+    <div class="f"><label>Type <b class="mono">${esc(name)}</b> to confirm</label>
+      <input id="vd_confirm" autocomplete="off" placeholder="${esc(name)}" oninput="volumeDeleteGate()"></div>
+    <div class="row"><button id="vd_go" class="btn danger" data-need="admin" disabled
+      onclick="volumeDeleteNow('${esc(namespace)}','${esc(name)}','${esc(p.uid)}')">Delete selected</button>
+      <button class="btn" onclick="closeModal()">Cancel</button></div>`;
+};
+
+window.volumeDeleteGate = () => {
+  const p = window.__volumeDeletePlan;
+  const action = document.querySelector('input[name="vd_action"]:checked')?.value || "";
+  const input = $("#vd_confirm"), button = $("#vd_go");
+  if (!p || !input || !button) return;
+  const allowed = action && !p.blocked && (action !== "delete_data" || p.actions?.delete_data?.enabled);
+  button.disabled = !allowed || !volumeDeleteConfirmationValid(p.name, input.value);
+  button.textContent = action === "delete_claim" ? "Delete claim · keep data" : action === "delete_data" ? "Permanently delete data" : "Delete selected";
+};
+
+window.volumeDeleteNow = async (namespace, name, uid) => {
+  const action = document.querySelector('input[name="vd_action"]:checked')?.value || "";
+  const confirmation = $("#vd_confirm").value.trim();
+  if (!volumeDeleteConfirmationValid(name, confirmation)) return toast("type the volume name exactly to confirm", "bad");
+  if (!action) return toast("choose whether to retain or permanently delete the backing data", "bad");
+  const button = $("#vd_go"); button.disabled = true; button.textContent = "Requesting deletion…";
+  try {
+    const result = await api("/api/volumes/delete", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ namespace, name, uid, action, confirmation }) });
+    toast(result.message || `${name} deletion started`, "ok"); closeModal(); resetPaint(); viewStorage();
+  } catch (e) {
+    button.disabled = false; volumeDeleteGate(); toast(e.message, "bad");
+  }
 };
 
 /* ---------------- shares ---------------- */

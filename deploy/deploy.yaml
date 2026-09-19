@@ -15,8 +15,13 @@ metadata:
   name: harvui
 rules:
   - apiGroups: [""]
-    resources: [namespaces, events, persistentvolumes]
+    resources: [namespaces, events]
     verbs: [get, list, watch]
+  # Volume deletion explicitly flips the bound PV between Retain and Delete
+  # after an impact preview; no broader PV mutation is used.
+  - apiGroups: [""]
+    resources: [persistentvolumes]
+    verbs: [get, list, watch, patch]
   # cordon / uncordon needs patch on the node object
   - apiGroups: [""]
     resources: [nodes]

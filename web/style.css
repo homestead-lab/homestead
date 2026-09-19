@@ -448,6 +448,7 @@ pre{background:rgba(0,0,0,.5);border:1px solid var(--line);border-radius:13px;pa
 .badbg{background:var(--crit)!important}.constraintbar{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.025)}
 .blockreasons{display:flex;flex-direction:column;gap:3px;margin-top:8px;color:var(--crit);font-size:10.5px}
 .dependency-list{display:grid;gap:7px}.dependency-row{display:flex;justify-content:space-between;gap:14px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:11px;background:var(--surf2)}.dependency-row.stranded{border-color:rgba(255,77,79,.34);background:rgba(255,77,79,.06)}.dependency-danger{border-color:rgba(255,77,79,.4)!important;background:rgba(255,77,79,.08)!important;color:#ffb4b8!important}.dependency-confirm{margin-top:12px;padding:11px 12px;border:1px solid rgba(255,77,79,.3);border-radius:11px}
+.volume-impact-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin:12px 0}.volume-impact{padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--surf2);display:grid;gap:3px}.volume-impact b{font:700 18px "JetBrains Mono",monospace}.volume-impact span{font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.07em}.volume-delete-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}.volume-delete-option{display:flex;gap:10px;padding:14px;border:1px solid var(--line);border-radius:13px;background:var(--surf2);cursor:pointer}.volume-delete-option:has(input:checked){border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}.volume-delete-option.danger:has(input:checked){border-color:var(--crit);box-shadow:0 0 0 1px var(--crit)}.volume-delete-option input{margin-top:3px}.volume-delete-option span{display:grid;gap:5px}.volume-delete-option small{color:var(--mut);line-height:1.5}.volume-delete-option.disabled{opacity:.48;cursor:not-allowed}
 
 /* app store */
 .apps{display:grid;grid-template-columns:repeat(auto-fill,minmax(262px,1fr));gap:14px}
@@ -669,7 +670,7 @@ html[data-motion="off"] .uptime .ld{animation:none}
 @media(max-width:560px){
   .apps{grid-template-columns:1fr}
   .wmeta{grid-template-columns:repeat(2,1fr)}
-  .f2,.f3,.f4,.hwchoices{grid-template-columns:1fr}
+  .f2,.f3,.f4,.hwchoices,.volume-impact-grid,.volume-delete-grid{grid-template-columns:1fr}
   .opts{grid-template-columns:1fr 1fr}
 }
 

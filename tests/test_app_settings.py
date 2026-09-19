@@ -77,6 +77,10 @@ class AppSettingsTests(unittest.TestCase):
     def test_image_cleanup_is_admin_only(self):
         self.assertEqual("admin", server.needed_role("/api/images/cleanup", "POST"))
 
+    def test_volume_impact_is_viewable_but_deletion_is_admin_only(self):
+        self.assertEqual("viewer", server.needed_role("/api/volumes/delete-plan", "GET"))
+        self.assertEqual("admin", server.needed_role("/api/volumes/delete", "POST"))
+
 
 if __name__ == "__main__":
     unittest.main()

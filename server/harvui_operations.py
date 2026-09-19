@@ -188,12 +188,43 @@ def _image_cleanup(item):
     return "running", progress, f"Image removed from {complete}/{len(pods)} nodes"
 
 
+def _get_or_none(path):
+    try:
+        return kget(path)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
+
+
+def _volume_delete(item):
+    ref = item["ref"]
+    pvc = _get_or_none(
+        f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['name']}")
+    if pvc is not None:
+        deleting = bool((pvc.get("metadata", {}) or {}).get("deletionTimestamp"))
+        return "running", 35 if deleting else 15, (
+            "Waiting for workloads to release the claim" if deleting else "Waiting for PVC deletion")
+    if ref.get("action") == "delete_claim":
+        return "succeeded", 100, "Claim deleted; backing data retained"
+
+    pv = _get_or_none(f"/api/v1/persistentvolumes/{ref['pv']}") if ref.get("pv") else None
+    if pv is not None:
+        return "running", 70, "Claim deleted; removing the backing persistent volume"
+    volume = (_get_or_none(f"/apis/longhorn.io/v1beta2/volumes/{ref['volume']}")
+              if ref.get("volume") else None)
+    if volume is not None:
+        return "running", 90, "Persistent volume deleted; Longhorn is removing replica data"
+    return "succeeded", 100, "Claim and backing volume data deleted"
+
+
 RESOLVERS = {
     "deployment": _deployment,
     "image-update": _deployment,
     "image-rollback": _deployment,
     "image-pull": _prepull,
     "image-cleanup": _image_cleanup,
+    "volume-delete": _volume_delete,
     "import": _job,
     "vm-migration": _migration,
     "backup": _backup,

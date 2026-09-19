@@ -84,6 +84,38 @@ class OperationTests(unittest.TestCase):
         self.assertEqual("succeeded", complete["status"])
         self.assertEqual(100, complete["progress"])
 
+    def test_permanent_volume_delete_waits_for_claim_pv_and_longhorn_data(self):
+        operations.start(
+            "volume-delete", "Delete volume scratch",
+            {"kind": "PersistentVolumeClaim", "name": "scratch", "namespace": "lab"},
+            "/volumes", {"namespace": "lab", "name": "scratch", "action": "delete_data",
+                         "pv": "pv-scratch", "volume": "lh-scratch"})
+        pvc_path = "/api/v1/namespaces/lab/persistentvolumeclaims/scratch"
+        pv_path = "/api/v1/persistentvolumes/pv-scratch"
+        lh_path = "/apis/longhorn.io/v1beta2/volumes/lh-scratch"
+        self.objects[pvc_path] = {"metadata": {"deletionTimestamp": "now"}}
+        self.objects[pv_path] = {"metadata": {"name": "pv-scratch"}}
+        self.objects[lh_path] = {"metadata": {"name": "lh-scratch"}}
+        self.assertEqual(35, operations.list_operations()[0]["progress"])
+        del self.objects[pvc_path]
+        self.assertEqual(70, operations.list_operations()[0]["progress"])
+        del self.objects[pv_path]
+        self.assertEqual(90, operations.list_operations()[0]["progress"])
+        del self.objects[lh_path]
+        complete = operations.list_operations()[0]
+        self.assertEqual("succeeded", complete["status"])
+        self.assertEqual(100, complete["progress"])
+
+    def test_claim_only_volume_delete_completes_when_claim_is_gone(self):
+        operations.start(
+            "volume-delete", "Delete claim scratch",
+            {"kind": "PersistentVolumeClaim", "name": "scratch", "namespace": "lab"},
+            "/volumes", {"namespace": "lab", "name": "scratch", "action": "delete_claim",
+                         "pv": "pv-scratch", "volume": "lh-scratch"})
+        complete = operations.list_operations()[0]
+        self.assertEqual("succeeded", complete["status"])
+        self.assertIn("retained", complete["message"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -50,6 +50,49 @@
     { id: "igpu", name: "Intel/AMD iGPU", host_path: "/dev/dri", container_path: "/dev/dri", builtin: true },
     { id: "coral_usb", name: "Google Coral USB", host_path: "/dev/bus/usb", container_path: "/dev/bus/usb", builtin: false, usb_ids: ["18d1:9302"] },
   ];
+  const volumes = [
+    { name: "pvc-demo-frigate", pvc_name: "frigate-config", namespace: "lab", attached_to: "frigate",
+      pod_status: "Running", state: "attached", robustness: "healthy", node: "harvester-node2",
+      size_gb: 20, actual_gb: 3.8, used_pct: 19, replicas: 2,
+      access_modes: ["ReadWriteOnce"], storage_class: "longhorn-r2", last_used_secs: 0 },
+    { name: "pvc-demo-scratch", pvc_name: "scratch-test", namespace: "lab", attached_to: "",
+      pod_status: "", state: "detached", robustness: "unknown", node: "",
+      size_gb: 5, actual_gb: 0.2, used_pct: 4, replicas: 2,
+      access_modes: ["ReadWriteOnce"], storage_class: "longhorn-r2", last_used_secs: 2400 },
+  ];
+  const volumeDeletePlan = url => {
+    const name = url.searchParams.get("name") || "scratch-test";
+    const attached = name === "frigate-config";
+    return {
+      namespace: "lab", name, uid: `demo-${name}`, resource_version: "42", phase: "Bound",
+      storage_class: "longhorn-r2", access_modes: ["ReadWriteOnce"],
+      requested_storage: attached ? "20Gi" : "5Gi",
+      pv: { name: `pvc-demo-${name}`, reclaim_policy: "Delete", driver: "driver.longhorn.io" },
+      longhorn: { name: `pvc-demo-${name}`, state: attached ? "attached" : "detached",
+        robustness: attached ? "healthy" : "unknown", attached_node: attached ? "harvester-node2" : "",
+        replicas: 2, actual_bytes: attached ? 4080218931 : 214748364, actual_gb: attached ? 3.8 : 0.2 },
+      consumers: attached ? [
+        { kind: "Pod", name: "frigate-7d8f6d4c9-demo", namespace: "lab", active: true,
+          detail: "Running on harvester-node2", mounts: [{ container: "frigate", container_kind: "app", path: "/config", read_only: false }] },
+        { kind: "Deployment", name: "frigate", namespace: "lab", active: true,
+          detail: "1 desired replica", mounts: [{ container: "frigate", container_kind: "app", path: "/config", read_only: false }] },
+      ] : [],
+      active_consumers: attached ? 2 : 0,
+      snapshots: { count: attached ? 3 : 1, names: ["daily"] },
+      backups: { count: 1, names: ["nightly"] },
+      data_present: true, inventory_complete: true, warnings: [],
+      blocked: attached,
+      blocking_reasons: attached ? [
+        "2 active workload reference(s) must be stopped and unmounted first",
+        "Longhorn still reports the volume attached to harvester-node2",
+      ] : [],
+      actions: {
+        detach: { complete: !attached, description: "Stop/unmount consumers while keeping the claim and all data." },
+        delete_claim: { enabled: !attached, description: "Delete the PVC and retain backing data." },
+        delete_data: { enabled: !attached, description: "Delete the PVC and backing data." },
+      },
+    };
+  };
   const responses = {
     "/api/auth/state": { setup: false, user: "demo", role: "admin" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, updates: { policy: "approval_required", notify_available: true, notify_failures: true } },
@@ -58,7 +101,8 @@
       nodes_ready: 3, nodes_total: 3, workload_pods: 16, system_pods: 116, lb_ip: "192.0.2.242", nodes,
       top_cpu: [{ name: "frigate", ns: "lab", nodes: ["harvester-node2"], cpu: .84 }, { name: "home-assistant", ns: "lab", nodes: ["harvester-node1"], cpu: .31 }, { name: "paperless", ns: "lab", nodes: ["harvester-node3"], cpu: .18 }],
       top_mem: [{ name: "frigate", ns: "lab", nodes: ["harvester-node2"], mem_mb: 1840 }, { name: "home-assistant", ns: "lab", nodes: ["harvester-node1"], mem_mb: 738 }, { name: "paperless", ns: "lab", nodes: ["harvester-node3"], mem_mb: 512 }] },
-    "/api/history": history, "/api/storage": storage, "/api/hardware/features": hardware,
+    "/api/history": history, "/api/storage": storage, "/api/volumes": volumes,
+    "/api/volumes/delete-plan": volumeDeletePlan, "/api/hardware/features": hardware,
     "/api/operations": [], "/api/workloads": workloads,
     "/api/image-updates": { checked_at: "2026-09-19T12:00:00Z", updates: 1, errors: 0,
       policy: { policy: "approval_required", allows_install: true, reason: "Explicit operator approval is required before rollout." },
@@ -86,7 +130,8 @@
     const url = new URL(typeof input === "string" ? input : input.url, location.origin);
     if (!url.pathname.startsWith("/api/")) return original(input, init);
     const key = url.pathname === "/api/image-updates" ? "/api/image-updates" : url.pathname;
-    const value = responses[key];
+    const configured = responses[key];
+    const value = typeof configured === "function" ? configured(url, init) : configured;
     if (value === undefined) return new Response(JSON.stringify({ error: `Demo endpoint not available: ${url.pathname}` }), { status: 404, headers: { "Content-Type": "application/json" } });
     return new Response(JSON.stringify(value), { status: 200, headers: { "Content-Type": "application/json" } });
   };

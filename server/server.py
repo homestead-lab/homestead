@@ -1318,6 +1318,7 @@ import harvui_updates as UPDATES
 import harvui_operations as OPS
 import harvui_console as CONSOLE
 import harvui_icons as ICONS
+import harvui_volumes as VOLUMES
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
 LC.bind(kget, ksend, SYS_NS, _cache, HW.features)
 IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.features)
@@ -1326,6 +1327,7 @@ LH.bind(kget, ksend, _cache)
 PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.features)
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS)
 OPS.bind(kget, DATA_DIR, UPDATES.progress)
+VOLUMES.bind(kget, ksend, LH.snapshots, LH.backups, _cache, SYS_NS, DEFAULT_NS)
 CONSOLE_PROXY = CONSOLE.ConsoleProxy(API, TOKEN, CTX, DATA_DIR, SYS_NS, {DEFAULT_NS}, kget)
 
 
@@ -1379,6 +1381,7 @@ ADMIN_ROUTES = {
     "/api/sources/containers", "/api/sources/inspect", "/api/import",
     "/api/shares", "/api/shares/delete",
     "/api/images/cleanup",
+    "/api/volumes/delete",
     "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete",
 }
 # things a signed-in user may always do to their own account
@@ -1559,6 +1562,9 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, OPS.list_operations())
             if p == "/api/volumes":
                 return self._send(200, cached("vol", 8, get_volumes))
+            if p == "/api/volumes/delete-plan":
+                return self._send(200, VOLUMES.deletion_plan(
+                    (q.get("ns") or [DEFAULT_NS])[0], (q.get("name") or [""])[0]))
             if p == "/api/events":
                 return self._send(200, cached("ev", 10, get_events))
             if p == "/api/storage":
@@ -1870,6 +1876,16 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, create_volume(b))
             if p == "/api/volumes/edit":
                 return self._send(200, edit_volume(b))
+            if p == "/api/volumes/delete":
+                result = VOLUMES.delete(b)
+                result["operation"] = OPS.start(
+                    "volume-delete", f"Delete volume {result['name']}",
+                    {"kind": "PersistentVolumeClaim", "name": result["name"],
+                     "namespace": result["namespace"]},
+                    "/volumes", {"namespace": result["namespace"], "name": result["name"],
+                                  "action": result["action"], "pv": result["pv"],
+                                  "volume": result["longhorn_volume"]}, result["message"])
+                return self._send(200, result)
             if p == "/api/lh/job":
                 return self._send(200, LH.save_job(b))
             if p == "/api/lh/job/delete":
