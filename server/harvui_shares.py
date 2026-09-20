@@ -8,7 +8,6 @@ without losing access the next time a share is changed.
 import base64
 import hashlib
 import json
-import math
 import re
 import time
 import urllib.error
@@ -263,7 +262,8 @@ def apply_samba(rows, credentials, deployment=None):
         raise ValueError("the samba deployment is not installed")
     users = _validate_access(rows, credentials)
     spec = deployment["spec"]["template"]["spec"]
-    container = spec["containers"][0]
+    container = next((row for row in spec["containers"] if row.get("name") == "samba"),
+                     spec["containers"][0])
     managed = {mount.get("name") for mount in container.get("volumeMounts", []) or []
                if re.fullmatch(r"(?:sh\d+|hs-[a-f0-9]{12})", str(mount.get("name") or ""))}
     mounts = [mount for mount in container.get("volumeMounts", []) or []
