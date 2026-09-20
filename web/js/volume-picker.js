@@ -89,6 +89,20 @@ function storageClassBadges(facts) {
 }
 window.storageClassBadges = storageClassBadges;
 
+function claimRisk(claim, ctx) {
+  const target = ctx.targetNode ? ctx.targetNode() : "";
+  if (!claim.node || (target && claim.node === target)) return "";
+  const rwo = !(claim.access_modes || []).includes("ReadWriteMany");
+  if (claim.migratable) {
+    return ` It is attached on ${claim.node} and its class is migratable, so Longhorn will try to live-migrate it rather than attach it here — that mount usually fails.`;
+  }
+  if (rwo) {
+    return ` It is ReadWriteOnce and attached on ${claim.node}, so it cannot mount here at the same time.`;
+  }
+  return "";
+}
+window.claimRisk = claimRisk;
+
 function volumePickerHost(node) { return node.closest("[data-volume-host]"); }
 
 function volumePickerContext(node) {
@@ -101,11 +115,22 @@ function volumeSourceValue(row) {
   return String(choice && choice.style.display !== "none" ? choice.value : $(".vs", row).value).trim();
 }
 
+function claimSummary(claim) {
+  const parts = [(claim.access_modes || []).map(m => m === "ReadWriteMany" ? "RWX" : m === "ReadWriteOnce" ? "RWO" : m).join("/") || "mode unknown",
+    claim.size || "size unknown", claim.status];
+  // Bound says nothing about whether a second pod elsewhere can mount it.
+  if (claim.robustness && claim.robustness !== "healthy") parts.push(claim.robustness);
+  if (claim.node) parts.push(`on ${claim.node}`);
+  else if (claim.status === "Bound") parts.push("detached");
+  return parts.filter(Boolean).join(" · ");
+}
+window.claimSummary = claimSummary;
+
 function volumeSourceList(row, kind) {
   const ctx = volumePickerContext(row);
   let values = [];
   if (kind === "existing") values = (ctx.pvcs() || []).map(v => ({ value: v.name,
-    label: `${(v.access_modes || []).join("/") || "mode unknown"} · ${v.size || "size unknown"} · ${v.status}` }));
+    label: claimSummary(v) }));
   if (kind === "pod") values = (ctx.podVolumes() || []).map(v => ({ value: v.name,
     label: `${v.kind}${v.source ? ` · ${v.source}` : ""}` }));
   const choice = $(".vselect", row), requested = String(choice.value || $(".vs", row).value).trim();
@@ -166,7 +191,7 @@ function syncVolumeRow(row) {
   $(".vhelp", row).textContent = actual === "new-rwo" ? (ctx.newSourceHelp || "Creates a Longhorn claim for this workload (single-node attachment).")
     : actual === "new-rwx" ? (ctx.newSourceHelp || "Creates shared Longhorn storage that several pods can mount at once.") +
         (hidden ? ` ${hidden} storage class${hidden === 1 ? "" : "es"} hidden: they create live-migratable VM volumes, which Longhorn cannot mount into a pod.` : "")
-    : actual === "existing" ? selectedPvc ? `${selectedPvc.name}: ${(selectedPvc.access_modes || []).join("/") || "mode unknown"}, ${selectedPvc.size}, ${selectedPvc.status}. The claim and data are kept.` : "Mounts an existing PVC without creating or deleting it."
+    : actual === "existing" ? selectedPvc ? `${selectedPvc.name}: ${claimSummary(selectedPvc)}. The claim and data are kept.${claimRisk(selectedPvc, ctx)}` : "Mounts an existing PVC without creating or deleting it."
     : actual === "pod" ? selectedPodVolume ? `${selectedPodVolume.name}: ${selectedPodVolume.kind}${selectedPodVolume.source ? ` (${selectedPodVolume.source})` : ""}. The same storage is shared with the other container.` : ctx.podHelp
     : actual === "ephemeral" ? "Creates temporary pod storage. Its contents are deleted when the pod is replaced; ideal for cache or transcoding."
     : "Mounts this exact host path; the container can only run where that path exists.";

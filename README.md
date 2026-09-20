@@ -54,10 +54,10 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.7`, the workflow publishes:
+For a release such as `v2.8.8`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.7
+ghcr.io/wjcloudy/homestead:2.8.8
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -68,8 +68,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.7
-git push origin v2.8.7
+git tag v2.8.8
+git push origin v2.8.8
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -276,7 +276,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.7 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.8 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -348,6 +348,14 @@ policy cannot be edited afterwards — so Homestead offers create, make-default
 and delete rather than an edit button that would silently do nothing. Deleting
 a class is refused while any claim still references it, and volumes already
 built from it keep working and keep their data.
+
+Choosing an existing claim shows what Longhorn knows about it — its access
+mode, size, replica health and the node it is currently attached to — because
+`Bound` says nothing about whether a second pod on another node can mount it.
+Two cases are called out by name: a ReadWriteOnce claim already attached
+elsewhere cannot attach twice, and a claim from a migratable class answers a
+second node by starting a live migration rather than attaching, which the CSI
+driver will not filesystem-mount while it is in flight.
 
 One parameter decides whether a class can back container storage at all.
 A class with `migratable: true` hands out two-controller volumes so a VM disk

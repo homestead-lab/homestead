@@ -27,6 +27,7 @@ const editVolumePicker = index => createVolumePicker($("#e_vols_" + index), {
   storageClasses: () => EDIT_STORAGE.storage_classes,
   sharedStorageClasses: () => EDIT_STORAGE.shared_storage_classes || EDIT_STORAGE.storage_classes,
   classFacts: () => EDIT_STORAGE.storage_class_facts || {},
+  targetNode: () => $("#e_node")?.value || EDIT_STORAGE.node || "",
   podVolumes: () => EDIT_STORAGE.pod_volumes,
   allowPod: () => EDIT_STORAGE.pod_volumes.length > 0,
   podLabel: "Existing volume in this pod",
@@ -88,7 +89,8 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       hardware: w.hardware || [], volumes: w.volumes || [] }];
     EDIT_STORAGE = { pvcs: options.pvcs || [], storage_classes: options.storage_classes || [],
       shared_storage_classes: options.shared_storage_classes || [],
-      storage_class_facts: options.storage_class_facts || {}, pod_volumes: w.pod_volumes || [] };
+      storage_class_facts: options.storage_class_facts || {}, pod_volumes: w.pod_volumes || [],
+      node: w.node || "" };
     $("#mbody").innerHTML = `
       <div class="f"><label>Workload name ${tip("The real Kubernetes Deployment name. Renaming creates a replacement Deployment, waits for it to become ready, then removes the old one. Generated pods use this name plus a Kubernetes suffix.")}</label><input type="text" id="e_workload_name" value="${esc(w.name)}"></div>
       <div class="f"><label>Pod hostname ${tip("The hostname visible inside the pod. It does not rename the Kubernetes Pod; generated pods use the workload name plus a suffix.")}</label><input type="text" id="e_pod_name" value="${esc(w.pod_hostname || "")}" placeholder="optional"></div>

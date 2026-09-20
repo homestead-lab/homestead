@@ -283,28 +283,54 @@ def _longhorn_volume(pvc):
         f"/apis/longhorn.io/v1beta2/namespaces/{LONGHORN_NAMESPACE}/volumes/{name}")
 
 
+def _samba_node():
+    pods = _get_optional(
+        f"/api/v1/namespaces/{NAMESPACE}/pods?labelSelector=app%3Dsamba") or {}
+    for pod in pods.get("items", []) or []:
+        node = (pod.get("spec") or {}).get("nodeName")
+        if node:
+            return node
+    return ""
+
+
 def claim_warnings(pvc_name):
     """Check a claim before Samba is touched, and say what looks risky.
 
-    An unbound claim is refused outright: there is nothing to mount.  A
-    *migratable* volume — a second controller so a VM disk can live-migrate —
-    is only warned about.  Longhorn has been seen to reject filesystem mounts
-    of those, but whether it does depends on how the volume is currently
-    attached, so the attempt is allowed and the rollout guard is what keeps
-    Samba safe if the mount really does fail.
+    An unbound claim is refused: there is nothing to mount.  The subtle case is
+    a volume already attached on another node.  A migratable volume answers a
+    second node by starting a live migration rather than attaching, and
+    Longhorn will not filesystem-mount it while that is in flight; a
+    ReadWriteOnce volume simply cannot attach twice.  Both are warnings rather
+    than refusals — the rollout guard is what protects the working shares —
+    but they name the node, because that is the fact that decides it.
     """
     pvc = _pvc(pvc_name)
     phase = ((pvc.get("status") or {}).get("phase") or "").strip()
     if phase != "Bound":
         raise ValueError(f"volume {pvc_name} is {phase.lower() or 'not bound'}, "
                          "so it cannot back a share yet")
-    spec = (_longhorn_volume(pvc) or {}).get("spec") or {}
-    controllers = int(spec.get("numberOfControllers") or 1)
-    if spec.get("migratable") or controllers > 1:
-        return [f"{pvc_name} is a live-migratable Longhorn volume ({controllers} controllers). "
-                "Longhorn may refuse to mount it into a pod; if it does, this change is "
-                "rolled back and your existing shares keep serving."]
-    return []
+    volume = _longhorn_volume(pvc) or {}
+    spec, status = volume.get("spec") or {}, volume.get("status") or {}
+    attached = status.get("currentNodeID", "")
+    here = _samba_node()
+    warnings = []
+    if attached and here and attached != here:
+        modes = (pvc.get("spec") or {}).get("accessModes") or []
+        if spec.get("migratable"):
+            warnings.append(
+                f"{pvc_name} is attached on {attached} and its storage class is migratable, so "
+                f"Longhorn will try to live-migrate it to {here} instead of attaching it. That "
+                "mount usually fails; if it does, this change is rolled back and your existing "
+                "shares keep serving.")
+        elif "ReadWriteMany" not in modes:
+            warnings.append(
+                f"{pvc_name} is ReadWriteOnce and already attached on {attached}, so Samba on "
+                f"{here} cannot mount it at the same time. If the mount fails, this change is "
+                "rolled back and your existing shares keep serving.")
+    if status.get("robustness") and status["robustness"] not in ("healthy", ""):
+        warnings.append(f"{pvc_name} is {status['robustness']} in Longhorn; repair its replicas "
+                        "before relying on this share.")
+    return warnings
 
 
 def _samba_ready():

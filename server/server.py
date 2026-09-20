@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.7"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.8"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1150,6 +1150,59 @@ def _dns_name(value, label="name"):
     return value
 
 
+def longhorn_state_by_pvc(namespace):
+    """Longhorn's live view of each claim: health, and where it is attached.
+
+    A claim that is Bound tells you nothing about whether a second pod on
+    another node can mount it, which is exactly the question a storage picker
+    is asking.
+    """
+    try:
+        volumes = kget("/apis/longhorn.io/v1beta2/volumes").get("items", [])
+    except Exception:
+        return {}
+    state = {}
+    for volume in volumes:
+        status = volume.get("status", {}) or {}
+        kubernetes = status.get("kubernetesStatus", {}) or {}
+        if kubernetes.get("namespace") != namespace or not kubernetes.get("pvcName"):
+            continue
+        workloads = sorted({row.get("workloadName") or row.get("podName") or ""
+                            for row in kubernetes.get("workloadsStatus") or []
+                            if row.get("workloadName") or row.get("podName")})
+        state[kubernetes["pvcName"]] = {
+            "robustness": status.get("robustness", ""),
+            "node": status.get("currentNodeID", ""),
+            "migratable": bool((volume.get("spec", {}) or {}).get("migratable")),
+            "migrating_to": (volume.get("spec", {}) or {}).get("migrationNodeID", ""),
+            "workloads": workloads,
+        }
+    return state
+
+
+def _pvc_rows(namespace):
+    """Every claim in a namespace, with the Longhorn facts a picker needs."""
+    live = longhorn_state_by_pvc(namespace)
+    rows = []
+    for item in kget(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims").get("items", []):
+        spec, status = item.get("spec", {}), item.get("status", {})
+        name = item["metadata"]["name"]
+        facts = live.get(name, {})
+        rows.append({
+            "name": name,
+            "size": (status.get("capacity", {}) or {}).get("storage") or
+                    (spec.get("resources", {}).get("requests", {}) or {}).get("storage", ""),
+            "status": status.get("phase", "Unknown"),
+            "access_modes": spec.get("accessModes", []) or [],
+            "storage_class": spec.get("storageClassName", ""),
+            "robustness": facts.get("robustness", ""),
+            "node": facts.get("node", ""),
+            "migratable": facts.get("migratable", False),
+            "workloads": facts.get("workloads", []),
+        })
+    return sorted(rows, key=lambda row: row["name"])
+
+
 def deploy_options(ns):
     """Return the live choices needed by the deployment editor."""
     deployments = []
@@ -1174,20 +1227,9 @@ def deploy_options(ns):
             "containers": [c.get("name", "") for c in pspec.get("containers", []) or []],
             "volumes": volumes,
         })
-    pvcs = []
-    for item in kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims").get("items", []):
-        spec, status = item.get("spec", {}), item.get("status", {})
-        pvcs.append({
-            "name": item["metadata"]["name"],
-            "size": (status.get("capacity", {}) or {}).get("storage") or
-                    (spec.get("resources", {}).get("requests", {}) or {}).get("storage", ""),
-            "status": status.get("phase", "Unknown"),
-            "access_modes": spec.get("accessModes", []) or [],
-            "storage_class": spec.get("storageClassName", ""),
-        })
     classes = storage_classes()
     return {"deployments": sorted(deployments, key=lambda x: x["name"]),
-            "pvcs": sorted(pvcs, key=lambda x: x["name"]),
+            "pvcs": _pvc_rows(ns),
             "storage_classes": selectable_storage_classes(classes),
             "shared_storage_classes": shared_storage_classes(classes),
             "storage_class_facts": storage_class_facts(classes)}
@@ -1196,19 +1238,14 @@ def deploy_options(ns):
 def share_storage_options():
     """Volumes a new share can be created on, in the namespace Samba runs in."""
     ns = SMB_NAMESPACE
-    pvcs = []
-    for item in kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims").get("items", []):
-        spec, status = item.get("spec", {}), item.get("status", {})
-        pvcs.append({
-            "name": item["metadata"]["name"],
-            "size": (status.get("capacity", {}) or {}).get("storage") or
-                    (spec.get("resources", {}).get("requests", {}) or {}).get("storage", ""),
-            "status": status.get("phase", "Unknown"),
-            "access_modes": spec.get("accessModes", []) or [],
-            "storage_class": spec.get("storageClassName", ""),
-        })
     classes = storage_classes()
-    return {"namespace": ns, "pvcs": sorted(pvcs, key=lambda row: row["name"]),
+    node = ""
+    try:
+        pods = kget(f"/api/v1/namespaces/{ns}/pods?labelSelector=app%3Dsamba").get("items", [])
+        node = next((pod["spec"].get("nodeName", "") for pod in pods if pod["spec"].get("nodeName")), "")
+    except Exception:
+        node = ""
+    return {"namespace": ns, "node": node, "pvcs": _pvc_rows(ns),
             "storage_classes": selectable_storage_classes(classes),
             "shared_storage_classes": shared_storage_classes(classes),
             "storage_class_facts": storage_class_facts(classes)}

@@ -193,8 +193,10 @@
     deployments: workloads.filter(w => w.ns === "lab").map(w => ({ name: w.name,
       containers: w.pods[0].containers.map(c => c.name),
       volumes: w.name === "frigate" ? [{ name: "config", kind: "pvc", source: "frigate-config" }] : [] })),
-    pvcs: volumes.map(v => ({ name: v.pvc_name, size: `${v.size_gb}Gi`, status: v.state === "attached" ? "Bound" : "Available",
-      access_modes: v.access_modes, storage_class: v.storage_class })),
+    pvcs: volumes.map(v => ({ name: v.pvc_name, size: `${v.size_gb}Gi`, status: "Bound",
+      access_modes: v.access_modes, storage_class: v.storage_class,
+      robustness: v.robustness, node: v.node, migratable: v.storage_class === "longhorn-r2",
+      workloads: v.attached || [] })),
     storage_classes: ["harvester-longhorn", "longhorn", "longhorn-r2"],
     shared_storage_classes: ["longhorn"],
     storage_class_facts: {
@@ -300,10 +302,11 @@
         expandable: false, reclaim: "Delete", default: false, internal: true, in_use: 0 },
     ],
     "/api/shares": shares,
-    "/api/shares/options": { namespace: "lab",
-      pvcs: volumes.map(v => ({ name: v.pvc_name, size: `${v.size_gb}Gi`,
-        status: v.state === "attached" ? "Bound" : "Available",
-        access_modes: v.access_modes, storage_class: v.storage_class })),
+    "/api/shares/options": { namespace: "lab", node: "harvester-node2",
+      pvcs: volumes.map(v => ({ name: v.pvc_name, size: `${v.size_gb}Gi`, status: "Bound",
+        access_modes: v.access_modes, storage_class: v.storage_class,
+        robustness: v.robustness, node: v.node, migratable: v.storage_class === "longhorn-r2",
+        workloads: v.attached || [] })),
       storage_classes: ["harvester-longhorn", "longhorn", "longhorn-r2"],
       shared_storage_classes: ["longhorn"], storage_class_facts: deployOptions.storage_class_facts },
     "/api/shares/edit": { ok: true, shares, deployment_updated: true,
@@ -382,7 +385,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.6", candidate: "ghcr.io/wjcloudy/homestead:2.8.7", candidate_tag: "2.8.7", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.7", candidate: "ghcr.io/wjcloudy/homestead:2.8.8", candidate_tag: "2.8.8", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

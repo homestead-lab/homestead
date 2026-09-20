@@ -149,20 +149,54 @@ class ShareTests(unittest.TestCase):
         self.assertEqual("10Gi", pvc["spec"]["resources"]["requests"]["storage"])
         self.assertFalse(any("persistentvolumeclaims" in path for _, path, _ in self.sent))
 
-    def test_a_migratable_volume_is_warned_about_but_still_allowed(self):
-        """Other pods do mount these, so the rollout guard decides, not a blanket ban."""
-        self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/vmdisk"] = {
-            "metadata": {"name": "vmdisk"}, "spec": {"volumeName": "pvc-abc"},
+    def _volume(self, claim, **status):
+        """A Bound claim backed by a Longhorn volume in the given state."""
+        self.objects[f"/api/v1/namespaces/lab/persistentvolumeclaims/{claim}"] = {
+            "metadata": {"name": claim},
+            "spec": {"volumeName": f"pvc-{claim}", "accessModes": status.pop("modes", ["ReadWriteMany"])},
             "status": {"phase": "Bound", "capacity": {"storage": "5Gi"}}}
-        self.objects["/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/pvc-abc"] = {
-            "metadata": {"name": "pvc-abc"},
-            "spec": {"migratable": True, "numberOfControllers": 2, "accessMode": "rwx"}}
+        self.objects[f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/pvc-{claim}"] = {
+            "metadata": {"name": f"pvc-{claim}"},
+            "spec": {"migratable": status.pop("migratable", False)},
+            "status": {"currentNodeID": status.pop("node", ""),
+                       "robustness": status.pop("robustness", "healthy")}}
+        self.objects["/api/v1/namespaces/lab/pods?labelSelector=app%3Dsamba"] = {
+            "items": [{"spec": {"nodeName": "harvester-node2"}}]}
 
-        result = shares.create_share("vm", 0, "vm", "pw", False, pvc="vmdisk")
+    def test_a_migratable_volume_attached_elsewhere_warns_about_live_migration(self):
+        """The case that took Samba down: second node, migratable class."""
+        self._volume("plexmedia", migratable=True, node="harvester-node1")
 
-        self.assertIn("live-migratable", result["warnings"][0])
-        self.assertIn("rolled back", result["warnings"][0])
+        result = shares.create_share("plex", 0, "plex", "pw", False, pvc="plexmedia")
+
+        warning = result["warnings"][0]
+        self.assertIn("harvester-node1", warning)
+        self.assertIn("live-migrate", warning)
+        self.assertIn("harvester-node2", warning)
+        self.assertIn("rolled back", warning)
         self.assertTrue(any("deployments/samba" in path for _, path, _ in self.sent))
+
+    def test_a_migratable_volume_nobody_holds_is_not_nagged_about(self):
+        self._volume("spare", migratable=True, node="")
+
+        self.assertEqual([], shares.create_share("spare", 0, "spare", "pw", False,
+                                                 pvc="spare")["warnings"])
+
+    def test_a_volume_attached_on_samba_s_own_node_is_fine(self):
+        self._volume("local", migratable=True, node="harvester-node2")
+
+        self.assertEqual([], shares.create_share("local", 0, "local", "pw", False,
+                                                 pvc="local")["warnings"])
+
+    def test_rwo_attached_elsewhere_and_degraded_replicas_are_both_called_out(self):
+        self._volume("appdata", modes=["ReadWriteOnce"], node="harvester-node1",
+                     robustness="degraded")
+
+        warnings = shares.create_share("app", 0, "app", "pw", False, pvc="appdata")["warnings"]
+
+        self.assertIn("ReadWriteOnce", warnings[0])
+        self.assertIn("harvester-node1", warnings[0])
+        self.assertIn("degraded", warnings[1])
 
     def test_an_unbound_volume_is_refused(self):
         self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/pending"] = {

@@ -453,6 +453,7 @@ window.newShare = async () => {
     storageClasses: () => options.storage_classes || [],
     sharedStorageClasses: () => options.shared_storage_classes || options.storage_classes || [],
     classFacts: () => options.storage_class_facts || {},
+    targetNode: () => options.node || "",
     kinds: ["new-rwo", "new-rwx", "existing"],
     pathLabel: "Folder inside the volume",
     pathPlaceholder: "whole volume",
