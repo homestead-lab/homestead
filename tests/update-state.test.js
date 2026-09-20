@@ -16,3 +16,24 @@ test("missing or equal timestamps remain eligible", () => {
   assert.equal(state.isStale(report, report), false);
   assert.equal(state.isStale({}, report), false);
 });
+
+test("only workloads with available images can be staged", () => {
+  const report = { workloads: [
+    { ns: "lab", name: "plex", available: true },
+    { ns: "lab", name: "frigate", available: false, images: [{ error: "registry unavailable" }] },
+    { ns: "lab", name: "samba", available: true },
+  ] };
+  assert.deepEqual(state.availableWorkloads(report).map(item => item.name), ["plex", "samba"]);
+});
+
+test("control-plane updates are applied last without disturbing the selected order", () => {
+  const selected = [
+    { name: "homestead" },
+    { name: "plex" },
+    { name: "harvui" },
+    { name: "frigate" },
+  ];
+  assert.deepEqual(state.orderApply(selected).map(item => item.name),
+    ["plex", "frigate", "homestead", "harvui"]);
+  assert.deepEqual(selected.map(item => item.name), ["homestead", "plex", "harvui", "frigate"]);
+});

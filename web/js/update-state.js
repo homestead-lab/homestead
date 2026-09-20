@@ -12,5 +12,15 @@
     return Number.isFinite(current) && Number.isFinite(next) && next < current;
   }
 
-  return { isStale };
+  function availableWorkloads(report) {
+    return (report?.workloads || []).filter(workload => workload?.available);
+  }
+
+  function orderApply(workloads, controlPlaneNames = ["homestead", "harvui"]) {
+    const names = new Set(controlPlaneNames);
+    return [...(workloads || [])].sort((left, right) =>
+      Number(names.has(left?.name)) - Number(names.has(right?.name)));
+  }
+
+  return { isStale, availableWorkloads, orderApply };
 });

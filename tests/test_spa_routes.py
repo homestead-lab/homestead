@@ -30,7 +30,7 @@ class SpaRouteTests(unittest.TestCase):
         html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
         hrefs = set(re.findall(r'<a href="([^"]+)" data-view=', html))
         self.assertEqual(set(server.SPA_ROUTES), hrefs)
-        self.assertIn('<script src="/js/router.js"></script>', html)
+        self.assertRegex(html, r'<script src="/js/router\.js\?v=\d+\.\d+\.\d+"></script>')
 
     def test_bundled_svg_assets_are_public_without_allowing_traversal(self):
         self.assertTrue(server.is_asset_path("/assets/homestead-mark.svg"))

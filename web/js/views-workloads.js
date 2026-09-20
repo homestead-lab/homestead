@@ -100,13 +100,19 @@ window.imageUpdateCenter = async () => {
   }
   if (!report) return;
   const affected = (report.workloads || []).filter(w => w.available || w.images?.some(image => image.error));
+  const available = HarvUpdateState.availableWorkloads(report);
   const policy = report.policy || {};
   modal("Image updates", `<div class="update-center">
     <div class="note"><b>${esc(policy.policy === "notify_only" ? "Notify only" : policy.policy === "maintenance_window" ? "Maintenance window" : "Approval required")}</b>
       ${esc(policy.reason || "Every rollout requires an explicit review.")}</div>
+    ${available.length ? `<div class="update-selectbar">
+      <label class="switch"><input type="checkbox" id="updateSelectAll" checked onchange="toggleImageUpdateSelection(this.checked)"> Select all</label>
+      <span id="updateSelectedCount">${available.length} of ${available.length} selected</span>
+      <button class="btn pri" id="updateStage" data-need="operator" onclick="imageUpdateBatchReview()">Stage selected (${available.length})</button>
+    </div>` : ""}
     ${affected.length ? `<div class="settings-list">${affected.map(w => {
       const failures = (w.images || []).filter(image => image.error);
-      return `<div class="settings-list-row update-center-row"><div><b>${esc(w.name)}</b><div class="dim xs mono">${esc(w.ns)}</div>
+      return `<div class="settings-list-row update-center-row">${w.available ? `<label class="update-pick" title="Stage ${esc(w.name)}"><input class="update-select" type="checkbox" checked data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" onchange="syncImageUpdateSelection()"><span></span></label>` : '<span class="update-pick-spacer"></span>'}<div><b>${esc(w.name)}</b><div class="dim xs mono">${esc(w.ns)}</div>
         ${failures.map(image => `<div class="updateerror">${esc(image.container)} · ${esc(image.error)}</div>`).join("")}</div>
         <div class="row">${w.available ? '<span class="pill warn">update available</span>' : ""}
         ${failures.length ? '<span class="pill crit">check failed</span>' : ""}
@@ -114,6 +120,56 @@ window.imageUpdateCenter = async () => {
     }).join("")}</div>` : '<div class="empty small">Images are current and registry checks succeeded.</div>'}
     <div class="row" style="margin-top:16px"><button class="btn" onclick="closeModal();go('workloads')">Open Containers</button>
       <button class="btn" onclick="checkImageUpdates()">Check now</button></div></div>`, true);
+  if (window.applyRole) window.applyRole();
+};
+window.syncImageUpdateSelection = () => {
+  const boxes = [...document.querySelectorAll("#mbody .update-select")];
+  const selected = boxes.filter(box => box.checked).length;
+  const all = document.getElementById("updateSelectAll");
+  if (all) {
+    all.checked = !!boxes.length && selected === boxes.length;
+    all.indeterminate = selected > 0 && selected < boxes.length;
+  }
+  const count = document.getElementById("updateSelectedCount");
+  if (count) count.textContent = `${selected} of ${boxes.length} selected`;
+  const stage = document.getElementById("updateStage");
+  if (stage) {
+    stage.disabled = selected === 0;
+    stage.textContent = `Stage selected (${selected})`;
+  }
+};
+window.toggleImageUpdateSelection = checked => {
+  document.querySelectorAll("#mbody .update-select").forEach(box => { box.checked = checked; });
+  syncImageUpdateSelection();
+};
+window.imageUpdateBatchReview = () => {
+  const keys = new Set([...document.querySelectorAll("#mbody .update-select:checked")]
+    .map(box => updateKey(box.dataset.ns, box.dataset.name)));
+  const selected = HarvUpdateState.availableWorkloads(STATE.data.imageUpdates)
+    .filter(item => keys.has(updateKey(item.ns, item.name)));
+  if (!selected.length) return toast("Select at least one update to stage", "bad");
+  window.__imageUpdateBatch = selected.map(item => ({ ns: item.ns, name: item.name }));
+  const policy = STATE.data.imageUpdates?.policy || {};
+  const blocked = policy.allows_install === false;
+  const imageCount = selected.reduce((total, item) => total + item.images.filter(image => image.available).length, 0);
+  modal(`Stage ${selected.length} update${selected.length === 1 ? "" : "s"}`, `<div class="update-review">
+    <div class="note"><b>Managed batch update.</b> Homestead will pin ${imageCount} selected image${imageCount === 1 ? "" : "s"} by digest,
+      start each rollout, monitor Kubernetes readiness, and preserve every previous digest for rollback.</div>
+    ${selected.map(item => `<section class="update-workload-review"><div class="between"><div><b>${esc(item.name)}</b><div class="dim xs mono">${esc(item.ns)}</div></div>
+      <span class="pill warn">${item.images.filter(image => image.available).length} image${item.images.filter(image => image.available).length === 1 ? "" : "s"}</span></div>
+      ${item.images.filter(image => image.available).map(image => `<div class="update-image">
+        <div class="between"><b>${esc(image.container)}</b><span class="tag warn">${esc(image.candidate_tag || "new digest")}</span></div>
+        <div><span>Running</span><code>${esc(image.deployed)}</code></div>
+        <div><span>Install</span><code>${esc(image.candidate)}@${esc((image.remote_digest || "").slice(0, 19))}…</code></div>
+      </div>`).join("")}</section>`).join("")}
+    <div class="note ${blocked ? "dependency-danger" : ""}"><b>Cluster policy · ${esc(policy.policy === "notify_only" ? "notify only" : policy.policy === "maintenance_window" ? "maintenance window" : "approval required")}</b>
+      ${esc(policy.reason || "Review and approve these digest-pinned rollouts.")}</div>
+    <label class="switch update-approval ${blocked ? "hidden" : ""}"><input type="checkbox" id="updateBatchApprove"
+      onchange="document.getElementById('updateBatchInstall').disabled=!this.checked"> I reviewed every selected image change and approve these rollouts</label>
+    <div class="row" style="margin-top:18px"><button class="btn pri" id="updateBatchInstall" data-need="operator" disabled
+      onclick="imageUpdateBatchApply()">Install ${selected.length} update${selected.length === 1 ? "" : "s"}</button>
+      <button class="btn" onclick="imageUpdateCenter()">Back</button></div></div>`, true);
+  if (window.applyRole) window.applyRole();
 };
 window.openUpdateWorkload = name => {
   closeModal();
@@ -270,6 +326,74 @@ window.imageUpdateApply = async (ns, name) => {
       body: JSON.stringify({ ns, name, approved: true }) });
     monitorImageRollout(ns, name);
   } catch (e) { $("#mbody").innerHTML = `<div class="empty"><b>Update could not start</b><br><span class="dim">${esc(e.message)}</span></div>`; }
+};
+
+function batchUpdateMarkup(items, states, startFailures = [], reconnecting = false) {
+  const failureMap = Object.fromEntries(startFailures.map(item => [updateKey(item.ns, item.name), item.error]));
+  const complete = items.filter(item => failureMap[updateKey(item.ns, item.name)] ||
+    ["ready", "failed"].includes(states[updateKey(item.ns, item.name)]?.phase)).length;
+  return `<div class="batch-rollout">
+    <div class="between"><div><b>${complete}/${items.length} rollouts complete</b>
+      <div class="dim xs">Each workload is tracked independently and keeps its own rollback image.</div></div>
+      ${reconnecting ? '<span class="pill warn">reconnecting</span>' : '<span class="pill ok">monitoring</span>'}</div>
+    <div class="rollout-meter"><span style="width:${items.length ? Math.round(complete / items.length * 100) : 100}%"></span></div>
+    <div class="batch-rollout-list">${items.map(item => {
+      const key = updateKey(item.ns, item.name), state = states[key], startError = failureMap[key];
+      const phase = startError ? "failed to start" : state?.phase || "starting";
+      const tone = phase === "ready" ? "ok" : phase === "failed" || startError ? "crit" : "warn";
+      return `<div><span><b>${esc(item.name)}</b><small>${esc(item.ns)}${state ? ` · ${state.ready}/${state.desired} ready` : ""}</small></span>
+        <span class="pill ${tone}">${esc(phase)}</span>${startError ? `<div class="updateerror">${esc(startError)}</div>` : ""}</div>`;
+    }).join("")}</div>
+    <div class="row" style="margin-top:18px"><button class="btn" onclick="closeModal()">Monitor in background</button></div>
+  </div>`;
+}
+
+window.imageUpdateBatchApply = async () => {
+  const selected = window.__imageUpdateBatch || [];
+  if (!selected.length) return toast("The staged update list is empty", "bad");
+  const ordered = HarvUpdateState.orderApply(selected);
+  const started = [], startFailures = [], states = Object.fromEntries(ordered.map(item =>
+    [updateKey(item.ns, item.name), { phase: "queued", ready: 0, desired: 1 }]));
+  modal(`Starting ${ordered.length} updates`, batchUpdateMarkup(ordered, states), true);
+  for (const item of ordered) {
+    try {
+      await api("/api/image-updates/apply", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ns: item.ns, name: item.name, approved: true }) });
+      started.push(item);
+      states[updateKey(item.ns, item.name)] = { phase: "starting", ready: 0, desired: 1 };
+    } catch (error) {
+      startFailures.push({ ...item, error: error.message });
+    }
+    if ($("#mbody")) $("#mbody").innerHTML = batchUpdateMarkup(ordered, states, startFailures);
+  }
+  if (started.length) monitorImageRollouts(started, startFailures, states, ordered);
+};
+
+window.monitorImageRollouts = (items, startFailures = [], initialStates = {}, allItems = items) => {
+  if (window.__updateTimer) clearInterval(window.__updateTimer);
+  const states = { ...initialStates };
+  let misses = 0;
+  const poll = async () => {
+    if ($("#modal").classList.contains("hidden")) return clearInterval(window.__updateTimer);
+    const results = await Promise.all(items.map(async item => {
+      try {
+        const state = await api(`/api/image-updates/progress?ns=${encodeURIComponent(item.ns)}&name=${encodeURIComponent(item.name)}`);
+        return { item, state };
+      } catch (error) { return { item, error }; }
+    }));
+    const successful = results.filter(result => result.state);
+    misses = successful.length ? 0 : misses + 1;
+    successful.forEach(result => { states[updateKey(result.item.ns, result.item.name)] = result.state; });
+    if ($("#mbody")) $("#mbody").innerHTML = batchUpdateMarkup(allItems, states, startFailures, misses > 0);
+    if (window.applyRole) window.applyRole();
+    const terminal = items.every(item => ["ready", "failed"].includes(states[updateKey(item.ns, item.name)]?.phase));
+    if (terminal) {
+      clearInterval(window.__updateTimer); window.__updateTimer = null;
+      if ($("#mbody")) $("#mbody").insertAdjacentHTML("beforeend", '<button class="btn pri" onclick="closeModal();go(\'workloads\')">Done</button>');
+      setTimeout(() => loadImageUpdates(true, true), 1000);
+    }
+  };
+  poll(); window.__updateTimer = setInterval(poll, 2000);
 };
 
 function rolloutMarkup(s) {

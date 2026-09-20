@@ -288,10 +288,14 @@
       return { ok: true, name: body.name, namespace: body.namespace,
         message: `Service ${body.namespace}/${body.name} created` };
     },
-    "/api/image-updates": { checked_at: "2026-09-19T12:00:00Z", updates: 1, errors: 0,
+    "/api/image-updates": { checked_at: "2026-09-19T12:00:00Z", updates: 3, errors: 0,
       policy: { policy: "approval_required", allows_install: true, reason: "Explicit operator approval is required before rollout." },
       workloads: [{ ns: "lab", name: "frigate", available: true, can_rollback: true,
-        images: [{ container: "frigate", deployed: "ghcr.io/blakeblackshear/frigate:stable", candidate: "ghcr.io/blakeblackshear/frigate:stable", candidate_tag: "stable", remote_digest: "sha256:abc", available: true }] }] },
+        images: [{ container: "frigate", deployed: "ghcr.io/blakeblackshear/frigate:stable", candidate: "ghcr.io/blakeblackshear/frigate:stable", candidate_tag: "stable", remote_digest: "sha256:abc", available: true }] },
+      { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
+        images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
+      { ns: "lab", name: "homestead", available: true, can_rollback: true,
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.7.6", candidate: "ghcr.io/wjcloudy/homestead:2.7.7", candidate_tag: "2.7.7", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]
