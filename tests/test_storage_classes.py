@@ -56,11 +56,18 @@ class StorageClassTests(unittest.TestCase):
 
         method, path, body = self.sent[-1]
         self.assertEqual(("POST", "/apis/storage.k8s.io/v1/storageclasses"), (method, path))
-        self.assertEqual({"numberOfReplicas": "3", "staleReplicaTimeout": "30"}, body["parameters"])
+        self.assertEqual({"numberOfReplicas": "3", "staleReplicaTimeout": "30",
+                          "migratable": "false", "encrypted": "false"}, body["parameters"],
+                         "every parameter is written explicitly, not left blank")
         self.assertEqual("driver.longhorn.io", body["provisioner"])
         self.assertEqual("Retain", body["reclaimPolicy"])
         self.assertTrue(body["allowVolumeExpansion"])
-        self.assertNotIn("migratable", body["parameters"], "container storage is not migratable")
+        self.assertEqual("false", body["parameters"]["migratable"])
+
+    def test_a_migratable_class_says_so_explicitly_too(self):
+        server.create_storage_class({"name": "longhorn-vm", "replicas": 2, "migratable": True})
+
+        self.assertEqual("true", self.sent[-1][2]["parameters"]["migratable"])
 
     def test_making_a_class_default_clears_the_previous_one(self):
         server.set_default_storage_class("longhorn")

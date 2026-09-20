@@ -1455,9 +1455,12 @@ def create_storage_class(cfg):
     reclaim = str(cfg.get("reclaim_policy") or "Delete")
     if reclaim not in ("Delete", "Retain"):
         raise ValueError("reclaim policy must be Delete or Retain")
-    parameters = {"numberOfReplicas": str(replicas), "staleReplicaTimeout": str(stale)}
-    if cfg.get("migratable"):
-        parameters["migratable"] = "true"
+    # Written explicitly, the way Harvester writes its own classes: a blank
+    # parameter and an explicit false behave the same in Longhorn but do not
+    # read the same to anyone comparing two classes.
+    parameters = {"numberOfReplicas": str(replicas), "staleReplicaTimeout": str(stale),
+                  "migratable": "true" if cfg.get("migratable") else "false",
+                  "encrypted": "true" if cfg.get("encrypted") else "false"}
     body = {"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
             "metadata": {"name": name, "labels": {"harvui.io/managed": "true"},
                          "annotations": {DEFAULT_CLASS_ANNOTATION: "true"} if cfg.get("default") else {}},
