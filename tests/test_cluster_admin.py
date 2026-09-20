@@ -58,6 +58,18 @@ class ClusterAdministrationTests(unittest.TestCase):
         api = next(row for row in report["services"] if row["id"] == "api")
         self.assertEqual("critical", api["state"])
 
+    def test_replaced_and_completed_system_pods_do_not_reduce_current_readiness(self):
+        current = pod("rke2-coredns-current")
+        completed = pod("rke2-coredns-old", ready=False)
+        completed["status"]["phase"] = "Succeeded"
+        terminating = pod("rke2-coredns-replaced", ready=False)
+        terminating["metadata"]["deletionTimestamp"] = "2027-01-15T08:00:00Z"
+        report = self.report([node("one", ["control-plane", "etcd"])],
+                             [current, completed, terminating])
+        dns = next(row for row in report["services"] if row["id"] == "dns")
+        self.assertEqual({"pods": 1, "ready": 1, "state": "healthy"},
+                         {key: dns[key] for key in ("pods", "ready", "state")})
+
     def test_certificate_and_recent_system_warnings_are_summarized_without_bodies(self):
         now = 1_800_000_000
         created = "2027-01-15T07:46:40Z"  # 20 minutes before `now`

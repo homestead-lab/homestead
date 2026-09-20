@@ -81,6 +81,11 @@ def _service_rows(pods):
     groups = {key: [] for key, _, _, _ in SERVICE_DEFS}
     for pod in pods:
         meta = pod.get("metadata") or {}
+        phase = (pod.get("status") or {}).get("phase")
+        # Replaced static pods and completed system jobs can remain visible in
+        # the API briefly. They are history, not part of current availability.
+        if meta.get("deletionTimestamp") or phase in ("Succeeded", "Failed"):
+            continue
         labels = meta.get("labels") or {}
         haystack = " ".join((meta.get("name", ""), labels.get("app", ""),
                              labels.get("k8s-app", ""), labels.get("component", ""))).lower()
