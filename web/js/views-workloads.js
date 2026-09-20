@@ -444,14 +444,23 @@ document.addEventListener("keydown", event => {
 const deployDefaults = () => ({ name: "", image: "", icon: "", namespace: "lab", replicas: 1,
   cpu: "50m", memory: "128Mi", ports: [], env: {}, env_meta: [], volumes: [], hardware: [],
   template_devices: [], target_mode: "new", target_workload: "", network_mode: "loadbalancer",
-  vip_mode: "shared", lb_ip: "" });
+  vip_mode: "shared", lb_ip: "", env_bindings: {}, app_profile: null });
 let DCFG = deployDefaults(), DOPT = { deployments: [], pvcs: [], storage_classes: [] }, DRENDERING = false;
+function generatedSecret() {
+  const bytes = new Uint8Array(18); crypto.getRandomValues(bytes);
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
 async function viewDeploy(pre) {
   pre = pre || window.__deployPrefill;
   window.__deployPrefill = null;
   const [, liveNodes] = await Promise.all([loadHardwareFeatures(), api("/api/nodes").catch(() => [])]);
   if (liveNodes.length) STATE.data.nodes = liveNodes;
   DCFG = Object.assign(deployDefaults(), pre || {});
+  (DCFG.env_meta || []).forEach(meta => {
+    meta.binding = (DCFG.env_bindings || {})[meta.key] || "";
+    if (meta.binding) DCFG.env[meta.key] = "";
+    if (meta.generate && !DCFG.env[meta.key]) DCFG.env[meta.key] = generatedSecret();
+  });
   (DCFG.template_devices || []).forEach(device => {
     const devicePaths = [device.host_path, device.container_path].filter(Boolean);
     const feature = (STATE.data.hardwareFeatures || []).find(f => {
@@ -468,6 +477,12 @@ async function viewDeploy(pre) {
       <p>Run an independent workload or add a sidecar container to an existing pod</p></div></div>
   <div class="split">
     <div class="card flat">
+      ${DCFG.app_profile ? `<div class="app-profile ${esc(DCFG.app_profile.level || "review")}">
+        <div class="settings-card-head"><div><b>${esc(DCFG.app_profile.label || "Template guidance")}</b>
+          <div class="dim small">Compatibility guidance derived from ports, paths, variables, and runtime access</div></div><span class="pill ${DCFG.app_profile.level === "dependency" ? "warn" : "info"}">${esc(DCFG.app_profile.intent || "template")}</span></div>
+        ${(DCFG.app_profile.notes || []).map(note => `<div class="profile-note">✓ ${esc(note)}</div>`).join("")}
+        ${(DCFG.app_profile.dependencies || []).length ? `<div class="dependency-list">${DCFG.app_profile.dependencies.map(dep => `<div class="dependency-row stranded"><span>${esc(dep.name)}</span><b>${dep.managed ? "managed" : "deploy separately"}</b></div>`).join("")}</div>` : ""}
+      </div>` : ""}
       <div class="f"><label>Deployment model ${tip("A new workload gets its own pod and lifecycle. Adding to an existing workload creates a sidecar container; Kubernetes restarts that workload's pods to apply it.")}</label>
         <select id="d_target_mode"><option value="new" ${DCFG.target_mode !== "existing" ? "selected" : ""}>New workload · independent pod</option>
           <option value="existing" ${DCFG.target_mode === "existing" ? "selected" : ""}>Add container to existing workload · shared pod</option></select></div>
@@ -491,7 +506,7 @@ async function viewDeploy(pre) {
         ${hardwareChoices("d_hw", (DCFG.hardware || []).concat(DCFG.gpu && !(DCFG.hardware || []).includes("igpu") ? ["igpu"] : []))}
       </div>
       ${(DCFG.template_devices || []).length ? `<div class="note import-device-note"><b>Imported device mappings:</b> ${(DCFG.template_devices || []).map(d => `<span class="mono">${esc(d.host_path || "?")} → ${esc(d.container_path || "?")}</span>`).join(", ")}. Matching hardware features were selected; review them before deploying.</div>` : ""}
-      <div class="sec">Network ${tip("Kubernetes replaces Docker bridge networking with Services. Use a dedicated VIP for apps such as Pi-hole that need their own address or common ports.")}</div>
+      <div class="sec">Network ${tip("Kubernetes replaces Docker bridge networking with Services. Use a dedicated VIP for DNS servers and other workloads that must own common ports.")}</div>
       <div class="f2"><div class="f"><label>Access mode</label><select id="d_net">
         <option value="loadbalancer" ${DCFG.network_mode === "loadbalancer" ? "selected" : ""}>LAN access (VIP)</option>
         <option value="internal" ${DCFG.network_mode === "internal" ? "selected" : ""}>Cluster only</option>
@@ -501,20 +516,20 @@ async function viewDeploy(pre) {
           <option value="auto" ${DCFG.vip_mode === "auto" ? "selected" : ""}>New automatic VIP</option>
           <option value="manual" ${DCFG.vip_mode === "manual" ? "selected" : ""}>Specific VIP</option></select></div></div>
       <div class="f" id="d_vip_wrap"><label>Specific VIP</label><input id="d_lb_ip" value="${esc(DCFG.lb_ip || "")}" placeholder="192.0.2.250"></div>
-      <div class="note"><b>Docker bridge → Kubernetes Service.</b> Shared VIP reuses ${esc((STATE.data.ov && STATE.data.ov.lb_ip) || "the cluster VIP")} on a unique LAN port. New automatic VIP asks kube-vip IPAM for another address. Specific VIP is ideal for Pi-hole/DNS when port 53 must live on its own address. Host network binds directly on one node and reduces failover safety.</div>
+      <div class="note"><b>Docker bridge → Kubernetes Service.</b> Shared VIP reuses ${esc((STATE.data.ov && STATE.data.ov.lb_ip) || "the cluster VIP")} on a unique LAN port. New automatic VIP asks kube-vip IPAM for another address. A dedicated VIP is ideal for DNS when port 53 must live on its own address. Host network binds directly on one node and reduces failover safety.</div>
       <div class="sec">Ports ${tip("Container port is where the process listens. LAN port is what clients use through the Kubernetes Service. TCP and UDP on the same number are separate listeners.")}</div><div id="d_ports"></div><button class="btn sm" onclick="addPort()">＋ add port</button>
       <div class="sec">Storage ${tip("The mount path is inside the container. Choose whether its backing storage is a new Longhorn claim, an existing claim, an existing volume in a shared pod, or a path on one host.")}</div>
       <div class="note storage-guide"><b>Choose deliberately:</b> RWO is best for one workload; RWX permits multi-node sharing; an existing PVC keeps its current data; a pod volume shares the exact backing volume with a sidecar. Host paths reduce failover portability.</div>
       <div id="d_vols"></div><button class="btn sm" onclick="addVol()">＋ add storage mapping</button>
       <div class="sec">Environment ${tip("Environment variables are passed directly to the container. App Store defaults are imported and remain editable.")}</div><div id="d_env"></div><button class="btn sm" onclick="addEnv()">＋ add variable</button>
       <div class="row" style="margin-top:24px">
-        <button class="btn pri" onclick="doDeploy()">Deploy container</button>
+        <button class="btn pri" onclick="doDeploy()" ${DCFG.app_profile?.blocked ? "disabled" : ""}>Deploy container</button>
         <button class="btn" onclick="previewYaml()">Preview manifest</button>
       </div>
     </div>
     <div class="card flat"><div class="ctitle">Configuration</div><div class="csub">Live summary</div>
       <div id="d_summary" style="margin-top:14px"></div>
-      <button class="btn pri wide" style="margin-top:18px" onclick="doDeploy()">Deploy</button></div>
+      <button class="btn pri wide" style="margin-top:18px" onclick="doDeploy()" ${DCFG.app_profile?.blocked ? "disabled" : ""}>Deploy</button></div>
   </div>`);
   DRENDERING = true;
   renderDeployTargets(); renderPorts(); renderVols(); renderEnv(); applyDeployMode();
@@ -572,11 +587,12 @@ function collect() {
   DCFG.volumes = $$("#d_vols .deploy-volume").map(r => {
     const kind = $(".vk", r).value;
     return { path: $(".vp", r).value.trim(), source: $(".vs", r).value.trim(), kind,
-      type: kind === "host" ? "host" : kind === "pod" ? "pod" : "pvc",
+      type: kind === "host" ? "host" : kind === "pod" ? "pod" : kind === "ephemeral" ? "emptyDir" : "pvc",
       create: kind === "new-rwo" || kind === "new-rwx", size_gb: +$(".vz", r).value || 5,
       storage_class: $(".vsc", r).value, access_mode: kind === "new-rwx" ? "ReadWriteMany" : "ReadWriteOnce",
       read_only: $(".vro", r).checked, label: r.dataset.label || "", description: r.dataset.description || "",
-      required: r.dataset.required === "true", template_source: r.dataset.templateSource || "" };
+      required: r.dataset.required === "true", template_source: r.dataset.templateSource || "",
+      role: r.dataset.role || "" };
   });
   DCFG.env = {}; $$("#d_env .env-row").forEach(r => { const k = $(".ek", r).value.trim(); if (k) DCFG.env[k] = $(".ev", r).value; });
   return DCFG;
@@ -593,7 +609,7 @@ function syncSummary() {
     row("▤", "Hardware", c.hardware.length ? hardwareTags(c.hardware) : '<span class="dim">none</span>') +
     row("◎", "Network", `<span class="small">${esc(c.network_mode)}${c.network_mode === "loadbalancer" ? ` · ${esc(c.vip_mode)} VIP` : ""}</span>`) +
     row("⇄", "Ports", c.ports.length ? c.ports.map(p => `<span class="tag ${p.expose ? "info" : ""}">${p.host}→${p.container}</span>`).join("") : '<span class="dim">—</span>') +
-    row("▥", "Storage", c.volumes.length ? c.volumes.map(v => `<span class="tag">${esc(v.source || "?")} · ${esc(v.kind)}</span>`).join("") : '<span class="dim">—</span>') +
+    row("▥", "Storage", c.volumes.length ? c.volumes.map(v => `<span class="tag">${esc(v.source || (v.kind === "ephemeral" ? "temporary" : "choose source"))} · ${esc(v.kind)}</span>`).join("") : '<span class="dim">—</span>') +
     row("≡", "Env vars", Object.keys(c.env).length ? `<span class="tag">${Object.keys(c.env).length} set</span>` : '<span class="dim">—</span>');
 }
 function addPort(cp = "", hp = "", ex = true, protocol = "TCP") {
@@ -608,6 +624,7 @@ function addPort(cp = "", hp = "", ex = true, protocol = "TCP") {
 function volumeKind(v) {
   if (v.kind) return v.kind;
   if (v.type === "host") return "host";
+  if (v.type === "emptyDir") return "ephemeral";
   if (v.type === "pod") return "pod";
   if (v.create === false) return "existing";
   return v.access_mode === "ReadWriteMany" ? "new-rwx" : "new-rwo";
@@ -630,6 +647,8 @@ function syncVolumeRow(row) {
   $(".vnew", row).style.display = isNew ? "grid" : "none";
   storageSourceList(row, actual);
   const source = $(".vs", row);
+  source.closest("div").style.display = actual === "ephemeral" ? "none" : "block";
+  source.disabled = actual === "ephemeral";
   source.placeholder = actual === "host" ? "/mnt/storage or /dev/…" : actual === "pod" ? "existing pod volume" : actual === "existing" ? "existing PVC name" : "new PVC name";
   const selectedPvc = actual === "existing" ? DOPT.pvcs.find(v => v.name === source.value) : null;
   const selectedPodVolume = actual === "pod" ? (selectedTarget()?.volumes || []).find(v => v.name === source.value) : null;
@@ -637,6 +656,7 @@ function syncVolumeRow(row) {
     : actual === "new-rwx" ? "Creates shared Longhorn storage that can attach from multiple nodes."
     : actual === "existing" ? selectedPvc ? `${selectedPvc.name}: ${(selectedPvc.access_modes || []).join("/") || "mode unknown"}, ${selectedPvc.size}, ${selectedPvc.status}. The claim and data are kept.` : "Mounts an existing PVC without creating or deleting it."
     : actual === "pod" ? selectedPodVolume ? `${selectedPodVolume.name}: ${selectedPodVolume.kind}${selectedPodVolume.source ? ` (${selectedPodVolume.source})` : ""}. Shared with the sidecar.` : "Mounts a volume already defined on the selected workload into this sidecar."
+    : actual === "ephemeral" ? "Creates temporary pod storage. Its contents are deleted when the pod is replaced; ideal for cache or transcoding."
     : "Mounts this exact host path; the container can only run where that path exists.";
 }
 function addVol(path = "", src = "", type = "pvc", meta = {}) {
@@ -644,9 +664,10 @@ function addVol(path = "", src = "", type = "pvc", meta = {}) {
   const kind = volumeKind(v), d = document.createElement("div"); d.className = "deploy-volume";
   d.dataset.label = v.label || ""; d.dataset.description = v.description || "";
   d.dataset.required = String(!!v.required); d.dataset.templateSource = v.template_source || "";
+  d.dataset.role = v.role || "";
   const listId = `vlist-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const classes = DOPT.storage_classes.length ? DOPT.storage_classes : ["longhorn-r2"];
-  d.innerHTML = `<div class="volume-title"><div><b>${esc(v.label || "Storage mapping")}</b>${v.required ? ' <span class="pill warn">required</span>' : ""}</div>
+  d.innerHTML = `<div class="volume-title"><div><b>${esc(v.label || "Storage mapping")}</b>${v.role ? `<span class="tag">${esc(v.role)}</span>` : ""}${v.required ? ' <span class="pill warn">required</span>' : ""}</div>
       <button class="iconbtn row-remove" type="button" title="Remove storage mapping" onclick="this.closest('.deploy-volume').remove();syncSummary()">×</button></div>
     ${v.description ? `<div class="dim small volume-desc">${esc(v.description)}</div>` : ""}
     <div class="deploy-volume-grid">
@@ -656,6 +677,7 @@ function addVol(path = "", src = "", type = "pvc", meta = {}) {
         <option value="new-rwx" ${kind === "new-rwx" ? "selected" : ""}>New shared volume · RWX</option>
         <option value="existing" ${kind === "existing" ? "selected" : ""}>Existing PVC · keep data</option>
         <option value="pod" ${kind === "pod" ? "selected" : ""}>Existing volume in selected pod</option>
+        <option value="ephemeral" ${kind === "ephemeral" ? "selected" : ""}>Temporary pod storage · emptyDir</option>
         <option value="host" ${kind === "host" ? "selected" : ""}>Host path · advanced</option></select></div>
       <div><label>Volume / path</label><input class="vs" type="text" list="${listId}" value="${esc(v.source || "")}"><datalist class="vchoices" id="${listId}"></datalist></div>
       <div class="vnew"><div><label>Size GiB</label><input class="vz" type="number" min="1" value="${v.size_gb || 5}"></div>
@@ -669,8 +691,11 @@ function addVol(path = "", src = "", type = "pvc", meta = {}) {
 }
 function addEnv(k = "", v = "", meta = {}) {
   const d = document.createElement("div"); d.className = "f3 env-row";
+  const editor = meta.options?.length
+    ? `<select class="ev">${meta.options.map(option => `<option ${option === v ? "selected" : ""}>${esc(option)}</option>`).join("")}</select>`
+    : `<input class="ev" type="${meta.masked ? "password" : "text"}" value="${esc(v)}" ${meta.binding ? `readonly placeholder="Assigned ${esc(meta.binding)} at deploy time"` : ""}>`;
   d.innerHTML = `<div><label>Key</label><input class="ek" type="text" value="${esc(k)}"></div>
-    <div><label>${esc(meta.label || "Value")}${meta.required ? " · required" : ""}</label><input class="ev" type="${meta.masked ? "password" : "text"}" value="${esc(v)}">${meta.description ? `<span class="dim xs">${esc(meta.description)}</span>` : ""}</div>
+    <div><label>${esc(meta.label || "Value")}${meta.required ? " · required" : ""}${meta.generate ? " · generated securely" : ""}${meta.binding ? ` · bound to ${esc(meta.binding)}` : ""}</label>${editor}${meta.description ? `<span class="dim xs">${esc(meta.description)}</span>` : ""}</div>
     <button class="iconbtn row-remove" type="button" title="Remove variable" onclick="this.parentElement.remove();syncSummary()">×</button>`;
   $("#d_env").appendChild(d); d.addEventListener("input", syncSummary); if (!DRENDERING) syncSummary();
 }
@@ -684,15 +709,18 @@ window.previewYaml = async () => {
 };
 window.doDeploy = async () => {
   const c = collect();
+  if (c.app_profile?.blocked) return toast(c.app_profile.label || "this template is not directly compatible", "bad");
   if (!c.name || !c.image) return toast("name and image are required", "bad");
   if (c.target_mode === "existing" && !c.target_workload) return toast("choose an existing workload", "bad");
-  if (c.volumes.some(v => !v.path || !v.source)) return toast("every storage mapping needs a mount path and source", "bad");
+  if (c.volumes.some(v => !v.path || (v.kind !== "ephemeral" && !v.source))) return toast("every persistent storage mapping needs a mount path and source", "bad");
   try {
     const plan = await api("/api/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
+    if (plan.app_profile?.blocked) return toast(plan.app_profile.label || "this workload needs a Kubernetes-specific design", "bad");
     const joining = c.target_mode === "existing";
     modal(joining ? "Review shared-pod change" : "Review deployment", `<div class="update-review">
       <div class="reviewbox"><b>${joining ? `Add ${esc(c.name)} to ${esc(c.target_workload)}` : `Create ${esc(c.name)}`}</b>
         <p class="dim">${esc(plan.impact?.message || "Review the Kubernetes objects before continuing.")}</p>
+        ${plan.app_profile?.notes?.length ? `<div class="app-profile ${esc(plan.app_profile.level || "review")}">${plan.app_profile.notes.map(note => `<div class="profile-note">✓ ${esc(note)}</div>`).join("")}</div>` : ""}
         <div class="dependency-list"><div class="dependency-row"><span>Image</span><b class="mono">${esc(c.image)}</b></div>
           <div class="dependency-row"><span>Ports</span><b>${c.ports.length}</b></div><div class="dependency-row"><span>Storage mappings</span><b>${c.volumes.length}</b></div></div>
       </div>
@@ -730,7 +758,8 @@ window.storeSearch = async () => {
         <div class="apps stagger">${r.apps.map((a, i) => `<div class="card app">
           <div class="row" style="gap:11px">${a.icon ? `<img class="ico" src="${esc(a.icon)}" referrerpolicy="no-referrer" onerror="this.style.display='none'">` : ""}
             <div style="min-width:0"><div class="nm">${esc(a.name)}</div>
-            ${a.cat ? `<span class="tag">${esc(a.cat.split(" ")[0])}</span>` : ""}</div></div>
+            ${a.cat ? `<span class="tag">${esc(a.cat.split(" ")[0])}</span>` : ""}
+            ${a.deploy?.app_profile ? `<span class="tag ${a.deploy.app_profile.level === "dependency" ? "warn" : "info"}">${esc(a.deploy.app_profile.label)}</span>` : ""}</div></div>
           <div class="ds">${esc(a.desc || "No description provided.")}</div>
           <div class="rp">${esc(a.repo)}</div>
           <button class="btn pri wide" onclick="storeInstall(${i})">Configure &amp; deploy</button></div>`).join("")}</div>`

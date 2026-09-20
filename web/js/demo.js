@@ -207,6 +207,10 @@
           access_mode: "ReadWriteOnce", label: "Media path", required: true, template_source: "/mnt/user/Media/frigate" }],
       template_devices: [{ host_path: "/dev/bus/usb", container_path: "/dev/bus/usb", label: "Coral TPU" },
                          { host_path: "/dev/dri/renderD128", container_path: "/dev/dri/renderD128", label: "iGPU" }],
+      app_profile: { family: "frigate", level: "guided", label: "Hardware review", notes: [
+        "Imported device paths match the reusable Coral TPU and iGPU hardware features.",
+        "Choose existing storage for retained recordings or create a suitably sized Longhorn claim.",
+      ], dependencies: [] },
     } };
   const responses = {
     "/api/auth/state": { setup: false, user: "demo", role: "admin" },

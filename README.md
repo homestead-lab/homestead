@@ -22,7 +22,7 @@ passthrough, image updates and failover constraints into approachable controls.
 | Area | Capability |
 |---|---|
 | **Dashboard** | Cluster CPU/RAM/network/disk telemetry, transition-aware health, top consumers, configurable warnings |
-| **Containers** | App Store and image deployment, independent or sidecar pods, edit/move/logs/console, hardware passthrough, update checks, monitored rollout and rollback |
+| **Containers** | Guided App Store and image deployment, independent or sidecar pods, edit/move/logs/console, hardware passthrough, update checks, monitored rollout and rollback |
 | **Architecture** | VIP → workload → claim → Longhorn volume → replica dependency view |
 | **Networking** | Service, ClusterIP, VIP, ingress, listener ownership, endpoint health and guided collision-free exposure |
 | **Storage** | RWO/RWX volume creation, growth and guarded deletion, usage, health, snapshots, backups and recurring jobs |
@@ -50,11 +50,11 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.6.0`, the workflow publishes:
+For a release such as `v2.7.0`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.6.0
-ghcr.io/wjcloudy/homestead:2.6
+ghcr.io/wjcloudy/homestead:2.7.0
+ghcr.io/wjcloudy/homestead:2.7
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
 ghcr.io/wjcloudy/homestead:sha-<commit>
@@ -64,8 +64,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.6.0
-git push origin v2.6.0
+git tag v2.7.0
+git push origin v2.7.0
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -178,6 +178,22 @@ CDI must be installed in the cluster. Harvester includes it, and the supplied
 RBAC permits Homestead to create and monitor DataVolumes while ordinary HTTP
 credentials remain in namespace-scoped Kubernetes Secrets.
 
+## Guided App Store deployment
+
+Homestead translates Unraid Community Applications templates into Kubernetes
+ports, environment variables, device hints, and explicit storage choices. Its
+compatibility analyser is application-agnostic: port/protocol patterns determine
+network intent, path and description semantics distinguish config/data/media/cache,
+variable metadata identifies secrets, options, and external dependencies, and
+requests for container-runtime sockets are blocked for a Kubernetes-specific design.
+These rules apply to every catalogue image rather than a list of named apps.
+
+Public catalogue password defaults are discarded and regenerated locally.
+Secret values are masked in manifest previews. Template option lists become
+select controls, and the same storage, network, dependency, and hardware review
+is used whether deployment begins in App Store or directly from Deploy. Plex,
+Pi-hole, and Nextcloud are release validation examples, not special-case profiles.
+
 ## Networking and virtual IPs
 
 Networking reconciles Kubernetes Services, EndpointSlices, Ingresses, node
@@ -220,7 +236,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.6.0 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.7.0 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour

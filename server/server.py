@@ -3,7 +3,7 @@
 Homestead - a friendly homelab control plane for Harvester, Rancher and Longhorn.
 Pure Python stdlib: no pip install at runtime, so it starts even with no internet.
 """
-import json, os, re, ssl, sys, time, threading, urllib.request, urllib.parse, urllib.error
+import copy, json, os, re, secrets, ssl, sys, time, threading, urllib.request, urllib.parse, urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.6.0"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.7.0"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1064,6 +1064,8 @@ def build_deployment(cfg):
         mounts.append(mount)
         if v.get("type") == "host":
             volumes.append({"name": vn, "hostPath": {"path": v["source"]}})
+        elif v.get("type") == "emptyDir":
+            volumes.append({"name": vn, "emptyDir": {}})
         else:
             volumes.append({"name": vn, "persistentVolumeClaim": {"claimName": v["source"]}})
     ports = [{"containerPort": int(p["container"]),
@@ -1250,16 +1252,18 @@ def build_sidecar_deployment(cfg, current):
                 raise ValueError(f"pod volume {volume_name or '(blank)'} does not exist in {target}")
         else:
             source = (item.get("source") or "").strip()
-            if not source:
+            if not source and item.get("type") != "emptyDir":
                 raise ValueError(f"storage source is required for {mount_path}")
             volume_name = ""
-            if item.get("type") != "host":
+            if item.get("type") not in ("host", "emptyDir"):
                 volume_name = next((v.get("name") for v in pod_volumes
                                     if v.get("persistentVolumeClaim", {}).get("claimName") == source), "")
             if not volume_name:
                 volume_name = _unique_volume_name(f"hs-{container_name}-{index + 1}", used)
                 if item.get("type") == "host":
                     pod_volumes.append({"name": volume_name, "hostPath": {"path": source}})
+                elif item.get("type") == "emptyDir":
+                    pod_volumes.append({"name": volume_name, "emptyDir": {}})
                 else:
                     pod_volumes.append({"name": volume_name,
                                         "persistentVolumeClaim": {"claimName": source}})
@@ -1396,6 +1400,7 @@ def fetch_appstore():
                 "cat": a.get("CategoryList") or a.get("Category") or "",
                 "web": a.get("Project") or a.get("Support") or "",
                 "network": a.get("Network") or "bridge",
+                "webui": a.get("WebUI") or "",
                 "config": a.get("Config") or [],
             }
             item["deploy"] = template_to_cfg(item)
@@ -1438,25 +1443,240 @@ def template_to_cfg(app):
             except (TypeError, ValueError):
                 pass
         elif typ == "variable" and tgt:
+            options = [option.strip() for option in val.split("|") if option.strip()] if "|" in val else []
+            if options:
+                val = options[0]
+            masked = str(attrs.get("Mask", "false")).lower() == "true"
+            secret_value = masked or bool(re.search(r"(?:PASSWORD|PASS|TOKEN|SECRET|API_KEY|APIKEY)$", tgt, re.I))
+            generate = secret_value and (bool(val) or required or (masked and "password" in tgt.lower()))
+            if generate:
+                # Public catalogue defaults must never become deployed credentials.
+                val = ""
             envs[tgt] = val
             env_meta.append({"key": tgt, "label": label, "description": description,
-                             "required": required, "masked": str(attrs.get("Mask", "false")).lower() == "true"})
+                             "required": required, "masked": secret_value,
+                             "generate": generate, "options": options})
         elif typ == "path" and tgt:
             volume_index += 1
-            system_bind = tgt == "/etc/localtime" and val == "/etc/localtime"
-            vols.append({"path": tgt,
-                         "source": "/etc/localtime" if system_bind else f"{name}-data{volume_index if volume_index > 1 else ''}",
-                         "type": "host" if system_bind else "pvc", "create": not system_bind,
-                         "access_mode": "ReadWriteOnce", "size_gb": 5,
+            system_bind = tgt in ("/etc/localtime", "/var/run/docker.sock") and val == tgt
+            clean_path = tgt.rstrip("/").lower() or "/"
+            context = " ".join((clean_path, label, description, val)).lower()
+            tokens = set(re.split(r"[^a-z0-9]+", context))
+            cache_tokens = {"cache", "caches", "transcode", "transcoding", "temp", "temporary", "tmp"}
+            media_tokens = {"media", "movie", "movies", "tv", "music", "photo", "photos",
+                            "video", "videos", "recording", "recordings", "download", "downloads"}
+            config_path = (clean_path == "/config" or clean_path.endswith("/config") or
+                           "appdata" in str(val).lower())
+            role = ("system" if system_bind else "cache" if tokens & cache_tokens else
+                    "config" if config_path else "media" if tokens & media_tokens else
+                    "data" if clean_path == "/data" or clean_path.endswith("/data") else "config")
+            volume_type = "host" if system_bind else "emptyDir" if role == "cache" else "pvc"
+            create = not system_bind and role not in ("cache", "media")
+            size = 50 if role == "data" else 5
+            access_mode = ("ReadWriteMany" if {"rwx", "shared", "multinode", "multi-node"} & tokens
+                           else "ReadWriteOnce")
+            source = (val if system_bind else "" if role in ("cache", "media") else
+                      f"{name}-data{volume_index if volume_index > 1 else ''}")
+            vols.append({"path": tgt, "source": source,
+                         "type": volume_type, "create": create, "role": role,
+                         "access_mode": access_mode, "size_gb": size,
                          "read_only": read_only, "label": label, "description": description,
                          "required": required, "template_source": val})
         elif typ == "device":
             devices.append({"host_path": val or tgt, "container_path": tgt or val,
                             "label": label, "description": description, "required": required})
-    return {"name": name,
+    network = str(app.get("network") or "bridge").strip().lower()
+    network_mode = "host" if network == "host" else "loadbalancer"
+    vip_mode = "auto" if network not in ("bridge", "host", "default", "") else "shared"
+
+    # Host-mode templates frequently omit port rows. Preserve the useful WebUI
+    # listener so users can switch to a Service without re-reading the template.
+    if not ports:
+        match = re.search(r"\[PORT:(\d+)\]", str(app.get("webui") or ""), re.I)
+        if match:
+            port = int(match.group(1))
+            ports.append({"container": port, "host": port, "expose": network != "host",
+                          "name": f"p{port}-tcp", "protocol": "TCP",
+                          "label": "Web interface", "description": "Inferred from the template WebUI URL",
+                          "required": True})
+    cfg = {"name": name,
             "image": app["repo"], "icon": app.get("icon") or "",
             "ports": ports, "env": envs, "env_meta": env_meta, "volumes": vols,
-            "template_devices": devices}
+            "template_devices": devices, "template_network": network,
+            "network_mode": network_mode, "vip_mode": vip_mode,
+            "env_bindings": {}}
+    return analyze_deploy_intent(cfg)
+
+
+def analyze_deploy_intent(cfg):
+    """Derive portable Kubernetes guidance from template semantics, never app names."""
+    updated = dict(cfg)
+    updated["ports"] = [dict(item) for item in (cfg.get("ports") or [])]
+    updated["env_bindings"] = dict(cfg.get("env_bindings") or {})
+    notes, dependencies, intents = [], [], []
+    exposed = [item for item in updated["ports"] if item.get("expose", True)]
+    dns = any(int(item.get("container") or 0) == 53 for item in exposed)
+    if dns and updated.get("network_mode") != "host":
+        updated["network_mode"], updated["vip_mode"] = "loadbalancer", "auto"
+        intents.append("network")
+        notes.append("A dedicated automatic VIP is selected because this template exposes DNS port 53.")
+        bind_names = {"SERVERIP", "SERVER_IP", "LOCAL_IPV4", "FTLCONF_LOCAL_IPV4"}
+        for key in (updated.get("env") or {}):
+            if re.sub(r"[^A-Z0-9_]", "", key.upper()) in bind_names:
+                updated["env_bindings"][key] = "vip"
+        if updated["env_bindings"]:
+            notes.append("Address variables are filled from the allocated VIP at deploy time.")
+    for port in updated["ports"]:
+        if int(port.get("container") or 0) == 67 and str(port.get("protocol") or "TCP").upper() == "UDP":
+            port["expose"], port["required"] = False, False
+            port["description"] = "Optional: expose only when this workload provides DHCP"
+            if "network" not in intents:
+                intents.append("network")
+            notes.append("DHCP port 67 stays disabled unless you explicitly expose it.")
+
+    volumes = updated.get("volumes") or []
+
+    def inferred_role(item):
+        if item.get("role"):
+            return item["role"]
+        path = str(item.get("path") or "").rstrip("/").lower() or "/"
+        context = " ".join(str(item.get(key) or "") for key in
+                           ("path", "source", "template_source", "label", "description")).lower()
+        tokens = set(re.split(r"[^a-z0-9]+", context))
+        if path in ("/etc/localtime", "/var/run/docker.sock", "/run/containerd/containerd.sock"):
+            return "system"
+        if tokens & {"cache", "caches", "transcode", "transcoding", "temp", "temporary", "tmp"}:
+            return "cache"
+        if path == "/config" or path.endswith("/config") or "appdata" in context:
+            return "config"
+        if tokens & {"media", "movie", "movies", "tv", "music", "photo", "photos", "video",
+                     "videos", "recording", "recordings", "download", "downloads"}:
+            return "media"
+        if path == "/data" or path.endswith("/data"):
+            return "data"
+        return "config"
+
+    media = [item.get("path") for item in volumes if inferred_role(item) == "media"]
+    cache = [item.get("path") for item in volumes if inferred_role(item) == "cache"]
+    data_paths = [item.get("path") for item in volumes if inferred_role(item) == "data"]
+    if media:
+        intents.append("storage")
+        notes.append("Choose existing/shared media storage for: " + ", ".join(filter(None, media)) + ".")
+    if cache:
+        if "storage" not in intents:
+            intents.append("storage")
+        notes.append("Temporary pod storage is selected for cache/transcode paths: " + ", ".join(filter(None, cache)) + ".")
+    if data_paths:
+        if "storage" not in intents:
+            intents.append("storage")
+        notes.append("Persistent data paths start as editable Longhorn claims; choose RWX when multiple replicas or workloads must attach: " + ", ".join(filter(None, data_paths)) + ".")
+    if any(item.get("access_mode") == "ReadWriteMany" for item in volumes):
+        if "storage" not in intents:
+            intents.append("storage")
+        notes.append("Template wording indicates shared storage; review the proposed RWX claim and size.")
+
+    generated = [item.get("key") for item in (updated.get("env_meta") or []) if item.get("generate")]
+    if generated:
+        intents.append("security")
+        notes.append("Public defaults for secret fields are discarded and generated locally.")
+    option_fields = [item.get("key") for item in (updated.get("env_meta") or []) if item.get("options")]
+    if option_fields:
+        notes.append("Enumerated template values are presented as selectors instead of literal option strings.")
+
+    env_keys = {re.sub(r"[^A-Z0-9_]", "", key.upper()) for key in (updated.get("env") or {})}
+    if any(key.endswith(("DB_HOST", "DATABASE_HOST", "MYSQL_HOST", "POSTGRES_HOST")) for key in env_keys):
+        dependencies.append({"kind": "database", "name": "External database endpoint",
+                             "required": True, "managed": False})
+    if any(key.endswith(("REDIS_HOST", "CACHE_HOST")) for key in env_keys):
+        dependencies.append({"kind": "cache", "name": "External cache endpoint",
+                             "required": True, "managed": False})
+
+    runtime_socket = next((item for item in volumes
+                           if item.get("path") in ("/var/run/docker.sock", "/run/containerd/containerd.sock")), None)
+    blocked = bool(runtime_socket)
+    if blocked:
+        intents.append("safety")
+        dependencies.append({"kind": "runtime", "name": "Host container-runtime control",
+                             "required": True, "managed": False})
+        notes.append("This template requests a host container-runtime socket and can create or control other containers; it needs a Kubernetes-specific deployment design.")
+    if dependencies:
+        intents.append("dependency")
+        notes.append("Review the external services listed below before deployment.")
+    if updated.get("template_devices"):
+        intents.append("hardware")
+        notes.append("Imported device paths are matched to reusable hardware features; verify eligible hosts before deploying.")
+    network = str(updated.get("template_network") or "bridge").lower()
+    if network == "host":
+        intents.append("network")
+        notes.append("The source requests host networking; review node port collisions and failover, or switch to a Service VIP.")
+    elif network not in ("bridge", "default", "") and not dns:
+        intents.append("network")
+        notes.append("The source custom network is represented by a dedicated Kubernetes VIP.")
+    if not notes:
+        notes.append("Review the imported ports, variables, and storage choices before deploying.")
+
+    intents = list(dict.fromkeys(intents)) or ["template"]
+    level = "dependency" if blocked or dependencies else "guided" if dns else "review"
+    label = ("Needs Kubernetes design" if blocked else "Dependency review" if dependencies else
+             "Dedicated VIP" if dns else "Storage review" if "storage" in intents else "Template review")
+    updated["app_profile"] = {"intent": intents[0], "intents": intents, "level": level,
+                              "label": label, "notes": notes, "dependencies": dependencies,
+                              "blocked": blocked}
+    return updated
+
+
+def apply_deploy_bindings(cfg):
+    """Resolve values that depend on the reviewed cluster-side network plan."""
+    bindings = cfg.get("env_bindings") or {}
+    if not bindings:
+        return cfg
+    updated = dict(cfg)
+    updated["env"] = dict(cfg.get("env") or {})
+    for key, binding in bindings.items():
+        if binding == "vip":
+            vip = cfg.get("lb_ip") or ""
+            if not vip:
+                raise ValueError(f"{key} requires a dedicated Service VIP")
+            updated["env"][key] = vip
+    return updated
+
+
+def apply_generated_secrets(cfg):
+    """Fill catalogue password defaults without trusting a public feed value."""
+    generate = {item.get("key") for item in (cfg.get("env_meta") or [])
+                if item.get("generate") and item.get("key")}
+    if not generate:
+        return cfg
+    updated = dict(cfg)
+    updated["env"] = dict(cfg.get("env") or {})
+    for key in generate:
+        if not updated["env"].get(key):
+            updated["env"][key] = secrets.token_urlsafe(18)
+    return updated
+
+
+def ensure_profile_compatible(cfg):
+    profile = cfg.get("app_profile") or {}
+    if profile.get("blocked"):
+        raise ValueError(profile.get("label") or "this App Store template is not directly compatible")
+    return cfg
+
+
+def redact_deployment_preview(deployment, cfg=None):
+    """Return a manifest safe to display, including for existing shared pods."""
+    if not deployment:
+        return deployment
+    sensitive = {item.get("key") for item in ((cfg or {}).get("env_meta") or [])
+                 if item.get("masked") and item.get("key")}
+    safe = copy.deepcopy(deployment)
+    containers = safe.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+    for container in containers:
+        for item in container.get("env") or []:
+            key = str(item.get("name") or "")
+            if key in sensitive or re.search(r"(?:PASSWORD|PASS|TOKEN|SECRET|API_?KEY|PRIVATE_?KEY)$", key, re.I):
+                if "value" in item:
+                    item["value"] = "••••••"
+    return safe
 
 
 def raw_get(path, timeout=20):
@@ -1925,8 +2145,12 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/settings":
                 return self._send(200, {"ok": True, **save_app_settings(b)})
             if p == "/api/deploy":
+                b = analyze_deploy_intent(b)
+                b = ensure_profile_compatible(b)
                 persist_icon_config(b)
                 b = NETWORK.prepare_deploy(b)
+                b = apply_deploy_bindings(b)
+                b = apply_generated_secrets(b)
                 ns = b.get("namespace") or DEFAULT_NS
                 target_mode = b.get("target_mode", "new")
                 if target_mode == "existing":
@@ -2026,8 +2250,12 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/appstore/install":
                 cfg = template_to_cfg(b["app"])
                 cfg.update(b.get("overrides") or {})
+                cfg = analyze_deploy_intent(cfg)
+                cfg = ensure_profile_compatible(cfg)
                 persist_icon_config(cfg)
                 cfg = NETWORK.prepare_deploy(cfg)
+                cfg = apply_deploy_bindings(cfg)
+                cfg = apply_generated_secrets(cfg)
                 dep, svc = build_deployment(cfg)
                 ns = dep["metadata"]["namespace"]
                 for volume in cfg.get("volumes") or []:
@@ -2224,18 +2452,23 @@ class H(BaseHTTPRequestHandler):
                     "Waiting for the Service address and endpoints")
                 return self._send(200, result)
             if p == "/api/preview":
+                b = analyze_deploy_intent(b)
                 b = NETWORK.prepare_deploy(b)
+                b = apply_deploy_bindings(b)
+                b = apply_generated_secrets(b)
                 if b.get("target_mode") == "existing":
                     ns = b.get("namespace") or DEFAULT_NS
                     target = _dns_name(b.get("target_workload"), "existing workload")
                     current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
                     dep, svc = build_sidecar_deployment(b, current)
-                    return self._send(200, {"deployment": dep, "service": svc,
+                    return self._send(200, {"deployment": redact_deployment_preview(dep, b), "service": svc,
+                                            "app_profile": b.get("app_profile"),
                                             "impact": {"mode": "existing", "workload": target,
                                                        "containers": [c.get("name") for c in current.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])],
                                                        "message": "Saving updates the Deployment template and restarts every container in its pods."}})
                 dep, svc = build_deployment(b)
-                return self._send(200, {"deployment": dep, "service": svc,
+                return self._send(200, {"deployment": redact_deployment_preview(dep, b), "service": svc,
+                                        "app_profile": b.get("app_profile"),
                                         "impact": {"mode": "new", "workload": dep["metadata"]["name"],
                                                    "message": "Creates a new independently managed Deployment."}})
             return self._send(404, {"error": "no route"})

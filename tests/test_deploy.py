@@ -45,6 +45,110 @@ class AppStoreTemplateTests(unittest.TestCase):
         self.assertFalse(cfg["volumes"][0]["create"])
         self.assertTrue(cfg["volumes"][0]["read_only"])
 
+    def test_dns_ports_drive_dedicated_vip_and_safe_password(self):
+        cfg = server.template_to_cfg({
+            "name": "Any DNS appliance", "repo": "example/dns:latest", "network": "Bridge",
+            "config": [
+                {"@attributes": {"Target": "53", "Type": "Port", "Mode": "tcp"}, "value": "53"},
+                {"@attributes": {"Target": "53", "Type": "Port", "Mode": "udp"}, "value": "53"},
+                {"@attributes": {"Target": "67", "Type": "Port", "Mode": "udp"}, "value": "67"},
+                {"@attributes": {"Target": "WEBPASSWORD", "Type": "Variable", "Mask": "true"},
+                 "value": "catalogue-password"},
+                {"@attributes": {"Target": "ServerIP", "Type": "Variable"}, "value": "192.0.2.1"},
+            ],
+        })
+        self.assertEqual(("loadbalancer", "auto"), (cfg["network_mode"], cfg["vip_mode"]))
+        self.assertEqual("Dedicated VIP", cfg["app_profile"]["label"])
+        self.assertEqual("", cfg["env"]["WEBPASSWORD"])
+        self.assertTrue(next(x for x in cfg["env_meta"] if x["key"] == "WEBPASSWORD")["generate"])
+        self.assertEqual({"ServerIP": "vip"}, cfg["env_bindings"])
+        dhcp = next(x for x in cfg["ports"] if x["container"] == 67)
+        self.assertFalse(dhcp["expose"])
+        cfg["lb_ip"] = "192.0.2.243"
+        self.assertEqual("192.0.2.243", server.apply_deploy_bindings(cfg)["env"]["ServerIP"])
+
+    def test_paths_classify_config_media_cache_and_infer_web_port(self):
+        cfg = server.template_to_cfg({
+            "name": "Any media server", "repo": "example/media", "network": "host",
+            "webui": "http://[IP]:[PORT:32400]/web",
+            "config": [
+                {"@attributes": {"Name": "Config", "Target": "/config", "Type": "Path"},
+                 "value": "/mnt/user/appdata/plex"},
+                {"@attributes": {"Name": "Movies", "Target": "/movies", "Type": "Path"},
+                 "value": "/mnt/user/media/movies"},
+                {"@attributes": {"Name": "Transcode", "Target": "/transcode", "Type": "Path"},
+                 "value": "/tmp/plex"},
+            ],
+        })
+        volumes = {item["role"]: item for item in cfg["volumes"]}
+        self.assertEqual(5, volumes["config"]["size_gb"])
+        self.assertTrue(volumes["config"]["create"])
+        self.assertEqual("", volumes["media"]["source"])
+        self.assertFalse(volumes["media"]["create"])
+        self.assertEqual("emptyDir", volumes["cache"]["type"])
+        self.assertEqual(32400, cfg["ports"][0]["container"])
+        self.assertFalse(cfg["ports"][0]["expose"])
+
+    def test_options_and_dependency_shaped_variables_are_structured(self):
+        options = server.template_to_cfg({
+            "name": "VPN", "repo": "example/vpn", "config": [{
+                "@attributes": {"Target": "VPN_ENABLED", "Type": "Variable"},
+                "value": "false|true",
+            }],
+        })
+        self.assertEqual("false", options["env"]["VPN_ENABLED"])
+        self.assertEqual(["false", "true"], options["env_meta"][0]["options"])
+
+        stateful = server.template_to_cfg({
+            "name": "Stateful app", "repo": "example/stateful", "config": [
+                {"@attributes": {"Target": "DB_HOST", "Type": "Variable", "Required": "true"},
+                 "value": "database"},
+                {"@attributes": {"Name": "Shared user data", "Description": "RWX shared data",
+                                  "Target": "/data", "Type": "Path"}, "value": "/mnt/user/stateful"},
+            ],
+        })
+        self.assertEqual("dependency", stateful["app_profile"]["level"])
+        self.assertEqual("database", stateful["app_profile"]["dependencies"][0]["kind"])
+        self.assertEqual("ReadWriteMany", stateful["volumes"][0]["access_mode"])
+        self.assertEqual(50, stateful["volumes"][0]["size_gb"])
+
+    def test_generated_secrets_and_preview_redaction(self):
+        cfg = {"env": {"WEBPASSWORD": ""}, "env_meta": [
+            {"key": "WEBPASSWORD", "masked": True, "generate": True},
+        ]}
+        generated = server.apply_generated_secrets(cfg)
+        self.assertGreaterEqual(len(generated["env"]["WEBPASSWORD"]), 20)
+        self.assertEqual("", cfg["env"]["WEBPASSWORD"])
+        dep = {"spec": {"template": {"spec": {"containers": [{"env": [
+            {"name": "WEBPASSWORD", "value": generated["env"]["WEBPASSWORD"]},
+            {"name": "MODE", "value": "normal"},
+        ]}]}}}}
+        safe = server.redact_deployment_preview(dep, cfg)
+        self.assertEqual("••••••", safe["spec"]["template"]["spec"]["containers"][0]["env"][0]["value"])
+        self.assertEqual("normal", safe["spec"]["template"]["spec"]["containers"][0]["env"][1]["value"])
+        self.assertNotEqual("••••••", dep["spec"]["template"]["spec"]["containers"][0]["env"][0]["value"])
+
+    def test_profiles_do_not_depend_on_app_name_or_image(self):
+        common = [{"@attributes": {"Name": "Movies", "Target": "/library", "Type": "Path"},
+                   "value": "/mnt/user/media/movies"}]
+        first = server.template_to_cfg({"name": "Alpha", "repo": "vendor/one", "config": common})
+        second = server.template_to_cfg({"name": "Beta", "repo": "another/two", "config": common})
+        self.assertEqual(first["app_profile"], second["app_profile"])
+        self.assertEqual("media", first["volumes"][0]["role"])
+
+    def test_runtime_socket_is_blocked_for_any_image(self):
+        cfg = server.template_to_cfg({
+            "name": "Generic controller", "repo": "example/controller:latest", "config": [{
+                "@attributes": {"Target": "/var/run/docker.sock", "Type": "Path"},
+                "value": "/var/run/docker.sock",
+            }],
+        })
+        self.assertEqual("safety", cfg["app_profile"]["intent"])
+        self.assertTrue(cfg["app_profile"]["blocked"])
+        self.assertEqual("host", cfg["volumes"][0]["type"])
+        with self.assertRaisesRegex(ValueError, "Needs Kubernetes design"):
+            server.ensure_profile_compatible(cfg)
+
 
 class SidecarDeploymentTests(unittest.TestCase):
     def setUp(self):
@@ -89,6 +193,17 @@ class SidecarDeploymentTests(unittest.TestCase):
         volumes = updated["spec"]["template"]["spec"]["volumes"]
         self.assertEqual("helper-cache", volumes[-1]["persistentVolumeClaim"]["claimName"])
         self.assertEqual(volumes[-1]["name"], updated["spec"]["template"]["spec"]["containers"][1]["volumeMounts"][0]["name"])
+
+    def test_sidecar_can_add_ephemeral_cache(self):
+        cfg = {
+            "name": "helper", "image": "example/helper", "target_workload": "media",
+            "volumes": [{"path": "/cache", "source": "", "type": "emptyDir"}],
+            "ports": [], "hardware": [],
+        }
+        updated, _ = server.build_sidecar_deployment(cfg, copy.deepcopy(self.current))
+        volume = updated["spec"]["template"]["spec"]["volumes"][-1]
+        self.assertEqual({}, volume["emptyDir"])
+        self.assertEqual(volume["name"], updated["spec"]["template"]["spec"]["containers"][1]["volumeMounts"][0]["name"])
 
     def test_duplicate_container_and_missing_pod_volume_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "already exists"):
