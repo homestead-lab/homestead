@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.6"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.7"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -502,6 +502,8 @@ def get_volumes():
             "name": v["metadata"]["name"],
             "pvc_name": ks.get("pvcName", ""),
             "namespace": ks.get("namespace", ""),
+            "attached": sorted({w.get("workloadName") or w.get("podName") or ""
+                                for w in wls if w.get("workloadName") or w.get("podName")}),
             "attached_to": ", ".join(sorted({w.get("workloadName") or w.get("podName") or ""
                                              for w in wls if w.get("workloadName") or w.get("podName")})),
             "pod_status": ", ".join(sorted({w.get("podStatus", "") for w in wls if w.get("podStatus")})),
@@ -1183,11 +1185,12 @@ def deploy_options(ns):
             "access_modes": spec.get("accessModes", []) or [],
             "storage_class": spec.get("storageClassName", ""),
         })
-    storage_classes = sorted(s["metadata"]["name"] for s in
-                             kget("/apis/storage.k8s.io/v1/storageclasses").get("items", []))
+    classes = storage_classes()
     return {"deployments": sorted(deployments, key=lambda x: x["name"]),
             "pvcs": sorted(pvcs, key=lambda x: x["name"]),
-            "storage_classes": storage_classes}
+            "storage_classes": selectable_storage_classes(classes),
+            "shared_storage_classes": shared_storage_classes(classes),
+            "storage_class_facts": storage_class_facts(classes)}
 
 
 def share_storage_options():
@@ -1204,10 +1207,11 @@ def share_storage_options():
             "access_modes": spec.get("accessModes", []) or [],
             "storage_class": spec.get("storageClassName", ""),
         })
-    classes = sorted(item["metadata"]["name"] for item in
-                     kget("/apis/storage.k8s.io/v1/storageclasses").get("items", []))
+    classes = storage_classes()
     return {"namespace": ns, "pvcs": sorted(pvcs, key=lambda row: row["name"]),
-            "storage_classes": classes}
+            "storage_classes": selectable_storage_classes(classes),
+            "shared_storage_classes": shared_storage_classes(classes),
+            "storage_class_facts": storage_class_facts(classes)}
 
 
 def _unique_volume_name(base, used):
@@ -1333,11 +1337,182 @@ def build_sidecar_deployment(cfg, current):
     return updated, service
 
 
+# Harvester keeps these for VM images and VM state; they are not general
+# purpose storage and Harvester's own UI marks them internal.
+INTERNAL_STORAGE_CLASSES = {"longhorn-static", "vmstate-persistence"}
+
+
+def _internal_class(meta):
+    annotations = meta.get("annotations", {}) or {}
+    return (meta.get("name", "") in INTERNAL_STORAGE_CLASSES or
+            str(annotations.get("harvesterhci.io/is-reserved-storageclass", "")).lower() == "true")
+
+
+def storage_classes():
+    """Every StorageClass, with the one fact that decides if RWX will work.
+
+    A class with migratable=true hands out two-controller volumes so a VM disk
+    can live-migrate. Longhorn's CSI driver refuses to filesystem-mount those,
+    so a ReadWriteMany claim created on such a class can never be mounted by a
+    pod - it binds happily and then strands whatever tries to use it.
+    """
+    rows = []
+    for item in kget("/apis/storage.k8s.io/v1/storageclasses").get("items", []):
+        meta = item.get("metadata", {}) or {}
+        parameters = item.get("parameters", {}) or {}
+        annotations = meta.get("annotations", {}) or {}
+        rows.append({
+            "name": meta.get("name", ""),
+            "provisioner": item.get("provisioner", ""),
+            "parameters": parameters,
+            "replicas": parameters.get("numberOfReplicas", ""),
+            "migratable": str(parameters.get("migratable", "")).lower() == "true",
+            "encrypted": str(parameters.get("encrypted", "")).lower() == "true",
+            "data_locality": parameters.get("dataLocality", ""),
+            "expandable": bool(item.get("allowVolumeExpansion")),
+            "reclaim": item.get("reclaimPolicy", "Delete"),
+            "default": annotations.get("storageclass.kubernetes.io/is-default-class") == "true",
+            "internal": _internal_class(meta),
+        })
+    return sorted(rows, key=lambda row: row["name"])
+
+
+DEFAULT_CLASS_ANNOTATION = "storageclass.kubernetes.io/is-default-class"
+LONGHORN_PROVISIONER = "driver.longhorn.io"
+
+
+def storage_class_usage():
+    """How many claims each class is backing, so deletion can be guarded."""
+    counts = {}
+    for item in kget("/api/v1/persistentvolumeclaims").get("items", []):
+        name = (item.get("spec", {}) or {}).get("storageClassName") or ""
+        if name:
+            counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def storage_class_inventory():
+    usage = storage_class_usage()
+    rows = storage_classes()
+    for row in rows:
+        row["in_use"] = usage.get(row["name"], 0)
+    return rows
+
+
+def create_storage_class(cfg):
+    """Create a Longhorn StorageClass.
+
+    Kubernetes treats a StorageClass as immutable apart from its default flag
+    and expansion setting, so Homestead offers create and delete rather than an
+    edit that would silently do nothing.
+    """
+    name = _dns_name(cfg.get("name"), "storage class name")
+    if any(row["name"] == name for row in storage_classes()):
+        raise ValueError(f"storage class {name} already exists")
+    replicas = int(cfg.get("replicas", 2) or 2)
+    if not 1 <= replicas <= 5:
+        raise ValueError("replica count must be between 1 and 5")
+    stale = int(cfg.get("stale_replica_timeout", 30) or 30)
+    if not 1 <= stale <= 2880:
+        raise ValueError("stale replica timeout must be between 1 and 2880 minutes")
+    reclaim = str(cfg.get("reclaim_policy") or "Delete")
+    if reclaim not in ("Delete", "Retain"):
+        raise ValueError("reclaim policy must be Delete or Retain")
+    parameters = {"numberOfReplicas": str(replicas), "staleReplicaTimeout": str(stale)}
+    if cfg.get("migratable"):
+        parameters["migratable"] = "true"
+    body = {"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
+            "metadata": {"name": name, "labels": {"harvui.io/managed": "true"},
+                         "annotations": {DEFAULT_CLASS_ANNOTATION: "true"} if cfg.get("default") else {}},
+            "provisioner": str(cfg.get("provisioner") or LONGHORN_PROVISIONER),
+            "parameters": parameters,
+            "allowVolumeExpansion": bool(cfg.get("expandable", True)),
+            "reclaimPolicy": reclaim,
+            "volumeBindingMode": "Immediate"}
+    if cfg.get("default"):
+        _clear_default_class(name)
+    ksend("POST", "/apis/storage.k8s.io/v1/storageclasses", body)
+    return {"ok": True, "name": name, "classes": storage_class_inventory(),
+            "message": (f"Storage class {name} created" +
+                        (" and made the default" if cfg.get("default") else ""))}
+
+
+def _clear_default_class(keep):
+    for row in storage_classes():
+        if row["default"] and row["name"] != keep:
+            ksend("PATCH", f"/apis/storage.k8s.io/v1/storageclasses/{row['name']}",
+                  {"metadata": {"annotations": {DEFAULT_CLASS_ANNOTATION: "false"}}},
+                  ctype="application/merge-patch+json")
+
+
+def set_default_storage_class(name):
+    name = _dns_name(name, "storage class name")
+    row = next((item for item in storage_classes() if item["name"] == name), None)
+    if not row:
+        raise ValueError(f"storage class {name} does not exist")
+    if row["internal"]:
+        raise ValueError(f"{name} is reserved by Harvester and cannot be the default")
+    _clear_default_class(name)
+    ksend("PATCH", f"/apis/storage.k8s.io/v1/storageclasses/{name}",
+          {"metadata": {"annotations": {DEFAULT_CLASS_ANNOTATION: "true"}}},
+          ctype="application/merge-patch+json")
+    return {"ok": True, "classes": storage_class_inventory(),
+            "message": f"{name} is now the default storage class"}
+
+
+def delete_storage_class(name):
+    name = _dns_name(name, "storage class name")
+    rows = storage_class_inventory()
+    row = next((item for item in rows if item["name"] == name), None)
+    if not row:
+        raise ValueError(f"storage class {name} does not exist")
+    if row["internal"]:
+        raise ValueError(f"{name} is reserved by Harvester and must not be deleted")
+    if row["default"]:
+        raise ValueError(f"{name} is the default class; make another class the default first")
+    if row["in_use"]:
+        raise ValueError(f"{name} still backs {row['in_use']} claim"
+                         f"{'s' if row['in_use'] != 1 else ''}; existing volumes keep working, "
+                         "but the class cannot be removed while claims reference it")
+    ksend("DELETE", f"/apis/storage.k8s.io/v1/storageclasses/{name}")
+    return {"ok": True, "classes": storage_class_inventory(),
+            "message": f"Storage class {name} deleted; existing volumes are untouched"}
+
+
+def selectable_storage_classes(rows=None):
+    """Classes a person may pick for their own workloads."""
+    return [row["name"] for row in (rows if rows is not None else storage_classes())
+            if not row["internal"]]
+
+
+def storage_class_facts(rows=None):
+    """The handful of class facts worth showing next to a class picker."""
+    return {row["name"]: {"replicas": row["replicas"], "migratable": row["migratable"],
+                          "encrypted": row["encrypted"], "expandable": row["expandable"],
+                          "reclaim": row["reclaim"], "default": row["default"]}
+            for row in (rows if rows is not None else storage_classes()) if not row["internal"]}
+
+
+def shared_storage_classes(rows=None):
+    """Classes that can actually serve ReadWriteMany to a pod."""
+    return [row["name"] for row in (rows if rows is not None else storage_classes())
+            if not row["internal"] and not row["migratable"]]
+
+
 def create_pvc(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce"):
+    sc = sc or STORAGE_CLASS
+    if access_mode == "ReadWriteMany":
+        chosen = next((row for row in storage_classes() if row["name"] == sc), None)
+        if chosen and chosen["migratable"]:
+            usable = ", ".join(shared_storage_classes()) or "none in this cluster"
+            raise ValueError(
+                f"storage class {sc} creates live-migratable volumes for VM disks, and "
+                "Longhorn cannot mount those into a pod. Shared (ReadWriteMany) storage "
+                f"needs a class without migratable=true — available: {usable}")
     body = {"apiVersion": "v1", "kind": "PersistentVolumeClaim",
             "metadata": {"name": name, "namespace": ns, "labels": {"harvui.io/managed": "true"}},
             "spec": {"accessModes": [access_mode],
-                     "storageClassName": sc or STORAGE_CLASS,
+                     "storageClassName": sc,
                      "resources": {"requests": {"storage": f"{size_gb}Gi"}}}}
     return ksend("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", body)
 
@@ -1889,9 +2064,32 @@ def display_icon(annotations):
         return ""
 
 
-def workload_edit_payload(ns, name, deployment, hardware_definitions=None):
+def _service_listeners(deployment, services):
+    """Map a container port onto the Service port that publishes it."""
+    selector = (deployment["spec"].get("selector", {}) or {}).get("matchLabels", {}) or {}
+    listeners = {}
+    for service in services or []:
+        chosen = (service.get("spec", {}) or {}).get("selector") or {}
+        if not chosen or not all(selector.get(key) == value for key, value in chosen.items()):
+            continue
+        for port in (service.get("spec", {}) or {}).get("ports", []) or []:
+            try:
+                target = int(port.get("targetPort", port.get("port")))
+                listeners[(str(port.get("protocol") or "TCP").upper(), target)] = int(port["port"])
+            except (TypeError, ValueError):
+                continue
+    return listeners
+
+
+def workload_edit_payload(ns, name, deployment, hardware_definitions=None, services=None):
     """Return pod-level settings plus an editable record for every app container."""
     pspec = deployment["spec"]["template"]["spec"]
+    if services is None:
+        try:
+            services = kget(f"/api/v1/namespaces/{ns}/services").get("items", [])
+        except Exception:
+            services = []
+    listeners = _service_listeners(deployment, services)
     annotations = deployment["metadata"].get("annotations", {}) or {}
     definitions = hardware_definitions if hardware_definitions is not None else HW.features()
     volumes = {volume.get("name"): volume for volume in pspec.get("volumes", []) or []}
@@ -1966,7 +2164,12 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None):
             "original_name": container.get("name", ""), "name": container.get("name", ""),
             "image": container.get("image", ""), "cpu": requests.get("cpu", ""), "memory": requests.get("memory", ""),
             "env": literals, "env_refs": refs,
-            "ports": [{"container": port.get("containerPort"), "name": port.get("name", ""), "protocol": port.get("protocol", "TCP")}
+            "ports": [{"container": port.get("containerPort"), "name": port.get("name", ""),
+                       "protocol": port.get("protocol", "TCP"),
+                       "host": listeners.get((str(port.get("protocol") or "TCP").upper(),
+                                              port.get("containerPort")), port.get("containerPort")),
+                       "expose": (str(port.get("protocol") or "TCP").upper(),
+                                  port.get("containerPort")) in listeners}
                       for port in container.get("ports", []) or []],
             "hardware": hardware, "volumes": mounts,
         })
@@ -1999,6 +2202,8 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None):
         "pod_volumes": reusable,
         "hardware": detected, "icon": annotations.get("harvui.io/icon-source", annotations.get("harvui.io/icon", "")),
         "node": pspec.get("nodeSelector", {}).get("kubernetes.io/hostname", ""),
+        "network_mode": "host" if pspec.get("hostNetwork") else "",
+        "has_service": bool(listeners),
         "seed_configs": LC.seed_configs(ns, deployment),
         "container_name": first["name"], "image": first["image"], "cpu": first["cpu"], "memory": first["memory"],
         "env": first["env"], "ports": first["ports"], "volumes": first["volumes"], "gpu": "igpu" in detected,
@@ -2047,6 +2252,7 @@ ADMIN_ROUTES = {
     "/api/sources/containers", "/api/sources/inspect", "/api/import",
     "/api/vm-disks/import",
     "/api/shares", "/api/shares/edit", "/api/shares/delete", "/api/shares/options",
+    "/api/storage/classes/default", "/api/storage/classes/delete",
     "/api/images/cleanup",
     "/api/volumes/delete",
     "/api/node/smart/test",
@@ -2063,6 +2269,8 @@ def needed_role(path, method):
     if path == "/api/hardware/features" and method != "GET":
         return "admin"
     if path == "/api/settings" and method != "GET":
+        return "admin"
+    if path == "/api/storage/classes" and method != "GET":
         return "admin"
     if path == "/api/console":
         return "operator"
@@ -2310,7 +2518,14 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/namespaces":
                 return self._send(200, sorted(n["metadata"]["name"] for n in kget("/api/v1/namespaces")["items"]))
             if p == "/api/storageclasses":
-                return self._send(200, sorted(s["metadata"]["name"] for s in kget("/apis/storage.k8s.io/v1/storageclasses")["items"]))
+                classes = storage_classes()
+                if (q.get("facts") or [""])[0] == "1":
+                    return self._send(200, {"names": selectable_storage_classes(classes),
+                                            "shared": shared_storage_classes(classes),
+                                            "facts": storage_class_facts(classes)})
+                return self._send(200, selectable_storage_classes(classes))
+            if p == "/api/storage/classes":
+                return self._send(200, storage_class_inventory())
             if p == "/api/pvcs":
                 ns = (q.get("ns") or [DEFAULT_NS])[0]
                 items = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims")["items"]
@@ -2480,6 +2695,12 @@ class H(BaseHTTPRequestHandler):
                     {"namespace": b["ns"], "name": b["name"]})
                 _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("image-updates", None)
                 return self._send(200, result)
+            if p == "/api/storage/classes":
+                return self._send(200, create_storage_class(b))
+            if p == "/api/storage/classes/default":
+                return self._send(200, set_default_storage_class(b.get("name")))
+            if p == "/api/storage/classes/delete":
+                return self._send(200, delete_storage_class(b.get("name")))
             if p == "/api/shares":
                 result = SHARES.create_share(
                     b["name"], b.get("size_gb", 10), b.get("user", "lab"),
@@ -2543,7 +2764,17 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "name": cfg["name"], "operation": op})
             if p == "/api/edit":
                 persist_icon_config(b)
-                return self._send(200, LC.edit_workload(b))
+                result = LC.edit_workload(b)
+                ports = [port for container in b.get("containers") or []
+                         for port in container.get("ports") or []]
+                if "containers" in b and any("expose" in port for port in ports):
+                    message = NETWORK.sync_workload_ports(
+                        b["ns"], result.get("name") or b["name"], ports,
+                        network_mode=b.get("network_mode"))
+                    if message:
+                        result["network"] = message
+                        _cache.pop("network", None)
+                return self._send(200, result)
             if p == "/api/move":
                 node = b.get("node")
                 if b.get("auto"):

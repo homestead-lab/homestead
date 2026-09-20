@@ -47,7 +47,7 @@ function workloadHierarchy(w) {
         ${c.restarts ? `<span class="tag warn">${c.restarts} restart${c.restarts === 1 ? "" : "s"}</span>` : ""}
         <span class="mono dim tree-image">${esc(c.image || "image unavailable")}</span>
       </div>`).join("") || `<div class="dim xs">Container detail is unavailable for this pod.</div>`}</div>
-    </div>`).join("") || `<div class="dim xs">No pods exist yet. The workload controller will create them when replicas are above zero.</div>`}</div>
+    </div>`).join("") || `<div class="dim xs">No pods exist yet. The workload controller will create them when the instance count is above zero.</div>`}</div>
   </details>`;
 }
 
@@ -584,7 +584,7 @@ const deployDefaults = () => ({ name: "", workload_name: "", container_name: "",
   cpu: "50m", memory: "128Mi", ports: [], env: {}, env_meta: [], volumes: [], hardware: [],
   template_devices: [], target_mode: "new", target_workload: "", network_mode: "loadbalancer",
   vip_mode: "shared", lb_ip: "", env_bindings: {}, app_profile: null });
-let DCFG = deployDefaults(), DOPT = { deployments: [], pvcs: [], storage_classes: [] }, DRENDERING = false;
+let DCFG = deployDefaults(), DOPT = { deployments: [], pvcs: [], storage_classes: [], shared_storage_classes: [] }, DRENDERING = false;
 function generatedSecret() {
   const bytes = new Uint8Array(18); crypto.getRandomValues(bytes);
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -637,7 +637,7 @@ async function viewDeploy(pre) {
       <div class="f"><label>Container logo ${tip("Optional public HTTPS image URL. Homestead validates and saves a private copy on its persistent volume, so the logo survives source outages and upgrades.")}</label><input type="url" id="d_icon" value="${esc(DCFG.icon || "")}" placeholder="https://…/icon.png"></div>
       <div class="f2">
         <div class="f"><label>Namespace</label><select id="d_ns">${nss.map(n => `<option ${n === DCFG.namespace ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
-        <div class="f" id="d_rep_wrap"><label>Replicas</label><input type="number" id="d_rep" value="${DCFG.replicas}" min="0" max="5"></div>
+        <div class="f" id="d_rep_wrap"><label>Instances ${tip("How many copies of this workload run at once. Most homelab apps want one; Longhorn replicas are a separate, storage-level idea.")}</label><input type="number" id="d_rep" value="${DCFG.replicas}" min="0" max="5"></div>
       </div>
       <div class="f2">
         <div class="f"><label>CPU reserved ${tip("The scheduler guarantees this much CPU capacity. 1000m = one CPU core; 50m = 5% of one core. This is not a hard limit.")}</label><input type="text" id="d_cpu" value="${esc(DCFG.cpu)}" placeholder="50m"></div>
@@ -742,7 +742,7 @@ function syncSummary() {
     (c.target_mode === "existing" ? "" : row("◈", "Workload / pod", c.workload_name ? `<b>${esc(c.workload_name)}</b>` : '<span class="dim">—</span>')) +
     row("▣", "Container", c.container_name ? `<b>${esc(c.container_name)}</b>` : '<span class="dim">—</span>') +
     row("❏", "Image", c.image ? `<span class="small mono">${esc(c.image)}</span>` : '<span class="dim">—</span>') +
-    row("⌗", "Namespace", esc(c.namespace)) + row("⧉", c.target_mode === "existing" ? "Joins workload" : "Replicas", c.target_mode === "existing" ? esc(c.target_workload || "—") : c.replicas) +
+    row("⌗", "Namespace", esc(c.namespace)) + row("⧉", c.target_mode === "existing" ? "Joins workload" : "Instances", c.target_mode === "existing" ? esc(c.target_workload || "—") : c.replicas) +
     row("◴", "Requests", `<span class="small mono">${esc(c.cpu)} · ${esc(c.memory)}</span>`) +
     row("▤", "Hardware", c.hardware.length ? hardwareTags(c.hardware) : '<span class="dim">none</span>') +
     row("◎", "Network", `<span class="small">${esc(c.network_mode)}${c.network_mode === "loadbalancer" ? ` · ${esc(c.vip_mode)} VIP` : ""}</span>`) +
@@ -763,6 +763,8 @@ function deployVolumePicker() {
   return createVolumePicker($("#d_vols"), {
     pvcs: () => DOPT.pvcs,
     storageClasses: () => DOPT.storage_classes,
+    sharedStorageClasses: () => DOPT.shared_storage_classes || DOPT.storage_classes,
+    classFacts: () => DOPT.storage_class_facts || {},
     podVolumes: () => selectedTarget()?.volumes || [],
     allowPod: () => $("#d_target_mode")?.value === "existing",
     podLabel: "Existing volume in selected pod",

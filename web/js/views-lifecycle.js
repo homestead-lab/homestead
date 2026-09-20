@@ -9,8 +9,10 @@ const editEnvRow = (index, key = "", value = "") => `<div class="f3 e-env-row">
 const editPortRow = (index, port = {}) => `<div class="edit-port-row">
   <div><label>Name</label><input class="ep-name" type="text" value="${esc(port.name || "")}" placeholder="web"></div>
   <div><label>Container port</label><input class="ep-number" type="number" min="1" max="65535" value="${esc(port.container || "")}" placeholder="8080"></div>
+  <div><label>LAN port</label><input class="ep-host" type="number" min="1" max="65535" value="${esc(port.host || port.container || "")}" placeholder="8080" oninput="editPortsChanged()"></div>
   <div><label>Protocol</label><select class="ep-protocol">${["TCP", "UDP", "SCTP"].map(value => `<option ${value === (port.protocol || "TCP") ? "selected" : ""}>${value}</option>`).join("")}</select></div>
-  <button class="btn sm danger row-remove" type="button" onclick="this.parentNode.remove()">✕</button></div>`;
+  <label class="switch"><input class="ep-expose" type="checkbox" ${port.expose ? "checked" : ""} onchange="editPortsChanged()">Expose</label>
+  <button class="btn sm danger row-remove" type="button" onclick="this.parentNode.remove();editPortsChanged()">✕</button></div>`;
 
 /* Live namespace storage inventory for the editor's unified volume picker. */
 let EDIT_STORAGE = { pvcs: [], storage_classes: [], pod_volumes: [] };
@@ -23,6 +25,8 @@ const editVolumeRow = mount => ({
 const editVolumePicker = index => createVolumePicker($("#e_vols_" + index), {
   pvcs: () => EDIT_STORAGE.pvcs,
   storageClasses: () => EDIT_STORAGE.storage_classes,
+  sharedStorageClasses: () => EDIT_STORAGE.shared_storage_classes || EDIT_STORAGE.storage_classes,
+  classFacts: () => EDIT_STORAGE.storage_class_facts || {},
   podVolumes: () => EDIT_STORAGE.pod_volumes,
   allowPod: () => EDIT_STORAGE.pod_volumes.length > 0,
   podLabel: "Existing volume in this pod",
@@ -55,7 +59,7 @@ const editContainerPanel = (container, index) => {
       ${refs.length ? `<div class="managed-env-list">${refs.map(ref => `<div><span class="mono">${esc(ref.name)}</span><span>${esc(ref.source)}</span><span class="pill info">managed reference</span></div>`).join("")}</div><div class="dim xs managed-env-note">References remain connected to Kubernetes and are not exposed or replaced when you save.</div>` : ""}
       <div class="e-env" id="e_env_${index}">${(env.length ? env : [["", ""]]).map(([key, value]) => editEnvRow(index, key, value)).join("")}</div>
       <button class="btn sm" type="button" onclick="editAddEnv(${index})">＋ add variable</button>
-      <div class="subsec">Container ports</div>
+      <div class="subsec">Ports ${tip("Container port is where the process listens inside the container. LAN port is the number clients use on the Service address; unexposed ports stay inside the cluster.")}</div>
       <div class="e-ports" id="e_ports_${index}">${ports.map(port => editPortRow(index, port)).join("")}</div>
       <button class="btn sm" type="button" onclick="editAddPort(${index})">＋ add port</button>
       <div class="subsec">Storage</div>
@@ -83,23 +87,25 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       image: w.image, cpu: w.cpu, memory: w.memory, env: w.env || {}, env_refs: [], ports: w.ports || [],
       hardware: w.hardware || [], volumes: w.volumes || [] }];
     EDIT_STORAGE = { pvcs: options.pvcs || [], storage_classes: options.storage_classes || [],
-      pod_volumes: w.pod_volumes || [] };
+      shared_storage_classes: options.shared_storage_classes || [],
+      storage_class_facts: options.storage_class_facts || {}, pod_volumes: w.pod_volumes || [] };
     $("#mbody").innerHTML = `
       <div class="f"><label>Workload name ${tip("The real Kubernetes Deployment name. Renaming creates a replacement Deployment, waits for it to become ready, then removes the old one. Generated pods use this name plus a Kubernetes suffix.")}</label><input type="text" id="e_workload_name" value="${esc(w.name)}"></div>
       <div class="f"><label>Pod hostname ${tip("The hostname visible inside the pod. It does not rename the Kubernetes Pod; generated pods use the workload name plus a suffix.")}</label><input type="text" id="e_pod_name" value="${esc(w.pod_hostname || "")}" placeholder="optional"></div>
       <div class="f"><label>Container logo ${tip("Optional public HTTPS image URL. Homestead validates it and keeps a persistent local copy while retaining this source for later edits.")}</label><input type="url" id="e_icon" value="${esc(w.icon || "")}" placeholder="https://…/icon.png"></div>
       <div class="f2">
-        <div class="f"><label>Replicas</label><input type="number" id="e_rep" value="${w.start_replicas ?? w.replicas ?? 1}" min="1" max="5" ${w.autostart === false ? "disabled" : ""}></div>
+        <div class="f"><label>Instances ${tip("How many copies of this workload run at once. Most homelab apps want one; Longhorn replicas are a separate, storage-level idea.")}</label><input type="number" id="e_rep" value="${w.start_replicas ?? w.replicas ?? 1}" min="1" max="5" ${w.autostart === false ? "disabled" : ""}></div>
         <div class="f"><label>Preferred node ${tip("A preference guides placement but still allows failover. Use Move for hardware-aware choices and optional hard pinning.")}</label><select id="e_node" data-current="${esc(w.node || "")}">
           <option value="">any node</option>
           ${nodes.map(n => `<option value="${esc(n.name)}" ${n.name === w.node ? "selected" : ""}>${esc(n.name)}</option>`).join("")}
         </select></div>
       </div>
       <label class="switch" id="e_autostart_wrap"><input type="checkbox" id="e_autostart" onchange="editAutostartToggle()" ${w.autostart === false ? "" : "checked"}>
-        Autostart ${tip("On keeps the workload running: Kubernetes restarts it after a crash, a node reboot or a cluster restart. Off scales it to zero and remembers the replica count for when you switch it back on.")}</label>
+        Autostart ${tip("On keeps the workload running: Kubernetes restarts it after a crash, a node reboot or a cluster restart. Off scales it to zero and remembers the instance count for when you switch it back on.")}</label>
       <div class="dim xs" id="e_autostart_note" style="margin:-4px 0 6px">${w.autostart === false ? "Stays stopped until you switch autostart back on." : "Runs continuously and comes back after a reboot."}</div>
       <div class="sec">Containers <span class="pill">${containers.length}</span></div>
       <div id="e_containers">${containers.map(editContainerPanel).join("")}</div>
+      <div class="note" id="e_ports_note" hidden></div>
       ${seeds.length ? `<div class="sec">Startup seed config ${tip("This ConfigMap is copied into the container's persistent storage by an init container before every start. It is authoritative: editing only the mounted file will be overwritten on restart.")}</div>
         <div class="note seed-note"><b>Authoritative startup configuration.</b> Saving here updates the ConfigMap and restarts the workload so the init container copies the new value into appdata.</div>
         ${seeds.map((s, i) => `<div class="seed-editor card flat">
@@ -116,11 +122,34 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       <div class="note" style="margin-top:14px">Saving rolls the pod. Renaming the workload performs a guarded stop, recreate and readiness check. With a ReadWriteOnce volume the old pod must fully stop before the renamed one starts, so expect a short outage. A failed rename restores the original Deployment.</div>`;
     containers.forEach((container, index) => renderVolumeRows(editVolumePicker(index),
       (container.volumes || []).filter(volume => !volume.managed).map(editVolumeRow)));
+    window.__editHadService = !!w.has_service;
+    editPortsChanged();
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
 window.editAddEnv = (index, key = "", value = "") => $("#e_env_" + index).insertAdjacentHTML("beforeend", editEnvRow(index, key, value));
-window.editAddPort = (index, port = {}) => $("#e_ports_" + index).insertAdjacentHTML("beforeend", editPortRow(index, port));
+window.editAddPort = (index, port = {}) => {
+  $("#e_ports_" + index).insertAdjacentHTML("beforeend", editPortRow(index, port));
+  editPortsChanged();
+};
 window.editAddVol = (index, volume = {}) => addVolumeRow(editVolumePicker(index), volume);
+window.editPortsChanged = () => {
+  const note = $("#e_ports_note");
+  if (!note) return;
+  const rows = $$("#e_containers .edit-port-row");
+  const exposed = rows.filter(row => $(".ep-expose", row).checked);
+  const remapped = exposed.filter(row => +$(".ep-host", row).value !== +$(".ep-number", row).value);
+  $$(".ep-host").forEach(input => { input.disabled = !$(".ep-expose", input.closest(".edit-port-row")).checked; });
+  if (!exposed.length && window.__editHadService) {
+    note.hidden = false;
+    note.innerHTML = "<b>No port is exposed.</b> Saving removes this workload's Service, so its LAN address is released and clients lose the listener.";
+  } else if (remapped.length) {
+    note.hidden = false;
+    note.innerHTML = `<b>LAN listeners change on save:</b> ${remapped.map(row =>
+      `<span class="mono">${+$(".ep-host", row).value} → ${+$(".ep-number", row).value}</span>`).join(", ")}. Existing bookmarks on the old port stop working.`;
+  } else {
+    note.hidden = true;
+  }
+};
 window.editAutostartToggle = () => {
   const on = $("#e_autostart").checked;
   $("#e_rep").disabled = !on;
@@ -134,7 +163,9 @@ window.editSave = async (ns, name) => {
     const env = {};
     $$(".e-env-row", panel).forEach(row => { const key = $(".ek", row).value.trim(); if (key) env[key] = $(".ev", row).value; });
     const ports = $$(".edit-port-row", panel).map(row => ({ name: $(".ep-name", row).value.trim(),
-      container: +$(".ep-number", row).value, protocol: $(".ep-protocol", row).value })).filter(port => port.container);
+      container: +$(".ep-number", row).value, protocol: $(".ep-protocol", row).value,
+      host: +$(".ep-host", row).value || +$(".ep-number", row).value,
+      expose: $(".ep-expose", row).checked })).filter(port => port.container);
     return { original_name: panel.dataset.originalName, name: $("#e_container_name_" + index).value.trim(),
       image: $("#e_image_" + index).value.trim(), cpu: $("#e_cpu_" + index).value.trim(),
       memory: $("#e_mem_" + index).value.trim(), hardware: selectedHardware("e_hw_" + index), env, ports,
@@ -165,7 +196,7 @@ window.editSave = async (ns, name) => {
       await api("/api/move", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ns, name: activeName, node: node || null }) });
     }
-    toast(renaming ? `${name} renamed to ${activeName}` : `${activeName} updated`, "ok");
+    toast(result.network || (renaming ? `${name} renamed to ${activeName}` : `${activeName} updated`), "ok");
     closeModal(); setTimeout(() => refresh(true), 1200);
   } catch (e) {
     toast(e.message, "bad");

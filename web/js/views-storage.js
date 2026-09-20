@@ -132,7 +132,9 @@ function archHighlight(id) {
 
 /* ---------------- volumes ---------------- */
 async function viewStorage() {
-  const [v, st] = await Promise.all([api("/api/volumes"), api("/api/storage").catch(() => null)]);
+  const [v, st, classes] = await Promise.all([api("/api/volumes"), api("/api/storage").catch(() => null),
+    api("/api/storage/classes").catch(() => [])]);
+  STATE.data.storageClasses = classes;
   STATE.data.vols = v;
   const q = STATE.q.toLowerCase();
   const rows = v.filter(x => !q || x.name.includes(q) || (x.node || "").includes(q) ||
@@ -162,7 +164,9 @@ async function viewStorage() {
    <th>Volume</th><th>Attached to</th><th>Node</th><th>Health</th><th>Mode</th><th>Replicas</th><th>Usage</th><th>Last used</th><th></th>
    </tr></thead><tbody>${rows.map(x => `<tr>
      <td><b>${esc(x.pvc_name || x.name.slice(0, 18))}</b><div class="dim xs mono">${esc(x.namespace || "")}</div></td>
-     <td>${x.attached_to ? `<span class="tag info">${esc(x.attached_to)}</span>` : '<span class="dim">detached</span>'}
+     <td data-label="Attached to">${attachedWorkloads(x).length
+       ? `<div class="attachlist">${attachedWorkloads(x).map(w => `<span class="tag info">${esc(w)}</span>`).join("")}</div>`
+       : '<span class="dim">detached</span>'}
          ${x.pod_status ? `<div class="dim xs">${esc(x.pod_status)}</div>` : ""}</td>
      <td class="small">${esc(x.node || "—")}</td>
      <td>${x.state === "attached"
@@ -177,16 +181,24 @@ async function viewStorage() {
        <button class="btn sm danger" data-need="admin" title="Review attachment and data-loss impact before deleting" onclick='volumeDelete(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("trash")}Delete</button>
      </div></td>
       </tr>`).join("") || `<tr><td colspan=9 class="empty">none</td></tr>`}
-   </tbody></table></div></div>`);
+   </tbody></table></div></div>
+  ${storageClassCard(classes)}`);
 }
 window.volumeCreate = async () => {
-  const [nss, scs] = await Promise.all([api("/api/namespaces"), api("/api/storageclasses")]);
+  const [nss, classes] = await Promise.all([api("/api/namespaces"),
+    api("/api/storageclasses?facts=1").catch(() => ({ names: [], facts: {}, shared: [] }))]);
+  const scs = classes.names || [];
+  window.__volumeClasses = classes;
   modal("Create volume", `<div class="f2"><div class="f"><label>Name</label><input id="vc_name" placeholder="frigate-media"></div>
     <div class="f"><label>Namespace</label><select id="vc_ns">${nss.map(n => `<option ${n === "lab" ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div></div>
     <div class="f2"><div class="f"><label>Size (GB)</label><input id="vc_size" type="number" min="1" value="10"></div>
     <div class="f"><label>Access mode ${tip("RWO mounts on one node at a time and suits most apps. RWX can mount on several nodes, using Longhorn's shared-volume support.")}</label><select id="vc_mode"><option value="ReadWriteOnce">RWO · one node</option><option value="ReadWriteMany">RWX · many nodes</option></select></div></div>
-    <div class="f"><label>Storage class</label><select id="vc_sc">${scs.map(s => `<option ${s === "longhorn-r2" ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></div>
+    <div class="f"><label>Storage class</label><select id="vc_sc" onchange="volumeClassFacts()">${scs.map(s => `<option ${s === "longhorn-r2" ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>
+      <div class="vclass-badges" id="vc_badges"></div></div>
+    <div class="note" id="vc_mode_note" hidden></div>
     <div class="row"><button class="btn pri" onclick="volumeCreateNow()">Create volume</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+  $("#vc_mode").addEventListener("change", volumeClassFacts);
+  volumeClassFacts();
 };
 window.volumeCreateNow = async () => {
   const body = { name: $("#vc_name").value.trim(), namespace: $("#vc_ns").value, size_gb: +$("#vc_size").value,
@@ -299,6 +311,104 @@ window.volumeDeleteNow = async (namespace, name, uid) => {
   }
 };
 
+function storageClassCard(classes) {
+  const rows = classes || [];
+  if (!rows.length) return "";
+  return `<div class="card flat pad0" style="margin-top:18px">
+    <div class="between storage-class-head">
+      <div><div class="ctitle">Storage classes</div>
+        <div class="csub">What a new volume is built from. Kubernetes fixes a class at creation, so Homestead creates and removes them rather than editing them in place.</div></div>
+      <button class="btn pri" data-need="admin" onclick="storageClassCreate()">＋ New storage class</button></div>
+    <div class="tblwrap"><table class="tbl storage-class-table"><thead><tr>
+      <th>Class</th><th>Replicas</th><th>Shared (RWX)</th><th>Encryption</th><th>Expansion</th><th>Volumes</th><th></th>
+    </tr></thead><tbody>${rows.map(row => `<tr>
+      <td><b>${esc(row.name)}</b>${row.default ? '<span class="tag ok">default</span>' : ""}${row.internal ? '<span class="tag">Harvester internal</span>' : ""}
+        <div class="dim xs mono">${esc(row.provisioner || "")}</div></td>
+      <td class="mono" data-label="Replicas">${esc(row.replicas || "—")}</td>
+      <td data-label="Shared (RWX)">${row.migratable
+        ? '<span class="pill low" data-tip="This class creates live-migratable volumes for VM disks. Longhorn cannot mount those into a pod, so it cannot back shared storage.">VM disks only</span>'
+        : '<span class="pill ok">usable</span>'}</td>
+      <td data-label="Encryption">${row.encrypted ? '<span class="tag info">encrypted</span>' : '<span class="dim">—</span>'}</td>
+      <td data-label="Expansion">${row.expandable ? '<span class="tag ok">can grow</span>' : '<span class="tag">fixed size</span>'}</td>
+      <td class="mono" data-label="Volumes">${row.in_use ?? 0}</td>
+      <td><div class="row" style="gap:6px;flex-wrap:nowrap">
+        ${row.default || row.internal ? "" : `<button class="btn sm" data-need="admin" title="Use this class when nothing else is chosen" onclick="storageClassDefault('${esc(row.name)}')">Make default</button>`}
+        ${row.internal || row.default || row.in_use ? "" : `<button class="btn sm danger" data-need="admin" onclick="storageClassDelete('${esc(row.name)}')">${icon("trash")}Delete</button>`}
+      </div></td></tr>`).join("")}</tbody></table></div></div>`;
+}
+window.storageClassCreate = () => {
+  modal("New storage class", `
+    <p class="muted small">A storage class is a recipe Longhorn follows when it creates a volume:
+      how many replicas to keep, whether the volume can grow, and what happens to the data when its
+      claim is deleted. Kubernetes will not let those settings change afterwards, so choose them now.</p>
+    <div class="f" style="margin-top:14px"><label>Name</label>
+      <input type="text" id="sc_name" placeholder="longhorn-r3" autocomplete="off"></div>
+    <div class="f2"><div class="f"><label>Replicas ${tip("Copies Longhorn keeps on separate disks. Two survives one disk or node loss; one has no redundancy.")}</label>
+      <input type="number" id="sc_reps" min="1" max="5" value="2"></div>
+      <div class="f"><label>Reclaim policy ${tip("Delete removes the Longhorn volume with its claim. Retain keeps the data behind after the claim is gone.")}</label>
+        <select id="sc_reclaim"><option>Delete</option><option>Retain</option></select></div></div>
+    <label class="switch"><input type="checkbox" id="sc_expand" checked> Allow volumes to grow later</label>
+    <label class="switch"><input type="checkbox" id="sc_migratable" onchange="storageClassHint()"> Live-migratable · for VM disks</label>
+    <div class="note" id="sc_hint">Leave migratable off for container storage: a migratable volume gets a second controller so a VM can move between hosts, and Longhorn refuses to mount that kind into a pod — which is what breaks ReadWriteMany.</div>
+    <label class="switch"><input type="checkbox" id="sc_default"> Make this the default class</label>
+    <div class="row" style="margin-top:18px"><button class="btn pri" id="sc_go" data-need="admin" onclick="storageClassSave(this)">Create class</button>
+      <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+};
+window.storageClassHint = () => {
+  const on = $("#sc_migratable").checked, hint = $("#sc_hint");
+  hint.classList.toggle("bad", on);
+  hint.innerHTML = on
+    ? "<b>Volumes from this class cannot be mounted by containers.</b> Only pick this for VM disks that need live migration; ReadWriteMany claims built on it will never attach to a pod."
+    : "Leave migratable off for container storage: a migratable volume gets a second controller so a VM can move between hosts, and Longhorn refuses to mount that kind into a pod — which is what breaks ReadWriteMany.";
+};
+window.storageClassSave = async button => {
+  const name = $("#sc_name").value.trim();
+  if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(name)) return toast("lowercase letters, numbers and dashes only", "bad");
+  if (button) { button.disabled = true; button.textContent = "Creating…"; }
+  try {
+    const result = await api("/api/storage/classes", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, replicas: +$("#sc_reps").value, reclaim_policy: $("#sc_reclaim").value,
+        expandable: $("#sc_expand").checked, migratable: $("#sc_migratable").checked,
+        default: $("#sc_default").checked }) });
+    toast(result.message || `storage class "${name}" created`, "ok"); closeModal(); resetPaint(); viewStorage();
+  } catch (e) { if (button) { button.disabled = false; button.textContent = "Create class"; } toast(e.message, "bad"); }
+};
+window.storageClassDefault = async name => {
+  try {
+    const result = await api("/api/storage/classes/default", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }) });
+    toast(result.message || `${name} is now the default`, "ok"); resetPaint(); viewStorage();
+  } catch (e) { toast(e.message, "bad"); }
+};
+window.storageClassDelete = async name => {
+  if (!confirm(`Delete storage class "${name}"?
+
+Volumes already built from it keep working and keep their data. New volumes can no longer use it.`)) return;
+  try {
+    const result = await api("/api/storage/classes/delete", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }) });
+    toast(result.message || `storage class "${name}" deleted`, "ok"); resetPaint(); viewStorage();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+window.volumeClassFacts = () => {
+  const classes = window.__volumeClasses || { facts: {}, shared: [] };
+  const name = $("#vc_sc")?.value, badges = $("#vc_badges"), note = $("#vc_mode_note");
+  if (badges) badges.innerHTML = storageClassBadges((classes.facts || {})[name]);
+  if (!note) return;
+  const rwx = $("#vc_mode")?.value === "ReadWriteMany";
+  const usable = (classes.shared || []).includes(name);
+  note.hidden = !(rwx && !usable);
+  if (!note.hidden) {
+    note.innerHTML = `<b>${esc(name)} cannot back a shared volume.</b> It creates live-migratable
+      volumes for VM disks, which Longhorn will not mount into a pod.
+      ${(classes.shared || []).length ? `Use ${(classes.shared || []).map(esc).join(" or ")} instead.` : ""}`;
+  }
+};
+
+const attachedWorkloads = volume => volume.attached
+  || String(volume.attached_to || "").split(",").map(name => name.trim()).filter(Boolean);
+
 /* ---------------- shares ---------------- */
 async function viewShares() {
   const sh = await api("/api/shares").catch(() => []);
@@ -341,6 +451,8 @@ window.newShare = async () => {
   const host = createVolumePicker($("#sh_storage"), {
     pvcs: () => options.pvcs || [],
     storageClasses: () => options.storage_classes || [],
+    sharedStorageClasses: () => options.shared_storage_classes || options.storage_classes || [],
+    classFacts: () => options.storage_class_facts || {},
     kinds: ["new-rwo", "new-rwx", "existing"],
     pathLabel: "Folder inside the volume",
     pathPlaceholder: "whole volume",
@@ -369,8 +481,9 @@ window.mkShare = async button => {
     storage_class: storage.storage_class, access_mode: storage.access_mode });
   if (button) { button.disabled = true; button.textContent = "Creating…"; }
   try {
-    await api("/api/shares", { method: "POST", headers: { "Content-Type": "application/json" },
+    const result = await api("/api/shares", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body) });
+    (result.warnings || []).forEach(warning => toast(warning, "warn"));
     toast(`share "${name}" created`, "ok"); closeModal(); resetPaint(); viewShares();
   } catch (e) { if (button) { button.disabled = false; button.textContent = "Create share"; } toast(e.message, "bad"); }
 };

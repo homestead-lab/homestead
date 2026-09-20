@@ -105,7 +105,7 @@ def _consumers(namespace, claim, warnings):
             desired = int((obj.get("spec", {}) or {}).get("replicas", 1) or 0)
             spec = (((obj.get("spec", {}) or {}).get("template") or {}).get("spec") or {})
             row = _consumer(kind, obj, spec, claim, desired > 0,
-                            f"{desired} desired replica{'s' if desired != 1 else ''}")
+                            f"{desired} desired instance{'s' if desired != 1 else ''}")
             if row:
                 result.append(row)
 

@@ -438,3 +438,94 @@ def prepare_deploy(cfg):
     updated["vip_mode"] = planned["vip_mode"]
     updated["network_warnings"] = planned["warnings"]
     return updated
+
+
+def workload_services(namespace, workload):
+    """Services whose selector points at this Deployment's pods."""
+    deployment = kget(f"/apis/apps/v1/namespaces/{namespace}/deployments/{workload}")
+    selector = ((deployment.get("spec", {}) or {}).get("selector", {}) or {}).get("matchLabels", {}) or {}
+    if not selector:
+        return []
+    rows = []
+    for service in _items(f"/api/v1/namespaces/{namespace}/services"):
+        chosen = (service.get("spec", {}) or {}).get("selector") or {}
+        if chosen and all(selector.get(key) == value for key, value in chosen.items()):
+            rows.append(service)
+    # The Service named after its workload is the one Homestead created.
+    rows.sort(key=lambda row: row["metadata"]["name"] != workload)
+    return rows
+
+
+def _listener_owner(service, ports):
+    """Another Service already answering on one of these VIP listeners."""
+    state = inventory()
+    mine = (service["metadata"]["namespace"], service["metadata"]["name"])
+    addresses = set()
+    for row in state["services"]:
+        if (row["namespace"], row["name"]) == mine:
+            addresses.update(row["external_ips"])
+    if not addresses:
+        return None
+    for row in state["services"]:
+        if (row["namespace"], row["name"]) == mine or not addresses & set(row["external_ips"]):
+            continue
+        for existing in row["ports"]:
+            for port in ports:
+                if (int(existing["port"]) == int(port["port"]) and
+                        str(existing["protocol"]).upper() == port["protocol"]):
+                    return {"namespace": row["namespace"], "service": row["name"],
+                            "port": existing["port"], "protocol": existing["protocol"]}
+    return None
+
+
+def sync_workload_ports(namespace, workload, ports, network_mode=None, vip_mode="shared"):
+    """Point a workload's Service at the LAN ports its containers now expose.
+
+    Editing a container only ever changed containerPort, which Kubernetes uses
+    for nothing on its own: the LAN listener lives on the Service. Exposing the
+    first port creates that Service, unexposing the last one removes it, and
+    everything between is an in-place port update that keeps the VIP.
+    """
+    namespace = _name(namespace, "namespace")
+    workload = _name(workload, "workload name")
+    exposed = [port for port in ports or [] if port.get("expose")]
+    if network_mode == "host":
+        exposed = []
+    desired = _ports({"ports": [{"name": port.get("name"),
+                                 "port": port.get("host") or port.get("container"),
+                                 "target_port": port.get("container"),
+                                 "protocol": port.get("protocol") or "TCP"}
+                                for port in exposed]}) if exposed else []
+    services = workload_services(namespace, workload)
+    if not services:
+        if not desired:
+            return ""
+        internal = network_mode == "internal"
+        plan = create_service({"namespace": namespace, "name": workload, "workload": workload,
+                               "type": "ClusterIP" if internal else "LoadBalancer",
+                               "vip_mode": "cluster" if internal else vip_mode,
+                               "ports": [{"name": port["name"], "port": port["port"],
+                                          "target_port": port["targetPort"],
+                                          "protocol": port["protocol"]} for port in desired]})
+        return plan["message"]
+
+    service = services[0]
+    name = service["metadata"]["name"]
+    if not desired:
+        ksend("DELETE", f"/api/v1/namespaces/{namespace}/services/{name}")
+        return f"Service {name} removed; its LAN address was released"
+
+    current = [{"name": port.get("name", ""), "port": int(port.get("port")),
+                "targetPort": int(port.get("targetPort", port.get("port"))),
+                "protocol": str(port.get("protocol") or "TCP").upper()}
+               for port in (service.get("spec", {}) or {}).get("ports", []) or []]
+    if current == desired:
+        return ""
+    owner = _listener_owner(service, desired)
+    if owner:
+        raise ValueError(f"port {owner['port']}/{owner['protocol']} is already answered by "
+                         f"{owner['namespace']}/{owner['service']} on this address")
+    service["spec"]["ports"] = desired
+    ksend("PUT", f"/api/v1/namespaces/{namespace}/services/{name}", service)
+    listeners = ", ".join(f"{port['port']}→{port['targetPort']}/{port['protocol']}" for port in desired)
+    return f"Service {name} now listens on {listeners}"

@@ -6,6 +6,7 @@ legacy deployment/ConfigMap formats are read so existing installations migrate
 without losing access the next time a share is changed.
 """
 import base64
+import copy
 import hashlib
 import json
 import re
@@ -18,6 +19,10 @@ NAMESPACE = "lab"
 CACHE = {}
 CONFIGMAP = "harvui-shares"
 SECRET = "harvui-share-credentials"
+LONGHORN_NAMESPACE = "longhorn-system"
+# A Samba rollout is a container restart, not a download: if the pod is not
+# serving within this long, its mounts are not going to succeed.
+ROLLOUT_TIMEOUT = 45
 
 
 def bind(_kget, _ksend, _create_pvc, namespace, cache):
@@ -270,6 +275,61 @@ def _validate_access(rows, credentials):
     return users
 
 
+def _longhorn_volume(pvc):
+    name = (pvc.get("spec") or {}).get("volumeName") or ""
+    if not name:
+        return None
+    return _get_optional(
+        f"/apis/longhorn.io/v1beta2/namespaces/{LONGHORN_NAMESPACE}/volumes/{name}")
+
+
+def claim_warnings(pvc_name):
+    """Check a claim before Samba is touched, and say what looks risky.
+
+    An unbound claim is refused outright: there is nothing to mount.  A
+    *migratable* volume — a second controller so a VM disk can live-migrate —
+    is only warned about.  Longhorn has been seen to reject filesystem mounts
+    of those, but whether it does depends on how the volume is currently
+    attached, so the attempt is allowed and the rollout guard is what keeps
+    Samba safe if the mount really does fail.
+    """
+    pvc = _pvc(pvc_name)
+    phase = ((pvc.get("status") or {}).get("phase") or "").strip()
+    if phase != "Bound":
+        raise ValueError(f"volume {pvc_name} is {phase.lower() or 'not bound'}, "
+                         "so it cannot back a share yet")
+    spec = (_longhorn_volume(pvc) or {}).get("spec") or {}
+    controllers = int(spec.get("numberOfControllers") or 1)
+    if spec.get("migratable") or controllers > 1:
+        return [f"{pvc_name} is a live-migratable Longhorn volume ({controllers} controllers). "
+                "Longhorn may refuse to mount it into a pod; if it does, this change is "
+                "rolled back and your existing shares keep serving."]
+    return []
+
+
+def _samba_ready():
+    deployment = _get_optional(f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/samba")
+    if not deployment:
+        return False
+    desired = int((deployment.get("spec") or {}).get("replicas", 1) or 0)
+    if desired == 0:
+        return True
+    status = deployment.get("status") or {}
+    generation = int((deployment.get("metadata") or {}).get("generation", 0) or 0)
+    return (int(status.get("observedGeneration", 0) or 0) >= generation and
+            int(status.get("readyReplicas", 0) or 0) >= desired and
+            int(status.get("updatedReplicas", 0) or 0) >= desired)
+
+
+def _samba_blocker():
+    """Whatever Kubernetes last complained about, so the error names the cause."""
+    events = _get_optional(f"/api/v1/namespaces/{NAMESPACE}/events") or {}
+    messages = [item.get("message", "") for item in events.get("items", []) or []
+                if str((item.get("involvedObject") or {}).get("name", "")).startswith("samba-")
+                and item.get("type") == "Warning"]
+    return messages[-1][:220] if messages else ""
+
+
 def _volume_name(name):
     return "hs-" + hashlib.sha1(name.encode()).hexdigest()[:12]
 
@@ -279,6 +339,7 @@ def apply_samba(rows, credentials, deployment=None):
     if not deployment:
         raise ValueError("the samba deployment is not installed")
     users = _validate_access(rows, credentials)
+    previous, was_serving = copy.deepcopy(deployment), _samba_ready()
     spec = deployment["spec"]["template"]["spec"]
     container = next((row for row in spec["containers"] if row.get("name") == "samba"),
                      spec["containers"][0])
@@ -315,7 +376,35 @@ def apply_samba(rows, credentials, deployment=None):
     deployment["spec"]["template"].setdefault("metadata", {}).setdefault(
         "annotations", {})["harvui.io/share-update-at"] = time.strftime(
             "%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    return ksend("PUT", f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/samba", deployment)
+    result = ksend("PUT", f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/samba", deployment)
+    _guard_rollout(previous, was_serving)
+    return result
+
+
+def _guard_rollout(previous, was_serving):
+    """Put the old shares back if the new spec cannot start.
+
+    Samba uses the Recreate strategy because its claims are mostly
+    ReadWriteOnce, so the serving pod is gone before the replacement mounts
+    anything. A share that cannot be mounted would therefore take every
+    working share down with it. If Samba was serving before the change, it has
+    to be serving after it — otherwise the change is reverted and refused.
+    """
+    if not was_serving:
+        return ""
+    deadline = time.time() + ROLLOUT_TIMEOUT
+    while time.time() < deadline:
+        if _samba_ready():
+            return ""
+        time.sleep(1.5)
+    blocker = _samba_blocker()
+    live = _get_optional(f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/samba")
+    if live and previous:
+        restored = copy.deepcopy(previous)
+        restored["metadata"]["resourceVersion"] = live["metadata"].get("resourceVersion", "")
+        ksend("PUT", f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/samba", restored)
+    raise ValueError("Samba could not start with this change, so the previous shares were "
+                     "restored" + (f": {blocker}" if blocker else "."))
 
 
 def _clear_cache():
@@ -335,7 +424,9 @@ def create_share(name, size_gb, user, password, public, read_only=False,
         raise ValueError("a password is required for a private share")
     reuse = bool(pvc)
     pvc_name = _claim_name(pvc) if reuse else _claim_name(f"share-{name}")
+    warnings = []
     if reuse:
+        warnings = claim_warnings(pvc_name)
         # Borrowed claims keep their own size; Homestead only mounts them.
         try:
             size_gb = _pvc_size(_pvc(pvc_name))[1] or 0
@@ -365,7 +456,7 @@ def create_share(name, size_gb, user, password, public, read_only=False,
     _save_config(rows, config_obj)
     result = apply_samba(rows, credentials, deployment)
     _clear_cache()
-    return {"shares": [_public(item, credentials) for item in rows],
+    return {"shares": [_public(item, credentials) for item in rows], "warnings": warnings,
             "deployment": result, "message": f"Share {name} created"}
 
 

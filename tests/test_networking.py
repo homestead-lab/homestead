@@ -52,14 +52,65 @@ class NetworkingTests(unittest.TestCase):
                 "status": {"desiredNumberScheduled": 2, "numberReady": 2}},
         }
 
+        self.objects["/api/v1/namespaces/lab/services"] = self.objects["/api/v1/services"]
+        for deployment in self.objects["/apis/apps/v1/deployments"]["items"]:
+            meta = deployment["metadata"]
+            self.objects[f"/apis/apps/v1/namespaces/lab/deployments/{meta['name']}"] = deployment
+
         def get(path):
             return self.objects[path]
 
-        def send(method, path, body, **kwargs):
+        def send(method, path, body=None, **kwargs):
             self.sent.append((method, path, body))
             return body
 
         networking.bind(get, send, {"kube-system", "harvester-system"}, "lab", "192.0.2.242")
+
+    def test_edited_lan_port_is_published_on_the_existing_service(self):
+        message = networking.sync_workload_ports("lab", "homestead", [
+            {"name": "web", "container": 8088, "host": 9090, "protocol": "TCP", "expose": True}])
+
+        method, path, body = self.sent[-1]
+        self.assertEqual(("PUT", "/api/v1/namespaces/lab/services/homestead"), (method, path))
+        self.assertEqual([{"name": "web", "port": 9090, "targetPort": 8088, "protocol": "TCP"}],
+                         body["spec"]["ports"])
+        self.assertEqual("10.43.0.20", body["spec"]["clusterIP"], "the VIP and cluster IP are kept")
+        self.assertIn("9090", message)
+
+    def test_unexposing_every_port_removes_the_service(self):
+        message = networking.sync_workload_ports("lab", "homestead", [
+            {"name": "web", "container": 8088, "host": 8088, "protocol": "TCP", "expose": False}])
+
+        self.assertEqual([("DELETE", "/api/v1/namespaces/lab/services/homestead", None)],
+                         [(m, p, b) for m, p, b in self.sent])
+        self.assertIn("released", message)
+
+    def test_unchanged_ports_do_not_touch_the_service(self):
+        self.assertEqual("", networking.sync_workload_ports("lab", "homestead", [
+            {"name": "web", "container": 8088, "host": 8088, "protocol": "TCP", "expose": True}]))
+        self.assertEqual([], self.sent)
+
+    def test_exposing_a_workload_without_a_service_creates_one(self):
+        message = networking.sync_workload_ports("lab", "pihole", [
+            {"name": "dns", "container": 53, "host": 53, "protocol": "UDP", "expose": True}],
+            vip_mode="automatic")
+
+        method, path, body = self.sent[-1]
+        self.assertEqual(("POST", "/api/v1/namespaces/lab/services"), (method, path))
+        self.assertEqual({"app": "pihole"}, body["spec"]["selector"])
+        self.assertIn("192.0.2.243", message)
+
+    def test_a_lan_port_another_service_already_answers_is_refused(self):
+        self.objects["/api/v1/services"]["items"].append({
+            "metadata": {"name": "pihole", "namespace": "lab",
+                         "annotations": {"kube-vip.io/loadbalancerIPs": "192.0.2.242"}},
+            "spec": {"type": "LoadBalancer", "selector": {"app": "pihole"},
+                     "ports": [{"name": "dns", "port": 53, "targetPort": 53, "protocol": "UDP"}]},
+            "status": {"loadBalancer": {"ingress": [{"ip": "192.0.2.242"}]}}})
+
+        with self.assertRaisesRegex(ValueError, "already answered by"):
+            networking.sync_workload_ports("lab", "homestead", [
+                {"name": "dns", "container": 8088, "host": 53, "protocol": "UDP", "expose": True}])
 
     def test_inventory_reconciles_pool_against_live_services(self):
         state = networking.inventory()

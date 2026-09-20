@@ -69,7 +69,8 @@
     { id: "coral_usb", name: "Google Coral USB", host_path: "/dev/bus/usb", container_path: "/dev/bus/usb", builtin: false, usb_ids: ["18d1:9302"] },
   ];
   const volumes = [
-    { name: "pvc-demo-frigate", pvc_name: "frigate-config", namespace: "lab", attached_to: "frigate",
+    { name: "pvc-demo-frigate", pvc_name: "frigate-config", namespace: "lab", attached_to: "frigate, samba",
+      attached: ["frigate", "samba"],
       pod_status: "Running", state: "attached", robustness: "healthy", node: "harvester-node2",
       size_gb: 20, actual_gb: 3.8, used_pct: 19, replicas: 2,
       access_modes: ["ReadWriteOnce"], storage_class: "longhorn-r2", last_used_secs: 0 },
@@ -194,7 +195,13 @@
       volumes: w.name === "frigate" ? [{ name: "config", kind: "pvc", source: "frigate-config" }] : [] })),
     pvcs: volumes.map(v => ({ name: v.pvc_name, size: `${v.size_gb}Gi`, status: v.state === "attached" ? "Bound" : "Available",
       access_modes: v.access_modes, storage_class: v.storage_class })),
-    storage_classes: ["harvester-longhorn", "longhorn-r2"],
+    storage_classes: ["harvester-longhorn", "longhorn", "longhorn-r2"],
+    shared_storage_classes: ["longhorn"],
+    storage_class_facts: {
+      "harvester-longhorn": { replicas: "3", migratable: true, encrypted: false, expandable: true, reclaim: "Delete", default: true },
+      longhorn: { replicas: "3", migratable: false, encrypted: false, expandable: true, reclaim: "Delete", default: false },
+      "longhorn-r2": { replicas: "2", migratable: true, encrypted: false, expandable: true, reclaim: "Retain", default: false },
+    },
   };
   const demoApp = { name: "Frigate", repo: "ghcr.io/blakeblackshear/frigate:stable", icon: "", cat: "HomeAutomation",
     desc: "Network video recorder with local AI object detection.", downloads: 24800000, stars: 42000,
@@ -281,12 +288,24 @@
         size_gb: body.size_gb || 20,
         message: `Restore of ${body.backup || lhBackups[0].name} into ${body.namespace || "lab"}/${body.name || "pvc-demo-frigate-restore"} started` };
     },
+    "/api/storageclasses": ["harvester-longhorn", "longhorn", "longhorn-r2"],
+    "/api/storage/classes": [
+      { name: "harvester-longhorn", provisioner: "driver.longhorn.io", replicas: "3", migratable: true,
+        expandable: true, reclaim: "Delete", default: true, internal: false, in_use: 2 },
+      { name: "longhorn", provisioner: "driver.longhorn.io", replicas: "3", migratable: false,
+        encrypted: true, expandable: true, reclaim: "Delete", default: false, internal: false, in_use: 0 },
+      { name: "longhorn-r2", provisioner: "driver.longhorn.io", replicas: "2", migratable: true,
+        expandable: true, reclaim: "Retain", default: false, internal: false, in_use: 7 },
+      { name: "longhorn-static", provisioner: "driver.longhorn.io", replicas: "", migratable: false,
+        expandable: false, reclaim: "Delete", default: false, internal: true, in_use: 0 },
+    ],
     "/api/shares": shares,
     "/api/shares/options": { namespace: "lab",
       pvcs: volumes.map(v => ({ name: v.pvc_name, size: `${v.size_gb}Gi`,
         status: v.state === "attached" ? "Bound" : "Available",
         access_modes: v.access_modes, storage_class: v.storage_class })),
-      storage_classes: ["harvester-longhorn", "longhorn-r2"] },
+      storage_classes: ["harvester-longhorn", "longhorn", "longhorn-r2"],
+      shared_storage_classes: ["longhorn"], storage_class_facts: deployOptions.storage_class_facts },
     "/api/shares/edit": { ok: true, shares, deployment_updated: true,
       message: "Share secure updated; Samba is restarting" },
     "/api/operations": [], "/api/workloads": workloads, "/api/network": network,
@@ -326,12 +345,13 @@
       const containers = source.map((container, index) => ({ original_name: container.name, name: container.name,
         image: container.image || found.images[index] || found.images[0], cpu: index ? "20m" : "50m", memory: index ? "64Mi" : "128Mi",
         env: index ? { LOG_LEVEL: "info" } : {}, env_refs: index ? [] : [{ name: "APP_TOKEN", source: "Secret homestead-demo · token" }],
-        ports: index ? [{ name: "mqtt", container: 1883, protocol: "TCP" }] : [{ name: "web", container: 8123, protocol: "TCP" }],
+        ports: index ? [{ name: "mqtt", container: 1883, protocol: "TCP", host: 1883, expose: false }]
+          : [{ name: "web", container: 8123, protocol: "TCP", host: 8123, expose: true }],
         hardware: index ? [] : (found.hardware || []), volumes: index ? [] : [{ name: "config",
           source: `${found.name}-config`, path: "/config", read_only: false, kind: "existing",
           value: `${found.name}-config`, managed: false }] }));
       return { ns: found.ns, name: found.name, container_name: containers[0].name,
-        pod_volumes: [{ name: "config", kind: "pvc", source: `${found.name}-config` }],
+        pod_volumes: [{ name: "config", kind: "pvc", source: `${found.name}-config` }], has_service: true,
         pod_hostname: found.name === "frigate" ? "frigate-core" : "", image: found.images[0], replicas: found.desired,
         cpu: "50m", memory: "128Mi", env: {}, ports: [], hardware: found.hardware || [], icon: "", node: found.nodes[0] || "",
         seed_configs: [], volumes: containers[0].volumes, containers };
@@ -362,7 +382,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.5", candidate: "ghcr.io/wjcloudy/homestead:2.8.6", candidate_tag: "2.8.6", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.6", candidate: "ghcr.io/wjcloudy/homestead:2.8.7", candidate_tag: "2.8.7", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

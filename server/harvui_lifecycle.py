@@ -142,7 +142,7 @@ def _wait_for_replicas(ns, name, desired, timeout=120):
                     (not generation or observed >= generation)):
                 return dep
         time.sleep(2)
-    state = "stop" if desired == 0 else f"reach {desired}/{desired} ready replicas"
+    state = "stop" if desired == 0 else f"reach {desired}/{desired} ready instances"
     raise TimeoutError(f"timed out waiting for {name} to {state}")
 
 

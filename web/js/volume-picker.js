@@ -17,6 +17,8 @@ const VOLUME_KINDS = ["new-rwo", "new-rwx", "existing", "pod", "ephemeral", "hos
 const VOLUME_PICKER_DEFAULTS = {
   pvcs: () => [],
   storageClasses: () => [],
+  sharedStorageClasses: null,
+  classFacts: () => ({}),
   podVolumes: () => [],
   allowPod: () => false,
   kinds: VOLUME_KINDS,
@@ -74,6 +76,19 @@ function volumeListIssue(rows) {
   return "";
 }
 
+function storageClassBadges(facts) {
+  if (!facts) return "";
+  const badges = [];
+  if (facts.replicas) badges.push(`<span class="tag">${esc(facts.replicas)} replica${facts.replicas === "1" ? "" : "s"}</span>`);
+  badges.push(facts.encrypted ? '<span class="tag info">encrypted</span>' : '<span class="tag">not encrypted</span>');
+  badges.push(facts.expandable ? '<span class="tag ok">can grow</span>' : '<span class="tag">fixed size</span>');
+  if (facts.reclaim === "Retain") badges.push('<span class="tag info">keeps data on delete</span>');
+  if (facts.migratable) badges.push('<span class="tag warn" data-tip="Volumes from this class carry a second controller for VM live migration, which Longhorn will not mount into a pod.">VM disks only</span>');
+  if (facts.default) badges.push('<span class="tag ok">default</span>');
+  return badges.join("");
+}
+window.storageClassBadges = storageClassBadges;
+
 function volumePickerHost(node) { return node.closest("[data-volume-host]"); }
 
 function volumePickerContext(node) {
@@ -108,6 +123,21 @@ function volumeSourceList(row, kind) {
   choice.value = values.some(v => v.value === requested) ? requested : "";
 }
 
+function volumeClassList(row, kind) {
+  const ctx = volumePickerContext(row), select = $(".vsc", row);
+  const all = ctx.storageClasses() || [];
+  // Only a non-migratable class can serve ReadWriteMany to a pod.
+  const shared = ctx.sharedStorageClasses ? (ctx.sharedStorageClasses() || []) : all;
+  const usable = (kind === "new-rwx" ? shared : all).length
+    ? (kind === "new-rwx" ? shared : all) : ["longhorn-r2"];
+  const wanted = select.value || row.dataset.storageClass || "";
+  select.innerHTML = usable.map(name =>
+    `<option ${name === wanted ? "selected" : ""}>${esc(name)}</option>`).join("");
+  if (usable.includes(wanted)) select.value = wanted;
+  row.dataset.storageClass = select.value;
+  return all.length - usable.length;
+}
+
 function syncVolumeRow(row) {
   const ctx = volumePickerContext(row), kind = $(".vk", row).value, allowPod = !!ctx.allowPod();
   const podOption = [...$(".vk", row).options].find(o => o.value === "pod");
@@ -115,6 +145,13 @@ function syncVolumeRow(row) {
   if (kind === "pod" && !allowPod) $(".vk", row).value = (ctx.kinds || VOLUME_KINDS).find(k => k !== "pod") || "existing";
   const actual = $(".vk", row).value, isNew = actual.startsWith("new-");
   $(".vnew", row).style.display = isNew ? "grid" : "none";
+  const hidden = volumeClassList(row, actual);
+  const badges = $(".vclass-badges", row);
+  if (badges) {
+    const facts = (ctx.classFacts() || {})[$(".vsc", row).value];
+    badges.innerHTML = isNew ? storageClassBadges(facts) : "";
+    badges.style.display = isNew && badges.innerHTML ? "flex" : "none";
+  }
   volumeSourceList(row, actual);
   const source = $(".vs", row), choice = $(".vselect", row), selectable = actual === "existing" || actual === "pod";
   $(".vsource", row).style.display = actual === "ephemeral" ? "none" : "block";
@@ -127,7 +164,8 @@ function syncVolumeRow(row) {
   const selectedPvc = actual === "existing" ? (ctx.pvcs() || []).find(v => v.name === selectedSource) : null;
   const selectedPodVolume = actual === "pod" ? (ctx.podVolumes() || []).find(v => v.name === selectedSource) : null;
   $(".vhelp", row).textContent = actual === "new-rwo" ? (ctx.newSourceHelp || "Creates a Longhorn claim for this workload (single-node attachment).")
-    : actual === "new-rwx" ? (ctx.newSourceHelp || "Creates shared Longhorn storage that can attach from multiple nodes.")
+    : actual === "new-rwx" ? (ctx.newSourceHelp || "Creates shared Longhorn storage that several pods can mount at once.") +
+        (hidden ? ` ${hidden} storage class${hidden === 1 ? "" : "es"} hidden: they create live-migratable VM volumes, which Longhorn cannot mount into a pod.` : "")
     : actual === "existing" ? selectedPvc ? `${selectedPvc.name}: ${(selectedPvc.access_modes || []).join("/") || "mode unknown"}, ${selectedPvc.size}, ${selectedPvc.status}. The claim and data are kept.` : "Mounts an existing PVC without creating or deleting it."
     : actual === "pod" ? selectedPodVolume ? `${selectedPodVolume.name}: ${selectedPodVolume.kind}${selectedPodVolume.source ? ` (${selectedPodVolume.source})` : ""}. The same storage is shared with the other container.` : ctx.podHelp
     : actual === "ephemeral" ? "Creates temporary pod storage. Its contents are deleted when the pod is replaced; ideal for cache or transcoding."
@@ -143,6 +181,7 @@ function addVolumeRow(host, v = {}) {
   d.dataset.label = v.label || ""; d.dataset.description = v.description || "";
   d.dataset.required = String(!!v.required); d.dataset.templateSource = v.template_source || "";
   d.dataset.role = v.role || ""; d.dataset.volumeName = v.volume_name || "";
+  d.dataset.storageClass = v.storage_class || "";
   const classes = (ctx.storageClasses() || []).length ? ctx.storageClasses() : ["longhorn-r2"];
   d.innerHTML = `<div class="volume-title"><div><b>${esc(v.label || "Storage mapping")}</b>${v.role ? `<span class="tag">${esc(v.role)}</span>` : ""}${v.required ? ' <span class="pill warn">required</span>' : ""}</div>
       ${ctx.removable ? '<button class="iconbtn row-remove" type="button" title="Remove storage mapping" onclick="removeVolumeRow(this)">×</button>' : ""}</div>
@@ -155,11 +194,12 @@ function addVolumeRow(host, v = {}) {
       <div class="vnew"><div><label>Size GiB</label><input class="vz" type="number" min="1" value="${v.size_gb || 5}"></div>
         <div><label>Storage class</label><select class="vsc">${classes.map(sc => `<option ${sc === (v.storage_class || "longhorn-r2") ? "selected" : ""}>${esc(sc)}</option>`).join("")}</select></div></div>
     </div>
+    <div class="vclass-badges" style="display:none"></div>
     <div class="volume-foot"><span class="dim small vhelp"></span><label class="switch" ${ctx.readOnlyToggle ? "" : 'style="display:none"'}><input class="vro" type="checkbox" ${v.read_only ? "checked" : ""}>Read-only</label></div>
     ${v.template_source && v.template_source !== v.source ? `<div class="template-source">Unraid source: <span class="mono">${esc(v.template_source)}</span> · choose its Kubernetes backing above</div>` : ""}`;
   host.appendChild(d); syncVolumeRow(d);
   d.addEventListener("input", event => { if (event.target.matches(".vs,.vselect")) syncVolumeRow(d); ctx.onChange(); });
-  d.addEventListener("change", event => { if (event.target.matches(".vk,.vs,.vselect")) syncVolumeRow(d); ctx.onChange(); });
+  d.addEventListener("change", event => { if (event.target.matches(".vk,.vs,.vselect,.vsc")) syncVolumeRow(d); ctx.onChange(); });
   return d;
 }
 

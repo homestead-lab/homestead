@@ -25,11 +25,11 @@ not affiliated with, endorsed, or sponsored by Lime Technology, Inc.
 | Area | Capability |
 |---|---|
 | **Dashboard** | Cluster CPU/RAM/network/disk telemetry, transition-aware health, top consumers, configurable warnings |
-| **Containers** | Guided App Store and image deployment, independent or sidecar pods, guarded Kubernetes workload rename, edit/move/logs/console, autostart, one storage picker for new and existing containers, hardware passthrough, update checks, monitored rollout and rollback |
+| **Containers** | Guided App Store and image deployment, independent or sidecar pods, guarded Kubernetes workload rename, edit/move/logs/console, autostart, LAN port and exposure editing, one storage picker for new and existing containers, hardware passthrough, update checks, monitored rollout and rollback |
 | **Architecture** | VIP → workload → claim → Longhorn volume → replica dependency view |
 | **Networking** | Service, ClusterIP, VIP, ingress, listener ownership, endpoint health and guided collision-free exposure |
 | **Cluster** | Harvester/Kubernetes versions, control-plane and etcd quorum, node pressure, critical services, certificate requests and guided node onboarding |
-| **Storage** | RWO/RWX volume creation, growth and guarded deletion, usage, health, snapshots, backups and recurring jobs |
+| **Storage** | RWO/RWX volume creation, growth and guarded deletion, storage-class inventory and creation, usage, health, snapshots, backups and recurring jobs |
 | **Hardware** | Host device browser and reusable mappings for iGPU, Coral, USB/PCIe and other devices |
 | **Import** | Unraid/Docker workload and appdata import with editable seed configuration |
 | **Administration** | Direct URLs/breadcrumbs, persistent activity tray, viewer/operator/admin roles, appearance, thresholds and version details |
@@ -54,10 +54,10 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.6`, the workflow publishes:
+For a release such as `v2.8.7`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.6
+ghcr.io/wjcloudy/homestead:2.8.7
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -68,8 +68,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.6
-git push origin v2.8.6
+git tag v2.8.7
+git push origin v2.8.7
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -276,7 +276,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.6 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.7 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -340,6 +340,25 @@ errors across browser or Homestead restarts. See the
 [Longhorn StorageClass parameters](https://longhorn.io/docs/1.12.1/references/storage-class-parameters/)
 reference for the underlying mechanism.
 
+## Storage classes
+
+A StorageClass is the recipe Longhorn follows when it creates a volume.
+Kubernetes fixes a class at creation — its parameters, provisioner and reclaim
+policy cannot be edited afterwards — so Homestead offers create, make-default
+and delete rather than an edit button that would silently do nothing. Deleting
+a class is refused while any claim still references it, and volumes already
+built from it keep working and keep their data.
+
+One parameter decides whether a class can back container storage at all.
+A class with `migratable: true` hands out two-controller volumes so a VM disk
+can live-migrate between hosts, and Longhorn's CSI driver refuses to
+filesystem-mount those into a pod: a ReadWriteMany claim created on such a
+class binds happily and then strands whatever tries to use it in
+`ContainerCreating`. Homestead therefore refuses ReadWriteMany claims on a
+migratable class, naming the classes that would work, and the storage picker
+narrows its class list as soon as RWX is chosen. Harvester's reserved internal
+classes are never offered.
+
 ## Network shares
 
 Network Shares manages the existing `samba` Deployment and Longhorn-backed
@@ -353,6 +372,14 @@ read/write. Longhorn/Kubernetes claims cannot shrink, so the editor shows the
 live PVC request as its minimum size; a borrowed volume is resized from
 Volumes instead, never by the share. Size-only changes do not restart Samba;
 access-policy changes use the Activity tray to follow the rolling restart.
+
+Samba serves every share from one pod with the Recreate strategy, because its
+claims are mostly ReadWriteOnce. A share whose volume cannot be mounted would
+therefore take every working share down with it, so a change is guarded: the
+claim must be Bound and mountable before the Deployment is written, and if the
+pod does not become ready the previous shares are restored and the change is
+refused with the mount error. The guard only reverts when Samba was serving
+beforehand, so a repair still applies to an already-broken Samba.
 
 Share metadata is stored in the `harvui-shares` ConfigMap. Passwords are stored
 separately in the `harvui-share-credentials` Kubernetes Secret and are never

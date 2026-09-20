@@ -149,6 +149,60 @@ class ShareTests(unittest.TestCase):
         self.assertEqual("10Gi", pvc["spec"]["resources"]["requests"]["storage"])
         self.assertFalse(any("persistentvolumeclaims" in path for _, path, _ in self.sent))
 
+    def test_a_migratable_volume_is_warned_about_but_still_allowed(self):
+        """Other pods do mount these, so the rollout guard decides, not a blanket ban."""
+        self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/vmdisk"] = {
+            "metadata": {"name": "vmdisk"}, "spec": {"volumeName": "pvc-abc"},
+            "status": {"phase": "Bound", "capacity": {"storage": "5Gi"}}}
+        self.objects["/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/pvc-abc"] = {
+            "metadata": {"name": "pvc-abc"},
+            "spec": {"migratable": True, "numberOfControllers": 2, "accessMode": "rwx"}}
+
+        result = shares.create_share("vm", 0, "vm", "pw", False, pvc="vmdisk")
+
+        self.assertIn("live-migratable", result["warnings"][0])
+        self.assertIn("rolled back", result["warnings"][0])
+        self.assertTrue(any("deployments/samba" in path for _, path, _ in self.sent))
+
+    def test_an_unbound_volume_is_refused(self):
+        self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/pending"] = {
+            "metadata": {"name": "pending"}, "spec": {}, "status": {"phase": "Pending"}}
+
+        with self.assertRaisesRegex(ValueError, "pending"):
+            shares.create_share("later", 0, "later", "pw", False, pvc="pending")
+        self.assertEqual([], self.sent)
+
+    def test_a_share_that_cannot_start_restores_the_working_shares(self):
+        """Samba uses Recreate, so a bad mount must never outlive the attempt."""
+        ready, timeout = shares._samba_ready, shares.ROLLOUT_TIMEOUT
+        shares._samba_ready = lambda: True   # serving before the change
+        shares.ROLLOUT_TIMEOUT = 0           # and never ready after it
+        try:
+            with self.assertRaisesRegex(ValueError, "previous shares were restored"):
+                shares.create_share("clips", 0, "clips", "pw", False, pvc="share-secure")
+        finally:
+            shares._samba_ready, shares.ROLLOUT_TIMEOUT = ready, timeout
+
+        method, path, body = self.sent[-1]
+        self.assertEqual("PUT", method)
+        self.assertTrue(path.endswith("/deployments/samba"))
+        args = body["spec"]["template"]["spec"]["containers"][0]["args"]
+        self.assertNotIn("clips;/shares/clips;yes;no;no;clips", args)
+        self.assertIn("secure;/shares/secure;yes;no;no;lab", args)
+
+    def test_a_broken_samba_can_still_be_repaired(self):
+        """With Samba already down, a change must apply instead of rolling back."""
+        ready, timeout = shares._samba_ready, shares.ROLLOUT_TIMEOUT
+        shares._samba_ready = lambda: False
+        shares.ROLLOUT_TIMEOUT = 0
+        try:
+            shares.delete_share("secure")
+        finally:
+            shares._samba_ready, shares.ROLLOUT_TIMEOUT = ready, timeout
+
+        args = self.sent[-1][2]["spec"]["template"]["spec"]["containers"][0]["args"]
+        self.assertNotIn("secure;/shares/secure;yes;no;no;lab", args)
+
     def test_folder_cannot_escape_the_volume(self):
         for folder in ("../etc", "media/../../etc", "media/../secrets"):
             with self.assertRaisesRegex(ValueError, "relative path inside the volume"):
