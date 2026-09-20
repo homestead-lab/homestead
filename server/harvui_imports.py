@@ -14,6 +14,7 @@ import re
 import shlex
 import time
 import urllib.error
+import urllib.parse
 
 kget = ksend = create_pvc = build_deployment = None
 NS = "lab"
@@ -650,6 +651,158 @@ def run_job_now(name):
 
 
 # --------------------------------------------------------------- VMs
+VM_DISK_LABEL = "homestead.io/vm-disk-import"
+
+
+def _required_name(value, label="name"):
+    value = str(value or "").strip()
+    if not SAFE.match(value):
+        raise ValueError(f"{label} must be lowercase letters, numbers and dashes")
+    return value
+
+
+def _get_or_none(path):
+    try:
+        return kget(path)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
+
+
+def vm_disk_import_plan(namespace, name):
+    """Preflight an import without returning or persisting its source URL."""
+    namespace = _required_name(namespace or NS, "namespace")
+    name = _required_name(name, "disk name")
+    dv = _get_or_none(
+        f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{namespace}/datavolumes/{name}")
+    pvc = _get_or_none(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{name}")
+    conflicts = []
+    if dv:
+        conflicts.append({"kind": "DataVolume", "name": name})
+    if pvc:
+        conflicts.append({"kind": "PersistentVolumeClaim", "name": name})
+    return {"namespace": namespace, "name": name, "ready": not conflicts,
+            "conflicts": conflicts,
+            "message": ("Ready to create a new CDI DataVolume and PVC" if not conflicts else
+                        f"{namespace}/{name} already exists; choose a new disk name")}
+
+
+def _http_disk_source(cfg):
+    source_url = str(cfg.get("source_url") or "").strip()
+    try:
+        parsed = urllib.parse.urlsplit(source_url)
+    except ValueError as error:
+        raise ValueError("source URL is invalid") from error
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError("source URL must use HTTP or HTTPS")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("put HTTP credentials in a Kubernetes Secret, not in the URL")
+    source = {"url": source_url}
+    checksum = str(cfg.get("checksum") or "").strip().lower()
+    if checksum:
+        match = re.fullmatch(r"(sha256|sha512):([0-9a-f]+)", checksum)
+        if not match or len(match.group(2)) != {"sha256": 64, "sha512": 128}[match.group(1)]:
+            raise ValueError("checksum must be sha256:<64 hex characters> or sha512:<128 hex characters>")
+        source["checksum"] = checksum
+    secret = str(cfg.get("secret_ref") or "").strip()
+    cert = str(cfg.get("cert_config_map") or "").strip()
+    if secret:
+        source["secretRef"] = _required_name(secret, "secret reference")
+    if cert:
+        source["certConfigMap"] = _required_name(cert, "CA ConfigMap")
+    return source
+
+
+def import_vm_disk(cfg):
+    """Import a qemu-supported disk image into a new PVC through CDI."""
+    namespace = _required_name(cfg.get("namespace") or NS, "namespace")
+    name = _required_name(cfg.get("name"), "disk name")
+    plan = vm_disk_import_plan(namespace, name)
+    if not plan["ready"]:
+        raise ValueError(plan["message"])
+    try:
+        size_gb = int(cfg.get("size_gb", 20))
+    except (TypeError, ValueError) as error:
+        raise ValueError("capacity must be a whole number of GiB") from error
+    if not 1 <= size_gb <= 16384:
+        raise ValueError("capacity must be between 1 and 16384 GiB")
+    access_mode = str(cfg.get("access_mode") or "ReadWriteOnce")
+    if access_mode not in ("ReadWriteOnce", "ReadWriteMany"):
+        raise ValueError("access mode must be ReadWriteOnce or ReadWriteMany")
+    storage_class = _required_name(cfg.get("storage_class") or "longhorn-r2", "storage class")
+    source = _http_disk_source(cfg)
+    body = {
+        "apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "DataVolume",
+        "metadata": {
+            "name": name, "namespace": namespace,
+            "labels": {"harvui.io/managed": "true", VM_DISK_LABEL: "true"},
+            "annotations": {"homestead.io/import-source": "http",
+                            "homestead.io/disk-format": "auto-detected"},
+        },
+        "spec": {
+            "source": {"http": source}, "contentType": "kubevirt",
+            "storage": {
+                "storageClassName": storage_class,
+                "accessModes": [access_mode], "volumeMode": "Filesystem",
+                "resources": {"requests": {"storage": f"{size_gb}Gi"}},
+            },
+        },
+    }
+    ksend("POST", f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{namespace}/datavolumes", body)
+    _bust("vms", "vol")
+    return {"ok": True, "namespace": namespace, "name": name, "pvc": name,
+            "size_gb": size_gb,
+            "message": f"CDI import into {namespace}/{name} started"}
+
+
+def _disk_consumers():
+    consumers = {}
+    try:
+        vms = kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
+    except Exception:
+        return consumers
+    for vm in vms:
+        meta = vm.get("metadata", {}) or {}
+        ns, vm_name = meta.get("namespace", ""), meta.get("name", "")
+        for volume in (((vm.get("spec", {}) or {}).get("template", {}) or {})
+                       .get("spec", {}).get("volumes", []) or []):
+            disk_name = (volume.get("dataVolume") or {}).get("name")
+            if disk_name:
+                consumers.setdefault((ns, disk_name), []).append(vm_name)
+    return consumers
+
+
+def list_vm_disks():
+    """Return managed imports with status only; source URLs remain cluster-private."""
+    try:
+        items = kget("/apis/cdi.kubevirt.io/v1beta1/datavolumes").get("items", [])
+    except Exception:
+        return []
+    consumers = _disk_consumers()
+    out = []
+    for item in items:
+        meta = item.get("metadata", {}) or {}
+        if (meta.get("labels", {}) or {}).get(VM_DISK_LABEL) != "true":
+            continue
+        spec, status = item.get("spec", {}) or {}, item.get("status", {}) or {}
+        ns, name = meta.get("namespace", ""), meta.get("name", "")
+        progress = str(status.get("progress", "") or "")
+        amount = float(progress.rstrip("%") or 0) if re.fullmatch(r"\d+(?:\.\d+)?%?", progress) else 0
+        request = ((spec.get("storage", {}) or {}).get("resources", {}) or {}).get("requests", {}) or {}
+        messages = [c.get("message") or c.get("reason") for c in status.get("conditions", []) or []
+                    if c.get("status") == "False" and (c.get("message") or c.get("reason"))]
+        used_by = consumers.get((ns, name), [])
+        out.append({"namespace": ns, "name": name, "pvc": status.get("claimName") or name,
+                    "phase": status.get("phase") or "Pending", "progress": round(amount, 1),
+                    "capacity": request.get("storage", ""),
+                    "storage_class": (spec.get("storage", {}) or {}).get("storageClassName", ""),
+                    "access_modes": (spec.get("storage", {}) or {}).get("accessModes", []),
+                    "message": str(messages[0])[:300] if messages else "",
+                    "in_use": bool(used_by), "used_by": used_by})
+    return sorted(out, key=lambda row: (row["namespace"], row["name"]))
+
+
 def list_vm_images():
     try:
         return [{"name": i["metadata"]["name"],
@@ -663,18 +816,29 @@ def list_vm_images():
 
 def create_vm(cfg):
     """Create a KubeVirt VM backed by a Longhorn DataVolume."""
-    name = cfg["name"]
-    if not SAFE.match(name):
-        raise ValueError("name must be lowercase letters, numbers and dashes")
-    ns = cfg.get("namespace", NS)
+    name = _required_name(cfg.get("name"))
+    ns = _required_name(cfg.get("namespace") or NS, "namespace")
     cores = int(cfg.get("cores", 2))
     mem = cfg.get("memory", "2Gi")
     disk = int(cfg.get("disk_gb", 20))
     sc = cfg.get("storage_class", "longhorn-r2")
-    dv = f"{name}-disk"
+    imported_dv = str(cfg.get("disk_import") or "").strip()
+    dv = imported_dv or f"{name}-disk"
     password = str(cfg.get("password") or "")
-    if not cfg.get("cloud_init") and len(password) < 10:
+    if not imported_dv and not cfg.get("cloud_init") and len(password) < 10:
         raise ValueError("root password must be at least 10 characters")
+
+    if imported_dv:
+        _required_name(imported_dv, "imported disk")
+        disk_obj = _get_or_none(
+            f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{imported_dv}")
+        if not disk_obj:
+            raise ValueError(f"imported disk {ns}/{imported_dv} does not exist")
+        if (disk_obj.get("status", {}) or {}).get("phase") != "Succeeded":
+            raise ValueError("imported disk is not ready yet")
+        users = _disk_consumers().get((ns, imported_dv), [])
+        if users:
+            raise ValueError(f"imported disk is already attached to VM {users[0]}")
 
     src = {"blank": {}}
     if cfg.get("image_url"):
@@ -682,12 +846,18 @@ def create_vm(cfg):
     elif cfg.get("image_id"):
         src = {"pvc": {"namespace": "harvester-public", "name": cfg["image_id"]}}
 
-    cloudinit = cfg.get("cloud_init") or (
+    cloudinit = cfg.get("cloud_init") or (password and (
         "#cloud-config\n"
         f"hostname: {name}\n"
         "ssh_pwauth: true\n"
         f"password: {password}\n"
-        "chpasswd: {expire: false}\n")
+        "chpasswd: {expire: false}\n"))
+
+    disks = [{"name": "root", "disk": {"bus": "virtio"}, "bootOrder": 1}]
+    volumes = [{"name": "root", "dataVolume": {"name": dv}}]
+    if cloudinit:
+        disks.append({"name": "cloudinit", "disk": {"bus": "virtio"}})
+        volumes.append({"name": "cloudinit", "cloudInitNoCloud": {"userData": cloudinit}})
 
     vm = {
         "apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
@@ -695,13 +865,13 @@ def create_vm(cfg):
                      "labels": {"harvui.io/managed": "true", "app": name}},
         "spec": {
             "running": bool(cfg.get("start", True)),
-            "dataVolumeTemplates": [{
+            **({} if imported_dv else {"dataVolumeTemplates": [{
                 "metadata": {"name": dv},
                 "spec": {"source": src,
                          "pvc": {"accessModes": ["ReadWriteMany"],
                                  "resources": {"requests": {"storage": f"{disk}Gi"}},
                                  "storageClassName": sc}},
-            }],
+            }]}),
             "template": {
                 "metadata": {"labels": {"kubevirt.io/domain": name, "app": name}},
                 "spec": {
@@ -710,16 +880,12 @@ def create_vm(cfg):
                         "memory": {"guest": mem},
                         "resources": {"requests": {"memory": mem}},
                         "devices": {
-                            "disks": [{"name": "root", "disk": {"bus": "virtio"}, "bootOrder": 1},
-                                      {"name": "cloudinit", "disk": {"bus": "virtio"}}],
+                            "disks": disks,
                             "interfaces": [{"name": "default", "masquerade": {}}],
                         },
                     },
                     "networks": [{"name": "default", "pod": {}}],
-                    "volumes": [
-                        {"name": "root", "dataVolume": {"name": dv}},
-                        {"name": "cloudinit", "cloudInitNoCloud": {"userData": cloudinit}},
-                    ],
+                    "volumes": volumes,
                     "evictionStrategy": "LiveMigrate",
                 },
             },

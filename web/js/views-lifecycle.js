@@ -232,8 +232,12 @@ window.doVmMove = async (ns, name) => {
     toast(`migration ${r.migration} started`, "ok"); closeModal(); setTimeout(() => refresh(true), 2000);
   } catch (e) { toast(e.message, "bad"); }
 };
-window.vmNew = async () => {
-  const imgs = await api("/api/vmimages").catch(() => []);
+window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
+  const [imgs, disks] = await Promise.all([
+    api("/api/vmimages").catch(() => []), api("/api/vm-disks").catch(() => []),
+  ]);
+  const readyDisks = disks.filter(d => d.phase === "Succeeded" && !d.in_use);
+  const selected = selectedDisk ? `disk:${selectedNamespace || "lab"}/${selectedDisk}` : "";
   modal("New virtual machine", `
     <div class="f"><label>Name</label><input type="text" id="v_name" placeholder="ubuntu-test"></div>
     <div class="f2">
@@ -242,25 +246,35 @@ window.vmNew = async () => {
     </div>
     <div class="f2">
       <div class="f"><label>Disk (GB)</label><input type="number" id="v_disk" value="20" min="5"></div>
-      <div class="f"><label>Root password</label><input type="password" id="v_pass" autocomplete="new-password" placeholder="Set an initial password"></div>
+      <div class="f"><label>Root password ${tip("Required when Homestead provisions a new disk. Optional for an imported disk that already has login access configured.")}</label><input type="password" id="v_pass" autocomplete="new-password" placeholder="Set an initial password"></div>
     </div>
-    <div class="f"><label>Boot image</label>
-      ${imgs.length ? `<select id="v_img"><option value="">blank disk</option>
-        ${imgs.map(i => `<option value="${esc(i.name)}">${esc(i.display)} (${i.size_gb}G)</option>`).join("")}</select>`
-        : `<input type="text" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img">
-           <div class="dim xs" style="margin-top:6px">No Harvester images found — paste a cloud image URL instead.</div>`}</div>
+    <div class="f"><label>Boot disk ${tip("Use a completed CDI import without copying it again, select a Harvester image, or let the VM download a URL while it is created.")}</label>
+      <select id="v_boot" onchange="vmBootChanged()">
+        <option value="">blank disk</option>
+        ${readyDisks.map(d => `<option value="disk:${esc(d.namespace)}/${esc(d.name)}" ${selected === `disk:${d.namespace}/${d.name}` ? "selected" : ""}>Imported · ${esc(d.namespace)}/${esc(d.name)} (${esc(d.capacity || "size unknown")})</option>`).join("")}
+        ${imgs.map(i => `<option value="image:${esc(i.name)}">Harvester · ${esc(i.display)} (${i.size_gb}G)</option>`).join("")}
+        <option value="url">Download from HTTP(S) URL</option>
+      </select></div>
+    <div class="f" id="v_url_row" hidden><label>Image URL</label><input type="url" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img"></div>
     <div class="row" style="margin-top:18px">
       <button class="btn pri" onclick="doVmCreate()">Create VM</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div>
-    <div class="note" style="margin-top:14px">The disk is provisioned as a Longhorn DataVolume.
-    A cloud image download can take several minutes before the VM will boot.</div>`, true);
+    <div class="note" style="margin-top:14px">New disks are provisioned as Longhorn DataVolumes.
+    Imported disks are attached directly and remain visible on the Import page.</div>`, true);
+  vmBootChanged();
 };
+window.vmBootChanged = () => { if ($("#v_url_row")) $("#v_url_row").hidden = $("#v_boot").value !== "url"; };
 window.doVmCreate = async () => {
+  const boot = $("#v_boot").value;
+  const imported = boot.startsWith("disk:") ? boot.slice(5).split("/") : [];
   const body = { name: $("#v_name").value.trim(), cores: +$("#v_cores").value,
     memory: $("#v_mem").value.trim(), disk_gb: +$("#v_disk").value, password: $("#v_pass").value,
-    image_id: $("#v_img") ? $("#v_img").value : "", image_url: $("#v_url") ? $("#v_url").value.trim() : "" };
+    namespace: imported[0] || "lab", disk_import: imported[1] || "",
+    image_id: boot.startsWith("image:") ? boot.slice(6) : "",
+    image_url: boot === "url" ? $("#v_url").value.trim() : "" };
   if (!body.name) return toast("name is required", "bad");
-  if (body.password.length < 10) return toast("root password must be at least 10 characters", "bad");
+  if (!body.disk_import && body.password.length < 10) return toast("root password must be at least 10 characters", "bad");
+  if (boot === "url" && !body.image_url) return toast("image URL is required", "bad");
   try {
     await api("/api/vm/create", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(`${body.name} created`, "ok"); closeModal(); go("vms");
@@ -368,13 +382,29 @@ window.jobDel = async name => {
 async function viewImport() {
   const [, nodes] = await Promise.all([loadHardwareFeatures(), api("/api/nodes").catch(() => [])]);
   if (nodes.length) STATE.data.nodes = nodes;
-  const [srcs, jobs] = await Promise.all([api("/api/sources"), api("/api/imports").catch(() => [])]);
-  STATE.data.srcs = srcs;
+  const [srcs, jobs, disks, namespaces, storageClasses] = await Promise.all([
+    api("/api/sources"), api("/api/imports").catch(() => []), api("/api/vm-disks").catch(() => []),
+    api("/api/namespaces").catch(() => ["lab"]), api("/api/storageclasses").catch(() => ["longhorn-r2"]),
+  ]);
+  STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
   paint(`<div class="phead"><div><h2>Import</h2>
-      <p>Bring containers and their appdata across from another host</p></div>
-      <button class="btn pri" data-need="admin" onclick="srcAdd()">＋ Add source</button></div>
+      <p>Bring containers, appdata and virtual-machine disks into Homestead</p></div>
+      <div class="row"><button class="btn" data-need="admin" onclick="srcAdd()">＋ Container source</button>
+      <button class="btn pri" data-need="admin" onclick="vmDiskImport()">＋ VM disk</button></div></div>
 
-    <div class="sec">Sources</div>
+    <div class="sec">VM disk images ${tip("CDI downloads supported QEMU disk formats, including qcow2 and vmdk, converts them into a VM-ready disk, and writes the result into a new Longhorn PVC.")}</div>
+    ${disks.length ? `<div class="card flat pad0"><div class="tblwrap"><table class="tbl"><thead><tr>
+      <th>Disk / PVC</th><th>Capacity</th><th>Status</th><th>Progress</th><th>Attached to</th><th></th></tr></thead><tbody>
+      ${disks.map(d => { const done = d.phase === "Succeeded", failed = ["Failed","Error","Unknown"].includes(d.phase); return `<tr>
+        <td><b>${esc(d.name)}</b><div class="dim xs mono">${esc(d.namespace)} · ${esc(d.storage_class || "storage class unknown")}</div></td>
+        <td class="mono small">${esc(d.capacity || "—")}<div class="dim xs">${esc((d.access_modes || []).join(", "))}</div></td>
+        <td><span class="pill ${done ? "ok" : failed ? "crit" : "med"}">${esc(d.phase.replace(/([a-z])([A-Z])/g, "$1 $2"))}</span>${d.message ? `<div class="dim xs" style="margin-top:5px;max-width:320px">${esc(d.message)}</div>` : ""}</td>
+        <td style="min-width:130px"><div class="jobmeter"><span class="${failed ? "failed" : ""}" style="width:${Math.max(2, done ? 100 : d.progress || 0)}%"></span></div><div class="dim xs mono">${done ? "ready" : `${esc(d.progress || 0)}%`}</div></td>
+        <td class="small">${d.in_use ? esc((d.used_by || []).join(", ")) : '<span class="dim">not attached</span>'}</td>
+        <td>${done && !d.in_use ? `<button class="btn sm" onclick="vmNew('${esc(d.name)}','${esc(d.namespace)}')">Create VM</button>` : ""}</td></tr>`; }).join("")}
+      </tbody></table></div></div>` : `<div class="empty">No managed VM disk imports yet. Import an HTTP(S) qcow2, vmdk, raw, vdi, vhd or vhdx image into a new PVC.</div>`}
+
+    <div class="sec">Container sources</div>
     <div class="grid g3">${srcs.map(s => `<div class="card flat">
       <div class="between"><div><div class="ctitle">${esc(s.name)}</div>
         <div class="csub">${esc(s.kind)} · ${esc(s.user)}@${esc(s.host)}</div></div>
@@ -394,12 +424,51 @@ async function viewImport() {
     </tbody></table></div></div>` : ""}
 
     <div class="note" style="margin-top:20px">
-      <b>What import does.</b> It creates a Longhorn volume, runs an rsync job that copies the remote
+      <b>Container import.</b> It creates a Longhorn volume, runs an rsync job that copies the remote
       appdata directory into it, and creates the workload pointing at that volume — left stopped so you can
       start it once the copy finishes. Path mappings from the source host do not carry over; the appdata
       lands at the mount path you choose.
     </div>`);
 }
+window.vmDiskImport = () => {
+  const namespaces = STATE.data.importNamespaces || ["lab"];
+  const classes = STATE.data.importStorageClasses || ["longhorn-r2"];
+  modal("Import VM disk", `
+    <div class="note"><b>CDI handles the conversion.</b> Provide a directly downloadable HTTP(S) qcow2, vmdk, raw, vdi, vhd or vhdx image. The source is streamed into a new Longhorn PVC; an existing disk is never overwritten.</div>
+    <div class="f2" style="margin-top:16px">
+      <div class="f"><label>Namespace ${tip("The imported DataVolume and its PVC are created here. A VM using the disk must be in the same namespace.")}</label><select id="vd_ns">${namespaces.map(n => `<option value="${esc(n)}" ${n === "lab" ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
+      <div class="f"><label>Disk / PVC name ${tip("This becomes both the CDI DataVolume name and the resulting PVC name.")}</label><input id="vd_name" placeholder="ubuntu-server"></div>
+    </div>
+    <div class="f"><label>Image URL ${tip("HTTP and HTTPS only. URLs containing embedded usernames or passwords are rejected; use a Kubernetes Secret for authenticated endpoints.")}</label><input type="url" id="vd_url" placeholder="https://example.net/images/server.qcow2"></div>
+    <div class="f2">
+      <div class="f"><label>Capacity (GiB) ${tip("Must be at least as large as the image's virtual disk capacity. CDI expands the converted disk to fit this PVC.")}</label><input type="number" min="1" max="16384" id="vd_size" value="20"></div>
+      <div class="f"><label>Storage class</label><select id="vd_sc">${classes.map(s => `<option value="${esc(s)}" ${s === "longhorn-r2" ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></div>
+    </div>
+    <div class="f2">
+      <div class="f"><label>Access mode ${tip("RWO is the normal choice for a VM boot disk. RWX allows several nodes to mount it but does not make concurrent VM writes safe.")}</label><select id="vd_mode"><option value="ReadWriteOnce">RWO · one node</option><option value="ReadWriteMany">RWX · many nodes</option></select></div>
+      <div class="f"><label>Checksum (optional) ${tip("Recommended for downloaded images. Paste the publisher's SHA-256 or SHA-512 hexadecimal digest.")}</label><div class="row" style="gap:7px"><select id="vd_algo" style="max-width:110px"><option value="sha256">SHA-256</option><option value="sha512">SHA-512</option></select><input id="vd_checksum" class="mono" placeholder="hex digest"></div></div>
+    </div>
+    <details><summary class="small">Authenticated or private CA source</summary><div class="f2" style="margin-top:12px">
+      <div class="f"><label>Credential Secret ${tip("Optional Secret in the destination namespace containing CDI-compatible accessKeyId and secretKey fields.")}</label><input id="vd_secret" placeholder="image-download-credentials"></div>
+      <div class="f"><label>CA ConfigMap ${tip("Optional ConfigMap in the destination namespace containing the endpoint's CA certificate.")}</label><input id="vd_ca" placeholder="private-ca"></div></div></details>
+    <div class="row" style="margin-top:18px"><button class="btn pri" onclick="doVmDiskImport()">Start import</button><button class="btn" onclick="closeModal()">Cancel</button></div>
+    <div class="dim xs" style="margin-top:12px">Progress continues in the active-jobs tray after this dialog closes. Source URLs are not copied into Homestead's operation history.</div>`, true);
+};
+window.doVmDiskImport = async () => {
+  const digest = $("#vd_checksum").value.trim();
+  const body = { namespace: $("#vd_ns").value, name: $("#vd_name").value.trim(),
+    source_url: $("#vd_url").value.trim(), size_gb: +$("#vd_size").value,
+    storage_class: $("#vd_sc").value, access_mode: $("#vd_mode").value,
+    checksum: digest ? `${$("#vd_algo").value}:${digest}` : "",
+    secret_ref: $("#vd_secret").value.trim(), cert_config_map: $("#vd_ca").value.trim() };
+  if (!body.name || !body.source_url) return toast("disk name and image URL are required", "bad");
+  try {
+    const plan = await api(`/api/vm-disks/import-plan?ns=${encodeURIComponent(body.namespace)}&name=${encodeURIComponent(body.name)}`);
+    if (!plan.ready) return toast(plan.message, "bad");
+    const result = await api("/api/vm-disks/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    toast(result.message, "ok"); closeModal(); resetPaint(); viewImport();
+  } catch (e) { toast(e.message, "bad"); }
+};
 window.srcAdd = () => modal("Add import source", `
   <div class="f"><label>Name</label><input type="text" id="sc_name" placeholder="unraid"></div>
   <div class="f2">

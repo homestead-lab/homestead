@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.3.0"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.4.0"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1340,6 +1340,7 @@ ADMIN_ROUTES = {
     "/api/node/power", "/api/node/drain", "/api/node/cordon", "/api/node/hardware",
     "/api/sources", "/api/sources/delete", "/api/sources/browse",
     "/api/sources/containers", "/api/sources/inspect", "/api/import",
+    "/api/vm-disks/import",
     "/api/shares", "/api/shares/edit", "/api/shares/delete",
     "/api/images/cleanup",
     "/api/volumes/delete",
@@ -1563,6 +1564,11 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("vms", 5, IMP.list_vms))
             if p == "/api/vmimages":
                 return self._send(200, cached("vmimg", 30, IMP.list_vm_images))
+            if p == "/api/vm-disks":
+                return self._send(200, IMP.list_vm_disks())
+            if p == "/api/vm-disks/import-plan":
+                return self._send(200, IMP.vm_disk_import_plan(
+                    (q.get("ns") or [DEFAULT_NS])[0], (q.get("name") or [""])[0]))
             if p == "/api/images":
                 return self._send(200, cached("imgcache", 30, IMP.image_cache))
             if p == "/api/hardware/features":
@@ -1871,6 +1877,14 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, LC.vm_power(b.get("ns", DEFAULT_NS), b["name"], b["action"]))
             if p == "/api/vm/create":
                 return self._send(200, IMP.create_vm(b))
+            if p == "/api/vm-disks/import":
+                result = IMP.import_vm_disk(b)
+                result["operation"] = OPS.start(
+                    "vm-disk-import", f"Import VM disk {result['name']}",
+                    {"kind": "DataVolume", "name": result["name"],
+                     "namespace": result["namespace"]},
+                    "/import", {"namespace": result["namespace"], "name": result["name"]})
+                return self._send(200, result)
             if p == "/api/images/prepull":
                 result = IMP.prepull(b["image"], b.get("nodes"))
                 result["operation"] = OPS.start(

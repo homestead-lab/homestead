@@ -48,11 +48,11 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.3.0`, the workflow publishes:
+For a release such as `v2.4.0`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.3.0
-ghcr.io/wjcloudy/homestead:2.1
+ghcr.io/wjcloudy/homestead:2.4.0
+ghcr.io/wjcloudy/homestead:2.4
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
 ghcr.io/wjcloudy/homestead:sha-<commit>
@@ -62,8 +62,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.3.0
-git push origin v2.3.0
+git tag v2.4.0
+git push origin v2.4.0
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -155,6 +155,27 @@ Homestead works without either probe container. When the SMART sidecar is not
 installed or cannot read a drive, the UI reports that state without degrading
 the whole cluster.
 
+### Import qcow2 and vmdk VM disks
+
+Import → **VM disk** uses KubeVirt CDI to stream an HTTP(S) disk image into a
+new Longhorn PVC. CDI auto-detects and converts common QEMU formats including
+qcow2, vmdk, raw, vdi, vhd, and vhdx. Homestead checks both the DataVolume and
+PVC name before starting and never overwrites an existing disk. Optional
+SHA-256/SHA-512 verification, CDI credential Secrets, and private-CA ConfigMaps
+are supported.
+
+Download/conversion progress survives page refreshes and Homestead restarts in
+the Activity tray. When the DataVolume reaches `Succeeded`, choose **Create VM**
+to attach that exact disk without another copy. An imported RWO disk already
+referenced by a VM is not offered for a second attachment. Source URLs (which
+may contain signed query parameters) are intentionally excluded from Homestead's
+inventory and operation-history responses; Kubernetes administrators can still
+read the source from the DataVolume itself.
+
+CDI must be installed in the cluster. Harvester includes it, and the supplied
+RBAC permits Homestead to create and monitor DataVolumes while ordinary HTTP
+credentials remain in namespace-scoped Kubernetes Secrets.
+
 ## Updating Homestead
 
 Homestead appears in its own Containers page. **Check images** compares the running
@@ -174,7 +195,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.3.0 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.4.0 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour

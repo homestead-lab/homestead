@@ -156,6 +156,39 @@ def _migration(item):
     return "running", progress, f"Migration {phase.lower() or 'pending'}"
 
 
+def _vm_disk_import(item):
+    ref = item["ref"]
+    obj = kget(
+        f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ref['namespace']}"
+        f"/datavolumes/{ref['name']}")
+    status = obj.get("status", {}) or {}
+    phase = str(status.get("phase", "Pending") or "Pending")
+    raw_progress = str(status.get("progress", "") or "").rstrip("%")
+    try:
+        progress = max(0, min(99, round(float(raw_progress))))
+    except ValueError:
+        progress = 5 if phase in ("Pending", "ImportScheduled") else 15
+    failed_phases = {"Failed", "Error", "Unknown"}
+    conditions = status.get("conditions", []) or []
+    detail = next((condition.get("message") or condition.get("reason")
+                   for condition in reversed(conditions)
+                   if condition.get("status") == "False" and
+                   (condition.get("message") or condition.get("reason"))), "")
+    if phase == "Succeeded":
+        return "succeeded", 100, "Disk image imported and PVC is ready"
+    if phase in failed_phases:
+        return "failed", progress, detail or f"CDI import {phase.lower()}"
+    if phase == "WaitForFirstConsumer":
+        return "running", progress, "Waiting for a VM to request this disk"
+    message = {
+        "Pending": "Preparing the CDI import",
+        "ImportScheduled": "Importer pod scheduled",
+        "ImportInProgress": "Downloading and converting the disk image",
+        "Paused": "CDI import paused",
+    }.get(phase, f"CDI import {phase.lower()}")
+    return "running", progress, message
+
+
 def _backup(item):
     ref = item["ref"]
     obj = kget(f"/apis/longhorn.io/v1beta2/namespaces/{ref['namespace']}/backups/{ref['name']}")
@@ -306,6 +339,7 @@ RESOLVERS = {
     "volume-delete": _volume_delete,
     "smart-test": _smart_test,
     "import": _job,
+    "vm-disk-import": _vm_disk_import,
     "vm-migration": _migration,
     "backup": _backup,
     "volume-restore": _volume_restore,

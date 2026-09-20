@@ -178,6 +178,36 @@ class OperationTests(unittest.TestCase):
         self.assertEqual(55, operations.list_operations()[0]["progress"])
         self.assertEqual("succeeded", operations.list_operations()[0]["status"])
 
+    def test_vm_disk_import_tracks_cdi_progress_and_completion(self):
+        operations.start(
+            "vm-disk-import", "Import VM disk router",
+            {"kind": "DataVolume", "name": "router", "namespace": "lab"},
+            "/import", {"namespace": "lab", "name": "router"})
+        path = "/apis/cdi.kubevirt.io/v1beta1/namespaces/lab/datavolumes/router"
+        self.objects[path] = {"status": {"phase": "ImportInProgress", "progress": "48.7%"}}
+        running = operations.list_operations()[0]
+        self.assertEqual("running", running["status"])
+        self.assertEqual(49, running["progress"])
+        self.assertIn("converting", running["message"])
+        self.objects[path]["status"] = {"phase": "Succeeded", "progress": "100.0%"}
+        complete = operations.list_operations()[0]
+        self.assertEqual("succeeded", complete["status"])
+        self.assertEqual(100, complete["progress"])
+
+    def test_vm_disk_import_surfaces_cdi_failure_detail(self):
+        operations.start(
+            "vm-disk-import", "Import VM disk broken",
+            {"kind": "DataVolume", "name": "broken", "namespace": "lab"},
+            "/import", {"namespace": "lab", "name": "broken"})
+        path = "/apis/cdi.kubevirt.io/v1beta1/namespaces/lab/datavolumes/broken"
+        self.objects[path] = {"status": {"phase": "Failed", "progress": "12%",
+            "conditions": [{"type": "Running", "status": "False",
+                            "message": "checksum mismatch"}]}}
+        failed = operations.list_operations()[0]
+        self.assertEqual("failed", failed["status"])
+        self.assertEqual(12, failed["progress"])
+        self.assertEqual("checksum mismatch", failed["message"])
+
 
 if __name__ == "__main__":
     unittest.main()

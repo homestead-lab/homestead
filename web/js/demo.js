@@ -89,6 +89,14 @@
   const lhBackups = [{ name: "backup-demo-frigate-20260919", volume: "pvc-demo-frigate",
     state: "Completed", progress: 100, size_mb: 1842.6, volume_size_gb: 20,
     created: "2026-09-19T02:14:32Z", error: "", target: "default", restorable: true }];
+  const vmDisks = [
+    { namespace: "lab", name: "ubuntu-2404", pvc: "ubuntu-2404", phase: "Succeeded",
+      progress: 100, capacity: "40Gi", storage_class: "longhorn-r2",
+      access_modes: ["ReadWriteOnce"], message: "", in_use: false, used_by: [] },
+    { namespace: "lab", name: "router-migration", pvc: "router-migration", phase: "ImportInProgress",
+      progress: 63.4, capacity: "16Gi", storage_class: "longhorn-r2",
+      access_modes: ["ReadWriteOnce"], message: "", in_use: false, used_by: [] },
+  ];
   const lhOverview = {
     total: 2, protected: 2, unprotected: [], groups: ["default", "critical"],
     target: { configured: true, available: true, name: "default",
@@ -168,6 +176,26 @@
     },
     "/api/volumes/delete-plan": volumeDeletePlan, "/api/hardware/features": hardware,
     "/api/namespaces": ["default", "lab", "monitoring"],
+    "/api/storageclasses": ["harvester-longhorn", "longhorn-r2"],
+    "/api/vm-disks": vmDisks,
+    "/api/vm-disks/import-plan": url => {
+      const namespace = url.searchParams.get("ns") || "lab";
+      const name = url.searchParams.get("name") || "";
+      const conflict = vmDisks.some(d => d.namespace === namespace && d.name === name);
+      return { namespace, name, ready: !conflict,
+        conflicts: conflict ? [{ kind: "DataVolume", name }] : [],
+        message: conflict ? `${namespace}/${name} already exists; choose a new disk name` : "Ready to create a new CDI DataVolume and PVC" };
+    },
+    "/api/vm-disks/import": (url, init) => {
+      const body = JSON.parse(init?.body || "{}");
+      return { ok: true, namespace: body.namespace || "lab", name: body.name,
+        pvc: body.name, size_gb: body.size_gb,
+        message: `CDI import into ${body.namespace || "lab"}/${body.name} started` };
+    },
+    "/api/vmimages": [],
+    "/api/vms": [],
+    "/api/sources": [],
+    "/api/imports": [],
     "/api/lh/overview": lhOverview,
     "/api/lh/snapshots": [], "/api/lh/backups": lhBackups,
     "/api/lh/restore/plan": restorePlan,
