@@ -115,6 +115,32 @@
         last_backup: "", last_backup_at: "" },
     ],
   };
+  const network = {
+    controller: { name: "kube-vip", installed: true, desired: 3, ready: 3, healthy: true,
+      mode: "ARP Service controller · explicit VIP allocation" },
+    summary: { services: 8, app_services: 3, load_balancers: 3, vips: 3,
+      listeners: 3, unhealthy: 0, ready_endpoints: 3 },
+    available_vips: ["192.0.2.217", "192.0.2.218"], available_vip_count: 2,
+    node_ips: ["192.0.2.207", "192.0.2.208", "192.0.2.210"], conflicts: [],
+    pools: [{ name: "lab-pool", ready: true, total: 6, reported_available: 2,
+      ranges: [{ start: "192.0.2.214", end: "192.0.2.219", candidate_count: 6 }] }],
+    workloads: workloads.map(row => ({ namespace: row.ns, name: row.name, replicas: row.desired,
+      ports: row.ports.map(port => ({ name: "web", port: port.port, protocol: "TCP" })) })),
+    vips: workloads.map(row => ({ ip: row.ports[0].ip, shared: false, services: 1,
+      listeners: [{ namespace: row.ns, service: row.name, port: row.ports[0].port,
+        protocol: "TCP", access: `http://${row.ports[0].ip}:${row.ports[0].port}`,
+        browser: true, health: "healthy" }] })),
+    services: workloads.map(row => ({ namespace: row.ns, name: row.name, type: "LoadBalancer",
+      system: false, managed: true, cluster_ip: `10.43.0.${20 + workloads.indexOf(row)}`,
+      external_ips: [row.ports[0].ip], assigned_ips: [row.ports[0].ip], requested_ips: [row.ports[0].ip],
+      vip_host: "harvester-node1", selector: { app: row.name }, targets: [row.name],
+      ports: [{ name: "web", port: row.ports[0].port, target_port: row.ports[0].port,
+        protocol: "TCP", access: `http://${row.ports[0].ip}:${row.ports[0].port}`, browser: true }],
+      endpoints: { ready: [{ addresses: [`10.42.0.${30 + workloads.indexOf(row)}`],
+        node: row.nodes[0], target_kind: "Pod", target: row.pods[0].name }], not_ready: [], ports: [] },
+      ready_endpoints: 1, not_ready_endpoints: 0, health: "healthy", reason: "1 ready endpoint" })),
+    ingresses: [],
+  };
   const restorePlan = url => {
     const ns = url.searchParams.get("ns") || "";
     const name = url.searchParams.get("name") || "";
@@ -209,7 +235,21 @@
     "/api/shares": shares,
     "/api/shares/edit": { ok: true, shares, deployment_updated: true,
       message: "Share secure updated; Samba is restarting" },
-    "/api/operations": [], "/api/workloads": workloads,
+    "/api/operations": [], "/api/workloads": workloads, "/api/network": network,
+    "/api/network/plan": (url, init) => {
+      const body = JSON.parse(init?.body || "{}");
+      const vip = body.type === "ClusterIP" ? "" : body.vip_mode === "shared" ? "192.0.2.242" : body.vip || "192.0.2.217";
+      return { ready: true, namespace: body.namespace, name: body.name, workload: body.workload,
+        type: body.type, vip_mode: body.vip_mode, vip, ports: (body.ports || []).map((port, index) => ({
+          name: `port-${index + 1}`, port: +port.port, targetPort: +port.target_port, protocol: port.protocol })),
+        warnings: [], path: { vip: vip || "cluster only", service: `${body.namespace}/${body.name}`,
+          workload: `Deployment/${body.workload}`, endpoints: 1 }, available_vips: network.available_vips };
+    },
+    "/api/network/services": (url, init) => {
+      const body = JSON.parse(init?.body || "{}");
+      return { ok: true, name: body.name, namespace: body.namespace,
+        message: `Service ${body.namespace}/${body.name} created` };
+    },
     "/api/image-updates": { checked_at: "2026-09-19T12:00:00Z", updates: 1, errors: 0,
       policy: { policy: "approval_required", allows_install: true, reason: "Explicit operator approval is required before rollout." },
       workloads: [{ ns: "lab", name: "frigate", available: true, can_rollback: true,

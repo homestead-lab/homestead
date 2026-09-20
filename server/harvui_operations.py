@@ -330,6 +330,30 @@ def _smart_test(item):
     return smart_progress(item["ref"])
 
 
+def _network_service(item):
+    ref = item["ref"]
+    namespace, name = ref["namespace"], ref["name"]
+    service = kget(f"/api/v1/namespaces/{namespace}/services/{name}")
+    spec, status = service.get("spec", {}) or {}, service.get("status", {}) or {}
+    selector = urllib.parse.quote(f"kubernetes.io/service-name={name}", safe="")
+    slices = kget(
+        f"/apis/discovery.k8s.io/v1/namespaces/{namespace}/endpointslices"
+        f"?labelSelector={selector}").get("items", [])
+    ready = sum(1 for row in slices for endpoint in endpoint_rows(row)
+                if endpoint.get("conditions", {}).get("ready") is not False and
+                not endpoint.get("conditions", {}).get("terminating", False))
+    if spec.get("type") == "LoadBalancer":
+        addresses = (status.get("loadBalancer", {}) or {}).get("ingress", []) or []
+        if not addresses:
+            return "running", 55 if ready else 25, f"{ready} ready endpoint(s); waiting for kube-vip"
+    address = spec.get("clusterIP") or "Service"
+    return "succeeded", 100, f"{address} active · {ready} ready endpoint(s)"
+
+
+def endpoint_rows(endpoint_slice):
+    return endpoint_slice.get("endpoints", []) or []
+
+
 RESOLVERS = {
     "deployment": _deployment,
     "image-update": _deployment,
@@ -338,6 +362,7 @@ RESOLVERS = {
     "image-cleanup": _image_cleanup,
     "volume-delete": _volume_delete,
     "smart-test": _smart_test,
+    "network-service": _network_service,
     "import": _job,
     "vm-disk-import": _vm_disk_import,
     "vm-migration": _migration,

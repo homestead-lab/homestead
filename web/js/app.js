@@ -4,6 +4,7 @@ const VIEWS = {
   dash:      ["Dashboard",      "overview",  viewDash,      true],
   flow:      ["Architecture",   "overview",  viewFlow,      true],
   nodes:     ["Nodes",          "overview",  viewNodes,     true],
+  network:   ["Networking",     "overview",  viewNetworking,true],
   workloads: ["Containers",     "workloads", viewWorkloads, true],
   vms:       ["Virtual Machines","workloads", viewVMs,       true],
   deploy:    ["Deploy",         "workloads", () => viewDeploy(), false],
@@ -18,7 +19,7 @@ const VIEWS = {
   settings:  ["Settings",       "system",    viewSettings,  false],
 };
 
-const FILTERABLE_VIEWS = new Set(["workloads", "storage", "images", "events", "store"]);
+const FILTERABLE_VIEWS = new Set(["workloads", "storage", "images", "events", "store", "network"]);
 
 function routeParamsForView(v, extra = {}) {
   const params = FILTERABLE_VIEWS.has(v) && STATE.q ? { q: STATE.q } : {};
@@ -228,6 +229,7 @@ $("#globalSearch").addEventListener("input", e => {
   else if (STATE.view === "storage") viewStorage();
   else if (STATE.view === "images") viewImages();
   else if (STATE.view === "events") viewEvents();
+  else if (STATE.view === "network") viewNetworking();
   clearTimeout(searchTimer); searchTimer = setTimeout(() => globalSearch(STATE.q), 180);
 });
 $("#globalSearch").addEventListener("keydown", e => {

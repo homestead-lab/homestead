@@ -208,6 +208,28 @@ class OperationTests(unittest.TestCase):
         self.assertEqual(12, failed["progress"])
         self.assertEqual("checksum mismatch", failed["message"])
 
+    def test_network_service_waits_for_vip_then_reports_ready_endpoints(self):
+        operations.start(
+            "network-service", "Expose pihole",
+            {"kind": "Service", "name": "pihole-lan", "namespace": "lab"},
+            "/networking", {"namespace": "lab", "name": "pihole-lan"})
+        service_path = "/api/v1/namespaces/lab/services/pihole-lan"
+        slices_path = ("/apis/discovery.k8s.io/v1/namespaces/lab/endpointslices"
+                       "?labelSelector=kubernetes.io%2Fservice-name%3Dpihole-lan")
+        self.objects[service_path] = {
+            "spec": {"type": "LoadBalancer", "clusterIP": "10.43.0.53"},
+            "status": {"loadBalancer": {}}}
+        self.objects[slices_path] = {"items": [{"endpoints": [{
+            "conditions": {"ready": True}}]}]}
+        running = operations.list_operations()[0]
+        self.assertEqual("running", running["status"])
+        self.assertIn("waiting for kube-vip", running["message"])
+        self.objects[service_path]["status"]["loadBalancer"]["ingress"] = [
+            {"ip": "192.0.2.243"}]
+        complete = operations.list_operations()[0]
+        self.assertEqual("succeeded", complete["status"])
+        self.assertIn("1 ready endpoint", complete["message"])
+
 
 if __name__ == "__main__":
     unittest.main()

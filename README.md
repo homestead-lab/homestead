@@ -24,6 +24,7 @@ passthrough, image updates and failover constraints into approachable controls.
 | **Dashboard** | Cluster CPU/RAM/network/disk telemetry, transition-aware health, top consumers, configurable warnings |
 | **Containers** | Deploy, edit, move, start/stop, logs, logos, hardware passthrough, image update checks, monitored rollout and deterministic rollback |
 | **Architecture** | VIP → workload → claim → Longhorn volume → replica dependency view |
+| **Networking** | Service, ClusterIP, VIP, ingress, listener ownership, endpoint health and guided collision-free exposure |
 | **Storage** | RWO/RWX volume creation, growth and guarded deletion, usage, health, snapshots, backups and recurring jobs |
 | **Hardware** | Host device browser and reusable mappings for iGPU, Coral, USB/PCIe and other devices |
 | **Import** | Unraid/Docker workload and appdata import with editable seed configuration |
@@ -35,6 +36,7 @@ passthrough, image updates and failover constraints into approachable controls.
 Dockerfile                    production container image
 server/server.py              stdlib HTTP server and Kubernetes API client
 server/harvui_updates.py      OCI registry checks, rollout monitoring, rollback
+server/harvui_networking.py   VIP allocation, Service planning and endpoint inventory
 web/                          dependency-free browser UI
 web/assets/                   Homestead SVG identity
 deploy/deploy.yaml            namespace, RBAC, Longhorn PVC, Deployment, Service
@@ -48,11 +50,11 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.4.0`, the workflow publishes:
+For a release such as `v2.5.0`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.4.0
-ghcr.io/wjcloudy/homestead:2.4
+ghcr.io/wjcloudy/homestead:2.5.0
+ghcr.io/wjcloudy/homestead:2.5
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
 ghcr.io/wjcloudy/homestead:sha-<commit>
@@ -62,15 +64,15 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.4.0
-git push origin v2.4.0
+git tag v2.5.0
+git push origin v2.5.0
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
 The OCI source label in the image links releases back to this repository.
 
 Each tagged release also launches Homestead against deterministic demo data,
-captures polished Dashboard, Containers, and Architecture views in headless
+captures polished Dashboard, Containers, Architecture, and Networking views in headless
 Chromium, and attaches them to the GitHub release. The stable screenshot above
 always follows the latest release; no live cluster data or credentials are used.
 
@@ -176,6 +178,29 @@ CDI must be installed in the cluster. Harvester includes it, and the supplied
 RBAC permits Homestead to create and monitor DataVolumes while ordinary HTTP
 credentials remain in namespace-scoped Kubernetes Secrets.
 
+## Networking and virtual IPs
+
+Networking reconciles Kubernetes Services, EndpointSlices, Ingresses, node
+addresses, kube-vip status, and Harvester IP pools in one view. It shows the
+live path from each VIP and listener through its Service to ready pod endpoints,
+including the owning node and a direct access link where the protocol is
+browser-friendly.
+
+**Expose workload** creates either a cluster-only Service or a LAN-facing
+LoadBalancer Service. Automatic allocation chooses an unused IPv4 address from
+a visible Harvester IP pool; shared allocation reuses Homestead's VIP only when
+the protocol/port tuple is free; manual allocation validates the address and
+warns when it is outside the configured pools. Every flow shows a review plan
+and collision check before Kubernetes is changed. Homestead deliberately
+reconciles the pool against live Services and node addresses because a manually
+requested kube-vip address may not be reflected in an IPPool's reported free
+count.
+
+The supplied RBAC is read-only for EndpointSlices, Ingresses, and Harvester IP
+pools. Service creation uses the existing Service permission and copies the
+selected Deployment's selector from the server rather than trusting browser
+input.
+
 ## Updating Homestead
 
 Homestead appears in its own Containers page. **Check images** compares the running
@@ -195,7 +220,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.4.0 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.5.0 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour

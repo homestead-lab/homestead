@@ -23,4 +23,5 @@ const capture = async (view, name) => {
 await capture(null, "dashboard");
 await capture("workloads", "containers");
 await capture("flow", "architecture");
+await capture("network", "networking");
 await browser.close();

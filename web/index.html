@@ -26,7 +26,7 @@
 </script>
 <title>Homestead</title>
 <meta name="description" content="Homestead is a friendly homelab control plane for Harvester, Rancher, Longhorn, Fleet and Kubernetes workloads.">
-<link rel="icon" type="image/svg+xml" href="/assets/homestead-mark.svg?v=2.4.0">
+<link rel="icon" type="image/svg+xml" href="/assets/homestead-mark.svg?v=2.5.0">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
@@ -57,6 +57,7 @@
     <symbol id="i-dash" viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="9" rx="2"/><rect x="13.5" y="3" width="7.5" height="5.5" rx="2"/><rect x="13.5" y="12" width="7.5" height="9" rx="2"/><rect x="3" y="15.5" width="7.5" height="5.5" rx="2"/></symbol>
     <symbol id="i-flow" viewBox="0 0 24 24"><circle cx="5" cy="6" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="12" r="2.2"/><path d="M7.2 6.8 16.9 11.2M7.2 17.2 16.9 12.8"/></symbol>
     <symbol id="i-node" viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="6.5" rx="2"/><rect x="2.5" y="13.5" width="19" height="6.5" rx="2"/><path d="M6 7.2h.01M6 16.8h.01"/></symbol>
+    <symbol id="i-network" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="18" r="2.5"/><circle cx="19" cy="18" r="2.5"/><path d="M10.8 7.2 6.2 15.8M13.2 7.2l4.6 8.6M7.5 18h9"/></symbol>
     <symbol id="i-box" viewBox="0 0 24 24"><path d="M12 2.7 20.5 7v10L12 21.3 3.5 17V7z"/><path d="M3.5 7 12 11.4 20.5 7M12 11.4v9.9"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.3"/><path d="M12 8.2v7.6M8.2 12h7.6"/></symbol>
     <symbol id="i-store" viewBox="0 0 24 24"><path d="M3.5 8.5 5 4.2h14L20.5 8.5"/><path d="M3.5 8.5h17v10.3a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5z"/><path d="M9 12.3h6"/></symbol>
@@ -92,14 +93,15 @@
 <div id="app">
   <aside class="side">
     <div class="brand">
-      <img class="brandmark" src="/assets/homestead-mark.svg?v=2.4.0" alt="">
-      <div><div class="bname">Homestead</div><div class="bver">HOMELAB · v2.4.0</div></div>
+      <img class="brandmark" src="/assets/homestead-mark.svg?v=2.5.0" alt="">
+      <div><div class="bname">Homestead</div><div class="bver">HOMELAB · v2.5.0</div></div>
     </div>
     <nav id="nav">
       <div class="navlbl">Overview</div>
       <a href="/" data-view="dash"><svg><use href="#i-dash"/></svg>Dashboard</a>
       <a href="/architecture" data-view="flow"><svg><use href="#i-flow"/></svg>Architecture</a>
       <a href="/nodes" data-view="nodes"><svg><use href="#i-node"/></svg>Nodes</a>
+      <a href="/networking" data-view="network"><svg><use href="#i-network"/></svg>Networking</a>
       <div class="navlbl">Workloads</div>
       <a href="/deploy" data-view="deploy"><svg><use href="#i-plus"/></svg>Deploy</a>
       <a href="/containers" data-view="workloads"><svg><use href="#i-box"/></svg>Containers<span id="updateBadge" class="navbadge hidden">0</span></a>
@@ -188,6 +190,7 @@
 <script src="/js/views-overview.js"></script>
 <script src="/js/views-workloads.js"></script>
 <script src="/js/views-storage.js"></script>
+<script src="/js/views-network.js"></script>
 <script src="/js/move.js"></script>
 <script src="/js/views-lifecycle.js"></script>
 <script src="/js/views-protect.js"></script>

@@ -12,6 +12,7 @@
     dash:      Object.freeze({ path: "/",                label: "Dashboard",       section: "Overview" }),
     flow:      Object.freeze({ path: "/architecture",    label: "Architecture",    section: "Overview" }),
     nodes:     Object.freeze({ path: "/nodes",           label: "Nodes",           section: "Overview" }),
+    network:   Object.freeze({ path: "/networking",      label: "Networking",      section: "Overview" }),
     deploy:    Object.freeze({ path: "/deploy",          label: "Deploy",          section: "Workloads" }),
     workloads: Object.freeze({ path: "/containers",      label: "Containers",      section: "Workloads" }),
     vms:       Object.freeze({ path: "/vms",             label: "Virtual Machines", section: "Workloads" }),

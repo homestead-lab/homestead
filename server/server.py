@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.4.0"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.5.0"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1115,7 +1115,7 @@ def build_deployment(cfg):
     exposed = [p for p in cfg.get("ports") or [] if p.get("expose")]
     if exposed and cfg.get("network_mode") != "host":
         mode = cfg.get("vip_mode", "shared")
-        vip = cfg.get("lb_ip") if mode == "manual" else (LB_IP if mode == "shared" else "")
+        vip = cfg.get("lb_ip") if mode in ("manual", "automatic") else (LB_IP if mode == "shared" else "")
         svc_type = "ClusterIP" if cfg.get("network_mode") == "internal" else "LoadBalancer"
         svc = {
             "apiVersion": "v1", "kind": "Service",
@@ -1278,6 +1278,7 @@ import harvui_icons as ICONS
 import harvui_volumes as VOLUMES
 import harvui_smart as SMART
 import harvui_shares as SHARES
+import harvui_networking as NETWORK
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
 LC.bind(kget, ksend, SYS_NS, _cache, HW.features)
 IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.features)
@@ -1289,6 +1290,7 @@ SMART.bind(kget, DEFAULT_NS, AUTH.internal_signing_key)
 OPS.bind(kget, DATA_DIR, UPDATES.progress, SMART.progress)
 VOLUMES.bind(kget, ksend, LH.snapshots, LH.backups, _cache, SYS_NS, DEFAULT_NS)
 SHARES.bind(kget, ksend, create_pvc, SMB_NAMESPACE, _cache)
+NETWORK.bind(kget, ksend, SYS_NS, DEFAULT_NS, LB_IP)
 CONSOLE_PROXY = CONSOLE.ConsoleProxy(API, TOKEN, CTX, DATA_DIR, SYS_NS, {DEFAULT_NS}, kget)
 
 
@@ -1304,7 +1306,7 @@ def display_icon(annotations):
 SPA_ROUTES = frozenset({
     "/", "/architecture", "/nodes", "/deploy", "/containers", "/vms",
     "/app-store", "/shares", "/volumes", "/image-cache", "/data-protection",
-    "/schedules", "/import", "/events", "/settings",
+    "/schedules", "/import", "/events", "/networking", "/settings",
 })
 
 
@@ -1512,6 +1514,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("nodes", 5, get_nodes))
             if p == "/api/workloads":
                 return self._send(200, cached("wl", 5, get_workloads))
+            if p == "/api/network":
+                return self._send(200, cached("network", 5, NETWORK.inventory))
             if p == "/api/image-updates":
                 force = (q.get("force") or ["0"])[0].lower() in ("1", "true", "yes")
                 report = json.loads(json.dumps(cached(
@@ -1708,6 +1712,7 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, **save_app_settings(b)})
             if p == "/api/deploy":
                 persist_icon_config(b)
+                b = NETWORK.prepare_deploy(b)
                 dep, svc = build_deployment(b)
                 ns = dep["metadata"]["namespace"]
                 for v in b.get("volumes") or []:
@@ -1722,7 +1727,7 @@ class H(BaseHTTPRequestHandler):
                         ksend("POST", f"/api/v1/namespaces/{ns}/services", svc)
                     except urllib.error.HTTPError as e:
                         if e.code != 409: raise
-                _cache.pop("wl", None); _cache.pop("ov", None)
+                _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
                 op = OPS.start("deployment", f"Deploy {dep['metadata']['name']}",
                                {"kind": "Deployment", "name": dep["metadata"]["name"], "namespace": ns},
                                "/containers", {"namespace": ns, "name": dep["metadata"]["name"]})
@@ -1970,6 +1975,7 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, IMP.inspect_source_container(b["name"], b["container"]))
             if p == "/api/import":
                 persist_icon_config(b)
+                b = NETWORK.prepare_deploy(b)
                 result = IMP.import_container(b)
                 result["operation"] = OPS.start(
                     "import", f"Import {b['name']}",
@@ -1978,7 +1984,19 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, result)
             if p == "/api/operations/dismiss":
                 return self._send(200, OPS.dismiss(b["id"]))
+            if p == "/api/network/plan":
+                return self._send(200, NETWORK.service_plan(b))
+            if p == "/api/network/services":
+                result = NETWORK.create_service(b)
+                _cache.pop("network", None); _cache.pop("flow2", None)
+                result["operation"] = OPS.start(
+                    "network-service", f"Expose {result['name']}",
+                    {"kind": "Service", "name": result["name"], "namespace": result["namespace"]},
+                    "/networking", {"namespace": result["namespace"], "name": result["name"]},
+                    "Waiting for the Service address and endpoints")
+                return self._send(200, result)
             if p == "/api/preview":
+                b = NETWORK.prepare_deploy(b)
                 dep, svc = build_deployment(b)
                 return self._send(200, {"deployment": dep, "service": svc})
             return self._send(404, {"error": "no route"})

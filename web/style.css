@@ -465,7 +465,7 @@ pre{background:rgba(0,0,0,.5);border:1px solid var(--line);border-radius:13px;pa
   backdrop-filter:blur(8px);animation:fade .2s var(--e)}
 @keyframes fade{from{opacity:0}to{opacity:1}}
 .modalbox{background:linear-gradient(158deg,rgba(255,255,255,.08),rgba(255,255,255,.03));backdrop-filter:blur(40px) saturate(1.3);-webkit-backdrop-filter:blur(40px) saturate(1.3);border:1px solid var(--line2);border-radius:22px;width:min(840px,100%);
-  max-height:88vh;overflow:auto;box-shadow:0 36px 100px rgba(0,0,0,.8);animation:pop .3s var(--e)}
+  max-height:88vh;overflow-y:auto;overflow-x:hidden;box-shadow:0 36px 100px rgba(0,0,0,.8);animation:pop .3s var(--e)}
 @keyframes pop{from{transform:translateY(16px) scale(.98);opacity:0}to{transform:none;opacity:1}}
 .modalhead{display:flex;justify-content:space-between;align-items:center;padding:18px 22px;
   border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(20,20,22,.72);backdrop-filter:blur(20px);z-index:2}
@@ -607,6 +607,13 @@ html[data-motion="off"] .uptime .ld{animation:none}
 
 /* container cards (replaces the wide table on every width) */
 .cardlist{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+.network-vips{grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
+.netlisteners{margin-top:12px;border-top:1px solid var(--line)}
+.netlisteners .drow{padding:9px 0}.netlisteners .dl{display:flex;flex-direction:column;gap:2px}
+.netpath{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-family:"JetBrains Mono",monospace;font-size:11px}
+.netpath span{padding:3px 7px;border:1px solid var(--line);border-radius:6px;background:rgba(255,255,255,.04)}
+.netpath i{font-style:normal;color:var(--low)}.netpath.big{font-size:12px;margin:10px 0}
+.reviewbox{margin-top:16px;padding:14px;border:1px solid rgba(74,158,255,.28);border-radius:12px;background:rgba(74,158,255,.07)}
 .wcard{display:flex;flex-direction:column;gap:12px}
 .wmeta{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:11px 0;
   border-top:1px solid rgba(255,255,255,.055);border-bottom:1px solid rgba(255,255,255,.055)}
