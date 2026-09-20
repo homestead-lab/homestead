@@ -25,7 +25,7 @@ not affiliated with, endorsed, or sponsored by Lime Technology, Inc.
 | Area | Capability |
 |---|---|
 | **Dashboard** | Cluster CPU/RAM/network/disk telemetry, transition-aware health, top consumers, configurable warnings |
-| **Containers** | Guided App Store and image deployment, independent or sidecar pods, edit/move/logs/console, hardware passthrough, update checks, monitored rollout and rollback |
+| **Containers** | Guided App Store and image deployment, independent or sidecar pods, guarded Kubernetes workload rename, edit/move/logs/console, hardware passthrough, update checks, monitored rollout and rollback |
 | **Architecture** | VIP → workload → claim → Longhorn volume → replica dependency view |
 | **Networking** | Service, ClusterIP, VIP, ingress, listener ownership, endpoint health and guided collision-free exposure |
 | **Cluster** | Harvester/Kubernetes versions, control-plane and etcd quorum, node pressure, critical services, certificate requests and guided node onboarding |
@@ -54,10 +54,10 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.1`, the workflow publishes:
+For a release such as `v2.8.2`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.1
+ghcr.io/wjcloudy/homestead:2.8.2
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -68,8 +68,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.1
-git push origin v2.8.1
+git tag v2.8.2
+git push origin v2.8.2
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -276,7 +276,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.1 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.2 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour

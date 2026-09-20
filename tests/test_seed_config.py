@@ -1,6 +1,7 @@
 import copy
 import sys
 import unittest
+import urllib.error
 from pathlib import Path
 
 
@@ -104,6 +105,111 @@ class SeedConfigTests(unittest.TestCase):
             lifecycle.edit_workload({"ns": "lab", "name": "frigate", "container_name": "sidecar"})
         with self.assertRaisesRegex(ValueError, "lowercase letters"):
             lifecycle.edit_workload({"ns": "lab", "name": "frigate", "container_name": "Bad Name"})
+
+    def test_workload_rename_recreates_waits_retargets_hpa_and_deletes_old(self):
+        old = copy.deepcopy(self.deployment)
+        old["metadata"].update({"namespace": "lab", "uid": "old-uid", "resourceVersion": "8"})
+        old["spec"]["selector"] = {"matchLabels": {"app": "frigate"}}
+        old["spec"]["template"].setdefault("metadata", {})["labels"] = {"app": "frigate"}
+        old["status"] = {"replicas": 1, "readyReplicas": 1, "availableReplicas": 1,
+                         "updatedReplicas": 1, "observedGeneration": 1}
+        objects = {"frigate": old}
+        hpa = {"metadata": {"name": "frigate-auto", "namespace": "lab", "resourceVersion": "3"},
+               "spec": {"scaleTargetRef": {"apiVersion": "apps/v1", "kind": "Deployment", "name": "frigate"}}}
+        sent = []
+
+        def get(path):
+            if path.endswith("/horizontalpodautoscalers"):
+                return {"items": [hpa]}
+            if "/deployments/" in path:
+                target = path.rsplit("/", 1)[-1]
+                if target not in objects:
+                    raise urllib.error.HTTPError(path, 404, "not found", None, None)
+                return objects[target]
+            raise AssertionError(path)
+
+        def send(method, path, body, **kwargs):
+            sent.append((method, path, copy.deepcopy(body)))
+            if method == "POST" and path.endswith("/deployments"):
+                created = copy.deepcopy(body)
+                created["metadata"]["generation"] = 1
+                created["status"] = {}
+                objects[created["metadata"]["name"]] = created
+            elif method == "PATCH" and path.endswith("/scale"):
+                target = path.split("/")[-2]
+                replicas = body["spec"]["replicas"]
+                objects[target]["spec"]["replicas"] = replicas
+                objects[target]["status"] = {"replicas": replicas, "readyReplicas": replicas,
+                                               "availableReplicas": replicas, "updatedReplicas": replicas,
+                                               "observedGeneration": 1}
+            elif method == "DELETE" and "/deployments/" in path:
+                objects.pop(path.rsplit("/", 1)[-1], None)
+            return body
+
+        lifecycle.bind(get, send, set(), {}, lambda: [])
+        result = lifecycle.edit_workload({
+            "ns": "lab", "name": "frigate", "workload_name": "camera-stack",
+            "container_name": "camera-detector", "pod_hostname": "camera-core",
+        })
+
+        self.assertTrue(result["renamed"])
+        self.assertEqual("camera-stack", result["name"])
+        self.assertNotIn("frigate", objects)
+        created = objects["camera-stack"]
+        self.assertNotIn("uid", created["metadata"])
+        self.assertEqual("camera-stack", created["spec"]["selector"]["matchLabels"]["homestead.io/workload"])
+        self.assertEqual("camera-stack", created["spec"]["template"]["metadata"]["labels"]["homestead.io/workload"])
+        self.assertEqual("camera-detector", created["spec"]["template"]["spec"]["containers"][0]["name"])
+        self.assertEqual("camera-core", created["spec"]["template"]["spec"]["hostname"])
+        self.assertEqual("camera-stack", hpa["spec"]["scaleTargetRef"]["name"])
+        self.assertEqual(["POST", "PUT", "PATCH", "PATCH", "DELETE"], [row[0] for row in sent])
+
+    def test_failed_workload_rename_removes_replacement_and_restores_scale(self):
+        old = copy.deepcopy(self.deployment)
+        old["metadata"].update({"namespace": "lab", "resourceVersion": "8"})
+        old["spec"]["selector"] = {"matchLabels": {"app": "frigate"}}
+        old["spec"]["template"].setdefault("metadata", {})["labels"] = {"app": "frigate"}
+        objects = {"frigate": old}
+        sent = []
+
+        def get(path):
+            if path.endswith("/horizontalpodautoscalers"):
+                return {"items": []}
+            if "/deployments/" in path:
+                target = path.rsplit("/", 1)[-1]
+                if target not in objects:
+                    raise urllib.error.HTTPError(path, 404, "not found", None, None)
+                return objects[target]
+            raise AssertionError(path)
+
+        def send(method, path, body, **kwargs):
+            sent.append((method, path, copy.deepcopy(body)))
+            if method == "POST":
+                objects[body["metadata"]["name"]] = copy.deepcopy(body)
+            elif method == "PATCH" and path.endswith("/scale"):
+                objects[path.split("/")[-2]]["spec"]["replicas"] = body["spec"]["replicas"]
+            elif method == "DELETE":
+                objects.pop(path.rsplit("/", 1)[-1], None)
+            return body
+
+        original_wait = lifecycle._wait_for_replicas
+        lifecycle.bind(get, send, set(), {}, lambda: [])
+        lifecycle._wait_for_replicas = lambda ns, target, desired, timeout=120: (
+            (_ for _ in ()).throw(TimeoutError("replacement never became ready"))
+            if target == "camera-stack" else objects[target])
+        try:
+            with self.assertRaisesRegex(RuntimeError, "frigate was restored"):
+                lifecycle.edit_workload({
+                    "ns": "lab", "name": "frigate", "workload_name": "camera-stack",
+                })
+        finally:
+            lifecycle._wait_for_replicas = original_wait
+
+        self.assertIn("frigate", objects)
+        self.assertNotIn("camera-stack", objects)
+        self.assertEqual(1, objects["frigate"]["spec"]["replicas"])
+        self.assertEqual("DELETE", sent[-2][0])
+        self.assertEqual(1, sent[-1][2]["spec"]["replicas"])
 
 
 if __name__ == "__main__":

@@ -13,8 +13,9 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     const nodes = (liveNodes.length ? liveNodes : (STATE.data.ov ? STATE.data.ov.nodes : [])).filter(n => n.schedulable !== false);
     const seeds = w.seed_configs || [];
     $("#mbody").innerHTML = `
+      <div class="f"><label>Workload name ${tip("The real Kubernetes Deployment name. Renaming creates a replacement Deployment, waits for it to become ready, then removes the old one. Generated pods use this name plus a Kubernetes suffix.")}</label><input type="text" id="e_workload_name" value="${esc(w.name)}"></div>
       <div class="f2">
-        <div class="f"><label>Pod name / hostname ${tip("A stable hostname used inside the pod. Kubernetes still gives each running pod a generated runtime name, shown in the container details.")}</label><input type="text" id="e_pod_name" value="${esc(w.pod_hostname || "")}" placeholder="${esc(w.name)}"></div>
+        <div class="f"><label>Pod hostname ${tip("The hostname visible inside the pod. It does not rename the Kubernetes Pod; generated pods use the workload name plus a suffix.")}</label><input type="text" id="e_pod_name" value="${esc(w.pod_hostname || "")}" placeholder="optional"></div>
         <div class="f"><label>Container name ${tip("The Kubernetes container name inside this pod. Changing it restarts the workload.")}</label><input type="text" id="e_container_name" value="${esc(w.container_name || w.name)}"></div>
       </div>
       <div class="f"><label>Image</label><input type="text" id="e_image" value="${esc(w.image)}"></div>
@@ -25,7 +26,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       </div>
       <div class="f2">
         <div class="f"><label>Replicas</label><input type="number" id="e_rep" value="${w.replicas}" min="0" max="5"></div>
-        <div class="f"><label>Preferred node ${tip("A preference guides placement but still allows failover. Use Move for hardware-aware choices and optional hard pinning.")}</label><select id="e_node">
+        <div class="f"><label>Preferred node ${tip("A preference guides placement but still allows failover. Use Move for hardware-aware choices and optional hard pinning.")}</label><select id="e_node" data-current="${esc(w.node || "")}">
           <option value="">any node</option>
           ${nodes.map(n => `<option value="${esc(n.name)}" ${n.name === w.node ? "selected" : ""}>${esc(n.name)}</option>`).join("")}
         </select></div>
@@ -48,11 +49,10 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
         `<span class="tag info">${esc(v.source || "?")} → ${esc(v.path)}</span>`).join("")}
         <div class="dim xs" style="margin-top:8px">Volumes cannot be changed in place — a mount change needs a redeploy.</div></div>` : ""}
       <div class="row" style="margin-top:22px">
-        <button class="btn pri" onclick="editSave('${esc(ns)}','${esc(name)}')">Save &amp; restart</button>
+        <button class="btn pri" id="e_save" onclick="editSave('${esc(ns)}','${esc(name)}')">Save &amp; restart</button>
         <button class="btn" onclick="closeModal()">Cancel</button>
       </div>
-      <div class="note" style="margin-top:14px">Saving rolls the pod. With a ReadWriteOnce volume
-      the old pod must fully stop before the new one starts, so expect a short outage.</div>`;
+      <div class="note" style="margin-top:14px">Saving rolls the pod. Renaming the workload performs a guarded stop, recreate and readiness check. With a ReadWriteOnce volume the old pod must fully stop before the renamed one starts, so expect a short outage. A failed rename restores the original Deployment.</div>`;
     Object.entries(w.env || {}).forEach(([k, v]) => editAddEnv(k, v));
     if (!Object.keys(w.env || {}).length) editAddEnv();
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
@@ -72,16 +72,31 @@ window.editSave = async (ns, name) => {
     init_container: el.dataset.init, config_map: el.dataset.configMap,
     key: el.dataset.key, value: el.value,
   }));
-  const body = { ns, name, pod_hostname: $("#e_pod_name").value.trim(), container_name: $("#e_container_name").value.trim(),
+  const workloadName = $("#e_workload_name").value.trim();
+  const renaming = workloadName !== name;
+  if (renaming && !confirm(`Rename Kubernetes Deployment “${name}” to “${workloadName}”?\n\nHomestead will stop the old workload, start the renamed one, wait for readiness, and restore the original if startup fails. Expect a short outage.`)) return;
+  const body = { ns, name, workload_name: workloadName, pod_hostname: $("#e_pod_name").value.trim(), container_name: $("#e_container_name").value.trim(),
     image: $("#e_image").value.trim(), icon: $("#e_icon").value.trim(), cpu: $("#e_cpu").value.trim(),
     memory: $("#e_mem").value.trim(), replicas: +$("#e_rep").value, gpu: hardware.includes("igpu"), hardware, env, seed_configs };
+  const button = $("#e_save");
+  button.disabled = true;
+  button.textContent = renaming ? "Renaming & checking readiness…" : "Saving & restarting…";
   try {
-    await api("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    const node = $("#e_node").value;
-    await api("/api/move", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ns, name, node: node || null }) });
-    toast(`${name} updated`, "ok"); closeModal(); setTimeout(() => refresh(true), 1200);
-  } catch (e) { toast(e.message, "bad"); }
+    const result = await api("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const activeName = result.name || workloadName || name;
+    const nodeSelect = $("#e_node");
+    const node = nodeSelect.value;
+    if (node !== (nodeSelect.dataset.current || "")) {
+      await api("/api/move", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ns, name: activeName, node: node || null }) });
+    }
+    toast(renaming ? `${name} renamed to ${activeName}` : `${activeName} updated`, "ok");
+    closeModal(); setTimeout(() => refresh(true), 1200);
+  } catch (e) {
+    toast(e.message, "bad");
+    button.disabled = false;
+    button.textContent = "Save & restart";
+  }
 };
 
 /* ---------------- move a container ---------------- */
