@@ -1,5 +1,6 @@
 import sys
 import unittest
+import urllib.error
 from pathlib import Path
 
 
@@ -101,6 +102,19 @@ class NetworkingTests(unittest.TestCase):
         })
         self.assertEqual("cluster", prepared["vip_mode"])
         self.assertEqual("", prepared["lb_ip"])
+
+    def test_inventory_retries_a_single_api_throttle(self):
+        calls = []
+
+        def throttled(path):
+            calls.append(path)
+            if len(calls) == 1:
+                raise urllib.error.HTTPError(path, 429, "throttled", {"Retry-After": "0"}, None)
+            return {"items": []}
+
+        networking.bind(throttled, lambda *args, **kwargs: None, set(), "lab", "192.0.2.242")
+        self.assertEqual([], networking._items("/api/v1/services"))
+        self.assertEqual(2, len(calls))
 
 
 if __name__ == "__main__":

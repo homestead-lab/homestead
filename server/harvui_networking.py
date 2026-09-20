@@ -9,6 +9,7 @@ kube-vip addresses are not recorded in the Harvester IPPool status.
 """
 import ipaddress
 import re
+import time
 import urllib.error
 
 
@@ -29,14 +30,23 @@ def bind(_kget, _ksend, system_namespaces, default_namespace, shared_vip):
 
 
 def _items(path):
-    try:
-        return kget(path).get("items", [])
-    except urllib.error.HTTPError as error:
-        if error.code in (403, 404):
+    for attempt in range(2):
+        try:
+            return kget(path).get("items", [])
+        except urllib.error.HTTPError as error:
+            if error.code in (403, 404):
+                return []
+            if error.code == 429 and attempt == 0:
+                try:
+                    delay = float((error.headers or {}).get("Retry-After", "0.5"))
+                except (TypeError, ValueError):
+                    delay = 0.5
+                time.sleep(max(0.0, min(2.0, delay)))
+                continue
+            raise
+        except Exception:
             return []
-        raise
-    except Exception:
-        return []
+    return []
 
 
 def _name(value, label):
