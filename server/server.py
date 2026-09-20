@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.5.1"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.6.0"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1056,12 +1056,19 @@ def build_deployment(cfg):
     mounts, volumes = [], []
     for i, v in enumerate(cfg.get("volumes") or []):
         vn = f"vol{i}"
-        mounts.append({"name": vn, "mountPath": v["path"]})
+        if v.get("type") == "pod":
+            raise ValueError("existing pod volumes can only be used when joining an existing workload")
+        mount = {"name": vn, "mountPath": v["path"]}
+        if v.get("read_only"):
+            mount["readOnly"] = True
+        mounts.append(mount)
         if v.get("type") == "host":
             volumes.append({"name": vn, "hostPath": {"path": v["source"]}})
         else:
             volumes.append({"name": vn, "persistentVolumeClaim": {"claimName": v["source"]}})
-    ports = [{"containerPort": int(p["container"]), "name": (p.get("name") or f"p{p['container']}")[:15]}
+    ports = [{"containerPort": int(p["container"]),
+              "name": (p.get("name") or f"p{p['container']}-{str(p.get('protocol', 'TCP')).lower()}")[:15],
+              "protocol": str(p.get("protocol", "TCP")).upper()}
              for p in cfg.get("ports") or []]
     c = {"name": name, "image": cfg["image"], "imagePullPolicy": "IfNotPresent"}
     if env: c["env"] = env
@@ -1122,12 +1129,182 @@ def build_deployment(cfg):
             "metadata": {"name": name, "namespace": ns, "labels": {"app": name, "harvui.io/managed": "true"},
                          "annotations": {"kube-vip.io/loadbalancerIPs": vip} if vip and svc_type == "LoadBalancer" else {}},
             "spec": {"type": svc_type, "selector": {"app": name},
-                      "ports": [{"name": (p.get("name") or f"p{p['container']}")[:15],
+                      "ports": [{"name": (p.get("name") or f"p{p['container']}-{str(p.get('protocol', 'TCP')).lower()}")[:15],
                                  "port": int(p.get("host") or p["container"]),
                                  "targetPort": int(p["container"]),
                                  "protocol": str(p.get("protocol", "TCP")).upper()} for p in exposed]},
         }
     return dep, svc
+
+
+def _dns_name(value, label="name"):
+    value = (value or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?", value):
+        raise ValueError(f"{label} must use lowercase letters, numbers and dashes")
+    return value
+
+
+def deploy_options(ns):
+    """Return the live choices needed by the deployment editor."""
+    deployments = []
+    for item in kget(f"/apis/apps/v1/namespaces/{ns}/deployments").get("items", []):
+        pspec = item.get("spec", {}).get("template", {}).get("spec", {})
+        volumes = []
+        for volume in pspec.get("volumes", []) or []:
+            row = {"name": volume.get("name", ""), "kind": "other", "source": ""}
+            if volume.get("persistentVolumeClaim"):
+                row.update({"kind": "pvc", "source": volume["persistentVolumeClaim"].get("claimName", "")})
+            elif volume.get("hostPath"):
+                row.update({"kind": "host", "source": volume["hostPath"].get("path", "")})
+            elif volume.get("emptyDir") is not None:
+                row["kind"] = "emptyDir"
+            elif volume.get("configMap"):
+                row.update({"kind": "configMap", "source": volume["configMap"].get("name", "")})
+            elif volume.get("secret"):
+                row.update({"kind": "secret", "source": volume["secret"].get("secretName", "")})
+            volumes.append(row)
+        deployments.append({
+            "name": item["metadata"]["name"],
+            "containers": [c.get("name", "") for c in pspec.get("containers", []) or []],
+            "volumes": volumes,
+        })
+    pvcs = []
+    for item in kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims").get("items", []):
+        spec, status = item.get("spec", {}), item.get("status", {})
+        pvcs.append({
+            "name": item["metadata"]["name"],
+            "size": (status.get("capacity", {}) or {}).get("storage") or
+                    (spec.get("resources", {}).get("requests", {}) or {}).get("storage", ""),
+            "status": status.get("phase", "Unknown"),
+            "access_modes": spec.get("accessModes", []) or [],
+            "storage_class": spec.get("storageClassName", ""),
+        })
+    storage_classes = sorted(s["metadata"]["name"] for s in
+                             kget("/apis/storage.k8s.io/v1/storageclasses").get("items", []))
+    return {"deployments": sorted(deployments, key=lambda x: x["name"]),
+            "pvcs": sorted(pvcs, key=lambda x: x["name"]),
+            "storage_classes": storage_classes}
+
+
+def _unique_volume_name(base, used):
+    base = re.sub(r"[^a-z0-9-]", "-", base.lower()).strip("-")[:55] or "volume"
+    candidate, suffix = base, 2
+    while candidate in used:
+        tail = f"-{suffix}"
+        candidate = base[:63 - len(tail)].rstrip("-") + tail
+        suffix += 1
+    used.add(candidate)
+    return candidate
+
+
+def build_sidecar_deployment(cfg, current):
+    """Add one container to an existing Deployment pod template.
+
+    Kubernetes cannot modify a running Pod. Updating the controller template causes a
+    reviewed rollout, so all containers in the workload restart together.
+    """
+    container_name = _dns_name(cfg.get("name"), "container name")
+    target = _dns_name(cfg.get("target_workload"), "existing workload")
+    if current.get("metadata", {}).get("name") != target:
+        raise ValueError("existing workload does not match the selected Deployment")
+    if cfg.get("network_mode") == "host":
+        raise ValueError("host networking cannot be enabled while joining an existing workload")
+
+    updated = json.loads(json.dumps(current))
+    pspec = updated.setdefault("spec", {}).setdefault("template", {}).setdefault("spec", {})
+    containers = pspec.setdefault("containers", [])
+    if any(c.get("name") == container_name for c in containers):
+        raise ValueError(f"container {container_name} already exists in {target}")
+
+    env = [{"name": k, "value": str(v)} for k, v in (cfg.get("env") or {}).items()]
+    ports = [{"containerPort": int(p["container"]),
+              "name": (p.get("name") or f"p{p['container']}-{str(p.get('protocol', 'TCP')).lower()}")[:15],
+              "protocol": str(p.get("protocol", "TCP")).upper()}
+             for p in cfg.get("ports") or [] if p.get("container")]
+    container = {"name": container_name, "image": cfg["image"], "imagePullPolicy": "IfNotPresent"}
+    if env:
+        container["env"] = env
+    if ports:
+        container["ports"] = ports
+    resources = {}
+    if cfg.get("cpu"):
+        resources.setdefault("requests", {})["cpu"] = cfg["cpu"]
+    if cfg.get("memory"):
+        resources.setdefault("requests", {})["memory"] = cfg["memory"]
+    if resources:
+        container["resources"] = resources
+    if cfg.get("privileged"):
+        container["securityContext"] = {"privileged": True}
+
+    pod_volumes = pspec.setdefault("volumes", [])
+    existing_by_name = {v.get("name"): v for v in pod_volumes}
+    used = set(existing_by_name)
+    mounts = []
+    for index, item in enumerate(cfg.get("volumes") or []):
+        mount_path = (item.get("path") or "").strip()
+        if not mount_path:
+            continue
+        if item.get("type") == "pod":
+            volume_name = item.get("source", "")
+            if volume_name not in existing_by_name:
+                raise ValueError(f"pod volume {volume_name or '(blank)'} does not exist in {target}")
+        else:
+            source = (item.get("source") or "").strip()
+            if not source:
+                raise ValueError(f"storage source is required for {mount_path}")
+            volume_name = ""
+            if item.get("type") != "host":
+                volume_name = next((v.get("name") for v in pod_volumes
+                                    if v.get("persistentVolumeClaim", {}).get("claimName") == source), "")
+            if not volume_name:
+                volume_name = _unique_volume_name(f"hs-{container_name}-{index + 1}", used)
+                if item.get("type") == "host":
+                    pod_volumes.append({"name": volume_name, "hostPath": {"path": source}})
+                else:
+                    pod_volumes.append({"name": volume_name,
+                                        "persistentVolumeClaim": {"claimName": source}})
+        mount = {"name": volume_name, "mountPath": mount_path}
+        if item.get("read_only"):
+            mount["readOnly"] = True
+        mounts.append(mount)
+
+    hardware = set(cfg.get("hardware") or [])
+    if cfg.get("gpu"):
+        hardware.add("igpu")
+    devices = {feature["id"]: HW.mount_spec(feature) for feature in HW.features()}
+    unknown = hardware - set(devices)
+    if unknown:
+        raise ValueError("unknown hardware feature(s): " + ", ".join(sorted(unknown)))
+    for feature_id in hardware:
+        device = devices[feature_id]
+        pspec.setdefault("nodeSelector", {})[device["label"]] = "true"
+        container.setdefault("securityContext", {})["privileged"] = True
+        volume_name = next((v.get("name") for v in pod_volumes
+                            if v.get("hostPath", {}).get("path") == device["host_path"]), "")
+        if not volume_name:
+            volume_name = _unique_volume_name(device["name"], used)
+            pod_volumes.append({"name": volume_name, "hostPath": {
+                "path": device["host_path"], "type": device["path_type"]}})
+        mounts.append({"name": volume_name, "mountPath": device["container_path"]})
+    if mounts:
+        container["volumeMounts"] = mounts
+    containers.append(container)
+
+    selector = current.get("spec", {}).get("selector", {}).get("matchLabels", {})
+    service_cfg = dict(cfg)
+    service_cfg["name"] = container_name
+    # Only the Service portion is needed here. Pod storage and hardware have
+    # already been merged above and pod-volume references are join-only.
+    service_cfg["volumes"] = []
+    service_cfg["hardware"] = []
+    service_cfg["gpu"] = False
+    _, service = build_deployment(service_cfg)
+    if service:
+        service["spec"]["selector"] = selector
+    annotation_name = ("sidecar-" + container_name)[:63].rstrip("-")
+    updated.setdefault("metadata", {}).setdefault("annotations", {})[
+        f"harvui.io/{annotation_name}"] = cfg.get("image", "")
+    return updated, service
 
 
 def create_pvc(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce"):
@@ -1211,45 +1388,75 @@ def fetch_appstore():
             repo = a.get("Repository") or ""
             if not repo or not a.get("Name"):
                 continue
-            out.append({
+            item = {
                 "name": a.get("Name"),
                 "repo": repo,
                 "icon": a.get("Icon") or "",
-                "desc": re.sub(r"\s+", " ", (a.get("Description") or ""))[:300],
-                "cat": a.get("Category") or "",
+                "desc": re.sub(r"\s+", " ", (a.get("Overview") or a.get("Description") or ""))[:300],
+                "cat": a.get("CategoryList") or a.get("Category") or "",
                 "web": a.get("Project") or a.get("Support") or "",
-                "ports": [str(p) for p in ([a.get("Network", {})] if isinstance(a.get("Network"), dict) else [])],
+                "network": a.get("Network") or "bridge",
                 "config": a.get("Config") or [],
-            })
+            }
+            item["deploy"] = template_to_cfg(item)
+            out.append(item)
         return out
     return cached("appstore", 3600, go)
 
 
 def template_to_cfg(app):
     """Turn an Unraid CA template entry into our deploy config."""
-    ports, envs, vols = [], {}, []
+    ports, envs, env_meta, vols, devices = [], {}, [], [], []
     cfgs = app.get("config") or []
     if isinstance(cfgs, dict):
         cfgs = [cfgs]
+    if not isinstance(cfgs, list):
+        cfgs = []
+    name = re.sub(r"[^a-z0-9-]", "-", app["name"].lower()).strip("-")[:40]
+    volume_index = 0
     for c in cfgs:
         if not isinstance(c, dict):
             continue
-        typ = (c.get("@attributes", {}) or {}).get("Type") or c.get("Type") or ""
-        tgt = (c.get("@attributes", {}) or {}).get("Target") or c.get("Target") or ""
-        val = c.get("value") or (c.get("@attributes", {}) or {}).get("Default") or ""
-        if typ == "Port" and tgt:
+        attrs = c.get("@attributes", {}) or {}
+        typ = str(attrs.get("Type") or c.get("Type") or "").strip().lower()
+        tgt = str(attrs.get("Target") or c.get("Target") or "").strip()
+        val = c.get("value")
+        if val is None or val == "":
+            val = attrs.get("Default") or c.get("Default") or ""
+        val = str(val)
+        label = str(attrs.get("Name") or c.get("Name") or tgt)
+        description = str(attrs.get("Description") or c.get("Description") or "")
+        required = str(attrs.get("Required") or c.get("Required") or "false").lower() == "true"
+        mode = str(attrs.get("Mode") or c.get("Mode") or "")
+        read_only = mode.lower() == "ro"
+        if typ == "port" and tgt:
             try:
+                protocol = mode.upper() if mode.lower() in ("tcp", "udp") else "TCP"
                 ports.append({"container": int(tgt), "host": int(val or tgt), "expose": True,
-                              "name": f"p{tgt}"})
-            except ValueError:
+                              "name": f"p{tgt}-{protocol.lower()}", "protocol": protocol,
+                              "label": label, "description": description, "required": required})
+            except (TypeError, ValueError):
                 pass
-        elif typ == "Variable" and tgt:
+        elif typ == "variable" and tgt:
             envs[tgt] = val
-        elif typ == "Path" and tgt:
-            vols.append({"path": tgt, "source": "", "type": "pvc"})
-    return {"name": re.sub(r"[^a-z0-9-]", "-", app["name"].lower()).strip("-")[:40],
+            env_meta.append({"key": tgt, "label": label, "description": description,
+                             "required": required, "masked": str(attrs.get("Mask", "false")).lower() == "true"})
+        elif typ == "path" and tgt:
+            volume_index += 1
+            system_bind = tgt == "/etc/localtime" and val == "/etc/localtime"
+            vols.append({"path": tgt,
+                         "source": "/etc/localtime" if system_bind else f"{name}-data{volume_index if volume_index > 1 else ''}",
+                         "type": "host" if system_bind else "pvc", "create": not system_bind,
+                         "access_mode": "ReadWriteOnce", "size_gb": 5,
+                         "read_only": read_only, "label": label, "description": description,
+                         "required": required, "template_source": val})
+        elif typ == "device":
+            devices.append({"host_path": val or tgt, "container_path": tgt or val,
+                            "label": label, "description": description, "required": required})
+    return {"name": name,
             "image": app["repo"], "icon": app.get("icon") or "",
-            "ports": ports, "env": envs, "volumes": vols}
+            "ports": ports, "env": envs, "env_meta": env_meta, "volumes": vols,
+            "template_devices": devices}
 
 
 def raw_get(path, timeout=20):
@@ -1631,8 +1838,15 @@ class H(BaseHTTPRequestHandler):
                 ns = (q.get("ns") or [DEFAULT_NS])[0]
                 items = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims")["items"]
                 return self._send(200, [{"name": i["metadata"]["name"],
-                                         "size": i["spec"]["resources"]["requests"]["storage"],
-                                         "status": i["status"].get("phase")} for i in items])
+                                         "size": (i.get("status", {}).get("capacity", {}) or {}).get("storage") or
+                                                 i["spec"]["resources"]["requests"]["storage"],
+                                         "status": i.get("status", {}).get("phase", "Unknown"),
+                                         "access_modes": i.get("spec", {}).get("accessModes", []),
+                                         "storage_class": i.get("spec", {}).get("storageClassName", "")}
+                                        for i in items])
+            if p == "/api/deploy/options":
+                ns = (q.get("ns") or [DEFAULT_NS])[0]
+                return self._send(200, deploy_options(ns))
             if p == "/api/appstore":
                 term = (q.get("q") or [""])[0].lower().strip()
                 cat = (q.get("cat") or [""])[0].lower().strip()
@@ -1713,25 +1927,35 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/deploy":
                 persist_icon_config(b)
                 b = NETWORK.prepare_deploy(b)
-                dep, svc = build_deployment(b)
-                ns = dep["metadata"]["namespace"]
+                ns = b.get("namespace") or DEFAULT_NS
+                target_mode = b.get("target_mode", "new")
+                if target_mode == "existing":
+                    target = _dns_name(b.get("target_workload"), "existing workload")
+                    current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
+                    dep, svc = build_sidecar_deployment(b, current)
+                elif target_mode == "new":
+                    dep, svc = build_deployment(b)
+                    target = dep["metadata"]["name"]
+                else:
+                    raise ValueError("deployment target must be new or existing")
                 for v in b.get("volumes") or []:
                     if v.get("type") == "pvc" and v.get("create"):
-                        try:
-                            create_pvc(ns, v["source"], v.get("size_gb", 5))
-                        except urllib.error.HTTPError as e:
-                            if e.code != 409: raise
-                ksend("POST", f"/apis/apps/v1/namespaces/{ns}/deployments", dep)
+                        create_pvc(ns, _dns_name(v.get("source"), "volume name"), v.get("size_gb", 5),
+                                   v.get("storage_class") or STORAGE_CLASS,
+                                   v.get("access_mode") or "ReadWriteOnce")
+                if target_mode == "existing":
+                    ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{target}", dep)
+                else:
+                    ksend("POST", f"/apis/apps/v1/namespaces/{ns}/deployments", dep)
                 if svc:
-                    try:
-                        ksend("POST", f"/api/v1/namespaces/{ns}/services", svc)
-                    except urllib.error.HTTPError as e:
-                        if e.code != 409: raise
+                    ksend("POST", f"/api/v1/namespaces/{ns}/services", svc)
                 _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
-                op = OPS.start("deployment", f"Deploy {dep['metadata']['name']}",
-                               {"kind": "Deployment", "name": dep["metadata"]["name"], "namespace": ns},
-                               "/containers", {"namespace": ns, "name": dep["metadata"]["name"]})
-                return self._send(200, {"ok": True, "name": dep["metadata"]["name"], "operation": op})
+                action = f"Add {b['name']} to {target}" if target_mode == "existing" else f"Deploy {target}"
+                op = OPS.start("deployment", action,
+                               {"kind": "Deployment", "name": target, "namespace": ns},
+                               "/containers", {"namespace": ns, "name": target})
+                return self._send(200, {"ok": True, "name": target,
+                                        "container": b["name"], "operation": op})
             if p == "/api/scale":
                 ns, name, n = b["ns"], b["name"], int(b["replicas"])
                 ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}/scale",
@@ -1803,14 +2027,18 @@ class H(BaseHTTPRequestHandler):
                 cfg = template_to_cfg(b["app"])
                 cfg.update(b.get("overrides") or {})
                 persist_icon_config(cfg)
+                cfg = NETWORK.prepare_deploy(cfg)
                 dep, svc = build_deployment(cfg)
                 ns = dep["metadata"]["namespace"]
+                for volume in cfg.get("volumes") or []:
+                    if volume.get("type") == "pvc" and volume.get("create"):
+                        create_pvc(ns, _dns_name(volume.get("source"), "volume name"),
+                                   volume.get("size_gb", 5),
+                                   volume.get("storage_class") or STORAGE_CLASS,
+                                   volume.get("access_mode") or "ReadWriteOnce")
                 ksend("POST", f"/apis/apps/v1/namespaces/{ns}/deployments", dep)
                 if svc:
-                    try:
-                        ksend("POST", f"/api/v1/namespaces/{ns}/services", svc)
-                    except urllib.error.HTTPError as e:
-                        if e.code != 409: raise
+                    ksend("POST", f"/api/v1/namespaces/{ns}/services", svc)
                 _cache.pop("wl", None)
                 op = OPS.start("deployment", f"Install {cfg['name']}",
                                {"kind": "Deployment", "name": cfg["name"], "namespace": ns},
@@ -1997,8 +2225,19 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, result)
             if p == "/api/preview":
                 b = NETWORK.prepare_deploy(b)
+                if b.get("target_mode") == "existing":
+                    ns = b.get("namespace") or DEFAULT_NS
+                    target = _dns_name(b.get("target_workload"), "existing workload")
+                    current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
+                    dep, svc = build_sidecar_deployment(b, current)
+                    return self._send(200, {"deployment": dep, "service": svc,
+                                            "impact": {"mode": "existing", "workload": target,
+                                                       "containers": [c.get("name") for c in current.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])],
+                                                       "message": "Saving updates the Deployment template and restarts every container in its pods."}})
                 dep, svc = build_deployment(b)
-                return self._send(200, {"deployment": dep, "service": svc})
+                return self._send(200, {"deployment": dep, "service": svc,
+                                        "impact": {"mode": "new", "workload": dep["metadata"]["name"],
+                                                   "message": "Creates a new independently managed Deployment."}})
             return self._send(404, {"error": "no route"})
         except PermissionError as e:
             return self._send(403, {"error": str(e)})

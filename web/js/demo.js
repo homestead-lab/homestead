@@ -185,6 +185,29 @@
       },
     };
   };
+  const deployOptions = {
+    deployments: workloads.filter(w => w.ns === "lab").map(w => ({ name: w.name,
+      containers: w.pods[0].containers.map(c => c.name),
+      volumes: w.name === "frigate" ? [{ name: "config", kind: "pvc", source: "frigate-config" }] : [] })),
+    pvcs: volumes.map(v => ({ name: v.pvc_name, size: `${v.size_gb}Gi`, status: v.state === "attached" ? "Bound" : "Available",
+      access_modes: v.access_modes, storage_class: v.storage_class })),
+    storage_classes: ["harvester-longhorn", "longhorn-r2"],
+  };
+  const demoApp = { name: "Frigate", repo: "ghcr.io/blakeblackshear/frigate:stable", icon: "", cat: "HomeAutomation",
+    desc: "Network video recorder with local AI object detection.", deploy: {
+      name: "frigate", image: "ghcr.io/blakeblackshear/frigate:stable", icon: "",
+      ports: [{ container: 8971, host: 8971, expose: true, protocol: "TCP" },
+              { container: 8555, host: 8555, expose: true, protocol: "TCP" },
+              { container: 8555, host: 8555, expose: true, protocol: "UDP" }],
+      env: { FRIGATE_RTSP_PASSWORD: "change-me", LIBVA_DRIVER_NAME: "iHD" },
+      env_meta: [{ key: "FRIGATE_RTSP_PASSWORD", label: "Frigate RTSP password", required: true, masked: true }],
+      volumes: [{ path: "/config", source: "frigate-data", type: "pvc", create: true, size_gb: 5,
+        access_mode: "ReadWriteOnce", label: "Config path", required: true, template_source: "/mnt/user/appdata/frigate" },
+        { path: "/media/frigate", source: "frigate-data2", type: "pvc", create: true, size_gb: 5,
+          access_mode: "ReadWriteOnce", label: "Media path", required: true, template_source: "/mnt/user/Media/frigate" }],
+      template_devices: [{ host_path: "/dev/bus/usb", container_path: "/dev/bus/usb", label: "Coral TPU" },
+                         { host_path: "/dev/dri/renderD128", container_path: "/dev/dri/renderD128", label: "iGPU" }],
+    } };
   const responses = {
     "/api/auth/state": { setup: false, user: "demo", role: "admin" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true } },
@@ -203,6 +226,17 @@
     "/api/volumes/delete-plan": volumeDeletePlan, "/api/hardware/features": hardware,
     "/api/namespaces": ["default", "lab", "monitoring"],
     "/api/storageclasses": ["harvester-longhorn", "longhorn-r2"],
+    "/api/deploy/options": deployOptions,
+    "/api/appstore": { total: 1, apps: [demoApp] },
+    "/api/preview": (url, init) => {
+      const body = JSON.parse(init?.body || "{}");
+      const joining = body.target_mode === "existing";
+      return { deployment: { apiVersion: "apps/v1", kind: "Deployment",
+          metadata: { name: joining ? body.target_workload : body.name, namespace: body.namespace },
+          spec: { template: { spec: { containers: [{ name: body.name, image: body.image }] } } } },
+        service: null, impact: { mode: joining ? "existing" : "new", workload: joining ? body.target_workload : body.name,
+          message: joining ? "Saving updates the Deployment template and restarts every container in its pods." : "Creates a new independently managed Deployment." } };
+    },
     "/api/vm-disks": vmDisks,
     "/api/vm-disks/import-plan": url => {
       const namespace = url.searchParams.get("ns") || "lab";

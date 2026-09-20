@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HOMESTEAD_VERSION = "2.5.1";
+const HOMESTEAD_VERSION = "2.6.0";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
