@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.5"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.6"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1190,6 +1190,26 @@ def deploy_options(ns):
             "storage_classes": storage_classes}
 
 
+def share_storage_options():
+    """Volumes a new share can be created on, in the namespace Samba runs in."""
+    ns = SMB_NAMESPACE
+    pvcs = []
+    for item in kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims").get("items", []):
+        spec, status = item.get("spec", {}), item.get("status", {})
+        pvcs.append({
+            "name": item["metadata"]["name"],
+            "size": (status.get("capacity", {}) or {}).get("storage") or
+                    (spec.get("resources", {}).get("requests", {}) or {}).get("storage", ""),
+            "status": status.get("phase", "Unknown"),
+            "access_modes": spec.get("accessModes", []) or [],
+            "storage_class": spec.get("storageClassName", ""),
+        })
+    classes = sorted(item["metadata"]["name"] for item in
+                     kget("/apis/storage.k8s.io/v1/storageclasses").get("items", []))
+    return {"namespace": ns, "pvcs": sorted(pvcs, key=lambda row: row["name"]),
+            "storage_classes": classes}
+
+
 def _unique_volume_name(base, used):
     base = re.sub(r"[^a-z0-9-]", "-", base.lower()).strip("-")[:55] or "volume"
     candidate, suffix = base, 2
@@ -1967,9 +1987,15 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None):
         reusable.append({"name": volume.get("name", ""),
                          "kind": {"existing": "pvc", "ephemeral": "emptyDir"}.get(kind, kind),
                          "source": value})
+    replicas = deployment["spec"].get("replicas", 1) or 0
+    try:
+        parked = int(annotations.get(LC.AUTOSTART_REPLICAS, "") or 0)
+    except ValueError:
+        parked = 0
     return {
         "ns": ns, "name": name, "pod_hostname": pspec.get("hostname", ""),
-        "replicas": deployment["spec"].get("replicas", 1), "containers": containers,
+        "replicas": replicas, "autostart": replicas > 0,
+        "start_replicas": replicas or parked or 1, "containers": containers,
         "pod_volumes": reusable,
         "hardware": detected, "icon": annotations.get("harvui.io/icon-source", annotations.get("harvui.io/icon", "")),
         "node": pspec.get("nodeSelector", {}).get("kubernetes.io/hostname", ""),
@@ -2020,7 +2046,7 @@ ADMIN_ROUTES = {
     "/api/sources", "/api/sources/delete", "/api/sources/browse",
     "/api/sources/containers", "/api/sources/inspect", "/api/import",
     "/api/vm-disks/import",
-    "/api/shares", "/api/shares/edit", "/api/shares/delete",
+    "/api/shares", "/api/shares/edit", "/api/shares/delete", "/api/shares/options",
     "/api/images/cleanup",
     "/api/volumes/delete",
     "/api/node/smart/test",
@@ -2231,6 +2257,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("flow2", 8, get_flow2))
             if p == "/api/shares":
                 return self._send(200, SHARES.list_shares())
+            if p == "/api/shares/options":
+                return self._send(200, share_storage_options())
             if p == "/api/move/plan":
                 return self._send(200, PLACE.plan(
                     q["ns"][0], q["name"][0],
@@ -2455,7 +2483,9 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/shares":
                 result = SHARES.create_share(
                     b["name"], b.get("size_gb", 10), b.get("user", "lab"),
-                    b.get("password"), b.get("public", False), b.get("read_only", False))
+                    b.get("password"), b.get("public", False), b.get("read_only", False),
+                    b.get("pvc"), b.get("sub_path", ""), b.get("storage_class"),
+                    b.get("access_mode"))
                 deployment = result.pop("deployment", None)
                 if deployment:
                     result["operation"] = OPS.start(

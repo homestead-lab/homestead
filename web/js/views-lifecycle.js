@@ -89,12 +89,15 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       <div class="f"><label>Pod hostname ${tip("The hostname visible inside the pod. It does not rename the Kubernetes Pod; generated pods use the workload name plus a suffix.")}</label><input type="text" id="e_pod_name" value="${esc(w.pod_hostname || "")}" placeholder="optional"></div>
       <div class="f"><label>Container logo ${tip("Optional public HTTPS image URL. Homestead validates it and keeps a persistent local copy while retaining this source for later edits.")}</label><input type="url" id="e_icon" value="${esc(w.icon || "")}" placeholder="https://…/icon.png"></div>
       <div class="f2">
-        <div class="f"><label>Replicas</label><input type="number" id="e_rep" value="${w.replicas}" min="0" max="5"></div>
+        <div class="f"><label>Replicas</label><input type="number" id="e_rep" value="${w.start_replicas ?? w.replicas ?? 1}" min="1" max="5" ${w.autostart === false ? "disabled" : ""}></div>
         <div class="f"><label>Preferred node ${tip("A preference guides placement but still allows failover. Use Move for hardware-aware choices and optional hard pinning.")}</label><select id="e_node" data-current="${esc(w.node || "")}">
           <option value="">any node</option>
           ${nodes.map(n => `<option value="${esc(n.name)}" ${n.name === w.node ? "selected" : ""}>${esc(n.name)}</option>`).join("")}
         </select></div>
       </div>
+      <label class="switch" id="e_autostart_wrap"><input type="checkbox" id="e_autostart" onchange="editAutostartToggle()" ${w.autostart === false ? "" : "checked"}>
+        Autostart ${tip("On keeps the workload running: Kubernetes restarts it after a crash, a node reboot or a cluster restart. Off scales it to zero and remembers the replica count for when you switch it back on.")}</label>
+      <div class="dim xs" id="e_autostart_note" style="margin:-4px 0 6px">${w.autostart === false ? "Stays stopped until you switch autostart back on." : "Runs continuously and comes back after a reboot."}</div>
       <div class="sec">Containers <span class="pill">${containers.length}</span></div>
       <div id="e_containers">${containers.map(editContainerPanel).join("")}</div>
       ${seeds.length ? `<div class="sec">Startup seed config ${tip("This ConfigMap is copied into the container's persistent storage by an init container before every start. It is authoritative: editing only the mounted file will be overwritten on restart.")}</div>
@@ -118,6 +121,13 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
 window.editAddEnv = (index, key = "", value = "") => $("#e_env_" + index).insertAdjacentHTML("beforeend", editEnvRow(index, key, value));
 window.editAddPort = (index, port = {}) => $("#e_ports_" + index).insertAdjacentHTML("beforeend", editPortRow(index, port));
 window.editAddVol = (index, volume = {}) => addVolumeRow(editVolumePicker(index), volume);
+window.editAutostartToggle = () => {
+  const on = $("#e_autostart").checked;
+  $("#e_rep").disabled = !on;
+  $("#e_autostart_note").textContent = on
+    ? "Runs continuously and comes back after a reboot."
+    : "Stays stopped until you switch autostart back on.";
+};
 window.editSave = async (ns, name) => {
   const containers = $$("#e_containers .edit-container").map(panel => {
     const index = panel.dataset.index;
@@ -140,10 +150,12 @@ window.editSave = async (ns, name) => {
   const renaming = workloadName !== name;
   if (renaming && !confirm(`Rename Kubernetes Deployment “${name}” to “${workloadName}”?\n\nHomestead will stop the old workload, start the renamed one, wait for readiness, and restore the original if startup fails. Expect a short outage.`)) return;
   const body = { ns, name, workload_name: workloadName, pod_hostname: $("#e_pod_name").value.trim(),
-    icon: $("#e_icon").value.trim(), replicas: +$("#e_rep").value, containers, seed_configs };
+    icon: $("#e_icon").value.trim(), replicas: Math.max(1, +$("#e_rep").value || 1),
+    autostart: $("#e_autostart").checked, containers, seed_configs };
   const button = $("#e_save");
   button.disabled = true;
-  button.textContent = renaming ? "Renaming & checking readiness…" : "Saving & restarting…";
+  button.textContent = renaming ? "Renaming & checking readiness…"
+    : body.autostart ? "Saving & restarting…" : "Saving & stopping…";
   try {
     const result = await api("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const activeName = result.name || workloadName || name;

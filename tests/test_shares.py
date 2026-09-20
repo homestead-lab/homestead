@@ -40,6 +40,7 @@ class ShareTests(unittest.TestCase):
             },
         }
         self.sent = []
+        self.created = []
 
         def get(path):
             if path not in self.objects:
@@ -55,10 +56,12 @@ class ShareTests(unittest.TestCase):
             self.objects[path] = copy.deepcopy(body)
             return copy.deepcopy(body)
 
-        def create_pvc(namespace, name, size):
+        def create_pvc(namespace, name, size, storage_class=None, access_mode="ReadWriteOnce"):
+            self.created.append((name, size, storage_class, access_mode))
             self.objects[f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{name}"] = {
                 "metadata": {"name": name, "resourceVersion": "1"},
-                "spec": {"resources": {"requests": {"storage": f"{size}Gi"}}},
+                "spec": {"accessModes": [access_mode], "storageClassName": storage_class,
+                         "resources": {"requests": {"storage": f"{size}Gi"}}},
                 "status": {"phase": "Pending"},
             }
             return self.objects[f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{name}"]
@@ -110,6 +113,47 @@ class ShareTests(unittest.TestCase):
     def test_claim_cannot_shrink(self):
         with self.assertRaisesRegex(ValueError, "cannot shrink"):
             shares.edit_share("secure", 9, "lab", "", False, False)
+        self.assertEqual([], self.sent)
+
+    def test_share_can_publish_a_folder_of_an_existing_volume(self):
+        result = shares.create_share("clips", 0, "clips", "pw", False,
+                                     pvc="share-secure", sub_path="/cameras/front")
+
+        self.assertEqual([], self.created, "an existing volume must not be recreated")
+        row = next(item for item in result["shares"] if item["name"] == "clips")
+        self.assertFalse(row["owned"])
+        self.assertEqual(10, row["size_gb"], "size comes from the borrowed claim")
+        dep = self.objects["/apis/apps/v1/namespaces/lab/deployments/samba"]
+        container = dep["spec"]["template"]["spec"]["containers"][0]
+        mount = next(m for m in container["volumeMounts"] if m["mountPath"] == "/shares/clips")
+        self.assertEqual("cameras/front", mount["subPath"],
+                         "a typed leading slash is normalised, not escaped")
+        claims = [v for v in dep["spec"]["template"]["spec"]["volumes"]
+                  if (v.get("persistentVolumeClaim") or {}).get("claimName") == "share-secure"]
+        self.assertEqual(1, len(claims), "one volume entry serves both shares of a claim")
+        self.assertEqual(claims[0]["name"], mount["name"])
+
+    def test_new_share_creates_its_own_claim_with_the_chosen_class(self):
+        shares.create_share("media", 50, "media", "pw", False,
+                            storage_class="longhorn-r2", access_mode="ReadWriteMany")
+
+        self.assertEqual([("share-media", 50, "longhorn-r2", "ReadWriteMany")], self.created)
+
+    def test_borrowed_volume_is_never_resized_by_a_share_edit(self):
+        shares.create_share("clips", 0, "clips", "pw", False, pvc="share-secure")
+        self.sent.clear()
+
+        shares.edit_share("clips", 500, "clips", "", False, True)
+
+        pvc = self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/share-secure"]
+        self.assertEqual("10Gi", pvc["spec"]["resources"]["requests"]["storage"])
+        self.assertFalse(any("persistentvolumeclaims" in path for _, path, _ in self.sent))
+
+    def test_folder_cannot_escape_the_volume(self):
+        for folder in ("../etc", "media/../../etc", "media/../secrets"):
+            with self.assertRaisesRegex(ValueError, "relative path inside the volume"):
+                shares.create_share("escape", 0, "escape", "pw", False,
+                                    pvc="share-secure", sub_path=folder)
         self.assertEqual([], self.sent)
 
 

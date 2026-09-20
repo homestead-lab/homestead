@@ -217,20 +217,17 @@ function renderWorkloads() {
                 onclick="moveWorkload('${w.name}','${w.ns}')">${esc(w.nodes.join(", ") || "unscheduled")}</span></div></div>
           </div>
           <div class="row">${update?.available ? '<span class="pill warn">update available</span>' : ""}
-          ${updateError ? `<span class="pill low" title="${esc(updateError.error)}">registry check unavailable</span>` : ""}
+          ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}
           <span class="pill ${ok ? "ok" : off ? "low" : "crit"}">${w.ready}/${w.desired}</span></div>
         </div>
         <div class="wmeta">
           <div><div class="dim xs">UPTIME</div>${w.uptime ? upChip(w.uptime) : '<span class="dim">—</span>'}</div>
           <div><div class="dim xs">CPU ${tip("Live usage. 100% equals one fully used CPU core.")}</div><div class="mono small">${workloadCpuPercent(w.cpu)}</div></div>
           <div><div class="dim xs">RAM</div><div class="mono small">${w.mem_mb} <span class="dim">MB</span></div></div>
-          <div><div class="dim xs">ACCESS</div><div>${w.ports.map(p => p.ip
-            ? `<span class="plink" title="Open ${esc(svcUrl(p.ip, p.port))}" onclick="openSvc('${esc(p.ip)}',${p.port})">${p.port}<svg class="ext" width="9" height="9"><use href="#i-ext"/></svg></span>`
-            : `<span class="tag">${p.port}</span>`).join("") || '<span class="dim">—</span>'}</div></div>
+          <div><div class="dim xs">ACCESS</div><div class="waccess">${accessPorts(w.ports)}</div></div>
         </div>
         <div class="dim xs mono wimg"><span class="wimage-name">${w.images.map(esc).join(" · ")}</span>
           <span class="wimage-hardware">${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</span></div>
-        ${updateError ? `<div class="updateerror">Image check: ${esc(updateError.error)}</div>` : ""}
         <div class="wfoot">
           ${workloadHierarchy(w)}
           <div class="row wacts">
@@ -251,6 +248,17 @@ function renderWorkloads() {
           </div>
         </div></div>`;
     }).join("") || `<div class="empty">nothing here yet</div>`}</div>`);
+}
+
+function accessPorts(ports) {
+  const rows = ports || [];
+  if (!rows.length) return '<span class="dim">—</span>';
+  const shown = rows.slice(0, 2);
+  const rest = rows.slice(shown.length);
+  return shown.map(p => p.ip
+    ? `<span class="plink" title="Open ${esc(svcUrl(p.ip, p.port))}" onclick="openSvc('${esc(p.ip)}',${p.port})">${p.port}<svg class="ext" width="9" height="9"><use href="#i-ext"/></svg></span>`
+    : `<span class="tag">${p.port}</span>`).join("") +
+    (rest.length ? `<span class="tag more" data-tip="Also listening on ${esc(rest.map(p => p.port).join(", "))}">+${rest.length}</span>` : "");
 }
 
 window.wlScale = async (ns, name, n) => {

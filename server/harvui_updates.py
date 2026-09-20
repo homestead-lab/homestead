@@ -238,13 +238,16 @@ def _check_deployment(dep, pods, force=False):
     tracked = _annotation_json(dep, TRACKED)
     auths = _secret_credentials(ns, dep)
     mine = _matching_pods(dep, pods)
+    # A stopped workload has no running digest to compare, which is expected
+    # rather than a failed check: imports land scaled to zero on purpose.
+    running = bool(mine) and int(dep["spec"].get("replicas", 1) or 0) > 0
     images = []
     for container in dep["spec"]["template"]["spec"].get("containers", []):
         deployed = container.get("image", "")
         source = tracked.get(container["name"]) or deployed
         item = {"container": container["name"], "deployed": deployed, "source": source,
                 "available": False, "current_digest": "", "remote_digest": "",
-                "candidate": source, "candidate_tag": "", "error": ""}
+                "candidate": source, "candidate_tag": "", "error": "", "running": running}
         try:
             parsed = parse_image(source)
             current = parse_image(deployed).get("digest") or _pod_digest(mine, container["name"])
@@ -263,7 +266,7 @@ def _check_deployment(dep, pods, force=False):
             item.update({"current_digest": current, "remote_digest": remote,
                          "candidate": candidate, "candidate_tag": candidate_tag or parsed["tag"],
                          "available": bool(current and remote and not matches_remote) or bool(candidate_tag)})
-            if not current:
+            if not current and running:
                 item["error"] = "running image digest is not available yet"
         except urllib.error.HTTPError as error:
             item["error"] = ("registry authentication required" if error.code in (401, 403)

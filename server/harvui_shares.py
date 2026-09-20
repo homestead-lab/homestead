@@ -41,6 +41,24 @@ def _user(value):
     return value
 
 
+def _sub_path(value):
+    """A folder inside the volume, kept relative and inside the claim."""
+    value = str(value or "").strip().strip("/")
+    if not value:
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*", value) or ".." in value.split("/"):
+        raise ValueError("folder must be a relative path inside the volume, "
+                         "such as media/photos")
+    return value
+
+
+def _claim_name(value):
+    value = str(value or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?", value):
+        raise ValueError("volume name must use lowercase letters, numbers and dashes")
+    return value
+
+
 def _size(value):
     try:
         value = int(value)
@@ -271,15 +289,23 @@ def apply_samba(rows, credentials, deployment=None):
     volumes = [volume for volume in spec.get("volumes", []) or []
                if volume.get("name") not in managed]
     args = ["-p"]
+    attached = {}
     for row in sorted(rows, key=lambda item: item["name"]):
         if not row.get("pvc"):
             continue
         path = row.get("path") or f"/shares/{row['name']}"
-        volume_name = _volume_name(row["name"])
+        # Two shares can live in different folders of one claim, so the volume
+        # is keyed by claim and the folder becomes the mount's subPath.
+        volume_name = attached.get(row["pvc"]) or _volume_name("claim:" + row["pvc"])
         readonly = bool(row.get("read_only", False))
-        mounts.append({"name": volume_name, "mountPath": path, "readOnly": readonly})
-        volumes.append({"name": volume_name,
-                        "persistentVolumeClaim": {"claimName": row["pvc"]}})
+        mount = {"name": volume_name, "mountPath": path, "readOnly": readonly}
+        if row.get("sub_path"):
+            mount["subPath"] = row["sub_path"]
+        mounts.append(mount)
+        if row["pvc"] not in attached:
+            attached[row["pvc"]] = volume_name
+            volumes.append({"name": volume_name,
+                            "persistentVolumeClaim": {"claimName": row["pvc"]}})
         args += ["-s", f"{row['name']};{path};yes;{'yes' if readonly else 'no'};"
                        f"{'yes' if row.get('public') else 'no'};{_user(row.get('user'))}"]
     for user, password in sorted(users.items()):
@@ -298,21 +324,36 @@ def _clear_cache():
             CACHE.pop(key, None)
 
 
-def create_share(name, size_gb, user, password, public, read_only=False):
-    name, size_gb, user = _name(name), _size(size_gb), _user(user)
+def create_share(name, size_gb, user, password, public, read_only=False,
+                 pvc=None, sub_path="", storage_class=None, access_mode=None):
+    """Create a share on a new Longhorn claim, or on a folder of an existing one."""
+    name, user, sub_path = _name(name), _user(user), _sub_path(sub_path)
     rows, credentials, config_obj, secret_obj, deployment = _state()
     if any(row.get("name") == name for row in rows):
         raise ValueError("share already exists; use Edit to change it")
     if not public and not password:
         raise ValueError("a password is required for a private share")
-    pvc_name = f"share-{name}"
-    try:
-        create_pvc(NAMESPACE, pvc_name, size_gb)
-    except urllib.error.HTTPError as error:
-        if error.code == 409:
-            raise ValueError(f"PVC {pvc_name} already exists and was not changed")
-        raise
+    reuse = bool(pvc)
+    pvc_name = _claim_name(pvc) if reuse else _claim_name(f"share-{name}")
+    if reuse:
+        # Borrowed claims keep their own size; Homestead only mounts them.
+        try:
+            size_gb = _pvc_size(_pvc(pvc_name))[1] or 0
+        except Exception as error:
+            if _not_found(error):
+                raise ValueError(f"volume {pvc_name} does not exist in {NAMESPACE}")
+            raise
+    else:
+        size_gb = _size(size_gb)
+        try:
+            create_pvc(NAMESPACE, pvc_name, size_gb, storage_class,
+                       access_mode or "ReadWriteOnce")
+        except urllib.error.HTTPError as error:
+            if error.code == 409:
+                raise ValueError(f"PVC {pvc_name} already exists and was not changed")
+            raise
     row = {"name": name, "pvc": pvc_name, "path": f"/shares/{name}",
+           "sub_path": sub_path, "owned": not reuse,
            "size_gb": size_gb, "user": user, "public": bool(public),
            "read_only": bool(read_only),
            "created": time.strftime("%Y-%m-%d %H:%M")}
@@ -329,15 +370,21 @@ def create_share(name, size_gb, user, password, public, read_only=False):
 
 
 def edit_share(name, size_gb, user, password, public, read_only=False):
-    name, size_gb, user = _name(name), _size(size_gb), _user(user)
+    name, user = _name(name), _user(user)
     rows, credentials, config_obj, secret_obj, deployment = _state()
     row = next((item for item in rows if item.get("name") == name), None)
     if not row:
         raise ValueError("share not found")
     pvc = _pvc(row.get("pvc", ""))
     _, old_size = _pvc_size(pvc)
-    if old_size and size_gb < old_size:
-        raise ValueError(f"Longhorn volumes cannot shrink; choose at least {old_size} GB")
+    owned = row.get("owned", True)
+    if not owned:
+        # The claim belongs to another workload; resize it from Volumes instead.
+        size_gb = old_size or row.get("size_gb", 0)
+    else:
+        size_gb = _size(size_gb)
+        if old_size and size_gb < old_size:
+            raise ValueError(f"Longhorn volumes cannot shrink; choose at least {old_size} GB")
     previous = (bool(row.get("public")), str(row.get("user") or "lab"),
                 bool(row.get("read_only", False)))
     row.update(size_gb=size_gb, user=user, public=bool(public),
@@ -352,7 +399,7 @@ def edit_share(name, size_gb, user, password, public, read_only=False):
         credentials[name]["user"] = user
     access_changed = previous != (bool(public), user, bool(read_only)) or password_changed
     _validate_access(rows, credentials)
-    if not old_size or size_gb > old_size:
+    if owned and (not old_size or size_gb > old_size):
         pvc["spec"]["resources"]["requests"]["storage"] = f"{size_gb}Gi"
         ksend("PUT", f"/api/v1/namespaces/{NAMESPACE}/persistentvolumeclaims/{row['pvc']}", pvc)
     _save_credentials(credentials, secret_obj)
@@ -378,4 +425,4 @@ def delete_share(name):
     result = apply_samba(keep, credentials, deployment)
     _clear_cache()
     return {"shares": [_public(item, credentials) for item in keep],
-            "deployment": result, "message": f"Share {name} removed; its PVC was kept"}
+            "deployment": result, "message": f"Share {name} removed; its volume was kept"}

@@ -5,15 +5,30 @@
    inventory (PVCs, storage classes) and the pod volumes that can be reused, so
    the same rows work while creating a workload and while editing one. */
 
+const VOLUME_KIND_LABELS = {
+  "new-rwo": "New Longhorn volume · RWO",
+  "new-rwx": "New shared volume · RWX",
+  existing: "Existing PVC · keep data",
+  ephemeral: "Temporary pod storage · emptyDir",
+  host: "Host path · advanced",
+};
+const VOLUME_KINDS = ["new-rwo", "new-rwx", "existing", "pod", "ephemeral", "host"];
+
 const VOLUME_PICKER_DEFAULTS = {
   pvcs: () => [],
   storageClasses: () => [],
   podVolumes: () => [],
   allowPod: () => false,
+  kinds: VOLUME_KINDS,
   podLabel: "Existing volume in this pod",
   podEmpty: "Choose a volume already in this pod…",
   podUnavailable: "No reusable volumes in this pod",
   podHelp: "Mounts a volume already defined in this pod into this container.",
+  pathLabel: "Container mount path",
+  pathPlaceholder: "/config",
+  newSourceHelp: "",
+  removable: true,
+  readOnlyToggle: true,
   onChange: () => { },
 };
 
@@ -97,7 +112,7 @@ function syncVolumeRow(row) {
   const ctx = volumePickerContext(row), kind = $(".vk", row).value, allowPod = !!ctx.allowPod();
   const podOption = [...$(".vk", row).options].find(o => o.value === "pod");
   if (podOption) podOption.disabled = !allowPod;
-  if (kind === "pod" && !allowPod) $(".vk", row).value = "existing";
+  if (kind === "pod" && !allowPod) $(".vk", row).value = (ctx.kinds || VOLUME_KINDS).find(k => k !== "pod") || "existing";
   const actual = $(".vk", row).value, isNew = actual.startsWith("new-");
   $(".vnew", row).style.display = isNew ? "grid" : "none";
   volumeSourceList(row, actual);
@@ -111,8 +126,8 @@ function syncVolumeRow(row) {
   const selectedSource = volumeSourceValue(row);
   const selectedPvc = actual === "existing" ? (ctx.pvcs() || []).find(v => v.name === selectedSource) : null;
   const selectedPodVolume = actual === "pod" ? (ctx.podVolumes() || []).find(v => v.name === selectedSource) : null;
-  $(".vhelp", row).textContent = actual === "new-rwo" ? "Creates a Longhorn claim for this workload (single-node attachment)."
-    : actual === "new-rwx" ? "Creates shared Longhorn storage that can attach from multiple nodes."
+  $(".vhelp", row).textContent = actual === "new-rwo" ? (ctx.newSourceHelp || "Creates a Longhorn claim for this workload (single-node attachment).")
+    : actual === "new-rwx" ? (ctx.newSourceHelp || "Creates shared Longhorn storage that can attach from multiple nodes.")
     : actual === "existing" ? selectedPvc ? `${selectedPvc.name}: ${(selectedPvc.access_modes || []).join("/") || "mode unknown"}, ${selectedPvc.size}, ${selectedPvc.status}. The claim and data are kept.` : "Mounts an existing PVC without creating or deleting it."
     : actual === "pod" ? selectedPodVolume ? `${selectedPodVolume.name}: ${selectedPodVolume.kind}${selectedPodVolume.source ? ` (${selectedPodVolume.source})` : ""}. The same storage is shared with the other container.` : ctx.podHelp
     : actual === "ephemeral" ? "Creates temporary pod storage. Its contents are deleted when the pod is replaced; ideal for cache or transcoding."
@@ -122,28 +137,25 @@ function syncVolumeRow(row) {
 function addVolumeRow(host, v = {}) {
   if (!host) return null;
   const ctx = volumePickerContext(host);
-  const kind = volumeKind(v), d = document.createElement("div"); d.className = "deploy-volume";
+  const kinds = ctx.kinds || VOLUME_KINDS;
+  const requested = volumeKind(v), kind = kinds.includes(requested) ? requested : kinds[0];
+  const d = document.createElement("div"); d.className = "deploy-volume";
   d.dataset.label = v.label || ""; d.dataset.description = v.description || "";
   d.dataset.required = String(!!v.required); d.dataset.templateSource = v.template_source || "";
   d.dataset.role = v.role || ""; d.dataset.volumeName = v.volume_name || "";
   const classes = (ctx.storageClasses() || []).length ? ctx.storageClasses() : ["longhorn-r2"];
   d.innerHTML = `<div class="volume-title"><div><b>${esc(v.label || "Storage mapping")}</b>${v.role ? `<span class="tag">${esc(v.role)}</span>` : ""}${v.required ? ' <span class="pill warn">required</span>' : ""}</div>
-      <button class="iconbtn row-remove" type="button" title="Remove storage mapping" onclick="removeVolumeRow(this)">×</button></div>
+      ${ctx.removable ? '<button class="iconbtn row-remove" type="button" title="Remove storage mapping" onclick="removeVolumeRow(this)">×</button>' : ""}</div>
     ${v.description ? `<div class="dim small volume-desc">${esc(v.description)}</div>` : ""}
     <div class="deploy-volume-grid">
-      <div><label>Container mount path</label><input class="vp" type="text" value="${esc(v.path || "")}" placeholder="/config"></div>
-      <div><label>Storage source</label><select class="vk">
-        <option value="new-rwo" ${kind === "new-rwo" ? "selected" : ""}>New Longhorn volume · RWO</option>
-        <option value="new-rwx" ${kind === "new-rwx" ? "selected" : ""}>New shared volume · RWX</option>
-        <option value="existing" ${kind === "existing" ? "selected" : ""}>Existing PVC · keep data</option>
-        <option value="pod" ${kind === "pod" ? "selected" : ""}>${esc(ctx.podLabel)}</option>
-        <option value="ephemeral" ${kind === "ephemeral" ? "selected" : ""}>Temporary pod storage · emptyDir</option>
-        <option value="host" ${kind === "host" ? "selected" : ""}>Host path · advanced</option></select></div>
+      <div><label>${esc(ctx.pathLabel)}</label><input class="vp" type="text" value="${esc(v.path || "")}" placeholder="${esc(ctx.pathPlaceholder)}"></div>
+      <div><label>Storage source</label><select class="vk">${kinds.map(k =>
+        `<option value="${k}" ${k === kind ? "selected" : ""}>${esc(k === "pod" ? ctx.podLabel : VOLUME_KIND_LABELS[k])}</option>`).join("")}</select></div>
       <div class="vsource"><label class="vsource-label">Volume / path</label><input class="vs" type="text" value="${esc(v.source || "")}"><select class="vselect" style="display:none"></select></div>
       <div class="vnew"><div><label>Size GiB</label><input class="vz" type="number" min="1" value="${v.size_gb || 5}"></div>
         <div><label>Storage class</label><select class="vsc">${classes.map(sc => `<option ${sc === (v.storage_class || "longhorn-r2") ? "selected" : ""}>${esc(sc)}</option>`).join("")}</select></div></div>
     </div>
-    <div class="volume-foot"><span class="dim small vhelp"></span><label class="switch"><input class="vro" type="checkbox" ${v.read_only ? "checked" : ""}>Read-only</label></div>
+    <div class="volume-foot"><span class="dim small vhelp"></span><label class="switch" ${ctx.readOnlyToggle ? "" : 'style="display:none"'}><input class="vro" type="checkbox" ${v.read_only ? "checked" : ""}>Read-only</label></div>
     ${v.template_source && v.template_source !== v.source ? `<div class="template-source">Unraid source: <span class="mono">${esc(v.template_source)}</span> · choose its Kubernetes backing above</div>` : ""}`;
   host.appendChild(d); syncVolumeRow(d);
   d.addEventListener("input", event => { if (event.target.matches(".vs,.vselect")) syncVolumeRow(d); ctx.onChange(); });

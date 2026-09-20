@@ -83,8 +83,11 @@
       actual_size_gb: 250, pvc_status: "Bound", user: "lab", public: true,
       read_only: false, has_password: false, created: "2026-09-18 22:26" },
     { name: "secure", pvc: "share-secure", path: "/shares/secure", size_gb: 20,
-      actual_size_gb: 20, pvc_status: "Bound", user: "lab", public: false,
+      actual_size_gb: 20, pvc_status: "Bound", user: "lab", public: false, owned: true,
       read_only: true, has_password: true, created: "2026-09-18 22:39" },
+    { name: "photos", pvc: "frigate-config", path: "/shares/photos", sub_path: "clips",
+      size_gb: 20, actual_size_gb: 20, pvc_status: "Bound", user: "lab", public: false,
+      owned: false, read_only: true, has_password: true, created: "2026-09-19 08:12" },
   ];
   const lhBackups = [{ name: "backup-demo-frigate-20260919", volume: "pvc-demo-frigate",
     state: "Completed", progress: 100, size_mb: 1842.6, volume_size_gb: 20,
@@ -279,6 +282,11 @@
         message: `Restore of ${body.backup || lhBackups[0].name} into ${body.namespace || "lab"}/${body.name || "pvc-demo-frigate-restore"} started` };
     },
     "/api/shares": shares,
+    "/api/shares/options": { namespace: "lab",
+      pvcs: volumes.map(v => ({ name: v.pvc_name, size: `${v.size_gb}Gi`,
+        status: v.state === "attached" ? "Bound" : "Available",
+        access_modes: v.access_modes, storage_class: v.storage_class })),
+      storage_classes: ["harvester-longhorn", "longhorn-r2"] },
     "/api/shares/edit": { ok: true, shares, deployment_updated: true,
       message: "Share secure updated; Samba is restarting" },
     "/api/operations": [], "/api/workloads": workloads, "/api/network": network,
@@ -354,7 +362,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.4", candidate: "ghcr.io/wjcloudy/homestead:2.8.5", candidate_tag: "2.8.5", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.5", candidate: "ghcr.io/wjcloudy/homestead:2.8.6", candidate_tag: "2.8.6", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

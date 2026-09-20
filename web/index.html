@@ -15,22 +15,22 @@
           : true;
     var r = document.documentElement;
     r.dataset.theme = d ? "dark" : "light";
-    r.dataset.bg = s.bg || "gold";
+    r.dataset.bg = s.bg || "soft";
     r.dataset.motion = s.motion || "on";
     r.style.setProperty("--blur", (s.blur == null ? 26 : s.blur) + "px");
   } catch (e) {
     document.documentElement.dataset.theme = "dark";
-    document.documentElement.dataset.bg = "gold";
+    document.documentElement.dataset.bg = "soft";
   }
 })();
 </script>
 <title>Homestead</title>
 <meta name="description" content="Homestead is a friendly homelab control plane for Harvester, Rancher, Longhorn, Fleet and Kubernetes workloads.">
-<link rel="icon" type="image/svg+xml" href="/assets/homestead-mark.svg?v=2.8.5">
+<link rel="icon" type="image/svg+xml" href="/assets/homestead-mark.svg?v=2.8.6">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
-<link rel="stylesheet" href="/style.css?v=2.8.5">
+<link rel="stylesheet" href="/style.css?v=2.8.6">
 </head>
 <body>
 
@@ -93,8 +93,8 @@
 <div id="app">
   <aside class="side">
     <div class="brand">
-      <img class="brandmark" src="/assets/homestead-mark.svg?v=2.8.5" alt="">
-      <div><div class="bname">Homestead</div><div class="bver">HOMELAB · v2.8.5</div></div>
+      <img class="brandmark" src="/assets/homestead-mark.svg?v=2.8.6" alt="">
+      <div><div class="bname">Homestead</div><div class="bver">HOMELAB · v2.8.6</div></div>
     </div>
     <nav id="nav">
       <div class="navlbl">Overview</div>
@@ -161,8 +161,8 @@
       <div class="opt" data-v="auto">Auto</div></div></div>
   <div class="dsec"><h5>Background</h5><p>What the glass blurs behind it</p>
     <div class="opts" id="optBg">
-      <div class="opt" data-v="gold"><div class="sw sw-gold"></div>Gold</div>
       <div class="opt" data-v="soft"><div class="sw sw-soft"></div>Soft</div>
+      <div class="opt" data-v="gold"><div class="sw sw-gold"></div>Gold</div>
       <div class="opt" data-v="plain"><div class="sw sw-plain"></div>Plain</div></div></div>
   <div class="dsec"><h5>Glass blur</h5><p><span id="blurVal">26</span>px — how frosted the panels are</p>
     <input type="range" class="rng" id="optBlur" min="0" max="60" step="2" value="26"></div>
@@ -183,24 +183,24 @@
     <div id="mbody"></div>
   </div>
 </div>
-<script src="/js/router.js?v=2.8.5"></script>
-<script src="/js/demo.js?v=2.8.5"></script>
-<script src="/js/metrics-utils.js?v=2.8.5"></script>
-<script src="/js/core.js?v=2.8.5"></script>
-<script src="/js/operations.js?v=2.8.5"></script>
-<script src="/js/update-state.js?v=2.8.5"></script>
-<script src="/js/volume-picker.js?v=2.8.5"></script>
-<script src="/js/views-overview.js?v=2.8.5"></script>
-<script src="/js/appstore-utils.js?v=2.8.5"></script>
-<script src="/js/views-workloads.js?v=2.8.5"></script>
-<script src="/js/views-storage.js?v=2.8.5"></script>
-<script src="/js/views-network.js?v=2.8.5"></script>
-<script src="/js/move.js?v=2.8.5"></script>
-<script src="/js/views-lifecycle.js?v=2.8.5"></script>
-<script src="/js/views-protect.js?v=2.8.5"></script>
-<script src="/js/views-settings.js?v=2.8.5"></script>
-<script src="/js/views-cluster.js?v=2.8.5"></script>
-<script src="/js/app.js?v=2.8.5"></script>
-<script src="/js/auth.js?v=2.8.5"></script>
+<script src="/js/router.js?v=2.8.6"></script>
+<script src="/js/demo.js?v=2.8.6"></script>
+<script src="/js/metrics-utils.js?v=2.8.6"></script>
+<script src="/js/core.js?v=2.8.6"></script>
+<script src="/js/operations.js?v=2.8.6"></script>
+<script src="/js/update-state.js?v=2.8.6"></script>
+<script src="/js/volume-picker.js?v=2.8.6"></script>
+<script src="/js/views-overview.js?v=2.8.6"></script>
+<script src="/js/appstore-utils.js?v=2.8.6"></script>
+<script src="/js/views-workloads.js?v=2.8.6"></script>
+<script src="/js/views-storage.js?v=2.8.6"></script>
+<script src="/js/views-network.js?v=2.8.6"></script>
+<script src="/js/move.js?v=2.8.6"></script>
+<script src="/js/views-lifecycle.js?v=2.8.6"></script>
+<script src="/js/views-protect.js?v=2.8.6"></script>
+<script src="/js/views-settings.js?v=2.8.6"></script>
+<script src="/js/views-cluster.js?v=2.8.6"></script>
+<script src="/js/app.js?v=2.8.6"></script>
+<script src="/js/auth.js?v=2.8.6"></script>
 </body>
 </html>

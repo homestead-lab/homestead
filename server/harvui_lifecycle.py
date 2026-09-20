@@ -18,6 +18,10 @@ import urllib.error
 # Deployment with ENABLE_NODE_POWER=true.
 NODE_POWER_ENABLED = os.environ.get("ENABLE_NODE_POWER", "").lower() in ("1", "true", "yes")
 
+# Remembers the replica count a workload should return to when autostart is
+# switched back on, because scaling to zero forgets it.
+AUTOSTART_REPLICAS = "harvui.io/autostart-replicas"
+
 # injected by server.py so this module stays import-cycle free
 kget = ksend = None
 SYS_NS = set()
@@ -595,8 +599,19 @@ def edit_workload(cfg):
     if "seed_configs" in cfg:
         _save_seed_configs(ns, dep, cfg.get("seed_configs") or [])
 
-    if "replicas" in cfg:
-        dep["spec"]["replicas"] = int(cfg["replicas"])
+    if "replicas" in cfg or "autostart" in cfg:
+        requested = int(cfg.get("replicas", dep["spec"].get("replicas", 1)) or 0)
+        autostart = bool(cfg["autostart"]) if "autostart" in cfg else requested > 0
+        annotations = dep["metadata"].setdefault("annotations", {})
+        # Kubernetes has no boot-time start: a workload runs exactly when its
+        # replica count is above zero. Autostart off therefore scales to zero
+        # and parks the wanted count so turning it back on restores it.
+        if autostart:
+            dep["spec"]["replicas"] = max(1, requested)
+            annotations.pop(AUTOSTART_REPLICAS, None)
+        else:
+            dep["spec"]["replicas"] = 0
+            annotations[AUTOSTART_REPLICAS] = str(max(1, requested))
     hardware_requests = [(container, change.get("hardware") or [])
                          for container, change in container_requests if "hardware" in change]
     if hardware_requests:

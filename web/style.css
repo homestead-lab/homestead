@@ -156,7 +156,8 @@ a{color:inherit;text-decoration:none}
   background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.012));
   backdrop-filter:blur(calc(var(--blur,26px) * 1.15)) saturate(1.3);-webkit-backdrop-filter:blur(calc(var(--blur,26px) * 1.15)) saturate(1.3);
 }
-.crumb{display:flex;align-items:center;gap:7px;font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.11em;font-weight:650}
+.crumb{display:flex;align-items:center;gap:7px;font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.11em;font-weight:650;min-width:0;white-space:nowrap}
+.crumb a,.crumb [aria-current="page"]{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .crumb a{color:var(--dim);border-radius:4px;transition:color .18s var(--e)}
 .crumb a:hover,.crumb a:focus-visible{color:var(--tx);outline:none}
 .crumb [aria-current="page"]{color:var(--mut)}
@@ -651,13 +652,23 @@ html[data-motion="off"] .uptime .ld{animation:none}
 .netpath span{padding:3px 7px;border:1px solid var(--line);border-radius:6px;background:rgba(255,255,255,.04)}
 .netpath i{font-style:normal;color:var(--low)}.netpath.big{font-size:12px;margin:10px 0}
 .reviewbox{margin-top:16px;padding:14px;border:1px solid rgba(74,158,255,.28);border-radius:12px;background:rgba(74,158,255,.07)}
-.wcard{display:flex;flex-direction:column;gap:5px;padding:10px 12px;overflow:visible}
+.wcard{display:flex;flex-direction:column;gap:5px;padding:10px 12px;overflow:visible;container-type:inline-size}
 .whead{min-height:30px}.wtitle{min-width:0;line-height:1.1}.wtitle>.dim{margin-top:2px}
-.wmeta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;padding:4px 0;
+.wmeta{display:grid;grid-template-columns:minmax(0,.95fr) minmax(0,.8fr) minmax(0,.85fr) minmax(0,1.4fr);gap:7px;padding:4px 0;
   border-top:1px solid rgba(255,255,255,.055);border-bottom:1px solid rgba(255,255,255,.055)}
 .wmeta>div{display:flex;align-items:center;gap:5px;min-width:0;white-space:nowrap;overflow:hidden}
 .wmeta .dim.xs{margin:0;letter-spacing:.05em;font-size:9px;flex:0 0 auto}.wmeta .mono.small{font-size:11px}
 .wmeta>div>div:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.waccess{display:flex;align-items:center;gap:4px;min-width:0}
+.waccess .plink,.waccess .tag{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.waccess .tag.more{cursor:help}
+/* Three cards across leaves too little room for four metrics side by side,
+   so a narrow card stacks them two by two rather than clipping the values. */
+@container (max-width:360px){
+  .wmeta{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:3px}
+}
+/* a registry check that could not run is one hoverable mark, not a whole row */
+.tip.warn-tip{color:var(--med);border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.08);margin-left:0}
 .wimg{height:19px;display:flex;align-items:center;gap:4px;word-break:normal;white-space:nowrap;line-height:19px;overflow:hidden;font-size:10px}
 .wimage-name{min-width:0;overflow:hidden;text-overflow:ellipsis}.wimage-hardware{display:flex;align-items:center;gap:2px;flex:0 0 auto}.wimage-hardware:empty{display:none}
 .wimg .tag{padding:1px 6px;margin:0 3px 0 0;border-radius:6px;font-size:9px;line-height:14px;vertical-align:middle}
@@ -781,16 +792,10 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
 .topright{flex:0 0 auto}
 #searchbtn{display:none}
 
-@media(max-width:900px){
-  .top{gap:8px;padding:0 12px}
-  .topright{gap:6px}
-  .iconbtn{width:34px;height:34px;font-size:13px}
-  .iconbtn svg{width:15px;height:15px}
-  h1{font-size:16px}
-  .crumb{font-size:9.5px;letter-spacing:.09em}
-
-  /* search collapses to an icon; tapping it overlays the bar */
-  #searchbtn{display:grid}
+/* The title and the search bar stop fitting side by side well before the
+   sidebar collapses, so the search becomes an icon that overlays the bar. */
+@media(max-width:1080px){
+  #searchbtn.only-sm{display:grid!important}
   .searchwrap{position:absolute;left:10px;right:10px;top:50%;transform:translateY(-50%);
     z-index:6;display:none}
   body.searching .searchwrap{display:flex}
@@ -798,6 +803,15 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
   body.searching #refresh,body.searching #opensettings,body.searching .whoami{display:none}
   .searchwrap .search{width:100%}
   .searchwrap .search:focus{width:100%}
+}
+
+@media(max-width:900px){
+  .top{gap:8px;padding:0 12px}
+  .topright{gap:6px}
+  .iconbtn{width:34px;height:34px;font-size:13px}
+  .iconbtn svg{width:15px;height:15px}
+  h1{font-size:16px}
+  .crumb{font-size:9.5px;letter-spacing:.09em}
 
   /* avatar only — the name and role live in the drawer */
   .whoami{padding:3px;gap:0}

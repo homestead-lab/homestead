@@ -81,6 +81,28 @@ class ImageUpdateTests(unittest.TestCase):
             updates.registry_tags, updates.manifest_info = original_tags, original_manifest
             updates._secret_credentials = original_creds
 
+    def test_stopped_workload_is_not_reported_as_a_failed_registry_check(self):
+        """An import lands scaled to zero, so there is no digest to compare."""
+        original_tags, original_manifest = updates.registry_tags, updates.manifest_info
+        original_creds = updates._secret_credentials
+        try:
+            updates.registry_tags = lambda *args, **kwargs: ["1.27.0"]
+            updates.manifest_info = lambda *args, **kwargs: {
+                "digest": "sha256:" + "b" * 64, "children": []}
+            updates._secret_credentials = lambda *args: {}
+
+            stopped = copy.deepcopy(self.dep)
+            stopped["spec"]["replicas"] = 0
+            self.assertEqual("", updates._check_deployment(stopped, [])["images"][0]["error"])
+
+            running = {"metadata": {"namespace": "lab", "labels": {"app": "demo"}},
+                       "status": {"containerStatuses": [{"name": "demo", "imageID": ""}]}}
+            item = updates._check_deployment(self.dep, [running])["images"][0]
+            self.assertEqual("running image digest is not available yet", item["error"])
+        finally:
+            updates.registry_tags, updates.manifest_info = original_tags, original_manifest
+            updates._secret_credentials = original_creds
+
     def test_scan_uses_shared_system_namespace_filter(self):
         user = copy.deepcopy(self.dep)
         system = copy.deepcopy(self.dep)

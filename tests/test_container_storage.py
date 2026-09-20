@@ -40,7 +40,9 @@ DEPLOYMENT = {
 }
 
 
-class ContainerStorageTests(unittest.TestCase):
+class WorkloadEditFixture:
+    """A Deployment with one claim, one ConfigMap and one device mount."""
+
     def setUp(self):
         self.deployment = copy.deepcopy(DEPLOYMENT)
         self.sent = []
@@ -76,6 +78,8 @@ class ContainerStorageTests(unittest.TestCase):
         change.update(extra)
         return lifecycle.edit_workload({"ns": "lab", "name": "frigate", "containers": [change]})
 
+
+class ContainerStorageTests(WorkloadEditFixture, unittest.TestCase):
     def test_new_claim_is_created_and_mounted(self):
         self.edit([
             {"path": "/config", "kind": "existing", "source": "frigate-config"},
@@ -151,6 +155,36 @@ class ContainerStorageTests(unittest.TestCase):
         spec = self.saved_spec()
         self.assertEqual(3, len(spec["volumes"]))
         self.assertEqual(3, len(spec["containers"][0]["volumeMounts"]))
+
+
+class AutostartTests(WorkloadEditFixture, unittest.TestCase):
+    """Autostart is the replica count expressed the way people think about it."""
+
+    def test_switching_autostart_off_parks_the_replica_count(self):
+        lifecycle.edit_workload({"ns": "lab", "name": "frigate", "replicas": 3,
+                                 "autostart": False})
+
+        saved = self.sent[-1][2]
+        self.assertEqual(0, saved["spec"]["replicas"])
+        self.assertEqual("3", saved["metadata"]["annotations"][lifecycle.AUTOSTART_REPLICAS])
+
+        payload = server.workload_edit_payload("lab", "frigate", saved, FEATURES)
+        self.assertFalse(payload["autostart"])
+        self.assertEqual(3, payload["start_replicas"])
+
+    def test_switching_autostart_on_restores_at_least_one_replica(self):
+        lifecycle.edit_workload({"ns": "lab", "name": "frigate", "replicas": 0,
+                                 "autostart": True})
+
+        saved = self.sent[-1][2]
+        self.assertEqual(1, saved["spec"]["replicas"])
+        self.assertNotIn(lifecycle.AUTOSTART_REPLICAS, saved["metadata"]["annotations"])
+        self.assertTrue(server.workload_edit_payload("lab", "frigate", saved, FEATURES)["autostart"])
+
+    def test_a_replica_edit_without_autostart_keeps_working(self):
+        lifecycle.edit_workload({"ns": "lab", "name": "frigate", "replicas": 2})
+
+        self.assertEqual(2, self.sent[-1][2]["spec"]["replicas"])
 
 
 class EditPayloadStorageTests(unittest.TestCase):
