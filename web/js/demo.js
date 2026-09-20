@@ -308,10 +308,17 @@
     "/api/workload": url => {
       const name = url.searchParams.get("name") || "frigate";
       const found = workloads.find(item => item.name === name) || workloads[0];
-      return { ns: found.ns, name: found.name, container_name: found.pods[0]?.containers[0]?.name || found.name,
+      const base = found.pods[0]?.containers || [{ name: found.name, image: found.images[0] }];
+      const source = found.name === "home-assistant" ? base.concat([{ name: "mqtt-sidecar", image: "eclipse-mosquitto:2" }]) : base;
+      const containers = source.map((container, index) => ({ original_name: container.name, name: container.name,
+        image: container.image || found.images[index] || found.images[0], cpu: index ? "20m" : "50m", memory: index ? "64Mi" : "128Mi",
+        env: index ? { LOG_LEVEL: "info" } : {}, env_refs: index ? [] : [{ name: "APP_TOKEN", source: "Secret homestead-demo · token" }],
+        ports: index ? [{ name: "mqtt", container: 1883, protocol: "TCP" }] : [{ name: "web", container: 8123, protocol: "TCP" }],
+        hardware: index ? [] : (found.hardware || []), volumes: index ? [] : [{ source: `${found.name}-config`, path: "/config", read_only: false }] }));
+      return { ns: found.ns, name: found.name, container_name: containers[0].name,
         pod_hostname: found.name === "frigate" ? "frigate-core" : "", image: found.images[0], replicas: found.desired,
         cpu: "50m", memory: "128Mi", env: {}, ports: [], hardware: found.hardware || [], icon: "", node: found.nodes[0] || "",
-        seed_configs: [], volumes: [] };
+        seed_configs: [], volumes: containers[0].volumes, containers };
     },
     "/api/edit": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
@@ -339,7 +346,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.1", candidate: "ghcr.io/wjcloudy/homestead:2.8.2", candidate_tag: "2.8.2", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.2", candidate: "ghcr.io/wjcloudy/homestead:2.8.3", candidate_tag: "2.8.3", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

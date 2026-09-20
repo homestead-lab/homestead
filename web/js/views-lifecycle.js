@@ -1,6 +1,47 @@
 /* Edit / move containers, node power actions, VMs, images, schedules, import */
 
-/* ---------------- edit a container ---------------- */
+/* ---------------- edit a pod and its containers ---------------- */
+const editEnvRow = (index, key = "", value = "") => `<div class="f3 e-env-row">
+  <div><label>Key</label><input class="ek" type="text" value="${esc(key)}"></div>
+  <div><label>Value</label><input class="ev" type="text" value="${esc(value)}"></div>
+  <button class="btn sm danger row-remove" type="button" onclick="this.parentNode.remove()">✕</button></div>`;
+
+const editPortRow = (index, port = {}) => `<div class="edit-port-row">
+  <div><label>Name</label><input class="ep-name" type="text" value="${esc(port.name || "")}" placeholder="web"></div>
+  <div><label>Container port</label><input class="ep-number" type="number" min="1" max="65535" value="${esc(port.container || "")}" placeholder="8080"></div>
+  <div><label>Protocol</label><select class="ep-protocol">${["TCP", "UDP", "SCTP"].map(value => `<option ${value === (port.protocol || "TCP") ? "selected" : ""}>${value}</option>`).join("")}</select></div>
+  <button class="btn sm danger row-remove" type="button" onclick="this.parentNode.remove()">✕</button></div>`;
+
+const editContainerPanel = (container, index) => {
+  const env = Object.entries(container.env || {});
+  const refs = container.env_refs || [];
+  const ports = container.ports || [];
+  const volumes = container.volumes || [];
+  return `<details class="edit-container card flat" data-index="${index}" data-original-name="${esc(container.original_name || container.name)}" ${index === 0 ? "open" : ""}>
+    <summary><span class="edit-container-chevron">›</span><span class="edit-container-title"><b>${esc(container.name)}</b><small class="mono">${esc(container.image)}</small></span><span class="pill">${env.length + refs.length} vars</span><span class="pill">${ports.length} ports</span></summary>
+    <div class="edit-container-body">
+      <div class="f2">
+        <div class="f"><label>Container name ${tip("The Kubernetes name of this container inside the pod. Each container name must be unique.")}</label><input id="e_container_name_${index}" type="text" value="${esc(container.name)}"></div>
+        <div class="f"><label>Image</label><input id="e_image_${index}" type="text" value="${esc(container.image)}"></div>
+      </div>
+      <div class="f2">
+        <div class="f"><label>CPU reserved ${tip("Guaranteed scheduling capacity. 1000m = one core; it is not a hard usage limit.")}</label><input id="e_cpu_${index}" type="text" value="${esc(container.cpu || "")}" placeholder="50m"></div>
+        <div class="f"><label>Memory reserved ${tip("Guaranteed scheduling capacity in Mi or Gi; it is not a hard usage limit.")}</label><input id="e_mem_${index}" type="text" value="${esc(container.memory || "")}" placeholder="128Mi"></div>
+      </div>
+      <div class="subsec">Hardware passed to this container</div>
+      <div class="hwchoices">${hardwareChoices(`e_hw_${index}`, container.hardware || [])}</div>
+      <div class="subsec">Environment</div>
+      ${refs.length ? `<div class="managed-env-list">${refs.map(ref => `<div><span class="mono">${esc(ref.name)}</span><span>${esc(ref.source)}</span><span class="pill info">managed reference</span></div>`).join("")}</div><div class="dim xs managed-env-note">References remain connected to Kubernetes and are not exposed or replaced when you save.</div>` : ""}
+      <div class="e-env" id="e_env_${index}">${(env.length ? env : [["", ""]]).map(([key, value]) => editEnvRow(index, key, value)).join("")}</div>
+      <button class="btn sm" type="button" onclick="editAddEnv(${index})">＋ add variable</button>
+      <div class="subsec">Container ports</div>
+      <div class="e-ports" id="e_ports_${index}">${ports.map(port => editPortRow(index, port)).join("")}</div>
+      <button class="btn sm" type="button" onclick="editAddPort(${index})">＋ add port</button>
+      ${volumes.length ? `<div class="subsec">Mounted volumes</div><div class="edit-mount-list">${volumes.map(volume => `<span class="tag info">${esc(volume.source || "?")} → ${esc(volume.path)}${volume.read_only ? " · read-only" : ""}</span>`).join("")}</div><div class="dim xs edit-mount-note">Mount changes require a redeploy, so they are shown here as read-only.</div>` : ""}
+    </div>
+  </details>`;
+};
+
 window.wlEdit = async (ns, name, fromRoute = false) => {
   if (!fromRoute && window.setModalRoute) setModalRoute({ panel: "edit", ns, workload: name }, name);
   modal("Edit · " + name, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
@@ -12,18 +53,13 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     if (liveNodes.length) STATE.data.nodes = liveNodes;
     const nodes = (liveNodes.length ? liveNodes : (STATE.data.ov ? STATE.data.ov.nodes : [])).filter(n => n.schedulable !== false);
     const seeds = w.seed_configs || [];
+    const containers = w.containers || [{ original_name: w.container_name || w.name, name: w.container_name || w.name,
+      image: w.image, cpu: w.cpu, memory: w.memory, env: w.env || {}, env_refs: [], ports: w.ports || [],
+      hardware: w.hardware || [], volumes: w.volumes || [] }];
     $("#mbody").innerHTML = `
       <div class="f"><label>Workload name ${tip("The real Kubernetes Deployment name. Renaming creates a replacement Deployment, waits for it to become ready, then removes the old one. Generated pods use this name plus a Kubernetes suffix.")}</label><input type="text" id="e_workload_name" value="${esc(w.name)}"></div>
-      <div class="f2">
-        <div class="f"><label>Pod hostname ${tip("The hostname visible inside the pod. It does not rename the Kubernetes Pod; generated pods use the workload name plus a suffix.")}</label><input type="text" id="e_pod_name" value="${esc(w.pod_hostname || "")}" placeholder="optional"></div>
-        <div class="f"><label>Container name ${tip("The Kubernetes container name inside this pod. Changing it restarts the workload.")}</label><input type="text" id="e_container_name" value="${esc(w.container_name || w.name)}"></div>
-      </div>
-      <div class="f"><label>Image</label><input type="text" id="e_image" value="${esc(w.image)}"></div>
+      <div class="f"><label>Pod hostname ${tip("The hostname visible inside the pod. It does not rename the Kubernetes Pod; generated pods use the workload name plus a suffix.")}</label><input type="text" id="e_pod_name" value="${esc(w.pod_hostname || "")}" placeholder="optional"></div>
       <div class="f"><label>Container logo ${tip("Optional public HTTPS image URL. Homestead validates it and keeps a persistent local copy while retaining this source for later edits.")}</label><input type="url" id="e_icon" value="${esc(w.icon || "")}" placeholder="https://…/icon.png"></div>
-      <div class="f2">
-        <div class="f"><label>CPU reserved ${tip("Guaranteed scheduling capacity. 1000m = one core; it is not a hard usage limit.")}</label><input type="text" id="e_cpu" value="${esc(w.cpu)}" placeholder="50m"></div>
-        <div class="f"><label>Memory reserved ${tip("Guaranteed scheduling capacity in Mi or Gi; it is not a hard usage limit.")}</label><input type="text" id="e_mem" value="${esc(w.memory)}" placeholder="128Mi"></div>
-      </div>
       <div class="f2">
         <div class="f"><label>Replicas</label><input type="number" id="e_rep" value="${w.replicas}" min="0" max="5"></div>
         <div class="f"><label>Preferred node ${tip("A preference guides placement but still allows failover. Use Move for hardware-aware choices and optional hard pinning.")}</label><select id="e_node" data-current="${esc(w.node || "")}">
@@ -31,11 +67,8 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
           ${nodes.map(n => `<option value="${esc(n.name)}" ${n.name === w.node ? "selected" : ""}>${esc(n.name)}</option>`).join("")}
         </select></div>
       </div>
-      <div class="hwchoices">
-        ${hardwareChoices("e_hw", w.hardware || [])}
-      </div>
-      <div class="sec">Environment</div>
-      <div id="e_env"></div><button class="btn sm" onclick="editAddEnv()">＋ add variable</button>
+      <div class="sec">Containers <span class="pill">${containers.length}</span></div>
+      <div id="e_containers">${containers.map(editContainerPanel).join("")}</div>
       ${seeds.length ? `<div class="sec">Startup seed config ${tip("This ConfigMap is copied into the container's persistent storage by an init container before every start. It is authoritative: editing only the mounted file will be overwritten on restart.")}</div>
         <div class="note seed-note"><b>Authoritative startup configuration.</b> Saving here updates the ConfigMap and restarts the workload so the init container copies the new value into appdata.</div>
         ${seeds.map((s, i) => `<div class="seed-editor card flat">
@@ -45,29 +78,26 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
             data-init="${esc(s.init_container)}" data-config-map="${esc(s.config_map)}" data-key="${esc(s.key)}">${esc(s.value)}</textarea>
           ${s.command ? `<div class="dim xs mono seed-command">${esc(s.command)}</div>` : ""}
         </div>`).join("")}` : ""}
-      ${w.volumes.length ? `<div class="sec">Mounted volumes</div><div>${w.volumes.map(v =>
-        `<span class="tag info">${esc(v.source || "?")} → ${esc(v.path)}</span>`).join("")}
-        <div class="dim xs" style="margin-top:8px">Volumes cannot be changed in place — a mount change needs a redeploy.</div></div>` : ""}
       <div class="row" style="margin-top:22px">
         <button class="btn pri" id="e_save" onclick="editSave('${esc(ns)}','${esc(name)}')">Save &amp; restart</button>
         <button class="btn" onclick="closeModal()">Cancel</button>
       </div>
       <div class="note" style="margin-top:14px">Saving rolls the pod. Renaming the workload performs a guarded stop, recreate and readiness check. With a ReadWriteOnce volume the old pod must fully stop before the renamed one starts, so expect a short outage. A failed rename restores the original Deployment.</div>`;
-    Object.entries(w.env || {}).forEach(([k, v]) => editAddEnv(k, v));
-    if (!Object.keys(w.env || {}).length) editAddEnv();
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
-window.editAddEnv = (k = "", v = "") => {
-  const d = document.createElement("div"); d.className = "f3";
-  d.innerHTML = `<div><label>Key</label><input class="ek" type="text" value="${esc(k)}"></div>
-    <div><label>Value</label><input class="ev" type="text" value="${esc(v)}"></div>
-    <button class="btn sm danger" onclick="this.parentNode.remove()">✕</button>`;
-  $("#e_env").appendChild(d);
-};
+window.editAddEnv = (index, key = "", value = "") => $("#e_env_" + index).insertAdjacentHTML("beforeend", editEnvRow(index, key, value));
+window.editAddPort = (index, port = {}) => $("#e_ports_" + index).insertAdjacentHTML("beforeend", editPortRow(index, port));
 window.editSave = async (ns, name) => {
-  const env = {};
-  $$("#e_env .f3").forEach(r => { const k = $(".ek", r).value.trim(); if (k) env[k] = $(".ev", r).value; });
-  const hardware = selectedHardware("e_hw");
+  const containers = $$("#e_containers .edit-container").map(panel => {
+    const index = panel.dataset.index;
+    const env = {};
+    $$(".e-env-row", panel).forEach(row => { const key = $(".ek", row).value.trim(); if (key) env[key] = $(".ev", row).value; });
+    const ports = $$(".edit-port-row", panel).map(row => ({ name: $(".ep-name", row).value.trim(),
+      container: +$(".ep-number", row).value, protocol: $(".ep-protocol", row).value })).filter(port => port.container);
+    return { original_name: panel.dataset.originalName, name: $("#e_container_name_" + index).value.trim(),
+      image: $("#e_image_" + index).value.trim(), cpu: $("#e_cpu_" + index).value.trim(),
+      memory: $("#e_mem_" + index).value.trim(), hardware: selectedHardware("e_hw_" + index), env, ports };
+  });
   const seed_configs = $$("#mbody .e_seed").map(el => ({
     init_container: el.dataset.init, config_map: el.dataset.configMap,
     key: el.dataset.key, value: el.value,
@@ -75,9 +105,8 @@ window.editSave = async (ns, name) => {
   const workloadName = $("#e_workload_name").value.trim();
   const renaming = workloadName !== name;
   if (renaming && !confirm(`Rename Kubernetes Deployment “${name}” to “${workloadName}”?\n\nHomestead will stop the old workload, start the renamed one, wait for readiness, and restore the original if startup fails. Expect a short outage.`)) return;
-  const body = { ns, name, workload_name: workloadName, pod_hostname: $("#e_pod_name").value.trim(), container_name: $("#e_container_name").value.trim(),
-    image: $("#e_image").value.trim(), icon: $("#e_icon").value.trim(), cpu: $("#e_cpu").value.trim(),
-    memory: $("#e_mem").value.trim(), replicas: +$("#e_rep").value, gpu: hardware.includes("igpu"), hardware, env, seed_configs };
+  const body = { ns, name, workload_name: workloadName, pod_hostname: $("#e_pod_name").value.trim(),
+    icon: $("#e_icon").value.trim(), replicas: +$("#e_rep").value, containers, seed_configs };
   const button = $("#e_save");
   button.disabled = true;
   button.textContent = renaming ? "Renaming & checking readiness…" : "Saving & restarting…";

@@ -106,6 +106,43 @@ class SeedConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "lowercase letters"):
             lifecycle.edit_workload({"ns": "lab", "name": "frigate", "container_name": "Bad Name"})
 
+    def test_edit_updates_multiple_containers_and_preserves_managed_env(self):
+        containers = self.deployment["spec"]["template"]["spec"]["containers"]
+        containers[0]["env"] = [
+            {"name": "PLAIN", "value": "old"},
+            {"name": "TOKEN", "valueFrom": {"secretKeyRef": {"name": "camera", "key": "token"}}},
+        ]
+        containers.append({"name": "mqtt", "image": "mosquitto:1", "ports": [{"name": "mqtt", "containerPort": 1883}]})
+        lifecycle.edit_workload({
+            "ns": "lab", "name": "frigate", "containers": [
+                {"original_name": "frigate", "name": "detector", "image": "frigate:2", "cpu": "250m",
+                 "memory": "512Mi", "env": {"PLAIN": "new", "TOKEN": "must-not-replace"},
+                 "ports": [{"name": "web", "container": 5000, "protocol": "TCP"}]},
+                {"original_name": "mqtt", "name": "broker", "image": "mosquitto:2", "cpu": "20m",
+                 "memory": "64Mi", "env": {"LOG_LEVEL": "info"},
+                 "ports": [{"name": "mqtt", "container": 1883, "protocol": "TCP"}]},
+            ],
+        })
+        saved = self.sent[-1][2]["spec"]["template"]["spec"]["containers"]
+        self.assertEqual(["detector", "broker"], [item["name"] for item in saved])
+        self.assertEqual(["frigate:2", "mosquitto:2"], [item["image"] for item in saved])
+        self.assertEqual("250m", saved[0]["resources"]["requests"]["cpu"])
+        self.assertEqual("512Mi", saved[0]["resources"]["requests"]["memory"])
+        self.assertEqual("new", next(item["value"] for item in saved[0]["env"] if item["name"] == "PLAIN"))
+        token = next(item for item in saved[0]["env"] if item["name"] == "TOKEN")
+        self.assertEqual("camera", token["valueFrom"]["secretKeyRef"]["name"])
+        self.assertEqual(1883, saved[1]["ports"][0]["containerPort"])
+
+    def test_multi_container_edit_rejects_duplicate_final_names_before_save(self):
+        self.deployment["spec"]["template"]["spec"]["containers"].append(
+            {"name": "sidecar", "image": "example/sidecar"})
+        with self.assertRaisesRegex(ValueError, "must be unique"):
+            lifecycle.edit_workload({"ns": "lab", "name": "frigate", "containers": [
+                {"original_name": "frigate", "name": "shared"},
+                {"original_name": "sidecar", "name": "shared"},
+            ]})
+        self.assertEqual([], self.sent)
+
     def test_workload_rename_recreates_waits_retargets_hpa_and_deletes_old(self):
         old = copy.deepcopy(self.deployment)
         old["metadata"].update({"namespace": "lab", "uid": "old-uid", "resourceVersion": "8"})

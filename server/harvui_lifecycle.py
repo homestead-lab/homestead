@@ -241,18 +241,180 @@ def rename_workload(ns, old_name, new_name, edited_dep):
             "renamed_from": old_name, "replicas": desired, "hpas": hpas}
 
 
+def _container_feature_ids(spec, container, definitions):
+    volumes = {v.get("name"): v for v in spec.get("volumes", []) or []}
+    found = []
+    for mount in container.get("volumeMounts", []) or []:
+        volume = volumes.get(mount.get("name"), {})
+        host_path = (volume.get("hostPath") or {}).get("path", "").rstrip("/")
+        mount_path = str(mount.get("mountPath") or "").rstrip("/")
+        for feature in definitions:
+            expected_host = feature["host_path"].rstrip("/")
+            expected_mount = feature["container_path"].rstrip("/")
+            if host_path and (host_path == expected_host or host_path.startswith(expected_host + "/")):
+                if mount_path == expected_mount and feature["id"] not in found:
+                    found.append(feature["id"])
+    return found
+
+
+def _apply_container_edit(container, change, workload_name):
+    if "name" in change:
+        container["name"] = dns_label(change.get("name"), "container name")
+    if "image" in change:
+        image = str(change.get("image") or "").strip()
+        if not image:
+            raise ValueError(f"{container['name']}: image is required")
+        container["image"] = image
+    if "env" in change:
+        refs = [copy.deepcopy(item) for item in container.get("env", []) or []
+                if item.get("valueFrom") and item.get("name")]
+        protected = {item["name"] for item in refs}
+        literals = [{"name": str(key), "value": str(value)}
+                    for key, value in (change.get("env") or {}).items()
+                    if key not in protected]
+        env = refs + literals
+        if env:
+            container["env"] = env
+        else:
+            container.pop("env", None)
+    if "cpu" in change or "memory" in change:
+        resources = container.setdefault("resources", {})
+        requests = resources.setdefault("requests", {})
+        for key in ("cpu", "memory"):
+            if key not in change:
+                continue
+            value = str(change.get(key) or "").strip()
+            if value:
+                requests[key] = value
+            else:
+                requests.pop(key, None)
+        if not requests:
+            resources.pop("requests", None)
+        if not resources:
+            container.pop("resources", None)
+    if "ports" in change:
+        ports = []
+        for item in change.get("ports") or []:
+            number = int(item.get("container") or item.get("containerPort") or 0)
+            if not 1 <= number <= 65535:
+                raise ValueError(f"{container['name']}: container ports must be between 1 and 65535")
+            protocol = str(item.get("protocol") or "TCP").upper()
+            if protocol not in ("TCP", "UDP", "SCTP"):
+                raise ValueError(f"{container['name']}: unsupported port protocol {protocol}")
+            port = {"containerPort": number, "protocol": protocol}
+            port_name = str(item.get("name") or "").strip()
+            if port_name:
+                port["name"] = dns_label(port_name[:15], "port name")
+            ports.append(port)
+        if ports:
+            container["ports"] = ports
+        else:
+            container.pop("ports", None)
+
+
+def _apply_container_hardware(spec, dep, requested):
+    definitions = hardware_features()
+    by_id = {feature["id"]: feature for feature in definitions}
+    devices = {}
+    for feature in definitions:
+        slug = feature["id"].replace("_", "-")[:50].strip("-")
+        volume_name = f"hw-{slug}-{hashlib.sha1(feature['id'].encode()).hexdigest()[:6]}"
+        devices[feature["id"]] = (feature["label"], volume_name, feature["host_path"],
+                                   feature["container_path"], feature["path_type"])
+
+    desired = {id(container): set(_container_feature_ids(spec, container, definitions))
+               for container in spec.get("containers", [])}
+    for container, feature_ids in requested:
+        wanted = set(feature_ids or [])
+        unknown = wanted - set(by_id)
+        if unknown:
+            raise ValueError("unknown hardware feature(s): " + ", ".join(sorted(unknown)))
+        desired[id(container)] = wanted
+
+    managed_names = {entry[1] for entry in devices.values()} | {"dri", "coral", "coral-usb"}
+    for container in spec.get("containers", []):
+        mounts = [mount for mount in container.get("volumeMounts", []) or []
+                  if mount.get("name") not in managed_names]
+        if mounts:
+            container["volumeMounts"] = mounts
+        else:
+            container.pop("volumeMounts", None)
+    volumes = [volume for volume in spec.get("volumes", []) or []
+               if volume.get("name") not in managed_names]
+
+    union = set()
+    added_volumes = set()
+    for container in spec.get("containers", []):
+        for feature_id in sorted(desired.get(id(container), set())):
+            union.add(feature_id)
+            label, volume_name, host_path, container_path, path_type = devices[feature_id]
+            if volume_name not in added_volumes:
+                volumes.append({"name": volume_name,
+                                "hostPath": {"path": host_path, "type": path_type}})
+                added_volumes.add(volume_name)
+            container.setdefault("volumeMounts", []).append(
+                {"name": volume_name, "mountPath": container_path})
+            container.setdefault("securityContext", {})["privileged"] = True
+    if volumes:
+        spec["volumes"] = volumes
+    else:
+        spec.pop("volumes", None)
+
+    selectors = spec.setdefault("nodeSelector", {})
+    for feature in definitions:
+        selectors.pop(feature["label"], None)
+    for feature_id in union:
+        selectors[devices[feature_id][0]] = "true"
+    if not selectors:
+        spec.pop("nodeSelector", None)
+    annotations = dep["metadata"].setdefault("annotations", {})
+    if union:
+        annotations["harvui.io/hardware"] = ",".join(sorted(union))
+    else:
+        annotations.pop("harvui.io/hardware", None)
+
+
 def edit_workload(cfg):
-    """Patch an existing Deployment in place: image, resources, env, ports, gpu."""
+    """Edit pod settings and one or more containers in an existing Deployment."""
     ns, name = cfg["ns"], cfg["name"]
     dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     spec = dep["spec"]["template"]["spec"]
-    c = spec["containers"][0]
+    containers = spec.get("containers", [])
+    if not containers:
+        raise ValueError(f"{name} has no editable containers")
 
-    if "container_name" in cfg:
-        container_name = dns_label(cfg.get("container_name"), "container name")
-        if any(other is not c and other.get("name") == container_name for other in spec.get("containers", [])):
-            raise ValueError(f"container {container_name} already exists in {name}")
-        c["name"] = container_name
+    container_requests = []
+    if "containers" in cfg:
+        existing = {container.get("name"): container for container in containers}
+        seen = set()
+        for change in cfg.get("containers") or []:
+            original = str(change.get("original_name") or change.get("name") or "")
+            if original not in existing:
+                raise ValueError(f"container {original or '(unnamed)'} no longer exists in {name}")
+            if original in seen:
+                raise ValueError(f"container {original} was submitted more than once")
+            seen.add(original)
+            container_requests.append((existing[original], change))
+        final_names = []
+        requested_by_original = {str(change.get("original_name") or change.get("name")): change
+                                 for _, change in container_requests}
+        for container in containers:
+            change = requested_by_original.get(container.get("name"), {})
+            final_names.append(dns_label(change.get("name") or container.get("name"), "container name"))
+        if len(final_names) != len(set(final_names)):
+            raise ValueError(f"container names must be unique in {name}")
+        for container, change in container_requests:
+            _apply_container_edit(container, change, name)
+    else:
+        # Backward-compatible single-container request used by older clients.
+        legacy = {key: cfg[key] for key in ("image", "env", "cpu", "memory", "ports") if key in cfg}
+        if "container_name" in cfg:
+            legacy["name"] = cfg["container_name"]
+        if legacy:
+            final_name = dns_label(legacy.get("name") or containers[0].get("name"), "container name")
+            if any(other is not containers[0] and other.get("name") == final_name for other in containers):
+                raise ValueError(f"container {final_name} already exists in {name}")
+            _apply_container_edit(containers[0], legacy, name)
     if "pod_hostname" in cfg:
         pod_hostname = (cfg.get("pod_hostname") or "").strip()
         if pod_hostname:
@@ -263,65 +425,17 @@ def edit_workload(cfg):
     if "seed_configs" in cfg:
         _save_seed_configs(ns, dep, cfg.get("seed_configs") or [])
 
-    if cfg.get("image"):
-        c["image"] = cfg["image"]
-    if "env" in cfg:
-        c["env"] = [{"name": k, "value": str(v)} for k, v in (cfg["env"] or {}).items()] or None
-        if c["env"] is None:
-            c.pop("env", None)
-    if cfg.get("cpu") or cfg.get("memory"):
-        req = {}
-        if cfg.get("cpu"):
-            req["cpu"] = cfg["cpu"]
-        if cfg.get("memory"):
-            req["memory"] = cfg["memory"]
-        c.setdefault("resources", {})["requests"] = req
-    if "ports" in cfg:
-        c["ports"] = [{"containerPort": int(p["container"]),
-                       "name": (p.get("name") or f"p{p['container']}")[:15]}
-                      for p in cfg["ports"]] or None
-        if c["ports"] is None:
-            c.pop("ports", None)
     if "replicas" in cfg:
         dep["spec"]["replicas"] = int(cfg["replicas"])
-    if "hardware" in cfg or "gpu" in cfg:
+    hardware_requests = [(container, change.get("hardware") or [])
+                         for container, change in container_requests if "hardware" in change]
+    if hardware_requests:
+        _apply_container_hardware(spec, dep, hardware_requests)
+    elif "hardware" in cfg or "gpu" in cfg:
         wanted = set(cfg.get("hardware") or [])
         if cfg.get("gpu"):
             wanted.add("igpu")
-        devices = {}
-        for f in hardware_features():
-            slug = f["id"].replace("_", "-")[:50].strip("-")
-            vn = f"hw-{slug}-{hashlib.sha1(f['id'].encode()).hexdigest()[:6]}"
-            devices[f["id"]] = (f["label"], vn, f["host_path"],
-                                 f["container_path"], f["path_type"])
-        unknown = wanted - set(devices)
-        if unknown:
-            raise ValueError("unknown hardware feature(s): " + ", ".join(sorted(unknown)))
-        sel = spec.setdefault("nodeSelector", {})
-        mounts = c.setdefault("volumeMounts", [])
-        volumes = spec.setdefault("volumes", [])
-        managed_names = {v[1] for v in devices.values()} | {"dri", "coral", "coral-usb"}
-        mounts[:] = [m for m in mounts if m.get("name") not in managed_names]
-        volumes[:] = [v for v in volumes if v.get("name") not in managed_names]
-        for hw, (label, vn, host_path, container_path, typ) in devices.items():
-            if hw in wanted:
-                sel[label] = "true"
-                c.setdefault("securityContext", {})["privileged"] = True
-                mounts.append({"name": vn, "mountPath": container_path})
-                volumes.append({"name": vn, "hostPath": {"path": host_path, "type": typ}})
-            else:
-                sel.pop(label, None)
-        # Clear legacy labels after the matching configurable feature is removed.
-        known_labels = {f["label"] for f in hardware_features()}
-        for label in list(sel):
-            if label.startswith(("hardware/", "hardware.harvui.io/")) and label not in known_labels:
-                sel.pop(label, None)
-        if not mounts: c.pop("volumeMounts", None)
-        if not volumes: spec.pop("volumes", None)
-        if not sel: spec.pop("nodeSelector", None)
-        ann = dep["metadata"].setdefault("annotations", {})
-        if wanted: ann["harvui.io/hardware"] = ",".join(sorted(wanted))
-        else: ann.pop("harvui.io/hardware", None)
+        _apply_container_hardware(spec, dep, [(containers[0], wanted)])
     if "icon" in cfg:
         ann = dep["metadata"].setdefault("annotations", {})
         if cfg["icon"]:

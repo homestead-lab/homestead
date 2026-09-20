@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.2"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.3"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1868,6 +1868,79 @@ def display_icon(annotations):
     except (FileNotFoundError, ValueError, OSError):
         return ""
 
+
+def workload_edit_payload(ns, name, deployment, hardware_definitions=None):
+    """Return pod-level settings plus an editable record for every app container."""
+    pspec = deployment["spec"]["template"]["spec"]
+    annotations = deployment["metadata"].get("annotations", {}) or {}
+    definitions = hardware_definitions if hardware_definitions is not None else HW.features()
+    volumes = {volume.get("name"): volume for volume in pspec.get("volumes", []) or []}
+
+    def source_label(volume):
+        if volume.get("persistentVolumeClaim"):
+            return volume["persistentVolumeClaim"].get("claimName", "")
+        for field, label in (("configMap", "ConfigMap"), ("secret", "Secret")):
+            if volume.get(field):
+                return f"{label} {volume[field].get('name', '')}".strip()
+        if volume.get("hostPath"):
+            return volume["hostPath"].get("path", "host path")
+        if "emptyDir" in volume:
+            return "temporary storage"
+        return "Kubernetes volume"
+
+    def env_reference(item):
+        ref = item.get("valueFrom", {}) or {}
+        for field, label in (("secretKeyRef", "Secret"), ("configMapKeyRef", "ConfigMap")):
+            if ref.get(field):
+                value = ref[field]
+                return f"{label} {value.get('name', '')} · {value.get('key', '')}".strip(" ·")
+        if ref.get("fieldRef"):
+            return f"Pod field · {ref['fieldRef'].get('fieldPath', '')}".strip(" ·")
+        if ref.get("resourceFieldRef"):
+            return f"Resource field · {ref['resourceFieldRef'].get('resource', '')}".strip(" ·")
+        return "Managed Kubernetes reference"
+
+    containers = []
+    for container in pspec.get("containers", []) or []:
+        mounts, hardware = [], []
+        for mount in container.get("volumeMounts", []) or []:
+            volume = volumes.get(mount.get("name"), {})
+            mounts.append({"name": mount.get("name", ""), "path": mount.get("mountPath", ""),
+                           "source": source_label(volume), "read_only": bool(mount.get("readOnly", False))})
+            host_path = (volume.get("hostPath") or {}).get("path", "").rstrip("/")
+            mount_path = str(mount.get("mountPath") or "").rstrip("/")
+            for feature in definitions:
+                expected_host = feature["host_path"].rstrip("/")
+                if (host_path == expected_host or host_path.startswith(expected_host + "/")) and mount_path == feature["container_path"].rstrip("/") and feature["id"] not in hardware:
+                    hardware.append(feature["id"])
+        literals = {item["name"]: item.get("value", "") for item in container.get("env", []) or []
+                    if item.get("name") and "valueFrom" not in item}
+        refs = [{"name": item["name"], "source": env_reference(item)}
+                for item in container.get("env", []) or [] if item.get("name") and item.get("valueFrom")]
+        requests = (container.get("resources", {}) or {}).get("requests", {}) or {}
+        containers.append({
+            "original_name": container.get("name", ""), "name": container.get("name", ""),
+            "image": container.get("image", ""), "cpu": requests.get("cpu", ""), "memory": requests.get("memory", ""),
+            "env": literals, "env_refs": refs,
+            "ports": [{"container": port.get("containerPort"), "name": port.get("name", ""), "protocol": port.get("protocol", "TCP")}
+                      for port in container.get("ports", []) or []],
+            "hardware": hardware, "volumes": mounts,
+        })
+    detected = HW.workload_features(pspec, annotations)
+    assigned = {feature for container in containers for feature in container["hardware"]}
+    if containers:
+        containers[0]["hardware"].extend(feature for feature in detected if feature not in assigned)
+    first = containers[0] if containers else {"name": "", "image": "", "cpu": "", "memory": "", "env": {}, "ports": [], "volumes": []}
+    return {
+        "ns": ns, "name": name, "pod_hostname": pspec.get("hostname", ""),
+        "replicas": deployment["spec"].get("replicas", 1), "containers": containers,
+        "hardware": detected, "icon": annotations.get("harvui.io/icon-source", annotations.get("harvui.io/icon", "")),
+        "node": pspec.get("nodeSelector", {}).get("kubernetes.io/hostname", ""),
+        "seed_configs": LC.seed_configs(ns, deployment),
+        "container_name": first["name"], "image": first["image"], "cpu": first["cpu"], "memory": first["memory"],
+        "env": first["env"], "ports": first["ports"], "volumes": first["volumes"], "gpu": "igpu" in detected,
+    }
+
 # Browser routes serve the same authenticated application shell. Keep this an
 # explicit allowlist: an unknown path must not accidentally shadow an API 404.
 SPA_ROUTES = frozenset({
@@ -2168,31 +2241,7 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/workload":
                 ns, nm = q["ns"][0], q["name"][0]
                 d = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{nm}")
-                c = d["spec"]["template"]["spec"]["containers"][0]
-                pspec = d["spec"]["template"]["spec"]
-                hardware = HW.workload_features(pspec, d["metadata"].get("annotations", {}) or {})
-                return self._send(200, {
-                    "ns": ns, "name": nm, "container_name": c.get("name", ""),
-                    "pod_hostname": pspec.get("hostname", ""), "image": c.get("image", ""),
-                    "replicas": d["spec"].get("replicas", 1),
-                    "cpu": c.get("resources", {}).get("requests", {}).get("cpu", ""),
-                    "memory": c.get("resources", {}).get("requests", {}).get("memory", ""),
-                    "env": {e["name"]: e.get("value", "") for e in c.get("env", []) or []},
-                    "ports": [{"container": x.get("containerPort"), "name": x.get("name", "")}
-                              for x in c.get("ports", []) or []],
-                    "gpu": "igpu" in hardware,
-                    "hardware": hardware,
-                    "icon": d["metadata"].get("annotations", {}).get(
-                        "harvui.io/icon-source",
-                        d["metadata"].get("annotations", {}).get("harvui.io/icon", "")),
-                    "node": pspec.get("nodeSelector", {}).get("kubernetes.io/hostname", ""),
-                    "seed_configs": LC.seed_configs(ns, d),
-                    "volumes": [{"path": m.get("mountPath"), "source": next(
-                        (v.get("persistentVolumeClaim", {}).get("claimName", "")
-                          for v in pspec.get("volumes", [])
-                         if v["name"] == m["name"]), "")}
-                        for m in c.get("volumeMounts", []) or []],
-                })
+                return self._send(200, workload_edit_payload(ns, nm, d))
             if p == "/api/namespaces":
                 return self._send(200, sorted(n["metadata"]["name"] for n in kget("/api/v1/namespaces")["items"]))
             if p == "/api/storageclasses":
