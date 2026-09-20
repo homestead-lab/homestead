@@ -53,10 +53,10 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.7.2`, the workflow publishes:
+For a release such as `v2.7.3`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.7.2
+ghcr.io/wjcloudy/homestead:2.7.3
 ghcr.io/wjcloudy/homestead:2.7
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -67,8 +67,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.7.2
-git push origin v2.7.2
+git tag v2.7.3
+git push origin v2.7.3
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -109,14 +109,15 @@ Then install and wait for readiness:
 
 ```bash
 kubectl apply -f deploy/deploy.yaml
-kubectl -n lab rollout status deployment/harvui --timeout=5m
-kubectl -n lab get deployment/harvui pvc/harvui-data service/harvui
+kubectl -n lab rollout status deployment/homestead --timeout=5m
+kubectl -n lab get deployment/homestead pvc/harvui-data service/harvui
 ```
 
-The Kubernetes resources and `harvui.io/*` metadata intentionally keep their
-original names. This is an upgrade-compatibility boundary: applying the
-Homestead manifest reuses the existing PVC, authentication Secret, settings,
-icons, operations, and rollback history instead of creating a parallel install.
+The running Deployment, container, and generated pod names use `homestead`.
+Stateful and access-bound compatibility objects such as `harvui-data`, the
+authentication Secret, Service, settings, icons, and the `harvui.io/*`
+annotation domain intentionally retain their original names. This lets an
+upgrade adopt the existing data and VIP instead of creating a parallel install.
 
 Open the Service address on port `8088`. The first visit creates the initial
 administrator. Authentication is stored in a Kubernetes Secret, independently
@@ -255,7 +256,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.7.2 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.7.3 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour

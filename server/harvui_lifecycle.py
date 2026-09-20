@@ -297,7 +297,7 @@ def node_power(node, action, drain_first=True):
     if not NODE_POWER_ENABLED:
         raise PermissionError(
             "Host power control is disabled. It needs a privileged helper pod that enters the "
-            "host namespaces, so it ships off. Set ENABLE_NODE_POWER=true on the harvui "
+            "host namespaces, so it ships off. Set ENABLE_NODE_POWER=true on the Homestead "
             "Deployment to turn it on. Cordon and drain work regardless.")
     if action not in ("reboot", "poweroff"):
         raise ValueError("action must be reboot or poweroff")

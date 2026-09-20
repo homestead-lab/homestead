@@ -138,7 +138,7 @@ window.nodeActions = async name => {
     <div class="sec">Power</div>
     ${off ? `<div class="note"><b>Host power control is disabled.</b> Rebooting needs a privileged
         helper pod that enters the host namespaces, so it ships off. Set
-        <span class="mono">ENABLE_NODE_POWER=true</span> on the harvui Deployment to enable it.
+        <span class="mono">ENABLE_NODE_POWER=true</span> on the Homestead Deployment to enable it.
         Cordon and drain above work regardless.</div>`
       : risky ? `<div class="note" style="border-color:rgba(255,77,79,.35);background:rgba(255,77,79,.08);color:#ffb4b8">
         <b>Blocked.</b> ${(qr.ready || []).length} of ${qr.total} etcd members are ready and quorum needs

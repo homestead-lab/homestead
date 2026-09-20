@@ -205,8 +205,8 @@ def deletion_plan(namespace, name):
     labels = meta.get("labels", {}) or {}
     if namespace in SYSTEM_NAMESPACES:
         protected.append("system namespaces can only be changed with Kubernetes administration tools")
-    if labels.get("app") == "harvui" or name == "harvui-data" or any(
-            row["name"] == "harvui" for row in consumers):
+    if labels.get("app") in ("harvui", "homestead") or name == "harvui-data" or any(
+            row["name"] in ("harvui", "homestead") for row in consumers):
         protected.append("this claim stores Homestead's own state")
 
     blockers = list(protected)

@@ -137,9 +137,11 @@ class VolumeDeletionTests(unittest.TestCase):
         self.assertTrue(any("object reference" in reason for reason in plan["blocking_reasons"]))
 
     def test_homestead_and_system_claims_are_hard_blocked(self):
-        self.claim(labels={"app": "harvui"})
-        plan = volumes.deletion_plan("lab", "media")
-        self.assertTrue(any("Homestead" in reason for reason in plan["blocking_reasons"]))
+        for app_name in ("harvui", "homestead"):
+            with self.subTest(app_name=app_name):
+                self.claim(labels={"app": app_name})
+                plan = volumes.deletion_plan("lab", "media")
+                self.assertTrue(any("Homestead" in reason for reason in plan["blocking_reasons"]))
 
 
 if __name__ == "__main__":
