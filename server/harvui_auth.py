@@ -99,6 +99,11 @@ def _signing_key(data=None):
     return data["signing_key"].encode()
 
 
+def internal_signing_key():
+    """Key shared only with trusted in-cluster helpers; never returned by HTTP."""
+    return _signing_key()
+
+
 def needs_setup():
     return not _load(force=True).get("users")
 

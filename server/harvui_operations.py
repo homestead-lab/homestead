@@ -16,6 +16,7 @@ import urllib.error
 
 kget = None
 deployment_progress = None
+smart_progress = None
 DATA_DIR = "/data"
 STORE = "operations.json"
 MAX_OPERATIONS = 100
@@ -23,9 +24,10 @@ TERMINAL = {"succeeded", "failed", "cancelled"}
 _lock = threading.RLock()
 
 
-def bind(_kget, data_dir, _deployment_progress):
-    global kget, DATA_DIR, deployment_progress
+def bind(_kget, data_dir, _deployment_progress, _smart_progress=None):
+    global kget, DATA_DIR, deployment_progress, smart_progress
     kget, DATA_DIR, deployment_progress = _kget, data_dir, _deployment_progress
+    smart_progress = _smart_progress
 
 
 def _now():
@@ -219,6 +221,12 @@ def _volume_delete(item):
     return "succeeded", 100, "Claim and backing volume data deleted"
 
 
+def _smart_test(item):
+    if smart_progress is None:
+        raise RuntimeError("SMART progress provider is not configured")
+    return smart_progress(item["ref"])
+
+
 RESOLVERS = {
     "deployment": _deployment,
     "image-update": _deployment,
@@ -226,6 +234,7 @@ RESOLVERS = {
     "image-pull": _prepull,
     "image-cleanup": _image_cleanup,
     "volume-delete": _volume_delete,
+    "smart-test": _smart_test,
     "import": _job,
     "vm-migration": _migration,
     "backup": _backup,

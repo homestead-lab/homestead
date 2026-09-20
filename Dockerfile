@@ -16,7 +16,8 @@ ENV PORT=8080 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-RUN addgroup -S -g 10001 harvui && adduser -S -D -H -u 10001 -G harvui harvui \
+RUN apk add --no-cache smartmontools \
+    && addgroup -S -g 10001 harvui && adduser -S -D -H -u 10001 -G harvui harvui \
     && mkdir -p /srv /web /data \
     && chown -R harvui:harvui /data
 

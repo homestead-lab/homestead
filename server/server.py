@@ -33,6 +33,13 @@ DEFAULT_APP_SETTINGS = {
         "maintenance": {"days": [0, 1, 2, 3, 4, 5, 6],
                         "start": "02:00", "duration_minutes": 120},
     },
+    "smart": {
+        "temperature": {"warning": 55, "critical": 65},
+        "reallocated_warning": 1,
+        "pending_critical": 1,
+        "uncorrectable_critical": 1,
+        "notify_failures": True,
+    },
 }
 
 SYS_NS = {
@@ -163,6 +170,22 @@ def validate_app_settings(value):
             unit = "°C" if metric == "temperature" else "%"
             raise ValueError(f"{metric} thresholds must be ordered between 1 and {upper}{unit}")
         out["thresholds"][metric] = {"warning": warning, "critical": critical}
+    smart_in = (value or {}).get("smart") or {}
+    smart_temp = smart_in.get("temperature") or out["smart"]["temperature"]
+    temp_warning = int(smart_temp.get("warning", out["smart"]["temperature"]["warning"]))
+    temp_critical = int(smart_temp.get("critical", out["smart"]["temperature"]["critical"]))
+    if temp_warning < 1 or temp_critical > 120 or temp_warning >= temp_critical:
+        raise ValueError("drive temperature thresholds must be ordered between 1 and 120°C")
+    out["smart"]["temperature"] = {"warning": temp_warning, "critical": temp_critical}
+    for key in ("reallocated_warning", "pending_critical", "uncorrectable_critical"):
+        count = int(smart_in.get(key, out["smart"][key]))
+        if count < 1 or count > 1_000_000:
+            raise ValueError(f"{key} must be between 1 and 1000000")
+        out["smart"][key] = count
+    notify = smart_in.get("notify_failures", out["smart"]["notify_failures"])
+    if not isinstance(notify, bool):
+        raise ValueError("SMART notify_failures must be true or false")
+    out["smart"]["notify_failures"] = notify
     update_in = (value or {}).get("updates") or {}
     policy = str(update_in.get("policy", out["updates"]["policy"]))
     if policy not in ("notify_only", "approval_required", "maintenance_window"):
@@ -298,11 +321,24 @@ def node_temps():
         node = p.get("spec", {}).get("nodeName")
         if not ip or not node or p.get("status", {}).get("phase") != "Running":
             continue
+        payload = {"node": node, "thermal": [], "hwmon": [], "devices": {},
+                   "disks": [], "sensors": 0, "smart_helper": {"available": False}}
         try:
             with urllib.request.urlopen(f"http://{ip}:9099/", timeout=4) as r:
-                out[node] = json.loads(r.read().decode())
+                payload.update(json.loads(r.read().decode()))
         except Exception:
-            continue
+            pass
+        try:
+            with urllib.request.urlopen(f"http://{ip}:9100/", timeout=20) as r:
+                smart = json.loads(r.read().decode())
+            rows = {row.get("name"): row for row in smart.get("disks", [])}
+            for disk in payload.get("disks", []):
+                disk["smart"] = rows.get(disk.get("name"))
+            payload["smart_helper"] = {"available": True, "disks": len(rows)}
+        except Exception as error:
+            payload["smart_helper"] = {"available": False,
+                "reason": "SMART helper unavailable; install or update deploy/nodeprobe.yaml"}
+        out[node] = payload
     _TEMP_CACHE.update(at=time.time(), data=out)
     return out
 
@@ -334,6 +370,37 @@ def node_stats(name):
     }
 
 
+def smart_disk_issues(report, settings=None):
+    """Classify actionable SMART findings using cluster-wide thresholds."""
+    if not report or not report.get("available"):
+        return []
+    cfg = settings or DEFAULT_APP_SETTINGS["smart"]
+    issues = []
+    if str(report.get("health") or "").lower() == "failed":
+        issues.append({"severity": "critical", "reason": "SMART overall-health check failed"})
+    temperature = report.get("temperature_c")
+    if temperature is not None:
+        severity = ("critical" if float(temperature) >= cfg["temperature"]["critical"] else
+                    "degraded" if float(temperature) >= cfg["temperature"]["warning"] else "")
+        if severity:
+            issues.append({"severity": severity,
+                           "reason": f"drive temperature is {temperature}°C"})
+    reallocated = int(report.get("reallocated") or 0)
+    pending = int(report.get("pending") or 0)
+    uncorrectable = int(report.get("uncorrectable") or 0)
+    media = int(report.get("media_errors") or 0)
+    if reallocated >= cfg["reallocated_warning"]:
+        issues.append({"severity": "degraded", "reason": f"{reallocated} reallocated sector(s)"})
+    if pending >= cfg["pending_critical"]:
+        issues.append({"severity": "critical", "reason": f"{pending} pending sector(s)"})
+    if uncorrectable >= cfg["uncorrectable_critical"]:
+        issues.append({"severity": "critical",
+                       "reason": f"{uncorrectable} uncorrectable sector(s)"})
+    if media:
+        issues.append({"severity": "critical", "reason": f"{media} NVMe media error(s)"})
+    return issues
+
+
 def get_nodes():
     nodes = kget("/api/v1/nodes")
     try:
@@ -347,6 +414,7 @@ def get_nodes():
         vmis = []
 
     temps = node_temps()
+    smart_cfg = get_app_settings().get("smart") or DEFAULT_APP_SETTINGS["smart"]
     out = []
     for n in nodes.get("items", []):
         name = n["metadata"]["name"]
@@ -373,6 +441,11 @@ def get_nodes():
             auto_hardware = {x for x in annotations.get(HW.AUTO_ANNOTATION, "").split(",") if x}
         hardware_inventory = HW.inventory(labels, probed, auto_hardware)
         hardware = {x["id"]: x["available"] for x in hardware_inventory}
+        temp_payload = temps.get(name)
+        disk_issues = []
+        for disk in (temp_payload or {}).get("disks", []):
+            for issue in smart_disk_issues(disk.get("smart"), smart_cfg):
+                disk_issues.append({**issue, "disk": disk.get("name", "unknown")})
         out.append({
             "name": name,
             "status": "Ready" if conds.get("Ready") == "True" else "NotReady",
@@ -400,7 +473,9 @@ def get_nodes():
                            for c in n["status"].get("conditions", [])],
             "created": n["metadata"].get("creationTimestamp", ""),
             **node_stats(name),
-            "temps": temps.get(name),
+            "temps": temp_payload,
+            "disk_issues": disk_issues,
+            "smart_notify": smart_cfg.get("notify_failures", True),
         })
     return out
 
@@ -601,6 +676,10 @@ def classify_cluster_health(nodes, workloads, volumes, startup_grace=300):
             issues.append({"severity": "critical", "kind": "Node",
                            "name": node.get("name", "unknown"),
                            "reason": f"node is {node.get('status') or 'not ready'}"})
+        for disk in (node.get("disk_issues") or []) if node.get("smart_notify", True) else []:
+            issues.append({"severity": disk.get("severity", "degraded"), "kind": "Disk",
+                           "name": f"{node.get('name', 'unknown')}/{disk.get('disk', 'unknown')}",
+                           "reason": disk.get("reason", "SMART warning")})
     for volume in volumes:
         robustness = str(volume.get("robustness", "") or "").lower()
         label = volume.get("pvc_name") or volume.get("name") or "unknown"
@@ -1319,6 +1398,7 @@ import harvui_operations as OPS
 import harvui_console as CONSOLE
 import harvui_icons as ICONS
 import harvui_volumes as VOLUMES
+import harvui_smart as SMART
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
 LC.bind(kget, ksend, SYS_NS, _cache, HW.features)
 IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.features)
@@ -1326,7 +1406,8 @@ AUTH.bind(kget, ksend, DEFAULT_NS)
 LH.bind(kget, ksend, _cache)
 PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.features)
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS)
-OPS.bind(kget, DATA_DIR, UPDATES.progress)
+SMART.bind(kget, DEFAULT_NS, AUTH.internal_signing_key)
+OPS.bind(kget, DATA_DIR, UPDATES.progress, SMART.progress)
 VOLUMES.bind(kget, ksend, LH.snapshots, LH.backups, _cache, SYS_NS, DEFAULT_NS)
 CONSOLE_PROXY = CONSOLE.ConsoleProxy(API, TOKEN, CTX, DATA_DIR, SYS_NS, {DEFAULT_NS}, kget)
 
@@ -1382,6 +1463,7 @@ ADMIN_ROUTES = {
     "/api/shares", "/api/shares/delete",
     "/api/images/cleanup",
     "/api/volumes/delete",
+    "/api/node/smart/test",
     "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete",
 }
 # things a signed-in user may always do to their own account
@@ -1573,6 +1655,10 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("node:" + (q.get("name") or [""])[0], 5,
                                   lambda: next((n for n in get_nodes()
                                                 if n["name"] == (q.get("name") or [""])[0]), {})))
+            if p == "/api/node/smart":
+                node = (q.get("node") or [""])[0]
+                disk = (q.get("disk") or [""])[0]
+                return self._send(200, SMART.disk(node, disk) if disk else SMART.inventory(node))
             if p == "/api/history":
                 with _lock:
                     return self._send(200, {k: list(v) for k, v in HIST.items()})
@@ -1826,6 +1912,19 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, LC.set_cordon(b["node"], b.get("cordon", True)))
             if p == "/api/node/hardware":
                 return self._send(200, set_node_hardware(b))
+            if p == "/api/node/smart/test":
+                result = SMART.start_test(b.get("node"), b.get("disk"), b.get("test"))
+                result["operation"] = OPS.start(
+                    "smart-test", f"SMART {result['test']} test · {result['disk']}",
+                    {"kind": "Disk", "name": result["disk"], "namespace": result["node"]},
+                    "/nodes?node=" + urllib.parse.quote(result["node"]),
+                    {"node": result["node"], "disk": result["disk"],
+                     "test": result["test"], "expected_seconds": result["expected_seconds"],
+                     "baseline": result["baseline"], "started_epoch": result["started_epoch"]},
+                    result["message"])
+                _TEMP_CACHE["at"] = 0
+                _cache.pop("node:" + result["node"], None)
+                return self._send(200, result)
             if p == "/api/hardware/features":
                 return self._send(200, HW.save_features(b.get("features")))
             if p == "/api/node/drain":

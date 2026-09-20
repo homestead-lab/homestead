@@ -59,6 +59,16 @@ class ClusterHealthTests(unittest.TestCase):
             [self.healthy_node()], [], [{"name": "archive", "robustness": "unknown"}])
         self.assertEqual("healthy", result["health_state"])
 
+    def test_smart_disk_warning_affects_health_only_when_notifications_are_enabled(self):
+        node = self.healthy_node() | {"disk_issues": [{"disk": "sda", "severity": "critical",
+                                                        "reason": "1 pending sector"}],
+                                      "smart_notify": True}
+        result = server.classify_cluster_health([node], [], [])
+        self.assertEqual("critical", result["health_state"])
+        self.assertEqual("Disk", result["health_issues"][0]["kind"])
+        node["smart_notify"] = False
+        self.assertEqual("healthy", server.classify_cluster_health([node], [], [])["health_state"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,9 @@
 const tempCls = c => c == null ? "" : sev(c, "temperature") === "b" ? "t-hot" : sev(c, "temperature") === "w" ? "t-warm" : "t-ok";
 const tempTag = c => c == null ? "" : sev(c, "temperature") === "b" ? "bad" : sev(c, "temperature") === "w" ? "warn" : "";
+const smartTone = health => health === "passed" ? "ok" : health === "failed" ? "bad" : "";
+const smartMetric = value => value == null ? "unsupported" : String(value);
+const smartTestTone = status => /without error|success|passed/i.test(status || "") ? "ok" :
+  /fail|error|aborted|interrupted/i.test(status || "") ? "bad" : "";
 const nodeHardwareIds = n => (STATE.data.hardwareFeatures || [])
   .filter(f => n.hardware?.[f.id]).map(f => f.id);
 
@@ -49,7 +53,7 @@ async function viewDash() {
   ${(o.health_issues || []).length ? `<div class="clusteralert ${o.health === "critical" ? "critical" : ""}">
     <div><b>${o.health === "critical" ? "Cluster needs attention" : "Cluster is degraded"}</b>
       <span>${esc(o.health_summary)}</span></div>
-    <button class="btn sm" onclick="go('${o.health_issues.some(x => x.kind === "Node") ? "nodes" :
+    <button class="btn sm" onclick="go('${o.health_issues.some(x => ["Node", "Disk"].includes(x.kind)) ? "nodes" :
       o.health_issues.some(x => x.kind === "Volume") ? "storage" : "workloads"}')">Review</button>
   </div>` : ""}
 
@@ -180,13 +184,15 @@ window.nodeDetail = async (name, fromRoute = false) => {
     const i = n.info || {};
     const row = (l, v) => `<div class="drow"><div class="dl">${l}</div><div class="dv mono">${v}</div></div>`;
     const disks = (n.temps && n.temps.disks) || [];
-    const diskRows = disks.map(d => `<div class="diskrow">
-      <div class="diskidentity"><b class="mono">${esc(d.name)}</b><span>${esc(d.model || d.name)}</span></div>
-      <div><span class="disklabel">TYPE</span><b>${esc(d.kind || "Disk")}</b></div>
+    const diskRows = disks.map(d => { const s = d.smart || null; return `<div class="diskrow ${s?.health === "failed" ? "smart-failed" : ""}">
+      <div class="diskidentity"><b class="mono">${esc(d.name)} <span class="tag">${esc(d.kind || "Disk")}</span></b><span>${esc(s?.model || d.model || d.name)}</span><span class="mono">${esc(s?.serial || d.serial || "serial unavailable")}</span></div>
       <div><span class="disklabel">CAPACITY</span><b class="mono">${Number(d.size_gb || 0).toFixed(1)} GB</b></div>
+      <div><span class="disklabel">SMART</span>${s ? `<b><span class="tag ${smartTone(s.health)}">${esc(s.health || "unknown")}</span></b>` : '<b class="dim">unavailable</b>'}</div>
+      <div><span class="disklabel">TEMP</span><b class="mono ${tempCls(s?.temperature_c)}">${s?.temperature_c == null ? "—" : esc(s.temperature_c) + "°C"}</b></div>
       <div><span class="disklabel">READ</span><b class="mono diskrate read">↓ ${Number(d.read_mbps || 0).toFixed(2)} MB/s</b></div>
       <div><span class="disklabel">WRITE</span><b class="mono diskrate write">↑ ${Number(d.write_mbps || 0).toFixed(2)} MB/s</b></div>
-    </div>`).join("");
+      <button class="btn sm" ${s ? "" : "disabled"} onclick="smartDisk('${esc(n.name)}','${esc(d.name)}')" title="${s ? "Drive health, history, and self-tests" : "SMART helper is not available on this host"}">Details</button>
+    </div>`; }).join("");
     $("#mbody").innerHTML = `
       <div class="grid g2" style="margin-bottom:16px">
         <div class="card flat"><div class="ctitle">Utilisation</div>
@@ -266,6 +272,49 @@ window.nodeDetail = async (name, fromRoute = false) => {
       <div class="row" style="margin-top:16px">
         <button class="btn" onclick="nodeActions('${esc(n.name)}')">Host actions…</button></div>`;
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+};
+
+window.smartDisk = async (node, disk) => {
+  modal(`Drive · ${disk}`, `<div class="empty"><span class="spin2"></span>reading SMART data</div>`, true);
+  try {
+    const s = await api(`/api/node/smart?node=${encodeURIComponent(node)}&disk=${encodeURIComponent(disk)}`);
+    const tests = s.self_tests || [], active = s.test?.active;
+    const stat = (label, value, tone = "") => `<div class="smartstat ${tone}"><span>${label}</span><b class="mono">${esc(smartMetric(value))}</b></div>`;
+    $("#mbody").innerHTML = `
+      <div class="between smart-drive-head"><div><div class="ctitle">${esc(s.model || disk)}</div><div class="csub mono">${esc(s.path || "/dev/" + disk)} · ${esc(s.serial || "serial unavailable")} · ${esc(s.protocol || "protocol unknown")}</div></div>
+        <span class="pill ${smartTone(s.health)}">SMART ${esc(s.health || "unknown")}</span></div>
+      ${s.available ? "" : `<div class="note"><b>SMART unavailable.</b> ${esc(s.unavailable_reason || "This drive or USB bridge does not expose SMART data.")}</div>`}
+      ${active ? `<div class="clusteralert"><div><b>Self-test running</b><span>${esc(s.test.status || "In progress")}${s.test.remaining_percent == null ? "" : ` · ${esc(s.test.remaining_percent)}% remaining`}</span></div></div>` : ""}
+      <div class="smartstats">
+        ${stat("Temperature", s.temperature_c == null ? null : s.temperature_c + "°C", tempTag(s.temperature_c))}
+        ${stat("Power-on hours", s.power_on_hours)}
+        ${stat("Reallocated", s.reallocated, +(s.reallocated || 0) ? "warn" : "")}
+        ${stat("Pending", s.pending, +(s.pending || 0) ? "bad" : "")}
+        ${stat("Uncorrectable", s.uncorrectable, +(s.uncorrectable || 0) ? "bad" : "")}
+        ${stat("Errors", s.media_errors ?? s.error_count, +(s.media_errors ?? s.error_count ?? 0) ? "bad" : "")}
+      </div>
+      <div class="drow"><div class="dl">Firmware</div><div class="dv mono">${esc(s.firmware || "—")}</div></div>
+      <div class="drow"><div class="dl">SMART enabled</div><div class="dv">${s.smart_enabled == null ? "not reported" : s.smart_enabled ? "yes" : "no"}</div></div>
+      <div class="sec">Self-test history</div>
+      ${tests.length ? `<div class="tblwrap"><table class="tbl dense"><thead><tr><th>Test</th><th>Result</th><th>Drive hours</th></tr></thead><tbody>${tests.map(t => `<tr><td>${esc(t.type || "Self-test")}</td><td><span class="tag ${smartTestTone(t.status)}">${esc(t.status || "Unknown")}</span></td><td class="mono">${esc(t.lifetime_hours ?? "—")}</td></tr>`).join("")}</tbody></table></div>` : '<div class="empty small">The drive has no self-test history.</div>'}
+      <div class="smart-actions"><div><b>Run a drive self-test</b><div class="dim xs">Tests run inside the drive. A long test can reduce disk performance while active.</div></div><div class="row">
+        <button class="btn" data-need="admin" ${!s.available || active || !(s.supported_tests || []).includes("short") ? "disabled" : ""} onclick="smartStartConfirm('${esc(node)}','${esc(disk)}','short')">Short test</button>
+        <button class="btn" data-need="admin" ${!s.available || active || !(s.supported_tests || []).includes("long") ? "disabled" : ""} onclick="smartStartConfirm('${esc(node)}','${esc(disk)}','long')">Long test</button>
+      </div></div>
+      <div class="note"><b>USB and NVMe caveat.</b> Some USB bridges hide SMART commands; NVMe exposes different counters from ATA/SATA. Homestead shows unsupported values explicitly instead of treating them as zero.</div>`;
+  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+};
+
+window.smartStartConfirm = (node, disk, type) => modal(`Start ${type} SMART test?`, `
+  <p>This asks <b>${esc(node)} / ${esc(disk)}</b> to run its built-in ${esc(type)} self-test.</p>
+  <div class="note">The test does not erase data, but a long test can reduce storage performance and may take hours. Progress and the final drive result remain in Activity.</div>
+  <div class="row" style="margin-top:16px"><button class="btn pri" onclick="smartStart('${esc(node)}','${esc(disk)}','${esc(type)}')">Start ${esc(type)} test</button><button class="btn" onclick="smartDisk('${esc(node)}','${esc(disk)}')">Cancel</button></div>`);
+
+window.smartStart = async (node, disk, type) => {
+  try {
+    const result = await api("/api/node/smart/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node, disk, test: type }) });
+    toast(result.message || `${type} SMART test started`, "ok"); closeModal();
+  } catch (e) { toast(e.message, "bad"); }
 };
 window.hardwareEdit = n => modal("Hardware · " + n.name, `
   <p class="muted small">Choose which configured features workloads may use on this node. Saving writes explicit Kubernetes labels; unchecked features are explicitly disabled even if detected.</p>

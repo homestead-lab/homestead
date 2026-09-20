@@ -122,18 +122,38 @@ and create a `docker-registry` secret using a classic GitHub token with only
 `read:packages`. GitHub documents this in
 [Working with the Container registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
 
-### 3. Optional node telemetry
+### 3. Optional node telemetry and drive health
 
-Kubernetes does not expose physical temperatures, host device inventory, or
-per-disk throughput. Install the non-privileged node probe to enable those views:
+Kubernetes does not expose physical temperatures, host device inventory,
+per-disk throughput, or SMART health. Install the node probe to enable those
+views:
 
 ```bash
 kubectl apply -f deploy/nodeprobe.yaml
 kubectl -n lab rollout status daemonset/harvui-nodeprobe --timeout=5m
 ```
 
-The probe mounts `/sys`, `/proc`, and `/dev` read-only, drops all capabilities,
-and uses a read-only root filesystem. Homestead works without it.
+The ordinary telemetry container mounts `/sys`, `/proc`, and `/dev` read-only,
+drops all capabilities, runs as a non-root user, and uses a read-only root
+filesystem. An isolated `smart` sidecar runs `smartctl` against physical host
+drives. Because generic Kubernetes cannot grant an unknown, changing set of
+block devices individually, that sidecar alone is privileged; it still has no
+host PID, IPC, or network namespace, uses a read-only root filesystem, and
+accepts test requests only when they carry a short-lived signature from the
+Homestead backend. Remove the sidecar if SMART access is not wanted—the normal
+temperature, device, and throughput telemetry keeps working.
+
+Node detail shows drive identity, capacity, temperature, SMART health, error
+counters, power-on hours, and per-disk read/write MB/s. Administrators can run
+short or extended self-tests after an explicit confirmation; tests and their
+progress remain in Activity through browser refreshes and Homestead restarts.
+Settings → Health thresholds controls temperature and media-error warnings.
+USB/SATA bridges and virtual disks that do not expose SMART are labelled as
+unsupported instead of being treated as failed drives.
+
+Homestead works without either probe container. When the SMART sidecar is not
+installed or cannot read a drive, the UI reports that state without degrading
+the whole cluster.
 
 ## Updating Homestead
 

@@ -116,6 +116,18 @@ class OperationTests(unittest.TestCase):
         self.assertEqual("succeeded", complete["status"])
         self.assertIn("retained", complete["message"])
 
+    def test_smart_test_progress_is_persisted_through_shared_resolver(self):
+        states = [("running", 55, "Self-test in progress"),
+                  ("succeeded", 100, "Completed without error")]
+        operations.bind(lambda path: self.objects[path], self.tmp.name,
+                        lambda namespace, name: self.objects[(namespace, name)],
+                        lambda ref: states.pop(0))
+        operations.start("smart-test", "SMART short test · sda",
+                         {"kind": "Disk", "name": "sda", "namespace": "node-1"},
+                         "/nodes?node=node-1", {"node": "node-1", "disk": "sda"})
+        self.assertEqual(55, operations.list_operations()[0]["progress"])
+        self.assertEqual("succeeded", operations.list_operations()[0]["status"])
+
 
 if __name__ == "__main__":
     unittest.main()

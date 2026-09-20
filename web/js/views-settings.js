@@ -7,11 +7,12 @@ const ROLE_COPY = {
 };
 
 function thresholdEditor(id, label, unit, help, pair) {
+  const temperature = id.includes("temperature");
   return `<div class="threshold-card">
     <div><b>${esc(label)}</b><div class="dim xs">${esc(help)}</div></div>
     <div class="threshold-values">
-      <label>Warning <span class="warn-dot"></span><input id="set_${id}_warn" type="number" min="1" max="${id === "temperature" ? 119 : 99}" value="${pair.warning}" ${can("admin") ? "" : "disabled"}><span>${unit}</span></label>
-      <label>Critical <span class="crit-dot"></span><input id="set_${id}_crit" type="number" min="2" max="${id === "temperature" ? 120 : 100}" value="${pair.critical}" ${can("admin") ? "" : "disabled"}><span>${unit}</span></label>
+      <label>Warning <span class="warn-dot"></span><input id="set_${id}_warn" type="number" min="1" max="${temperature ? 119 : 99}" value="${pair.warning}" ${can("admin") ? "" : "disabled"}><span>${unit}</span></label>
+      <label>Critical <span class="crit-dot"></span><input id="set_${id}_crit" type="number" min="2" max="${temperature ? 120 : 100}" value="${pair.critical}" ${can("admin") ? "" : "disabled"}><span>${unit}</span></label>
     </div></div>`;
 }
 
@@ -26,6 +27,8 @@ async function viewSettings() {
   const updates = settings.updates || { policy: "approval_required", notify_available: true,
     notify_failures: true, maintenance: { days: [0, 1, 2, 3, 4, 5, 6], start: "02:00", duration_minutes: 120 } };
   const maintenance = updates.maintenance || {};
+  const smart = settings.smart || { temperature: { warning: 55, critical: 65 },
+    reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true };
   const info = settings.info || {};
   const nodes = overview?.nodes || STATE.data.nodes || [];
   const hardwareRows = features.map(f => {
@@ -50,6 +53,23 @@ async function viewSettings() {
           ${thresholdEditor("temperature", "CPU temperature", "°C", "Host thermal warning", thresholds.temperature)}
         </div>
         <div class="note"><b>Warning</b> changes the metric and node card to yellow. <b>Critical</b> changes them to red. A node uses the most severe result across CPU, memory, disk, and temperature.</div>
+      </section>
+
+      <section class="card flat settings-wide">
+        <div class="settings-card-head"><div><div class="ctitle">Drive health policy</div>
+          <div class="csub">SMART warnings shown on node cards and in cluster health</div></div>
+          ${can("admin") ? '<button class="btn pri" onclick="saveHealthSettings()">Save drive policy</button>' : '<span class="pill neutral">admin managed</span>'}</div>
+        <div class="threshold-grid">
+          ${thresholdEditor("drive_temperature", "Drive temperature", "°C", "SATA, SAS, and NVMe temperature", smart.temperature)}
+          <div class="threshold-card"><div><b>Media counters</b><div class="dim xs">Alert when raw drive counters reach these values</div></div>
+            <div class="smart-threshold-values">
+              <label>Reallocated warning <input id="set_smart_reallocated" type="number" min="1" max="1000000" value="${smart.reallocated_warning}" ${can("admin") ? "" : "disabled"}></label>
+              <label>Pending critical <input id="set_smart_pending" type="number" min="1" max="1000000" value="${smart.pending_critical}" ${can("admin") ? "" : "disabled"}></label>
+              <label>Uncorrectable critical <input id="set_smart_uncorrectable" type="number" min="1" max="1000000" value="${smart.uncorrectable_critical}" ${can("admin") ? "" : "disabled"}></label>
+            </div></div>
+        </div>
+        <label class="switch" style="margin-top:14px"><input id="set_smart_notify" type="checkbox" ${smart.notify_failures !== false ? "checked" : ""} ${can("admin") ? "" : "disabled"}> Include SMART failures and threshold breaches in cluster health notifications</label>
+        <div class="note"><b>Device differences are preserved.</b> NVMe reports media errors; ATA disks report reallocated, pending, and uncorrectable sectors. Missing counters are shown as unsupported, not zero.</div>
       </section>
 
       <section class="card flat settings-wide">
@@ -112,6 +132,9 @@ async function viewSettings() {
 window.saveHealthSettings = async () => {
   const read = id => ({ warning: +$("#set_" + id + "_warn").value, critical: +$("#set_" + id + "_crit").value });
   const body = { thresholds: { cpu: read("cpu"), memory: read("memory"), disk: read("disk"), temperature: read("temperature") },
+    smart: { temperature: read("drive_temperature"), reallocated_warning: +$("#set_smart_reallocated").value,
+      pending_critical: +$("#set_smart_pending").value, uncorrectable_critical: +$("#set_smart_uncorrectable").value,
+      notify_failures: $("#set_smart_notify").checked },
     updates: STATE.data.appSettings?.updates };
   try {
     const saved = await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -129,7 +152,8 @@ window.updatePolicyFields = () => {
 
 window.saveUpdateSettings = async () => {
   const current = STATE.data.appSettings || {};
-  const body = { thresholds: current.thresholds || HEALTH_DEFAULTS.thresholds, updates: {
+  const body = { thresholds: current.thresholds || HEALTH_DEFAULTS.thresholds,
+    smart: current.smart, updates: {
     policy: $("#set_update_policy").value,
     notify_available: $("#set_notify_available").checked,
     notify_failures: $("#set_notify_failures").checked,

@@ -17,6 +17,7 @@ class AppSettingsTests(unittest.TestCase):
         self.assertLess(settings["thresholds"]["memory"]["warning"],
                         settings["thresholds"]["memory"]["critical"])
         self.assertEqual("approval_required", settings["updates"]["policy"])
+        self.assertEqual(1, settings["smart"]["pending_critical"])
 
     def test_partial_update_uses_defaults_for_other_metrics(self):
         settings = server.validate_app_settings({
@@ -76,6 +77,20 @@ class AppSettingsTests(unittest.TestCase):
 
     def test_image_cleanup_is_admin_only(self):
         self.assertEqual("admin", server.needed_role("/api/images/cleanup", "POST"))
+
+    def test_smart_policy_and_test_authorization(self):
+        settings = server.validate_app_settings({"smart": {
+            "temperature": {"warning": 60, "critical": 72},
+            "reallocated_warning": 4, "pending_critical": 2,
+            "uncorrectable_critical": 3, "notify_failures": False,
+        }})
+        self.assertEqual(72, settings["smart"]["temperature"]["critical"])
+        self.assertFalse(settings["smart"]["notify_failures"])
+        with self.assertRaisesRegex(ValueError, "drive temperature"):
+            server.validate_app_settings({"smart": {
+                "temperature": {"warning": 80, "critical": 70}}})
+        self.assertEqual("viewer", server.needed_role("/api/node/smart", "GET"))
+        self.assertEqual("admin", server.needed_role("/api/node/smart/test", "POST"))
 
     def test_volume_impact_is_viewable_but_deletion_is_admin_only(self):
         self.assertEqual("viewer", server.needed_role("/api/volumes/delete-plan", "GET"))
