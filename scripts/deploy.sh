@@ -5,7 +5,7 @@ set -euo pipefail
 NS="${NS:-lab}"
 HOST="${HOST:-rancher@192.0.2.210}"
 IMAGE="${IMAGE:-ghcr.io/wjcloudy/homestead}"
-TAG="${TAG:-2.8.3}"
+TAG="${TAG:-2.8.4}"
 INSTALL_NODE_PROBE="${INSTALL_NODE_PROBE:-true}"
 K='sudo -n /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml'
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

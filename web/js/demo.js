@@ -261,7 +261,12 @@
     },
     "/api/vmimages": [],
     "/api/vms": [],
-    "/api/sources": [],
+    "/api/sources": [{ name: "unraid", host: "192.0.2.10", user: "root", kind: "unraid", base_path: "/mnt/user/appdata", added: "2026-09-20 12:00" }],
+    "/api/sources/containers": { containers: [{ name: "media-server", image: "example/media-server:latest", state: "running" }] },
+    "/api/sources/browse": { entries: ["media-server", "home-automation"] },
+    "/api/sources/inspect": { name: "media-server", image: "example/media-server:latest", remote_path: "/mnt/user/appdata/media-server",
+      mount_path: "/config", ports: [{ container: 8096, host: 8096, protocol: "TCP", expose: true }],
+      env: { PUID: "1000", PGID: "1000" }, hardware: [], network_mode: "loadbalancer", mounts: [] },
     "/api/imports": [],
     "/api/lh/overview": lhOverview,
     "/api/lh/snapshots": [], "/api/lh/backups": lhBackups,
@@ -346,7 +351,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.2", candidate: "ghcr.io/wjcloudy/homestead:2.8.3", candidate_tag: "2.8.3", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.3", candidate: "ghcr.io/wjcloudy/homestead:2.8.4", candidate_tag: "2.8.4", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

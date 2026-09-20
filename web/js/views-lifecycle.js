@@ -617,15 +617,15 @@ window.inspectImport = async (source, container) => {
     importSetup(source, container, cfg);
   } catch (e) { $("#mbody").innerHTML = `<div class="empty"><b>Could not inspect ${esc(container)}</b><br><span class="dim small">${esc(e.message)}</span></div>`; }
 };
-window.importSetup = (source, dir, cfg = {}) => {
+window.importSetup = async (source, dir, cfg = {}) => {
   const src = (STATE.data.srcs || []).find(s => s.name === source) || {};
   const name = (cfg.name || dir).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 38);
   STATE.data.importCfg = cfg;
+  const storage = await api("/api/deploy/options?ns=lab").catch(() => ({ pvcs: [], storage_classes: ["longhorn-r2"] }));
+  STATE.data.importStorage = storage;
+  const classes = storage.storage_classes?.length ? storage.storage_classes : ["longhorn-r2"];
   modal("Import · " + dir, `
-    <div class="f2">
-      <div class="f"><label>Workload name</label><input type="text" id="im_name" value="${esc(name)}"></div>
-      <div class="f"><label>Volume size (GB)</label><input type="number" id="im_size" value="10" min="1"></div>
-    </div>
+    <div class="f"><label>Workload name</label><input type="text" id="im_name" value="${esc(name)}"></div>
     <div class="f"><label>Remote path</label>
       <input type="text" id="im_path" value="${esc(cfg.remote_path || ((src.base_path || "") + "/" + dir))}"></div>
     <div class="f"><label>Docker image ${tip("Read from Docker on the source host. You can change the tag before importing.")}</label>
@@ -635,7 +635,17 @@ window.importSetup = (source, dir, cfg = {}) => {
     <div class="hwchoices">${hardwareChoices("im_hw", cfg.hardware || [])}</div>
     <div class="f"><label>Mount appdata inside the container ${tip("This is the path the app sees inside the container, usually /config. The copied files themselves live on a Longhorn volume, not at this path on a Harvester node.")}</label>
       <input type="text" id="im_mount" value="${esc(cfg.mount_path || "/config")}">
-      <div class="dim xs" style="margin-top:6px">Source files → Longhorn PVC <span class="mono">${esc(name)}-appdata</span> → this path inside the container.</div></div>
+      <div class="dim xs" style="margin-top:6px">Source files → Longhorn PVC <span class="mono" id="im_pvc_route">${esc(name)}-appdata</span> → this path inside the container.</div></div>
+    <div class="sec">Longhorn storage ${tip("Choose where copied appdata is stored. RWO suits one workload; RWX allows attachment from multiple nodes. Existing PVC merges the imported files into data already in that claim.")}</div>
+    <div class="deploy-volume import-storage">
+      <div class="deploy-volume-grid">
+        <div><label>Storage source</label><select id="im_storage_kind" onchange="imSyncStorage()"><option value="new-rwo">New Longhorn volume · RWO</option><option value="new-rwx">New shared volume · RWX</option><option value="existing">Existing PVC · merge data</option></select></div>
+        <div id="im_pvc_new"><label>New PVC name</label><input id="im_pvc_name" value="${esc(name)}-appdata" oninput="imSyncStorage()"></div>
+        <div id="im_pvc_existing" style="display:none"><label>Existing PVC</label><select id="im_pvc_select" onchange="imSyncStorage()">${(storage.pvcs || []).length ? `<option value="">Choose an existing PVC…</option>${storage.pvcs.map(pvc => `<option value="${esc(pvc.name)}">${esc(pvc.name)} · ${esc((pvc.access_modes || []).join("/") || "mode unknown")} · ${esc(pvc.size || "size unknown")}</option>`).join("")}` : '<option value="">No existing PVCs in lab</option>'}</select></div>
+        <div class="vnew" id="im_new_settings"><div><label>Size GiB</label><input type="number" id="im_size" value="10" min="1" max="16384"></div><div><label>Storage class</label><select id="im_sc">${classes.map(sc => `<option ${sc === "longhorn-r2" ? "selected" : ""}>${esc(sc)}</option>`).join("")}</select></div></div>
+      </div>
+      <div class="volume-foot"><span id="im_storage_help" class="dim small">Creates a Longhorn claim for this workload with single-node attachment.</span></div>
+    </div>
     <div class="sec">Network</div><div class="f2"><div class="f"><label>Docker network → Kubernetes</label><select id="im_net"><option value="loadbalancer">LAN access (VIP)</option><option value="internal">Cluster only</option><option value="host" ${cfg.network_mode === "host" ? "selected" : ""}>Host network (advanced)</option></select></div>
       <div class="f"><label>VIP allocation ${tip("Choose a new automatic or specific VIP for apps such as Pi-hole that need port 53 on their own address.")}</label><select id="im_vip"><option value="shared">Shared Homestead VIP</option><option value="auto">New automatic VIP</option><option value="manual">Specific VIP</option></select></div></div>
     <div class="f"><label>Specific VIP (only for manual)</label><input id="im_ip" placeholder="192.0.2.250"></div>
@@ -655,15 +665,32 @@ window.importSetup = (source, dir, cfg = {}) => {
 };
 window.imAddPort = () => { $("#im_ports").insertAdjacentHTML("beforeend", '<div class="f4 im-port"><div><label>Container</label><input class="ipc" type="number"></div><div><label>LAN</label><input class="iph" type="number"></div><div><label>Protocol</label><select class="ipp"><option>TCP</option><option>UDP</option></select></div><label class="switch"><input class="ipe" type="checkbox" checked>Expose</label></div>'); };
 window.imAddEnv = () => { $("#im_env").insertAdjacentHTML("beforeend", '<div class="f2 im-env"><div class="f"><label>Variable</label><input class="iek"></div><div class="f"><label>Value</label><input class="iev"></div></div>'); };
+window.imSyncStorage = () => {
+  const kind = $("#im_storage_kind")?.value || "new-rwo", existing = kind === "existing";
+  $("#im_pvc_new").style.display = existing ? "none" : "block";
+  $("#im_pvc_existing").style.display = existing ? "block" : "none";
+  $("#im_new_settings").style.display = existing ? "none" : "grid";
+  $("#im_pvc_route").textContent = (existing ? $("#im_pvc_select").value : $("#im_pvc_name").value.trim()) || "choose a PVC";
+  $("#im_storage_help").textContent = existing
+    ? "Copies into an existing PVC and keeps its current access mode, storage class, and data. Files with the same names may be replaced."
+    : kind === "new-rwx" ? "Creates shared Longhorn storage that can attach from multiple nodes."
+    : "Creates a Longhorn claim for this workload with single-node attachment.";
+};
 window.doImport = async source => {
   const env = {}; $$(".im-env").forEach(r => { const k = $(".iek", r).value.trim(); if (k) env[k] = $(".iev", r).value; });
   const cfg = STATE.data.importCfg || {};
+  const storageKind = $("#im_storage_kind").value, existing = storageKind === "existing";
+  const pvcName = existing ? $("#im_pvc_select").value : $("#im_pvc_name").value.trim();
   const body = { source, name: $("#im_name").value.trim(), remote_path: $("#im_path").value.trim(),
     image: $("#im_image").value.trim(), icon: $("#im_icon").value.trim(), mount_path: $("#im_mount").value.trim(),
-    size_gb: +$("#im_size").value, start_after_copy: $("#im_start").checked,
+    pvc_name: pvcName, size_gb: existing ? 1 : +$("#im_size").value, reuse_existing: existing,
+    storage_class: existing ? "longhorn-r2" : $("#im_sc").value,
+    access_mode: storageKind === "new-rwx" ? "ReadWriteMany" : "ReadWriteOnce", start_after_copy: $("#im_start").checked,
     ports: $$(".im-port").map(r => ({ container: +$(".ipc", r).value, host: +$(".iph", r).value || +$(".ipc", r).value, protocol: $(".ipp", r).value, expose: $(".ipe", r).checked })).filter(p => p.container),
     env, hardware: selectedHardware("im_hw"), network_mode: $("#im_net").value, vip_mode: $("#im_vip").value, lb_ip: $("#im_ip").value.trim() };
   if (!body.name || !body.image) return toast("workload name and image are required", "bad");
+  if (!body.pvc_name) return toast(existing ? "choose an existing PVC" : "PVC name is required", "bad");
+  if (existing && !confirm(`Import into existing PVC “${body.pvc_name}”?\n\nThe current data is kept, but imported files with the same names may be replaced.`)) return;
   try {
     const r = await api("/api/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(`import started (${r.job})`, "ok"); closeModal(); resetPaint(); viewImport();

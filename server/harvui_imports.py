@@ -252,20 +252,37 @@ def _pod_logs(pod):
 def import_container(cfg):
     """Create the PVC, launch the copy Job, then create the Deployment.
 
-    cfg: {source, remote_path, name, image, ports, env, mount_path, size_gb,
-          start_after_copy}
+    cfg: {source, remote_path, name, image, ports, env, mount_path, pvc_name,
+          size_gb, storage_class, access_mode, reuse_existing, start_after_copy}
     """
     name = cfg["name"]
     if not SAFE.match(name):
         raise ValueError("name must be lowercase letters, numbers and dashes")
     src = _source(cfg["source"])
-    pvc = f"{name}-appdata"
+    pvc = str(cfg.get("pvc_name") or f"{name}-appdata").strip()
+    if not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?", pvc):
+        raise ValueError("PVC name must be lowercase letters, numbers and dashes")
     size = int(cfg.get("size_gb", 10))
-    try:
-        create_pvc(NS, pvc, size)
-    except urllib.error.HTTPError as e:
-        if e.code != 409:
+    if not 1 <= size <= 16384:
+        raise ValueError("volume size must be between 1 and 16384 GiB")
+    access_mode = str(cfg.get("access_mode") or "ReadWriteOnce")
+    if access_mode not in ("ReadWriteOnce", "ReadWriteMany"):
+        raise ValueError("access mode must be ReadWriteOnce or ReadWriteMany")
+    storage_class = str(cfg.get("storage_class") or "longhorn-r2").strip()
+    if not re.fullmatch(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?", storage_class):
+        raise ValueError("storage class must use lowercase letters, numbers, dots and dashes")
+    if cfg.get("reuse_existing"):
+        try:
+            existing = kget(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{pvc}")
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                raise ValueError(f"existing PVC {pvc} was not found") from error
             raise
+        existing_modes = (existing.get("spec", {}) or {}).get("accessModes", []) or []
+        access_mode = existing_modes[0] if existing_modes else access_mode
+        storage_class = (existing.get("spec", {}) or {}).get("storageClassName", storage_class)
+    else:
+        create_pvc(NS, pvc, size, storage_class, access_mode)
 
     remote = cfg["remote_path"]
     job = f"harvui-import-{name}"
@@ -336,6 +353,7 @@ def import_container(cfg):
         created = name
     _bust("wl", "ov", "flow")
     return {"ok": True, "job": job, "pvc": pvc, "deployment": created,
+            "storage_class": storage_class, "access_mode": access_mode,
             "note": "Deployment created stopped; start it once the copy job finishes."
                     if cfg.get("start_after_copy", True) else ""}
 
