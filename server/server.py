@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.7.12"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.7.13"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1457,6 +1457,56 @@ def search_appstore(apps, term):
     return [app for _, _, app in sorted(ranked, key=lambda row: (row[0], row[1]))]
 
 
+def appstore_number(value):
+    """Coerce optional feed statistics without letting malformed rows break browsing."""
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def unique_appstore_apps(apps):
+    """Hide duplicate templates that point at the same named container image."""
+    seen, out = set(), []
+    for app in apps:
+        key = (str(app.get("name") or "").strip().lower(),
+               str(app.get("repo") or "").strip().lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(app)
+    return out
+
+
+def rank_appstore(apps, mode="popular"):
+    """Rank cached catalogue rows using only statistics supplied by the feed."""
+    rows = unique_appstore_apps(apps)
+    if mode == "recent":
+        key = lambda app: (-appstore_number(app.get("first_seen")),
+                           str(app.get("name") or "").lower())
+    elif mode == "trending":
+        key = lambda app: (-appstore_number(app.get("top_trending")),
+                           -appstore_number(app.get("trending")),
+                           -appstore_number(app.get("top_performing")),
+                           -appstore_number(app.get("downloads")),
+                           str(app.get("name") or "").lower())
+    else:
+        key = lambda app: (-appstore_number(app.get("top_performing")),
+                           -appstore_number(app.get("trending")),
+                           -appstore_number(app.get("top_trending")),
+                           -appstore_number(app.get("downloads")),
+                           str(app.get("name") or "").lower())
+    return sorted(rows, key=key)
+
+
+def appstore_spotlight(apps):
+    """Choose the strongest feed-ranked app for the catalogue spotlight."""
+    ranked = rank_appstore(apps, "popular")
+    return next((app for app in ranked if appstore_number(app.get("top_performing")) > 0),
+                next((app for app in ranked if appstore_number(app.get("trending")) > 0),
+                     ranked[0] if ranked else None))
+
+
 def fetch_appstore():
     def go():
         req = urllib.request.Request(CA_FEED, headers={
@@ -1483,6 +1533,13 @@ def fetch_appstore():
                 "network": a.get("Network") or "bridge",
                 "webui": a.get("WebUI") or "",
                 "config": a.get("Config") or [],
+                "downloads": int(appstore_number(a.get("downloads"))),
+                "stars": int(appstore_number(a.get("stars"))),
+                "trending": appstore_number(a.get("trending")),
+                "top_trending": appstore_number(a.get("topTrending")),
+                "top_performing": appstore_number(a.get("topPerforming")),
+                "first_seen": int(appstore_number(a.get("FirstSeen"))),
+                "last_update": int(appstore_number(a.get("LastUpdate"))),
             }
             item["deploy"] = template_to_cfg(item)
             out.append(item)
@@ -2152,15 +2209,24 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/appstore":
                 term = (q.get("q") or [""])[0].lower().strip()
                 cat = (q.get("cat") or [""])[0].lower().strip()
+                sort_mode = (q.get("sort") or ["popular"])[0].lower().strip()
+                if sort_mode not in {"popular", "trending", "recent"}:
+                    sort_mode = "popular"
                 try:
                     apps = fetch_appstore()
                 except Exception as e:
                     return self._send(502, {"error": f"app feed unavailable: {e}"})
                 if term:
                     apps = search_appstore(apps, term)
+                else:
+                    apps = rank_appstore(apps, sort_mode)
                 if cat:
                     apps = [a for a in apps if any(cat in value.lower() for value in a.get("categories", []))]
-                return self._send(200, {"total": len(apps), "apps": apps[:60]})
+                spotlight = None if term else appstore_spotlight(apps)
+                limit = 60 if term else 30
+                return self._send(200, {"total": len(apps), "apps": apps[:limit],
+                                        "sort": "search" if term else sort_mode,
+                                        "spotlight": spotlight})
             if p == "/api/logs":
                 ns = q["ns"][0]
                 pod = (q.get("pod") or [""])[0]

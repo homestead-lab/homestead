@@ -43,6 +43,35 @@ class AppStoreTemplateTests(unittest.TestCase):
         ]
         self.assertEqual(apps, server.search_appstore(apps, "frigate"))
 
+    def test_catalogue_popular_ranking_uses_feed_performance_and_deduplicates_templates(self):
+        apps = [
+            {"name": "Small", "repo": "demo/small:latest", "downloads": 10, "top_performing": 9.2},
+            {"name": "Large", "repo": "demo/large:latest", "downloads": 500, "top_performing": 2.1},
+            {"name": "Large", "repo": "demo/large:latest", "downloads": 500, "top_performing": 2.1},
+        ]
+        ranked = server.rank_appstore(apps, "popular")
+        self.assertEqual(["Small", "Large"], [app["name"] for app in ranked])
+
+    def test_catalogue_recent_and_trending_use_native_feed_metrics(self):
+        apps = [
+            {"name": "Older fast", "repo": "demo/fast", "first_seen": 10,
+             "top_performing": 8.4, "top_trending": 3.1, "trending": 8.4, "downloads": 200},
+            {"name": "Newest", "repo": "demo/new", "first_seen": 30,
+             "top_performing": 0, "top_trending": 9.2, "trending": 10.1, "downloads": 20},
+            {"name": "Middle", "repo": "demo/middle", "first_seen": 20,
+             "top_performing": 4.0, "top_trending": 4.0, "trending": 4.0, "downloads": 100},
+        ]
+        self.assertEqual(["Newest", "Middle", "Older fast"],
+                         [app["name"] for app in server.rank_appstore(apps, "recent")])
+        self.assertEqual(["Newest", "Middle", "Older fast"],
+                         [app["name"] for app in server.rank_appstore(apps, "trending")])
+        self.assertEqual("Older fast", server.appstore_spotlight(apps)["name"])
+
+    def test_catalogue_metric_coercion_tolerates_missing_and_malformed_values(self):
+        self.assertEqual(0, server.appstore_number(None))
+        self.assertEqual(0, server.appstore_number("not-a-number"))
+        self.assertEqual(12.5, server.appstore_number("12.5"))
+
     def test_catalogue_markup_is_rendered_as_plain_readable_text(self):
         self.assertEqual(
             "Container Variable: PLEX_CLAIM_TOKEN · Example: claim-abc",
@@ -323,7 +352,7 @@ class HomesteadManifestTests(unittest.TestCase):
     def test_runtime_workload_uses_homestead_names_and_image(self):
         manifest = (ROOT / "deploy" / "deploy.yaml").read_text()
         self.assertIn("kind: Deployment\nmetadata:\n  name: homestead", manifest)
-        self.assertIn("- name: homestead\n          image: ghcr.io/wjcloudy/homestead:2.7.12", manifest)
+        self.assertIn("- name: homestead\n          image: ghcr.io/wjcloudy/homestead:2.7.13", manifest)
         self.assertIn("harvui.io/update-sources: '{\"homestead\":", manifest)
         self.assertNotIn("kind: Deployment\nmetadata:\n  name: harvui", manifest)
 

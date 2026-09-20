@@ -194,7 +194,8 @@
     storage_classes: ["harvester-longhorn", "longhorn-r2"],
   };
   const demoApp = { name: "Frigate", repo: "ghcr.io/blakeblackshear/frigate:stable", icon: "", cat: "HomeAutomation",
-    desc: "Network video recorder with local AI object detection.", deploy: {
+    desc: "Network video recorder with local AI object detection.", downloads: 24800000, stars: 42000,
+    trending: 7.8, top_trending: 5.4, top_performing: 7.8, first_seen: 1640995200, deploy: {
       name: "frigate", image: "ghcr.io/blakeblackshear/frigate:stable", icon: "",
       ports: [{ container: 8971, host: 8971, expose: true, protocol: "TCP" },
               { container: 8555, host: 8555, expose: true, protocol: "TCP" },
@@ -231,7 +232,7 @@
     "/api/namespaces": ["default", "lab", "monitoring"],
     "/api/storageclasses": ["harvester-longhorn", "longhorn-r2"],
     "/api/deploy/options": deployOptions,
-    "/api/appstore": { total: 1, apps: [demoApp] },
+    "/api/appstore": { total: 1, apps: [demoApp], sort: "popular", spotlight: demoApp },
     "/api/preview": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       const joining = body.target_mode === "existing";
@@ -305,7 +306,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.7.11", candidate: "ghcr.io/wjcloudy/homestead:2.7.12", candidate_tag: "2.7.12", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.7.12", candidate: "ghcr.io/wjcloudy/homestead:2.7.13", candidate_tag: "2.7.13", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

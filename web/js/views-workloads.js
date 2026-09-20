@@ -891,38 +891,108 @@ window.confirmDeploy = async () => {
 };
 
 /* ---------------- app store ---------------- */
+let STORE_MODE = "popular";
+
+function storeCount(value) {
+  return new Intl.NumberFormat(undefined, { notation: Number(value || 0) >= 10000 ? "compact" : "standard",
+    maximumFractionDigits: 1 }).format(Number(value || 0));
+}
+
+function storeMetric(app, mode) {
+  if (mode === "recent" && app.first_seen) {
+    return `${icon("clock")} Added ${new Date(app.first_seen * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`;
+  }
+  if (mode === "trending" && (app.top_trending || app.trending)) {
+    const score = Number(app.top_trending || app.trending || 0);
+    return `${icon("update")} ${score.toFixed(1)}% feed trend`;
+  }
+  if (mode === "popular" && app.top_performing) {
+    return `${icon("update")} ${Number(app.top_performing).toFixed(1)}% performance score`;
+  }
+  return app.downloads ? `${icon("import")} ${storeCount(app.downloads)} downloads` : `${icon("box")} Community template`;
+}
+
+function storeCard(app, index, mode) {
+  return `<div class="card app">
+    <div class="row" style="gap:11px">${app.icon ? `<img class="ico" src="${esc(app.icon)}" referrerpolicy="no-referrer" onerror="this.style.display='none'">` : ""}
+      <div style="min-width:0"><div class="nm">${esc(app.name)}</div>
+      ${appCategoryLabel(app.categories || app.cat) ? `<span class="tag">${esc(appCategoryLabel(app.categories || app.cat))}</span>` : ""}
+      ${app.deploy?.app_profile ? `<span class="tag ${app.deploy.app_profile.level === "dependency" ? "warn" : "info"}">${esc(app.deploy.app_profile.label)}</span>` : ""}</div></div>
+    <div class="store-metric">${storeMetric(app, mode)}</div>
+    <div class="ds">${esc(app.desc || "No description provided.")}</div>
+    <div class="rp">${esc(app.repo)}</div>
+    <button class="btn pri wide" onclick="storeInstall(${index})">Configure &amp; deploy</button></div>`;
+}
+
+function storeSpotlight(app) {
+  if (!app) return "";
+  return `<section class="store-spotlight card flat">
+    <div class="store-spotlight-icon">${app.icon ? `<img src="${esc(app.icon)}" referrerpolicy="no-referrer" onerror="this.style.display='none'">` : icon("store")}</div>
+    <div class="store-spotlight-copy"><div class="store-eyebrow">Spotlight · top performing in the feed</div>
+      <h3>${esc(app.name)}</h3><p>${esc(app.desc || "No description provided.")}</p>
+      <div class="store-stats">${app.top_performing ? `<span>${Number(app.top_performing).toFixed(1)}% performance score</span>` : ""}
+        ${app.trending ? `<span>${Number(app.trending).toFixed(1)}% current trend</span>` : ""}
+        ${app.downloads ? `<span>${storeCount(app.downloads)} image pulls</span>` : ""}</div></div>
+    <button class="btn pri" onclick="storeInstallSpotlight()">Configure &amp; deploy</button>
+  </section>`;
+}
+
 async function viewStore() {
   resetPaint();
   paint(`<div class="phead">
       <div><h2>Community catalogue</h2><p>Third-party Community Applications templates adapted into reviewed Kubernetes workloads</p></div>
-      <div class="row"><input class="search" id="s_q" placeholder="plex, nextcloud, jellyfin…" value="${esc(STATE.q)}" style="width:260px;padding-left:16px">
+      <div class="row store-search"><input class="search" id="s_q" placeholder="plex, nextcloud, jellyfin…" value="${esc(STATE.q)}" style="width:260px;padding-left:16px">
       <button class="btn pri" onclick="storeSearch()">Search</button></div></div>
     <div class="note catalogue-notice">Listings are read on demand from the public <a href="https://github.com/Squidly271/AppFeed" target="_blank" rel="noopener">Community Applications feed</a> and cached for six hours. Homestead is independent and is not endorsed by the catalogue maintainers. Unraid® is a registered trademark of Lime Technology, Inc. This application is not affiliated with, endorsed, or sponsored by Lime Technology, Inc.</div>
-    <div id="s_res"><div class="empty">Search the community catalogue to begin.</div></div>`);
+    <div class="store-browse-head"><div class="seg store-modes" id="s_modes">
+      <button class="${STORE_MODE === "popular" ? "on" : ""}" onclick="storeBrowse('popular')">Popular</button>
+      <button class="${STORE_MODE === "trending" ? "on" : ""}" onclick="storeBrowse('trending')">Trending</button>
+      <button class="${STORE_MODE === "recent" ? "on" : ""}" onclick="storeBrowse('recent')">Recently added</button>
+    </div><span class="dim xs">Rankings come from statistics already present in the cached feed.</span></div>
+    <div id="s_res"><div class="empty"><span class="spin2"></span>loading catalogue…</div></div>`);
   $("#s_q").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); storeSearch(); } });
-  if (STATE.q) storeSearch();
+  if (STATE.q) storeSearch(); else storeBrowse(STORE_MODE);
 }
 window.storeSearch = async () => {
   const q = $("#s_q").value.trim();
+  if (!q) return storeBrowse(STORE_MODE);
   $("#s_res").innerHTML = `<div class="empty"><span class="spin2"></span>searching catalogue…</div>`;
   try {
     const r = await api("/api/appstore?q=" + encodeURIComponent(q));
     STATE.data.apps = r.apps;
+    STATE.data.spotlight = null;
     $("#s_res").innerHTML = r.apps.length
       ? `<div class="dim small" style="margin-bottom:12px">${r.total} match${r.total === 1 ? "" : "es"} · showing ${r.apps.length}</div>
-        <div class="apps stagger">${r.apps.map((a, i) => `<div class="card app">
-          <div class="row" style="gap:11px">${a.icon ? `<img class="ico" src="${esc(a.icon)}" referrerpolicy="no-referrer" onerror="this.style.display='none'">` : ""}
-            <div style="min-width:0"><div class="nm">${esc(a.name)}</div>
-            ${appCategoryLabel(a.categories || a.cat) ? `<span class="tag">${esc(appCategoryLabel(a.categories || a.cat))}</span>` : ""}
-            ${a.deploy?.app_profile ? `<span class="tag ${a.deploy.app_profile.level === "dependency" ? "warn" : "info"}">${esc(a.deploy.app_profile.label)}</span>` : ""}</div></div>
-          <div class="ds">${esc(a.desc || "No description provided.")}</div>
-          <div class="rp">${esc(a.repo)}</div>
-          <button class="btn pri wide" onclick="storeInstall(${i})">Configure &amp; deploy</button></div>`).join("")}</div>`
+        <div class="apps stagger">${r.apps.map((a, i) => storeCard(a, i, "search")).join("")}</div>`
       : `<div class="empty">nothing matched “${esc(q)}”</div>`;
+  } catch (e) { $("#s_res").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+};
+window.storeBrowse = async mode => {
+  STORE_MODE = ["popular", "trending", "recent"].includes(mode) ? mode : "popular";
+  STATE.q = "";
+  if ($("#s_q")) $("#s_q").value = "";
+  $$("#s_modes button").forEach(button => button.classList.toggle("on", button.textContent.toLowerCase().startsWith(STORE_MODE === "recent" ? "recent" : STORE_MODE)));
+  $("#s_res").innerHTML = `<div class="empty"><span class="spin2"></span>loading catalogue…</div>`;
+  try {
+    const r = await api("/api/appstore?sort=" + encodeURIComponent(STORE_MODE));
+    STATE.data.apps = r.apps;
+    STATE.data.spotlight = r.spotlight || null;
+    const heading = STORE_MODE === "popular" ? "Top performing" : STORE_MODE === "trending" ? "Trending now" : "Recently added";
+    const detail = STORE_MODE === "popular" ? "Top 30 by the feed’s performance score" : STORE_MODE === "trending" ? "Top 30 by the feed’s current trend score" : "The 30 newest templates by first-seen date";
+    $("#s_res").innerHTML = `${storeSpotlight(r.spotlight)}
+      <div class="store-section-head"><div><h3>${heading}</h3><span>${detail}</span></div><b>${r.apps.length}</b></div>
+      ${r.apps.length ? `<div class="apps stagger">${r.apps.map((a, i) => storeCard(a, i, STORE_MODE)).join("")}</div>` : `<div class="empty">No ranked apps are available.</div>`}`;
   } catch (e) { $("#s_res").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
 window.storeInstall = i => {
   const a = STATE.data.apps[i];
+  window.__deployPrefill = a.deploy || { name: a.name, image: a.repo, icon: a.icon || "" };
+  go("deploy");
+  toast(`"${a.name}" loaded — check storage paths before deploying`);
+};
+window.storeInstallSpotlight = () => {
+  const a = STATE.data.spotlight;
+  if (!a) return toast("The spotlight app is no longer available", "bad");
   window.__deployPrefill = a.deploy || { name: a.name, image: a.repo, icon: a.icon || "" };
   go("deploy");
   toast(`"${a.name}" loaded — check storage paths before deploying`);
