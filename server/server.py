@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.4"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.5"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1846,7 +1846,7 @@ import harvui_shares as SHARES
 import harvui_networking as NETWORK
 import harvui_cluster as CLUSTER
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
-LC.bind(kget, ksend, SYS_NS, _cache, HW.features)
+LC.bind(kget, ksend, SYS_NS, _cache, HW.features, create_pvc, STORAGE_CLASS)
 IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.features)
 AUTH.bind(kget, ksend, DEFAULT_NS)
 LH.bind(kget, ksend, _cache, STORAGE_CLASS)
@@ -1888,6 +1888,24 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None):
             return "temporary storage"
         return "Kubernetes volume"
 
+    def storage_kind(volume):
+        """Map a pod volume onto the storage picker's vocabulary.
+
+        Only claims, host paths and emptyDir are editable as storage. ConfigMap
+        and Secret volumes are Kubernetes wiring that the editor shows but does
+        not offer to repoint.
+        """
+        if volume.get("persistentVolumeClaim"):
+            return "existing", volume["persistentVolumeClaim"].get("claimName", "")
+        if volume.get("hostPath"):
+            return "host", volume["hostPath"].get("path", "")
+        if "emptyDir" in volume:
+            return "ephemeral", ""
+        for field in ("configMap", "secret"):
+            if volume.get(field):
+                return field, volume[field].get("name", volume[field].get("secretName", ""))
+        return "other", ""
+
     def env_reference(item):
         ref = item.get("valueFrom", {}) or {}
         for field, label in (("secretKeyRef", "Secret"), ("configMapKeyRef", "ConfigMap")):
@@ -1905,14 +1923,20 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None):
         mounts, hardware = [], []
         for mount in container.get("volumeMounts", []) or []:
             volume = volumes.get(mount.get("name"), {})
-            mounts.append({"name": mount.get("name", ""), "path": mount.get("mountPath", ""),
-                           "source": source_label(volume), "read_only": bool(mount.get("readOnly", False))})
+            kind, value = storage_kind(volume)
             host_path = (volume.get("hostPath") or {}).get("path", "").rstrip("/")
             mount_path = str(mount.get("mountPath") or "").rstrip("/")
+            device = False
             for feature in definitions:
                 expected_host = feature["host_path"].rstrip("/")
-                if (host_path == expected_host or host_path.startswith(expected_host + "/")) and mount_path == feature["container_path"].rstrip("/") and feature["id"] not in hardware:
-                    hardware.append(feature["id"])
+                if (host_path == expected_host or host_path.startswith(expected_host + "/")) and mount_path == feature["container_path"].rstrip("/"):
+                    device = True
+                    if feature["id"] not in hardware:
+                        hardware.append(feature["id"])
+            mounts.append({"name": mount.get("name", ""), "path": mount.get("mountPath", ""),
+                           "source": source_label(volume), "read_only": bool(mount.get("readOnly", False)),
+                           "kind": kind, "value": value,
+                           "managed": device or kind in ("configMap", "secret", "other")})
         literals = {item["name"]: item.get("value", "") for item in container.get("env", []) or []
                     if item.get("name") and "valueFrom" not in item}
         refs = [{"name": item["name"], "source": env_reference(item)}
@@ -1926,14 +1950,27 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None):
                       for port in container.get("ports", []) or []],
             "hardware": hardware, "volumes": mounts,
         })
-    detected = HW.workload_features(pspec, annotations)
+    detected = HW.workload_features(pspec, annotations, definitions)
     assigned = {feature for container in containers for feature in container["hardware"]}
     if containers:
         containers[0]["hardware"].extend(feature for feature in detected if feature not in assigned)
     first = containers[0] if containers else {"name": "", "image": "", "cpu": "", "memory": "", "env": {}, "ports": [], "volumes": []}
+    reusable = []
+    device_paths = {feature["host_path"].rstrip("/") for feature in definitions}
+    for volume in pspec.get("volumes", []) or []:
+        kind, value = storage_kind(volume)
+        if kind not in ("existing", "host", "ephemeral"):
+            continue
+        if kind == "host" and any(value.rstrip("/") == device or value.rstrip("/").startswith(device + "/")
+                                  for device in device_paths):
+            continue
+        reusable.append({"name": volume.get("name", ""),
+                         "kind": {"existing": "pvc", "ephemeral": "emptyDir"}.get(kind, kind),
+                         "source": value})
     return {
         "ns": ns, "name": name, "pod_hostname": pspec.get("hostname", ""),
         "replicas": deployment["spec"].get("replicas", 1), "containers": containers,
+        "pod_volumes": reusable,
         "hardware": detected, "icon": annotations.get("harvui.io/icon-source", annotations.get("harvui.io/icon", "")),
         "node": pspec.get("nodeSelector", {}).get("kubernetes.io/hostname", ""),
         "seed_configs": LC.seed_configs(ns, deployment),

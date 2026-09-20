@@ -12,13 +12,34 @@ const editPortRow = (index, port = {}) => `<div class="edit-port-row">
   <div><label>Protocol</label><select class="ep-protocol">${["TCP", "UDP", "SCTP"].map(value => `<option ${value === (port.protocol || "TCP") ? "selected" : ""}>${value}</option>`).join("")}</select></div>
   <button class="btn sm danger row-remove" type="button" onclick="this.parentNode.remove()">✕</button></div>`;
 
+/* Live namespace storage inventory for the editor's unified volume picker. */
+let EDIT_STORAGE = { pvcs: [], storage_classes: [], pod_volumes: [] };
+const editVolumeRow = mount => ({
+  path: mount.path || "",
+  kind: ["existing", "host", "ephemeral"].includes(mount.kind) ? mount.kind : "existing",
+  source: mount.kind === "ephemeral" ? "" : (mount.value || mount.source || ""),
+  read_only: !!mount.read_only, volume_name: mount.name || "",
+});
+const editVolumePicker = index => createVolumePicker($("#e_vols_" + index), {
+  pvcs: () => EDIT_STORAGE.pvcs,
+  storageClasses: () => EDIT_STORAGE.storage_classes,
+  podVolumes: () => EDIT_STORAGE.pod_volumes,
+  allowPod: () => EDIT_STORAGE.pod_volumes.length > 0,
+  podLabel: "Existing volume in this pod",
+  podEmpty: "Choose a volume already in this pod…",
+  podUnavailable: "No reusable volumes in this pod",
+  podHelp: "Mounts a volume already defined in this pod, sharing that storage with the other container.",
+});
+
 const editContainerPanel = (container, index) => {
   const env = Object.entries(container.env || {});
   const refs = container.env_refs || [];
   const ports = container.ports || [];
   const volumes = container.volumes || [];
+  const managed = volumes.filter(volume => volume.managed);
+  const mounts = volumes.filter(volume => !volume.managed);
   return `<details class="edit-container card flat" data-index="${index}" data-original-name="${esc(container.original_name || container.name)}" ${index === 0 ? "open" : ""}>
-    <summary><span class="edit-container-chevron">›</span><span class="edit-container-title"><b>${esc(container.name)}</b><small class="mono">${esc(container.image)}</small></span><span class="pill">${env.length + refs.length} vars</span><span class="pill">${ports.length} ports</span></summary>
+    <summary><span class="edit-container-chevron">›</span><span class="edit-container-title"><b>${esc(container.name)}</b><small class="mono">${esc(container.image)}</small></span><span class="pill">${env.length + refs.length} vars</span><span class="pill">${ports.length} ports</span><span class="pill">${mounts.length} mounts</span></summary>
     <div class="edit-container-body">
       <div class="f2">
         <div class="f"><label>Container name ${tip("The Kubernetes name of this container inside the pod. Each container name must be unique.")}</label><input id="e_container_name_${index}" type="text" value="${esc(container.name)}"></div>
@@ -37,7 +58,11 @@ const editContainerPanel = (container, index) => {
       <div class="subsec">Container ports</div>
       <div class="e-ports" id="e_ports_${index}">${ports.map(port => editPortRow(index, port)).join("")}</div>
       <button class="btn sm" type="button" onclick="editAddPort(${index})">＋ add port</button>
-      ${volumes.length ? `<div class="subsec">Mounted volumes</div><div class="edit-mount-list">${volumes.map(volume => `<span class="tag info">${esc(volume.source || "?")} → ${esc(volume.path)}${volume.read_only ? " · read-only" : ""}</span>`).join("")}</div><div class="dim xs edit-mount-note">Mount changes require a redeploy, so they are shown here as read-only.</div>` : ""}
+      <div class="subsec">Storage</div>
+      <div class="note storage-guide"><b>Choose deliberately:</b> RWO is best for one workload; RWX permits multi-node sharing; an existing PVC keeps its current data; a volume already in this pod shares the exact backing storage with another container. Host paths reduce failover portability. Saving creates any new claim, then rolls the pod.</div>
+      ${managed.length ? `<div class="edit-mount-list">${managed.map(volume => `<span class="tag info">${esc(volume.source || "?")} → ${esc(volume.path)}${volume.read_only ? " · read-only" : ""}</span>`).join("")}</div><div class="dim xs edit-mount-note">ConfigMap, Secret and hardware device mounts are managed by Homestead and stay as they are.</div>` : ""}
+      <div class="e-vols" id="e_vols_${index}"></div>
+      <button class="btn sm" type="button" onclick="editAddVol(${index})">＋ add storage mapping</button>
     </div>
   </details>`;
 };
@@ -46,9 +71,10 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
   if (!fromRoute && window.setModalRoute) setModalRoute({ panel: "edit", ns, workload: name }, name);
   modal("Edit · " + name, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
   try {
-    const [w, liveNodes] = await Promise.all([
+    const [w, liveNodes, options] = await Promise.all([
       api(`/api/workload?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`),
       loadHardwareFeatures().then(() => api("/api/nodes").catch(() => [])),
+      api(`/api/deploy/options?ns=${encodeURIComponent(ns)}`).catch(() => ({})),
     ]);
     if (liveNodes.length) STATE.data.nodes = liveNodes;
     const nodes = (liveNodes.length ? liveNodes : (STATE.data.ov ? STATE.data.ov.nodes : [])).filter(n => n.schedulable !== false);
@@ -56,6 +82,8 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     const containers = w.containers || [{ original_name: w.container_name || w.name, name: w.container_name || w.name,
       image: w.image, cpu: w.cpu, memory: w.memory, env: w.env || {}, env_refs: [], ports: w.ports || [],
       hardware: w.hardware || [], volumes: w.volumes || [] }];
+    EDIT_STORAGE = { pvcs: options.pvcs || [], storage_classes: options.storage_classes || [],
+      pod_volumes: w.pod_volumes || [] };
     $("#mbody").innerHTML = `
       <div class="f"><label>Workload name ${tip("The real Kubernetes Deployment name. Renaming creates a replacement Deployment, waits for it to become ready, then removes the old one. Generated pods use this name plus a Kubernetes suffix.")}</label><input type="text" id="e_workload_name" value="${esc(w.name)}"></div>
       <div class="f"><label>Pod hostname ${tip("The hostname visible inside the pod. It does not rename the Kubernetes Pod; generated pods use the workload name plus a suffix.")}</label><input type="text" id="e_pod_name" value="${esc(w.pod_hostname || "")}" placeholder="optional"></div>
@@ -83,10 +111,13 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
         <button class="btn" onclick="closeModal()">Cancel</button>
       </div>
       <div class="note" style="margin-top:14px">Saving rolls the pod. Renaming the workload performs a guarded stop, recreate and readiness check. With a ReadWriteOnce volume the old pod must fully stop before the renamed one starts, so expect a short outage. A failed rename restores the original Deployment.</div>`;
+    containers.forEach((container, index) => renderVolumeRows(editVolumePicker(index),
+      (container.volumes || []).filter(volume => !volume.managed).map(editVolumeRow)));
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
 window.editAddEnv = (index, key = "", value = "") => $("#e_env_" + index).insertAdjacentHTML("beforeend", editEnvRow(index, key, value));
 window.editAddPort = (index, port = {}) => $("#e_ports_" + index).insertAdjacentHTML("beforeend", editPortRow(index, port));
+window.editAddVol = (index, volume = {}) => addVolumeRow(editVolumePicker(index), volume);
 window.editSave = async (ns, name) => {
   const containers = $$("#e_containers .edit-container").map(panel => {
     const index = panel.dataset.index;
@@ -96,8 +127,11 @@ window.editSave = async (ns, name) => {
       container: +$(".ep-number", row).value, protocol: $(".ep-protocol", row).value })).filter(port => port.container);
     return { original_name: panel.dataset.originalName, name: $("#e_container_name_" + index).value.trim(),
       image: $("#e_image_" + index).value.trim(), cpu: $("#e_cpu_" + index).value.trim(),
-      memory: $("#e_mem_" + index).value.trim(), hardware: selectedHardware("e_hw_" + index), env, ports };
+      memory: $("#e_mem_" + index).value.trim(), hardware: selectedHardware("e_hw_" + index), env, ports,
+      volumes: readVolumeRows($("#e_vols_" + index)) };
   });
+  const storageIssue = containers.map(container => volumeListIssue(container.volumes)).find(Boolean);
+  if (storageIssue) return toast(storageIssue, "bad");
   const seed_configs = $$("#mbody .e_seed").map(el => ({
     init_container: el.dataset.init, config_map: el.dataset.configMap,
     key: el.dataset.key, value: el.value,

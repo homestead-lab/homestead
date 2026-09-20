@@ -23,6 +23,8 @@ kget = ksend = None
 SYS_NS = set()
 _cache = {}
 hardware_features = lambda: []
+create_pvc = None
+STORAGE_CLASS = "longhorn-r2"
 
 
 def dns_label(value, label):
@@ -32,11 +34,16 @@ def dns_label(value, label):
     return value
 
 
-def bind(_kget, _ksend, _sys_ns, _cache_ref, _hardware_features=None):
-    global kget, ksend, SYS_NS, _cache, hardware_features
+def bind(_kget, _ksend, _sys_ns, _cache_ref, _hardware_features=None,
+         _create_pvc=None, _storage_class=None):
+    global kget, ksend, SYS_NS, _cache, hardware_features, create_pvc, STORAGE_CLASS
     kget, ksend, SYS_NS, _cache = _kget, _ksend, _sys_ns, _cache_ref
     if _hardware_features:
         hardware_features = _hardware_features
+    if _create_pvc:
+        create_pvc = _create_pvc
+    if _storage_class:
+        STORAGE_CLASS = _storage_class
 
 
 def _bust(*keys):
@@ -312,6 +319,168 @@ def _apply_container_edit(container, change, workload_name):
             container.pop("ports", None)
 
 
+def _unique_volume_name(base, used):
+    base = re.sub(r"[^a-z0-9-]", "-", base.lower()).strip("-")[:55] or "volume"
+    candidate, suffix = base, 2
+    while candidate in used:
+        tail = f"-{suffix}"
+        candidate = base[:63 - len(tail)].rstrip("-") + tail
+        suffix += 1
+    used.add(candidate)
+    return candidate
+
+
+def _is_storage_volume(volume):
+    """True for the volume kinds the storage picker owns."""
+    return bool(volume.get("persistentVolumeClaim") or volume.get("hostPath")
+                or "emptyDir" in volume)
+
+
+def _requested_volume_kind(row):
+    kind = str(row.get("kind") or "").strip()
+    if kind:
+        return kind
+    kind_by_type = {"host": "host", "emptyDir": "ephemeral", "pod": "pod"}
+    if row.get("type") in kind_by_type:
+        return kind_by_type[row["type"]]
+    if row.get("create") is False:
+        return "existing"
+    return "new-rwx" if row.get("access_mode") == "ReadWriteMany" else "new-rwo"
+
+
+def _device_host_paths():
+    return {feature["host_path"].rstrip("/") for feature in hardware_features()}
+
+
+def _is_device_mount(volume, devices):
+    path = (volume.get("hostPath") or {}).get("path", "").rstrip("/")
+    return bool(path) and any(path == device or path.startswith(device + "/") for device in devices)
+
+
+def _pvc_exists(ns, name):
+    try:
+        kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}")
+        return True
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return False
+        raise
+
+
+def _apply_container_volumes(ns, spec, container_requests):
+    """Rewrite the storage a container mounts and report the claims to create.
+
+    Only claims, host paths and emptyDir volumes are owned by the storage
+    picker.  Hardware device mounts, ConfigMap and Secret volumes are
+    Kubernetes wiring that the editor never repoints, so they survive untouched.
+    Claims are returned rather than created here so that every container is
+    validated before anything is written to the cluster.
+    """
+    requests = [(container, change.get("volumes") or [])
+                for container, change in container_requests if "volumes" in change]
+    if not requests:
+        return []
+
+    pod_volumes = spec.get("volumes", []) or []
+    by_name = {volume.get("name"): volume for volume in pod_volumes}
+    devices = _device_host_paths()
+    used = set(by_name)
+    pending, seen_claims = [], set()
+
+    def reuse(match):
+        return next((volume.get("name") for volume in pod_volumes if match(volume)), "")
+
+    for container, rows in requests:
+        name = container.get("name", "container")
+        kept = []
+        for mount in container.get("volumeMounts", []) or []:
+            volume = by_name.get(mount.get("name"), {})
+            if not _is_storage_volume(volume) or _is_device_mount(volume, devices):
+                kept.append(mount)
+        mounts, paths = [], {str(mount.get("mountPath") or "").rstrip("/") for mount in kept}
+        for index, row in enumerate(rows):
+            path = str(row.get("path") or "").strip()
+            if not path.startswith("/"):
+                raise ValueError(f"{name}: storage mount path must be absolute, got "
+                                 f"{path or '(blank)'}")
+            if path.rstrip("/") in paths:
+                raise ValueError(f"{name}: {path} is mounted twice")
+            paths.add(path.rstrip("/"))
+            kind = _requested_volume_kind(row)
+            source = str(row.get("source") or "").strip()
+            requested_name = str(row.get("volume_name") or "").strip()
+            if kind == "pod":
+                if source not in by_name or not _is_storage_volume(by_name[source]):
+                    raise ValueError(f"{name}: pod volume {source or '(blank)'} does not exist "
+                                     "in this workload")
+                volume_name = source
+            elif kind == "ephemeral":
+                volume_name = requested_name if "emptyDir" in by_name.get(requested_name, {}) else ""
+                if not volume_name:
+                    volume_name = _unique_volume_name(f"hs-{name}-{index + 1}", used)
+                    pod_volumes.append({"name": volume_name, "emptyDir": {}})
+            elif kind == "host":
+                if not source:
+                    raise ValueError(f"{name}: {path} needs a host path")
+                volume_name = reuse(lambda volume: (volume.get("hostPath") or {}).get("path") == source
+                                    and not _is_device_mount(volume, devices))
+                if not volume_name:
+                    volume_name = _unique_volume_name(f"hs-{name}-{index + 1}", used)
+                    pod_volumes.append({"name": volume_name, "hostPath": {"path": source}})
+            else:
+                claim = dns_label(source, "volume name")
+                volume_name = reuse(lambda volume: (volume.get("persistentVolumeClaim") or {})
+                                    .get("claimName") == claim)
+                if not volume_name:
+                    volume_name = _unique_volume_name(f"hs-{name}-{index + 1}", used)
+                    pod_volumes.append({"name": volume_name,
+                                        "persistentVolumeClaim": {"claimName": claim}})
+                if kind in ("new-rwo", "new-rwx") and claim not in seen_claims:
+                    seen_claims.add(claim)
+                    if _pvc_exists(ns, claim):
+                        raise ValueError(f"volume {claim} already exists — choose "
+                                         "“Existing PVC” to mount it without recreating it")
+                    pending.append({
+                        "name": claim,
+                        "size_gb": max(1, int(row.get("size_gb") or 5)),
+                        "storage_class": str(row.get("storage_class") or "").strip() or STORAGE_CLASS,
+                        "access_mode": "ReadWriteMany" if kind == "new-rwx" else "ReadWriteOnce",
+                    })
+            mount = {"name": volume_name, "mountPath": path}
+            if row.get("read_only"):
+                mount["readOnly"] = True
+            mounts.append(mount)
+        merged = kept + mounts
+        if merged:
+            container["volumeMounts"] = merged
+        else:
+            container.pop("volumeMounts", None)
+
+    # Drop storage volumes nothing mounts any more, leaving Kubernetes wiring alone.
+    mounted = {mount.get("name")
+               for group in ("containers", "initContainers")
+               for item in spec.get(group, []) or []
+               for mount in item.get("volumeMounts", []) or []}
+    remaining = [volume for volume in pod_volumes
+                 if volume.get("name") in mounted or not _is_storage_volume(volume)
+                 or _is_device_mount(volume, devices)]
+    if remaining:
+        spec["volumes"] = remaining
+    else:
+        spec.pop("volumes", None)
+    return pending
+
+
+def _create_pending_pvcs(ns, pending):
+    if not pending:
+        return
+    if not create_pvc:
+        raise ValueError("creating volumes is unavailable on this server")
+    for claim in pending:
+        create_pvc(ns, claim["name"], claim["size_gb"], claim["storage_class"],
+                   claim["access_mode"])
+
+
 def _apply_container_hardware(spec, dep, requested):
     definitions = hardware_features()
     by_id = {feature["id"]: feature for feature in definitions}
@@ -415,6 +584,7 @@ def edit_workload(cfg):
             if any(other is not containers[0] and other.get("name") == final_name for other in containers):
                 raise ValueError(f"container {final_name} already exists in {name}")
             _apply_container_edit(containers[0], legacy, name)
+    pending_claims = _apply_container_volumes(ns, spec, container_requests)
     if "pod_hostname" in cfg:
         pod_hostname = (cfg.get("pod_hostname") or "").strip()
         if pod_hostname:
@@ -447,6 +617,8 @@ def edit_workload(cfg):
 
     dep["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[
         "harvui.io/editedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Every container is validated by now, so new claims can be created safely.
+    _create_pending_pvcs(ns, pending_claims)
     workload_name = dns_label(cfg.get("workload_name") or name, "workload name")
     if workload_name != name:
         return rename_workload(ns, name, workload_name, dep)

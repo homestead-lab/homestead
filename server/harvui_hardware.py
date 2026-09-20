@@ -194,9 +194,10 @@ def inventory(labels, devices, auto_ids=None):
     return out
 
 
-def workload_features(podspec, annotations=None):
+def workload_features(podspec, annotations=None, definitions=None):
     """Read feature IDs from annotations, node selectors or mounted host paths."""
-    defs = features(); found = []
+    defs = features() if definitions is None else definitions
+    found = []
     ann = (annotations or {}).get("harvui.io/hardware", "")
     for fid in [x.strip() for x in ann.split(",") if x.strip()]:
         if fid not in found:

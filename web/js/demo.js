@@ -319,8 +319,11 @@
         image: container.image || found.images[index] || found.images[0], cpu: index ? "20m" : "50m", memory: index ? "64Mi" : "128Mi",
         env: index ? { LOG_LEVEL: "info" } : {}, env_refs: index ? [] : [{ name: "APP_TOKEN", source: "Secret homestead-demo · token" }],
         ports: index ? [{ name: "mqtt", container: 1883, protocol: "TCP" }] : [{ name: "web", container: 8123, protocol: "TCP" }],
-        hardware: index ? [] : (found.hardware || []), volumes: index ? [] : [{ source: `${found.name}-config`, path: "/config", read_only: false }] }));
+        hardware: index ? [] : (found.hardware || []), volumes: index ? [] : [{ name: "config",
+          source: `${found.name}-config`, path: "/config", read_only: false, kind: "existing",
+          value: `${found.name}-config`, managed: false }] }));
       return { ns: found.ns, name: found.name, container_name: containers[0].name,
+        pod_volumes: [{ name: "config", kind: "pvc", source: `${found.name}-config` }],
         pod_hostname: found.name === "frigate" ? "frigate-core" : "", image: found.images[0], replicas: found.desired,
         cpu: "50m", memory: "128Mi", env: {}, ports: [], hardware: found.hardware || [], icon: "", node: found.nodes[0] || "",
         seed_configs: [], volumes: containers[0].volumes, containers };
@@ -351,7 +354,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.3", candidate: "ghcr.io/wjcloudy/homestead:2.8.4", candidate_tag: "2.8.4", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.4", candidate: "ghcr.io/wjcloudy/homestead:2.8.5", candidate_tag: "2.8.5", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

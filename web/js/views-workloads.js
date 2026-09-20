@@ -707,7 +707,7 @@ function applyDeployMode() {
   const host = [...$("#d_net").options].find(o => o.value === "host");
   if (host) host.disabled = joining;
   if (joining && $("#d_net").value === "host") $("#d_net").value = "internal";
-  $$("#d_vols .deploy-volume").forEach(syncVolumeRow);
+  syncVolumeRows($("#d_vols"));
 }
 function collect() {
   DCFG.workload_name = $("#d_workload_name").value.trim();
@@ -722,16 +722,7 @@ function collect() {
   DCFG.vip_mode = $("#d_vip_mode").value; DCFG.lb_ip = $("#d_lb_ip").value.trim();
   DCFG.ports = $$("#d_ports .port-row").map(r => ({ container: +$(".pc", r).value,
     host: +$(".ph", r).value || +$(".pc", r).value, protocol: $(".pp", r).value, expose: $(".pe", r).checked }));
-  DCFG.volumes = $$("#d_vols .deploy-volume").map(r => {
-    const kind = $(".vk", r).value;
-    return { path: $(".vp", r).value.trim(), source: volumeSourceValue(r), kind,
-      type: kind === "host" ? "host" : kind === "pod" ? "pod" : kind === "ephemeral" ? "emptyDir" : "pvc",
-      create: kind === "new-rwo" || kind === "new-rwx", size_gb: +$(".vz", r).value || 5,
-      storage_class: $(".vsc", r).value, access_mode: kind === "new-rwx" ? "ReadWriteMany" : "ReadWriteOnce",
-      read_only: $(".vro", r).checked, label: r.dataset.label || "", description: r.dataset.description || "",
-      required: r.dataset.required === "true", template_source: r.dataset.templateSource || "",
-      role: r.dataset.role || "" };
-  });
+  DCFG.volumes = readVolumeRows($("#d_vols"));
   DCFG.env = {}; $$("#d_env .env-row").forEach(r => { const k = $(".ek", r).value.trim(); if (k) DCFG.env[k] = $(".ev", r).value; });
   return DCFG;
 }
@@ -760,86 +751,22 @@ function addPort(cp = "", hp = "", ex = true, protocol = "TCP") {
     <button class="iconbtn row-remove" type="button" title="Remove port" onclick="this.parentElement.remove();syncSummary()">×</button>`;
   $("#d_ports").appendChild(d); d.addEventListener("input", syncSummary); if (!DRENDERING) syncSummary();
 }
-function volumeKind(v) {
-  if (v.kind) return v.kind;
-  if (v.type === "host") return "host";
-  if (v.type === "emptyDir") return "ephemeral";
-  if (v.type === "pod") return "pod";
-  if (v.create === false) return "existing";
-  return v.access_mode === "ReadWriteMany" ? "new-rwx" : "new-rwo";
-}
-function volumeSourceValue(row) {
-  const choice = $(".vselect", row);
-  return String(choice && choice.style.display !== "none" ? choice.value : $(".vs", row).value).trim();
-}
-function storageSourceList(row, kind) {
-  let values = [];
-  if (kind === "existing") values = DOPT.pvcs.map(v => ({ value: v.name,
-    label: `${(v.access_modes || []).join("/") || "mode unknown"} · ${v.size || "size unknown"} · ${v.status}` }));
-  if (kind === "pod") values = (selectedTarget()?.volumes || []).map(v => ({ value: v.name,
-    label: `${v.kind}${v.source ? ` · ${v.source}` : ""}` }));
-  const choice = $(".vselect", row), requested = choice.value || $(".vs", row).value;
-  const emptyLabel = kind === "pod" ? "Choose a volume from the selected workload…" : "Choose an existing PVC…";
-  const unavailable = kind === "pod" ? "No reusable volumes in the selected workload" : "No existing PVCs in this namespace";
-  choice.innerHTML = values.length
-    ? `<option value="">${emptyLabel}</option>` + values.map(v => `<option value="${esc(v.value)}">${esc(v.value)} · ${esc(v.label)}</option>`).join("")
-    : `<option value="">${unavailable}</option>`;
-  choice.disabled = !values.length;
-  choice.value = values.some(v => v.value === requested) ? requested : "";
-}
-function syncVolumeRow(row) {
-  const kind = $(".vk", row).value, joining = $("#d_target_mode")?.value === "existing";
-  const podOption = [...$(".vk", row).options].find(o => o.value === "pod");
-  if (podOption) podOption.disabled = !joining;
-  if (kind === "pod" && !joining) $(".vk", row).value = "existing";
-  const actual = $(".vk", row).value, isNew = actual.startsWith("new-");
-  $(".vnew", row).style.display = isNew ? "grid" : "none";
-  storageSourceList(row, actual);
-  const source = $(".vs", row), choice = $(".vselect", row), selectable = actual === "existing" || actual === "pod";
-  $(".vsource", row).style.display = actual === "ephemeral" ? "none" : "block";
-  source.style.display = selectable ? "none" : "block";
-  choice.style.display = selectable ? "block" : "none";
-  source.disabled = actual === "ephemeral";
-  source.placeholder = actual === "host" ? "/mnt/storage or /dev/…" : "new PVC name";
-  $(".vsource-label", row).textContent = actual === "host" ? "Host path" : actual === "pod" ? "Pod volume" : actual === "existing" ? "Existing PVC" : "New PVC name";
-  const selectedSource = volumeSourceValue(row);
-  const selectedPvc = actual === "existing" ? DOPT.pvcs.find(v => v.name === selectedSource) : null;
-  const selectedPodVolume = actual === "pod" ? (selectedTarget()?.volumes || []).find(v => v.name === selectedSource) : null;
-  $(".vhelp", row).textContent = actual === "new-rwo" ? "Creates a Longhorn claim for this workload (single-node attachment)."
-    : actual === "new-rwx" ? "Creates shared Longhorn storage that can attach from multiple nodes."
-    : actual === "existing" ? selectedPvc ? `${selectedPvc.name}: ${(selectedPvc.access_modes || []).join("/") || "mode unknown"}, ${selectedPvc.size}, ${selectedPvc.status}. The claim and data are kept.` : "Mounts an existing PVC without creating or deleting it."
-    : actual === "pod" ? selectedPodVolume ? `${selectedPodVolume.name}: ${selectedPodVolume.kind}${selectedPodVolume.source ? ` (${selectedPodVolume.source})` : ""}. Shared with the sidecar.` : "Mounts a volume already defined on the selected workload into this sidecar."
-    : actual === "ephemeral" ? "Creates temporary pod storage. Its contents are deleted when the pod is replaced; ideal for cache or transcoding."
-    : "Mounts this exact host path; the container can only run where that path exists.";
+function deployVolumePicker() {
+  return createVolumePicker($("#d_vols"), {
+    pvcs: () => DOPT.pvcs,
+    storageClasses: () => DOPT.storage_classes,
+    podVolumes: () => selectedTarget()?.volumes || [],
+    allowPod: () => $("#d_target_mode")?.value === "existing",
+    podLabel: "Existing volume in selected pod",
+    podEmpty: "Choose a volume from the selected workload…",
+    podUnavailable: "No reusable volumes in the selected workload",
+    podHelp: "Mounts a volume already defined on the selected workload into this sidecar.",
+    onChange: () => { if (!DRENDERING) syncSummary(); },
+  });
 }
 function addVol(path = "", src = "", type = "pvc", meta = {}) {
   const v = typeof type === "object" ? type : { ...meta, path, source: src, type };
-  const kind = volumeKind(v), d = document.createElement("div"); d.className = "deploy-volume";
-  d.dataset.label = v.label || ""; d.dataset.description = v.description || "";
-  d.dataset.required = String(!!v.required); d.dataset.templateSource = v.template_source || "";
-  d.dataset.role = v.role || "";
-  const classes = DOPT.storage_classes.length ? DOPT.storage_classes : ["longhorn-r2"];
-  d.innerHTML = `<div class="volume-title"><div><b>${esc(v.label || "Storage mapping")}</b>${v.role ? `<span class="tag">${esc(v.role)}</span>` : ""}${v.required ? ' <span class="pill warn">required</span>' : ""}</div>
-      <button class="iconbtn row-remove" type="button" title="Remove storage mapping" onclick="this.closest('.deploy-volume').remove();syncSummary()">×</button></div>
-    ${v.description ? `<div class="dim small volume-desc">${esc(v.description)}</div>` : ""}
-    <div class="deploy-volume-grid">
-      <div><label>Container mount path</label><input class="vp" type="text" value="${esc(v.path || "")}" placeholder="/config"></div>
-      <div><label>Storage source</label><select class="vk">
-        <option value="new-rwo" ${kind === "new-rwo" ? "selected" : ""}>New Longhorn volume · RWO</option>
-        <option value="new-rwx" ${kind === "new-rwx" ? "selected" : ""}>New shared volume · RWX</option>
-        <option value="existing" ${kind === "existing" ? "selected" : ""}>Existing PVC · keep data</option>
-        <option value="pod" ${kind === "pod" ? "selected" : ""}>Existing volume in selected pod</option>
-        <option value="ephemeral" ${kind === "ephemeral" ? "selected" : ""}>Temporary pod storage · emptyDir</option>
-        <option value="host" ${kind === "host" ? "selected" : ""}>Host path · advanced</option></select></div>
-      <div class="vsource"><label class="vsource-label">Volume / path</label><input class="vs" type="text" value="${esc(v.source || "")}"><select class="vselect" style="display:none"></select></div>
-      <div class="vnew"><div><label>Size GiB</label><input class="vz" type="number" min="1" value="${v.size_gb || 5}"></div>
-        <div><label>Storage class</label><select class="vsc">${classes.map(sc => `<option ${sc === (v.storage_class || "longhorn-r2") ? "selected" : ""}>${esc(sc)}</option>`).join("")}</select></div></div>
-    </div>
-    <div class="volume-foot"><span class="dim small vhelp"></span><label class="switch"><input class="vro" type="checkbox" ${v.read_only ? "checked" : ""}>Read-only</label></div>
-    ${v.template_source && v.template_source !== v.source ? `<div class="template-source">Unraid source: <span class="mono">${esc(v.template_source)}</span> · choose its Kubernetes backing above</div>` : ""}`;
-  $("#d_vols").appendChild(d); syncVolumeRow(d);
-  d.addEventListener("input", event => { if (event.target.matches(".vs,.vselect")) syncVolumeRow(d); syncSummary(); });
-  d.addEventListener("change", event => { if (event.target.matches(".vk,.vs,.vselect")) syncVolumeRow(d); syncSummary(); });
+  addVolumeRow(deployVolumePicker(), v);
   if (!DRENDERING) syncSummary();
 }
 function addEnv(k = "", v = "", meta = {}) {
@@ -853,7 +780,7 @@ function addEnv(k = "", v = "", meta = {}) {
   $("#d_env").appendChild(d); d.addEventListener("input", syncSummary); if (!DRENDERING) syncSummary();
 }
 function renderPorts() { const before = DRENDERING; DRENDERING = true; const rows = [...(DCFG.ports || [])]; $("#d_ports").innerHTML = ""; rows.forEach(p => addPort(p.container, p.host, p.expose !== false, p.protocol || "TCP")); DRENDERING = before; }
-function renderVols() { const before = DRENDERING; DRENDERING = true; const rows = [...(DCFG.volumes || [])]; $("#d_vols").innerHTML = ""; rows.forEach(v => addVol("", "", v)); DRENDERING = before; }
+function renderVols() { const before = DRENDERING; DRENDERING = true; renderVolumeRows(deployVolumePicker(), DCFG.volumes || []); DRENDERING = before; }
 function renderEnv() { const before = DRENDERING; DRENDERING = true; const rows = Object.entries(DCFG.env || {}); $("#d_env").innerHTML = ""; rows.forEach(([k, v]) => addEnv(k, v, (DCFG.env_meta || []).find(m => m.key === k) || {})); DRENDERING = before; }
 window.addPort = addPort; window.addVol = addVol; window.addEnv = addEnv;
 window.previewYaml = async () => {
@@ -866,7 +793,8 @@ window.doDeploy = async () => {
   if (!c.container_name || !c.image) return toast("container name and image are required", "bad");
   if (c.target_mode === "new" && !c.workload_name) return toast("workload / pod name is required", "bad");
   if (c.target_mode === "existing" && !c.target_workload) return toast("choose an existing workload", "bad");
-  if (c.volumes.some(v => !v.path || (v.kind !== "ephemeral" && !v.source))) return toast("every persistent storage mapping needs a mount path and source", "bad");
+  const storageIssue = volumeListIssue(c.volumes);
+  if (storageIssue) return toast(storageIssue, "bad");
   try {
     const plan = await api("/api/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
     if (plan.app_profile?.blocked) return toast(plan.app_profile.label || "this workload needs a Kubernetes-specific design", "bad");
