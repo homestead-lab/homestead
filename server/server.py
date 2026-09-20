@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.7.3"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.7.4"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1406,6 +1406,35 @@ def category_values(value):
     return found
 
 
+def search_appstore(apps, term):
+    """Return catalogue matches with name relevance ahead of description hits."""
+    needle = str(term or "").strip().lower()
+    if not needle:
+        return list(apps)
+
+    def relevance(app):
+        name = str(app.get("name") or "").lower()
+        description = str(app.get("desc") or "").lower()
+        if name == needle:
+            return 0
+        if name.startswith(needle):
+            return 1
+        if re.search(rf"(?:^|[^a-z0-9]){re.escape(needle)}", name):
+            return 2
+        if needle in name:
+            return 3
+        if needle in description:
+            return 4
+        return None
+
+    ranked = []
+    for position, app in enumerate(apps):
+        score = relevance(app)
+        if score is not None:
+            ranked.append((score, position, app))
+    return [app for _, _, app in sorted(ranked, key=lambda row: (row[0], row[1]))]
+
+
 def fetch_appstore():
     def go():
         req = urllib.request.Request(CA_FEED, headers={
@@ -2105,7 +2134,7 @@ class H(BaseHTTPRequestHandler):
                 except Exception as e:
                     return self._send(502, {"error": f"app feed unavailable: {e}"})
                 if term:
-                    apps = [a for a in apps if term in a["name"].lower() or term in a["desc"].lower()]
+                    apps = search_appstore(apps, term)
                 if cat:
                     apps = [a for a in apps if any(cat in value.lower() for value in a.get("categories", []))]
                 return self._send(200, {"total": len(apps), "apps": apps[:60]})

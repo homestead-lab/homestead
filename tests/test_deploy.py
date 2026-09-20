@@ -17,6 +17,32 @@ class AppStoreTemplateTests(unittest.TestCase):
         self.assertEqual(["HomeAutomation"], server.category_values([{"name": "HomeAutomation"}]))
         self.assertEqual(["Backup/Sync"], server.category_values({"Category": "Backup/Sync"}))
 
+    def test_search_prioritizes_name_matches_over_description_matches(self):
+        apps = [
+            {"name": "YA-WAMF", "desc": "Consumes Frigate events"},
+            {"name": "Super Frigate Tools", "desc": "Utilities"},
+            {"name": "Frigate Plate Recognizer", "desc": "Plate recognition"},
+            {"name": "Frigate", "desc": "Network video recorder"},
+            {"name": "MyFrigateBridge", "desc": "Bridge"},
+            {"name": "Amcrest PTZ", "desc": "Controls cameras for Frigate"},
+        ]
+        result = server.search_appstore(apps, "frigate")
+        self.assertEqual([
+            "Frigate",
+            "Frigate Plate Recognizer",
+            "Super Frigate Tools",
+            "MyFrigateBridge",
+            "YA-WAMF",
+            "Amcrest PTZ",
+        ], [app["name"] for app in result])
+
+    def test_search_is_stable_within_the_same_relevance_tier(self):
+        apps = [
+            {"name": "First", "desc": "Frigate integration"},
+            {"name": "Second", "desc": "Frigate helper"},
+        ]
+        self.assertEqual(apps, server.search_appstore(apps, "frigate"))
+
     def test_template_preserves_ports_environment_storage_and_devices(self):
         app = {
             "name": "Demo App", "repo": "example/demo:latest", "icon": "https://example.com/icon.png",
@@ -256,7 +282,7 @@ class HomesteadManifestTests(unittest.TestCase):
     def test_runtime_workload_uses_homestead_names_and_image(self):
         manifest = (ROOT / "deploy" / "deploy.yaml").read_text()
         self.assertIn("kind: Deployment\nmetadata:\n  name: homestead", manifest)
-        self.assertIn("- name: homestead\n          image: ghcr.io/wjcloudy/homestead:2.7.3", manifest)
+        self.assertIn("- name: homestead\n          image: ghcr.io/wjcloudy/homestead:2.7.4", manifest)
         self.assertIn("harvui.io/update-sources: '{\"homestead\":", manifest)
         self.assertNotIn("kind: Deployment\nmetadata:\n  name: harvui", manifest)
 
