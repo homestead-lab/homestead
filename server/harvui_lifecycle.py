@@ -8,6 +8,7 @@ the raw API calls are three lines each.
 import json
 import hashlib
 import os
+import re
 import time
 import urllib.error
 
@@ -109,6 +110,24 @@ def edit_workload(cfg):
     dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     spec = dep["spec"]["template"]["spec"]
     c = spec["containers"][0]
+
+    def dns_label(value, label):
+        value = (value or "").strip().lower()
+        if not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?", value):
+            raise ValueError(f"{label} must use lowercase letters, numbers and dashes")
+        return value
+
+    if "container_name" in cfg:
+        container_name = dns_label(cfg.get("container_name"), "container name")
+        if any(other is not c and other.get("name") == container_name for other in spec.get("containers", [])):
+            raise ValueError(f"container {container_name} already exists in {name}")
+        c["name"] = container_name
+    if "pod_hostname" in cfg:
+        pod_hostname = (cfg.get("pod_hostname") or "").strip()
+        if pod_hostname:
+            spec["hostname"] = dns_label(pod_hostname, "pod hostname")
+        else:
+            spec.pop("hostname", None)
 
     if "seed_configs" in cfg:
         _save_seed_configs(ns, dep, cfg.get("seed_configs") or [])

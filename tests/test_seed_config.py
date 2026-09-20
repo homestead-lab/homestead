@@ -87,6 +87,24 @@ class SeedConfigTests(unittest.TestCase):
                 }],
             })
 
+    def test_edit_updates_container_name_and_pod_hostname(self):
+        lifecycle.edit_workload({
+            "ns": "lab", "name": "frigate",
+            "container_name": "camera-detector", "pod_hostname": "frigate-core",
+        })
+        saved = self.sent[-1][2]
+        pod_spec = saved["spec"]["template"]["spec"]
+        self.assertEqual("camera-detector", pod_spec["containers"][0]["name"])
+        self.assertEqual("frigate-core", pod_spec["hostname"])
+
+    def test_edit_rejects_invalid_or_duplicate_container_names(self):
+        self.deployment["spec"]["template"]["spec"]["containers"].append(
+            {"name": "sidecar", "image": "example/sidecar"})
+        with self.assertRaisesRegex(ValueError, "already exists"):
+            lifecycle.edit_workload({"ns": "lab", "name": "frigate", "container_name": "sidecar"})
+        with self.assertRaisesRegex(ValueError, "lowercase letters"):
+            lifecycle.edit_workload({"ns": "lab", "name": "frigate", "container_name": "Bad Name"})
+
 
 if __name__ == "__main__":
     unittest.main()

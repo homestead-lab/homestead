@@ -237,6 +237,12 @@ class SidecarDeploymentTests(unittest.TestCase):
         self.assertEqual({"app": "media"}, service["spec"]["selector"])
         self.assertEqual(19000, service["spec"]["ports"][0]["port"])
 
+    def test_sidecar_uses_explicit_container_name(self):
+        cfg = {"name": "legacy", "container_name": "metrics-helper", "image": "example/helper",
+               "target_workload": "media", "ports": [], "volumes": [], "hardware": []}
+        updated, _ = server.build_sidecar_deployment(cfg, copy.deepcopy(self.current))
+        self.assertEqual("metrics-helper", updated["spec"]["template"]["spec"]["containers"][1]["name"])
+
     def test_sidecar_new_claim_gets_a_collision_safe_pod_volume(self):
         cfg = {
             "name": "helper", "image": "example/helper", "target_workload": "media",
@@ -300,11 +306,24 @@ class DeployOptionsTests(unittest.TestCase):
         }}}}
 
 
+class NewWorkloadNamingTests(unittest.TestCase):
+    def test_workload_and_container_names_can_differ(self):
+        cfg = {"name": "legacy", "workload_name": "camera-stack", "container_name": "frigate",
+               "image": "example/frigate", "namespace": "lab", "ports": [{"container": 5000,
+               "host": 5000, "protocol": "TCP", "expose": True}], "volumes": [], "hardware": []}
+        with mock.patch.object(server.HW, "features", return_value=[]):
+            deployment, service = server.build_deployment(cfg)
+        self.assertEqual("camera-stack", deployment["metadata"]["name"])
+        self.assertEqual("frigate", deployment["spec"]["template"]["spec"]["containers"][0]["name"])
+        self.assertEqual("camera-stack", service["metadata"]["name"])
+        self.assertEqual({"app": "camera-stack"}, service["spec"]["selector"])
+
+
 class HomesteadManifestTests(unittest.TestCase):
     def test_runtime_workload_uses_homestead_names_and_image(self):
         manifest = (ROOT / "deploy" / "deploy.yaml").read_text()
         self.assertIn("kind: Deployment\nmetadata:\n  name: homestead", manifest)
-        self.assertIn("- name: homestead\n          image: ghcr.io/wjcloudy/homestead:2.7.9", manifest)
+        self.assertIn("- name: homestead\n          image: ghcr.io/wjcloudy/homestead:2.7.10", manifest)
         self.assertIn("harvui.io/update-sources: '{\"homestead\":", manifest)
         self.assertNotIn("kind: Deployment\nmetadata:\n  name: harvui", manifest)
 

@@ -235,10 +235,12 @@
     "/api/preview": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       const joining = body.target_mode === "existing";
+      const workloadName = body.workload_name || body.name;
+      const containerName = body.container_name || body.name;
       return { deployment: { apiVersion: "apps/v1", kind: "Deployment",
-          metadata: { name: joining ? body.target_workload : body.name, namespace: body.namespace },
-          spec: { template: { spec: { containers: [{ name: body.name, image: body.image }] } } } },
-        service: null, impact: { mode: joining ? "existing" : "new", workload: joining ? body.target_workload : body.name,
+          metadata: { name: joining ? body.target_workload : workloadName, namespace: body.namespace },
+          spec: { template: { spec: { containers: [{ name: containerName, image: body.image }] } } } },
+        service: null, impact: { mode: joining ? "existing" : "new", workload: joining ? body.target_workload : workloadName,
           message: joining ? "Saving updates the Deployment template and restarts every container in its pods." : "Creates a new independently managed Deployment." } };
     },
     "/api/vm-disks": vmDisks,
@@ -274,6 +276,14 @@
     "/api/shares/edit": { ok: true, shares, deployment_updated: true,
       message: "Share secure updated; Samba is restarting" },
     "/api/operations": [], "/api/workloads": workloads, "/api/network": network,
+    "/api/workload": url => {
+      const name = url.searchParams.get("name") || "frigate";
+      const found = workloads.find(item => item.name === name) || workloads[0];
+      return { ns: found.ns, name: found.name, container_name: found.pods[0]?.containers[0]?.name || found.name,
+        pod_hostname: found.name === "frigate" ? "frigate-core" : "", image: found.images[0], replicas: found.desired,
+        cpu: "50m", memory: "128Mi", env: {}, ports: [], hardware: found.hardware || [], icon: "", node: found.nodes[0] || "",
+        seed_configs: [], volumes: [] };
+    },
     "/api/network/plan": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       const vip = body.type === "ClusterIP" ? "" : body.vip_mode === "shared" ? "192.0.2.242" : body.vip || "192.0.2.217";
@@ -295,7 +305,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.7.8", candidate: "ghcr.io/wjcloudy/homestead:2.7.9", candidate_tag: "2.7.9", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.7.9", candidate: "ghcr.io/wjcloudy/homestead:2.7.10", candidate_tag: "2.7.10", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

@@ -13,6 +13,10 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     const nodes = (liveNodes.length ? liveNodes : (STATE.data.ov ? STATE.data.ov.nodes : [])).filter(n => n.schedulable !== false);
     const seeds = w.seed_configs || [];
     $("#mbody").innerHTML = `
+      <div class="f2">
+        <div class="f"><label>Pod name / hostname ${tip("A stable hostname used inside the pod. Kubernetes still gives each running pod a generated runtime name, shown in the container details.")}</label><input type="text" id="e_pod_name" value="${esc(w.pod_hostname || "")}" placeholder="${esc(w.name)}"></div>
+        <div class="f"><label>Container name ${tip("The Kubernetes container name inside this pod. Changing it restarts the workload.")}</label><input type="text" id="e_container_name" value="${esc(w.container_name || w.name)}"></div>
+      </div>
       <div class="f"><label>Image</label><input type="text" id="e_image" value="${esc(w.image)}"></div>
       <div class="f"><label>Container logo ${tip("Optional public HTTPS image URL. Homestead validates it and keeps a persistent local copy while retaining this source for later edits.")}</label><input type="url" id="e_icon" value="${esc(w.icon || "")}" placeholder="https://…/icon.png"></div>
       <div class="f2">
@@ -68,7 +72,8 @@ window.editSave = async (ns, name) => {
     init_container: el.dataset.init, config_map: el.dataset.configMap,
     key: el.dataset.key, value: el.value,
   }));
-  const body = { ns, name, image: $("#e_image").value.trim(), icon: $("#e_icon").value.trim(), cpu: $("#e_cpu").value.trim(),
+  const body = { ns, name, pod_hostname: $("#e_pod_name").value.trim(), container_name: $("#e_container_name").value.trim(),
+    image: $("#e_image").value.trim(), icon: $("#e_icon").value.trim(), cpu: $("#e_cpu").value.trim(),
     memory: $("#e_mem").value.trim(), replicas: +$("#e_rep").value, gpu: hardware.includes("igpu"), hardware, env, seed_configs };
   try {
     await api("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });

@@ -711,6 +711,11 @@ html[data-motion="off"] .uptime .ld{animation:none}
 @media(max-width:560px){
   .apps{grid-template-columns:1fr}
   .wmeta{grid-template-columns:repeat(2,1fr)}
+  .cardlist,.wcard,.whead,.wfoot,.wacts{min-width:0;max-width:100%}
+  .whead{align-items:flex-start;gap:6px}.whead>.row:last-child{flex-wrap:wrap;justify-content:flex-end}
+  .wfoot>.workloadtree{flex:1 1 100%;min-width:0}
+  .wacts{width:100%;flex-wrap:wrap}.wacts>.btn{flex:1 1 auto}
+  .actionmenu{margin-left:0}
   .f2,.f3,.f4,.hwchoices,.volume-impact-grid,.volume-delete-grid{grid-template-columns:1fr}
   .opts{grid-template-columns:1fr 1fr}
 }

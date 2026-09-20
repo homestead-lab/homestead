@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.7.9"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.7.10"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -625,7 +625,8 @@ def get_workloads():
             if not ready:
                 transition_ages.append(age_secs(p["metadata"].get("creationTimestamp")))
             containers = pod_container_rows(p)
-            pod_rows.append({"name": p["metadata"]["name"], "phase": p["status"].get("phase"),
+            pod_rows.append({"name": p["metadata"]["name"], "hostname": p["spec"].get("hostname", ""),
+                             "phase": p["status"].get("phase"),
                              "node": p["spec"].get("nodeName", ""), "ready": ready,
                              "waiting": waits,
                              "uptime": age_secs(p["status"].get("startTime")),
@@ -1050,7 +1051,8 @@ def get_storage():
 
 # ---------------------------------------------------------------- mutations
 def build_deployment(cfg):
-    name = cfg["name"]
+    name = _dns_name(cfg.get("workload_name") or cfg.get("name"), "workload name")
+    container_name = _dns_name(cfg.get("container_name") or cfg.get("name"), "container name")
     ns = cfg.get("namespace", DEFAULT_NS)
     env = [{"name": k, "value": str(v)} for k, v in (cfg.get("env") or {}).items()]
     mounts, volumes = [], []
@@ -1072,7 +1074,7 @@ def build_deployment(cfg):
               "name": (p.get("name") or f"p{p['container']}-{str(p.get('protocol', 'TCP')).lower()}")[:15],
               "protocol": str(p.get("protocol", "TCP")).upper()}
              for p in cfg.get("ports") or []]
-    c = {"name": name, "image": cfg["image"], "imagePullPolicy": "IfNotPresent"}
+    c = {"name": container_name, "image": cfg["image"], "imagePullPolicy": "IfNotPresent"}
     if env: c["env"] = env
     if ports: c["ports"] = ports
     if mounts: c["volumeMounts"] = mounts
@@ -1205,7 +1207,7 @@ def build_sidecar_deployment(cfg, current):
     Kubernetes cannot modify a running Pod. Updating the controller template causes a
     reviewed rollout, so all containers in the workload restart together.
     """
-    container_name = _dns_name(cfg.get("name"), "container name")
+    container_name = _dns_name(cfg.get("container_name") or cfg.get("name"), "container name")
     target = _dns_name(cfg.get("target_workload"), "existing workload")
     if current.get("metadata", {}).get("name") != target:
         raise ValueError("existing workload does not match the selected Deployment")
@@ -2109,7 +2111,8 @@ class H(BaseHTTPRequestHandler):
                 pspec = d["spec"]["template"]["spec"]
                 hardware = HW.workload_features(pspec, d["metadata"].get("annotations", {}) or {})
                 return self._send(200, {
-                    "ns": ns, "name": nm, "image": c.get("image", ""),
+                    "ns": ns, "name": nm, "container_name": c.get("name", ""),
+                    "pod_hostname": pspec.get("hostname", ""), "image": c.get("image", ""),
                     "replicas": d["spec"].get("replicas", 1),
                     "cpu": c.get("resources", {}).get("requests", {}).get("cpu", ""),
                     "memory": c.get("resources", {}).get("requests", {}).get("memory", ""),
@@ -2253,12 +2256,13 @@ class H(BaseHTTPRequestHandler):
                 if svc:
                     ksend("POST", f"/api/v1/namespaces/{ns}/services", svc)
                 _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
-                action = f"Add {b['name']} to {target}" if target_mode == "existing" else f"Deploy {target}"
+                container_name = _dns_name(b.get("container_name") or b.get("name"), "container name")
+                action = f"Add {container_name} to {target}" if target_mode == "existing" else f"Deploy {target}"
                 op = OPS.start("deployment", action,
                                {"kind": "Deployment", "name": target, "namespace": ns},
                                "/containers", {"namespace": ns, "name": target})
                 return self._send(200, {"ok": True, "name": target,
-                                        "container": b["name"], "operation": op})
+                                        "container": container_name, "operation": op})
             if p == "/api/scale":
                 ns, name, n = b["ns"], b["name"], int(b["replicas"])
                 ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}/scale",

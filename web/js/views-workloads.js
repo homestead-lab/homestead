@@ -37,7 +37,8 @@ function workloadHierarchy(w) {
       <span>${podLabel}</span><span class="tree-arrow">→</span><span>${containerLabel}</span>
       <span class="tree-hint">show runtime objects</span></summary>
     <div class="tree-body">${pods.map(p => `<div class="tree-pod">
-      <div class="tree-pod-head"><span class="tree-branch">Pod</span><b class="mono">${esc(p.name)}</b>
+      <div class="tree-pod-head"><span class="tree-branch">Pod</span><b class="mono">${esc(p.hostname || p.name)}</b>
+        ${p.hostname ? `<span class="mono dim tree-resource" title="Kubernetes runtime name">${esc(p.name)}</span>` : ""}
         <span class="pill ${p.ready ? "ok" : p.phase === "Pending" ? "med" : "crit"}">${p.ready ? "ready" : esc(p.phase || "pending")}</span>
         <span class="dim xs">${esc(p.node || "unscheduled")}${p.restarts ? ` · ${p.restarts} restart${p.restarts === 1 ? "" : "s"}` : ""}</span></div>
       <div class="tree-containers">${(p.containers || []).map(c => `<div class="tree-container">
@@ -571,7 +572,7 @@ document.addEventListener("keydown", event => {
 });
 
 /* ---------------- deploy ---------------- */
-const deployDefaults = () => ({ name: "", image: "", icon: "", namespace: "lab", replicas: 1,
+const deployDefaults = () => ({ name: "", workload_name: "", container_name: "", image: "", icon: "", namespace: "lab", replicas: 1,
   cpu: "50m", memory: "128Mi", ports: [], env: {}, env_meta: [], volumes: [], hardware: [],
   template_devices: [], target_mode: "new", target_workload: "", network_mode: "loadbalancer",
   vip_mode: "shared", lb_ip: "", env_bindings: {}, app_profile: null });
@@ -586,6 +587,8 @@ async function viewDeploy(pre) {
   const [, liveNodes] = await Promise.all([loadHardwareFeatures(), api("/api/nodes").catch(() => [])]);
   if (liveNodes.length) STATE.data.nodes = liveNodes;
   DCFG = Object.assign(deployDefaults(), pre || {});
+  DCFG.workload_name ||= DCFG.name || "";
+  DCFG.container_name ||= DCFG.name || "";
   (DCFG.env_meta || []).forEach(meta => {
     meta.binding = (DCFG.env_bindings || {})[meta.key] || "";
     if (meta.binding) DCFG.env[meta.key] = "";
@@ -620,7 +623,8 @@ async function viewDeploy(pre) {
         <div class="f"><label>Existing workload</label><select id="d_target_workload"></select></div>
         <div id="d_join_note" class="note"></div>
       </div>
-      <div class="f"><label>Name</label><input type="text" id="d_name" value="${esc(DCFG.name)}" placeholder="my-app"></div>
+      <div class="f" id="d_workload_name_wrap"><label>Workload / pod prefix ${tip("The stable name for this workload. Kubernetes adds a generated suffix to each running pod, such as my-app-7d9f8c6b5-x2abc.")}</label><input type="text" id="d_workload_name" value="${esc(DCFG.workload_name)}" placeholder="my-app"></div>
+      <div class="f"><label>Container name ${tip("The name of the container inside the pod. It can differ from the workload name and must use lowercase letters, numbers, and dashes.")}</label><input type="text" id="d_container_name" value="${esc(DCFG.container_name)}" placeholder="my-app"></div>
       <div class="f"><label>Docker image ${tip("The registry image and tag Kubernetes will pull, for example ghcr.io/home-assistant/home-assistant:stable")}</label><input type="text" id="d_image" value="${esc(DCFG.image)}" placeholder="nginx:alpine · ghcr.io/user/app:tag"></div>
       <div class="f"><label>Container logo ${tip("Optional public HTTPS image URL. Homestead validates and saves a private copy on its persistent volume, so the logo survives source outages and upgrades.")}</label><input type="url" id="d_icon" value="${esc(DCFG.icon || "")}" placeholder="https://…/icon.png"></div>
       <div class="f2">
@@ -664,7 +668,7 @@ async function viewDeploy(pre) {
   DRENDERING = true;
   renderDeployTargets(); renderPorts(); renderVols(); renderEnv(); applyDeployMode();
   DRENDERING = false; syncSummary();
-  ["d_name", "d_image", "d_icon", "d_rep", "d_cpu", "d_mem", "d_net", "d_vip_mode", "d_lb_ip", "d_target_workload"].forEach(id => {
+  ["d_workload_name", "d_container_name", "d_image", "d_icon", "d_rep", "d_cpu", "d_mem", "d_net", "d_vip_mode", "d_lb_ip", "d_target_workload"].forEach(id => {
     const el = $("#" + id); if (!el) return;
     el.addEventListener("input", syncSummary); el.addEventListener("change", syncSummary);
   });
@@ -698,6 +702,7 @@ async function refreshDeployOptions() {
 function applyDeployMode() {
   const joining = $("#d_target_mode")?.value === "existing";
   $("#d_join_wrap").style.display = joining ? "block" : "none";
+  $("#d_workload_name_wrap").style.display = joining ? "none" : "block";
   $("#d_rep_wrap").style.display = joining ? "none" : "block";
   const host = [...$("#d_net").options].find(o => o.value === "host");
   if (host) host.disabled = joining;
@@ -705,7 +710,10 @@ function applyDeployMode() {
   $$("#d_vols .deploy-volume").forEach(syncVolumeRow);
 }
 function collect() {
-  DCFG.name = $("#d_name").value.trim(); DCFG.image = $("#d_image").value.trim();
+  DCFG.workload_name = $("#d_workload_name").value.trim();
+  DCFG.container_name = $("#d_container_name").value.trim();
+  DCFG.name = $("#d_target_mode").value === "existing" ? DCFG.container_name : DCFG.workload_name;
+  DCFG.image = $("#d_image").value.trim();
   DCFG.namespace = $("#d_ns").value; DCFG.replicas = +$("#d_rep").value;
   DCFG.target_mode = $("#d_target_mode").value; DCFG.target_workload = $("#d_target_workload").value;
   DCFG.cpu = $("#d_cpu").value.trim(); DCFG.memory = $("#d_mem").value.trim(); DCFG.icon = $("#d_icon").value.trim();
@@ -732,7 +740,8 @@ function syncSummary() {
   const vipWrap = $("#d_vip_wrap"); if (vipWrap) vipWrap.style.display = c.network_mode === "loadbalancer" && c.vip_mode === "manual" ? "block" : "none";
   const row = (i, l, v) => `<div class="drow"><div class="di">${i}</div><div class="dl">${l}</div><div class="dv">${v}</div></div>`;
   $("#d_summary").innerHTML =
-    row("◈", "Name", c.name ? `<b>${esc(c.name)}</b>` : '<span class="dim">—</span>') +
+    (c.target_mode === "existing" ? "" : row("◈", "Workload / pod", c.workload_name ? `<b>${esc(c.workload_name)}</b>` : '<span class="dim">—</span>')) +
+    row("▣", "Container", c.container_name ? `<b>${esc(c.container_name)}</b>` : '<span class="dim">—</span>') +
     row("❏", "Image", c.image ? `<span class="small mono">${esc(c.image)}</span>` : '<span class="dim">—</span>') +
     row("⌗", "Namespace", esc(c.namespace)) + row("⧉", c.target_mode === "existing" ? "Joins workload" : "Replicas", c.target_mode === "existing" ? esc(c.target_workload || "—") : c.replicas) +
     row("◴", "Requests", `<span class="small mono">${esc(c.cpu)} · ${esc(c.memory)}</span>`) +
@@ -854,7 +863,8 @@ window.previewYaml = async () => {
 window.doDeploy = async () => {
   const c = collect();
   if (c.app_profile?.blocked) return toast(c.app_profile.label || "this template is not directly compatible", "bad");
-  if (!c.name || !c.image) return toast("name and image are required", "bad");
+  if (!c.container_name || !c.image) return toast("container name and image are required", "bad");
+  if (c.target_mode === "new" && !c.workload_name) return toast("workload / pod name is required", "bad");
   if (c.target_mode === "existing" && !c.target_workload) return toast("choose an existing workload", "bad");
   if (c.volumes.some(v => !v.path || (v.kind !== "ephemeral" && !v.source))) return toast("every persistent storage mapping needs a mount path and source", "bad");
   try {
@@ -862,7 +872,7 @@ window.doDeploy = async () => {
     if (plan.app_profile?.blocked) return toast(plan.app_profile.label || "this workload needs a Kubernetes-specific design", "bad");
     const joining = c.target_mode === "existing";
     modal(joining ? "Review shared-pod change" : "Review deployment", `<div class="update-review">
-      <div class="reviewbox"><b>${joining ? `Add ${esc(c.name)} to ${esc(c.target_workload)}` : `Create ${esc(c.name)}`}</b>
+      <div class="reviewbox"><b>${joining ? `Add ${esc(c.container_name)} to ${esc(c.target_workload)}` : `Create ${esc(c.workload_name)} with container ${esc(c.container_name)}`}</b>
         <p class="dim">${esc(plan.impact?.message || "Review the Kubernetes objects before continuing.")}</p>
         ${plan.app_profile?.notes?.length ? `<div class="app-profile ${esc(plan.app_profile.level || "review")}">${plan.app_profile.notes.map(note => `<div class="profile-note">✓ ${esc(note)}</div>`).join("")}</div>` : ""}
         <div class="dependency-list"><div class="dependency-row"><span>Image</span><b class="mono">${esc(c.image)}</b></div>
@@ -876,7 +886,7 @@ window.doDeploy = async () => {
 window.confirmDeploy = async () => {
   const c = collect();
   try { $("#deployGo").disabled = true; await api("/api/deploy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
-    closeModal(); toast(c.target_mode === "existing" ? `${c.name} added to ${c.target_workload}` : `${c.name} deployed`, "ok"); go("workloads");
+    closeModal(); toast(c.target_mode === "existing" ? `${c.container_name} added to ${c.target_workload}` : `${c.workload_name} deployed`, "ok"); go("workloads");
   } catch (e) { if ($("#deployGo")) $("#deployGo").disabled = false; toast(e.message, "bad"); }
 };
 
