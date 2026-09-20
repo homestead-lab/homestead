@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HOMESTEAD_VERSION = "2.7.10";
+const HOMESTEAD_VERSION = "2.7.11";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -163,11 +163,13 @@ function toast(msg, kind = "") {
   d.className = "tst " + kind; d.textContent = msg;
   $("#toast").appendChild(d); setTimeout(() => d.remove(), 4200);
 }
-function modal(t, h, wide) {
+function modal(t, h, wide, contextClass = "") {
   $("#mtitle").textContent = t;
   $("#mbody").innerHTML = h;
   enhanceActions($("#mbody"));
   $(".modalbox").classList.toggle("wide", !!wide);
+  $(".modalbox").classList.toggle("node-detail-modal", contextClass === "node-detail-modal");
+  $("#modal").classList.toggle("node-detail-view", contextClass === "node-detail-modal");
   $("#modal").classList.remove("hidden");
 }
 function closeModal(updateRoute = true) {

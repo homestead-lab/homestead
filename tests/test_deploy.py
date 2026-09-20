@@ -323,7 +323,7 @@ class HomesteadManifestTests(unittest.TestCase):
     def test_runtime_workload_uses_homestead_names_and_image(self):
         manifest = (ROOT / "deploy" / "deploy.yaml").read_text()
         self.assertIn("kind: Deployment\nmetadata:\n  name: homestead", manifest)
-        self.assertIn("- name: homestead\n          image: ghcr.io/wjcloudy/homestead:2.7.10", manifest)
+        self.assertIn("- name: homestead\n          image: ghcr.io/wjcloudy/homestead:2.7.11", manifest)
         self.assertIn("harvui.io/update-sources: '{\"homestead\":", manifest)
         self.assertNotIn("kind: Deployment\nmetadata:\n  name: harvui", manifest)
 

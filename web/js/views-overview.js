@@ -178,7 +178,7 @@ function nodeCard(n) {
 
 window.nodeDetail = async (name, fromRoute = false) => {
   if (!fromRoute && window.setModalRoute) setModalRoute({ node: name }, name);
-  modal("Node · " + name, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
+  modal("Node · " + name, `<div class="empty"><span class="spin2"></span>loading</div>`, true, "node-detail-modal");
   try {
     const n = await api("/api/node?name=" + encodeURIComponent(name));
     const i = n.info || {};
@@ -193,8 +193,8 @@ window.nodeDetail = async (name, fromRoute = false) => {
       <div><span class="disklabel">WRITE</span><b class="mono diskrate write">↑ ${Number(d.write_mbps || 0).toFixed(2)} MB/s</b></div>
       <button class="btn sm" ${s ? "" : "disabled"} onclick="smartDisk('${esc(n.name)}','${esc(d.name)}')" title="${s ? "Drive health, history, and self-tests" : "SMART helper is not available on this host"}">Details</button>
     </div>`; }).join("");
-    $("#mbody").innerHTML = `
-      <div class="grid g2" style="margin-bottom:16px">
+    $("#mbody").innerHTML = `<div class="node-detail">
+      <div class="grid g2 node-summary-grid" style="margin-bottom:16px">
         <div class="card flat"><div class="ctitle">Utilisation</div>
           <div style="margin-top:12px">
             <div class="between"><span class="dim xs">CPU</span><span class="mono small">${n.cpu_pct}% used · ${n.cpu_cap} cores</span></div>
@@ -213,13 +213,13 @@ window.nodeDetail = async (name, fromRoute = false) => {
           ${row("Address", esc((n.addresses || {}).InternalIP || "—"))}
         </div>
       </div>
-      <div class="card flat" style="margin-bottom:16px">
-        <div class="between"><div><div class="ctitle">Disk activity</div>
+      <div class="card flat node-disk-card" style="margin-bottom:16px">
+        <div class="between node-section-head"><div><div class="ctitle">Disk activity</div>
           <div class="csub">Live host block-device throughput · read and write megabytes per second</div></div>
           <span class="tag">${disks.length} disk${disks.length === 1 ? "" : "s"}</span></div>
         <div class="diskactivity">${diskRows || `<div class="note"><b>No physical disk counters available.</b> The optional node probe must be running with its read-only <span class="mono">/proc</span> mount.</div>`}</div>
       </div>
-      <div class="card flat"><div class="ctitle">System</div>
+      <div class="card flat node-system-card"><div class="ctitle">System</div>
         ${row("Status", `<span class="pill ${n.status === "Ready" ? "ok" : "crit"}">${esc(n.status)}</span>`)}
         ${row("Roles", n.roles.map(r => `<span class="tag">${esc(r)}</span>`).join(""))}
         ${row("Schedulable", n.schedulable ? "yes" : `<span class="tag warn">cordoned</span>`)}
@@ -253,13 +253,13 @@ window.nodeDetail = async (name, fromRoute = false) => {
            <span class="mono">/sys</span> read-only, drops all capabilities and is not privileged.</div>`}
       </div>
       <div class="card flat" style="margin-top:16px">
-        <div class="between"><div><div class="ctitle">Hardware availability</div>
+        <div class="between node-section-head"><div><div class="ctitle">Hardware availability</div>
           <div class="csub">Used by placement checks before containers move or start</div></div>
           <button class="btn sm" data-need="admin" onclick='hardwareEdit(${JSON.stringify(n).replace(/'/g, "&#39;")})'>Define hardware</button></div>
         <div style="margin-top:12px">${hardwareTags(nodeHardwareIds(n)) || '<span class="dim xs">No hardware is currently defined.</span>'}</div>
       </div>
       <div class="card flat" style="margin-top:16px">
-        <div class="between"><div><div class="ctitle">Workloads on this host</div>
+        <div class="between node-section-head"><div><div class="ctitle">Workloads on this host</div>
           <div class="csub">${n.pods_wl} of yours · ${n.pods_sys} system pods</div></div>
           ${n.workloads.length ? `<button class="btn sm" data-need="admin"
             onclick="evacuateNode('${esc(n.name)}')">Evacuate all</button>` : ""}</div>
@@ -270,7 +270,8 @@ window.nodeDetail = async (name, fromRoute = false) => {
         ${n.workloads.length ? '<div class="dim xs" style="margin-top:10px">Click a workload to move it to another host.</div>' : ""}
       </div>
       <div class="row" style="margin-top:16px">
-        <button class="btn" onclick="nodeActions('${esc(n.name)}')">Host actions…</button></div>`;
+        <button class="btn" onclick="nodeActions('${esc(n.name)}')">Host actions…</button></div>
+      </div>`;
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
 

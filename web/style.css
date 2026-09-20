@@ -804,6 +804,26 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
   .diskrow>button{grid-column:1/-1}.smartstats{grid-template-columns:1fr 1fr}.smart-actions{align-items:flex-start;flex-direction:column}
 }
 
+@media(max-width:560px){
+  .modal.node-detail-view{padding:0;place-items:stretch}
+  .node-detail-modal{width:100%;height:100%;max-height:none;border:0;border-radius:0}
+  .node-detail-modal .modalhead{padding:13px 15px}
+  .node-detail-modal #mbody{padding:12px}
+  .node-detail{min-width:0;width:100%}
+  .node-detail .card{min-width:0;padding:15px;border-radius:16px}
+  .node-detail .node-section-head{align-items:flex-start;flex-wrap:wrap}
+  .node-detail .node-section-head>div{min-width:0;flex:1 1 170px}
+  .node-detail .node-section-head>.btn{flex:1 0 auto;justify-content:center}
+  .node-detail .drow{display:grid;grid-template-columns:minmax(70px,.8fr) minmax(0,1.2fr);gap:8px}
+  .node-detail .drow .dl{min-width:0;flex:none}
+  .node-detail .drow .dv{min-width:0;text-align:right;overflow-wrap:anywhere}
+  .node-detail .drow .tag{white-space:normal;text-align:left}
+  .node-detail .diskrow{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:12px}
+  .node-detail .diskidentity,.node-detail .diskrow>button{grid-column:1/-1}
+  .node-detail .diskidentity span{white-space:normal;overflow-wrap:anywhere}
+  .node-detail>.row:last-child .btn{width:100%;justify-content:center}
+}
+
 
 /* ---------------- move workload ---------------- */
 .tag.movable{cursor:pointer;padding-right:7px}
