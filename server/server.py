@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.7.0"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.7.1"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1378,12 +1378,40 @@ def set_node_hardware(cfg):
 
 
 # ---------------------------------------------------------------- app store
-CA_FEED = "https://raw.githubusercontent.com/Squidly271/AppFeed/master/applicationFeed.json"
+CA_FEED = os.environ.get(
+    "COMMUNITY_CATALOG_URL",
+    "https://raw.githubusercontent.com/Squidly271/AppFeed/master/applicationFeed.json",
+)
+
+
+def category_values(value):
+    """Flatten inconsistent feed category shapes into stable display strings."""
+    found = []
+
+    def visit(item):
+        if isinstance(item, (list, tuple)):
+            for child in item:
+                visit(child)
+        elif isinstance(item, dict):
+            preferred = [item.get(key) for key in ("name", "label", "category", "Category")]
+            usable = [child for child in preferred if child not in (None, "")]
+            for child in usable or item.values():
+                visit(child)
+        elif item is not None:
+            for part in re.split(r"[\s,|]+", str(item).strip()):
+                if part and part not in found:
+                    found.append(part)
+
+    visit(value)
+    return found
 
 
 def fetch_appstore():
     def go():
-        req = urllib.request.Request(CA_FEED, headers={"User-Agent": "Homestead/2.0"})
+        req = urllib.request.Request(CA_FEED, headers={
+            "User-Agent": f"Homestead/{HOMESTEAD_VERSION} (+https://github.com/wjcloudy/homestead)",
+            "Accept": "application/json",
+        })
         with urllib.request.urlopen(req, timeout=60) as r:
             data = json.loads(r.read().decode("utf-8", "replace"))
         apps = data.get("applist", data if isinstance(data, list) else [])
@@ -1392,12 +1420,14 @@ def fetch_appstore():
             repo = a.get("Repository") or ""
             if not repo or not a.get("Name"):
                 continue
+            categories = category_values(a.get("CategoryList") or a.get("Category") or "")
             item = {
                 "name": a.get("Name"),
                 "repo": repo,
                 "icon": a.get("Icon") or "",
                 "desc": re.sub(r"\s+", " ", (a.get("Overview") or a.get("Description") or ""))[:300],
-                "cat": a.get("CategoryList") or a.get("Category") or "",
+                "cat": categories[0] if categories else "",
+                "categories": categories,
                 "web": a.get("Project") or a.get("Support") or "",
                 "network": a.get("Network") or "bridge",
                 "webui": a.get("WebUI") or "",
@@ -1406,7 +1436,7 @@ def fetch_appstore():
             item["deploy"] = template_to_cfg(item)
             out.append(item)
         return out
-    return cached("appstore", 3600, go)
+    return cached("appstore", 21600, go)
 
 
 def template_to_cfg(app):
@@ -2077,7 +2107,7 @@ class H(BaseHTTPRequestHandler):
                 if term:
                     apps = [a for a in apps if term in a["name"].lower() or term in a["desc"].lower()]
                 if cat:
-                    apps = [a for a in apps if cat in (a["cat"] or "").lower()]
+                    apps = [a for a in apps if any(cat in value.lower() for value in a.get("categories", []))]
                 return self._send(200, {"total": len(apps), "apps": apps[:60]})
             if p == "/api/logs":
                 ns = q["ns"][0]

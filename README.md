@@ -4,11 +4,14 @@
   <img src="web/assets/homestead-lockup.svg" width="360" alt="Homestead — friendly cluster management for your homelab">
 </p>
 
-**Homestead is an open-source, Unraid-style homelab dashboard and container
+**Homestead is an open-source, NAS-style homelab dashboard and container
 management UI for Harvester HCI, Rancher, Longhorn, Fleet, KubeVirt and
 Kubernetes.** It runs inside your cluster, talks directly to the Kubernetes API
 through a dedicated ServiceAccount, and turns workloads, storage, hardware
 passthrough, image updates and failover constraints into approachable controls.
+
+Unraid® is a registered trademark of Lime Technology, Inc. This application is
+not affiliated with, endorsed, or sponsored by Lime Technology, Inc.
 
 [![CI](https://github.com/wjcloudy/homestead/actions/workflows/ci.yml/badge.svg)](https://github.com/wjcloudy/homestead/actions/workflows/ci.yml)
 [![Container](https://img.shields.io/badge/ghcr.io-homestead-2453ff?logo=docker)](https://github.com/wjcloudy/homestead/pkgs/container/homestead)
@@ -50,10 +53,10 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.7.0`, the workflow publishes:
+For a release such as `v2.7.1`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.7.0
+ghcr.io/wjcloudy/homestead:2.7.1
 ghcr.io/wjcloudy/homestead:2.7
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -64,8 +67,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.7.0
-git push origin v2.7.0
+git tag v2.7.1
+git push origin v2.7.1
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -194,6 +197,22 @@ select controls, and the same storage, network, dependency, and hardware review
 is used whether deployment begins in App Store or directly from Deploy. Plex,
 Pi-hole, and Nextcloud are release validation examples, not special-case profiles.
 
+### Community catalogue data notice
+
+The optional catalogue adapter reads the public Community Applications feed
+from `Squidly271/AppFeed` at runtime; catalogue content is not bundled into the
+Homestead image or repository. Requests identify Homestead, results are cached
+for six hours, and `COMMUNITY_CATALOG_URL` can point deployments at another
+authorized, compatible feed. Homestead links to and credits the upstream source
+and does not use Unraid logos or imply endorsement.
+
+As of 20 September 2026, GitHub reports no declared repository license for the
+`AppFeed` repository. The Community Applications plugin source contains GPLv2
+headers, but that alone does not establish a license for generated feed metadata,
+listing descriptions, or icons. Operators redistributing or commercially hosting
+the catalogue should obtain permission from its maintainers/Lime Technology or
+configure a feed whose reuse terms are explicit.
+
 ## Networking and virtual IPs
 
 Networking reconciles Kubernetes Services, EndpointSlices, Ingresses, node
@@ -236,7 +255,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.7.0 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.7.1 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour

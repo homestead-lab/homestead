@@ -11,6 +11,12 @@ import server
 
 
 class AppStoreTemplateTests(unittest.TestCase):
+    def test_category_shapes_are_normalized(self):
+        self.assertEqual(["MediaServer", "Tools"], server.category_values("MediaServer Tools"))
+        self.assertEqual(["Network", "Security"], server.category_values(["Network", "Security"]))
+        self.assertEqual(["HomeAutomation"], server.category_values([{"name": "HomeAutomation"}]))
+        self.assertEqual(["Backup/Sync"], server.category_values({"Category": "Backup/Sync"}))
+
     def test_template_preserves_ports_environment_storage_and_devices(self):
         app = {
             "name": "Demo App", "repo": "example/demo:latest", "icon": "https://example.com/icon.png",

@@ -740,10 +740,11 @@ window.confirmDeploy = async () => {
 async function viewStore() {
   resetPaint();
   paint(`<div class="phead">
-      <div><h2>App Store</h2><p>Unraid Community Applications catalogue, deployed as Kubernetes workloads</p></div>
+      <div><h2>Community catalogue</h2><p>Third-party Community Applications templates adapted into reviewed Kubernetes workloads</p></div>
       <div class="row"><input class="search" id="s_q" placeholder="plex, nextcloud, jellyfin…" value="${esc(STATE.q)}" style="width:260px;padding-left:16px">
       <button class="btn pri" onclick="storeSearch()">Search</button></div></div>
-    <div id="s_res"><div class="empty">Search the catalogue — it is fetched live from the Unraid CA feed.</div></div>`);
+    <div class="note catalogue-notice">Listings are read on demand from the public <a href="https://github.com/Squidly271/AppFeed" target="_blank" rel="noopener">Community Applications feed</a> and cached for six hours. Homestead is independent and is not endorsed by the catalogue maintainers. Unraid® is a registered trademark of Lime Technology, Inc. This application is not affiliated with, endorsed, or sponsored by Lime Technology, Inc.</div>
+    <div id="s_res"><div class="empty">Search the community catalogue to begin.</div></div>`);
   $("#s_q").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); storeSearch(); } });
   if (STATE.q) storeSearch();
 }
@@ -758,7 +759,7 @@ window.storeSearch = async () => {
         <div class="apps stagger">${r.apps.map((a, i) => `<div class="card app">
           <div class="row" style="gap:11px">${a.icon ? `<img class="ico" src="${esc(a.icon)}" referrerpolicy="no-referrer" onerror="this.style.display='none'">` : ""}
             <div style="min-width:0"><div class="nm">${esc(a.name)}</div>
-            ${a.cat ? `<span class="tag">${esc(a.cat.split(" ")[0])}</span>` : ""}
+            ${appCategoryLabel(a.categories || a.cat) ? `<span class="tag">${esc(appCategoryLabel(a.categories || a.cat))}</span>` : ""}
             ${a.deploy?.app_profile ? `<span class="tag ${a.deploy.app_profile.level === "dependency" ? "warn" : "info"}">${esc(a.deploy.app_profile.label)}</span>` : ""}</div></div>
           <div class="ds">${esc(a.desc || "No description provided.")}</div>
           <div class="rp">${esc(a.repo)}</div>

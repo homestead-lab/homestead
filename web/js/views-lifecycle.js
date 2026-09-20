@@ -481,6 +481,7 @@ window.srcAdd = () => modal("Add import source", `
     <div class="f"><label>Password</label><input type="password" id="sc_pass"></div>
   </div>
   <div class="f"><label>Appdata base path</label><input type="text" id="sc_path" value="/mnt/user/appdata"></div>
+  <div class="dim xs" style="margin-bottom:12px">Unraid® is a registered trademark of Lime Technology, Inc. This application is not affiliated with, endorsed, or sponsored by Lime Technology, Inc.</div>
   <div class="row" style="margin-top:16px">
     <button class="btn pri" onclick="doSrcAdd()">Add source</button>
     <button class="btn" onclick="closeModal()">Cancel</button></div>

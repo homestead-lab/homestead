@@ -419,6 +419,7 @@ select option{background:#151517}
 .app-profile.dependency{border-color:rgba(255,176,32,.32);background:rgba(255,176,32,.06)}
 .app-profile .settings-card-head{margin-bottom:10px}.profile-note{padding:4px 0;color:var(--mut);font-size:12px;line-height:1.45}
 .app-profile .dependency-list{margin-top:10px}
+.catalogue-notice{margin-bottom:14px}.catalogue-notice a{color:var(--low);text-decoration:none}.catalogue-notice a:hover{text-decoration:underline}
 .deploy-volume{display:grid;gap:10px;padding:14px;margin-bottom:11px;border:1px solid var(--line);border-radius:13px;background:rgba(255,255,255,.025)}
 .volume-title,.volume-foot{display:flex;align-items:center;justify-content:space-between;gap:12px}.volume-title>div{display:flex;align-items:center;gap:7px}
 .volume-desc{margin-top:-5px}.deploy-volume-grid{display:grid;grid-template-columns:1fr 1.25fr 1fr;gap:10px;align-items:end}.deploy-volume-grid>div{min-width:0}
