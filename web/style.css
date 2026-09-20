@@ -207,15 +207,15 @@ h1{margin:2px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em}
 .btn:active{transform:translateY(0)}
 .btn:focus-visible,.iconbtn:focus-visible,.tip:focus-visible{outline:2px solid var(--low);outline-offset:2px}
 .btn:disabled,.btn[aria-disabled="true"]{opacity:.45;cursor:not-allowed;transform:none;box-shadow:none}
-.workloadtree{margin:12px 0 2px;border:1px solid var(--line);border-radius:11px;background:rgba(255,255,255,.025)}
-.workloadtree summary{display:flex;align-items:center;gap:7px;padding:8px 10px;cursor:pointer;color:var(--mut);font-size:11.5px;list-style:none}
+.workloadtree{margin:2px 0 0;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.025)}
+.workloadtree summary{display:flex;align-items:center;gap:7px;padding:6px 9px;cursor:pointer;color:var(--mut);font-size:11px;list-style:none}
 .workloadtree summary::-webkit-details-marker{display:none}.workloadtree summary::before{content:"›";font-size:17px;line-height:1;transition:transform .2s var(--e)}
 .workloadtree[open] summary::before{transform:rotate(90deg)}.tree-kind,.tree-branch{font-weight:700;color:var(--low)}
 .tree-arrow{color:var(--dim)}.tree-hint{margin-left:auto;color:var(--dim)}
-.tree-body{padding:0 10px 9px}.tree-pod{border-top:1px solid rgba(255,255,255,.055);padding:9px 0 2px}
+.tree-body{padding:0 9px 7px}.tree-pod{border-top:1px solid rgba(255,255,255,.055);padding:7px 0 1px}
 .tree-pod-head,.tree-container{display:flex;align-items:center;gap:8px;min-width:0;font-size:11.5px}
 .tree-pod-head .pill,.tree-container .pill{padding:2px 7px;font-size:9.5px}.tree-containers{margin:7px 0 0 15px;padding-left:12px;border-left:1px solid var(--line)}
-.tree-container{padding:4px 0}.tree-branch{font-size:9px;letter-spacing:.06em;text-transform:uppercase;flex:0 0 58px}.tree-branch.init{color:var(--vio)}
+.tree-container{padding:3px 0}.tree-branch{font-size:9px;letter-spacing:.06em;text-transform:uppercase;flex:0 0 58px}.tree-branch.init{color:var(--vio)}
 .tree-image{margin-left:auto;max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media(max-width:720px){.tree-hint,.tree-image{display:none}.tree-pod-head{flex-wrap:wrap}.tree-container{flex-wrap:wrap}}
 .consolebar{display:grid;grid-template-columns:1.4fr 1fr .8fr auto;gap:10px;align-items:end}.consolebar .f{margin:0}
@@ -630,12 +630,15 @@ html[data-motion="off"] .uptime .ld{animation:none}
 .netpath span{padding:3px 7px;border:1px solid var(--line);border-radius:6px;background:rgba(255,255,255,.04)}
 .netpath i{font-style:normal;color:var(--low)}.netpath.big{font-size:12px;margin:10px 0}
 .reviewbox{margin-top:16px;padding:14px;border:1px solid rgba(74,158,255,.28);border-radius:12px;background:rgba(74,158,255,.07)}
-.wcard{display:flex;flex-direction:column;gap:12px}
-.wmeta{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:11px 0;
+.wcard{display:flex;flex-direction:column;gap:8px;padding:14px;overflow:visible}
+.wmeta{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;padding:7px 0;
   border-top:1px solid rgba(255,255,255,.055);border-bottom:1px solid rgba(255,255,255,.055)}
-.wmeta .dim.xs{margin-bottom:4px;letter-spacing:.07em}
-.wimg{word-break:break-all;line-height:1.5}
-.wacts{gap:7px;flex-wrap:wrap}
+.wmeta .dim.xs{margin-bottom:2px;letter-spacing:.07em}
+.wimg{word-break:break-all;line-height:1.3;max-height:2.6em;overflow:hidden}
+.wacts{gap:6px;flex-wrap:wrap;padding-top:1px}.wacts>.btn{padding:5px 9px}
+.actionmenu{position:relative;margin-left:auto}.actionmenu>summary{list-style:none;font-size:17px;line-height:1;padding:3px 10px!important;height:29px}
+.actionmenu>summary::-webkit-details-marker{display:none}.actionmenu-pop{position:absolute;right:0;bottom:calc(100% + 6px);z-index:12;width:172px;padding:6px;border:1px solid var(--line2);border-radius:11px;background:rgba(20,20,23,.98);box-shadow:0 16px 45px rgba(0,0,0,.6);backdrop-filter:blur(20px)}
+.actionmenu-pop button{width:100%;display:flex;align-items:center;gap:8px;padding:8px 9px;border:0;border-radius:8px;background:transparent;color:var(--tx);font:600 12px "Inter Tight",sans-serif;cursor:pointer;text-align:left}.actionmenu-pop button:hover{background:rgba(255,255,255,.08)}.actionmenu-pop button.danger{color:#ff9fa3}.actionmenu-pop .btnicon{width:14px;height:14px}
 .updatebar{display:flex;align-items:center;justify-content:space-between;gap:18px;margin:-4px 0 16px;
   padding:13px 15px;border-radius:13px;border:1px solid rgba(255,176,32,.28);background:rgba(255,176,32,.075)}
 .updatebar.quiet{border-color:var(--line);background:rgba(255,255,255,.025)}
