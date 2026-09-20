@@ -53,8 +53,8 @@ async function viewFlow() {
                  onclick="event.stopPropagation();moveWorkload('${esc(w.name)}','${esc(w.ns || "lab")}')">⇄</button>`}</div>
         <div class="row" style="gap:8px;justify-content:space-between">
           ${w.uptime ? upChip(w.uptime) : '<span class="dim xs">—</span>'}
-          <span class="dim xs mono">${(w.cpu || 0).toFixed(2)} cores · ${w.mem_mb || 0}MB</span></div>
-        <div class="livebar"><span style="width:${Math.min(100, (w.cpu || 0) * 120)}%"></span></div>
+          <span class="dim xs mono" title="Live CPU usage; 100% equals one CPU core">${workloadCpuPercent(w.cpu)} CPU · ${w.mem_mb || 0}MB</span></div>
+        <div class="livebar"><span style="width:${Math.min(100, Number(w.cpu || 0) * 100)}%"></span></div>
         ${w.claims.length ? `<div class="copies" style="margin-top:9px">${w.claims.map(c => `<span class="mchip">▤ ${esc(c.pvc)}</span>`).join("")}</div>` : ""}
         ${w.ports.length ? `<div class="portchips">${w.ports.map(p => p.vip
               ? `<span class="plink" onclick="event.stopPropagation();openSvc('${esc(p.vip)}',${p.port})">${esc(p.name)}:${p.port}<svg class="ext" width="9" height="9"><use href="#i-ext"/></svg></span>`

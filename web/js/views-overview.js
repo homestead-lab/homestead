@@ -64,7 +64,7 @@ async function viewDash() {
       ${dualSpark((H.cpu || []).slice(-40), (H.mem || []).slice(-40))}
       <div class="row" style="gap:26px;margin-top:12px">
         <div><div class="bignum">${o.cpu_pct}<span class="unit">%</span></div>
-          <div class="csub"><span class="kdot s1"></span>CPU · ${o.cpu_used}/${o.cpu_cap} cores</div></div>
+          <div class="csub"><span class="kdot s1"></span>CPU · ${o.cpu_cap} cores capacity</div></div>
         <div><div class="bignum">${o.mem_pct}<span class="unit">%</span></div>
           <div class="csub"><span class="kdot s2"></span>RAM · ${o.mem_used_gb}/${o.mem_cap_gb} GB</div></div>
       </div>
@@ -108,7 +108,7 @@ async function viewDash() {
       <div class="tblwrap"><table class="tbl"><thead><tr><th>Workload</th><th>Node</th><th style="width:150px">CPU</th></tr></thead><tbody>
       ${o.top_cpu.slice(0, 5).map(w => `<tr><td><b>${esc(w.name)}</b><div class="dim xs">${esc(w.ns)}</div></td>
         <td class="small muted">${esc(w.nodes.join(", ") || "—")}</td>
-        <td>${meter(Math.min(100, w.cpu * 100))}<div class="dim xs mono" style="margin-top:4px">${w.cpu} cores</div></td></tr>`).join("")}
+        <td>${meter(Math.min(100, Number(w.cpu || 0) * 100))}<div class="dim xs mono" style="margin-top:4px" title="100% equals one CPU core">${workloadCpuPercent(w.cpu)}</div></td></tr>`).join("")}
       </tbody></table></div></div>
     <div class="card flat pad0">
       <div class="cardhd"><div class="ctitle">Top memory</div></div>
@@ -197,7 +197,7 @@ window.nodeDetail = async (name, fromRoute = false) => {
       <div class="grid g2" style="margin-bottom:16px">
         <div class="card flat"><div class="ctitle">Utilisation</div>
           <div style="margin-top:12px">
-            <div class="between"><span class="dim xs">CPU</span><span class="mono small">${n.cpu_used} / ${n.cpu_cap} cores</span></div>
+            <div class="between"><span class="dim xs">CPU</span><span class="mono small">${n.cpu_pct}% used · ${n.cpu_cap} cores</span></div>
             ${meter(n.cpu_pct, 'style="margin:6px 0 14px"', "cpu")}
             <div class="between"><span class="dim xs">MEMORY</span><span class="mono small">${n.mem_used_gb} / ${n.mem_cap_gb} GB</span></div>
             ${meter(n.mem_pct, 'style="margin:6px 0 14px"', "memory")}

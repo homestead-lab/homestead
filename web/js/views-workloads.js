@@ -165,7 +165,7 @@ function renderWorkloads() {
         </div>
         <div class="wmeta">
           <div><div class="dim xs">UPTIME</div>${w.uptime ? upChip(w.uptime) : '<span class="dim">—</span>'}</div>
-          <div><div class="dim xs">CPU</div><div class="mono small">${w.cpu} <span class="dim">cores</span></div></div>
+          <div><div class="dim xs">CPU ${tip("Live usage. 100% equals one fully used CPU core.")}</div><div class="mono small">${workloadCpuPercent(w.cpu)}</div></div>
           <div><div class="dim xs">RAM</div><div class="mono small">${w.mem_mb} <span class="dim">MB</span></div></div>
           <div><div class="dim xs">ACCESS</div><div>${w.ports.map(p => p.ip
             ? `<span class="plink" title="Open ${esc(svcUrl(p.ip, p.port))}" onclick="openSvc('${esc(p.ip)}',${p.port})">${p.port}<svg class="ext" width="9" height="9"><use href="#i-ext"/></svg></span>`
