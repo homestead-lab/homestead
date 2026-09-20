@@ -317,6 +317,18 @@ data:
                 rows.append((name, path))
         return rows
 
+    def device_type(name):
+        # smartctl normally infers this from a /dev path. The host device tree
+        # is deliberately mounted at /host/dev, so make the transport explicit.
+        if name.startswith("nvme"):
+            return "nvme"
+        block = os.path.join(SYS, "class/block", name, "device")
+        vendor = read(os.path.join(block, "vendor")).upper()
+        model = read(os.path.join(block, "model")).upper()
+        if vendor == "ATA" or model.startswith("ATA "):
+            return "sat"
+        return "scsi"
+
     def run(args, timeout=15):
         done = subprocess.run(["smartctl", *args], capture_output=True, text=True,
                               timeout=timeout, check=False)
@@ -359,7 +371,7 @@ data:
         return out
 
     def report(name, path):
-        code, data, message = run(["-a", "-j", path])
+        code, data, message = run(["-d", device_type(name), "-a", "-j", path])
         device = data.get("device") or {}
         protocol = str(device.get("protocol") or "")
         nvme = data.get("nvme_smart_health_information_log") or {}
@@ -375,6 +387,12 @@ data:
         power_hours = (data.get("power_on_time") or {}).get("hours")
         if power_hours is None:
             power_hours = nvme.get("power_on_hours")
+        if power_hours is None:
+            power_hours = raw_attr(data, 9)
+        if temperature is None:
+            temperature = raw_attr(data, 194)
+        if temperature is None:
+            temperature = raw_attr(data, 190)
         health = "unknown"
         if isinstance(data.get("smart_status"), dict):
             health = "passed" if data["smart_status"].get("passed") else "failed"
@@ -490,7 +508,8 @@ data:
                 if (before.get("test") or {}).get("active"):
                     raise ValueError("a self-test is already running")
                 path = next(path for disk, path in disks() if disk == name)
-                code, data, message = run(["-t", test, "-j", path], timeout=20)
+                code, data, message = run(
+                    ["-d", device_type(name), "-t", test, "-j", path], timeout=20)
                 if code & 3:
                     raise ValueError(message or "smartctl could not start the test")
                 expected = int((before.get("expected_seconds") or {}).get(test, 0) or 0)

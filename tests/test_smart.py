@@ -108,6 +108,8 @@ class SmartTests(unittest.TestCase):
         self.assertNotIn("privileged: true", probe_section)
         self.assertIn("X-Homestead-Signature", manifest)
         self.assertIn("secretName: harvui-auth", manifest)
+        self.assertIn('["-d", device_type(name), "-a", "-j", path]', manifest)
+        self.assertIn('["-d", device_type(name), "-t", test, "-j", path]', manifest)
         script = manifest.split("  smart.py: |\n", 1)[1].split("\n---", 1)[0]
         source = "\n".join(line[4:] if line.startswith("    ") else line
                            for line in script.splitlines())
