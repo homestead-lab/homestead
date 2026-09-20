@@ -45,7 +45,7 @@ async function viewFlow() {
         <div class="ahd">${appAvatar(w.name, w.icon)}
           <div style="flex:1;min-width:0"><div class="anm">${esc(w.name)}</div>
             <div class="dim xs">${esc(w.kind === "vm" ? "virtual machine" : w.node)}</div></div>
-          ${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}
+          <div class="arch-hardware">${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</div>
           ${w.kind === "vm"
             ? `<button class="btn sm" data-need="operator" title="Migrate"
                  onclick="event.stopPropagation();vmMove('${esc(w.ns || "lab")}','${esc(w.name)}')">⇄</button>`

@@ -228,8 +228,8 @@ function renderWorkloads() {
             ? `<span class="plink" title="Open ${esc(svcUrl(p.ip, p.port))}" onclick="openSvc('${esc(p.ip)}',${p.port})">${p.port}<svg class="ext" width="9" height="9"><use href="#i-ext"/></svg></span>`
             : `<span class="tag">${p.port}</span>`).join("") || '<span class="dim">—</span>'}</div></div>
         </div>
-        <div class="dim xs mono wimg">${w.images.map(esc).join(" · ")}
-          ${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</div>
+        <div class="dim xs mono wimg"><span class="wimage-name">${w.images.map(esc).join(" · ")}</span>
+          <span class="wimage-hardware">${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</span></div>
         ${updateError ? `<div class="updateerror">Image check: ${esc(updateError.error)}</div>` : ""}
         <div class="wfoot">
           ${workloadHierarchy(w)}
