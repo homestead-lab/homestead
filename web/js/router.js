@@ -24,6 +24,7 @@
     schedules: Object.freeze({ path: "/schedules",       label: "Schedules",       section: "System" }),
     imports:   Object.freeze({ path: "/import",          label: "Import",          section: "System" }),
     events:    Object.freeze({ path: "/events",          label: "Events",          section: "System" }),
+    cluster:   Object.freeze({ path: "/system/cluster",  label: "Cluster",         section: "System" }),
     settings:  Object.freeze({ path: "/settings",        label: "Settings",        section: "System" }),
   });
 

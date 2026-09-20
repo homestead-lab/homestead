@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.7.13"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.0"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1844,6 +1844,7 @@ import harvui_volumes as VOLUMES
 import harvui_smart as SMART
 import harvui_shares as SHARES
 import harvui_networking as NETWORK
+import harvui_cluster as CLUSTER
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
 LC.bind(kget, ksend, SYS_NS, _cache, HW.features)
 IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.features)
@@ -1856,6 +1857,7 @@ OPS.bind(kget, DATA_DIR, UPDATES.progress, SMART.progress)
 VOLUMES.bind(kget, ksend, LH.snapshots, LH.backups, _cache, SYS_NS, DEFAULT_NS)
 SHARES.bind(kget, ksend, create_pvc, SMB_NAMESPACE, _cache)
 NETWORK.bind(kget, ksend, SYS_NS, DEFAULT_NS, LB_IP)
+CLUSTER.bind(kget, SYS_NS, lambda: cached("nodes", 5, get_nodes))
 CONSOLE_PROXY = CONSOLE.ConsoleProxy(API, TOKEN, CTX, DATA_DIR, SYS_NS, {DEFAULT_NS}, kget)
 
 
@@ -1871,7 +1873,7 @@ def display_icon(annotations):
 SPA_ROUTES = frozenset({
     "/", "/architecture", "/nodes", "/deploy", "/containers", "/vms",
     "/app-store", "/shares", "/volumes", "/image-cache", "/data-protection",
-    "/schedules", "/import", "/events", "/networking", "/settings",
+    "/schedules", "/import", "/events", "/networking", "/system/cluster", "/settings",
 })
 
 
@@ -2081,6 +2083,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("wl", 5, get_workloads))
             if p == "/api/network":
                 return self._send(200, cached("network", 5, NETWORK.inventory))
+            if p == "/api/cluster":
+                return self._send(200, cached("cluster", 15, CLUSTER.inventory))
             if p == "/api/image-updates":
                 force = (q.get("force") or ["0"])[0].lower() in ("1", "true", "yes")
                 report = json.loads(json.dumps(cached(

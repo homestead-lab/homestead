@@ -277,6 +277,34 @@
     "/api/shares/edit": { ok: true, shares, deployment_updated: true,
       message: "Share secure updated; Samba is restarting" },
     "/api/operations": [], "/api/workloads": workloads, "/api/network": network,
+    "/api/cluster": { generated_at: 1789891200, state: "attention",
+      summary: "The platform is online, with resilience or warning items to review.",
+      versions: { harvester: "1.6.0", kubernetes: "1.34.1+rke2r1" },
+      control_plane: { total: 2, ready: 2, etcd_total: 2, etcd_ready: 2, quorum_needed: 2, quorum_margin: 0, state: "attention" },
+      nodes: nodes.map(n => ({ name: n.name, ready: true, status: "Ready", roles: n.roles,
+        schedulable: n.schedulable, pressure: [], cpu_pct: n.cpu_pct, memory_pct: n.mem_pct,
+        disk_pct: n.fs_pct, pods: n.pods, version: "v1.34.1+rke2r1", os: "Harvester v1.6.0" })),
+      capacity: { pressure: [], unready: [], cordoned: [] },
+      services: [
+        { id: "api", name: "Kubernetes API", pods: 2, ready: 2, state: "healthy", required: true },
+        { id: "etcd", name: "etcd", pods: 2, ready: 2, state: "healthy", required: true },
+        { id: "controller", name: "Controller manager", pods: 2, ready: 2, state: "healthy", required: true },
+        { id: "scheduler", name: "Scheduler", pods: 2, ready: 2, state: "healthy", required: true },
+        { id: "dns", name: "Cluster DNS", pods: 2, ready: 2, state: "healthy", required: true },
+        { id: "harvester", name: "Harvester", pods: 3, ready: 3, state: "healthy", required: true },
+        { id: "longhorn", name: "Longhorn", pods: 3, ready: 3, state: "healthy", required: true },
+        { id: "kubevirt", name: "KubeVirt", pods: 5, ready: 5, state: "healthy", required: false }],
+      certificates: { state: "healthy", total: 4, pending: 0, failed: 0, expiring: 0,
+        entries: [{ name: "csr-node-3", signer: "kubernetes.io/kube-apiserver-client-kubelet", state: "approved", age_seconds: 8120 }],
+        note: "Issued certificate lifetime is estimated from each CSR request. Private keys and certificate bodies are never returned." },
+      warnings: [{ namespace: "longhorn-system", object: "longhorn-manager", kind: "Pod", reason: "Unhealthy",
+        message: "Readiness probe recovered after one retry", count: 1, age_seconds: 820 }], unavailable: [],
+      onboarding: { recommended_role: "Control plane + etcd",
+        reason: "The cluster has 2 etcd members. An odd three-member control plane provides a useful one-node failure margin.",
+        checks: ["Reserve a unique hostname and management-network address.", "Verify DNS, gateway, and time synchronization from the new host.",
+          "Match the running Harvester release before joining it.", "Confirm the install disk is empty and data disks are intentionally assigned.",
+          "Review hardware features after join so workloads can use the new host.", "Run drain and failover preflight before relying on the node for resilience."],
+        pxe: { enabled: false, status: "Not configured", reason: "PXE can affect DHCP and boot traffic, so it remains a separately designed managed add-on." }} },
     "/api/workload": url => {
       const name = url.searchParams.get("name") || "frigate";
       const found = workloads.find(item => item.name === name) || workloads[0];
@@ -306,7 +334,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.7.12", candidate: "ghcr.io/wjcloudy/homestead:2.7.13", candidate_tag: "2.7.13", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.7.13", candidate: "ghcr.io/wjcloudy/homestead:2.8.0", candidate_tag: "2.8.0", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]
