@@ -3,7 +3,7 @@
 Homestead - a friendly homelab control plane for Harvester, Rancher and Longhorn.
 Pure Python stdlib: no pip install at runtime, so it starts even with no internet.
 """
-import copy, json, os, re, secrets, ssl, sys, time, threading, urllib.request, urllib.parse, urllib.error
+import copy, html, json, os, re, secrets, ssl, sys, time, threading, urllib.request, urllib.parse, urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.7.4"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.7.5"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1406,6 +1406,26 @@ def category_values(value):
     return found
 
 
+def catalog_text(value, limit=None):
+    """Turn catalogue HTML fragments and entities into compact readable text."""
+    text = str(value or "")
+    # Some catalogue fields contain encoded markup (and occasionally encode it
+    # twice), so decode before removing tags.
+    for _ in range(2):
+        decoded = html.unescape(text)
+        if decoded == text:
+            break
+        text = decoded
+    text = re.sub(r"(?i)<\s*br\s*/?\s*>", "\n", text)
+    text = re.sub(r"(?i)</\s*(?:p|div|li|tr|h[1-6])\s*>", "\n", text)
+    text = re.sub(r"<[^>]*>", "", text)
+    text = html.unescape(text).replace("\xa0", " ")
+    text = re.sub(r"[ \t\r\f\v]+", " ", text)
+    text = re.sub(r"\s*\n+\s*", " · ", text)
+    text = re.sub(r"(?:\s*·\s*)+", " · ", text).strip(" ·")
+    return text[:limit] if limit is not None else text
+
+
 def search_appstore(apps, term):
     """Return catalogue matches with name relevance ahead of description hits."""
     needle = str(term or "").strip().lower()
@@ -1454,7 +1474,7 @@ def fetch_appstore():
                 "name": a.get("Name"),
                 "repo": repo,
                 "icon": a.get("Icon") or "",
-                "desc": re.sub(r"\s+", " ", (a.get("Overview") or a.get("Description") or ""))[:300],
+                "desc": catalog_text(a.get("Overview") or a.get("Description") or "", 300),
                 "cat": categories[0] if categories else "",
                 "categories": categories,
                 "web": a.get("Project") or a.get("Support") or "",
@@ -1488,8 +1508,8 @@ def template_to_cfg(app):
         if val is None or val == "":
             val = attrs.get("Default") or c.get("Default") or ""
         val = str(val)
-        label = str(attrs.get("Name") or c.get("Name") or tgt)
-        description = str(attrs.get("Description") or c.get("Description") or "")
+        label = catalog_text(attrs.get("Name") or c.get("Name") or tgt)
+        description = catalog_text(attrs.get("Description") or c.get("Description") or "")
         required = str(attrs.get("Required") or c.get("Required") or "false").lower() == "true"
         mode = str(attrs.get("Mode") or c.get("Mode") or "")
         read_only = mode.lower() == "ro"

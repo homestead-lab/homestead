@@ -43,6 +43,28 @@ class AppStoreTemplateTests(unittest.TestCase):
         ]
         self.assertEqual(apps, server.search_appstore(apps, "frigate"))
 
+    def test_catalogue_markup_is_rendered_as_plain_readable_text(self):
+        self.assertEqual(
+            "Container Variable: PLEX_CLAIM_TOKEN · Example: claim-abc",
+            server.catalog_text(
+                "Container Variable: PLEX_CLAIM_TOKEN&lt;br&gt;<b>Example:</b>&nbsp;claim-abc"),
+        )
+
+    def test_template_variable_metadata_does_not_expose_html(self):
+        app = {
+            "name": "Plex",
+            "repo": "plexinc/pms-docker:latest",
+            "config": [{"@attributes": {
+                "Name": "Claim token&lt;br&gt;optional",
+                "Target": "PLEX_CLAIM_TOKEN",
+                "Type": "Variable",
+                "Description": "Container Variable: PLEX_CLAIM_TOKEN<br/>Example: claim-abc",
+            }, "value": ""}],
+        }
+        meta = server.template_to_cfg(app)["env_meta"][0]
+        self.assertEqual("Claim token · optional", meta["label"])
+        self.assertEqual("Container Variable: PLEX_CLAIM_TOKEN · Example: claim-abc", meta["description"])
+
     def test_template_preserves_ports_environment_storage_and_devices(self):
         app = {
             "name": "Demo App", "repo": "example/demo:latest", "icon": "https://example.com/icon.png",
@@ -282,7 +304,7 @@ class HomesteadManifestTests(unittest.TestCase):
     def test_runtime_workload_uses_homestead_names_and_image(self):
         manifest = (ROOT / "deploy" / "deploy.yaml").read_text()
         self.assertIn("kind: Deployment\nmetadata:\n  name: homestead", manifest)
-        self.assertIn("- name: homestead\n          image: ghcr.io/wjcloudy/homestead:2.7.4", manifest)
+        self.assertIn("- name: homestead\n          image: ghcr.io/wjcloudy/homestead:2.7.5", manifest)
         self.assertIn("harvui.io/update-sources: '{\"homestead\":", manifest)
         self.assertNotIn("kind: Deployment\nmetadata:\n  name: harvui", manifest)
 
