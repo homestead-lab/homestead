@@ -33,7 +33,7 @@ function workloadHierarchy(w) {
   const podLabel = `${podCount} pod${podCount === 1 ? "" : "s"}`;
   const containerLabel = `${containerCount} container${containerCount === 1 ? "" : "s"}`;
   return `<details class="workloadtree">
-    <summary><span class="tree-kind">${esc(w.kind || "Deployment")}</span><span class="tree-arrow">→</span>
+    <summary title="Show ${esc(w.kind || "Deployment")} runtime objects"><span class="tree-kind">${esc(w.kind || "Deployment")}</span><span class="tree-arrow">→</span>
       <span>${podLabel}</span><span class="tree-arrow">→</span><span>${containerLabel}</span>
       <span class="tree-hint">show runtime objects</span></summary>
     <div class="tree-body">${pods.map(p => `<div class="tree-pod">
@@ -208,10 +208,10 @@ function renderWorkloads() {
       const update = workloadUpdate(w.ns, w.name);
       const updateError = update?.images?.find(x => x.error);
       return `<div class="wcard card flat">
-        <div class="between">
+        <div class="between whead">
           <div class="row" style="gap:10px;min-width:0">
             ${appAvatar(w.name, w.icon)}
-            <div style="min-width:0"><div style="font-weight:680">${esc(w.name)}</div>
+            <div class="wtitle"><div style="font-weight:680">${esc(w.name)}</div>
               <div class="dim xs">${esc(w.ns)} · <span class="nodelink"
                 onclick="moveWorkload('${w.name}','${w.ns}')">${esc(w.nodes.join(", ") || "unscheduled")}</span></div></div>
           </div>
@@ -229,9 +229,10 @@ function renderWorkloads() {
         </div>
         <div class="dim xs mono wimg">${w.images.map(esc).join(" · ")}
           ${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</div>
-        ${workloadHierarchy(w)}
         ${updateError ? `<div class="updateerror">Image check: ${esc(updateError.error)}</div>` : ""}
-        <div class="row wacts">
+        <div class="wfoot">
+          ${workloadHierarchy(w)}
+          <div class="row wacts">
           <button class="btn sm" title="View live container logs" onclick="wlLogs('${w.ns}','${w.pods[0] ? w.pods[0].name : ""}','${w.name}')">${icon("log")}Logs</button>
           <button class="btn sm" title="Restart all pods in this workload" onclick="wlRestart('${w.ns}','${w.name}')">${icon("restart")}Restart</button>
           ${update?.available ? `<button class="btn sm pri" title="Review and install the available image update" data-need="operator" onclick="imageUpdateReview('${w.ns}','${w.name}')">${icon("update")}Update</button>` : ""}
@@ -246,6 +247,7 @@ function renderWorkloads() {
               <button class="danger" aria-label="Delete ${esc(w.name)}" title="Delete the workload; persistent volumes are kept" onclick="this.closest('details').open=false;wlDelete('${w.ns}','${w.name}')">${icon("trash")}Delete</button>
             </div>
           </details>
+          </div>
         </div></div>`;
     }).join("") || `<div class="empty">nothing here yet</div>`}</div>`);
 }
