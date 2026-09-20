@@ -12,6 +12,7 @@ import secrets
 import threading
 import time
 import urllib.error
+import urllib.parse
 
 
 kget = None
@@ -168,6 +169,75 @@ def _backup(item):
     return "running", progress, f"Backup {state or 'pending'}"
 
 
+def _volume_restore(item):
+    ref = item["ref"]
+    namespace, name = ref["namespace"], ref["name"]
+    pvc = _get_or_none(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{name}")
+    if pvc is None:
+        return "failed", 0, "The destination PVC no longer exists"
+    pvc_status = pvc.get("status", {}) or {}
+    phase = str(pvc_status.get("phase", "Pending") or "Pending")
+    if phase == "Lost":
+        return "failed", 10, "Kubernetes reports the restored PVC as lost"
+    pv_name = (pvc.get("spec", {}) or {}).get("volumeName", "")
+    if not pv_name:
+        return "running", 8, "Provisioning the destination PVC"
+    pv = _get_or_none(f"/api/v1/persistentvolumes/{pv_name}")
+    if pv is None:
+        return "running", 12, "Waiting for the restored persistent volume"
+    csi = (pv.get("spec", {}) or {}).get("csi", {}) or {}
+    volume_name = csi.get("volumeHandle", "")
+    if not volume_name:
+        return "failed", 12, "The provisioned PV is not a Longhorn CSI volume"
+    volume = _get_or_none(
+        f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/{volume_name}")
+    if volume is None:
+        return "running", 16, "Waiting for Longhorn to create the volume"
+    status = volume.get("status", {}) or {}
+    for condition in status.get("conditions", []) or []:
+        if condition.get("type") == "Scheduled" and condition.get("status") == "False":
+            detail = condition.get("message") or condition.get("reason")
+            return "failed", 18, detail or "Longhorn cannot schedule the restored volume"
+    robustness = str(status.get("robustness", "") or "").lower()
+    if robustness == "faulted":
+        return "failed", 20, "The restored Longhorn volume is faulted"
+
+    selector = urllib.parse.quote(f"longhornvolume={volume_name}", safe="")
+    engines = kget(
+        "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/engines"
+        f"?labelSelector={selector}").get("items", [])
+    restore_rows = []
+    restored_backups = []
+    for engine in engines:
+        engine_status = engine.get("status", {}) or {}
+        restored_backups.append(str(engine_status.get("lastRestoredBackup", "") or ""))
+        restore_rows.extend((engine_status.get("restoreStatus", {}) or {}).values())
+    errors = [str(row.get("error")) for row in restore_rows if row.get("error")]
+    if errors:
+        return "failed", min([int(row.get("progress", 0) or 0) for row in restore_rows] or [20]), errors[0]
+    restoring = any(bool(row.get("isRestoring")) for row in restore_rows)
+    progresses = [int(row.get("progress", 0) or 0) for row in restore_rows]
+    restore_progress = min(progresses) if progresses else 0
+    operation_progress = min(92, 20 + (restore_progress * 70 + 50) // 100)
+    restored = bool(restore_rows) and all(
+        not row.get("isRestoring") and (
+            int(row.get("progress", 0) or 0) >= 100 or row.get("lastRestored") or
+            str(row.get("state", "")).lower() in ("complete", "completed"))
+        for row in restore_rows)
+    restored = restored or (
+        bool(status.get("restoreInitiated")) and not bool(status.get("restoreRequired")) and
+        any(restored_backups))
+    if restored and phase == "Bound" and robustness == "healthy":
+        return "succeeded", 100, f"Restored PVC {namespace}/{name} is bound and healthy"
+    if restoring or restore_progress:
+        return "running", operation_progress, f"Restoring backup data · {restore_progress}%"
+    if restored:
+        return "running", 96, f"Data restored; waiting for {robustness or 'healthy'} replicas"
+    if status.get("restoreInitiated"):
+        return "running", 20, "Longhorn initialized the backup restore"
+    return "running", 18, "Waiting for Longhorn restore engines"
+
+
 def _image_cleanup(item):
     ref = item["ref"]
     pods = [kget(f"/api/v1/namespaces/{ref['namespace']}/pods/{name}")
@@ -238,6 +308,7 @@ RESOLVERS = {
     "import": _job,
     "vm-migration": _migration,
     "backup": _backup,
+    "volume-restore": _volume_restore,
 }
 
 

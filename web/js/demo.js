@@ -86,6 +86,38 @@
       actual_size_gb: 20, pvc_status: "Bound", user: "lab", public: false,
       read_only: true, has_password: true, created: "2026-09-18 22:39" },
   ];
+  const lhBackups = [{ name: "backup-demo-frigate-20260919", volume: "pvc-demo-frigate",
+    state: "Completed", progress: 100, size_mb: 1842.6, volume_size_gb: 20,
+    created: "2026-09-19T02:14:32Z", error: "", target: "default", restorable: true }];
+  const lhOverview = {
+    total: 2, protected: 2, unprotected: [], groups: ["default", "critical"],
+    target: { configured: true, available: true, name: "default",
+      url: "nfs://backup.example.invalid:/homestead", reason: "", interval: "5m", secret: "" },
+    tasks: { snapshot: "Snapshot — point-in-time, stored on the volume",
+      backup: "Backup — snapshot then upload to the backup target" },
+    jobs: [{ name: "nightly-backup", task: "backup", cron: "0 2 * * *", retain: 7,
+      concurrency: 1, groups: ["default"], covers: 2,
+      volumes: ["pvc-demo-frigate", "pvc-demo-scratch"], desc: "Nightly external backup" }],
+    volumes: [
+      { name: "pvc-demo-frigate", pvc: "frigate-config", namespace: "lab", size_gb: 20,
+        robustness: "healthy", state: "attached", labels: {}, jobs: [], groups: ["default", "critical"],
+        last_backup: lhBackups[0].name, last_backup_at: lhBackups[0].created },
+      { name: "pvc-demo-scratch", pvc: "scratch-test", namespace: "lab", size_gb: 5,
+        robustness: "healthy", state: "detached", labels: {}, jobs: [], groups: ["default"],
+        last_backup: "", last_backup_at: "" },
+    ],
+  };
+  const restorePlan = url => {
+    const ns = url.searchParams.get("ns") || "";
+    const name = url.searchParams.get("name") || "";
+    const conflict = name === "frigate-config" ? { kind: "PersistentVolumeClaim", name,
+      message: `PVC ${ns}/${name} already exists; choose a new name` } : null;
+    return { backup: lhBackups[0].name, source_volume: "pvc-demo-frigate",
+      created: lhBackups[0].created, backup_size_mb: lhBackups[0].size_mb,
+      volume_size_bytes: 21474836480, minimum_size_gb: 20,
+      suggested_name: "pvc-demo-frigate-restore", namespace: ns, pvc_name: name,
+      conflict, ready: !conflict, target: "default" };
+  };
   const volumeDeletePlan = url => {
     const name = url.searchParams.get("name") || "scratch-test";
     const attached = name === "frigate-config";
@@ -135,6 +167,17 @@
       return disk?.smart || { error: "Demo disk not found" };
     },
     "/api/volumes/delete-plan": volumeDeletePlan, "/api/hardware/features": hardware,
+    "/api/namespaces": ["default", "lab", "monitoring"],
+    "/api/lh/overview": lhOverview,
+    "/api/lh/snapshots": [], "/api/lh/backups": lhBackups,
+    "/api/lh/restore/plan": restorePlan,
+    "/api/lh/restore": (url, init) => {
+      const body = JSON.parse(init?.body || "{}");
+      return { ok: true, backup: body.backup || lhBackups[0].name,
+        namespace: body.namespace || "lab", name: body.name || "pvc-demo-frigate-restore",
+        size_gb: body.size_gb || 20,
+        message: `Restore of ${body.backup || lhBackups[0].name} into ${body.namespace || "lab"}/${body.name || "pvc-demo-frigate-restore"} started` };
+    },
     "/api/shares": shares,
     "/api/shares/edit": { ok: true, shares, deployment_updated: true,
       message: "Share secure updated; Samba is restarting" },

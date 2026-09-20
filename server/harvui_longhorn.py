@@ -15,6 +15,8 @@ That label model is what makes "groups" cheap here — assigning a volume is one
 label patch, not a controller.
 """
 import json
+import hashlib
+import math
 import re
 import time
 import urllib.error
@@ -23,6 +25,7 @@ kget = ksend = None
 LHNS = "longhorn-system"
 API = "/apis/longhorn.io/v1beta2"
 _cache = {}
+STORAGE_CLASS = "longhorn-r2"
 
 TASKS = {
     "snapshot": "Snapshot — point-in-time, stored on the volume",
@@ -38,9 +41,10 @@ GROUP_LABEL = "recurring-job-group.longhorn.io/"
 SAFE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$")
 
 
-def bind(_kget, _ksend, _cache_ref):
-    global kget, ksend, _cache
+def bind(_kget, _ksend, _cache_ref, storage_class="longhorn-r2"):
+    global kget, ksend, _cache, STORAGE_CLASS
     kget, ksend, _cache = _kget, _ksend, _cache_ref
+    STORAGE_CLASS = storage_class
 
 
 def _bust(*keys):
@@ -269,8 +273,11 @@ def backups(volume=None):
             "name": b["metadata"]["name"], "volume": vol,
             "state": st.get("state", ""), "progress": st.get("progress", 0),
             "size_mb": round(int(st.get("size", 0) or 0) / 1048576, 1),
+            "volume_size_gb": max(1, math.ceil(int(st.get("volumeSize", 0) or 0) / 1073741824)),
             "created": st.get("backupCreatedAt", ""),
             "error": st.get("error", ""),
+            "target": st.get("backupTargetName", "default") or "default",
+            "restorable": str(st.get("state", "")).lower() == "completed" and bool(st.get("url")),
         })
     return sorted(out, key=lambda x: x["created"], reverse=True)
 
@@ -288,6 +295,161 @@ def create_backup(volume, name=None):
     _bust("lhbackups")
     return {"ok": True, "backup": out.get("metadata", {}).get("name", ""),
             "snapshot": snap, "volume": volume}
+
+
+K8S_LABEL = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def _valid_k8s_name(value):
+    value = str(value or "")
+    return bool(value) and len(value) <= 253 and all(
+        K8S_LABEL.fullmatch(part) for part in value.split("."))
+
+
+def _get_or_none(path):
+    try:
+        return kget(path)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
+
+
+def _backup(name):
+    if not _valid_k8s_name(name):
+        raise ValueError("backup name is invalid")
+    item = _get_or_none(f"{API}/namespaces/{LHNS}/backups/{name}")
+    if item is None:
+        raise ValueError("backup was not found")
+    return item
+
+
+def _restore_source(item):
+    status = item.get("status", {}) or {}
+    state = str(status.get("state", "") or "")
+    url = str(status.get("url", "") or "")
+    size = int(status.get("volumeSize", 0) or 0)
+    if state.lower() != "completed":
+        raise ValueError(f"backup is not ready to restore (state: {state or 'pending'})")
+    if not url:
+        raise ValueError("backup URL is not available yet")
+    if size <= 0:
+        raise ValueError("backup volume size is unavailable")
+    return status, url, size
+
+
+def _restore_class_name(url, replicas):
+    digest = hashlib.sha256(f"{STORAGE_CLASS}\0{replicas}\0{url}".encode()).hexdigest()[:16]
+    return f"homestead-restore-{digest}"
+
+
+def restore_plan(backup, namespace, pvc_name):
+    item = _backup(backup)
+    status, url, size = _restore_source(item)
+    namespace = str(namespace or "").strip()
+    pvc_name = str(pvc_name or "").strip()
+    if namespace and not _valid_k8s_name(namespace):
+        raise ValueError("namespace is invalid")
+    if pvc_name and not _valid_k8s_name(pvc_name):
+        raise ValueError("PVC name must use lowercase letters, numbers, dots and dashes")
+    source_volume = str(status.get("volumeName", "") or "backup")
+    suggested = re.sub(r"[^a-z0-9-]+", "-", source_volume.lower()).strip("-")[:230]
+    suggested = (suggested or "restored-volume") + "-restore"
+    conflict = None
+    if namespace:
+        if _get_or_none(f"/api/v1/namespaces/{namespace}") is None:
+            conflict = {"kind": "Namespace", "name": namespace,
+                        "message": f"Namespace {namespace} does not exist"}
+        elif pvc_name and _get_or_none(
+                f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{pvc_name}") is not None:
+            conflict = {"kind": "PersistentVolumeClaim", "name": pvc_name,
+                        "message": f"PVC {namespace}/{pvc_name} already exists; choose a new name"}
+    return {
+        "backup": item["metadata"]["name"], "source_volume": source_volume,
+        "created": status.get("backupCreatedAt", ""),
+        "backup_size_mb": round(int(status.get("size", 0) or 0) / 1048576, 1),
+        "volume_size_bytes": size, "minimum_size_gb": max(1, math.ceil(size / 1073741824)),
+        "suggested_name": suggested, "namespace": namespace, "pvc_name": pvc_name,
+        "conflict": conflict, "ready": conflict is None,
+        "target": status.get("backupTargetName", "default") or "default",
+    }
+
+
+def restore_backup(cfg):
+    backup = str(cfg.get("backup") or "").strip()
+    namespace = str(cfg.get("namespace") or "").strip()
+    pvc_name = str(cfg.get("name") or "").strip()
+    plan = restore_plan(backup, namespace, pvc_name)
+    if plan["conflict"]:
+        raise ValueError(plan["conflict"]["message"])
+    access_mode = str(cfg.get("access_mode") or "ReadWriteOnce")
+    if access_mode not in ("ReadWriteOnce", "ReadWriteMany"):
+        raise ValueError("access mode must be ReadWriteOnce or ReadWriteMany")
+    replicas = int(cfg.get("replicas", 2) or 2)
+    if replicas < 1 or replicas > 5:
+        raise ValueError("replicas must be between 1 and 5")
+    size_gb = int(cfg.get("size_gb") or plan["minimum_size_gb"])
+    if size_gb < plan["minimum_size_gb"]:
+        raise ValueError(f"restored PVC cannot be smaller than {plan['minimum_size_gb']} GiB")
+
+    item = _backup(backup)
+    status, url, _ = _restore_source(item)
+    base = kget(f"/apis/storage.k8s.io/v1/storageclasses/{STORAGE_CLASS}")
+    if base.get("provisioner") != "driver.longhorn.io":
+        raise ValueError(f"storage class {STORAGE_CLASS} is not managed by Longhorn")
+    parameters = dict(base.get("parameters", {}) or {})
+    # Homestead restores filesystem PVCs. Harvester's VM-oriented class may
+    # advertise migratable=true, which is valid only for RWX block volumes.
+    parameters.update(fromBackup=url, numberOfReplicas=str(replicas), migratable="false",
+                      backupTargetName=status.get("backupTargetName", "default") or "default")
+    class_name = _restore_class_name(url, replicas)
+    storage_class = {
+        "apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
+        "metadata": {"name": class_name,
+                     "labels": {"app.kubernetes.io/managed-by": "homestead",
+                                "homestead.io/restore-class": "true"},
+                     "annotations": {"homestead.io/source-backup": backup,
+                                     "homestead.io/base-storage-class": STORAGE_CLASS}},
+        "provisioner": "driver.longhorn.io", "allowVolumeExpansion": True,
+        "reclaimPolicy": "Delete", "volumeBindingMode": "Immediate",
+        "parameters": parameters,
+    }
+    if base.get("mountOptions"):
+        storage_class["mountOptions"] = list(base["mountOptions"])
+    if base.get("allowedTopologies"):
+        storage_class["allowedTopologies"] = list(base["allowedTopologies"])
+    existing_class = _get_or_none(f"/apis/storage.k8s.io/v1/storageclasses/{class_name}")
+    if existing_class:
+        if (existing_class.get("provisioner") != "driver.longhorn.io" or
+                (existing_class.get("parameters", {}) or {}) != parameters or
+                (existing_class.get("metadata", {}).get("labels", {}) or {}).get(
+                    "app.kubernetes.io/managed-by") != "homestead"):
+            raise ValueError(f"restore storage class {class_name} exists with different settings")
+    else:
+        ksend("POST", "/apis/storage.k8s.io/v1/storageclasses", storage_class)
+
+    pvc = {
+        "apiVersion": "v1", "kind": "PersistentVolumeClaim",
+        "metadata": {"name": pvc_name, "namespace": namespace,
+                     "labels": {"app.kubernetes.io/managed-by": "homestead",
+                                "homestead.io/restored-volume": "true"},
+                     "annotations": {"homestead.io/restored-from-backup": backup,
+                                     "homestead.io/source-volume": plan["source_volume"]}},
+        "spec": {"storageClassName": class_name, "accessModes": [access_mode],
+                 "volumeMode": "Filesystem",
+                 "resources": {"requests": {"storage": f"{size_gb}Gi"}}},
+    }
+    try:
+        out = ksend("POST", f"/api/v1/namespaces/{namespace}/persistentvolumeclaims", pvc)
+    except Exception:
+        # A class is safe to retain and reuse, but never hide a failed PVC create.
+        raise
+    _bust("lhvols", "vol")
+    return {"ok": True, "backup": backup, "namespace": namespace, "name": pvc_name,
+            "storage_class": class_name, "size_gb": size_gb,
+            "access_mode": access_mode,
+            "uid": (out.get("metadata", {}) or {}).get("uid", ""),
+            "message": f"Restore of {backup} into {namespace}/{pvc_name} started"}
 
 
 def overview():

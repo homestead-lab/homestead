@@ -48,10 +48,10 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.2.2`, the workflow publishes:
+For a release such as `v2.3.0`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.2.2
+ghcr.io/wjcloudy/homestead:2.3.0
 ghcr.io/wjcloudy/homestead:2.1
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -62,8 +62,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.2.2
-git push origin v2.2.2
+git tag v2.3.0
+git push origin v2.3.0
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -174,7 +174,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.2.2 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.3.0 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -219,6 +219,24 @@ The exact claim name must be typed before either action. System namespaces and
 Homestead's own `harvui-data` claim are protected, and the supplied RBAC grants
 only the additional PV `patch` permission required to make the chosen reclaim
 behavior deterministic.
+
+## Restore a Longhorn backup
+
+Completed backups have a **Restore** action in Data Protection. Homestead always
+restores into a newly named PVC: it checks the namespace and destination name
+first, refuses to overwrite an existing claim, and enforces a capacity at least
+as large as the backed-up volume. RWO and RWX claims are supported, with an
+explicit replica count.
+
+The restore uses Longhorn's documented CSI `fromBackup` StorageClass parameter.
+Homestead creates a deterministic, reusable restore class derived from the
+backup URL and selected replica count, then submits an ordinary PVC to the
+Longhorn CSI provisioner. It never fabricates a PV or mutates the source volume
+or backup. The Activity tray persists the operation and reports provisioning,
+per-replica restore percentage, replica-health waiting, and actionable Longhorn
+errors across browser or Homestead restarts. See the
+[Longhorn StorageClass parameters](https://longhorn.io/docs/1.12.1/references/storage-class-parameters/)
+reference for the underlying mechanism.
 
 ## Network shares
 

@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.2.2"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.3.0"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1282,7 +1282,7 @@ HW.bind(kget, ksend, DEFAULT_NS, _cache)
 LC.bind(kget, ksend, SYS_NS, _cache, HW.features)
 IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.features)
 AUTH.bind(kget, ksend, DEFAULT_NS)
-LH.bind(kget, ksend, _cache)
+LH.bind(kget, ksend, _cache, STORAGE_CLASS)
 PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.features)
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS)
 SMART.bind(kget, DEFAULT_NS, AUTH.internal_signing_key)
@@ -1345,6 +1345,7 @@ ADMIN_ROUTES = {
     "/api/volumes/delete",
     "/api/node/smart/test",
     "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete",
+    "/api/lh/restore",
 }
 # things a signed-in user may always do to their own account
 SELF_ROUTES = {"/api/auth/logout", "/api/auth/password", "/api/auth/signout-everywhere"}
@@ -1576,6 +1577,11 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/lh/backups":
                 vol = (q.get("volume") or [None])[0]
                 return self._send(200, LH.backups(vol))
+            if p == "/api/lh/restore/plan":
+                return self._send(200, LH.restore_plan(
+                    (q.get("backup") or [""])[0],
+                    (q.get("ns") or [DEFAULT_NS])[0],
+                    (q.get("name") or [""])[0]))
             if p == "/api/sources":
                 return self._send(200, IMP.list_sources())
             if p == "/api/imports":
@@ -1911,6 +1917,21 @@ class H(BaseHTTPRequestHandler):
                         "backup", f"Back up {b['volume']}",
                         {"kind": "Volume", "name": b["volume"], "namespace": "longhorn-system"},
                         "/data-protection", {"namespace": "longhorn-system", "name": result["backup"]})
+                return self._send(200, result)
+            if p == "/api/lh/restore":
+                plan = LH.restore_plan(
+                    b.get("backup"), b.get("namespace", DEFAULT_NS), b.get("name"))
+                if plan.get("conflict"):
+                    return self._send(409, {"error": plan["conflict"]["message"], "plan": plan})
+                result = LH.restore_backup(b)
+                result["operation"] = OPS.start(
+                    "volume-restore", f"Restore {result['name']}",
+                    {"kind": "PersistentVolumeClaim", "name": result["name"],
+                     "namespace": result["namespace"]},
+                    "/volumes?" + urllib.parse.urlencode({"q": result["name"]}),
+                    {"namespace": result["namespace"], "name": result["name"],
+                     "backup": result["backup"]},
+                    "Waiting for Longhorn to provision the restored volume")
                 return self._send(200, result)
             if p == "/api/lh/target":
                 return self._send(200, LH.set_backup_target(

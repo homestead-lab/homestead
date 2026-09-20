@@ -267,13 +267,16 @@ window.lhSnaps = async (vol, label) => {
       </tbody></table></div></div>
       <div class="sec">Backups (${bks.length})</div>
       <div class="card flat pad0"><div class="tblwrap"><table class="tbl">
-        <thead><tr><th>Name</th><th>State</th><th>Size</th><th>Created</th></tr></thead><tbody>
+        <thead><tr><th>Name</th><th>State</th><th>Size</th><th>Created</th><th></th></tr></thead><tbody>
         ${bks.map(b => `<tr><td class="mono small">${esc(b.name.slice(0, 28))}</td>
           <td><span class="pill ${b.state === "Completed" ? "ok" : b.state === "Error" ? "crit" : "med"}">${esc(b.state || "?")}</span>
               ${b.error ? `<div class="dim xs">${esc(b.error.slice(0, 80))}</div>` : ""}</td>
           <td class="mono">${b.size_mb} MB</td>
-          <td class="small dim">${esc((b.created || "").replace("T", " ").replace("Z", ""))}</td></tr>`).join("")
-          || `<tr><td colspan=4 class="empty">no backups — needs a backup target</td></tr>`}
+          <td class="small dim">${esc((b.created || "").replace("T", " ").replace("Z", ""))}</td>
+          <td>${b.restorable ? `<button class="btn sm" data-need="admin"
+            onclick="lhRestore('${esc(b.name)}')">${icon("rollback")}Restore</button>`
+            : '<span class="dim xs">not ready</span>'}</td></tr>`).join("")
+          || `<tr><td colspan=5 class="empty">no backups — needs a backup target</td></tr>`}
       </tbody></table></div></div>`;
     if (window.applyRole) window.applyRole();
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
@@ -291,6 +294,76 @@ window.lhBackupNow = async (vol, label) => {
       body: JSON.stringify({ volume: vol }) });
     toast("backup started", "ok"); setTimeout(() => lhSnaps(vol, label), 1500);
   } catch (e) { toast(e.message, "bad"); }
+};
+let restoreCheckTimer = 0;
+window.lhRestore = async backup => {
+  modal("Restore backup", `<div class="empty"><span class="spin2"></span>checking backup and namespaces</div>`, true);
+  try {
+    const [plan, namespaces] = await Promise.all([
+      api(`/api/lh/restore/plan?backup=${encodeURIComponent(backup)}&ns=&name=`),
+      api("/api/namespaces"),
+    ]);
+    const defaultNs = namespaces.includes("lab") ? "lab" : (namespaces[0] || "default");
+    $("#mbody").innerHTML = `
+      <div class="note"><b>This creates a new PVC.</b> The backup and its source volume stay unchanged.
+        Restore progress remains in the active-jobs tray if this dialog is closed or Homestead is refreshed.</div>
+      <div class="drow"><div class="dl">Backup</div><div class="dv mono small">${esc(plan.backup)}</div></div>
+      <div class="drow"><div class="dl">Source volume</div><div class="dv mono small">${esc(plan.source_volume)}</div></div>
+      <div class="drow"><div class="dl">Original capacity</div><div class="dv">${plan.minimum_size_gb} GiB</div></div>
+      <div class="f2" style="margin-top:16px">
+        <div class="f"><label>Namespace ${tip("The Kubernetes namespace that will own the new PersistentVolumeClaim.")}</label>
+          <select id="lr_ns" onchange="lhRestoreCheck()">${namespaces.map(ns =>
+            `<option value="${esc(ns)}" ${ns === defaultNs ? "selected" : ""}>${esc(ns)}</option>`).join("")}</select></div>
+        <div class="f"><label>New PVC name ${tip("Must be unique in the selected namespace. Existing claims are never overwritten.")}</label>
+          <input id="lr_name" value="${esc(plan.suggested_name)}" oninput="lhRestoreCheck()"></div>
+      </div>
+      <div class="f2">
+        <div class="f"><label>Capacity (GiB) ${tip("May be larger than the backup volume, but never smaller.")}</label>
+          <input id="lr_size" type="number" min="${plan.minimum_size_gb}" value="${plan.minimum_size_gb}"></div>
+        <div class="f"><label>Access mode ${tip("RWO mounts on one node at a time. RWX is shared through Longhorn's share manager.")}</label>
+          <select id="lr_mode"><option value="ReadWriteOnce">ReadWriteOnce (RWO)</option>
+            <option value="ReadWriteMany">ReadWriteMany (RWX)</option></select></div>
+      </div>
+      <div class="f"><label>Replicas ${tip("Copies Longhorn maintains on separate eligible disks after the restore completes.")}</label>
+        <input id="lr_replicas" type="number" min="1" max="5" value="2"></div>
+      <div id="lr_check" class="note"><span class="spin2"></span> checking destination name</div>
+      <div class="row" style="margin-top:18px">
+        <button class="btn pri" id="lr_submit" data-need="admin" data-backup="${esc(backup)}"
+          onclick="lhRestoreStart(this.dataset.backup)" disabled>${icon("rollback")}Start restore</button>
+        <button class="btn" onclick="closeModal()">Cancel</button></div>`;
+    if (window.applyRole) window.applyRole();
+    lhRestoreCheck();
+  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+};
+window.lhRestoreCheck = () => {
+  clearTimeout(restoreCheckTimer);
+  restoreCheckTimer = setTimeout(async () => {
+    const box = $("#lr_check"), button = $("#lr_submit");
+    if (!box || !button) return;
+    const backup = button.dataset.backup || "";
+    const ns = $("#lr_ns").value, name = $("#lr_name").value.trim();
+    button.disabled = true;
+    if (!name) { box.className = "note bad"; box.textContent = "Enter a PVC name."; return; }
+    box.className = "note"; box.innerHTML = '<span class="spin2"></span> checking destination name';
+    try {
+      const plan = await api(`/api/lh/restore/plan?backup=${encodeURIComponent(backup)}&ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`);
+      if (plan.conflict) { box.className = "note bad"; box.textContent = plan.conflict.message; }
+      else { box.className = "note good"; box.textContent = `${ns}/${name} is available. Existing PVCs will not be changed.`; button.disabled = false; }
+    } catch (e) { box.className = "note bad"; box.textContent = e.message; }
+  }, 250);
+};
+window.lhRestoreStart = async backup => {
+  const body = { backup, namespace: $("#lr_ns").value, name: $("#lr_name").value.trim(),
+    size_gb: +$("#lr_size").value, access_mode: $("#lr_mode").value,
+    replicas: +$("#lr_replicas").value };
+  const button = $("#lr_submit");
+  button.disabled = true; button.innerHTML = '<span class="spin2"></span> starting';
+  try {
+    const result = await api("/api/lh/restore", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body) });
+    toast(result.message || "restore started", "ok"); closeModal();
+    if (window.refreshOperations) window.refreshOperations(true);
+  } catch (e) { toast(e.message, "bad"); button.disabled = false; button.innerHTML = `${icon("rollback")}Start restore`; }
 };
 window.lhSnapDel = async (name, vol, label) => {
   if (!confirm(`Delete snapshot "${name}"?`)) return;

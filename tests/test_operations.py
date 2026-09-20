@@ -116,6 +116,56 @@ class OperationTests(unittest.TestCase):
         self.assertEqual("succeeded", complete["status"])
         self.assertIn("retained", complete["message"])
 
+    def test_volume_restore_tracks_longhorn_engine_progress_until_healthy(self):
+        operations.start(
+            "volume-restore", "Restore restored-data",
+            {"kind": "PersistentVolumeClaim", "name": "restored-data", "namespace": "lab"},
+            "/volumes?q=restored-data",
+            {"namespace": "lab", "name": "restored-data", "backup": "backup-123"})
+        self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/restored-data"] = {
+            "spec": {"volumeName": "pv-restored"}, "status": {"phase": "Bound"}}
+        self.objects["/api/v1/persistentvolumes/pv-restored"] = {
+            "spec": {"csi": {"driver": "driver.longhorn.io", "volumeHandle": "lh-restored"}}}
+        self.objects[
+            "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/lh-restored"
+        ] = {"status": {"robustness": "healthy", "restoreInitiated": True,
+                         "restoreRequired": True, "conditions": []}}
+        engines_path = ("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/engines"
+                        "?labelSelector=longhornvolume%3Dlh-restored")
+        self.objects[engines_path] = {"items": [{"status": {
+            "lastRestoredBackup": "", "restoreStatus": {"replica-a": {
+                "isRestoring": True, "progress": 45, "state": "in_progress", "error": ""}}}}]}
+        running = operations.list_operations()[0]
+        self.assertEqual("running", running["status"])
+        self.assertEqual(52, running["progress"])
+        engine = self.objects[engines_path]["items"][0]["status"]
+        engine["lastRestoredBackup"] = "backup-123"
+        engine["restoreStatus"]["replica-a"].update(
+            isRestoring=False, progress=100, state="complete")
+        self.objects[
+            "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/lh-restored"
+        ]["status"]["restoreRequired"] = False
+        complete = operations.list_operations()[0]
+        self.assertEqual("succeeded", complete["status"])
+        self.assertEqual(100, complete["progress"])
+
+    def test_volume_restore_surfaces_longhorn_scheduling_failure(self):
+        operations.start(
+            "volume-restore", "Restore restored-data",
+            {"kind": "PersistentVolumeClaim", "name": "restored-data", "namespace": "lab"},
+            "/volumes", {"namespace": "lab", "name": "restored-data"})
+        self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/restored-data"] = {
+            "spec": {"volumeName": "pv-restored"}, "status": {"phase": "Bound"}}
+        self.objects["/api/v1/persistentvolumes/pv-restored"] = {
+            "spec": {"csi": {"volumeHandle": "lh-restored"}}}
+        self.objects[
+            "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/lh-restored"
+        ] = {"status": {"conditions": [{"type": "Scheduled", "status": "False",
+                                          "message": "insufficient storage"}]}}
+        failed = operations.list_operations()[0]
+        self.assertEqual("failed", failed["status"])
+        self.assertIn("insufficient storage", failed["message"])
+
     def test_smart_test_progress_is_persisted_through_shared_resolver(self):
         states = [("running", 55, "Self-test in progress"),
                   ("succeeded", 100, "Completed without error")]
