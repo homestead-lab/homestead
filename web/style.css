@@ -778,3 +778,11 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
 .movecard.blocked{opacity:.42;cursor:not-allowed}
 .movecard.blocked:hover{transform:none;box-shadow:none;border-color:var(--line)}
 @media(max-width:560px){.movegrid,.smart-threshold-values{grid-template-columns:1fr}}
+
+@media(max-width:700px){
+  .sharetable{overflow:visible}.sharetable table,.sharetable tbody,.sharetable tr,.sharetable td{display:block;width:100%}
+  .sharetable thead{display:none}.sharetable tr{padding:12px 13px;border-bottom:1px solid var(--line)}
+  .sharetable tr:last-child{border-bottom:0}.sharetable td{border:0;padding:6px 0;display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .sharetable td[data-label]::before{content:attr(data-label);color:var(--dim);font-size:9px;letter-spacing:.09em;text-transform:uppercase;flex:0 0 auto}
+  .sharetable .shareidentity{padding-bottom:10px}.sharetable .shareactions{padding-top:10px}.sharetable .shareactions .row{width:100%}.sharetable .shareactions .btn{flex:1}
+}

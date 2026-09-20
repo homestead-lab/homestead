@@ -220,6 +220,21 @@ Homestead's own `harvui-data` claim are protected, and the supplied RBAC grants
 only the additional PV `patch` permission required to make the chosen reclaim
 behavior deterministic.
 
+## Network shares
+
+Network Shares manages the existing `samba` Deployment and Longhorn-backed
+claims without replacing their data. A share can be grown in place, switched
+between guest and private access, assigned a username, and made read-only or
+read/write. Longhorn/Kubernetes claims cannot shrink, so the editor shows the
+live PVC request as its minimum size. Size-only changes do not restart Samba;
+access-policy changes use the Activity tray to follow the rolling restart.
+
+Share metadata is stored in the `harvui-shares` ConfigMap. Passwords are stored
+separately in the `harvui-share-credentials` Kubernetes Secret and are never
+returned by the Homestead API. The first successful share edit transparently
+migrates credentials from older Homestead ConfigMaps and the existing Samba
+arguments. Removing a share keeps its PVC and data.
+
 ## Workload logos
 
 Container create, edit, import, and App Store flows accept an optional public

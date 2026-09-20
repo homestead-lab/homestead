@@ -1252,128 +1252,6 @@ def template_to_cfg(app):
             "ports": ports, "env": envs, "volumes": vols}
 
 
-# ---------------------------------------------------------------- SMB shares
-def _shares_from_deployment():
-    """Read shares already defined on the samba deployment so we never clobber them."""
-    out = []
-    try:
-        dep = kget(f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments/samba")
-    except Exception:
-        return out
-    spec = dep["spec"]["template"]["spec"]
-    c = spec["containers"][0]
-    claim_by_path = {}
-    for m in c.get("volumeMounts", []) or []:
-        for v in spec.get("volumes", []) or []:
-            if v["name"] == m["name"] and v.get("persistentVolumeClaim"):
-                claim_by_path[m["mountPath"]] = v["persistentVolumeClaim"]["claimName"]
-    args = c.get("args", []) or []
-    for i, a in enumerate(args):
-        if a == "-s" and i + 1 < len(args):
-            parts = args[i + 1].split(";")
-            if len(parts) < 2:
-                continue
-            name, path = parts[0], parts[1]
-            guest = (parts[4] if len(parts) > 4 else "no").lower() == "yes"
-            users = parts[5] if len(parts) > 5 else "lab"
-            out.append({"name": name, "pvc": claim_by_path.get(path, ""), "path": path,
-                        "size_gb": 0, "user": users, "public": guest, "created": "existing"})
-    return [s for s in out if s["pvc"]]
-
-
-def list_shares():
-    known = []
-    try:
-        cm = kget(f"/api/v1/namespaces/{SMB_NAMESPACE}/configmaps/harvui-shares")
-        known = json.loads(cm.get("data", {}).get("shares.json", "[]"))
-    except Exception:
-        known = []
-    # merge in anything defined directly on the deployment that we don't track yet
-    names = {s["name"] for s in known}
-    for s in _shares_from_deployment():
-        if s["name"] not in names:
-            known.append(s)
-    return known
-
-
-def save_shares(shares):
-    body = {"apiVersion": "v1", "kind": "ConfigMap",
-            "metadata": {"name": "harvui-shares", "namespace": SMB_NAMESPACE},
-            "data": {"shares.json": json.dumps(shares, indent=2)}}
-    try:
-        kget(f"/api/v1/namespaces/{SMB_NAMESPACE}/configmaps/harvui-shares")
-        return ksend("PUT", f"/api/v1/namespaces/{SMB_NAMESPACE}/configmaps/harvui-shares", body)
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return ksend("POST", f"/api/v1/namespaces/{SMB_NAMESPACE}/configmaps", body)
-        raise
-
-
-def create_share(name, size_gb, user, password, public):
-    if not public and not password:
-        raise ValueError("a password is required for a private share")
-    pvc = f"share-{name}"
-    try:
-        create_pvc(SMB_NAMESPACE, pvc, size_gb)
-    except urllib.error.HTTPError as e:
-        if e.code != 409:
-            raise
-    shares = [s for s in list_shares() if s["name"] != name]
-    shares.append({"name": name, "pvc": pvc, "path": f"/shares/{name}", "size_gb": size_gb,
-                   "user": user or "lab", "password": password, "public": bool(public),
-                   "created": time.strftime("%Y-%m-%d %H:%M")})
-    save_shares(shares)
-    apply_samba(shares, password)
-    return shares
-
-
-def delete_share(name):
-    shares = list_shares()
-    keep = [s for s in shares if s["name"] != name]
-    if len(keep) == len(shares):
-        return keep
-    save_shares(keep)
-    apply_samba(keep)
-    return keep
-
-
-def apply_samba(shares, password=None):
-    """Rewrite the samba deployment so each share is a mounted PVC + -s arg.
-
-    dperson/samba -s format is:  name;path;browse;readonly;guest;users
-    Getting that order wrong silently produces a share nobody can reach.
-    """
-    dep = kget(f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments/samba")
-    spec = dep["spec"]["template"]["spec"]
-    c = spec["containers"][0]
-    args = ["-p"]
-    users = {}
-    mounts, volumes = [], []
-    for i, s in enumerate(shares):
-        if not s.get("pvc"):
-            continue
-        mp = s.get("path") or f"/shares/{s['name']}"
-        vn = f"sh{i}"
-        mounts.append({"name": vn, "mountPath": mp})
-        volumes.append({"name": vn, "persistentVolumeClaim": {"claimName": s["pvc"]}})
-        guest = "yes" if s.get("public") else "no"
-        owner = s.get("user") or "lab"
-        # name ; path ; browse ; readonly ; guest ; users
-        args += ["-s", f"{s['name']};{mp};yes;no;{guest};{owner}"]
-        share_password = s.get("password") or password
-        if not guest and not share_password:
-            raise ValueError(f"share {s['name']} needs a password before Samba can be updated")
-        if share_password:
-            users[owner] = share_password
-    for u, pw in users.items():
-        args += ["-u", f"{u};{pw}"]
-    args += ["-g", "server min protocol = SMB2"]
-    c["args"] = args
-    c["volumeMounts"] = mounts
-    spec["volumes"] = volumes
-    return ksend("PUT", f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments/samba", dep)
-
-
 def raw_get(path, timeout=20):
     """Plain-text GET against the API (pod logs and similar)."""
     req = urllib.request.Request(API + path, headers={"Authorization": f"Bearer {TOKEN}"})
@@ -1399,6 +1277,7 @@ import harvui_console as CONSOLE
 import harvui_icons as ICONS
 import harvui_volumes as VOLUMES
 import harvui_smart as SMART
+import harvui_shares as SHARES
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
 LC.bind(kget, ksend, SYS_NS, _cache, HW.features)
 IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.features)
@@ -1409,6 +1288,7 @@ UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS)
 SMART.bind(kget, DEFAULT_NS, AUTH.internal_signing_key)
 OPS.bind(kget, DATA_DIR, UPDATES.progress, SMART.progress)
 VOLUMES.bind(kget, ksend, LH.snapshots, LH.backups, _cache, SYS_NS, DEFAULT_NS)
+SHARES.bind(kget, ksend, create_pvc, SMB_NAMESPACE, _cache)
 CONSOLE_PROXY = CONSOLE.ConsoleProxy(API, TOKEN, CTX, DATA_DIR, SYS_NS, {DEFAULT_NS}, kget)
 
 
@@ -1460,7 +1340,7 @@ ADMIN_ROUTES = {
     "/api/node/power", "/api/node/drain", "/api/node/cordon", "/api/node/hardware",
     "/api/sources", "/api/sources/delete", "/api/sources/browse",
     "/api/sources/containers", "/api/sources/inspect", "/api/import",
-    "/api/shares", "/api/shares/delete",
+    "/api/shares", "/api/shares/edit", "/api/shares/delete",
     "/api/images/cleanup",
     "/api/volumes/delete",
     "/api/node/smart/test",
@@ -1665,7 +1545,7 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/flow":
                 return self._send(200, cached("flow2", 8, get_flow2))
             if p == "/api/shares":
-                return self._send(200, list_shares())
+                return self._send(200, SHARES.list_shares())
             if p == "/api/move/plan":
                 return self._send(200, PLACE.plan(
                     q["ns"][0], q["name"][0],
@@ -1869,11 +1749,39 @@ class H(BaseHTTPRequestHandler):
                 _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("image-updates", None)
                 return self._send(200, result)
             if p == "/api/shares":
-                s = create_share(b["name"], int(b.get("size_gb", 10)), b.get("user", "lab"),
-                                 b.get("password"), b.get("public", False))
-                return self._send(200, {"ok": True, "shares": s})
+                result = SHARES.create_share(
+                    b["name"], b.get("size_gb", 10), b.get("user", "lab"),
+                    b.get("password"), b.get("public", False), b.get("read_only", False))
+                deployment = result.pop("deployment", None)
+                if deployment:
+                    result["operation"] = OPS.start(
+                        "deployment", f"Create share {b['name']}",
+                        {"kind": "Deployment", "name": "samba", "namespace": SMB_NAMESPACE},
+                        "/shares", {"namespace": SMB_NAMESPACE, "name": "samba"},
+                        "Restarting Samba with the new share")
+                return self._send(200, {"ok": True, **result})
+            if p == "/api/shares/edit":
+                result = SHARES.edit_share(
+                    b["name"], b.get("size_gb"), b.get("user", "lab"),
+                    b.get("password"), b.get("public", False), b.get("read_only", False))
+                deployment = result.pop("deployment", None)
+                if deployment:
+                    result["operation"] = OPS.start(
+                        "deployment", f"Update share {b['name']}",
+                        {"kind": "Deployment", "name": "samba", "namespace": SMB_NAMESPACE},
+                        "/shares", {"namespace": SMB_NAMESPACE, "name": "samba"},
+                        "Restarting Samba with updated access")
+                return self._send(200, {"ok": True, **result})
             if p == "/api/shares/delete":
-                return self._send(200, {"ok": True, "shares": delete_share(b["name"])})
+                result = SHARES.delete_share(b["name"])
+                deployment = result.pop("deployment", None)
+                if deployment:
+                    result["operation"] = OPS.start(
+                        "deployment", f"Remove share {b['name']}",
+                        {"kind": "Deployment", "name": "samba", "namespace": SMB_NAMESPACE},
+                        "/shares", {"namespace": SMB_NAMESPACE, "name": "samba"},
+                        "Restarting Samba without the removed share")
+                return self._send(200, {"ok": True, **result})
             if p == "/api/appstore/install":
                 cfg = template_to_cfg(b["app"])
                 cfg.update(b.get("overrides") or {})

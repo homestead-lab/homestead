@@ -302,18 +302,22 @@ window.volumeDeleteNow = async (namespace, name, uid) => {
 /* ---------------- shares ---------------- */
 async function viewShares() {
   const sh = await api("/api/shares").catch(() => []);
-  const ip = (STATE.data.ov && STATE.data.ov.lb_ip) || "";
+  STATE.data.shares = sh;
+  if (!STATE.data.ov) STATE.data.ov = await api("/api/overview").catch(() => ({}));
+  const ip = STATE.data.ov.lb_ip || "server";
   paint(`<div class="phead"><div><h2>Network shares</h2>
     <p>SMB shares backed by replicated Longhorn volumes — mount them straight from Windows</p></div></div>
   <div class="split">
-    <div class="card flat pad0"><div class="tblwrap"><table class="tbl">
+    <div class="card flat pad0"><div class="tblwrap sharetable"><table class="tbl">
       <thead><tr><th>Share</th><th>Size</th><th>Access</th><th>UNC path</th><th></th></tr></thead><tbody>
-      ${sh.map(s => `<tr><td><div class="row" style="gap:9px"><div class="av n2">${esc(s.name.slice(0, 2).toUpperCase())}</div>
+      ${sh.map(s => `<tr><td class="shareidentity"><div class="row" style="gap:9px"><div class="av n2">${esc(s.name.slice(0, 2).toUpperCase())}</div>
         <div><b>${esc(s.name)}</b><div class="dim xs">${esc(s.created || "")}</div></div></div></td>
-        <td class="mono">${s.size_gb ? s.size_gb + " GB" : "—"}</td>
-        <td>${s.public ? '<span class="pill med">guest</span>' : `<span class="pill low">${esc(s.user)}</span>`}</td>
-        <td class="small muted mono">\\\\${esc(ip)}\\${esc(s.name)}</td>
-        <td><button class="btn sm danger" onclick="rmShare('${esc(s.name)}')">Remove</button></td></tr>`).join("")
+        <td class="mono" data-label="Size">${s.size_gb ? s.size_gb + " GB" : "—"}</td>
+        <td data-label="Access"><span>${s.public ? '<span class="pill med">guest</span>' : `<span class="pill low">${esc(s.user)}</span>`}
+          ${s.read_only ? '<span class="tag">read only</span>' : '<span class="tag">read/write</span>'}</span></td>
+        <td class="small muted mono" data-label="UNC path">\\\\${esc(ip)}\\${esc(s.name)}</td>
+        <td class="shareactions"><div class="row"><button class="btn sm" data-need="admin" title="Grow this share or change its access policy" onclick="editShare('${esc(s.name)}')">${icon("edit")}Edit</button>
+          <button class="btn sm danger" data-need="admin" onclick="rmShare('${esc(s.name)}')">${icon("trash")}Remove</button></div></td></tr>`).join("")
         || `<tr><td colspan=5 class="empty">no shares yet — create one →</td></tr>`}</tbody></table></div></div>
     <div class="card flat"><div class="ctitle">New share</div><div class="csub">Creates a Longhorn volume and adds it to samba</div>
       <div class="f" style="margin-top:16px"><label>Share name</label><input type="text" id="sh_name" placeholder="media"></div>
@@ -321,6 +325,7 @@ async function viewShares() {
         <div class="f"><label>Username</label><input type="text" id="sh_user" value="lab"></div></div>
       <div class="f"><label>Password</label><input type="password" id="sh_pass" autocomplete="new-password" placeholder="Required unless guest access is enabled"></div>
       <label class="switch"><input type="checkbox" id="sh_pub"> Allow guest access</label>
+      <label class="switch"><input type="checkbox" id="sh_ro"> Read only</label>
       <button class="btn pri wide" onclick="mkShare()">Create share</button>
       <div class="dim xs" style="margin-top:12px">Creating or removing a share restarts samba, so open SMB sessions drop briefly.</div></div>
   </div>`);
@@ -332,9 +337,48 @@ window.mkShare = async () => {
   try {
     await api("/api/shares", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, size_gb: +$("#sh_size").value, user: $("#sh_user").value.trim(),
-        password: $("#sh_pass").value, public: $("#sh_pub").checked }) });
+        password: $("#sh_pass").value, public: $("#sh_pub").checked, read_only: $("#sh_ro").checked }) });
     toast(`share "${name}" created`, "ok"); resetPaint(); viewShares();
   } catch (e) { toast(e.message, "bad"); }
+};
+window.shareAccessToggle = () => {
+  const guest = $("#she_pub")?.checked;
+  $("#she_private")?.classList.toggle("hidden", guest);
+};
+window.editShare = name => {
+  const s = (STATE.data.shares || []).find(row => row.name === name);
+  if (!s) return toast("share details are no longer available; refresh and try again", "bad");
+  modal(`Edit share · ${s.name}`, `
+    <div class="callout"><b>\\\\${esc((STATE.data.ov && STATE.data.ov.lb_ip) || "server")}\\${esc(s.name)}</b><br>
+      The claim can grow but cannot shrink. Size-only changes keep Samba running; access changes briefly disconnect open SMB sessions.</div>
+    <div class="f2" style="margin-top:14px"><div class="f"><label>Requested size (GB) ${tip("Longhorn volumes can grow online. Kubernetes and Longhorn do not support shrinking a populated claim.")}</label>
+      <input type="number" id="she_size" min="${esc(s.size_gb || 1)}" value="${esc(s.size_gb || 1)}"></div>
+      <div class="f"><label>Access</label><select id="she_access" onchange="shareAccessToggle()">
+        <option value="private" ${s.public ? "" : "selected"}>Private · username and password</option>
+        <option value="guest" ${s.public ? "selected" : ""}>Guest · no sign-in</option></select></div></div>
+    <div id="she_private" class="${s.public ? "hidden" : ""}"><div class="f"><label>Username</label>
+      <input type="text" id="she_user" value="${esc(s.user || "lab")}" autocomplete="username"></div>
+      <div class="f"><label>New password ${tip("Leave blank to keep the existing password. Passwords are stored in a Kubernetes Secret and are never returned to the browser.")}</label>
+        <input type="password" id="she_pass" autocomplete="new-password" placeholder="${s.has_password ? "Leave blank to keep current password" : "Required for private access"}"></div></div>
+    <label class="switch"><input type="checkbox" id="she_ro" ${s.read_only ? "checked" : ""}> Read only · clients can browse and download but cannot change files</label>
+    <div class="row" style="margin-top:18px"><button class="btn pri" data-need="admin" onclick="saveShareEdit('${esc(s.name)}',this)">${icon("edit")}Save changes</button>
+      <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+};
+window.saveShareEdit = async (name, button) => {
+  const original = (STATE.data.shares || []).find(row => row.name === name);
+  if (!original) return toast("share details are no longer available", "bad");
+  const size = +$("#she_size").value;
+  const publicAccess = $("#she_access").value === "guest";
+  const password = $("#she_pass")?.value || "";
+  if (!Number.isInteger(size) || size < +(original.size_gb || 1)) return toast(`size must be at least ${original.size_gb || 1} GB`, "bad");
+  if (!publicAccess && !original.has_password && !password) return toast("set a password before enabling private access", "bad");
+  if (button) { button.disabled = true; button.textContent = "Saving…"; }
+  try {
+    const result = await api("/api/shares/edit", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, size_gb: size, user: $("#she_user")?.value.trim() || original.user || "lab",
+        password, public: publicAccess, read_only: $("#she_ro").checked }) });
+    toast(result.message || `share "${name}" updated`, "ok"); closeModal(); resetPaint(); viewShares();
+  } catch (e) { if (button) { button.disabled = false; button.innerHTML = `${icon("edit")}Save changes`; } toast(e.message, "bad"); }
 };
 window.rmShare = async name => {
   if (!confirm(`Remove share "${name}" from samba?\n\nThe Longhorn volume and its data are kept.`)) return;

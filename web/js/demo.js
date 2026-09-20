@@ -78,6 +78,14 @@
       size_gb: 5, actual_gb: 0.2, used_pct: 4, replicas: 2,
       access_modes: ["ReadWriteOnce"], storage_class: "longhorn-r2", last_used_secs: 2400 },
   ];
+  const shares = [
+    { name: "media", pvc: "share-media", path: "/shares/media", size_gb: 250,
+      actual_size_gb: 250, pvc_status: "Bound", user: "lab", public: true,
+      read_only: false, has_password: false, created: "2026-09-18 22:26" },
+    { name: "secure", pvc: "share-secure", path: "/shares/secure", size_gb: 20,
+      actual_size_gb: 20, pvc_status: "Bound", user: "lab", public: false,
+      read_only: true, has_password: true, created: "2026-09-18 22:39" },
+  ];
   const volumeDeletePlan = url => {
     const name = url.searchParams.get("name") || "scratch-test";
     const attached = name === "frigate-config";
@@ -127,6 +135,9 @@
       return disk?.smart || { error: "Demo disk not found" };
     },
     "/api/volumes/delete-plan": volumeDeletePlan, "/api/hardware/features": hardware,
+    "/api/shares": shares,
+    "/api/shares/edit": { ok: true, shares, deployment_updated: true,
+      message: "Share secure updated; Samba is restarting" },
     "/api/operations": [], "/api/workloads": workloads,
     "/api/image-updates": { checked_at: "2026-09-19T12:00:00Z", updates: 1, errors: 0,
       policy: { policy: "approval_required", allows_install: true, reason: "Explicit operator approval is required before rollout." },
