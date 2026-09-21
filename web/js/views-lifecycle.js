@@ -786,14 +786,66 @@ function importFolderName(remotePath, mountPath) {
 }
 
 function importMappingRow(row = {}) {
-  return `<div class="f4 im-map">
+  return `<div class="im-map" data-pvc="${esc(row.pvc || "")}">
     <div><label>Source folder on the host</label><input class="imm-remote" type="text" value="${esc(row.remote_path || "")}" placeholder="/mnt/user/appdata/app/config" oninput="imSyncMaps()"></div>
-    <div><label>Subfolder in the volume</label><input class="imm-folder" type="text" value="${esc(row.folder || "")}" placeholder="${esc(importFolderName(row.remote_path, row.mount_path))}" oninput="imSyncMaps()"></div>
+    <div><label>Goes to volume</label><select class="imm-pvc" onchange="imSyncMaps()"></select></div>
+    <div><label>Subfolder</label><input class="imm-folder" type="text" value="${esc(row.folder || "")}" placeholder="${esc(importFolderName(row.remote_path, row.mount_path))}" oninput="imSyncMaps()"></div>
     <div><label>Path inside the container</label><input class="imm-mount" type="text" value="${esc(row.mount_path || "")}" placeholder="/config"></div>
     <label class="switch"><input class="imm-on" type="checkbox" ${row.include === false ? "" : "checked"} onchange="imSyncMaps()">Copy</label>
     <button class="iconbtn row-remove" type="button" title="Remove folder" onclick="this.closest('.im-map').remove();imSyncMaps()">×</button>
     <div class="dim xs imm-size" style="grid-column:1/-1;margin-top:-4px"></div></div>`;
 }
+
+/* A volume row is just a claim: a name, whether it is new, and how big.
+   The mapping rows above pick from these by name. */
+function importVolumeRow(volume = {}, index = 0) {
+  const classes = (STATE.data.importStorage?.storage_classes || ["longhorn-r2"]);
+  return `<div class="f4 im-volume">
+    <div><label>Volume name</label><input class="imv-name" type="text" value="${esc(volume.name || "")}" oninput="imSyncVolumes()"></div>
+    <div><label>Source</label><select class="imv-kind" onchange="imSyncVolumes()">
+      <option value="new-rwo" ${volume.access_mode === "ReadWriteMany" ? "" : "selected"}>New Longhorn volume · RWO</option>
+      <option value="new-rwx" ${volume.access_mode === "ReadWriteMany" ? "selected" : ""}>New shared volume · RWX</option>
+      <option value="existing" ${volume.create === false ? "selected" : ""}>Existing PVC · merge data</option></select></div>
+    <div><label>Size GiB</label><input class="imv-size" type="number" min="1" max="16384" value="${esc(volume.size_gb || 10)}"></div>
+    <div><label>Storage class</label><select class="imv-class">${classes.map(sc => `<option ${sc === (volume.storage_class || "longhorn-r2") ? "selected" : ""}>${esc(sc)}</option>`).join("")}</select></div>
+    ${index === 0 ? "" : '<button class="iconbtn row-remove" type="button" title="Remove volume" onclick="this.closest(\'.im-volume\').remove();imSyncVolumes()">×</button>'}
+  </div>`;
+}
+
+window.imAddVolume = () => {
+  const rows = $$("#im_volumes .im-volume");
+  const base = ($("#im_name")?.value.trim() || "app");
+  $("#im_volumes").insertAdjacentHTML("beforeend",
+    importVolumeRow({ name: `${base}-${rows.length === 0 ? "appdata" : "data" + (rows.length + 1)}`, size_gb: rows.length ? 100 : 10 }, rows.length));
+  imSyncVolumes();
+};
+
+window.importVolumes = () => $$("#im_volumes .im-volume").map(row => {
+  const kind = $(".imv-kind", row).value;
+  return { name: $(".imv-name", row).value.trim(), create: kind !== "existing",
+    size_gb: +$(".imv-size", row).value || 10, storage_class: $(".imv-class", row).value,
+    access_mode: kind === "new-rwx" ? "ReadWriteMany" : "ReadWriteOnce" };
+}).filter(volume => volume.name);
+
+window.imSyncVolumes = () => {
+  const volumes = importVolumes();
+  $$("#im_volumes .im-volume").forEach(row => {
+    const existing = $(".imv-kind", row).value === "existing";
+    $(".imv-size", row).disabled = existing;
+    $(".imv-class", row).disabled = existing;
+  });
+  // Every mapping keeps its choice if that volume still exists, else falls to the first.
+  $$("#im_maps .im-map").forEach(row => {
+    const select = $(".imm-pvc", row);
+    if (!select) return;
+    const wanted = select.value || row.dataset.pvc || "";
+    select.innerHTML = volumes.map(volume => `<option ${volume.name === wanted ? "selected" : ""}>${esc(volume.name)}</option>`).join("")
+      || '<option value="">add a volume first</option>';
+    if (!volumes.some(volume => volume.name === wanted) && volumes.length) select.value = volumes[0].name;
+    row.dataset.pvc = select.value;
+  });
+  imSyncMaps();
+};
 
 window.imAddMap = () => {
   $("#im_maps").insertAdjacentHTML("beforeend", importMappingRow({ include: true }));
@@ -803,9 +855,11 @@ window.imSyncMaps = () => {
   const rows = $$("#im_maps .im-map").filter(row => $(".imm-on", row).checked);
   const note = $("#im_maps_note");
   if (note) {
-    note.textContent = rows.length > 1
-      ? `${rows.length} folders copied into one volume, each mounted back separately.`
-      : rows.length === 1 ? "One folder copied to the root of the volume." : "Nothing selected to copy.";
+    const targets = new Set(rows.map(row => $(".imm-pvc", row)?.value).filter(Boolean));
+    note.textContent = !rows.length ? "Nothing selected to copy."
+      : targets.size > 1 ? `${rows.length} folders across ${targets.size} volumes, each mounted back separately.`
+      : rows.length > 1 ? `${rows.length} folders into one volume, each in its own subfolder.`
+      : "One folder copied to the root of its volume.";
   }
   const sizes = STATE.data.importSizes || {};
   $$("#im_maps .im-map").forEach(row => {
@@ -858,6 +912,7 @@ window.importMappings = () => $$("#im_maps .im-map")
   .map(row => ({ remote_path: $(".imm-remote", row).value.trim(),
     mount_path: $(".imm-mount", row).value.trim() || "/config",
     folder: $(".imm-folder", row).value.trim(),
+    pvc: $(".imm-pvc", row)?.value || "",
     bytes: (STATE.data.importSizes || {})[$(".imm-remote", row).value.trim()] || 0 }));
 
 window.importSetup = async (source, dir, cfg = {}) => {
@@ -890,7 +945,12 @@ window.importSetup = async (source, dir, cfg = {}) => {
         <input type="number" id="im_uid" min="0" max="65535" placeholder="keep what the source had"></div>
         <div class="f"><label>Owner GID</label><input type="number" id="im_gid" min="0" max="65535" placeholder="same as UID"></div></div>
     </details>
-    <div class="sec">Longhorn storage ${tip("Choose where copied appdata is stored. RWO suits one workload; RWX allows attachment from multiple nodes. Existing PVC merges the imported files into data already in that claim.")}</div>
+    <div class="sec">Volumes ${tip("An import can fill more than one volume: appdata on a small replicated claim, recordings on a large one. Each folder above says which volume it goes to.")}</div>
+    <div class="note">Appdata and bulk storage rarely want the same volume. Add a second one and point the
+      heavy folders at it.</div>
+    <div id="im_volumes"></div>
+    <button class="btn sm" onclick="imAddVolume()">＋ add volume</button>
+    <div class="sec">Longhorn storage for the first volume ${tip("Choose where copied appdata is stored. RWO suits one workload; RWX allows attachment from multiple nodes. Existing PVC merges the imported files into data already in that claim.")}</div>
     <div class="deploy-volume import-storage">
       <div class="deploy-volume-grid">
         <div><label>Storage source</label><select id="im_storage_kind" onchange="imSyncStorage()"><option value="new-rwo">New Longhorn volume · RWO</option><option value="new-rwx">New shared volume · RWX</option><option value="existing">Existing PVC · merge data</option></select></div>
@@ -915,7 +975,8 @@ window.importSetup = async (source, dir, cfg = {}) => {
       <button class="btn" onclick="closeModal()">Cancel</button></div>
     <div class="note" style="margin-top:14px">The copy runs as a Job — you can close this and watch it
     on the Import page, folder by folder. Large appdata directories can take a while.</div>`, true);
-  imSyncMaps();
+  $("#im_volumes").innerHTML = importVolumeRow({ name: `${name}-appdata`, size_gb: 10 }, 0);
+  imSyncVolumes();
 };
 window.imAddPort = () => { $("#im_ports").insertAdjacentHTML("beforeend", '<div class="f4 im-port"><div><label>Container</label><input class="ipc" type="number"></div><div><label>LAN</label><input class="iph" type="number"></div><div><label>Protocol</label><select class="ipp"><option>TCP</option><option>UDP</option></select></div><label class="switch"><input class="ipe" type="checkbox" checked>Expose</label></div>'); };
 window.imAddEnv = () => { $("#im_env").insertAdjacentHTML("beforeend", '<div class="f2 im-env"><div class="f"><label>Variable</label><input class="iek"></div><div class="f"><label>Value</label><input class="iev"></div></div>'); };
@@ -936,7 +997,8 @@ window.doImport = async source => {
   const storageKind = $("#im_storage_kind").value, existing = storageKind === "existing";
   const pvcName = existing ? $("#im_pvc_select").value : $("#im_pvc_name").value.trim();
   const body = { source, name: $("#im_name").value.trim(), remote_path: $("#im_path").value.trim(),
-    image: $("#im_image").value.trim(), icon: $("#im_icon").value.trim(), mappings: importMappings(),
+    image: $("#im_image").value.trim(), icon: $("#im_icon").value.trim(),
+    mappings: importMappings(), volumes: importVolumes(),
     pvc_name: pvcName, size_gb: existing ? 1 : +$("#im_size").value, reuse_existing: existing,
     storage_class: existing ? "longhorn-r2" : $("#im_sc").value,
     access_mode: storageKind === "new-rwx" ? "ReadWriteMany" : "ReadWriteOnce", start_after_copy: $("#im_start").checked,
@@ -945,15 +1007,17 @@ window.doImport = async source => {
     uid: $("#im_uid").value.trim(), gid: $("#im_gid").value.trim() };
   if (!body.name || !body.image) return toast("workload name and image are required", "bad");
   if (!body.mappings.length) return toast("choose at least one folder to copy", "bad");
-  const measured = body.mappings.reduce((sum, row) => sum + (row.bytes || 0), 0);
-  if (measured) {
-    const target = existing ? (STATE.data.vols || []).find(vol => vol.pvc_name === pvcName) : null;
-    const capacityGb = existing ? (target?.size_gb || 0) : +$("#im_size").value;
-    const usedGb = existing ? (target?.actual_gb || 0) : 0;
+  for (const volume of body.volumes) {
+    const measured = body.mappings.filter(row => row.pvc === volume.name)
+      .reduce((sum, row) => sum + (row.bytes || 0), 0);
+    if (!measured) continue;
+    const claim = volume.create ? null : (STATE.data.vols || []).find(vol => vol.pvc_name === volume.name);
+    const capacityGb = volume.create ? volume.size_gb : (claim?.size_gb || 0);
+    const usedGb = volume.create ? 0 : (claim?.actual_gb || 0);
     const neededGb = measured / 1024 ** 3;
     if (capacityGb && neededGb > capacityGb - usedGb) {
-      return toast(`${neededGb.toFixed(1)} GiB to copy but only ${Math.max(0, capacityGb - usedGb).toFixed(1)} GiB free`
-        + (usedGb ? ` (${usedGb.toFixed(1)} GiB already written)` : "") + " — grow the volume or raise the size", "bad");
+      return toast(`${volume.name}: ${neededGb.toFixed(1)} GiB to copy but only ${Math.max(0, capacityGb - usedGb).toFixed(1)} GiB free`
+        + (usedGb ? ` (${usedGb.toFixed(1)} GiB already written)` : "") + " — grow it or raise its size", "bad");
     }
   }
   const bad = body.mappings.find(row => !row.remote_path.startsWith("/") || !row.mount_path.startsWith("/"));

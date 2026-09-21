@@ -688,6 +688,10 @@ html[data-motion="off"] .uptime .ld{animation:none}
 .fileeditor-plain{width:100%;height:100%;padding:12px;border:0;background:transparent;color:var(--tx);
   font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12px;line-height:1.55;resize:none;tab-size:2}
 .fileeditor-plain:focus{outline:none}
+.im-map{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(120px,.9fr) minmax(90px,.7fr) minmax(0,1fr) auto auto;
+  gap:10px;align-items:end;margin-bottom:11px}
+.im-volume{margin-bottom:11px}
+@media(max-width:900px){.im-map{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
 .import-advanced{margin:12px 0}
 .import-advanced>summary{cursor:pointer;list-style:none;padding:6px 0}
 .import-advanced>summary::-webkit-details-marker{display:none}

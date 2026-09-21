@@ -38,8 +38,8 @@ class ImportMappingTests(unittest.TestCase):
         rows = imports.import_mappings({"remote_path": "/mnt/user/appdata/plex",
                                         "mount_path": "/config"})
 
-        self.assertEqual([{"remote_path": "/mnt/user/appdata/plex",
-                           "mount_path": "/config", "folder": "", "bytes": 0}], rows)
+        self.assertEqual([{"remote_path": "/mnt/user/appdata/plex", "mount_path": "/config",
+                           "folder": "", "bytes": 0, "pvc": "app-appdata"}], rows)
 
     def test_bad_mappings_are_refused(self):
         with self.assertRaisesRegex(ValueError, "remote path must be absolute"):
@@ -87,6 +87,57 @@ class ImportManifestTests(unittest.TestCase):
 
         mount = deployment["spec"]["template"]["spec"]["containers"][0]["volumeMounts"][0]
         self.assertNotIn("subPath", mount)
+
+
+class MultipleVolumeTests(unittest.TestCase):
+    """Frigate's recordings do not belong on the same claim as its appdata."""
+
+    FRIGATE = {
+        "name": "frigate",
+        "volumes": [{"name": "frigate-appdata", "create": True, "size_gb": 10},
+                    {"name": "frigate-recordings", "create": True, "size_gb": 500,
+                     "access_mode": "ReadWriteMany"}],
+        "mappings": [
+            {"remote_path": "/mnt/user/appdata/frigate", "mount_path": "/config"},
+            {"remote_path": "/mnt/user/appdata/frigate/clips", "mount_path": "/clips",
+             "pvc": "frigate-appdata"},
+            {"remote_path": "/mnt/user/cctv", "mount_path": "/media/frigate/recordings",
+             "pvc": "frigate-recordings"}],
+    }
+
+    def test_each_folder_lands_in_the_volume_it_was_given(self):
+        rows = imports.import_mappings(self.FRIGATE)
+
+        self.assertEqual(["frigate-appdata", "frigate-appdata", "frigate-recordings"],
+                         [row["pvc"] for row in rows])
+
+    def test_folders_sharing_a_volume_get_subdirectories_and_a_lone_one_does_not(self):
+        rows = imports.import_mappings(self.FRIGATE)
+
+        self.assertEqual(["frigate", "clips"], [row["folder"] for row in rows[:2]])
+        self.assertEqual("", rows[2]["folder"],
+                         "the only folder on a volume takes its root")
+
+    def test_the_same_folder_name_on_two_volumes_is_not_a_collision(self):
+        rows = imports.import_mappings({
+            "name": "app",
+            "volumes": [{"name": "app-one"}, {"name": "app-two"}],
+            "mappings": [{"remote_path": "/a/data", "mount_path": "/one", "pvc": "app-one"},
+                         {"remote_path": "/b/data", "mount_path": "/two", "pvc": "app-two"}]})
+
+        self.assertEqual(["", ""], [row["folder"] for row in rows])
+
+    def test_a_mapping_cannot_name_a_volume_the_import_does_not_have(self):
+        with self.assertRaisesRegex(ValueError, "which this import does not create"):
+            imports.import_mappings({"name": "app", "volumes": [{"name": "app-data"}],
+                                     "mappings": [{"remote_path": "/a", "mount_path": "/x",
+                                                   "pvc": "somewhere-else"}]})
+
+    def test_duplicate_and_malformed_volumes_are_refused(self):
+        with self.assertRaisesRegex(ValueError, "listed twice"):
+            imports.import_volumes({"volumes": [{"name": "a"}, {"name": "a"}]})
+        with self.assertRaisesRegex(ValueError, "lowercase letters"):
+            imports.import_volumes({"volumes": [{"name": "Bad Name"}]})
 
 
 class SourceMeasurementTests(unittest.TestCase):

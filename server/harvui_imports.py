@@ -446,6 +446,45 @@ def _folder_name(value, used):
     return name
 
 
+def import_volumes(cfg):
+    """The claims this import writes into, in the order they were defined.
+
+    Appdata and recordings do not belong on the same volume: one is small and
+    wants replicas, the other is large and usually does not. An import may
+    therefore land in several claims, and each folder says which one it goes to.
+    """
+    rows, seen = [], set()
+    requested = cfg.get("volumes") or []
+    if not requested:
+        # The original shape: one claim for the whole import.
+        requested = [{"name": cfg.get("pvc_name") or f"{cfg.get('name', 'app')}-appdata",
+                      "create": not cfg.get("reuse_existing"),
+                      "size_gb": cfg.get("size_gb", 10),
+                      "storage_class": cfg.get("storage_class"),
+                      "access_mode": cfg.get("access_mode")}]
+    for item in requested:
+        claim = str(item.get("name") or "").strip()
+        if not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?", claim):
+            raise ValueError(f"volume name {claim or '(blank)'} must be lowercase letters, "
+                             "numbers and dashes")
+        if claim in seen:
+            raise ValueError(f"volume {claim} is listed twice")
+        seen.add(claim)
+        create = bool(item.get("create", True))
+        size = int(item.get("size_gb") or 10)
+        if create and not 1 <= size <= 16384:
+            raise ValueError("volume size must be between 1 and 16384 GiB")
+        access_mode = str(item.get("access_mode") or "ReadWriteOnce")
+        if access_mode not in ("ReadWriteOnce", "ReadWriteMany"):
+            raise ValueError("access mode must be ReadWriteOnce or ReadWriteMany")
+        storage_class = str(item.get("storage_class") or "longhorn-r2").strip()
+        if not re.fullmatch(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?", storage_class):
+            raise ValueError("storage class must use lowercase letters, numbers, dots and dashes")
+        rows.append({"name": claim, "create": create, "size_gb": size,
+                     "storage_class": storage_class, "access_mode": access_mode})
+    return rows
+
+
 def import_mappings(cfg):
     """Every remote directory this import copies, and where it lands.
 
@@ -455,6 +494,8 @@ def import_mappings(cfg):
     a volume per mapping.
     """
     rows, used, paths = [], set(), set()
+    volumes = import_volumes(cfg)
+    names = [volume["name"] for volume in volumes]
     requested = cfg.get("mappings")
     if not requested:
         # The original single-folder shape, kept so older clients still work.
@@ -471,21 +512,28 @@ def import_mappings(cfg):
         if mount in paths:
             raise ValueError(f"{mount} is mapped twice")
         paths.add(mount)
+        target = str(item.get("pvc") or "").strip() or names[0]
         folder = str(item.get("folder") or "").strip("/")
         if folder:
             if not re.fullmatch(r"[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*", folder):
                 raise ValueError(f"folder {folder} must be a plain relative path")
             if ".." in folder.split("/"):
                 raise ValueError("folder cannot climb out of the volume")
-            used.add(folder)
-        elif not single:
-            folder = _folder_name(remote or mount, used)
+            used.add((target, folder))
+        elif sum(1 for row in requested if (str(row.get("pvc") or "").strip() or names[0]) == target) > 1:
+            # A volume receiving one folder takes it at its root; several
+            # folders sharing a volume each get their own subdirectory.
+            folder = _folder_name(remote or mount, {name for claim, name in used if claim == target})
+            used.add((target, folder))
         try:
             size = max(0, int(item.get("bytes") or 0))
         except (TypeError, ValueError):
             size = 0
+        claim = str(item.get("pvc") or "").strip() or names[0]
+        if claim not in names:
+            raise ValueError(f"{mount} points at volume {claim}, which this import does not create")
         rows.append({"remote_path": remote, "mount_path": mount, "folder": folder,
-                     "bytes": size})
+                     "bytes": size, "pvc": claim})
     return rows
 
 
@@ -502,68 +550,72 @@ def _claim_used_gb(pvc):
     return 0.0
 
 
-def import_container(cfg):
-    """Create the PVC, launch the copy Job, then create the Deployment.
+def _claim_capacity_gb(pvc):
+    """What an existing claim actually offers, or 0 when it cannot be read."""
+    try:
+        claim = kget(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{pvc}")
+    except Exception:
+        return 0.0
+    quantity = ((claim.get("status", {}) or {}).get("capacity", {}) or {}).get("storage", "")
+    match = re.fullmatch(r"([0-9.]+)([KMGTP]i?)?", str(quantity).strip())
+    if not match:
+        return 0.0
+    scale = {"Ki": 1 / 1024 ** 2, "Mi": 1 / 1024, "Gi": 1, "Ti": 1024,
+             "K": 1 / 1000 ** 2, "M": 1 / 1000, "G": 1, "T": 1000}
+    return float(match.group(1)) * scale.get(match.group(2) or "Gi", 1)
 
-    cfg: {source, remote_path, name, image, ports, env, mount_path, pvc_name,
-          size_gb, storage_class, access_mode, reuse_existing, start_after_copy}
+
+def import_container(cfg):
+    """Create the volumes, launch the copy Job, then create the Deployment.
+
+    cfg: {source, name, image, ports, env, volumes[], mappings[], hardware,
+          network_mode, start_after_copy, uid, gid}
     """
     name = cfg["name"]
     if not SAFE.match(name):
         raise ValueError("name must be lowercase letters, numbers and dashes")
     src = _source(cfg["source"])
-    pvc = str(cfg.get("pvc_name") or f"{name}-appdata").strip()
-    if not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?", pvc):
-        raise ValueError("PVC name must be lowercase letters, numbers and dashes")
-    size = int(cfg.get("size_gb", 10))
-    if not 1 <= size <= 16384:
-        raise ValueError("volume size must be between 1 and 16384 GiB")
-    access_mode = str(cfg.get("access_mode") or "ReadWriteOnce")
-    if access_mode not in ("ReadWriteOnce", "ReadWriteMany"):
-        raise ValueError("access mode must be ReadWriteOnce or ReadWriteMany")
-    storage_class = str(cfg.get("storage_class") or "longhorn-r2").strip()
-    if not re.fullmatch(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?", storage_class):
-        raise ValueError("storage class must use lowercase letters, numbers, dots and dashes")
-    # A measured source and a known claim size settle whether this can work
-    # before anything is copied. Without a measurement nothing is claimed.
-    needed = sum(mapping.get("bytes") or 0 for mapping in import_mappings(cfg))
-    if needed and not cfg.get("ignore_capacity"):
-        capacity_gb, used_gb = float(size), 0.0
-        if cfg.get("reuse_existing"):
-            try:
-                claim = kget(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{pvc}")
-                quantity = ((claim.get("status", {}) or {}).get("capacity", {}) or {}).get("storage", "")
-                match = re.fullmatch(r"([0-9.]+)([KMGTP]i?)?", str(quantity).strip())
-                if match:
-                    scale = {"Ki": 1 / 1024 ** 2, "Mi": 1 / 1024, "Gi": 1, "Ti": 1024,
-                             "K": 1 / 1000 ** 2, "M": 1 / 1000, "G": 1, "T": 1000}
-                    capacity_gb = float(match.group(1)) * scale.get(match.group(2) or "Gi", 1)
-                used_gb = _claim_used_gb(pvc)
-            except Exception:
-                capacity_gb = 0.0
-        free_gb = capacity_gb - used_gb
-        needed_gb = needed / 1024 ** 3
-        if capacity_gb and needed_gb > free_gb:
-            raise ValueError(
-                f"the measured source needs {needed_gb:.1f} GiB but {pvc} has "
-                f"{max(0.0, free_gb):.1f} GiB free of {capacity_gb:.0f} GiB"
-                + (f" ({used_gb:.1f} GiB already written)" if used_gb else "")
-                + ". Grow the volume or choose a larger size, then import again.")
+    volumes = import_volumes(cfg)
+    mappings = import_mappings(cfg)
+    pvc = volumes[0]["name"]
 
-    if cfg.get("reuse_existing"):
+    # Each volume is judged on what is going into it, not on the import total:
+    # a 500 GiB recordings claim says nothing about whether appdata fits.
+    if not cfg.get("ignore_capacity"):
+        for volume in volumes:
+            needed = sum(row.get("bytes") or 0 for row in mappings if row["pvc"] == volume["name"])
+            if not needed:
+                continue
+            capacity_gb = float(volume["size_gb"])
+            used_gb = 0.0
+            if not volume["create"]:
+                capacity_gb = _claim_capacity_gb(volume["name"])
+                used_gb = _claim_used_gb(volume["name"])
+            needed_gb = needed / 1024 ** 3
+            if capacity_gb and needed_gb > capacity_gb - used_gb:
+                raise ValueError(
+                    f"the measured source needs {needed_gb:.1f} GiB but {volume['name']} has "
+                    f"{max(0.0, capacity_gb - used_gb):.1f} GiB free of {capacity_gb:.0f} GiB"
+                    + (f" ({used_gb:.1f} GiB already written)" if used_gb else "")
+                    + ". Grow the volume or choose a larger size, then import again.")
+
+    for volume in volumes:
+        if volume["create"]:
+            create_pvc(NS, volume["name"], volume["size_gb"], volume["storage_class"],
+                       volume["access_mode"])
+            continue
         try:
-            existing = kget(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{pvc}")
+            existing = kget(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{volume['name']}")
         except urllib.error.HTTPError as error:
             if error.code == 404:
-                raise ValueError(f"existing PVC {pvc} was not found") from error
+                raise ValueError(f"existing PVC {volume['name']} was not found") from error
             raise
-        existing_modes = (existing.get("spec", {}) or {}).get("accessModes", []) or []
-        access_mode = existing_modes[0] if existing_modes else access_mode
-        storage_class = (existing.get("spec", {}) or {}).get("storageClassName", storage_class)
-    else:
-        create_pvc(NS, pvc, size, storage_class, access_mode)
+        modes = (existing.get("spec", {}) or {}).get("accessModes", []) or []
+        volume["access_mode"] = modes[0] if modes else volume["access_mode"]
+        volume["storage_class"] = (existing.get("spec", {}) or {}).get(
+            "storageClassName", volume["storage_class"])
+    storage_class, access_mode = volumes[0]["storage_class"], volumes[0]["access_mode"]
 
-    mappings = import_mappings(cfg)
     job = f"homestead-import-{name}"
     for previous in (job, f"harvui-import-{name}"):
         # A rerun clears the job from before the rename as well as its own.
@@ -585,10 +637,13 @@ def import_container(cfg):
     measured = sum(mapping.get("bytes") or 0 for mapping in mappings)
     if measured and all(mapping.get("bytes") for mapping in mappings):
         steps.append("echo " + shlex.quote(f"==> total {total} folders {measured}B"))
+    mount_of = {volume["name"]: (f"/mnt/{volume['name']}" if len(volumes) > 1 else "/appdata")
+                for volume in volumes}
     for index, mapping in enumerate(mappings, start=1):
-        target = ("/appdata/" + mapping["folder"]) if mapping["folder"] else "/appdata"
+        base = mount_of[mapping["pvc"]]
+        target = (base + "/" + mapping["folder"]) if mapping["folder"] else base
         spec = shlex.quote(f"{src['user']}@{src['host']}:{mapping['remote_path']}/")
-        label = mapping["folder"] or "appdata"
+        label = mapping["folder"] or (mapping["pvc"] if len(volumes) > 1 else "appdata")
         steps.append(f"mkdir -p {shlex.quote(target)}")
         weight = f" ({mapping['bytes']}B)" if mapping.get("bytes") else ""
         steps.append("echo " + shlex.quote(
@@ -608,8 +663,10 @@ def import_container(cfg):
     owner_uid, owner_gid = _ownership(cfg)
     if owner_uid is not None:
         steps.append("echo " + shlex.quote(f"==> owner {owner_uid}:{owner_gid}"))
-        steps.append(f"chown -R {owner_uid}:{owner_gid} /appdata")
-    steps.append("echo '==> done'; du -sh /appdata")
+        for mount in sorted(set(mount_of.values())):
+            steps.append(f"chown -R {owner_uid}:{owner_gid} {shlex.quote(mount)}")
+    steps.append("echo '==> done'; du -sh " + " ".join(
+        shlex.quote(mount) for mount in sorted(set(mount_of.values()))))
     script = "\n".join(steps) + "\n"
 
     body = {
@@ -622,7 +679,9 @@ def import_container(cfg):
                      "annotations": {"homestead.io/import-workload": name if cfg.get("create_workload", True) else "",
                                      "homestead.io/import-volume": pvc,
                                      "homestead.io/import-volume-created":
-                                         "false" if cfg.get("reuse_existing") else "true"}},
+                                         "true" if volumes[0]["create"] else "false",
+                                     "homestead.io/import-volumes-created":
+                                         ",".join(v["name"] for v in volumes if v["create"])}},
         "spec": {"backoffLimit": 1, "ttlSecondsAfterFinished": 3600,
                  "template": {"metadata": {"labels": {"harvui.io/task": "import"}},
                               "spec": {"restartPolicy": "Never",
@@ -631,10 +690,14 @@ def import_container(cfg):
                                            "command": ["sh", "-c", script],
                                            "env": [{"name": "SRC_PASS", "valueFrom": {"secretKeyRef": {
                                                "name": source_secret(src["name"]), "key": "password"}}}],
-                                           "volumeMounts": [{"name": "appdata", "mountPath": "/appdata"}],
+                                           "volumeMounts": [
+                                               {"name": f"vol{index}", "mountPath": mount_of[volume["name"]]}
+                                               for index, volume in enumerate(volumes)],
                                        }],
-                                       "volumes": [{"name": "appdata",
-                                                    "persistentVolumeClaim": {"claimName": pvc}}]}}},
+                                       "volumes": [
+                                           {"name": f"vol{index}",
+                                            "persistentVolumeClaim": {"claimName": volume["name"]}}
+                                           for index, volume in enumerate(volumes)]}}},
     }
     ksend("POST", f"/apis/batch/v1/namespaces/{NS}/jobs", body)
 
@@ -645,7 +708,7 @@ def import_container(cfg):
             "replicas": 0 if cfg.get("start_after_copy", True) else 1,
             "cpu": cfg.get("cpu", "50m"), "memory": cfg.get("memory", "256Mi"),
             "ports": cfg.get("ports") or [], "env": cfg.get("env") or {},
-            "volumes": [{"path": mapping["mount_path"], "source": pvc, "type": "pvc",
+            "volumes": [{"path": mapping["mount_path"], "source": mapping["pvc"], "type": "pvc",
                           "sub_path": mapping["folder"]} for mapping in mappings],
             "fs_group": owner_gid,
             "gpu": bool(cfg.get("gpu")),
@@ -669,7 +732,7 @@ def import_container(cfg):
         created = name
     _bust("wl", "ov", "flow")
     return {"ok": True, "job": job, "pvc": pvc, "deployment": created,
-            "mappings": mappings,
+            "mappings": mappings, "volumes": volumes,
             "storage_class": storage_class, "access_mode": access_mode,
             "note": "Deployment created stopped; start it once the copy job finishes."
                     if cfg.get("start_after_copy", True) else ""}
