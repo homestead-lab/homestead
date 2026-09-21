@@ -178,6 +178,7 @@ async function viewStorage() {
      <td class="small dim">${x.state === "attached" ? '<span class="tag ok">in use</span>' : esc(fmtAgo(x.last_used_secs))}</td>
      <td><div class="row" style="gap:6px;flex-wrap:nowrap">
        <button class="btn sm" data-need="operator" onclick='volumeEdit(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("edit")}Edit</button>
+       <button class="btn sm" data-need="admin" title="Hand this volume's files to the user the container runs as" onclick="volumeChown('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}')">Ownership</button>
        <button class="btn sm danger" data-need="admin" title="Review attachment and data-loss impact before deleting" onclick='volumeDelete(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("trash")}Delete</button>
      </div></td>
       </tr>`).join("") || `<tr><td colspan=9 class="empty">none</td></tr>`}
@@ -408,6 +409,34 @@ window.volumeClassFacts = () => {
     note.innerHTML = `<b>${esc(name)} cannot back a shared volume.</b> It creates live-migratable
       volumes for VM disks, which Longhorn will not mount into a pod.
       ${(classes.shared || []).length ? `Use ${(classes.shared || []).map(esc).join(" or ")} instead.` : ""}`;
+  }
+};
+
+window.volumeChown = (namespace, name) => {
+  modal(`Ownership · ${name}`, `
+    <p class="muted small">An import copies as root, so files land owned by root. A container that runs as
+      its own user — mosquitto as 1883, a linuxserver image as PUID — then cannot write to its own appdata,
+      and its log fills with permission errors. This hands every file on the volume to the user you name.</p>
+    <div class="f2" style="margin-top:14px">
+      <div class="f"><label>User (UID)</label><input type="number" id="vc_uid" min="0" max="65535" placeholder="1883"></div>
+      <div class="f"><label>Group (GID)</label><input type="number" id="vc_gid" min="0" max="65535" placeholder="same as UID"></div></div>
+    <div class="note">Homestead runs a short job that mounts the volume and changes ownership. The workload
+      should be stopped first: a ReadWriteOnce volume cannot attach to the job while its pod holds it.</div>
+    <div class="row" style="margin-top:16px">
+      <button class="btn pri" data-need="admin" onclick="volumeChownNow('${esc(namespace)}','${esc(name)}',this)">Set ownership</button>
+      <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+};
+window.volumeChownNow = async (namespace, name, button) => {
+  const uid = $("#vc_uid").value.trim();
+  if (!uid) return toast("a user id is required", "bad");
+  if (button) { button.disabled = true; button.textContent = "Starting…"; }
+  try {
+    const result = await api("/api/volumes/chown", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ namespace, name, uid, gid: $("#vc_gid").value.trim() }) });
+    closeModal(); toast(result.message || "ownership job started", "ok");
+  } catch (e) {
+    if (button) { button.disabled = false; button.textContent = "Set ownership"; }
+    toast(e.message, "bad");
   }
 };
 

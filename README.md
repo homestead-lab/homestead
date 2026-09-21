@@ -54,10 +54,10 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.16`, the workflow publishes:
+For a release such as `v2.8.17`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.16
+ghcr.io/wjcloudy/homestead:2.8.17
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -68,8 +68,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.16
-git push origin v2.8.16
+git tag v2.8.17
+git push origin v2.8.17
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -276,7 +276,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.16 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.17 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -339,6 +339,14 @@ per-replica restore percentage, replica-health waiting, and actionable Longhorn
 errors across browser or Homestead restarts. See the
 [Longhorn StorageClass parameters](https://longhorn.io/docs/1.12.1/references/storage-class-parameters/)
 reference for the underlying mechanism.
+
+An import copies as root, so files arrive owned by root and a container that
+runs as its own user — mosquitto as 1883, a linuxserver image as PUID — cannot
+write to its own appdata. The import form takes the owner UID/GID, prefilled
+from PUID and PGID when Docker had them, hands the copied files over at the end
+of the copy, and sets the workload's `fsGroup` so the kubelet keeps the volume
+writable. For appdata already copied as root, Volumes has an Ownership action
+that runs the same handover on an existing claim.
 
 ## Storage classes
 

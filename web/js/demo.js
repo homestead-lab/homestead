@@ -296,6 +296,8 @@
         { source: "/mnt/user/appdata/media-server/transcode", path: "/transcode", type: "bind" },
         { source: "/mnt/user/media", path: "/media", type: "bind" }] },
     "/api/imports/delete": { ok: true, message: "Import removed" },
+    "/api/volumes/chown": { ok: true, job: "harvui-chown-frigate-config", uid: 1883, gid: 1883,
+      message: "Setting ownership of frigate-config to 1883:1883" },
     "/api/sources/measure": { total_bytes: 9663676416, complete: false, suggested_gb: 12,
       timeout_seconds: 25, paths: [
         { path: "/mnt/user/appdata/media-server", bytes: 1073741824, measured: true },
@@ -429,7 +431,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.15", candidate: "ghcr.io/wjcloudy/homestead:2.8.16", candidate_tag: "2.8.16", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.16", candidate: "ghcr.io/wjcloudy/homestead:2.8.17", candidate_tag: "2.8.17", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

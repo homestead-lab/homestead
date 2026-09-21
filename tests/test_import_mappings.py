@@ -196,6 +196,66 @@ class ImportCapacityTests(unittest.TestCase):
         self.assertTrue(any("jobs" in path for _, path in self.sent))
 
 
+class OwnershipTests(unittest.TestCase):
+    """Copied appdata has to belong to whoever the container runs as."""
+
+    def setUp(self):
+        self.sent, self.bodies = [], []
+
+        def send(method, path, body=None, **kw):
+            self.sent.append((method, path))
+            self.bodies.append(body)
+            return body or {}
+
+        imports.bind(lambda path: {"items": []}, send, lambda *a, **k: {},
+                     lambda cfg: ({"metadata": {"name": "x"}}, None), "lab", {})
+        imports._source = lambda name: dict(SOURCE)
+
+    def _script(self):
+        job = next(body for body in self.bodies if body and body.get("kind") == "Job")
+        return job["spec"]["template"]["spec"]["containers"][0]["command"][-1]
+
+    def test_puid_and_pgid_from_docker_become_the_file_owner(self):
+        imports.import_container({"source": "tower", "name": "ha", "image": "ha:1",
+                                  "create_workload": False, "reuse_existing": True,
+                                  "pvc_name": "ha-appdata", "remote_path": "/mnt/user/appdata/ha",
+                                  "env": {"PUID": "1000", "PGID": "1000"}})
+
+        self.assertIn("chown -R 1000:1000 /appdata", self._script())
+
+    def test_an_explicit_owner_beats_the_environment(self):
+        imports.import_container({"source": "tower", "name": "mq", "image": "mosquitto:2",
+                                  "create_workload": False, "reuse_existing": True,
+                                  "pvc_name": "mq-appdata", "remote_path": "/mnt/user/appdata/mq",
+                                  "env": {"PUID": "1000"}, "uid": "1883"})
+
+        self.assertIn("chown -R 1883:1883 /appdata", self._script())
+
+    def test_without_an_owner_nothing_is_chowned(self):
+        imports.import_container({"source": "tower", "name": "plain", "image": "app:1",
+                                  "create_workload": False, "reuse_existing": True,
+                                  "pvc_name": "plain-appdata", "remote_path": "/mnt/user/appdata/plain"})
+
+        self.assertNotIn("chown", self._script())
+
+    def test_a_claim_can_be_handed_over_after_the_fact(self):
+        result = imports.chown_claim("lab", "mosquitto-appdata", "1883", "")
+
+        job = self.bodies[-1]
+        self.assertEqual("chown", job["metadata"]["labels"]["harvui.io/task"])
+        self.assertIn("chown -R 1883:1883 /data",
+                      job["spec"]["template"]["spec"]["containers"][0]["command"][-1])
+        self.assertEqual("mosquitto-appdata",
+                         job["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"])
+        self.assertIn("1883:1883", result["message"])
+
+    def test_nonsense_ids_are_refused(self):
+        for uid in ("root", "-5", "99999999"):
+            with self.subTest(uid=uid):
+                with self.assertRaises(ValueError):
+                    imports.chown_claim("lab", "media", uid, "")
+
+
 class ImportProgressTests(unittest.TestCase):
     """The log replays 0-100% per folder; the UI needs one honest number."""
 
@@ -281,3 +341,30 @@ class ImportProgressTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FsGroupTests(unittest.TestCase):
+    """fsGroup keeps the volume writable for a container that is not root."""
+
+    def setUp(self):
+        self.features = server.HW.features
+        server.HW.features = lambda: []
+
+    def tearDown(self):
+        server.HW.features = self.features
+
+    def test_an_owner_group_becomes_the_pod_fs_group(self):
+        deployment, _ = server.build_deployment({
+            "name": "mq", "workload_name": "mq", "container_name": "mq", "image": "mosquitto:2",
+            "namespace": "lab", "fs_group": 1883,
+            "volumes": [{"path": "/mosquitto/data", "source": "mq-appdata", "type": "pvc"}]})
+
+        spec = deployment["spec"]["template"]["spec"]
+        self.assertEqual(1883, spec["securityContext"]["fsGroup"])
+
+    def test_no_owner_leaves_the_pod_security_context_alone(self):
+        deployment, _ = server.build_deployment({
+            "name": "app", "workload_name": "app", "container_name": "app", "image": "app:1",
+            "namespace": "lab", "volumes": []})
+
+        self.assertNotIn("securityContext", deployment["spec"]["template"]["spec"])

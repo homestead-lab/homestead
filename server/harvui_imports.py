@@ -304,6 +304,66 @@ def measure_source_paths(name, paths, seconds=25):
             "suggested_gb": suggested, "timeout_seconds": seconds}
 
 
+def _ownership(cfg):
+    """The uid:gid imported files should end up owned by, if any.
+
+    rsync runs as root with --no-owner, so everything it writes lands owned by
+    root. A container that runs as its own user - mosquitto as 1883, a
+    linuxserver image as PUID - then cannot write to its own appdata.
+    """
+    def _id(value):
+        text = str(value if value is not None else "").strip()
+        if not text:
+            return None
+        if not text.isdigit() or not 0 <= int(text) <= 65535:
+            raise ValueError("user and group ids must be whole numbers between 0 and 65535")
+        return int(text)
+
+    env = cfg.get("env") or {}
+    uid = _id(cfg.get("uid") if cfg.get("uid") not in (None, "") else env.get("PUID"))
+    gid = _id(cfg.get("gid") if cfg.get("gid") not in (None, "") else env.get("PGID"))
+    if uid is not None and gid is None:
+        gid = uid
+    return uid, gid
+
+
+def chown_claim(namespace, pvc, uid, gid):
+    """Hand an existing claim to a user, for appdata already copied as root."""
+    namespace = str(namespace or NS)
+    if not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?", str(pvc or "")):
+        raise ValueError("volume name must be lowercase letters, numbers and dashes")
+    owner_uid, owner_gid = _ownership({"uid": uid, "gid": gid})
+    if owner_uid is None:
+        raise ValueError("a user id is required")
+    job = f"harvui-chown-{pvc}"[:60].rstrip("-")
+    try:
+        ksend("DELETE", f"/apis/batch/v1/namespaces/{namespace}/jobs/{job}"
+                        "?propagationPolicy=Background")
+        time.sleep(1)
+    except urllib.error.HTTPError:
+        pass
+    script = (f"echo '==> step 1/1 ownership :: chown -R {owner_uid}:{owner_gid} /data'\n"
+              f"chown -R {owner_uid}:{owner_gid} /data\n"
+              "echo '==> done'; ls -ld /data\n")
+    body = {
+        "apiVersion": "batch/v1", "kind": "Job",
+        "metadata": {"name": job, "namespace": namespace,
+                     "labels": {"harvui.io/task": "chown", "harvui.io/app": pvc}},
+        "spec": {"backoffLimit": 1, "ttlSecondsAfterFinished": 600,
+                 "template": {"metadata": {"labels": {"harvui.io/task": "chown"}},
+                              "spec": {"restartPolicy": "Never",
+                                       "containers": [{"name": "chown", "image": "alpine:3.20",
+                                                       "command": ["sh", "-c", script],
+                                                       "volumeMounts": [{"name": "data", "mountPath": "/data"}]}],
+                                       "volumes": [{"name": "data",
+                                                    "persistentVolumeClaim": {"claimName": pvc}}]}}},
+    }
+    ksend("POST", f"/apis/batch/v1/namespaces/{namespace}/jobs", body)
+    _bust("vol", "stor")
+    return {"ok": True, "job": job, "uid": owner_uid, "gid": owner_gid,
+            "message": f"Setting ownership of {pvc} to {owner_uid}:{owner_gid}"}
+
+
 def _folder_name(value, used):
     """A safe directory name inside the appdata volume."""
     base = re.sub(r"[^a-z0-9._-]+", "-", str(value or "").strip("/").split("/")[-1].lower())
@@ -466,6 +526,10 @@ def import_container(cfg):
             "-e 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' "
             f"{spec} {shlex.quote(target + '/')}")
         steps.append("echo " + shlex.quote(f"==> step {index}/{total} {label} complete"))
+    owner_uid, owner_gid = _ownership(cfg)
+    if owner_uid is not None:
+        steps.append("echo " + shlex.quote(f"==> owner {owner_uid}:{owner_gid}"))
+        steps.append(f"chown -R {owner_uid}:{owner_gid} /appdata")
     steps.append("echo '==> done'; du -sh /appdata")
     script = "\n".join(steps) + "\n"
 
@@ -497,6 +561,7 @@ def import_container(cfg):
             "ports": cfg.get("ports") or [], "env": cfg.get("env") or {},
             "volumes": [{"path": mapping["mount_path"], "source": pvc, "type": "pvc",
                           "sub_path": mapping["folder"]} for mapping in mappings],
+            "fs_group": owner_gid,
             "gpu": bool(cfg.get("gpu")),
             "hardware": cfg.get("hardware") or [], "icon": cfg.get("icon", ""),
             "icon_source": cfg.get("icon_source", cfg.get("icon", "")),
@@ -629,7 +694,9 @@ def _job_pod(job):
 
 def import_status():
     try:
-        jobs = kget(f"/apis/batch/v1/namespaces/{NS}/jobs?labelSelector=harvui.io/task%3Dimport").get("items", [])
+        jobs = [job for job in
+                kget(f"/apis/batch/v1/namespaces/{NS}/jobs?labelSelector=harvui.io/task").get("items", [])
+                if (job["metadata"].get("labels", {}) or {}).get("harvui.io/task") in ("import", "chown")]
     except Exception:
         return []
     out = []
@@ -639,6 +706,7 @@ def import_status():
                  else "failed" if st.get("failed") else "pending")
         row = {
             "name": j["metadata"]["name"],
+            "kind": (j["metadata"].get("labels", {}) or {}).get("harvui.io/task", "import"),
             "app": j["metadata"].get("labels", {}).get("harvui.io/app", ""),
             "active": st.get("active", 0), "succeeded": st.get("succeeded", 0),
             "failed": st.get("failed", 0),

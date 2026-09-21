@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.16"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.17"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1115,6 +1115,11 @@ def build_deployment(cfg):
             {"name": dev["name"], "mountPath": dev["container_path"]})
         podspec.setdefault("volumes", []).append(
             {"name": dev["name"], "hostPath": {"path": dev["host_path"], "type": dev["path_type"]}})
+    if cfg.get("fs_group") is not None:
+        # The kubelet gives the volume to this group and makes it group
+        # writable, which is what lets a container that is not root write to
+        # appdata it did not create.
+        podspec.setdefault("securityContext", {})["fsGroup"] = int(cfg["fs_group"])
     if cfg.get("network_mode") == "host":
         podspec["hostNetwork"] = True
         podspec["dnsPolicy"] = "ClusterFirstWithHostNet"
@@ -2306,7 +2311,7 @@ ADMIN_ROUTES = {
     "/api/storage/classes/default", "/api/storage/classes/delete",
     "/api/network/service/delete",
     "/api/images/cleanup",
-    "/api/volumes/delete",
+    "/api/volumes/delete", "/api/volumes/chown",
     "/api/node/smart/test",
     "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete",
     "/api/lh/restore",
@@ -2747,6 +2752,9 @@ class H(BaseHTTPRequestHandler):
                     {"namespace": b["ns"], "name": b["name"]})
                 _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("image-updates", None)
                 return self._send(200, result)
+            if p == "/api/volumes/chown":
+                return self._send(200, IMP.chown_claim(
+                    b.get("namespace") or DEFAULT_NS, b.get("name"), b.get("uid"), b.get("gid")))
             if p == "/api/sources/measure":
                 return self._send(200, IMP.measure_source_paths(
                     b.get("name"), b.get("paths") or [], b.get("seconds", 25)))

@@ -565,7 +565,7 @@ async function viewImport() {
     ${jobs.length ? `<div class="sec">Transfers</div>
     <div class="card flat pad0"><div class="tblwrap"><table class="tbl"><thead><tr>
       <th>App</th><th>Job</th><th>State</th><th>Progress</th><th>Started</th><th></th></tr></thead><tbody>
-      ${jobs.map(j => `<tr><td><b>${esc(j.app || "—")}</b></td>
+      ${jobs.map(j => `<tr><td><b>${esc(j.app || "—")}</b>${j.kind === "chown" ? '<span class="tag">ownership</span>' : ""}</td>
         <td class="mono small dim">${esc(j.name)}</td>
         <td><span class="pill ${j.state === "done" ? "ok" : j.state === "failed" ? "crit" : "med"}">${esc(j.state)}</span></td>
         <td style="min-width:150px">${importProgressCell(j)}</td>
@@ -853,6 +853,9 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <div class="row"><button class="btn sm" onclick="imAddMap()">＋ add folder</button>
       <button class="btn sm" id="im_measure" onclick="imMeasure('${esc(source)}')">Measure sizes</button></div>
     <div class="dim xs" id="im_maps_note" style="margin-top:8px"></div>
+    <div class="f2"><div class="f"><label>Owner UID ${tip("rsync copies as root, so files land owned by root and a container that runs as its own user cannot write to them. Set the user the app runs as; PUID/PGID are filled in when Docker had them.")}</label>
+      <input type="number" id="im_uid" min="0" max="65535" value="${esc((cfg.env || {}).PUID || "")}" placeholder="leave blank to keep root"></div>
+      <div class="f"><label>Owner GID</label><input type="number" id="im_gid" min="0" max="65535" value="${esc((cfg.env || {}).PGID || "")}" placeholder="same as UID"></div></div>
     <div class="sec">Longhorn storage ${tip("Choose where copied appdata is stored. RWO suits one workload; RWX allows attachment from multiple nodes. Existing PVC merges the imported files into data already in that claim.")}</div>
     <div class="deploy-volume import-storage">
       <div class="deploy-volume-grid">
@@ -904,7 +907,8 @@ window.doImport = async source => {
     storage_class: existing ? "longhorn-r2" : $("#im_sc").value,
     access_mode: storageKind === "new-rwx" ? "ReadWriteMany" : "ReadWriteOnce", start_after_copy: $("#im_start").checked,
     ports: $$(".im-port").map(r => ({ container: +$(".ipc", r).value, host: +$(".iph", r).value || +$(".ipc", r).value, protocol: $(".ipp", r).value, expose: $(".ipe", r).checked })).filter(p => p.container),
-    env, hardware: selectedHardware("im_hw"), network_mode: $("#im_net").value, vip_mode: $("#im_vip").value, lb_ip: $("#im_ip").value.trim() };
+    env, hardware: selectedHardware("im_hw"), network_mode: $("#im_net").value, vip_mode: $("#im_vip").value, lb_ip: $("#im_ip").value.trim(),
+    uid: $("#im_uid").value.trim(), gid: $("#im_gid").value.trim() };
   if (!body.name || !body.image) return toast("workload name and image are required", "bad");
   if (!body.mappings.length) return toast("choose at least one folder to copy", "bad");
   const measured = body.mappings.reduce((sum, row) => sum + (row.bytes || 0), 0);
