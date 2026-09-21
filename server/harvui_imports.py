@@ -756,7 +756,9 @@ def import_container(cfg):
                                      "homestead.io/import-volume-created":
                                          "true" if volumes[0]["create"] else "false",
                                      "homestead.io/import-volumes-created":
-                                         ",".join(v["name"] for v in volumes if v["create"])}},
+                                         ",".join(v["name"] for v in volumes if v["create"]),
+                                     "homestead.io/import-volumes":
+                                         ",".join(v["name"] for v in volumes)}},
         "spec": {"backoffLimit": 1, "ttlSecondsAfterFinished": 3600,
                  "template": {"metadata": {"labels": {"harvui.io/task": "import"}},
                               "spec": {"restartPolicy": "Never",
@@ -908,7 +910,7 @@ def import_cleanup_plan(name):
         job = kget(f"/apis/batch/v1/namespaces/{NS}/jobs/{name}")
     except Exception:
         return {"job": name, "workload": "", "volume": "", "volume_created": False,
-                "namespace": NS, "known": False}
+                "volumes": [], "namespace": NS, "known": False}
     meta = job.get("metadata", {}) or {}
     annotations = meta.get("annotations", {}) or {}
     app = (meta.get("labels", {}) or {}).get("harvui.io/app", "")
@@ -924,9 +926,27 @@ def import_cleanup_plan(name):
             exists = False
     return {"job": name, "namespace": NS, "workload": workload if exists else "",
             "volume": volume, "volume_created": created,
+            # An import can fill several volumes - appdata on one, recordings on
+            # another - and cleaning it up has to offer all of them, not just the
+            # first one it happened to record.
+            "volumes": _plan_volumes(annotations, volume, created),
             # An import that predates this annotation says so rather than
             # implying the volume is safe to delete.
             "known": bool(annotations)}
+
+
+def _names(annotations, key):
+    return [part.strip() for part in str(annotations.get(key, "") or "").split(",") if part.strip()]
+
+
+def _plan_volumes(annotations, volume, created):
+    """Every claim this import used, and whether it is this import's to delete."""
+    made = set(_names(annotations, "homestead.io/import-volumes-created"))
+    used = _names(annotations, "homestead.io/import-volumes") or sorted(made)
+    if not used and volume:
+        # An import from before either list, which recorded one claim only.
+        return [{"name": volume, "created": created}]
+    return [{"name": claim, "created": claim in made} for claim in used]
 
 
 def delete_import(name):

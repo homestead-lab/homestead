@@ -314,9 +314,13 @@
       const name = JSON.parse(init?.body || "{}").name || "";
       return name.includes("obsidian")
         ? { job: name, namespace: "lab", workload: "obsidian", volume: "obsidian-appdata",
-            volume_created: true, known: true }
+            volume_created: true, known: true,
+            volumes: [{ name: "obsidian-appdata", created: true },
+                      { name: "obsidian-vault", created: true }] }
         : { job: name, namespace: "lab", workload: "plex", volume: "plexmedia",
-            volume_created: false, known: true };
+            volume_created: false, known: true,
+            volumes: [{ name: "plexmedia", created: false },
+                      { name: "plex-config", created: true }] };
     },
     "/api/files/list": url => {
       const path = url.searchParams.get("path") || "";
@@ -478,7 +482,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.32", candidate_tag: "2.8.32", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.33", candidate_tag: "2.8.33", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

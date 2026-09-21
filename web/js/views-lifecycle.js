@@ -586,7 +586,10 @@ async function viewImport() {
 window.importRemove = async (name, state) => {
   const running = state === "running";
   const plan = await api("/api/imports/cleanup-plan", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }) }).catch(() => ({ workload: "", volume: "", volume_created: false, known: false }));
+    body: JSON.stringify({ name }) }).catch(() => ({ workload: "", volume: "", volume_created: false, volumes: [], known: false }));
+  // An import can have filled several volumes; every one it created is offered.
+  const claims = plan.volumes?.length ? plan.volumes
+    : plan.volume ? [{ name: plan.volume, created: plan.volume_created }] : [];
   modal(running ? `Cancel import · ${name}` : `Remove import · ${name}`, `
     <div class="note">${running
       ? "Cancelling stops the copy where it is. Files already written stay on the volume."
@@ -599,13 +602,15 @@ window.importRemove = async (name, state) => {
           <small>${plan.workload
             ? "Deletes the Deployment this import created, and every Service pointing at it."
             : "This import created no workload, or it has already been deleted."}</small></span></label>
-      <label class="volume-delete-option danger ${plan.volume && plan.volume_created ? "" : "disabled"}">
-        <input type="checkbox" id="imr_volume" ${plan.volume && plan.volume_created ? "" : "disabled"}>
-        <span><b>The volume${plan.volume ? ` · ${esc(plan.volume)}` : ""}</b>
-          <small>${!plan.volume ? "No volume is recorded for this import."
-            : plan.volume_created
-              ? "Deletes the claim this import created, along with whatever was copied into it."
-              : `${esc(plan.volume)} existed before this import, so it is not this import's to delete. Remove it from Volumes if you mean to.`}</small></span></label>
+      ${claims.length ? claims.map(claim => `
+      <label class="volume-delete-option danger ${claim.created ? "" : "disabled"}">
+        <input type="checkbox" class="imr-volume" value="${esc(claim.name)}" ${claim.created ? "" : "disabled"}>
+        <span><b>The volume · ${esc(claim.name)}</b>
+          <small>${claim.created
+            ? "Deletes the claim this import created, along with whatever was copied into it."
+            : `${esc(claim.name)} existed before this import, so it is not this import's to delete. Remove it from Volumes if you mean to.`}</small></span></label>`).join("")
+      : `<label class="volume-delete-option danger disabled"><input type="checkbox" disabled>
+        <span><b>The volume</b><small>No volume is recorded for this import.</small></span></label>`}
     </div>
     ${plan.known === false ? '<div class="note">This import predates the record of what it created, so only the job is removed.</div>' : ""}
     <div class="row" style="margin-top:18px">
@@ -614,9 +619,11 @@ window.importRemove = async (name, state) => {
   if (window.applyRole) window.applyRole();
 };
 window.importRemoveNow = async (name, button) => {
+  const volumes = $$(".imr-volume").filter(box => box.checked).map(box => box.value);
   const body = { name, remove_workload: !!$("#imr_workload")?.checked,
-    remove_volume: !!$("#imr_volume")?.checked };
-  if (body.remove_volume && !confirm("Delete the imported volume and everything copied into it?\n\nThis cannot be undone.")) return;
+    remove_volume: volumes.length > 0, remove_volumes: volumes };
+  if (volumes.length && !confirm(`Delete ${volumes.length === 1 ? volumes[0] : volumes.join(" and ")} `
+      + "and everything copied into " + (volumes.length === 1 ? "it" : "them") + "?\n\nThis cannot be undone.")) return;
   if (button) { button.disabled = true; button.textContent = "Removing…"; }
   try {
     const result = await api("/api/imports/delete", { method: "POST", headers: { "Content-Type": "application/json" },

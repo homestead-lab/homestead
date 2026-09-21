@@ -56,6 +56,20 @@ class ContainerImportStorageTests(unittest.TestCase):
         claim = job["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"]
         self.assertEqual("example-config", claim)
 
+    def test_the_job_records_every_volume_so_cleanup_can_offer_them(self):
+        imports.import_container(self.config(volumes=[
+            {"name": "example-config", "create": True, "size_gb": 10},
+            {"name": "example-clips", "create": True, "size_gb": 500},
+            {"name": "shared-appdata", "create": False}]))
+
+        job = next(body for method, path, body in self.sent if method == "POST" and path.endswith("/jobs"))
+        annotations = job["metadata"]["annotations"]
+        self.assertEqual("example-config,example-clips,shared-appdata",
+                         annotations["homestead.io/import-volumes"])
+        self.assertEqual("example-config,example-clips",
+                         annotations["homestead.io/import-volumes-created"],
+                         "a borrowed claim is never this import's to delete")
+
     def test_existing_import_reuses_selected_claim_without_creating_one(self):
         result = imports.import_container(self.config(
             pvc_name="shared-appdata", reuse_existing=True, size_gb=1))
@@ -125,6 +139,48 @@ class ImportJobRemovalTests(unittest.TestCase):
         self.deployments = {"plex"}
 
         self.assertFalse(imports.import_cleanup_plan("homestead-import-plex")["volume_created"])
+
+    def test_every_volume_an_import_created_is_offered(self):
+        """An import that filled appdata and recordings has to clean up both."""
+        self.job = {"metadata": {"name": "homestead-import-frigate", "namespace": "lab",
+                                 "annotations": {
+                                     "homestead.io/import-workload": "frigate",
+                                     "homestead.io/import-volume": "frigate-appdata",
+                                     "homestead.io/import-volume-created": "true",
+                                     "homestead.io/import-volumes": "frigate-appdata,frigate-recordings",
+                                     "homestead.io/import-volumes-created":
+                                         "frigate-appdata,frigate-recordings"}}}
+        self.deployments = {"frigate"}
+
+        plan = imports.import_cleanup_plan("homestead-import-frigate")
+
+        self.assertEqual([{"name": "frigate-appdata", "created": True},
+                          {"name": "frigate-recordings", "created": True}], plan["volumes"])
+
+    def test_a_volume_the_import_borrowed_is_listed_but_not_deletable(self):
+        self.job = {"metadata": {"name": "homestead-import-frigate", "namespace": "lab",
+                                 "annotations": {
+                                     "homestead.io/import-workload": "frigate",
+                                     "homestead.io/import-volume": "frigate-appdata",
+                                     "homestead.io/import-volume-created": "true",
+                                     "homestead.io/import-volumes": "frigate-appdata,cctv-archive",
+                                     "homestead.io/import-volumes-created": "frigate-appdata"}}}
+        self.deployments = {"frigate"}
+
+        plan = imports.import_cleanup_plan("homestead-import-frigate")
+
+        self.assertEqual([True, False], [row["created"] for row in plan["volumes"]])
+
+    def test_an_import_recorded_before_the_list_still_offers_its_volume(self):
+        self.job = {"metadata": {"name": "homestead-import-obsidian", "namespace": "lab",
+                                 "annotations": {"homestead.io/import-workload": "obsidian",
+                                                 "homestead.io/import-volume": "obsidian-appdata",
+                                                 "homestead.io/import-volume-created": "true"}}}
+        self.deployments = {"obsidian"}
+
+        plan = imports.import_cleanup_plan("homestead-import-obsidian")
+
+        self.assertEqual([{"name": "obsidian-appdata", "created": True}], plan["volumes"])
 
     def test_a_workload_already_gone_is_not_offered_either(self):
         self.job = {"metadata": {"name": "homestead-import-obsidian", "namespace": "lab",

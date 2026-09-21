@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.32"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.33"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2854,9 +2854,16 @@ class H(BaseHTTPRequestHandler):
                     b.get("name"), b.get("paths") or [], b.get("seconds", 25)))
             if p == "/api/imports/delete":
                 plan = IMP.import_cleanup_plan(b.get("name"))
-                if b.get("remove_volume") and not plan["volume_created"]:
-                    raise ValueError("this import copied into a volume it did not create, "
-                                     "so it will not delete it")
+                made = {row["name"] for row in plan["volumes"] if row["created"]}
+                # The request names claims; asking for all of them is the old
+                # boolean, which an import with one volume still sends.
+                wanted = [str(claim) for claim in (b.get("remove_volumes") or [])]
+                if b.get("remove_volume") and not wanted:
+                    wanted = [row["name"] for row in plan["volumes"] if row["created"]]
+                borrowed = [claim for claim in wanted if claim not in made]
+                if borrowed:
+                    raise ValueError(f"this import copied into {', '.join(sorted(borrowed))} "
+                                     "without creating it, so it will not delete it")
                 result = IMP.delete_import(b.get("name"))
                 removed = []
                 if b.get("remove_workload") and plan["workload"]:
@@ -2870,12 +2877,12 @@ class H(BaseHTTPRequestHandler):
                             pass
                     removed.append(f"workload {name}")
                     _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
-                if b.get("remove_volume") and plan["volume"]:
+                for claim in wanted:
                     # Requested alongside the workload that held it, so the claim
                     # may still be releasing; Kubernetes finishes it either way.
                     ksend("DELETE", f"/api/v1/namespaces/{plan['namespace']}/"
-                                    f"persistentvolumeclaims/{plan['volume']}")
-                    removed.append(f"volume {plan['volume']}")
+                                    f"persistentvolumeclaims/{claim}")
+                    removed.append(f"volume {claim}")
                     _cache.pop("vol", None); _cache.pop("stor", None)
                 if removed:
                     result["message"] = result["message"] + " with " + " and ".join(removed)
