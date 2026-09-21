@@ -108,9 +108,9 @@ class ImportJobRemovalTests(unittest.TestCase):
     def test_a_failed_import_job_can_be_removed(self):
         result = imports.delete_import("homestead-import-obsidian")
 
-        self.assertEqual("DELETE", self.sent[-1][0])
-        self.assertIn("jobs/homestead-import-obsidian", self.sent[-1][1])
-        self.assertIn("propagationPolicy=Background", self.sent[-1][1])
+        deleted = [path for method, path in self.sent if method == "DELETE"]
+        self.assertIn("/apis/batch/v1/namespaces/lab/jobs/homestead-import-obsidian"
+                      "?propagationPolicy=Background", deleted)
         self.assertIn("removed", result["message"])
 
     def test_cancelling_a_running_copy_kills_its_pod_before_returning(self):
@@ -142,7 +142,7 @@ class ImportJobRemovalTests(unittest.TestCase):
     def test_a_job_from_before_the_rename_is_still_removable(self):
         imports.delete_import("harvui-import-obsidian")
 
-        self.assertIn("jobs/harvui-import-obsidian", self.sent[-1][1])
+        self.assertTrue(any("jobs/harvui-import-obsidian" in path for _, path in self.sent))
 
     def test_a_cleanup_plan_reports_what_the_import_created(self):
         self.job = {"metadata": {"name": "homestead-import-obsidian", "namespace": "lab",

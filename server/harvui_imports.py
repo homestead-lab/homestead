@@ -1039,9 +1039,25 @@ def delete_import(name):
         if error.code != 404:
             raise
     stopped = _stop_job_pods(name)
+    # A pre-pull started for this app outlives the import that wanted it: it is
+    # a DaemonSet, so deleting its pods only makes it build new ones.
+    app = re.sub(r"^(?:homestead|harvui)-import-", "", name)
+    pulls = [f"{prefix}{app}" for prefix in PREPULL_NAMES]
+    stopped_pulls = [pull for pull in pulls if _daemonset_exists(pull)]
+    for pull in stopped_pulls:
+        stop_prepull(pull)
     _bust("wl", "ov")
     return {"ok": True, "name": name, "pods_removed": stopped,
+            "prepulls_removed": stopped_pulls,
             "message": f"Import {name} removed"}
+
+
+def _daemonset_exists(name):
+    try:
+        found = kget(f"/apis/apps/v1/namespaces/{NS}/daemonsets/{name}")
+    except Exception:
+        return False
+    return bool((found.get("metadata", {}) or {}).get("name"))
 
 
 def wait_for_pods_gone(namespace, selector, seconds=20):
@@ -1258,17 +1274,52 @@ def image_cache():
                        "system": _system_image(value["name"]),
                        "protected": bool(reasons), "retained_by": reasons})
     shared.sort(key=lambda x: -x["size_mb"])
+    # Read here rather than on its own timer: whoever is looking at the image
+    # cache is exactly who wants to know a pull is running, or has finished and
+    # been cleared away.
+    pulls = prepull_status()
     return {"nodes": per_node, "images": shared[:200],
+            "pulls": pulls["pulls"], "pulls_finished": pulls["finished"],
             "distinct": len(shared),
             "node_names": [n["metadata"]["name"] for n in nodes],
             "retained": retained,
             "protected": sum(1 for image in shared if image["protected"])}
 
 
+PREPULL_NAMES = ("homestead-pull-", "harvui-pull-")
+
+
+def _pullable_nodes():
+    """Nodes worth warming an image onto: Ready, and not cordoned.
+
+    A DaemonSet cannot decline the tolerations its controller adds - not-ready,
+    unreachable, unschedulable and every pressure taint - so the only way to
+    keep a pull off a node being drained or already falling over is to leave
+    that node out of the set the pods are allowed to land on.
+    """
+    healthy, all_names = [], []
+    for node in kget("/api/v1/nodes").get("items", []):
+        name = (node.get("metadata", {}) or {}).get("name", "")
+        if not name:
+            continue
+        all_names.append(name)
+        conditions = (node.get("status", {}) or {}).get("conditions", []) or []
+        ready = any(c.get("type") == "Ready" and c.get("status") == "True" for c in conditions)
+        if ready and not (node.get("spec", {}) or {}).get("unschedulable"):
+            healthy.append(name)
+    return healthy, all_names
+
+
 def prepull(image, nodes=None):
-    """Warm an image onto every (or selected) node with a DaemonSet-style pull."""
+    """Warm an image onto every healthy node with a DaemonSet-style pull."""
     tag = re.sub(r"[^a-z0-9-]", "-", image.split("/")[-1].split(":")[0].lower())[:30]
     name = f"homestead-pull-{tag}"
+    healthy, every = _pullable_nodes()
+    wanted = [node for node in (nodes or every) if node in healthy]
+    skipped = sorted(set(nodes or every) - set(wanted))
+    if not wanted:
+        raise ValueError(f"{', '.join(skipped)} is not ready to take an image pull"
+                         if skipped else "no node is ready to take an image pull")
     body = {
         "apiVersion": "apps/v1", "kind": "DaemonSet",
         "metadata": {"name": name, "namespace": NS,
@@ -1282,10 +1333,11 @@ def prepull(image, nodes=None):
                                                        "image": "registry.k8s.io/pause:3.9",
                                                        "resources": {"requests": {"cpu": "1m", "memory": "4Mi"}}}]}}},
     }
-    if nodes:
-        body["spec"]["template"]["spec"]["affinity"] = {"nodeAffinity": {
-            "requiredDuringSchedulingIgnoredDuringExecution": {"nodeSelectorTerms": [
-                {"matchExpressions": [{"key": "kubernetes.io/hostname", "operator": "In", "values": nodes}]}]}}}
+    # Always pinned, never left to the DaemonSet's own idea of every node.
+    body["spec"]["template"]["spec"]["affinity"] = {"nodeAffinity": {
+        "requiredDuringSchedulingIgnoredDuringExecution": {"nodeSelectorTerms": [
+            {"matchExpressions": [{"key": "kubernetes.io/hostname",
+                                   "operator": "In", "values": sorted(wanted)}]}]}}}
     for previous in (name, f"harvui-pull-{tag}"):
         try:
             ksend("DELETE", f"/apis/apps/v1/namespaces/{NS}/daemonsets/{previous}")
@@ -1293,7 +1345,56 @@ def prepull(image, nodes=None):
             pass
     time.sleep(1)
     ksend("POST", f"/apis/apps/v1/namespaces/{NS}/daemonsets", body)
-    return {"ok": True, "daemonset": name, "image": image}
+    return {"ok": True, "daemonset": name, "image": image, "nodes": sorted(wanted),
+            "skipped": skipped,
+            "message": f"Pulling onto {len(wanted)} node{'' if len(wanted) == 1 else 's'}"
+                       + (f"; skipped {', '.join(skipped)} (cordoned or not ready)" if skipped else "")}
+
+
+def prepull_status(sweep=True):
+    """Every pull still running, and the finished ones cleared away.
+
+    A DaemonSet has no notion of being done: once the init container has pulled
+    the image its pod sits there holding a pause container open for good. So
+    completion is read from the outside - every pod it wants is ready - and the
+    DaemonSet is deleted rather than left running on every node forever.
+    """
+    try:
+        sets = kget(f"/apis/apps/v1/namespaces/{NS}/daemonsets"
+                    "?labelSelector=harvui.io/task%3Dprepull").get("items", [])
+    except Exception:
+        return {"pulls": [], "finished": []}
+    pulls, finished = [], []
+    for item in sets:
+        name = item["metadata"]["name"]
+        status = item.get("status", {}) or {}
+        desired = int(status.get("desiredNumberScheduled", 0) or 0)
+        ready = int(status.get("numberReady", 0) or 0)
+        image = ""
+        for container in (item["spec"]["template"]["spec"].get("initContainers") or []):
+            image = container.get("image", "") or image
+        row = {"name": name, "image": image, "desired": desired, "ready": ready,
+               "complete": bool(desired) and ready >= desired}
+        if row["complete"] and sweep:
+            stop_prepull(name)
+            finished.append(row)
+        else:
+            pulls.append(row)
+    return {"pulls": pulls, "finished": finished}
+
+
+def stop_prepull(name):
+    """Delete a pull DaemonSet. Deleting its pods only makes it replace them."""
+    name = str(name or "")
+    if not any(name.startswith(prefix) for prefix in PREPULL_NAMES) or "/" in name:
+        raise ValueError("that is not an image pre-pull")
+    try:
+        ksend("DELETE", f"/apis/apps/v1/namespaces/{NS}/daemonsets/{name}"
+                        "?propagationPolicy=Background")
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+    return {"ok": True, "daemonset": name, "message": f"Pre-pull {name} stopped"}
 
 
 def cleanup_image(digest, nodes=None):

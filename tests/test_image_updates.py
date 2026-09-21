@@ -155,6 +155,50 @@ class ImageUpdateTests(unittest.TestCase):
         restored = self.dep["spec"]["template"]["spec"]["containers"][0]["image"]
         self.assertEqual("docker.io/library/nginx@sha256:" + "d" * 64, restored)
 
+    def test_an_init_container_on_the_same_image_moves_with_it(self):
+        """Homestead's own data-permissions init container is built from the
+        Homestead image: leaving it behind pins it to the release the workload
+        was installed with, however many times the app is updated."""
+        spec = self.dep["spec"]["template"]["spec"]
+        spec["containers"] = [{"name": "homestead",
+                               "image": "ghcr.io/wjcloudy/homestead:2.8.2",
+                               "env": [{"name": "PORT", "value": "8080"},
+                                       {"name": "HOMESTEAD_VERSION", "value": "2.8.2"}]}]
+        spec["initContainers"] = [{"name": "data-permissions",
+                                   "image": "ghcr.io/wjcloudy/homestead:2.8.2"},
+                                  {"name": "wait", "image": "busybox:1.36"}]
+        new_digest = "sha256:" + "e" * 64
+        old_digest = "sha256:" + "f" * 64
+        original = updates._check_deployment
+        try:
+            updates._check_deployment = lambda *args, **kwargs: {
+                "images": [{"container": "homestead", "available": True,
+                            "source": "ghcr.io/wjcloudy/homestead:2.8.2",
+                            "current_digest": old_digest,
+                            "candidate": "ghcr.io/wjcloudy/homestead:2.8.37",
+                            "remote_digest": new_digest}]}
+            updates.apply_update("lab", "demo")
+        finally:
+            updates._check_deployment = original
+
+        spec = self.dep["spec"]["template"]["spec"]
+        wanted = "ghcr.io/wjcloudy/homestead@" + new_digest
+        self.assertEqual(wanted, spec["containers"][0]["image"])
+        self.assertEqual(wanted, spec["initContainers"][0]["image"],
+                         "the init container is the same release as the app")
+        self.assertEqual("busybox:1.36", spec["initContainers"][1]["image"],
+                         "an unrelated init container is left alone")
+        self.assertEqual([{"name": "PORT", "value": "8080"}], spec["containers"][0]["env"],
+                         "a pinned version env var would now be a lie")
+
+        updates.rollback("lab", "demo")
+        spec = self.dep["spec"]["template"]["spec"]
+        was = "ghcr.io/wjcloudy/homestead@" + old_digest
+        self.assertEqual(was, spec["containers"][0]["image"])
+        self.assertEqual("ghcr.io/wjcloudy/homestead:2.8.2", spec["initContainers"][0]["image"],
+                         "rollback takes the init container back with it")
+        self.assertEqual("busybox:1.36", spec["initContainers"][1]["image"])
+
     def test_progress_waits_for_surge_replacement_to_be_ready(self):
         self.dep["status"].update({"replicas": 2, "updatedReplicas": 1,
                                    "readyReplicas": 1, "availableReplicas": 1,

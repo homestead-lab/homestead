@@ -295,6 +295,44 @@ def scan(force=False):
             "workloads": workloads}
 
 
+# An env var pinning the version in the Deployment outlives the image it
+# described: the image bakes HOMESTEAD_VERSION in itself, so a copy written
+# into the pod spec only ever goes stale. Updating an image drops it.
+PINNED_VERSION_ENV = ("HOMESTEAD_VERSION", "HARVUI_VERSION")
+
+
+def _pod_containers(dep):
+    """Every container in the pod template, init containers included.
+
+    An init container that shares an image with the app - the one that fixes
+    ownership on the data volume before Homestead starts - has to move with it.
+    Kubernetes keeps their names unique across both lists, so one map covers
+    both.
+    """
+    spec = dep["spec"]["template"]["spec"]
+    return list(spec.get("initContainers", []) or []) + list(spec.get("containers", []) or [])
+
+
+def _same_repository(one, other):
+    try:
+        return parse_image(one)["base"] == parse_image(other)["base"]
+    except ValueError:
+        return False
+
+
+def _drop_pinned_version(container):
+    env = container.get("env")
+    if not env:
+        return
+    kept = [item for item in env if item.get("name") not in PINNED_VERSION_ENV]
+    if len(kept) == len(env):
+        return
+    if kept:
+        container["env"] = kept
+    else:
+        container.pop("env", None)
+
+
 def _immutable(ref, digest):
     parsed = parse_image(ref)
     return parsed["base"] + "@" + digest
@@ -319,8 +357,7 @@ def apply_update(ns, name):
         raise ValueError("no image update is currently available")
     annotations = dep["metadata"].setdefault("annotations", {})
     tracked = _annotation_json(dep, TRACKED)
-    before = {c["name"]: c.get("image", "")
-              for c in dep["spec"]["template"]["spec"].get("containers", [])}
+    before = {c["name"]: c.get("image", "") for c in _pod_containers(dep)}
     # Make the rollback target immutable too. On a first managed update the
     # Deployment may still contain a mutable tag even though the pod status
     # tells us the exact manifest that is running.
@@ -337,14 +374,27 @@ def apply_update(ns, name):
         tracked[container["name"]] = update["candidate"]
         container["image"] = _immutable(update["candidate"], update["remote_digest"])
         container["imagePullPolicy"] = "IfNotPresent"
+        _drop_pinned_version(container)
+    # An init container built from the same image is the same release, so it
+    # follows the container it belongs to rather than staying on the tag the
+    # workload was first installed with.
+    for init in dep["spec"]["template"]["spec"].get("initContainers", []) or []:
+        update = next((chosen[name] for name, item in chosen.items()
+                       if _same_repository(init.get("image", ""), before.get(name, ""))), None)
+        if not update:
+            continue
+        tracked[init["name"]] = update["candidate"]
+        init["image"] = _immutable(update["candidate"], update["remote_digest"])
+        init["imagePullPolicy"] = "IfNotPresent"
+        _drop_pinned_version(init)
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     annotations[TRACKED] = json.dumps(tracked, separators=(",", ":"))
     annotations[LAST_ACTION] = "update " + now
     dep["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[ROLLOUT_AT] = now
     result = ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
     _history({"at": now, "action": "update", "namespace": ns, "deployment": name,
-              "before": before, "after": {c["name"]: c["image"] for c in
-                                            result["spec"]["template"]["spec"]["containers"]}})
+              "before": before,
+              "after": {c["name"]: c["image"] for c in _pod_containers(result)}})
     return progress(ns, name, result)
 
 
@@ -354,9 +404,8 @@ def rollback(ns, name):
     restore = previous.get("images") or {}
     if not restore:
         raise ValueError("no managed update is available to roll back")
-    current = {c["name"]: c.get("image", "") for c in
-               dep["spec"]["template"]["spec"].get("containers", [])}
-    for container in dep["spec"]["template"]["spec"].get("containers", []):
+    current = {c["name"]: c.get("image", "") for c in _pod_containers(dep)}
+    for container in _pod_containers(dep):
         if container["name"] in restore:
             container["image"] = restore[container["name"]]
             container["imagePullPolicy"] = "IfNotPresent"

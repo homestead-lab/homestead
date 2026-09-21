@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.38"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.39"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -3066,6 +3066,8 @@ class H(BaseHTTPRequestHandler):
                      "namespace": result["namespace"]},
                     "/import", {"namespace": result["namespace"], "name": result["name"]})
                 return self._send(200, result)
+            if p == "/api/images/prepull/stop":
+                return self._send(200, IMP.stop_prepull(b.get("name")))
             if p == "/api/images/prepull":
                 result = IMP.prepull(b["image"], b.get("nodes"))
                 result["operation"] = OPS.start(

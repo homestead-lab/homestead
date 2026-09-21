@@ -294,6 +294,28 @@
         pvc: body.name, size_gb: body.size_gb,
         message: `CDI import into ${body.namespace || "lab"}/${body.name} started` };
     },
+    "/api/images": { distinct: 3, protected: 2, retained: 2,
+      node_names: ["harvester-node1", "harvester-node2", "harvester-node3"],
+      nodes: [{ node: "harvester-node1", total_gb: 14.2, count: 38 },
+        { node: "harvester-node2", total_gb: 11.9, count: 31 },
+        { node: "harvester-node3", total_gb: 9.4, count: 27 }],
+      pulls: [{ name: "homestead-pull-frigate", image: "ghcr.io/blakeblackshear/frigate:0.18.0-rc1",
+        desired: 3, ready: 1, complete: false }],
+      pulls_finished: [],
+      images: [
+        { name: "ghcr.io/blakeblackshear/frigate:stable", names: [], digest: "sha256:" + "a".repeat(64),
+          size_mb: 2480, nodes: ["harvester-node2"], system: false, protected: true,
+          retained_by: [{ reason: "active", namespace: "lab", workload: "frigate", container: "frigate" }] },
+        { name: "ghcr.io/home-assistant/home-assistant:stable", names: [], digest: "sha256:" + "b".repeat(64),
+          size_mb: 1720, nodes: ["harvester-node1", "harvester-node3"], system: false, protected: true,
+          retained_by: [{ reason: "rollback", namespace: "lab", workload: "home-assistant", container: "home-assistant" }] },
+        { name: "docker.io/library/redis:7.2", names: [], digest: "sha256:" + "c".repeat(64),
+          size_mb: 41, nodes: ["harvester-node1", "harvester-node2", "harvester-node3"],
+          system: false, protected: false, retained_by: [] }] },
+    "/api/images/prepull": { ok: true, daemonset: "homestead-pull-redis",
+      nodes: ["harvester-node1", "harvester-node3"], skipped: ["harvester-node2"],
+      message: "Pulling onto 2 nodes; skipped harvester-node2 (cordoned or not ready)" },
+    "/api/images/prepull/stop": { ok: true, message: "Pre-pull homestead-pull-frigate stopped" },
     "/api/vmimages": [],
     "/api/vms": [],
     "/api/sources": [{ name: "unraid", host: "192.0.2.10", user: "root", kind: "unraid", base_path: "/mnt/user/appdata", added: "2026-09-20 12:00" }],
@@ -482,7 +504,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.38", candidate_tag: "2.8.38", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.39", candidate_tag: "2.8.39", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

@@ -97,3 +97,105 @@ class ImageCacheTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PrepullTests(unittest.TestCase):
+    """A pre-pull is a DaemonSet, which means it needs stopping, not deleting."""
+
+    def setUp(self):
+        self.sent = []
+        self.daemonsets = []
+        self.nodes = [
+            self._node("node1"),
+            self._node("node2", ready=False),
+            self._node("node3", cordoned=True),
+        ]
+
+        def get(path):
+            if path == "/api/v1/nodes":
+                return {"items": self.nodes}
+            if "/daemonsets?" in path:
+                return {"items": self.daemonsets}
+            if "/daemonsets/" in path:
+                name = path.rsplit("/", 1)[-1].split("?")[0]
+                found = next((d for d in self.daemonsets
+                              if d["metadata"]["name"] == name), None)
+                if not found:
+                    raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+                return found
+            raise AssertionError(path)
+
+        imports.kget = get
+        self.posted = []
+
+        def send(method, path, body=None, **kwargs):
+            self.sent.append((method, path))
+            if method == "POST":
+                self.posted.append(body)
+            return body or {}
+
+        imports.ksend = send
+        self.sleep, imports.time.sleep = imports.time.sleep, lambda _: None
+
+    def tearDown(self):
+        imports.time.sleep = self.sleep
+
+    @staticmethod
+    def _node(name, ready=True, cordoned=False):
+        return {"metadata": {"name": name},
+                "spec": {"unschedulable": cordoned} if cordoned else {},
+                "status": {"conditions": [{"type": "Ready",
+                                           "status": "True" if ready else "False"}]}}
+
+    def _pull(self, name="homestead-pull-frigate", desired=1, ready=1):
+        return {"metadata": {"name": name, "labels": {"harvui.io/task": "prepull"}},
+                "spec": {"template": {"spec": {"initContainers": [
+                    {"name": "pull", "image": "frigate:0.18.0"}]}}},
+                "status": {"desiredNumberScheduled": desired, "numberReady": ready}}
+
+    def test_a_cordoned_or_unready_node_is_left_out(self):
+        result = imports.prepull("ghcr.io/x/frigate:0.18.0")
+
+        self.assertEqual(["node1"], result["nodes"])
+        self.assertEqual(["node2", "node3"], result["skipped"])
+        # Pinned by affinity, because a DaemonSet cannot refuse the tolerations
+        # its controller adds for unschedulable, not-ready and unreachable.
+        terms = (self.posted[0]["spec"]["template"]["spec"]["affinity"]["nodeAffinity"]
+                 ["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"])
+        self.assertEqual(["node1"], terms[0]["matchExpressions"][0]["values"])
+
+    def test_asking_for_only_an_unhealthy_node_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "node2 is not ready"):
+            imports.prepull("ghcr.io/x/frigate:0.18.0", ["node2"])
+        self.assertNotIn(("POST", "/apis/apps/v1/namespaces/lab/daemonsets"), self.sent)
+
+    def test_a_finished_pull_is_cleared_away_rather_than_left_running(self):
+        self.daemonsets = [self._pull(desired=2, ready=2)]
+
+        status = imports.prepull_status()
+
+        self.assertEqual([], status["pulls"])
+        self.assertEqual(["homestead-pull-frigate"], [row["name"] for row in status["finished"]])
+        self.assertIn(("DELETE", "/apis/apps/v1/namespaces/lab/daemonsets/"
+                       "homestead-pull-frigate?propagationPolicy=Background"), self.sent)
+
+    def test_a_pull_still_running_is_reported_and_kept(self):
+        self.daemonsets = [self._pull(desired=3, ready=1)]
+
+        status = imports.prepull_status()
+
+        self.assertEqual([{"name": "homestead-pull-frigate", "image": "frigate:0.18.0",
+                           "desired": 3, "ready": 1, "complete": False}], status["pulls"])
+        self.assertEqual([], [x for x in self.sent if x[0] == "DELETE"])
+
+    def test_only_a_pre_pull_can_be_stopped_this_way(self):
+        for name in ("", "longhorn-manager", "../../kube-system/x", "homestead-import-frigate"):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, "not an image pre-pull"):
+                    imports.stop_prepull(name)
+
+    def test_a_pull_from_before_the_rename_can_still_be_stopped(self):
+        imports.stop_prepull("harvui-pull-frigate")
+
+        self.assertIn(("DELETE", "/apis/apps/v1/namespaces/lab/daemonsets/"
+                       "harvui-pull-frigate?propagationPolicy=Background"), self.sent)

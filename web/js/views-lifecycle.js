@@ -428,6 +428,12 @@ async function viewImages() {
         <div class="bignum" style="margin-top:8px">${n.total_gb}<span class="unit">GB</span></div>
         <div class="csub">${n.count} images cached</div></div>`).join("")}
     </div>
+    ${(d.pulls || []).map(pull => `<div class="note warn between" style="margin-bottom:12px">
+      <span>Pre-pulling <span class="mono">${esc(pull.image)}</span> · ${pull.ready} of ${pull.desired} node${pull.desired === 1 ? "" : "s"} done.
+        It runs until every node has the image; its pods come straight back if you delete them.</span>
+      <button class="btn sm danger" data-need="admin" onclick="prepullStop('${esc(pull.name)}')">Stop</button></div>`).join("")}
+    ${(d.pulls_finished || []).length ? `<div class="note good" style="margin-bottom:12px">Finished pre-pulling
+      ${d.pulls_finished.map(pull => `<span class="mono">${esc(pull.image)}</span>`).join(", ")} — cleared away.</div>` : ""}
     <div class="card flat pad0"><div class="tblwrap"><table class="tbl"><thead><tr>
       <th>Image</th><th>Size</th><th>Cached on</th><th>Retention</th><th></th></tr></thead><tbody>
       ${imgs.slice(0, 80).map(i => {
@@ -448,9 +454,19 @@ async function viewImages() {
 }
 window.prepull = async image => {
   try {
-    await api("/api/images/prepull", { method: "POST", headers: { "Content-Type": "application/json" },
+    const result = await api("/api/images/prepull", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ image }) });
-    toast("pre-pull started on all nodes", "ok");
+    toast(result.message || "pre-pull started", result.skipped?.length ? "warn" : "ok");
+    resetPaint(); viewImages();
+  } catch (e) { toast(e.message, "bad"); }
+};
+/* Its pods are a DaemonSet's to replace, so stopping means deleting the set. */
+window.prepullStop = async name => {
+  try {
+    const result = await api("/api/images/prepull/stop", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }) });
+    toast(result.message || "pre-pull stopped", "ok");
+    resetPaint(); viewImages();
   } catch (e) { toast(e.message, "bad"); }
 };
 

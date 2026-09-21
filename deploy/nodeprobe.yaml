@@ -580,7 +580,7 @@ spec:
               mountPath: /host/proc
               readOnly: true
         - name: smart
-          image: ghcr.io/wjcloudy/homestead:2.8.38
+          image: ghcr.io/wjcloudy/homestead:2.8.39
           imagePullPolicy: IfNotPresent
           command: ["python3", "/srv/smart.py"]
           ports:
