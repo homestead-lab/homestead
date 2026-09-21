@@ -235,7 +235,12 @@ def inventory():
                          "cluster_ip": spec.get("clusterIP") or "", "external_ips": external,
                          "assigned_ips": assigned, "requested_ips": requested,
                          "vip_host": annotations.get("kube-vip.io/vipHost") or "",
-                         "selector": selector, "targets": targets, "ports": service_ports,
+                         "selector": selector, "targets": targets,
+                         # A Service whose selector matches no Deployment still owns
+                         # its VIP and port: that is how a deleted workload leaves a
+                         # listener behind.
+                         "orphaned": bool(selector) and not targets,
+                         "ports": service_ports,
                          "endpoints": endpoint, "ready_endpoints": ready_count,
                          "not_ready_endpoints": not_ready_count, "health": health, "reason": reason})
 
@@ -529,3 +534,37 @@ def sync_workload_ports(namespace, workload, ports, network_mode=None, vip_mode=
     ksend("PUT", f"/api/v1/namespaces/{namespace}/services/{name}", service)
     listeners = ", ".join(f"{port['port']}→{port['targetPort']}/{port['protocol']}" for port in desired)
     return f"Service {name} now listens on {listeners}"
+
+
+def delete_service(namespace, name, force=False):
+    """Release a Service and the LAN listeners it owns.
+
+    A Service outlives the workload it was created for, so this is how an
+    orphaned VIP:port is reclaimed. Deleting one that still has a workload
+    behind it takes that workload off the LAN, so it needs force.
+    """
+    namespace = _name(namespace, "namespace")
+    name = _name(name, "service name")
+    if namespace in SYSTEM_NAMESPACES:
+        raise PermissionError("Homestead does not delete Services in system namespaces")
+    row = next((item for item in inventory()["services"]
+                if item["namespace"] == namespace and item["name"] == name), None)
+    if not row:
+        raise ValueError(f"Service {namespace}/{name} does not exist")
+    if row["targets"] and not force:
+        raise ValueError(f"{namespace}/{name} still serves {', '.join(row['targets'])}; "
+                         "removing it takes that workload off the LAN")
+    ksend("DELETE", f"/api/v1/namespaces/{namespace}/services/{name}")
+    freed = [f"{ip}:{port['port']}/{port['protocol']}"
+             for ip in row["external_ips"] for port in row["ports"]]
+    return {"ok": True, "name": name, "namespace": namespace, "freed": freed,
+            "message": (f"Service {namespace}/{name} deleted" +
+                        (f", releasing {', '.join(freed)}" if freed else ""))}
+
+
+def workload_service_names(namespace, workload):
+    """Names of the Services that select a workload's pods, for deletion."""
+    try:
+        return [row["metadata"]["name"] for row in workload_services(namespace, workload)]
+    except Exception:
+        return []

@@ -276,9 +276,11 @@ window.wlRestart = async (ns, name) => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.wlDelete = async (ns, name) => {
-  if (!confirm(`Delete "${name}" in ${ns}?\n\nRemoves the Deployment and its Service.\nPersistent volumes are kept.`)) return;
-  try { await api(`/api/workload/${ns}/${name}`, { method: "DELETE" });
-    toast(`${name} deleted`, "ok"); setTimeout(() => refresh(true), 900);
+  if (!confirm(`Delete "${name}" in ${ns}?\n\nRemoves the Deployment and every Service that points at it, freeing their LAN ports.\nPersistent volumes are kept.`)) return;
+  try { const result = await api(`/api/workload/${ns}/${name}`, { method: "DELETE" });
+    const freed = (result.services || []).length;
+    toast(`${name} deleted${freed ? ` with ${freed} service${freed === 1 ? "" : "s"}` : ""}`, "ok");
+    setTimeout(() => refresh(true), 900);
   } catch (e) { toast(e.message, "bad"); }
 };
 function openLogs(title, path) {

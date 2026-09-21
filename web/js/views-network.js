@@ -12,6 +12,7 @@ async function viewNetworking() {
     [row.namespace, row.name, row.cluster_ip, ...row.external_ips, networkPortText(row), ...row.targets]
       .join(" ").toLowerCase().includes(q)));
   const controller = data.controller;
+  const orphans = services.filter(row => row.orphaned).length;
   paint(`<div class="phead"><div><h2>Networking</h2>
       <p>Addresses, listeners and the live path from your LAN to each workload</p></div>
       <div class="row"><button class="btn" onclick="networkToggleSystem()">${showSystem ? "Hide" : "Show"} system</button>
@@ -36,17 +37,35 @@ async function viewNetworking() {
           ? `<a class="tag info" href="${esc(item.access)}" target="_blank" rel="noopener">Open ${icon("ext")}</a>`
           : `<span class="tag">${esc(item.access)}</span>`}</div></div>`).join("")}</div></div>`).join("") || '<div class="card flat empty">No external VIPs</div>'}</div>
     <div class="sec" style="margin-top:22px">Services &amp; endpoint paths</div>
-    <div class="card flat pad0"><div class="tblwrap"><table class="tbl"><thead><tr><th>Service</th><th>Addresses</th><th>Listeners</th><th>Traffic path</th><th>Health</th></tr></thead>
-      <tbody>${services.map(row => `<tr><td><b>${esc(row.name)}</b><div class="dim xs mono">${esc(row.namespace)} · ${esc(row.type)}</div></td>
+    ${orphans ? `<div class="note" style="margin-bottom:12px">${orphans === 1
+      ? "<b>1 Service no longer points at a workload.</b> It still owns its VIP and port, so that number stays taken until the Service is removed."
+      : `<b>${orphans} Services no longer point at a workload.</b> They still own their VIPs and ports, so those numbers stay taken until the Services are removed.`}</div>` : ""}
+    <div class="card flat pad0"><div class="tblwrap"><table class="tbl"><thead><tr><th>Service</th><th>Addresses</th><th>Listeners</th><th>Traffic path</th><th>Health</th><th></th></tr></thead>
+      <tbody>${services.map(row => `<tr><td><b>${esc(row.name)}</b>${row.orphaned ? '<span class="tag warn" data-tip="No Deployment matches this Service selector, so nothing answers on it. Its VIP and port stay reserved until it is removed.">no workload</span>' : ""}<div class="dim xs mono">${esc(row.namespace)} · ${esc(row.type)}</div></td>
         <td><div class="mono small">${row.external_ips.map(esc).join(" · ") || "cluster only"}</div><div class="dim xs mono">ClusterIP ${esc(row.cluster_ip || "—")}</div></td>
         <td>${row.ports.map(p => `<span class="tag">${p.port}/${esc(p.protocol)} → ${esc(p.target_port)}</span>`).join(" ")}</td>
         <td><div class="netpath"><span>${esc(row.external_ips[0] || row.cluster_ip || "pending")}</span><i>→</i><span>${esc(row.name)}</span><i>→</i><span>${row.ready_endpoints} endpoint${row.ready_endpoints === 1 ? "" : "s"}</span></div>
           <div class="dim xs">${row.endpoints.ready.map(e => `${esc(e.target || e.addresses[0] || "endpoint")} @ ${esc(e.node || "unknown node")}`).join(" · ") || "No ready target"}</div></td>
-        <td><span class="pill ${networkPill(row.health)}">${esc(row.health)}</span><div class="dim xs" style="margin-top:5px">${esc(row.reason)}</div></td></tr>`).join("") || '<tr><td colspan="5" class="empty">No matching services</td></tr>'}</tbody></table></div></div>
+        <td><span class="pill ${networkPill(row.health)}">${esc(row.health)}</span><div class="dim xs" style="margin-top:5px">${esc(row.reason)}</div></td>
+        <td>${row.system ? "" : `<button class="btn sm ${row.orphaned ? "danger" : ""}" data-need="admin" title="${row.orphaned ? "Release this listener" : "Remove this Service and take its workload off the LAN"}" onclick="networkServiceDelete('${esc(row.namespace)}','${esc(row.name)}')">${icon("trash")}${row.orphaned ? "Release" : "Remove"}</button>`}</td></tr>`).join("") || '<tr><td colspan="6" class="empty">No matching services</td></tr>'}</tbody></table></div></div>
     ${data.ingresses.length ? `<div class="sec" style="margin-top:22px">Ingress routes</div><div class="card flat pad0"><div class="tblwrap"><table class="tbl dense"><thead><tr><th>Ingress</th><th>Address</th><th>Route</th><th>Backend</th></tr></thead><tbody>${data.ingresses.filter(x => showSystem || !x.system).flatMap(row => row.rules.map(rule => `<tr><td>${esc(row.namespace)}/${esc(row.name)}</td><td class="mono">${esc(row.addresses.join(", ") || "pending")}</td><td>${esc(rule.host)}${esc(rule.path)}</td><td>${esc(rule.service)}:${esc(rule.port)}</td></tr>`)).join("")}</tbody></table></div></div>` : ""}`);
 }
 
 window.networkToggleSystem = () => { STATE.networkSystem = !STATE.networkSystem; viewNetworking(); };
+
+window.networkServiceDelete = async (namespace, name) => {
+  const row = (STATE.data.network?.services || []).find(item => item.namespace === namespace && item.name === name);
+  const listeners = (row?.external_ips || []).flatMap(ip => (row?.ports || []).map(p => `${ip}:${p.port}/${p.protocol}`));
+  const serving = row?.targets?.length
+    ? `\n\n${name} still serves ${row.targets.join(", ")}, which will lose its LAN address.` : "";
+  const frees = listeners.length ? `Frees ${listeners.join(", ")}.` : "It holds no external listener.";
+  if (!confirm(`Remove Service ${namespace}/${name}?${serving}\n\n${frees}`)) return;
+  try {
+    const result = await api("/api/network/service/delete", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ namespace, name, force: !!row?.targets?.length }) });
+    toast(result.message || `${name} removed`, "ok"); resetPaint(); viewNetworking();
+  } catch (e) { toast(e.message, "bad"); }
+};
 
 function networkModalPort(port = {}, first = false) {
   return `<div class="f4 net-port"><div><label>LAN port</label><input class="np-port" type="number" min="1" max="65535" value="${esc(port.port || port.container || "")}"></div>

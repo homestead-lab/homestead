@@ -184,7 +184,7 @@ window.editSave = async (ns, name) => {
   if (renaming && !confirm(`Rename Kubernetes Deployment “${name}” to “${workloadName}”?\n\nHomestead will stop the old workload, start the renamed one, wait for readiness, and restore the original if startup fails. Expect a short outage.`)) return;
   const body = { ns, name, workload_name: workloadName, pod_hostname: $("#e_pod_name").value.trim(),
     icon: $("#e_icon").value.trim(), replicas: Math.max(1, +$("#e_rep").value || 1),
-    autostart: $("#e_autostart").checked, containers, seed_configs };
+    autostart: $("#e_autostart").checked, manage_ports: true, containers, seed_configs };
   const button = $("#e_save");
   button.disabled = true;
   button.textContent = renaming ? "Renaming & checking readiness…"

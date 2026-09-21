@@ -142,7 +142,16 @@
         protocol: "TCP", access: `http://${row.ports[0].ip}:${row.ports[0].port}`, browser: true }],
       endpoints: { ready: [{ addresses: [`10.42.0.${30 + workloads.indexOf(row)}`],
         node: row.nodes[0], target_kind: "Pod", target: row.pods[0].name }], not_ready: [], ports: [] },
-      ready_endpoints: 1, not_ready_endpoints: 0, health: "healthy", reason: "1 ready endpoint" })),
+      ready_endpoints: 1, not_ready_endpoints: 0, health: "healthy", reason: "1 ready endpoint",
+      orphaned: false })).concat([{ namespace: "lab", name: "sonarr-old", type: "LoadBalancer",
+      system: false, managed: true, cluster_ip: "10.43.0.44", external_ips: ["192.0.2.246"],
+      assigned_ips: ["192.0.2.246"], requested_ips: ["192.0.2.246"], vip_host: "harvester-node1",
+      selector: { app: "sonarr-old" }, targets: [], orphaned: true,
+      ports: [{ name: "web", port: 8989, target_port: 8989, protocol: "TCP",
+        access: "http://192.0.2.246:8989", browser: true }],
+      endpoints: { ready: [], not_ready: [], ports: [] }, ready_endpoints: 0,
+      not_ready_endpoints: 0, health: "unavailable",
+      reason: "No ready endpoints match the Service selector" }]),
     ingresses: [],
   };
   const restorePlan = url => {
@@ -301,6 +310,8 @@
       { name: "longhorn-static", provisioner: "driver.longhorn.io", replicas: "", migratable: false,
         expandable: false, reclaim: "Delete", default: false, internal: true, in_use: 0 },
     ],
+    "/api/network/service/delete": { ok: true, freed: ["192.0.2.246:8989/TCP"],
+      message: "Service lab/sonarr-old deleted, releasing 192.0.2.246:8989/TCP" },
     "/api/shares": shares,
     "/api/shares/options": { namespace: "lab", node: "harvester-node2",
       pvcs: volumes.map(v => ({ name: v.pvc_name, size: `${v.size_gb}Gi`, status: "Bound",
@@ -385,7 +396,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.8", candidate: "ghcr.io/wjcloudy/homestead:2.8.9", candidate_tag: "2.8.9", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.9", candidate: "ghcr.io/wjcloudy/homestead:2.8.10", candidate_tag: "2.8.10", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

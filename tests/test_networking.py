@@ -112,6 +112,43 @@ class NetworkingTests(unittest.TestCase):
             networking.sync_workload_ports("lab", "homestead", [
                 {"name": "dns", "container": 8088, "host": 53, "protocol": "UDP", "expose": True}])
 
+    def test_a_service_whose_workload_is_gone_is_marked_orphaned(self):
+        self.objects["/api/v1/services"]["items"].append({
+            "metadata": {"name": "ghost", "namespace": "lab",
+                         "annotations": {"kube-vip.io/loadbalancerIPs": "192.0.2.244"}},
+            "spec": {"type": "LoadBalancer", "selector": {"app": "deleted-app"},
+                     "ports": [{"name": "web", "port": 8080, "targetPort": 8080, "protocol": "TCP"}]},
+            "status": {"loadBalancer": {"ingress": [{"ip": "192.0.2.244"}]}}})
+
+        rows = {row["name"]: row for row in networking.inventory()["services"]}
+        self.assertTrue(rows["ghost"]["orphaned"])
+        self.assertFalse(rows["homestead"]["orphaned"], "a served Service is not orphaned")
+
+    def test_an_orphaned_listener_can_be_released(self):
+        self.objects["/api/v1/services"]["items"].append({
+            "metadata": {"name": "ghost", "namespace": "lab",
+                         "annotations": {"kube-vip.io/loadbalancerIPs": "192.0.2.244"}},
+            "spec": {"type": "LoadBalancer", "selector": {"app": "deleted-app"},
+                     "ports": [{"name": "web", "port": 8080, "targetPort": 8080, "protocol": "TCP"}]},
+            "status": {"loadBalancer": {"ingress": [{"ip": "192.0.2.244"}]}}})
+
+        result = networking.delete_service("lab", "ghost")
+
+        self.assertEqual(("DELETE", "/api/v1/namespaces/lab/services/ghost"), self.sent[-1][:2])
+        self.assertEqual(["192.0.2.244:8080/TCP"], result["freed"])
+
+    def test_deleting_a_service_that_still_serves_a_workload_needs_force(self):
+        with self.assertRaisesRegex(ValueError, "still serves homestead"):
+            networking.delete_service("lab", "homestead")
+        self.assertEqual([], self.sent)
+
+        networking.delete_service("lab", "homestead", force=True)
+        self.assertEqual(("DELETE", "/api/v1/namespaces/lab/services/homestead"), self.sent[-1][:2])
+
+    def test_system_namespace_services_are_off_limits(self):
+        with self.assertRaises(PermissionError):
+            networking.delete_service("kube-system", "kube-dns")
+
     def test_inventory_reconciles_pool_against_live_services(self):
         state = networking.inventory()
         self.assertEqual(["192.0.2.243", "192.0.2.244"], state["available_vips"])

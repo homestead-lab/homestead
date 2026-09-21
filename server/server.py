@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.9"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.10"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2293,6 +2293,7 @@ ADMIN_ROUTES = {
     "/api/vm-disks/import",
     "/api/shares", "/api/shares/edit", "/api/shares/delete", "/api/shares/options",
     "/api/storage/classes/default", "/api/storage/classes/delete",
+    "/api/network/service/delete",
     "/api/images/cleanup",
     "/api/volumes/delete",
     "/api/node/smart/test",
@@ -2735,6 +2736,10 @@ class H(BaseHTTPRequestHandler):
                     {"namespace": b["ns"], "name": b["name"]})
                 _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("image-updates", None)
                 return self._send(200, result)
+            if p == "/api/network/service/delete":
+                result = NETWORK.delete_service(b.get("namespace"), b.get("name"), b.get("force"))
+                _cache.pop("network", None)
+                return self._send(200, result)
             if p == "/api/storage/classes":
                 return self._send(200, create_storage_class(b))
             if p == "/api/storage/classes/default":
@@ -2807,7 +2812,11 @@ class H(BaseHTTPRequestHandler):
                 result = LC.edit_workload(b)
                 ports = [port for container in b.get("containers") or []
                          for port in container.get("ports") or []]
-                if "containers" in b and any("expose" in port for port in ports):
+                # manage_ports marks a client that owns the whole port list, so
+                # removing the last port removes the Service too. Older clients
+                # are recognised by a port carrying expose, and a body with no
+                # ports at all from one of those is left alone.
+                if b.get("manage_ports") or any("expose" in port for port in ports):
                     message = NETWORK.sync_workload_ports(
                         b["ns"], result.get("name") or b["name"], ports,
                         network_mode=b.get("network_mode"))
@@ -3030,13 +3039,20 @@ class H(BaseHTTPRequestHandler):
         try:
             if len(parts) == 4 and parts[:2] == ["api", "workload"]:
                 ns, name = parts[2], parts[3]
+                # Every Service selecting these pods, not just the one sharing the
+                # workload's name: a sidecar or a hand-made listener is named
+                # differently and would otherwise keep its VIP port forever.
+                services = set(NETWORK.workload_service_names(ns, name)) | {name}
                 ksend("DELETE", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-                try:
-                    ksend("DELETE", f"/api/v1/namespaces/{ns}/services/{name}")
-                except urllib.error.HTTPError:
-                    pass
-                _cache.pop("wl", None); _cache.pop("ov", None)
-                return self._send(200, {"ok": True})
+                removed = []
+                for service in sorted(services):
+                    try:
+                        ksend("DELETE", f"/api/v1/namespaces/{ns}/services/{service}")
+                        removed.append(service)
+                    except urllib.error.HTTPError:
+                        pass
+                _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
+                return self._send(200, {"ok": True, "services": removed})
             return self._send(404, {"error": "no route"})
         except urllib.error.HTTPError as e:
             return self._send(e.code, {"error": e.read().decode("utf-8", "replace")[:500]})
