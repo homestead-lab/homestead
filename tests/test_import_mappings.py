@@ -141,6 +141,61 @@ class SourceMeasurementTests(unittest.TestCase):
             imports.measure_source_paths("tower", ["relative/path"])
 
 
+class ImportCapacityTests(unittest.TestCase):
+    """A measured source and a known claim size settle this before copying."""
+
+    def setUp(self):
+        self.created, self.sent = [], []
+        self.claim_capacity = "10Gi"
+        self.written = 9.95 * 1024 ** 3
+
+        def get(path):
+            if "persistentvolumeclaims/" in path:
+                return {"metadata": {"name": "ha-appdata"},
+                        "spec": {"accessModes": ["ReadWriteOnce"], "storageClassName": "longhorn"},
+                        "status": {"phase": "Bound", "capacity": {"storage": self.claim_capacity}}}
+            if "longhorn.io" in path:
+                return {"items": [{"status": {"actualSize": int(self.written),
+                                              "kubernetesStatus": {"namespace": "lab",
+                                                                   "pvcName": "ha-appdata"}}}]}
+            raise AssertionError(path)
+
+        imports.bind(get, lambda method, path, body=None, **kw: self.sent.append((method, path)) or {},
+                     lambda *a, **k: self.created.append(a) or {},
+                     lambda cfg: ({"metadata": {"name": "x"}}, None), "lab", {})
+        imports._source = lambda name: dict(SOURCE)
+
+    def _import(self, **extra):
+        cfg = {"source": "tower", "name": "ha", "image": "ha:1", "pvc_name": "ha-appdata",
+               "reuse_existing": True, "create_workload": False,
+               "mappings": [{"remote_path": "/mnt/user/appdata/ha", "mount_path": "/config",
+                             "bytes": int(11.8 * 1024 ** 3)}]}
+        cfg.update(extra)
+        return imports.import_container(cfg)
+
+    def test_an_import_that_cannot_fit_is_refused_before_it_starts(self):
+        with self.assertRaisesRegex(ValueError, "11.8 GiB but ha-appdata has"):
+            self._import()
+        self.assertEqual([], self.sent, "no job is created for a copy that must fail")
+
+    def test_the_refusal_names_what_is_already_written(self):
+        with self.assertRaisesRegex(ValueError, "9.9 GiB already written"):
+            self._import()
+
+    def test_a_claim_with_room_proceeds(self):
+        self.claim_capacity = "50Gi"
+        self.written = 0
+
+        self._import()
+
+        self.assertTrue(any("jobs" in path for _, path in self.sent))
+
+    def test_an_unmeasured_import_is_never_second_guessed(self):
+        self._import(mappings=[{"remote_path": "/mnt/user/appdata/ha", "mount_path": "/config"}])
+
+        self.assertTrue(any("jobs" in path for _, path in self.sent))
+
+
 class ImportProgressTests(unittest.TestCase):
     """The log replays 0-100% per folder; the UI needs one honest number."""
 
@@ -201,6 +256,24 @@ class ImportProgressTests(unittest.TestCase):
 
         self.assertFalse(progress["weighted"])
         self.assertEqual(75.0, progress["percent"])
+
+    def test_running_out_of_space_is_named_not_left_in_the_log(self):
+        log = "\n".join([
+            '==> step 1/1 appdata :: 192.0.2.177:/mnt/user/appdata/HomeAsssistantCore -> /config',
+            'rsync: [receiver] write failed on "/appdata/home-assistant_v2.db": No space left on device (28)',
+            "rsync error: error in file IO (code 11) at receiver.c(401) [receiver=3.4.3]",
+        ])
+
+        progress = imports.import_progress(log)
+
+        self.assertEqual("ran out of space on the volume", progress["error"])
+        self.assertIn("No space left on device", progress["error_detail"])
+
+    def test_a_refused_connection_is_named_too(self):
+        progress = imports.import_progress(
+            "==> step 1/1 appdata :: a -> /config\nssh: connect to host 10.0.0.9 port 22: Connection refused")
+
+        self.assertEqual("the source host refused the connection", progress["error"])
 
     def test_output_without_markers_reports_nothing_rather_than_guessing(self):
         self.assertEqual({}, imports.import_progress("connecting...\nsome noise"))

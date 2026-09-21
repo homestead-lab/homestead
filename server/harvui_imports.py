@@ -359,6 +359,19 @@ def import_mappings(cfg):
     return rows
 
 
+def _claim_used_gb(pvc):
+    """How much a Longhorn volume has already written into this claim."""
+    try:
+        volumes = kget("/apis/longhorn.io/v1beta2/volumes").get("items", [])
+    except Exception:
+        return 0.0
+    for volume in volumes:
+        kubernetes = (volume.get("status", {}) or {}).get("kubernetesStatus", {}) or {}
+        if kubernetes.get("namespace") == NS and kubernetes.get("pvcName") == pvc:
+            return int((volume.get("status", {}) or {}).get("actualSize", 0) or 0) / 1024 ** 3
+    return 0.0
+
+
 def import_container(cfg):
     """Create the PVC, launch the copy Job, then create the Deployment.
 
@@ -381,6 +394,32 @@ def import_container(cfg):
     storage_class = str(cfg.get("storage_class") or "longhorn-r2").strip()
     if not re.fullmatch(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?", storage_class):
         raise ValueError("storage class must use lowercase letters, numbers, dots and dashes")
+    # A measured source and a known claim size settle whether this can work
+    # before anything is copied. Without a measurement nothing is claimed.
+    needed = sum(mapping.get("bytes") or 0 for mapping in import_mappings(cfg))
+    if needed and not cfg.get("ignore_capacity"):
+        capacity_gb, used_gb = float(size), 0.0
+        if cfg.get("reuse_existing"):
+            try:
+                claim = kget(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{pvc}")
+                quantity = ((claim.get("status", {}) or {}).get("capacity", {}) or {}).get("storage", "")
+                match = re.fullmatch(r"([0-9.]+)([KMGTP]i?)?", str(quantity).strip())
+                if match:
+                    scale = {"Ki": 1 / 1024 ** 2, "Mi": 1 / 1024, "Gi": 1, "Ti": 1024,
+                             "K": 1 / 1000 ** 2, "M": 1 / 1000, "G": 1, "T": 1000}
+                    capacity_gb = float(match.group(1)) * scale.get(match.group(2) or "Gi", 1)
+                used_gb = _claim_used_gb(pvc)
+            except Exception:
+                capacity_gb = 0.0
+        free_gb = capacity_gb - used_gb
+        needed_gb = needed / 1024 ** 3
+        if capacity_gb and needed_gb > free_gb:
+            raise ValueError(
+                f"the measured source needs {needed_gb:.1f} GiB but {pvc} has "
+                f"{max(0.0, free_gb):.1f} GiB free of {capacity_gb:.0f} GiB"
+                + (f" ({used_gb:.1f} GiB already written)" if used_gb else "")
+                + ". Grow the volume or choose a larger size, then import again.")
+
     if cfg.get("reuse_existing"):
         try:
             existing = kget(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{pvc}")
@@ -487,6 +526,16 @@ def import_container(cfg):
 
 STEP = re.compile(r"==> step (\d+)/(\d+) (\S+)(?: \((\d+)B\))?\s*(.*)$")
 TOTAL = re.compile(r"==> total (\d+) folders (\d+)B")
+# What went wrong, in the words the log used, so the UI need not say "failed".
+TROUBLE = (
+    ("No space left on device", "ran out of space on the volume"),
+    ("Permission denied", "the source refused the credentials"),
+    ("Host key verification failed", "the source host key was rejected"),
+    ("Connection refused", "the source host refused the connection"),
+    ("Connection timed out", "the source host did not answer"),
+    ("No route to host", "the source host was unreachable"),
+    ("failed to resolve", "the source host name could not be resolved"),
+)
 # rsync --info=progress2 redraws one line with \r: "  1,234,567  57%  11.83MB/s  0:00:04"
 RSYNC = re.compile(r"([\d,]+)\s+(\d+)%\s+(\S+)\s+(\d+:\d\d:\d\d)")
 
@@ -502,6 +551,7 @@ def import_progress(log):
     step, total, label, detail, percent, rate = 0, 0, "", "", 0, ""
     done_steps = 0
     sizes, done_bytes, total_bytes = {}, 0, 0
+    error, error_detail = "", ""
     for line in str(log or "").replace("\r", "\n").splitlines():
         line = line.strip()
         header = TOTAL.match(line)
@@ -521,6 +571,12 @@ def import_progress(log):
                 detail = rest[2:].strip() if rest.startswith("::") else rest
                 percent, rate = 0, ""
             continue
+        for needle, explanation in TROUBLE:
+            if needle.lower() in line.lower():
+                error, error_detail = explanation, line[:220]
+                break
+        if not error and line.startswith("rsync error:"):
+            error, error_detail = "the copy failed", line[:220]
         moved = RSYNC.search(line)
         if moved:
             percent, rate = int(moved.group(2)), moved.group(3)
@@ -539,7 +595,8 @@ def import_progress(log):
         overall = (done_steps + running) / total * 100
     return {"step": step, "steps": total, "folder": label, "detail": detail,
             "step_percent": percent, "percent": round(min(100.0, max(0.0, overall)), 1),
-            "rate": rate, "weighted": measured, "total_bytes": total_bytes}
+            "rate": rate, "weighted": measured, "total_bytes": total_bytes,
+            "error": error, "error_detail": error_detail}
 
 
 def delete_import(name):
@@ -592,7 +649,12 @@ def import_status():
             pod = _job_pod(j["metadata"]["name"])
             if pod:
                 try:
-                    row.update(import_progress(_pod_logs(pod)))
+                    log = _pod_logs(pod)
+                    row.update(import_progress(log) or {})
+                    if state == "failed" and not row.get("error"):
+                        tail = [line for line in str(log or "").splitlines() if line.strip()]
+                        row["error_detail"] = tail[-1][:220] if tail else ""
+                        row["error"] = "the copy failed"
                 except Exception:
                     pass
         elif state == "done":

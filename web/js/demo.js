@@ -317,7 +317,8 @@
         step_percent: 50, percent: 37.5, rate: "22.10MB/s" },
       { name: "harvui-import-obsidian", app: "obsidian", state: "failed", percent: 12,
         start: "2026-09-21T07:55:00Z", active: 0, succeeded: 0, failed: 1, step: 1, steps: 3,
-        folder: "config", step_percent: 36, rate: "", detail: "ssh: connect: connection refused" },
+        folder: "config", step_percent: 36, rate: "", error: "ran out of space on the volume",
+        error_detail: 'rsync: [receiver] write failed on "/appdata/home-assistant_v2.db": No space left on device (28)' },
       { name: "harvui-import-krusader", app: "binhex-krusader", state: "done", percent: 100,
         start: "2026-09-21T08:12:00Z", end: "2026-09-21T08:19:00Z", active: 0, succeeded: 1, failed: 0 },
     ],
@@ -428,7 +429,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.14", candidate: "ghcr.io/wjcloudy/homestead:2.8.15", candidate_tag: "2.8.15", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.15", candidate: "ghcr.io/wjcloudy/homestead:2.8.16", candidate_tag: "2.8.16", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

@@ -515,6 +515,11 @@ function importProgressCell(job) {
     return `<div class="dim xs">${failed ? "stopped before reporting" : "starting…"}</div>`;
   }
   const percent = done ? 100 : Math.max(2, job.percent || 0);
+  if (failed && job.error) {
+    return `<div class="jobmeter"><span class="failed" style="width:${percent}%"></span></div>
+      <div class="xs" style="color:#ffb4b8">${esc(job.error)}</div>
+      ${job.error_detail ? `<div class="dim xs mono" data-tip="${esc(job.error_detail)}">${esc(job.error_detail.slice(0, 48))}${job.error_detail.length > 48 ? "…" : ""}</div>` : ""}`;
+  }
   const label = done ? "copied"
     : job.steps > 1 ? `folder ${job.step || 1} of ${job.steps}${job.folder ? ` · ${job.folder}` : ""}`
     : job.folder ? esc(job.folder) : "copying";
@@ -902,6 +907,17 @@ window.doImport = async source => {
     env, hardware: selectedHardware("im_hw"), network_mode: $("#im_net").value, vip_mode: $("#im_vip").value, lb_ip: $("#im_ip").value.trim() };
   if (!body.name || !body.image) return toast("workload name and image are required", "bad");
   if (!body.mappings.length) return toast("choose at least one folder to copy", "bad");
+  const measured = body.mappings.reduce((sum, row) => sum + (row.bytes || 0), 0);
+  if (measured) {
+    const target = existing ? (STATE.data.vols || []).find(vol => vol.pvc_name === pvcName) : null;
+    const capacityGb = existing ? (target?.size_gb || 0) : +$("#im_size").value;
+    const usedGb = existing ? (target?.actual_gb || 0) : 0;
+    const neededGb = measured / 1024 ** 3;
+    if (capacityGb && neededGb > capacityGb - usedGb) {
+      return toast(`${neededGb.toFixed(1)} GiB to copy but only ${Math.max(0, capacityGb - usedGb).toFixed(1)} GiB free`
+        + (usedGb ? ` (${usedGb.toFixed(1)} GiB already written)` : "") + " — grow the volume or raise the size", "bad");
+    }
+  }
   const bad = body.mappings.find(row => !row.remote_path.startsWith("/") || !row.mount_path.startsWith("/"));
   if (bad) return toast(`every folder needs an absolute source and container path (${esc(bad.remote_path || "blank")})`, "bad");
   body.remote_path = body.mappings[0].remote_path;
