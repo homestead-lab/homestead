@@ -419,9 +419,10 @@ window.volumeChown = async (namespace, name) => {
   const hint = await api(`/api/volumes/ownership?namespace=${encodeURIComponent(namespace)}&name=${encodeURIComponent(name)}`)
     .catch(() => ({ known: false, source: "" }));
   $("#mbody").innerHTML = `
-    <p class="muted small">An import copies as root, so files land owned by root. A container that runs as
-      its own user — mosquitto as 1883, a linuxserver image as PUID — then cannot write to its own appdata,
-      and its log fills with permission errors. This hands every file on the volume to the user you name.</p>
+    <p class="muted small">An import keeps the ownership the files had on the source, and a volume created
+      from the App Store is written by the container itself, so both are already correct. This is for a
+      volume that is not: appdata imported before Homestead preserved ownership, or a container that runs
+      as a different user here than it did on the source. Its log fills with permission errors when so.</p>
     ${hint.known
       ? `<div class="note"><b>${esc(hint.workload)} runs as ${hint.uid ?? hint.gid}${hint.gid != null && hint.gid !== hint.uid ? `:${hint.gid}` : ""}.</b>
           Taken from ${esc(hint.source)}${hint.image ? ` · <span class="mono">${esc(hint.image)}</span>` : ""}.</div>`

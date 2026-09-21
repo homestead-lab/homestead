@@ -667,6 +667,11 @@ html[data-motion="off"] .uptime .ld{animation:none}
 .waccess .plink,.waccess .tag{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .waccess .tag.more{cursor:help}
 .attachlist{display:flex;flex-wrap:wrap;gap:4px}
+.import-advanced{margin:12px 0}
+.import-advanced>summary{cursor:pointer;list-style:none;padding:6px 0}
+.import-advanced>summary::-webkit-details-marker{display:none}
+.import-advanced>summary::before{content:"› ";display:inline-block;transition:transform .2s var(--e)}
+.import-advanced[open]>summary::before{transform:rotate(90deg)}
 .storage-class-head{padding:15px 16px 12px;gap:12px;flex-wrap:wrap}
 .storage-class-head .csub{max-width:62ch}
 /* class facts are single-line chips: wrapping one mid-phrase reads as damage */

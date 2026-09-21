@@ -595,10 +595,16 @@ def import_container(cfg):
             f"==> step {index}/{total} {label}{weight} :: {src['host']}:{mapping['remote_path']}"
             f" -> {mapping['mount_path']}"))
         steps.append(
-            'sshpass -p "$SRC_PASS" rsync -aH --info=progress2 --no-perms --no-owner --no-group '
+            # Ownership and permissions are preserved by number, so the app
+            # finds its appdata exactly as it was on the source. Dropping them
+            # made every file root-owned, which is why an imported container
+            # could not write to data a fresh deployment would have created
+            # itself.
+            'sshpass -p "$SRC_PASS" rsync -aH --numeric-ids --info=progress2 '
             "-e 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' "
             f"{spec} {shlex.quote(target + '/')}")
         steps.append("echo " + shlex.quote(f"==> step {index}/{total} {label} complete"))
+    # Only when asked: the copy already keeps whatever the source had.
     owner_uid, owner_gid = _ownership(cfg)
     if owner_uid is not None:
         steps.append("echo " + shlex.quote(f"==> owner {owner_uid}:{owner_gid}"))

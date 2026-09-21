@@ -215,7 +215,19 @@ class OwnershipTests(unittest.TestCase):
         job = next(body for body in self.bodies if body and body.get("kind") == "Job")
         return job["spec"]["template"]["spec"]["containers"][0]["command"][-1]
 
-    def test_puid_and_pgid_from_docker_become_the_file_owner(self):
+    def test_the_copy_keeps_the_ownership_the_source_had(self):
+        """A fresh deployment writes its own files; an import must not undo that."""
+        imports.import_container({"source": "tower", "name": "z2m", "image": "z2m:1",
+                                  "create_workload": False, "reuse_existing": True,
+                                  "pvc_name": "z2m-appdata", "remote_path": "/mnt/user/appdata/z2m"})
+
+        script = self._script()
+        self.assertIn("--numeric-ids", script)
+        for dropped in ("--no-owner", "--no-group", "--no-perms"):
+            self.assertNotIn(dropped, script)
+        self.assertNotIn("chown", script, "nothing to correct when ownership survives the copy")
+
+    def test_an_override_still_hands_the_files_over(self):
         imports.import_container({"source": "tower", "name": "ha", "image": "ha:1",
                                   "create_workload": False, "reuse_existing": True,
                                   "pvc_name": "ha-appdata", "remote_path": "/mnt/user/appdata/ha",

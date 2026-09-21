@@ -853,9 +853,14 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <div class="row"><button class="btn sm" onclick="imAddMap()">＋ add folder</button>
       <button class="btn sm" id="im_measure" onclick="imMeasure('${esc(source)}')">Measure sizes</button></div>
     <div class="dim xs" id="im_maps_note" style="margin-top:8px"></div>
-    <div class="f2"><div class="f"><label>Owner UID ${tip("rsync copies as root, so files land owned by root and a container that runs as its own user cannot write to them. Set the user the app runs as; PUID/PGID are filled in when Docker had them.")}</label>
-      <input type="number" id="im_uid" min="0" max="65535" value="${esc((cfg.env || {}).PUID || "")}" placeholder="leave blank to keep root"></div>
-      <div class="f"><label>Owner GID</label><input type="number" id="im_gid" min="0" max="65535" value="${esc((cfg.env || {}).PGID || "")}" placeholder="same as UID"></div></div>
+    <details class="import-advanced"><summary class="dim small">Override file ownership (rarely needed)</summary>
+      <div class="note">The copy keeps the ownership the files already had on the source, so the app finds
+        its appdata exactly as it left it. Set these only when the container should run as a different user
+        here than it did there.</div>
+      <div class="f2"><div class="f"><label>Owner UID</label>
+        <input type="number" id="im_uid" min="0" max="65535" placeholder="keep what the source had"></div>
+        <div class="f"><label>Owner GID</label><input type="number" id="im_gid" min="0" max="65535" placeholder="same as UID"></div></div>
+    </details>
     <div class="sec">Longhorn storage ${tip("Choose where copied appdata is stored. RWO suits one workload; RWX allows attachment from multiple nodes. Existing PVC merges the imported files into data already in that claim.")}</div>
     <div class="deploy-volume import-storage">
       <div class="deploy-volume-grid">
