@@ -898,7 +898,9 @@ window.imSyncMaps = () => {
     $(".imm-folder", row).placeholder = importFolderName($(".imm-remote", row).value, $(".imm-mount", row).value);
     const path = $(".imm-remote", row).value.trim(), readout = $(".imm-size", row);
     if (!readout) return;
+    readout.classList.toggle("bad", sizes[path] === "missing");
     readout.textContent = !(path in sizes) ? ""
+      : sizes[path] === "missing" ? "this folder does not exist on the source"
       : sizes[path] === null ? "size unknown — du timed out on this folder"
       : `${importBytes(sizes[path])} to copy`;
   });
@@ -926,7 +928,7 @@ window.imMeasure = async source => {
     const result = await api("/api/sources/measure", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: source, paths }) });
     STATE.data.importSizes = Object.fromEntries((result.paths || [])
-      .map(row => [row.path, row.measured ? row.bytes : null]));
+      .map(row => [row.path, row.measured ? row.bytes : row.exists === false ? "missing" : null]));
     // Each volume is sized from the folders pointed at it, not the total.
     const mappings = importMappings();
     $$("#im_volumes .im-volume").forEach(row => {
@@ -939,9 +941,11 @@ window.imMeasure = async source => {
     imSyncMaps();
     const note = $("#im_maps_note");
     if (note) {
-      note.textContent = `${importBytes(result.total_bytes)} measured across ${paths.length} folder${paths.length === 1 ? "" : "s"}` +
-        (result.complete ? `. Volume size set to ${result.suggested_gb} GiB, which leaves room to grow.`
-          : `, but some folders timed out after ${result.timeout_seconds}s — the suggested size covers only what was measured.`);
+      const missing = result.missing || [];
+      note.innerHTML = `${importBytes(result.total_bytes)} measured across ${paths.length - missing.length} folder${paths.length - missing.length === 1 ? "" : "s"}`
+        + (missing.length ? `. <b>${missing.map(esc).join(", ")} ${missing.length === 1 ? "does" : "do"} not exist on the source</b> — fix the path or untick the folder, or the copy will fail.`
+          : result.complete ? ". Volume sizes set from what is actually there, with room to grow."
+          : `, but some folders timed out after ${result.timeout_seconds}s — the sizes cover only what was measured.`);
     }
   } catch (e) { toast(e.message, "bad"); }
   finally { if (button) { button.disabled = false; button.textContent = "Measure sizes"; } }
@@ -957,7 +961,7 @@ window.importMappings = () => $$("#im_maps .im-map")
     const remote = $(".imm-remote", row).value.trim();
     return { remote_path: remote, mount_path: $(".imm-mount", row).value.trim() || "/config",
       folder: $(".imm-folder", row).value.trim(), pvc: $(".imm-pvc", row)?.value || "",
-      bytes: (STATE.data.importSizes || {})[remote] || 0 };
+      bytes: Number((STATE.data.importSizes || {})[remote]) || 0 };
   });
 
 window.importSetup = async (source, dir, cfg = {}) => {
@@ -1059,6 +1063,8 @@ window.doImport = async source => {
       : `every folder needs an absolute source and container path (${esc(bad.remote_path || "blank")})`, "bad");
   }
   if (!copied.length && !body.mappings.length) return toast("choose at least one folder to copy", "bad");
+  const absent = copied.find(row => (STATE.data.importSizes || {})[row.remote_path] === "missing");
+  if (absent) return toast(`${absent.remote_path} does not exist on the source — fix the path or untick it`, "bad");
   body.remote_path = copied[0]?.remote_path || "";
   body.mount_path = copied[0]?.mount_path || "/config";
   const reused = volumes.filter(volume => !volume.create).map(volume => volume.name);

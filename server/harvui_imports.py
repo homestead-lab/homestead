@@ -306,8 +306,9 @@ def measure_source_paths(name, paths, seconds=25):
     commands = []
     for candidate in wanted:
         quoted = shlex.quote(candidate)
-        commands.append(f"echo \"### {candidate}\"; timeout {seconds} du -sk {quoted} 2>/dev/null "
-                        f"|| echo UNKNOWN")
+        commands.append(f"echo \"### {candidate}\"; [ -e {quoted} ] || echo MISSING; "
+                        f"[ -e {quoted} ] && {{ timeout {seconds} du -sk {quoted} 2>/dev/null "
+                        f"|| echo TIMEOUT; }}")
     lines = run_probe(f"measure-{name}", _ssh_script(src, "; ".join(commands)), src,
                       timeout=min(180, seconds * len(wanted) + 40))
 
@@ -315,21 +316,27 @@ def measure_source_paths(name, paths, seconds=25):
     for line in lines:
         if line.startswith("### "):
             current = line[4:].strip()
-            rows.append({"path": current, "bytes": None, "measured": False})
+            rows.append({"path": current, "bytes": None, "measured": False, "exists": True,
+                         "timed_out": False})
             continue
         if not rows:
             continue
-        if line.strip() == "UNKNOWN":
+        if line.strip() == "MISSING":
+            rows[-1]["exists"] = False
+            continue
+        if line.strip() in ("TIMEOUT", "UNKNOWN"):
+            rows[-1]["timed_out"] = True
             continue
         match = MEASURE_LINE.match(line.strip())
         if match and rows[-1]["bytes"] is None:
             rows[-1].update(bytes=int(match.group(1)) * 1024, measured=True)
     measured = [row for row in rows if row["measured"]]
     total = sum(row["bytes"] for row in measured)
+    missing = [row["path"] for row in rows if not row["exists"]]
     complete = bool(rows) and len(measured) == len(rows)
     # Room for the copy plus what the app writes next; never below 1 GiB.
     suggested = max(1, int(total / (1024 ** 3) * 1.25) + 1)
-    return {"paths": rows, "total_bytes": total, "complete": complete,
+    return {"paths": rows, "total_bytes": total, "complete": complete, "missing": missing,
             "suggested_gb": suggested, "timeout_seconds": seconds}
 
 
@@ -663,6 +670,18 @@ def import_container(cfg):
     # folder with nothing to say which folder it is on.
     steps = ["set -e",
              "apk add --no-cache rsync openssh-client sshpass >/dev/null 2>&1"]
+    # rsync fails per folder, halfway through, after the volume exists. Asking
+    # the source about all of them first turns that into one clear refusal.
+    sources = [mapping["remote_path"] for mapping in mappings if not mapping.get("medium")]
+    if sources:
+        remote_check = "; ".join(f"[ -e {shlex.quote(source)} ] || echo {shlex.quote(source)}"
+                                 for source in sources)
+        steps.append("echo '==> checking the source folders exist'")
+        steps.append(
+            'missing=$(sshpass -p "$SRC_PASS" ssh -o StrictHostKeyChecking=no '
+            "-o UserKnownHostsFile=/dev/null "
+            f"{shlex.quote(src['user'] + '@' + src['host'])} {shlex.quote(remote_check)})")
+        steps.append('if [ -n "$missing" ]; then echo "==> missing $missing"; exit 4; fi')
     total = len([row for row in mappings if not row.get("medium")])
     # Measured up front, the copy can report bytes rather than folder counts.
     copied_rows = [row for row in mappings if not row.get("medium")]
@@ -780,6 +799,7 @@ STEP = re.compile(r"==> step (\d+)/(\d+) (\S+)(?: \((\d+)B\))?\s*(.*)$")
 TOTAL = re.compile(r"==> total (\d+) folders (\d+)B")
 # What went wrong, in the words the log used, so the UI need not say "failed".
 TROUBLE = (
+    ("No such file or directory", "a source folder does not exist on the host"),
     ("No space left on device", "ran out of space on the volume"),
     ("Permission denied", "the source refused the credentials"),
     ("Host key verification failed", "the source host key was rejected"),
@@ -823,6 +843,10 @@ def import_progress(log):
                 detail = rest[2:].strip() if rest.startswith("::") else rest
                 percent, rate = 0, ""
             continue
+        if line.startswith("==> missing "):
+            error = "a source folder does not exist on the host"
+            error_detail = line[len("==> missing "):][:220]
+            continue
         for needle, explanation in TROUBLE:
             if needle.lower() in line.lower():
                 error, error_detail = explanation, line[:220]
@@ -836,7 +860,9 @@ def import_progress(log):
             step = total = max(total, step)
             done_steps, percent = total, 100
     if not total:
-        return {}
+        # A copy can fail before it announces a step - a source that is not
+        # there, a host that will not answer - and that reason still matters.
+        return {"error": error, "error_detail": error_detail, "percent": 0} if error else {}
     running = percent / 100 if done_steps < step else 0
     measured = total_bytes > 0
     if measured:

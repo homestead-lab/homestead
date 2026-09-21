@@ -694,6 +694,7 @@ html[data-motion="off"] .uptime .ld{animation:none}
 .im-map{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(120px,.9fr) minmax(90px,.7fr) minmax(0,1fr) auto auto;
   gap:10px;align-items:end;margin-bottom:11px}
 .im-volume{margin-bottom:11px}
+.imm-size.bad{color:#ffb4b8}
 .im-scratch{border:1px dashed var(--line2);border-radius:11px;padding:11px;background:rgba(167,139,250,.05)}
 .im-scratch input:disabled{opacity:.5}
 @media(max-width:900px){.im-map{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}

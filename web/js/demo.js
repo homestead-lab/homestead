@@ -340,10 +340,15 @@
     "/api/volumes/chown": { ok: true, job: "homestead-chown-frigate-config", uid: 1883, gid: 1883,
       message: "Setting ownership of frigate-config to 1883:1883" },
     "/api/sources/measure": { total_bytes: 9663676416, complete: false, suggested_gb: 12,
-      timeout_seconds: 25, paths: [
-        { path: "/mnt/user/appdata/media-server", bytes: 1073741824, measured: true },
-        { path: "/mnt/user/appdata/media-server/transcode", bytes: 8589934592, measured: true },
-        { path: "/mnt/user/media", bytes: null, measured: false } ] },
+      timeout_seconds: 25, missing: ["/mnt/user/appdata/media-server/old-config"], paths: [
+        { path: "/mnt/user/appdata/media-server", bytes: 1073741824, measured: true,
+          exists: true, timed_out: false },
+        { path: "/mnt/user/appdata/media-server/transcode", bytes: 8589934592, measured: true,
+          exists: true, timed_out: false },
+        { path: "/mnt/user/appdata/media-server/old-config", bytes: null, measured: false,
+          exists: false, timed_out: false },
+        { path: "/mnt/user/media", bytes: null, measured: false, exists: true,
+          timed_out: true } ] },
     "/api/image-updates/progress": { ns: "lab", name: "plex", phase: "progressing", desired: 1,
       replicas: 1, updated: 1, ready: 0, available: 0, unavailable: 1, generation: 4,
       observed_generation: 4, problems: [], can_rollback: true,
@@ -472,7 +477,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.30", candidate_tag: "2.8.30", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.31", candidate_tag: "2.8.31", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

@@ -215,15 +215,31 @@ class SourceMeasurementTests(unittest.TestCase):
         self.assertTrue(result["complete"])
         self.assertEqual(13, result["suggested_gb"], "measured size plus headroom")
 
+    def test_a_folder_that_is_not_there_says_so_rather_than_timing_out(self):
+        """The two look identical in a log and mean very different things."""
+        self.lines = ["### /mnt/user/appdata/frigate", "MISSING",
+                      "### /mnt/user/appdata/plex", "2048	/mnt/user/appdata/plex"]
+
+        result = imports.measure_source_paths("tower", ["/mnt/user/appdata/frigate",
+                                                        "/mnt/user/appdata/plex"])
+
+        self.assertEqual(["/mnt/user/appdata/frigate"], result["missing"])
+        self.assertFalse(result["paths"][0]["exists"])
+        self.assertFalse(result["paths"][0]["timed_out"], "absent is not slow")
+        self.assertTrue(result["paths"][1]["exists"])
+
     def test_a_folder_that_times_out_is_unknown_rather_than_zero(self):
         self.lines = ["### /mnt/user/appdata/plex/config", "1024	/mnt/user/appdata/plex/config",
-                      "### /mnt/user/media", "UNKNOWN"]
+                      "### /mnt/user/media", "TIMEOUT"]
 
         result = imports.measure_source_paths("tower", ["/mnt/user/appdata/plex/config",
                                                         "/mnt/user/media"])
 
         self.assertFalse(result["paths"][1]["measured"])
         self.assertIsNone(result["paths"][1]["bytes"])
+        self.assertTrue(result["paths"][1]["timed_out"])
+        self.assertTrue(result["paths"][1]["exists"], "slow is not absent")
+        self.assertEqual([], result["missing"])
         self.assertFalse(result["complete"], "a partial measurement says so")
 
     def test_every_folder_is_measured_under_its_own_timeout(self):
@@ -511,6 +527,13 @@ class ImportProgressTests(unittest.TestCase):
 
         self.assertEqual("ran out of space on the volume", progress["error"])
         self.assertIn("No space left on device", progress["error_detail"])
+
+    def test_a_copy_that_never_starts_still_reports_why(self):
+        progress = imports.import_progress(
+            "==> checking the source folders exist\n==> missing /mnt/user/appdata/frigate")
+
+        self.assertEqual("a source folder does not exist on the host", progress["error"])
+        self.assertEqual("/mnt/user/appdata/frigate", progress["error_detail"])
 
     def test_a_refused_connection_is_named_too(self):
         progress = imports.import_progress(
