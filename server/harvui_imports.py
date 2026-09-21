@@ -339,6 +339,64 @@ def _ownership(cfg):
     return uid, gid
 
 
+def _numeric(value):
+    text = str(value if value is not None else "").strip()
+    return int(text) if text.isdigit() and 0 <= int(text) <= 65535 else None
+
+
+def ownership_hint(namespace, pvc):
+    """Who should own this claim's files, judged from whatever mounts it.
+
+    The answer is never guessed: it comes from the workload itself, in the
+    order of how explicit each source is - the PUID/PGID convention first,
+    then a securityContext, then the pod's fsGroup. When nothing says, the
+    mounting workload and its image are reported so the answer can be looked
+    up rather than invented.
+    """
+    namespace = str(namespace or NS)
+    try:
+        deployments = kget(f"/apis/apps/v1/namespaces/{namespace}/deployments").get("items", [])
+    except Exception:
+        deployments = []
+    for deployment in deployments:
+        spec = ((deployment.get("spec", {}) or {}).get("template", {}) or {}).get("spec", {}) or {}
+        mounted = {volume.get("name") for volume in spec.get("volumes", []) or []
+                   if (volume.get("persistentVolumeClaim") or {}).get("claimName") == pvc}
+        if not mounted:
+            continue
+        workload = deployment["metadata"]["name"]
+        pod_security = spec.get("securityContext", {}) or {}
+        for container in spec.get("containers", []) or []:
+            if not any(mount.get("name") in mounted
+                       for mount in container.get("volumeMounts", []) or []):
+                continue
+            env = {item.get("name"): item.get("value", "")
+                   for item in container.get("env", []) or [] if item.get("name")}
+            security = container.get("securityContext", {}) or {}
+            image = container.get("image", "")
+            candidates = (
+                (_numeric(env.get("PUID")), _numeric(env.get("PGID")),
+                 f"PUID/PGID on {container.get('name', workload)}"),
+                (_numeric(security.get("runAsUser")), _numeric(security.get("runAsGroup")),
+                 f"the container's security context in {workload}"),
+                (_numeric(pod_security.get("runAsUser")), _numeric(pod_security.get("fsGroup")),
+                 f"the pod security context in {workload}"),
+                (None, _numeric(pod_security.get("fsGroup")), f"the fsGroup already set on {workload}"),
+            )
+            for uid, gid, source in candidates:
+                if uid is None and gid is None:
+                    continue
+                return {"uid": uid, "gid": gid if gid is not None else uid,
+                        "source": source, "workload": workload, "image": image,
+                        "known": True}
+            return {"uid": None, "gid": None, "workload": workload, "image": image,
+                    "known": False,
+                    "source": f"{workload} does not declare a user; check what {image or 'its image'} "
+                              "runs as - mosquitto uses 1883, linuxserver images use PUID"}
+    return {"uid": None, "gid": None, "known": False, "workload": "", "image": "",
+            "source": "nothing mounts this volume, so its files can be owned by anyone you choose"}
+
+
 def chown_claim(namespace, pvc, uid, gid):
     """Hand an existing claim to a user, for appdata already copied as root."""
     namespace = str(namespace or NS)

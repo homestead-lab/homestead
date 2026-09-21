@@ -412,19 +412,29 @@ window.volumeClassFacts = () => {
   }
 };
 
-window.volumeChown = (namespace, name) => {
-  modal(`Ownership · ${name}`, `
+window.volumeChown = async (namespace, name) => {
+  modal(`Ownership · ${name}`, '<div class="empty"><span class="spin2"></span>reading what uses this volume</div>');
+  // The workload that mounts it already says who it runs as; asking the person
+  // for a uid they have no way to know is not a question worth putting to them.
+  const hint = await api(`/api/volumes/ownership?namespace=${encodeURIComponent(namespace)}&name=${encodeURIComponent(name)}`)
+    .catch(() => ({ known: false, source: "" }));
+  $("#mbody").innerHTML = `
     <p class="muted small">An import copies as root, so files land owned by root. A container that runs as
       its own user — mosquitto as 1883, a linuxserver image as PUID — then cannot write to its own appdata,
       and its log fills with permission errors. This hands every file on the volume to the user you name.</p>
+    ${hint.known
+      ? `<div class="note"><b>${esc(hint.workload)} runs as ${hint.uid ?? hint.gid}${hint.gid != null && hint.gid !== hint.uid ? `:${hint.gid}` : ""}.</b>
+          Taken from ${esc(hint.source)}${hint.image ? ` · <span class="mono">${esc(hint.image)}</span>` : ""}.</div>`
+      : `<div class="note dependency-danger"><b>Nothing here declares a user.</b> ${esc(hint.source || "")}</div>`}
     <div class="f2" style="margin-top:14px">
-      <div class="f"><label>User (UID)</label><input type="number" id="vc_uid" min="0" max="65535" placeholder="1883"></div>
-      <div class="f"><label>Group (GID)</label><input type="number" id="vc_gid" min="0" max="65535" placeholder="same as UID"></div></div>
+      <div class="f"><label>User (UID)</label><input type="number" id="vc_uid" min="0" max="65535" value="${hint.uid ?? ""}" placeholder="1883"></div>
+      <div class="f"><label>Group (GID)</label><input type="number" id="vc_gid" min="0" max="65535" value="${hint.gid ?? ""}" placeholder="same as UID"></div></div>
     <div class="note">Homestead runs a short job that mounts the volume and changes ownership. The workload
       should be stopped first: a ReadWriteOnce volume cannot attach to the job while its pod holds it.</div>
     <div class="row" style="margin-top:16px">
       <button class="btn pri" data-need="admin" onclick="volumeChownNow('${esc(namespace)}','${esc(name)}',this)">Set ownership</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+      <button class="btn" onclick="closeModal()">Cancel</button></div>`;
+  if (window.applyRole) window.applyRole();
 };
 window.volumeChownNow = async (namespace, name, button) => {
   const uid = $("#vc_uid").value.trim();

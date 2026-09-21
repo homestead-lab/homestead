@@ -268,6 +268,68 @@ class OwnershipTests(unittest.TestCase):
                     imports.chown_claim("lab", "media", uid, "")
 
 
+class OwnershipHintTests(unittest.TestCase):
+    """Nobody knows a container's uid by heart; the workload already says."""
+
+    def _deployment(self, container):
+        return {"items": [{
+            "metadata": {"name": "app", "namespace": "lab"},
+            "spec": {"template": {"spec": {
+                "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "app-appdata"}}],
+                "containers": [dict(container, volumeMounts=[{"name": "data", "mountPath": "/data"}])],
+                **self.pod_security,
+            }}},
+        }]}
+
+    def _bind(self, container, **pod):
+        self.pod_security = pod
+        imports.bind(lambda path: self._deployment(container), lambda *a, **k: {},
+                     lambda *a, **k: {}, lambda cfg: ({}, None), "lab", {})
+
+    def test_puid_and_pgid_are_the_first_answer(self):
+        self._bind({"name": "app", "image": "lscr.io/linuxserver/app",
+                    "env": [{"name": "PUID", "value": "1000"}, {"name": "PGID", "value": "1000"}]})
+
+        hint = imports.ownership_hint("lab", "app-appdata")
+
+        self.assertEqual((1000, 1000, True), (hint["uid"], hint["gid"], hint["known"]))
+        self.assertIn("PUID/PGID", hint["source"])
+
+    def test_a_security_context_answers_when_the_environment_does_not(self):
+        self._bind({"name": "app", "image": "mosquitto:2",
+                    "securityContext": {"runAsUser": 1883, "runAsGroup": 1883}})
+
+        hint = imports.ownership_hint("lab", "app-appdata")
+
+        self.assertEqual(1883, hint["uid"])
+        self.assertIn("security context", hint["source"])
+
+    def test_an_fs_group_alone_still_names_a_group(self):
+        self._bind({"name": "app", "image": "app:1"}, securityContext={"fsGroup": 568})
+
+        hint = imports.ownership_hint("lab", "app-appdata")
+
+        self.assertEqual(568, hint["gid"])
+        self.assertTrue(hint["known"])
+
+    def test_a_workload_that_says_nothing_says_so_and_names_the_image(self):
+        self._bind({"name": "app", "image": "eclipse-mosquitto:2"})
+
+        hint = imports.ownership_hint("lab", "app-appdata")
+
+        self.assertFalse(hint["known"])
+        self.assertIsNone(hint["uid"])
+        self.assertIn("eclipse-mosquitto:2", hint["source"])
+
+    def test_an_unused_volume_is_not_second_guessed(self):
+        self._bind({"name": "app", "image": "app:1"})
+
+        hint = imports.ownership_hint("lab", "some-other-claim")
+
+        self.assertFalse(hint["known"])
+        self.assertIn("nothing mounts this volume", hint["source"])
+
+
 class ImportProgressTests(unittest.TestCase):
     """The log replays 0-100% per folder; the UI needs one honest number."""
 
