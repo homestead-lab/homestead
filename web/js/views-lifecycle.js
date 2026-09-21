@@ -826,8 +826,10 @@ window.imAddScratch = () => {
    The mapping rows above pick from these by name. */
 function importVolumeRow(volume = {}, index = 0) {
   const classes = (STATE.data.importStorage?.storage_classes || ["longhorn-r2"]);
+  const claims = (STATE.data.importStorage?.pvcs || []);
   return `<div class="f4 im-volume">
-    <div><label>Volume name</label><input class="imv-name" type="text" value="${esc(volume.name || "")}" oninput="imSyncVolumes()"></div>
+    <div><label>Volume name</label><input class="imv-name" type="text" value="${esc(volume.name || "")}" list="im_pvc_list" oninput="imSyncVolumes()">
+      <datalist id="im_pvc_list">${claims.map(claim => `<option value="${esc(claim.name)}">${esc(claim.size || "")} ${esc((claim.access_modes || []).join("/"))}</option>`).join("")}</datalist></div>
     <div><label>Source</label><select class="imv-kind" onchange="imSyncVolumes()">
       <option value="new-rwo" ${volume.access_mode === "ReadWriteMany" ? "" : "selected"}>New Longhorn volume · RWO</option>
       <option value="new-rwx" ${volume.access_mode === "ReadWriteMany" ? "selected" : ""}>New shared volume · RWX</option>
@@ -925,8 +927,15 @@ window.imMeasure = async source => {
       body: JSON.stringify({ name: source, paths }) });
     STATE.data.importSizes = Object.fromEntries((result.paths || [])
       .map(row => [row.path, row.measured ? row.bytes : null]));
-    const size = $("#im_size");
-    if (size && result.suggested_gb) size.value = result.suggested_gb;
+    // Each volume is sized from the folders pointed at it, not the total.
+    const mappings = importMappings();
+    $$("#im_volumes .im-volume").forEach(row => {
+      const name = $(".imv-name", row).value.trim();
+      if ($(".imv-kind", row).value === "existing") return;
+      const bytes = mappings.filter(map => !map.medium && (map.pvc || name) === name)
+        .reduce((sum, map) => sum + ((STATE.data.importSizes || {})[map.remote_path] || 0), 0);
+      if (bytes) $(".imv-size", row).value = Math.max(1, Math.round(bytes / 1024 ** 3 * 1.25) + 1);
+    });
     imSyncMaps();
     const note = $("#im_maps_note");
     if (note) {
@@ -968,7 +977,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <div class="sec">Hardware requirements ${tip("Docker device mappings are pre-selected. Add or remove features before import; placement will be limited to nodes that provide every selected feature.")}</div>
     <div class="hwchoices">${hardwareChoices("im_hw", cfg.hardware || [])}</div>
     <div class="sec">Folders to copy ${tip("Every Docker path under the source appdata directory can come across. They all live in one Longhorn volume for this app, each in its own subfolder, mounted back where the container expects it.")}</div>
-    <div class="note">Source folders → one Longhorn volume <span class="mono" id="im_pvc_route">${esc(name)}-appdata</span> → mounted back at each container path.</div>
+    <div class="note">Source folders → the volumes you define below → mounted back at each container path.</div>
     <div id="im_maps">${importMappingRows(cfg, src).map(importMappingRow).join("")}</div>
     <div class="row"><button class="btn sm" onclick="imAddMap()">＋ add folder</button>
       <button class="btn sm" onclick="imAddScratch()">＋ add RAM scratch</button>
@@ -987,16 +996,6 @@ window.importSetup = async (source, dir, cfg = {}) => {
       heavy folders at it.</div>
     <div id="im_volumes"></div>
     <button class="btn sm" onclick="imAddVolume()">＋ add volume</button>
-    <div class="sec">Longhorn storage for the first volume ${tip("Choose where copied appdata is stored. RWO suits one workload; RWX allows attachment from multiple nodes. Existing PVC merges the imported files into data already in that claim.")}</div>
-    <div class="deploy-volume import-storage">
-      <div class="deploy-volume-grid">
-        <div><label>Storage source</label><select id="im_storage_kind" onchange="imSyncStorage()"><option value="new-rwo">New Longhorn volume · RWO</option><option value="new-rwx">New shared volume · RWX</option><option value="existing">Existing PVC · merge data</option></select></div>
-        <div id="im_pvc_new"><label>New PVC name</label><input id="im_pvc_name" value="${esc(name)}-appdata" oninput="imSyncStorage()"></div>
-        <div id="im_pvc_existing" style="display:none"><label>Existing PVC</label><select id="im_pvc_select" onchange="imSyncStorage()">${(storage.pvcs || []).length ? `<option value="">Choose an existing PVC…</option>${storage.pvcs.map(pvc => `<option value="${esc(pvc.name)}">${esc(pvc.name)} · ${esc((pvc.access_modes || []).join("/") || "mode unknown")} · ${esc(pvc.size || "size unknown")}</option>`).join("")}` : '<option value="">No existing PVCs in lab</option>'}</select></div>
-        <div class="vnew" id="im_new_settings"><div><label>Size GiB</label><input type="number" id="im_size" value="10" min="1" max="16384"></div><div><label>Storage class</label><select id="im_sc">${classes.map(sc => `<option ${sc === "longhorn-r2" ? "selected" : ""}>${esc(sc)}</option>`).join("")}</select></div></div>
-      </div>
-      <div class="volume-foot"><span id="im_storage_help" class="dim small">Creates a Longhorn claim for this workload with single-node attachment.</span></div>
-    </div>
     <div class="sec">Network</div><div class="f2"><div class="f"><label>Docker network → Kubernetes</label><select id="im_net"><option value="loadbalancer">LAN access (VIP)</option><option value="internal">Cluster only</option><option value="host" ${cfg.network_mode === "host" ? "selected" : ""}>Host network (advanced)</option></select></div>
       <div class="f"><label>VIP allocation ${tip("Choose a new automatic or specific VIP for apps such as Pi-hole that need port 53 on their own address.")}</label><select id="im_vip"><option value="shared">Shared Homestead VIP</option><option value="auto">New automatic VIP</option><option value="manual">Specific VIP</option></select></div></div>
     <div class="f"><label>Specific VIP (only for manual)</label><input id="im_ip" placeholder="192.0.2.250"></div>
@@ -1017,34 +1016,25 @@ window.importSetup = async (source, dir, cfg = {}) => {
 };
 window.imAddPort = () => { $("#im_ports").insertAdjacentHTML("beforeend", '<div class="f4 im-port"><div><label>Container</label><input class="ipc" type="number"></div><div><label>LAN</label><input class="iph" type="number"></div><div><label>Protocol</label><select class="ipp"><option>TCP</option><option>UDP</option></select></div><label class="switch"><input class="ipe" type="checkbox" checked>Expose</label></div>'); };
 window.imAddEnv = () => { $("#im_env").insertAdjacentHTML("beforeend", '<div class="f2 im-env"><div class="f"><label>Variable</label><input class="iek"></div><div class="f"><label>Value</label><input class="iev"></div></div>'); };
-window.imSyncStorage = () => {
-  const kind = $("#im_storage_kind")?.value || "new-rwo", existing = kind === "existing";
-  $("#im_pvc_new").style.display = existing ? "none" : "block";
-  $("#im_pvc_existing").style.display = existing ? "block" : "none";
-  $("#im_new_settings").style.display = existing ? "none" : "grid";
-  $("#im_pvc_route").textContent = (existing ? $("#im_pvc_select").value : $("#im_pvc_name").value.trim()) || "choose a PVC";
-  $("#im_storage_help").textContent = existing
-    ? "Copies into an existing PVC and keeps its current access mode, storage class, and data. Files with the same names may be replaced."
-    : kind === "new-rwx" ? "Creates shared Longhorn storage that can attach from multiple nodes."
-    : "Creates a Longhorn claim for this workload with single-node attachment.";
-};
 window.doImport = async source => {
   const env = {}; $$(".im-env").forEach(r => { const k = $(".iek", r).value.trim(); if (k) env[k] = $(".iev", r).value; });
   const cfg = STATE.data.importCfg || {};
-  const storageKind = $("#im_storage_kind").value, existing = storageKind === "existing";
-  const pvcName = existing ? $("#im_pvc_select").value : $("#im_pvc_name").value.trim();
+  const volumes = importVolumes();
+  const first = volumes[0];
+  if (!first) return toast("add at least one volume", "bad");
+  const existing = !first.create;
   const body = { source, name: $("#im_name").value.trim(), remote_path: $("#im_path").value.trim(),
     image: $("#im_image").value.trim(), icon: $("#im_icon").value.trim(),
-    mappings: importMappings(), volumes: importVolumes(),
-    pvc_name: pvcName, size_gb: existing ? 1 : +$("#im_size").value, reuse_existing: existing,
-    storage_class: existing ? "longhorn-r2" : $("#im_sc").value,
-    access_mode: storageKind === "new-rwx" ? "ReadWriteMany" : "ReadWriteOnce", start_after_copy: $("#im_start").checked,
+    mappings: importMappings(), volumes,
+    pvc_name: first.name, size_gb: first.size_gb, reuse_existing: existing,
+    storage_class: first.storage_class, access_mode: first.access_mode,
+    start_after_copy: $("#im_start").checked,
     ports: $$(".im-port").map(r => ({ container: +$(".ipc", r).value, host: +$(".iph", r).value || +$(".ipc", r).value, protocol: $(".ipp", r).value, expose: $(".ipe", r).checked })).filter(p => p.container),
     env, hardware: selectedHardware("im_hw"), network_mode: $("#im_net").value, vip_mode: $("#im_vip").value, lb_ip: $("#im_ip").value.trim(),
     uid: $("#im_uid").value.trim(), gid: $("#im_gid").value.trim() };
   if (!body.name || !body.image) return toast("workload name and image are required", "bad");
   if (!body.mappings.length) return toast("choose at least one folder to copy", "bad");
-  for (const volume of body.volumes) {
+  for (const volume of volumes) {
     const measured = body.mappings.filter(row => row.pvc === volume.name)
       .reduce((sum, row) => sum + (row.bytes || 0), 0);
     if (!measured) continue;
@@ -1057,12 +1047,23 @@ window.doImport = async source => {
         + (usedGb ? ` (${usedGb.toFixed(1)} GiB already written)` : "") + " — grow it or raise its size", "bad");
     }
   }
-  const bad = body.mappings.find(row => !row.remote_path.startsWith("/") || !row.mount_path.startsWith("/"));
-  if (bad) return toast(`every folder needs an absolute source and container path (${esc(bad.remote_path || "blank")})`, "bad");
-  body.remote_path = body.mappings[0].remote_path;
-  body.mount_path = body.mappings[0].mount_path;
-  if (!body.pvc_name) return toast(existing ? "choose an existing PVC" : "PVC name is required", "bad");
-  if (existing && !confirm(`Import into existing PVC “${body.pvc_name}”?\n\nThe current data is kept, but imported files with the same names may be replaced.`)) return;
+  // A RAM scratch mapping has no source by design, so only copied folders are
+  // asked for one.
+  const copied = body.mappings.filter(row => !row.medium);
+  const bad = body.mappings.find(row => row.medium
+    ? !String(row.mount_path || "").startsWith("/")
+    : !String(row.remote_path || "").startsWith("/") || !String(row.mount_path || "").startsWith("/"));
+  if (bad) {
+    return toast(bad.medium
+      ? `a RAM scratch volume needs an absolute path inside the container (${esc(bad.mount_path || "blank")})`
+      : `every folder needs an absolute source and container path (${esc(bad.remote_path || "blank")})`, "bad");
+  }
+  if (!copied.length && !body.mappings.length) return toast("choose at least one folder to copy", "bad");
+  body.remote_path = copied[0]?.remote_path || "";
+  body.mount_path = copied[0]?.mount_path || "/config";
+  const reused = volumes.filter(volume => !volume.create).map(volume => volume.name);
+  if (reused.length && !confirm(`Import into existing volume${reused.length === 1 ? "" : "s"} ${reused.join(", ")}?` +
+      "\n\nThe current data is kept, but imported files with the same names may be replaced.")) return;
   try {
     const r = await api("/api/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(`import started (${r.job})`, "ok"); closeModal(); resetPaint(); viewImport();
