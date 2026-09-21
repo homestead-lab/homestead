@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.20"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.21"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2089,6 +2089,7 @@ import harvui_hardware as HW
 import harvui_updates as UPDATES
 import harvui_operations as OPS
 import harvui_console as CONSOLE
+import harvui_files as FILES
 import harvui_icons as ICONS
 import harvui_volumes as VOLUMES
 import harvui_smart as SMART
@@ -2109,6 +2110,7 @@ SHARES.bind(kget, ksend, create_pvc, SMB_NAMESPACE, _cache)
 NETWORK.bind(kget, ksend, SYS_NS, DEFAULT_NS, LB_IP)
 CLUSTER.bind(kget, SYS_NS, lambda: cached("nodes", 5, get_nodes))
 CONSOLE_PROXY = CONSOLE.ConsoleProxy(API, TOKEN, CTX, DATA_DIR, SYS_NS, {DEFAULT_NS}, kget)
+FILES.bind(kget, ksend, urllib.parse.urlparse(API), TOKEN, CTX, SYS_NS)
 
 
 def display_icon(annotations):
@@ -2312,6 +2314,7 @@ ADMIN_ROUTES = {
     "/api/network/service/delete",
     "/api/images/cleanup",
     "/api/volumes/delete", "/api/volumes/chown",
+    "/api/files/list", "/api/files/read", "/api/files/write", "/api/files/close",
     "/api/node/smart/test",
     "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete",
     "/api/lh/restore",
@@ -2522,6 +2525,14 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("flow2", 8, get_flow2))
             if p == "/api/shares":
                 return self._send(200, SHARES.list_shares())
+            if p == "/api/files/list":
+                return self._send(200, FILES.list_files(
+                    (q.get("namespace") or [DEFAULT_NS])[0], (q.get("pvc") or [""])[0],
+                    (q.get("path") or [""])[0]))
+            if p == "/api/files/read":
+                return self._send(200, FILES.read_file(
+                    (q.get("namespace") or [DEFAULT_NS])[0], (q.get("pvc") or [""])[0],
+                    (q.get("path") or [""])[0]))
             if p == "/api/volumes/ownership":
                 return self._send(200, IMP.ownership_hint(
                     (q.get("namespace") or [DEFAULT_NS])[0], (q.get("name") or [""])[0]))
@@ -2755,6 +2766,15 @@ class H(BaseHTTPRequestHandler):
                     {"namespace": b["ns"], "name": b["name"]})
                 _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("image-updates", None)
                 return self._send(200, result)
+            if p == "/api/files/write":
+                warning = FILES.check_syntax(b.get("path"), b.get("content"))
+                if warning and not b.get("ignore_syntax"):
+                    return self._send(400, {"error": warning, "syntax": True})
+                return self._send(200, FILES.write_file(
+                    b.get("namespace") or DEFAULT_NS, b.get("pvc"), b.get("path"), b.get("content")))
+            if p == "/api/files/close":
+                return self._send(200, FILES.close_session(
+                    b.get("namespace") or DEFAULT_NS, b.get("pvc")))
             if p == "/api/volumes/chown":
                 return self._send(200, IMP.chown_claim(
                     b.get("namespace") or DEFAULT_NS, b.get("name"), b.get("uid"), b.get("gid")))

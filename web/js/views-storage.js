@@ -178,6 +178,7 @@ async function viewStorage() {
      <td class="small dim">${x.state === "attached" ? '<span class="tag ok">in use</span>' : esc(fmtAgo(x.last_used_secs))}</td>
      <td><div class="row" style="gap:6px;flex-wrap:nowrap">
        <button class="btn sm" data-need="operator" onclick='volumeEdit(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("edit")}Edit</button>
+       <button class="btn sm" data-need="admin" title="Browse and edit the files on this volume" onclick="volumeFiles('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}',${x.state === "attached"})">${icon("edit")}Files</button>
        <button class="btn sm" data-need="admin" title="Hand this volume's files to the user the container runs as" onclick="volumeChown('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}')">Ownership</button>
        <button class="btn sm danger" data-need="admin" title="Review attachment and data-loss impact before deleting" onclick='volumeDelete(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("trash")}Delete</button>
      </div></td>
@@ -410,6 +411,127 @@ window.volumeClassFacts = () => {
       volumes for VM disks, which Longhorn will not mount into a pod.
       ${(classes.shared || []).length ? `Use ${(classes.shared || []).map(esc).join(" or ")} instead.` : ""}`;
   }
+};
+
+const FILEVIEW = { namespace: "", pvc: "", path: "", file: "", dirty: false };
+
+const fileSize = bytes => bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  : bytes >= 1024 ? `${Math.round(bytes / 1024)} KB` : `${bytes} B`;
+
+window.volumeFiles = async (namespace, pvc, attached) => {
+  Object.assign(FILEVIEW, { namespace, pvc, path: "", file: "", dirty: false });
+  modal(`Files · ${pvc}`, `<div class="empty"><span class="spin2"></span>starting a file browser on ${esc(pvc)}</div>`, true);
+  if (attached && !confirm(`${pvc} is attached to a running workload.\n\nA ReadWriteOnce volume can only mount in one place, so the browser will not start until the workload is stopped. Continue anyway?`)) {
+    return closeModal();
+  }
+  fileBrowse("");
+};
+
+window.fileBrowse = async (path) => {
+  const { namespace, pvc } = FILEVIEW;
+  if (FILEVIEW.dirty && !confirm("Discard unsaved changes?")) return;
+  try {
+    const listing = await api(`/api/files/list?namespace=${encodeURIComponent(namespace)}&pvc=${encodeURIComponent(pvc)}&path=${encodeURIComponent(path || "")}`);
+    Object.assign(FILEVIEW, { path: listing.path || "", file: "", dirty: false });
+    $("#mbody").innerHTML = fileBrowserMarkup(listing);
+    if (window.applyRole) window.applyRole();
+  } catch (e) {
+    $("#mbody").innerHTML = `<div class="note dependency-danger"><b>The file browser could not start.</b> ${esc(e.message)}</div>
+      <div class="row" style="margin-top:14px"><button class="btn" onclick="fileBrowse('')">Try again</button>
+      <button class="btn" onclick="closeFiles()">Close</button></div>`;
+  }
+};
+
+function fileCrumbs(path) {
+  const parts = String(path || "").split("/").filter(Boolean);
+  const crumbs = [`<button class="linkish" onclick="fileBrowse('')">${esc(FILEVIEW.pvc)}</button>`];
+  parts.forEach((part, index) => {
+    const upto = parts.slice(0, index + 1).join("/");
+    crumbs.push(`<span class="dim">/</span><button class="linkish" onclick="fileBrowse('${esc(upto)}')">${esc(part)}</button>`);
+  });
+  return crumbs.join("");
+}
+
+function fileBrowserMarkup(listing) {
+  const parent = String(listing.path || "").split("/").slice(0, -1).join("/");
+  return `<div class="filecrumbs">${fileCrumbs(listing.path)}</div>
+    <div class="filelist">
+      ${listing.path ? `<button class="filerow" onclick="fileBrowse('${esc(parent)}')"><span class="fileicon">↩</span><span>..</span><span class="dim xs">up one level</span></button>` : ""}
+      ${listing.entries.map(entry => {
+        const full = (listing.path ? listing.path + "/" : "") + entry.name;
+        return entry.kind === "dir"
+          ? `<button class="filerow" onclick="fileBrowse('${esc(full)}')"><span class="fileicon">▸</span><span>${esc(entry.name)}</span><span class="dim xs">folder</span></button>`
+          : `<button class="filerow" ${entry.editable ? `onclick="fileOpen('${esc(full)}')"` : "disabled"}><span class="fileicon">·</span><span>${esc(entry.name)}</span><span class="dim xs">${fileSize(entry.size)}${entry.editable ? "" : " · too large to edit"}</span></button>`;
+      }).join("") || '<div class="empty small">this folder is empty</div>'}
+    </div>
+    ${listing.truncated ? '<div class="dim xs">Only the first 500 entries are listed.</div>' : ""}
+    <div class="row" style="margin-top:16px"><button class="btn" onclick="closeFiles()">Close browser</button></div>
+    <div class="note" style="margin-top:12px">The browser runs as a short-lived pod that mounts this volume.
+      It stops on its own after 30 minutes, or when you close it.</div>`;
+}
+
+window.fileOpen = async (path) => {
+  const { namespace, pvc } = FILEVIEW;
+  try {
+    const file = await api(`/api/files/read?namespace=${encodeURIComponent(namespace)}&pvc=${encodeURIComponent(pvc)}&path=${encodeURIComponent(path)}`);
+    FILEVIEW.file = file.path;
+    FILEVIEW.dirty = false;
+    $("#mbody").innerHTML = `<div class="filecrumbs">${fileCrumbs(FILEVIEW.path)}<span class="dim">/</span><b>${esc(file.path.split("/").pop())}</b></div>
+      <div class="between fileeditbar"><span class="dim xs">${fileSize(file.size)} · saving keeps the previous contents as <span class="mono">${esc(file.path.split("/").pop())}.homestead-bak</span></span>
+        <span class="dim xs" id="file_state"></span></div>
+      <textarea id="file_body" class="mono fileeditor" spellcheck="false" rows="20" oninput="fileTouched()">${esc(file.content)}</textarea>
+      <div class="row" style="margin-top:14px">
+        <button class="btn pri" id="file_save" data-need="admin" onclick="fileSave()">Save</button>
+        <button class="btn" onclick="fileBrowse('${esc(FILEVIEW.path)}')">Back</button>
+        <button class="btn" onclick="closeFiles()">Close browser</button></div>`;
+    const editor = $("#file_body");
+    editor.addEventListener("keydown", event => {
+      if (event.key !== "Tab") return;
+      event.preventDefault();
+      const start = editor.selectionStart, end = editor.selectionEnd;
+      editor.setRangeText("  ", start, end, "end");
+      fileTouched();
+    });
+    if (window.applyRole) window.applyRole();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+window.fileTouched = () => {
+  FILEVIEW.dirty = true;
+  const state = $("#file_state");
+  if (state) state.textContent = "unsaved changes";
+};
+
+window.fileSave = async (ignoreSyntax = false) => {
+  const { namespace, pvc, file } = FILEVIEW;
+  const button = $("#file_save"), content = $("#file_body").value;
+  if (button) { button.disabled = true; button.textContent = "Saving…"; }
+  try {
+    const result = await api("/api/files/write", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ namespace, pvc, path: file, content, ignore_syntax: ignoreSyntax }) });
+    FILEVIEW.dirty = false;
+    const state = $("#file_state");
+    if (state) state.textContent = `saved ${new Date().toLocaleTimeString()}`;
+    toast(result.message || "saved", "ok");
+  } catch (e) {
+    // A syntax complaint is a warning, not a refusal: it is your file.
+    if (/^(JSON is invalid|YAML cannot)/.test(e.message) && confirm(`${e.message}\n\nSave it anyway?`)) {
+      return fileSave(true);
+    }
+    toast(e.message, "bad");
+  } finally {
+    if (button) { button.disabled = false; button.textContent = "Save"; }
+  }
+};
+
+window.closeFiles = async () => {
+  const { namespace, pvc, dirty } = FILEVIEW;
+  if (dirty && !confirm("Discard unsaved changes?")) return;
+  closeModal();
+  try {
+    await api("/api/files/close", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ namespace, pvc }) });
+  } catch (e) { /* the pod expires on its own */ }
 };
 
 window.volumeChown = async (namespace, name) => {

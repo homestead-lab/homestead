@@ -296,6 +296,24 @@
         { source: "/mnt/user/appdata/media-server/transcode", path: "/transcode", type: "bind" },
         { source: "/mnt/user/media", path: "/media", type: "bind" }] },
     "/api/imports/delete": { ok: true, message: "Import removed" },
+    "/api/files/list": url => {
+      const path = url.searchParams.get("path") || "";
+      if (path === "config") {
+        return { path: "config", truncated: false, pod: "homestead-files-frigate-config",
+          entries: [{ name: "config.yml", kind: "file", size: 4210, editable: true },
+            { name: "secrets.yaml", kind: "file", size: 180, editable: true }] };
+      }
+      return { path: "", truncated: false, pod: "homestead-files-frigate-config",
+        entries: [{ name: "config", kind: "dir", size: 0, editable: false },
+          { name: "clips", kind: "dir", size: 0, editable: false },
+          { name: "frigate.db", kind: "file", size: 5242880, editable: false },
+          { name: "notes.txt", kind: "file", size: 96, editable: true }] };
+    },
+    "/api/files/read": url => ({ path: url.searchParams.get("path") || "notes.txt", size: 96,
+      content: "detectors:\n  coral:\n    type: edgetpu\n\nmqtt:\n  host: mqtt\n" }),
+    "/api/files/write": { ok: true, path: "config/config.yml", bytes: 96,
+      message: "Saved config/config.yml (96 bytes); previous contents kept as config.yml.homestead-bak" },
+    "/api/files/close": { ok: true },
     "/api/volumes/ownership": { uid: 1000, gid: 1000, known: true, workload: "frigate",
       image: "ghcr.io/blakeblackshear/frigate:stable", source: "PUID/PGID on frigate" },
     "/api/volumes/chown": { ok: true, job: "homestead-chown-frigate-config", uid: 1883, gid: 1883,
@@ -433,7 +451,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.19", candidate: "ghcr.io/wjcloudy/homestead:2.8.20", candidate_tag: "2.8.20", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.20", candidate: "ghcr.io/wjcloudy/homestead:2.8.21", candidate_tag: "2.8.21", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

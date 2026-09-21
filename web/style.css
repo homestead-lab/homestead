@@ -667,6 +667,22 @@ html[data-motion="off"] .uptime .ld{animation:none}
 .waccess .plink,.waccess .tag{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .waccess .tag.more{cursor:help}
 .attachlist{display:flex;flex-wrap:wrap;gap:4px}
+/* volume file browser */
+.filecrumbs{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:12px;font-size:12px}
+.linkish{background:none;border:0;color:var(--low);cursor:pointer;font:inherit;padding:2px 4px;border-radius:6px}
+.linkish:hover{background:rgba(74,158,255,.12)}
+.filelist{display:grid;gap:4px;max-height:46vh;overflow:auto;padding-right:4px}
+.filerow{display:grid;grid-template-columns:20px minmax(0,1fr) auto;align-items:center;gap:10px;
+  width:100%;text-align:left;padding:9px 11px;border:1px solid var(--line);border-radius:10px;
+  background:rgba(255,255,255,.025);color:var(--tx);font:inherit;font-size:12.5px;cursor:pointer}
+.filerow:hover:not(:disabled){background:rgba(255,255,255,.06);border-color:var(--line2)}
+.filerow:disabled{opacity:.45;cursor:not-allowed}
+.filerow>span:nth-child(2){overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fileicon{color:var(--dim);text-align:center}
+.fileeditbar{margin-bottom:6px;gap:12px;flex-wrap:wrap}
+.fileeditor{width:100%;min-height:340px;padding:12px;border:1px solid var(--line2);border-radius:11px;
+  background:rgba(0,0,0,.35);color:var(--tx);font-size:12px;line-height:1.55;resize:vertical;tab-size:2}
+.fileeditor:focus{outline:none;border-color:var(--low)}
 .import-advanced{margin:12px 0}
 .import-advanced>summary{cursor:pointer;list-style:none;padding:6px 0}
 .import-advanced>summary::-webkit-details-marker{display:none}
