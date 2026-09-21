@@ -40,7 +40,7 @@ class ImportMappingTests(unittest.TestCase):
 
         self.assertEqual([{"remote_path": "/mnt/user/appdata/plex", "mount_path": "/config",
                            "folder": "", "bytes": 0, "pvc": "app-appdata",
-                           "medium": "", "size_mb": 0}], rows)
+                           "medium": "", "size_mb": 0, "exclude": []}], rows)
 
     def test_bad_mappings_are_refused(self):
         with self.assertRaisesRegex(ValueError, "remote path must be absolute"):
@@ -574,6 +574,84 @@ class FsGroupTests(unittest.TestCase):
             "namespace": "lab", "volumes": []})
 
         self.assertNotIn("securityContext", deployment["spec"]["template"]["spec"])
+
+
+class NestedFolderTests(unittest.TestCase):
+    """Frigate keeps its recordings inside the folder holding its config."""
+
+    FRIGATE = {
+        "name": "frigate",
+        "volumes": [{"name": "frigate-appdata"}, {"name": "frigate-recordings"}],
+        "mappings": [
+            {"remote_path": "/mnt/user/cctv/Frigate", "mount_path": "/config",
+             "pvc": "frigate-appdata"},
+            {"remote_path": "/mnt/user/cctv/Frigate/recordings", "mount_path": "/media/frigate",
+             "pvc": "frigate-recordings"}],
+    }
+
+    def test_a_folder_mapped_on_its_own_is_kept_out_of_its_parent(self):
+        rows = imports.import_mappings(self.FRIGATE)
+
+        self.assertEqual(["/recordings"], rows[0]["exclude"],
+                         "the recordings must not also ride along into appdata")
+        self.assertEqual([], rows[1]["exclude"])
+
+    def test_a_folder_left_unticked_is_excluded_too(self):
+        """The client names what it did not select, so it stays behind."""
+        cfg = copy.deepcopy(self.FRIGATE)
+        cfg["mappings"] = [dict(cfg["mappings"][0], exclude=["clips/", "/recordings"])]
+
+        rows = imports.import_mappings(cfg)
+
+        self.assertEqual(["/clips", "/recordings"], rows[0]["exclude"])
+
+    def test_an_exclude_cannot_climb_out_of_the_folder(self):
+        cfg = copy.deepcopy(self.FRIGATE)
+        cfg["mappings"] = [dict(cfg["mappings"][0], exclude=["../../etc", "", "/"])]
+
+        self.assertEqual([], imports.import_mappings(cfg)[0]["exclude"])
+
+    def test_a_sibling_with_a_similar_name_is_not_excluded(self):
+        cfg = copy.deepcopy(self.FRIGATE)
+        cfg["mappings"][1]["remote_path"] = "/mnt/user/cctv/Frigate-recordings"
+
+        self.assertEqual([], imports.import_mappings(cfg)[0]["exclude"],
+                         "Frigate-recordings is beside Frigate, not inside it")
+
+    def test_the_copy_tells_rsync_to_leave_the_nested_folder_alone(self):
+        sent = []
+        imports.bind(lambda path: (_ for _ in ()).throw(AssertionError(path)),
+                     lambda method, path, body=None, **kw: sent.append(body) or {},
+                     lambda *a, **k: {}, lambda cfg: ({"metadata": {"name": "x"}}, None),
+                     "lab", {})
+        imports._source = lambda name: dict(SOURCE)
+        imports.import_container(dict(self.FRIGATE, source="tower", image="frigate:1",
+                                      create_workload=False))
+
+        script = sent[-1]["spec"]["template"]["spec"]["containers"][0]["command"][-1]
+        appdata, recordings = [line for line in script.splitlines() if line.startswith("sshpass -p \"$SRC_PASS\" rsync")]
+        self.assertIn("--exclude=/recordings/ ", appdata)
+        self.assertNotIn("--exclude", recordings, "the recordings copy excludes nothing")
+
+    def test_a_parent_is_measured_without_what_the_copy_will_skip(self):
+        rows = [{"path": "/mnt/user/cctv/Frigate", "bytes": 5 * 1024 ** 3, "measured": True},
+                {"path": "/mnt/user/cctv/Frigate/recordings", "bytes": 4 * 1024 ** 3,
+                 "measured": True}]
+
+        imports._deduct_nested(rows)
+
+        self.assertEqual(1024 ** 3, rows[0]["bytes"], "du counted the recordings twice")
+        self.assertEqual(5 * 1024 ** 3, rows[0]["gross_bytes"])
+        self.assertEqual(4 * 1024 ** 3, rows[1]["bytes"])
+
+    def test_a_three_deep_tree_does_not_deduct_the_same_bytes_twice(self):
+        rows = [{"path": "/a", "bytes": 100, "measured": True},
+                {"path": "/a/b", "bytes": 60, "measured": True},
+                {"path": "/a/b/c", "bytes": 20, "measured": True}]
+
+        imports._deduct_nested(rows)
+
+        self.assertEqual([40, 40, 20], [row["bytes"] for row in rows])
 
 
 class ConfigMountTests(unittest.TestCase):

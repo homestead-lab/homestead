@@ -353,6 +353,7 @@ def measure_source_paths(name, paths, seconds=25):
         match = MEASURE_LINE.match(line.strip())
         if match and rows[-1]["bytes"] is None:
             rows[-1].update(bytes=int(match.group(1)) * 1024, measured=True)
+    _deduct_nested(rows)
     measured = [row for row in rows if row["measured"]]
     total = sum(row["bytes"] for row in measured)
     missing = [row["path"] for row in rows if not row["exists"]]
@@ -361,6 +362,29 @@ def measure_source_paths(name, paths, seconds=25):
     suggested = max(1, int(total / (1024 ** 3) * 1.25) + 1)
     return {"paths": rows, "total_bytes": total, "complete": complete, "missing": missing,
             "suggested_gb": suggested, "timeout_seconds": seconds}
+
+
+def _deduct_nested(rows):
+    """du counts a subfolder inside its parent; the copy will not.
+
+    Anything mapped separately is excluded from its parent's rsync, so the
+    parent's measured size has to lose it too - otherwise a 4 TB recordings
+    folder is counted once against the appdata volume it is not going to and
+    once against the volume it is.
+    """
+    by_path = {row["path"]: row for row in rows if row["measured"]}
+    for row in rows:
+        if not row["measured"]:
+            continue
+        inside = sum(other["bytes"] for path, other in by_path.items()
+                     if path.startswith(row["path"] + "/")
+                     # Only the nearest parent deducts a folder, or a tree three
+                     # deep would subtract the same bytes twice.
+                     and not any(path.startswith(mid + "/") and mid.startswith(row["path"] + "/")
+                                 for mid in by_path))
+        if inside:
+            row["gross_bytes"] = row["bytes"]
+            row["bytes"] = max(0, row["bytes"] - inside)
 
 
 def _ownership(cfg):
@@ -594,8 +618,32 @@ def import_mappings(cfg):
         if claim not in names:
             raise ValueError(f"{mount} points at volume {claim}, which this import does not create")
         rows.append({"remote_path": remote, "mount_path": mount, "folder": folder,
-                     "bytes": size, "pvc": claim, "medium": "", "size_mb": 0})
+                     "bytes": size, "pvc": claim, "medium": "", "size_mb": 0,
+                     "exclude": _excludes(remote, requested, item.get("exclude"))})
     return rows
+
+
+def _excludes(remote, requested, asked):
+    """Subfolders of this folder that the copy must leave alone.
+
+    Frigate on Unraid mounts /mnt/user/cctv/Frigate as its config and
+    /mnt/user/cctv/Frigate/recordings as its recordings. Copying the first
+    without saying otherwise drags the second along - into the wrong volume,
+    twice over, terabytes of it. Anything mapped separately is excluded from
+    its parent, whether or not that mapping is being copied: the client sends
+    the folders it left unticked so those stay behind too.
+    """
+    nested = set()
+    for other in requested:
+        child = str(other.get("remote_path") or "").strip().rstrip("/")
+        if child.startswith(remote + "/"):
+            nested.add(child[len(remote):])
+    for item in asked or []:
+        relative = "/" + str(item or "").strip().strip("/")
+        if relative == "/" or ".." in relative.split("/"):
+            continue
+        nested.add(relative)
+    return sorted(nested)
 
 
 def _claim_used_gb(pvc):
@@ -724,6 +772,11 @@ def import_container(cfg):
         steps.append("echo " + shlex.quote(
             f"==> step {index}/{total} {label}{weight} :: {src['host']}:{mapping['remote_path']}"
             f" -> {mapping['mount_path']}"))
+        # Said out loud, so a copy that comes back smaller than the folder looks
+        # is explained by the log rather than by a support question.
+        if mapping.get("exclude"):
+            steps.append("echo " + shlex.quote(
+                "    leaving out " + ", ".join(mapping["exclude"]) + " (mapped separately)"))
         steps.append(
             # Ownership and permissions are preserved by number, so the app
             # finds its appdata exactly as it was on the source. Dropping them
@@ -732,7 +785,11 @@ def import_container(cfg):
             # itself.
             'sshpass -p "$SRC_PASS" rsync -aH --numeric-ids --info=progress2 '
             "-e 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' "
-            f"{spec} {shlex.quote(target + '/')}")
+            # A leading slash anchors the pattern to the folder being copied,
+            # so /recordings means that one and not every directory so named.
+            + "".join(f"--exclude={shlex.quote(pattern + '/')} "
+                      for pattern in mapping.get("exclude") or [])
+            + f"{spec} {shlex.quote(target + '/')}")
         steps.append("echo " + shlex.quote(f"==> step {index}/{total} {label} complete"))
     # Only when asked: the copy already keeps whatever the source had.
     owner_uid, owner_gid = _ownership(cfg)

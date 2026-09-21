@@ -347,7 +347,7 @@
     "/api/sources/measure": { total_bytes: 9663676416, complete: false, suggested_gb: 12,
       timeout_seconds: 25, missing: ["/mnt/user/appdata/media-server/old-config"], paths: [
         { path: "/mnt/user/appdata/media-server", bytes: 1073741824, measured: true,
-          exists: true, timed_out: false },
+          exists: true, timed_out: false, gross_bytes: 9663676416 },
         { path: "/mnt/user/appdata/media-server/transcode", bytes: 8589934592, measured: true,
           exists: true, timed_out: false },
         { path: "/mnt/user/appdata/media-server/old-config", bytes: null, measured: false,
@@ -482,7 +482,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.33", candidate_tag: "2.8.33", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.34", candidate_tag: "2.8.34", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

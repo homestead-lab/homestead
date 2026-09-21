@@ -902,16 +902,21 @@ window.imSyncMaps = () => {
       : "One folder copied to the root of its volume.") + ram;
   }
   const sizes = STATE.data.importSizes || {};
+  const everything = importSourcePaths();
   $$("#im_maps .im-map").forEach(row => {
     if (row.dataset.medium === "memory") return;
     $(".imm-folder", row).placeholder = importFolderName($(".imm-remote", row).value, $(".imm-mount", row).value);
-    const path = $(".imm-remote", row).value.trim(), readout = $(".imm-size", row);
+    const path = $(".imm-remote", row).value.trim().replace(/\/+$/, ""), readout = $(".imm-size", row);
     if (!readout) return;
+    // A folder mapped in its own right never travels inside its parent, so say
+    // so on the parent: otherwise the recordings look like they went missing.
+    const inside = path ? everything.filter(other => other.startsWith(path + "/")) : [];
+    const skips = inside.length ? ` · leaves out ${inside.map(other => other.slice(path.length)).join(", ")}, mapped separately` : "";
     readout.classList.toggle("bad", sizes[path] === "missing");
-    readout.textContent = !(path in sizes) ? ""
+    readout.textContent = (!(path in sizes) ? ""
       : sizes[path] === "missing" ? "this folder does not exist on the source"
       : sizes[path] === null ? "size unknown — du timed out on this folder"
-      : `${importBytes(sizes[path])} to copy`;
+      : `${importBytes(sizes[path])} to copy`) + (sizes[path] === "missing" ? "" : skips);
   });
 };
 const importBytes = value => {
@@ -950,7 +955,8 @@ window.imMeasure = async source => {
     imSyncMaps();
     const note = $("#im_maps_note");
     if (note) {
-      const missing = result.missing || [];
+      const copying = new Set(importMappings().filter(map => !map.medium).map(map => map.remote_path));
+      const missing = (result.missing || []).filter(path => copying.has(path));
       note.innerHTML = `${importBytes(result.total_bytes)} measured across ${paths.length - missing.length} folder${paths.length - missing.length === 1 ? "" : "s"}`
         + (missing.length ? `. <b>${missing.map(esc).join(", ")} ${missing.length === 1 ? "does" : "do"} not exist on the source</b> — fix the path or untick the folder, or the copy will fail.`
           : result.complete ? ". Volume sizes set from what is actually there, with room to grow."
@@ -960,18 +966,30 @@ window.imMeasure = async source => {
   finally { if (button) { button.disabled = false; button.textContent = "Measure sizes"; } }
 };
 
-window.importMappings = () => $$("#im_maps .im-map")
-  .filter(row => $(".imm-on", row).checked)
-  .map(row => {
-    if (row.dataset.medium === "memory") {
-      return { medium: "memory", mount_path: $(".imm-mount", row).value.trim() || "/tmp/cache",
-        size_mb: +$(".imm-ram", row).value || 1024 };
-    }
-    const remote = $(".imm-remote", row).value.trim();
-    return { remote_path: remote, mount_path: $(".imm-mount", row).value.trim() || "/config",
-      folder: $(".imm-folder", row).value.trim(), pvc: $(".imm-pvc", row)?.value || "",
-      bytes: Number((STATE.data.importSizes || {})[remote]) || 0 };
-  });
+/* Every folder listed, ticked or not: an unticked subfolder still has to be
+   kept out of its parent's copy, or leaving it out achieves nothing. */
+window.importSourcePaths = () => $$("#im_maps .im-map")
+  .filter(row => row.dataset.medium !== "memory")
+  .map(row => $(".imm-remote", row).value.trim())
+  .filter(path => path.startsWith("/"))
+  .map(path => path.replace(/\/+$/, ""));
+
+window.importMappings = () => {
+  const all = importSourcePaths();
+  return $$("#im_maps .im-map")
+    .filter(row => $(".imm-on", row).checked)
+    .map(row => {
+      if (row.dataset.medium === "memory") {
+        return { medium: "memory", mount_path: $(".imm-mount", row).value.trim() || "/tmp/cache",
+          size_mb: +$(".imm-ram", row).value || 1024 };
+      }
+      const remote = $(".imm-remote", row).value.trim().replace(/\/+$/, "");
+      return { remote_path: remote, mount_path: $(".imm-mount", row).value.trim() || "/config",
+        folder: $(".imm-folder", row).value.trim(), pvc: $(".imm-pvc", row)?.value || "",
+        exclude: all.filter(path => path.startsWith(remote + "/")).map(path => path.slice(remote.length)),
+        bytes: Number((STATE.data.importSizes || {})[remote]) || 0 };
+    });
+};
 
 window.importSetup = async (source, dir, cfg = {}) => {
   const src = (STATE.data.srcs || []).find(s => s.name === source) || {};
