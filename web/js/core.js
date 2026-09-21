@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HOMESTEAD_VERSION = "2.8.25";
+const HOMESTEAD_VERSION = "2.8.26";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -313,7 +313,11 @@ function morph(a, b) {
   }
 }
 function syncAttrs(x, y) {
-  for (const at of [...y.attributes]) if (x.getAttribute(at.name) !== at.value) {
+  // Whether a <details> is open belongs to the reader, the same way the text in
+  // an input does: a background refresh must not fold up a pod tree mid-read.
+  const readerOwnsOpen = x.nodeName === "DETAILS";
+  for (const at of [...y.attributes]) if (!(readerOwnsOpen && at.name === "open") &&
+      x.getAttribute(at.name) !== at.value) {
     const animateSpark = at.name === "d" && x.closest(".spark") &&
       (x.classList.contains("ln") || x.classList.contains("fl"));
     x.setAttribute(at.name, at.value);
@@ -322,7 +326,10 @@ function syncAttrs(x, y) {
         { duration: 420, easing: "cubic-bezier(.2,.8,.2,1)" });
     }
   }
-  for (const at of [...x.attributes]) if (!y.hasAttribute(at.name)) x.removeAttribute(at.name);
+  for (const at of [...x.attributes]) {
+    if (readerOwnsOpen && at.name === "open") continue;
+    if (!y.hasAttribute(at.name)) x.removeAttribute(at.name);
+  }
 }
 function resetPaint() { const h = V(); delete h.dataset.painted; h.innerHTML = ""; }
 
