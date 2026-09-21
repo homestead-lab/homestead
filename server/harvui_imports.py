@@ -615,7 +615,14 @@ def import_container(cfg):
     body = {
         "apiVersion": "batch/v1", "kind": "Job",
         "metadata": {"name": job, "namespace": NS,
-                     "labels": {"harvui.io/task": "import", "harvui.io/app": name}},
+                     "labels": {"harvui.io/task": "import", "harvui.io/app": name},
+                     # What this import made, so cleaning it up later does not
+                     # have to guess - and cannot offer to delete a volume it
+                     # merely borrowed.
+                     "annotations": {"homestead.io/import-workload": name if cfg.get("create_workload", True) else "",
+                                     "homestead.io/import-volume": pvc,
+                                     "homestead.io/import-volume-created":
+                                         "false" if cfg.get("reuse_existing") else "true"}},
         "spec": {"backoffLimit": 1, "ttlSecondsAfterFinished": 3600,
                  "template": {"metadata": {"labels": {"harvui.io/task": "import"}},
                               "spec": {"restartPolicy": "Never",
@@ -741,6 +748,35 @@ def import_progress(log):
             "step_percent": percent, "percent": round(min(100.0, max(0.0, overall)), 1),
             "rate": rate, "weighted": measured, "total_bytes": total_bytes,
             "error": error, "error_detail": error_detail}
+
+
+def import_cleanup_plan(name):
+    """What an import job left behind, read from the job itself."""
+    if not re.fullmatch(r"(?:homestead|harvui)-import-[a-z0-9][a-z0-9-]{0,60}", str(name or "")):
+        raise ValueError("unknown import job")
+    try:
+        job = kget(f"/apis/batch/v1/namespaces/{NS}/jobs/{name}")
+    except Exception:
+        return {"job": name, "workload": "", "volume": "", "volume_created": False,
+                "namespace": NS, "known": False}
+    meta = job.get("metadata", {}) or {}
+    annotations = meta.get("annotations", {}) or {}
+    app = (meta.get("labels", {}) or {}).get("harvui.io/app", "")
+    workload = annotations.get("homestead.io/import-workload", app)
+    volume = annotations.get("homestead.io/import-volume", "")
+    created = str(annotations.get("homestead.io/import-volume-created", "")).lower() == "true"
+    exists = False
+    if workload:
+        try:
+            kget(f"/apis/apps/v1/namespaces/{NS}/deployments/{workload}")
+            exists = True
+        except Exception:
+            exists = False
+    return {"job": name, "namespace": NS, "workload": workload if exists else "",
+            "volume": volume, "volume_created": created,
+            # An import that predates this annotation says so rather than
+            # implying the volume is safe to delete.
+            "known": bool(annotations)}
 
 
 def delete_import(name):

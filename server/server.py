@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.23"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.24"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2319,7 +2319,7 @@ ADMIN_ROUTES = {
     "/api/node/power", "/api/node/drain", "/api/node/cordon", "/api/node/hardware",
     "/api/sources", "/api/sources/delete", "/api/sources/browse",
     "/api/sources/containers", "/api/sources/inspect", "/api/sources/measure",
-    "/api/import", "/api/imports/delete",
+    "/api/import", "/api/imports/delete", "/api/imports/cleanup-plan",
     "/api/vm-disks/import",
     "/api/shares", "/api/shares/edit", "/api/shares/delete", "/api/shares/options",
     "/api/storage/classes/default", "/api/storage/classes/delete",
@@ -2803,7 +2803,36 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, IMP.measure_source_paths(
                     b.get("name"), b.get("paths") or [], b.get("seconds", 25)))
             if p == "/api/imports/delete":
-                return self._send(200, IMP.delete_import(b.get("name")))
+                plan = IMP.import_cleanup_plan(b.get("name"))
+                if b.get("remove_volume") and not plan["volume_created"]:
+                    raise ValueError("this import copied into a volume it did not create, "
+                                     "so it will not delete it")
+                result = IMP.delete_import(b.get("name"))
+                removed = []
+                if b.get("remove_workload") and plan["workload"]:
+                    ns, name = plan["namespace"], plan["workload"]
+                    services = set(NETWORK.workload_service_names(ns, name)) | {name}
+                    ksend("DELETE", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+                    for service in sorted(services):
+                        try:
+                            ksend("DELETE", f"/api/v1/namespaces/{ns}/services/{service}")
+                        except urllib.error.HTTPError:
+                            pass
+                    removed.append(f"workload {name}")
+                    _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
+                if b.get("remove_volume") and plan["volume"]:
+                    # Requested alongside the workload that held it, so the claim
+                    # may still be releasing; Kubernetes finishes it either way.
+                    ksend("DELETE", f"/api/v1/namespaces/{plan['namespace']}/"
+                                    f"persistentvolumeclaims/{plan['volume']}")
+                    removed.append(f"volume {plan['volume']}")
+                    _cache.pop("vol", None); _cache.pop("stor", None)
+                if removed:
+                    result["message"] = result["message"] + " with " + " and ".join(removed)
+                result["removed"] = removed
+                return self._send(200, result)
+            if p == "/api/imports/cleanup-plan":
+                return self._send(200, IMP.import_cleanup_plan(b.get("name")))
             if p == "/api/network/service/delete":
                 result = NETWORK.delete_service(b.get("namespace"), b.get("name"), b.get("force"))
                 _cache.pop("network", None)

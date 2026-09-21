@@ -295,7 +295,15 @@
       mounts: [{ source: "/mnt/user/appdata/media-server", path: "/config", type: "bind" },
         { source: "/mnt/user/appdata/media-server/transcode", path: "/transcode", type: "bind" },
         { source: "/mnt/user/media", path: "/media", type: "bind" }] },
-    "/api/imports/delete": { ok: true, message: "Import removed" },
+    "/api/imports/delete": { ok: true, message: "Import removed", removed: [] },
+    "/api/imports/cleanup-plan": (url, init) => {
+      const name = JSON.parse(init?.body || "{}").name || "";
+      return name.includes("obsidian")
+        ? { job: name, namespace: "lab", workload: "obsidian", volume: "obsidian-appdata",
+            volume_created: true, known: true }
+        : { job: name, namespace: "lab", workload: "plex", volume: "plexmedia",
+            volume_created: false, known: true };
+    },
     "/api/files/list": url => {
       const path = url.searchParams.get("path") || "";
       if (path === "config") {
@@ -451,7 +459,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.22", candidate: "ghcr.io/wjcloudy/homestead:2.8.23", candidate_tag: "2.8.23", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.23", candidate: "ghcr.io/wjcloudy/homestead:2.8.24", candidate_tag: "2.8.24", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

@@ -73,7 +73,21 @@ class ImportJobRemovalTests(unittest.TestCase):
 
     def setUp(self):
         self.sent = []
-        imports.bind(lambda path: {}, lambda method, path, body=None, **kw:
+        self.job = {}
+        self.deployments = set()
+
+        def get(path):
+            if "/deployments/" in path:
+                if path.rsplit("/", 1)[-1] in self.deployments:
+                    return {"metadata": {"name": path.rsplit("/", 1)[-1]}}
+                raise ValueError("not found")
+            if "/jobs/" in path:
+                if not self.job:
+                    raise ValueError("not found")
+                return self.job
+            return {}
+
+        imports.bind(get, lambda method, path, body=None, **kw:
                      self.sent.append((method, path)) or {},
                      lambda *a, **k: {}, lambda cfg: ({}, None), "lab", {})
 
@@ -89,6 +103,47 @@ class ImportJobRemovalTests(unittest.TestCase):
         imports.delete_import("harvui-import-obsidian")
 
         self.assertIn("jobs/harvui-import-obsidian", self.sent[-1][1])
+
+    def test_a_cleanup_plan_reports_what_the_import_created(self):
+        self.job = {"metadata": {"name": "homestead-import-obsidian", "namespace": "lab",
+                                 "labels": {"harvui.io/app": "obsidian"},
+                                 "annotations": {"homestead.io/import-workload": "obsidian",
+                                                 "homestead.io/import-volume": "obsidian-appdata",
+                                                 "homestead.io/import-volume-created": "true"}}}
+        self.deployments = {"obsidian"}
+
+        plan = imports.import_cleanup_plan("homestead-import-obsidian")
+
+        self.assertEqual(("obsidian", "obsidian-appdata", True, True),
+                         (plan["workload"], plan["volume"], plan["volume_created"], plan["known"]))
+
+    def test_a_borrowed_volume_is_never_offered_for_deletion(self):
+        self.job = {"metadata": {"name": "homestead-import-plex", "namespace": "lab",
+                                 "annotations": {"homestead.io/import-workload": "plex",
+                                                 "homestead.io/import-volume": "plexmedia",
+                                                 "homestead.io/import-volume-created": "false"}}}
+        self.deployments = {"plex"}
+
+        self.assertFalse(imports.import_cleanup_plan("homestead-import-plex")["volume_created"])
+
+    def test_a_workload_already_gone_is_not_offered_either(self):
+        self.job = {"metadata": {"name": "homestead-import-obsidian", "namespace": "lab",
+                                 "annotations": {"homestead.io/import-workload": "obsidian",
+                                                 "homestead.io/import-volume": "obsidian-appdata",
+                                                 "homestead.io/import-volume-created": "true"}}}
+        self.deployments = set()
+
+        self.assertEqual("", imports.import_cleanup_plan("homestead-import-obsidian")["workload"])
+
+    def test_an_import_from_before_the_record_says_it_does_not_know(self):
+        self.job = {"metadata": {"name": "homestead-import-old", "namespace": "lab",
+                                 "labels": {"harvui.io/app": "old"}}}
+        self.deployments = {"old"}
+
+        plan = imports.import_cleanup_plan("homestead-import-old")
+
+        self.assertFalse(plan["known"])
+        self.assertFalse(plan["volume_created"], "an unknown volume is never deletable")
 
     def test_only_homestead_import_jobs_are_removable(self):
         for name in ("", "kube-system-thing", "homestead-pull-frigate", "../../etc"):
