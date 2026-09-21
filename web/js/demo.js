@@ -291,6 +291,15 @@
       mounts: [{ source: "/mnt/user/appdata/media-server", path: "/config", type: "bind" },
         { source: "/mnt/user/appdata/media-server/transcode", path: "/transcode", type: "bind" },
         { source: "/mnt/user/media", path: "/media", type: "bind" }] },
+    "/api/image-updates/progress": { ns: "lab", name: "plex", phase: "progressing", desired: 1,
+      replicas: 1, updated: 1, ready: 0, available: 0, unavailable: 1, generation: 4,
+      observed_generation: 4, problems: [], can_rollback: true,
+      pull: { state: "pulling", image: "ghcr.io/hotio/plex:latest", node: "harvester-node1",
+        seconds: 135, pod: "plex-5cc965d5f7-d7x7b" },
+      pods: [{ name: "plex-5cc965d5f7-d7x7b", phase: "Pending", node: "harvester-node1",
+        waiting: [{ container: "plex", reason: "ContainerCreating", message: "" }],
+        pull: { state: "pulling", image: "ghcr.io/hotio/plex:latest", seconds: 135 } }],
+      images: { plex: "ghcr.io/hotio/plex:latest" } },
     "/api/imports": [
       { name: "harvui-import-plex", app: "plex", state: "running", start: "2026-09-21T08:40:00Z",
         active: 1, succeeded: 0, failed: 0, step: 2, steps: 4, folder: "transcode",
@@ -406,7 +415,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.10", candidate: "ghcr.io/wjcloudy/homestead:2.8.11", candidate_tag: "2.8.11", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.11", candidate: "ghcr.io/wjcloudy/homestead:2.8.12", candidate_tag: "2.8.12", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

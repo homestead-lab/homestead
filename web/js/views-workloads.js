@@ -413,6 +413,26 @@ window.monitorImageRollouts = (items, startFailures = [], initialStates = {}, al
   poll(); window.__updateTimer = setInterval(poll, 2000);
 };
 
+function pullElapsed(seconds) {
+  const value = Math.max(0, Math.round(seconds || 0));
+  return value < 60 ? `${value}s` : `${Math.floor(value / 60)}m ${String(value % 60).padStart(2, "0")}s`;
+}
+
+/* Kubernetes reports no byte progress for an image pull — the kubelet only
+   says it started and, later, how long it took — so this says which node is
+   fetching and for how long rather than drawing a percentage it cannot know. */
+function pullDetail(s) {
+  const pull = s.pull || {};
+  if (pull.state === "pulling") {
+    return `Fetching ${pull.image || "the image"}${pull.node ? ` on ${pull.node}` : ""} · ${pullElapsed(pull.seconds)} so far`;
+  }
+  if (pull.state === "failed") return pull.detail || "The image could not be pulled";
+  if (pull.state === "pulled" && s.updated < s.desired) {
+    return `Pulled${pull.took ? ` in ${pull.took}` : ""}; starting the container`;
+  }
+  return `${s.updated} replacement pod${s.updated === 1 ? "" : "s"} created`;
+}
+
 function rolloutMarkup(s) {
   const pct = s.desired ? Math.min(100, Math.round(s.ready / s.desired * 100)) : (s.phase === "ready" ? 100 : 0);
   return `<div class="rollout-head"><span class="pill ${s.phase === "ready" ? "ok" : s.phase === "failed" ? "crit" : "warn"}">${esc(s.phase)}</span>
@@ -420,12 +440,12 @@ function rolloutMarkup(s) {
     <div class="rollout-meter"><span style="width:${pct}%"></span></div>
     <div class="rollout-steps">
       <div class="${s.observed_generation >= s.generation ? "done" : "active"}"><i></i><span><b>Deployment accepted</b><small>Generation ${s.generation}</small></span></div>
-      <div class="${s.updated >= s.desired ? "done" : "active"}"><i></i><span><b>New image pulled</b><small>${s.updated} replacement pod${s.updated === 1 ? "" : "s"} created</small></span></div>
+      <div class="${s.updated >= s.desired && s.pull?.state !== "pulling" ? "done" : s.pull?.state === "failed" ? "failed" : "active"}"><i></i><span><b>${s.pull?.state === "pulling" ? "Pulling new image" : s.pull?.state === "failed" ? "Image pull failed" : "New image pulled"}</b><small>${esc(pullDetail(s))}</small></span></div>
       <div class="${s.phase === "ready" ? "done" : s.phase === "failed" ? "failed" : "active"}"><i></i><span><b>Readiness checks</b><small>${s.ready} pod${s.ready === 1 ? "" : "s"} serving</small></span></div>
     </div>
     ${s.problems?.length ? `<div class="gateerr">${s.problems.map(esc).join("<br>")}</div>` : ""}
-    <div class="podprogress">${(s.pods || []).map(p => `<div><span><b>${esc(p.name)}</b><small>${esc(p.node || "scheduling")}</small></span>
-      <span class="pill ${p.phase === "Running" ? "ok" : "warn"}">${esc(p.waiting?.[0]?.reason || p.phase)}</span></div>`).join("")}</div>
+    <div class="podprogress">${(s.pods || []).map(p => `<div><span><b>${esc(p.name)}</b><small>${esc(p.node || "scheduling")}${p.pull?.state === "pulling" ? ` · pulling ${esc(pullElapsed(p.pull.seconds))}` : ""}</small></span>
+      <span class="pill ${p.phase === "Running" ? "ok" : "warn"}">${esc(p.pull?.state === "pulling" ? "pulling image" : p.waiting?.[0]?.reason || p.phase)}</span></div>`).join("")}</div>
     <div class="row" style="margin-top:18px">
       ${s.can_rollback ? `<button class="btn ${s.phase === "failed" ? "danger" : ""}" data-need="operator" onclick="imageRollback('${esc(s.ns)}','${esc(s.name)}')">Rollback</button>` : ""}
       ${s.phase === "ready" ? '<button class="btn pri" onclick="closeModal();go(\'workloads\')">Done</button>' : '<button class="btn" onclick="closeModal()">Monitor in background</button>'}

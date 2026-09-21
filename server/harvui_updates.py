@@ -6,6 +6,7 @@ written to the update history. Applied images are pinned by manifest digest so
 rollback cannot accidentally re-pull a broken mutable tag.
 """
 import base64
+import calendar
 import concurrent.futures
 import hashlib
 import json
@@ -375,6 +376,52 @@ def rollback(ns, name):
     return progress(ns, name, result)
 
 
+PULL_IMAGE = re.compile(r'image\s+"([^"]+)"')
+PULL_TOOK = re.compile(r"\sin\s+([0-9hms.]+)")
+
+
+def _event_age(event):
+    stamp = (event.get("lastTimestamp") or event.get("eventTime") or
+             (event.get("metadata") or {}).get("creationTimestamp") or "")
+    try:
+        moment = time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S")
+    except (TypeError, ValueError):
+        return 0
+    return max(0, int(time.time() - calendar.timegm(moment)))
+
+
+def pull_state(namespace, pod):
+    """What the kubelet says about fetching this pod's image.
+
+    Kubernetes reports no byte or layer progress for an image pull - the
+    kubelet only emits Pulling and Pulled events - so this reports the phase,
+    the image, the node and how long it has been going rather than inventing a
+    percentage.
+    """
+    try:
+        events = kget(f"/api/v1/namespaces/{namespace}/events"
+                      f"?fieldSelector=involvedObject.name={pod}").get("items", [])
+    except Exception:
+        return {}
+    relevant = [event for event in events
+                if event.get("reason") in ("Pulling", "Pulled", "Failed", "BackOff")]
+    if not relevant:
+        return {}
+    relevant.sort(key=_event_age)   # smallest age first: the newest event wins
+    latest = relevant[0]
+    reason, message = latest.get("reason", ""), latest.get("message", "") or ""
+    image = (PULL_IMAGE.search(message) or [None, ""])[1] if PULL_IMAGE.search(message) else ""
+    if reason == "Pulling":
+        return {"state": "pulling", "image": image, "seconds": _event_age(latest),
+                "detail": message[:220]}
+    if reason == "Pulled":
+        took = PULL_TOOK.search(message)
+        return {"state": "pulled", "image": image, "seconds": _event_age(latest),
+                "took": took.group(1) if took else "", "detail": message[:220]}
+    return {"state": "failed", "image": image, "seconds": _event_age(latest),
+            "detail": message[:220]}
+
+
 def progress(ns, name, dep=None):
     dep = dep or kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     pods = _matching_pods(dep, kget("/api/v1/pods").get("items", []))
@@ -399,8 +446,13 @@ def progress(ns, name, dep=None):
                               "message": waiting.get("message", "")[:220]})
                 if waiting.get("reason") in fatal:
                     problems.append(f"{pod['metadata']['name']}: {waiting.get('reason')}")
-        pod_rows.append({"name": pod["metadata"]["name"], "phase": pod.get("status", {}).get("phase", ""),
-                         "node": pod.get("spec", {}).get("nodeName", ""), "waiting": waits})
+        row = {"name": pod["metadata"]["name"], "phase": pod.get("status", {}).get("phase", ""),
+               "node": pod.get("spec", {}).get("nodeName", ""), "waiting": waits}
+        running = all(cs.get("ready") for cs in
+                      pod.get("status", {}).get("containerStatuses", []) or [{}])
+        if not running:
+            row["pull"] = pull_state(ns, row["name"])
+        pod_rows.append(row)
     for condition in status.get("conditions", []) or []:
         if condition.get("type") == "Progressing" and condition.get("status") == "False":
             problems.append(condition.get("message") or condition.get("reason") or "rollout failed")
@@ -410,7 +462,13 @@ def progress(ns, name, dep=None):
     complete = (observed >= generation and replicas == desired and updated == desired and
                 ready == desired and available == desired and unavailable == 0)
     phase = "failed" if problems else ("ready" if complete else "progressing")
-    return {"ns": ns, "name": name, "phase": phase, "desired": desired,
+    # The pull worth reporting is the one still running, else the last failure.
+    pulls = [dict(row["pull"], node=row["node"], pod=row["name"])
+             for row in pod_rows if row.get("pull")]
+    pull = (next((row for row in pulls if row["state"] == "pulling"), None) or
+            next((row for row in pulls if row["state"] == "failed"), None) or
+            (pulls[0] if pulls else {}))
+    return {"ns": ns, "name": name, "phase": phase, "desired": desired, "pull": pull,
             "replicas": replicas, "updated": updated, "ready": ready,
             "available": available, "unavailable": unavailable, "generation": generation,
             "observed_generation": observed, "pods": pod_rows, "problems": problems,

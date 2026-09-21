@@ -97,6 +97,11 @@ def _finish(item, status, progress, message):
     return changed
 
 
+def _elapsed(seconds):
+    seconds = max(0, int(seconds or 0))
+    return f"{seconds}s" if seconds < 60 else f"{seconds // 60}m {seconds % 60:02d}s"
+
+
 def _deployment(item):
     ref = item["ref"]
     state = deployment_progress(ref["namespace"], ref["name"])
@@ -108,6 +113,16 @@ def _deployment(item):
         return "failed", progress, "; ".join(state.get("problems") or []) or "Rollout failed"
     if state.get("phase") == "ready":
         return "succeeded", 100, f"{ready}/{desired} replicas ready"
+    # "0/1 replicas ready" for four minutes says nothing; a big image being
+    # fetched says everything. Kubernetes reports no percentage for a pull, so
+    # this reports what it does know: the image, the node and how long.
+    pull = state.get("pull") or {}
+    if pull.get("state") == "pulling":
+        where = f" on {pull['node']}" if pull.get("node") else ""
+        return "running", progress, f"Pulling image{where} · {_elapsed(pull.get('seconds'))} so far"
+    if pull.get("state") == "pulled" and ready < desired:
+        took = f" in {pull['took']}" if pull.get("took") else ""
+        return "running", progress, f"Image pulled{took}; starting container"
     return "running", progress, f"{ready}/{desired} replicas ready"
 
 
