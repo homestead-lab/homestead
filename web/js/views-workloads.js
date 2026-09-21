@@ -276,12 +276,56 @@ window.wlRestart = async (ns, name) => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.wlDelete = async (ns, name) => {
-  if (!confirm(`Delete "${name}" in ${ns}?\n\nRemoves the Deployment and every Service that points at it, freeing their LAN ports.\nPersistent volumes are kept.`)) return;
-  try { const result = await api(`/api/workload/${ns}/${name}`, { method: "DELETE" });
+  modal("Delete · " + name, '<div class="empty"><span class="spin2"></span>checking what this removes</div>', true);
+  // The card list alone cannot say which Services or claims belong to this
+  // workload, and deleting it removes the first and keeps the second.
+  const [network, vols] = await Promise.all([
+    STATE.data.network ? Promise.resolve(STATE.data.network) : api("/api/network").catch(() => ({ services: [] })),
+    STATE.data.vols ? Promise.resolve(STATE.data.vols) : api("/api/volumes").catch(() => []),
+  ]);
+  const workload = (STATE.data.wl || []).find(row => row.ns === ns && row.name === name) || {};
+  const services = (network.services || [])
+    .filter(row => row.namespace === ns && (row.targets || []).includes(name));
+  const listeners = services.flatMap(row => (row.external_ips || [])
+    .flatMap(ip => (row.ports || []).map(port => `${ip}:${port.port}/${port.protocol}`)));
+  const claims = (vols || []).filter(vol => (vol.attached || []).includes(name));
+  $("#mbody").innerHTML = `
+    <div class="note dependency-danger"><b>This removes the workload, not its data.</b>
+      The Deployment and every Service pointing at it are deleted. Persistent volumes are kept and can be
+      removed afterwards from Volumes.</div>
+    <div class="dependency-list" style="margin-top:12px">
+      <div class="dependency-row"><span>Deployment</span><b class="mono">${esc(ns)}/${esc(name)}</b></div>
+      <div class="dependency-row"><span>Containers</span><b>${(workload.images || []).length || 1}</b></div>
+      <div class="dependency-row ${services.length ? "stranded" : ""}"><span>Services removed</span>
+        <b>${services.length ? services.map(row => esc(row.name)).join(", ") : "none"}</b></div>
+      ${listeners.length ? `<div class="dependency-row stranded"><span>LAN listeners freed</span>
+        <b class="mono">${listeners.map(esc).join(", ")}</b></div>` : ""}
+      <div class="dependency-row"><span>Volumes kept</span>
+        <b>${claims.length ? claims.map(vol => esc(vol.pvc_name || vol.name)).join(", ") : "none attached"}</b></div>
+    </div>
+    <div class="f" style="margin-top:16px"><label>Type <b class="mono">${esc(name)}</b> to confirm</label>
+      <input id="wd_confirm" autocomplete="off" placeholder="${esc(name)}" oninput="wlDeleteGate('${esc(name)}')"></div>
+    <div class="row"><button class="btn danger" id="wd_go" data-need="operator" disabled
+      onclick="wlDeleteNow('${esc(ns)}','${esc(name)}',this)">Delete workload</button>
+      <button class="btn" onclick="closeModal()">Cancel</button></div>`;
+  if (window.applyRole) window.applyRole();
+};
+window.wlDeleteGate = name => {
+  const button = $("#wd_go"), input = $("#wd_confirm");
+  if (button && input) button.disabled = input.value.trim() !== name;
+};
+window.wlDeleteNow = async (ns, name, button) => {
+  if (button) { button.disabled = true; button.textContent = "Deleting…"; }
+  try {
+    const result = await api(`/api/workload/${ns}/${name}`, { method: "DELETE" });
     const freed = (result.services || []).length;
+    closeModal();
     toast(`${name} deleted${freed ? ` with ${freed} service${freed === 1 ? "" : "s"}` : ""}`, "ok");
     setTimeout(() => refresh(true), 900);
-  } catch (e) { toast(e.message, "bad"); }
+  } catch (e) {
+    if (button) { button.disabled = false; button.textContent = "Delete workload"; }
+    toast(e.message, "bad");
+  }
 };
 function openLogs(title, path) {
   if (window.__logTimer) clearInterval(window.__logTimer);

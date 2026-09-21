@@ -54,10 +54,10 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.12`, the workflow publishes:
+For a release such as `v2.8.13`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.12
+ghcr.io/wjcloudy/homestead:2.8.13
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -68,8 +68,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.12
-git push origin v2.8.12
+git tag v2.8.13
+git push origin v2.8.13
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -276,7 +276,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.12 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.13 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -366,6 +366,14 @@ class binds happily and then strands whatever tries to use it in
 migratable class, naming the classes that would work, and the storage picker
 narrows its class list as soon as RWX is chosen. Harvester's reserved internal
 classes are never offered.
+
+A deletion is refused while something would break: a running pod, or a
+controller that still references the claim even at zero replicas, since it
+would start one day and find nothing. A Job that has finished, and the pod it
+left behind, are listed but do not block - the copy job from an import used to
+trap the volume it had just filled. Homestead removes its own finished jobs
+before deleting the claim, because Kubernetes can otherwise hold the PVC in
+Terminating while one exists.
 
 ## Network shares
 

@@ -242,8 +242,9 @@ window.volumeDelete = async x => {
       <div class="row" style="margin-top:16px"><button class="btn" onclick="closeModal()">Close</button></div>`);
   }
   window.__volumeDeletePlan = p;
+  const stale = new Set((p.stale_consumers || []).map(c => `${c.kind}/${c.name}`));
   const mounts = (p.consumers || []).map(c => `<div class="dependency-row ${c.active ? "stranded" : ""}">
-    <div><b>${esc(c.kind)} · ${esc(c.name)}</b><div class="dim xs">${esc(c.namespace)} · ${esc(c.detail || (c.active ? "active" : "inactive"))}</div></div>
+    <div><b>${esc(c.kind)} · ${esc(c.name)}</b>${stale.has(`${c.kind}/${c.name}`) ? '<span class="tag">finished</span>' : ""}<div class="dim xs">${esc(c.namespace)} · ${esc(c.detail || (c.active ? "active" : "inactive"))}</div></div>
     <div class="small mono">${(c.mounts || []).map(m => `${esc(m.container)}:${esc(m.path || m.container_kind)}${m.read_only ? " · read-only" : ""}`).join("<br>") || "claim reference"}</div>
   </div>`).join("");
   const lh = p.longhorn || {}, pv = p.pv || {};
@@ -253,6 +254,9 @@ window.volumeDelete = async x => {
   $("#mbody").innerHTML = `
     ${blocked ? `<div class="note dependency-danger"><b>Deletion is blocked.</b><ul>${p.blocking_reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>`
       : `<div class="note"><b>Impact check passed.</b> This claim is detached and has no active workload references. Choose what should happen to its backing data.</div>`}
+    ${(p.removable_jobs || []).length ? `<div class="note"><b>Finished ${(p.removable_jobs || []).length === 1 ? "job" : "jobs"} still referencing this claim.</b>
+      <span class="mono">${(p.removable_jobs || []).map(esc).join(", ")}</span> already completed — typically the copy job from an import.
+      Homestead removes ${(p.removable_jobs || []).length === 1 ? "it" : "them"} first, because Kubernetes can otherwise hold the claim in Terminating.</div>` : ""}
     <div class="volume-impact-grid">
       ${volumeImpactCount(lh.actual_gb ?? "?", "GB written", "GB written")}
       ${volumeImpactCount(lh.replicas ?? "?", "replica", "replicas")}
@@ -268,6 +272,7 @@ window.volumeDelete = async x => {
     <div class="note ${p.actions?.detach?.complete ? "" : "dependency-danger"}">
       <b>${p.actions?.detach?.complete ? "Already detached." : "Stop and unmount this claim first."}</b>
       Detaching keeps the PVC and all data. Homestead will not silently rewrite or stop the workloads listed below.
+      ${(p.stale_consumers || []).length ? `Entries marked <i>finished</i> have stopped for good and do not hold it.` : ""}
     </div>
     ${mounts ? `<div class="dependency-list" style="margin-top:10px">${mounts}</div>` : '<div class="empty small">No pods, controllers, jobs or virtual machines reference this claim.</div>'}
     <div class="sec">2 · Choose deletion result</div>

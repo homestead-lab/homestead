@@ -210,8 +210,16 @@ def deletion_plan(namespace, name):
         protected.append("this claim stores Homestead's own state")
 
     blockers = list(protected)
-    if consumers:
-        blockers.append(f"{len(consumers)} Kubernetes object reference(s) must be removed first")
+    # A Job that finished, or the Pod it left behind, references the claim but
+    # will never run again - the copy job from an import is the usual case, and
+    # it used to block deleting the very volume it had just filled. A stopped
+    # controller is different: it starts again one day and would find no claim,
+    # so it still blocks.
+    stale = [row for row in consumers
+             if row["kind"] in ("Job", "Pod") and not row.get("active")]
+    lingering = [row for row in consumers if row not in stale]
+    if lingering:
+        blockers.append(f"{len(lingering)} Kubernetes object reference(s) must be removed first")
     if attachment_state == "attached" or attached_node:
         blockers.append(f"Longhorn still reports the volume attached{f' to {attached_node}' if attached_node else ''}")
     if not dependency_inventory_complete:
@@ -242,6 +250,11 @@ def deletion_plan(namespace, name):
         },
         "consumers": consumers,
         "active_consumers": len(active_consumers),
+        # Homestead made these and they have finished, so it can tidy them up
+        # as part of the deletion instead of asking for manual kubectl work.
+        "stale_consumers": stale,
+        "removable_jobs": [row["name"] for row in stale if row["kind"] == "Job"
+                           and row["name"].startswith("harvui-")],
         "snapshots": {"count": len(snapshot_rows), "names": [x.get("name", "") for x in snapshot_rows[:20]]},
         "backups": {"count": len(backup_rows), "names": [x.get("name", "") for x in backup_rows[:20]]},
         "data_present": data_present,
@@ -274,6 +287,15 @@ def delete(cfg):
         raise PermissionError("volume deletion blocked: " + "; ".join(plan["blocking_reasons"]))
     if action == "delete_data" and not plan["inventory_complete"]:
         raise PermissionError("permanent deletion is blocked until snapshot and backup impact can be checked")
+
+    # Clear Homestead's own finished Jobs first: while one exists, Kubernetes
+    # can hold the PVC in Terminating even though the Job stopped long ago.
+    for job in plan.get("removable_jobs") or []:
+        try:
+            ksend("DELETE", f"/apis/batch/v1/namespaces/{namespace}/jobs/{job}"
+                            "?propagationPolicy=Background")
+        except Exception:
+            pass
 
     pv_name = plan["pv"]["name"]
     desired_policy = "Retain" if action == "delete_claim" else "Delete"

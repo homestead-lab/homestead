@@ -181,7 +181,8 @@
           detail: "Running on harvester-node2", mounts: [{ container: "frigate", container_kind: "app", path: "/config", read_only: false }] },
         { kind: "Deployment", name: "frigate", namespace: "lab", active: true,
           detail: "1 desired replica", mounts: [{ container: "frigate", container_kind: "app", path: "/config", read_only: false }] },
-      ] : [],
+      ] : [{ kind: "Job", name: "harvui-import-frigate", namespace: "lab", active: false,
+        detail: "not running", mounts: [{ container: "copy", container_kind: "app", path: "/appdata" }] }],
       active_consumers: attached ? 2 : 0,
       snapshots: { count: attached ? 3 : 1, names: ["daily"] },
       backups: { count: 1, names: ["nightly"] },
@@ -191,6 +192,9 @@
         "2 active workload reference(s) must be stopped and unmounted first",
         "Longhorn still reports the volume attached to harvester-node2",
       ] : [],
+      stale_consumers: attached ? [] : [{ kind: "Job", name: "harvui-import-frigate", namespace: "lab",
+        active: false, detail: "not running", mounts: [{ container: "copy", path: "/appdata" }] }],
+      removable_jobs: attached ? [] : ["harvui-import-frigate"],
       actions: {
         detach: { complete: !attached, description: "Stop/unmount consumers while keeping the claim and all data." },
         delete_claim: { enabled: !attached, description: "Delete the PVC and retain backing data." },
@@ -415,7 +419,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.11", candidate: "ghcr.io/wjcloudy/homestead:2.8.12", candidate_tag: "2.8.12", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.12", candidate: "ghcr.io/wjcloudy/homestead:2.8.13", candidate_tag: "2.8.13", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

@@ -136,6 +136,45 @@ class VolumeDeletionTests(unittest.TestCase):
         self.assertFalse(plan["consumers"][0]["active"])
         self.assertTrue(any("object reference" in reason for reason in plan["blocking_reasons"]))
 
+    def test_a_finished_import_job_does_not_block_the_volume_it_filled(self):
+        """The copy job outlives the import; it must not trap the volume."""
+        self.claim()
+        self.objects["/apis/batch/v1/namespaces/lab/jobs"] = {"items": [{
+            "metadata": {"name": "harvui-import-media", "namespace": "lab"},
+            "spec": {"template": {"spec": {
+                "volumes": [{"name": "appdata", "persistentVolumeClaim": {"claimName": "media"}}],
+                "containers": [{"name": "copy", "volumeMounts": [{"name": "appdata", "mountPath": "/appdata"}]}],
+            }}},
+            "status": {"active": 0, "succeeded": 1},
+        }]}
+
+        plan = volumes.deletion_plan("lab", "media")
+
+        self.assertFalse(plan["blocked"], "a completed job is not a reason to refuse")
+        self.assertEqual(["harvui-import-media"], plan["removable_jobs"])
+        self.assertEqual(1, len(plan["stale_consumers"]))
+
+    def test_deleting_the_claim_clears_the_finished_job_first(self):
+        self.claim()
+        self.objects["/apis/batch/v1/namespaces/lab/jobs"] = {"items": [{
+            "metadata": {"name": "harvui-import-media", "namespace": "lab"},
+            "spec": {"template": {"spec": {
+                "volumes": [{"name": "appdata", "persistentVolumeClaim": {"claimName": "media"}}],
+                "containers": [{"name": "copy", "volumeMounts": [{"name": "appdata", "mountPath": "/appdata"}]}],
+            }}},
+            "status": {"active": 0, "succeeded": 1},
+        }]}
+
+        volumes.delete({"namespace": "lab", "name": "media", "uid": "uid-1",
+                        "action": "delete_claim", "confirmation": "media"})
+
+        deletes = [path for method, path, *_ in self.sent if method == "DELETE"]
+        self.assertTrue(any("jobs/harvui-import-media" in path for path in deletes))
+        self.assertTrue(any("persistentvolumeclaims/media" in path for path in deletes))
+        self.assertLess([i for i, p in enumerate(deletes) if "jobs/" in p][0],
+                        [i for i, p in enumerate(deletes) if "persistentvolumeclaims/" in p][0],
+                        "the job goes before the claim, or the claim can hang in Terminating")
+
     def test_homestead_and_system_claims_are_hard_blocked(self):
         for app_name in ("harvui", "homestead"):
             with self.subTest(app_name=app_name):
