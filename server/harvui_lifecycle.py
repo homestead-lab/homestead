@@ -420,11 +420,11 @@ def _apply_container_volumes(ns, spec, container_requests):
                     raise ValueError(f"{name}: pod volume {source or '(blank)'} does not exist "
                                      "in this workload")
                 volume_name = source
-            elif kind in ("ephemeral", "memory"):
-                # A RAM disk and a scratch directory are the same object to
-                # Kubernetes, distinguished only by its medium.
+            elif kind in ("ephemeral", "memory", "shm"):
+                # A RAM disk, a scratch directory and an enlarged /dev/shm are
+                # one object to Kubernetes, told apart only by their medium.
                 empty = {}
-                if kind == "memory":
+                if kind in ("memory", "shm"):
                     empty["medium"] = "Memory"
                     if row.get("size_limit"):
                         empty["sizeLimit"] = str(row["size_limit"])

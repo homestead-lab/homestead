@@ -224,6 +224,17 @@ class MemoryScratchTests(WorkloadEditFixture, unittest.TestCase):
         mounts = {m["mountPath"]: m["name"] for m in spec["containers"][0]["volumeMounts"]}
         self.assertEqual(scratch["name"], mounts["/tmp/cache"])
 
+    def test_shared_memory_is_a_ram_volume_over_dev_shm(self):
+        """A pod's own /dev/shm is 64 MiB and cannot be asked to be larger."""
+        self.edit([{"path": "/dev/shm", "kind": "shm", "source": "",
+                    "type": "emptyDir", "medium": "memory", "size_limit": "2048Mi"}])
+
+        spec = self.saved_spec()
+        shm = next(v for v in spec["volumes"] if "emptyDir" in v)
+        self.assertEqual({"medium": "Memory", "sizeLimit": "2048Mi"}, shm["emptyDir"])
+        mounts = {m["mountPath"]: m["name"] for m in spec["containers"][0]["volumeMounts"]}
+        self.assertEqual(shm["name"], mounts["/dev/shm"])
+
     def test_a_plain_scratch_volume_stays_disk_backed(self):
         self.edit([{"path": "/tmp/work", "kind": "ephemeral", "source": "", "type": "emptyDir"}])
 

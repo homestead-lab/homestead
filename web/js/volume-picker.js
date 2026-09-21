@@ -11,9 +11,11 @@ const VOLUME_KIND_LABELS = {
   existing: "Existing PVC · keep data",
   ephemeral: "Temporary pod storage · emptyDir",
   memory: "Memory scratch · RAM-backed",
+  shm: "Shared memory · /dev/shm",
   host: "Host path · advanced",
 };
-const VOLUME_KINDS = ["new-rwo", "new-rwx", "existing", "pod", "ephemeral", "memory", "host"];
+const VOLUME_KINDS = ["new-rwo", "new-rwx", "existing", "pod", "ephemeral", "memory", "shm", "host"];
+const SHM_PATH = "/dev/shm";
 
 const VOLUME_PICKER_DEFAULTS = {
   pvcs: () => [],
@@ -36,9 +38,16 @@ const VOLUME_PICKER_DEFAULTS = {
 };
 
 function volumeKind(v) {
-  if (v.kind) return v.kind;
+  // A memory volume already mounted at /dev/shm is shared memory, whoever
+  // described it: the server reads one back as plain "memory".
+  const atShm = String(v.path || "").replace(/\/+$/, "") === SHM_PATH;
+  if (v.kind) return v.kind === "memory" && atShm ? "shm" : v.kind;
   if (v.type === "host") return "host";
-  if (v.type === "emptyDir") return String(v.medium || "").toLowerCase() === "memory" ? "memory" : "ephemeral";
+  if (v.type === "emptyDir") {
+    if (String(v.medium || "").toLowerCase() !== "memory") return "ephemeral";
+    // /dev/shm is the one RAM mount with a fixed home and a reason of its own.
+    return atShm ? "shm" : "memory";
+  }
   if (v.type === "pod") return "pod";
   if (v.create === false) return "existing";
   return v.access_mode === "ReadWriteMany" ? "new-rwx" : "new-rwo";
@@ -46,7 +55,7 @@ function volumeKind(v) {
 
 function volumeType(kind) {
   return kind === "host" ? "host" : kind === "pod" ? "pod"
-    : kind === "ephemeral" || kind === "memory" ? "emptyDir" : "pvc";
+    : kind === "ephemeral" || kind === "memory" || kind === "shm" ? "emptyDir" : "pvc";
 }
 
 /* Validation runs on plain objects so it can be reused before a save without a
@@ -56,7 +65,7 @@ function volumeRowIssue(v) {
   if (!path) return "every storage mapping needs a container mount path";
   if (!path.startsWith("/")) return `mount path "${path}" must start with /`;
   const kind = volumeKind(v || {});
-  if (kind !== "ephemeral" && kind !== "memory" && !String((v && v.source) || "").trim()) {
+  if (!["ephemeral", "memory", "shm"].includes(kind) && !String((v && v.source) || "").trim()) {
     return `${path} needs a storage source`;
   }
   if ((kind === "new-rwo" || kind === "new-rwx") &&
@@ -171,12 +180,17 @@ function syncVolumeRow(row) {
   if (podOption) podOption.disabled = !allowPod;
   if (kind === "pod" && !allowPod) $(".vk", row).value = (ctx.kinds || VOLUME_KINDS).find(k => k !== "pod") || "existing";
   const actual = $(".vk", row).value, isNew = actual.startsWith("new-");
-  const ram = actual === "memory";
+  const shm = actual === "shm", ram = actual === "memory" || shm;
+  // Shared memory only means anything at /dev/shm, so the row fills that in
+  // and stops it being typed somewhere it would do nothing.
+  const pathInput = $(".vp", row);
+  if (shm) pathInput.value = SHM_PATH;
+  pathInput.disabled = shm;
   $(".vnew", row).style.display = isNew || ram ? "grid" : "none";
   $(".vnew", row).classList.toggle("ram", ram);
   const sizeLabel = $(".vsize-label", row);
   if (sizeLabel) sizeLabel.textContent = ram ? "Size MiB" : "Size GiB";
-  if (ram && !row.dataset.ramSized) { $(".vz", row).value = 1024; row.dataset.ramSized = "1"; }
+  if (ram && !row.dataset.ramSized) { $(".vz", row).value = shm ? 2048 : 1024; row.dataset.ramSized = "1"; }
   if (!ram && row.dataset.ramSized) { $(".vz", row).value = 5; delete row.dataset.ramSized; }
   const hidden = volumeClassList(row, actual);
   const badges = $(".vclass-badges", row);
@@ -201,6 +215,7 @@ function syncVolumeRow(row) {
         (hidden ? ` ${hidden} storage class${hidden === 1 ? "" : "es"} hidden: they create live-migratable VM volumes, which Longhorn cannot mount into a pod.` : "")
     : actual === "existing" ? selectedPvc ? `${selectedPvc.name}: ${claimSummary(selectedPvc)}. The claim and data are kept.${claimRisk(selectedPvc, ctx)}` : "Mounts an existing PVC without creating or deleting it."
     : actual === "pod" ? selectedPodVolume ? `${selectedPodVolume.name}: ${selectedPodVolume.kind}${selectedPodVolume.source ? ` (${selectedPodVolume.source})` : ""}. The same storage is shared with the other container.` : ctx.podHelp
+    : shm ? "Kubernetes gives every pod 64 MiB of /dev/shm and no way to ask for more, so this mounts a RAM disk over it. Apps that pass frames or buffers between processes - Frigate, Chromium, Postgres - need far more than the default. It counts against the node's memory."
     : ram ? "Creates a RAM disk of this size inside the pod. It starts empty every time and counts against the node's memory; this is what a tmpfs mount becomes."
     : actual === "ephemeral" ? "Creates temporary pod storage. Its contents are deleted when the pod is replaced; ideal for cache or transcoding."
     : "Mounts this exact host path; the container can only run where that path exists.";
@@ -238,12 +253,12 @@ function addVolumeRow(host, v = {}) {
 }
 
 function readVolumeRow(row) {
-  const kind = $(".vk", row).value;
-  const size = +$(".vz", row).value || (kind === "memory" ? 1024 : 5);
-  return { path: $(".vp", row).value.trim(), source: volumeSourceValue(row), kind,
+  const kind = $(".vk", row).value, inRam = kind === "memory" || kind === "shm";
+  const size = +$(".vz", row).value || (inRam ? 1024 : 5);
+  return { path: kind === "shm" ? SHM_PATH : $(".vp", row).value.trim(), source: volumeSourceValue(row), kind,
     type: volumeType(kind),
-    medium: kind === "memory" ? "memory" : "",
-    size_limit: kind === "memory" ? `${size}Mi` : "",
+    medium: inRam ? "memory" : "",
+    size_limit: inRam ? `${size}Mi` : "",
     create: kind === "new-rwo" || kind === "new-rwx", size_gb: +$(".vz", row).value || 5,
     storage_class: $(".vsc", row).value, access_mode: kind === "new-rwx" ? "ReadWriteMany" : "ReadWriteOnce",
     read_only: $(".vro", row).checked, label: row.dataset.label || "", description: row.dataset.description || "",
