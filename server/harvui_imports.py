@@ -216,7 +216,7 @@ def inspect_source_container(name, container):
         if destination and not any(row["path"] == destination for row in mounts):
             mounts.append({"source": "", "path": destination, "type": "tmpfs",
                            "size_mb": _tmpfs_mb(options)})
-    app_mount = next((m for m in mounts if m["source"].startswith(src.get("base_path", "/mnt/user/appdata"))), None)
+    app_mount = _config_mount(mounts, src.get("base_path", "/mnt/user/appdata"))
     labels = config.get("Labels", {}) or {}
     devices = host.get("Devices", []) or []
     paths = " ".join([d.get("PathOnHost", "") for d in devices] + (host.get("Binds", []) or [])).lower()
@@ -232,10 +232,33 @@ def inspect_source_container(name, container):
         "icon": labels.get("net.unraid.docker.icon", "") or labels.get("harvui.icon", ""),
         "webui": labels.get("net.unraid.docker.webui", ""),
         "env": env, "ports": ports, "mounts": mounts,
-        "remote_path": app_mount["source"] if app_mount else src.get("base_path", "/mnt/user/appdata") + "/" + container,
+        "remote_path": app_mount["source"] if app_mount else "",
         "mount_path": app_mount["path"] if app_mount else "/config",
+        # Nothing on the host said where this container keeps its config, so the
+        # import must not pretend: a guessed path is one rsync cannot find.
+        "guessed_path": not app_mount,
         "network_mode": host.get("NetworkMode", "bridge"), "hardware": hardware,
     }
+
+
+CONFIG_MOUNTS = ("/config", "/data", "/etc/config", "/var/lib")
+
+
+def _config_mount(mounts, base_path):
+    """The bind mount holding this container's configuration, or None.
+
+    Usually it lives under the source's appdata directory. Plenty of Unraid
+    templates keep it elsewhere - Frigate often sits beside the recordings on
+    a camera share - so a container path that conventionally means config is
+    the second choice. Guessing a path that is not there is not a choice at
+    all: rsync only discovers that halfway through a copy.
+    """
+    binds = [m for m in mounts if m.get("source", "").startswith("/") and m.get("path")]
+    under_base = [m for m in binds if m["source"].startswith(base_path.rstrip("/") + "/")
+                  or m["source"] == base_path.rstrip("/")]
+    if under_base:
+        return under_base[0]
+    return next((m for m in binds if m["path"].rstrip("/") in CONFIG_MOUNTS), None)
 
 
 def run_probe(tag, script, src, timeout=70):

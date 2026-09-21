@@ -643,6 +643,7 @@ svg use,#nav a svg,.iconbtn svg,.sicon svg{stroke:currentColor;fill:none;stroke-
   background:rgba(255,176,32,.07);border:1px solid rgba(255,176,32,.22)}
 .note.good{background:rgba(61,220,151,.07);border-color:rgba(61,220,151,.24);color:var(--green)}
 .note.bad{background:rgba(255,95,115,.07);border-color:rgba(255,95,115,.24);color:var(--red)}
+.note.warn{background:rgba(255,176,32,.07);border-color:rgba(255,176,32,.26);color:var(--med)}
 .note code{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11.5px;color:#ffc86b}
 .modalbox.wide{width:min(1000px,100%)}
 .abox.dimmed,.copy.dimmed{opacity:.22;filter:saturate(.4)}

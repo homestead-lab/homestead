@@ -779,10 +779,12 @@ function importMappingRows(cfg, src) {
       ? { mount_path: mount.path, medium: "memory", size_mb: mount.size_mb || 1024, include: true }
       : { remote_path: mount.source, mount_path: mount.path,
           include: mount.source === cfg.remote_path || mount.source.startsWith(base + "/") });
-  if (cfg.remote_path && !rows.some(row => row.remote_path === cfg.remote_path)) {
+  // cfg.remote_path is only worth adding when the host actually reported it.
+  // A guessed one is a folder nobody has: it would be ticked, copied, and fail.
+  if (cfg.remote_path && !cfg.guessed_path && !rows.some(row => row.remote_path === cfg.remote_path)) {
     rows.unshift({ remote_path: cfg.remote_path, mount_path: cfg.mount_path || "/config", include: true });
   }
-  if (!rows.length) rows.push({ remote_path: cfg.remote_path || "", mount_path: cfg.mount_path || "/config", include: true });
+  if (!rows.length) rows.push({ remote_path: "", mount_path: cfg.mount_path || "/config", include: true });
   return rows.filter(row => {
     const key = row.medium ? `ram:${row.mount_path}` : row.remote_path;
     return !seen.has(key) && seen.add(key);
@@ -974,7 +976,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
   modal("Import · " + dir, `
     <div class="f"><label>Workload name</label><input type="text" id="im_name" value="${esc(name)}"></div>
     <div class="f"><label>Remote path</label>
-      <input type="text" id="im_path" value="${esc(cfg.remote_path || ((src.base_path || "") + "/" + dir))}"></div>
+      <input type="text" id="im_path" value="${esc(cfg.remote_path || "")}" placeholder="${esc((src.base_path || "") + "/" + dir)}"></div>
     <div class="f"><label>Docker image ${tip("Read from Docker on the source host. You can change the tag before importing.")}</label>
       <input type="text" id="im_image" value="${esc(cfg.image || "")}" placeholder="lscr.io/linuxserver/${esc(name)}:latest"></div>
     <div class="f"><label>Logo URL</label><input type="url" id="im_icon" value="${esc(cfg.icon || "")}" placeholder="https://…/icon.png"></div>
@@ -982,6 +984,8 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <div class="hwchoices">${hardwareChoices("im_hw", cfg.hardware || [])}</div>
     <div class="sec">Folders to copy ${tip("Every Docker path under the source appdata directory can come across. They all live in one Longhorn volume for this app, each in its own subfolder, mounted back where the container expects it.")}</div>
     <div class="note">Source folders → the volumes you define below → mounted back at each container path.</div>
+    ${cfg.guessed_path ? `<div class="note warn">Nothing this container mounts sits under <span class="mono">${esc(src.base_path || "/mnt/user/appdata")}</span>,
+      so Homestead cannot tell which folder holds its configuration. Tick the ones to copy yourself.</div>` : ""}
     <div id="im_maps">${importMappingRows(cfg, src).map(importMappingRow).join("")}</div>
     <div class="row"><button class="btn sm" onclick="imAddMap()">＋ add folder</button>
       <button class="btn sm" onclick="imAddScratch()">＋ add RAM scratch</button>

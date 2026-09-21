@@ -574,3 +574,31 @@ class FsGroupTests(unittest.TestCase):
             "namespace": "lab", "volumes": []})
 
         self.assertNotIn("securityContext", deployment["spec"]["template"]["spec"])
+
+
+class ConfigMountTests(unittest.TestCase):
+    """Which folder an imported container keeps its configuration in."""
+
+    def test_appdata_wins_when_the_container_mounts_it(self):
+        mounts = [{"source": "/mnt/user/cctv", "path": "/media"},
+                  {"source": "/mnt/user/appdata/frigate", "path": "/config"}]
+
+        chosen = imports._config_mount(mounts, "/mnt/user/appdata")
+
+        self.assertEqual("/mnt/user/appdata/frigate", chosen["source"])
+
+    def test_a_config_path_outside_appdata_is_used_rather_than_invented(self):
+        """Frigate on Unraid often keeps its config beside the recordings."""
+        mounts = [{"source": "/mnt/user/cctv/Frigate/recordings", "path": "/media/frigate"},
+                  {"source": "/mnt/user/cctv/Frigate", "path": "/config"}]
+
+        chosen = imports._config_mount(mounts, "/mnt/user/appdata")
+
+        self.assertEqual("/mnt/user/cctv/Frigate", chosen["source"],
+                         "the real path on the host, not /mnt/user/appdata/frigate")
+
+    def test_nothing_recognisable_means_nothing_is_guessed(self):
+        mounts = [{"source": "/mnt/user/films", "path": "/films"},
+                  {"source": "", "path": "/tmp/cache", "type": "tmpfs"}]
+
+        self.assertIsNone(imports._config_mount(mounts, "/mnt/user/appdata"))
