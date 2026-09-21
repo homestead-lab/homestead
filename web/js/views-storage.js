@@ -498,6 +498,10 @@ window.fileOpen = async (path) => {
 
 window.fileTouched = () => {
   FILEVIEW.dirty = true;
+  window.__modalGuard = () => FILEVIEW.dirty
+    ? `${FILEVIEW.file} has unsaved changes.
+
+Close the editor and lose them?` : "";
   const state = $("#file_state");
   if (state) state.textContent = "unsaved changes";
 };

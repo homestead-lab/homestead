@@ -248,11 +248,12 @@ if (sbtn) sbtn.onclick = () => {
 $("#globalSearch").addEventListener("blur", () => {
   if (!$("#globalSearch").value) document.body.classList.remove("searching");
 });
-$("#mclose").onclick = closeModal;
-$("#modal").onclick = e => { if (e.target.id === "modal") closeModal(); };
+$("#mclose").onclick = dismissModal;
+// Clicking the backdrop deliberately does nothing: a modal here is usually a
+// form worth several minutes, and losing it to a stray click is not a feature.
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") {
-    closeModal(); closeNav(); $("#drawer").classList.remove("open");
+    dismissModal(); closeNav(); $("#drawer").classList.remove("open");
     document.body.classList.remove("searching");
   }
   if (e.key === "/" && document.activeElement.tagName !== "INPUT") { e.preventDefault(); $("#globalSearch").focus(); }

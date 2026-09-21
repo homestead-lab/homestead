@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HOMESTEAD_VERSION = "2.8.21";
+const HOMESTEAD_VERSION = "2.8.22";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -164,6 +164,7 @@ function toast(msg, kind = "") {
   $("#toast").appendChild(d); setTimeout(() => d.remove(), 4200);
 }
 function modal(t, h, wide, contextClass = "") {
+  window.__modalGuard = null;   // each modal decides for itself what is at stake
   $("#mtitle").textContent = t;
   $("#mbody").innerHTML = h;
   enhanceActions($("#mbody"));
@@ -172,7 +173,19 @@ function modal(t, h, wide, contextClass = "") {
   $("#modal").classList.toggle("node-detail-view", contextClass === "node-detail-modal");
   $("#modal").classList.remove("hidden");
 }
+/* The X and Escape are the only ways a person dismisses a modal, and either can
+   land on unsaved work, so both ask a modal that has something at stake first.
+   Code that closes a modal after finishing its job calls closeModal directly. */
+function dismissModal() {
+  const guard = window.__modalGuard;
+  if (typeof guard === "function") {
+    const question = guard();
+    if (question && !confirm(question)) return;
+  }
+  closeModal();
+}
 function closeModal(updateRoute = true) {
+  window.__modalGuard = null;
   if (window.__hardwareReturn && /hardware feature/i.test($("#mtitle").textContent)) {
     return hardwareManagerBack();
   }
