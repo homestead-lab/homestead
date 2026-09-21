@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.22"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.23"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2292,6 +2292,18 @@ def is_public_path(path):
     return path in PUBLIC or is_asset_path(path) or path.startswith("/api/icons/")
 
 
+VENDOR_TYPES = {".js": "application/javascript", ".css": "text/css", ".ttf": "font/ttf",
+                ".json": "application/json", ".svg": "image/svg+xml", ".map": "application/json",
+                ".md": "text/markdown; charset=utf-8"}
+
+
+def is_vendor_path(path):
+    """A file from a vendored library, addressed by its own relative path."""
+    path = path or ""
+    return (bool(re.fullmatch(r"/vendor/[A-Za-z0-9][A-Za-z0-9/._-]*", path)) and
+            ".." not in path and os.path.splitext(path)[1] in VENDOR_TYPES)
+
+
 def is_asset_path(path):
     """Allow only flat, bundled SVG assets; never user-controlled filesystem paths."""
     return bool(re.fullmatch(r"/assets/[A-Za-z0-9][A-Za-z0-9._-]*\.svg", path or ""))
@@ -2376,12 +2388,15 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _file(self, path, ctype):
+    def _file(self, path, ctype, cache=""):
         try:
             with open(path, "rb") as f:
-                self._send(200, f.read(), ctype)
+                body = f.read()
         except FileNotFoundError:
-            self._send(404, {"error": "not found"})
+            return self._send(404, {"error": "not found"})
+        if cache:
+            self._extra_headers = list(getattr(self, "_extra_headers", [])) + [("Cache-Control", cache)]
+        self._send(200, body, ctype)
 
     def _icon(self, request_path):
         try:
@@ -2422,7 +2437,8 @@ class H(BaseHTTPRequestHandler):
 
     def _guard(self, path):
         """Returns None when the request may proceed, or sends the refusal."""
-        if is_spa_route(path) or is_public_path(path) or (path.startswith("/js/") and path.endswith(".js")):
+        if (is_spa_route(path) or is_public_path(path) or is_vendor_path(path) or
+                (path.startswith("/js/") and path.endswith(".js"))):
             return None
         who = self._who()
         if not who:
@@ -2463,6 +2479,11 @@ class H(BaseHTTPRequestHandler):
                 return self._file(f"{WEBROOT}/js/{os.path.basename(p)}", "application/javascript")
             if is_asset_path(p):
                 return self._file(f"{WEBROOT}/assets/{os.path.basename(p)}", "image/svg+xml")
+            if is_vendor_path(p):
+                # Vendored libraries are versioned by release, so they can be
+                # cached hard: Monaco alone is several megabytes.
+                return self._file(f"{WEBROOT}{p}", VENDOR_TYPES[os.path.splitext(p)[1]],
+                                  cache="public, max-age=31536000, immutable")
             if p == "/app.js":
                 return self._file(f"{WEBROOT}/app.js", "application/javascript")
             if p == "/style.css":

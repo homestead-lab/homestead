@@ -25,6 +25,9 @@ COPY --chown=harvui:harvui server/*.py /srv/
 COPY --chown=harvui:harvui web/index.html web/style.css /web/
 COPY --chown=harvui:harvui web/js/*.js /web/js/
 COPY --chown=harvui:harvui web/assets/*.svg /web/assets/
+# Vendored libraries keep their own directory layout: Monaco loads its pieces
+# by relative path at runtime.
+COPY --chown=harvui:harvui web/vendor /web/vendor
 
 USER 10001:10001
 EXPOSE 8080

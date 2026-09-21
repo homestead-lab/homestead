@@ -413,10 +413,83 @@ window.volumeClassFacts = () => {
   }
 };
 
-const FILEVIEW = { namespace: "", pvc: "", path: "", file: "", dirty: false };
+const FILEVIEW = { namespace: "", pvc: "", path: "", file: "", dirty: false, editor: null };
+
+function disposeEditor() {
+  if (FILEVIEW.editor) {
+    FILEVIEW.editor.getModel()?.dispose();
+    FILEVIEW.editor.dispose();
+    FILEVIEW.editor = null;
+  }
+}
 
 const fileSize = bytes => bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
   : bytes >= 1024 ? `${Math.round(bytes / 1024)} KB` : `${bytes} B`;
+
+/* Monaco is several megabytes, so it is fetched the first time a file is
+   opened rather than on page load, and never at all for the rest of the app.
+   If it cannot load - offline, blocked, a stripped image - the editor falls
+   back to the textarea that was here before, which still saves correctly. */
+const MONACO_BASE = "/vendor/monaco";
+let monacoLoading = null;
+
+function monacoLanguage(name) {
+  const extension = String(name || "").toLowerCase().split(".").pop();
+  return { yml: "yaml", yaml: "yaml", json: "json", md: "markdown", markdown: "markdown",
+    xml: "xml", conf: "ini", ini: "ini", cfg: "ini", env: "ini", toml: "ini",
+    sh: "shell", bash: "shell", py: "python", js: "javascript", ts: "typescript" }[extension] || "plaintext";
+}
+
+function loadMonaco() {
+  if (window.monaco?.editor) return Promise.resolve(window.monaco);
+  if (monacoLoading) return monacoLoading;
+  monacoLoading = new Promise((resolve, reject) => {
+    const failed = message => { monacoLoading = null; reject(new Error(message)); };
+    const style = document.createElement("link");
+    style.rel = "stylesheet";
+    style.href = `${MONACO_BASE}/vs/editor/editor.main.css?v=${HOMESTEAD_VERSION}`;
+    document.head.appendChild(style);
+    const script = document.createElement("script");
+    script.src = `${MONACO_BASE}/vs/loader.js?v=${HOMESTEAD_VERSION}`;
+    script.onerror = () => failed("the editor could not be loaded");
+    script.onload = () => {
+      try {
+        window.require.config({ paths: { vs: `${MONACO_BASE}/vs` } });
+        // Same origin, so the worker needs no blob shim.
+        window.MonacoEnvironment = { getWorkerUrl: () => `${MONACO_BASE}/vs/base/worker/workerMain.js` };
+        window.require(["vs/editor/editor.main"], () => resolve(window.monaco), () => failed("the editor could not start"));
+      } catch (e) { failed(e.message); }
+    };
+    document.head.appendChild(script);
+  });
+  return monacoLoading;
+}
+
+function monacoTheme() {
+  return document.documentElement.dataset.theme === "light" ? "vs" : "vs-dark";
+}
+
+async function mountEditor(host, content, filename) {
+  const monaco = await loadMonaco();
+  const editor = monaco.editor.create(host, {
+    value: content,
+    language: monacoLanguage(filename),
+    theme: monacoTheme(),
+    automaticLayout: true,
+    minimap: { enabled: false },
+    fontSize: 12.5,
+    fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+    scrollBeyondLastLine: false,
+    renderWhitespace: "selection",
+    tabSize: 2,
+    insertSpaces: true,
+    rulers: [],
+    padding: { top: 10, bottom: 10 },
+  });
+  editor.onDidChangeModelContent(() => fileTouched());
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => fileSave());
+  return editor;
+}
 
 window.volumeFiles = async (namespace, pvc, attached) => {
   Object.assign(FILEVIEW, { namespace, pvc, path: "", file: "", dirty: false });
@@ -430,6 +503,7 @@ window.volumeFiles = async (namespace, pvc, attached) => {
 window.fileBrowse = async (path) => {
   const { namespace, pvc } = FILEVIEW;
   if (FILEVIEW.dirty && !confirm("Discard unsaved changes?")) return;
+  disposeEditor();
   try {
     const listing = await api(`/api/files/list?namespace=${encodeURIComponent(namespace)}&pvc=${encodeURIComponent(pvc)}&path=${encodeURIComponent(path || "")}`);
     Object.assign(FILEVIEW, { path: listing.path || "", file: "", dirty: false });
@@ -479,19 +553,32 @@ window.fileOpen = async (path) => {
     $("#mbody").innerHTML = `<div class="filecrumbs">${fileCrumbs(FILEVIEW.path)}<span class="dim">/</span><b>${esc(file.path.split("/").pop())}</b></div>
       <div class="between fileeditbar"><span class="dim xs">${fileSize(file.size)} · saving keeps the previous contents as <span class="mono">${esc(file.path.split("/").pop())}.homestead-bak</span></span>
         <span class="dim xs" id="file_state"></span></div>
-      <textarea id="file_body" class="mono fileeditor" spellcheck="false" rows="20" oninput="fileTouched()">${esc(file.content)}</textarea>
+      <div id="file_editor" class="fileeditor"></div>
       <div class="row" style="margin-top:14px">
         <button class="btn pri" id="file_save" data-need="admin" onclick="fileSave()">Save</button>
         <button class="btn" onclick="fileBrowse('${esc(FILEVIEW.path)}')">Back</button>
         <button class="btn" onclick="closeFiles()">Close browser</button></div>`;
-    const editor = $("#file_body");
-    editor.addEventListener("keydown", event => {
-      if (event.key !== "Tab") return;
-      event.preventDefault();
-      const start = editor.selectionStart, end = editor.selectionEnd;
-      editor.setRangeText("  ", start, end, "end");
-      fileTouched();
-    });
+    FILEVIEW.editor = null;
+    try {
+      FILEVIEW.editor = await mountEditor($("#file_editor"), file.content, file.path);
+    } catch (e) {
+      // Still perfectly editable, just without highlighting.
+      const host = $("#file_editor");
+      if (host) {
+        host.innerHTML = `<textarea id="file_body" class="mono fileeditor-plain" spellcheck="false"
+          oninput="fileTouched()"></textarea>`;
+        $("#file_body").value = file.content;
+        $("#file_body").addEventListener("keydown", event => {
+          if (event.key !== "Tab") return;
+          event.preventDefault();
+          const input = $("#file_body");
+          input.setRangeText("  ", input.selectionStart, input.selectionEnd, "end");
+          fileTouched();
+        });
+        const state = $("#file_state");
+        if (state) state.textContent = "plain editor";
+      }
+    }
     if (window.applyRole) window.applyRole();
   } catch (e) { toast(e.message, "bad"); }
 };
@@ -508,7 +595,8 @@ Close the editor and lose them?` : "";
 
 window.fileSave = async (ignoreSyntax = false) => {
   const { namespace, pvc, file } = FILEVIEW;
-  const button = $("#file_save"), content = $("#file_body").value;
+  const button = $("#file_save");
+  const content = FILEVIEW.editor ? FILEVIEW.editor.getValue() : ($("#file_body")?.value ?? "");
   if (button) { button.disabled = true; button.textContent = "Saving…"; }
   try {
     const result = await api("/api/files/write", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -531,6 +619,7 @@ window.fileSave = async (ignoreSyntax = false) => {
 window.closeFiles = async () => {
   const { namespace, pvc, dirty } = FILEVIEW;
   if (dirty && !confirm("Discard unsaved changes?")) return;
+  disposeEditor();
   closeModal();
   try {
     await api("/api/files/close", { method: "POST", headers: { "Content-Type": "application/json" },

@@ -41,7 +41,8 @@ Dockerfile                    production container image
 server/server.py              stdlib HTTP server and Kubernetes API client
 server/harvui_updates.py      OCI registry checks, rollout monitoring, rollback
 server/harvui_networking.py   VIP allocation, Service planning and endpoint inventory
-web/                          dependency-free browser UI
+web/                          browser UI, no build step
+web/vendor/monaco/            vendored Monaco editor subset (see its README)
 web/assets/                   Homestead SVG identity
 deploy/deploy.yaml            namespace, RBAC, Longhorn PVC, Deployment, Service
 deploy/nodeprobe.yaml         optional per-node telemetry and device inventory
@@ -54,10 +55,10 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.22`, the workflow publishes:
+For a release such as `v2.8.23`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.22
+ghcr.io/wjcloudy/homestead:2.8.23
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -68,8 +69,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.22
-git push origin v2.8.22
+git tag v2.8.23
+git push origin v2.8.23
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -276,7 +277,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.22 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.23 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -370,8 +371,16 @@ can be overridden, because it is your file. Binary files and anything above
 1 MB are listed but not editable, and no path can address anything outside the
 volume.
 
-`server/harvui_files.py` holds this, reusing the exec WebSocket the console
-already speaks.
+Files open in Monaco — the editor from VS Code — with highlighting for YAML,
+JSON, INI, XML, shell, Markdown and the rest of what turns up in appdata, plus
+JSON validation as you type and Ctrl/Cmd+S to save. It is the one third-party
+library in the browser UI, vendored at `web/vendor/monaco` as a trimmed 4.5 MB
+subset of the 14 MB distribution, fetched only when a file is opened and never
+on page load. If it cannot load at all the editor falls back to a plain
+textarea, which saves through exactly the same path.
+
+`server/harvui_files.py` holds the server side, reusing the exec WebSocket the
+console already speaks.
 
 ## Storage classes
 
