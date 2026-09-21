@@ -160,6 +160,18 @@ def source_containers(name):
     return sorted(out, key=lambda x: x["name"].lower())
 
 
+DEFAULT_SHM_MB = 64
+
+
+def _shm_mb(size):
+    """The /dev/shm a container was given, in MiB, if it was more than default."""
+    try:
+        megabytes = int(size or 0) // 1024 ** 2
+    except (TypeError, ValueError):
+        return 0
+    return megabytes if megabytes > DEFAULT_SHM_MB else 0
+
+
 def _tmpfs_mb(options):
     """The size a tmpfs mount was given, in MiB, or 0 when it was not."""
     match = re.search(r"size=(\d+)([kmg]?)", str(options or "").lower())
@@ -238,6 +250,11 @@ def inspect_source_container(name, container):
         # import must not pretend: a guessed path is one rsync cannot find.
         "guessed_path": not app_mount,
         "network_mode": host.get("NetworkMode", "bridge"), "hardware": hardware,
+        # Docker's --shm-size has no Kubernetes equivalent: a pod gets 64 MiB of
+        # /dev/shm whatever it asks for. Frigate keeps every camera's frames
+        # there, so a container given more on the source has to be given it
+        # again here or ffmpeg hands over frames that never fit.
+        "shm_mb": _shm_mb(host.get("ShmSize")),
     }
 
 

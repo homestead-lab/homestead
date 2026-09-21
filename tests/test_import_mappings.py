@@ -654,6 +654,29 @@ class NestedFolderTests(unittest.TestCase):
         self.assertEqual([40, 40, 20], [row["bytes"] for row in rows])
 
 
+class SharedMemoryTests(unittest.TestCase):
+    """--shm-size has no Kubernetes equivalent, so it has to be carried over."""
+
+    def test_more_than_the_default_is_reported(self):
+        self.assertEqual(512, imports._shm_mb(512 * 1024 ** 2))
+
+    def test_the_default_and_below_is_not_worth_carrying(self):
+        self.assertEqual(0, imports._shm_mb(64 * 1024 ** 2), "a pod gets this anyway")
+        self.assertEqual(0, imports._shm_mb(0))
+        self.assertEqual(0, imports._shm_mb(None))
+
+    def test_a_shm_volume_is_memory_backed_and_copies_nothing(self):
+        rows = imports.import_mappings({
+            "name": "frigate", "volumes": [{"name": "frigate-appdata"}],
+            "mappings": [{"remote_path": "/mnt/user/cctv/Frigate", "mount_path": "/config"},
+                         {"mount_path": "/dev/shm", "medium": "memory", "size_mb": 512}]})
+
+        self.assertEqual({"remote_path": "", "mount_path": "/dev/shm", "medium": "memory",
+                          "size_mb": 512, "bytes": 0},
+                         {key: rows[1][key] for key in
+                          ("remote_path", "mount_path", "medium", "size_mb", "bytes")})
+
+
 class ConfigMountTests(unittest.TestCase):
     """Which folder an imported container keeps its configuration in."""
 

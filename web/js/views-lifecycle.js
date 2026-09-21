@@ -788,6 +788,12 @@ function importMappingRows(cfg, src) {
           include: mount.source === cfg.remote_path || mount.source.startsWith(base + "/") });
   // cfg.remote_path is only worth adding when the host actually reported it.
   // A guessed one is a folder nobody has: it would be ticked, copied, and fail.
+  // Kubernetes gives a pod 64 MiB of /dev/shm and no way to ask for more except
+  // a memory-backed volume over the top, so a container Docker gave more than
+  // that keeps it: without it Frigate's frames never reach the detectors.
+  if (cfg.shm_mb && !rows.some(row => row.mount_path === "/dev/shm")) {
+    rows.push({ mount_path: "/dev/shm", medium: "memory", size_mb: cfg.shm_mb, include: true });
+  }
   if (cfg.remote_path && !cfg.guessed_path && !rows.some(row => row.remote_path === cfg.remote_path)) {
     rows.unshift({ remote_path: cfg.remote_path, mount_path: cfg.mount_path || "/config", include: true });
   }
@@ -812,8 +818,9 @@ function importMappingRow(row = {}) {
       <div><label>Path inside the container</label><input class="imm-mount" type="text" value="${esc(row.mount_path || "")}" placeholder="/tmp/cache"></div>
       <label class="switch"><input class="imm-on" type="checkbox" ${row.include === false ? "" : "checked"} onchange="imSyncMaps()">Create</label>
       <button class="iconbtn row-remove" type="button" title="Remove scratch volume" onclick="this.closest('.im-map').remove();imSyncMaps()">×</button>
-      <div class="dim xs" style="grid-column:1/-1;margin-top:-4px">This was tmpfs on the source: a RAM disk that starts empty every time.
-        Kubernetes gives it the same thing, capped at this size and counted against the node's memory.</div></div>`;
+      <div class="dim xs" style="grid-column:1/-1;margin-top:-4px">${row.mount_path === "/dev/shm"
+        ? "Shared memory, as <code>--shm-size</code> gave it on the source. A pod gets 64 MiB otherwise, which is not enough for apps that pass frames or buffers between processes."
+        : "This was tmpfs on the source: a RAM disk that starts empty every time. Kubernetes gives it the same thing, capped at this size and counted against the node's memory."}</div></div>`;
   }
   return `<div class="im-map" data-pvc="${esc(row.pvc || "")}">
     <div><label>Source folder on the host</label><input class="imm-remote" type="text" value="${esc(row.remote_path || "")}" placeholder="/mnt/user/appdata/app/config" oninput="imSyncMaps()"></div>
