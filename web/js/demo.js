@@ -304,7 +304,8 @@
       env: { PUID: "1000", PGID: "1000" }, hardware: [], network_mode: "loadbalancer",
       mounts: [{ source: "/mnt/user/appdata/media-server", path: "/config", type: "bind" },
         { source: "/mnt/user/appdata/media-server/transcode", path: "/transcode", type: "bind" },
-        { source: "/mnt/user/media", path: "/media", type: "bind" }] },
+        { source: "/mnt/user/media", path: "/media", type: "bind" },
+        { source: "", path: "/tmp/cache", type: "tmpfs", size_mb: 1000 }] },
     "/api/imports/delete": { ok: true, message: "Import removed", removed: [] },
     "/api/imports/cleanup-plan": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name || "";
@@ -469,7 +470,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.26", candidate: "ghcr.io/wjcloudy/homestead:2.8.27", candidate_tag: "2.8.27", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.27", candidate: "ghcr.io/wjcloudy/homestead:2.8.28", candidate_tag: "2.8.28", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

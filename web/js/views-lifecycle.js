@@ -770,14 +770,21 @@ function importMappingRows(cfg, src) {
   const base = (src.base_path || "/mnt/user/appdata").replace(/\/+$/, "");
   const seen = new Set();
   const rows = (cfg.mounts || [])
-    .filter(mount => mount.source && mount.path && mount.type !== "tmpfs")
-    .map(mount => ({ remote_path: mount.source, mount_path: mount.path,
-      include: mount.source === cfg.remote_path || mount.source.startsWith(base + "/") }));
+    .filter(mount => mount.path && (mount.source || mount.type === "tmpfs"))
+    .map(mount => mount.type === "tmpfs"
+      // tmpfs on the source is RAM, so there is nothing to copy and nowhere to
+      // copy it from: it becomes a memory-backed scratch volume instead.
+      ? { mount_path: mount.path, medium: "memory", size_mb: mount.size_mb || 1024, include: true }
+      : { remote_path: mount.source, mount_path: mount.path,
+          include: mount.source === cfg.remote_path || mount.source.startsWith(base + "/") });
   if (cfg.remote_path && !rows.some(row => row.remote_path === cfg.remote_path)) {
     rows.unshift({ remote_path: cfg.remote_path, mount_path: cfg.mount_path || "/config", include: true });
   }
   if (!rows.length) rows.push({ remote_path: cfg.remote_path || "", mount_path: cfg.mount_path || "/config", include: true });
-  return rows.filter(row => !seen.has(row.remote_path) && seen.add(row.remote_path));
+  return rows.filter(row => {
+    const key = row.medium ? `ram:${row.mount_path}` : row.remote_path;
+    return !seen.has(key) && seen.add(key);
+  });
 }
 
 function importFolderName(remotePath, mountPath) {
@@ -786,6 +793,17 @@ function importFolderName(remotePath, mountPath) {
 }
 
 function importMappingRow(row = {}) {
+  if (row.medium === "memory") {
+    return `<div class="im-map im-scratch" data-medium="memory">
+      <div><label>Source</label><input class="imm-remote" type="text" value="" disabled placeholder="RAM — nothing to copy"></div>
+      <div><label>Kind</label><input type="text" value="Memory scratch" disabled></div>
+      <div><label>Size MiB</label><input class="imm-ram" type="number" min="1" max="65536" value="${esc(row.size_mb || 1024)}"></div>
+      <div><label>Path inside the container</label><input class="imm-mount" type="text" value="${esc(row.mount_path || "")}" placeholder="/tmp/cache"></div>
+      <label class="switch"><input class="imm-on" type="checkbox" ${row.include === false ? "" : "checked"} onchange="imSyncMaps()">Create</label>
+      <button class="iconbtn row-remove" type="button" title="Remove scratch volume" onclick="this.closest('.im-map').remove();imSyncMaps()">×</button>
+      <div class="dim xs" style="grid-column:1/-1;margin-top:-4px">This was tmpfs on the source: a RAM disk that starts empty every time.
+        Kubernetes gives it the same thing, capped at this size and counted against the node's memory.</div></div>`;
+  }
   return `<div class="im-map" data-pvc="${esc(row.pvc || "")}">
     <div><label>Source folder on the host</label><input class="imm-remote" type="text" value="${esc(row.remote_path || "")}" placeholder="/mnt/user/appdata/app/config" oninput="imSyncMaps()"></div>
     <div><label>Goes to volume</label><select class="imm-pvc" onchange="imSyncMaps()"></select></div>
@@ -795,6 +813,12 @@ function importMappingRow(row = {}) {
     <button class="iconbtn row-remove" type="button" title="Remove folder" onclick="this.closest('.im-map').remove();imSyncMaps()">×</button>
     <div class="dim xs imm-size" style="grid-column:1/-1;margin-top:-4px"></div></div>`;
 }
+
+window.imAddScratch = () => {
+  $("#im_maps").insertAdjacentHTML("beforeend",
+    importMappingRow({ medium: "memory", size_mb: 1024, mount_path: "/tmp/cache", include: true }));
+  imSyncMaps();
+};
 
 /* A volume row is just a claim: a name, whether it is new, and how big.
    The mapping rows above pick from these by name. */
@@ -852,17 +876,21 @@ window.imAddMap = () => {
   imSyncMaps();
 };
 window.imSyncMaps = () => {
-  const rows = $$("#im_maps .im-map").filter(row => $(".imm-on", row).checked);
+  const all = $$("#im_maps .im-map").filter(row => $(".imm-on", row).checked);
+  const scratch = all.filter(row => row.dataset.medium === "memory");
+  const rows = all.filter(row => row.dataset.medium !== "memory");
   const note = $("#im_maps_note");
   if (note) {
     const targets = new Set(rows.map(row => $(".imm-pvc", row)?.value).filter(Boolean));
-    note.textContent = !rows.length ? "Nothing selected to copy."
+    const ram = scratch.length ? ` ${scratch.length} RAM scratch volume${scratch.length === 1 ? "" : "s"} is created empty.` : "";
+    note.textContent = (!rows.length ? "Nothing selected to copy."
       : targets.size > 1 ? `${rows.length} folders across ${targets.size} volumes, each mounted back separately.`
       : rows.length > 1 ? `${rows.length} folders into one volume, each in its own subfolder.`
-      : "One folder copied to the root of its volume.";
+      : "One folder copied to the root of its volume.") + ram;
   }
   const sizes = STATE.data.importSizes || {};
   $$("#im_maps .im-map").forEach(row => {
+    if (row.dataset.medium === "memory") return;
     $(".imm-folder", row).placeholder = importFolderName($(".imm-remote", row).value, $(".imm-mount", row).value);
     const path = $(".imm-remote", row).value.trim(), readout = $(".imm-size", row);
     if (!readout) return;
@@ -885,7 +913,8 @@ const importBytes = value => {
    answer, not the whole measurement. */
 window.imMeasure = async source => {
   const rows = $$("#im_maps .im-map");
-  const paths = rows.map(row => $(".imm-remote", row).value.trim()).filter(path => path.startsWith("/"));
+  const paths = rows.filter(row => row.dataset.medium !== "memory")
+    .map(row => $(".imm-remote", row).value.trim()).filter(path => path.startsWith("/"));
   if (!paths.length) return toast("add a source folder first", "bad");
   const button = $("#im_measure");
   if (button) { button.disabled = true; button.textContent = "Measuring…"; }
@@ -909,11 +938,16 @@ window.imMeasure = async source => {
 
 window.importMappings = () => $$("#im_maps .im-map")
   .filter(row => $(".imm-on", row).checked)
-  .map(row => ({ remote_path: $(".imm-remote", row).value.trim(),
-    mount_path: $(".imm-mount", row).value.trim() || "/config",
-    folder: $(".imm-folder", row).value.trim(),
-    pvc: $(".imm-pvc", row)?.value || "",
-    bytes: (STATE.data.importSizes || {})[$(".imm-remote", row).value.trim()] || 0 }));
+  .map(row => {
+    if (row.dataset.medium === "memory") {
+      return { medium: "memory", mount_path: $(".imm-mount", row).value.trim() || "/tmp/cache",
+        size_mb: +$(".imm-ram", row).value || 1024 };
+    }
+    const remote = $(".imm-remote", row).value.trim();
+    return { remote_path: remote, mount_path: $(".imm-mount", row).value.trim() || "/config",
+      folder: $(".imm-folder", row).value.trim(), pvc: $(".imm-pvc", row)?.value || "",
+      bytes: (STATE.data.importSizes || {})[remote] || 0 };
+  });
 
 window.importSetup = async (source, dir, cfg = {}) => {
   const src = (STATE.data.srcs || []).find(s => s.name === source) || {};
@@ -935,6 +969,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <div class="note">Source folders → one Longhorn volume <span class="mono" id="im_pvc_route">${esc(name)}-appdata</span> → mounted back at each container path.</div>
     <div id="im_maps">${importMappingRows(cfg, src).map(importMappingRow).join("")}</div>
     <div class="row"><button class="btn sm" onclick="imAddMap()">＋ add folder</button>
+      <button class="btn sm" onclick="imAddScratch()">＋ add RAM scratch</button>
       <button class="btn sm" id="im_measure" onclick="imMeasure('${esc(source)}')">Measure sizes</button></div>
     <div class="dim xs" id="im_maps_note" style="margin-top:8px"></div>
     <details class="import-advanced"><summary class="dim small">Override file ownership (rarely needed)</summary>

@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.27"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.28"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1112,7 +1112,15 @@ def build_deployment(cfg):
             if v.get("type") == "host":
                 volumes.append({"name": vn, "hostPath": {"path": v["source"]}})
             elif v.get("type") == "emptyDir":
-                volumes.append({"name": vn, "emptyDir": {}})
+                # A RAM-backed scratch volume is what a tmpfs mount becomes:
+                # same speed, same volatility, and bounded so it cannot eat the
+                # node's memory.
+                empty = {}
+                if str(v.get("medium", "")).lower() == "memory":
+                    empty["medium"] = "Memory"
+                if v.get("size_limit"):
+                    empty["sizeLimit"] = str(v["size_limit"])
+                volumes.append({"name": vn, "emptyDir": empty})
             else:
                 volumes.append({"name": vn, "persistentVolumeClaim": {"claimName": v["source"]}})
         mount = {"name": vn, "mountPath": v["path"]}

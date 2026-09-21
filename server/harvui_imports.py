@@ -160,6 +160,16 @@ def source_containers(name):
     return sorted(out, key=lambda x: x["name"].lower())
 
 
+def _tmpfs_mb(options):
+    """The size a tmpfs mount was given, in MiB, or 0 when it was not."""
+    match = re.search(r"size=(\d+)([kmg]?)", str(options or "").lower())
+    if not match:
+        return 0
+    amount, unit = int(match.group(1)), match.group(2)
+    scale = {"": 1 / 1024 ** 2, "k": 1 / 1024, "m": 1, "g": 1024}[unit]
+    return max(1, int(amount * scale))
+
+
 def inspect_source_container(name, container):
     """Translate Docker inspect fields into Homestead's deploy/import model."""
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", container or ""):
@@ -197,8 +207,15 @@ def inspect_source_container(name, container):
         ports.append({"container": int(num), "host": int(hp),
                       "protocol": (proto or "tcp").upper(), "expose": True})
     mounts = [{"source": m.get("Source", ""), "path": m.get("Destination", ""),
-               "type": m.get("Type", "")}
+               "type": m.get("Type", ""),
+               "size_mb": _tmpfs_mb(m.get("Mode", "")) if m.get("Type") == "tmpfs" else 0}
               for m in item.get("Mounts", []) or [] if m.get("Destination")]
+    # --tmpfs never appears in Mounts, only in HostConfig, and it is how
+    # /tmp/cache is usually given to Frigate on Unraid.
+    for destination, options in (host.get("Tmpfs", {}) or {}).items():
+        if destination and not any(row["path"] == destination for row in mounts):
+            mounts.append({"source": "", "path": destination, "type": "tmpfs",
+                           "size_mb": _tmpfs_mb(options)})
     app_mount = next((m for m in mounts if m["source"].startswith(src.get("base_path", "/mnt/user/appdata"))), None)
     labels = config.get("Labels", {}) or {}
     devices = host.get("Devices", []) or []
@@ -505,6 +522,18 @@ def import_mappings(cfg):
     for item in requested:
         remote = str(item.get("remote_path") or "").strip().rstrip("/")
         mount = str(item.get("mount_path") or "").strip().rstrip("/") or "/config"
+        if str(item.get("medium") or "").lower() == "memory":
+            # A scratch mount has no source: the point of it is that it starts
+            # empty and lives in RAM, exactly as tmpfs did on the source host.
+            if mount in paths:
+                raise ValueError(f"{mount} is mapped twice")
+            paths.add(mount)
+            size_mb = int(item.get("size_mb") or 1024)
+            if not 1 <= size_mb <= 65536:
+                raise ValueError("scratch size must be between 1 MiB and 64 GiB")
+            rows.append({"remote_path": "", "mount_path": mount, "folder": "", "bytes": 0,
+                         "pvc": "", "medium": "memory", "size_mb": size_mb})
+            continue
         if not remote.startswith("/"):
             raise ValueError(f"remote path must be absolute, got {remote or '(blank)'}")
         if not mount.startswith("/"):
@@ -520,7 +549,9 @@ def import_mappings(cfg):
             if ".." in folder.split("/"):
                 raise ValueError("folder cannot climb out of the volume")
             used.add((target, folder))
-        elif sum(1 for row in requested if (str(row.get("pvc") or "").strip() or names[0]) == target) > 1:
+        elif sum(1 for row in requested
+                 if str(row.get("medium") or "").lower() != "memory"
+                 and (str(row.get("pvc") or "").strip() or names[0]) == target) > 1:
             # A volume receiving one folder takes it at its root; several
             # folders sharing a volume each get their own subdirectory.
             folder = _folder_name(remote or mount, {name for claim, name in used if claim == target})
@@ -533,7 +564,7 @@ def import_mappings(cfg):
         if claim not in names:
             raise ValueError(f"{mount} points at volume {claim}, which this import does not create")
         rows.append({"remote_path": remote, "mount_path": mount, "folder": folder,
-                     "bytes": size, "pvc": claim})
+                     "bytes": size, "pvc": claim, "medium": "", "size_mb": 0})
     return rows
 
 
@@ -632,14 +663,16 @@ def import_container(cfg):
     # folder with nothing to say which folder it is on.
     steps = ["set -e",
              "apk add --no-cache rsync openssh-client sshpass >/dev/null 2>&1"]
-    total = len(mappings)
+    total = len([row for row in mappings if not row.get("medium")])
     # Measured up front, the copy can report bytes rather than folder counts.
-    measured = sum(mapping.get("bytes") or 0 for mapping in mappings)
-    if measured and all(mapping.get("bytes") for mapping in mappings):
+    copied_rows = [row for row in mappings if not row.get("medium")]
+    measured = sum(mapping.get("bytes") or 0 for mapping in copied_rows)
+    if measured and copied_rows and all(mapping.get("bytes") for mapping in copied_rows):
         steps.append("echo " + shlex.quote(f"==> total {total} folders {measured}B"))
     mount_of = {volume["name"]: (f"/mnt/{volume['name']}" if len(volumes) > 1 else "/appdata")
                 for volume in volumes}
-    for index, mapping in enumerate(mappings, start=1):
+    copied = [row for row in mappings if not row.get("medium")]
+    for index, mapping in enumerate(copied, start=1):
         base = mount_of[mapping["pvc"]]
         target = (base + "/" + mapping["folder"]) if mapping["folder"] else base
         spec = shlex.quote(f"{src['user']}@{src['host']}:{mapping['remote_path']}/")
@@ -708,8 +741,13 @@ def import_container(cfg):
             "replicas": 0 if cfg.get("start_after_copy", True) else 1,
             "cpu": cfg.get("cpu", "50m"), "memory": cfg.get("memory", "256Mi"),
             "ports": cfg.get("ports") or [], "env": cfg.get("env") or {},
-            "volumes": [{"path": mapping["mount_path"], "source": mapping["pvc"], "type": "pvc",
-                          "sub_path": mapping["folder"]} for mapping in mappings],
+            "volumes": [
+                {"path": mapping["mount_path"], "type": "emptyDir", "medium": "memory",
+                 "size_limit": f"{mapping['size_mb']}Mi"}
+                if mapping.get("medium") else
+                {"path": mapping["mount_path"], "source": mapping["pvc"], "type": "pvc",
+                 "sub_path": mapping["folder"]}
+                for mapping in mappings],
             "fs_group": owner_gid,
             "gpu": bool(cfg.get("gpu")),
             "hardware": cfg.get("hardware") or [], "icon": cfg.get("icon", ""),

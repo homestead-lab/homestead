@@ -39,7 +39,8 @@ class ImportMappingTests(unittest.TestCase):
                                         "mount_path": "/config"})
 
         self.assertEqual([{"remote_path": "/mnt/user/appdata/plex", "mount_path": "/config",
-                           "folder": "", "bytes": 0, "pvc": "app-appdata"}], rows)
+                           "folder": "", "bytes": 0, "pvc": "app-appdata",
+                           "medium": "", "size_mb": 0}], rows)
 
     def test_bad_mappings_are_refused(self):
         with self.assertRaisesRegex(ValueError, "remote path must be absolute"):
@@ -138,6 +139,51 @@ class MultipleVolumeTests(unittest.TestCase):
             imports.import_volumes({"volumes": [{"name": "a"}, {"name": "a"}]})
         with self.assertRaisesRegex(ValueError, "lowercase letters"):
             imports.import_volumes({"volumes": [{"name": "Bad Name"}]})
+
+
+class ScratchMountTests(unittest.TestCase):
+    """Frigate's /tmp/cache is tmpfs on Unraid: RAM, not something to copy."""
+
+    FRIGATE = {
+        "name": "frigate",
+        "volumes": [{"name": "frigate-appdata"}],
+        "mappings": [{"remote_path": "/mnt/user/appdata/frigate", "mount_path": "/config"},
+                     {"mount_path": "/tmp/cache", "medium": "memory", "size_mb": 1000}],
+    }
+
+    def test_a_scratch_mount_has_no_source_and_is_never_copied(self):
+        rows = imports.import_mappings(self.FRIGATE)
+
+        scratch = rows[1]
+        self.assertEqual(("", "memory", 1000), (scratch["remote_path"], scratch["medium"],
+                                                scratch["size_mb"]))
+        self.assertEqual(0, scratch["bytes"], "there is nothing to measure")
+
+    def test_scratch_does_not_push_the_real_folder_into_a_subdirectory(self):
+        rows = imports.import_mappings(self.FRIGATE)
+
+        self.assertEqual("", rows[0]["folder"],
+                         "one copied folder still owns the volume root")
+
+    def _scratch(self, **extra):
+        return imports.import_mappings({"name": "app", "volumes": [{"name": "app-data"}],
+                                        "mappings": [dict({"mount_path": "/tmp/cache",
+                                                           "medium": "memory"}, **extra)]})[0]
+
+    def test_an_unstated_size_defaults_to_a_gibibyte(self):
+        self.assertEqual(1024, self._scratch()["size_mb"])
+        self.assertEqual(1024, self._scratch(size_mb=0)["size_mb"],
+                         "blank arrives as zero and means unstated")
+
+    def test_a_scratch_larger_than_any_node_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "scratch size"):
+            self._scratch(size_mb=99999999)
+
+    def test_docker_tmpfs_options_become_a_size(self):
+        self.assertEqual(953, imports._tmpfs_mb("rw,size=1000000000"))
+        self.assertEqual(1024, imports._tmpfs_mb("rw,size=1g"))
+        self.assertEqual(512, imports._tmpfs_mb("size=512m"))
+        self.assertEqual(0, imports._tmpfs_mb("rw,noexec"))
 
 
 class SourceMeasurementTests(unittest.TestCase):
