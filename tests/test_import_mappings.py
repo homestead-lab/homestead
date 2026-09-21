@@ -238,10 +238,22 @@ class OwnershipTests(unittest.TestCase):
 
         self.assertNotIn("chown", self._script())
 
+    def test_jobs_are_named_after_homestead(self):
+        imports.import_container({"source": "tower", "name": "plex", "image": "plex:1",
+                                  "create_workload": False, "reuse_existing": True,
+                                  "pvc_name": "plex-appdata", "remote_path": "/mnt/user/appdata/plex"})
+
+        created = [body for body in self.bodies if body and body.get("kind") == "Job"]
+        self.assertEqual("homestead-import-plex", created[-1]["metadata"]["name"])
+        cleared = [path for method, path in self.sent if method == "DELETE"]
+        self.assertTrue(any("harvui-import-plex" in path for path in cleared),
+                        "a job from before the rename is cleared too")
+
     def test_a_claim_can_be_handed_over_after_the_fact(self):
         result = imports.chown_claim("lab", "mosquitto-appdata", "1883", "")
 
         job = self.bodies[-1]
+        self.assertEqual("homestead-chown-mosquitto-appdata", job["metadata"]["name"])
         self.assertEqual("chown", job["metadata"]["labels"]["harvui.io/task"])
         self.assertIn("chown -R 1883:1883 /data",
                       job["spec"]["template"]["spec"]["containers"][0]["command"][-1])

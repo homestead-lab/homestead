@@ -181,7 +181,7 @@
           detail: "Running on harvester-node2", mounts: [{ container: "frigate", container_kind: "app", path: "/config", read_only: false }] },
         { kind: "Deployment", name: "frigate", namespace: "lab", active: true,
           detail: "1 desired replica", mounts: [{ container: "frigate", container_kind: "app", path: "/config", read_only: false }] },
-      ] : [{ kind: "Job", name: "harvui-import-frigate", namespace: "lab", active: false,
+      ] : [{ kind: "Job", name: "homestead-import-frigate", namespace: "lab", active: false,
         detail: "not running", mounts: [{ container: "copy", container_kind: "app", path: "/appdata" }] }],
       active_consumers: attached ? 2 : 0,
       snapshots: { count: attached ? 3 : 1, names: ["daily"] },
@@ -192,9 +192,9 @@
         "2 active workload reference(s) must be stopped and unmounted first",
         "Longhorn still reports the volume attached to harvester-node2",
       ] : [],
-      stale_consumers: attached ? [] : [{ kind: "Job", name: "harvui-import-frigate", namespace: "lab",
+      stale_consumers: attached ? [] : [{ kind: "Job", name: "homestead-import-frigate", namespace: "lab",
         active: false, detail: "not running", mounts: [{ container: "copy", path: "/appdata" }] }],
-      removable_jobs: attached ? [] : ["harvui-import-frigate"],
+      removable_jobs: attached ? [] : ["homestead-import-frigate"],
       actions: {
         detach: { complete: !attached, description: "Stop/unmount consumers while keeping the claim and all data." },
         delete_claim: { enabled: !attached, description: "Delete the PVC and retain backing data." },
@@ -296,7 +296,7 @@
         { source: "/mnt/user/appdata/media-server/transcode", path: "/transcode", type: "bind" },
         { source: "/mnt/user/media", path: "/media", type: "bind" }] },
     "/api/imports/delete": { ok: true, message: "Import removed" },
-    "/api/volumes/chown": { ok: true, job: "harvui-chown-frigate-config", uid: 1883, gid: 1883,
+    "/api/volumes/chown": { ok: true, job: "homestead-chown-frigate-config", uid: 1883, gid: 1883,
       message: "Setting ownership of frigate-config to 1883:1883" },
     "/api/sources/measure": { total_bytes: 9663676416, complete: false, suggested_gb: 12,
       timeout_seconds: 25, paths: [
@@ -313,15 +313,15 @@
         pull: { state: "pulling", image: "ghcr.io/hotio/plex:latest", seconds: 135 } }],
       images: { plex: "ghcr.io/hotio/plex:latest" } },
     "/api/imports": [
-      { name: "harvui-import-plex", app: "plex", state: "running", start: "2026-09-21T08:40:00Z",
+      { name: "homestead-import-plex", app: "plex", state: "running", start: "2026-09-21T08:40:00Z",
         active: 1, succeeded: 0, failed: 0, step: 2, steps: 4, folder: "transcode",
         detail: "tower:/mnt/user/appdata/plex/transcode -> /transcode",
         step_percent: 50, percent: 37.5, rate: "22.10MB/s" },
-      { name: "harvui-import-obsidian", app: "obsidian", state: "failed", percent: 12,
+      { name: "homestead-import-obsidian", app: "obsidian", state: "failed", percent: 12,
         start: "2026-09-21T07:55:00Z", active: 0, succeeded: 0, failed: 1, step: 1, steps: 3,
         folder: "config", step_percent: 36, rate: "", error: "ran out of space on the volume",
         error_detail: 'rsync: [receiver] write failed on "/appdata/home-assistant_v2.db": No space left on device (28)' },
-      { name: "harvui-import-krusader", app: "binhex-krusader", state: "done", percent: 100,
+      { name: "homestead-import-krusader", app: "binhex-krusader", state: "done", percent: 100,
         start: "2026-09-21T08:12:00Z", end: "2026-09-21T08:19:00Z", active: 0, succeeded: 1, failed: 0 },
     ],
     "/api/lh/overview": lhOverview,
@@ -431,7 +431,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.16", candidate: "ghcr.io/wjcloudy/homestead:2.8.17", candidate_tag: "2.8.17", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.17", candidate: "ghcr.io/wjcloudy/homestead:2.8.18", candidate_tag: "2.8.18", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

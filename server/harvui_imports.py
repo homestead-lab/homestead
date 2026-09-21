@@ -70,11 +70,12 @@ def add_source(name, host, user, password, kind="unraid", base_path="/mnt/user/a
     save_sources(srcs)
     # credentials live in a Secret, never in the ConfigMap
     sec = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
-           "metadata": {"name": f"harvui-src-{name}", "namespace": NS},
+           "metadata": {"name": source_secret(name), "namespace": NS},
            "stringData": {"password": password or ""}}
     try:
-        kget(f"/api/v1/namespaces/{NS}/secrets/harvui-src-{name}")
-        ksend("PUT", f"/api/v1/namespaces/{NS}/secrets/harvui-src-{name}", sec)
+        existing = source_secret(name)
+        kget(f"/api/v1/namespaces/{NS}/secrets/{existing}")
+        ksend("PUT", f"/api/v1/namespaces/{NS}/secrets/{existing}", sec)
     except urllib.error.HTTPError as e:
         if e.code != 404:
             raise
@@ -86,10 +87,21 @@ def del_source(name):
     srcs = [s for s in list_sources() if s["name"] != name]
     save_sources(srcs)
     try:
-        ksend("DELETE", f"/api/v1/namespaces/{NS}/secrets/harvui-src-{name}")
+        ksend("DELETE", f"/api/v1/namespaces/{NS}/secrets/{source_secret(name)}")
     except urllib.error.HTTPError:
         pass
     return srcs
+
+
+def source_secret(name):
+    """This source's password secret, under whichever name it was created with."""
+    for candidate in (f"homestead-src-{name}", f"harvui-src-{name}"):
+        try:
+            kget(f"/api/v1/namespaces/{NS}/secrets/{candidate}")
+            return candidate
+        except Exception:
+            continue
+    return f"homestead-src-{name}"
 
 
 def _source(name):
@@ -211,7 +223,7 @@ def inspect_source_container(name, container):
 
 def run_probe(tag, script, src, timeout=70):
     """Run a one-shot pod, wait for it, return its stdout."""
-    pod = f"harvui-probe-{re.sub(r'[^a-z0-9-]', '-', tag)[:30]}-{int(time.time()) % 100000}"
+    pod = f"homestead-probe-{re.sub(r'[^a-z0-9-]', '-', tag)[:30]}-{int(time.time()) % 100000}"
     body = {
         "apiVersion": "v1", "kind": "Pod",
         "metadata": {"name": pod, "namespace": NS, "labels": {"harvui.io/task": "probe"}},
@@ -221,7 +233,7 @@ def run_probe(tag, script, src, timeout=70):
                      "command": ["sh", "-c",
                                  "apk add --no-cache openssh-client sshpass >/dev/null 2>&1; " + script],
                      "env": [{"name": "SRC_PASS", "valueFrom": {"secretKeyRef": {
-                         "name": f"harvui-src-{src['name']}", "key": "password"}}}],
+                         "name": source_secret(src["name"]), "key": "password"}}}],
                  }]},
     }
     ksend("POST", f"/api/v1/namespaces/{NS}/pods", body)
@@ -335,7 +347,7 @@ def chown_claim(namespace, pvc, uid, gid):
     owner_uid, owner_gid = _ownership({"uid": uid, "gid": gid})
     if owner_uid is None:
         raise ValueError("a user id is required")
-    job = f"harvui-chown-{pvc}"[:60].rstrip("-")
+    job = f"homestead-chown-{pvc}"[:60].rstrip("-")
     try:
         ksend("DELETE", f"/apis/batch/v1/namespaces/{namespace}/jobs/{job}"
                         "?propagationPolicy=Background")
@@ -494,12 +506,15 @@ def import_container(cfg):
         create_pvc(NS, pvc, size, storage_class, access_mode)
 
     mappings = import_mappings(cfg)
-    job = f"harvui-import-{name}"
-    try:
-        ksend("DELETE", f"/apis/batch/v1/namespaces/{NS}/jobs/{job}?propagationPolicy=Background")
-        time.sleep(1)
-    except urllib.error.HTTPError:
-        pass
+    job = f"homestead-import-{name}"
+    for previous in (job, f"harvui-import-{name}"):
+        # A rerun clears the job from before the rename as well as its own.
+        try:
+            ksend("DELETE", f"/apis/batch/v1/namespaces/{NS}/jobs/{previous}"
+                            "?propagationPolicy=Background")
+        except urllib.error.HTTPError:
+            pass
+    time.sleep(1)
 
     # Every interpolated value arrives from the UI, so all of it is quoted.
     # Each step announces itself on its own line before rsync's own progress,
@@ -544,7 +559,7 @@ def import_container(cfg):
                                            "name": "copy", "image": "alpine:3.20",
                                            "command": ["sh", "-c", script],
                                            "env": [{"name": "SRC_PASS", "valueFrom": {"secretKeyRef": {
-                                               "name": f"harvui-src-{src['name']}", "key": "password"}}}],
+                                               "name": source_secret(src["name"]), "key": "password"}}}],
                                            "volumeMounts": [{"name": "appdata", "mountPath": "/appdata"}],
                                        }],
                                        "volumes": [{"name": "appdata",
@@ -671,7 +686,7 @@ def delete_import(name):
     references the appdata claim - which used to leave both the import and the
     volume it was filling unremovable from the UI.
     """
-    if not re.fullmatch(r"harvui-import-[a-z0-9][a-z0-9-]{0,60}", str(name or "")):
+    if not re.fullmatch(r"(?:homestead|harvui)-import-[a-z0-9][a-z0-9-]{0,60}", str(name or "")):
         raise ValueError("unknown import job")
     try:
         ksend("DELETE", f"/apis/batch/v1/namespaces/{NS}/jobs/{name}"
@@ -859,7 +874,7 @@ def image_cache():
 def prepull(image, nodes=None):
     """Warm an image onto every (or selected) node with a DaemonSet-style pull."""
     tag = re.sub(r"[^a-z0-9-]", "-", image.split("/")[-1].split(":")[0].lower())[:30]
-    name = f"harvui-pull-{tag}"
+    name = f"homestead-pull-{tag}"
     body = {
         "apiVersion": "apps/v1", "kind": "DaemonSet",
         "metadata": {"name": name, "namespace": NS,
@@ -877,11 +892,12 @@ def prepull(image, nodes=None):
         body["spec"]["template"]["spec"]["affinity"] = {"nodeAffinity": {
             "requiredDuringSchedulingIgnoredDuringExecution": {"nodeSelectorTerms": [
                 {"matchExpressions": [{"key": "kubernetes.io/hostname", "operator": "In", "values": nodes}]}]}}}
-    try:
-        ksend("DELETE", f"/apis/apps/v1/namespaces/{NS}/daemonsets/{name}")
-        time.sleep(1)
-    except urllib.error.HTTPError:
-        pass
+    for previous in (name, f"harvui-pull-{tag}"):
+        try:
+            ksend("DELETE", f"/apis/apps/v1/namespaces/{NS}/daemonsets/{previous}")
+        except urllib.error.HTTPError:
+            pass
+    time.sleep(1)
     ksend("POST", f"/apis/apps/v1/namespaces/{NS}/daemonsets", body)
     return {"ok": True, "daemonset": name, "image": image}
 
@@ -910,11 +926,11 @@ def cleanup_image(digest, nodes=None):
     pods = []
     for node in selected:
         suffix = hashlib.sha256((digest + "|" + node).encode()).hexdigest()[:10]
-        pod_name = "harvui-image-clean-" + suffix
+        pod_name = "homestead-image-clean-" + suffix
         body = {
             "apiVersion": "v1", "kind": "Pod",
             "metadata": {"name": pod_name, "namespace": NS,
-                         "labels": {"app": "harvui-image-cleaner", "harvui.io/task": "image-cleanup"},
+                         "labels": {"app": "homestead-image-cleaner", "harvui.io/task": "image-cleanup"},
                          "annotations": {"harvui.io/image-digest": digest,
                                          "harvui.io/cache-node": node}},
             "spec": {"nodeName": node, "restartPolicy": "Never",

@@ -78,15 +78,20 @@ class ImportJobRemovalTests(unittest.TestCase):
                      lambda *a, **k: {}, lambda cfg: ({}, None), "lab", {})
 
     def test_a_failed_import_job_can_be_removed(self):
-        result = imports.delete_import("harvui-import-obsidian")
+        result = imports.delete_import("homestead-import-obsidian")
 
         self.assertEqual("DELETE", self.sent[-1][0])
-        self.assertIn("jobs/harvui-import-obsidian", self.sent[-1][1])
+        self.assertIn("jobs/homestead-import-obsidian", self.sent[-1][1])
         self.assertIn("propagationPolicy=Background", self.sent[-1][1])
         self.assertIn("removed", result["message"])
 
+    def test_a_job_from_before_the_rename_is_still_removable(self):
+        imports.delete_import("harvui-import-obsidian")
+
+        self.assertIn("jobs/harvui-import-obsidian", self.sent[-1][1])
+
     def test_only_homestead_import_jobs_are_removable(self):
-        for name in ("", "kube-system-thing", "harvui-pull-frigate", "../../etc"):
+        for name in ("", "kube-system-thing", "homestead-pull-frigate", "../../etc"):
             with self.subTest(name=name):
                 with self.assertRaisesRegex(ValueError, "unknown import job"):
                     imports.delete_import(name)

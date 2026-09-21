@@ -254,7 +254,7 @@ def deletion_plan(namespace, name):
         # as part of the deletion instead of asking for manual kubectl work.
         "stale_consumers": stale,
         "removable_jobs": [row["name"] for row in stale if row["kind"] == "Job"
-                           and row["name"].startswith("harvui-")],
+                           and row["name"].startswith(("homestead-", "harvui-"))],
         "snapshots": {"count": len(snapshot_rows), "names": [x.get("name", "") for x in snapshot_rows[:20]]},
         "backups": {"count": len(backup_rows), "names": [x.get("name", "") for x in backup_rows[:20]]},
         "data_present": data_present,
