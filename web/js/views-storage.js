@@ -161,30 +161,30 @@ async function viewStorage() {
       ${st.disks.map(d => `<div class="drow"><div class="dl">${esc(d.node.replace("harvester-", ""))}</div>
         <div class="dv mono">${d.avail_gb}<span class="dim"> / ${d.cap_gb} GB free</span></div></div>`).join("")}</div>
   </div>` : ""}
-  <div class="card flat pad0"><div class="tblwrap"><table class="tbl"><thead><tr>
-   <th>Volume</th><th>Attached to</th><th>Node</th><th>Health</th><th>Mode</th><th>Replicas</th><th>Usage</th><th>Last used</th><th></th>
+  <div class="card flat pad0"><div class="tblwrap voltable"><table class="tbl dense"><thead><tr>
+   <th>Volume</th><th>Attached to</th><th>Health</th><th>Mode</th><th>Usage</th><th>Last used</th><th></th>
    </tr></thead><tbody>${rows.map(x => `<tr>
-     <td><b>${esc(x.pvc_name || x.name.slice(0, 18))}</b><div class="dim xs mono">${esc(x.namespace || "")}</div></td>
+     <td class="volname"><b>${esc(x.pvc_name || x.name.slice(0, 18))}</b>
+       <span class="dim xs mono">${esc(x.namespace || "")}${x.node ? ` · ${esc(x.node.replace("harvester-", ""))}` : ""}</span></td>
      <td data-label="Attached to">${attachedWorkloads(x).length
        ? `<div class="attachlist">${attachedWorkloads(x).map(w => `<span class="tag info">${esc(w)}</span>`).join("")}</div>`
-       : '<span class="dim">detached</span>'}
-         ${x.pod_status ? `<div class="dim xs">${esc(x.pod_status)}</div>` : ""}</td>
-     <td class="small">${esc(x.node || "—")}</td>
-     <td data-label="Health">${x.state === "attached"
+       : '<span class="dim">detached</span>'}${x.pod_status ? `<span class="dim xs"> · ${esc(x.pod_status)}</span>` : ""}</td>
+     <td data-label="Health" class="volhealth${x.health_reason && x.robustness !== "healthy" ? " hasreason" : ""}">${x.state === "attached"
        ? `<span class="pill ${x.robustness === "healthy" ? "ok" : x.robustness === "degraded" ? "med" : "crit"}"${x.health_reason ? ` data-tip="${esc(x.health_reason)}"` : ""}>${esc(x.robustness)}</span>`
        : `<span class="pill crit" data-tip="Longhorn cannot report live health while this volume is detached">unknown</span>`}
-       ${x.health_reason && x.robustness !== "healthy" ? `<div class="dim xs volume-reason">${esc(x.health_reason)}</div>` : ""}</td>
-     <td><span class="tag">${esc((x.access_modes || ["?"]).map(m => m === "ReadWriteMany" ? "RWX" : m === "ReadWriteOnce" ? "RWO" : m).join(", "))}</span></td>
-     <td class="mono"><b>${x.replicas}</b></td>
-     <td style="min-width:130px">${meter(x.used_pct || 0)}<div class="between dim xs mono" style="margin-top:4px"><span>${x.actual_gb} GB</span><span>${x.size_gb} GB</span></div></td>
-     <td class="small dim">${x.state === "attached" ? '<span class="tag ok">in use</span>' : esc(fmtAgo(x.last_used_secs))}</td>
-     <td><div class="row" style="gap:6px;flex-wrap:nowrap">
-       <button class="btn sm" data-need="operator" onclick='volumeEdit(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("edit")}Edit</button>
-       <button class="btn sm" data-need="admin" title="Browse and edit the files on this volume" onclick="volumeFiles('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}',${x.state === "attached"})">${icon("edit")}Files</button>
-       <button class="btn sm" data-need="admin" title="Hand this volume's files to the user the container runs as" onclick="volumeChown('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}')">Ownership</button>
-       <button class="btn sm danger" data-need="admin" title="Review attachment and data-loss impact before deleting" onclick='volumeDelete(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("trash")}Delete</button>
+       ${x.health_reason && x.robustness !== "healthy" ? `<span class="dim xs volume-reason">${esc(x.health_reason)}</span>` : ""}</td>
+     <td data-label="Mode"><span class="tag">${esc((x.access_modes || ["?"]).map(m => m === "ReadWriteMany" ? "RWX" : m === "ReadWriteOnce" ? "RWO" : m).join(", "))}</span>
+       <span class="dim xs mono">×${x.replicas}</span></td>
+     <td data-label="Usage" class="volusage"><div>${meter(x.used_pct || 0)}
+       <span class="dim xs mono">${x.actual_gb} / ${x.size_gb} GB</span></div></td>
+     <td data-label="Last used" class="small dim">${x.state === "attached" ? '<span class="tag ok">in use</span>' : esc(fmtAgo(x.last_used_secs))}</td>
+     <td class="volactions"><div class="row">
+       <button class="iconbtn" data-need="operator" data-tip="Resize or change replicas" onclick='volumeEdit(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("edit")}</button>
+       <button class="iconbtn" data-need="admin" data-tip="Browse and edit the files on this volume" onclick="volumeFiles('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}',${x.state === "attached"})">${icon("list")}</button>
+       <button class="iconbtn" data-need="admin" data-tip="Hand this volume's files to the user the container runs as" onclick="volumeChown('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}')">${icon("shield")}</button>
+       <button class="iconbtn danger" data-need="admin" data-tip="Review attachment and data-loss impact before deleting" onclick='volumeDelete(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("trash")}</button>
      </div></td>
-      </tr>`).join("") || `<tr><td colspan=9 class="empty">none</td></tr>`}
+      </tr>`).join("") || `<tr><td colspan=7 class="empty">none</td></tr>`}
    </tbody></table></div></div>
   ${storageClassCard(classes)}`);
 }
