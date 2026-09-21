@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.24"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.25"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -480,6 +480,39 @@ def get_nodes():
     return out
 
 
+def _volume_health_reason(volume):
+    """Why Longhorn is unhappy with a volume, in its own words.
+
+    "degraded" on its own sends people to the Longhorn UI to find out what it
+    means. The conditions carry the answer - most often that a replica cannot
+    be scheduled because no node has room for it.
+    """
+    status = volume.get("status", {}) or {}
+    annotations = volume.get("metadata", {}).get("annotations", {}) or {}
+    conditions = []
+    for condition in status.get("conditions", []) or []:
+        conditions.append({"type": condition.get("type", ""),
+                           "status": condition.get("status", ""),
+                           "reason": condition.get("reason", ""),
+                           "message": (condition.get("message") or "")[:300]})
+    failing = [row for row in conditions
+               if row["status"] == "False" and row["type"] not in ("Restore",)]
+    scheduling = annotations.get("longhorn.io/volume-scheduling-error", "") or ""
+    robustness = str(status.get("robustness", "") or "").lower()
+    reason = ""
+    if failing:
+        first = failing[0]
+        reason = first["message"] or first["reason"] or f"{first['type']} is failing"
+    elif scheduling:
+        reason = scheduling
+    elif robustness == "degraded":
+        # Longhorn reports no condition while it is simply catching up.
+        reason = "a replica is rebuilding; the volume is readable and writable meanwhile"
+    elif robustness == "faulted":
+        reason = "every replica is unusable, so the volume cannot be attached"
+    return reason[:300], conditions, scheduling
+
+
 def get_volumes():
     try:
         vols = kget("/apis/longhorn.io/v1beta2/volumes").get("items", [])
@@ -498,6 +531,7 @@ def get_volumes():
         wls = ks.get("workloadsStatus") or []
         pvc_obj = pvcs.get((ks.get("namespace", ""), ks.get("pvcName", "")), {})
         pvc_spec = pvc_obj.get("spec", {}) or {}
+        health_reason, conditions, scheduling_error = _volume_health_reason(v)
         out.append({
             "name": v["metadata"]["name"],
             "pvc_name": ks.get("pvcName", ""),
@@ -519,7 +553,9 @@ def get_volumes():
             "used_pct": round((int(st.get("actualSize", 0) or 0) / max(int(sp.get("size", 0) or 0), 1)) * 100, 1),
             "access_modes": pvc_spec.get("accessModes", []) or [],
             "storage_class": pvc_spec.get("storageClassName", ""),
-            "pvc": v["metadata"].get("annotations", {}).get("longhorn.io/volume-scheduling-error", "") or "",
+            "health_reason": health_reason,
+            "conditions": [row for row in conditions if row["status"] == "False"],
+            "scheduling_error": scheduling_error,
         })
     return sorted(out, key=lambda x: x["name"])
 
@@ -1047,6 +1083,9 @@ def get_storage():
         "faulted": len([v for v in vols if v["state"] == "attached" and v["robustness"] == "faulted"]),
         "unknown": len([v for v in vols if v["state"] != "attached"]),
         "attached": len([v for v in vols if v["state"] == "attached"]),
+        "reasons": [{"name": v.get("pvc_name") or v["name"], "robustness": v["robustness"],
+                     "reason": v["health_reason"]}
+                    for v in vols if v.get("health_reason") and v["robustness"] != "healthy"][:8],
         "disks": disks,
     }
 

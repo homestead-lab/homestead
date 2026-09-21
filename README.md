@@ -55,10 +55,10 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.24`, the workflow publishes:
+For a release such as `v2.8.25`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.24
+ghcr.io/wjcloudy/homestead:2.8.25
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -69,8 +69,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.24
-git push origin v2.8.24
+git tag v2.8.25
+git push origin v2.8.25
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -277,7 +277,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.24 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.25 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -390,6 +390,12 @@ policy cannot be edited afterwards — so Homestead offers create, make-default
 and delete rather than an edit button that would silently do nothing. Deleting
 a class is refused while any claim still references it, and volumes already
 built from it keep working and keep their data.
+
+A volume that is not healthy says why, taken from Longhorn's own conditions:
+most often that a replica cannot be scheduled because no node has room for it.
+A volume that is merely rebuilding says so too, along with the fact that it is
+readable and writable meanwhile, because "degraded" on its own reads like an
+emergency when usually it is not.
 
 Choosing an existing claim shows what Longhorn knows about it — its access
 mode, size, replica health and the node it is currently attached to — because

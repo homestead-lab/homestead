@@ -56,8 +56,10 @@
       pod_count: 1, container_count: 1, pods: [pod("paperless", "harvester-node3", "ghcr.io/paperless-ngx/paperless-ngx:latest")] },
   ];
   const storage = { cap_gb: 1392, avail_gb: 906, used_gb: 486, used_pct: 34.9,
-    provisioned_gb: 670, actual_gb: 224, volumes: 7, healthy: 7, degraded: 0,
-    faulted: 0, unknown: 0, attached: 6, disks: [] };
+    provisioned_gb: 670, actual_gb: 224, volumes: 8, healthy: 6, degraded: 1,
+    faulted: 0, unknown: 1, attached: 7, disks: [],
+    reasons: [{ name: "arr-dashboard-data", robustness: "degraded",
+      reason: "no disk space to create the replicas required: 1 of 2 replicas scheduled" }] };
   const history = {
     cpu: [18,21,19,26,24,31,27,29,33,30,35,28,31,27,29,32,30,27,26,27,25,28,27,27],
     mem: [47,48,49,50,50,51,52,52,53,54,54,55,55,55,56,56,57,58,57,58,59,59,60,61],
@@ -74,6 +76,14 @@
       pod_status: "Running", state: "attached", robustness: "healthy", node: "harvester-node2",
       size_gb: 20, actual_gb: 3.8, used_pct: 19, replicas: 2,
       access_modes: ["ReadWriteOnce"], storage_class: "longhorn-r2", last_used_secs: 0 },
+    { name: "pvc-demo-degraded", pvc_name: "arr-dashboard-data", namespace: "lab", attached_to: "arr-dashboard",
+      attached: ["arr-dashboard"], node: "harvester-node1", state: "attached", robustness: "degraded",
+      size_gb: 5, actual_gb: 3.1, used_pct: 62, replicas: 2, access_modes: ["ReadWriteOnce"],
+      storage_class: "longhorn-r2", last_used_secs: 0, created: "2026-09-19T08:00:00Z",
+      health_reason: "no disk space to create the replicas required: 1 of 2 replicas scheduled",
+      conditions: [{ type: "Scheduled", status: "False", reason: "ReplicaSchedulingFailure",
+        message: "no disk space to create the replicas required: 1 of 2 replicas scheduled" }],
+      scheduling_error: "" },
     { name: "pvc-demo-scratch", pvc_name: "scratch-test", namespace: "lab", attached_to: "",
       pod_status: "", state: "detached", robustness: "unknown", node: "",
       size_gb: 5, actual_gb: 0.2, used_pct: 4, replicas: 2,
@@ -459,7 +469,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.23", candidate: "ghcr.io/wjcloudy/homestead:2.8.24", candidate_tag: "2.8.24", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.24", candidate: "ghcr.io/wjcloudy/homestead:2.8.25", candidate_tag: "2.8.25", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

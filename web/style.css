@@ -667,6 +667,7 @@ html[data-motion="off"] .uptime .ld{animation:none}
 .waccess .plink,.waccess .tag{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .waccess .tag.more{cursor:help}
 .attachlist{display:flex;flex-wrap:wrap;gap:4px}
+.volume-reason{margin-top:5px;max-width:34ch;line-height:1.4;overflow-wrap:anywhere}
 /* volume file browser */
 .filecrumbs{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:12px;font-size:12px}
 .linkish{background:none;border:0;color:var(--low);cursor:pointer;font:inherit;padding:2px 4px;border-radius:6px}

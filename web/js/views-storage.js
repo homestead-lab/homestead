@@ -149,7 +149,8 @@ async function viewStorage() {
     <div class="card flat"><div class="ctitle">Provisioned</div>
       <div class="bignum" style="margin-top:8px">${st.provisioned_gb}<span class="unit">GB</span></div>
       <div class="csub">${st.actual_gb} GB actually written</div></div>
-    <div class="card flat"><div class="ctitle">Replica health</div>
+    <div class="card flat"><div class="ctitle">Replica health</div>${(st.reasons || []).length
+      ? `<div class="dim xs volume-reason" style="margin-top:8px">${esc(st.reasons[0].name)}: ${esc(st.reasons[0].reason)}${st.reasons.length > 1 ? ` · and ${st.reasons.length - 1} more` : ""}</div>` : ""}
       <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap">
         <span class="tag ok">${st.healthy} healthy</span>
         ${st.degraded ? `<span class="tag warn">${st.degraded} degraded</span>` : ""}
@@ -169,9 +170,10 @@ async function viewStorage() {
        : '<span class="dim">detached</span>'}
          ${x.pod_status ? `<div class="dim xs">${esc(x.pod_status)}</div>` : ""}</td>
      <td class="small">${esc(x.node || "—")}</td>
-     <td>${x.state === "attached"
-       ? `<span class="pill ${x.robustness === "healthy" ? "ok" : x.robustness === "degraded" ? "med" : "crit"}">${esc(x.robustness)}</span>`
-       : `<span class="pill crit" title="Longhorn cannot report live health while this volume is detached">unknown</span>`}</td>
+     <td data-label="Health">${x.state === "attached"
+       ? `<span class="pill ${x.robustness === "healthy" ? "ok" : x.robustness === "degraded" ? "med" : "crit"}"${x.health_reason ? ` data-tip="${esc(x.health_reason)}"` : ""}>${esc(x.robustness)}</span>`
+       : `<span class="pill crit" data-tip="Longhorn cannot report live health while this volume is detached">unknown</span>`}
+       ${x.health_reason && x.robustness !== "healthy" ? `<div class="dim xs volume-reason">${esc(x.health_reason)}</div>` : ""}</td>
      <td><span class="tag">${esc((x.access_modes || ["?"]).map(m => m === "ReadWriteMany" ? "RWX" : m === "ReadWriteOnce" ? "RWO" : m).join(", "))}</span></td>
      <td class="mono"><b>${x.replicas}</b></td>
      <td style="min-width:130px">${meter(x.used_pct || 0)}<div class="between dim xs mono" style="margin-top:4px"><span>${x.actual_gb} GB</span><span>${x.size_gb} GB</span></div></td>
