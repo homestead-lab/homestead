@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.34"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.35"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2876,16 +2876,33 @@ class H(BaseHTTPRequestHandler):
                         except urllib.error.HTTPError:
                             pass
                     removed.append(f"workload {name}")
+                    # Its pod holds the same claims the caller may be deleting
+                    # next, so wait for it to go rather than leaving them
+                    # Terminating behind the pvc-protection finaliser.
+                    IMP.wait_for_pods_gone(ns, f"app={name}")
                     _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
                 for claim in wanted:
-                    # Requested alongside the workload that held it, so the claim
-                    # may still be releasing; Kubernetes finishes it either way.
                     ksend("DELETE", f"/api/v1/namespaces/{plan['namespace']}/"
                                     f"persistentvolumeclaims/{claim}")
                     removed.append(f"volume {claim}")
                     _cache.pop("vol", None); _cache.pop("stor", None)
+                # A claim something still mounts only gets a deletion stamp, so
+                # say it is releasing rather than reporting it gone.
+                releasing = []
+                for claim in wanted:
+                    try:
+                        live = kget(f"/api/v1/namespaces/{plan['namespace']}/"
+                                    f"persistentvolumeclaims/{claim}")
+                    except Exception:
+                        continue
+                    if (live.get("metadata", {}) or {}).get("deletionTimestamp"):
+                        releasing.append(claim)
+                result["releasing"] = releasing
                 if removed:
                     result["message"] = result["message"] + " with " + " and ".join(removed)
+                if result.get("releasing"):
+                    result["message"] += (" — " + ", ".join(result["releasing"])
+                                          + " will finish deleting once released")
                 result["removed"] = removed
                 return self._send(200, result)
             if p == "/api/imports/cleanup-plan":

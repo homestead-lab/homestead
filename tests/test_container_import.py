@@ -113,6 +113,32 @@ class ImportJobRemovalTests(unittest.TestCase):
         self.assertIn("propagationPolicy=Background", self.sent[-1][1])
         self.assertIn("removed", result["message"])
 
+    def test_cancelling_a_running_copy_kills_its_pod_before_returning(self):
+        """Background deletion leaves rsync running, holding the volumes open."""
+        pods = {"items": [{"metadata": {"name": "homestead-import-obsidian-x9f2"}}]}
+        original = imports.kget
+
+        def get(path):
+            if "/pods?" in path:
+                return pods if "homestead-import-obsidian" in path else {"items": []}
+            return original(path)
+
+        def send(method, path, body=None, **kwargs):
+            self.sent.append((method, path))
+            if "/pods/" in path:
+                pods["items"] = []
+            return {}
+
+        imports.bind(get, send, lambda *a, **k: {}, lambda cfg: ({}, None), "lab", {})
+
+        result = imports.delete_import("homestead-import-obsidian")
+
+        self.assertEqual(["homestead-import-obsidian-x9f2"], result["pods_removed"])
+        pod_delete = next(path for method, path in self.sent if "/pods/" in path)
+        self.assertIn("gracePeriodSeconds=0", pod_delete)
+        self.assertLess(self.sent.index(("DELETE", pod_delete)), len(self.sent),
+                        "the pod goes before the caller deletes any claim")
+
     def test_a_job_from_before_the_rename_is_still_removable(self):
         imports.delete_import("harvui-import-obsidian")
 

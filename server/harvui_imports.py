@@ -1021,8 +1021,58 @@ def delete_import(name):
     except urllib.error.HTTPError as error:
         if error.code != 404:
             raise
+    stopped = _stop_job_pods(name)
     _bust("wl", "ov")
-    return {"ok": True, "name": name, "message": f"Import {name} removed"}
+    return {"ok": True, "name": name, "pods_removed": stopped,
+            "message": f"Import {name} removed"}
+
+
+def wait_for_pods_gone(namespace, selector, seconds=20):
+    """Wait for pods matching a selector to disappear, and say whether they did."""
+    deadline = time.time() + max(0, seconds)
+    while True:
+        try:
+            pods = kget(f"/api/v1/namespaces/{namespace}/pods"
+                        f"?labelSelector={urllib.parse.quote(selector)}").get("items", [])
+        except Exception:
+            return True
+        if not pods or time.time() >= deadline:
+            return not pods
+        time.sleep(1)
+
+
+def _stop_job_pods(job, seconds=20):
+    """Kill the copy pod now, and wait for it to actually be gone.
+
+    Deleting the Job in the background hands the pod to the garbage collector
+    and returns at once, so an rsync that was running kept running - holding
+    the claims open, which left any volume deleted alongside it stuck
+    Terminating behind the pvc-protection finaliser. Cancelling a copy means
+    cancelling it, so the pod goes first and the claims are free afterwards.
+    """
+    removed = []
+    try:
+        pods = kget(f"/api/v1/namespaces/{NS}/pods?labelSelector=job-name%3D{job}").get("items", [])
+    except Exception:
+        return removed
+    for pod in pods:
+        pod_name = pod["metadata"]["name"]
+        try:
+            ksend("DELETE", f"/api/v1/namespaces/{NS}/pods/{pod_name}?gracePeriodSeconds=0")
+            removed.append(pod_name)
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+    deadline = time.time() + max(0, seconds)
+    while removed and time.time() < deadline:
+        try:
+            left = kget(f"/api/v1/namespaces/{NS}/pods?labelSelector=job-name%3D{job}").get("items", [])
+        except Exception:
+            break
+        if not left:
+            break
+        time.sleep(1)
+    return removed
 
 
 def _job_pod(job):
