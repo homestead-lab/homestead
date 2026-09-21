@@ -295,6 +295,7 @@
       mounts: [{ source: "/mnt/user/appdata/media-server", path: "/config", type: "bind" },
         { source: "/mnt/user/appdata/media-server/transcode", path: "/transcode", type: "bind" },
         { source: "/mnt/user/media", path: "/media", type: "bind" }] },
+    "/api/imports/delete": { ok: true, message: "Import removed" },
     "/api/image-updates/progress": { ns: "lab", name: "plex", phase: "progressing", desired: 1,
       replicas: 1, updated: 1, ready: 0, available: 0, unavailable: 1, generation: 4,
       observed_generation: 4, problems: [], can_rollback: true,
@@ -309,6 +310,9 @@
         active: 1, succeeded: 0, failed: 0, step: 2, steps: 4, folder: "transcode",
         detail: "tower:/mnt/user/appdata/plex/transcode -> /transcode",
         step_percent: 50, percent: 37.5, rate: "22.10MB/s" },
+      { name: "harvui-import-obsidian", app: "obsidian", state: "failed", percent: 12,
+        start: "2026-09-21T07:55:00Z", active: 0, succeeded: 0, failed: 1, step: 1, steps: 3,
+        folder: "config", step_percent: 36, rate: "", detail: "ssh: connect: connection refused" },
       { name: "harvui-import-krusader", app: "binhex-krusader", state: "done", percent: 100,
         start: "2026-09-21T08:12:00Z", end: "2026-09-21T08:19:00Z", active: 0, succeeded: 1, failed: 0 },
     ],
@@ -419,7 +423,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.12", candidate: "ghcr.io/wjcloudy/homestead:2.8.13", candidate_tag: "2.8.13", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.13", candidate: "ghcr.io/wjcloudy/homestead:2.8.14", candidate_tag: "2.8.14", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

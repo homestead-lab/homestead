@@ -565,7 +565,8 @@ async function viewImport() {
         <td><span class="pill ${j.state === "done" ? "ok" : j.state === "failed" ? "crit" : "med"}">${esc(j.state)}</span></td>
         <td style="min-width:150px">${importProgressCell(j)}</td>
         <td class="small dim">${esc((j.start || "").replace("T", " ").replace("Z", ""))}</td>
-        <td><button class="btn sm" onclick="jobLogs('lab','${esc(j.name)}')">Logs</button></td></tr>`).join("")}
+        <td><div class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn sm" onclick="jobLogs('lab','${esc(j.name)}')">Logs</button>
+          <button class="btn sm ${j.state === "failed" ? "danger" : ""}" data-need="admin" title="${j.state === "running" ? "Stop this copy and remove its job" : "Remove this job; it keeps referencing the volume until it is gone"}" onclick="importRemove('${esc(j.name)}','${esc(j.state)}')">${j.state === "running" ? "Cancel" : "Remove"}</button></div></td></tr>`).join("")}
     </tbody></table></div></div>` : ""}
 
     <div class="note" style="margin-top:20px">
@@ -575,6 +576,22 @@ async function viewImport() {
       lands at the mount path you choose.
     </div>`);
 }
+window.importRemove = async (name, state) => {
+  const running = state === "running";
+  if (!confirm(running
+    ? `Cancel the copy "${name}"?
+
+Files already written stay on the volume; nothing else is deleted.`
+    : `Remove the finished job "${name}"?
+
+It keeps referencing the volume it copied into until it is gone. The copied data is untouched.`)) return;
+  try {
+    const result = await api("/api/imports/delete", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }) });
+    toast(result.message || `${name} removed`, "ok"); resetPaint(); viewImport();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
 window.vmDiskImport = () => {
   const namespaces = STATE.data.importNamespaces || ["lab"];
   const classes = STATE.data.importStorageClasses || ["longhorn-r2"];

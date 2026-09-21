@@ -462,6 +462,25 @@ def import_progress(log):
             "rate": rate}
 
 
+def delete_import(name):
+    """Remove an import Job, cancelling the copy if it is still running.
+
+    A failed import leaves its Job behind, and while that Job exists it still
+    references the appdata claim - which used to leave both the import and the
+    volume it was filling unremovable from the UI.
+    """
+    if not re.fullmatch(r"harvui-import-[a-z0-9][a-z0-9-]{0,60}", str(name or "")):
+        raise ValueError("unknown import job")
+    try:
+        ksend("DELETE", f"/apis/batch/v1/namespaces/{NS}/jobs/{name}"
+                        "?propagationPolicy=Background")
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+    _bust("wl", "ov")
+    return {"ok": True, "name": name, "message": f"Import {name} removed"}
+
+
 def _job_pod(job):
     try:
         pods = kget(f"/api/v1/namespaces/{NS}/pods?labelSelector=job-name%3D{job}").get("items", [])
