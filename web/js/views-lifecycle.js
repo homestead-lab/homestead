@@ -757,7 +757,8 @@ function importMappingRow(row = {}) {
     <div><label>Subfolder in the volume</label><input class="imm-folder" type="text" value="${esc(row.folder || "")}" placeholder="${esc(importFolderName(row.remote_path, row.mount_path))}" oninput="imSyncMaps()"></div>
     <div><label>Path inside the container</label><input class="imm-mount" type="text" value="${esc(row.mount_path || "")}" placeholder="/config"></div>
     <label class="switch"><input class="imm-on" type="checkbox" ${row.include === false ? "" : "checked"} onchange="imSyncMaps()">Copy</label>
-    <button class="iconbtn row-remove" type="button" title="Remove folder" onclick="this.closest('.im-map').remove();imSyncMaps()">×</button></div>`;
+    <button class="iconbtn row-remove" type="button" title="Remove folder" onclick="this.closest('.im-map').remove();imSyncMaps()">×</button>
+    <div class="dim xs imm-size" style="grid-column:1/-1;margin-top:-4px"></div></div>`;
 }
 
 window.imAddMap = () => {
@@ -772,15 +773,58 @@ window.imSyncMaps = () => {
       ? `${rows.length} folders copied into one volume, each mounted back separately.`
       : rows.length === 1 ? "One folder copied to the root of the volume." : "Nothing selected to copy.";
   }
+  const sizes = STATE.data.importSizes || {};
   $$("#im_maps .im-map").forEach(row => {
     $(".imm-folder", row).placeholder = importFolderName($(".imm-remote", row).value, $(".imm-mount", row).value);
+    const path = $(".imm-remote", row).value.trim(), readout = $(".imm-size", row);
+    if (!readout) return;
+    readout.textContent = !(path in sizes) ? ""
+      : sizes[path] === null ? "size unknown — du timed out on this folder"
+      : `${importBytes(sizes[path])} to copy`;
   });
 };
+const importBytes = value => {
+  const size = Number(value || 0);
+  if (!size) return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let index = 0, amount = size;
+  while (amount >= 1024 && index < units.length - 1) { amount /= 1024; index++; }
+  return `${amount >= 10 || index === 0 ? Math.round(amount) : amount.toFixed(1)} ${units[index]}`;
+};
+
+/* du walks every inode, so a deep appdata tree can take a while. Each folder
+   is measured under its own timeout on the host: a slow one costs its own
+   answer, not the whole measurement. */
+window.imMeasure = async source => {
+  const rows = $$("#im_maps .im-map");
+  const paths = rows.map(row => $(".imm-remote", row).value.trim()).filter(path => path.startsWith("/"));
+  if (!paths.length) return toast("add a source folder first", "bad");
+  const button = $("#im_measure");
+  if (button) { button.disabled = true; button.textContent = "Measuring…"; }
+  try {
+    const result = await api("/api/sources/measure", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: source, paths }) });
+    STATE.data.importSizes = Object.fromEntries((result.paths || [])
+      .map(row => [row.path, row.measured ? row.bytes : null]));
+    const size = $("#im_size");
+    if (size && result.suggested_gb) size.value = result.suggested_gb;
+    imSyncMaps();
+    const note = $("#im_maps_note");
+    if (note) {
+      note.textContent = `${importBytes(result.total_bytes)} measured across ${paths.length} folder${paths.length === 1 ? "" : "s"}` +
+        (result.complete ? `. Volume size set to ${result.suggested_gb} GiB, which leaves room to grow.`
+          : `, but some folders timed out after ${result.timeout_seconds}s — the suggested size covers only what was measured.`);
+    }
+  } catch (e) { toast(e.message, "bad"); }
+  finally { if (button) { button.disabled = false; button.textContent = "Measure sizes"; } }
+};
+
 window.importMappings = () => $$("#im_maps .im-map")
   .filter(row => $(".imm-on", row).checked)
   .map(row => ({ remote_path: $(".imm-remote", row).value.trim(),
     mount_path: $(".imm-mount", row).value.trim() || "/config",
-    folder: $(".imm-folder", row).value.trim() }));
+    folder: $(".imm-folder", row).value.trim(),
+    bytes: (STATE.data.importSizes || {})[$(".imm-remote", row).value.trim()] || 0 }));
 
 window.importSetup = async (source, dir, cfg = {}) => {
   const src = (STATE.data.srcs || []).find(s => s.name === source) || {};
@@ -801,7 +845,8 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <div class="sec">Folders to copy ${tip("Every Docker path under the source appdata directory can come across. They all live in one Longhorn volume for this app, each in its own subfolder, mounted back where the container expects it.")}</div>
     <div class="note">Source folders → one Longhorn volume <span class="mono" id="im_pvc_route">${esc(name)}-appdata</span> → mounted back at each container path.</div>
     <div id="im_maps">${importMappingRows(cfg, src).map(importMappingRow).join("")}</div>
-    <button class="btn sm" onclick="imAddMap()">＋ add folder</button>
+    <div class="row"><button class="btn sm" onclick="imAddMap()">＋ add folder</button>
+      <button class="btn sm" id="im_measure" onclick="imMeasure('${esc(source)}')">Measure sizes</button></div>
     <div class="dim xs" id="im_maps_note" style="margin-top:8px"></div>
     <div class="sec">Longhorn storage ${tip("Choose where copied appdata is stored. RWO suits one workload; RWX allows attachment from multiple nodes. Existing PVC merges the imported files into data already in that claim.")}</div>
     <div class="deploy-volume import-storage">

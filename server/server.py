@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.14"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.15"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2299,7 +2299,8 @@ ADMIN_ROUTES = {
     "/api/auth/users", "/api/auth/users/delete", "/api/auth/role",
     "/api/node/power", "/api/node/drain", "/api/node/cordon", "/api/node/hardware",
     "/api/sources", "/api/sources/delete", "/api/sources/browse",
-    "/api/sources/containers", "/api/sources/inspect", "/api/import", "/api/imports/delete",
+    "/api/sources/containers", "/api/sources/inspect", "/api/sources/measure",
+    "/api/import", "/api/imports/delete",
     "/api/vm-disks/import",
     "/api/shares", "/api/shares/edit", "/api/shares/delete", "/api/shares/options",
     "/api/storage/classes/default", "/api/storage/classes/delete",
@@ -2746,6 +2747,9 @@ class H(BaseHTTPRequestHandler):
                     {"namespace": b["ns"], "name": b["name"]})
                 _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("image-updates", None)
                 return self._send(200, result)
+            if p == "/api/sources/measure":
+                return self._send(200, IMP.measure_source_paths(
+                    b.get("name"), b.get("paths") or [], b.get("seconds", 25)))
             if p == "/api/imports/delete":
                 return self._send(200, IMP.delete_import(b.get("name")))
             if p == "/api/network/service/delete":

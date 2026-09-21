@@ -249,6 +249,61 @@ def _pod_logs(pod):
 
 
 # --------------------------------------------------------------- import job
+MEASURE_LINE = re.compile(r"^(\d+)\s+(.*)$")
+
+
+def measure_source_paths(name, paths, seconds=25):
+    """Ask the source host how big each folder is, and stop asking if it drags.
+
+    du walks every inode, which on a deep appdata tree can take longer than
+    anyone wants to wait at a modal. Each path is measured under its own
+    timeout so one slow folder costs that folder's answer rather than the
+    whole measurement, and an unmeasured folder is reported as unknown instead
+    of as zero.
+    """
+    src = _source(name)
+    seconds = max(5, min(120, int(seconds or 25)))
+    wanted = []
+    for item in paths or []:
+        candidate = str(item or "").strip().rstrip("/")
+        if not candidate.startswith("/"):
+            raise ValueError(f"path must be absolute, got {candidate or '(blank)'}")
+        if candidate not in wanted:
+            wanted.append(candidate)
+    if not wanted:
+        return {"paths": [], "total_bytes": 0, "complete": True, "suggested_gb": 1}
+
+    # du -sk is the portable spelling: busybox and GNU both have it.
+    commands = []
+    for candidate in wanted:
+        quoted = shlex.quote(candidate)
+        commands.append(f"echo \"### {candidate}\"; timeout {seconds} du -sk {quoted} 2>/dev/null "
+                        f"|| echo UNKNOWN")
+    lines = run_probe(f"measure-{name}", _ssh_script(src, "; ".join(commands)), src,
+                      timeout=min(180, seconds * len(wanted) + 40))
+
+    rows, current = [], None
+    for line in lines:
+        if line.startswith("### "):
+            current = line[4:].strip()
+            rows.append({"path": current, "bytes": None, "measured": False})
+            continue
+        if not rows:
+            continue
+        if line.strip() == "UNKNOWN":
+            continue
+        match = MEASURE_LINE.match(line.strip())
+        if match and rows[-1]["bytes"] is None:
+            rows[-1].update(bytes=int(match.group(1)) * 1024, measured=True)
+    measured = [row for row in rows if row["measured"]]
+    total = sum(row["bytes"] for row in measured)
+    complete = bool(rows) and len(measured) == len(rows)
+    # Room for the copy plus what the app writes next; never below 1 GiB.
+    suggested = max(1, int(total / (1024 ** 3) * 1.25) + 1)
+    return {"paths": rows, "total_bytes": total, "complete": complete,
+            "suggested_gb": suggested, "timeout_seconds": seconds}
+
+
 def _folder_name(value, used):
     """A safe directory name inside the appdata volume."""
     base = re.sub(r"[^a-z0-9._-]+", "-", str(value or "").strip("/").split("/")[-1].lower())
@@ -295,7 +350,12 @@ def import_mappings(cfg):
             used.add(folder)
         elif not single:
             folder = _folder_name(remote or mount, used)
-        rows.append({"remote_path": remote, "mount_path": mount, "folder": folder})
+        try:
+            size = max(0, int(item.get("bytes") or 0))
+        except (TypeError, ValueError):
+            size = 0
+        rows.append({"remote_path": remote, "mount_path": mount, "folder": folder,
+                     "bytes": size})
     return rows
 
 
@@ -349,13 +409,18 @@ def import_container(cfg):
     steps = ["set -e",
              "apk add --no-cache rsync openssh-client sshpass >/dev/null 2>&1"]
     total = len(mappings)
+    # Measured up front, the copy can report bytes rather than folder counts.
+    measured = sum(mapping.get("bytes") or 0 for mapping in mappings)
+    if measured and all(mapping.get("bytes") for mapping in mappings):
+        steps.append("echo " + shlex.quote(f"==> total {total} folders {measured}B"))
     for index, mapping in enumerate(mappings, start=1):
         target = ("/appdata/" + mapping["folder"]) if mapping["folder"] else "/appdata"
         spec = shlex.quote(f"{src['user']}@{src['host']}:{mapping['remote_path']}/")
         label = mapping["folder"] or "appdata"
         steps.append(f"mkdir -p {shlex.quote(target)}")
+        weight = f" ({mapping['bytes']}B)" if mapping.get("bytes") else ""
         steps.append("echo " + shlex.quote(
-            f"==> step {index}/{total} {label} :: {src['host']}:{mapping['remote_path']}"
+            f"==> step {index}/{total} {label}{weight} :: {src['host']}:{mapping['remote_path']}"
             f" -> {mapping['mount_path']}"))
         steps.append(
             'sshpass -p "$SRC_PASS" rsync -aH --info=progress2 --no-perms --no-owner --no-group '
@@ -420,7 +485,8 @@ def import_container(cfg):
                     if cfg.get("start_after_copy", True) else ""}
 
 
-STEP = re.compile(r"==> step (\d+)/(\d+) (\S+)\s*(.*)$")
+STEP = re.compile(r"==> step (\d+)/(\d+) (\S+)(?: \((\d+)B\))?\s*(.*)$")
+TOTAL = re.compile(r"==> total (\d+) folders (\d+)B")
 # rsync --info=progress2 redraws one line with \r: "  1,234,567  57%  11.83MB/s  0:00:04"
 RSYNC = re.compile(r"([\d,]+)\s+(\d+)%\s+(\S+)\s+(\d+:\d\d:\d\d)")
 
@@ -435,14 +501,22 @@ def import_progress(log):
     """
     step, total, label, detail, percent, rate = 0, 0, "", "", 0, ""
     done_steps = 0
+    sizes, done_bytes, total_bytes = {}, 0, 0
     for line in str(log or "").replace("\r", "\n").splitlines():
         line = line.strip()
+        header = TOTAL.match(line)
+        if header:
+            total, total_bytes = int(header.group(1)), int(header.group(2))
+            continue
         match = STEP.match(line)
         if match:
             step, total = int(match.group(1)), int(match.group(2))
-            label, rest = match.group(3), (match.group(4) or "").strip()
+            label, rest = match.group(3), (match.group(5) or "").strip()
+            if match.group(4):
+                sizes[step] = int(match.group(4))
             if rest == "complete":
                 done_steps, percent, rate = step, 100, ""
+                done_bytes = sum(sizes.get(index, 0) for index in range(1, step + 1))
             else:
                 detail = rest[2:].strip() if rest.startswith("::") else rest
                 percent, rate = 0, ""
@@ -455,11 +529,17 @@ def import_progress(log):
             done_steps, percent = total, 100
     if not total:
         return {}
-    # Whole steps already finished, plus how far the running one has come.
-    overall = ((done_steps + (percent / 100 if done_steps < step else 0)) / total) * 100
+    running = percent / 100 if done_steps < step else 0
+    measured = total_bytes > 0
+    if measured:
+        # Folders differ wildly in size, so count bytes when the import knows
+        # them: four folders are not four equal quarters of the copy.
+        overall = (done_bytes + sizes.get(step, 0) * running) / total_bytes * 100
+    else:
+        overall = (done_steps + running) / total * 100
     return {"step": step, "steps": total, "folder": label, "detail": detail,
             "step_percent": percent, "percent": round(min(100.0, max(0.0, overall)), 1),
-            "rate": rate}
+            "rate": rate, "weighted": measured, "total_bytes": total_bytes}
 
 
 def delete_import(name):

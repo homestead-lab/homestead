@@ -31,7 +31,7 @@ not affiliated with, endorsed, or sponsored by Lime Technology, Inc.
 | **Cluster** | Harvester/Kubernetes versions, control-plane and etcd quorum, node pressure, critical services, certificate requests and guided node onboarding |
 | **Storage** | RWO/RWX volume creation, growth and guarded deletion, storage-class inventory and creation, usage, health, snapshots, backups and recurring jobs |
 | **Hardware** | Host device browser and reusable mappings for iGPU, Coral, USB/PCIe and other devices |
-| **Import** | Unraid/Docker workload and appdata import, several folders into one volume, live per-folder progress, editable seed configuration |
+| **Import** | Unraid/Docker workload and appdata import, several folders into one volume, measured sizing, byte-weighted progress, editable seed configuration |
 | **Administration** | Direct URLs/breadcrumbs, persistent activity tray, viewer/operator/admin roles, appearance, thresholds and version details |
 
 ## Repository layout
@@ -54,10 +54,10 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.14`, the workflow publishes:
+For a release such as `v2.8.15`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.14
+ghcr.io/wjcloudy/homestead:2.8.15
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -68,8 +68,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.14
-git push origin v2.8.14
+git tag v2.8.15
+git push origin v2.8.15
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -276,7 +276,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.14 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.15 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
