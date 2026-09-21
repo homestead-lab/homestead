@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.10"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.11"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1057,21 +1057,31 @@ def build_deployment(cfg):
     container_name = _dns_name(cfg.get("container_name") or cfg.get("name"), "container name")
     ns = cfg.get("namespace", DEFAULT_NS)
     env = [{"name": k, "value": str(v)} for k, v in (cfg.get("env") or {}).items()]
-    mounts, volumes = [], []
+    mounts, volumes, named = [], [], {}
     for i, v in enumerate(cfg.get("volumes") or []):
-        vn = f"vol{i}"
         if v.get("type") == "pod":
             raise ValueError("existing pod volumes can only be used when joining an existing workload")
+        # Several folders of one claim share a single volume entry and differ
+        # only by subPath, which is how an import lands one volume per app.
+        key = (v.get("type") or "pvc", v.get("source") or "")
+        reusable = key[0] in ("pvc", "host") and key[1]
+        vn = named.get(key) if reusable else None
+        if not vn:
+            vn = f"vol{len(volumes)}"
+            if reusable:
+                named[key] = vn
+            if v.get("type") == "host":
+                volumes.append({"name": vn, "hostPath": {"path": v["source"]}})
+            elif v.get("type") == "emptyDir":
+                volumes.append({"name": vn, "emptyDir": {}})
+            else:
+                volumes.append({"name": vn, "persistentVolumeClaim": {"claimName": v["source"]}})
         mount = {"name": vn, "mountPath": v["path"]}
+        if v.get("sub_path"):
+            mount["subPath"] = str(v["sub_path"]).strip("/")
         if v.get("read_only"):
             mount["readOnly"] = True
         mounts.append(mount)
-        if v.get("type") == "host":
-            volumes.append({"name": vn, "hostPath": {"path": v["source"]}})
-        elif v.get("type") == "emptyDir":
-            volumes.append({"name": vn, "emptyDir": {}})
-        else:
-            volumes.append({"name": vn, "persistentVolumeClaim": {"claimName": v["source"]}})
     ports = [{"containerPort": int(p["container"]),
               "name": (p.get("name") or f"p{p['container']}-{str(p.get('protocol', 'TCP')).lower()}")[:15],
               "protocol": str(p.get("protocol", "TCP")).upper()}

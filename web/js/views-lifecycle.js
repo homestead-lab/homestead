@@ -507,6 +507,22 @@ window.jobDel = async name => {
 };
 
 /* ---------------- import ---------------- */
+/* rsync restarts its percentage for every folder, so the job announces each
+   one and the bar shows how far through the whole set the copy is. */
+function importProgressCell(job) {
+  const done = job.state === "done", failed = job.state === "failed";
+  if (job.percent == null && !done) {
+    return `<div class="dim xs">${failed ? "stopped before reporting" : "starting…"}</div>`;
+  }
+  const percent = done ? 100 : Math.max(2, job.percent || 0);
+  const label = done ? "copied"
+    : job.steps > 1 ? `folder ${job.step || 1} of ${job.steps}${job.folder ? ` · ${job.folder}` : ""}`
+    : job.folder ? esc(job.folder) : "copying";
+  return `<div class="jobmeter"><span class="${failed ? "failed" : ""}" style="width:${percent}%"></span></div>
+    <div class="dim xs mono">${done ? "100%" : `${job.percent ?? 0}%`}${job.rate ? ` · ${esc(job.rate)}` : ""}</div>
+    <div class="dim xs">${esc(label)}</div>`;
+}
+
 async function viewImport() {
   const [, nodes] = await Promise.all([loadHardwareFeatures(), api("/api/nodes").catch(() => [])]);
   if (nodes.length) STATE.data.nodes = nodes;
@@ -543,10 +559,11 @@ async function viewImport() {
 
     ${jobs.length ? `<div class="sec">Transfers</div>
     <div class="card flat pad0"><div class="tblwrap"><table class="tbl"><thead><tr>
-      <th>App</th><th>Job</th><th>State</th><th>Started</th><th></th></tr></thead><tbody>
+      <th>App</th><th>Job</th><th>State</th><th>Progress</th><th>Started</th><th></th></tr></thead><tbody>
       ${jobs.map(j => `<tr><td><b>${esc(j.app || "—")}</b></td>
         <td class="mono small dim">${esc(j.name)}</td>
         <td><span class="pill ${j.state === "done" ? "ok" : j.state === "failed" ? "crit" : "med"}">${esc(j.state)}</span></td>
+        <td style="min-width:150px">${importProgressCell(j)}</td>
         <td class="small dim">${esc((j.start || "").replace("T", " ").replace("Z", ""))}</td>
         <td><button class="btn sm" onclick="jobLogs('lab','${esc(j.name)}')">Logs</button></td></tr>`).join("")}
     </tbody></table></div></div>` : ""}
@@ -696,6 +713,58 @@ window.inspectImport = async (source, container) => {
     importSetup(source, container, cfg);
   } catch (e) { $("#mbody").innerHTML = `<div class="empty"><b>Could not inspect ${esc(container)}</b><br><span class="dim small">${esc(e.message)}</span></div>`; }
 };
+/* Every Docker mount under the source appdata path is importable; anything
+   else on the host is offered but left unticked, because it is not appdata. */
+function importMappingRows(cfg, src) {
+  const base = (src.base_path || "/mnt/user/appdata").replace(/\/+$/, "");
+  const seen = new Set();
+  const rows = (cfg.mounts || [])
+    .filter(mount => mount.source && mount.path && mount.type !== "tmpfs")
+    .map(mount => ({ remote_path: mount.source, mount_path: mount.path,
+      include: mount.source === cfg.remote_path || mount.source.startsWith(base + "/") }));
+  if (cfg.remote_path && !rows.some(row => row.remote_path === cfg.remote_path)) {
+    rows.unshift({ remote_path: cfg.remote_path, mount_path: cfg.mount_path || "/config", include: true });
+  }
+  if (!rows.length) rows.push({ remote_path: cfg.remote_path || "", mount_path: cfg.mount_path || "/config", include: true });
+  return rows.filter(row => !seen.has(row.remote_path) && seen.add(row.remote_path));
+}
+
+function importFolderName(remotePath, mountPath) {
+  const tail = String(remotePath || mountPath || "data").replace(/\/+$/, "").split("/").pop();
+  return tail.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "").slice(0, 60) || "data";
+}
+
+function importMappingRow(row = {}) {
+  return `<div class="f4 im-map">
+    <div><label>Source folder on the host</label><input class="imm-remote" type="text" value="${esc(row.remote_path || "")}" placeholder="/mnt/user/appdata/app/config" oninput="imSyncMaps()"></div>
+    <div><label>Subfolder in the volume</label><input class="imm-folder" type="text" value="${esc(row.folder || "")}" placeholder="${esc(importFolderName(row.remote_path, row.mount_path))}" oninput="imSyncMaps()"></div>
+    <div><label>Path inside the container</label><input class="imm-mount" type="text" value="${esc(row.mount_path || "")}" placeholder="/config"></div>
+    <label class="switch"><input class="imm-on" type="checkbox" ${row.include === false ? "" : "checked"} onchange="imSyncMaps()">Copy</label>
+    <button class="iconbtn row-remove" type="button" title="Remove folder" onclick="this.closest('.im-map').remove();imSyncMaps()">×</button></div>`;
+}
+
+window.imAddMap = () => {
+  $("#im_maps").insertAdjacentHTML("beforeend", importMappingRow({ include: true }));
+  imSyncMaps();
+};
+window.imSyncMaps = () => {
+  const rows = $$("#im_maps .im-map").filter(row => $(".imm-on", row).checked);
+  const note = $("#im_maps_note");
+  if (note) {
+    note.textContent = rows.length > 1
+      ? `${rows.length} folders copied into one volume, each mounted back separately.`
+      : rows.length === 1 ? "One folder copied to the root of the volume." : "Nothing selected to copy.";
+  }
+  $$("#im_maps .im-map").forEach(row => {
+    $(".imm-folder", row).placeholder = importFolderName($(".imm-remote", row).value, $(".imm-mount", row).value);
+  });
+};
+window.importMappings = () => $$("#im_maps .im-map")
+  .filter(row => $(".imm-on", row).checked)
+  .map(row => ({ remote_path: $(".imm-remote", row).value.trim(),
+    mount_path: $(".imm-mount", row).value.trim() || "/config",
+    folder: $(".imm-folder", row).value.trim() }));
+
 window.importSetup = async (source, dir, cfg = {}) => {
   const src = (STATE.data.srcs || []).find(s => s.name === source) || {};
   const name = (cfg.name || dir).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 38);
@@ -712,9 +781,11 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <div class="f"><label>Logo URL</label><input type="url" id="im_icon" value="${esc(cfg.icon || "")}" placeholder="https://…/icon.png"></div>
     <div class="sec">Hardware requirements ${tip("Docker device mappings are pre-selected. Add or remove features before import; placement will be limited to nodes that provide every selected feature.")}</div>
     <div class="hwchoices">${hardwareChoices("im_hw", cfg.hardware || [])}</div>
-    <div class="f"><label>Mount appdata inside the container ${tip("This is the path the app sees inside the container, usually /config. The copied files themselves live on a Longhorn volume, not at this path on a Harvester node.")}</label>
-      <input type="text" id="im_mount" value="${esc(cfg.mount_path || "/config")}">
-      <div class="dim xs" style="margin-top:6px">Source files → Longhorn PVC <span class="mono" id="im_pvc_route">${esc(name)}-appdata</span> → this path inside the container.</div></div>
+    <div class="sec">Folders to copy ${tip("Every Docker path under the source appdata directory can come across. They all live in one Longhorn volume for this app, each in its own subfolder, mounted back where the container expects it.")}</div>
+    <div class="note">Source folders → one Longhorn volume <span class="mono" id="im_pvc_route">${esc(name)}-appdata</span> → mounted back at each container path.</div>
+    <div id="im_maps">${importMappingRows(cfg, src).map(importMappingRow).join("")}</div>
+    <button class="btn sm" onclick="imAddMap()">＋ add folder</button>
+    <div class="dim xs" id="im_maps_note" style="margin-top:8px"></div>
     <div class="sec">Longhorn storage ${tip("Choose where copied appdata is stored. RWO suits one workload; RWX allows attachment from multiple nodes. Existing PVC merges the imported files into data already in that claim.")}</div>
     <div class="deploy-volume import-storage">
       <div class="deploy-volume-grid">
@@ -734,13 +805,13 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <div class="sec">Environment variables ${tip("Copied from Docker inspect. Review secrets and host-specific paths before starting the imported app.")}</div>
     <div id="im_env">${Object.entries(cfg.env || {}).map(([k,v]) => `<div class="f2 im-env"><div class="f"><label>Variable</label><input class="iek" value="${esc(k)}"></div><div class="f"><label>Value</label><input class="iev" value="${esc(v)}"></div></div>`).join("")}</div>
     <button class="btn sm" onclick="imAddEnv()">＋ add variable</button>
-    ${(cfg.mounts || []).filter(m => m.source !== cfg.remote_path).length ? `<div class="note" style="margin-top:14px"><b>Other Docker paths need review.</b> This import copies the appdata path only. Docker also mounted: ${(cfg.mounts || []).filter(m => m.source !== cfg.remote_path).map(m => `<span class="mono">${esc(m.source)} → ${esc(m.path)}</span>`).join(", ")}</div>` : ""}
     <label class="switch"><input type="checkbox" id="im_start" checked> Leave stopped until the copy finishes</label>
     <div class="row" style="margin-top:16px">
       <button class="btn pri" onclick="doImport('${esc(source)}')">Start import</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div>
     <div class="note" style="margin-top:14px">The copy runs as a Job — you can close this and watch it
-    on the Import page. Large appdata directories can take a while.</div>`, true);
+    on the Import page, folder by folder. Large appdata directories can take a while.</div>`, true);
+  imSyncMaps();
 };
 window.imAddPort = () => { $("#im_ports").insertAdjacentHTML("beforeend", '<div class="f4 im-port"><div><label>Container</label><input class="ipc" type="number"></div><div><label>LAN</label><input class="iph" type="number"></div><div><label>Protocol</label><select class="ipp"><option>TCP</option><option>UDP</option></select></div><label class="switch"><input class="ipe" type="checkbox" checked>Expose</label></div>'); };
 window.imAddEnv = () => { $("#im_env").insertAdjacentHTML("beforeend", '<div class="f2 im-env"><div class="f"><label>Variable</label><input class="iek"></div><div class="f"><label>Value</label><input class="iev"></div></div>'); };
@@ -761,13 +832,18 @@ window.doImport = async source => {
   const storageKind = $("#im_storage_kind").value, existing = storageKind === "existing";
   const pvcName = existing ? $("#im_pvc_select").value : $("#im_pvc_name").value.trim();
   const body = { source, name: $("#im_name").value.trim(), remote_path: $("#im_path").value.trim(),
-    image: $("#im_image").value.trim(), icon: $("#im_icon").value.trim(), mount_path: $("#im_mount").value.trim(),
+    image: $("#im_image").value.trim(), icon: $("#im_icon").value.trim(), mappings: importMappings(),
     pvc_name: pvcName, size_gb: existing ? 1 : +$("#im_size").value, reuse_existing: existing,
     storage_class: existing ? "longhorn-r2" : $("#im_sc").value,
     access_mode: storageKind === "new-rwx" ? "ReadWriteMany" : "ReadWriteOnce", start_after_copy: $("#im_start").checked,
     ports: $$(".im-port").map(r => ({ container: +$(".ipc", r).value, host: +$(".iph", r).value || +$(".ipc", r).value, protocol: $(".ipp", r).value, expose: $(".ipe", r).checked })).filter(p => p.container),
     env, hardware: selectedHardware("im_hw"), network_mode: $("#im_net").value, vip_mode: $("#im_vip").value, lb_ip: $("#im_ip").value.trim() };
   if (!body.name || !body.image) return toast("workload name and image are required", "bad");
+  if (!body.mappings.length) return toast("choose at least one folder to copy", "bad");
+  const bad = body.mappings.find(row => !row.remote_path.startsWith("/") || !row.mount_path.startsWith("/"));
+  if (bad) return toast(`every folder needs an absolute source and container path (${esc(bad.remote_path || "blank")})`, "bad");
+  body.remote_path = body.mappings[0].remote_path;
+  body.mount_path = body.mappings[0].mount_path;
   if (!body.pvc_name) return toast(existing ? "choose an existing PVC" : "PVC name is required", "bad");
   if (existing && !confirm(`Import into existing PVC “${body.pvc_name}”?\n\nThe current data is kept, but imported files with the same names may be replaced.`)) return;
   try {

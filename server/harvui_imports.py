@@ -249,6 +249,56 @@ def _pod_logs(pod):
 
 
 # --------------------------------------------------------------- import job
+def _folder_name(value, used):
+    """A safe directory name inside the appdata volume."""
+    base = re.sub(r"[^a-z0-9._-]+", "-", str(value or "").strip("/").split("/")[-1].lower())
+    base = base.strip("-.")[:60] or "data"
+    name, suffix = base, 2
+    while name in used:
+        name = f"{base}-{suffix}"
+        suffix += 1
+    used.add(name)
+    return name
+
+
+def import_mappings(cfg):
+    """Every remote directory this import copies, and where it lands.
+
+    An Unraid container usually maps several folders under appdata. They belong
+    in one volume per container, each copied into its own subdirectory and
+    mounted back at the path the container expects through subPath, rather than
+    a volume per mapping.
+    """
+    rows, used, paths = [], set(), set()
+    requested = cfg.get("mappings")
+    if not requested:
+        # The original single-folder shape, kept so older clients still work.
+        requested = [{"remote_path": cfg.get("remote_path"),
+                      "mount_path": cfg.get("mount_path", "/config"), "folder": ""}]
+    single = len(requested) == 1
+    for item in requested:
+        remote = str(item.get("remote_path") or "").strip().rstrip("/")
+        mount = str(item.get("mount_path") or "").strip().rstrip("/") or "/config"
+        if not remote.startswith("/"):
+            raise ValueError(f"remote path must be absolute, got {remote or '(blank)'}")
+        if not mount.startswith("/"):
+            raise ValueError(f"container path must be absolute, got {mount}")
+        if mount in paths:
+            raise ValueError(f"{mount} is mapped twice")
+        paths.add(mount)
+        folder = str(item.get("folder") or "").strip("/")
+        if folder:
+            if not re.fullmatch(r"[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*", folder):
+                raise ValueError(f"folder {folder} must be a plain relative path")
+            if ".." in folder.split("/"):
+                raise ValueError("folder cannot climb out of the volume")
+            used.add(folder)
+        elif not single:
+            folder = _folder_name(remote or mount, used)
+        rows.append({"remote_path": remote, "mount_path": mount, "folder": folder})
+    return rows
+
+
 def import_container(cfg):
     """Create the PVC, launch the copy Job, then create the Deployment.
 
@@ -284,7 +334,7 @@ def import_container(cfg):
     else:
         create_pvc(NS, pvc, size, storage_class, access_mode)
 
-    remote = cfg["remote_path"]
+    mappings = import_mappings(cfg)
     job = f"harvui-import-{name}"
     try:
         ksend("DELETE", f"/apis/batch/v1/namespaces/{NS}/jobs/{job}?propagationPolicy=Background")
@@ -292,18 +342,28 @@ def import_container(cfg):
     except urllib.error.HTTPError:
         pass
 
-    # remote_path arrives from the UI, so every interpolated value is quoted.
-    spec = shlex.quote(f"{src['user']}@{src['host']}:{remote.rstrip('/')}/")
-    banner = shlex.quote(f"==> copying {src['host']}:{remote} -> /appdata")
-    script = (
-        "set -e\n"
-        "apk add --no-cache rsync openssh-client sshpass >/dev/null 2>&1\n"
-        f"echo {banner}\n"
-        "sshpass -p \"$SRC_PASS\" rsync -aH --info=progress2 --no-perms --no-owner --no-group "
-        "-e 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' "
-        f"{spec} /appdata/\n"
-        "echo '==> done'; du -sh /appdata\n"
-    )
+    # Every interpolated value arrives from the UI, so all of it is quoted.
+    # Each step announces itself on its own line before rsync's own progress,
+    # which is what lets the UI say "2 of 5" instead of replaying 0-100% per
+    # folder with nothing to say which folder it is on.
+    steps = ["set -e",
+             "apk add --no-cache rsync openssh-client sshpass >/dev/null 2>&1"]
+    total = len(mappings)
+    for index, mapping in enumerate(mappings, start=1):
+        target = ("/appdata/" + mapping["folder"]) if mapping["folder"] else "/appdata"
+        spec = shlex.quote(f"{src['user']}@{src['host']}:{mapping['remote_path']}/")
+        label = mapping["folder"] or "appdata"
+        steps.append(f"mkdir -p {shlex.quote(target)}")
+        steps.append("echo " + shlex.quote(
+            f"==> step {index}/{total} {label} :: {src['host']}:{mapping['remote_path']}"
+            f" -> {mapping['mount_path']}"))
+        steps.append(
+            'sshpass -p "$SRC_PASS" rsync -aH --info=progress2 --no-perms --no-owner --no-group '
+            "-e 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' "
+            f"{spec} {shlex.quote(target + '/')}")
+        steps.append("echo " + shlex.quote(f"==> step {index}/{total} {label} complete"))
+    steps.append("echo '==> done'; du -sh /appdata")
+    script = "\n".join(steps) + "\n"
 
     body = {
         "apiVersion": "batch/v1", "kind": "Job",
@@ -331,7 +391,8 @@ def import_container(cfg):
             "replicas": 0 if cfg.get("start_after_copy", True) else 1,
             "cpu": cfg.get("cpu", "50m"), "memory": cfg.get("memory", "256Mi"),
             "ports": cfg.get("ports") or [], "env": cfg.get("env") or {},
-            "volumes": [{"path": cfg.get("mount_path", "/config"), "source": pvc, "type": "pvc"}],
+            "volumes": [{"path": mapping["mount_path"], "source": pvc, "type": "pvc",
+                          "sub_path": mapping["folder"]} for mapping in mappings],
             "gpu": bool(cfg.get("gpu")),
             "hardware": cfg.get("hardware") or [], "icon": cfg.get("icon", ""),
             "icon_source": cfg.get("icon_source", cfg.get("icon", "")),
@@ -353,9 +414,61 @@ def import_container(cfg):
         created = name
     _bust("wl", "ov", "flow")
     return {"ok": True, "job": job, "pvc": pvc, "deployment": created,
+            "mappings": mappings,
             "storage_class": storage_class, "access_mode": access_mode,
             "note": "Deployment created stopped; start it once the copy job finishes."
                     if cfg.get("start_after_copy", True) else ""}
+
+
+STEP = re.compile(r"==> step (\d+)/(\d+) (\S+)\s*(.*)$")
+# rsync --info=progress2 redraws one line with \r: "  1,234,567  57%  11.83MB/s  0:00:04"
+RSYNC = re.compile(r"([\d,]+)\s+(\d+)%\s+(\S+)\s+(\d+:\d\d:\d\d)")
+
+
+def import_progress(log):
+    """Read the copy job's output as one overall position, not a replayed bar.
+
+    rsync restarts its percentage for every folder it copies, which is why the
+    log looks like 0-100% several times over. Each folder is announced first,
+    so the step counter carries the real progress and rsync's percentage only
+    fills in the step that is running.
+    """
+    step, total, label, detail, percent, rate = 0, 0, "", "", 0, ""
+    done_steps = 0
+    for line in str(log or "").replace("\r", "\n").splitlines():
+        line = line.strip()
+        match = STEP.match(line)
+        if match:
+            step, total = int(match.group(1)), int(match.group(2))
+            label, rest = match.group(3), (match.group(4) or "").strip()
+            if rest == "complete":
+                done_steps, percent, rate = step, 100, ""
+            else:
+                detail = rest[2:].strip() if rest.startswith("::") else rest
+                percent, rate = 0, ""
+            continue
+        moved = RSYNC.search(line)
+        if moved:
+            percent, rate = int(moved.group(2)), moved.group(3)
+        elif line.startswith("==> done"):
+            step = total = max(total, step)
+            done_steps, percent = total, 100
+    if not total:
+        return {}
+    # Whole steps already finished, plus how far the running one has come.
+    overall = ((done_steps + (percent / 100 if done_steps < step else 0)) / total) * 100
+    return {"step": step, "steps": total, "folder": label, "detail": detail,
+            "step_percent": percent, "percent": round(min(100.0, max(0.0, overall)), 1),
+            "rate": rate}
+
+
+def _job_pod(job):
+    try:
+        pods = kget(f"/api/v1/namespaces/{NS}/pods?labelSelector=job-name%3D{job}").get("items", [])
+    except Exception:
+        return ""
+    pods.sort(key=lambda pod: pod["metadata"].get("creationTimestamp", ""), reverse=True)
+    return pods[0]["metadata"]["name"] if pods else ""
 
 
 def import_status():
@@ -366,16 +479,26 @@ def import_status():
     out = []
     for j in jobs:
         st = j.get("status", {})
-        out.append({
+        state = ("running" if st.get("active") else "done" if st.get("succeeded")
+                 else "failed" if st.get("failed") else "pending")
+        row = {
             "name": j["metadata"]["name"],
             "app": j["metadata"].get("labels", {}).get("harvui.io/app", ""),
             "active": st.get("active", 0), "succeeded": st.get("succeeded", 0),
             "failed": st.get("failed", 0),
             "start": st.get("startTime", ""), "end": st.get("completionTime", ""),
-            "state": "running" if st.get("active") else
-                     "done" if st.get("succeeded") else
-                     "failed" if st.get("failed") else "pending",
-        })
+            "state": state,
+        }
+        if state in ("running", "failed"):
+            pod = _job_pod(j["metadata"]["name"])
+            if pod:
+                try:
+                    row.update(import_progress(_pod_logs(pod)))
+                except Exception:
+                    pass
+        elif state == "done":
+            row["percent"] = 100
+        out.append(row)
     return sorted(out, key=lambda x: x["start"], reverse=True)
 
 
