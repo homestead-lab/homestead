@@ -54,10 +54,10 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.8`, the workflow publishes:
+For a release such as `v2.8.9`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.8
+ghcr.io/wjcloudy/homestead:2.8.9
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -68,8 +68,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.8
-git push origin v2.8.8
+git tag v2.8.9
+git push origin v2.8.9
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -276,7 +276,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.8 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.9 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -388,6 +388,15 @@ claim must be Bound and mountable before the Deployment is written, and if the
 pod does not become ready the previous shares are restored and the change is
 refused with the mount error. The guard only reverts when Samba was serving
 beforehand, so a repair still applies to an already-broken Samba.
+
+A password belongs to the Samba account, not to one share, because Samba keeps
+a single password per user. A second private share for an existing username
+therefore reuses that account's password when the field is left blank —
+Homestead never shows a stored password back, so it cannot ask you to retype
+one — and setting a new password changes it for every share using that
+account, which the editor says before you save. Passwords that disagreed about
+the same account used to fail validation on every later change, including
+changes to unrelated shares.
 
 Share metadata is stored in the `harvui-shares` ConfigMap. Passwords are stored
 separately in the `harvui-share-credentials` Kubernetes Secret and are never

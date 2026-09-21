@@ -441,8 +441,9 @@ window.newShare = async () => {
     <div class="sec">Storage</div>
     <div class="note storage-guide"><b>Where the files live:</b> a new Longhorn volume is created for this share alone, or pick a volume that already exists — including one a container uses — and optionally share just a folder inside it. A ReadWriteOnce volume can only attach on one node, so Samba and the workload that owns it must run on the same host.</div>
     <div id="sh_storage"></div>
-    <div class="f2" style="margin-top:14px"><div class="f"><label>Username</label><input type="text" id="sh_user" value="lab" autocomplete="username"></div>
-      <div class="f"><label>Password</label><input type="password" id="sh_pass" autocomplete="new-password" placeholder="Required unless guest access is enabled"></div></div>
+    <div class="f2" style="margin-top:14px"><div class="f"><label>Username</label><input type="text" id="sh_user" value="lab" autocomplete="username" oninput="shareAccountHint()"></div>
+      <div class="f"><label>Password</label><input type="password" id="sh_pass" autocomplete="new-password" placeholder="Required unless guest access is enabled">
+        <span class="dim xs" id="sh_account"></span></div></div>
     <label class="switch"><input type="checkbox" id="sh_pub"> Allow guest access</label>
     <label class="switch"><input type="checkbox" id="sh_ro"> Read only</label>
     <div class="row" style="margin-top:18px"><button class="btn pri" id="sh_go" data-need="admin" onclick="mkShare(this)">Create share</button>
@@ -463,11 +464,28 @@ window.newShare = async () => {
   });
   renderVolumeRows(host, [{ kind: "new-rwo", path: "", source: "", size_gb: 10,
     label: "Share storage" }]);
+  shareAccountHint();
+};
+window.shareAccountHint = () => {
+  const user = $("#sh_user")?.value.trim(), hint = $("#sh_account"), field = $("#sh_pass");
+  if (!hint || !field) return;
+  // Samba keeps one password per account, and Homestead never shows it back,
+  // so an account that already has one must not have to be retyped.
+  const known = (STATE.data.shares || []).filter(row => !row.public && row.user === user && row.has_password);
+  hint.textContent = known.length
+    ? `${user} already has a password from ${known.map(row => row.name).join(", ")}. Leave this blank to reuse it, or type a new one to change it for every share using ${user}.`
+    : "";
+  field.placeholder = known.length ? `Leave blank to reuse the ${user} password`
+    : "Required unless guest access is enabled";
 };
 window.mkShare = async button => {
   const name = $("#sh_name").value.trim();
   if (!/^[a-z0-9-]{2,30}$/.test(name)) return toast("lowercase letters, numbers and dashes only", "bad");
-  if (!$("#sh_pub").checked && !$("#sh_pass").value) return toast("a password is required for a private share", "bad");
+  const account = $("#sh_user").value.trim();
+  const known = (STATE.data.shares || []).some(row => !row.public && row.user === account && row.has_password);
+  if (!$("#sh_pub").checked && !$("#sh_pass").value && !known) {
+    return toast("a password is required for a private share", "bad");
+  }
   const storage = readVolumeRows($("#sh_storage"))[0] || {};
   const folder = String(storage.path || "").trim().replace(/^\/+|\/+$/g, "");
   if (folder && !/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/.test(folder)) {
@@ -488,6 +506,10 @@ window.mkShare = async button => {
     toast(`share "${name}" created`, "ok"); closeModal(); resetPaint(); viewShares();
   } catch (e) { if (button) { button.disabled = false; button.textContent = "Create share"; } toast(e.message, "bad"); }
 };
+const shareAccountSiblings = share => (STATE.data.shares || [])
+  .filter(row => !row.public && row.user === share.user && row.name !== share.name)
+  .map(row => row.name);
+
 window.shareAccessToggle = () => {
   const guest = $("#she_pub")?.checked;
   $("#she_private")?.classList.toggle("hidden", guest);
@@ -508,7 +530,8 @@ window.editShare = name => {
     <div id="she_private" class="${s.public ? "hidden" : ""}"><div class="f"><label>Username</label>
       <input type="text" id="she_user" value="${esc(s.user || "lab")}" autocomplete="username"></div>
       <div class="f"><label>New password ${tip("Leave blank to keep the existing password. Passwords are stored in a Kubernetes Secret and are never returned to the browser.")}</label>
-        <input type="password" id="she_pass" autocomplete="new-password" placeholder="${s.has_password ? "Leave blank to keep current password" : "Required for private access"}"></div></div>
+        <input type="password" id="she_pass" autocomplete="new-password" placeholder="${s.has_password ? "Leave blank to keep current password" : "Required for private access"}">
+        ${shareAccountSiblings(s).length ? `<span class="dim xs">${esc(s.user)} is also used by ${esc(shareAccountSiblings(s).join(", "))}. Samba keeps one password per account, so a new one changes those too.</span>` : ""}</div></div>
     <label class="switch"><input type="checkbox" id="she_ro" ${s.read_only ? "checked" : ""}> Read only · clients can browse and download but cannot change files</label>
     <div class="row" style="margin-top:18px"><button class="btn pri" data-need="admin" onclick="saveShareEdit('${esc(s.name)}',this)">${icon("edit")}Save changes</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div>`);

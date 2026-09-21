@@ -237,6 +237,43 @@ class ShareTests(unittest.TestCase):
         args = self.sent[-1][2]["spec"]["template"]["spec"]["containers"][0]["args"]
         self.assertNotIn("secure;/shares/secure;yes;no;no;lab", args)
 
+    def test_a_second_share_reuses_the_account_password(self):
+        """You cannot be asked to retype a password Homestead never shows you."""
+        result = shares.create_share("archive", 0, "lab", "", False, pvc="share-secure")
+
+        self.assertIn("existing lab password", result["message"])
+        self.assertEqual("legacy-password", self.decoded_secret()["archive"]["password"])
+
+    def test_a_new_password_moves_the_whole_account(self):
+        result = shares.create_share("archive", 0, "lab", "fresh-password", False,
+                                     pvc="share-secure")
+
+        secret = self.decoded_secret()
+        self.assertEqual("fresh-password", secret["archive"]["password"])
+        self.assertEqual("fresh-password", secret["secure"]["password"],
+                         "Samba keeps one password per account")
+        self.assertIn("also used by secure", result["warnings"][0])
+
+    def test_mismatched_accounts_no_longer_block_unrelated_changes(self):
+        """The bug behind 'guest access cannot be set on edit'."""
+        rows = json.loads(self.objects[
+            "/api/v1/namespaces/lab/configmaps/harvui-shares"]["data"]["shares.json"])
+        rows.append({"name": "media", "pvc": "share-media", "path": "/shares/media",
+                     "size_gb": 5, "user": "lab", "public": False, "created": "existing"})
+        self.objects["/api/v1/namespaces/lab/configmaps/harvui-shares"]["data"]["shares.json"] = json.dumps(rows)
+        self.objects["/api/v1/namespaces/lab/secrets/harvui-share-credentials"] = {
+            "metadata": {"name": "harvui-share-credentials", "resourceVersion": "3"},
+            "data": {"credentials.json": base64.b64encode(json.dumps({
+                "secure": {"user": "lab", "password": "one"},
+                "media": {"user": "lab", "password": "two"},
+            }).encode()).decode()}}
+
+        result = shares.edit_share("secure", 10, "lab", "", True, False)
+
+        self.assertTrue(result["shares"][0]["public"] or result["shares"][1]["public"])
+        self.assertEqual({"media"}, set(self.decoded_secret()),
+                         "the remaining share keeps one consistent account password")
+
     def test_folder_cannot_escape_the_volume(self):
         for folder in ("../etc", "media/../../etc", "media/../secrets"):
             with self.assertRaisesRegex(ValueError, "relative path inside the volume"):

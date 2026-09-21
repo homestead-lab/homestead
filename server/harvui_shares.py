@@ -259,6 +259,36 @@ def _save_credentials(credentials, current=None):
     return ksend("POST", f"/api/v1/namespaces/{NAMESPACE}/secrets", body)
 
 
+def account_password(credentials, user):
+    """The password already in use by a Samba account, if it has one."""
+    user = _user(user)
+    for value in credentials.values():
+        if value.get("user") == user and value.get("password"):
+            return str(value["password"])
+    return ""
+
+
+def account_shares(rows, user, exclude=""):
+    user = _user(user)
+    return sorted(row["name"] for row in rows
+                  if not row.get("public") and row.get("name") != exclude
+                  and _user(row.get("user")) == user)
+
+
+def _set_account_password(credentials, rows, user, password):
+    """Samba keeps one password per account, so set it everywhere that user appears.
+
+    Storing it per share is what allowed two shares to disagree about the same
+    account, which then failed validation on every later change - including
+    changes that had nothing to do with either share.
+    """
+    user = _user(user)
+    for row in rows:
+        if row.get("public") or _user(row.get("user")) != user:
+            continue
+        credentials[row["name"]] = {"user": user, "password": str(password)}
+
+
 def _validate_access(rows, credentials):
     users = {}
     for row in rows:
@@ -446,8 +476,12 @@ def create_share(name, size_gb, user, password, public, read_only=False,
     rows, credentials, config_obj, secret_obj, deployment = _state()
     if any(row.get("name") == name for row in rows):
         raise ValueError("share already exists; use Edit to change it")
+    password, reused = str(password or ""), False
     if not public and not password:
-        raise ValueError("a password is required for a private share")
+        password = account_password(credentials, user)
+        reused = bool(password)
+        if not password:
+            raise ValueError("a password is required for a private share")
     reuse = bool(pvc)
     pvc_name = _claim_name(pvc) if reuse else _claim_name(f"share-{name}")
     warnings = []
@@ -476,14 +510,20 @@ def create_share(name, size_gb, user, password, public, read_only=False,
            "created": time.strftime("%Y-%m-%d %H:%M")}
     rows.append(row)
     if not public:
-        credentials[name] = {"user": user, "password": str(password)}
+        _set_account_password(credentials, rows, user, password)
+        if not reused:
+            shared_with = account_shares(rows, user, exclude=name)
+            if shared_with:
+                warnings.append(f"{user} is also used by {', '.join(shared_with)}; Samba keeps one "
+                                "password per account, so those shares now use this password too.")
     _validate_access(rows, credentials)
     _save_credentials(credentials, secret_obj)
     _save_config(rows, config_obj)
     result = apply_samba(rows, credentials, deployment)
     _clear_cache()
     return {"shares": [_public(item, credentials) for item in rows], "warnings": warnings,
-            "deployment": result, "message": f"Share {name} created"}
+            "deployment": result,
+            "message": f"Share {name} created" + (f" using the existing {user} password" if reused else "")}
 
 
 def edit_share(name, size_gb, user, password, public, read_only=False):
@@ -511,9 +551,12 @@ def edit_share(name, size_gb, user, password, public, read_only=False):
         password_changed = password_changed or name in credentials
         credentials.pop(name, None)
     elif password:
-        credentials[name] = {"user": user, "password": str(password)}
-    elif name in credentials:
-        credentials[name]["user"] = user
+        _set_account_password(credentials, rows, user, password)
+    else:
+        existing = account_password(credentials, user) or account_password(credentials, previous[1])
+        if not existing:
+            raise ValueError(f"{user} has no password yet; set one to keep this share private")
+        _set_account_password(credentials, rows, user, existing)
     access_changed = previous != (bool(public), user, bool(read_only)) or password_changed
     _validate_access(rows, credentials)
     if owned and (not old_size or size_gb > old_size):
