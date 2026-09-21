@@ -344,7 +344,9 @@ def _requested_volume_kind(row):
     kind = str(row.get("kind") or "").strip()
     if kind:
         return kind
-    kind_by_type = {"host": "host", "emptyDir": "ephemeral", "pod": "pod"}
+    if row.get("type") == "emptyDir":
+        return "memory" if str(row.get("medium") or "").lower() == "memory" else "ephemeral"
+    kind_by_type = {"host": "host", "pod": "pod"}
     if row.get("type") in kind_by_type:
         return kind_by_type[row["type"]]
     if row.get("create") is False:
@@ -418,11 +420,23 @@ def _apply_container_volumes(ns, spec, container_requests):
                     raise ValueError(f"{name}: pod volume {source or '(blank)'} does not exist "
                                      "in this workload")
                 volume_name = source
-            elif kind == "ephemeral":
-                volume_name = requested_name if "emptyDir" in by_name.get(requested_name, {}) else ""
-                if not volume_name:
+            elif kind in ("ephemeral", "memory"):
+                # A RAM disk and a scratch directory are the same object to
+                # Kubernetes, distinguished only by its medium.
+                empty = {}
+                if kind == "memory":
+                    empty["medium"] = "Memory"
+                    if row.get("size_limit"):
+                        empty["sizeLimit"] = str(row["size_limit"])
+                existing = by_name.get(requested_name, {})
+                matches = ("emptyDir" in existing and
+                           (existing.get("emptyDir") or {}).get("medium", "") == empty.get("medium", ""))
+                volume_name = requested_name if matches else ""
+                if volume_name:
+                    existing["emptyDir"] = empty
+                else:
                     volume_name = _unique_volume_name(f"hs-{name}-{index + 1}", used)
-                    pod_volumes.append({"name": volume_name, "emptyDir": {}})
+                    pod_volumes.append({"name": volume_name, "emptyDir": empty})
             elif kind == "host":
                 if not source:
                     raise ValueError(f"{name}: {path} needs a host path")

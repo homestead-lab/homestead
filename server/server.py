@@ -17,7 +17,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.28"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.29"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2222,6 +2222,9 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         if volume.get("hostPath"):
             return "host", volume["hostPath"].get("path", "")
         if "emptyDir" in volume:
+            empty = volume.get("emptyDir") or {}
+            if str(empty.get("medium", "")).lower() == "memory":
+                return "memory", str(empty.get("sizeLimit", "") or "")
             return "ephemeral", ""
         for field in ("configMap", "secret"):
             if volume.get(field):
@@ -2286,7 +2289,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
     device_paths = {feature["host_path"].rstrip("/") for feature in definitions}
     for volume in pspec.get("volumes", []) or []:
         kind, value = storage_kind(volume)
-        if kind not in ("existing", "host", "ephemeral"):
+        if kind not in ("existing", "host", "ephemeral", "memory"):
             continue
         if kind == "host" and any(value.rstrip("/") == device or value.rstrip("/").startswith(device + "/")
                                   for device in device_paths):

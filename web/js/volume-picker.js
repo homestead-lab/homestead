@@ -10,9 +10,10 @@ const VOLUME_KIND_LABELS = {
   "new-rwx": "New shared volume · RWX",
   existing: "Existing PVC · keep data",
   ephemeral: "Temporary pod storage · emptyDir",
+  memory: "Memory scratch · RAM-backed",
   host: "Host path · advanced",
 };
-const VOLUME_KINDS = ["new-rwo", "new-rwx", "existing", "pod", "ephemeral", "host"];
+const VOLUME_KINDS = ["new-rwo", "new-rwx", "existing", "pod", "ephemeral", "memory", "host"];
 
 const VOLUME_PICKER_DEFAULTS = {
   pvcs: () => [],
@@ -37,14 +38,15 @@ const VOLUME_PICKER_DEFAULTS = {
 function volumeKind(v) {
   if (v.kind) return v.kind;
   if (v.type === "host") return "host";
-  if (v.type === "emptyDir") return "ephemeral";
+  if (v.type === "emptyDir") return String(v.medium || "").toLowerCase() === "memory" ? "memory" : "ephemeral";
   if (v.type === "pod") return "pod";
   if (v.create === false) return "existing";
   return v.access_mode === "ReadWriteMany" ? "new-rwx" : "new-rwo";
 }
 
 function volumeType(kind) {
-  return kind === "host" ? "host" : kind === "pod" ? "pod" : kind === "ephemeral" ? "emptyDir" : "pvc";
+  return kind === "host" ? "host" : kind === "pod" ? "pod"
+    : kind === "ephemeral" || kind === "memory" ? "emptyDir" : "pvc";
 }
 
 /* Validation runs on plain objects so it can be reused before a save without a
@@ -54,7 +56,7 @@ function volumeRowIssue(v) {
   if (!path) return "every storage mapping needs a container mount path";
   if (!path.startsWith("/")) return `mount path "${path}" must start with /`;
   const kind = volumeKind(v || {});
-  if (kind !== "ephemeral" && !String((v && v.source) || "").trim()) {
+  if (kind !== "ephemeral" && kind !== "memory" && !String((v && v.source) || "").trim()) {
     return `${path} needs a storage source`;
   }
   if ((kind === "new-rwo" || kind === "new-rwx") &&
@@ -169,7 +171,13 @@ function syncVolumeRow(row) {
   if (podOption) podOption.disabled = !allowPod;
   if (kind === "pod" && !allowPod) $(".vk", row).value = (ctx.kinds || VOLUME_KINDS).find(k => k !== "pod") || "existing";
   const actual = $(".vk", row).value, isNew = actual.startsWith("new-");
-  $(".vnew", row).style.display = isNew ? "grid" : "none";
+  const ram = actual === "memory";
+  $(".vnew", row).style.display = isNew || ram ? "grid" : "none";
+  $(".vnew", row).classList.toggle("ram", ram);
+  const sizeLabel = $(".vsize-label", row);
+  if (sizeLabel) sizeLabel.textContent = ram ? "Size MiB" : "Size GiB";
+  if (ram && !row.dataset.ramSized) { $(".vz", row).value = 1024; row.dataset.ramSized = "1"; }
+  if (!ram && row.dataset.ramSized) { $(".vz", row).value = 5; delete row.dataset.ramSized; }
   const hidden = volumeClassList(row, actual);
   const badges = $(".vclass-badges", row);
   if (badges) {
@@ -179,10 +187,10 @@ function syncVolumeRow(row) {
   }
   volumeSourceList(row, actual);
   const source = $(".vs", row), choice = $(".vselect", row), selectable = actual === "existing" || actual === "pod";
-  $(".vsource", row).style.display = actual === "ephemeral" ? "none" : "block";
+  $(".vsource", row).style.display = actual === "ephemeral" || ram ? "none" : "block";
   source.style.display = selectable ? "none" : "block";
   choice.style.display = selectable ? "block" : "none";
-  source.disabled = actual === "ephemeral";
+  source.disabled = actual === "ephemeral" || ram;
   source.placeholder = actual === "host" ? "/mnt/storage or /dev/…" : "new PVC name";
   $(".vsource-label", row).textContent = actual === "host" ? "Host path" : actual === "pod" ? "Pod volume" : actual === "existing" ? "Existing PVC" : "New PVC name";
   const selectedSource = volumeSourceValue(row);
@@ -193,6 +201,7 @@ function syncVolumeRow(row) {
         (hidden ? ` ${hidden} storage class${hidden === 1 ? "" : "es"} hidden: they create live-migratable VM volumes, which Longhorn cannot mount into a pod.` : "")
     : actual === "existing" ? selectedPvc ? `${selectedPvc.name}: ${claimSummary(selectedPvc)}. The claim and data are kept.${claimRisk(selectedPvc, ctx)}` : "Mounts an existing PVC without creating or deleting it."
     : actual === "pod" ? selectedPodVolume ? `${selectedPodVolume.name}: ${selectedPodVolume.kind}${selectedPodVolume.source ? ` (${selectedPodVolume.source})` : ""}. The same storage is shared with the other container.` : ctx.podHelp
+    : ram ? "Creates a RAM disk of this size inside the pod. It starts empty every time and counts against the node's memory; this is what a tmpfs mount becomes."
     : actual === "ephemeral" ? "Creates temporary pod storage. Its contents are deleted when the pod is replaced; ideal for cache or transcoding."
     : "Mounts this exact host path; the container can only run where that path exists.";
 }
@@ -216,7 +225,7 @@ function addVolumeRow(host, v = {}) {
       <div><label>Storage source</label><select class="vk">${kinds.map(k =>
         `<option value="${k}" ${k === kind ? "selected" : ""}>${esc(k === "pod" ? ctx.podLabel : VOLUME_KIND_LABELS[k])}</option>`).join("")}</select></div>
       <div class="vsource"><label class="vsource-label">Volume / path</label><input class="vs" type="text" value="${esc(v.source || "")}"><select class="vselect" style="display:none"></select></div>
-      <div class="vnew"><div><label>Size GiB</label><input class="vz" type="number" min="1" value="${v.size_gb || 5}"></div>
+      <div class="vnew"><div><label class="vsize-label">Size GiB</label><input class="vz" type="number" min="1" value="${v.size_gb || 5}"></div>
         <div><label>Storage class</label><select class="vsc">${classes.map(sc => `<option ${sc === (v.storage_class || "longhorn-r2") ? "selected" : ""}>${esc(sc)}</option>`).join("")}</select></div></div>
     </div>
     <div class="vclass-badges" style="display:none"></div>
@@ -230,8 +239,11 @@ function addVolumeRow(host, v = {}) {
 
 function readVolumeRow(row) {
   const kind = $(".vk", row).value;
+  const size = +$(".vz", row).value || (kind === "memory" ? 1024 : 5);
   return { path: $(".vp", row).value.trim(), source: volumeSourceValue(row), kind,
     type: volumeType(kind),
+    medium: kind === "memory" ? "memory" : "",
+    size_limit: kind === "memory" ? `${size}Mi` : "",
     create: kind === "new-rwo" || kind === "new-rwx", size_gb: +$(".vz", row).value || 5,
     storage_class: $(".vsc", row).value, access_mode: kind === "new-rwx" ? "ReadWriteMany" : "ReadWriteOnce",
     read_only: $(".vro", row).checked, label: row.dataset.label || "", description: row.dataset.description || "",

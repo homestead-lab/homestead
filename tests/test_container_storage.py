@@ -208,3 +208,35 @@ class EditPayloadStorageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MemoryScratchTests(WorkloadEditFixture, unittest.TestCase):
+    """A RAM disk is available everywhere the picker is, not only in imports."""
+
+    def test_a_memory_volume_is_created_with_its_limit(self):
+        self.edit([{"path": "/config", "kind": "existing", "source": "frigate-config"},
+                   {"path": "/tmp/cache", "kind": "memory", "source": "",
+                    "type": "emptyDir", "medium": "memory", "size_limit": "1024Mi"}])
+
+        spec = self.saved_spec()
+        scratch = next(v for v in spec["volumes"] if "emptyDir" in v)
+        self.assertEqual({"medium": "Memory", "sizeLimit": "1024Mi"}, scratch["emptyDir"])
+        mounts = {m["mountPath"]: m["name"] for m in spec["containers"][0]["volumeMounts"]}
+        self.assertEqual(scratch["name"], mounts["/tmp/cache"])
+
+    def test_a_plain_scratch_volume_stays_disk_backed(self):
+        self.edit([{"path": "/tmp/work", "kind": "ephemeral", "source": "", "type": "emptyDir"}])
+
+        scratch = next(v for v in self.saved_spec()["volumes"] if "emptyDir" in v)
+        self.assertEqual({}, scratch["emptyDir"], "no medium means the node's disk")
+
+    def test_the_editor_reads_a_ram_volume_back_as_one(self):
+        self.deployment["spec"]["template"]["spec"]["volumes"].append(
+            {"name": "cache", "emptyDir": {"medium": "Memory", "sizeLimit": "512Mi"}})
+        self.deployment["spec"]["template"]["spec"]["containers"][0]["volumeMounts"].append(
+            {"name": "cache", "mountPath": "/tmp/cache"})
+
+        payload = server.workload_edit_payload("lab", "frigate", self.deployment, FEATURES, services=[])
+
+        mount = next(m for m in payload["containers"][0]["volumes"] if m["path"] == "/tmp/cache")
+        self.assertEqual(("memory", "512Mi", False), (mount["kind"], mount["value"], mount["managed"]))

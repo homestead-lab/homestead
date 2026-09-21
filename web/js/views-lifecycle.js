@@ -18,8 +18,10 @@ const editPortRow = (index, port = {}) => `<div class="edit-port-row">
 let EDIT_STORAGE = { pvcs: [], storage_classes: [], pod_volumes: [] };
 const editVolumeRow = mount => ({
   path: mount.path || "",
-  kind: ["existing", "host", "ephemeral"].includes(mount.kind) ? mount.kind : "existing",
-  source: mount.kind === "ephemeral" ? "" : (mount.value || mount.source || ""),
+  kind: ["existing", "host", "ephemeral", "memory"].includes(mount.kind) ? mount.kind : "existing",
+  source: ["ephemeral", "memory"].includes(mount.kind) ? "" : (mount.value || mount.source || ""),
+  // value carries the size limit for a RAM volume, e.g. "1024Mi".
+  size_gb: mount.kind === "memory" ? (parseInt(mount.value, 10) || 1024) : undefined,
   read_only: !!mount.read_only, volume_name: mount.name || "",
 });
 const editVolumePicker = index => createVolumePicker($("#e_vols_" + index), {
