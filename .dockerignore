@@ -7,6 +7,9 @@ __pycache__
 tests
 docs
 deploy
+# The probe's scripts travel in the image so an upgrade can carry them to the
+# DaemonSet; everything else under deploy/ stays out.
+!deploy/nodeprobe.yaml
 scripts
 PLAN.md
 *.local
