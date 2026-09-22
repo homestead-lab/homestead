@@ -31,6 +31,17 @@ function renderOperations() {
     ${active.length ? `<span class="jobsummarypct">${Math.round(latest.progress || 0)}%</span>` : ""}
     <span class="jobchev" aria-hidden="true">⌃</span>`;
   $("#jobSummary").setAttribute("aria-expanded", String(operationPanelOpen));
+  // Clearing one at a time is fine for a stray failure and tedious after a
+  // batch, so the header offers the lot - and says how many, because it will
+  // not touch anything still running.
+  const finished = items.filter(item => !operationActive(item));
+  const clear = $("#jobClear");
+  if (clear) {
+    // Only relabel when there is something to clear, so it never reads
+    // "Clear 0 finished" in the moment between clearing and hiding.
+    clear.hidden = !finished.length;
+    if (finished.length) clear.textContent = `Clear ${finished.length} finished`;
+  }
   $("#jobList").innerHTML = items.slice(0, 12).map(operation => `<article class="jobitem">
     <div class="jobitemtop"><div><b>${esc(operation.title)}</b>
       <span>${esc(operation.resource?.namespace ? operation.resource.namespace + " · " : "")}${esc(operation.resource?.kind || operation.kind)}</span></div>
@@ -76,6 +87,15 @@ window.openOperation = href => {
   go(route.view, { params: Object.fromEntries(url.searchParams) });
   renderOperations();
 };
+window.dismissFinishedOperations = async () => {
+  try {
+    const result = await api("/api/operations/dismiss", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ all: true }) });
+    toast(result.detail || "finished jobs cleared", "ok");
+  } catch (e) { toast(e.message, "bad"); }
+  refreshOperations(true);
+};
+
 window.dismissOperation = async id => {
   try {
     await api("/api/operations/dismiss", { method: "POST", headers: { "Content-Type": "application/json" },

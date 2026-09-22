@@ -70,6 +70,47 @@ class OperationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "active operation"):
             operations.dismiss(item["id"])
 
+    def _finished(self, name, status):
+        item = operations.start("image-pull", "Pull " + name, {"kind": "Image", "name": name},
+                                "/image-cache", {"namespace": "lab", "name": "pull-" + name})
+        stored = json.loads((Path(self.tmp.name) / operations.STORE).read_text())
+        for row in stored:
+            if row["id"] == item["id"]:
+                row["status"] = status
+                row["finished_at"] = "2026-09-22T10:00:00Z"
+        (Path(self.tmp.name) / operations.STORE).write_text(json.dumps(stored))
+        return item
+
+    def test_clearing_finished_jobs_leaves_the_running_one_alone(self):
+        """The tray is how you watch a running job; clearing must not hide it."""
+        self._finished("one", "succeeded")
+        self._finished("two", "failed")
+        running = operations.start("image-pull", "Pull three", {"kind": "Image", "name": "three"},
+                                   "/image-cache", {"namespace": "lab", "name": "pull-three"})
+        self.objects["/apis/apps/v1/namespaces/lab/daemonsets/pull-three"] = {
+            "status": {"desiredNumberScheduled": 3, "numberReady": 1, "numberUnavailable": 2}}
+
+        result = operations.dismiss_finished()
+
+        self.assertEqual(2, result["dismissed"])
+        self.assertEqual([running["id"]], [x["id"] for x in operations.list_operations()])
+        self.assertIn("still running", result["detail"])
+
+    def test_clearing_with_nothing_finished_says_so_rather_than_nothing(self):
+        operations.start("image-pull", "Pull four", {"kind": "Image", "name": "four"},
+                         "/image-cache", {"namespace": "lab", "name": "pull-four"})
+
+        result = operations.dismiss_finished()
+
+        self.assertEqual(0, result["dismissed"])
+        self.assertIn("nothing finished", result["detail"])
+
+    def test_clearing_an_empty_tray_is_not_an_error(self):
+        result = operations.dismiss_finished()
+
+        self.assertEqual(0, result["dismissed"])
+        self.assertEqual(0, result["remaining"])
+
     def test_image_cleanup_tracks_each_node_pod(self):
         operations.start(
             "image-cleanup", "Clean image", {"kind": "Image", "name": "repo@sha256:abc"},

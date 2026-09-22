@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.54"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.55"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -3294,6 +3294,8 @@ class H(BaseHTTPRequestHandler):
                     "/import", {"namespace": DEFAULT_NS, "name": result["job"]})
                 return self._send(200, result)
             if p == "/api/operations/dismiss":
+                if b.get("all"):
+                    return self._send(200, OPS.dismiss_finished())
                 return self._send(200, OPS.dismiss(b["id"]))
             if p == "/api/network/plan":
                 return self._send(200, NETWORK.service_plan(b))

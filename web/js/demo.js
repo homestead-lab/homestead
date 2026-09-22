@@ -295,7 +295,7 @@
       detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.54", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.55", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" } } },
     "/api/overview": { health: "healthy", health_state: "healthy", health_summary: "All cluster services are healthy", health_issues: [],
@@ -488,7 +488,33 @@
       shared_storage_classes: ["longhorn"], storage_class_facts: deployOptions.storage_class_facts },
     "/api/shares/edit": { ok: true, shares, deployment_updated: true,
       message: "Share secure updated; Samba is restarting" },
-    "/api/operations": [], "/api/workloads": workloads, "/api/network": network,
+    // A finished batch plus one still running, which is the case the clear
+    // button exists for and the one it must not touch.
+    "/api/operations": () => (window.__demoOps ??= [
+      { id: "op1", kind: "import", title: "Import frigate", status: "succeeded", progress: 100,
+        message: "copied 3 folders", started_at: new Date(Date.now() - 9e5).toISOString(),
+        finished_at: new Date(Date.now() - 6e5).toISOString(), href: "/import",
+        resource: { kind: "Job", name: "frigate", namespace: "lab" } },
+      { id: "op2", kind: "image-pull", title: "Pull plex", status: "failed", progress: 40,
+        message: "registry returned HTTP 429", started_at: new Date(Date.now() - 6e5).toISOString(),
+        finished_at: new Date(Date.now() - 5e5).toISOString(), href: "/image-cache",
+        resource: { kind: "Image", name: "plex", namespace: "lab" } },
+      { id: "op3", kind: "update", title: "Update home-assistant", status: "running", progress: 62,
+        message: "rolling out", started_at: new Date(Date.now() - 6e4).toISOString(),
+        href: "/containers", resource: { kind: "Deployment", name: "home-assistant", namespace: "lab" } },
+    ]),
+    "/api/operations/dismiss": (url, init) => {
+      const body = JSON.parse(init?.body || "{}");
+      const before = (window.__demoOps || []).length;
+      window.__demoOps = (window.__demoOps || []).filter(op => body.all
+        ? !["succeeded", "failed", "cancelled"].includes(op.status)
+        : op.id !== body.id);
+      const gone = before - window.__demoOps.length;
+      return { ok: true, dismissed: gone, remaining: window.__demoOps.length,
+        detail: gone ? `cleared ${gone} finished job${gone === 1 ? "" : "s"}; 1 still running`
+          : "nothing finished to clear" };
+    },
+    "/api/workloads": workloads, "/api/network": network,
     "/api/cluster": { generated_at: 1789891200, state: "attention",
       summary: "The platform is online, with resilience or warning items to review.",
       versions: { harvester: "1.6.0", kubernetes: "1.34.1+rke2r1" },
@@ -570,7 +596,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.54", candidate_tag: "2.8.54", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.55", candidate_tag: "2.8.55", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

@@ -419,6 +419,24 @@ def list_operations():
         return [_public(item) for item in items]
 
 
+def dismiss_finished():
+    """Clear every job that has finished, leaving anything still running.
+
+    One at a time is fine for a stray failure and tedious after a batch of
+    twenty. Active jobs are kept regardless: the tray is how you watch them.
+    """
+    with _lock:
+        items = _read()
+        keep = [item for item in items if item.get("status") not in TERMINAL]
+        removed = len(items) - len(keep)
+        if removed:
+            _write(keep)
+    return {"ok": True, "dismissed": removed, "remaining": len(keep),
+            "detail": (f"cleared {removed} finished job" + ("" if removed == 1 else "s")
+                       if removed else "nothing finished to clear")
+                      + (f"; {len(keep)} still running" if keep else "")}
+
+
 def dismiss(operation_id):
     with _lock:
         items = _read()
