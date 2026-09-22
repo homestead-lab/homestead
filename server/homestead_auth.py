@@ -34,8 +34,24 @@ def SECRET_NAME():
     return NAMES.object_name("auth", NS, kind="secrets")
 
 ITERATIONS = 600_000
-SESSION_TTL = int(os.environ.get("SESSION_TTL_HOURS", "12")) * 3600
 COOKIE = "homestead_session"
+
+# A session has two clocks. The idle window is how long a session survives with
+# nothing happening, and it restarts on use - so nobody is signed out in the
+# middle of working, which is the whole complaint with a fixed expiry. The
+# absolute window is how long a session may live at all, however busy, and it
+# does not restart: a cookie copied off a machine stops working eventually
+# whatever the thief does with it.
+SESSION_TTL = int(os.environ.get("SESSION_TTL_HOURS", "12")) * 3600
+REMEMBER_TTL = int(os.environ.get("SESSION_REMEMBER_DAYS", "30")) * 86400
+ABSOLUTE_TTL = int(os.environ.get("SESSION_MAX_DAYS", "90")) * 86400
+# Refreshed halfway through rather than on every request, so an active browser
+# is not handed a new cookie several times a second.
+REFRESH_AFTER = 0.5
+
+
+def idle_ttl(remember):
+    return REMEMBER_TTL if remember else SESSION_TTL
 
 # viewer < operator < admin
 ROLES = ("viewer", "operator", "admin")
@@ -222,11 +238,15 @@ def _sign(payload_b64, key):
         hmac.new(key, payload_b64.encode(), hashlib.sha256).digest()).decode().rstrip("=")
 
 
-def issue_token(username):
+def issue_token(username, remember=False, started=None):
+    """A signed session. `started` carries the original sign-in time forward
+    through every refresh, so the absolute window cannot be extended by use."""
     data = _load()
     u = data["users"][username]
+    now = int(time.time())
     payload = {"u": username, "v": u.get("ver", 1), "r": u.get("role", "admin"),
-               "exp": int(time.time()) + SESSION_TTL}
+               "iat": int(started or now), "rem": bool(remember),
+               "exp": now + idle_ttl(remember)}
     raw = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
     return f"{raw}.{_sign(raw, _signing_key(data))}"
 
@@ -244,17 +264,28 @@ def verify_token(token):
         payload = json.loads(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
     except Exception:
         return None
-    if payload.get("exp", 0) < time.time():
-        return None
+    now = time.time()
+    if payload.get("exp", 0) < now:
+        return None          # idle too long
+    remember = bool(payload.get("rem"))
+    started = int(payload.get("iat") or 0)
+    # A session from before this field existed is treated as starting now: it
+    # still expires, just on the idle clock it was issued with.
+    if started and now - started > ABSOLUTE_TTL:
+        return None          # alive too long, however active
     u = data.get("users", {}).get(payload.get("u"))
     if not u or u.get("ver", 1) != payload.get("v"):
         return None          # password changed or user removed
+    window = idle_ttl(remember)
     # role is re-read from the store, never trusted from the token, so a
     # demotion takes effect immediately rather than at the next sign-in
-    return {"user": payload["u"], "role": u.get("role", "admin")}
+    return {"user": payload["u"], "role": u.get("role", "admin"),
+            "remember": remember, "started": started or int(now),
+            "expires": int(payload["exp"]),
+            "stale": (payload["exp"] - now) < window * REFRESH_AFTER}
 
 
-def login(username, password, addr):
+def login(username, password, addr, remember=False):
     username = (username or "").strip().lower()
     if not _rate_ok(addr):
         raise PermissionError("too many attempts — wait a few minutes")
@@ -268,7 +299,7 @@ def login(username, password, addr):
         raise PermissionError("incorrect username or password")
     u["last_login"] = time.strftime("%Y-%m-%d %H:%M")
     _save(data)
-    return issue_token(username)
+    return issue_token(username, remember=remember)
 
 
 def logout_everywhere(username):

@@ -55,10 +55,10 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.40`, the workflow publishes:
+For a release such as `v2.8.41`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.40
+ghcr.io/wjcloudy/homestead:2.8.41
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -69,8 +69,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.40
-git push origin v2.8.40
+git tag v2.8.41
+git push origin v2.8.41
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -281,7 +281,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.40 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.41 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -520,7 +520,9 @@ authenticated.
 | `SMB_NAMESPACE` | `lab` | namespace containing the managed Samba deployment |
 | `STORAGE_CLASS` | `longhorn-r2` | default StorageClass for new volumes |
 | `LB_IP` | empty | shared kube-vip address |
-| `SESSION_TTL_HOURS` | `12` | signed session lifetime |
+| `SESSION_TTL_HOURS` | `12` | idle window for an ordinary session |
+| `SESSION_REMEMBER_DAYS` | `30` | idle window when "keep me signed in" is ticked |
+| `SESSION_MAX_DAYS` | `90` | hard limit on a session's age, however active |
 | `ENABLE_NODE_POWER` | unset | `true` enables guarded reboot/shutdown actions |
 
 ## Local verification
@@ -539,6 +541,32 @@ docker build --build-arg VERSION=dev -t homestead:dev .
 Passwords use PBKDF2-HMAC-SHA256 with per-user salts in the `homestead-auth`
 Secret. Sessions are HMAC-signed, `HttpOnly`, `SameSite=Strict` cookies and all
 mutations require a custom anti-CSRF header. Roles are enforced server-side.
+
+### Sessions
+
+A session has two clocks. The **idle window** is how long it survives with
+nothing happening, and it restarts whenever the session is used — so nobody is
+signed out in the middle of a task. The **absolute window** is how long a
+session may live at all, and it does not restart, so a cookie copied off a
+machine stops working whatever the holder does with it.
+
+| | idle | absolute |
+| --- | --- | --- |
+| ordinary sign-in | 12 hours | 90 days |
+| "keep me signed in" | 30 days | 90 days |
+
+The cookie is refreshed once a session passes the halfway point of its idle
+window, so an open browser is not handed a new one on every request. `Secure`
+is set when the request arrived over TLS, directly or through a proxy that sets
+`X-Forwarded-Proto`; it is left off over plain HTTP, where a `Secure` cookie
+would never be sent back.
+
+Long sessions are safe because they stay revocable. Every token carries the
+account's version number, checked against the stored record on each request, so
+changing a password or using **Sign out everywhere** invalidates every session
+for that account immediately, on every device. The role is re-read from the
+store rather than trusted from the token, so a demotion takes effect at once
+rather than at the next sign-in.
 
 Interactive container consoles require operator access. The supplied manifest
 grants `pods/exec` only through the `homestead-console` Role in the `lab`

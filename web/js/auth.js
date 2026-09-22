@@ -10,15 +10,42 @@ const _fetch = window.fetch.bind(window);
 window.fetch = (url, opts = {}) => {
   if (typeof url === "string" && url.startsWith("/api/") &&
       opts.method && opts.method !== "GET") {
-    opts.headers = Object.assign({ "X-HarvUI-Auth": "1" }, opts.headers || {});
+    opts.headers = Object.assign({ "X-Homestead-Auth": "1" }, opts.headers || {});
   }
   return _fetch(url, opts);
 };
 
+/* The last answer from /api/auth/state, so Settings can describe this session
+   without asking again. */
+window.AUTH_STATE = {};
 async function authState() {
-  try { return await (await _fetch("/api/auth/state")).json(); }
-  catch (e) { return { setup: false, user: null }; }
+  try {
+    window.AUTH_STATE = await (await _fetch("/api/auth/state")).json();
+    return window.AUTH_STATE;
+  } catch (e) { return { setup: false, user: null }; }
 }
+
+window.sessionSummary = (state = {}) => {
+  if (!state.session_expires) return "";
+  const days = Math.round((state.session_expires * 1000 - Date.now()) / 86400000);
+  const hours = Math.round((state.session_expires * 1000 - Date.now()) / 3600000);
+  const left = days >= 2 ? `${days} days` : `${Math.max(1, hours)} hour${hours === 1 ? "" : "s"}`;
+  return (state.remember
+    ? `Kept signed in on this device. This session lapses after ${left} unused`
+    : `This session lapses after ${left} unused`)
+    + `, and ends for good ${state.session_max_days} days after you signed in. `
+    + "Signing out everywhere ends it now, on every device.";
+};
+
+window.signOutEverywhere = async () => {
+  if (!confirm("Sign out of every device, including this one?" + String.fromCharCode(10, 10)
+      + "Every session for your account stops working immediately.")) return;
+  try {
+    await _fetch("/api/auth/signout-everywhere", { method: "POST",
+      headers: { "Content-Type": "application/json", "X-Homestead-Auth": "1" } });
+  } catch (e) { }
+  location.reload();
+};
 
 function gate(html) {
   $("#gatebox").innerHTML = html;
@@ -28,7 +55,7 @@ function ungate() { $("#gate").classList.add("hidden"); }
 
 function loginForm(err, setup) {
   gate(`
-    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.40" alt="">
+    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.41" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}
@@ -38,10 +65,14 @@ function loginForm(err, setup) {
       <input type="password" id="lg_pass" autocomplete="${setup ? "new-password" : "current-password"}"></div>
     ${setup ? `<div class="f"><label>Confirm password</label>
       <input type="password" id="lg_pass2" autocomplete="new-password"></div>` : ""}
+    <label class="switch gateremember"><input type="checkbox" id="lg_remember"
+      ${localStorage.getItem("homestead.remember") === "0" ? "" : "checked"}>Keep me signed in on this device</label>
     <button class="btn pri wide" id="lg_go">${setup ? "Create account" : "Sign in"}</button>
     ${setup ? `<div class="gatehint">Minimum 10 characters. Stored as PBKDF2-SHA256 with a
       per-user salt in a Kubernetes Secret — never in plain text.</div>`
-      : `<div class="gatehint">Homestead can deploy, move and delete workloads.<br>Sessions last 12 hours.</div>`}`);
+      : `<div class="gatehint">Homestead can deploy, move and delete workloads.<br>
+        A session stays signed in while you keep using it. Leave the box unticked on a
+        shared computer.</div>`}`);
   const go = () => setup ? doSetup() : doLogin();
   $("#lg_go").onclick = go;
   ["lg_user", "lg_pass", "lg_pass2"].forEach(id => {
@@ -54,11 +85,14 @@ function loginForm(err, setup) {
 async function doLogin() {
   const username = $("#lg_user").value.trim(), password = $("#lg_pass").value;
   if (!username || !password) return loginForm("Enter a username and password");
+  const remember = !!$("#lg_remember")?.checked;
+  // Remembered for next time, so the box comes back the way it was left.
+  try { localStorage.setItem("homestead.remember", remember ? "1" : "0"); } catch (e) { }
   $("#lg_go").textContent = "Signing in…"; $("#lg_go").disabled = true;
   try {
     const r = await _fetch("/api/auth/login", { method: "POST",
-      headers: { "Content-Type": "application/json", "X-HarvUI-Auth": "1" },
-      body: JSON.stringify({ username, password }) });
+      headers: { "Content-Type": "application/json", "X-Homestead-Auth": "1" },
+      body: JSON.stringify({ username, password, remember }) });
     const b = await r.json();
     if (!r.ok) return loginForm(b.error || "Sign-in failed");
     ME = b.user; ROLE = b.role || "admin"; ungate(); afterAuth();
@@ -73,8 +107,8 @@ async function doSetup() {
   $("#lg_go").textContent = "Creating…"; $("#lg_go").disabled = true;
   try {
     const r = await _fetch("/api/auth/setup", { method: "POST",
-      headers: { "Content-Type": "application/json", "X-HarvUI-Auth": "1" },
-      body: JSON.stringify({ username, password }) });
+      headers: { "Content-Type": "application/json", "X-Homestead-Auth": "1" },
+      body: JSON.stringify({ username, password, remember: !!$("#lg_remember")?.checked }) });
     const b = await r.json();
     if (!r.ok) return loginForm(b.error || "Setup failed", true);
     ME = b.user; ROLE = "admin"; ungate(); afterAuth();

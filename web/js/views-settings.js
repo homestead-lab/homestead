@@ -108,7 +108,9 @@ async function viewSettings() {
         <div class="role-summary"><b>${esc(ROLE || "viewer")}</b><span>${esc(ROLE_COPY[ROLE] || ROLE_COPY.viewer)}</span></div>
         <div class="row settings-actions"><button class="btn sm" onclick="pwChange()">Change password</button>
           ${can("admin") ? '<button class="btn sm" onclick="manageUsers()">Manage users</button>' : ""}
+          <button class="btn sm" onclick="signOutEverywhere()">Sign out everywhere</button>
           <button class="btn sm danger" onclick="doLogout()">Sign out</button></div>
+        <div class="dim xs">${sessionSummary(AUTH_STATE)}</div>
         <div class="role-legend">
           ${Object.entries(ROLE_COPY).map(([role, copy]) => `<div><span class="${roleClass(role)} rolechip">${role}</span><span class="dim xs">${esc(copy)}</span></div>`).join("")}
         </div>

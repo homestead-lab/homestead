@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.40"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.41"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2479,14 +2479,24 @@ class H(BaseHTTPRequestHandler):
                 out[k] = v
         return out
 
-    def _set_cookie(self, token, clear=False):
+    def _over_tls(self):
+        """Whether this request reached us encrypted, directly or via a proxy."""
+        forwarded = (self.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
+        return forwarded == "https" or bool(getattr(self.connection, "context", None))
+
+    def _set_cookie(self, token, clear=False, max_age=None):
+        # Secure only behind TLS: Homestead is usually served over plain HTTP
+        # on a LAN address, and a Secure cookie there would never be sent back.
+        secure = "; Secure" if self._over_tls() else ""
         if clear:
             self._extra_headers.append(
-                ("Set-Cookie", f"{AUTH.COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"))
+                ("Set-Cookie",
+                 f"{AUTH.COOKIE}=; Path=/; HttpOnly; SameSite=Strict{secure}; Max-Age=0"))
         else:
+            age = AUTH.SESSION_TTL if max_age is None else max_age
             self._extra_headers.append(
-                ("Set-Cookie", f"{AUTH.COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; "
-                               f"Max-Age={AUTH.SESSION_TTL}"))
+                ("Set-Cookie", f"{AUTH.COOKIE}={token}; Path=/; HttpOnly; "
+                               f"SameSite=Strict{secure}; Max-Age={age}"))
 
     def _who(self):
         return AUTH.verify_token(self._cookies().get(AUTH.COOKIE))
@@ -2500,11 +2510,19 @@ class H(BaseHTTPRequestHandler):
         if not who:
             self._send(401, {"error": "not signed in", "auth": False})
             return True
+        # Used recently enough to be worth extending: the idle clock restarts,
+        # the absolute one does not, so working never signs anyone out.
+        if who.get("stale"):
+            self._set_cookie(AUTH.issue_token(who["user"], who["remember"], who["started"]),
+                             max_age=AUTH.idle_ttl(who["remember"]))
         # CSRF: the cookie is SameSite=Strict, and mutations additionally require a
         # header that a cross-site form cannot set.
         if self.command in ("POST", "DELETE", "PUT", "PATCH"):
-            if self.headers.get("X-HarvUI-Auth") != "1":
-                self._send(403, {"error": "missing X-HarvUI-Auth header"})
+            # Either spelling: a browser holding a cached copy of the old UI
+            # would otherwise have every action refused after an update.
+            if "1" not in (self.headers.get("X-Homestead-Auth"),
+                           self.headers.get("X-HarvUI-Auth")):
+                self._send(403, {"error": "missing X-Homestead-Auth header"})
                 return True
         self.user, self.role = who["user"], who["role"]
         need = needed_role(path, self.command)
@@ -2551,6 +2569,10 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"setup": AUTH.needs_setup(),
                                         "user": who["user"] if who else None,
                                         "role": who["role"] if who else None,
+                                        "remember": bool(who and who.get("remember")),
+                                        "session_expires": who.get("expires") if who else None,
+                                        "session_started": who.get("started") if who else None,
+                                        "session_max_days": AUTH.ABSOLUTE_TTL // 86400,
                                         "roles": list(AUTH.ROLES)})
             if p == "/api/auth/users":
                 return self._send(200, AUTH.list_users())
@@ -2740,16 +2762,19 @@ class H(BaseHTTPRequestHandler):
             addr = self.headers.get("X-Forwarded-For") or self.client_address[0]
             if p == "/api/auth/setup":
                 AUTH.create_user(b.get("username"), b.get("password"), first_only=True)
-                tok = AUTH.issue_token((b.get("username") or "").strip().lower())
-                self._set_cookie(tok)
+                remember = bool(b.get("remember"))
+                tok = AUTH.issue_token((b.get("username") or "").strip().lower(), remember)
+                self._set_cookie(tok, max_age=AUTH.idle_ttl(remember))
                 return self._send(200, {"ok": True, "user": b.get("username")})
             if p == "/api/auth/login":
                 try:
-                    tok = AUTH.login(b.get("username"), b.get("password"), addr)
+                    remember = bool(b.get("remember"))
+                    tok = AUTH.login(b.get("username"), b.get("password"), addr, remember)
                 except PermissionError as e:
                     return self._send(401, {"error": str(e)})
-                self._set_cookie(tok)
-                return self._send(200, {"ok": True, "user": (b.get("username") or "").strip().lower()})
+                self._set_cookie(tok, max_age=AUTH.idle_ttl(remember))
+                return self._send(200, {"ok": True, "remember": remember,
+                                        "user": (b.get("username") or "").strip().lower()})
             if p == "/api/auth/logout":
                 self._set_cookie("", clear=True)
                 return self._send(200, {"ok": True})

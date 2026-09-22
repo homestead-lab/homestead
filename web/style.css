@@ -841,6 +841,7 @@ html[data-motion="off"] .uptime .ld{animation:none}
 .gateerr{border-radius:11px;padding:10px 13px;font-size:12.5px;margin-bottom:14px;
   background:rgba(255,77,79,.11);border:1px solid rgba(255,77,79,.3);color:#ffb4b8}
 .gatehint{margin-top:16px;font-size:11px;color:var(--dim);text-align:center;line-height:1.6}
+.gateremember{margin:4px 0 14px;justify-content:flex-start;font-size:12px;color:var(--mut)}
 .whoami{display:flex;align-items:center;gap:9px;padding:5px 12px 5px 5px;border-radius:999px;cursor:pointer;
   background:rgba(255,255,255,.05);border:1px solid var(--line);transition:all .2s var(--e)}
 .whoami:hover{background:rgba(255,255,255,.1);border-color:var(--line2)}

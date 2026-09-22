@@ -116,7 +116,7 @@ function networkConfig() {
 window.networkReview = async () => {
   try {
     const cfg = networkConfig();
-    const plan = await api("/api/network/plan", {method: "POST", headers: {"Content-Type": "application/json", "X-HarvUI-Auth": "1"}, body: JSON.stringify(cfg)});
+    const plan = await api("/api/network/plan", {method: "POST", headers: {"Content-Type": "application/json", "X-Homestead-Auth": "1"}, body: JSON.stringify(cfg)});
     $("#net_review").innerHTML = `<div class="reviewbox"><b>Traffic path</b><div class="netpath big"><span>${esc(plan.path.vip)}</span><i>→</i><span>${esc(plan.path.service)}</span><i>→</i><span>${esc(plan.path.workload)}</span></div>
       <div class="dim xs">${plan.ports.map(p => `${p.port}/${p.protocol} → ${p.targetPort}`).join(" · ")}</div>${plan.warnings.map(w => `<div class="tag warn" style="margin-top:8px">${esc(w)}</div>`).join("")}</div>`;
     const actions = $("#mbody .modalactions");
@@ -126,7 +126,7 @@ window.networkReview = async () => {
 
 window.networkCreate = async () => {
   try {
-    const result = await api("/api/network/services", {method: "POST", headers: {"Content-Type": "application/json", "X-HarvUI-Auth": "1"}, body: JSON.stringify(networkConfig())});
+    const result = await api("/api/network/services", {method: "POST", headers: {"Content-Type": "application/json", "X-Homestead-Auth": "1"}, body: JSON.stringify(networkConfig())});
     closeModal(); toast(result.message, "ok"); await viewNetworking();
   } catch (error) { toast(error.message, "bad"); }
 };
