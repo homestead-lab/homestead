@@ -162,6 +162,8 @@ a{color:inherit;text-decoration:none}
 .crumb a:hover,.crumb a:focus-visible{color:var(--tx);outline:none}
 .crumb [aria-current="page"]{color:var(--mut)}
 .crumbsection{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.scanprogress{display:inline-flex;align-items:center;gap:7px;min-height:18px;white-space:nowrap}
+.scanprogress b{color:var(--med)}
 .diskreason{display:block;margin-top:3px;max-width:26ch;line-height:1.35;overflow-wrap:anywhere}
 .diskfindings{margin:8px 0 6px;padding-left:0;list-style:none;display:grid;gap:5px}
 .diskfindings li{display:flex;align-items:center;gap:8px;font-size:12px}

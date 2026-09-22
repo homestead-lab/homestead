@@ -294,7 +294,7 @@
       detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.52", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.53", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" } } },
     "/api/overview": { health: "healthy", health_state: "healthy", health_summary: "All cluster services are healthy", health_issues: [],
@@ -544,14 +544,22 @@
       return { ok: true, name: body.name, namespace: body.namespace,
         message: `Service ${body.namespace}/${body.name} created` };
     },
-    "/api/image-updates": { checked_at: "2026-09-19T12:00:00Z", updates: 3, errors: 0,
+    // Paced so the progress readout is visible rather than a flash.
+    "/api/image-updates/scan-progress": () => {
+      const at = (window.__demoScan = (window.__demoScan || 0) + 1);
+      const total = 8, done = Math.min(total, at * 2);
+      return { running: done < total, done, total, updates: Math.floor(done / 3),
+        current: ["frigate", "home-assistant", "paperless", "samba"][at % 4],
+        started_at: 0, finished_at: 0, elapsed: at * 0.5 };
+    },
+    "/api/image-updates": { checked_at: new Date().toISOString(), updates: 3, errors: 0,
       policy: { policy: "approval_required", allows_install: true, reason: "Explicit operator approval is required before rollout." },
       workloads: [{ ns: "lab", name: "frigate", available: true, can_rollback: true,
         images: [{ container: "frigate", deployed: "ghcr.io/blakeblackshear/frigate:stable", candidate: "ghcr.io/blakeblackshear/frigate:stable", candidate_tag: "stable", remote_digest: "sha256:abc", available: true }] },
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.52", candidate_tag: "2.8.52", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.53", candidate_tag: "2.8.53", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

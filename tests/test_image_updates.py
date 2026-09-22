@@ -322,6 +322,45 @@ class ImageUpdateTests(unittest.TestCase):
 
         self.assertFalse(report["available"], "no newer tag and no digest to compare")
 
+    def test_a_scan_reports_how_far_it_has_got(self):
+        """A button that only goes quiet looks like one that did not work."""
+        seen = []
+        original = updates._check_deployment
+
+        def slow(dep, pods, force=False):
+            seen.append(updates.scan_progress())
+            return {"ns": "lab", "name": dep["metadata"]["name"], "images": [],
+                    "available": False, "can_rollback": False, "last_action": ""}
+
+        deployments = [{"metadata": {"name": f"app{n}", "namespace": "lab"}} for n in range(4)]
+        original_get = updates.kget
+        try:
+            updates._check_deployment = slow
+            updates.kget = lambda path: ({"items": deployments} if "deployments" in path
+                                         else {"items": []})
+            report = updates.scan()
+        finally:
+            updates._check_deployment = original
+            updates.kget = original_get
+
+        self.assertEqual(4, len(report["workloads"]))
+        self.assertTrue(any(state["running"] for state in seen), "progress shows while it runs")
+        self.assertEqual(4, seen[0]["total"], "the total is known before the first check")
+
+        after = updates.scan_progress()
+        self.assertFalse(after["running"])
+        self.assertEqual(4, after["done"])
+        self.assertEqual("", after["current"], "nothing is being checked once it is over")
+
+    def test_progress_is_readable_before_any_scan_has_run(self):
+        updates.SCAN.update({"running": False, "done": 0, "total": 0, "current": "",
+                             "started_at": 0.0, "finished_at": 0.0, "updates": 0})
+
+        state = updates.scan_progress()
+
+        self.assertFalse(state["running"])
+        self.assertEqual(0, state["elapsed"])
+
     def test_progress_waits_for_surge_replacement_to_be_ready(self):
         self.dep["status"].update({"replicas": 2, "updatedReplicas": 1,
                                    "readyReplicas": 1, "availableReplicas": 1,

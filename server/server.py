@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.52"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.53"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2663,6 +2663,10 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("network", 5, NETWORK.inventory))
             if p == "/api/cluster":
                 return self._send(200, cached("cluster", 15, CLUSTER.inventory))
+            if p == "/api/image-updates/scan-progress":
+                # Read while a scan is in flight, so it needs no session cache
+                # and must not be served from one.
+                return self._send(200, UPDATES.scan_progress())
             if p == "/api/image-updates":
                 force = (q.get("force") or ["0"])[0].lower() in ("1", "true", "yes")
                 report = json.loads(json.dumps(cached(

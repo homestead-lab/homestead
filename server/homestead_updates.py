@@ -311,13 +311,46 @@ def _check_deployment(dep, pods, force=False):
             "last_action": _annotation(dep, LAST_ACTION)}
 
 
+# A scan asks a registry about every workload, one network round trip each,
+# so it takes as long as the slowest registry allows. Progress is published
+# here as it goes, because a button that only goes quiet looks like one that
+# did not work.
+SCAN = {"running": False, "done": 0, "total": 0, "current": "",
+        "started_at": 0.0, "finished_at": 0.0, "updates": 0}
+_SCAN_LOCK = threading.Lock()
+
+
+def scan_progress():
+    with _SCAN_LOCK:
+        state = dict(SCAN)
+    state["elapsed"] = round(
+        (time.time() if state["running"] else state["finished_at"]) - state["started_at"], 1
+    ) if state["started_at"] else 0
+    return state
+
+
+def _scan_note(**fields):
+    with _SCAN_LOCK:
+        SCAN.update(fields)
+
+
 def scan(force=False):
     deps = [d for d in kget("/apis/apps/v1/deployments").get("items", [])
             if d["metadata"]["namespace"] not in SYSTEM_NAMESPACES]
     pods = kget("/api/v1/pods").get("items", [])
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, max(1, len(deps)))) as pool:
-        futures = [pool.submit(_check_deployment, dep, pods, force) for dep in deps]
-        workloads = [future.result() for future in futures]
+    _scan_note(running=True, done=0, total=len(deps), current="", updates=0,
+               started_at=time.time(), finished_at=0.0)
+    workloads = []
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, max(1, len(deps)))) as pool:
+            pending = {pool.submit(_check_deployment, dep, pods, force):
+                       dep["metadata"]["name"] for dep in deps}
+            for future in concurrent.futures.as_completed(pending):
+                workloads.append(future.result())
+                _scan_note(done=len(workloads), current=pending[future],
+                           updates=sum(1 for x in workloads if x["available"]))
+    finally:
+        _scan_note(running=False, current="", finished_at=time.time())
     workloads.sort(key=lambda x: (x["ns"], x["name"]))
     return {"checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "updates": sum(1 for x in workloads if x["available"]),

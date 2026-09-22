@@ -51,6 +51,15 @@ function workloadHierarchy(w) {
   </details>`;
 }
 
+/* When the registries were last asked, so a stale answer is not mistaken for
+   a fresh one. */
+function checkedAgo() {
+  const at = STATE.data.imageUpdates?.checked_at;
+  if (!at) return "";
+  const secs = Math.max(0, (Date.now() - Date.parse(at)) / 1000);
+  return "checked " + (secs < 90 ? "just now" : fmtAgo(secs));
+}
+
 async function loadImageUpdates(force = false, quiet = false) {
   const requestId = (window.__imageUpdateRequestId || 0) + 1;
   window.__imageUpdateRequestId = requestId;
@@ -195,7 +204,9 @@ function renderWorkloads() {
   const updateErrors = report?.errors || 0;
   paint(`<div class="phead">
       <div><h2>Containers</h2><p>${rows.length} workload${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""} · Harvester system pods hidden</p></div>
-      <div class="row"><button class="btn" onclick="checkImageUpdates()">↻ Check images</button>
+      <div class="row"><span class="dim xs scanprogress" id="scanprogress"></span>
+      <span class="dim xs" title="When the registries were last asked">${checkedAgo()}</span>
+      <button class="btn" onclick="checkImageUpdates()">↻ Check images</button>
       <button class="btn pri hide-sm" data-need="operator" onclick="go('deploy')">＋ Deploy</button></div></div>
 
     ${updateCount ? `<div class="updatebar"><div><b>${updateCount} update${updateCount === 1 ? "" : "s"} available</b>
@@ -348,12 +359,49 @@ function openLogs(title, path) {
   poll(); window.__logTimer = setInterval(poll, 2000);
 }
 
+/* A scan asks a registry about every workload in turn, so it is neither
+   instant nor evenly paced. The server counts as it goes; this reads that
+   count so the wait shows its work instead of going quiet. */
 window.checkImageUpdates = async () => {
   const button = typeof event !== "undefined" ? event.currentTarget : null;
-  if (button) { button.disabled = true; button.textContent = "Checking registries…"; }
-  const report = await loadImageUpdates(true, false);
-  if (button) { button.disabled = false; button.textContent = "↻ Check images"; }
-  if (report && STATE.view === "workloads") renderWorkloads();
+  if (button) { button.disabled = true; button.textContent = "Checking…"; }
+  const host = $("#scanprogress");
+  if (host) host.innerHTML = '<span class="spin2"></span> asking the registries…';
+  let watching = true;
+  const watch = async () => {
+    while (watching) {
+      await new Promise(r => setTimeout(r, 500));
+      if (!watching) break;
+      const at = await api("/api/image-updates/scan-progress").catch(() => null);
+      if (!at || !at.total) continue;
+      const done = Math.min(at.done, at.total);
+      if (button && at.running) button.textContent = `Checking ${done}/${at.total}…`;
+      const bar = $("#scanprogress");
+      if (!bar) continue;
+      bar.innerHTML = at.running
+        ? `<span class="spin2"></span> checked ${done} of ${at.total}`
+          + (at.current ? ` · ${esc(at.current)}` : "")
+          + (at.updates ? ` · <b>${at.updates} update${at.updates === 1 ? "" : "s"} so far</b>` : "")
+        : "";
+    }
+  };
+  watch();
+  try {
+    const report = await loadImageUpdates(true, false);
+    const updates = (report?.workloads || []).filter(x => x.available).length;
+    const errors = report?.errors || 0;
+    toast(updates ? `${updates} update${updates === 1 ? "" : "s"} available`
+      : errors ? `no updates found; ${errors} image${errors === 1 ? "" : "s"} could not be checked`
+      : "every image is up to date", updates ? "ok" : errors ? "warn" : "ok");
+    if (report && STATE.view === "workloads") renderWorkloads();
+  } catch (e) {
+    toast(e.message, "bad");
+  } finally {
+    watching = false;
+    if (button) { button.disabled = false; button.textContent = "↻ Check images"; }
+    const bar = $("#scanprogress");
+    if (bar) bar.innerHTML = "";
+  }
 };
 
 window.imageUpdateReview = (ns, name) => {
