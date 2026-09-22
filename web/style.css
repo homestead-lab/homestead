@@ -692,14 +692,21 @@ html[data-motion="off"] .uptime .ld{animation:none}
 .reviewbox{margin-top:16px;padding:14px;border:1px solid rgba(74,158,255,.28);border-radius:12px;background:rgba(74,158,255,.07)}
 .wcard{display:flex;flex-direction:column;gap:5px;padding:10px 12px;overflow:visible;container-type:inline-size}
 .whead{min-height:30px}.wtitle{min-width:0;line-height:1.1}.wtitle>.dim{margin-top:2px}
-.wmeta{display:grid;grid-template-columns:minmax(0,.95fr) minmax(0,.8fr) minmax(0,.85fr) minmax(0,1.4fr);gap:7px;padding:4px 0;
+/* The three numbers take the room they need and are never cut; the ports
+   take what is left and give way first. */
+.wmeta{display:grid;grid-template-columns:auto auto auto minmax(0,1fr);gap:7px 14px;padding:4px 0;
   border-top:1px solid rgba(255,255,255,.055);border-bottom:1px solid rgba(255,255,255,.055)}
 .wmeta>div{display:flex;align-items:center;gap:5px;min-width:0;white-space:nowrap;overflow:hidden}
 .wmeta .dim.xs{margin:0;letter-spacing:.05em;font-size:9px;flex:0 0 auto}.wmeta .mono.small{font-size:11px}
 .wmeta>div>div:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .waccess{display:flex;align-items:center;gap:4px;min-width:0}
 .waccess .plink,.waccess .tag{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
-.waccess .tag.more{cursor:help}
+.waccess .tag.more{cursor:help;flex:0 0 auto}
+.waccess .more-narrow{display:none}
+.wmeta [data-tip]{cursor:help}
+.whead>.row:first-child{flex:1 1 auto}
+.wtitle>div:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.whead>.row:last-child{flex:0 0 auto}
 .attachlist{display:inline-flex;flex-wrap:wrap;gap:4px;vertical-align:middle}
 .volume-reason{display:block;margin-top:2px;max-width:30ch;line-height:1.35;overflow-wrap:anywhere}
 /* The volume list is long and mostly skim-read, so a row is one line of text
@@ -758,9 +765,14 @@ html[data-motion="off"] .uptime .ld{animation:none}
 .vclass-badges{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
 .vclass-badges .tag{white-space:nowrap}
 .note.bad{border-color:rgba(255,77,79,.28);background:rgba(255,77,79,.07);color:#ffb4b8}
-/* Three cards across leaves too little room for four metrics side by side,
-   so a narrow card stacks them two by two rather than clipping the values. */
-@container (max-width:360px){
+/* Four metrics side by side need about 415px of card with one port shown and
+   about 520px with two; below that the ports shorten, then the metrics stack
+   two by two, rather than any number being cut. */
+@container (max-width:520px){
+  .waccess .second,.waccess .more-wide{display:none}
+  .waccess .more-narrow{display:inline-flex}
+}
+@container (max-width:420px){
   .wmeta{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:3px}
 }
 /* a registry check that could not run is one hoverable mark, not a whole row */

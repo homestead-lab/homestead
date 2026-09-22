@@ -232,8 +232,8 @@ function renderWorkloads() {
         </div>
         <div class="wmeta">
           <div><div class="dim xs">UPTIME</div>${w.uptime ? upChip(w.uptime) : '<span class="dim">—</span>'}</div>
-          <div><div class="dim xs">CPU ${tip("Live usage. 100% equals one fully used CPU core.")}</div><div class="mono small">${workloadCpuPercent(w.cpu)}</div></div>
-          <div><div class="dim xs">RAM</div><div class="mono small">${w.mem_mb} <span class="dim">MB</span></div></div>
+          <div><div class="dim xs" data-tip="Live usage. 100% equals one fully used CPU core.">CPU</div><div class="mono small">${workloadCpuPercent(w.cpu)}</div></div>
+          <div><div class="dim xs" data-tip="Memory in use right now">RAM</div><div class="mono small">${workloadMemory(w.mem_mb)}</div></div>
           <div><div class="dim xs">ACCESS</div><div class="waccess">${accessPorts(w.ports)}</div></div>
         </div>
         <div class="dim xs mono wimg"><span class="wimage-name">${w.images.map(esc).join(" · ")}</span>
@@ -264,11 +264,14 @@ function accessPorts(ports) {
   const rows = ports || [];
   if (!rows.length) return '<span class="dim">—</span>';
   const shown = rows.slice(0, 2);
-  const rest = rows.slice(shown.length);
-  return shown.map(p => p.ip
-    ? `<span class="plink" title="Open ${esc(svcUrl(p.ip, p.port))}" onclick="openSvc('${esc(p.ip)}',${p.port})">${p.port}<svg class="ext" width="9" height="9"><use href="#i-ext"/></svg></span>`
-    : `<span class="tag">${p.port}</span>`).join("") +
-    (rest.length ? `<span class="tag more" data-tip="Also listening on ${esc(rest.map(p => p.port).join(", "))}">+${rest.length}</span>` : "");
+  // A narrow card has room for one port, a wide one for two; each size gets
+  // its own "+N" so the count is right whichever one is showing.
+  const more = (from, kind) => rows.length > from
+    ? `<span class="tag more ${kind}" data-tip="Also listening on ${esc(rows.slice(from).map(p => p.port).join(", "))}">+${rows.length - from}</span>` : "";
+  return shown.map((p, i) => (p.ip
+    ? `<span class="plink${i ? " second" : ""}" title="Open ${esc(svcUrl(p.ip, p.port))}" onclick="openSvc('${esc(p.ip)}',${p.port})">${p.port}<svg class="ext" width="9" height="9"><use href="#i-ext"/></svg></span>`
+    : `<span class="tag${i ? " second" : ""}">${p.port}</span>`)).join("") +
+    more(1, "more-narrow") + more(2, "more-wide");
 }
 
 window.wlScale = async (ns, name, n) => {
