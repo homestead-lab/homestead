@@ -569,11 +569,14 @@ async function viewImport() {
     <div id="movesList">${movesHtml(moves)}</div>
 
     <div class="sec">Other Homestead clusters ${tip("Another Homestead installation on the network. Its workloads can be listed here, and later moved across: volume data travels through the shared Longhorn backup target, the definition comes straight from the other Homestead.")}</div>
-    ${clusters.length ? `<div class="grid g3">${clusters.map(c => `<div class="card flat">
-      <div class="between"><div><div class="ctitle">${esc(c.name)}</div>
-        <div class="csub mono">${esc(c.user)}@${esc(c.url)}</div></div>
+    ${clusters.length ? `<div class="grid g3">${clusters.map(c => `<div class="card flat clcard">
+      <div class="between"><div class="clhead"><div class="ctitle">${esc(c.name)}</div>
+        <div class="csub mono clurl" title="${esc(c.user)}@${esc(c.url)}">${esc(c.user)}@${esc(c.url)}</div></div>
         <button class="btn sm danger" data-need="admin" onclick="clusterDel('${esc(c.name)}')">✕</button></div>
-      <div class="clver" id="clver_${esc(c.name)}"><span class="dim xs">Checking version…</span></div>
+      <div class="clver"><span class="dim xs">Version</span>
+        <span id="clver_${esc(c.name)}"><span class="dim xs"><span class="spin2"></span> checking…</span></span>
+        <button class="iconbtn clrecheck" data-tip="Check the version again" onclick="clusterCheck('${esc(c.name)}')">${icon("refresh")}</button></div>
+      <div id="clvermsg_${esc(c.name)}"></div>
       <div class="row" style="margin-top:12px"><button class="btn sm" onclick="clusterBrowse('${esc(c.name)}')">Browse workloads</button></div>
       <div class="dim xs" id="cluster_${esc(c.name)}" style="margin-top:10px"></div>
     </div>`).join("")}</div>`
@@ -1151,30 +1154,31 @@ window.clusterDel = async name => {
 /* Whether the two Homesteads can move workloads between them, and if not,
    which one to update. Same protocol on different releases still works. */
 const CLUSTER_VERSION_TAGS = {
-  same: ["ok", v => `v${v} · same as here`],
-  differs: ["info", v => `v${v} · this one is v${HOMESTEAD_VERSION}`],
-  behind: ["bad", v => `v${v || "?"} · too old to move`],
-  ahead: ["bad", v => `v${v || "?"} · update this one`],
-  unreachable: ["warn", () => "not answering"],
-  refused: ["bad", () => "version unknown"],
+  same: ["ok", v => `v${v} · matches`],
+  differs: ["info", v => `v${v} · differs`],
+  behind: ["bad", v => `v${v || "?"} · too old`],
+  ahead: ["bad", v => `v${v || "?"} · newer`],
+  unreachable: ["warn", () => "no answer"],
+  refused: ["bad", () => "unknown"],
 };
 
 window.clusterCheck = async name => {
-  const host = $("#clver_" + name);
+  const host = $("#clver_" + name), note = $("#clvermsg_" + name);
   if (!host) return;
-  host.innerHTML = '<span class="dim xs"><span class="spin2"></span> checking version…</span>';
+  host.innerHTML = '<span class="dim xs"><span class="spin2"></span> checking…</span>';
+  if (note) note.innerHTML = "";
   let check;
   try {
     check = await api("/api/move/clusters/check", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
   } catch (e) { check = { state: "refused", message: e.message }; }
   const [tone, label] = CLUSTER_VERSION_TAGS[check.state] || CLUSTER_VERSION_TAGS.refused;
-  const target = $("#clver_" + name);
-  if (!target) return;
-  target.innerHTML = `<span class="tag ${tone}" title="${esc(check.message || "")}">${esc(label(check.version))}</span>
-    <button class="linkish xs" onclick="clusterCheck('${esc(name)}')">check again</button>
-    ${check.compatible === false || ["unreachable", "refused"].includes(check.state)
-      ? `<div class="dim xs clvermsg">${esc(check.message || "")}</div>` : ""}`;
+  host.innerHTML = `<span class="tag ${tone}" title="${esc(check.message || "")}">${esc(label(check.version))}</span>`;
+  // A reason to act gets a note; a harmless difference gets a quiet line.
+  const trouble = check.compatible === false || ["unreachable", "refused"].includes(check.state);
+  if (!note) return;
+  if (trouble) note.innerHTML = `<div class="note ${tone === "warn" ? "warn" : "bad"} clvernote">${esc(check.message || "")}</div>`;
+  else if (check.state === "differs") note.innerHTML = `<div class="dim xs clverdim">This cluster runs v${esc(HOMESTEAD_VERSION)}. Moves work between the two.</div>`;
 };
 
 window.clusterBrowse = async name => {
@@ -1213,7 +1217,7 @@ window.clusterInventory = report => {
         : '<span class="dim">none</span>'}</td>
       <td><span class="tag ${w.running ? "ok" : ""}">${w.running ? "running" : "stopped"}</span></td>
       <td>${w.movable
-        ? `<button class="btn sm" data-need="admin" onclick="moveReview('${esc(report.cluster)}','${esc(w.kind)}','${esc(w.name)}')">Move here</button>`
+        ? `<button class="btn sm" data-need="admin" onclick="moveReview('${esc(report.cluster)}','${esc(w.kind)}','${esc(w.name)}')">Move to this cluster</button>`
           + ((w.warnings || []).length ? `<div class="dim xs" style="max-width:240px;margin-top:4px">${w.warnings.map(esc).join("; ")}</div>` : "")
         : `<span class="tag bad">cannot move</span><div class="dim xs" style="max-width:240px">${w.blockers.map(esc).join("; ")}</div>`}</td>
     </tr>`).join("")}</tbody></table></div>`
