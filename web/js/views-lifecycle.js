@@ -558,20 +558,21 @@ async function viewImport() {
   STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
   paint(`<div class="phead"><div><h2>Import</h2>
       <p>Bring containers, appdata and virtual-machine disks into Homestead</p></div>
-      <div class="row"><button class="btn" data-need="admin" onclick="clusterAdd()">＋ Cluster</button>
+      <div class="row"><button class="btn" data-need="admin" onclick="clusterAdd()">＋ Homestead cluster</button>
       <button class="btn" data-need="admin" onclick="srcAdd()">＋ Container source</button>
       <button class="btn pri" data-need="admin" onclick="vmDiskImport()">＋ VM disk</button></div></div>
 
-    <div class="sec">Other clusters ${tip("Another Homestead on the network. Its workloads can be listed here, and later moved across: volume data travels through the shared Longhorn backup target, the definition comes straight from the other Homestead.")}</div>
+    <div class="sec">Other Homestead clusters ${tip("Another Homestead installation on the network. Its workloads can be listed here, and later moved across: volume data travels through the shared Longhorn backup target, the definition comes straight from the other Homestead.")}</div>
     ${clusters.length ? `<div class="grid g3">${clusters.map(c => `<div class="card flat">
       <div class="between"><div><div class="ctitle">${esc(c.name)}</div>
         <div class="csub mono">${esc(c.user)}@${esc(c.url)}</div></div>
         <button class="btn sm danger" data-need="admin" onclick="clusterDel('${esc(c.name)}')">✕</button></div>
-      <div class="row" style="margin-top:12px"><button class="btn sm" onclick="clusterBrowse('${esc(c.name)}')">What has it got?</button></div>
+      <div class="row" style="margin-top:12px"><button class="btn sm" onclick="clusterBrowse('${esc(c.name)}')">Browse workloads</button></div>
       <div class="dim xs" id="cluster_${esc(c.name)}" style="margin-top:10px"></div>
     </div>`).join("")}</div>`
-    : `<div class="empty">No other clusters. Add one to see what it is running, and to move
-       workloads between them once both point at the same backup storage.</div>`}
+    : `<div class="empty">No other clusters connected. Add a Homestead running on another Harvester
+       cluster to browse its workloads, and to move them here once both clusters point at the same
+       backup storage.</div>`}
 
     <div class="sec">VM disk images ${tip("CDI downloads supported QEMU disk formats, including qcow2 and vmdk, converts them into a VM-ready disk, and writes the result into a new Longhorn PVC.")}</div>
     ${disks.length ? `<div class="card flat pad0"><div class="tblwrap"><table class="tbl"><thead><tr>
@@ -1093,15 +1094,23 @@ window.importSetup = async (source, dir, cfg = {}) => {
 };
 /* Another Homestead on the network. The destination pulls, so these
    credentials are this cluster reaching out, not the far one reaching in. */
-window.clusterAdd = () => modal("Add a cluster", `
-  <p class="muted small">Homestead on another Harvester cluster. Used to list what it is running,
-    and to move workloads here.</p>
-  <div class="f"><label>Name</label><input id="cl_name" placeholder="loft"></div>
-  <div class="f"><label>Address</label><input id="cl_url" placeholder="http://192.0.2.242:8088"></div>
-  <div class="f2"><div class="f"><label>Username</label><input id="cl_user" autocomplete="off"></div>
-    <div class="f"><label>Password</label><input id="cl_pass" type="password" autocomplete="new-password"></div></div>
-  <div class="note">Stored in a Kubernetes Secret, never in the ConfigMap that lists the clusters.
-    An account on the far Homestead with operator access is enough to list; moving needs admin there.</div>
+window.clusterAdd = () => modal("Add a Homestead cluster", `
+  <p class="muted small">Connects to <b>another Homestead installation</b> running on a different
+    Harvester cluster. Homestead must already be installed and reachable there. Use it to see what
+    that cluster is running, and to move workloads across.</p>
+  <div class="f"><label>Label ${tip("What you will call this cluster here. Any short name.")}</label>
+    <input id="cl_name" placeholder="loft"></div>
+  <div class="f"><label>Homestead address ${tip("The address you use to open the other Homestead in a browser, including the port.")}</label>
+    <input id="cl_url" placeholder="http://192.0.2.242:8088"></div>
+  <div class="sec">Sign in to that Homestead</div>
+  <p class="muted small">A Homestead account on the <b>other</b> cluster — the username and password you
+    would type into its own sign-in page. Not a Harvester, Rancher or SSH login.</p>
+  <div class="f2"><div class="f"><label>Homestead username</label>
+      <input id="cl_user" autocomplete="off" placeholder="admin"></div>
+    <div class="f"><label>Homestead password</label>
+      <input id="cl_pass" type="password" autocomplete="new-password"></div></div>
+  <div class="note">The password is kept in a Kubernetes Secret, never in the ConfigMap that lists
+    the clusters. Operator access there is enough to browse; moving a workload will need admin.</div>
   <div class="row" style="margin-top:16px">
     <button class="btn pri" data-need="admin" onclick="clusterSave()">Add cluster</button>
     <button class="btn" onclick="closeModal()">Cancel</button></div>`);
@@ -1144,7 +1153,7 @@ window.clusterBrowse = async name => {
 };
 
 /* What the far cluster has, and plainly what of it cannot come. */
-window.clusterInventory = report => modal(`${report.cluster} · what it is running`, `
+window.clusterInventory = report => modal(`Workloads on ${report.cluster}`, `
   ${report.workloads.length ? `<div class="tblwrap"><table class="tbl dense"><thead><tr>
     <th>Workload</th><th>Image</th><th>Volumes</th><th>State</th><th>Movable</th></tr></thead><tbody>
     ${report.workloads.map(w => `<tr>
