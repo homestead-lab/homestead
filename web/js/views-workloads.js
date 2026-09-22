@@ -61,14 +61,13 @@ function checkedAgo() {
 }
 
 async function loadImageUpdates(force = false, quiet = false) {
-  const requestId = (window.__imageUpdateRequestId || 0) + 1;
-  window.__imageUpdateRequestId = requestId;
   try {
-    const report = await api(`/api/image-updates${force ? "?force=1" : ""}`);
-    // A forced check can overtake the quiet background check kicked off by
-    // viewWorkloads. A later request may also return the older non-force cache,
-    // so compare server timestamps as well as request order.
-    if (requestId !== window.__imageUpdateRequestId) return report;
+    // A forced check outlives the page it started on: its answer is for the
+    // whole app, not just the view that asked.
+    const report = await api(`/api/image-updates${force ? "?force=1" : ""}`, force ? { keep: true } : undefined);
+    // The page's quiet refresh asks every few seconds and can land before or
+    // after a forced check. Which report is newer is the server's to say, by
+    // when it was checked - never by which request happened to be sent last.
     const existing = STATE.data.imageUpdates;
     if (HomesteadUpdateState.isStale(existing, report)) {
       existing.policy = report.policy || existing.policy;
@@ -372,7 +371,7 @@ window.checkImageUpdates = async () => {
     while (watching) {
       await new Promise(r => setTimeout(r, 500));
       if (!watching) break;
-      const at = await api("/api/image-updates/scan-progress").catch(() => null);
+      const at = await api("/api/image-updates/scan-progress", { keep: true }).catch(() => null);
       if (!at || !at.total) continue;
       const done = Math.min(at.done, at.total);
       if (button && at.running) button.textContent = `Checking ${done}/${at.total}…`;
@@ -388,6 +387,7 @@ window.checkImageUpdates = async () => {
   watch();
   try {
     const report = await loadImageUpdates(true, false);
+    if (!report) return;      // the failure has been said already
     const updates = (report?.workloads || []).filter(x => x.available).length;
     const errors = report?.errors || 0;
     toast(updates ? `${updates} update${updates === 1 ? "" : "s"} available`

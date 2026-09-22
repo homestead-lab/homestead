@@ -2,6 +2,8 @@ import copy
 import json
 import sys
 import tempfile
+import time
+import threading
 import unittest
 from pathlib import Path
 
@@ -351,6 +353,99 @@ class ImageUpdateTests(unittest.TestCase):
         self.assertFalse(after["running"])
         self.assertEqual(4, after["done"])
         self.assertEqual("", after["current"], "nothing is being checked once it is over")
+
+    def _fake_scans(self, delay=0.0):
+        """scan() replaced by one that counts its runs and can be made slow."""
+        runs = []
+        original = updates.scan
+
+        def scan(force=False):
+            runs.append(force)
+            time.sleep(delay)
+            return {"checked_at": f"run-{len(runs)}", "updates": len(runs), "workloads": []}
+
+        updates.scan = scan
+        self.addCleanup(setattr, updates, "scan", original)
+        updates.invalidate()
+        self.addCleanup(updates.invalidate)
+        return runs
+
+    def test_a_quiet_request_reuses_the_last_report(self):
+        runs = self._fake_scans()
+
+        first = updates.report()
+        second = updates.report()
+
+        self.assertEqual([False], runs)
+        self.assertIs(first, second)
+
+    def test_a_forced_check_replaces_what_quiet_requests_see(self):
+        """The bug: the button found an update, the page kept the older answer."""
+        runs = self._fake_scans()
+        updates.report()
+
+        forced = updates.report(force=True)
+
+        self.assertEqual([False, True], runs)
+        self.assertIs(forced, updates.report(), "the forced answer is now everyone's")
+
+    def test_a_quiet_request_during_a_forced_check_waits_for_it_not_a_second_scan(self):
+        runs = self._fake_scans(delay=0.3)
+        results = {}
+        forced = threading.Thread(target=lambda: results.update(forced=updates.report(True)))
+        forced.start()
+        time.sleep(0.05)
+
+        results["quiet"] = updates.report()
+        forced.join()
+
+        self.assertEqual([True], runs, "one scan, not two racing each other")
+        self.assertIs(results["forced"], results["quiet"])
+
+    def test_a_forced_check_does_not_settle_for_a_scan_already_running(self):
+        runs = self._fake_scans(delay=0.3)
+        quiet = threading.Thread(target=updates.report)
+        quiet.start()
+        time.sleep(0.05)
+
+        forced = updates.report(force=True)
+        quiet.join()
+
+        self.assertEqual([False, True], runs, "it began before the button was pressed")
+        self.assertEqual("run-2", forced["checked_at"])
+
+    def test_an_image_change_makes_the_next_quiet_request_look_again(self):
+        runs = self._fake_scans()
+        updates.report()
+
+        updates.invalidate()
+        updates.report()
+
+        self.assertEqual([False, False], runs)
+
+    def test_one_odd_deployment_does_not_sink_the_scan(self):
+        original = updates._check_deployment
+
+        def check(dep, pods, force=False):
+            if dep["metadata"]["name"] == "odd":
+                raise KeyError("template")
+            return {"ns": "lab", "name": dep["metadata"]["name"], "images": [],
+                    "available": True, "can_rollback": False, "last_action": ""}
+
+        deployments = [{"metadata": {"name": name, "namespace": "lab"}} for name in ("odd", "plex")]
+        original_get = updates.kget
+        try:
+            updates._check_deployment = check
+            updates.kget = lambda path: ({"items": deployments} if "deployments" in path
+                                         else {"items": []})
+            report = updates.scan()
+        finally:
+            updates._check_deployment = original
+            updates.kget = original_get
+
+        self.assertEqual(1, report["updates"], "plex's update still shows")
+        self.assertEqual(1, report["errors"])
+        self.assertEqual(["odd", "plex"], [w["name"] for w in report["workloads"]])
 
     def test_progress_is_readable_before_any_scan_has_run(self):
         updates.SCAN.update({"running": False, "done": 0, "total": 0, "current": "",

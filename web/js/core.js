@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HOMESTEAD_VERSION = "2.8.60";
+const HOMESTEAD_VERSION = "2.8.61";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -124,7 +124,8 @@ window.NAV_TOKEN = 0;
 const ABANDONED = new Promise(() => { });
 
 async function api(path, opts) {
-  const readOnly = !opts || !opts.method || opts.method === "GET";
+  // `keep` marks a read whose answer matters after the page changes.
+  const readOnly = (!opts || !opts.method || opts.method === "GET") && !opts?.keep;
   const startedAt = window.NAV_TOKEN;
   const r = await fetch(path, opts);
   const ct = r.headers.get("content-type") || "";

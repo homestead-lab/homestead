@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.60"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.61"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2724,10 +2724,7 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, UPDATES.scan_progress())
             if p == "/api/image-updates":
                 force = (q.get("force") or ["0"])[0].lower() in ("1", "true", "yes")
-                report = json.loads(json.dumps(cached(
-                    "image-updates" if not force else
-                    "image-updates-force:" + str(int(time.time() / 10)),
-                    600 if not force else 8, lambda: UPDATES.scan(force))))
+                report = json.loads(json.dumps(UPDATES.report(force)))
                 report["policy"] = update_policy_status()
                 return self._send(200, report)
             if p == "/api/image-updates/progress":
@@ -2998,7 +2995,7 @@ class H(BaseHTTPRequestHandler):
                     {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
                     "/containers?" + urllib.parse.urlencode({"q": b["name"]}),
                     {"namespace": b["ns"], "name": b["name"]})
-                _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("image-updates", None)
+                _cache.pop("wl", None); _cache.pop("ov", None); UPDATES.invalidate()
                 return self._send(200, result)
             if p == "/api/image-updates/rollback":
                 result = UPDATES.rollback(b["ns"], b["name"])
@@ -3007,7 +3004,7 @@ class H(BaseHTTPRequestHandler):
                     {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
                     "/containers?" + urllib.parse.urlencode({"q": b["name"]}),
                     {"namespace": b["ns"], "name": b["name"]})
-                _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("image-updates", None)
+                _cache.pop("wl", None); _cache.pop("ov", None); UPDATES.invalidate()
                 return self._send(200, result)
             if p == "/api/files/write":
                 warning = FILES.check_syntax(b.get("path"), b.get("content"))

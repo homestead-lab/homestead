@@ -343,11 +343,20 @@ def scan(force=False):
     workloads = []
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, max(1, len(deps)))) as pool:
-            pending = {pool.submit(_check_deployment, dep, pods, force):
-                       dep["metadata"]["name"] for dep in deps}
+            pending = {pool.submit(_check_deployment, dep, pods, force): dep for dep in deps}
             for future in concurrent.futures.as_completed(pending):
-                workloads.append(future.result())
-                _scan_note(done=len(workloads), current=pending[future],
+                dep = pending[future]
+                try:
+                    workloads.append(future.result())
+                except Exception as error:
+                    # One odd Deployment is that workload's problem, not a
+                    # failed scan that throws away every answer beside it.
+                    workloads.append({"ns": dep["metadata"]["namespace"],
+                                      "name": dep["metadata"]["name"], "available": False,
+                                      "can_rollback": False, "last_action": "",
+                                      "images": [{"container": "", "available": False,
+                                                  "error": str(error)[:180]}]})
+                _scan_note(done=len(workloads), current=dep["metadata"]["name"],
                            updates=sum(1 for x in workloads if x["available"]))
     finally:
         _scan_note(running=False, current="", finished_at=time.time())
@@ -356,6 +365,55 @@ def scan(force=False):
             "updates": sum(1 for x in workloads if x["available"]),
             "errors": sum(1 for x in workloads for image in x["images"] if image.get("error")),
             "workloads": workloads}
+
+
+# The last finished scan, which every request shares. Before this, a quiet
+# check could start a second scan beside a forced one, reset its progress,
+# and hand the page an older answer than the one the button just found.
+_LATEST = {"report": None, "number": 0, "finished": 0.0}
+_STARTED = [0]      # scans begun so far; a clock is too coarse to order them
+_RUN_LOCK = threading.Lock()
+FRESH_FOR = 600
+
+
+def invalidate():
+    """Something changed an image: the next quiet request scans again."""
+    with _SCAN_LOCK:
+        _LATEST.update(report=None, number=0, finished=0.0)
+
+
+def report(force=False):
+    """The update report: one scan at a time, and the newest wins for everyone.
+
+    A quiet request takes any report younger than FRESH_FOR. A forced one wants
+    a scan that began after it asked, so it waits out one already running
+    rather than trusting its older answers. Whoever waits reuses what the
+    running scan found if that is good enough, instead of starting another.
+    """
+    with _SCAN_LOCK:
+        latest, begun = dict(_LATEST), _STARTED[0]
+    if not force and latest["report"] and time.time() - latest["finished"] < FRESH_FOR:
+        return latest["report"]
+    with _RUN_LOCK:
+        with _SCAN_LOCK:
+            latest = dict(_LATEST)
+        if latest["report"]:
+            if force and latest["number"] > begun:
+                return latest["report"]
+            if not force and time.time() - latest["finished"] < FRESH_FOR:
+                return latest["report"]
+        with _SCAN_LOCK:
+            _STARTED[0] += 1
+            number = _STARTED[0]
+        try:
+            found = scan(force)
+        except Exception:
+            if latest["report"] and not force:
+                return latest["report"]
+            raise
+        with _SCAN_LOCK:
+            _LATEST.update(report=found, number=number, finished=time.time())
+        return found
 
 
 # An env var pinning the version in the Deployment outlives the image it
