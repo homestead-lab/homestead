@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.55"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.56"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2221,9 +2221,11 @@ import homestead_networking as NETWORK
 import homestead_cluster as CLUSTER
 import homestead_probe as PROBE
 import homestead_objectstore as OBJECTS
+import homestead_move as MOVE
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
+MOVE.bind(kget, ksend, DEFAULT_NS)
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
 LC.bind(kget, ksend, SYS_NS, _cache, HW.features, create_pvc, STORAGE_CLASS)
 IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.features)
@@ -2463,6 +2465,8 @@ ADMIN_ROUTES = {
     "/api/node/probe/install", "/api/node/probe/remove",
     # Object storage holds every backup, and its keys.
     "/api/objectstore/deploy", "/api/objectstore/longhorn", "/api/objectstore/remove",
+    # A cluster's credentials, and what they reach.
+    "/api/move/clusters/add", "/api/move/clusters/remove", "/api/move/remote",
     "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete",
     "/api/lh/restore",
 }
@@ -2667,6 +2671,12 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("network", 5, NETWORK.inventory))
             if p == "/api/cluster":
                 return self._send(200, cached("cluster", 15, CLUSTER.inventory))
+            # What this cluster offers another one. Read-only, and the half
+            # of a move the far cluster calls.
+            if p == "/api/move/inventory":
+                return self._send(200, MOVE.inventory())
+            if p == "/api/move/clusters":
+                return self._send(200, MOVE.list_clusters())
             if p == "/api/objectstore":
                 return self._send(200, OBJECTS.status())
             if p == "/api/image-updates/scan-progress":
@@ -3136,6 +3146,13 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, LC.set_cordon(b["node"], b.get("cordon", True)))
             if p == "/api/node/hardware":
                 return self._send(200, set_node_hardware(b))
+            if p == "/api/move/clusters/add":
+                return self._send(200, MOVE.add_cluster(
+                    b.get("name"), b.get("url"), b.get("user"), b.get("password")))
+            if p == "/api/move/clusters/remove":
+                return self._send(200, MOVE.remove_cluster(b.get("name")))
+            if p == "/api/move/remote":
+                return self._send(200, MOVE.remote_inventory(b.get("name")))
             if p == "/api/objectstore/deploy":
                 return self._send(200, OBJECTS.deploy(b))
             if p == "/api/objectstore/longhorn":

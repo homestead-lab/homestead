@@ -163,7 +163,7 @@ metadata:
   annotations:
     # Homestead reads harvui.io/* as well, so an install made before the
     # rename keeps its update history, workload metadata and rollback state.
-    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.55"}'
+    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.56"}'
 spec:
   replicas: 1
   strategy:
@@ -195,7 +195,7 @@ spec:
           tolerationSeconds: 15
       initContainers:
         - name: data-permissions
-          image: ghcr.io/wjcloudy/homestead:2.8.55
+          image: ghcr.io/wjcloudy/homestead:2.8.56
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "chown 10001:10001 /data && chmod 0770 /data"]
           securityContext:
@@ -212,7 +212,7 @@ spec:
               mountPath: /data
       containers:
         - name: homestead
-          image: ghcr.io/wjcloudy/homestead:2.8.55
+          image: ghcr.io/wjcloudy/homestead:2.8.56
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT

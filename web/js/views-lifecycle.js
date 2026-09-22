@@ -549,15 +549,29 @@ function importProgressCell(job) {
 async function viewImport() {
   const [, nodes] = await Promise.all([loadHardwareFeatures(), api("/api/nodes").catch(() => [])]);
   if (nodes.length) STATE.data.nodes = nodes;
-  const [srcs, jobs, disks, namespaces, storageClasses] = await Promise.all([
+  const [srcs, jobs, disks, namespaces, storageClasses, clusters] = await Promise.all([
     api("/api/sources"), api("/api/imports").catch(() => []), api("/api/vm-disks").catch(() => []),
     api("/api/namespaces").catch(() => ["lab"]), api("/api/storageclasses").catch(() => ["longhorn-r2"]),
+    api("/api/move/clusters").catch(() => []),
   ]);
+  STATE.data.clusters = clusters;
   STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
   paint(`<div class="phead"><div><h2>Import</h2>
       <p>Bring containers, appdata and virtual-machine disks into Homestead</p></div>
-      <div class="row"><button class="btn" data-need="admin" onclick="srcAdd()">＋ Container source</button>
+      <div class="row"><button class="btn" data-need="admin" onclick="clusterAdd()">＋ Cluster</button>
+      <button class="btn" data-need="admin" onclick="srcAdd()">＋ Container source</button>
       <button class="btn pri" data-need="admin" onclick="vmDiskImport()">＋ VM disk</button></div></div>
+
+    <div class="sec">Other clusters ${tip("Another Homestead on the network. Its workloads can be listed here, and later moved across: volume data travels through the shared Longhorn backup target, the definition comes straight from the other Homestead.")}</div>
+    ${clusters.length ? `<div class="grid g3">${clusters.map(c => `<div class="card flat">
+      <div class="between"><div><div class="ctitle">${esc(c.name)}</div>
+        <div class="csub mono">${esc(c.user)}@${esc(c.url)}</div></div>
+        <button class="btn sm danger" data-need="admin" onclick="clusterDel('${esc(c.name)}')">✕</button></div>
+      <div class="row" style="margin-top:12px"><button class="btn sm" onclick="clusterBrowse('${esc(c.name)}')">What has it got?</button></div>
+      <div class="dim xs" id="cluster_${esc(c.name)}" style="margin-top:10px"></div>
+    </div>`).join("")}</div>`
+    : `<div class="empty">No other clusters. Add one to see what it is running, and to move
+       workloads between them once both point at the same backup storage.</div>`}
 
     <div class="sec">VM disk images ${tip("CDI downloads supported QEMU disk formats, including qcow2 and vmdk, converts them into a VM-ready disk, and writes the result into a new Longhorn PVC.")}</div>
     ${disks.length ? `<div class="card flat pad0"><div class="tblwrap"><table class="tbl"><thead><tr>
@@ -1077,6 +1091,77 @@ window.importSetup = async (source, dir, cfg = {}) => {
   $("#im_volumes").innerHTML = importVolumeRow({ name: `${name}-appdata`, size_gb: 10 }, 0);
   imSyncVolumes();
 };
+/* Another Homestead on the network. The destination pulls, so these
+   credentials are this cluster reaching out, not the far one reaching in. */
+window.clusterAdd = () => modal("Add a cluster", `
+  <p class="muted small">Homestead on another Harvester cluster. Used to list what it is running,
+    and to move workloads here.</p>
+  <div class="f"><label>Name</label><input id="cl_name" placeholder="loft"></div>
+  <div class="f"><label>Address</label><input id="cl_url" placeholder="http://192.0.2.242:8088"></div>
+  <div class="f2"><div class="f"><label>Username</label><input id="cl_user" autocomplete="off"></div>
+    <div class="f"><label>Password</label><input id="cl_pass" type="password" autocomplete="new-password"></div></div>
+  <div class="note">Stored in a Kubernetes Secret, never in the ConfigMap that lists the clusters.
+    An account on the far Homestead with operator access is enough to list; moving needs admin there.</div>
+  <div class="row" style="margin-top:16px">
+    <button class="btn pri" data-need="admin" onclick="clusterSave()">Add cluster</button>
+    <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+
+window.clusterSave = async () => {
+  const body = { name: $("#cl_name").value.trim(), url: $("#cl_url").value.trim(),
+    user: $("#cl_user").value.trim(), password: $("#cl_pass").value };
+  if (!body.name || !body.url) return toast("name and address are required", "bad");
+  try {
+    await api("/api/move/clusters/add", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    toast(`${body.name} added`, "ok"); closeModal(); resetPaint(); viewImport();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+window.clusterDel = async name => {
+  if (!confirm(`Forget ${name}?` + String.fromCharCode(10, 10)
+      + "Its credentials are deleted. Nothing on that cluster is touched.")) return;
+  try {
+    await api("/api/move/clusters/remove", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+    toast(`${name} forgotten`, "ok"); resetPaint(); viewImport();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+window.clusterBrowse = async name => {
+  const host = $("#cluster_" + name);
+  if (host) host.innerHTML = '<span class="spin2"></span> asking…';
+  try {
+    const report = await api("/api/move/remote", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+    STATE.data.remoteInventory = report;
+    clusterInventory(report);
+    if (host) host.textContent = `${report.workloads.length} workload${report.workloads.length === 1 ? "" : "s"}`
+      + ` · ${report.movable} movable`;
+  } catch (e) {
+    if (host) host.innerHTML = `<span class="bad">${esc(e.message)}</span>`;
+    toast(e.message, "bad");
+  }
+};
+
+/* What the far cluster has, and plainly what of it cannot come. */
+window.clusterInventory = report => modal(`${report.cluster} · what it is running`, `
+  ${report.workloads.length ? `<div class="tblwrap"><table class="tbl dense"><thead><tr>
+    <th>Workload</th><th>Image</th><th>Volumes</th><th>State</th><th>Movable</th></tr></thead><tbody>
+    ${report.workloads.map(w => `<tr>
+      <td><b>${esc(w.name)}</b><div class="dim xs mono">${esc(w.namespace)}</div></td>
+      <td class="mono small" style="word-break:break-all">${esc(w.image)}</td>
+      <td class="small">${w.volumes.length
+        ? w.volumes.map(v => `<div class="mono xs">${esc(v.claim)} · ${v.size_gb} GB → ${esc(v.path)}</div>`).join("")
+        : '<span class="dim">none</span>'}</td>
+      <td><span class="tag ${w.running ? "ok" : ""}">${w.running ? "running" : "stopped"}</span></td>
+      <td>${w.movable ? '<span class="tag ok">yes</span>'
+        : `<span class="tag bad">no</span><div class="dim xs" style="max-width:260px">${w.blockers.map(esc).join("; ")}</div>`}</td>
+    </tr>`).join("")}</tbody></table></div>`
+    : '<div class="empty">That cluster is running nothing Homestead can see.</div>'}
+  <div class="note" style="margin-top:14px"><b>Listing only, for now.</b> Moving a workload needs both
+    clusters pointed at the same Longhorn backup target; that is the next piece.</div>
+  <div class="row" style="margin-top:16px"><button class="btn" onclick="closeModal()">Close</button></div>`);
+
 window.imAddPort = () => { $("#im_ports").insertAdjacentHTML("beforeend", '<div class="f4 im-port"><div><label>Container</label><input class="ipc" type="number"></div><div><label>LAN</label><input class="iph" type="number"></div><div><label>Protocol</label><select class="ipp"><option>TCP</option><option>UDP</option></select></div><label class="switch"><input class="ipe" type="checkbox" checked>Expose</label></div>'); };
 window.imAddEnv = () => { $("#im_env").insertAdjacentHTML("beforeend", '<div class="f2 im-env"><div class="f"><label>Variable</label><input class="iek"></div><div class="f"><label>Value</label><input class="iev"></div></div>'); };
 window.doImport = async source => {
