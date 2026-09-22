@@ -71,7 +71,7 @@ window.toggleOperations = () => {
 };
 window.openOperation = href => {
   const url = new URL(href || "/", window.location.origin);
-  const route = HarvRouter.resolve(url.pathname);
+  const route = HomesteadRouter.resolve(url.pathname);
   operationPanelOpen = false;
   go(route.view, { params: Object.fromEntries(url.searchParams) });
   renderOperations();

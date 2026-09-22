@@ -251,7 +251,8 @@ def inspect_source_container(name, container):
     return {
         "name": (item.get("Name") or container).lstrip("/"),
         "image": config.get("Image", ""),
-        "icon": labels.get("net.unraid.docker.icon", "") or labels.get("harvui.icon", ""),
+        "icon": (labels.get("net.unraid.docker.icon", "")
+                 or labels.get("homestead.icon", "") or labels.get("harvui.icon", "")),
         "webui": labels.get("net.unraid.docker.webui", ""),
         "env": env, "ports": ports, "mounts": mounts,
         "remote_path": app_mount["source"] if app_mount else "",

@@ -29,11 +29,11 @@ function routeParamsForView(v, extra = {}) {
 
 function renderBreadcrumb(v, detail = "") {
   const host = $("#crumb");
-  host.innerHTML = HarvRouter.breadcrumbs(v, detail).map((item, index) => {
+  host.innerHTML = HomesteadRouter.breadcrumbs(v, detail).map((item, index) => {
     const sep = index ? '<span class="crumbsep" aria-hidden="true">/</span>' : "";
     return sep + (item.current
       ? `<span aria-current="page">${esc(item.label)}</span>`
-      : `<a href="${esc(item.url)}" data-route-view="${esc(HarvRouter.resolve(item.url).view)}">${esc(item.label)}</a>`);
+      : `<a href="${esc(item.url)}" data-route-view="${esc(HomesteadRouter.resolve(item.url).view)}">${esc(item.label)}</a>`);
   }).join("");
   $$("a[data-route-view]", host).forEach(a => a.onclick = e => {
     e.preventDefault(); go(a.dataset.routeView);
@@ -44,7 +44,7 @@ window.renderBreadcrumb = renderBreadcrumb;
 function setModalRoute(params, detail) {
   STATE.modalRoute = true;
   STATE.modalDetail = detail || "";
-  const url = HarvRouter.urlFor(STATE.view, routeParamsForView(STATE.view, params));
+  const url = HomesteadRouter.urlFor(STATE.view, routeParamsForView(STATE.view, params));
   const current = window.location.pathname + window.location.search;
   if (url !== current) window.history.pushState({ view: STATE.view, modal: true }, "", url);
   renderBreadcrumb(STATE.view, STATE.modalDetail);
@@ -56,7 +56,7 @@ function clearModalRoute() {
   STATE.modalRoute = false;
   STATE.modalDetail = "";
   STATE.deepLinkToken = "";
-  const url = HarvRouter.urlFor(STATE.view, routeParamsForView(STATE.view));
+  const url = HomesteadRouter.urlFor(STATE.view, routeParamsForView(STATE.view));
   window.history.replaceState({ view: STATE.view }, "", url);
   renderBreadcrumb(STATE.view);
 }
@@ -116,7 +116,7 @@ function go(v, options = {}) {
   if (!VIEWS[v]) return;
   if (!$("#modal").classList.contains("hidden")) closeModal(false);
   STATE.view = v;
-  const locationParams = options.fromLocation ? HarvRouter.queryParams(window.location.search) : null;
+  const locationParams = options.fromLocation ? HomesteadRouter.queryParams(window.location.search) : null;
   if (locationParams) {
     STATE.q = typeof locationParams.q === "string" ? locationParams.q.trim() : "";
     $("#globalSearch").value = STATE.q;
@@ -126,7 +126,7 @@ function go(v, options = {}) {
   renderBreadcrumb(v);
   document.title = `${t} · Homestead`;
   if (options.history !== false) {
-    const url = HarvRouter.urlFor(v, options.params || routeParamsForView(v));
+    const url = HomesteadRouter.urlFor(v, options.params || routeParamsForView(v));
     const current = window.location.pathname + window.location.search;
     if (url !== current) window.history[options.replace ? "replaceState" : "pushState"]({ view: v }, "", url);
   }
@@ -172,7 +172,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
 $$("#nav a").forEach(a => a.onclick = e => { e.preventDefault(); go(a.dataset.view); });
 window.addEventListener("popstate", () => {
   closeModal(false);
-  const route = HarvRouter.resolve(window.location.pathname);
+  const route = HomesteadRouter.resolve(window.location.pathname);
   go(route.view, { history: false, fromLocation: true });
 });
 function openNav() { document.body.classList.add("navopen"); }
@@ -223,7 +223,7 @@ async function globalSearch(q) {
 $("#globalSearch").addEventListener("input", e => {
   STATE.q = e.target.value.trim();
   if (FILTERABLE_VIEWS.has(STATE.view)) {
-    const url = HarvRouter.urlFor(STATE.view, routeParamsForView(STATE.view));
+    const url = HomesteadRouter.urlFor(STATE.view, routeParamsForView(STATE.view));
     window.history.replaceState({ view: STATE.view }, "", url);
   }
   if (STATE.view === "workloads") renderWorkloads();

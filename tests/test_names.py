@@ -87,5 +87,31 @@ class LabelSearchTests(unittest.TestCase):
         self.assertEqual([], names.find("/apis/batch/v1/namespaces/lab/jobs", "task"))
 
 
+class NoNewLegacyNamesTests(unittest.TestCase):
+    """The old name is read in named places. It must not spread from them."""
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def test_no_module_writes_a_legacy_annotation_key_by_hand(self):
+        """Writing "harvui.io/x" as a literal puts the old domain on something
+        new. homestead_names decides what gets written."""
+        offenders = []
+        for path in sorted((self.ROOT / "server").glob("*.py")):
+            if path.name == "homestead_names.py":
+                continue
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if '"harvui.io/' in line or "'harvui.io/" in line:
+                    offenders.append(f"{path.name}:{number}")
+        self.assertEqual([], offenders)
+
+    def test_the_browser_globals_carry_the_current_name(self):
+        for name, wanted in (("router.js", "HomesteadRouter"),
+                             ("update-state.js", "HomesteadUpdateState")):
+            with self.subTest(file=name):
+                source = (self.ROOT / "web" / "js" / name).read_text(encoding="utf-8")
+                self.assertIn(wanted, source)
+                self.assertNotIn("Harv", source.replace("Harvester", ""))
+
+
 if __name__ == "__main__":
     unittest.main()

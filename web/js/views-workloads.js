@@ -61,7 +61,7 @@ async function loadImageUpdates(force = false, quiet = false) {
     // so compare server timestamps as well as request order.
     if (requestId !== window.__imageUpdateRequestId) return report;
     const existing = STATE.data.imageUpdates;
-    if (HarvUpdateState.isStale(existing, report)) {
+    if (HomesteadUpdateState.isStale(existing, report)) {
       existing.policy = report.policy || existing.policy;
       return existing;
     }
@@ -101,7 +101,7 @@ window.imageUpdateCenter = async () => {
   }
   if (!report) return;
   const affected = (report.workloads || []).filter(w => w.available || w.images?.some(image => image.error));
-  const available = HarvUpdateState.availableWorkloads(report);
+  const available = HomesteadUpdateState.availableWorkloads(report);
   const policy = report.policy || {};
   modal("Image updates", `<div class="update-center">
     <div class="note"><b>${esc(policy.policy === "notify_only" ? "Notify only" : policy.policy === "maintenance_window" ? "Maintenance window" : "Approval required")}</b>
@@ -146,7 +146,7 @@ window.toggleImageUpdateSelection = checked => {
 window.imageUpdateBatchReview = () => {
   const keys = new Set([...document.querySelectorAll("#mbody .update-select:checked")]
     .map(box => updateKey(box.dataset.ns, box.dataset.name)));
-  const selected = HarvUpdateState.availableWorkloads(STATE.data.imageUpdates)
+  const selected = HomesteadUpdateState.availableWorkloads(STATE.data.imageUpdates)
     .filter(item => keys.has(updateKey(item.ns, item.name)));
   if (!selected.length) return toast("Select at least one update to stage", "bad");
   window.__imageUpdateBatch = selected.map(item => ({ ns: item.ns, name: item.name }));
@@ -412,7 +412,7 @@ function batchUpdateMarkup(items, states, startFailures = [], reconnecting = fal
 window.imageUpdateBatchApply = async () => {
   const selected = window.__imageUpdateBatch || [];
   if (!selected.length) return toast("The staged update list is empty", "bad");
-  const ordered = HarvUpdateState.orderApply(selected);
+  const ordered = HomesteadUpdateState.orderApply(selected);
   const started = [], startFailures = [], states = Object.fromEntries(ordered.map(item =>
     [updateKey(item.ns, item.name), { phase: "queued", ready: 0, desired: 1 }]));
   modal(`Starting ${ordered.length} updates`, batchUpdateMarkup(ordered, states), true);

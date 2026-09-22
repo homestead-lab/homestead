@@ -4,7 +4,7 @@
 (function (root, factory) {
   const router = factory();
   if (typeof module === "object" && module.exports) module.exports = router;
-  root.HarvRouter = router;
+  root.HomesteadRouter = router;
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
 

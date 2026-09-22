@@ -1,7 +1,7 @@
 (function (root, factory) {
   const api = factory();
   if (typeof module === "object" && module.exports) module.exports = api;
-  else root.HarvUpdateState = api;
+  else root.HomesteadUpdateState = api;
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
 
