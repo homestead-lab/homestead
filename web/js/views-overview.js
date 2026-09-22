@@ -7,6 +7,8 @@ const diskHealthTone = state => state === "healthy" ? "ok" : state === "attentio
   : state === "critical" ? "bad" : "";
 const diskHealthWord = state => state === "attention" ? "needs attention"
   : state === "unavailable" ? "not reported" : (state || "unknown");
+/* Life remaining, where the drive reports something that means it. */
+const lifeTone = pct => pct == null ? "" : pct <= 10 ? "bad" : pct <= 25 ? "warn" : "ok";
 const smartMetric = value => value == null ? "unsupported" : String(value);
 const smartTestTone = status => /without error|success|passed/i.test(status || "") ? "ok" :
   /fail|error|aborted|interrupted/i.test(status || "") ? "bad" : "";
@@ -196,6 +198,8 @@ window.nodeDetail = async (name, fromRoute = false) => {
       <div><span class="disklabel">HEALTH</span><b><span class="tag ${diskHealthTone(d.health?.state)}"
         data-tip="${esc(d.health?.summary || "no SMART data for this drive")}">${esc(diskHealthWord(d.health?.state))}</span></b>
         ${d.health?.issues?.length ? `<span class="dim xs diskreason">${esc(d.health.summary)}</span>` : ""}</div>
+      <div><span class="disklabel">LIFE</span><b class="mono ${lifeTone(d.health?.life_pct)}"
+        data-tip="${esc(d.health?.life_basis ? "From the drive's " + d.health.life_basis : "This drive reports no measure of remaining life")}">${d.health?.life_pct == null ? "—" : esc(d.health.life_pct) + "%"}</b></div>
       <div><span class="disklabel">TEMP</span><b class="mono ${tempCls(s?.temperature_c)}">${s?.temperature_c == null ? "—" : esc(s.temperature_c) + "°C"}</b></div>
       <div><span class="disklabel">READ</span><b class="mono diskrate read">↓ ${Number(d.read_mbps || 0).toFixed(2)} MB/s</b></div>
       <div><span class="disklabel">WRITE</span><b class="mono diskrate write">↑ ${Number(d.write_mbps || 0).toFixed(2)} MB/s</b></div>
@@ -303,6 +307,8 @@ window.smartDisk = async (node, disk) => {
           thresholds set in Settings${s.health ? `, and the drive's own overall-health check says ${esc(s.health)}` : ""}.</div>` : ""}
       ${active ? `<div class="clusteralert"><div><b>Self-test running</b><span>${esc(s.test.status || "In progress")}${s.test.remaining_percent == null ? "" : ` · ${esc(s.test.remaining_percent)}% remaining`}</span></div></div>` : ""}
       <div class="smartstats">
+        ${stat("Life remaining", health.life_pct == null ? null : health.life_pct + "%", lifeTone(health.life_pct))}
+        ${health.spare_pct == null ? "" : stat("Spare blocks", health.spare_pct + "%", lifeTone(health.spare_pct))}
         ${stat("Temperature", s.temperature_c == null ? null : s.temperature_c + "°C", tempTag(s.temperature_c))}
         ${stat("Power-on hours", s.power_on_hours)}
         ${stat("Reallocated", s.reallocated, +(s.reallocated || 0) ? "warn" : "")}
@@ -310,6 +316,7 @@ window.smartDisk = async (node, disk) => {
         ${stat("Uncorrectable", s.uncorrectable, +(s.uncorrectable || 0) ? "bad" : "")}
         ${stat("Errors", s.media_errors ?? s.error_count, +(s.media_errors ?? s.error_count ?? 0) ? "bad" : "")}
       </div>
+      ${health.life_basis ? `<div class="drow"><div class="dl">Life measured from</div><div class="dv">${esc(health.life_basis)}</div></div>` : ""}
       <div class="drow"><div class="dl">Firmware</div><div class="dv mono">${esc(s.firmware || "—")}</div></div>
       <div class="drow"><div class="dl">SMART enabled</div><div class="dv">${s.smart_enabled == null ? "not reported" : s.smart_enabled ? "yes" : "no"}</div></div>
       <div class="drow"><div class="dl">Drive's own health check ${tip("smartctl's overall-health bit. Drives report PASSED until failure is imminent, which is why Homestead judges the counters as well.")}</div>

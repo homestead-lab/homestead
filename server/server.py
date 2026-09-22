@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.47"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.48"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -421,13 +421,29 @@ def smart_disk_health(report, settings=None):
     against the configured thresholds, and says which ones it was.
     """
     if not report:
-        return {"state": "unavailable", "issues": [],
+        return {"state": "unavailable", "issues": [], "life_pct": None,
+                "life_basis": "", "spare_pct": None,
                 "summary": "no SMART data for this drive"}
     if not report.get("available"):
-        return {"state": "unavailable", "issues": [],
+        return {"state": "unavailable", "issues": [], "life_pct": None,
+                "life_basis": "", "spare_pct": None,
                 "summary": report.get("unavailable_reason")
                 or "this drive or its USB bridge does not expose SMART data"}
     issues = smart_disk_issues(report, settings)
+    wear = report.get("wear") or {}
+    life = wear.get("life_pct")
+    spare, floor = wear.get("spare_pct"), wear.get("spare_floor_pct")
+    # A drive that has spent its endurance is worn out whatever else it says.
+    if life is not None and int(life) <= 10:
+        issues.append({"severity": "critical",
+                       "reason": f"only {int(life)}% of rated life remains"})
+    elif life is not None and int(life) <= 25:
+        issues.append({"severity": "degraded",
+                       "reason": f"{int(life)}% of rated life remains"})
+    if spare is not None and floor is not None and int(spare) <= int(floor):
+        issues.append({"severity": "critical",
+                       "reason": f"spare blocks are down to {int(spare)}%, "
+                                 f"at the drive's floor of {int(floor)}%"})
     state = ("critical" if any(x["severity"] == "critical" for x in issues)
              else "attention" if issues else "healthy")
     if not issues:
@@ -436,7 +452,10 @@ def smart_disk_health(report, settings=None):
             summary = "passed, with no reported defects"
     else:
         summary = "; ".join(x["reason"] for x in issues)
-    return {"state": state, "issues": issues, "summary": summary}
+    return {"state": state, "issues": issues, "summary": summary,
+            "life_pct": None if life is None else int(life),
+            "life_basis": wear.get("basis", ""),
+            "spare_pct": None if spare is None else int(spare)}
 
 
 def get_nodes():

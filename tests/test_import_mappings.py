@@ -677,6 +677,34 @@ class SharedMemoryTests(unittest.TestCase):
                           ("remote_path", "mount_path", "medium", "size_mb", "bytes")})
 
 
+class NoStorageTests(unittest.TestCase):
+    """Plenty of containers keep nothing: a relay, a bridge, a snapshot helper."""
+
+    CFG = {"source": "tower", "name": "ha-snapshot", "image": "ha-snapshot:1",
+           "mappings": [], "volumes": []}
+
+    def test_no_claim_is_invented_for_a_container_that_keeps_nothing(self):
+        self.assertEqual([], imports.import_volumes(self.CFG))
+
+    def test_no_mappings_means_no_mappings(self):
+        self.assertEqual([], imports.import_mappings(self.CFG))
+
+    def test_the_older_single_folder_shape_still_gets_its_default(self):
+        """A client that sends no mappings key at all predates the list."""
+        rows = imports.import_mappings({"name": "plex", "remote_path": "/mnt/user/appdata/plex"})
+
+        self.assertEqual("/mnt/user/appdata/plex", rows[0]["remote_path"])
+        self.assertEqual(["plex-appdata"],
+                         [v["name"] for v in imports.import_volumes({"name": "plex"})])
+
+    def test_a_ram_only_container_still_gets_its_scratch_but_no_claim(self):
+        cfg = dict(self.CFG, mappings=[{"mount_path": "/tmp/cache", "medium": "memory",
+                                        "size_mb": 512}])
+
+        self.assertEqual([], imports.import_volumes(cfg))
+        self.assertEqual("memory", imports.import_mappings(cfg)[0]["medium"])
+
+
 class ConfigMountTests(unittest.TestCase):
     """Which folder an imported container keeps its configuration in."""
 

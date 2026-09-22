@@ -554,6 +554,14 @@ def import_volumes(cfg):
     """
     rows, seen = [], set()
     requested = cfg.get("volumes") or []
+    copies = [row for row in (cfg.get("mappings") or [])
+              if str(row.get("medium") or "").lower() != "memory"
+              and str(row.get("remote_path") or "").strip()]
+    if not requested and not copies and cfg.get("mappings") is not None:
+        # Plenty of containers keep nothing: a webhook relay, a bridge, a
+        # snapshot helper. Inventing an appdata claim for one creates storage
+        # nobody asked for and a copy job with nothing to copy.
+        return []
     if not requested:
         # The original shape: one claim for the whole import.
         requested = [{"name": cfg.get("pvc_name") or f"{cfg.get('name', 'app')}-appdata",
@@ -596,10 +604,12 @@ def import_mappings(cfg):
     volumes = import_volumes(cfg)
     names = [volume["name"] for volume in volumes]
     requested = cfg.get("mappings")
-    if not requested:
+    if requested is None:
         # The original single-folder shape, kept so older clients still work.
         requested = [{"remote_path": cfg.get("remote_path"),
                       "mount_path": cfg.get("mount_path", "/config"), "folder": ""}]
+    if not requested:
+        return []
     single = len(requested) == 1
     for item in requested:
         remote = str(item.get("remote_path") or "").strip().rstrip("/")
@@ -714,7 +724,8 @@ def import_container(cfg):
     src = _source(cfg["source"])
     volumes = import_volumes(cfg)
     mappings = import_mappings(cfg)
-    pvc = volumes[0]["name"]
+    copied = [row for row in mappings if not row.get("medium")]
+    pvc = volumes[0]["name"] if volumes else ""
 
     # Each volume is judged on what is going into it, not on the import total:
     # a 500 GiB recordings claim says nothing about whether appdata fits.
@@ -751,7 +762,8 @@ def import_container(cfg):
         volume["access_mode"] = modes[0] if modes else volume["access_mode"]
         volume["storage_class"] = (existing.get("spec", {}) or {}).get(
             "storageClassName", volume["storage_class"])
-    storage_class, access_mode = volumes[0]["storage_class"], volumes[0]["access_mode"]
+    storage_class = volumes[0]["storage_class"] if volumes else ""
+    access_mode = volumes[0]["access_mode"] if volumes else ""
 
     job = f"homestead-import-{name}"
     for previous in (job, f"harvui-import-{name}"):
@@ -839,7 +851,7 @@ def import_container(cfg):
                      "annotations": {"homestead.io/import-workload": name if cfg.get("create_workload", True) else "",
                                      "homestead.io/import-volume": pvc,
                                      "homestead.io/import-volume-created":
-                                         "true" if volumes[0]["create"] else "false",
+                                         "true" if volumes and volumes[0]["create"] else "false",
                                      "homestead.io/import-volumes-created":
                                          ",".join(v["name"] for v in volumes if v["create"]),
                                      "homestead.io/import-volumes":
@@ -861,7 +873,10 @@ def import_container(cfg):
                                             "persistentVolumeClaim": {"claimName": volume["name"]}}
                                            for index, volume in enumerate(volumes)]}}},
     }
-    ksend("POST", f"/apis/batch/v1/namespaces/{NS}/jobs", body)
+    # A container with nothing to copy needs no copy job; the workload below
+    # is the whole import.
+    if copied:
+        ksend("POST", f"/apis/batch/v1/namespaces/{NS}/jobs", body)
 
     created = None
     if cfg.get("create_workload", True):

@@ -55,10 +55,10 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.47`, the workflow publishes:
+For a release such as `v2.8.48`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.47
+ghcr.io/wjcloudy/homestead:2.8.48
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -69,8 +69,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.47
-git push origin v2.8.47
+git tag v2.8.48
+git push origin v2.8.48
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -281,7 +281,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.47 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.48 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -541,6 +541,20 @@ docker build --build-arg VERSION=dev -t homestead:dev .
 Passwords use PBKDF2-HMAC-SHA256 with per-user salts in the `homestead-auth`
 Secret. Sessions are HMAC-signed, `HttpOnly`, `SameSite=Strict` cookies and all
 mutations require a custom anti-CSRF header. Roles are enforced server-side.
+
+### Drive health
+
+Each drive carries a verdict — healthy, needs attention, critical, or not
+reported — drawn from its SMART counters against the thresholds in **Settings →
+Drive health policy**, not from the drive's own overall-health bit, which reads
+PASSED until failure is imminent. Where a drive reports a measure of remaining
+life it is shown as a percentage: NVMe endurance used, a SATA SSD's life-left
+attribute, or failing both, how close the worst pre-failure attribute sits to
+its manufacturer threshold. A drive that reports no such figure shows nothing
+rather than a made-up number.
+
+Life and spare-block figures come from the node probe, so `deploy/nodeprobe.yaml`
+has to be re-applied after upgrading to see them.
 
 ### Naming an installation
 

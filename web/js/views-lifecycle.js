@@ -813,7 +813,11 @@ function importMappingRows(cfg, src) {
   if (cfg.remote_path && !cfg.guessed_path && !rows.some(row => row.remote_path === cfg.remote_path)) {
     rows.unshift({ remote_path: cfg.remote_path, mount_path: cfg.mount_path || "/config", include: true });
   }
-  if (!rows.length) rows.push({ remote_path: "", mount_path: cfg.mount_path || "/config", include: true });
+  // Nothing mounted means nothing to copy. An empty list says that plainly;
+  // a blank row invites someone to invent a path the container never had.
+  if (!rows.length && cfg.remote_path && !cfg.guessed_path) {
+    rows.push({ remote_path: cfg.remote_path, mount_path: cfg.mount_path || "/config", include: true });
+  }
   return rows.filter(row => {
     const key = row.medium ? `ram:${row.mount_path}` : row.remote_path;
     return !seen.has(key) && seen.add(key);
@@ -1032,6 +1036,9 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <div class="hwchoices">${hardwareChoices("im_hw", cfg.hardware || [])}</div>
     <div class="sec">Folders to copy ${tip("Every Docker path under the source appdata directory can come across. They all live in one Longhorn volume for this app, each in its own subfolder, mounted back where the container expects it.")}</div>
     <div class="note">Source folders → the volumes you define below → mounted back at each container path.</div>
+    ${(cfg.mounts || []).some(m => m.source || m.type === "tmpfs") ? "" :
+      `<div class="note good">This container keeps nothing on disk, so there is nothing to copy and no
+        volume to create. Import will bring across its image, ports and environment alone.</div>`}
     ${cfg.guessed_path ? `<div class="note warn">Nothing this container mounts sits under <span class="mono">${esc(src.base_path || "/mnt/user/appdata")}</span>,
       so Homestead cannot tell which folder holds its configuration. Tick the ones to copy yourself.</div>` : ""}
     <div id="im_maps">${importMappingRows(cfg, src).map(importMappingRow).join("")}</div>
@@ -1076,20 +1083,23 @@ window.doImport = async source => {
   const env = {}; $$(".im-env").forEach(r => { const k = $(".iek", r).value.trim(); if (k) env[k] = $(".iev", r).value; });
   const cfg = STATE.data.importCfg || {};
   const volumes = importVolumes();
+  const mappings = importMappings();
   const first = volumes[0];
-  if (!first) return toast("add at least one volume", "bad");
-  const existing = !first.create;
+  // A container that keeps nothing imports as just the workload. Demanding a
+  // volume for it would mean creating storage nobody asked for.
+  const keepsNothing = !mappings.some(row => !row.medium && row.remote_path);
+  if (!first && !keepsNothing) return toast("add at least one volume", "bad");
+  const existing = !!first && !first.create;
   const body = { source, name: $("#im_name").value.trim(), remote_path: $("#im_path").value.trim(),
     image: $("#im_image").value.trim(), icon: $("#im_icon").value.trim(),
-    mappings: importMappings(), volumes,
-    pvc_name: first.name, size_gb: first.size_gb, reuse_existing: existing,
-    storage_class: first.storage_class, access_mode: first.access_mode,
+    mappings, volumes: keepsNothing ? [] : volumes,
+    pvc_name: first?.name || "", size_gb: first?.size_gb || 0, reuse_existing: existing,
+    storage_class: first?.storage_class || "", access_mode: first?.access_mode || "",
     start_after_copy: $("#im_start").checked,
     ports: $$(".im-port").map(r => ({ container: +$(".ipc", r).value, host: +$(".iph", r).value || +$(".ipc", r).value, protocol: $(".ipp", r).value, expose: $(".ipe", r).checked })).filter(p => p.container),
     env, hardware: selectedHardware("im_hw"), network_mode: $("#im_net").value, vip_mode: $("#im_vip").value, lb_ip: $("#im_ip").value.trim(),
     uid: $("#im_uid").value.trim(), gid: $("#im_gid").value.trim() };
   if (!body.name || !body.image) return toast("workload name and image are required", "bad");
-  if (!body.mappings.length) return toast("choose at least one folder to copy", "bad");
   for (const volume of volumes) {
     const measured = body.mappings.filter(row => row.pvc === volume.name)
       .reduce((sum, row) => sum + (row.bytes || 0), 0);
@@ -1114,12 +1124,11 @@ window.doImport = async source => {
       ? `a RAM scratch volume needs an absolute path inside the container (${esc(bad.mount_path || "blank")})`
       : `every folder needs an absolute source and container path (${esc(bad.remote_path || "blank")})`, "bad");
   }
-  if (!copied.length && !body.mappings.length) return toast("choose at least one folder to copy", "bad");
+  const reused = keepsNothing ? [] : volumes.filter(volume => !volume.create).map(volume => volume.name);
   const absent = copied.find(row => (STATE.data.importSizes || {})[row.remote_path] === "missing");
   if (absent) return toast(`${absent.remote_path} does not exist on the source — fix the path or untick it`, "bad");
   body.remote_path = copied[0]?.remote_path || "";
   body.mount_path = copied[0]?.mount_path || "/config";
-  const reused = volumes.filter(volume => !volume.create).map(volume => volume.name);
   if (reused.length && !confirm(`Import into existing volume${reused.length === 1 ? "" : "s"} ${reused.join(", ")}?` +
       "\n\nThe current data is kept, but imported files with the same names may be replaced.")) return;
   try {

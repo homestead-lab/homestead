@@ -161,6 +161,39 @@ class DiskHealthVerdictTests(unittest.TestCase):
         self.assertIn("3 reallocated sector(s)", result["summary"])
         self.assertIn("1 pending sector(s)", result["summary"])
 
+    def test_life_remaining_is_reported_with_what_measured_it(self):
+        result = self.verdict(wear={"life_pct": 94, "basis": "NVMe endurance used",
+                                    "spare_pct": 100, "spare_floor_pct": 10})
+
+        self.assertEqual(94, result["life_pct"])
+        self.assertEqual("NVMe endurance used", result["life_basis"])
+        self.assertEqual("healthy", result["state"])
+
+    def test_a_worn_drive_needs_attention_before_it_fails(self):
+        result = self.verdict(wear={"life_pct": 18, "basis": "SSD life left"})
+
+        self.assertEqual("attention", result["state"])
+        self.assertIn("18% of rated life remains", result["summary"])
+
+    def test_a_drive_at_the_end_of_its_endurance_is_critical(self):
+        result = self.verdict(wear={"life_pct": 4, "basis": "NVMe endurance used"})
+
+        self.assertEqual("critical", result["state"])
+        self.assertIn("only 4% of rated life remains", result["summary"])
+
+    def test_spare_blocks_at_the_drives_own_floor_are_critical(self):
+        result = self.verdict(wear={"life_pct": 80, "basis": "NVMe endurance used",
+                                    "spare_pct": 9, "spare_floor_pct": 10})
+
+        self.assertEqual("critical", result["state"])
+        self.assertIn("spare blocks are down to 9%", result["summary"])
+
+    def test_a_drive_that_reports_no_wear_figure_says_nothing_rather_than_zero(self):
+        result = self.verdict()
+
+        self.assertIsNone(result["life_pct"], "no figure is not the same as none left")
+        self.assertEqual("healthy", result["state"])
+
     def test_a_drive_without_smart_says_so_rather_than_healthy(self):
         result = server.smart_disk_health(
             {"available": False, "unavailable_reason": "USB bridge hides SMART"}, self.CFG)

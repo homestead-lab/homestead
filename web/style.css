@@ -905,7 +905,7 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
 
 /* per-device host disk activity */
 .diskactivity{margin-top:12px;display:grid;gap:8px}
-.diskrow{display:grid;grid-template-columns:minmax(190px,2fr) repeat(5,minmax(76px,1fr)) auto;
+.diskrow{display:grid;grid-template-columns:minmax(180px,2fr) repeat(6,minmax(72px,1fr)) auto;
   align-items:center;gap:14px;padding:11px 13px;border:1px solid var(--line);
   border-radius:12px;background:rgba(255,255,255,.025)}
 .diskrow.smart-failed{border-color:rgba(255,77,79,.42);background:rgba(255,77,79,.06)}

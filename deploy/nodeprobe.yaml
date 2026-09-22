@@ -351,6 +351,57 @@ data:
             value = int(match.group()) if match else None
         return value
 
+    def norm_attr(data, attr_id):
+        """An attribute's normalised value and how far it is above failing.
+
+        SMART attributes are reported both raw and normalised. The normalised
+        value counts down from 100 towards a manufacturer threshold, so it is
+        the closest thing a drive gives to a percentage of life left.
+        """
+        table = ((data.get("ata_smart_attributes") or {}).get("table") or [])
+        item = next((row for row in table if int(row.get("id", -1)) == attr_id), None)
+        if not item:
+            return None, None
+        value, thresh = item.get("value"), (item.get("thresh") or 0)
+        if value is None:
+            return None, None
+        span = max(1, 100 - int(thresh))
+        margin = max(0, min(100, round((int(value) - int(thresh)) / span * 100)))
+        return int(value), margin
+
+    def wear(data, nvme):
+        """How much life the drive says it has left, and what said so.
+
+        NVMe counts endurance used; SATA SSDs carry a life-left attribute;
+        spinning disks have no such figure, so the closest honest answer is
+        how near the worst attribute is to its failure threshold.
+        """
+        used = nvme.get("percentage_used")
+        if used is not None:
+            return {"life_pct": max(0, 100 - int(used)), "basis": "NVMe endurance used",
+                    "spare_pct": nvme.get("available_spare"),
+                    "spare_floor_pct": nvme.get("available_spare_threshold")}
+        # 231 SSD_Life_Left, 177 Wear_Leveling_Count, 233 Media_Wearout_Indicator
+        for attr_id, label in ((231, "SSD life left"), (233, "media wearout indicator"),
+                               (177, "wear levelling count")):
+            value, _ = norm_attr(data, attr_id)
+            if value is not None:
+                return {"life_pct": max(0, min(100, value)), "basis": label,
+                        "spare_pct": None, "spare_floor_pct": None}
+        table = ((data.get("ata_smart_attributes") or {}).get("table") or [])
+        margins = []
+        for row in table:
+            # Only attributes the drive itself says predict failure.
+            if not ((row.get("flags") or {}).get("prefailure")):
+                continue
+            _, margin = norm_attr(data, int(row.get("id", -1)))
+            if margin is not None:
+                margins.append(margin)
+        if margins:
+            return {"life_pct": min(margins), "basis": "worst pre-failure attribute",
+                    "spare_pct": None, "spare_floor_pct": None}
+        return {"life_pct": None, "basis": "", "spare_pct": None, "spare_floor_pct": None}
+
     def test_rows(data):
         table = ((data.get("ata_smart_self_test_log") or {}).get("standard") or {}).get("table") or []
         if not table:
@@ -441,6 +492,7 @@ data:
             "error_count": ((data.get("ata_smart_error_log") or {}).get("summary") or {}).get("count",
                              nvme.get("num_err_log_entries", scsi_uncorrected if scsi else None)),
             "media_errors": nvme.get("media_errors"),
+            "wear": wear(data, nvme),
             "supported_tests": supported,
             "test": {"active": active, "status": current_text or "No self-test running",
                      "remaining_percent": remaining},
@@ -580,7 +632,7 @@ spec:
               mountPath: /host/proc
               readOnly: true
         - name: smart
-          image: ghcr.io/wjcloudy/homestead:2.8.47
+          image: ghcr.io/wjcloudy/homestead:2.8.48
           imagePullPolicy: IfNotPresent
           command: ["python3", "/srv/smart.py"]
           ports:
