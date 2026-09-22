@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.45"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.46"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -506,8 +506,14 @@ def _volume_health_reason(volume):
                            "status": condition.get("status", ""),
                            "reason": condition.get("reason", ""),
                            "message": (condition.get("message") or "")[:300]})
+    # Longhorn's volume conditions do not share a polarity: Scheduled is False
+    # when replicas cannot be placed, while WaitForBackingImage is False in the
+    # ordinary case of a volume that has no backing image to wait for. Reading
+    # every False as trouble reported a detached volume as broken.
     failing = [row for row in conditions
-               if row["status"] == "False" and row["type"] not in ("Restore",)]
+               if (row["status"] == "False" and row["type"] == "Scheduled")
+               or (row["status"] == "True" and row["type"] in ("TooManySnapshots",
+                                                               "WaitForBackingImage"))]
     scheduling = annotations.get("longhorn.io/volume-scheduling-error", "") or ""
     robustness = str(status.get("robustness", "") or "").lower()
     reason = ""
@@ -1092,11 +1098,17 @@ def get_storage():
         "healthy": len([v for v in vols if v["state"] == "attached" and v["robustness"] == "healthy"]),
         "degraded": len([v for v in vols if v["state"] == "attached" and v["robustness"] == "degraded"]),
         "faulted": len([v for v in vols if v["state"] == "attached" and v["robustness"] == "faulted"]),
+        # Detached is a resting state, not a mystery: nothing is mounting the
+        # volume, so there is no live replica health to report.
+        "detached": len([v for v in vols if v["state"] != "attached"]),
         "unknown": len([v for v in vols if v["state"] != "attached"]),
         "attached": len([v for v in vols if v["state"] == "attached"]),
         "reasons": [{"name": v.get("pvc_name") or v["name"], "robustness": v["robustness"],
                      "reason": v["health_reason"]}
-                    for v in vols if v.get("health_reason") and v["robustness"] != "healthy"][:8],
+                    # Only volumes something is actually using: a detached one
+                    # has no live health, so it has nothing to explain.
+                    for v in vols if v.get("health_reason") and v["robustness"] != "healthy"
+                    and v["state"] == "attached"][:8],
         "disks": disks,
     }
 

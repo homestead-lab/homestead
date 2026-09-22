@@ -49,6 +49,40 @@ class VolumeHealthReasonTests(unittest.TestCase):
 
         self.assertIn("cannot be attached", reason)
 
+    def test_a_detached_volume_is_not_waiting_for_a_backing_image(self):
+        """Longhorn's conditions do not share a polarity. WaitForBackingImage
+        is False for every volume that has no backing image to wait for, which
+        is nearly all of them - reading that as a fault called a resting
+        volume broken."""
+        reason, _, _ = server._volume_health_reason(volume(
+            robustness="unknown",
+            conditions=[{"type": "WaitForBackingImage", "status": "False",
+                         "reason": "", "message": ""},
+                        {"type": "Scheduled", "status": "True"},
+                        {"type": "Restore", "status": "False"}]))
+
+        self.assertEqual("", reason)
+
+    def test_a_volume_actually_waiting_for_a_backing_image_says_so(self):
+        reason, _, _ = server._volume_health_reason(volume(
+            robustness="unknown",
+            conditions=[{"type": "WaitForBackingImage", "status": "True",
+                         "reason": "WaitForBackingImage",
+                         "message": "waiting for the backing image to be ready"}]))
+
+        self.assertEqual("waiting for the backing image to be ready", reason)
+
+    def test_too_many_snapshots_is_a_problem_when_true_not_when_false(self):
+        many = [{"type": "TooManySnapshots", "status": "True",
+                 "reason": "TooManySnapshots", "message": "too many snapshots"}]
+        few = [{"type": "TooManySnapshots", "status": "False"}]
+
+        self.assertEqual("too many snapshots",
+                         server._volume_health_reason(volume(robustness="healthy",
+                                                             conditions=many))[0])
+        self.assertEqual("", server._volume_health_reason(volume(robustness="healthy",
+                                                                 conditions=few))[0])
+
     def test_a_healthy_volume_has_nothing_to_explain(self):
         reason, _, _ = server._volume_health_reason(volume(
             robustness="healthy", conditions=[{"type": "Scheduled", "status": "True"}]))

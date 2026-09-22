@@ -131,6 +131,11 @@ function archHighlight(id) {
 }
 
 /* ---------------- volumes ---------------- */
+/* A reason is worth showing only when something is actually wrong: a detached
+   volume has no live health to report, which is not a problem to explain. */
+const volumeReason = v => (v.health_reason && v.state === "attached"
+  && v.robustness !== "healthy") ? v.health_reason : "";
+
 async function viewStorage() {
   const [v, st, classes] = await Promise.all([api("/api/volumes"), api("/api/storage").catch(() => null),
     api("/api/storage/classes").catch(() => [])]);
@@ -155,7 +160,7 @@ async function viewStorage() {
         <span class="tag ok">${st.healthy} healthy</span>
         ${st.degraded ? `<span class="tag warn">${st.degraded} degraded</span>` : ""}
         ${st.faulted ? `<span class="tag bad">${st.faulted} faulted</span>` : ""}
-        ${st.unknown ? `<span class="tag bad">${st.unknown} unknown · detached</span>` : ""}</div>
+        ${(st.detached ?? st.unknown) ? `<span class="tag">${st.detached ?? st.unknown} detached</span>` : ""}</div>
       <div class="csub" style="margin-top:10px">${st.attached} attached of ${st.volumes}</div></div>
     <div class="card flat"><div class="ctitle">Per-node disks</div>
       ${st.disks.map(d => `<div class="drow"><div class="dl">${esc(d.node.replace("harvester-", ""))}</div>
@@ -169,10 +174,12 @@ async function viewStorage() {
      <td data-label="Attached to">${attachedWorkloads(x).length
        ? `<div class="attachlist">${attachedWorkloads(x).map(w => `<span class="tag info">${esc(w)}</span>`).join("")}</div>`
        : '<span class="dim">detached</span>'}${x.pod_status ? `<span class="dim xs"> · ${esc(x.pod_status)}</span>` : ""}</td>
-     <td data-label="Health" class="volhealth${x.health_reason && x.robustness !== "healthy" ? " hasreason" : ""}">${x.state === "attached"
+     <td data-label="Health" class="volhealth${volumeReason(x) ? " hasreason" : ""}">${x.state === "attached"
        ? `<span class="pill ${x.robustness === "healthy" ? "ok" : x.robustness === "degraded" ? "med" : "crit"}"${x.health_reason ? ` data-tip="${esc(x.health_reason)}"` : ""}>${esc(x.robustness)}</span>`
-       : `<span class="pill crit" data-tip="Longhorn cannot report live health while this volume is detached">unknown</span>`}
-       ${x.health_reason && x.robustness !== "healthy" ? `<span class="dim xs volume-reason">${esc(x.health_reason)}</span>` : ""}</td>
+       // Detached is where a volume sits when nothing is using it - a stopped
+       // workload, not a fault. Longhorn calls it detached, so do we.
+       : `<span class="pill neutral" data-tip="Nothing is mounting this volume, so Longhorn reports no live replica health">detached</span>`}
+       ${volumeReason(x) ? `<span class="dim xs volume-reason">${esc(x.health_reason)}</span>` : ""}</td>
      <td data-label="Mode"><span class="tag">${esc((x.access_modes || ["?"]).map(m => m === "ReadWriteMany" ? "RWX" : m === "ReadWriteOnce" ? "RWO" : m).join(", "))}</span>
        <span class="dim xs mono">×${x.replicas}</span></td>
      <td data-label="Usage" class="volusage"><div>${meter(x.used_pct || 0)}
