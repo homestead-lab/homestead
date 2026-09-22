@@ -557,6 +557,8 @@ async function viewImport() {
   STATE.data.clusters = clusters;
   const moves = await api("/api/move/moves").catch(() => []);
   STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
+  // After the page is up: each check waits on the other Homestead answering.
+  setTimeout(() => clusters.forEach(c => clusterCheck(c.name)), 0);
   paint(`<div class="phead"><div><h2>Import</h2>
       <p>Bring containers, appdata and virtual-machine disks into Homestead</p></div>
       <div class="row"><button class="btn" data-need="admin" onclick="clusterAdd()">＋ Homestead cluster</button>
@@ -571,6 +573,7 @@ async function viewImport() {
       <div class="between"><div><div class="ctitle">${esc(c.name)}</div>
         <div class="csub mono">${esc(c.user)}@${esc(c.url)}</div></div>
         <button class="btn sm danger" data-need="admin" onclick="clusterDel('${esc(c.name)}')">✕</button></div>
+      <div class="clver" id="clver_${esc(c.name)}"><span class="dim xs">Checking version…</span></div>
       <div class="row" style="margin-top:12px"><button class="btn sm" onclick="clusterBrowse('${esc(c.name)}')">Browse workloads</button></div>
       <div class="dim xs" id="cluster_${esc(c.name)}" style="margin-top:10px"></div>
     </div>`).join("")}</div>`
@@ -1145,6 +1148,35 @@ window.clusterDel = async name => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
+/* Whether the two Homesteads can move workloads between them, and if not,
+   which one to update. Same protocol on different releases still works. */
+const CLUSTER_VERSION_TAGS = {
+  same: ["ok", v => `v${v} · same as here`],
+  differs: ["info", v => `v${v} · this one is v${HOMESTEAD_VERSION}`],
+  behind: ["bad", v => `v${v || "?"} · too old to move`],
+  ahead: ["bad", v => `v${v || "?"} · update this one`],
+  unreachable: ["warn", () => "not answering"],
+  refused: ["bad", () => "version unknown"],
+};
+
+window.clusterCheck = async name => {
+  const host = $("#clver_" + name);
+  if (!host) return;
+  host.innerHTML = '<span class="dim xs"><span class="spin2"></span> checking version…</span>';
+  let check;
+  try {
+    check = await api("/api/move/clusters/check", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+  } catch (e) { check = { state: "refused", message: e.message }; }
+  const [tone, label] = CLUSTER_VERSION_TAGS[check.state] || CLUSTER_VERSION_TAGS.refused;
+  const target = $("#clver_" + name);
+  if (!target) return;
+  target.innerHTML = `<span class="tag ${tone}" title="${esc(check.message || "")}">${esc(label(check.version))}</span>
+    <button class="linkish xs" onclick="clusterCheck('${esc(name)}')">check again</button>
+    ${check.compatible === false || ["unreachable", "refused"].includes(check.state)
+      ? `<div class="dim xs clvermsg">${esc(check.message || "")}</div>` : ""}`;
+};
+
 window.clusterBrowse = async name => {
   const host = $("#cluster_" + name);
   if (host) host.innerHTML = '<span class="spin2"></span> asking…';
@@ -1164,7 +1196,11 @@ window.clusterBrowse = async name => {
 /* What the far cluster has, and plainly what of it cannot come. */
 window.clusterInventory = report => {
   const rows = [...(report.workloads || []), ...(report.vms || [])];
+  const theirs = report.version || "";
   modal(`Workloads on ${report.cluster}`, `
+  <div class="dim xs" style="margin-bottom:10px">${esc(report.cluster)} runs Homestead
+    ${theirs ? `<b class="mono">v${esc(theirs)}</b>` : "an older release that does not say which"};
+    this one runs <b class="mono">v${esc(HOMESTEAD_VERSION)}</b>.</div>
   ${rows.length ? `<div class="tblwrap"><table class="tbl dense"><thead><tr>
     <th>Workload</th><th>Runs</th><th>Volumes</th><th>State</th><th></th></tr></thead><tbody>
     ${rows.map(w => `<tr>

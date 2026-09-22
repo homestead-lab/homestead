@@ -344,6 +344,8 @@ class EngineTests(unittest.TestCase):
             query = dict(part.split("=", 1) for part in path.split("?", 1)[1].split("&")) \
                 if "?" in path else {}
             route = path.split("?")[0]
+            if route == "/api/move/hello":
+                return client.hello()
             if route == "/api/move/target":
                 return {"url": self.lh.target["url"], "endpoint": "", "credentials": {},
                         "reachable_off_cluster": True}
@@ -388,6 +390,24 @@ class EngineTests(unittest.TestCase):
         self.assertTrue(planned["joined"])
         self.assertEqual(10, planned["total_gb"])
         self.assertTrue(any("will be created" in w for w in planned["warnings"]))
+
+    def test_a_source_too_old_to_send_blocks_the_move_before_anything_stops(self):
+        real = client.remote
+
+        def remote(name, path, body=None):
+            if path == "/api/move/hello":
+                return {"version": "2.8.40", "protocol": 0}
+            return real(name, path, body)
+
+        client.remote = remote
+        planned = engine.plan("shed", "container", "frigate", "moved", "automatic")
+
+        self.assertFalse(planned["ok"])
+        self.assertIn("Update shed first", planned["blockers"][0])
+        with self.assertRaisesRegex(ValueError, "too old"):
+            engine.start("shed", "container", "frigate", "moved", "automatic")
+        self.assertEqual([], engine.moves())
+        self.assertNotIn("/api/move/source", self.remote_calls, "nothing was stopped")
 
     def test_a_name_already_taken_here_blocks_the_move(self):
         planned = engine.plan("shed", "container", "frigate", "lab", "automatic")

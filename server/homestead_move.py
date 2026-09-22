@@ -25,16 +25,24 @@ import homestead_names as NAMES
 
 kget = ksend = None
 NS = "lab"
+VERSION = ""
 TIMEOUT = 20
+# What the two halves of a move say to each other. It goes up only when one
+# side would misread the other, so two different releases can still move
+# workloads between them while this number matches.
+PROTOCOL = 1
+# The first release that could send a workload, for Homesteads too old to say
+# what protocol they speak.
+FIRST_SENDER = (2, 8, 58)
 # Definitions Homestead did not write cannot be rebuilt from its own model, so
 # a workload carrying them is reported as such rather than moved in part.
 UNMODELLED = ("configMap", "secret", "csi", "nfs", "iscsi", "hostPath")
 _tokens = {}
 
 
-def bind(_kget, _ksend, namespace):
-    global kget, ksend, NS
-    kget, ksend, NS = _kget, _ksend, namespace
+def bind(_kget, _ksend, namespace, version=""):
+    global kget, ksend, NS, VERSION
+    kget, ksend, NS, VERSION = _kget, _ksend, namespace, version
     NAMES.bind(_kget)
 
 
@@ -168,8 +176,14 @@ def inventory():
     except Exception:
         machines, running = [], set()     # no KubeVirt: a cluster with no VMs
     vms = sorted((_vm_row(vm, running) for vm in machines), key=lambda row: row["name"])
-    return {"namespace": NS, "workloads": rows, "vms": vms,
+    return {"namespace": NS, "workloads": rows, "vms": vms, "version": VERSION,
+            "protocol": PROTOCOL,
             "movable": sum(1 for row in rows + vms if row["movable"])}
+
+
+def hello():
+    """Which Homestead this is, as another one asks before moving anything."""
+    return {"version": VERSION, "protocol": PROTOCOL, "namespace": NS}
 
 
 # --------------------------------------------------------------- the far side
@@ -281,6 +295,10 @@ def _call(row, path, token="", body=None):
         return json.loads(response.read().decode() or "{}"), response
 
 
+class Missing(ValueError):
+    """The other Homestead does not have that route: it is an older release."""
+
+
 class Unreachable(Exception):
     """The other cluster could not be asked - worth trying again shortly.
 
@@ -341,6 +359,8 @@ def remote(name, path, body=None):
                                  ) from error
             if error.code >= 500:
                 raise Unreachable(f"{name}: {reason or f'HTTP {error.code}'}") from error
+            if error.code == 404:
+                raise Missing(f"{name}: {reason or 'HTTP 404'}") from error
             raise ValueError(f"{name}: {reason or f'HTTP {error.code}'}") from error
         except (ValueError, Unreachable):
             raise
@@ -359,3 +379,58 @@ def remote_inventory(name):
     payload["cluster"] = name
     payload["url"] = row["url"]
     return payload
+
+
+def _release(version):
+    try:
+        return tuple(int(part) for part in str(version).lstrip("v").split(".")[:3])
+    except ValueError:
+        return ()
+
+
+def check_cluster(name):
+    """Whether this Homestead and another can move workloads between them.
+
+    Moves go both ways, so a protocol mismatch in either direction stops them
+    and says which side to update. Different releases on the same protocol
+    are fine, and reported only so the difference is not a surprise.
+    """
+    base = {"name": name, "local_version": VERSION, "local_protocol": PROTOCOL,
+            "version": "", "protocol": None}
+    try:
+        there = remote(name, "/api/move/hello")
+    except Missing:
+        # Older than the handshake: ask the settings page for the release.
+        try:
+            info = (remote(name, "/api/settings").get("info") or {})
+        except Unreachable as error:
+            return {**base, "state": "unreachable", "message": str(error)}
+        except ValueError as error:
+            return {**base, "state": "refused", "message": str(error)}
+        version = str(info.get("version") or "")
+        release = _release(version)
+        there = {"version": version,
+                 "protocol": 1 if release and release >= FIRST_SENDER else 0}
+    except Unreachable as error:
+        return {**base, "state": "unreachable", "message": str(error)}
+    except ValueError as error:
+        return {**base, "state": "refused", "message": str(error)}
+
+    version, protocol = str(there.get("version") or ""), int(there.get("protocol") or 0)
+    result = {**base, "version": version, "protocol": protocol}
+    shown = version or "an unknown release"
+    if protocol < PROTOCOL:
+        return {**result, "state": "behind", "compatible": False,
+                "message": f"{name} runs Homestead {shown}, too old to move workloads "
+                           f"with this one ({VERSION}). Update {name} first."}
+    if protocol > PROTOCOL:
+        return {**result, "state": "ahead", "compatible": False,
+                "message": f"{name} runs Homestead {shown}, newer than this one ({VERSION}) "
+                           f"in how it moves workloads. Update this Homestead first."}
+    if version == VERSION:
+        return {**result, "state": "same", "compatible": True,
+                "message": f"Both run Homestead {VERSION}."}
+    newer = name if _release(version) > _release(VERSION) else "this Homestead"
+    return {**result, "state": "differs", "compatible": True,
+            "message": f"{name} runs {shown} and this one {VERSION}. Moves work between "
+                       f"them; {newer} is the newer of the two."}

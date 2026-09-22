@@ -221,6 +221,12 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="")
         raise ValueError("kind must be container or vm")
     if address_mode not in ("shared", "automatic", "manual"):
         raise ValueError("address must be shared, automatic or manual")
+    versions = CLIENT.check_cluster(cluster)
+    if versions.get("compatible") is False:
+        return {"ok": False, "blockers": [versions["message"]], "warnings": [], "claims": [],
+                "versions": versions}
+    if versions.get("state") == "differs":
+        warnings.append(versions["message"])
     try:
         definition = CLIENT.remote(cluster, "/api/move/definition" + _q(kind=kind, name=name))
         there = CLIENT.remote(cluster, "/api/move/target")
@@ -298,6 +304,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="")
         "warnings": list(dict.fromkeys(warnings)),
         "cluster": cluster, "kind": kind, "name": name, "namespace": namespace,
         "joined": joined, "will_run": bool(will_run), "addresses": addresses,
+        "versions": versions,
         "claims": [{k: c.get(k) for k in ("claim", "size_gb", "access_mode", "volume_mode",
                                           "backing_image")}
                    for c in definition.get("claims", [])],

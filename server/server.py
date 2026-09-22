@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.58"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.59"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2227,7 +2227,7 @@ import homestead_move_engine as MOVE_ENGINE
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
-MOVE.bind(kget, ksend, DEFAULT_NS)
+MOVE.bind(kget, ksend, DEFAULT_NS, HOMESTEAD_VERSION)
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
 LC.bind(kget, ksend, SYS_NS, _cache, HW.features, create_pvc, STORAGE_CLASS)
 IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.features)
@@ -2473,6 +2473,7 @@ ADMIN_ROUTES = {
     "/api/objectstore/deploy", "/api/objectstore/longhorn", "/api/objectstore/remove",
     # A cluster's credentials, and what they reach.
     "/api/move/clusters/add", "/api/move/clusters/remove", "/api/move/remote",
+    "/api/move/clusters/check",
     # The source side of a move stops workloads, hands over definitions -
     # a VM's cloud-init Secrets among them - and the keys to the bucket.
     "/api/move/definition", "/api/move/target", "/api/move/source-status", "/api/move/source",
@@ -2702,6 +2703,9 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, MOVE.inventory())
             if p == "/api/move/clusters":
                 return self._send(200, MOVE.list_clusters())
+            # Which release this is, asked by another Homestead before a move.
+            if p == "/api/move/hello":
+                return self._send(200, MOVE.hello())
             if p == "/api/move/moves":
                 return self._send(200, MOVE_ENGINE.moves())
             if p == "/api/move/definition":
@@ -3188,6 +3192,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, MOVE.remove_cluster(b.get("name")))
             if p == "/api/move/remote":
                 return self._send(200, MOVE.remote_inventory(b.get("name")))
+            if p == "/api/move/clusters/check":
+                return self._move(lambda: MOVE.check_cluster(b.get("name")))
             if p == "/api/move/source":
                 action, kind, name = b.get("action"), b.get("kind"), b.get("name")
                 actions = {"quiesce": lambda: MOVE_SOURCE.quiesce(kind, name),

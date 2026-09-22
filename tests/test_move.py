@@ -177,5 +177,82 @@ class ClusterTests(unittest.TestCase):
             move.remote_inventory("nowhere")
 
 
+
+class VersionTests(unittest.TestCase):
+    """Two Homesteads say which release they run before anything moves."""
+
+    def setUp(self):
+        move.bind(lambda path: {}, lambda *a, **k: {}, "lab", "2.8.59")
+        self.answers = {}
+        real = move.remote
+
+        def remote(name, path, body=None):
+            answer = self.answers.get(path)
+            if isinstance(answer, Exception):
+                raise answer
+            if answer is None:
+                raise move.Missing(f"{name}: HTTP 404")
+            return answer
+
+        move.remote = remote
+        self.addCleanup(setattr, move, "remote", real)
+
+    def test_this_homestead_says_what_it_runs(self):
+        self.assertEqual({"version": "2.8.59", "protocol": move.PROTOCOL, "namespace": "lab"},
+                         move.hello())
+
+    def test_the_same_release_is_plainly_fine(self):
+        self.answers["/api/move/hello"] = {"version": "2.8.59", "protocol": move.PROTOCOL}
+
+        check = move.check_cluster("shed")
+
+        self.assertEqual("same", check["state"])
+        self.assertTrue(check["compatible"])
+
+    def test_different_releases_on_one_protocol_still_move(self):
+        self.answers["/api/move/hello"] = {"version": "2.8.61", "protocol": move.PROTOCOL}
+
+        check = move.check_cluster("shed")
+
+        self.assertEqual("differs", check["state"])
+        self.assertTrue(check["compatible"])
+        self.assertIn("shed is the newer", check["message"])
+
+    def test_a_newer_protocol_there_says_to_update_here(self):
+        self.answers["/api/move/hello"] = {"version": "3.0.0", "protocol": move.PROTOCOL + 1}
+
+        check = move.check_cluster("shed")
+
+        self.assertEqual("ahead", check["state"])
+        self.assertFalse(check["compatible"])
+        self.assertIn("Update this Homestead", check["message"])
+
+    def test_a_release_before_the_handshake_is_read_from_its_settings(self):
+        self.answers["/api/settings"] = {"info": {"version": "2.8.55"}}
+
+        check = move.check_cluster("shed")
+
+        self.assertEqual(("behind", "2.8.55", 0), (check["state"], check["version"], check["protocol"]))
+        self.assertIn("Update shed first", check["message"])
+
+    def test_the_first_release_that_could_send_counts_as_able(self):
+        self.answers["/api/settings"] = {"info": {"version": "2.8.58"}}
+
+        self.assertTrue(move.check_cluster("shed")["compatible"])
+
+    def test_a_cluster_that_does_not_answer_is_said_so_not_called_old(self):
+        self.answers["/api/move/hello"] = move.Unreachable("could not reach shed: timed out")
+
+        check = move.check_cluster("shed")
+
+        self.assertEqual("unreachable", check["state"])
+        self.assertNotIn("compatible", check)
+
+    def test_the_inventory_carries_the_release_too(self):
+        report = move.inventory()
+
+        self.assertEqual(("2.8.59", move.PROTOCOL), (report["version"], report["protocol"]))
+
+
 if __name__ == "__main__":
     unittest.main()

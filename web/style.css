@@ -166,6 +166,9 @@ a{color:inherit;text-decoration:none}
 .crumb [aria-current="page"]{color:var(--mut)}
 .crumbsection{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .moveitem{margin-bottom:12px}
+.clver{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
+.clvermsg{flex-basis:100%}
+.clver .linkish{font-size:11px;padding:2px 0}
 /* Seven short steps read as one line of progress, not a grid of cards. Two
    classes, to outrank the three-column rollout layout they borrow from. */
 .rollout-steps.movesteps{grid-template-columns:repeat(7,minmax(0,1fr));gap:5px;margin-bottom:10px}
