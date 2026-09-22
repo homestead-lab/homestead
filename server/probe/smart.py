@@ -214,6 +214,16 @@ def report(name, path):
                          nvme.get("num_err_log_entries", scsi_uncorrected if scsi else None)),
         "media_errors": nvme.get("media_errors"),
         "wear": wear(data, nvme),
+        # An NVMe drive keeps a different set of books from an ATA one. Showing
+        # its own counters beats four rows of "unsupported" ATA attributes.
+        "nvme": {
+            "available_spare": nvme.get("available_spare"),
+            "available_spare_threshold": nvme.get("available_spare_threshold"),
+            "percentage_used": nvme.get("percentage_used"),
+            "unsafe_shutdowns": nvme.get("unsafe_shutdowns"),
+            "data_units_written": nvme.get("data_units_written"),
+            "critical_warning": nvme.get("critical_warning"),
+        } if nvme else None,
         "supported_tests": supported,
         "test": {"active": active, "status": current_text or "No self-test running",
                  "remaining_percent": remaining},

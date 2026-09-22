@@ -194,6 +194,17 @@ class DiskHealthVerdictTests(unittest.TestCase):
         self.assertIsNone(result["life_pct"], "no figure is not the same as none left")
         self.assertEqual("healthy", result["state"])
 
+    def test_an_old_probe_is_told_apart_from_a_silent_drive(self):
+        """A probe that never reported wear is a probe to update, not a drive
+        with nothing to say - and the two looked identical."""
+        old_probe = server.smart_disk_health(
+            {"available": True, "health": "passed", "temperature_c": 40}, self.CFG)
+        current = self.verdict(wear={"life_pct": None, "basis": ""})
+
+        self.assertTrue(old_probe["stale_probe"])
+        self.assertFalse(current["stale_probe"])
+        self.assertIsNone(old_probe["life_pct"])
+
     def test_a_drive_without_smart_says_so_rather_than_healthy(self):
         result = server.smart_disk_health(
             {"available": False, "unavailable_reason": "USB bridge hides SMART"}, self.CFG)

@@ -292,6 +292,7 @@ window.smartDisk = async (node, disk) => {
     const s = await api(`/api/node/smart?node=${encodeURIComponent(node)}&disk=${encodeURIComponent(disk)}`);
     const tests = s.self_tests || [], active = s.test?.active;
     const health = s.health_assessment || { state: "unavailable", issues: [], summary: "" };
+    const nvme = s.nvme || null;
     const stat = (label, value, tone = "") => `<div class="smartstat ${tone}"><span>${label}</span><b class="mono">${esc(smartMetric(value))}</b></div>`;
     $("#mbody").innerHTML = `
       <div class="between smart-drive-head"><div><div class="ctitle">${esc(s.model || disk)}</div><div class="csub mono">${esc(s.path || "/dev/" + disk)} · ${esc(s.serial || "serial unavailable")} · ${esc(s.protocol || "protocol unknown")}</div></div>
@@ -305,15 +306,27 @@ window.smartDisk = async (node, disk) => {
       : s.available ? `<div class="note good"><b>No defects reported.</b> Every counter is within the
           thresholds set in Settings${s.health ? `, and the drive's own overall-health check says ${esc(s.health)}` : ""}.</div>` : ""}
       ${active ? `<div class="clusteralert"><div><b>Self-test running</b><span>${esc(s.test.status || "In progress")}${s.test.remaining_percent == null ? "" : ` · ${esc(s.test.remaining_percent)}% remaining`}</span></div></div>` : ""}
+      ${health.stale_probe ? `<div class="note warn"><b>The node probe predates this release.</b>
+        Wear and life figures come from the probe, which has not picked up the current scripts yet.
+        Homestead updates it when it starts; if this persists, check Settings → About.</div>` : ""}
       <div class="smartstats">
         ${stat("Life remaining", health.life_pct == null ? null : health.life_pct + "%", lifeTone(health.life_pct))}
         ${health.spare_pct == null ? "" : stat("Spare blocks", health.spare_pct + "%", lifeTone(health.spare_pct))}
         ${stat("Temperature", s.temperature_c == null ? null : s.temperature_c + "°C", tempTag(s.temperature_c))}
         ${stat("Power-on hours", s.power_on_hours)}
-        ${stat("Reallocated", s.reallocated, +(s.reallocated || 0) ? "warn" : "")}
-        ${stat("Pending", s.pending, +(s.pending || 0) ? "bad" : "")}
-        ${stat("Uncorrectable", s.uncorrectable, +(s.uncorrectable || 0) ? "bad" : "")}
-        ${stat("Errors", s.media_errors ?? s.error_count, +(s.media_errors ?? s.error_count ?? 0) ? "bad" : "")}
+        ${nvme
+          // An NVMe drive keeps different books from an ATA one, so it is asked
+          // its own questions rather than shown four "unsupported" rows.
+          ? `${stat("Endurance used", nvme.percentage_used == null ? null : nvme.percentage_used + "%",
+               +(nvme.percentage_used || 0) >= 90 ? "bad" : +(nvme.percentage_used || 0) >= 75 ? "warn" : "")}
+             ${stat("Media errors", s.media_errors, +(s.media_errors || 0) ? "bad" : "")}
+             ${stat("Unsafe shutdowns", nvme.unsafe_shutdowns)}
+             ${stat("Data written", nvme.data_units_written == null ? null
+               : (nvme.data_units_written * 512000 / 1024 ** 4).toFixed(2) + " TB")}`
+          : `${stat("Reallocated", s.reallocated, +(s.reallocated || 0) ? "warn" : "")}
+             ${stat("Pending", s.pending, +(s.pending || 0) ? "bad" : "")}
+             ${stat("Uncorrectable", s.uncorrectable, +(s.uncorrectable || 0) ? "bad" : "")}
+             ${stat("Errors", s.error_count, +(s.error_count || 0) ? "bad" : "")}`}
       </div>
       ${health.life_basis ? `<div class="drow"><div class="dl">Life measured from</div><div class="dv">${esc(health.life_basis)}</div></div>` : ""}
       <div class="drow"><div class="dl">Firmware</div><div class="dv mono">${esc(s.firmware || "—")}</div></div>

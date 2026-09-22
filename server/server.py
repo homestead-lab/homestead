@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.51"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.52"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -422,14 +422,18 @@ def smart_disk_health(report, settings=None):
     """
     if not report:
         return {"state": "unavailable", "issues": [], "life_pct": None,
-                "life_basis": "", "spare_pct": None,
+                "life_basis": "", "spare_pct": None, "stale_probe": False,
                 "summary": "no SMART data for this drive"}
     if not report.get("available"):
         return {"state": "unavailable", "issues": [], "life_pct": None,
-                "life_basis": "", "spare_pct": None,
+                "life_basis": "", "spare_pct": None, "stale_probe": False,
                 "summary": report.get("unavailable_reason")
                 or "this drive or its USB bridge does not expose SMART data"}
     issues = smart_disk_issues(report, settings)
+    # A probe from before wear reporting sends no "wear" key at all, which is
+    # not the same as a drive that has nothing to report. Saying "unsupported"
+    # for both sends people to look at the drive instead of the probe.
+    stale_probe = "wear" not in report
     wear = report.get("wear") or {}
     life = wear.get("life_pct")
     spare, floor = wear.get("spare_pct"), wear.get("spare_floor_pct")
@@ -455,6 +459,7 @@ def smart_disk_health(report, settings=None):
     return {"state": state, "issues": issues, "summary": summary,
             "life_pct": None if life is None else int(life),
             "life_basis": wear.get("basis", ""),
+            "stale_probe": stale_probe,
             "spare_pct": None if spare is None else int(spare)}
 
 

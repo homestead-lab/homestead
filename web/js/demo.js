@@ -18,6 +18,7 @@
     else if (life != null && life <= 25) issues.push({ severity: "degraded", reason: `${life}% of rated life remains` });
     const state = issues.some(i => i.severity === "critical") ? "critical" : issues.length ? "attention" : "healthy";
     return { state, issues, life_pct: life ?? null, life_basis: smart.wear?.basis || "",
+      stale_probe: false,
       spare_pct: smart.wear?.spare_pct ?? null,
       summary: issues.length ? issues.map(i => i.reason).join("; ") : "passed, with no reported defects" };
   };
@@ -30,6 +31,11 @@
     pending: name.startsWith("nvme") ? null : (wear.pending ?? 0),
     uncorrectable: name.startsWith("nvme") ? null : (wear.uncorrectable ?? 0), error_count: 0,
     media_errors: name.startsWith("nvme") ? (wear.media_errors ?? 0) : null,
+    nvme: name.startsWith("nvme")
+      ? { available_spare: 100, available_spare_threshold: 10,
+          percentage_used: 100 - (wear.life_pct ?? 94), unsafe_shutdowns: 12,
+          data_units_written: 41_235_700, critical_warning: 0 }
+      : null,
     wear: name.startsWith("nvme")
       ? { life_pct: wear.life_pct ?? 94, basis: "NVMe endurance used",
           spare_pct: wear.spare_pct ?? 100, spare_floor_pct: 10 }
@@ -288,7 +294,7 @@
       detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.51", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.52", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" } } },
     "/api/overview": { health: "healthy", health_state: "healthy", health_summary: "All cluster services are healthy", health_issues: [],
@@ -545,7 +551,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.51", candidate_tag: "2.8.51", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.52", candidate_tag: "2.8.52", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]
