@@ -1,6 +1,12 @@
 const tempCls = c => c == null ? "" : sev(c, "temperature") === "b" ? "t-hot" : sev(c, "temperature") === "w" ? "t-warm" : "t-ok";
 const tempTag = c => c == null ? "" : sev(c, "temperature") === "b" ? "bad" : sev(c, "temperature") === "w" ? "warn" : "";
 const smartTone = health => health === "passed" ? "ok" : health === "failed" ? "bad" : "";
+/* The verdict Homestead reaches from the counters, not smartctl's own
+   overall-health bit - that stays PASSED until a drive is nearly gone. */
+const diskHealthTone = state => state === "healthy" ? "ok" : state === "attention" ? "warn"
+  : state === "critical" ? "bad" : "";
+const diskHealthWord = state => state === "attention" ? "needs attention"
+  : state === "unavailable" ? "not reported" : (state || "unknown");
 const smartMetric = value => value == null ? "unsupported" : String(value);
 const smartTestTone = status => /without error|success|passed/i.test(status || "") ? "ok" :
   /fail|error|aborted|interrupted/i.test(status || "") ? "bad" : "";
@@ -184,10 +190,12 @@ window.nodeDetail = async (name, fromRoute = false) => {
     const i = n.info || {};
     const row = (l, v) => `<div class="drow"><div class="dl">${l}</div><div class="dv mono">${v}</div></div>`;
     const disks = (n.temps && n.temps.disks) || [];
-    const diskRows = disks.map(d => { const s = d.smart || null; return `<div class="diskrow ${s?.health === "failed" ? "smart-failed" : ""}">
+    const diskRows = disks.map(d => { const s = d.smart || null; return `<div class="diskrow ${d.health?.state === "critical" ? "smart-failed" : ""}">
       <div class="diskidentity"><b class="mono">${esc(d.name)} <span class="tag">${esc(d.kind || "Disk")}</span></b><span>${esc(s?.model || d.model || d.name)}</span><span class="mono">${esc(s?.serial || d.serial || "serial unavailable")}</span></div>
       <div><span class="disklabel">CAPACITY</span><b class="mono">${Number(d.size_gb || 0).toFixed(1)} GB</b></div>
-      <div><span class="disklabel">SMART</span>${s ? `<b><span class="tag ${smartTone(s.health)}">${esc(s.health || "unknown")}</span></b>` : '<b class="dim">unavailable</b>'}</div>
+      <div><span class="disklabel">HEALTH</span><b><span class="tag ${diskHealthTone(d.health?.state)}"
+        data-tip="${esc(d.health?.summary || "no SMART data for this drive")}">${esc(diskHealthWord(d.health?.state))}</span></b>
+        ${d.health?.issues?.length ? `<span class="dim xs diskreason">${esc(d.health.summary)}</span>` : ""}</div>
       <div><span class="disklabel">TEMP</span><b class="mono ${tempCls(s?.temperature_c)}">${s?.temperature_c == null ? "—" : esc(s.temperature_c) + "°C"}</b></div>
       <div><span class="disklabel">READ</span><b class="mono diskrate read">↓ ${Number(d.read_mbps || 0).toFixed(2)} MB/s</b></div>
       <div><span class="disklabel">WRITE</span><b class="mono diskrate write">↑ ${Number(d.write_mbps || 0).toFixed(2)} MB/s</b></div>
@@ -280,11 +288,19 @@ window.smartDisk = async (node, disk) => {
   try {
     const s = await api(`/api/node/smart?node=${encodeURIComponent(node)}&disk=${encodeURIComponent(disk)}`);
     const tests = s.self_tests || [], active = s.test?.active;
+    const health = s.health_assessment || { state: "unavailable", issues: [], summary: "" };
     const stat = (label, value, tone = "") => `<div class="smartstat ${tone}"><span>${label}</span><b class="mono">${esc(smartMetric(value))}</b></div>`;
     $("#mbody").innerHTML = `
       <div class="between smart-drive-head"><div><div class="ctitle">${esc(s.model || disk)}</div><div class="csub mono">${esc(s.path || "/dev/" + disk)} · ${esc(s.serial || "serial unavailable")} · ${esc(s.protocol || "protocol unknown")}</div></div>
-        <span class="pill ${smartTone(s.health)}">SMART ${esc(s.health || "unknown")}</span></div>
+        <span class="pill ${diskHealthTone(health.state)}">${esc(diskHealthWord(health.state))}</span></div>
       ${s.available ? "" : `<div class="note"><b>SMART unavailable.</b> ${esc(s.unavailable_reason || "This drive or USB bridge does not expose SMART data.")}</div>`}
+      ${health.issues?.length ? `<div class="note ${health.state === "critical" ? "bad" : "warn"}">
+        <b>${health.state === "critical" ? "This drive needs replacing." : "This drive needs watching."}</b>
+        <ul class="diskfindings">${health.issues.map(issue =>
+          `<li><span class="tag ${issue.severity === "critical" ? "bad" : "warn"}">${esc(issue.severity)}</span> ${esc(issue.reason)}</li>`).join("")}</ul>
+        <span class="dim xs">Measured against the drive-health policy in Settings.</span></div>`
+      : s.available ? `<div class="note good"><b>No defects reported.</b> Every counter is within the
+          thresholds set in Settings${s.health ? `, and the drive's own overall-health check says ${esc(s.health)}` : ""}.</div>` : ""}
       ${active ? `<div class="clusteralert"><div><b>Self-test running</b><span>${esc(s.test.status || "In progress")}${s.test.remaining_percent == null ? "" : ` · ${esc(s.test.remaining_percent)}% remaining`}</span></div></div>` : ""}
       <div class="smartstats">
         ${stat("Temperature", s.temperature_c == null ? null : s.temperature_c + "°C", tempTag(s.temperature_c))}
@@ -296,6 +312,8 @@ window.smartDisk = async (node, disk) => {
       </div>
       <div class="drow"><div class="dl">Firmware</div><div class="dv mono">${esc(s.firmware || "—")}</div></div>
       <div class="drow"><div class="dl">SMART enabled</div><div class="dv">${s.smart_enabled == null ? "not reported" : s.smart_enabled ? "yes" : "no"}</div></div>
+      <div class="drow"><div class="dl">Drive's own health check ${tip("smartctl's overall-health bit. Drives report PASSED until failure is imminent, which is why Homestead judges the counters as well.")}</div>
+        <div class="dv"><span class="tag ${smartTone(s.health)}">${esc(s.health || "not reported")}</span></div></div>
       <div class="sec">Self-test history</div>
       ${tests.length ? `<div class="tblwrap"><table class="tbl dense"><thead><tr><th>Test</th><th>Result</th><th>Drive hours</th></tr></thead><tbody>${tests.map(t => `<tr><td>${esc(t.type || "Self-test")}</td><td><span class="tag ${smartTestTone(t.status)}">${esc(t.status || "Unknown")}</span></td><td class="mono">${esc(t.lifetime_hours ?? "—")}</td></tr>`).join("")}</tbody></table></div>` : '<div class="empty small">The drive has no self-test history.</div>'}
       <div class="smart-actions"><div><b>Run a drive self-test</b><div class="dim xs">Tests run inside the drive. A long test can reduce disk performance while active.</div></div><div class="row">

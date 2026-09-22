@@ -116,5 +116,61 @@ class SmartTests(unittest.TestCase):
         compile(source, "smart.py", "exec")
 
 
+class DiskHealthVerdictTests(unittest.TestCase):
+    """One word for a drive, drawn from the counters rather than its own bit."""
+
+    CFG = {"temperature": {"warning": 55, "critical": 65}, "reallocated_warning": 1,
+           "pending_critical": 1, "uncorrectable_critical": 1, "notify_failures": True}
+
+    def verdict(self, **report):
+        base = {"available": True, "health": "passed", "temperature_c": 36,
+                "reallocated": 0, "pending": 0, "uncorrectable": 0, "media_errors": 0}
+        return server.smart_disk_health({**base, **report}, self.CFG)
+
+    def test_a_clean_drive_is_healthy(self):
+        result = self.verdict()
+
+        self.assertEqual("healthy", result["state"])
+        self.assertEqual([], result["issues"])
+        self.assertIn("no reported defects", result["summary"])
+
+    def test_a_drive_that_passes_its_own_check_can_still_need_attention(self):
+        """The whole point: a disk reallocating sectors reports PASSED for
+        years. The counter is the warning, not the overall-health bit."""
+        result = self.verdict(reallocated=24)
+
+        self.assertEqual("attention", result["state"])
+        self.assertEqual("24 reallocated sector(s)", result["summary"])
+
+    def test_pending_sectors_are_critical_however_the_drive_feels(self):
+        result = self.verdict(pending=2)
+
+        self.assertEqual("critical", result["state"])
+
+    def test_the_failing_overall_health_bit_is_still_believed(self):
+        self.assertEqual("critical", self.verdict(health="failed")["state"])
+
+    def test_a_hot_drive_is_judged_against_the_configured_threshold(self):
+        self.assertEqual("attention", self.verdict(temperature_c=56)["state"])
+        self.assertEqual("critical", self.verdict(temperature_c=70)["state"])
+
+    def test_every_finding_is_named_not_just_the_worst(self):
+        result = self.verdict(reallocated=3, pending=1)
+
+        self.assertEqual(2, len(result["issues"]))
+        self.assertIn("3 reallocated sector(s)", result["summary"])
+        self.assertIn("1 pending sector(s)", result["summary"])
+
+    def test_a_drive_without_smart_says_so_rather_than_healthy(self):
+        result = server.smart_disk_health(
+            {"available": False, "unavailable_reason": "USB bridge hides SMART"}, self.CFG)
+
+        self.assertEqual("unavailable", result["state"])
+        self.assertEqual("USB bridge hides SMART", result["summary"])
+
+    def test_no_report_at_all_is_not_a_pass(self):
+        self.assertEqual("unavailable", server.smart_disk_health(None, self.CFG)["state"])
+
+
 if __name__ == "__main__":
     unittest.main()

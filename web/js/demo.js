@@ -3,17 +3,36 @@
 (function () {
   if (new URLSearchParams(location.search).get("demo") !== "1") return;
 
-  const smartDisk = (name, model, serial, temperature, powerHours) => ({
+  /* What the counters add up to, the way the server computes it. */
+  const diskHealth = smart => {
+    const issues = [];
+    if (smart.health === "failed") issues.push({ severity: "critical", reason: "SMART overall-health check failed" });
+    if (smart.temperature_c >= 65) issues.push({ severity: "critical", reason: `drive temperature is ${smart.temperature_c}°C` });
+    else if (smart.temperature_c >= 55) issues.push({ severity: "degraded", reason: `drive temperature is ${smart.temperature_c}°C` });
+    if (smart.reallocated) issues.push({ severity: "degraded", reason: `${smart.reallocated} reallocated sector(s)` });
+    if (smart.pending) issues.push({ severity: "critical", reason: `${smart.pending} pending sector(s)` });
+    if (smart.uncorrectable) issues.push({ severity: "critical", reason: `${smart.uncorrectable} uncorrectable sector(s)` });
+    if (smart.media_errors) issues.push({ severity: "critical", reason: `${smart.media_errors} NVMe media error(s)` });
+    const state = issues.some(i => i.severity === "critical") ? "critical" : issues.length ? "attention" : "healthy";
+    return { state, issues,
+      summary: issues.length ? issues.map(i => i.reason).join("; ") : "passed, with no reported defects" };
+  };
+
+  const smartDisk = (name, model, serial, temperature, powerHours, wear = {}) => ({
     name, path: `/dev/${name}`, available: true, protocol: name.startsWith("nvme") ? "NVMe" : "ATA",
     model, serial, firmware: "1.0", capacity_gb: name.startsWith("nvme") ? 465.8 : 931.5,
     smart_enabled: true, health: "passed", temperature_c: temperature, power_on_hours: powerHours,
-    reallocated: name.startsWith("nvme") ? null : 0, pending: name.startsWith("nvme") ? null : 0,
-    uncorrectable: name.startsWith("nvme") ? null : 0, error_count: 0,
-    media_errors: name.startsWith("nvme") ? 0 : null, supported_tests: ["short", "long"],
+    reallocated: name.startsWith("nvme") ? null : (wear.reallocated ?? 0),
+    pending: name.startsWith("nvme") ? null : (wear.pending ?? 0),
+    uncorrectable: name.startsWith("nvme") ? null : (wear.uncorrectable ?? 0), error_count: 0,
+    media_errors: name.startsWith("nvme") ? (wear.media_errors ?? 0) : null,
+    supported_tests: ["short", "long"],
     test: { active: false, status: "No self-test running", remaining_percent: null },
     self_tests: [{ type: "Short offline", status: "Completed without error", lifetime_hours: powerHours - 12,
       signature: `short|ok|${powerHours - 12}` }],
   });
+
+  const withHealth = disk => Object.assign(disk, { health: diskHealth(disk.smart) });
 
   const nodes = [
     { name: "harvester-node1", status: "Ready", roles: ["control-plane", "etcd"], schedulable: true,
@@ -21,22 +40,23 @@
       fs_pct: 36.2, fs_used_gb: 168, fs_cap_gb: 464, rx_mbps: 8.4, tx_mbps: 3.1,
       pods: 54, pods_sys: 46, pods_wl: 8, vms: 1, workloads: ["home-assistant", "mosquitto", "samba"],
       hardware: { igpu: true }, temps: { cpu_c: 39, max_c: 51, sensors: 4, smart_helper: { available: true },
-        disks: [{ name: "nvme0n1", model: "Samsung SSD 970 EVO Plus", serial: "DEMO-NVME-01", kind: "NVMe", size_gb: 465.8,
-          read_mbps: 18.42, write_mbps: 6.17, smart: smartDisk("nvme0n1", "Samsung SSD 970 EVO Plus", "DEMO-NVME-01", 41, 8421) }] } },
+        disks: [withHealth({ name: "nvme0n1", model: "Samsung SSD 970 EVO Plus", serial: "DEMO-NVME-01", kind: "NVMe", size_gb: 465.8,
+          read_mbps: 18.42, write_mbps: 6.17, smart: smartDisk("nvme0n1", "Samsung SSD 970 EVO Plus", "DEMO-NVME-01", 41, 8421) })] } },
     { name: "harvester-node2", status: "Ready", roles: ["control-plane", "etcd"], schedulable: true,
       cpu_pct: 41.8, cpu_used: 3.34, cpu_cap: 8, mem_pct: 54.1, mem_used_gb: 8.4, mem_cap_gb: 15.6,
       fs_pct: 28.5, fs_used_gb: 132, fs_cap_gb: 464, rx_mbps: 21.9, tx_mbps: 12.6,
       pods: 47, pods_sys: 42, pods_wl: 5, vms: 0, workloads: ["frigate", "homestead"],
       hardware: { igpu: true, coral_usb: true }, temps: { cpu_c: 34, max_c: 47, sensors: 5, smart_helper: { available: true },
-        disks: [{ name: "sda", model: "WDC WD100EFAX", serial: "DEMO-SATA-02", kind: "HDD", size_gb: 931.5,
-          read_mbps: 3.26, write_mbps: 12.91, smart: smartDisk("sda", "WDC WD100EFAX", "DEMO-SATA-02", 36, 16420) }] } },
+        disks: [withHealth({ name: "sda", model: "WDC WD100EFAX", serial: "DEMO-SATA-02", kind: "HDD", size_gb: 931.5,
+          read_mbps: 3.26, write_mbps: 12.91,
+          smart: smartDisk("sda", "WDC WD100EFAX", "DEMO-SATA-02", 36, 16420, { reallocated: 24 }) })] } },
     { name: "harvester-node3", status: "Ready", roles: ["worker"], schedulable: true,
       cpu_pct: 16.3, cpu_used: 0.65, cpu_cap: 4, mem_pct: 46.2, mem_used_gb: 7.2, mem_cap_gb: 15.6,
       fs_pct: 31.1, fs_used_gb: 144, fs_cap_gb: 464, rx_mbps: 5.8, tx_mbps: 2.4,
       pods: 31, pods_sys: 28, pods_wl: 3, vms: 0, workloads: ["paperless"],
       hardware: {}, temps: { cpu_c: 36, max_c: 45, sensors: 3, smart_helper: { available: true },
-        disks: [{ name: "nvme0n1", model: "Kingston NV2", serial: "DEMO-NVME-03", kind: "NVMe", size_gb: 465.8,
-          read_mbps: 0.74, write_mbps: 1.15, smart: smartDisk("nvme0n1", "Kingston NV2", "DEMO-NVME-03", 38, 3912) }] } },
+        disks: [withHealth({ name: "nvme0n1", model: "Kingston NV2", serial: "DEMO-NVME-03", kind: "NVMe", size_gb: 465.8,
+          read_mbps: 0.74, write_mbps: 1.15, smart: smartDisk("nvme0n1", "Kingston NV2", "DEMO-NVME-03", 38, 3912) })] } },
   ];
   const pod = (name, node, image) => ({ name: `${name}-7d8f6d4c9-demo`, node, phase: "Running",
     ready: true, restarts: 0, container_count: 1,
@@ -255,7 +275,7 @@
       session_expires: Math.floor(Date.now() / 1000) + 86400 * 27,
       session_max_days: 90 },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.46", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242", kubernetes: "v1.32.4+rke2r1" } },
+      info: { version: "2.8.47", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242", kubernetes: "v1.32.4+rke2r1" } },
     "/api/overview": { health: "healthy", health_state: "healthy", health_summary: "All cluster services are healthy", health_issues: [],
       cpu_pct: 27.2, cpu_used: 5.4, cpu_cap: 20, mem_pct: 54.0, mem_used_gb: 25.2, mem_cap_gb: 46.8,
       nodes_ready: 3, nodes_total: 3, workload_pods: 16, system_pods: 116, lb_ip: "192.0.2.242", nodes,
@@ -266,7 +286,8 @@
     "/api/node/smart": url => {
       const node = nodes.find(n => n.name === url.searchParams.get("node"));
       const disk = node?.temps?.disks?.find(d => d.name === url.searchParams.get("disk"));
-      return disk?.smart || { error: "Demo disk not found" };
+      if (!disk?.smart) return { error: "Demo disk not found" };
+      return { ...disk.smart, health_assessment: disk.health };
     },
     "/api/volumes/delete-plan": volumeDeletePlan, "/api/hardware/features": hardware,
     "/api/namespaces": ["default", "lab", "monitoring"],
@@ -509,7 +530,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.46", candidate_tag: "2.8.46", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.47", candidate_tag: "2.8.47", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

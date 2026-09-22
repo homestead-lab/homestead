@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.46"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.47"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -412,6 +412,33 @@ def smart_disk_issues(report, settings=None):
     return issues
 
 
+def smart_disk_health(report, settings=None):
+    """What the findings add up to, in one word plus why.
+
+    smartctl's own overall-health bit says PASSED until a drive is at death's
+    door: a disk with hundreds of reallocated sectors still passes it. The
+    counters are where the warning lives, so the verdict is drawn from those
+    against the configured thresholds, and says which ones it was.
+    """
+    if not report:
+        return {"state": "unavailable", "issues": [],
+                "summary": "no SMART data for this drive"}
+    if not report.get("available"):
+        return {"state": "unavailable", "issues": [],
+                "summary": report.get("unavailable_reason")
+                or "this drive or its USB bridge does not expose SMART data"}
+    issues = smart_disk_issues(report, settings)
+    state = ("critical" if any(x["severity"] == "critical" for x in issues)
+             else "attention" if issues else "healthy")
+    if not issues:
+        summary = "no reported defects"
+        if str(report.get("health") or "").lower() == "passed":
+            summary = "passed, with no reported defects"
+    else:
+        summary = "; ".join(x["reason"] for x in issues)
+    return {"state": state, "issues": issues, "summary": summary}
+
+
 def get_nodes():
     nodes = kget("/api/v1/nodes")
     try:
@@ -455,7 +482,8 @@ def get_nodes():
         temp_payload = temps.get(name)
         disk_issues = []
         for disk in (temp_payload or {}).get("disks", []):
-            for issue in smart_disk_issues(disk.get("smart"), smart_cfg):
+            disk["health"] = smart_disk_health(disk.get("smart"), smart_cfg)
+            for issue in disk["health"]["issues"]:
                 disk_issues.append({**issue, "disk": disk.get("name", "unknown")})
         out.append({
             "name": name,
@@ -2635,7 +2663,14 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/node/smart":
                 node = (q.get("node") or [""])[0]
                 disk = (q.get("disk") or [""])[0]
-                return self._send(200, SMART.disk(node, disk) if disk else SMART.inventory(node))
+                if not disk:
+                    return self._send(200, SMART.inventory(node))
+                report = SMART.disk(node, disk)
+                # The same verdict the node card shows, so one drive cannot be
+                # healthy in the list and something else in its own detail.
+                report["health_assessment"] = smart_disk_health(
+                    report, get_app_settings().get("smart"))
+                return self._send(200, report)
             if p == "/api/history":
                 with _lock:
                     return self._send(200, {k: list(v) for k, v in HIST.items()})
