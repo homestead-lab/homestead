@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.53"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.54"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2220,8 +2220,10 @@ import homestead_shares as SHARES
 import homestead_networking as NETWORK
 import homestead_cluster as CLUSTER
 import homestead_probe as PROBE
+import homestead_objectstore as OBJECTS
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
+OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
 LC.bind(kget, ksend, SYS_NS, _cache, HW.features, create_pvc, STORAGE_CLASS)
 IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.features)
@@ -2459,6 +2461,8 @@ ADMIN_ROUTES = {
     "/api/node/smart/test",
     # Installing the probe stands a privileged container on every node.
     "/api/node/probe/install", "/api/node/probe/remove",
+    # Object storage holds every backup, and its keys.
+    "/api/objectstore/deploy", "/api/objectstore/longhorn", "/api/objectstore/remove",
     "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete",
     "/api/lh/restore",
 }
@@ -2663,6 +2667,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("network", 5, NETWORK.inventory))
             if p == "/api/cluster":
                 return self._send(200, cached("cluster", 15, CLUSTER.inventory))
+            if p == "/api/objectstore":
+                return self._send(200, OBJECTS.status())
             if p == "/api/image-updates/scan-progress":
                 # Read while a scan is in flight, so it needs no session cache
                 # and must not be served from one.
@@ -3130,6 +3136,12 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, LC.set_cordon(b["node"], b.get("cordon", True)))
             if p == "/api/node/hardware":
                 return self._send(200, set_node_hardware(b))
+            if p == "/api/objectstore/deploy":
+                return self._send(200, OBJECTS.deploy(b))
+            if p == "/api/objectstore/longhorn":
+                return self._send(200, OBJECTS.point_longhorn())
+            if p == "/api/objectstore/remove":
+                return self._send(200, OBJECTS.remove(bool(b.get("keep_data", True))))
             if p == "/api/node/probe/install":
                 return self._send(200, PROBE.install(HOMESTEAD_VERSION))
             if p == "/api/node/probe/remove":

@@ -1,0 +1,144 @@
+"""Backups need somewhere to go, and that somewhere has to be reachable."""
+import base64
+import json
+import sys
+import unittest
+import urllib.error
+from pathlib import Path
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_objectstore as store
+
+
+class ObjectStoreTests(unittest.TestCase):
+    def setUp(self):
+        self.objects = {}
+        self.sent = []
+        self.claims = []
+        store.bind(self._get, self._send, self._create_pvc, "lab")
+
+    def _get(self, path):
+        key = path.split("?")[0]
+        if key not in self.objects:
+            raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+        return self.objects[key]
+
+    def _send(self, method, path, body=None, **kwargs):
+        self.sent.append((method, path.split("?")[0], body))
+        return body or {}
+
+    def _create_pvc(self, ns, name, size, storage_class=None, access_mode="ReadWriteOnce"):
+        self.claims.append((ns, name, size, storage_class, access_mode))
+
+    def _service(self, ip=None, annotation=None):
+        self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"] = {
+            "metadata": {"name": "homestead-objectstore",
+                         "annotations": {"kube-vip.io/loadbalancerIPs": annotation}
+                         if annotation else {}},
+            "status": {"loadBalancer": {"ingress": [{"ip": ip}] if ip else []}},
+        }
+
+    def test_nothing_is_deployed_to_start_with(self):
+        state = store.status()
+
+        self.assertFalse(state["deployed"])
+        self.assertFalse(state["ready"])
+
+    def test_deploy_creates_a_volume_a_workload_and_an_address(self):
+        store.deploy({"size_gb": 200, "lb_ip": "192.0.2.243", "point_longhorn": False})
+
+        self.assertEqual([("lab", "homestead-objectstore", 200, None, "ReadWriteOnce")],
+                         self.claims)
+        created = [p for _, p, _ in self.sent]
+        self.assertIn("/apis/apps/v1/namespaces/lab/deployments", created)
+        self.assertIn("/api/v1/namespaces/lab/services", created)
+        service = next(b for _, p, b in self.sent if p.endswith("/services"))
+        self.assertEqual("LoadBalancer", service["spec"]["type"])
+        self.assertEqual("192.0.2.243",
+                         service["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
+
+    def test_the_writer_replaces_rather_than_surges(self):
+        """One pod, one ReadWriteOnce volume: a surge would deadlock on it."""
+        store.deploy({"point_longhorn": False})
+
+        deployment = next(b for _, p, b in self.sent if p.endswith("/deployments"))
+        self.assertEqual("Recreate", deployment["spec"]["strategy"]["type"])
+
+    def test_keys_are_generated_once_and_then_reused(self):
+        store.deploy({"point_longhorn": False})
+        written = next(b for _, p, b in self.sent if p.endswith("/secrets"))
+        first = base64.b64decode(written["data"]["secretkey"]).decode()
+
+        self.objects["/api/v1/namespaces/lab/secrets/homestead-objectstore-keys"] = written
+        self.assertEqual(first, store.credentials()["secret_key"],
+                         "regenerating the key would orphan every existing backup")
+
+    def test_a_generated_key_is_not_a_guessable_one(self):
+        self.assertGreaterEqual(len(store.credentials()["secret_key"]), 32)
+
+    def test_longhorn_is_given_the_lan_address_not_the_cluster_one(self):
+        """A backup only readable from inside this cluster cannot be restored
+        onto the cluster you are moving to."""
+        self._service(ip="192.0.2.243")
+
+        result = store.point_longhorn()
+
+        self.assertEqual("http://192.0.2.243:9000", result["endpoint"])
+        secret = next(b for _, p, b in self.sent
+                      if p == "/api/v1/namespaces/longhorn-system/secrets")
+        self.assertEqual("http://192.0.2.243:9000",
+                         base64.b64decode(secret["data"]["AWS_ENDPOINTS"]).decode())
+        self.assertEqual("s3://homestead-backups@us-east-1/", result["url"])
+
+    def test_without_a_lan_address_backups_still_work_and_say_what_they_cannot(self):
+        """Refusing would block someone who only wants backups working today."""
+        self._service()
+
+        result = store.point_longhorn()
+
+        self.assertEqual("http://homestead-objectstore.lab.svc:9000", result["endpoint"])
+        self.assertFalse(result["reachable_off_cluster"])
+        self.assertIn("only this cluster can read it", result["detail"])
+
+    def test_pointing_longhorn_at_a_store_that_does_not_exist_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "not deployed"):
+            store.point_longhorn()
+
+    def test_status_says_when_only_this_cluster_can_reach_it(self):
+        self._service()
+        self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-objectstore"] = {
+            "metadata": {"name": "homestead-objectstore"}, "status": {"readyReplicas": 1}}
+
+        state = store.status()
+
+        self.assertTrue(state["ready"])
+        self.assertFalse(state["reachable_off_cluster"],
+                         "without a LAN address no other cluster can restore from it")
+
+    def test_removing_keeps_the_backups_unless_told_otherwise(self):
+        self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-objectstore"] = {}
+        self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"] = {}
+
+        store.remove()
+
+        deleted = [p for m, p, _ in self.sent if m == "DELETE"]
+        self.assertNotIn("/api/v1/namespaces/lab/persistentvolumeclaims/homestead-objectstore",
+                         deleted)
+
+    def test_releasing_the_volume_is_possible_but_explicit(self):
+        store.remove(keep_data=False)
+
+        deleted = [p for m, p, _ in self.sent if m == "DELETE"]
+        self.assertIn("/api/v1/namespaces/lab/persistentvolumeclaims/homestead-objectstore",
+                      deleted)
+
+    def test_a_silly_size_is_refused(self):
+        for size in (1, 99999):
+            with self.subTest(size=size):
+                with self.assertRaisesRegex(ValueError, "between 5 and"):
+                    store.deploy({"size_gb": size})
+
+
+if __name__ == "__main__":
+    unittest.main()

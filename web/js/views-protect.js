@@ -13,9 +13,91 @@ const CRON_PRESETS = {
   "*/15 * * * *": "Every 15 minutes",
 };
 
+/* A backup has to be written somewhere, and where decides what it is good for:
+   a bucket inside this cluster moves workloads to another cluster, and is no
+   use at all as the only copy of anything. Both facts belong on screen. */
+function objectStoreCard(store, target) {
+  if (!store.deployed) {
+    return `<div class="note between" style="margin-bottom:18px"><span>
+      <b>No backup storage.</b> Longhorn writes volume backups to an S3 bucket, and nothing here
+      provides one — so backups, and moving a workload to another cluster, have nowhere to go.</span>
+      <button class="btn sm pri" data-need="admin" onclick="objectStoreSetup()">Set up storage</button></div>`;
+  }
+  const pointed = (target.url || "") === store.backup_url;
+  return `<div class="card flat" style="margin-bottom:18px">
+    <div class="between node-section-head"><div><div class="ctitle">Backup storage</div>
+      <div class="csub">MinIO on a Longhorn volume, holding every backup this cluster writes</div></div>
+      <div class="row"><span class="pill ${store.ready ? "ok" : "med"}">${store.ready ? "serving" : "starting"}</span>
+        <button class="btn sm danger" data-need="admin" onclick="objectStoreRemove()">Remove</button></div></div>
+    <div class="about-grid" style="margin-top:12px">
+      <div><span>Endpoint</span><b class="mono">${esc(store.endpoint || "—")}</b></div>
+      <div><span>Bucket</span><b class="mono">${esc(store.bucket)}</b></div>
+      <div><span>Size</span><b>${store.size_gb ? store.size_gb + " GB" : "—"}</b></div>
+      <div><span>Longhorn target</span><b>${pointed ? "pointed here" : "not pointed here"}</b></div>
+    </div>
+    ${pointed ? "" : `<div class="note warn" style="margin-top:12px"><b>Longhorn is not writing here.</b>
+      Backups will not reach this bucket until it is.
+      <button class="btn sm" data-need="admin" onclick="objectStorePoint()">Point Longhorn at it</button></div>`}
+    ${store.reachable_off_cluster ? "" : `<div class="note" style="margin-top:12px">
+      <b>Only this cluster can read it.</b> The store has no LAN address, so another cluster cannot
+      restore from these backups. Give its Service an address to migrate workloads elsewhere.</div>`}
+    <div class="note" style="margin-top:12px"><b>This is not disaster recovery.</b> The bucket lives on
+      the same Longhorn storage it protects, so it survives a lost workload or a bad upgrade, not a lost
+      cluster. It exists so a workload can be rebuilt somewhere else.</div>
+  </div>`;
+}
+
+window.objectStoreSetup = () => modal("Set up backup storage", `
+  <p>Runs MinIO on a Longhorn volume and points Longhorn's backups at it. Volume backups,
+    and moving a workload to another cluster, both read and write here.</p>
+  <div class="f2"><div class="f"><label>Size (GB) ${tip("Holds every volume backup this cluster keeps. Longhorn backups are incremental, so this is usually far smaller than the volumes themselves.")}</label>
+    <input id="os_size" type="number" min="5" max="16384" value="100"></div>
+    <div class="f"><label>LAN address ${tip("Another cluster reads backups over this address. Leave blank and only this cluster can restore from them.")}</label>
+      <input id="os_ip" type="text" placeholder="192.0.2.244"></div></div>
+  <div class="note"><b>It shares fate with what it protects.</b> Storage inside this cluster is the right
+    place to stage a migration and the wrong place for your only copy. Keep anything you cannot lose
+    somewhere else as well.</div>
+  <div class="row" style="margin-top:16px">
+    <button class="btn pri" data-need="admin" onclick="objectStoreDeploy()">Set up storage</button>
+    <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+
+window.objectStoreDeploy = async () => {
+  const body = { size_gb: +$("#os_size").value || 100, lb_ip: $("#os_ip").value.trim() };
+  try {
+    const result = await api("/api/objectstore/deploy", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    toast(`backup storage ready at ${result.endpoint}`, "ok");
+    closeModal(); resetPaint(); viewProtect();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+window.objectStorePoint = async () => {
+  try {
+    const result = await api("/api/objectstore/longhorn", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: "{}" });
+    toast(result.detail || "Longhorn pointed at the bucket", result.reachable_off_cluster ? "ok" : "warn");
+    resetPaint(); viewProtect();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+window.objectStoreRemove = async () => {
+  if (!confirm("Remove the backup storage?" + String.fromCharCode(10, 10)
+      + "The volume holding the backups is kept, so this can be undone.")) return;
+  try {
+    const result = await api("/api/objectstore/remove", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keep_data: true }) });
+    toast(result.detail || "backup storage removed", "ok");
+    resetPaint(); viewProtect();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
 async function viewProtect() {
-  const d = await api("/api/lh/overview");
+  const [d, objects] = await Promise.all([
+    api("/api/lh/overview"),
+    api("/api/objectstore").catch(() => ({ deployed: false })),
+  ]);
   STATE.data.lh = d;
+  STATE.data.objectStore = objects;
   const tgt = d.target || {};
   const cover = d.total ? Math.round(d.protected / d.total * 100) : 0;
 
@@ -26,6 +108,8 @@ async function viewProtect() {
         <button class="btn" data-need="admin" onclick="lhTarget()">Backup target</button>
         <button class="btn pri" data-need="operator" onclick="lhJob()">＋ New job</button>
       </div></div>
+
+  ${objectStoreCard(objects, tgt)}
 
   <div class="grid g3" style="margin-bottom:18px">
     <div class="card glow ${cover === 100 ? "g-ok" : cover ? "g-warn" : "g-bad"}">
