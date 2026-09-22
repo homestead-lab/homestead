@@ -270,6 +270,58 @@ class ImageUpdateTests(unittest.TestCase):
                          "one place records what is tracked, not two")
         self.assertIn("homestead.io/update-sources", annotations)
 
+    def _check(self, tags, remote, current, running=True):
+        self.dep["spec"]["template"]["spec"]["containers"] = [
+            {"name": "demo", "image": "ghcr.io/x/demo@sha256:" + current if current
+                                      else "ghcr.io/x/demo:2.8.41"}]
+        self.dep["metadata"]["annotations"] = {
+            "homestead.io/update-sources": json.dumps({"demo": "ghcr.io/x/demo:2.8.41"})}
+        pods = [{"metadata": {"namespace": "lab", "labels": {"app": "demo"}},
+                 "status": {"containerStatuses": [
+                     {"name": "demo",
+                      "imageID": ("ghcr.io/x/demo@sha256:" + current) if current else ""}]}}]
+        if not running:
+            self.dep["spec"]["replicas"] = 0
+            pods = []
+        original = (updates.registry_tags, updates.manifest_info, updates._secret_credentials)
+        try:
+            updates.registry_tags = lambda *a, **k: tags
+            updates.manifest_info = lambda *a, **k: {"digest": "sha256:" + remote,
+                                                     "children": []}
+            updates._secret_credentials = lambda *args: {}
+            return updates._check_deployment(self.dep, pods)
+        finally:
+            (updates.registry_tags, updates.manifest_info,
+             updates._secret_credentials) = original
+
+    def test_a_newer_tag_you_are_already_running_is_not_an_update(self):
+        """After the image is set by hand the recorded source lags behind, so a
+        newer tag exists that resolves to the digest already running."""
+        report = self._check(["2.8.41", "2.8.45"], "a" * 64, current="a" * 64)
+
+        self.assertEqual("2.8.45", report["images"][0]["candidate_tag"])
+        self.assertFalse(report["available"], "it is the version already deployed")
+
+    def test_a_newer_tag_with_a_different_image_is_an_update(self):
+        report = self._check(["2.8.41", "2.8.45"], "b" * 64, current="a" * 64)
+
+        self.assertTrue(report["available"])
+
+    def test_the_same_tag_rebuilt_underneath_is_an_update(self):
+        report = self._check(["2.8.41"], "b" * 64, current="a" * 64)
+
+        self.assertTrue(report["available"], "the tag moved to a different image")
+
+    def test_a_stopped_workload_is_still_offered_a_newer_release(self):
+        report = self._check(["2.8.41", "2.8.45"], "b" * 64, current="", running=False)
+
+        self.assertTrue(report["available"])
+
+    def test_a_stopped_workload_on_the_newest_release_is_not(self):
+        report = self._check(["2.8.41"], "b" * 64, current="", running=False)
+
+        self.assertFalse(report["available"], "no newer tag and no digest to compare")
+
     def test_progress_waits_for_surge_replacement_to_be_ready(self):
         self.dep["status"].update({"replicas": 2, "updatedReplicas": 1,
                                    "readyReplicas": 1, "availableReplicas": 1,

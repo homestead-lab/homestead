@@ -287,7 +287,11 @@ def _check_deployment(dep, pods, force=False):
             matches_remote = current in ([remote] + manifest["children"])
             item.update({"current_digest": current, "remote_digest": remote,
                          "candidate": candidate, "candidate_tag": candidate_tag or parsed["tag"],
-                         "available": bool(current and remote and not matches_remote) or bool(candidate_tag)})
+                         # A newer tag is only an update while the image it
+                         # points at is not the one already running. Offering
+                         # the version you are on reads as a broken checker.
+                         "available": bool(remote) and not matches_remote
+                                      and bool(current or candidate_tag)})
             if not current and running:
                 item["error"] = "running image digest is not available yet"
             elif not semver(parsed["tag"]) and parsed["digest"]:
