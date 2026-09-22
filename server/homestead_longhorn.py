@@ -339,8 +339,11 @@ def _restore_source(item):
     return status, url, size
 
 
-def _restore_class_name(url, replicas):
-    digest = hashlib.sha256(f"{STORAGE_CLASS}\0{replicas}\0{url}".encode()).hexdigest()[:16]
+def _restore_class_name(url, replicas, extra=""):
+    # Extra settings only join the digest when present, so the classes earlier
+    # restores created keep the names they already have.
+    seed = f"{STORAGE_CLASS}\0{replicas}\0{url}" + (f"\0{extra}" if extra else "")
+    digest = hashlib.sha256(seed.encode()).hexdigest()[:16]
     return f"homestead-restore-{digest}"
 
 
@@ -399,11 +402,23 @@ def restore_backup(cfg):
     if base.get("provisioner") != "driver.longhorn.io":
         raise ValueError(f"storage class {STORAGE_CLASS} is not managed by Longhorn")
     parameters = dict(base.get("parameters", {}) or {})
-    # Homestead restores filesystem PVCs. Harvester's VM-oriented class may
-    # advertise migratable=true, which is valid only for RWX block volumes.
-    parameters.update(fromBackup=url, numberOfReplicas=str(replicas), migratable="false",
+    volume_mode = str(cfg.get("volume_mode") or "Filesystem")
+    if volume_mode not in ("Filesystem", "Block"):
+        raise ValueError("volume mode must be Filesystem or Block")
+    # A container's claim is a filesystem and never live-migrates; Harvester's
+    # VM-oriented class may say migratable=true, which is valid only for block
+    # volumes. A VM disk is one, and one built on a Harvester image needs that
+    # image named, since its backup holds only what changed on top of it.
+    migratable = bool(cfg.get("migratable")) and volume_mode == "Block"
+    backing_image = str(cfg.get("backing_image") or "")
+    parameters.update(fromBackup=url, numberOfReplicas=str(replicas),
+                      migratable="true" if migratable else "false",
                       backupTargetName=status.get("backupTargetName", "default") or "default")
-    class_name = _restore_class_name(url, replicas)
+    if backing_image:
+        parameters["backingImage"] = backing_image
+    plain = (volume_mode, migratable, backing_image) == ("Filesystem", False, "")
+    extra = "" if plain else f"{volume_mode}|{migratable}|{backing_image}"
+    class_name = _restore_class_name(url, replicas, extra)
     storage_class = {
         "apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
         "metadata": {"name": class_name,
@@ -429,15 +444,17 @@ def restore_backup(cfg):
     else:
         ksend("POST", "/apis/storage.k8s.io/v1/storageclasses", storage_class)
 
+    annotations = {"homestead.io/restored-from-backup": backup,
+                   "homestead.io/source-volume": plan["source_volume"]}
+    annotations.update({str(k): str(v) for k, v in (cfg.get("annotations") or {}).items()})
     pvc = {
         "apiVersion": "v1", "kind": "PersistentVolumeClaim",
         "metadata": {"name": pvc_name, "namespace": namespace,
                      "labels": {"app.kubernetes.io/managed-by": "homestead",
                                 "homestead.io/restored-volume": "true"},
-                     "annotations": {"homestead.io/restored-from-backup": backup,
-                                     "homestead.io/source-volume": plan["source_volume"]}},
+                     "annotations": annotations},
         "spec": {"storageClassName": class_name, "accessModes": [access_mode],
-                 "volumeMode": "Filesystem",
+                 "volumeMode": volume_mode,
                  "resources": {"requests": {"storage": f"{size_gb}Gi"}}},
     }
     try:

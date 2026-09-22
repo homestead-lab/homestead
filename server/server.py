@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.57"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.58"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2222,6 +2222,8 @@ import homestead_cluster as CLUSTER
 import homestead_probe as PROBE
 import homestead_objectstore as OBJECTS
 import homestead_move as MOVE
+import homestead_move_source as MOVE_SOURCE
+import homestead_move_engine as MOVE_ENGINE
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
@@ -2235,6 +2237,10 @@ PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.featur
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS)
 SMART.bind(kget, DEFAULT_NS, AUTH.internal_signing_key)
 OPS.bind(kget, DATA_DIR, UPDATES.progress, SMART.progress)
+MOVE_SOURCE.bind(kget, ksend, LH, DEFAULT_NS)
+MOVE_ENGINE.bind(kget, ksend, LH, MOVE, NETWORK, OPS, DATA_DIR, DEFAULT_NS)
+# A move reads in the Activity tray like every other long job.
+OPS.RESOLVERS["move"] = MOVE_ENGINE.op_state
 VOLUMES.bind(kget, ksend, LH.snapshots, LH.backups, _cache, SYS_NS, DEFAULT_NS)
 SHARES.bind(kget, ksend, create_pvc, SMB_NAMESPACE, _cache)
 NETWORK.bind(kget, ksend, SYS_NS, DEFAULT_NS, LB_IP)
@@ -2467,6 +2473,12 @@ ADMIN_ROUTES = {
     "/api/objectstore/deploy", "/api/objectstore/longhorn", "/api/objectstore/remove",
     # A cluster's credentials, and what they reach.
     "/api/move/clusters/add", "/api/move/clusters/remove", "/api/move/remote",
+    # The source side of a move stops workloads, hands over definitions -
+    # a VM's cloud-init Secrets among them - and the keys to the bucket.
+    "/api/move/definition", "/api/move/target", "/api/move/source-status", "/api/move/source",
+    # The destination side creates, restores and removes.
+    "/api/move/plan", "/api/move/start", "/api/move/moves/retry",
+    "/api/move/moves/abandon", "/api/move/moves/finish",
     "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete",
     "/api/lh/restore",
 }
@@ -2581,6 +2593,19 @@ class H(BaseHTTPRequestHandler):
                 ("Set-Cookie", f"{AUTH.COOKIE}={token}; Path=/; HttpOnly; "
                                f"SameSite=Strict{secure}; Max-Age={age}"))
 
+    def _move(self, call):
+        """Run a move step, answering a refusal with 409 rather than 500.
+
+        The Homestead on the other end waits out a 5xx and stops on a 4xx, so
+        "no, it is still running" has to arrive as the second kind.
+        """
+        try:
+            return self._send(200, call())
+        except (ValueError, PermissionError) as error:
+            return self._send(409, {"error": str(error)})
+        except MOVE.Unreachable as error:
+            return self._send(502, {"error": str(error)})
+
     def _who(self):
         return AUTH.verify_token(self._cookies().get(AUTH.COOKIE))
 
@@ -2677,6 +2702,16 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, MOVE.inventory())
             if p == "/api/move/clusters":
                 return self._send(200, MOVE.list_clusters())
+            if p == "/api/move/moves":
+                return self._send(200, MOVE_ENGINE.moves())
+            if p == "/api/move/definition":
+                return self._move(lambda: MOVE_SOURCE.definition(
+                    (q.get("kind") or [""])[0], (q.get("name") or [""])[0]))
+            if p == "/api/move/source-status":
+                return self._move(lambda: MOVE_SOURCE.status(
+                    (q.get("kind") or [""])[0], (q.get("name") or [""])[0]))
+            if p == "/api/move/target":
+                return self._move(MOVE_SOURCE.target)
             if p == "/api/objectstore":
                 return self._send(200, OBJECTS.status())
             if p == "/api/image-updates/scan-progress":
@@ -3153,6 +3188,28 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, MOVE.remove_cluster(b.get("name")))
             if p == "/api/move/remote":
                 return self._send(200, MOVE.remote_inventory(b.get("name")))
+            if p == "/api/move/source":
+                action, kind, name = b.get("action"), b.get("kind"), b.get("name")
+                actions = {"quiesce": lambda: MOVE_SOURCE.quiesce(kind, name),
+                           "backup": lambda: MOVE_SOURCE.backup(kind, name),
+                           "release": lambda: MOVE_SOURCE.release(kind, name),
+                           "remove": lambda: MOVE_SOURCE.remove(kind, name,
+                                                                bool(b.get("volumes")))}
+                if action not in actions:
+                    return self._send(400, {"error": "unknown move action"})
+                return self._move(actions[action])
+            if p in ("/api/move/plan", "/api/move/start"):
+                call = MOVE_ENGINE.plan if p.endswith("plan") else MOVE_ENGINE.start
+                return self._move(lambda: call(
+                    b.get("cluster"), b.get("kind") or "container", b.get("name"),
+                    b.get("namespace") or DEFAULT_NS, b.get("address_mode") or "shared",
+                    b.get("address") or ""))
+            if p == "/api/move/moves/retry":
+                return self._move(lambda: MOVE_ENGINE.retry(b.get("id")))
+            if p == "/api/move/moves/abandon":
+                return self._move(lambda: MOVE_ENGINE.abandon(b.get("id")))
+            if p == "/api/move/moves/finish":
+                return self._move(lambda: MOVE_ENGINE.finish(b.get("id"), bool(b.get("volumes"))))
             if p == "/api/objectstore/deploy":
                 return self._send(200, OBJECTS.deploy(b))
             if p == "/api/objectstore/longhorn":
@@ -3405,5 +3462,7 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8080"))
     threading.Thread(target=_sampler, daemon=True).start()
     threading.Thread(target=_upgrade_node_probe, daemon=True).start()
+    # Moves carry on across restarts: their state is on disk, and this resumes it.
+    threading.Thread(target=MOVE_ENGINE.run, daemon=True).start()
     print(f"Homestead listening on :{port}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", port), H).serve_forever()

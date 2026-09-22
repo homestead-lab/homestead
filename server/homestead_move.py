@@ -99,6 +99,54 @@ def _workload_row(deployment):
                                            "hardware").split(",") if x],
         "movable": not blockers,
         "blockers": blockers,
+        "warnings": [],
+    }
+
+
+def _vm_row(vm, running_names):
+    """A VM, described the way the far cluster would have to rebuild it.
+
+    Its disks are Longhorn claims and travel like any other. Its cloud-init
+    Secrets are part of it and travel too. What cannot come is anything that
+    names this cluster's hardware or disks directly.
+    """
+    meta = vm.get("metadata", {}) or {}
+    namespace, name = meta.get("namespace", ""), meta.get("name", "")
+    template = (((vm.get("spec", {}) or {}).get("template", {}) or {}).get("spec", {}) or {})
+    domain = template.get("domain", {}) or {}
+    volumes, blockers, warnings = [], [], []
+    for volume in template.get("volumes", []) or []:
+        claim_name = ((volume.get("persistentVolumeClaim") or {}).get("claimName")
+                      or (volume.get("dataVolume") or {}).get("name"))
+        if claim_name:
+            claim = _claim(namespace, claim_name)
+            volumes.append({
+                "claim": claim_name, "path": volume.get("name", ""), "sub_path": "",
+                "read_only": False, "size_gb": _size_gb(claim),
+                "storage_class": ((claim or {}).get("spec", {}) or {}).get("storageClassName", ""),
+                "access_modes": ((claim or {}).get("spec", {}) or {}).get("accessModes", []),
+            })
+            continue
+        if "hostDisk" in volume:
+            blockers.append(f"disk {volume.get('name', '?')} is a file on one of this cluster's hosts")
+        elif "configMap" in volume or "secret" in volume:
+            blockers.append(f"disk {volume.get('name', '?')} comes from a "
+                            f"{'configMap' if 'configMap' in volume else 'secret'} "
+                            "Homestead did not create")
+    devices = domain.get("devices", {}) or {}
+    if devices.get("hostDevices") or devices.get("gpus"):
+        warnings.append("passes host devices through; the destination needs the same hardware")
+    networks = [(n.get("multus") or {}).get("networkName") for n in template.get("networks", []) or []]
+    if any(networks):
+        warnings.append("uses the " + ", ".join(n for n in networks if n) +
+                        " network, which must exist on the destination")
+    return {
+        "name": name, "namespace": namespace, "kind": "vm",
+        "image": "", "replicas": 1, "running": name in running_names,
+        "containers": [], "volumes": volumes, "ports": [], "hardware": [],
+        "cores": (domain.get("cpu", {}) or {}).get("cores", 0),
+        "memory": (domain.get("memory", {}) or {}).get("guest", ""),
+        "movable": not blockers, "blockers": blockers, "warnings": warnings,
     }
 
 
@@ -111,8 +159,17 @@ def inventory():
     rows = [_workload_row(d) for d in deployments
             if (d["metadata"].get("namespace") or "") == NS]
     rows.sort(key=lambda row: row["name"])
-    return {"namespace": NS, "workloads": rows,
-            "movable": sum(1 for row in rows if row["movable"])}
+    try:
+        machines = [vm for vm in kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
+                    if (vm["metadata"].get("namespace") or "") == NS]
+        running = {vmi["metadata"]["name"] for vmi in
+                   kget("/apis/kubevirt.io/v1/virtualmachineinstances").get("items", [])
+                   if (vmi["metadata"].get("namespace") or "") == NS}
+    except Exception:
+        machines, running = [], set()     # no KubeVirt: a cluster with no VMs
+    vms = sorted((_vm_row(vm, running) for vm in machines), key=lambda row: row["name"])
+    return {"namespace": NS, "workloads": rows, "vms": vms,
+            "movable": sum(1 for row in rows + vms if row["movable"])}
 
 
 # --------------------------------------------------------------- the far side
@@ -224,6 +281,14 @@ def _call(row, path, token="", body=None):
         return json.loads(response.read().decode() or "{}"), response
 
 
+class Unreachable(Exception):
+    """The other cluster could not be asked - worth trying again shortly.
+
+    Kept apart from ValueError, which means it was asked and said no. A move
+    waits out the first and stops on the second.
+    """
+
+
 def _token(name, force=False):
     """A session on the far Homestead, kept only in memory."""
     if not force and name in _tokens:
@@ -234,10 +299,12 @@ def _token(name, force=False):
             "username": row["user"], "password": _password(name), "remember": False})
     except urllib.error.HTTPError as error:
         if error.code in (401, 403):
-            raise ValueError(f"{name} refused those credentials") from error
+            raise ValueError(f"{name} refused those Homestead credentials") from error
+        if error.code >= 500:
+            raise Unreachable(f"{name} returned HTTP {error.code}") from error
         raise ValueError(f"{name} returned HTTP {error.code}") from error
     except Exception as error:
-        raise ValueError(f"could not reach {name}: {str(error)[:120]}") from error
+        raise Unreachable(f"could not reach {name}: {str(error)[:120]}") from error
     cookie = response.headers.get("Set-Cookie", "")
     token = cookie.split("homestead_session=", 1)[-1].split(";", 1)[0] if cookie else ""
     if not token:
@@ -246,20 +313,49 @@ def _token(name, force=False):
     return token
 
 
+def _reason(error):
+    try:
+        body = json.loads(error.read().decode("utf-8", "replace") or "{}")
+        return str(body.get("error") or "")[:240]
+    except Exception:
+        return ""
+
+
+def remote(name, path, body=None):
+    """Call another Homestead as the stored account, signing in again if needed.
+
+    A 401 is a lapsed session and gets one fresh sign-in. A 403 is the account
+    lacking the role - a move needs admin there - and is said plainly.
+    """
+    row = _cluster(name)
+    for attempt in (0, 1):
+        try:
+            payload, _ = _call(row, path, token=_token(name, force=bool(attempt)), body=body)
+            return payload
+        except urllib.error.HTTPError as error:
+            reason = _reason(error)
+            if error.code == 401 and not attempt:
+                continue
+            if error.code == 403:
+                raise ValueError(f"{name}: {reason or 'the account there lacks the access this needs'}"
+                                 ) from error
+            if error.code >= 500:
+                raise Unreachable(f"{name}: {reason or f'HTTP {error.code}'}") from error
+            raise ValueError(f"{name}: {reason or f'HTTP {error.code}'}") from error
+        except (ValueError, Unreachable):
+            raise
+        except Exception as error:
+            raise Unreachable(f"could not reach {name}: {str(error)[:120]}") from error
+    raise ValueError(f"{name} would not accept a fresh sign-in")
+
+
 def remote_inventory(name):
     """Ask another cluster what it has. The first half of every move."""
-    row = _cluster(name)
-    token = _token(name)
     try:
-        payload, _ = _call(row, "/api/move/inventory", token=token)
-    except urllib.error.HTTPError as error:
-        if error.code in (401, 403):
-            # The session may simply have lapsed since last time.
-            payload, _ = _call(row, "/api/move/inventory", token=_token(name, force=True))
-        else:
-            raise ValueError(f"{name} returned HTTP {error.code}") from error
-    except Exception as error:
-        raise ValueError(f"could not reach {name}: {str(error)[:120]}") from error
+        payload = remote(name, "/api/move/inventory")
+    except Unreachable as error:
+        raise ValueError(str(error)) from error
+    row = _cluster(name)
     payload["cluster"] = name
     payload["url"] = row["url"]
     return payload

@@ -555,12 +555,16 @@ async function viewImport() {
     api("/api/move/clusters").catch(() => []),
   ]);
   STATE.data.clusters = clusters;
+  const moves = await api("/api/move/moves").catch(() => []);
   STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
   paint(`<div class="phead"><div><h2>Import</h2>
       <p>Bring containers, appdata and virtual-machine disks into Homestead</p></div>
       <div class="row"><button class="btn" data-need="admin" onclick="clusterAdd()">＋ Homestead cluster</button>
       <button class="btn" data-need="admin" onclick="srcAdd()">＋ Container source</button>
       <button class="btn pri" data-need="admin" onclick="vmDiskImport()">＋ VM disk</button></div></div>
+
+    ${moves.length ? `<div class="sec">Moves ${tip("Workloads being brought here from another Homestead cluster. Each keeps going across restarts of either Homestead; the source is only removed when you say so.")}</div>` : ""}
+    <div id="movesList">${movesHtml(moves)}</div>
 
     <div class="sec">Other Homestead clusters ${tip("Another Homestead installation on the network. Its workloads can be listed here, and later moved across: volume data travels through the shared Longhorn backup target, the definition comes straight from the other Homestead.")}</div>
     ${clusters.length ? `<div class="grid g3">${clusters.map(c => `<div class="card flat">
@@ -613,6 +617,11 @@ async function viewImport() {
       start it once the copy finishes. Path mappings from the source host do not carry over; the appdata
       lands at the mount path you choose.
     </div>`);
+  // A running move keeps its own card current without repainting the page.
+  if (moves.some(m => m.status === "running")) {
+    clearTimeout(window.__moveTimer);
+    window.__moveTimer = setTimeout(watchMoves, 4000);
+  }
 }
 window.importRemove = async (name, state) => {
   const running = state === "running";
@@ -1153,23 +1162,180 @@ window.clusterBrowse = async name => {
 };
 
 /* What the far cluster has, and plainly what of it cannot come. */
-window.clusterInventory = report => modal(`Workloads on ${report.cluster}`, `
-  ${report.workloads.length ? `<div class="tblwrap"><table class="tbl dense"><thead><tr>
-    <th>Workload</th><th>Image</th><th>Volumes</th><th>State</th><th>Movable</th></tr></thead><tbody>
-    ${report.workloads.map(w => `<tr>
-      <td><b>${esc(w.name)}</b><div class="dim xs mono">${esc(w.namespace)}</div></td>
-      <td class="mono small" style="word-break:break-all">${esc(w.image)}</td>
+window.clusterInventory = report => {
+  const rows = [...(report.workloads || []), ...(report.vms || [])];
+  modal(`Workloads on ${report.cluster}`, `
+  ${rows.length ? `<div class="tblwrap"><table class="tbl dense"><thead><tr>
+    <th>Workload</th><th>Runs</th><th>Volumes</th><th>State</th><th></th></tr></thead><tbody>
+    ${rows.map(w => `<tr>
+      <td><b>${esc(w.name)}</b> ${w.kind === "vm" ? '<span class="tag">VM</span>' : ""}
+        <div class="dim xs mono">${esc(w.namespace)}</div></td>
+      <td class="mono small" style="word-break:break-all">${w.kind === "vm"
+        ? `${esc(w.cores || "?")} cores · ${esc(w.memory || "?")}` : esc(w.image)}</td>
       <td class="small">${w.volumes.length
-        ? w.volumes.map(v => `<div class="mono xs">${esc(v.claim)} · ${v.size_gb} GB → ${esc(v.path)}</div>`).join("")
+        ? w.volumes.map(v => `<div class="mono xs">${esc(v.claim)} · ${v.size_gb} GB${v.path ? ` → ${esc(v.path)}` : ""}</div>`).join("")
         : '<span class="dim">none</span>'}</td>
       <td><span class="tag ${w.running ? "ok" : ""}">${w.running ? "running" : "stopped"}</span></td>
-      <td>${w.movable ? '<span class="tag ok">yes</span>'
-        : `<span class="tag bad">no</span><div class="dim xs" style="max-width:260px">${w.blockers.map(esc).join("; ")}</div>`}</td>
+      <td>${w.movable
+        ? `<button class="btn sm" data-need="admin" onclick="moveReview('${esc(report.cluster)}','${esc(w.kind)}','${esc(w.name)}')">Move here</button>`
+          + ((w.warnings || []).length ? `<div class="dim xs" style="max-width:240px;margin-top:4px">${w.warnings.map(esc).join("; ")}</div>` : "")
+        : `<span class="tag bad">cannot move</span><div class="dim xs" style="max-width:240px">${w.blockers.map(esc).join("; ")}</div>`}</td>
     </tr>`).join("")}</tbody></table></div>`
     : '<div class="empty">That cluster is running nothing Homestead can see.</div>'}
-  <div class="note" style="margin-top:14px"><b>Listing only, for now.</b> Moving a workload needs both
-    clusters pointed at the same Longhorn backup target; that is the next piece.</div>
   <div class="row" style="margin-top:16px"><button class="btn" onclick="closeModal()">Close</button></div>`);
+};
+
+/* Before anything stops: where it lands, what address it gets, and every
+   reason it would fail or surprise someone - asked of both clusters. */
+window.moveReview = (cluster, kind, name) => {
+  modal(`Move ${name} from ${cluster}`, `
+  <p class="muted small">Stops ${esc(name)} on ${esc(cluster)}, backs up its volumes to the shared backup
+    storage, restores them here, and starts it here. The original stays on ${esc(cluster)}, stopped,
+    until you remove it, so it can be put back at any point before then.</p>
+  <div class="f2"><div class="f"><label>Namespace here</label><input id="mv_ns" value="lab"></div>
+    ${kind === "vm" ? "" : `<div class="f"><label>Address ${tip("The LAN address its Services get on this cluster. Shared uses this Homestead's own address; automatic takes a free one from the Harvester IP pool.")}</label>
+      <select id="mv_mode" onchange="moveAddressMode(this.value)">
+        <option value="shared">This cluster's shared address</option>
+        <option value="automatic">Next free pool address</option>
+        <option value="manual">A specific address</option></select></div>`}</div>
+  <div class="f" id="mv_ip_wrap" hidden><label>Specific address</label><input id="mv_ip" placeholder="192.0.2.245"></div>
+  <div id="mv_plan"></div>
+  <div class="row" style="margin-top:16px">
+    <button class="btn" onclick="movePlan('${esc(cluster)}','${esc(kind)}','${esc(name)}')">Check again</button>
+    <button class="btn pri" id="mv_go" data-need="admin" disabled
+      onclick="moveStart('${esc(cluster)}','${esc(kind)}','${esc(name)}')">Start move</button>
+    <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+  movePlan(cluster, kind, name);
+};
+
+window.moveAddressMode = value => {
+  const wrap = $("#mv_ip_wrap");
+  if (wrap) wrap.hidden = value !== "manual";
+};
+
+const moveBody = (cluster, kind, name) => ({
+  cluster, kind, name, namespace: $("#mv_ns")?.value.trim() || "lab",
+  address_mode: $("#mv_mode")?.value || "shared", address: $("#mv_ip")?.value.trim() || "" });
+
+window.movePlan = async (cluster, kind, name) => {
+  const host = $("#mv_plan"), go = $("#mv_go");
+  if (!host) return;
+  host.innerHTML = '<div class="empty"><span class="spin2"></span> asking both clusters…</div>';
+  if (go) go.disabled = true;
+  try {
+    const plan = await api("/api/move/plan", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(moveBody(cluster, kind, name)) });
+    const volumes = plan.claims || [];
+    host.innerHTML = `
+      ${plan.blockers?.length ? `<div class="note bad"><b>This move would fail.</b><ul>${plan.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul></div>` : ""}
+      ${plan.warnings?.length ? `<div class="note warn"><b>Worth knowing first.</b><ul>${plan.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
+      ${plan.ok ? `<div class="note good"><b>Ready to move.</b>
+        ${volumes.length ? `${volumes.length === 1 ? "Its volume" : `Its ${volumes.length} volumes`} (${plan.total_gb} GB) ${volumes.length === 1 ? "goes" : "go"}
+          through ${plan.joined ? "the backup storage both clusters already share" : `the backup storage on ${esc(cluster)}, which this cluster will be pointed at`}.`
+          : "It has no volumes, so only its definition travels."}
+        ${plan.addresses?.length ? `<br>Reachable here at ${plan.addresses.map(esc).join(", ")}.` : ""}
+        ${plan.will_run ? "" : `<br>It is stopped on ${esc(cluster)}, and will arrive stopped.`}</div>` : ""}
+      ${volumes.length ? `<div class="drow"><div class="dl">Volumes</div><div class="dv mono xs">${volumes.map(c =>
+        `${esc(c.claim)} · ${c.size_gb} GB${c.volume_mode === "Block" ? " · disk" : ""}`).join("<br>")}</div></div>` : ""}`;
+    if (go) go.disabled = !plan.ok;
+  } catch (e) {
+    host.innerHTML = `<div class="note bad">${esc(e.message)}</div>`;
+  }
+};
+
+window.moveStart = async (cluster, kind, name) => {
+  if (!confirm(`Stop ${name} on ${cluster} and bring it here?` + String.fromCharCode(10, 10)
+      + "It is unavailable from the moment it stops there until it starts here.")) return;
+  try {
+    await api("/api/move/start", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(moveBody(cluster, kind, name)) });
+    toast(`moving ${name} from ${cluster}; follow it here or in Activity`, "ok");
+    closeModal(); resetPaint(); viewImport();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+const MOVE_PHASE_WORDS = { joining: "Share storage", quiescing: "Stop there", "backing-up": "Back up",
+  syncing: "See backups", restoring: "Restore here", creating: "Create here", starting: "Start here" };
+
+function movesHtml(moves) {
+  return (moves || []).map(m => {
+    const tone = m.status === "succeeded" ? "ok" : m.status === "failed" ? "crit"
+      : m.status === "cancelled" ? "low" : "warn";
+    const steps = m.phases.filter(p => p !== "done").map((phase, index) => {
+      const state = m.status === "succeeded" || index < m.phase_index ? "done"
+        : index === m.phase_index ? (m.status === "failed" ? "failed" : m.status === "running" ? "active" : "")
+        : "";
+      return `<div class="${state}"><i></i><span><b>${esc(MOVE_PHASE_WORDS[phase] || phase)}</b></span></div>`;
+    }).join("");
+    const actions = [
+      m.status === "failed" ? `<button class="btn sm" data-need="admin" onclick="moveAct('retry','${m.id}')">Retry</button>` : "",
+      m.status === "succeeded" && !m.source_removed
+        ? `<button class="btn sm" data-need="admin" onclick="moveFinish('${m.id}','${esc(m.name)}','${esc(m.cluster)}')">Remove from ${esc(m.cluster)}</button>` : "",
+      ["running", "failed", "succeeded"].includes(m.status) && !m.source_removed
+        ? `<button class="btn sm danger" data-need="admin" onclick="moveBack('${m.id}','${esc(m.name)}','${esc(m.cluster)}','${m.status}')">Put back</button>` : "",
+    ].join("");
+    const started = Math.max(0, (Date.now() - Date.parse(m.created_at)) / 1000);
+    return `<div class="card flat moveitem">
+      <div class="between"><div><div class="ctitle">${esc(m.name)} <span class="dim">from ${esc(m.cluster)}</span>
+        ${m.kind === "vm" ? '<span class="tag">VM</span>' : ""}</div>
+        <div class="csub">into ${esc(m.namespace)} · started ${esc(started < 90 ? "just now" : fmtAgo(started))}</div></div>
+        <span class="pill ${tone}">${esc(m.status)}</span></div>
+      <div class="rollout-meter"><span style="width:${Math.max(2, m.progress)}%"></span></div>
+      <div class="rollout-steps movesteps">${steps}</div>
+      <div class="between"><span class="dim xs">${esc(m.message || "")}</span><div class="row">${actions}</div></div>
+    </div>`;
+  }).join("");
+}
+
+/* Only the moves section repaints while one runs, so a form half-filled
+   elsewhere on the page is left alone. */
+async function watchMoves() {
+  clearTimeout(window.__moveTimer);
+  if (STATE.view !== "imports") return;
+  const moves = await api("/api/move/moves").catch(() => null);
+  const host = $("#movesList");
+  if (moves && host) host.innerHTML = movesHtml(moves);
+  if (window.applyRole) window.applyRole();
+  if ((moves || []).some(m => m.status === "running")) window.__moveTimer = setTimeout(watchMoves, 4000);
+}
+window.watchMoves = watchMoves;
+
+window.moveAct = async (action, id) => {
+  try {
+    await api(`/api/move/moves/${action}`, { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+    toast(action === "retry" ? "retrying from where it stopped" : "putting it back", "ok");
+    watchMoves();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+window.moveBack = (id, name, cluster, status) => {
+  const landed = status === "succeeded";
+  if (!confirm(`Put ${name} back on ${cluster}?` + String.fromCharCode(10, 10)
+      + "It starts again there, as it was, and what this move created here is removed"
+      + (landed ? ", including anything written to it here since it arrived." : "."))) return;
+  moveAct("abandon", id);
+};
+
+window.moveFinish = (id, name, cluster) => modal(`Remove ${name} from ${cluster}`, `
+  <p>${esc(name)} is running here. Removing the stopped original from ${esc(cluster)} makes the move
+    permanent: after this it cannot be put back.</p>
+  <label class="switch"><input type="checkbox" id="mv_vols"> Also delete its volumes on ${esc(cluster)}</label>
+  <div class="note">Leaving the volumes costs space on ${esc(cluster)} but keeps a copy of the data as it
+    was at the moment of the move. Their backups stay in the backup storage either way.</div>
+  <div class="row" style="margin-top:16px">
+    <button class="btn danger" data-need="admin" onclick="moveFinishNow('${id}')">Remove from ${esc(cluster)}</button>
+    <button class="btn" onclick="closeModal()">Not yet</button></div>`);
+
+window.moveFinishNow = async id => {
+  try {
+    const result = await api("/api/move/moves/finish", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, volumes: !!$("#mv_vols")?.checked }) });
+    toast(result.message || "source removed", "ok");
+    closeModal(); watchMoves();
+  } catch (e) { toast(e.message, "bad"); }
+};
 
 window.imAddPort = () => { $("#im_ports").insertAdjacentHTML("beforeend", '<div class="f4 im-port"><div><label>Container</label><input class="ipc" type="number"></div><div><label>LAN</label><input class="iph" type="number"></div><div><label>Protocol</label><select class="ipp"><option>TCP</option><option>UDP</option></select></div><label class="switch"><input class="ipe" type="checkbox" checked>Expose</label></div>'); };
 window.imAddEnv = () => { $("#im_env").insertAdjacentHTML("beforeend", '<div class="f2 im-env"><div class="f"><label>Variable</label><input class="iek"></div><div class="f"><label>Value</label><input class="iev"></div></div>'); };
