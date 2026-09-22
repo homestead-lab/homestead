@@ -31,9 +31,10 @@ function renderBreadcrumb(v, detail = "") {
   const host = $("#crumb");
   host.innerHTML = HomesteadRouter.breadcrumbs(v, detail).map((item, index) => {
     const sep = index ? '<span class="crumbsep" aria-hidden="true">/</span>' : "";
-    return sep + (item.current
-      ? `<span aria-current="page">${esc(item.label)}</span>`
-      : `<a href="${esc(item.url)}" data-route-view="${esc(HomesteadRouter.resolve(item.url).view)}">${esc(item.label)}</a>`);
+    if (item.current) return sep + `<span aria-current="page">${esc(item.label)}</span>`;
+    // A section, or a detail with no page behind it, is text rather than a link.
+    if (!item.url) return sep + `<span class="crumbsection">${esc(item.label)}</span>`;
+    return sep + `<a href="${esc(item.url)}" data-route-view="${esc(HomesteadRouter.resolve(item.url).view)}">${esc(item.label)}</a>`;
   }).join("");
   $$("a[data-route-view]", host).forEach(a => a.onclick = e => {
     e.preventDefault(); go(a.dataset.routeView);
@@ -115,6 +116,8 @@ async function applyDeepLink(v, params) {
 function go(v, options = {}) {
   if (!VIEWS[v]) return;
   if (!$("#modal").classList.contains("hidden")) closeModal(false);
+  // Anything still loading belongs to the page being left behind.
+  window.NAV_TOKEN++;
   STATE.view = v;
   const locationParams = options.fromLocation ? HomesteadRouter.queryParams(window.location.search) : null;
   if (locationParams) {

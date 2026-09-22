@@ -55,10 +55,10 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.42`, the workflow publishes:
+For a release such as `v2.8.43`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.42
+ghcr.io/wjcloudy/homestead:2.8.43
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -69,8 +69,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.42
-git push origin v2.8.42
+git tag v2.8.43
+git push origin v2.8.43
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -281,7 +281,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.42 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.43 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -541,6 +541,12 @@ docker build --build-arg VERSION=dev -t homestead:dev .
 Passwords use PBKDF2-HMAC-SHA256 with per-user salts in the `homestead-auth`
 Secret. Sessions are HMAC-signed, `HttpOnly`, `SameSite=Strict` cookies and all
 mutations require a custom anti-CSRF header. Roles are enforced server-side.
+
+### Naming an installation
+
+The line under the Homestead wordmark, and the footer on a phone, show whatever
+**Settings → About this installation → Site name** is set to, alongside the
+running version. It starts blank, in which case only the version is shown.
 
 ### Sessions
 

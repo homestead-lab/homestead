@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.42"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.43"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -43,6 +43,9 @@ DEFAULT_APP_SETTINGS = {
         "uncorrectable_critical": 1,
         "notify_failures": True,
     },
+    # What to call this installation, shown under the Homestead wordmark. Blank
+    # means nothing is shown: better than a word that describes nobody's setup.
+    "site_name": "",
 }
 
 SYS_NS = {
@@ -216,6 +219,10 @@ def validate_app_settings(value):
         raise ValueError("maintenance duration must be between 15 and 1440 minutes")
     out["updates"]["maintenance"] = {
         "days": days, "start": start, "duration_minutes": duration}
+    site = str((value or {}).get("site_name", out["site_name"]) or "").strip()
+    if len(site) > 40:
+        raise ValueError("site name must be 40 characters or fewer")
+    out["site_name"] = site
     return out
 
 

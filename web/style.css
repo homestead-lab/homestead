@@ -161,6 +161,10 @@ a{color:inherit;text-decoration:none}
 .crumb a{color:var(--dim);border-radius:4px;transition:color .18s var(--e)}
 .crumb a:hover,.crumb a:focus-visible{color:var(--tx);outline:none}
 .crumb [aria-current="page"]{color:var(--mut)}
+.crumbsection{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sitename{margin-bottom:14px}.sitename .row{gap:8px}.sitename input{flex:1;min-width:0}
+.appfoot{display:none;padding:0 16px 22px;margin-top:-52px;color:var(--dim);
+  font-size:10px;letter-spacing:.06em;text-align:center}
 .crumbsep{color:var(--line2);user-select:none}
 h1{margin:2px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em}
 .topright{display:flex;gap:10px;align-items:center}

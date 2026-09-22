@@ -30,19 +30,31 @@ test("URL creation encodes filters and repeated values", () => {
     "/volumes?q=media+files&state=attached&state=faulted");
 });
 
-test("breadcrumbs link child views back to dashboard", () => {
+test("breadcrumbs place a view under its section, not under the dashboard", () => {
+  // The dashboard is a sibling page. Containers belongs to Workloads.
+  assert.deepEqual(router.breadcrumbs("workloads"), [
+    { label: "Workloads", url: "", current: false },
+    { label: "Containers", url: "/containers", current: true },
+  ]);
   assert.deepEqual(router.breadcrumbs("settings"), [
-    { label: "Dashboard", url: "/", current: false },
+    { label: "System", url: "", current: false },
     { label: "Settings", url: "/settings", current: true },
   ]);
   assert.deepEqual(router.breadcrumbs("dash"), [
+    { label: "Overview", url: "", current: false },
     { label: "Dashboard", url: "/", current: true },
   ]);
   assert.deepEqual(router.breadcrumbs("nodes", "harvester-node1"), [
-    { label: "Dashboard", url: "/", current: false },
+    { label: "Overview", url: "", current: false },
     { label: "Nodes", url: "/nodes", current: false },
     { label: "harvester-node1", url: "", current: true },
   ]);
+});
+
+test("a section is a label rather than a link, having no page of its own", () => {
+  for (const view of ["workloads", "storage", "cluster", "dash"]) {
+    assert.equal(router.breadcrumbs(view)[0].url, "", `${view} section is not a link`);
+  }
 });
 
 test("query parsing retains filters and repeated values", () => {

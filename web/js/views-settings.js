@@ -119,6 +119,10 @@ async function viewSettings() {
 
       <section class="card flat settings-wide">
         <div class="ctitle">About this installation</div><div class="csub">Runtime and cluster connection details</div>
+        <div class="f sitename"><label>Site name ${tip("Shown under the Homestead wordmark and at the foot of the page. Name the cluster or the house it lives in; leave it blank to show nothing.")}</label>
+          <div class="row"><input type="text" id="set_site_name" maxlength="40" placeholder="e.g. Loft rack, or nothing at all"
+            value="${esc(STATE.data.appSettings?.site_name || "")}" ${can("admin") ? "" : "disabled"}>
+            ${can("admin") ? '<button class="btn sm" onclick="saveSiteName()">Save</button>' : ""}</div></div>
         <div class="about-grid">
           <div><span>Homestead</span><b>v${esc(info.version || HOMESTEAD_VERSION)}</b></div>
           <div><span>Kubernetes</span><b>${esc(info.kubernetes || "—")}</b></div>
@@ -137,12 +141,25 @@ window.saveHealthSettings = async () => {
     smart: { temperature: read("drive_temperature"), reallocated_warning: +$("#set_smart_reallocated").value,
       pending_critical: +$("#set_smart_pending").value, uncorrectable_critical: +$("#set_smart_uncorrectable").value,
       notify_failures: $("#set_smart_notify").checked },
+    site_name: STATE.data.appSettings?.site_name || "",
     updates: STATE.data.appSettings?.updates };
   try {
     const saved = await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     HEALTH = { thresholds: { ...HEALTH_DEFAULTS.thresholds, ...(saved.thresholds || {}) } };
     STATE.data.appSettings = null;
     toast("health thresholds saved", "ok");
+    viewSettings();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+window.saveSiteName = async () => {
+  const body = { ...(STATE.data.appSettings || {}), site_name: $("#set_site_name").value.trim() };
+  delete body.info;
+  try {
+    const saved = await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    STATE.data.appSettings = null;
+    await loadHealthSettings(true);
+    toast(saved.site_name ? `named ${saved.site_name}` : "site name cleared", "ok");
     viewSettings();
   } catch (e) { toast(e.message, "bad"); }
 };

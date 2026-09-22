@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HOMESTEAD_VERSION = "2.8.42";
+const HOMESTEAD_VERSION = "2.8.43";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -27,8 +27,24 @@ async function loadHealthSettings(force = false) {
   const s = await api("/api/settings").catch(() => HEALTH_DEFAULTS);
   HEALTH = { thresholds: { ...HEALTH_DEFAULTS.thresholds, ...(s.thresholds || {}) } };
   STATE.data.appSettings = s;
+  paintBrand(s);
   return s;
 }
+
+/* The line under the wordmark: what this installation is called, and what it
+   is running. The name is a setting, because "HOMELAB" described nobody. */
+function paintBrand(settings = {}) {
+  const host = $(".bver");
+  if (!host) return;
+  const site = String(settings.site_name || "").trim();
+  const version = (settings.info || {}).version || host.dataset.version || "";
+  host.textContent = [site, version && "v" + version].filter(Boolean).join(" · ");
+  host.title = site ? `${site} · Homestead v${version}` : `Homestead v${version}`;
+  const foot = $("#appfoot");
+  if (foot) foot.textContent = [site, "Homestead", version && "v" + version]
+    .filter(Boolean).join(" · ");
+}
+window.paintBrand = paintBrand;
 const tip = (text, label = "?") => `<span class="tip" tabindex="0" aria-label="${esc(text)}" data-tip="${esc(text)}">${esc(label)}</span>`;
 const icon = name => `<svg class="btnicon" aria-hidden="true"><use href="#i-${esc(name)}"/></svg>`;
 const appAvatar = (name, icon, cls = "") => icon
@@ -98,10 +114,22 @@ function applySettings() {
 applySettings();
 
 /* ---------------- fetch ---------------- */
+/* Every navigation bumps this. A view builds its page across several awaits,
+   so a slow one could still be waiting when you move on - and then paint its
+   answer over the page you actually asked for, leaving the URL, the title and
+   the body disagreeing. A read whose answer arrives after you have navigated
+   away is for a page nobody is looking at, so it is abandoned rather than
+   returned. Writes are never abandoned: their result has to be reported. */
+window.NAV_TOKEN = 0;
+const ABANDONED = new Promise(() => { });
+
 async function api(path, opts) {
+  const readOnly = !opts || !opts.method || opts.method === "GET";
+  const startedAt = window.NAV_TOKEN;
   const r = await fetch(path, opts);
   const ct = r.headers.get("content-type") || "";
   const b = ct.includes("json") ? await r.json() : await r.text();
+  if (readOnly && startedAt !== window.NAV_TOKEN) return ABANDONED;
   if (!r.ok) throw new Error((b && b.error) || r.statusText);
   if (b && b.operation && window.noteOperation) window.noteOperation(b.operation);
   return b;

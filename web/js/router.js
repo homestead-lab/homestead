@@ -71,15 +71,15 @@
     return out;
   }
 
+  /* Where a page sits is its section in the sidebar - Containers lives under
+     Workloads, not under the Dashboard, which is a sibling page and never a
+     parent of anything. A section has no page of its own, so it is a label
+     rather than a link. */
   function breadcrumbs(view, detail) {
     const route = ROUTES[view] || ROUTES.dash;
-    if ((view === "dash" || !ROUTES[view]) && !detail) {
-      return [{ label: route.label, url: route.path, current: true }];
-    }
-    const items = [
-      { label: ROUTES.dash.label, url: ROUTES.dash.path, current: false },
-      { label: route.label, url: route.path, current: !detail },
-    ];
+    const items = [];
+    if (route.section) items.push({ label: route.section, url: "", current: false });
+    items.push({ label: route.label, url: route.path, current: !detail });
     if (detail) items.push({ label: String(detail), url: "", current: true });
     return items;
   }

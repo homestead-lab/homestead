@@ -97,5 +97,23 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual("admin", server.needed_role("/api/volumes/delete", "POST"))
 
 
+class SiteNameTests(unittest.TestCase):
+    """What to call this installation, shown where HOMELAB used to be."""
+
+    def test_it_is_empty_until_someone_names_it(self):
+        self.assertEqual("", server.validate_app_settings({})["site_name"])
+
+    def test_a_name_is_kept_and_trimmed(self):
+        self.assertEqual("Loft rack",
+                         server.validate_app_settings({"site_name": "  Loft rack  "})["site_name"])
+
+    def test_a_name_too_long_for_the_sidebar_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "40 characters"):
+            server.validate_app_settings({"site_name": "x" * 41})
+
+    def test_it_can_be_cleared_again(self):
+        self.assertEqual("", server.validate_app_settings({"site_name": "   "})["site_name"])
+
+
 if __name__ == "__main__":
     unittest.main()
