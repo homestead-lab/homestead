@@ -70,10 +70,30 @@ def parse_image(ref):
             "repo": repo, "base": base, "tag": tag, "digest": digest}
 
 
+def _suffix(key):
+    return key.split("/", 1)[-1]
+
+
+def _annotation(dep, key, default=""):
+    """Read under either naming domain.
+
+    An install made before the rename records what it tracks under harvui.io/*.
+    Reading only the current key loses the source tag an image was installed
+    from - and without a tag there is no next version to look for, so every
+    check comes back "up to date" for ever.
+    """
+    return NAMES.annotation_of(dep.get("metadata", {}), _suffix(key), default)
+
+
+def _write(annotations, key, value):
+    """Set the current key and drop the old one, so only one is ever true."""
+    annotations.pop(NAMES.legacy_key(_suffix(key)), None)
+    annotations[key] = value
+
+
 def _annotation_json(dep, key):
     try:
-        value = (dep.get("metadata", {}).get("annotations", {}) or {}).get(key, "{}")
-        parsed = json.loads(value)
+        parsed = json.loads(_annotation(dep, key, "{}") or "{}")
         return parsed if isinstance(parsed, dict) else {}
     except (TypeError, ValueError, json.JSONDecodeError):
         return {}
@@ -270,6 +290,11 @@ def _check_deployment(dep, pods, force=False):
                          "available": bool(current and remote and not matches_remote) or bool(candidate_tag)})
             if not current and running:
                 item["error"] = "running image digest is not available yet"
+            elif not semver(parsed["tag"]) and parsed["digest"]:
+                # Pinned to a digest with no release recorded to follow. Saying
+                # nothing here reads as "up to date", which is not what it means.
+                item["error"] = ("no release tag recorded for this image, so newer "
+                                 "versions cannot be found — redeploy it from a tag")
         except urllib.error.HTTPError as error:
             item["error"] = ("registry authentication required" if error.code in (401, 403)
                              else f"registry returned HTTP {error.code}")
@@ -279,7 +304,7 @@ def _check_deployment(dep, pods, force=False):
     return {"ns": ns, "name": name, "images": images,
             "available": any(x["available"] for x in images),
             "can_rollback": bool(_annotation_json(dep, PREVIOUS)),
-            "last_action": (dep["metadata"].get("annotations", {}) or {}).get(LAST_ACTION, "")}
+            "last_action": _annotation(dep, LAST_ACTION)}
 
 
 def scan(force=False):
@@ -365,9 +390,9 @@ def apply_update(ns, name):
     for image in check["images"]:
         if image.get("current_digest"):
             before[image["container"]] = _immutable(image["source"], image["current_digest"])
-    annotations[PREVIOUS] = json.dumps({"images": before, "sources": tracked,
+    _write(annotations, PREVIOUS, json.dumps({"images": before, "sources": tracked,
                                         "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
-                                       separators=(",", ":"))
+                                       separators=(",", ":")))
     for container in dep["spec"]["template"]["spec"].get("containers", []):
         update = chosen.get(container["name"])
         if not update:
@@ -389,8 +414,8 @@ def apply_update(ns, name):
         init["imagePullPolicy"] = "IfNotPresent"
         _drop_pinned_version(init)
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    annotations[TRACKED] = json.dumps(tracked, separators=(",", ":"))
-    annotations[LAST_ACTION] = "update " + now
+    _write(annotations, TRACKED, json.dumps(tracked, separators=(",", ":")))
+    _write(annotations, LAST_ACTION, "update " + now)
     dep["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[ROLLOUT_AT] = now
     result = ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
     _history({"at": now, "action": "update", "namespace": ns, "deployment": name,
@@ -411,14 +436,14 @@ def rollback(ns, name):
             container["image"] = restore[container["name"]]
             container["imagePullPolicy"] = "IfNotPresent"
     annotations = dep["metadata"].setdefault("annotations", {})
-    annotations[PREVIOUS] = json.dumps({"images": current,
+    _write(annotations, PREVIOUS, json.dumps({"images": current,
                                         "sources": _annotation_json(dep, TRACKED),
                                         "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
-                                       separators=(",", ":"))
+                                       separators=(",", ":")))
     if isinstance(previous.get("sources"), dict):
-        annotations[TRACKED] = json.dumps(previous["sources"], separators=(",", ":"))
+        _write(annotations, TRACKED, json.dumps(previous["sources"], separators=(",", ":")))
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    annotations[LAST_ACTION] = "rollback " + now
+    _write(annotations, LAST_ACTION, "rollback " + now)
     dep["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[ROLLOUT_AT] = now
     result = ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
     _history({"at": now, "action": "rollback", "namespace": ns, "deployment": name,
@@ -525,4 +550,4 @@ def progress(ns, name, dep=None):
             "images": {c["name"]: c.get("image", "") for c in
                        spec.get("template", {}).get("spec", {}).get("containers", [])},
             "can_rollback": bool(_annotation_json(dep, PREVIOUS)),
-            "last_action": (dep["metadata"].get("annotations", {}) or {}).get(LAST_ACTION, "")}
+            "last_action": _annotation(dep, LAST_ACTION)}

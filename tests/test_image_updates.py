@@ -199,6 +199,77 @@ class ImageUpdateTests(unittest.TestCase):
                          "rollback takes the init container back with it")
         self.assertEqual("busybox:1.36", spec["initContainers"][1]["image"])
 
+    def test_a_source_recorded_before_the_rename_is_still_followed(self):
+        """An install made as harvUI records what it tracks under harvui.io.
+        Reading only the current key loses the tag the image came from - and a
+        digest has no successor, so every check comes back "up to date"."""
+        self.dep["metadata"]["annotations"] = {
+            "harvui.io/update-sources": json.dumps({"demo": "ghcr.io/x/demo:2.8.41"})}
+        self.dep["spec"]["template"]["spec"]["containers"] = [
+            {"name": "demo", "image": "ghcr.io/x/demo@sha256:" + "f" * 64}]
+        pod = {"metadata": {"namespace": "lab", "labels": {"app": "demo"}},
+               "status": {"containerStatuses": [
+                   {"name": "demo", "imageID": "ghcr.io/x/demo@sha256:" + "f" * 64}]}}
+        asked = []
+        original_tags, original_manifest = updates.registry_tags, updates.manifest_info
+        original_creds = updates._secret_credentials
+        try:
+            updates.registry_tags = lambda ref, *a, **k: (asked.append(ref)
+                                                          or ["2.8.41", "2.8.42", "2.8.43"])
+            updates.manifest_info = lambda *a, **k: {"digest": "sha256:" + "e" * 64,
+                                                     "children": []}
+            updates._secret_credentials = lambda *args: {}
+            report = updates._check_deployment(self.dep, [pod])
+        finally:
+            updates.registry_tags, updates.manifest_info = original_tags, original_manifest
+            updates._secret_credentials = original_creds
+
+        image = report["images"][0]
+        self.assertEqual("ghcr.io/x/demo:2.8.41", asked[0], "the recorded tag is the one followed")
+        self.assertEqual("2.8.43", image["candidate_tag"])
+        self.assertTrue(report["available"])
+        self.assertEqual("", image["error"])
+
+    def test_a_digest_with_no_recorded_tag_says_so_rather_than_up_to_date(self):
+        self.dep["spec"]["template"]["spec"]["containers"] = [
+            {"name": "demo", "image": "ghcr.io/x/demo@sha256:" + "f" * 64}]
+        pod = {"metadata": {"namespace": "lab", "labels": {"app": "demo"}},
+               "status": {"containerStatuses": [
+                   {"name": "demo", "imageID": "ghcr.io/x/demo@sha256:" + "f" * 64}]}}
+        original_tags, original_manifest = updates.registry_tags, updates.manifest_info
+        original_creds = updates._secret_credentials
+        try:
+            updates.registry_tags = lambda *a, **k: ["2.8.43"]
+            updates.manifest_info = lambda *a, **k: {"digest": "sha256:" + "f" * 64,
+                                                     "children": []}
+            updates._secret_credentials = lambda *args: {}
+            image = updates._check_deployment(self.dep, [pod])["images"][0]
+        finally:
+            updates.registry_tags, updates.manifest_info = original_tags, original_manifest
+            updates._secret_credentials = original_creds
+
+        self.assertIn("no release tag recorded", image["error"])
+
+    def test_an_update_clears_the_key_it_replaces(self):
+        self.dep["metadata"]["annotations"] = {
+            "harvui.io/update-sources": json.dumps({"demo": "ghcr.io/x/demo:1.0.0"})}
+        original = updates._check_deployment
+        try:
+            updates._check_deployment = lambda *args, **kwargs: {
+                "images": [{"container": "demo", "available": True,
+                            "source": "ghcr.io/x/demo:1.0.0",
+                            "current_digest": "sha256:" + "d" * 64,
+                            "candidate": "ghcr.io/x/demo:1.1.0",
+                            "remote_digest": "sha256:" + "c" * 64}]}
+            updates.apply_update("lab", "demo")
+        finally:
+            updates._check_deployment = original
+
+        annotations = self.dep["metadata"]["annotations"]
+        self.assertNotIn("harvui.io/update-sources", annotations,
+                         "one place records what is tracked, not two")
+        self.assertIn("homestead.io/update-sources", annotations)
+
     def test_progress_waits_for_surge_replacement_to_be_ready(self):
         self.dep["status"].update({"replicas": 2, "updatedReplicas": 1,
                                    "readyReplicas": 1, "availableReplicas": 1,
