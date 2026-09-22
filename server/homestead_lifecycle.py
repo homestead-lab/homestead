@@ -12,6 +12,7 @@ import os
 import re
 import time
 import urllib.error
+import homestead_names as NAMES
 
 # Rebooting a host needs a privileged pod that enters the host namespaces.
 # That is a real escape hatch, so it is off unless the operator opts in on the
@@ -20,7 +21,7 @@ NODE_POWER_ENABLED = os.environ.get("ENABLE_NODE_POWER", "").lower() in ("1", "t
 
 # Remembers the replica count a workload should return to when autostart is
 # switched back on, because scaling to zero forgets it.
-AUTOSTART_REPLICAS = "harvui.io/autostart-replicas"
+AUTOSTART_REPLICAS = NAMES.key("autostart-replicas")
 
 # injected by server.py so this module stays import-cycle free
 kget = ksend = None
@@ -556,9 +557,9 @@ def _apply_container_hardware(spec, dep, requested):
         spec.pop("nodeSelector", None)
     annotations = dep["metadata"].setdefault("annotations", {})
     if union:
-        annotations["harvui.io/hardware"] = ",".join(sorted(union))
+        annotations[NAMES.key("hardware")] = ",".join(sorted(union))
     else:
-        annotations.pop("harvui.io/hardware", None)
+        annotations.pop(NAMES.key("hardware"), None)
 
 
 def edit_workload(cfg):
@@ -638,14 +639,14 @@ def edit_workload(cfg):
     if "icon" in cfg:
         ann = dep["metadata"].setdefault("annotations", {})
         if cfg["icon"]:
-            ann["harvui.io/icon"] = cfg["icon"]
-            ann["harvui.io/icon-source"] = cfg.get("icon_source", cfg["icon"])
+            ann[NAMES.key("icon")] = cfg["icon"]
+            ann[NAMES.key("icon-source")] = cfg.get("icon_source", cfg["icon"])
         else:
-            ann.pop("harvui.io/icon", None)
-            ann.pop("harvui.io/icon-source", None)
+            ann.pop(NAMES.key("icon"), None)
+            ann.pop(NAMES.key("icon-source"), None)
 
     dep["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[
-        "harvui.io/editedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ")
+        NAMES.key("editedAt")] = time.strftime("%Y-%m-%dT%H:%M:%SZ")
     # Every container is validated by now, so new claims can be created safely.
     _create_pending_pvcs(ns, pending_claims)
     workload_name = dns_label(cfg.get("workload_name") or name, "workload name")
@@ -674,7 +675,7 @@ def move_workload(ns, name, node):
         spec.pop("nodeSelector", None)
     dep["spec"].setdefault("strategy", {})["type"] = "Recreate"
     dep["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[
-        "harvui.io/movedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ")
+        NAMES.key("movedAt")] = time.strftime("%Y-%m-%dT%H:%M:%SZ")
     ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
     _bust("wl", "ov", "flow")
     return {"ok": True, "moved": name, "to": node or "any node"}
@@ -781,11 +782,11 @@ def node_power(node, action, drain_first=True):
         steps.append(f"drained {len(d['evicted'])} pod(s)")
 
     cmd = "systemctl reboot" if action == "reboot" else "systemctl poweroff"
-    pod_name = f"harvui-{action}-{node.split('.')[0][-12:]}-{int(time.time()) % 100000}"
+    pod_name = f"homestead-{action}-{node.split('.')[0][-12:]}-{int(time.time()) % 100000}"
     body = {
         "apiVersion": "v1", "kind": "Pod",
         "metadata": {"name": pod_name, "namespace": "lab",
-                     "labels": {"harvui.io/task": "node-power"}},
+                     "labels": NAMES.labels("node-power")},
         "spec": {
             "nodeName": node, "hostPID": True, "hostIPC": True, "hostNetwork": True,
             "restartPolicy": "Never", "terminationGracePeriodSeconds": 1,

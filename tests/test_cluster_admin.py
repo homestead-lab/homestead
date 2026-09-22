@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
-import harvui_cluster as cluster
+import homestead_cluster as cluster
 
 
 def node(name, roles, ready=True, pressure=None, os_image="Harvester v1.6.0"):

@@ -24,7 +24,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: harvui-nodeprobe
+  name: homestead-nodeprobe
   namespace: lab
 data:
   probe.py: |
@@ -527,18 +527,18 @@ data:
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: harvui-nodeprobe
+  name: homestead-nodeprobe
   namespace: lab
   labels:
-    app: harvui-nodeprobe
+    app: homestead-nodeprobe
 spec:
   selector:
     matchLabels:
-      app: harvui-nodeprobe
+      app: homestead-nodeprobe
   template:
     metadata:
       labels:
-        app: harvui-nodeprobe
+        app: homestead-nodeprobe
     spec:
       terminationGracePeriodSeconds: 2
       tolerations:
@@ -580,7 +580,7 @@ spec:
               mountPath: /host/proc
               readOnly: true
         - name: smart
-          image: ghcr.io/wjcloudy/homestead:2.8.39
+          image: ghcr.io/wjcloudy/homestead:2.8.40
           imagePullPolicy: IfNotPresent
           command: ["python3", "/srv/smart.py"]
           ports:
@@ -628,7 +628,7 @@ spec:
       volumes:
         - name: code
           configMap:
-            name: harvui-nodeprobe
+            name: homestead-nodeprobe
         - name: sys
           hostPath:
             path: /sys
@@ -645,5 +645,5 @@ spec:
             type: Directory
         - name: auth
           secret:
-            secretName: harvui-auth
+            secretName: homestead-auth
             optional: true

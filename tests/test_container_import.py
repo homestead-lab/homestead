@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 
-import harvui_imports as imports
+import homestead_imports as imports
 
 
 class ContainerImportStorageTests(unittest.TestCase):
@@ -16,7 +16,7 @@ class ContainerImportStorageTests(unittest.TestCase):
         self.created = []
 
         def get(path):
-            if path.endswith("/configmaps/harvui-sources"):
+            if path.endswith("/configmaps/homestead-sources"):
                 return {"data": {"sources.json": json.dumps([{
                     "name": "unraid", "host": "192.0.2.10", "user": "root", "base_path": "/mnt/user/appdata",
                 }])}}

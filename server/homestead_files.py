@@ -19,7 +19,8 @@ import socket
 import time
 import urllib.parse
 
-from harvui_console import encode_frame, read_frame
+from homestead_console import encode_frame, read_frame
+import homestead_names as NAMES
 
 kget = ksend = None
 API = None
@@ -105,7 +106,7 @@ def open_session(namespace, pvc):
     body = {
         "apiVersion": "v1", "kind": "Pod",
         "metadata": {"name": pod, "namespace": namespace,
-                     "labels": {"harvui.io/task": "files", "harvui.io/app": pvc}},
+                     "labels": NAMES.labels("files", app=pvc)},
         "spec": {"restartPolicy": "Never", "activeDeadlineSeconds": SESSION_SECONDS,
                  "terminationGracePeriodSeconds": 0,
                  "containers": [{"name": "files", "image": IMAGE,

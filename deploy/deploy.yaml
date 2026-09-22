@@ -6,13 +6,13 @@ metadata:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: harvui
+  name: homestead
   namespace: lab
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: harvui
+  name: homestead
 rules:
   - apiGroups: [""]
     resources: [namespaces, events]
@@ -102,14 +102,14 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: harvui
+  name: homestead
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: harvui
+  name: homestead
 subjects:
   - kind: ServiceAccount
-    name: harvui
+    name: homestead
     namespace: lab
 ---
 # Interactive exec is deliberately namespace-scoped. The ClusterRole above does
@@ -117,7 +117,7 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: harvui-console
+  name: homestead-console
   namespace: lab
 rules:
   - apiGroups: [""]
@@ -128,24 +128,24 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: harvui-console
+  name: homestead-console
   namespace: lab
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: harvui-console
+  name: homestead-console
 subjects:
   - kind: ServiceAccount
-    name: harvui
+    name: homestead
     namespace: lab
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: harvui-data
+  name: homestead-data
   namespace: lab
   labels:
-    app: harvui
+    app: homestead
 spec:
   accessModes: [ReadWriteMany]
   storageClassName: longhorn-r2
@@ -161,9 +161,9 @@ metadata:
   labels:
     app: homestead
   annotations:
-    # harvui.io is retained as the legacy compatibility domain so existing
-    # update history, workload metadata, and rollback state survive the rename.
-    harvui.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.39"}'
+    # Homestead reads harvui.io/* as well, so an install made before the
+    # rename keeps its update history, workload metadata and rollback state.
+    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.40"}'
 spec:
   replicas: 1
   strategy:
@@ -179,7 +179,7 @@ spec:
         app: homestead
         lab-workload: "true"
     spec:
-      serviceAccountName: harvui
+      serviceAccountName: homestead
       securityContext:
         fsGroup: 10001
         fsGroupChangePolicy: OnRootMismatch
@@ -195,7 +195,7 @@ spec:
           tolerationSeconds: 15
       initContainers:
         - name: data-permissions
-          image: ghcr.io/wjcloudy/homestead:2.8.39
+          image: ghcr.io/wjcloudy/homestead:2.8.40
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "chown 10001:10001 /data && chmod 0770 /data"]
           securityContext:
@@ -212,7 +212,7 @@ spec:
               mountPath: /data
       containers:
         - name: homestead
-          image: ghcr.io/wjcloudy/homestead:2.8.39
+          image: ghcr.io/wjcloudy/homestead:2.8.40
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT
@@ -266,12 +266,12 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: harvui-data
+            claimName: homestead-data
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: harvui
+  name: homestead
   namespace: lab
   labels:
     app: homestead

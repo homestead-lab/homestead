@@ -10,7 +10,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
-import harvui_icons as icons
+import homestead_icons as icons
 import server
 
 
@@ -58,8 +58,8 @@ class IconCacheTests(unittest.TestCase):
             server.persist_icon_config(cfg)
         dep, _ = server.build_deployment(cfg)
         annotations = dep["metadata"]["annotations"]
-        self.assertEqual("/api/icons/" + "a" * 64 + ".png", annotations["harvui.io/icon"])
-        self.assertEqual("https://example.com/logo.png", annotations["harvui.io/icon-source"])
+        self.assertEqual("/api/icons/" + "a" * 64 + ".png", annotations["homestead.io/icon"])
+        self.assertEqual("https://example.com/logo.png", annotations["homestead.io/icon-source"])
 
     def test_appstore_template_carries_icon(self):
         cfg = server.template_to_cfg({

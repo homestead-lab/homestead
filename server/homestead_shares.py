@@ -6,6 +6,7 @@ legacy deployment/ConfigMap formats are read so existing installations migrate
 without losing access the next time a share is changed.
 """
 import base64
+import homestead_names as NAMES
 import copy
 import hashlib
 import json
@@ -17,8 +18,21 @@ import urllib.error
 kget = ksend = create_pvc = None
 NAMESPACE = "lab"
 CACHE = {}
-CONFIGMAP = "harvui-shares"
-SECRET = "harvui-share-credentials"
+def CONFIGMAP():
+    """Where share definitions live: the pre-rename name if that is what exists."""
+    return NAMES.object_name("shares", NAMESPACE)
+
+
+def SECRET():
+    """The passwords for those shares, named to match them.
+
+    The pair is one thing: an install whose definitions are still under the old
+    name keeps its credentials there too, rather than ending up with one of
+    each and no way to tell which half is which.
+    """
+    if CONFIGMAP().startswith(NAMES.LEGACY):
+        return f"{NAMES.LEGACY}-share-credentials"
+    return NAMES.object_name("share-credentials", NAMESPACE, kind="secrets")
 LONGHORN_NAMESPACE = "longhorn-system"
 # A Samba rollout is a container restart, not a download: if the pod is not
 # serving within this long, its mounts are not going to succeed.
@@ -28,6 +42,7 @@ ROLLOUT_TIMEOUT = 45
 def bind(_kget, _ksend, _create_pvc, namespace, cache):
     global kget, ksend, create_pvc, NAMESPACE, CACHE
     kget, ksend, create_pvc, NAMESPACE, CACHE = _kget, _ksend, _create_pvc, namespace, cache
+    NAMES.bind(_kget)
 
 
 def _name(value):
@@ -148,7 +163,7 @@ def _deployment_state():
 
 
 def _config_rows():
-    obj = _get_optional(f"/api/v1/namespaces/{NAMESPACE}/configmaps/{CONFIGMAP}")
+    obj = _get_optional(f"/api/v1/namespaces/{NAMESPACE}/configmaps/{CONFIGMAP()}")
     if not obj:
         return [], None
     try:
@@ -159,7 +174,7 @@ def _config_rows():
 
 
 def _credentials():
-    obj = _get_optional(f"/api/v1/namespaces/{NAMESPACE}/secrets/{SECRET}")
+    obj = _get_optional(f"/api/v1/namespaces/{NAMESPACE}/secrets/{SECRET()}")
     if not obj:
         return {}, None
     try:
@@ -239,10 +254,10 @@ def _save_config(rows, current=None):
               if key not in ("password", "has_password", "actual_size_gb", "pvc_status")}
              for row in rows]
     body = {"apiVersion": "v1", "kind": "ConfigMap",
-            "metadata": _metadata(CONFIGMAP, current),
+            "metadata": _metadata(CONFIGMAP(), current),
             "data": {"shares.json": json.dumps(clean, indent=2)}}
     if current:
-        return ksend("PUT", f"/api/v1/namespaces/{NAMESPACE}/configmaps/{CONFIGMAP}", body)
+        return ksend("PUT", f"/api/v1/namespaces/{NAMESPACE}/configmaps/{CONFIGMAP()}", body)
     return ksend("POST", f"/api/v1/namespaces/{NAMESPACE}/configmaps", body)
 
 
@@ -251,11 +266,11 @@ def _save_credentials(credentials, current=None):
                     "password": str(value.get("password") or "")}
              for name, value in credentials.items() if value.get("password")}
     body = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
-            "metadata": _metadata(SECRET, current),
+            "metadata": _metadata(SECRET(), current),
             "data": {"credentials.json": base64.b64encode(
                 json.dumps(clean, separators=(",", ":")).encode()).decode()}}
     if current:
-        return ksend("PUT", f"/api/v1/namespaces/{NAMESPACE}/secrets/{SECRET}", body)
+        return ksend("PUT", f"/api/v1/namespaces/{NAMESPACE}/secrets/{SECRET()}", body)
     return ksend("POST", f"/api/v1/namespaces/{NAMESPACE}/secrets", body)
 
 
@@ -430,7 +445,7 @@ def apply_samba(rows, credentials, deployment=None):
     args += ["-g", "server min protocol = SMB2"]
     container["args"], container["volumeMounts"], spec["volumes"] = args, mounts, volumes
     deployment["spec"]["template"].setdefault("metadata", {}).setdefault(
-        "annotations", {})["harvui.io/share-update-at"] = time.strftime(
+        "annotations", {})[NAMES.key("share-update-at")] = time.strftime(
             "%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     result = ksend("PUT", f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/samba", deployment)
     _guard_rollout(previous, was_serving)

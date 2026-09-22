@@ -6,6 +6,9 @@ Pure Python stdlib: no pip install at runtime, so it starts even with no interne
 import copy, html, json, os, re, secrets, ssl, sys, time, threading, urllib.request, urllib.parse, urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+# Imported ahead of the feature modules because settings are read during start.
+import homestead_names as NAMES
+
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
 API = "https://kubernetes.default.svc"
 TOKEN = open(f"{SA}/token").read().strip() if os.path.exists(f"{SA}/token") else ""
@@ -17,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.39"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.40"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -255,9 +258,13 @@ def enforce_update_policy(body, settings=None, now=None):
     return status
 
 
+def _settings_map():
+    return NAMES.object_name("settings", DEFAULT_NS)
+
+
 def get_app_settings():
     try:
-        cm = kget(f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/harvui-settings")
+        cm = kget(f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/{_settings_map()}")
         raw = json.loads((cm.get("data") or {}).get("settings.json", "{}"))
         return validate_app_settings(raw)
     except urllib.error.HTTPError as e:
@@ -270,14 +277,15 @@ def get_app_settings():
 
 def save_app_settings(value):
     settings = validate_app_settings(value)
+    name = _settings_map()
     body = {"apiVersion": "v1", "kind": "ConfigMap",
-            "metadata": {"name": "harvui-settings", "namespace": DEFAULT_NS,
-                         "labels": {"harvui.io/managed": "true"}},
+            "metadata": {"name": name, "namespace": DEFAULT_NS,
+                         "labels": {NAMES.key("managed"): "true"}},
             "data": {"settings.json": json.dumps(settings, indent=2)}}
     try:
-        current = kget(f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/harvui-settings")
+        current = kget(f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/{name}")
         body["metadata"]["resourceVersion"] = current["metadata"]["resourceVersion"]
-        ksend("PUT", f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/harvui-settings", body)
+        ksend("PUT", f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/{name}", body)
     except urllib.error.HTTPError as e:
         if e.code != 404:
             raise
@@ -303,7 +311,7 @@ _TEMP_CACHE = {"at": 0, "data": {}}
 
 
 def node_temps():
-    """Temperatures from the optional harvui-nodeprobe DaemonSet.
+    """Temperatures from the optional homestead-nodeprobe DaemonSet.
 
     Absent probe is not an error — it just means no thermal data, which the UI
     reports rather than showing a blank gauge.
@@ -311,11 +319,7 @@ def node_temps():
     if time.time() - _TEMP_CACHE["at"] < 20:
         return _TEMP_CACHE["data"]
     out = {}
-    try:
-        pods = kget(f"/api/v1/namespaces/{DEFAULT_NS}/pods"
-                    "?labelSelector=app%3Dharvui-nodeprobe").get("items", [])
-    except Exception:
-        pods = []
+    pods = NAMES.nodeprobe_pods(DEFAULT_NS)
     for p in pods:
         ip = p.get("status", {}).get("podIP")
         node = p.get("spec", {}).get("nodeName")
@@ -430,15 +434,15 @@ def get_nodes():
         npods = [p for p in pods.get("items", []) if p.get("spec", {}).get("nodeName") == name]
         wl = sorted({p["metadata"].get("labels", {}).get("app") or p["metadata"]["name"].rsplit("-", 2)[0]
                      for p in npods if p["metadata"]["namespace"] not in SYS_NS
-                     and not p["metadata"].get("labels", {}).get("harvui.io/task")
+                     and not NAMES.label_of(p["metadata"], "task")
                      and (p["metadata"].get("labels", {}).get("app") or "") not in
-                         ("harvui-nodeprobe", "image-prepull")})
+                         NAMES.NODEPROBE + ("image-prepull",)})
         probed = (temps.get(name) or {}).get("devices") or {}
         annotations = n["metadata"].get("annotations", {}) or {}
         try:
             labels, auto_hardware = HW.reconcile_node(name, labels, annotations, probed)
         except Exception:
-            auto_hardware = {x for x in annotations.get(HW.AUTO_ANNOTATION, "").split(",") if x}
+            auto_hardware = {x for x in NAMES.read(annotations, "auto-hardware").split(",") if x}
         hardware_inventory = HW.inventory(labels, probed, auto_hardware)
         hardware = {x["id"]: x["available"] for x in hardware_inventory}
         temp_payload = temps.get(name)
@@ -676,8 +680,8 @@ def get_workloads():
                            for c in st.get("conditions", []) or []
                            if c.get("type") == "Progressing" and c.get("status") == "False"]
         template_annotations = d["spec"].get("template", {}).get("metadata", {}).get("annotations", {}) or {}
-        rollout_at = (template_annotations.get("harvui.io/update-rollout-at") or
-                      template_annotations.get("harvui.io/restartedAt"))
+        rollout_at = (NAMES.read(template_annotations, "update-rollout-at") or
+                      NAMES.read(template_annotations, "restartedAt"))
         if rollout_at:
             transition_ages.append(age_secs(rollout_at))
         if not transition_ages:
@@ -1178,10 +1182,10 @@ def build_deployment(cfg):
     ]
     dep = {
         "apiVersion": "apps/v1", "kind": "Deployment",
-        "metadata": {"name": name, "namespace": ns, "labels": {"app": name, "harvui.io/managed": "true"},
-                     "annotations": ({**({"harvui.io/icon": cfg.get("icon", "")} if cfg.get("icon") else {}),
-                                      **({"harvui.io/icon-source": cfg.get("icon_source", cfg.get("icon", ""))} if cfg.get("icon") else {}),
-                                      **({"harvui.io/hardware": ",".join(sorted(hardware))} if hardware else {})})},
+        "metadata": {"name": name, "namespace": ns, "labels": {"app": name, NAMES.key("managed"): "true"},
+                     "annotations": ({**({NAMES.key("icon"): cfg.get("icon", "")} if cfg.get("icon") else {}),
+                                      **({NAMES.key("icon-source"): cfg.get("icon_source", cfg.get("icon", ""))} if cfg.get("icon") else {}),
+                                      **({NAMES.key("hardware"): ",".join(sorted(hardware))} if hardware else {})})},
         "spec": {"replicas": int(cfg.get("replicas", 1)), "strategy": {"type": "Recreate"},
                  "selector": {"matchLabels": {"app": name}},
                  "template": {"metadata": {"labels": {"app": name, "lab-workload": "true"}}, "spec": podspec}},
@@ -1194,7 +1198,7 @@ def build_deployment(cfg):
         svc_type = "ClusterIP" if cfg.get("network_mode") == "internal" else "LoadBalancer"
         svc = {
             "apiVersion": "v1", "kind": "Service",
-            "metadata": {"name": name, "namespace": ns, "labels": {"app": name, "harvui.io/managed": "true"},
+            "metadata": {"name": name, "namespace": ns, "labels": {"app": name, NAMES.key("managed"): "true"},
                          "annotations": {"kube-vip.io/loadbalancerIPs": vip} if vip and svc_type == "LoadBalancer" else {}},
             "spec": {"type": svc_type, "selector": {"app": name},
                       "ports": [{"name": (p.get("name") or f"p{p['container']}-{str(p.get('protocol', 'TCP')).lower()}")[:15],
@@ -1432,7 +1436,7 @@ def build_sidecar_deployment(cfg, current):
         service["spec"]["selector"] = selector
     annotation_name = ("sidecar-" + container_name)[:63].rstrip("-")
     updated.setdefault("metadata", {}).setdefault("annotations", {})[
-        f"harvui.io/{annotation_name}"] = cfg.get("image", "")
+        NAMES.key(annotation_name)] = cfg.get("image", "")
     return updated, service
 
 
@@ -1524,7 +1528,7 @@ def create_storage_class(cfg):
                   "migratable": "true" if cfg.get("migratable") else "false",
                   "encrypted": "true" if cfg.get("encrypted") else "false"}
     body = {"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
-            "metadata": {"name": name, "labels": {"harvui.io/managed": "true"},
+            "metadata": {"name": name, "labels": {NAMES.key("managed"): "true"},
                          "annotations": {DEFAULT_CLASS_ANNOTATION: "true"} if cfg.get("default") else {}},
             "provisioner": str(cfg.get("provisioner") or LONGHORN_PROVISIONER),
             "parameters": parameters,
@@ -1612,7 +1616,7 @@ def create_pvc(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce"):
                 "Longhorn cannot mount those into a pod. Shared (ReadWriteMany) storage "
                 f"needs a class without migratable=true — available: {usable}")
     body = {"apiVersion": "v1", "kind": "PersistentVolumeClaim",
-            "metadata": {"name": name, "namespace": ns, "labels": {"harvui.io/managed": "true"}},
+            "metadata": {"name": name, "namespace": ns, "labels": {NAMES.key("managed"): "true"}},
             "spec": {"accessModes": [access_mode],
                      "storageClassName": sc,
                      "resources": {"requests": {"storage": f"{size_gb}Gi"}}}}
@@ -1668,7 +1672,8 @@ def set_node_hardware(cfg):
     labels = {f["label"]: "true" if f["id"] in selected else "false" for f in HW.features()}
     # These are deliberate overrides, so remove them from the auto-managed set.
     ksend("PATCH", f"/api/v1/nodes/{name}", {"metadata": {"labels": labels,
-          "annotations": {HW.AUTO_ANNOTATION: None}}},
+          "annotations": {HW.AUTO_ANNOTATION: None,
+                          HW.AUTO_ANNOTATION_LEGACY: None}}},
           ctype="application/merge-patch+json")
     for k in list(_cache):
         if k.startswith(("nodes", "ov")):
@@ -2123,26 +2128,27 @@ def raw_get(path, timeout=20):
 
 # expose a tiny shim module so helper modules can reach raw_get without a cycle
 import types as _types
-_shim = _types.ModuleType("harvui_shim")
+_shim = _types.ModuleType("homestead_shim")
 _shim.raw_get = raw_get
-sys.modules["harvui_shim"] = _shim
+sys.modules["homestead_shim"] = _shim
 
-import harvui_lifecycle as LC
-import harvui_imports as IMP
-import harvui_auth as AUTH
-import harvui_longhorn as LH
-import harvui_place as PLACE
-import harvui_hardware as HW
-import harvui_updates as UPDATES
-import harvui_operations as OPS
-import harvui_console as CONSOLE
-import harvui_files as FILES
-import harvui_icons as ICONS
-import harvui_volumes as VOLUMES
-import harvui_smart as SMART
-import harvui_shares as SHARES
-import harvui_networking as NETWORK
-import harvui_cluster as CLUSTER
+import homestead_lifecycle as LC
+import homestead_imports as IMP
+import homestead_auth as AUTH
+import homestead_longhorn as LH
+import homestead_place as PLACE
+import homestead_hardware as HW
+import homestead_updates as UPDATES
+import homestead_operations as OPS
+import homestead_console as CONSOLE
+import homestead_files as FILES
+import homestead_icons as ICONS
+import homestead_volumes as VOLUMES
+import homestead_smart as SMART
+import homestead_shares as SHARES
+import homestead_networking as NETWORK
+import homestead_cluster as CLUSTER
+NAMES.bind(kget)
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
 LC.bind(kget, ksend, SYS_NS, _cache, HW.features, create_pvc, STORAGE_CLASS)
 IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.features)
@@ -2161,7 +2167,7 @@ FILES.bind(kget, ksend, urllib.parse.urlparse(API), TOKEN, CTX, SYS_NS)
 
 
 def display_icon(annotations):
-    reference = (annotations or {}).get("harvui.io/icon", "")
+    reference = NAMES.read(annotations, "icon")
     try:
         return ICONS.data_url(reference, DATA_DIR)
     except (FileNotFoundError, ValueError, OSError):
@@ -2307,7 +2313,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         "replicas": replicas, "autostart": replicas > 0,
         "start_replicas": replicas or parked or 1, "containers": containers,
         "pod_volumes": reusable,
-        "hardware": detected, "icon": annotations.get("harvui.io/icon-source", annotations.get("harvui.io/icon", "")),
+        "hardware": detected, "icon": NAMES.read(annotations, "icon-source") or NAMES.read(annotations, "icon"),
         "node": pspec.get("nodeSelector", {}).get("kubernetes.io/hostname", ""),
         "network_mode": "host" if pspec.get("hostNetwork") else "",
         "has_service": bool(listeners),
@@ -2814,7 +2820,7 @@ class H(BaseHTTPRequestHandler):
                 ns, name = b["ns"], b["name"]
                 ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
                       {"spec": {"template": {"metadata": {"annotations":
-                       {"harvui.io/restartedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ")}}}}},
+                       {NAMES.key("restartedAt"): time.strftime("%Y-%m-%dT%H:%M:%SZ")}}}}},
                       ctype="application/merge-patch+json")
                 _cache.pop("wl", None)
                 return self._send(200, {"ok": True})

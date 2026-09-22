@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
-import harvui_networking as networking
+import homestead_networking as networking
 
 
 class NetworkingTests(unittest.TestCase):

@@ -39,8 +39,8 @@ not affiliated with, endorsed, or sponsored by Lime Technology, Inc.
 ```text
 Dockerfile                    production container image
 server/server.py              stdlib HTTP server and Kubernetes API client
-server/harvui_updates.py      OCI registry checks, rollout monitoring, rollback
-server/harvui_networking.py   VIP allocation, Service planning and endpoint inventory
+server/homestead_*.py         feature modules: updates, networking, storage, imports
+server/homestead_names.py     the names Homestead writes, and the ones it still reads
 web/                          browser UI, no build step
 web/vendor/monaco/            vendored Monaco editor subset (see its README)
 web/assets/                   Homestead SVG identity
@@ -55,10 +55,10 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.39`, the workflow publishes:
+For a release such as `v2.8.40`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.39
+ghcr.io/wjcloudy/homestead:2.8.40
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -69,8 +69,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.39
-git push origin v2.8.39
+git tag v2.8.40
+git push origin v2.8.40
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -112,14 +112,18 @@ Then install and wait for readiness:
 ```bash
 kubectl apply -f deploy/deploy.yaml
 kubectl -n lab rollout status deployment/homestead --timeout=5m
-kubectl -n lab get deployment/homestead pvc/harvui-data service/harvui
+kubectl -n lab get deployment/homestead pvc/homestead-data service/homestead
 ```
 
-The running Deployment, container, and generated pod names use `homestead`.
-Stateful and access-bound compatibility objects such as `harvui-data`, the
-authentication Secret, Service, settings, icons, and the `harvui.io/*`
-annotation domain intentionally retain their original names. This lets an
-upgrade adopt the existing data and VIP instead of creating a parallel install.
+Everything a new install creates is called `homestead`: the Deployment and its
+containers, the ServiceAccount and roles, the `homestead-data` claim, the
+Service, the ConfigMaps and Secrets it writes, and the `homestead.io/*`
+annotation domain.
+
+Homestead was previously called harvUI. It still reads the `harvui-*` objects
+and `harvui.io/*` keys an older install created, and writes back to whichever
+of the two an object already uses, so an upgrade needs no migration and no
+flag day. Nothing new is ever created under the old name.
 
 Open the Service address on port `8088`. The first visit creates the initial
 administrator. Authentication is stored in a Kubernetes Secret, independently
@@ -138,7 +142,7 @@ views:
 
 ```bash
 kubectl apply -f deploy/nodeprobe.yaml
-kubectl -n lab rollout status daemonset/harvui-nodeprobe --timeout=5m
+kubectl -n lab rollout status daemonset/homestead-nodeprobe --timeout=5m
 ```
 
 The ordinary telemetry container mounts `/sys`, `/proc`, and `/dev` read-only,
@@ -277,7 +281,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.39 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.40 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -319,7 +323,7 @@ After a claim is detached and unreferenced, the administrator explicitly
 chooses between deleting the PVC while forcing its PV to `Retain`, or permanently
 deleting the PVC and backing Longhorn data with the PV policy set to `Delete`.
 The exact claim name must be typed before either action. System namespaces and
-Homestead's own `harvui-data` claim are protected, and the supplied RBAC grants
+Homestead's own `homestead-data` claim are protected, and the supplied RBAC grants
 only the additional PV `patch` permission required to make the chosen reclaim
 behavior deterministic.
 
@@ -406,7 +410,7 @@ subset of the 14 MB distribution, fetched only when a file is opened and never
 on page load. If it cannot load at all the editor falls back to a plain
 textarea, which saves through exactly the same path.
 
-`server/harvui_files.py` holds the server side, reusing the exec WebSocket the
+`server/homestead_files.py` holds the server side, reusing the exec WebSocket the
 console already speaks.
 
 ## Storage classes
@@ -486,8 +490,8 @@ account, which the editor says before you save. Passwords that disagreed about
 the same account used to fail validation on every later change, including
 changes to unrelated shares.
 
-Share metadata is stored in the `harvui-shares` ConfigMap. Passwords are stored
-separately in the `harvui-share-credentials` Kubernetes Secret and are never
+Share metadata is stored in the `homestead-shares` ConfigMap. Passwords are stored
+separately in the `homestead-share-credentials` Kubernetes Secret and are never
 returned by the Homestead API. The first successful share edit transparently
 migrates credentials from older Homestead ConfigMaps and the existing Samba
 arguments. Removing a share keeps its PVC and data.
@@ -532,12 +536,12 @@ docker build --build-arg VERSION=dev -t homestead:dev .
 
 ## Security notes
 
-Passwords use PBKDF2-HMAC-SHA256 with per-user salts in the `harvui-auth`
+Passwords use PBKDF2-HMAC-SHA256 with per-user salts in the `homestead-auth`
 Secret. Sessions are HMAC-signed, `HttpOnly`, `SameSite=Strict` cookies and all
 mutations require a custom anti-CSRF header. Roles are enforced server-side.
 
 Interactive container consoles require operator access. The supplied manifest
-grants `pods/exec` only through the `harvui-console` Role in the `lab`
+grants `pods/exec` only through the `homestead-console` Role in the `lab`
 namespace—not through the cluster-wide role. The proxy independently restricts
 sessions to `DEFAULT_NS`, validates the exact running pod and application
 container, checks the browser origin, and keeps the service-account token on the

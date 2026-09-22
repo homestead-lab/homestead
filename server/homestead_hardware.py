@@ -6,6 +6,7 @@ path and optional USB VID:PID matches.  That lets the UI support accelerators,
 capture cards, serial adapters and future hardware without another code change.
 """
 import json
+import homestead_names as NAMES
 import hashlib
 import re
 import urllib.error
@@ -39,12 +40,14 @@ DEFAULT_CUSTOM = [
 ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,48}[a-z0-9])?$")
 USB_RE = re.compile(r"^[0-9a-f]{4}:[0-9a-f]{4}$")
 PATH_TYPES = {"Directory", "CharDevice", "BlockDevice", "Socket", "File"}
-AUTO_ANNOTATION = "harvui.io/auto-hardware"
+AUTO_ANNOTATION = NAMES.key("auto-hardware")
+AUTO_ANNOTATION_LEGACY = NAMES.legacy_key("auto-hardware")
 
 
 def bind(_kget, _ksend, _ns, _cache_ref):
     global kget, ksend, NS, _cache
     kget, ksend, NS, _cache = _kget, _ksend, _ns, _cache_ref
+    NAMES.bind(_kget)
 
 
 def _bust():
@@ -77,15 +80,19 @@ def _normalise(raw, existing=None):
     return {
         "id": fid, "name": name,
         "description": str(raw.get("description") or "").strip()[:180],
-        "label": old_label or str(raw.get("label") or f"hardware.harvui.io/{fid}"),
+        "label": old_label or str(raw.get("label") or f"hardware.{NAMES.DOMAIN}/{fid}"),
         "host_path": host, "container_path": dest, "path_type": typ,
         "usb_ids": usb, "builtin": False,
     }
 
 
+def _hardware_map():
+    return NAMES.object_name("hardware", NS)
+
+
 def custom_features():
     try:
-        cm = kget(f"/api/v1/namespaces/{NS}/configmaps/harvui-hardware")
+        cm = kget(f"/api/v1/namespaces/{NS}/configmaps/{_hardware_map()}")
         raw = json.loads(cm.get("data", {}).get("features.json", "[]"))
         if not isinstance(raw, list):
             raise ValueError("features.json is not a list")
@@ -93,7 +100,10 @@ def custom_features():
     except urllib.error.HTTPError as e:
         if e.code != 404:
             raise
-    except (ValueError, TypeError, json.JSONDecodeError):
+    except Exception:
+        # Custom hardware definitions are an extra: a cluster that cannot be
+        # reached, or a ConfigMap that will not parse, leaves the built-in set
+        # rather than stopping a deployment being built at all.
         pass
     return [dict(x, builtin=False) for x in DEFAULT_CUSTOM]
 
@@ -117,11 +127,11 @@ def save_features(items):
             raise ValueError(f"duplicate feature ID: {f['id']}")
         seen.add(f["id"]); out.append(f)
     body = {"apiVersion": "v1", "kind": "ConfigMap",
-            "metadata": {"name": "harvui-hardware", "namespace": NS},
+            "metadata": {"name": _hardware_map(), "namespace": NS},
             "data": {"features.json": json.dumps(out, indent=2)}}
     try:
-        kget(f"/api/v1/namespaces/{NS}/configmaps/harvui-hardware")
-        ksend("PATCH", f"/api/v1/namespaces/{NS}/configmaps/harvui-hardware",
+        kget(f"/api/v1/namespaces/{NS}/configmaps/{_hardware_map()}")
+        ksend("PATCH", f"/api/v1/namespaces/{NS}/configmaps/{_hardware_map()}",
               {"data": body["data"]}, ctype="application/merge-patch+json")
     except urllib.error.HTTPError as e:
         if e.code != 404:
@@ -155,7 +165,7 @@ def reconcile_node(name, labels, annotations, devices):
     """
     before_labels = dict(labels or {})
     labels = dict(before_labels)
-    before_auto = {x for x in str((annotations or {}).get(AUTO_ANNOTATION, "")).split(",") if x}
+    before_auto = {x for x in NAMES.read(annotations, "auto-hardware").split(",") if x}
     auto = set(before_auto)
     defs = features()
     for feature in defs:
@@ -176,7 +186,10 @@ def reconcile_node(name, labels, annotations, devices):
         value = ",".join(sorted(auto)) or None
         ksend("PATCH", f"/api/v1/nodes/{name}",
               {"metadata": {"labels": changed_labels,
-                            "annotations": {AUTO_ANNOTATION: value}}},
+                            # The old key is cleared in the same patch, so a
+                            # node never carries two answers to one question.
+                            "annotations": {AUTO_ANNOTATION: value,
+                                            AUTO_ANNOTATION_LEGACY: None}}},
               ctype="application/merge-patch+json")
     return labels, auto
 
@@ -198,7 +211,7 @@ def workload_features(podspec, annotations=None, definitions=None):
     """Read feature IDs from annotations, node selectors or mounted host paths."""
     defs = features() if definitions is None else definitions
     found = []
-    ann = (annotations or {}).get("harvui.io/hardware", "")
+    ann = NAMES.read(annotations, "hardware")
     for fid in [x.strip() for x in ann.split(",") if x.strip()]:
         if fid not in found:
             found.append(fid)

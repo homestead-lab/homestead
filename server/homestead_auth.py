@@ -18,6 +18,7 @@ Design notes, because the choices matter more than the code:
   not a control — a viewer who crafts the request by hand still gets a 403.
 """
 import base64
+import homestead_names as NAMES
 import hashlib
 import hmac
 import json
@@ -28,11 +29,13 @@ import urllib.error
 
 kget = ksend = None
 NS = "lab"
-SECRET_NAME = "harvui-auth"
+def SECRET_NAME():
+    """The credentials Secret, under whichever name this install already has."""
+    return NAMES.object_name("auth", NS, kind="secrets")
 
 ITERATIONS = 600_000
 SESSION_TTL = int(os.environ.get("SESSION_TTL_HOURS", "12")) * 3600
-COOKIE = "harvui_session"
+COOKIE = "homestead_session"
 
 # viewer < operator < admin
 ROLES = ("viewer", "operator", "admin")
@@ -55,6 +58,7 @@ ATTEMPT_WINDOW = 300
 def bind(_kget, _ksend, _ns):
     global kget, ksend, NS
     kget, ksend, NS = _kget, _ksend, _ns
+    NAMES.bind(_kget)
 
 
 # ------------------------------------------------------------------ store
@@ -62,7 +66,7 @@ def _load(force=False):
     if not force and _store_cache["data"] is not None and time.time() - _store_cache["at"] < 10:
         return _store_cache["data"]
     try:
-        sec = kget(f"/api/v1/namespaces/{NS}/secrets/{SECRET_NAME}")
+        sec = kget(f"/api/v1/namespaces/{NS}/secrets/{SECRET_NAME()}")
         raw = base64.b64decode(sec.get("data", {}).get("store.json", "") or "e30=")
         data = json.loads(raw.decode() or "{}")
     except urllib.error.HTTPError as e:
@@ -79,11 +83,11 @@ def _load(force=False):
 
 def _save(data):
     body = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
-            "metadata": {"name": SECRET_NAME, "namespace": NS},
+            "metadata": {"name": SECRET_NAME(), "namespace": NS},
             "data": {"store.json": base64.b64encode(json.dumps(data).encode()).decode()}}
     try:
-        kget(f"/api/v1/namespaces/{NS}/secrets/{SECRET_NAME}")
-        ksend("PUT", f"/api/v1/namespaces/{NS}/secrets/{SECRET_NAME}", body)
+        kget(f"/api/v1/namespaces/{NS}/secrets/{SECRET_NAME()}")
+        ksend("PUT", f"/api/v1/namespaces/{NS}/secrets/{SECRET_NAME()}", body)
     except urllib.error.HTTPError as e:
         if e.code != 404:
             raise

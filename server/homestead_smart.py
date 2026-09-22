@@ -6,6 +6,7 @@ Homestead.  This module keeps device validation and Kubernetes pod discovery in
 one place so the browser never receives a helper credential.
 """
 import hashlib
+import homestead_names as NAMES
 import hmac
 import json
 import re
@@ -23,6 +24,7 @@ DEFAULT_NAMESPACE = "lab"
 def bind(_kget, namespace, _signing_key):
     global kget, signing_key, DEFAULT_NAMESPACE
     kget, signing_key, DEFAULT_NAMESPACE = _kget, _signing_key, namespace
+    NAMES.bind(_kget)
 
 
 def _name(value, label):
@@ -34,9 +36,7 @@ def _name(value, label):
 
 def _probe(node):
     node = _name(node, "node")
-    pods = kget(
-        f"/api/v1/namespaces/{DEFAULT_NAMESPACE}/pods"
-        "?labelSelector=app%3Dharvui-nodeprobe").get("items", [])
+    pods = NAMES.nodeprobe_pods(DEFAULT_NAMESPACE)
     pod = next((item for item in pods
                 if item.get("spec", {}).get("nodeName") == node
                 and item.get("status", {}).get("phase") == "Running"

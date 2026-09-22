@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
-import harvui_imports as imports
+import homestead_imports as imports
 
 
 class ImageCacheTests(unittest.TestCase):
@@ -55,6 +55,7 @@ class ImageCacheTests(unittest.TestCase):
             raise AssertionError(path)
 
         imports.kget = get
+        imports.NAMES.bind(get)
         def send(method, path, body=None, **kwargs):
             if method == "DELETE":
                 raise urllib.error.HTTPError(path, 404, "missing", {}, None)
@@ -126,6 +127,7 @@ class PrepullTests(unittest.TestCase):
             raise AssertionError(path)
 
         imports.kget = get
+        imports.NAMES.bind(get)
         self.posted = []
 
         def send(method, path, body=None, **kwargs):

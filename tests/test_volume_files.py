@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 
-import harvui_files as files
+import homestead_files as files
 
 
 class PathSafetyTests(unittest.TestCase):

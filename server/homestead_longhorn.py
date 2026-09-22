@@ -15,6 +15,7 @@ That label model is what makes "groups" cheap here — assigning a volume is one
 label patch, not a controller.
 """
 import json
+import homestead_names as NAMES
 import hashlib
 import math
 import re
@@ -89,7 +90,7 @@ def save_job(cfg):
     body = {
         "apiVersion": "longhorn.io/v1beta2", "kind": "RecurringJob",
         "metadata": {"name": name, "namespace": LHNS,
-                     "labels": {"harvui.io/managed": "true"}},
+                     "labels": {NAMES.key("managed"): "true"}},
         "spec": {"name": name, "task": cfg["task"], "cron": cfg["cron"],
                  "retain": retain, "concurrency": int(cfg.get("concurrency", 1)),
                  "groups": cfg.get("groups") or [], "labels": cfg.get("labels") or {}},
@@ -199,10 +200,10 @@ def snapshots(volume=None):
 
 
 def create_snapshot(volume, name=None):
-    name = name or f"harvui-{int(time.time())}"
+    name = name or f"homestead-{int(time.time())}"
     body = {"apiVersion": "longhorn.io/v1beta2", "kind": "Snapshot",
             "metadata": {"name": name, "namespace": LHNS,
-                         "labels": {"harvui.io/managed": "true"}},
+                         "labels": {NAMES.key("managed"): "true"}},
             "spec": {"volume": volume, "createSnapshot": True}}
     out = ksend("POST", f"{API}/namespaces/{LHNS}/snapshots", body)
     _bust("lhsnaps")
@@ -288,9 +289,9 @@ def create_backup(volume, name=None):
         raise ValueError("no backup target configured — set one before backing up")
     snap = create_snapshot(volume, name)["snapshot"]
     body = {"apiVersion": "longhorn.io/v1beta2", "kind": "Backup",
-            "metadata": {"generateName": "harvui-", "namespace": LHNS,
-                         "labels": {"backup-volume": volume, "harvui.io/managed": "true"}},
-            "spec": {"snapshotName": snap, "labels": {"harvui": "manual"}}}
+            "metadata": {"generateName": "homestead-", "namespace": LHNS,
+                         "labels": {"backup-volume": volume, NAMES.key("managed"): "true"}},
+            "spec": {"snapshotName": snap, "labels": {"homestead": "manual"}}}
     out = ksend("POST", f"{API}/namespaces/{LHNS}/backups", body)
     _bust("lhbackups")
     return {"ok": True, "backup": out.get("metadata", {}).get("name", ""),

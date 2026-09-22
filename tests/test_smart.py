@@ -10,7 +10,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
-import harvui_smart as smart
+import homestead_smart as smart
 import server
 
 
@@ -107,7 +107,7 @@ class SmartTests(unittest.TestCase):
         probe_section = manifest.split("- name: probe", 1)[1].split("- name: smart", 1)[0]
         self.assertNotIn("privileged: true", probe_section)
         self.assertIn("X-Homestead-Signature", manifest)
-        self.assertIn("secretName: harvui-auth", manifest)
+        self.assertIn("secretName: homestead-auth", manifest)
         self.assertIn('["-d", device_type(name), "-a", "-j", path]', manifest)
         self.assertIn('["-d", device_type(name), "-t", test, "-j", path]', manifest)
         script = manifest.split("  smart.py: |\n", 1)[1].split("\n---", 1)[0]

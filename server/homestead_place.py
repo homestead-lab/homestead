@@ -16,6 +16,7 @@ Two things this gets right that a plain nodeSelector does not:
    available, but you have to ask for it, and only stays if it was already pinned.
 """
 import json
+import homestead_names as NAMES
 import time
 import urllib.error
 
@@ -306,7 +307,7 @@ def move(ns, name, node, pin=False):
 
     dep["spec"].setdefault("strategy", {})["type"] = "Recreate"
     dep["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[
-        "harvui.io/movedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ")
+        NAMES.key("movedAt")] = time.strftime("%Y-%m-%dT%H:%M:%SZ")
     ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
     _bust("wl", "ov", "flow", "nodes", "impact:")
     return {"ok": True, "moved": name, "to": node or "any node", "mode": mode}

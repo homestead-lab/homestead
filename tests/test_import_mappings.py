@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 
-import harvui_imports as imports
+import homestead_imports as imports
 import server
 
 
@@ -379,7 +379,7 @@ class OwnershipTests(unittest.TestCase):
 
         job = self.bodies[-1]
         self.assertEqual("homestead-chown-mosquitto-appdata", job["metadata"]["name"])
-        self.assertEqual("chown", job["metadata"]["labels"]["harvui.io/task"])
+        self.assertEqual("chown", job["metadata"]["labels"]["homestead.io/task"])
         self.assertIn("chown -R 1883:1883 /data",
                       job["spec"]["template"]["spec"]["containers"][0]["command"][-1])
         self.assertEqual("mosquitto-appdata",

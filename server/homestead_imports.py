@@ -16,6 +16,8 @@ import time
 import urllib.error
 import urllib.parse
 
+import homestead_names as NAMES
+
 kget = ksend = create_pvc = build_deployment = None
 NS = "lab"
 _cache = {}
@@ -26,6 +28,9 @@ def bind(_kget, _ksend, _create_pvc, _build_dep, _ns, _cache_ref, _hardware_feat
     global kget, ksend, create_pvc, build_deployment, NS, _cache, hardware_features
     kget, ksend, create_pvc, build_deployment = _kget, _ksend, _create_pvc, _build_dep
     NS, _cache = _ns, _cache_ref
+    # Name lookups need the same client, and binding here means a caller never
+    # has to remember to do it separately.
+    NAMES.bind(_kget)
     if _hardware_features:
         hardware_features = _hardware_features
 
@@ -40,21 +45,26 @@ SAFE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$")
 
 
 # --------------------------------------------------------------- sources
+def _sources_map():
+    return NAMES.object_name("sources", NS)
+
+
 def list_sources():
     try:
-        cm = kget(f"/api/v1/namespaces/{NS}/configmaps/harvui-sources")
+        cm = kget(f"/api/v1/namespaces/{NS}/configmaps/{_sources_map()}")
         return json.loads(cm.get("data", {}).get("sources.json", "[]"))
     except Exception:
         return []
 
 
 def save_sources(srcs):
+    name = _sources_map()
     body = {"apiVersion": "v1", "kind": "ConfigMap",
-            "metadata": {"name": "harvui-sources", "namespace": NS},
+            "metadata": {"name": name, "namespace": NS},
             "data": {"sources.json": json.dumps(srcs, indent=2)}}
     try:
-        kget(f"/api/v1/namespaces/{NS}/configmaps/harvui-sources")
-        return ksend("PUT", f"/api/v1/namespaces/{NS}/configmaps/harvui-sources", body)
+        kget(f"/api/v1/namespaces/{NS}/configmaps/{name}")
+        return ksend("PUT", f"/api/v1/namespaces/{NS}/configmaps/{name}", body)
     except urllib.error.HTTPError as e:
         if e.code == 404:
             return ksend("POST", f"/api/v1/namespaces/{NS}/configmaps", body)
@@ -283,7 +293,7 @@ def run_probe(tag, script, src, timeout=70):
     pod = f"homestead-probe-{re.sub(r'[^a-z0-9-]', '-', tag)[:30]}-{int(time.time()) % 100000}"
     body = {
         "apiVersion": "v1", "kind": "Pod",
-        "metadata": {"name": pod, "namespace": NS, "labels": {"harvui.io/task": "probe"}},
+        "metadata": {"name": pod, "namespace": NS, "labels": NAMES.labels("probe")},
         "spec": {"restartPolicy": "Never", "terminationGracePeriodSeconds": 1,
                  "containers": [{
                      "name": "probe", "image": "alpine:3.20",
@@ -313,7 +323,7 @@ def run_probe(tag, script, src, timeout=70):
 
 def _pod_logs(pod):
     import urllib.request
-    from harvui_shim import raw_get  # provided by server.py
+    from homestead_shim import raw_get  # provided by server.py
     return raw_get(f"/api/v1/namespaces/{NS}/pods/{pod}/log?tailLines=400")
 
 
@@ -506,9 +516,9 @@ def chown_claim(namespace, pvc, uid, gid):
     body = {
         "apiVersion": "batch/v1", "kind": "Job",
         "metadata": {"name": job, "namespace": namespace,
-                     "labels": {"harvui.io/task": "chown", "harvui.io/app": pvc}},
+                     "labels": NAMES.labels("chown", app=pvc)},
         "spec": {"backoffLimit": 1, "ttlSecondsAfterFinished": 600,
-                 "template": {"metadata": {"labels": {"harvui.io/task": "chown"}},
+                 "template": {"metadata": {"labels": NAMES.labels("chown")},
                               "spec": {"restartPolicy": "Never",
                                        "containers": [{"name": "chown", "image": "alpine:3.20",
                                                        "command": ["sh", "-c", script],
@@ -821,7 +831,7 @@ def import_container(cfg):
     body = {
         "apiVersion": "batch/v1", "kind": "Job",
         "metadata": {"name": job, "namespace": NS,
-                     "labels": {"harvui.io/task": "import", "harvui.io/app": name},
+                     "labels": NAMES.labels("import", app=name),
                      # What this import made, so cleaning it up later does not
                      # have to guess - and cannot offer to delete a volume it
                      # merely borrowed.
@@ -834,7 +844,7 @@ def import_container(cfg):
                                      "homestead.io/import-volumes":
                                          ",".join(v["name"] for v in volumes)}},
         "spec": {"backoffLimit": 1, "ttlSecondsAfterFinished": 3600,
-                 "template": {"metadata": {"labels": {"harvui.io/task": "import"}},
+                 "template": {"metadata": {"labels": NAMES.labels("import")},
                               "spec": {"restartPolicy": "Never",
                                        "containers": [{
                                            "name": "copy", "image": "alpine:3.20",
@@ -987,7 +997,7 @@ def import_cleanup_plan(name):
                 "volumes": [], "namespace": NS, "known": False}
     meta = job.get("metadata", {}) or {}
     annotations = meta.get("annotations", {}) or {}
-    app = (meta.get("labels", {}) or {}).get("harvui.io/app", "")
+    app = NAMES.label_of(meta, "app")
     workload = annotations.get("homestead.io/import-workload", app)
     volume = annotations.get("homestead.io/import-volume", "")
     created = str(annotations.get("homestead.io/import-volume-created", "")).lower() == "true"
@@ -1120,8 +1130,8 @@ def _job_pod(job):
 def import_status():
     try:
         jobs = [job for job in
-                kget(f"/apis/batch/v1/namespaces/{NS}/jobs?labelSelector=harvui.io/task").get("items", [])
-                if (job["metadata"].get("labels", {}) or {}).get("harvui.io/task") in ("import", "chown")]
+                NAMES.find(f"/apis/batch/v1/namespaces/{NS}/jobs", "task")
+                if NAMES.label_of(job["metadata"], "task") in ("import", "chown")]
     except Exception:
         return []
     out = []
@@ -1131,8 +1141,8 @@ def import_status():
                  else "failed" if st.get("failed") else "pending")
         row = {
             "name": j["metadata"]["name"],
-            "kind": (j["metadata"].get("labels", {}) or {}).get("harvui.io/task", "import"),
-            "app": j["metadata"].get("labels", {}).get("harvui.io/app", ""),
+            "kind": NAMES.label_of(j["metadata"], "task", "import"),
+            "app": NAMES.label_of(j["metadata"], "app"),
             "active": st.get("active", 0), "succeeded": st.get("succeeded", 0),
             "failed": st.get("failed", 0),
             "start": st.get("startTime", ""), "end": st.get("completionTime", ""),
@@ -1216,8 +1226,7 @@ def image_retention_inventory():
     for dep in deployments:
         meta = dep.get("metadata", {})
         try:
-            previous = json.loads((meta.get("annotations", {}) or {}).get(
-                "harvui.io/update-previous", "{}"))
+            previous = json.loads(NAMES.annotation_of(meta, "update-previous", "{}"))
         except (TypeError, ValueError, json.JSONDecodeError):
             previous = {}
         for container, ref in (previous.get("images") or {}).items():
@@ -1323,7 +1332,7 @@ def prepull(image, nodes=None):
     body = {
         "apiVersion": "apps/v1", "kind": "DaemonSet",
         "metadata": {"name": name, "namespace": NS,
-                     "labels": {"harvui.io/task": "prepull", "harvui.io/image": tag}},
+                     "labels": NAMES.labels("prepull", image=tag)},
         "spec": {"selector": {"matchLabels": {"app": name}},
                  "template": {"metadata": {"labels": {"app": name}},
                               "spec": {"terminationGracePeriodSeconds": 1,
@@ -1360,8 +1369,7 @@ def prepull_status(sweep=True):
     DaemonSet is deleted rather than left running on every node forever.
     """
     try:
-        sets = kget(f"/apis/apps/v1/namespaces/{NS}/daemonsets"
-                    "?labelSelector=harvui.io/task%3Dprepull").get("items", [])
+        sets = NAMES.find(f"/apis/apps/v1/namespaces/{NS}/daemonsets", "task", "prepull")
     except Exception:
         return {"pulls": [], "finished": []}
     pulls, finished = [], []
@@ -1425,9 +1433,9 @@ def cleanup_image(digest, nodes=None):
         body = {
             "apiVersion": "v1", "kind": "Pod",
             "metadata": {"name": pod_name, "namespace": NS,
-                         "labels": {"app": "homestead-image-cleaner", "harvui.io/task": "image-cleanup"},
-                         "annotations": {"harvui.io/image-digest": digest,
-                                         "harvui.io/cache-node": node}},
+                         "labels": dict({"app": "homestead-image-cleaner"}, **NAMES.labels("image-cleanup")),
+                         "annotations": {NAMES.key("image-digest"): digest,
+                                         NAMES.key("cache-node"): node}},
             "spec": {"nodeName": node, "restartPolicy": "Never",
                      "terminationGracePeriodSeconds": 1,
                      "tolerations": [{"operator": "Exists"}],
@@ -1498,7 +1506,7 @@ def save_job(cfg):
         raise ValueError("name must be lowercase letters, numbers and dashes")
     body = {
         "apiVersion": "batch/v1", "kind": "CronJob",
-        "metadata": {"name": name, "namespace": NS, "labels": {"harvui.io/managed": "true"}},
+        "metadata": {"name": name, "namespace": NS, "labels": {NAMES.key("managed"): "true"}},
         "spec": {"schedule": cfg["schedule"], "suspend": bool(cfg.get("suspend")),
                  "concurrencyPolicy": "Forbid",
                  "successfulJobsHistoryLimit": 3, "failedJobsHistoryLimit": 3,
@@ -1526,7 +1534,7 @@ def run_job_now(name):
     cj = kget(f"/apis/batch/v1/namespaces/{NS}/cronjobs/{name}")
     body = {"apiVersion": "batch/v1", "kind": "Job",
             "metadata": {"name": f"{name}-{int(time.time()) % 1000000}", "namespace": NS,
-                         "labels": {"harvui.io/managed": "true", "harvui.io/from": name}},
+                         "labels": {NAMES.key("managed"): "true", NAMES.key("from"): name}},
             "spec": cj["spec"]["jobTemplate"]["spec"]}
     return ksend("POST", f"/apis/batch/v1/namespaces/{NS}/jobs", body)
 
@@ -1617,7 +1625,7 @@ def import_vm_disk(cfg):
         "apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "DataVolume",
         "metadata": {
             "name": name, "namespace": namespace,
-            "labels": {"harvui.io/managed": "true", VM_DISK_LABEL: "true"},
+            "labels": {NAMES.key("managed"): "true", VM_DISK_LABEL: "true"},
             "annotations": {"homestead.io/import-source": "http",
                             "homestead.io/disk-format": "auto-detected"},
         },
@@ -1743,7 +1751,7 @@ def create_vm(cfg):
     vm = {
         "apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
         "metadata": {"name": name, "namespace": ns,
-                     "labels": {"harvui.io/managed": "true", "app": name}},
+                     "labels": {NAMES.key("managed"): "true", "app": name}},
         "spec": {
             "running": bool(cfg.get("start", True)),
             **({} if imported_dv else {"dataVolumeTemplates": [{

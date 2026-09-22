@@ -352,13 +352,31 @@ class HomesteadManifestTests(unittest.TestCase):
     def test_runtime_workload_uses_homestead_names_and_image(self):
         manifest = (ROOT / "deploy" / "deploy.yaml").read_text()
         self.assertIn("kind: Deployment\nmetadata:\n  name: homestead", manifest)
-        self.assertIn("- name: homestead\n          image: ghcr.io/wjcloudy/homestead:2.8.39", manifest)
-        self.assertIn("harvui.io/update-sources: '{\"homestead\":", manifest)
-        self.assertNotIn("kind: Deployment\nmetadata:\n  name: harvui", manifest)
+        self.assertIn("- name: homestead\n          image: ghcr.io/wjcloudy/homestead:2.8.40",
+                      manifest)
+        self.assertIn("homestead.io/update-sources: '{\"homestead\":", manifest)
 
-    def test_persistent_claim_keeps_legacy_compatibility_name(self):
+    def test_a_new_install_creates_nothing_called_harvui(self):
+        """The old name survives in code, to read what older installs wrote.
+        It must not survive in the manifests, or every new install inherits it."""
+        for name in ("deploy.yaml", "nodeprobe.yaml"):
+            with self.subTest(manifest=name):
+                lines = (ROOT / "deploy" / name).read_text().splitlines()
+                self.assertEqual([], [line for line in lines if "harvui" in line
+                                      and not line.strip().startswith("#")])
+
+    def test_the_version_is_not_pinned_beside_the_image_it_describes(self):
+        """The image bakes HOMESTEAD_VERSION in; a copy here goes stale the
+        moment the updater replaces that image."""
         manifest = (ROOT / "deploy" / "deploy.yaml").read_text()
-        self.assertIn("claimName: harvui-data", manifest)
+        self.assertNotIn("name: HOMESTEAD_VERSION", manifest)
+        self.assertNotIn("name: HARVUI_VERSION", manifest)
+
+    def test_the_data_claim_is_the_one_the_deployment_mounts(self):
+        manifest = (ROOT / "deploy" / "deploy.yaml").read_text()
+        self.assertIn("claimName: homestead-data", manifest)
+        self.assertIn("kind: PersistentVolumeClaim\nmetadata:\n  name: homestead-data",
+                      manifest)
 
 
 if __name__ == "__main__":

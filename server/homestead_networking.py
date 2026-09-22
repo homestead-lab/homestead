@@ -8,6 +8,7 @@ state rather than trusting an IPPool's allocation counter: explicitly requested
 kube-vip addresses are not recorded in the Harvester IPPool status.
 """
 import ipaddress
+import homestead_names as NAMES
 import re
 import time
 import urllib.error
@@ -231,7 +232,7 @@ def inventory():
         else:
             health, reason = "healthy", f"{ready_count} ready endpoint(s)" if selector else "Selectorless Service"
         raw_rows.append({"namespace": ns, "name": name, "type": service_type,
-                         "system": ns in SYSTEM_NAMESPACES, "managed": labels.get("homestead.io/managed") == "true" or labels.get("harvui.io/managed") == "true",
+                         "system": ns in SYSTEM_NAMESPACES, "managed": NAMES.read(labels, "managed") == "true",
                          "cluster_ip": spec.get("clusterIP") or "", "external_ips": external,
                          "assigned_ips": assigned, "requested_ips": requested,
                          "vip_host": annotations.get("kube-vip.io/vipHost") or "",

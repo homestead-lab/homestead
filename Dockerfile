@@ -17,17 +17,17 @@ ENV PORT=8080 \
     PYTHONUNBUFFERED=1
 
 RUN apk add --no-cache smartmontools \
-    && addgroup -S -g 10001 harvui && adduser -S -D -H -u 10001 -G harvui harvui \
+    && addgroup -S -g 10001 homestead && adduser -S -D -H -u 10001 -G homestead homestead \
     && mkdir -p /srv /web /data \
-    && chown -R harvui:harvui /data
+    && chown -R homestead:homestead /data
 
-COPY --chown=harvui:harvui server/*.py /srv/
-COPY --chown=harvui:harvui web/index.html web/style.css /web/
-COPY --chown=harvui:harvui web/js/*.js /web/js/
-COPY --chown=harvui:harvui web/assets/*.svg /web/assets/
+COPY --chown=homestead:homestead server/*.py /srv/
+COPY --chown=homestead:homestead web/index.html web/style.css /web/
+COPY --chown=homestead:homestead web/js/*.js /web/js/
+COPY --chown=homestead:homestead web/assets/*.svg /web/assets/
 # Vendored libraries keep their own directory layout: Monaco loads its pieces
 # by relative path at runtime.
-COPY --chown=harvui:harvui web/vendor /web/vendor
+COPY --chown=homestead:homestead web/vendor /web/vendor
 
 USER 10001:10001
 EXPOSE 8080

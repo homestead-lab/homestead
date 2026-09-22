@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 
-import harvui_lifecycle as lifecycle
+import homestead_lifecycle as lifecycle
 
 
 DEPLOYMENT = {

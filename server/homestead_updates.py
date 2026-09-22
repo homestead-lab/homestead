@@ -6,6 +6,7 @@ written to the update history. Applied images are pinned by manifest digest so
 rollback cannot accidentally re-pull a broken mutable tag.
 """
 import base64
+import homestead_names as NAMES
 import calendar
 import concurrent.futures
 import hashlib
@@ -24,10 +25,10 @@ kget = ksend = None
 DEFAULT_NS = "lab"
 DATA_DIR = "/data"
 SYSTEM_NAMESPACES = set()
-TRACKED = "harvui.io/update-sources"
-PREVIOUS = "harvui.io/update-previous"
-LAST_ACTION = "harvui.io/update-action"
-ROLLOUT_AT = "harvui.io/update-rollout-at"
+TRACKED = NAMES.key("update-sources")
+PREVIOUS = NAMES.key("update-previous")
+LAST_ACTION = NAMES.key("update-action")
+ROLLOUT_AT = NAMES.key("update-rollout-at")
 MANIFEST_ACCEPT = ", ".join((
     "application/vnd.oci.image.index.v1+json",
     "application/vnd.oci.image.manifest.v1+json",
