@@ -49,14 +49,15 @@ class ImageContentTests(unittest.TestCase):
                                  f"{source} is copied by the Dockerfile but "
                                  ".dockerignore keeps it out of the build")
 
-    def test_the_probe_manifest_is_in_the_image(self):
-        """Without it an upgrade cannot carry the probe's scripts."""
+    def test_the_probe_scripts_are_in_the_image(self):
+        """Without them an upgrade cannot carry the probe forward, and the
+        install button has nothing to install."""
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
-        self.assertIn("deploy/nodeprobe.yaml", dockerfile)
-        self.assertFalse(excluded("deploy/nodeprobe.yaml", ignore_rules()))
-        self.assertTrue(excluded("deploy/deploy.yaml", ignore_rules()),
-                        "only the probe manifest belongs in the image")
+        self.assertIn("server/probe/*.py", dockerfile)
+        self.assertFalse(excluded("server/probe/*.py", ignore_rules()))
+        self.assertTrue((ROOT / "server" / "probe" / "probe.py").exists())
+        self.assertTrue((ROOT / "server" / "probe" / "smart.py").exists())
 
 
 if __name__ == "__main__":

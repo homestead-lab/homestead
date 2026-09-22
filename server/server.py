@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.50"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.51"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2452,6 +2452,8 @@ ADMIN_ROUTES = {
     "/api/volumes/delete", "/api/volumes/chown",
     "/api/files/list", "/api/files/read", "/api/files/write", "/api/files/close",
     "/api/node/smart/test",
+    # Installing the probe stands a privileged container on every node.
+    "/api/node/probe/install", "/api/node/probe/remove",
     "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete",
     "/api/lh/restore",
 }
@@ -3119,6 +3121,10 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, LC.set_cordon(b["node"], b.get("cordon", True)))
             if p == "/api/node/hardware":
                 return self._send(200, set_node_hardware(b))
+            if p == "/api/node/probe/install":
+                return self._send(200, PROBE.install(HOMESTEAD_VERSION))
+            if p == "/api/node/probe/remove":
+                return self._send(200, PROBE.remove())
             if p == "/api/node/smart/test":
                 result = SMART.start_test(b.get("node"), b.get("disk"), b.get("test"))
                 result["operation"] = OPS.start(

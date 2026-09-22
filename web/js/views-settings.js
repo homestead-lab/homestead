@@ -131,7 +131,10 @@ async function viewSettings() {
           <div><span>Cluster VIP</span><b class="mono">${esc(overview?.lb_ip || info.vip || "—")}</b></div>
           <div><span>Nodes ready</span><b>${overview ? `${overview.nodes_ready}/${overview.nodes_total}` : "—"}</b></div>
           <div><span>Node probe ${tip("Homestead keeps the probe's scripts in step with its own release, so an upgrade needs no kubectl. It never installs the probe itself: the SMART sidecar is privileged.")}</span>
-            <b>${esc(probeWord(info.node_probe?.state))}</b><small>${esc(info.node_probe?.detail || "")}</small></div>
+            <b>${esc(probeWord(info.node_probe?.state))}</b><small>${esc(info.node_probe?.detail || "")}</small>
+            ${can("admin") ? `<div class="row" style="margin-top:6px">${info.node_probe?.state === "absent"
+              ? '<button class="btn sm" onclick="probeInstallConfirm()">Install</button>'
+              : '<button class="btn sm" onclick="probeRemove()">Remove</button>'}</div>` : ""}</div>
         </div>
       </section>
     </div>`);

@@ -259,10 +259,9 @@ window.nodeDetail = async (name, fromRoute = false) => {
           <div style="margin-top:14px">${[...(n.temps.hwmon || []), ...(n.temps.thermal || [])]
             .sort((a, b) => b.celsius - a.celsius).slice(0, 14)
             .map(t => `<span class="tag ${tempTag(t.celsius)}">${esc(t.chip ? t.chip + " " : "")}${esc(t.name)} ${t.celsius}°</span>`).join("")}</div>`
-        : `<div class="note" style="margin-top:12px"><b>No thermal data.</b> Kubernetes exposes none —
-           it needs the optional node probe. Apply
-           <span class="mono">deploy/nodeprobe.yaml</span> to enable it; it mounts
-           <span class="mono">/sys</span> read-only, drops all capabilities and is not privileged.</div>`}
+        : `<div class="note between" style="margin-top:12px"><span><b>No thermal data.</b> Kubernetes exposes
+           none — temperatures, drive health and per-disk throughput all come from the optional node probe.</span>
+           <button class="btn sm" data-need="admin" onclick="probeInstallConfirm()">Install node probe</button></div>`}
       </div>
       <div class="card flat" style="margin-top:16px">
         <div class="between node-section-head"><div><div class="ctitle">Hardware availability</div>
@@ -329,6 +328,43 @@ window.smartDisk = async (node, disk) => {
       </div></div>
       <div class="note"><b>USB and NVMe caveat.</b> Some USB bridges hide SMART commands; NVMe exposes different counters from ATA/SATA. Homestead shows unsupported values explicitly instead of treating them as zero.</div>`;
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+};
+
+/* The probe is two containers. One reads sensors with nothing special
+   granted to it; the other must be privileged to reach the drives at all, so
+   installing it is stated plainly and asked for rather than assumed. */
+window.probeInstallConfirm = () => modal("Install the node probe?", `
+  <p>The probe runs one pod on every node and reports what Kubernetes does not:
+    temperatures, host devices, per-disk throughput, and SMART drive health.</p>
+  <div class="note"><b>Telemetry container.</b> Mounts <span class="mono">/sys</span>,
+    <span class="mono">/proc</span> and <span class="mono">/dev</span> read-only, drops every
+    capability, runs with a read-only root and cannot escalate privilege.</div>
+  <div class="note warn"><b>SMART container is privileged.</b> Reading drive health means talking to
+    block devices directly, and no lesser capability covers an unknown, changing set of drives.
+    It has no host PID, IPC or network namespace, keeps a read-only root, and answers only
+    requests carrying a short-lived signature from Homestead. Without it there is no drive health.</div>
+  <div class="row" style="margin-top:16px">
+    <button class="btn pri" data-need="admin" onclick="probeInstall()">Install probe</button>
+    <button class="btn" onclick="closeModal()">Not now</button></div>`);
+
+window.probeInstall = async () => {
+  try {
+    const result = await api("/api/node/probe/install", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: "{}" });
+    toast(result.detail || "node probe installed", "ok");
+    closeModal(); resetPaint(); viewNodes();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+window.probeRemove = async () => {
+  if (!confirm("Remove the node probe from every node?" + String.fromCharCode(10, 10)
+      + "Temperatures, drive health and disk throughput stop being reported.")) return;
+  try {
+    const result = await api("/api/node/probe/remove", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: "{}" });
+    toast(result.detail || "node probe removed", "ok");
+    closeModal(); resetPaint(); viewNodes();
+  } catch (e) { toast(e.message, "bad"); }
 };
 
 window.smartStartConfirm = (node, disk, type) => modal(`Start ${type} SMART test?`, `
