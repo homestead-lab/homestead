@@ -22,6 +22,9 @@ RUN apk add --no-cache smartmontools \
     && chown -R homestead:homestead /data
 
 COPY --chown=homestead:homestead server/*.py /srv/
+# The node probe's scripts travel with the release that reads them, so an
+# upgrade can bring the probe with it instead of asking for a kubectl command.
+COPY --chown=homestead:homestead deploy/nodeprobe.yaml /srv/nodeprobe.yaml
 COPY --chown=homestead:homestead web/index.html web/style.css /web/
 COPY --chown=homestead:homestead web/js/*.js /web/js/
 COPY --chown=homestead:homestead web/assets/*.svg /web/assets/

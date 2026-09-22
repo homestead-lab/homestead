@@ -130,6 +130,8 @@ async function viewSettings() {
           <div><span>Storage class</span><b class="mono">${esc(info.storage_class || "—")}</b></div>
           <div><span>Cluster VIP</span><b class="mono">${esc(overview?.lb_ip || info.vip || "—")}</b></div>
           <div><span>Nodes ready</span><b>${overview ? `${overview.nodes_ready}/${overview.nodes_total}` : "—"}</b></div>
+          <div><span>Node probe ${tip("Homestead keeps the probe's scripts in step with its own release, so an upgrade needs no kubectl. It never installs the probe itself: the SMART sidecar is privileged.")}</span>
+            <b>${esc(probeWord(info.node_probe?.state))}</b><small>${esc(info.node_probe?.detail || "")}</small></div>
         </div>
       </section>
     </div>`);
@@ -151,6 +153,9 @@ window.saveHealthSettings = async () => {
     viewSettings();
   } catch (e) { toast(e.message, "bad"); }
 };
+
+const probeWord = state => ({ updated: "updated with this release", current: "up to date",
+  absent: "not installed", error: "could not be checked" })[state] || "unknown";
 
 window.saveSiteName = async () => {
   const body = { ...(STATE.data.appSettings || {}), site_name: $("#set_site_name").value.trim() };

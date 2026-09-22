@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.48"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.49"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -309,7 +309,7 @@ def app_settings_payload():
         kube = ""
     settings["info"] = {"version": HOMESTEAD_VERSION, "namespace": DEFAULT_NS,
                         "storage_class": STORAGE_CLASS, "vip": LB_IP,
-                        "kubernetes": kube}
+                        "kubernetes": kube, "node_probe": PROBE.status()}
     return settings
 
 
@@ -2214,7 +2214,9 @@ import homestead_smart as SMART
 import homestead_shares as SHARES
 import homestead_networking as NETWORK
 import homestead_cluster as CLUSTER
+import homestead_probe as PROBE
 NAMES.bind(kget)
+PROBE.bind(kget, ksend, DEFAULT_NS)
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
 LC.bind(kget, ksend, SYS_NS, _cache, HW.features, create_pvc, STORAGE_CLASS)
 IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.features)
@@ -3337,8 +3339,25 @@ class H(BaseHTTPRequestHandler):
             return self._send(500, {"error": str(e)})
 
 
+def _upgrade_node_probe():
+    """Finish the upgrade the image cannot finish by itself.
+
+    Deliberately not fatal and deliberately quiet: a cluster where the probe
+    is absent, or where Homestead lacks the rights to touch it, is a cluster
+    that simply has no probe - not a reason to refuse to start.
+    """
+    try:
+        result = PROBE.reconcile(HOMESTEAD_VERSION)
+    except Exception as error:
+        print(f"node probe: not updated ({str(error)[:120]})", flush=True)
+        return
+    if result["state"] in ("updated", "error"):
+        print(f"node probe: {result['detail']}", flush=True)
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8080"))
     threading.Thread(target=_sampler, daemon=True).start()
+    threading.Thread(target=_upgrade_node_probe, daemon=True).start()
     print(f"Homestead listening on :{port}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", port), H).serve_forever()

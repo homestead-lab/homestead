@@ -55,10 +55,10 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.48`, the workflow publishes:
+For a release such as `v2.8.49`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.48
+ghcr.io/wjcloudy/homestead:2.8.49
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -69,8 +69,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.48
-git push origin v2.8.48
+git tag v2.8.49
+git push origin v2.8.49
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -281,7 +281,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.48 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.49 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -553,8 +553,13 @@ attribute, or failing both, how close the worst pre-failure attribute sits to
 its manufacturer threshold. A drive that reports no such figure shows nothing
 rather than a made-up number.
 
-Life and spare-block figures come from the node probe, so `deploy/nodeprobe.yaml`
-has to be re-applied after upgrading to see them.
+The probe's scripts travel inside the Homestead image. On start, Homestead
+compares them with the ones the installed probe is running and replaces them if
+they differ, restarting the DaemonSet — so upgrading Homestead upgrades the
+probe, with no manifest to re-apply. It updates whichever name the probe already
+has, and never installs one that is not there: the SMART sidecar is privileged,
+so the first install stays a deliberate `kubectl apply -f deploy/nodeprobe.yaml`.
+What it last decided is shown in **Settings → About this installation**.
 
 ### Naming an installation
 
