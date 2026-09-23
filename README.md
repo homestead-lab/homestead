@@ -33,6 +33,7 @@ not affiliated with, endorsed, or sponsored by Lime Technology, Inc.
 | **Hardware** | Host device browser and reusable mappings for iGPU, Coral, USB/PCIe and other devices |
 | **Import** | Docker Compose files checked as you type, Unraid/Docker workload and appdata import, several folders across several volumes, measured sizing with a per-volume capacity preflight, byte-weighted progress, named failures, editable seed configuration |
 | **Administration** | Direct URLs/breadcrumbs, persistent activity tray, viewer/operator/admin roles, appearance, thresholds and version details |
+| **App & alerts** | Installable on phones and desktops over HTTPS, with push notifications for outages, degraded storage and workloads, failed jobs, joining hosts and image updates |
 
 ## Repository layout
 
@@ -55,10 +56,10 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.69`, the workflow publishes:
+For a release such as `v2.8.70`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.69
+ghcr.io/wjcloudy/homestead:2.8.70
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -69,8 +70,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.69
-git push origin v2.8.69
+git tag v2.8.70
+git push origin v2.8.70
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -331,6 +332,47 @@ response forbids framing and scripts from elsewhere, sessions are signed and
 limited per address and per account, using Cloudflare's client address rather
 than a header the client can write.
 
+## Installing the app and getting notifications
+
+Opened over HTTPS — through a Cloudflare Tunnel, or a reverse proxy with a
+certificate — Homestead can be installed as an app, and can notify each device
+when something needs you, even with Homestead closed. Browsers offer neither on
+a plain-HTTP LAN address; Settings says so there instead.
+
+1. Open Homestead's `https://` address. Chrome and Edge offer **Install app** in
+   Settings; on iPhone and iPad (iOS 16.4 or later), tap Share → **Add to Home
+   Screen** and open Homestead from the Home Screen, since iOS delivers
+   notifications only to installed web apps.
+2. In **Settings → Notifications on this device**, choose **Turn on
+   notifications** and pick what this device hears about:
+
+| Kind | What it covers |
+|---|---|
+| Outages | a node not Ready, a volume faulted, a drive failing SMART |
+| Degraded | a volume rebuilding a replica, a workload not ready after its start-up grace |
+| Failed jobs | anything in the activity tray that ends in failure |
+| Hosts joining | a join plan's install starting, the host joining, or the plan failing |
+| Image updates | a newer image for a workload (off by default; checked every six hours) |
+
+A problem is announced once it has lasted a minute, so restarts and rollouts do
+not buzz a phone, and announced again when it is over; the second notification
+replaces the first. **Send a test** checks the whole path.
+
+How it works: pushes carry nothing. Encrypting a payload needs a crypto library
+Homestead does not have, so Homestead sends an empty push signed with its VAPID
+key (kept in `DATA_DIR`), and the app's service worker then fetches what
+happened over its own signed-in connection. Nothing about the cluster passes
+through Google's, Mozilla's or Apple's push service. If the session has expired,
+the notification just says to open Homestead and sign in. Signing out on a
+device stops its notifications; so does removing its user.
+
+Homestead needs to reach the push services on the internet (for example
+`fcm.googleapis.com`, `updates.push.services.mozilla.com`, `web.push.apple.com`,
+`*.notify.windows.com`); it POSTs only to those hosts. Behind Cloudflare Access,
+the manifest and icons are served without Access's signature so the browser can
+install the app; if installation still fails, add an Access **Bypass** policy for
+`/manifest.webmanifest` and `/icons/*`.
+
 ## Updating Homestead
 
 Homestead appears in its own Containers page. **Check images** compares the running
@@ -350,7 +392,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.69 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.70 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -623,6 +665,8 @@ authenticated.
 | `SESSION_REMEMBER_DAYS` | `30` | idle window when "keep me signed in" is ticked |
 | `SESSION_MAX_DAYS` | `90` | hard limit on a session's age, however active |
 | `ENABLE_NODE_POWER` | unset | `true` enables guarded reboot/shutdown actions |
+| `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD` | empty | require Cloudflare Access's signature on requests through a tunnel |
+| `PUSH_CONTACT` | project URL | the `mailto:` or `https:` contact push services see in Homestead's VAPID token |
 
 ## Local verification
 

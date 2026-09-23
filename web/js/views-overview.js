@@ -26,6 +26,7 @@ async function viewDash() {
     loadHealthSettings(),
   ]);
   STATE.data.ov = o; STATE.data.stor = st;
+  pwaBadge((o.health_issues || []).length);
   const hp = $("#healthPill");
   const healthState = o.health_state || o.health;
   hp.className = "pill " + (healthState === "healthy" ? "ok" :

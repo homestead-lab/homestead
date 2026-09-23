@@ -28,6 +28,9 @@ COPY --chown=homestead:homestead server/probe/*.py /srv/probe/
 COPY --chown=homestead:homestead web/index.html web/style.css /web/
 COPY --chown=homestead:homestead web/js/*.js /web/js/
 COPY --chown=homestead:homestead web/assets/*.svg /web/assets/
+# The installable app: its worker, manifest and icons.
+COPY --chown=homestead:homestead web/sw.js web/manifest.webmanifest /web/
+COPY --chown=homestead:homestead web/icons/*.png /web/icons/
 # Vendored libraries keep their own directory layout: Monaco loads its pieces
 # by relative path at runtime.
 COPY --chown=homestead:homestead web/vendor /web/vendor

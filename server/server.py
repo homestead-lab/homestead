@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.69"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.70"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2349,6 +2349,8 @@ import homestead_move_engine as MOVE_ENGINE
 import homestead_compose as COMPOSE
 import homestead_onboard as ONBOARD
 import homestead_cfaccess as CFACCESS
+import homestead_push as PUSH
+import homestead_alerts as ALERTS
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
@@ -2371,6 +2373,72 @@ ONBOARD.bind(kget, ksend, DEFAULT_NS, DATA_DIR, OPS)
 # application, and a request that came through Cloudflare without Access's
 # signature is refused, whatever the Access policy says.
 CFACCESS.configure(os.environ.get("CF_ACCESS_TEAM_DOMAIN", ""), os.environ.get("CF_ACCESS_AUD", ""))
+PUSH.bind(DATA_DIR, os.environ.get("PUSH_CONTACT", ""))
+ALERTS.bind(DATA_DIR)
+
+
+# ------------------------------------------------------------- alerts
+UPDATE_SCAN_EVERY = 6 * 3600
+_last_update_scan = [0.0]
+
+
+def _alert_sources():
+    """What each source sees now; None where it could not look."""
+    results = {}
+
+    def take(name, fn):
+        try:
+            results[name] = fn()
+        except Exception:
+            results[name] = None
+
+    take("health", lambda: ALERTS.health_facts(cached("ov", 10, get_overview)))
+    take("jobs", lambda: ALERTS.job_facts(OPS.list_operations()))
+    take("joins", lambda: ALERTS.join_facts(ONBOARD.plans()))
+    if PUSH.wanted_by(["updates"]) and time.time() - _last_update_scan[0] > UPDATE_SCAN_EVERY:
+        # Only scanned for someone who asked: it asks every registry.
+        _last_update_scan[0] = time.time()
+        try:
+            UPDATES.report()
+        except Exception:
+            pass
+    latest = UPDATES._LATEST.get("report")
+    results["updates"] = ALERTS.update_facts(latest) if latest else None
+    return results
+
+
+def push_alerts(fresh):
+    """Wakes every device that wants one of these alerts, and belongs to a user still here."""
+    if not fresh:
+        return None
+    kinds = {entry["category"] for entry in fresh}
+    users = {u["name"] for u in AUTH.list_users()}
+    urgent = any(e["severity"] == "critical" and e["phase"] == "raised" for e in fresh)
+    return PUSH.send(lambda row: row["user"] in users and kinds & set(row["categories"]),
+                     urgency="high" if urgent else "normal")
+
+
+def alerts_pending(user, endpoint):
+    """What a device has not been shown yet, for its service worker after a push."""
+    row = PUSH.mine(user, endpoint) if endpoint else None
+    wanted = set(row["categories"]) if row else set()
+    active = len([a for a in ALERTS.active(wanted) if a.get("announced", 0) > 0])
+    if not row:
+        return {"alerts": [], "active": active, "known": False}
+    got = ALERTS.log(after=row.get("cursor", 0), categories=wanted | {"test"}, limit=12)
+    mine = PUSH.tag(endpoint)
+    alerts = [a for a in got["alerts"] if a["category"] != "test" or a.get("to") == mine]
+    PUSH.advance(user, endpoint, got["latest"])
+    return {"alerts": alerts, "active": active, "known": True}
+
+
+def _alerts_loop():
+    while True:
+        try:
+            push_alerts(ALERTS.observe(_alert_sources()))
+        except Exception as error:
+            print(f"alerts: {str(error)[:160]}", flush=True)
+        time.sleep(20)
 ONBOARD.kget_text = raw_get
 OPS.RESOLVERS["onboard"] = ONBOARD.op_state
 # A cleanup is recorded once it has happened, so it reads as done straight away.
@@ -2597,7 +2665,7 @@ CSP = "; ".join([
 
 
 # Paths reachable without a session. Everything else needs one.
-PUBLIC = {"/healthz", "/style.css", "/index.html",
+PUBLIC = {"/healthz", "/style.css", "/index.html", "/sw.js", "/manifest.webmanifest",
           "/api/auth/login", "/api/auth/state", "/api/auth/setup"}
 
 
@@ -2622,7 +2690,17 @@ def is_vendor_path(path):
 
 def is_asset_path(path):
     """Allow only flat, bundled SVG assets; never user-controlled filesystem paths."""
-    return bool(re.fullmatch(r"/assets/[A-Za-z0-9][A-Za-z0-9._-]*\.svg", path or ""))
+    return bool(re.fullmatch(r"/assets/[A-Za-z0-9][A-Za-z0-9._-]*\.svg", path or "")) or is_icon_png(path)
+
+
+def is_icon_png(path):
+    """The installed app's icons: flat, bundled PNGs."""
+    return bool(re.fullmatch(r"/icons/[a-z0-9][a-z0-9-]*\.png", path or ""))
+
+
+def is_app_identity(path):
+    """What a browser reads to install the app: its manifest and icons."""
+    return path == "/manifest.webmanifest" or is_icon_png(path)
 
 # Role needed per route. Rules:
 #   * any GET needs at least "viewer"
@@ -2666,7 +2744,10 @@ ADMIN_ROUTES = {
     "/api/lh/restore",
 }
 # things a signed-in user may always do to their own account
-SELF_ROUTES = {"/api/auth/logout", "/api/auth/password", "/api/auth/signout-everywhere"}
+SELF_ROUTES = {"/api/auth/logout", "/api/auth/password", "/api/auth/signout-everywhere",
+               # Notifications on your own devices, and what they are shown.
+               "/api/push/subscribe", "/api/push/unsubscribe", "/api/push/test",
+               "/api/push/status", "/api/alerts/pending"}
 
 
 def needed_role(path, method):
@@ -2716,7 +2797,10 @@ class H(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        # A file that says how it may be cached says so alone: two Cache-Control
+        # headers are read together, and no-store beside max-age wins.
+        if not any(k.lower() == "cache-control" for k, _ in (self._extra_headers or [])):
+            self.send_header("Cache-Control", "no-store")
         self._security_headers()
         for k, v in (self._extra_headers or []):
             self.send_header(k, v)
@@ -2815,7 +2899,9 @@ class H(BaseHTTPRequestHandler):
 
     def _guard(self, path):
         """Returns None when the request may proceed, or sends the refusal."""
-        if CFACCESS.enabled() and self._via_cloudflare():
+        # The app's name and icons are fetched by the browser's installer, which
+        # may not send Access's cookie; they say nothing about the cluster.
+        if CFACCESS.enabled() and self._via_cloudflare() and not is_app_identity(path):
             token = self.headers.get("Cf-Access-Jwt-Assertion") or self._cookies().get("CF_Authorization", "")
             try:
                 CFACCESS.verify(token)
@@ -2918,15 +3004,31 @@ class H(BaseHTTPRequestHandler):
                 return self._file(f"{WEBROOT}/index.html", "text/html; charset=utf-8")
             if p.startswith("/js/") and p.endswith(".js") and ".." not in p:
                 return self._file(f"{WEBROOT}/js/{os.path.basename(p)}", "application/javascript")
-            if is_asset_path(p):
+            if is_asset_path(p) and not is_icon_png(p):
                 return self._file(f"{WEBROOT}/assets/{os.path.basename(p)}", "image/svg+xml")
             if is_vendor_path(p):
-                # Vendored libraries are versioned by release, so they can be
-                # cached hard: Monaco alone is several megabytes.
-                return self._file(f"{WEBROOT}{p}", VENDOR_TYPES[os.path.splitext(p)[1]],
-                                  cache="public, max-age=31536000, immutable")
+                # Vendored paths carry no version, so the browser checks back
+                # each time; the installed app's worker keeps them per release.
+                return self._file(f"{WEBROOT}{p}", VENDOR_TYPES[os.path.splitext(p)[1]], cache="no-cache")
             if p == "/app.js":
                 return self._file(f"{WEBROOT}/app.js", "application/javascript")
+            if p == "/sw.js":
+                # Never cached by the browser's HTTP cache: a new release has to
+                # reach the worker that decides what else is cached.
+                return self._file(f"{WEBROOT}/sw.js", "application/javascript", cache="no-cache")
+            if p == "/manifest.webmanifest":
+                return self._file(f"{WEBROOT}/manifest.webmanifest", "application/manifest+json",
+                                  cache="no-cache")
+            if is_icon_png(p):
+                return self._file(f"{WEBROOT}/icons/{os.path.basename(p)}", "image/png",
+                                  cache="public, max-age=86400")
+            if p == "/api/push/key":
+                return self._send(200, {"key": PUSH.public_key(), "categories": PUSH.CATEGORIES,
+                                        "defaults": PUSH.DEFAULT_CATEGORIES})
+            if p == "/api/alerts":
+                return self._send(200, {"active": [a for a in ALERTS.active() if a.get("announced", 0) > 0],
+                                        "log": [a for a in ALERTS.log(limit=30)["alerts"] if a["category"] != "test"],
+                                        "devices": PUSH.devices(self.user)})
             if p == "/style.css":
                 return self._file(f"{WEBROOT}/style.css", "text/css")
             if p == "/healthz":
@@ -3209,6 +3311,37 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/auth/logout":
                 self._set_cookie("", clear=True)
                 return self._send(200, {"ok": True})
+            if p == "/api/push/subscribe":
+                try:
+                    return self._send(200, PUSH.subscribe(
+                        self.user, b.get("subscription"), b.get("categories"), b.get("device", ""),
+                        b.get("replaces", ""), cursor=ALERTS.log(limit=0)["latest"]))
+                except ValueError as error:
+                    return self._send(400, {"error": str(error)})
+            if p == "/api/push/unsubscribe":
+                return self._send(200, PUSH.unsubscribe(self.user, str(b.get("endpoint") or "")))
+            if p == "/api/push/status":
+                row = PUSH.mine(self.user, str(b.get("endpoint") or ""))
+                return self._send(200, {"known": bool(row), "tag": PUSH.tag(row["endpoint"]) if row else "",
+                                        "categories": (row or {}).get("categories", []),
+                                        "last_ok": (row or {}).get("last_ok", 0),
+                                        "failures": (row or {}).get("failures", 0)})
+            if p == "/api/push/test":
+                endpoint = str(b.get("endpoint") or "")
+                if not PUSH.mine(self.user, endpoint):
+                    return self._send(404, {"error": "this device is not set up for notifications"})
+                ALERTS.note({"key": f"test:{int(time.time())}", "category": "test", "severity": "info",
+                             "title": "Homestead notifications work",
+                             "body": "This device will be told when something needs you.",
+                             "href": "/settings", "to": PUSH.tag(endpoint)})
+                result = PUSH.send(lambda row: row["endpoint"] == endpoint, urgency="high")
+                status = (result["statuses"] or [0])[0]
+                if not result["sent"]:
+                    return self._send(502, {"error": f"the push service refused the push (HTTP {status})"
+                                            if status else "the push service could not be reached"})
+                return self._send(200, {"ok": True})
+            if p == "/api/alerts/pending":
+                return self._send(200, alerts_pending(self.user, str(b.get("endpoint") or "")))
             if p == "/api/auth/password":
                 AUTH.change_password(self.user, b.get("old"), b.get("new"))
                 self._set_cookie(AUTH.issue_token(self.user))
@@ -3747,5 +3880,6 @@ if __name__ == "__main__":
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=MOVE_ENGINE.run, daemon=True).start()
     threading.Thread(target=ONBOARD.run, daemon=True).start()
+    threading.Thread(target=_alerts_loop, daemon=True).start()
     print(f"Homestead listening on :{port}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", port), H).serve_forever()

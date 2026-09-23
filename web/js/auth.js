@@ -55,7 +55,7 @@ function ungate() { $("#gate").classList.add("hidden"); }
 
 function loginForm(err, setup) {
   gate(`
-    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.69" alt="">
+    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.70" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}
@@ -116,6 +116,7 @@ async function doSetup() {
 }
 
 window.doLogout = async () => {
+  try { await pwaForgetDevice(); } catch (e) { }
   try { await fetch("/api/auth/logout", { method: "POST" }); } catch (e) { }
   ME = null;
   clearInterval(window.__loopTimer);

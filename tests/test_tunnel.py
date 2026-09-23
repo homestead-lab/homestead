@@ -147,6 +147,18 @@ class TunnelTests(unittest.TestCase):
         self.assertEqual(403, sent[0][0])
         self.assertIn("Cloudflare Access", sent[0][1]["error"])
 
+    def test_the_app_can_be_installed_without_an_access_token(self):
+        cfaccess.configure("lab.cloudflareaccess.com", "aud-tag")
+        self.addCleanup(cfaccess.configure, "", "")
+        for path in ("/manifest.webmanifest", "/icons/icon-192.png"):
+            with self.subTest(path):
+                h, sent = handler(path, headers=CF)
+                h.do_GET()
+                self.assertEqual((200, "file"), sent[0])
+        h, sent = handler("/sw.js", headers=CF)
+        h.do_GET()
+        self.assertEqual(403, sent[0][0], "the worker is fetched with Access's cookie like any page")
+
     def test_the_lan_is_not_asked_for_an_access_token(self):
         cfaccess.configure("lab.cloudflareaccess.com", "aud-tag")
         self.addCleanup(cfaccess.configure, "", "")

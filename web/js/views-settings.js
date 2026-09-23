@@ -117,6 +117,8 @@ async function viewSettings() {
         ${users.length ? `<div class="sec">Users</div><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>User</th><th>Role</th><th>Last sign-in</th></tr></thead><tbody>${userRows}</tbody></table></div>` : ""}
       </section>
 
+      ${pwaCard()}
+
       <section class="card flat settings-wide">
         <div class="ctitle">About this installation</div><div class="csub">Runtime and cluster connection details</div>
         <div class="f sitename"><label>Site name ${tip("Shown under the Homestead wordmark and at the foot of the page. Name the cluster or the house it lives in; leave it blank to show nothing.")}</label>
@@ -138,6 +140,7 @@ async function viewSettings() {
         </div>
       </section>
     </div>`);
+  pwaPaint();
 }
 
 window.saveHealthSettings = async () => {
