@@ -66,10 +66,10 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.83`, the workflow publishes:
+For a release such as `v2.8.84`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.83
+ghcr.io/wjcloudy/homestead:2.8.84
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -80,8 +80,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.83
-git push origin v2.8.83
+git tag v2.8.84
+git push origin v2.8.84
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -432,7 +432,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.83/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.84/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -443,7 +443,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.83 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.84 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -719,6 +719,17 @@ Because a failed import usually leaves a stopped workload and a half-filled
 volume behind, removing it offers to delete those too — the volume only when
 that import created it, since a claim it merely copied into belongs to
 whatever was using it before.
+
+### Longhorn V2
+
+A storage class can be made on Longhorn's V2 data engine (SPDK), which is
+faster and lighter on CPU than V1. The class table has an Engine column, a V2
+volume is tagged on Volumes, and the storage classes card says whether V2 is on
+and how many nodes can hold its volumes: each needs a disk given to Longhorn as
+a block device and 2 GiB of hugepages. Creating a V2 class says so when it
+could not schedule yet. On Harvester, V2 is switched on by Harvester's own
+`longhorn-v2-data-engine-enabled` setting and V2 disks are added per host, so
+Homestead reads Longhorn's settings rather than changing them.
 
 ## Network shares
 

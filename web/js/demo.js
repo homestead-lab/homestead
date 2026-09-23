@@ -305,7 +305,7 @@
       detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.83", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.84", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
@@ -392,20 +392,20 @@
       user: "admin", added: "2026-09-22 17:02" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "garage") return { name, version: "2.8.83", protocol: 1, local_version: "2.8.83",
+      if (name === "garage") return { name, version: "2.8.84", protocol: 1, local_version: "2.8.84",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "garage runs 2.8.83 and this one 2.8.83. Moves work between them; garage is the newer of the two." };
+        message: "garage runs 2.8.84 and this one 2.8.84. Moves work between them; garage is the newer of the two." };
       return name === "attic"
-        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.83", local_protocol: 1,
+        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.84", local_protocol: 1,
             state: "behind", compatible: false,
-            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.83). Update attic first." }
-        : { name, version: "2.8.83", protocol: 1, local_version: "2.8.83", local_protocol: 1,
-            state: "same", compatible: true, message: "Both run Homestead 2.8.83." };
+            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.84). Update attic first." }
+        : { name, version: "2.8.84", protocol: 1, local_version: "2.8.84", local_protocol: 1,
+            state: "same", compatible: true, message: "Both run Homestead 2.8.84." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "shed", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.83", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.84", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -656,15 +656,21 @@
     },
     "/api/storageclasses": ["harvester-longhorn", "longhorn", "longhorn-r2"],
     "/api/storage/classes": [
-      { name: "harvester-longhorn", provisioner: "driver.longhorn.io", replicas: "3", migratable: true,
+      { name: "harvester-longhorn", provisioner: "driver.longhorn.io", engine: "v1", replicas: "3", migratable: true,
         expandable: true, reclaim: "Delete", default: true, internal: false, in_use: 2 },
-      { name: "longhorn", provisioner: "driver.longhorn.io", replicas: "3", migratable: false,
+      { name: "longhorn", provisioner: "driver.longhorn.io", engine: "v1", replicas: "3", migratable: false,
         encrypted: true, expandable: true, reclaim: "Delete", default: false, internal: false, in_use: 0 },
-      { name: "longhorn-r2", provisioner: "driver.longhorn.io", replicas: "2", migratable: true,
+      { name: "longhorn-r2", provisioner: "driver.longhorn.io", engine: "v1", replicas: "2", migratable: true,
         expandable: true, reclaim: "Retain", default: false, internal: false, in_use: 7 },
-      { name: "longhorn-static", provisioner: "driver.longhorn.io", replicas: "", migratable: false,
+      { name: "longhorn-static", provisioner: "driver.longhorn.io", engine: "v1", replicas: "", migratable: false,
         expandable: false, reclaim: "Delete", default: false, internal: true, in_use: 0 },
+      { name: "longhorn-v2", provisioner: "driver.longhorn.io", engine: "v2", replicas: "2", migratable: false,
+        expandable: true, reclaim: "Delete", default: false, internal: false, in_use: 1 },
     ],
+    "/api/storage/v2": { enabled: true, harvester_setting: true, ready_nodes: 2, total_nodes: 3, nodes: [
+      { name: "harvester-node1", block_disks: 1, hugepages_mb: 2048, ready: true, missing: [] },
+      { name: "harvester-node2", block_disks: 1, hugepages_mb: 2048, ready: true, missing: [] },
+      { name: "harvester-node3", block_disks: 0, hugepages_mb: 2048, ready: false, missing: ["a V2 (block) disk"] }] },
     "/api/network/service/delete": { ok: true, freed: ["192.0.2.246:8989/TCP"],
       message: "Service lab/sonarr-old deleted, releasing 192.0.2.246:8989/TCP" },
     "/api/shares": shares,
@@ -789,7 +795,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.83", candidate_tag: "2.8.83", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.84", candidate_tag: "2.8.84", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

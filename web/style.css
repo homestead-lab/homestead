@@ -1445,3 +1445,4 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .plan-card{display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:start;padding:12px 14px;cursor:pointer;margin:0}
 .plan-card:has(input:checked){border-color:var(--vio)}
 .plan-jobs{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.v2line{margin-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}

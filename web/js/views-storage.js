@@ -155,9 +155,10 @@ const volumeReason = v => (v.health_reason && v.state === "attached"
   && v.robustness !== "healthy") ? v.health_reason : "";
 
 async function viewStorage() {
-  const [v, st, classes] = await Promise.all([api("/api/volumes"), api("/api/storage").catch(() => null),
-    api("/api/storage/classes").catch(() => [])]);
+  const [v, st, classes, v2] = await Promise.all([api("/api/volumes"), api("/api/storage").catch(() => null),
+    api("/api/storage/classes").catch(() => []), api("/api/storage/v2").catch(() => null)]);
   STATE.data.storageClasses = classes;
+  STATE.data.v2 = v2;
   STATE.data.vols = v;
   const q = STATE.q.toLowerCase();
   const rows = v.filter(x => !q || x.name.includes(q) || (x.node || "").includes(q) ||
@@ -199,7 +200,7 @@ async function viewStorage() {
        // workload, not a fault. Longhorn calls it detached, so do we.
        : `<span class="pill neutral" data-tip="Nothing is mounting this volume, so Longhorn reports no live replica health">detached</span>`}
        ${volumeReason(x) ? `<span class="dim xs volume-reason">${esc(x.health_reason)}</span>` : ""}</td>
-     <td data-label="Mode"><span class="tag">${esc((x.access_modes || ["?"]).map(m => m === "ReadWriteMany" ? "RWX" : m === "ReadWriteOnce" ? "RWO" : m).join(", "))}</span>
+     <td data-label="Mode"><span class="tag">${esc((x.access_modes || ["?"]).map(m => m === "ReadWriteMany" ? "RWX" : m === "ReadWriteOnce" ? "RWO" : m).join(", "))}</span>${x.engine === "v2" ? '<span class="tag info" data-tip="On Longhorn\'s V2 data engine (SPDK)">V2</span>' : ""}
        <span class="dim xs mono">×${x.replicas}</span></td>
      <td data-label="Usage" class="volusage"><div>${meter(x.used_pct || 0)}
        <span class="dim xs mono">${x.actual_gb} / ${x.size_gb} GB</span></div></td>
@@ -213,7 +214,7 @@ async function viewStorage() {
      </div></td>
       </tr>`).join("") || `<tr><td colspan=7 class="empty">none</td></tr>`}
    </tbody></table></div></div>
-  ${storageClassCard(classes)}`);
+  ${storageClassCard(classes, v2)}`);
 }
 window.volumeCreate = async () => {
   const [nss, classes] = await Promise.all([api("/api/namespaces"),
@@ -347,19 +348,44 @@ window.volumeDeleteNow = async (namespace, name, uid) => {
   }
 };
 
-function storageClassCard(classes) {
+/* Longhorn's V2 engine in one line: whether it is on, and how many nodes can
+   hold its volumes. Shown once it is on or something already uses it. */
+function v2Summary(v2, rows) {
+  if (!v2 || (!v2.enabled && !rows.some(row => row.engine === "v2"))) return "";
+  const text = !v2.enabled ? "switched off, yet a class uses it: its volumes will not schedule"
+    : v2.ready_nodes ? `${v2.ready_nodes} of ${v2.total_nodes} node${v2.total_nodes === 1 ? "" : "s"} ready for its volumes`
+    : "on, but no node has a V2 disk and hugepages yet";
+  return `<div class="dim xs v2line"><span class="tag ${v2.enabled && v2.ready_nodes ? "info" : "warn"}">Longhorn V2</span> ${esc(text)}
+    <a onclick="v2Details()" style="cursor:pointer;text-decoration:underline">details</a></div>`;
+}
+window.v2Details = () => {
+  const v2 = STATE.data.v2 || { nodes: [] };
+  modal("Longhorn V2 data engine", `<p class="muted small">V2 is Longhorn's SPDK engine: lower latency and less CPU per I/O than V1. A V2 volume needs the engine switched on, and every node that holds one of its replicas needs a disk given to Longhorn as a block device and 2 GiB of hugepages.</p>
+    <div class="drow"><div class="dl">Engine</div><div class="dv">${v2.enabled ? '<span class="pill ok">on</span>' : '<span class="pill low">off</span>'}</div></div>
+    ${v2.harvester_setting !== null && v2.harvester_setting !== undefined ? `<div class="drow"><div class="dl">Harvester setting</div><div class="dv mono small">longhorn-v2-data-engine-enabled = ${v2.harvester_setting}</div></div>` : ""}
+    <div class="card flat pad0" style="margin-top:12px"><table class="tbl stack"><thead><tr><th>Node</th><th>V2 disks</th><th>Hugepages</th><th>Ready</th></tr></thead><tbody>
+      ${(v2.nodes || []).map(n => `<tr><td><b>${esc(n.name)}</b></td><td class="mono" data-label="V2 disks">${n.block_disks}</td>
+        <td class="mono" data-label="Hugepages">${n.hugepages_mb} MiB</td>
+        <td data-label="Ready">${n.ready ? '<span class="pill ok">ready</span>' : `<span class="dim xs">needs ${esc(n.missing.join(" and "))}</span>`}</td></tr>`).join("")
+        || '<tr><td colspan="4" class="empty">Longhorn reported no nodes</td></tr>'}</tbody></table></div>
+    <div class="note" style="margin-top:12px"><b>Turning it on, on Harvester:</b> Advanced → Settings → <span class="mono">longhorn-v2-data-engine-enabled</span>, which reserves the hugepages on every node. Then, per host, Hosts → Edit Config → Storage → Add Disk with the <b>Longhorn V2</b> provisioner, on a disk holding nothing you need. Harvester owns Longhorn's settings, so Homestead reads them rather than changing them.</div>`, true);
+};
+
+function storageClassCard(classes, v2 = null) {
   const rows = classes || [];
   if (!rows.length) return "";
   return `<div class="card flat pad0" style="margin-top:18px">
     <div class="between storage-class-head">
       <div><div class="ctitle">Storage classes</div>
-        <div class="csub">What a new volume is built from. Kubernetes fixes a class at creation, so Homestead creates and removes them rather than editing them in place.</div></div>
+        <div class="csub">What a new volume is built from. Kubernetes fixes a class at creation, so Homestead creates and removes them rather than editing them in place.</div>
+        ${v2Summary(v2, rows)}</div>
       <button class="btn pri" data-need="admin" onclick="storageClassCreate()">＋ New storage class</button></div>
     <div class="tblwrap"><table data-sort="storage-classes" class="tbl stack storage-class-table"><thead><tr>
-      <th>Class</th><th>Replicas</th><th>Shared (RWX)</th><th>Encryption</th><th>Expansion</th><th>Volumes</th><th></th>
+      <th>Class</th><th>Engine</th><th>Replicas</th><th>Shared (RWX)</th><th>Encryption</th><th>Expansion</th><th>Volumes</th><th></th>
     </tr></thead><tbody>${rows.map(row => `<tr>
       <td><b>${esc(row.name)}</b>${row.default ? '<span class="tag ok">default</span>' : ""}${row.internal ? '<span class="tag">Harvester internal</span>' : ""}
         <div class="dim xs mono">${esc(row.provisioner || "")}</div></td>
+      <td data-label="Engine">${row.engine === "v2" ? '<span class="tag info" data-tip="Longhorn V2 (SPDK)">V2</span>' : row.engine ? '<span class="tag">V1</span>' : '<span class="dim">—</span>'}</td>
       <td class="mono" data-label="Replicas">${esc(row.replicas || "—")}</td>
       <td data-label="Shared (RWX)">${row.migratable
         ? '<span class="pill low" data-tip="This class creates live-migratable volumes for VM disks. Longhorn cannot mount those into a pod, so it cannot back shared storage.">VM disks only</span>'
@@ -383,12 +409,29 @@ window.storageClassCreate = () => {
       <input type="number" id="sc_reps" min="1" max="5" value="2"></div>
       <div class="f"><label>Reclaim policy ${tip("Delete removes the Longhorn volume with its claim. Retain keeps the data behind after the claim is gone.")}</label>
         <select id="sc_reclaim"><option>Delete</option><option>Retain</option></select></div></div>
+    <div class="f"><label>Data engine ${tip("V1 is Longhorn's long-standing engine. V2 (SPDK) is faster and needs the engine switched on, a V2 disk and hugepages on the nodes.")}</label>
+      <select id="sc_engine" onchange="storageClassEngine()"><option value="v1">V1 · the default</option><option value="v2">V2 · SPDK</option></select>
+      <div class="note" id="sc_engine_note" hidden></div></div>
     <label class="switch"><input type="checkbox" id="sc_expand" checked> Allow volumes to grow later</label>
     <label class="switch"><input type="checkbox" id="sc_migratable" onchange="storageClassHint()"> Live-migratable · for VM disks</label>
     <div class="note" id="sc_hint">Leave migratable off for container storage: a migratable volume gets a second controller so a VM can move between hosts, and Longhorn refuses to mount that kind into a pod — which is what breaks ReadWriteMany.</div>
     <label class="switch"><input type="checkbox" id="sc_default"> Make this the default class</label>
     <div class="row" style="margin-top:18px"><button class="btn pri" id="sc_go" data-need="admin" onclick="storageClassSave(this)">Create class</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+};
+window.storageClassEngine = async () => {
+  const note = $("#sc_engine_note");
+  if ($("#sc_engine").value !== "v2") { note.hidden = true; return; }
+  note.hidden = false;
+  note.textContent = "Checking the nodes…";
+  const v2 = STATE.data.v2 = await api("/api/storage/v2").catch(() => STATE.data.v2);
+  if (!v2) { note.textContent = "Could not read Longhorn's V2 status."; return; }
+  note.classList.toggle("bad", !v2.enabled || !v2.ready_nodes);
+  note.innerHTML = !v2.enabled
+    ? "<b>V2 is switched off in Longhorn.</b> A class can be made now, but its volumes will not schedule until it is on. <a onclick=\"v2Details()\" style=\"cursor:pointer;text-decoration:underline\">How to turn it on</a>"
+    : v2.ready_nodes < +($("#sc_reps").value || 1)
+      ? `<b>${v2.ready_nodes} node${v2.ready_nodes === 1 ? " is" : "s are"} ready for V2</b>, fewer than the replicas asked for, so volumes will run degraded or not schedule. <a onclick="v2Details()" style="cursor:pointer;text-decoration:underline">What each node needs</a>`
+      : `${v2.ready_nodes} of ${v2.total_nodes} nodes are ready for V2 volumes.`;
 };
 window.storageClassHint = () => {
   const on = $("#sc_migratable").checked, hint = $("#sc_hint");
@@ -405,7 +448,7 @@ window.storageClassSave = async button => {
     const result = await api("/api/storage/classes", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, replicas: +$("#sc_reps").value, reclaim_policy: $("#sc_reclaim").value,
         expandable: $("#sc_expand").checked, migratable: $("#sc_migratable").checked,
-        default: $("#sc_default").checked }) });
+        engine: $("#sc_engine").value, default: $("#sc_default").checked }) });
     toast(result.message || `storage class "${name}" created`, "ok"); closeModal(); resetPaint(); viewStorage();
   } catch (e) { if (button) { button.disabled = false; button.textContent = "Create class"; } toast(e.message, "bad"); }
 };

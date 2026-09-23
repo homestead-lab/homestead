@@ -10,7 +10,7 @@
    never change under one address, so they are served from the cache. A page
    load always tries the network first and falls back to the saved shell only
    when there is no network at all. Nothing under /api/ is ever cached. */
-const VERSION = "2.8.83";
+const VERSION = "2.8.84";
 const CACHE = `homestead-${VERSION}`;
 const SHELL = "/";
 const ICON = "/icons/icon-192.png";

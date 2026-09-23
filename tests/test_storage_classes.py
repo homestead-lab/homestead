@@ -100,5 +100,59 @@ class StorageClassTests(unittest.TestCase):
         self.assertEqual([], self.sent)
 
 
+
+
+class LonghornV2Tests(unittest.TestCase):
+    def setUp(self):
+        self.sent = []
+        self.enabled = "true"
+        self.objects = {
+            "/api/v1/nodes": {"items": [
+                {"metadata": {"name": "n1"}, "status": {"allocatable": {"hugepages-2Mi": "2Gi"}}},
+                {"metadata": {"name": "n2"}, "status": {"allocatable": {"hugepages-2Mi": "0"}}}]},
+            "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/nodes": {"items": [
+                {"metadata": {"name": "n1"}, "spec": {"disks": {"nvme": {"diskType": "block", "allowScheduling": True},
+                                                                 "root": {"diskType": "filesystem"}}}},
+                {"metadata": {"name": "n2"}, "spec": {"disks": {"root": {"diskType": "filesystem"}}}}]},
+        }
+
+        def get(path, **kw):
+            if path.endswith("/settings/v2-data-engine"):
+                return {"value": self.enabled}
+            if "harvesterhci.io" in path:
+                raise OSError("not harvester")
+            if "storageclasses" in path:
+                return copy.deepcopy(CLASSES)
+            return copy.deepcopy(self.objects.get(path, {"items": []}))
+
+        server.kget = get
+        server.ksend = lambda method, path, body=None, **kw: self.sent.append((method, path, body)) or body
+
+    def test_quantities_read_in_mebibytes(self):
+        self.assertEqual([2048, 1024, 0, 0], [server._quantity_mb(v) for v in ("2Gi", "1024Mi", "0", "bogus")])
+
+    def test_each_node_says_what_it_lacks_for_v2(self):
+        status = server.v2_engine_status()
+        self.assertTrue(status["enabled"])
+        self.assertIsNone(status["harvester_setting"])
+        self.assertEqual((1, 2), (status["ready_nodes"], status["total_nodes"]))
+        n2 = next(n for n in status["nodes"] if n["name"] == "n2")
+        self.assertEqual(2, len(n2["missing"]))
+
+    def test_a_v2_class_carries_the_engine_and_warns_when_it_cannot_schedule(self):
+        result = server.create_storage_class({"name": "longhorn-v2", "replicas": 1, "engine": "v2"})
+        self.assertEqual("v2", self.sent[-1][2]["parameters"]["dataEngine"])
+        self.assertNotIn("will not schedule", result["message"])
+        self.enabled = "false"
+        result = server.create_storage_class({"name": "longhorn-v2b", "replicas": 1, "engine": "v2"})
+        self.assertIn("switched off", result["message"])
+        with self.assertRaises(ValueError):
+            server.create_storage_class({"name": "longhorn-v3", "engine": "v3"})
+
+    def test_v1_classes_do_not_name_an_engine(self):
+        server.create_storage_class({"name": "longhorn-plain", "replicas": 2})
+        self.assertNotIn("dataEngine", self.sent[-1][2]["parameters"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.83")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.84")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -631,6 +631,7 @@ def get_volumes():
             "node": st.get("currentNodeID", ""),
             "size_gb": round(int(sp.get("size", 0) or 0) / 1024**3, 1),
             "replicas": sp.get("numberOfReplicas", 0),
+            "engine": str(sp.get("dataEngine") or "v1").lower(),
             "actual_gb": round(int(st.get("actualSize", 0) or 0) / 1024**3, 2),
             "used_pct": round((int(st.get("actualSize", 0) or 0) / max(int(sp.get("size", 0) or 0), 1)) * 100, 1),
             "access_modes": pvc_spec.get("accessModes", []) or [],
@@ -1784,6 +1785,17 @@ def create_storage_class(cfg):
     parameters = {"numberOfReplicas": str(replicas), "staleReplicaTimeout": str(stale),
                   "migratable": "true" if cfg.get("migratable") else "false",
                   "encrypted": "true" if cfg.get("encrypted") else "false"}
+    engine = str(cfg.get("engine") or "v1").lower()
+    if engine not in ("v1", "v2"):
+        raise ValueError("the data engine is v1 or v2")
+    warning = ""
+    if engine == "v2":
+        parameters["dataEngine"] = "v2"
+        v2 = v2_engine_status()
+        if not v2["enabled"]:
+            warning = "; V2 is switched off in Longhorn, so its volumes will not schedule until it is on"
+        elif not v2["ready_nodes"]:
+            warning = "; no node has a V2 disk and hugepages yet, so its volumes will not schedule"
     body = {"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
             "metadata": {"name": name, "labels": {NAMES.key("managed"): "true"},
                          "annotations": {DEFAULT_CLASS_ANNOTATION: "true"} if cfg.get("default") else {}},
@@ -1797,7 +1809,64 @@ def create_storage_class(cfg):
     ksend("POST", "/apis/storage.k8s.io/v1/storageclasses", body)
     return {"ok": True, "name": name, "classes": storage_class_inventory(),
             "message": (f"Storage class {name} created" +
-                        (" and made the default" if cfg.get("default") else ""))}
+                        (" and made the default" if cfg.get("default") else "") + warning)}
+
+
+V2_HUGEPAGES_MB = 2048
+
+
+def _quantity_mb(value):
+    """A Kubernetes memory quantity in MiB: "2Gi", "1024Mi", "0"."""
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)([KMGT]i?)?", str(value or "0").strip())
+    if not match:
+        return 0
+    number, unit = float(match.group(1)), match.group(2) or ""
+    scale = {"": 1 / 1024**2, "Ki": 1 / 1024, "Mi": 1, "Gi": 1024, "Ti": 1024**2,
+             "K": 1000 / 1024**2, "M": 1000**2 / 1024**2, "G": 1000**3 / 1024**2, "T": 1000**4 / 1024**2}[unit]
+    return int(number * scale)
+
+
+def v2_engine_status():
+    """Whether Longhorn's V2 data engine can take volumes, node by node.
+
+    V2 (SPDK) needs three things: the engine switched on - on Harvester by its
+    own longhorn-v2-data-engine-enabled setting, which drives Longhorn's - and,
+    on each node that will hold a replica, a disk handed to Longhorn as a block
+    device and 2 GiB of hugepages. Without them a V2 volume never schedules,
+    which is worth knowing before creating a class for it."""
+    def setting(path):
+        try:
+            item = kget(path)
+            return str(item.get("value") or item.get("default") or "").lower() == "true"
+        except Exception:
+            return None
+
+    enabled = setting("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/settings/v2-data-engine")
+    harvester = setting("/apis/harvesterhci.io/v1beta1/settings/longhorn-v2-data-engine-enabled")
+    try:
+        hugepages = {node["metadata"]["name"]: _quantity_mb(
+            ((node.get("status", {}) or {}).get("allocatable", {}) or {}).get("hugepages-2Mi"))
+            for node in kget("/api/v1/nodes").get("items", [])}
+    except Exception:
+        hugepages = {}
+    nodes = []
+    try:
+        longhorn_nodes = kget("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/nodes").get("items", [])
+    except Exception:
+        longhorn_nodes = []
+    for node in longhorn_nodes:
+        name = node["metadata"]["name"]
+        disks = ((node.get("spec", {}) or {}).get("disks", {}) or {}).values()
+        block = [disk for disk in disks if str(disk.get("diskType", "")).lower() == "block"
+                 and disk.get("allowScheduling", True)]
+        pages = hugepages.get(name, 0)
+        missing = ([] if block else ["a V2 (block) disk"]) + (
+            [] if pages >= V2_HUGEPAGES_MB else [f"{V2_HUGEPAGES_MB // 1024} GiB of hugepages (has {pages} MiB)"])
+        nodes.append({"name": name, "block_disks": len(block), "hugepages_mb": pages,
+                      "ready": not missing, "missing": missing})
+    ready = sum(1 for node in nodes if node["ready"])
+    return {"enabled": bool(enabled), "harvester_setting": harvester, "nodes": nodes,
+            "ready_nodes": ready, "total_nodes": len(nodes)}
 
 
 def _clear_default_class(keep):
@@ -3356,6 +3425,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, selectable_storage_classes(classes))
             if p == "/api/storage/classes":
                 return self._send(200, storage_class_inventory())
+            if p == "/api/storage/v2":
+                return self._send(200, v2_engine_status())
             if p == "/api/pvcs":
                 ns = (q.get("ns") or [DEFAULT_NS])[0]
                 items = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims")["items"]
@@ -4091,7 +4162,7 @@ if __name__ == "__main__":
     threading.Thread(target=_upgrade_node_probe, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=MOVE_ENGINE.run, daemon=True).start()
-    # Join plans from 2.8.68-2.8.83 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.84 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     print(f"Homestead listening on :{port}", flush=True)
