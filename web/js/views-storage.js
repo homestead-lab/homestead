@@ -2,132 +2,150 @@
 
 const ROB = r => r === "healthy" ? "#3ddc91" : r === "degraded" ? "#ffb020" : "#ff4d4f";
 
+/* The architecture page: how each app is reached, what it runs, where its data
+   is and which hosts hold the copies - four columns read left to right, sized
+   to one desktop screen.
+
+     Access  ->  Containers  ->  Volumes  ->  Nodes (replica copies)
+
+   Lines join a VIP's port to the container behind it, a container to each
+   volume it mounts, and a volume to each copy of it. Hovering anything lights
+   up what it depends on and what depends on it - following the lines away from
+   it in each direction and never back, so a VIP that twelve apps share does
+   not light up all twelve when one of them is pointed at. */
 async function viewFlow() {
   const [f] = await Promise.all([api("/api/flow"), loadHardwareFeatures()]);
   STATE.data.flow = f;
   const links = [];
-  f.nodes.forEach(n => n.copies.forEach(c => links.push([n.id + "|" + c.vid, c.vid, "#a78bfa"])));
-  f.workloads.forEach(w => w.claims.forEach(c => { if (c.vid) links.push([c.vid, w.id, "#7dd3fc"]); }));
-  f.workloads.forEach(w => w.ports.forEach(p => { if (p.vip) links.push([w.id, "i:" + p.vip, "#ffb020"]); }));
+  const portId = (ip, port) => `p:${ip}:${port}`;
+  f.workloads.forEach(w => w.ports.forEach(p => { if (p.vip) links.push([portId(p.vip, p.port), w.id, "access"]); }));
+  f.workloads.forEach(w => w.claims.forEach(c => { if (c.vid) links.push([w.id, c.vid, "mount"]); }));
+  f.nodes.forEach(n => n.copies.forEach(c => links.push([c.vid, `${n.id}|${c.vid}`, "copy"])));
   STATE.data.alinks = links;
+  const used = new Set(links.flat());
+  const kind = w => w.kind === "vm" ? "virtual machine" : (w.node || "").replace(/^harvester-/, "");
 
   paint(`<div class="phead">
-      <div><h2>Architecture</h2><p>Where every replica lives, what mounts it, and how it is reached</p></div>
-      <div class="row hide-sm">
-        <span class="tag"><span class="dt" style="background:#a78bfa"></span>replica copy</span>
-        <span class="tag"><span class="dt" style="background:#7dd3fc"></span>mount</span>
-        <span class="tag"><span class="dt" style="background:#ffb020"></span>port</span>
+      <div><h2>Architecture</h2><p>How each app is reached, where its data lives, and which hosts hold the copies · hover anything to trace it</p></div>
+      <div class="row hide-sm arch-legend">
+        <span><i style="background:var(--arch-access)"></i>port</span>
+        <span><i style="background:var(--arch-mount)"></i>mount</span>
+        <span><i style="background:var(--arch-copy)"></i>replica</span>
       </div></div>
-    <div class="flowwrap topdown"><svg id="archsvg"></svg><div class="arch topdown">
+    <div class="arch2wrap"><svg id="archsvg" aria-hidden="true"></svg><div class="arch2">
 
-      <div class="acol"><h4>Nodes &amp; replica copies</h4>
-      ${f.nodes.map(n => `<div class="abox" data-id="${esc(n.id)}">
-        <div class="ahd"><div class="av n2">${esc(n.name.replace(/[^0-9a-z]/gi, "").slice(-2).toUpperCase())}</div>
-          <div class="anm">${esc(n.name)}</div><span class="badge">${n.copies.length}</span></div>
-        <div class="copies">${n.copies.map(c => `<span class="copy" data-tgt="${esc(c.vid)}" id="${esc(n.id + "|" + c.vid)}">
-          <span class="cd" style="background:${c.running ? "#3ddc91" : "#ffb020"}"></span>${esc(c.vol)}</span>`).join("")
-          || '<span class="dim xs">no replicas here</span>'}</div></div>`).join("")}
-      </div>
+      <section class="a2col"><h4>Access</h4>
+      ${f.vips.map(v => `<div class="a2item a2vip" data-kind="access" data-id="${esc(v.id)}">
+          <div class="a2vipip mono">${esc(v.ip)}</div>
+          <div class="a2ports">${v.ports.map(p => `<span class="a2port" id="${esc(portId(v.ip, p.port))}" data-kind="access"
+            data-id="${esc(portId(v.ip, p.port))}" title="${esc(p.app)} · open ${esc(v.ip)}:${p.port}"
+            onclick="openSvc('${esc(v.ip)}',${p.port})">${p.port}</span>`).join("")}</div></div>`).join("")
+        || '<div class="dim xs">No load-balancer addresses</div>'}
+      </section>
 
-      <div class="acol"><h4>Longhorn volumes</h4>
-      ${f.volumes.map(v => `<div class="abox" data-id="${esc(v.id)}" id="${esc(v.id)}">
-        <div class="ahd"><span class="cd" style="width:7px;height:7px;border-radius:50%;background:${ROB(v.robustness)}"></span>
-          <div class="anm">${esc(v.name)}</div><span class="badge">${v.replicas}×</span></div>
-        <div class="row" style="gap:6px">
-          <span class="tag">${v.size_gb}G</span>
-          <span class="tag ${v.robustness === "healthy" ? "ok" : v.robustness === "degraded" ? "warn" : "bad"}">${esc(v.robustness)}</span>
-          ${v.attached ? `<span class="tag info">on ${esc(v.attached.replace("harvester-", ""))}</span>` : ""}
-        </div></div>`).join("") || '<div class="dim xs" style="text-align:center">no volumes</div>'}
-      </div>
+      <section class="a2col"><h4>Containers <span class="dim">${f.workloads.length}</span></h4>
+      ${f.workloads.map(w => `<div class="a2item a2wl ${used.has(w.id) ? "" : "a2alone"}" id="${esc(w.id)}" data-kind="workload" data-id="${esc(w.id)}"
+          title="${esc(w.name)} · ${esc(kind(w))} · ${workloadCpuPercent(w.cpu)} CPU · ${w.mem_mb || 0} MB">
+          ${appAvatar(w.name, w.icon)}<span class="a2name">${esc(w.name)}</span>
+          <span class="a2meta">${esc(kind(w))}</span>
+          <button class="a2act" data-need="operator" title="${w.kind === "vm" ? "Migrate" : "Move to another host"}"
+            onclick="event.stopPropagation();${w.kind === "vm" ? `vmMove('${esc(w.ns || "lab")}','${esc(w.name)}')` : `moveWorkload('${esc(w.name)}','${esc(w.ns || "lab")}')`}">⇄</button>
+        </div>`).join("") || '<div class="dim xs">Nothing running</div>'}
+      </section>
 
-      <div class="acol"><h4>Workloads &amp; their ports</h4>
-      ${f.workloads.map(w => `<div class="abox" data-id="${esc(w.id)}" id="${esc(w.id)}">
-        <div class="ahd">${appAvatar(w.name, w.icon)}
-          <div style="flex:1;min-width:0"><div class="anm">${esc(w.name)}</div>
-            <div class="dim xs">${esc(w.kind === "vm" ? "virtual machine" : w.node)}</div></div>
-          <div class="arch-hardware">${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</div>
-          ${w.kind === "vm"
-            ? `<button class="btn sm" data-need="operator" title="Migrate"
-                 onclick="event.stopPropagation();vmMove('${esc(w.ns || "lab")}','${esc(w.name)}')">⇄</button>`
-            : `<button class="btn sm" data-need="operator" title="Move host"
-                 onclick="event.stopPropagation();moveWorkload('${esc(w.name)}','${esc(w.ns || "lab")}')">⇄</button>`}</div>
-        <div class="row" style="gap:8px;justify-content:space-between">
-          ${w.uptime ? upChip(w.uptime) : '<span class="dim xs">—</span>'}
-          <span class="dim xs mono" title="Live CPU usage; 100% equals one CPU core">${workloadCpuPercent(w.cpu)} CPU · ${w.mem_mb || 0}MB</span></div>
-        <div class="livebar"><span style="width:${Math.min(100, Number(w.cpu || 0) * 100)}%"></span></div>
-        ${w.claims.length ? `<div class="copies" style="margin-top:9px">${w.claims.map(c => `<span class="mchip">▤ ${esc(c.pvc)}</span>`).join("")}</div>` : ""}
-        ${w.ports.length ? `<div class="portchips">${w.ports.map(p => p.vip
-              ? `<span class="plink" onclick="event.stopPropagation();openSvc('${esc(p.vip)}',${p.port})">${esc(p.name)}:${p.port}<svg class="ext" width="9" height="9"><use href="#i-ext"/></svg></span>`
-              : `<span class="pchip">${esc(p.name)}:${p.port}</span>`).join("")}</div>`
-          : '<div class="portchips"><span class="dim xs">no exposed ports</span></div>'}
-      </div>`).join("")}
-      </div>
+      <section class="a2col"><h4>Volumes <span class="dim">${f.volumes.length}</span></h4>
+      ${f.volumes.map(v => `<div class="a2item a2vol ${used.has(v.id) ? "" : "a2alone"}" id="${esc(v.id)}" data-kind="volume" data-id="${esc(v.id)}"
+          title="${esc(v.name)} · ${v.size_gb} GB · ${v.replicas} replicas · ${esc(v.robustness)}${v.attached ? ` · attached on ${esc(v.attached)}` : ""}">
+          <span class="a2dot" style="background:${ROB(v.robustness)}"></span><span class="a2name">${esc(v.name)}</span>
+          <span class="a2meta mono">${v.size_gb}G · ${v.replicas}×</span></div>`).join("")
+        || '<div class="dim xs">No volumes</div>'}
+      </section>
 
-      <div class="acol"><h4>Access</h4>
-      ${f.vips.map(v => `<div class="abox vipbox" data-id="${esc(v.id)}" id="${esc(v.id)}">
-        <div class="dim xs" style="margin-bottom:5px">VIRTUAL IP</div>
-        <div class="vipip">${esc(v.ip)}</div>
-        <div class="portchips" style="justify-content:center">
-          ${v.ports.map(p => `<span class="plink" title="${esc(p.app)}" onclick="event.stopPropagation();openSvc('${esc(v.ip)}',${p.port})">${p.port}<svg class="ext" width="9" height="9"><use href="#i-ext"/></svg></span>`).join("")}</div>
-        <div class="dim xs" style="margin-top:8px">${v.ports.length} port${v.ports.length === 1 ? "" : "s"} · kube-vip</div>
-      </div>`).join("") || '<div class="dim xs" style="text-align:center">no load balancer IPs</div>'}
-      </div>
+      <section class="a2col"><h4>Nodes &amp; replica copies</h4>
+      ${f.nodes.map(n => `<div class="a2item a2node" data-kind="node" data-id="${esc(n.id)}">
+          <div class="a2nodehead"><b>${esc(n.name)}</b><span class="dim xs">${n.copies.length} cop${n.copies.length === 1 ? "y" : "ies"}</span></div>
+          <div class="a2copies">${n.copies.map(c => `<span class="a2copy ${c.running ? "" : "stopped"}" id="${esc(`${n.id}|${c.vid}`)}"
+            data-kind="copy" data-id="${esc(`${n.id}|${c.vid}`)}" title="${esc(c.vol)} on ${esc(n.name)}${c.running ? "" : " · not running"}">${esc(c.vol)}</span>`).join("")
+            || '<span class="dim xs">no replicas here</span>'}</div></div>`).join("")}
+      </section>
     </div></div>`);
-  requestAnimationFrame(() => drawArch());
-  $$(".abox").forEach(b => {
-    b.onmouseenter = () => archHighlight(b.dataset.id);
-    b.onmouseleave = () => { $$(".abox,.copy").forEach(x => x.classList.remove("dimmed", "sel")); drawArch(); };
-  });
+  // A live refresh redraws the page; whatever was being traced stays traced.
+  if (STATE.data.archHover) archHighlight(STATE.data.archHover);
+  else drawArch();
+  archWatch();
 }
 
-function drawArch(keep) {
-  const svg = $("#archsvg"), wrap = $(".flowwrap");
-  if (!svg || !wrap) return;
-  const R = wrap.getBoundingClientRect();
-  svg.setAttribute("viewBox", `0 0 ${R.width} ${R.height}`);
-  const P = id => {
-    const el = document.getElementById(id); if (!el) return null;
-    const b = el.getBoundingClientRect();
-    return { l: b.left - R.left, r: b.right - R.left, t: b.top - R.top, b: b.bottom - R.top,
-      x: b.left - R.left + b.width / 2, y: b.top - R.top + b.height / 2 };
-  };
-  const anim = SET.motion !== "off";
-  svg.innerHTML = (STATE.data.alinks || []).map(([a, b, col]) => {
-    const A = P(a), B = P(b); if (!A || !B) return "";
-    const on = !keep || (keep.has(a) && keep.has(b));
-    const topdown = $(".arch")?.classList.contains("topdown");
-    const cy = (A.b + B.t) / 2;
-    const cx = (A.r + B.l) / 2;
-    const d = topdown
-      ? `M ${A.x} ${A.t} C ${A.x} ${cy} ${B.x} ${cy} ${B.x} ${B.b}`
-      : `M ${A.r} ${A.y} C ${cx} ${A.y} ${cx} ${B.y} ${B.l} ${B.y}`;
-    return `<path d="${d}" style="stroke:${col};opacity:${on ? .28 : .04};stroke-width:${on ? 1.4 : 1}"/>` +
-      (anim && on ? `<path class="flowline glowpath" d="${d}" style="stroke:${col};opacity:.8;stroke-width:1.6;
-        animation-duration:${(1.1 + Math.random() * .9).toFixed(2)}s"/>` : "");
-  }).join("");
+/* Hover and resize, wired once for the page rather than per element, so a
+   live refresh that adds a row does not leave it unwired. */
+function archWatch() {
+  const wrap = $(".arch2wrap");
+  if (!wrap || wrap.dataset.watched) return;
+  wrap.dataset.watched = "1";
+  wrap.addEventListener("mouseover", event => {
+    const item = event.target.closest("[data-id]");
+    if (item && item.dataset.id !== STATE.data.archHover) archHighlight(item.dataset.id);
+  });
+  wrap.addEventListener("mouseleave", () => archHighlight(null));
+  if (window.ResizeObserver) new ResizeObserver(() => drawArch(STATE.data.archKeep)).observe(wrap);
 }
 
 function archHighlight(id) {
-  const links = STATE.data.alinks || [];
-  const keep = new Set([id]);
-  let grow = true;
-  while (grow) {
-    grow = false;
-    links.forEach(([a, b]) => {
-      if (keep.has(a) && !keep.has(b)) { keep.add(b); grow = true; }
-      if (keep.has(b) && !keep.has(a)) { keep.add(a); grow = true; }
-    });
-    [...keep].forEach(k => {
-      if (k.includes("|")) { const n = k.split("|")[0]; if (!keep.has(n)) { keep.add(n); grow = true; } }
-    });
-  }
-  drawArch(keep);
-  $$(".abox").forEach(x => {
-    const rel = keep.has(x.dataset.id) || [...keep].some(k => k.startsWith(x.dataset.id + "|"));
-    x.classList.toggle("dimmed", !rel);
-    x.classList.toggle("sel", x.dataset.id === id);
+  STATE.data.archHover = id;
+  const keep = id ? archRelated(id) : null;
+  STATE.data.archKeep = keep;
+  $$(".arch2 [data-id]").forEach(el => {
+    const on = !keep || keep.has(el.dataset.id)
+      || (el.classList.contains("a2node") && [...keep].some(k => k.startsWith(el.dataset.id + "|")))
+      || (el.classList.contains("a2vip") && [...keep].some(k => k.startsWith("p:" + el.dataset.id.slice(2) + ":")));
+    el.classList.toggle("dimmed", !on);
+    el.classList.toggle("sel", el.dataset.id === id);
   });
-  $$(".copy").forEach(c => c.classList.toggle("dimmed", !keep.has(c.id)));
+  drawArch(keep);
+}
+
+/* Everything upstream and downstream of one item: from it, each link is
+   followed left or right, and each step keeps going the same way. */
+function archRelated(id) {
+  const links = STATE.data.alinks || [];
+  const start = [id];
+  // A VIP or a node stands for all of its ports or copies.
+  if (id.startsWith("i:")) links.forEach(([a]) => { if (a.startsWith("p:" + id.slice(2) + ":")) start.push(a); });
+  if (id.startsWith("n:")) links.forEach(([, b]) => { if (b.startsWith(id + "|")) start.push(b); });
+  const keep = new Set(start);
+  const walk = (from, forward) => {
+    links.forEach(([a, b]) => {
+      const next = forward ? (a === from ? b : null) : (b === from ? a : null);
+      if (next && !keep.has(next)) { keep.add(next); walk(next, forward); }
+    });
+  };
+  start.forEach(item => { walk(item, true); walk(item, false); });
+  return keep;
+}
+
+function drawArch(keep = STATE.data.archKeep) {
+  const svg = $("#archsvg"), wrap = $(".arch2wrap");
+  if (!svg || !wrap) return;
+  const R = wrap.getBoundingClientRect();
+  svg.setAttribute("viewBox", `0 0 ${R.width} ${R.height}`);
+  const box = id => {
+    const el = document.getElementById(id);
+    if (!el || !el.offsetParent) return null;
+    const b = el.getBoundingClientRect();
+    // A port or a copy sits among others in its box; its line meets the box's
+    // edge at its height rather than crossing its neighbours to reach it.
+    const edge = el.closest(".a2vip, .a2node")?.getBoundingClientRect() || b;
+    return { l: edge.left - R.left, r: edge.right - R.left, y: b.top - R.top + b.height / 2 };
+  };
+  const motion = SET.motion !== "off";
+  svg.innerHTML = (STATE.data.alinks || []).map(([a, b, type]) => {
+    const A = box(a), B = box(b);
+    if (!A || !B) return "";
+    const lit = keep && keep.has(a) && keep.has(b);
+    const bend = Math.max(24, (B.l - A.r) / 2);
+    const d = `M ${A.r} ${A.y} C ${A.r + bend} ${A.y} ${B.l - bend} ${B.y} ${B.l} ${B.y}`;
+    const cls = `a2link ${type}${keep ? (lit ? " lit" : " faded") : ""}`;
+    return `<path class="${cls}" d="${d}"/>` + (lit && motion ? `<path class="a2flow ${type}" d="${d}"/>` : "");
+  }).join("");
 }
 
 /* ---------------- volumes ---------------- */
