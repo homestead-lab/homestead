@@ -25,10 +25,12 @@ not affiliated with, endorsed, or sponsored by Lime Technology, Inc.
 | Area | Capability |
 |---|---|
 | **Dashboard** | Cluster CPU/RAM/network/disk telemetry, transition-aware health, top consumers, configurable warnings |
-| **Containers** | Guided App Store and image deployment, independent or sidecar pods, guarded Kubernetes workload rename, edit/move/logs/console, autostart, LAN port and exposure editing, one storage picker for new and existing containers, hardware passthrough, update checks, monitored rollout with live image-pull state, and rollback |
+| **Containers** | Guided App Store and image deployment, Docker Compose import, independent or sidecar pods, guarded Kubernetes workload rename, edit/move/logs/console, autostart, LAN port and exposure editing, one storage picker for new and existing containers, hardware passthrough, update checks, monitored rollout with live image-pull state, rollback, and a card or row layout |
+| **Virtual machines** | Create from a Harvester image or an imported disk, power actions, and live migration between hosts |
 | **Architecture** | VIP → workload → claim → Longhorn volume → replica dependency view |
 | **Networking** | Service, ClusterIP, VIP, ingress, listener ownership, orphaned-listener release, endpoint health and guided collision-free exposure |
-| **Cluster** | Harvester/Kubernetes versions, control-plane and etcd quorum, node pressure, critical services, certificate requests and guided node onboarding |
+| **Cluster** | Harvester/Kubernetes versions, control-plane and etcd quorum, node pressure, critical services, certificate requests, adding hosts by USB image, network boot or ISO, and removing hosts - including ones that are dead for good |
+| **Between clusters** | Browse another Homestead cluster, check the two releases can talk, and move its containers and VMs here through shared backup storage |
 | **Storage** | RWO/RWX volume creation, growth and guarded deletion, file browsing and editing, storage-class inventory and creation, usage, health, snapshots, backups and recurring jobs |
 | **Hardware** | Host device browser and reusable mappings for iGPU, Coral, USB/PCIe and other devices |
 | **Import** | Docker Compose files checked as you type, Unraid/Docker workload and appdata import, several folders across several volumes, measured sizing with a per-volume capacity preflight, byte-weighted progress, named failures, editable seed configuration |
@@ -45,11 +47,15 @@ server/homestead_names.py     the names Homestead writes, and the ones it still 
 web/                          browser UI, no build step
 web/vendor/monaco/            vendored Monaco editor subset (see its README)
 web/assets/                   Homestead SVG identity
+web/icons/                    installed-app icons (from scripts/render_icons.py)
+web/sw.js, manifest.webmanifest  the installable app's service worker and manifest
 deploy/deploy.yaml            namespace, RBAC, Longhorn PVC, Deployment, Service
 deploy/nodeprobe.yaml         optional per-node telemetry and device inventory
 .github/workflows/ci.yml      tests and container build validation
 .github/workflows/release.yml multi-architecture GHCR and screenshot release pipeline
 scripts/deploy.sh             deploy a published image through an RKE2 host
+scripts/render_nodeprobe.py   regenerate deploy/nodeprobe.yaml from the probe's source
+scripts/render_icons.py       regenerate web/icons/ from the mark's geometry
 ```
 
 ## Container releases
@@ -318,9 +324,9 @@ cluster, so treat a published hostname as a way into the whole cluster:
   then checks Access's signature on every request that came through Cloudflare
   and refuses the rest, so an Access bypass rule or a policy on the wrong
   hostname does not quietly publish it.
-- **Point the tunnel at the Service inside the cluster** (for example
-  `http://homestead.lab.svc:8080`), not at the LAN VIP, and run `cloudflared` in
-  the cluster.
+- **Point the tunnel at the Service inside the cluster** -
+  `http://homestead.lab.svc:8088` with the supplied manifest - not at the LAN
+  VIP, and run `cloudflared` in the cluster.
 - **Finish setup on the LAN first.** Creating the first administrator is refused
   through the tunnel.
 
@@ -389,6 +395,22 @@ and semantic-version discovery never silently crosses a major release. Image
 pulls, updates, and rollbacks remain visible in the persistent Activity tray
 through browser refreshes and Homestead restarts.
 
+The in-app update changes Homestead's image and nothing else. When a release
+adds permissions or settings to `deploy/deploy.yaml` - its release notes say
+so - apply that release's manifest once. Download it, set the values you
+customised at install (`LB_IP` and the kube-vip address, `storageClassName`,
+`DEFAULT_NS`, any `CF_ACCESS_*`) back to yours, then apply it:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.70/deploy/deploy.yaml
+kubectl apply -f deploy.yaml
+```
+
+Until then the new features that need the extra permissions say they were
+refused; everything else keeps working. 2.8.68 was such a release (removing
+hosts and cleaning up after them), and so was 2.8.69 (the Cloudflare Access
+settings).
+
 Command-line deployment is also available:
 
 ```bash
@@ -456,18 +478,39 @@ errors across browser or Homestead restarts. See the
 [Longhorn StorageClass parameters](https://longhorn.io/docs/1.12.1/references/storage-class-parameters/)
 reference for the underlying mechanism.
 
-The copy preserves ownership and permissions by number, so an imported app
-finds its appdata exactly as it left it on the source. A volume created from the
-App Store is written by the container itself and is correct for the same reason;
-the import used to be the odd one out, dropping ownership so every file arrived
-belonging to root and the container could not write to its own data. Ownership
-can still be overridden during an import, for a container that should run as a
-different user here than it did there.
+## Moving workloads between clusters
 
-For appdata imported before that, Volumes has an Ownership action that hands an
-existing claim to a user, filled in from whatever mounts the volume — PUID and
-PGID first, then a container or pod security context — and named, so the number
-is never a guess.
+A container or VM can move from one Harvester cluster to another when both run
+Homestead. The destination does the work: it asks the other Homestead for the
+workload's definition directly, and reads its volumes from the Longhorn backups
+the other cluster wrote, so the source never holds credentials for the
+destination.
+
+1. **Give the source cluster backup storage.** Data Protection ▸ **Set up
+   storage** runs MinIO on a Longhorn volume and points Longhorn's backups at it.
+   Give it a LAN address, or the other cluster cannot read from it. It shares
+   fate with the cluster it protects: it is for moving workloads, not for your
+   only copy of anything.
+2. **On the destination, add the source.** Import ▸ **＋ Homestead cluster**
+   takes the other Homestead's address (for example `http://192.0.2.242:8088`)
+   and a Homestead account there - not a Harvester or SSH login; operator is
+   enough to browse, a move needs admin. The password is kept in a Secret. The
+   cluster's card shows the other Homestead's release and whether the two can
+   move workloads between them - and which side to update if not; different
+   releases that speak the same move protocol work together.
+3. **Browse and move.** **Browse workloads** lists what the other cluster runs,
+   with the reason anything cannot move (for example a ConfigMap, Secret or
+   host-path volume, which Homestead did not write and cannot rebuild). **Move to this
+   cluster** reviews the namespace, address and storage here, and lists every
+   blocker and warning from both clusters before anything stops.
+
+The move stops the workload there, backs up its volumes, restores them here,
+creates the workload and starts it, following each step in Activity. If the two
+clusters use different backup targets, this cluster's Longhorn target is pointed
+at the source's bucket, and the review says so first. The move survives a
+restart of either Homestead and has no timeout that would abandon a large
+volume. The original stays on the source, stopped, until you remove it, so it
+can be put back at any point.
 
 ## Importing from Unraid
 
@@ -495,6 +538,15 @@ Measure sizes runs `du` on the source under a per-folder timeout, fills in each
 volume's size from what is actually there, and lets the copy report progress in
 bytes rather than folder counts. The capacity check is per volume, so a 500 GiB
 recordings claim never excuses appdata that will not fit.
+
+The copy preserves ownership and permissions by number, so an imported app
+finds its appdata exactly as it left it on the source. Ownership can be
+overridden during an import, for a container that should run as a different
+user here than it did there. For appdata imported by an older release, which
+arrived owned by root, Volumes has an **Ownership** action that hands an
+existing claim to a user, filled in from whatever mounts the volume — PUID and
+PGID first, then a container or pod security context — so the number is never
+a guess.
 
 ## Importing a Docker Compose file
 
@@ -665,6 +717,9 @@ authenticated.
 | `SESSION_REMEMBER_DAYS` | `30` | idle window when "keep me signed in" is ticked |
 | `SESSION_MAX_DAYS` | `90` | hard limit on a session's age, however active |
 | `ENABLE_NODE_POWER` | unset | `true` enables guarded reboot/shutdown actions |
+| `COMMUNITY_CATALOG_URL` | AppFeed | the App Store's Community Applications feed |
+| `FILES_IMAGE` | `alpine:3.20` | image of the helper pod that browses and edits files on a volume |
+| `FILES_SESSION_SECONDS` | `1800` | how long that helper pod may live |
 | `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD` | empty | require Cloudflare Access's signature on requests through a tunnel |
 | `PUSH_CONTACT` | project URL | the `mailto:` or `https:` contact push services see in Homestead's VAPID token |
 
@@ -675,7 +730,8 @@ image is published:
 
 ```bash
 python -m unittest discover -s tests -v
-for file in web/js/*.js; do node --check "$file"; done
+for file in web/js/*.js web/sw.js; do node --check "$file"; done
+node --test tests/*.test.js
 docker build --build-arg VERSION=dev -t homestead:dev .
 ```
 
@@ -684,6 +740,9 @@ docker build --build-arg VERSION=dev -t homestead:dev .
 Passwords use PBKDF2-HMAC-SHA256 with per-user salts in the `homestead-auth`
 Secret. Sessions are HMAC-signed, `HttpOnly`, `SameSite=Strict` cookies and all
 mutations require a custom anti-CSRF header. Roles are enforced server-side.
+Every response carries a Content Security Policy that forbids framing and
+scripts from elsewhere; sign-in attempts are limited per address and per
+account; request bodies over 8 MB are refused.
 
 ### Drive health
 
@@ -753,8 +812,9 @@ server. Session start/stop metadata is written to
 `$DATA_DIR/console-audit.jsonl`; terminal input and output are not recorded.
 
 The supplied Service is plain HTTP. Put it behind TLS before exposing Homestead
-outside a trusted LAN. Host power control is disabled by default because it
-requires a short-lived privileged helper pod.
+outside a trusted LAN - see [Publishing through a Cloudflare
+Tunnel](#publishing-through-a-cloudflare-tunnel). Host power control is disabled
+by default because it requires a short-lived privileged helper pod.
 
 ## Licence
 

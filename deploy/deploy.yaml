@@ -187,8 +187,8 @@ metadata:
 spec:
   replicas: 1
   strategy:
-    # The application data PVC is ReadWriteOnce. A surge rollout leaves the
-    # replacement pod waiting forever for a volume still mounted by the old pod.
+    # One Homestead at a time: moves, join plans and alerts are driven from its
+    # data volume, and two copies overlapping in a surge rollout would both act.
     type: Recreate
   selector:
     matchLabels:

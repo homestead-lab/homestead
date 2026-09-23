@@ -24,7 +24,7 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: JavaScript syntax
         run: |
-          for file in web/js/*.js; do node --check "$file"; done
+          for file in web/js/*.js web/sw.js; do node --check "$file"; done
       - name: Frontend unit tests
         run: node --test tests/*.test.js
       - name: Compile Python
