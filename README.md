@@ -26,6 +26,7 @@ not affiliated with, endorsed, or sponsored by Lime Technology, Inc.
 |---|---|
 | **Dashboard** | Cluster CPU/RAM/network/disk telemetry, transition-aware health, top consumers, configurable warnings |
 | **Containers** | Guided App Store and image deployment, Docker Compose import, independent or sidecar pods, guarded Kubernetes workload rename, edit/move/logs/console, autostart, LAN port and exposure editing, one storage picker for new and existing containers, hardware passthrough, update checks, monitored rollout with live image-pull state, rollback, and a card or row layout |
+| **App Store** | The Community Applications catalogue laid out as Unraid shows it - monthly spotlights, recently added, trending and top performing - with a full page per app, from the public feed or one you set |
 | **Virtual machines** | Create from a Harvester image or an imported disk, power actions, and live migration between hosts |
 | **Architecture** | VIP → workload → claim → Longhorn volume → replica dependency view |
 | **Networking** | Service, ClusterIP, VIP, ingress, listener ownership, orphaned-listener release, endpoint health and guided collision-free exposure |
@@ -34,7 +35,7 @@ not affiliated with, endorsed, or sponsored by Lime Technology, Inc.
 | **Storage** | RWO/RWX volume creation, growth and guarded deletion, file browsing and editing, storage-class inventory and creation, usage, health, snapshots, backups and recurring jobs |
 | **Hardware** | Host device browser and reusable mappings for iGPU, Coral, USB/PCIe and other devices |
 | **Import** | Docker Compose files checked as you type, Unraid/Docker workload and appdata import, several folders across several volumes, measured sizing with a per-volume capacity preflight, byte-weighted progress, named failures, editable seed configuration |
-| **Administration** | Direct URLs/breadcrumbs, persistent activity tray, viewer/operator/admin roles, appearance, thresholds and version details |
+| **Administration** | Direct URLs/breadcrumbs, persistent activity tray, viewer/operator/admin roles, namespaces for your apps, appearance, thresholds and version details |
 | **App & alerts** | Installable on phones and desktops over HTTPS, with push notifications for outages, degraded storage and workloads, failed jobs, joining hosts and image updates |
 
 ## Repository layout
@@ -193,31 +194,66 @@ CDI must be installed in the cluster. Harvester includes it, and the supplied
 RBAC permits Homestead to create and monitor DataVolumes while ordinary HTTP
 credentials remain in namespace-scoped Kubernetes Secrets.
 
-## Guided App Store deployment
+## App Store
 
-Homestead translates Unraid Community Applications templates into Kubernetes
-ports, environment variables, device hints, and explicit storage choices. Its
-compatibility analyser is application-agnostic: port/protocol patterns determine
-network intent, path and description semantics distinguish config/data/media/cache,
+The App Store reads the Community Applications catalogue - the templates behind
+Unraid's Apps tab - and lists what can run as a container here. Plugins,
+language packs and templates the catalogue has blacklisted, deprecated or
+hidden are Unraid's own and are left out, so the listings match what Unraid
+shows.
+
+It opens on a front page laid out as Community Applications lays it out:
+
+- **Spotlight** - the app the Unraid team picks each month, newest first, with
+  the month and why it was picked;
+- **Recently added** - the newest templates, in the order the feed added them;
+- **Top trending** - the apps rising fastest in downloads;
+- **Top performing** - the feed's best performers overall.
+
+Each section has a page of its own, and search covers the whole catalogue.
+Clicking an app opens its full page: the whole description, its maintainer and
+whether the container is official, links to its project, support thread,
+registry, read-me, video and Discord, the spotlight note, any comment from the
+catalogue's moderators, what it requires, screenshots, and when it was added and
+last updated. The same page shows Homestead's own review of the template - the
+storage, network, dependency and hardware questions it will ask - before you
+choose **Configure & deploy**.
+
+### From template to workload
+
+Homestead translates each template into Kubernetes ports, environment
+variables, device hints, and explicit storage choices. Its compatibility
+analyser is application-agnostic: port/protocol patterns determine network
+intent, path and description semantics distinguish config/data/media/cache,
 variable metadata identifies secrets, options, and external dependencies, and
-requests for container-runtime sockets are blocked for a Kubernetes-specific design.
-These rules apply to every catalogue image rather than a list of named apps.
+requests for container-runtime sockets are blocked for a Kubernetes-specific
+design. These rules apply to every catalogue image rather than a list of named
+apps.
 
 Public catalogue password defaults are discarded and regenerated locally.
 Secret values are masked in manifest previews. Template option lists become
 select controls, and the same storage, network, dependency, and hardware review
-is used whether deployment begins in App Store or directly from Deploy. Plex,
-Pi-hole, and Nextcloud are release validation examples, not special-case profiles.
+is used whether deployment begins in App Store or directly from Deploy. An image
+given without a tag is deployed as `:latest`, which is what Docker would pull.
+Plex, Pi-hole, and Nextcloud are release validation examples, not special-case
+profiles.
+
+### Choosing the catalogue
+
+**Settings → App Store catalogue** points the App Store at any feed in the
+Community Applications format - a mirror, or your own list of templates - and
+**Use Community Applications** goes back to the public one. The App Store says
+which feed it is reading. `COMMUNITY_CATALOG_URL` sets the default for a whole
+deployment.
 
 ### Community catalogue data notice
 
-The optional catalogue adapter reads the public Community Applications feed
-from `Squidly271/AppFeed` at runtime; catalogue content is not bundled into the
-Homestead image or repository. Requests identify Homestead, results are cached
-for six hours. **Settings → App Store catalogue** points it at another feed in
-the same format - a mirror, or your own list of templates - and
-`COMMUNITY_CATALOG_URL` sets the default for a whole deployment. Homestead links to and credits the upstream source
-and does not use Unraid logos or imply endorsement.
+The catalogue adapter reads the public Community Applications feed from
+`Squidly271/AppFeed` at runtime, unless another feed is set; catalogue content
+is not bundled into the Homestead image or repository. Requests identify
+Homestead and results are cached for six hours. Homestead links to and credits
+the upstream source, links each app to its own project and support pages, and
+does not use Unraid logos or imply endorsement.
 
 As of 20 September 2026, GitHub reports no declared repository license for the
 `AppFeed` repository. The Community Applications plugin source contains GPLv2
@@ -681,6 +717,24 @@ separately in the `homestead-share-credentials` Kubernetes Secret and are never
 returned by the Homestead API. The first successful share edit transparently
 migrates credentials from older Homestead ConfigMaps and the existing Samba
 arguments. Removing a share keeps its PVC and data.
+
+## Namespaces
+
+A Harvester cluster holds dozens of namespaces that belong to Harvester,
+Rancher, Longhorn and Kubernetes - several named after generated IDs - and none
+of them is a place for an app. Every namespace picker in Homestead (Deploy,
+Import, Compose, Volumes, Data Protection) offers only yours. A namespace is
+treated as the platform's by name (`kube-*`, `cattle-*`, `harvester-*`,
+`longhorn-*`, `fleet-*` and the like), by the IDs Rancher generates (`p-xxxxx`,
+`u-xxxxx`, `user-xxxxx`), or by the annotation Rancher sets on the namespaces it
+considers its own.
+
+**Settings → Namespaces** lists yours with what each holds - apps, stateful
+sets, volumes and VMs - and how many platform namespaces are hidden. An admin
+can create a namespace there, and delete one only when it is empty and its name
+is typed; `default`, the namespace new workloads go to (`DEFAULT_NS`), and the
+one Homestead runs in are kept. A namespace that Homestead created is labelled
+`homestead.io/managed`.
 
 ## Workload logos
 
