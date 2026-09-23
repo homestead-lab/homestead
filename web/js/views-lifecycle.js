@@ -559,6 +559,7 @@ async function viewImport() {
     api("/api/move/clusters").catch(() => []),
   ]);
   STATE.data.clusters = clusters;
+  STATE.data.classFacts = (await api("/api/storageclasses?facts=1").catch(() => ({}))).facts || {};
   const moves = await api("/api/move/moves").catch(() => []);
   STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
   // After the page is up: each check waits on the other Homestead answering.
@@ -906,7 +907,7 @@ function importVolumeRow(volume = {}, index = 0) {
       <option value="new-rwx" ${volume.access_mode === "ReadWriteMany" ? "selected" : ""}>New shared volume · RWX</option>
       <option value="existing" ${volume.create === false ? "selected" : ""}>Existing PVC · merge data</option></select></div>
     <div><label>Size GiB</label><input class="imv-size" type="number" min="1" max="16384" value="${esc(volume.size_gb || 10)}"></div>
-    <div><label>Storage class</label><select class="imv-class">${classes.map(sc => `<option ${sc === (volume.storage_class || "longhorn-r2") ? "selected" : ""}>${esc(sc)}</option>`).join("")}</select></div>
+    <div><label>Storage class</label><select class="imv-class">${storageClassOptions(classes, volume.storage_class || "longhorn-r2", STATE.data.classFacts)}</select></div>
     ${index === 0 ? "" : '<button class="iconbtn row-remove" type="button" title="Remove volume" onclick="this.closest(\'.im-volume\').remove();imSyncVolumes()">×</button>'}
   </div>`;
 }
@@ -1095,8 +1096,8 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <div id="im_volumes"></div>
     <button class="btn sm" onclick="imAddVolume()">＋ add volume</button>
     <div class="sec">Network</div><div class="f2"><div class="f"><label>Docker network → Kubernetes</label><select id="im_net"><option value="loadbalancer">LAN access (VIP)</option><option value="internal">Cluster only</option><option value="host" ${cfg.network_mode === "host" ? "selected" : ""}>Host network (advanced)</option></select></div>
-      <div class="f"><label>VIP allocation ${tip("Choose a new automatic or specific VIP for apps such as Pi-hole that need port 53 on their own address.")}</label><select id="im_vip"><option value="shared">Shared Homestead VIP</option><option value="auto">New automatic VIP</option><option value="manual">Specific VIP</option></select></div></div>
-    <div class="f"><label>Specific VIP (only for manual)</label><input id="im_ip" placeholder="192.0.2.250"></div>
+      <div class="f"><label>VIP allocation ${tip("Choose a new automatic or specific VIP for apps such as Pi-hole that need port 53 on their own address.")}</label><select id="im_vip" onchange="$('#im_vip_wrap').style.display = this.value === 'manual' ? '' : 'none'"><option value="shared">Shared Homestead VIP</option><option value="auto">New automatic VIP</option><option value="manual">Specific VIP</option></select></div></div>
+    <div class="f" id="im_vip_wrap" style="display:none"><label>Specific VIP</label><div id="im_vip_pick"><span class="dim xs"><span class="spin2"></span></span></div></div>
     <div class="sec">Port mappings ${tip("Container port is what the app listens on. LAN port is what you open from another device. TCP and UDP mappings are kept separately.")}</div>
     <div id="im_ports">${(cfg.ports || []).map(p => `<div class="f4 im-port"><div><label>Container</label><input class="ipc" type="number" value="${p.container}"></div><div><label>LAN</label><input class="iph" type="number" value="${p.host}"></div><div><label>Protocol</label><select class="ipp"><option ${p.protocol === "TCP" ? "selected" : ""}>TCP</option><option ${p.protocol === "UDP" ? "selected" : ""}>UDP</option></select></div><label class="switch"><input class="ipe" type="checkbox" ${p.expose !== false ? "checked" : ""}>Expose</label></div>`).join("")}</div>
     <button class="btn sm" onclick="imAddPort()">＋ add port</button>
@@ -1110,6 +1111,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <div class="note" style="margin-top:14px">The copy runs as a Job — you can close this and watch it
     on the Import page, folder by folder. Large appdata directories can take a while.</div>`, true);
   $("#im_volumes").innerHTML = importVolumeRow({ name: `${name}-appdata`, size_gb: 10 }, 0);
+  vipChoices().then(choices => { const host = $("#im_vip_pick"); if (host) host.innerHTML = vipPicker("im", "", choices); });
   imSyncVolumes();
 };
 /* Another Homestead on the network. The destination pulls, so these
@@ -1402,7 +1404,7 @@ window.doImport = async source => {
     storage_class: first?.storage_class || "", access_mode: first?.access_mode || "",
     start_after_copy: $("#im_start").checked,
     ports: $$(".im-port").map(r => ({ container: +$(".ipc", r).value, host: +$(".iph", r).value || +$(".ipc", r).value, protocol: $(".ipp", r).value, expose: $(".ipe", r).checked })).filter(p => p.container),
-    env, hardware: selectedHardware("im_hw"), network_mode: $("#im_net").value, vip_mode: $("#im_vip").value, lb_ip: $("#im_ip").value.trim(),
+    env, hardware: selectedHardware("im_hw"), network_mode: $("#im_net").value, vip_mode: $("#im_vip").value, lb_ip: ($("#im_lb_ip")?.value || "").trim(),
     uid: $("#im_uid").value.trim(), gid: $("#im_gid").value.trim() };
   if (!body.name || !body.image) return toast("workload name and image are required", "bad");
   for (const volume of volumes) {

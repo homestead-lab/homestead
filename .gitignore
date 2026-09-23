@@ -6,6 +6,7 @@ __pycache__/
 
 # Local product/agent working notes. Keep these out of the public repository.
 /PLAN.md
+/plan.md
 /CLAUDE.md
 /claude.md
 /AGENTS.md

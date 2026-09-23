@@ -142,7 +142,9 @@ class ImageUpdateTests(unittest.TestCase):
             running = {"metadata": {"namespace": "lab", "labels": {"app": "demo"}},
                        "status": {"containerStatuses": [{"name": "demo", "imageID": ""}]}}
             item = updates._check_deployment(self.dep, [running])["images"][0]
-            self.assertEqual("running image digest is not available yet", item["error"])
+            # Just installed and still pulling: a check still to come, not a failed one.
+            self.assertEqual("", item["error"])
+            self.assertTrue(item["unchecked"] and item["starting"])
         finally:
             updates.registry_tags, updates.manifest_info = original_tags, original_manifest
             updates._secret_credentials = original_creds

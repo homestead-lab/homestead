@@ -87,7 +87,12 @@ class ImageCacheTests(unittest.TestCase):
         pod = self.sent[-1][2]
         self.assertEqual("node1", pod["spec"]["nodeName"])
         container = pod["spec"]["containers"][0]
-        self.assertIn("example.test/unused@" + self.unused, container["command"])
+        script = container["command"][-1]
+        self.assertIn(f"rmi 'example.test/unused@{self.unused}'", script)
+        self.assertIn("--state exited", script, "only exited containers are cleared, never a running one")
+        self.assertEqual("FallbackToLogsOnError", container["terminationMessagePolicy"])
+        self.assertRegex(pod["metadata"]["name"], r"^homestead-image-clean-[0-9a-f]{10}-[0-9a-f]+$",
+                         "each attempt has a name of its own")
         self.assertFalse(container["securityContext"]["allowPrivilegeEscalation"])
         self.assertEqual(["ALL"], container["securityContext"]["capabilities"]["drop"])
 

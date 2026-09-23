@@ -87,7 +87,7 @@ async function viewCluster() {
       <div class="csub">${esc(report.onboarding?.reason || "Review the current control-plane layout before joining another host.")}</div></div>
       <button class="btn" data-need="admin" onclick="clusterOnboarding()">Add a host</button></section>
   </div>
-  <div id="clusterCleanup"></div>`);
+  <div id="clusterCleanup">${STATE.data.cleanupHtml || ""}</div>`);
   // Admin only, and a round trip of its own: the page does not wait for it.
   if (window.can && can("admin")) clusterCleanupPaint();
 }

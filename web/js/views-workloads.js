@@ -265,7 +265,7 @@ function workloadCard(w) {
               <div class="dim xs">${esc(w.ns)} · <span class="nodelink"
                 onclick="moveWorkload('${w.name}','${w.ns}')">${esc(w.nodes.join(", ") || "unscheduled")}</span></div></div>
           </div>
-          <div class="row">${update?.available ? '<span class="pill warn">update available</span>' : ""}${update?.unchecked ? '<span class="pill slim neutral" data-tip="Stopped, and not seen running here yet, so its image has not been compared with the registry. It is checked once it has run.">not checked</span>' : ""}
+          <div class="row">${update?.available ? '<span class="pill warn">update available</span>' : ""}${update?.unchecked ? `<span class="pill slim neutral" data-tip="${update.images?.some(i => i.starting) ? "Still starting: its image is compared with the registry once it runs." : "Stopped, and not seen running here yet, so its image has not been compared with the registry. It is checked once it has run."}">${update.images?.some(i => i.starting) ? "starting" : "not checked"}</span>` : ""}
           ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}
           <span class="pill ${ok ? "ok" : off ? "low" : "crit"}">${w.ready}/${w.desired}</span></div>
         </div>
@@ -297,7 +297,7 @@ function workloadTable(rows) {
         <td class="wl-name" data-sort="${esc(w.name)}"><div class="row nowrap" style="gap:9px">${appAvatar(w.name, w.icon)}
           <div class="wtitle"><div><b>${esc(w.name)}</b></div>
             <div class="dim xs">${esc(w.ns)} · ${off ? "stopped" : `<span class="nodelink" onclick="moveWorkload('${w.name}','${w.ns}')">${esc(w.nodes.join(", ") || "unscheduled")}</span>${w.uptime ? ` · up ${esc(fmtUp(w.uptime))}` : " · starting"}`}</div></div></div></td>
-        <td class="wl-status" data-sort="${off ? -1 : w.desired ? w.ready / w.desired : 0}"><div class="row nowrap" style="gap:5px"><span class="pill slim ${ok ? "ok" : off ? "low" : "crit"}" title="${w.ready} of ${w.desired} ready">${w.ready}/${w.desired}</span>${update?.unchecked ? '<span class="pill slim neutral" data-tip="Stopped, and not seen running here yet, so its image has not been compared with the registry. It is checked once it has run.">not checked</span>' : ""}
+        <td class="wl-status" data-sort="${off ? -1 : w.desired ? w.ready / w.desired : 0}"><div class="row nowrap" style="gap:5px"><span class="pill slim ${ok ? "ok" : off ? "low" : "crit"}" title="${w.ready} of ${w.desired} ready">${w.ready}/${w.desired}</span>${update?.unchecked ? `<span class="pill slim neutral" data-tip="${update.images?.some(i => i.starting) ? "Still starting: its image is compared with the registry once it runs." : "Stopped, and not seen running here yet, so its image has not been compared with the registry. It is checked once it has run."}">${update.images?.some(i => i.starting) ? "starting" : "not checked"}</span>` : ""}
           ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}</div></td>
         <td class="wl-image"><div class="mono xs wl-imagetext" title="${esc(w.images.map(imageLabel).join(" · "))}">${w.images.map(i => esc(imageLabel(i))).join(" · ")}</div>
           ${(w.hardware || []).length || w.gpu ? `<div>${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</div>` : ""}</td>
@@ -390,25 +390,60 @@ window.wlDeleteNow = async (ns, name, button) => {
     toast(e.message, "bad");
   }
 };
-function openLogs(title, path) {
+/* Logs for one container of one pod. A workload with several replicas, or a
+   pod with sidecars, gets pickers saying exactly whose output this is. */
+function openLogs(title, path, pods = null, ns = "") {
   if (window.__logTimer) clearInterval(window.__logTimer);
-  modal("Logs · " + title, `<div class="logtools"><span id="logstate"><span class="spin2"></span> connecting</span>
-    <label class="switch"><input type="checkbox" id="logfollow" checked> Follow latest</label></div>
+  const LOG = window.__logView = { path, pods: pods || [], ns };
+  const multi = LOG.pods.length > 1 || LOG.pods.some(p => (p.containers || []).filter(c => c.kind === "app").length > 1);
+  modal("Logs · " + title, `<div class="logtools">
+      ${multi ? `<div class="logpick"><label>Pod <select id="logPod" onchange="logPodChanged()">${LOG.pods.map(p =>
+        `<option value="${esc(p.name)}">${esc(p.name)} · ${esc(p.node || "unscheduled")}${p.ready ? "" : " · not ready"}</option>`).join("")}</select></label>
+        <label>Container <select id="logContainer" onchange="logTargetChanged()"></select></label></div>` : ""}
+      <span id="logstate"><span class="spin2"></span> connecting</span>
+      <label class="switch"><input type="checkbox" id="logfollow" checked> Follow latest</label></div>
+    <div class="dim xs mono logsource" id="logSource"></div>
     <pre class="logview">waiting for log output…</pre>`, true);
+  if (multi) logPodChanged(); else logShowSource();
   const poll = async () => {
     if ($("#modal").classList.contains("hidden")) return clearInterval(window.__logTimer);
     try {
-      const t = await api(path + (path.includes("?") ? "&" : "?") + "tail=500");
+      const t = await api(LOG.path + (LOG.path.includes("?") ? "&" : "?") + "tail=500");
       const pre = $("#mbody .logview"); if (!pre) return;
       pre.textContent = t || "(the container is running but has not written any logs yet)";
       $("#logstate").innerHTML = '<span class="ld"></span> live · refreshes every 2s';
       if ($("#logfollow")?.checked) pre.scrollTop = pre.scrollHeight;
     } catch (e) {
-      const pre = $("#mbody .logview"); if (pre) pre.textContent = "Logs unavailable\n\n" + e.message;
-      if ($("#logstate")) $("#logstate").innerHTML = '<span class="cd badbg"></span> unavailable';
+      const pre = $("#mbody .logview"); if (pre) pre.textContent = e.message;
+      if ($("#logstate")) $("#logstate").innerHTML = '<span class="cd badbg"></span> no logs';
     }
   };
+  LOG.poll = poll;
   poll(); window.__logTimer = setInterval(poll, 2000);
+}
+
+window.logPodChanged = () => {
+  const LOG = window.__logView, pod = LOG.pods.find(p => p.name === $("#logPod")?.value);
+  const apps = (pod?.containers || []).filter(c => c.kind === "app");
+  $("#logContainer").innerHTML = apps.map(c => `<option value="${esc(c.name)}">${esc(c.name)} · ${esc(c.state || "unknown")}</option>`).join("");
+  $("#logContainer").closest("label").style.display = apps.length > 1 ? "" : "none";
+  logTargetChanged();
+};
+
+window.logTargetChanged = () => {
+  const LOG = window.__logView, pod = $("#logPod")?.value, container = $("#logContainer")?.value;
+  LOG.path = `/api/logs?ns=${encodeURIComponent(LOG.ns)}&pod=${encodeURIComponent(pod)}${container ? `&container=${encodeURIComponent(container)}` : ""}`;
+  const pre = $("#mbody .logview"); if (pre) pre.textContent = "waiting for log output…";
+  logShowSource();
+  if (LOG.poll) LOG.poll();
+};
+
+function logShowSource() {
+  const LOG = window.__logView, host = $("#logSource");
+  if (!host) return;
+  const params = new URLSearchParams(LOG.path.split("?")[1] || "");
+  const pod = LOG.pods.find(p => p.name === params.get("pod"));
+  host.textContent = params.get("pod") ? `pod ${params.get("pod")}${pod?.node ? ` on ${pod.node}` : ""}${params.get("container") ? ` · container ${params.get("container")}` : ""}` : "";
 }
 
 /* A scan asks a registry about every workload in turn, so it is neither
@@ -636,7 +671,9 @@ window.imageRollbackApply = async (ns, name) => {
 window.wlLogs = (ns, pod, workload = "", fromRoute = false) => {
   if (!fromRoute && window.setModalRoute) setModalRoute({ panel: "logs", ns, workload: workload || pod }, (workload || pod) + " logs");
   if (!pod) return modal("Logs unavailable", '<div class="empty"><b>No running pod</b><br><span class="dim small">Start the container and wait for Kubernetes to create a pod.</span></div>');
-  openLogs(pod, `/api/logs?ns=${encodeURIComponent(ns)}&pod=${encodeURIComponent(pod)}`);
+  const workloadRow = (STATE.data.wl || []).find(x => x.ns === ns && x.name === workload);
+  openLogs(workload || pod, `/api/logs?ns=${encodeURIComponent(ns)}&pod=${encodeURIComponent(pod)}`,
+    workloadRow?.pods || null, ns);
 };
 window.jobLogs = (ns, job) => openLogs(job, `/api/logs?ns=${encodeURIComponent(ns)}&job=${encodeURIComponent(job)}`);
 
@@ -780,6 +817,8 @@ async function viewDeploy(pre) {
   const nss = await api("/api/namespaces").catch(() => ["lab"]);
   if (!nss.includes(DCFG.namespace)) DCFG.namespace = nss.includes("lab") ? "lab" : nss[0];
   DOPT = await api("/api/deploy/options?ns=" + encodeURIComponent(DCFG.namespace)).catch(() => DOPT);
+  const vips = await vipChoices();
+  const sharedVip = (STATE.data.ov && STATE.data.ov.lb_ip) || "";
   resetPaint();
   paint(`<div class="phead"><div><h2>Deploy a container</h2>
       <p>Run an independent workload or add a sidecar container to an existing pod</p></div>
@@ -822,10 +861,10 @@ async function viewDeploy(pre) {
         <option value="internal" ${DCFG.network_mode === "internal" ? "selected" : ""}>Cluster only</option>
         <option value="host" ${DCFG.network_mode === "host" ? "selected" : ""}>Host network (advanced)</option></select></div>
         <div class="f"><label>VIP allocation</label><select id="d_vip_mode">
-          <option value="shared" ${DCFG.vip_mode === "shared" ? "selected" : ""}>Shared Homestead VIP</option>
-          <option value="auto" ${DCFG.vip_mode === "auto" ? "selected" : ""}>New automatic VIP</option>
+          <option value="shared" ${DCFG.vip_mode === "shared" ? "selected" : ""}>Shared Homestead VIP${sharedVip ? ` · ${esc(sharedVip)}` : ""}</option>
+          <option value="auto" ${DCFG.vip_mode === "auto" ? "selected" : ""}>New automatic VIP${vips.freeCount ? ` · ${vips.freeCount} free` : ""}</option>
           <option value="manual" ${DCFG.vip_mode === "manual" ? "selected" : ""}>Specific VIP</option></select></div></div>
-      <div class="f" id="d_vip_wrap"><label>Specific VIP</label><input id="d_lb_ip" value="${esc(DCFG.lb_ip || "")}" placeholder="192.0.2.250"></div>
+      <div class="f" id="d_vip_wrap"><label>Specific VIP</label>${vipPicker("d", DCFG.lb_ip || "", vips)}</div>
       <div class="note"><b>Docker bridge → Kubernetes Service.</b> Shared VIP reuses ${esc((STATE.data.ov && STATE.data.ov.lb_ip) || "the cluster VIP")} on a unique LAN port. New automatic VIP asks kube-vip IPAM for another address. A dedicated VIP is ideal for DNS when port 53 must live on its own address. Host network binds directly on one node and reduces failover safety.</div>
       <div class="sec">Ports ${tip("Container port is where the process listens. LAN port is what clients use through the Kubernetes Service. TCP and UDP on the same number are separate listeners.")}</div><div id="d_ports"></div><button class="btn sm" onclick="addPort()">＋ add port</button>
       <div class="sec">Storage ${tip("The mount path is inside the container. Choose whether its backing storage is a new Longhorn claim, an existing claim, an existing volume in a shared pod, or a path on one host.")}</div>
@@ -954,7 +993,7 @@ function addEnv(k = "", v = "", meta = {}) {
     ? `<select class="ev">${meta.options.map(option => `<option ${option === v ? "selected" : ""}>${esc(option)}</option>`).join("")}</select>`
     : `<input class="ev" type="${meta.masked ? "password" : "text"}" value="${esc(v)}" ${meta.binding ? `readonly placeholder="Assigned ${esc(meta.binding)} at deploy time"` : ""}>`;
   d.innerHTML = `<div><label>Key</label><input class="ek" type="text" value="${esc(k)}"></div>
-    <div><label>${esc(meta.label || "Value")}${meta.required ? " · required" : ""}${meta.generate ? " · generated securely" : ""}${meta.binding ? ` · bound to ${esc(meta.binding)}` : ""}</label>${editor}${meta.description ? `<span class="dim xs">${esc(meta.description)}</span>` : ""}</div>
+    <div><label title="${esc(`${meta.label || "Value"}${meta.required ? " · required" : ""}${meta.generate ? " · generated securely" : ""}${meta.binding ? ` · bound to ${meta.binding}` : ""}`)}">${esc(meta.label || "Value")}${meta.required ? " · required" : ""}${meta.generate ? " · generated securely" : ""}${meta.binding ? ` · bound to ${esc(meta.binding)}` : ""}</label>${editor}${meta.description ? `<span class="dim xs">${esc(meta.description)}</span>` : ""}</div>
     <button class="iconbtn row-remove" type="button" title="Remove variable" onclick="this.parentElement.remove();syncSummary()">×</button>`;
   $("#d_env").appendChild(d); d.addEventListener("input", syncSummary); if (!DRENDERING) syncSummary();
 }
@@ -995,6 +1034,38 @@ window.confirmDeploy = async () => {
   try { $("#deployGo").disabled = true; await api("/api/deploy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
     closeModal(); toast(c.target_mode === "existing" ? `${c.container_name} added to ${c.target_workload}` : `${c.workload_name} deployed`, "ok"); go("workloads");
   } catch (e) { if ($("#deployGo")) $("#deployGo").disabled = false; toast(e.message, "bad"); }
+};
+
+/* ---------------- choosing a VIP ----------------
+   A specific VIP is picked from what the cluster has: the free addresses in
+   Harvester's IP pools, or a VIP already in use, whose ports are then shared.
+   "Type an address" is there for one outside the pools. */
+async function vipChoices() {
+  const net = await api("/api/network", { keep: true }).catch(() => null);
+  return { free: net?.available_vips || [], freeCount: net?.available_vip_count || 0, used: net?.vips || [] };
+}
+window.vipChoices = vipChoices;
+
+function vipPicker(prefix, current, choices) {
+  const known = choices.free.includes(current) || choices.used.some(v => v.ip === current);
+  const typed = !!current && !known;
+  const option = (value, label) => `<option value="${esc(value)}" ${value === current ? "selected" : ""}>${esc(label)}</option>`;
+  return `<select id="${prefix}_lb_pick" onchange="vipPicked('${prefix}')">
+      <option value="" ${!current ? "selected" : ""}>Choose an address…</option>
+      ${choices.free.length ? `<optgroup label="Free in the IP pools (${choices.freeCount})">${choices.free.slice(0, 60).map(ip => option(ip, ip)).join("")}</optgroup>` : ""}
+      ${choices.used.length ? `<optgroup label="In use - shared with what is there">${choices.used.map(v =>
+        option(v.ip, `${v.ip} · ${v.services} service${v.services === 1 ? "" : "s"} · ports ${v.listeners.map(l => l.port).slice(0, 5).join(", ")}`)).join("")}</optgroup>` : ""}
+      <option value="__typed" ${typed ? "selected" : ""}>Type an address…</option></select>
+    <input id="${prefix}_lb_ip" value="${esc(current || "")}" placeholder="192.0.2.250" ${typed ? "" : 'style="display:none"'}>`;
+}
+
+window.vipPicked = prefix => {
+  const pick = $(`#${prefix}_lb_pick`), input = $(`#${prefix}_lb_ip`);
+  const typed = pick.value === "__typed";
+  input.style.display = typed ? "" : "none";
+  if (!typed) input.value = pick.value;
+  else input.focus();
+  input.dispatchEvent(new Event("input"));
 };
 
 /* ---------------- app store ----------------

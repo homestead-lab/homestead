@@ -51,6 +51,40 @@ def _over(dst, color, alpha):
     return (*mix, out)
 
 
+def _inside(px, py, poly):
+    """Even-odd point-in-polygon."""
+    inside = False
+    for (x1, y1), (x2, y2) in zip(poly, poly[1:] + poly[:1]):
+        if (y1 > py) != (y2 > py) and px < (x2 - x1) * (py - y1) / (y2 - y1) + x1:
+            inside = not inside
+    return inside
+
+
+def render_silhouette(size):
+    """The status-bar badge: a filled house with the two bars cut out.
+
+    Android draws a notification's small icon from its alpha channel alone, at
+    about 24dp. The outline mark thins to a smudge there; a solid shape stays a
+    house."""
+    unit = 64 / size
+    house = HOUSE[:-1]
+    rows = []
+    for y in range(size):
+        row = bytearray([0])
+        for x in range(size):
+            px, py = (x + 0.5) * unit, (y + 0.5) * unit
+            edge = min(_segment(px, py, a, b) for a, b in zip(HOUSE, HOUSE[1:]))
+            # Signed distance to the house, grown by half the stroke so it
+            # matches the mark's outer edge.
+            distance = (-edge if _inside(px, py, house) else edge) - STROKE / 2
+            alpha = _cover(distance, unit)
+            bars = min(_segment(px, py, a, b) for a, b in LINES) - STROKE / 2
+            alpha *= 1 - _cover(bars, unit)
+            row += bytes((255, 255, 255, max(0, min(255, round(alpha * 255)))))
+        rows.append(bytes(row))
+    return _png(size, b"".join(rows))
+
+
 def render(size, bleed=False, scale=1.0, mono=False):
     """bleed: fill the whole square (maskable, Apple). scale: the mark's share of it."""
     unit = 64 / size / scale            # mark units per pixel
@@ -94,12 +128,19 @@ ICONS = {
     # Maskable: the platform crops to its own shape, keeping the middle 80%.
     "maskable-512.png": dict(size=512, bleed=True, scale=0.78),
     "apple-touch-icon.png": dict(size=180, bleed=True, scale=0.86),
-    # The small monochrome badge Android shows in the status bar.
-    "badge-96.png": dict(size=96, mono=True, scale=1.1),
+}
+SILHOUETTES = {
+    # The small one-colour icon Android shows in the status bar, and the
+    # manifest's monochrome icon for an installed app.
+    "badge-96.png": 96,
+    "monochrome-192.png": 192,
 }
 
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
     for name, options in ICONS.items():
         (OUT / name).write_bytes(render(**options))
+        print(name)
+    for name, size in SILHOUETTES.items():
+        (OUT / name).write_bytes(render_silhouette(size))
         print(name)

@@ -109,8 +109,11 @@ window.clusterCleanupPaint = async () => {
       <span>${n.replicas ? `${n.replicas} replica${n.replicas === 1 ? "" : "s"} still recorded there. They rebuild elsewhere on their own; force it if the host is gone for good` : "No replicas left; safe to delete"}</span></div>
       <button class="btn sm ${n.replicas ? "danger" : ""}" data-need="admin" onclick="clusterCleanup('longhorn','${esc(n.name)}',${!!n.replicas})">${n.replicas ? "Force" : "Delete"}</button></div>`),
   ];
-  host.innerHTML = `<div class="sec">Hosts coming and going ${tip("What a removed host can leave behind: a node that stopped reporting, a Cluster API machine with no node, a Longhorn node record with no host.")}</div>
+  // Kept, so the next refresh draws it straight away instead of the page
+  // shrinking while it is fetched again and growing back when it arrives.
+  STATE.data.cleanupHtml = `<div class="sec">Hosts coming and going ${tip("What a removed host can leave behind: a node that stopped reporting, a Cluster API machine with no node, a Longhorn node record with no host.")}</div>
     <div class="card flat cleanup-card">${rows.join("") || '<div class="cleanup-row"><div><b>Nothing to tidy</b><span>Every node is ready and nothing is left over.</span></div></div>'}</div>`;
+  host.innerHTML = STATE.data.cleanupHtml;
   if (window.applyRole) window.applyRole();
 };
 

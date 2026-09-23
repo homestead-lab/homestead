@@ -16,6 +16,24 @@ function thresholdEditor(id, label, unit, help, pair) {
     </div></div>`;
 }
 
+/* One topic at a time: the page was every setting in one long column. */
+const SETTINGS_TABS = [["health", "Health"], ["updates", "Updates"], ["hardware", "Hardware"], ["access", "Access"],
+  ["apps", "Apps"], ["device", "This device"], ["about", "About"]];
+
+function settingsTab(pick) {
+  if (pick) {
+    try { localStorage.setItem("homestead.settings.tab", pick); } catch (e) { /* this visit only */ }
+    const grid = $(".settings-grid");
+    if (grid) grid.dataset.tab = pick;
+    $$(".settings-tabs button").forEach(b => { b.classList.toggle("on", b.dataset.tab === pick); b.setAttribute("aria-selected", b.dataset.tab === pick); });
+    return pick;
+  }
+  let saved = "";
+  try { saved = localStorage.getItem("homestead.settings.tab") || ""; } catch (e) { /* default */ }
+  return SETTINGS_TABS.some(([id]) => id === saved) ? saved : "health";
+}
+window.settingsTab = settingsTab;
+
 async function viewSettings() {
   const [settings, features, overview, users] = await Promise.all([
     loadHealthSettings(true), loadHardwareFeatures(),
@@ -39,11 +57,14 @@ async function viewSettings() {
   const userRows = users.map(u => `<tr><td><b>${esc(u.name)}</b>${u.name === ME ? ' <span class="tag ok">you</span>' : ""}</td>
     <td><span class="${roleClass(u.role)} rolechip">${esc(u.role)}</span></td><td class="dim xs mono">${esc(u.last_login || "never")}</td></tr>`).join("");
 
+  const tab = settingsTab();
   paint(`<div class="phead"><div><h2>Settings</h2><p>Cluster policy, hardware, access, and installation information</p></div>
     <button class="btn" onclick="document.getElementById('drawer').classList.add('open')">Appearance</button></div>
+    <div class="seg settings-tabs" role="tablist">${SETTINGS_TABS.map(([id, label]) =>
+      `<button role="tab" data-tab="${id}" class="${id === tab ? "on" : ""}" aria-selected="${id === tab}" onclick="settingsTab('${id}')">${label}</button>`).join("")}</div>
 
-    <div class="settings-grid">
-      <section class="card flat settings-wide">
+    <div class="settings-grid" data-tab="${tab}">
+      <section class="card flat settings-wide" data-tab="health">
         <div class="settings-card-head"><div><div class="ctitle">Health thresholds</div><div class="csub">Controls when utilisation bars and node cards turn yellow or red for everyone</div></div>
           ${can("admin") ? '<button class="btn pri" onclick="saveHealthSettings()">Save thresholds</button>' : '<span class="pill neutral">admin managed</span>'}</div>
         <div class="threshold-grid">
@@ -55,7 +76,7 @@ async function viewSettings() {
         <div class="note"><b>Warning</b> changes the metric and node card to yellow. <b>Critical</b> changes them to red. A node uses the most severe result across CPU, memory, disk, and temperature.</div>
       </section>
 
-      <section class="card flat settings-wide">
+      <section class="card flat settings-wide" data-tab="health">
         <div class="settings-card-head"><div><div class="ctitle">Drive health policy</div>
           <div class="csub">SMART warnings shown on node cards and in cluster health</div></div>
           ${can("admin") ? '<button class="btn pri" onclick="saveHealthSettings()">Save drive policy</button>' : '<span class="pill neutral">admin managed</span>'}</div>
@@ -72,7 +93,7 @@ async function viewSettings() {
         <div class="note"><b>Device differences are preserved.</b> NVMe reports media errors; ATA disks report reallocated, pending, and uncorrectable sectors. Missing counters are shown as unsupported, not zero.</div>
       </section>
 
-      <section class="card flat settings-wide">
+      <section class="card flat settings-wide" data-tab="updates">
         <div class="settings-card-head"><div><div class="ctitle">Container image update policy</div>
           <div class="csub">Controls registry notifications and when a reviewed rollout may start; major releases are never selected automatically</div></div>
           ${can("admin") ? '<button class="btn pri" onclick="saveUpdateSettings()">Save update policy</button>' : '<span class="pill neutral">admin managed</span>'}</div>
@@ -97,13 +118,13 @@ async function viewSettings() {
         <div class="note"><b>No silent upgrades.</b> Every install still shows the exact current and candidate image and requires an operator acknowledgement. Semantic-version discovery stays within the current major release.</div>
       </section>
 
-      <section class="card flat">
+      <section class="card flat" data-tab="hardware">
         <div class="settings-card-head"><div><div class="ctitle">Hardware features</div><div class="csub">Reusable passthrough paths and automatic host detection</div></div>
           ${can("admin") ? '<button class="btn sm" onclick="hardwareFeatureSettings()">Manage</button>' : ""}</div>
         <div class="settings-list">${hardwareRows || '<div class="empty small">No hardware features configured.</div>'}</div>
       </section>
 
-      <section class="card flat">
+      <section class="card flat" data-tab="access">
         <div class="settings-card-head"><div><div class="ctitle">Account & access</div><div class="csub">Signed in as ${esc(ME || "—")}</div></div><span class="${roleClass(ROLE)} rolechip">${esc(ROLE || "—")}</span></div>
         <div class="role-summary"><b>${esc(ROLE || "viewer")}</b><span>${esc(ROLE_COPY[ROLE] || ROLE_COPY.viewer)}</span></div>
         <div class="row settings-actions"><button class="btn sm" onclick="pwChange()">Change password</button>
@@ -119,7 +140,7 @@ async function viewSettings() {
 
       ${pwaCard()}
 
-      <section class="card flat settings-wide">
+      <section class="card flat settings-wide" data-tab="apps">
         <div class="settings-card-head"><div><div class="ctitle">App Store catalogue</div>
           <div class="csub">Any feed in the Community Applications format: the public one, a mirror, or your own list of templates</div></div>
           ${can("admin") ? '<div class="row"><button class="btn sm" onclick="saveCatalog(true)">Use Community Applications</button><button class="btn sm pri" onclick="saveCatalog()">Save</button></div>' : '<span class="pill neutral">admin managed</span>'}</div>
@@ -128,7 +149,7 @@ async function viewSettings() {
             value="${esc(STATE.data.appSettings?.catalog_url || "")}" ${can("admin") ? "" : "disabled"}></div>
       </section>
 
-      <section class="card flat settings-wide" id="nsCard">
+      <section class="card flat settings-wide" id="nsCard" data-tab="apps">
         <div class="settings-card-head"><div><div class="ctitle">Namespaces</div>
           <div class="csub">Where apps live. Harvester, Rancher and Kubernetes keep their own, which are hidden here and in every picker.</div></div>
           ${can("admin") ? `<div class="row ns-new"><input id="nsName" placeholder="new-namespace" maxlength="63" autocomplete="off"
@@ -136,7 +157,7 @@ async function viewSettings() {
         <div class="ns-body"><div class="empty small"><span class="spin2"></span></div></div>
       </section>
 
-      <section class="card flat settings-wide">
+      <section class="card flat settings-wide" data-tab="about">
         <div class="ctitle">About this installation</div><div class="csub">Runtime and cluster connection details</div>
         <div class="f sitename"><label>Site name ${tip("Shown under the Homestead wordmark and at the foot of the page. Name the cluster or the house it lives in; leave it blank to show nothing.")}</label>
           <div class="row"><input type="text" id="set_site_name" maxlength="40" placeholder="e.g. Loft rack, or nothing at all"

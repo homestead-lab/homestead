@@ -216,7 +216,7 @@ function pwaRecent(alerts) {
 }
 
 function pwaCard() {
-  return `<section class="card flat settings-wide" id="pwaCard">
+  return `<section class="card flat settings-wide" id="pwaCard" data-tab="device">
     <div class="settings-card-head"><div><div class="ctitle">Notifications on this device</div>
       <div class="csub">Outages, failed jobs and hosts joining, pushed even when Homestead is closed</div></div>
       <span id="pwaInstallSlot"></span></div>

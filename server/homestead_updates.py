@@ -302,7 +302,10 @@ def _check_deployment(dep, pods, force=False):
                          "available": bool(remote) and not matches_remote
                                       and bool(current or candidate_tag)})
             if not current and running:
-                item["error"] = "running image digest is not available yet"
+                # Pulling or starting: nothing has run yet to compare with the
+                # registry. That is a check still to come, not a failed one.
+                item["unchecked"] = True
+                item["starting"] = True
             elif not current and not candidate_tag:
                 # Stopped, and never seen running here: nothing to compare the
                 # registry with. It is not "current" - it is unchecked.

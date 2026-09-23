@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.79")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.80")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1675,6 +1675,9 @@ def storage_classes():
             "provisioner": item.get("provisioner", ""),
             "parameters": parameters,
             "replicas": parameters.get("numberOfReplicas", ""),
+            # Longhorn's data engine: v1 (iSCSI, the default) or v2 (SPDK).
+            "engine": ((str(parameters.get("dataEngine") or "v1").lower())
+                       if item.get("provisioner") == "driver.longhorn.io" else ""),
             "migratable": str(parameters.get("migratable", "")).lower() == "true",
             "encrypted": str(parameters.get("encrypted", "")).lower() == "true",
             "data_locality": parameters.get("dataLocality", ""),
@@ -1799,7 +1802,7 @@ def selectable_storage_classes(rows=None):
 
 def storage_class_facts(rows=None):
     """The handful of class facts worth showing next to a class picker."""
-    return {row["name"]: {"replicas": row["replicas"], "migratable": row["migratable"],
+    return {row["name"]: {"replicas": row["replicas"], "engine": row["engine"], "migratable": row["migratable"],
                           "encrypted": row["encrypted"], "expandable": row["expandable"],
                           "reclaim": row["reclaim"], "default": row["default"]}
             for row in (rows if rows is not None else storage_classes()) if not row["internal"]}
@@ -3337,11 +3340,26 @@ class H(BaseHTTPRequestHandler):
                 if not pod:
                     return self._send(404, {"error": "Logs are not available yet because no pod exists."})
                 tail = max(20, min(1000, int((q.get("tail") or [300])[0])))
-                req = urllib.request.Request(
-                    f"{API}/api/v1/namespaces/{ns}/pods/{pod}/log?tailLines={tail}&timestamps=true",
-                    headers={"Authorization": f"Bearer {TOKEN}"})
-                with urllib.request.urlopen(req, context=CTX, timeout=15) as r:
-                    return self._send(200, r.read().decode("utf-8", "replace"), "text/plain; charset=utf-8")
+                container = (q.get("container") or [""])[0]
+                if not container:
+                    # A pod with more than one container has to be told which;
+                    # asking without a name is a 400 from Kubernetes.
+                    try:
+                        spec = kget(f"/api/v1/namespaces/{ns}/pods/{pod}").get("spec", {}) or {}
+                        names = [c.get("name") for c in spec.get("containers", []) or []]
+                        container = names[0] if names else ""
+                    except Exception:
+                        container = ""
+                query = f"tailLines={tail}&timestamps=true" + (
+                    f"&container={urllib.parse.quote(container)}" if container else "")
+                req = urllib.request.Request(f"{API}/api/v1/namespaces/{ns}/pods/{pod}/log?{query}",
+                                             headers={"Authorization": f"Bearer {TOKEN}"})
+                try:
+                    with urllib.request.urlopen(req, context=CTX, timeout=15) as r:
+                        return self._send(200, r.read().decode("utf-8", "replace"), "text/plain; charset=utf-8")
+                except urllib.error.HTTPError as error:
+                    return self._send(409 if error.code in (400, 404) else error.code,
+                                      {"error": logs_refusal(error, pod, container)})
             return self._send(404, {"error": "no route"})
         except urllib.error.HTTPError as e:
             return self._send(e.code, {"error": e.read().decode("utf-8", "replace")[:500]})
@@ -3938,6 +3956,22 @@ def _reconcile_permissions():
         print(f"old keys: not moved ({str(error)[:120]})", flush=True)
 
 
+def logs_refusal(error, pod, container):
+    """What Kubernetes' refusal to give logs means, in words rather than its JSON."""
+    try:
+        message = json.loads(error.read().decode("utf-8", "replace")).get("message", "")
+    except Exception:
+        message = ""
+    who = f"{container} in {pod}" if container else pod
+    if "waiting to start" in message or "ContainerCreating" in message or "PodInitializing" in message:
+        return f"{who} has not started yet, so there are no logs. It shows here once it is running."
+    if "not found" in message and "pods" in message:
+        return f"{pod} no longer exists; the workload has probably replaced it. Reopen the logs."
+    if "terminated" in message:
+        return f"{who} has stopped and Kubernetes kept no logs from it."
+    return f"Kubernetes could not return the logs for {who}" + (f": {message}" if message else ".")
+
+
 def _upgrade_node_probe():
     """Finish the upgrade the image cannot finish by itself.
 
@@ -3961,7 +3995,7 @@ if __name__ == "__main__":
     threading.Thread(target=_upgrade_node_probe, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=MOVE_ENGINE.run, daemon=True).start()
-    # Join plans from 2.8.68-2.8.79 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.80 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     print(f"Homestead listening on :{port}", flush=True)

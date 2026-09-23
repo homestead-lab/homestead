@@ -1437,9 +1437,19 @@ def cleanup_image(digest, nodes=None):
     if not image_ref:
         raise ValueError("the cache did not report a removable repository digest")
     pods = []
+    socket = "unix:///host/run/k3s/containerd/containerd.sock"
+    crictl = f"/usr/local/bin/crictl --runtime-endpoint {socket} --image-endpoint {socket}"
+    quoted = "'" + image_ref.replace("'", "") + "'"
+    # Exited containers of pods long gone still hold the image, and rmi refuses
+    # while any does. Only exited ones are removed - never a running container.
+    script = (f"set -e; for id in $({crictl} ps -a -q --state exited --image {quoted}); "
+              f"do {crictl} rm \"$id\" >/dev/null; done; {crictl} rmi {quoted}")
+    attempt = format(int(time.time()), "x")[-6:]
     for node in selected:
         suffix = hashlib.sha256((digest + "|" + node).encode()).hexdigest()[:10]
-        pod_name = "homestead-image-clean-" + suffix
+        # A name of its own per attempt: a retry used to delete the last pod and
+        # recreate it at once, and Kubernetes had not finished deleting it.
+        pod_name = f"homestead-image-clean-{suffix}-{attempt}"
         body = {
             "apiVersion": "v1", "kind": "Pod",
             "metadata": {"name": pod_name, "namespace": NS,
@@ -1451,11 +1461,9 @@ def cleanup_image(digest, nodes=None):
                      "tolerations": [{"operator": "Exists"}],
                      "containers": [{
                          "name": "cleanup", "image": "python:3.12-alpine",
-                         "command": ["/usr/local/bin/crictl", "--runtime-endpoint",
-                                     "unix:///host/run/k3s/containerd/containerd.sock",
-                                     "--image-endpoint",
-                                     "unix:///host/run/k3s/containerd/containerd.sock",
-                                     "rmi", image_ref],
+                         "command": ["sh", "-c", script],
+                         # crictl's own words become the failure the job tray shows.
+                         "terminationMessagePolicy": "FallbackToLogsOnError",
                          "resources": {"requests": {"cpu": "5m", "memory": "16Mi"},
                                        "limits": {"memory": "48Mi"}},
                          "securityContext": {"runAsUser": 0, "runAsGroup": 0,
@@ -1475,12 +1483,13 @@ def cleanup_image(digest, nodes=None):
                              "path": "/run/k3s/containerd", "type": "Directory"}},
                      ]},
         }
-        try:
-            ksend("DELETE", f"/api/v1/namespaces/{NS}/pods/{pod_name}")
-            time.sleep(.2)
-        except urllib.error.HTTPError as error:
-            if error.code != 404:
-                raise
+        for old in NAMES.find(f"/api/v1/namespaces/{NS}/pods", "task", "image-cleanup"):
+            meta = old.get("metadata") or {}
+            if meta.get("name", "").startswith(f"homestead-image-clean-{suffix}") and                     (old.get("status") or {}).get("phase") in ("Succeeded", "Failed"):
+                try:
+                    ksend("DELETE", f"/api/v1/namespaces/{NS}/pods/{meta['name']}")
+                except urllib.error.HTTPError:
+                    pass
         ksend("POST", f"/api/v1/namespaces/{NS}/pods", body)
         pods.append(pod_name)
     _bust("imgcache")

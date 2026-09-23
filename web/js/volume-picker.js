@@ -87,10 +87,30 @@ function volumeListIssue(rows) {
   return "";
 }
 
+/* A class's name with what matters when choosing it: its replica count and
+   Longhorn engine. An <option> cannot hold a pill, so the text says it. */
+function storageClassLabel(name, facts) {
+  const f = facts && facts[name];
+  if (!f) return name;
+  const bits = [];
+  if (f.replicas) bits.push(`${f.replicas}×`);
+  if (f.engine) bits.push(`Longhorn ${f.engine.toUpperCase()}`);
+  if (f.migratable) bits.push("VM disks");
+  return bits.length ? `${name} · ${bits.join(" · ")}` : name;
+}
+window.storageClassLabel = storageClassLabel;
+
+function storageClassOptions(classes, selected, facts) {
+  return classes.map(sc => `<option value="${esc(sc)}" ${sc === selected ? "selected" : ""}>${esc(storageClassLabel(sc, facts))}</option>`).join("");
+}
+window.storageClassOptions = storageClassOptions;
+
 function storageClassBadges(facts) {
   if (!facts) return "";
   const badges = [];
   if (facts.replicas) badges.push(`<span class="tag">${esc(facts.replicas)} replica${facts.replicas === "1" ? "" : "s"}</span>`);
+  if (facts.engine) badges.push(`<span class="tag ${facts.engine === "v2" ? "info" : ""}" data-tip="${facts.engine === "v2"
+    ? "Longhorn's V2 data engine (SPDK): faster, and needs hugepages and a V2 disk on each node." : "Longhorn's V1 data engine, the default."}">Longhorn ${esc(facts.engine.toUpperCase())}</span>`);
   badges.push(facts.encrypted ? '<span class="tag info">encrypted</span>' : '<span class="tag">not encrypted</span>');
   badges.push(facts.expandable ? '<span class="tag ok">can grow</span>' : '<span class="tag">fixed size</span>');
   if (facts.reclaim === "Retain") badges.push('<span class="tag info">keeps data on delete</span>');
@@ -242,7 +262,7 @@ function addVolumeRow(host, v = {}) {
         `<option value="${k}" ${k === kind ? "selected" : ""}>${esc(k === "pod" ? ctx.podLabel : VOLUME_KIND_LABELS[k])}</option>`).join("")}</select></div>
       <div class="vsource"><label class="vsource-label">Volume / path</label><input class="vs" type="text" value="${esc(v.source || "")}"><select class="vselect" style="display:none"></select></div>
       <div class="vnew"><div><label class="vsize-label">Size GiB</label><input class="vz" type="number" min="1" value="${v.size_gb || 5}"></div>
-        <div><label>Storage class</label><select class="vsc">${classes.map(sc => `<option ${sc === (v.storage_class || "longhorn-r2") ? "selected" : ""}>${esc(sc)}</option>`).join("")}</select></div></div>
+        <div><label>Storage class</label><select class="vsc">${storageClassOptions(classes, v.storage_class || "longhorn-r2", ctx.classFacts())}</select></div></div>
     </div>
     <div class="vclass-badges" style="display:none"></div>
     <div class="volume-foot"><span class="dim small vhelp"></span><label class="switch" ${ctx.readOnlyToggle ? "" : 'style="display:none"'}><input class="vro" type="checkbox" ${v.read_only ? "checked" : ""}>Read-only</label></div>

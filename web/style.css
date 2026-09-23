@@ -453,6 +453,12 @@ select option{background:#151517}
 .f3{display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:end;margin-bottom:11px}
 .f4{display:grid;grid-template-columns:1fr 1fr minmax(95px,.55fr) auto auto;gap:10px;align-items:end;margin-bottom:11px}
 .row-remove{align-self:end;margin-bottom:2px;color:var(--dim)}
+/* A variable's value can carry a long label and a description under it; the
+   key and value boxes stay level because labels keep to one line and the row
+   lines up from the top. */
+.env-row{align-items:start}
+.env-row label{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.env-row .row-remove{align-self:start;margin-top:25px}
 .joinbox{padding:14px;margin:0 0 15px;border:1px solid rgba(74,158,255,.28);border-radius:13px;background:rgba(74,158,255,.06)}
 .joinbox .f{margin-bottom:10px}.joinbox .note{margin:0}
 .storage-guide{margin-bottom:12px}.import-device-note{margin-top:10px}
@@ -530,7 +536,7 @@ select option{background:#151517}
 pre{background:rgba(0,0,0,.5);border:1px solid var(--line);border-radius:13px;padding:15px;overflow:auto;
   font-size:11.5px;max-height:460px;line-height:1.6;color:#c6c6ce}
 .logtools{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px;color:var(--dim);font-size:11px}
-.logtools .switch{margin:0}.logview{height:min(58vh,560px);max-height:none;white-space:pre-wrap;overflow-wrap:anywhere}
+.logtools .switch{margin:0}.logpick{display:flex;gap:8px;flex-wrap:wrap}.logpick label{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--mut)}.logpick select{width:auto;padding:4px 8px;font-size:12px}.logsource{margin:-4px 0 6px}.logview{height:min(58vh,560px);max-height:none;white-space:pre-wrap;overflow-wrap:anywhere}
 .badbg{background:var(--crit)!important}.constraintbar{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.025)}
 .blockreasons{display:flex;flex-direction:column;gap:3px;margin-top:8px;color:var(--crit);font-size:10.5px}
 .dependency-list{display:grid;gap:7px}.dependency-row{display:flex;justify-content:space-between;gap:14px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:11px;background:var(--surf2)}.dependency-row.stranded{border-color:rgba(255,77,79,.34);background:rgba(255,77,79,.06)}.dependency-danger{border-color:rgba(255,77,79,.4)!important;background:rgba(255,77,79,.08)!important;color:#ffb4b8!important}.dependency-confirm{margin-top:12px;padding:11px 12px;border:1px solid rgba(255,77,79,.3);border-radius:11px}
@@ -1363,4 +1369,28 @@ html[data-theme="light"] .compose-editor{background:#fff}
   .wltable .wl-actions .wacts{width:auto;gap:3px;flex-wrap:nowrap}
   .wltable .wl-actions .wacts>.btn{flex:0 0 auto;width:30px;height:28px;padding:0;justify-content:center;font-size:0;gap:0}
   .wltable .wl-actions .wacts>.btn svg{width:14px;height:14px}
+}
+
+/* Settings, one tab at a time, each card the full width. */
+.settings-tabs{margin:0 0 14px;max-width:100%;overflow-x:auto;scrollbar-width:none}
+.settings-tabs::-webkit-scrollbar{display:none}
+.settings-tabs button{white-space:nowrap}
+.settings-grid[data-tab]>section{display:none;grid-column:1/-1}
+.settings-grid[data-tab="health"]>section[data-tab="health"],.settings-grid[data-tab="updates"]>section[data-tab="updates"],
+.settings-grid[data-tab="hardware"]>section[data-tab="hardware"],.settings-grid[data-tab="access"]>section[data-tab="access"],
+.settings-grid[data-tab="apps"]>section[data-tab="apps"],.settings-grid[data-tab="device"]>section[data-tab="device"],
+.settings-grid[data-tab="about"]>section[data-tab="about"]{display:block}
+/* A threshold is one row: its name, then warning and critical side by side. */
+.threshold-card{padding:10px 12px;gap:12px}
+.threshold-values{gap:8px}
+.threshold-values input{width:64px;padding:6px 8px}
+@media(max-width:560px){
+  .threshold-card{flex-direction:row;align-items:center}
+  .threshold-card>div:first-child .dim{display:none}
+  .threshold-values{width:auto}
+  .threshold-values label{flex:0 0 auto}
+  .threshold-values input{width:54px}
+  .settings-card-head{flex-wrap:nowrap;align-items:flex-start}
+  .settings-card-head>.btn,.settings-card-head>.row .btn{padding:6px 10px;font-size:12px;white-space:nowrap}
+  #mbody .settings-card-head{flex-wrap:wrap}
 }

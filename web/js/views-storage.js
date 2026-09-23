@@ -223,7 +223,7 @@ window.volumeCreate = async () => {
     <div class="f"><label>Namespace</label><select id="vc_ns">${nss.map(n => `<option ${n === "lab" ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div></div>
     <div class="f2"><div class="f"><label>Size (GB)</label><input id="vc_size" type="number" min="1" value="10"></div>
     <div class="f"><label>Access mode ${tip("RWO mounts on one node at a time and suits most apps. RWX can mount on several nodes, using Longhorn's shared-volume support.")}</label><select id="vc_mode"><option value="ReadWriteOnce">RWO · one node</option><option value="ReadWriteMany">RWX · many nodes</option></select></div></div>
-    <div class="f"><label>Storage class</label><select id="vc_sc" onchange="volumeClassFacts()">${scs.map(s => `<option ${s === "longhorn-r2" ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>
+    <div class="f"><label>Storage class</label><select id="vc_sc" onchange="volumeClassFacts()">${storageClassOptions(scs, "longhorn-r2", classes.facts)}</select>
       <div class="vclass-badges" id="vc_badges"></div></div>
     <div class="note" id="vc_mode_note" hidden></div>
     <div class="row"><button class="btn pri" onclick="volumeCreateNow()">Create volume</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
