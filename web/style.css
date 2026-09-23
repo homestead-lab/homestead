@@ -1396,3 +1396,31 @@ html[data-theme="light"] .compose-editor{background:#fff}
   .settings-card-head>.btn,.settings-card-head>.row .btn{padding:6px 10px;font-size:12px;white-space:nowrap}
   #mbody .settings-card-head{flex-wrap:wrap}
 }
+
+/* Container groups: a divider per group that folds, and a chip per group. */
+.wgroup-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 14px}
+.wgroup-chips{max-width:100%;overflow-x:auto;scrollbar-width:none}
+.wgroup-chips::-webkit-scrollbar{display:none}
+.wgroup-chips button{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;padding:6px 12px;font-size:12.5px}
+.wgroup-chips button .dim{font-size:11px}
+.wgroup-bar>.btn{margin-left:auto}
+.wgroup{margin-bottom:6px}
+.wgroup-head{display:flex;align-items:center;gap:10px;width:100%;padding:10px 2px 9px;margin:0 0 10px;background:none;border:0;
+  border-bottom:1px solid var(--line);color:var(--tx);font:inherit;text-align:left;cursor:pointer}
+.wgroup-head b{font-size:13px;letter-spacing:.02em}
+.wgroup-chevron{display:inline-block;transition:transform .15s var(--e);transform:rotate(90deg);color:var(--mut)}
+.wgroup-head[aria-expanded="false"] .wgroup-chevron{transform:none}
+.wgroup.folded .wgroup-head{margin-bottom:4px}
+.wltable tbody.grouphead td{padding:0 12px;background:rgba(255,255,255,.02)}
+.wltable tbody.grouphead .wgroup-head{margin:0;border-bottom:0}
+.wg-list{display:grid;gap:4px;max-height:48vh;overflow:auto;margin:12px 0;padding-right:4px}
+.wg-item{display:grid;grid-template-columns:auto auto 1fr auto;align-items:center;gap:10px;padding:7px 9px;border-radius:9px;cursor:pointer}
+.wg-item:hover{background:rgba(255,255,255,.04)}
+.wg-apply{display:flex;gap:8px;align-items:end;flex-wrap:wrap}
+.wg-apply .f{flex:1 1 180px;margin:0}
+@media(max-width:560px){
+  .wgroup-bar>.btn{margin-left:0}
+  .wltable.stack tbody.grouphead tr{display:block}
+  .wltable.stack tbody.grouphead td{display:block;padding:0 10px}
+  .wltable.stack tbody.grouphead td::before{display:none}
+}

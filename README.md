@@ -25,7 +25,7 @@ not affiliated with, endorsed, or sponsored by Lime Technology, Inc.
 | Area | Capability |
 |---|---|
 | **Dashboard** | Cluster CPU/RAM/network/disk telemetry, transition-aware health, top consumers, configurable warnings |
-| **Containers** | Guided App Store and image deployment, Docker Compose import, independent or sidecar pods, guarded Kubernetes workload rename, edit/move/logs/console, autostart, LAN port and exposure editing, one storage picker for new and existing containers, hardware passthrough, update checks, monitored rollout with live image-pull state, rollback, and a card or row layout |
+| **Containers** | Guided App Store and image deployment, Docker Compose import, independent or sidecar pods, guarded Kubernetes workload rename, edit/move/logs/console, autostart, LAN port and exposure editing, one storage picker for new and existing containers, hardware passthrough, update checks, monitored rollout with live image-pull state, rollback, groups with folding dividers and a filter per group, and a card or row layout |
 | **App Store** | The Community Applications catalogue laid out as Unraid shows it - monthly spotlights, recently added, trending and top performing - with a full page per app, from the public feed or one you set |
 | **Virtual machines** | Create from a Harvester image or an imported disk, power actions, and live migration between hosts |
 | **Architecture** | VIP → workload → claim → Longhorn volume → replica dependency view |
@@ -66,10 +66,10 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.81`, the workflow publishes:
+For a release such as `v2.8.82`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.81
+ghcr.io/wjcloudy/homestead:2.8.82
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -80,8 +80,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.81
-git push origin v2.8.81
+git tag v2.8.82
+git push origin v2.8.82
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -432,7 +432,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.81/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.82/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -443,7 +443,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.81 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.82 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -752,6 +752,16 @@ can create a namespace there, and delete one only when it is empty and its name
 is typed; `default`, the namespace new workloads go to (`DEFAULT_NS`), and the
 one Homestead runs in are kept. A namespace that Homestead created is labelled
 `homestead.io/managed`.
+
+## Container groups
+
+Workloads can be gathered into groups - Media, Home, Monitoring, whatever suits
+- from **Group** in a container's menu, or **Groups** on the Containers page to
+tick several and move them at once. Containers then shows each group under a
+divider that folds, ungrouped workloads last, and a chip per group shows that
+one alone; the search box matches group names too. Sorting a column sorts
+within each group. A group is the `homestead.io/group` annotation on each
+Deployment, so it needs no list of its own and exists while something is in it.
 
 ## Workload logos
 

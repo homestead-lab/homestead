@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HOMESTEAD_VERSION = "2.8.81";
+const HOMESTEAD_VERSION = "2.8.82";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -435,8 +435,16 @@ function sortRows(table) {
     th.setAttribute("aria-sort", state && state.col === index ? (state.dir > 0 ? "ascending" : "descending") : "none");
   });
   sortBar(table, heads, state);
-  const body = table.tBodies[0];
-  if (!state || !body || !heads[state.col]) return;
+  if (!state || !heads[state.col]) return;
+  // A table in sections (a heading body, then its rows) sorts each on its own.
+  [...table.tBodies].filter(body => !body.classList.contains("grouphead")).forEach(body => sortBody(body, heads, state));
+}
+function firstDataRow(table) {
+  const width = $$("thead th", table).length;
+  for (const body of table.tBodies) for (const row of body.rows) if (row.cells.length === width) return row;
+  return null;
+}
+function sortBody(body, heads, state) {
   const rows = [...body.rows];
   const keyed = rows.filter(row => row.cells.length === heads.length);
   const rest = rows.filter(row => row.cells.length !== heads.length);
@@ -480,7 +488,7 @@ document.addEventListener("change", event => {
   if (!select) return;
   const col = select.value === "" ? null : +select.value;
   const table = document.querySelector(`table[data-sort="${CSS.escape(select.dataset.sortFor)}"]`);
-  const numeric = col !== null && table && typeof sortValue(table.tBodies[0]?.rows[0]?.cells[col]) === "number";
+  const numeric = col !== null && table && typeof sortValue(firstDataRow(table)?.cells[col]) === "number";
   saveSort(select.dataset.sortFor, col === null ? null : { col, dir: numeric ? -1 : 1 });
 });
 document.addEventListener("click", event => {
@@ -498,7 +506,7 @@ document.addEventListener("click", event => {
   const table = th.closest("table");
   const col = +th.dataset.col, current = sortState(table.dataset.sort);
   // Numbers read best biggest first; names from A.
-  const firstRow = table.tBodies[0]?.rows[0];
+  const firstRow = firstDataRow(table);
   const numeric = typeof sortValue(firstRow?.cells[col]) === "number";
   const dir = current && current.col === col ? -current.dir : numeric ? -1 : 1;
   saveSort(table.dataset.sort, { col, dir });

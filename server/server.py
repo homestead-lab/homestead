@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.81")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.82")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -785,8 +785,39 @@ def get_workloads():
             "gpu": "igpu" in hardware,
             "hardware": hardware,
             "icon": display_icon(annotations),
+            "group": NAMES.read(annotations, "group"),
         })
     return sorted(out, key=lambda x: (x["ns"], x["name"]))
+
+
+def workload_group(value):
+    """A group's name as stored: its own words, trimmed, one line."""
+    group = " ".join(str(value or "").split())
+    if len(group) > 40:
+        raise ValueError("a group name is at most 40 characters")
+    return group
+
+
+def set_workload_groups(b):
+    """Puts workloads in a group, or out of every group with a blank name.
+
+    The group is an annotation on each Deployment, so it travels with the
+    workload and needs no list of its own: a group exists while something is
+    in it."""
+    group = workload_group(b.get("group"))
+    items = b.get("items") or []
+    if not items:
+        raise ValueError("choose at least one workload")
+    patch = {"metadata": {"annotations": {NAMES.key("group"): group or None}}}
+    targets = [(_dns_name(item.get("ns"), "namespace"), _dns_name(item.get("name"), "workload name"))
+               for item in items]
+    for ns, name in targets:
+        ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", patch,
+              ctype="application/merge-patch+json")
+    _cache.pop("wl", None)
+    count = len(items)
+    return {"ok": True, "group": group,
+            "detail": f"{count} workload{'s' if count != 1 else ''} " + (f"moved to {group}" if group else "ungrouped")}
 
 
 def classify_cluster_health(nodes, workloads, volumes, startup_grace=300):
@@ -3508,6 +3539,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, compose_report(b))
             if p == "/api/compose/apply":
                 return self._send(200, compose_apply(b))
+            if p == "/api/workloads/group":
+                return self._send(200, set_workload_groups(b))
             if p == "/api/scale":
                 ns, name, n = b["ns"], b["name"], int(b["replicas"])
                 ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}/scale",
@@ -4050,7 +4083,7 @@ if __name__ == "__main__":
     threading.Thread(target=_upgrade_node_probe, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=MOVE_ENGINE.run, daemon=True).start()
-    # Join plans from 2.8.68-2.8.81 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.82 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     print(f"Homestead listening on :{port}", flush=True)

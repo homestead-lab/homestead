@@ -199,17 +199,127 @@ if (updateNoticeButton) {
   };
 }
 
+/* ---------------- groups ----------------
+   A group is a word on each workload (an annotation), so it exists while
+   something is in it. The page shows each under a divider that folds, with a
+   chip per group to show just that one. */
+const NO_GROUP = "(none)";
+function workloadGroupPrefs() {
+  let pick = "", folded = [];
+  try {
+    pick = localStorage.getItem("homestead.containers.group") || "";
+    folded = JSON.parse(localStorage.getItem("homestead.containers.folded") || "[]");
+  } catch (e) { /* defaults */ }
+  return { pick, folded: new Set(Array.isArray(folded) ? folded : []) };
+}
+function workloadGroupNames(rows) {
+  return [...new Set(rows.map(w => w.group).filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+}
+/* Group names are the user's own words, so handlers get them by index. */
+let WL_GROUP_KEYS = [];
+function groupKeyIndex(key) {
+  let at = WL_GROUP_KEYS.indexOf(key);
+  if (at < 0) { WL_GROUP_KEYS.push(key); at = WL_GROUP_KEYS.length - 1; }
+  return at;
+}
+window.pickWorkloadGroup = index => {
+  try { localStorage.setItem("homestead.containers.group", WL_GROUP_KEYS[index] || ""); } catch (e) { /* this visit only */ }
+  renderWorkloads();
+};
+window.foldWorkloadGroup = index => {
+  const key = WL_GROUP_KEYS[index];
+  if (key === undefined) return;
+  const { folded } = workloadGroupPrefs();
+  folded.has(key) ? folded.delete(key) : folded.add(key);
+  try { localStorage.setItem("homestead.containers.folded", JSON.stringify([...folded])); } catch (e) { /* this visit only */ }
+  renderWorkloads();
+};
+function workloadGroupHead(group, rows, folded) {
+  const running = rows.filter(w => w.desired > 0 && w.ready === w.desired).length;
+  return `<button type="button" class="wgroup-head" aria-expanded="${!folded}" onclick="foldWorkloadGroup(${groupKeyIndex(group || NO_GROUP)})">
+    <span class="wgroup-chevron">›</span><b>${esc(group || "Ungrouped")}</b>
+    <span class="dim xs">${rows.length} workload${rows.length === 1 ? "" : "s"}${running < rows.length ? ` · ${running} running` : ""}</span></button>`;
+}
+function workloadSections(rows, layout, pick) {
+  const { folded } = workloadGroupPrefs();
+  const names = workloadGroupNames(rows);
+  if (!names.length || pick) return layout === "rows" ? workloadTable(rows) : `<div class="cardlist">${rows.map(workloadCard).join("")}</div>`;
+  const sections = names.map(name => [name, rows.filter(w => w.group === name)]);
+  const loose = rows.filter(w => !w.group);
+  if (loose.length) sections.push(["", loose]);
+  if (layout === "rows") return workloadTable(rows, sections, folded);
+  return sections.map(([name, members]) => {
+    const shut = folded.has(name || NO_GROUP);
+    return `<section class="wgroup${shut ? " folded" : ""}">${workloadGroupHead(name, members, shut)}
+      ${shut ? "" : `<div class="cardlist">${members.map(workloadCard).join("")}</div>`}</section>`;
+  }).join("");
+}
+function workloadGroupBar(all, pick) {
+  const names = workloadGroupNames(all);
+  const loose = all.filter(w => !w.group).length;
+  const chip = (value, label, count) => `<button type="button" class="${pick === value ? "on" : ""}" aria-pressed="${pick === value}" onclick="pickWorkloadGroup(${groupKeyIndex(value)})">${esc(label)} <span class="dim">${count}</span></button>`;
+  return `<div class="wgroup-bar">
+    ${names.length ? `<div class="seg wgroup-chips" role="group" aria-label="Show group">${chip("", "All", all.length)}${names.map(name =>
+      chip(name, name, all.filter(w => w.group === name).length)).join("")}${loose ? chip(NO_GROUP, "Ungrouped", loose) : ""}</div>` : ""}
+    <button class="btn sm" data-need="operator" onclick="manageWorkloadGroups()">${icon("list")}${names.length ? "Groups" : "Group workloads"}</button></div>`;
+}
+
+/* Put one workload in a group: pick one it could join, or name a new one. */
+window.wlGroup = (ns, name) => {
+  const w = (STATE.data.wl || []).find(x => x.ns === ns && x.name === name) || {};
+  const names = workloadGroupNames(STATE.data.wl || []);
+  window.__groupTarget = [{ ns, name }];
+  modal("Group · " + name, `<p class="muted small">Groups gather workloads under a divider on Containers, and each gets a chip to show it alone.</p>
+    <div class="f" style="margin-top:12px"><label>Group</label><input id="wg_name" list="wg_names" maxlength="40" value="${esc(w.group || "")}" placeholder="e.g. Media">
+      <datalist id="wg_names">${names.map(n => `<option value="${esc(n)}">`).join("")}</datalist></div>
+    <div class="row" style="justify-content:flex-end;margin-top:14px;gap:8px">
+      ${w.group ? `<button class="btn" onclick="saveWorkloadGroup(window.__groupTarget, '')">Remove from ${esc(w.group)}</button>` : ""}
+      <button class="btn pri" onclick="saveWorkloadGroup(window.__groupTarget, $('#wg_name').value)">Save</button></div>`);
+  setTimeout(() => $("#wg_name")?.focus(), 30);
+};
+
+/* Several at once: tick the workloads, then name the group they go in. */
+window.manageWorkloadGroups = () => {
+  const rows = STATE.data.wl || [], names = workloadGroupNames(rows);
+  modal("Groups", `<p class="muted small">Tick workloads, then move them to a group - an existing one or a new name - or out of every group. A group disappears when nothing is left in it.</p>
+    <div class="wg-list">${rows.map(w => `<label class="wg-item"><input type="checkbox" data-ns="${esc(w.ns)}" data-name="${esc(w.name)}">
+      ${appAvatar(w.name, w.icon)}<span><b>${esc(w.name)}</b><span class="dim xs"> ${esc(w.ns)}</span></span>
+      <span class="pill slim ${w.group ? "" : "neutral"}">${esc(w.group || "ungrouped")}</span></label>`).join("")}</div>
+    <div class="wg-apply"><div class="f"><label>Group</label><input id="wg_bulk" list="wg_bulk_names" maxlength="40" placeholder="e.g. Media">
+      <datalist id="wg_bulk_names">${names.map(n => `<option value="${esc(n)}">`).join("")}</datalist></div>
+      <button class="btn pri" onclick="saveWorkloadGroup(checkedWorkloads(), $('#wg_bulk').value)">Move ticked</button>
+      <button class="btn" onclick="saveWorkloadGroup(checkedWorkloads(), '')">Ungroup ticked</button></div>`);
+  loadAppIcons($("#mbody"));
+};
+window.checkedWorkloads = () => $$("#mbody .wg-item input:checked").map(box => ({ ns: box.dataset.ns, name: box.dataset.name }));
+window.saveWorkloadGroup = async (items, group) => {
+  if (!items || !items.length) return toast("Tick at least one workload", "bad");
+  try {
+    const result = await api("/api/workloads/group", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items, group: String(group || "").trim() }) });
+    toast(result.detail, "ok");
+    const moved = new Set(items.map(item => `${item.ns}/${item.name}`));
+    (STATE.data.wl || []).forEach(w => { if (moved.has(`${w.ns}/${w.name}`)) w.group = result.group; });
+    closeModal(); renderWorkloads();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
 function renderWorkloads() {
   const q = STATE.q.toLowerCase();
-  const rows = (STATE.data.wl || []).filter(x => !q || x.name.includes(q) || x.ns.includes(q) ||
-    x.images.join(" ").toLowerCase().includes(q) || x.nodes.join(" ").includes(q));
+  const all = STATE.data.wl || [];
+  // A chip for a group that has since emptied would hide everything.
+  const saved = workloadGroupPrefs().pick;
+  const group = saved === NO_GROUP ? (all.some(w => !w.group) ? saved : "") : workloadGroupNames(all).includes(saved) ? saved : "";
+  const rows = all.filter(x => !q || x.name.includes(q) || x.ns.includes(q) || (x.group || "").toLowerCase().includes(q) ||
+    x.images.join(" ").toLowerCase().includes(q) || x.nodes.join(" ").includes(q))
+    .filter(x => !group || (group === NO_GROUP ? !x.group : x.group === group));
   const report = STATE.data.imageUpdates;
   const updateCount = report?.updates || 0;
   const updateErrors = report?.errors || 0;
   const unchecked = (report?.workloads || []).filter(w => w.unchecked).length;
   const layout = viewLayout("containers");
   paint(`<div class="phead">
-      <div><h2>Containers</h2><p>${rows.length} workload${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""} · Harvester system pods hidden${report && !updateCount && !updateErrors ? (unchecked ? ` · ${unchecked} not checked yet` : " · images current") : ""}</p></div>
+      <div><h2>Containers</h2><p>${rows.length} workload${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""}${group ? ` in ${esc(group === NO_GROUP ? "no group" : group)}` : ""} · Harvester system pods hidden${report && !updateCount && !updateErrors ? (unchecked ? ` · ${unchecked} not checked yet` : " · images current") : ""}</p></div>
       <div class="row"><span class="dim xs scanprogress" id="scanprogress"></span>
       <span class="dim xs" title="When the registries were last asked">${checkedAgo()}</span>
       ${layoutSwitch("containers", "renderWorkloads")}
@@ -221,8 +331,9 @@ function renderWorkloads() {
       <span class="pill warn">review below</span></div>` : updateErrors ? `<div class="updatebar"><div><b>${updateErrors} registry check${updateErrors === 1 ? " needs" : "s need"} attention</b>
       <span>See the affected container cards and check their imagePullSecrets.</span></div><span class="pill crit">check failed</span></div>` : ""}
 
-    ${rows.length ? (layout === "rows" ? workloadTable(rows) : `<div class="cardlist">${rows.map(workloadCard).join("")}</div>`)
-      : `<div class="empty">${q ? "Nothing matches that search." : "Nothing deployed yet."}</div>`}`);
+    ${all.length ? workloadGroupBar(all, group) : ""}
+    ${rows.length ? workloadSections(rows, layout, group)
+      : `<div class="empty">${q || group ? "Nothing matches that search." : "Nothing deployed yet."}</div>`}`);
 }
 
 /* An image with no tag is Docker's latest; saying so is clearer than leaving it off. */
@@ -246,6 +357,7 @@ function workloadActions(w, update, off, compact = false) {
             <div class="actionmenu-pop">
               <button aria-label="Console for ${esc(w.name)}" title="Open an audited interactive shell in a running container" data-need="operator" onclick="this.closest('details').open=false;wlConsole('${w.ns}','${w.name}')">${icon("console")}Console</button>
               <button aria-label="Edit ${esc(w.name)}" title="Edit image, resources, environment, storage and hardware" onclick="this.closest('details').open=false;wlEdit('${w.ns}','${w.name}')">${icon("edit")}Edit</button>
+              <button aria-label="Group ${esc(w.name)}" title="Put this workload in a group on the Containers page" data-need="operator" onclick="this.closest('details').open=false;wlGroup('${w.ns}','${w.name}')">${icon("list")}Group${w.group ? ` · ${esc(w.group)}` : ""}</button>
               <button aria-label="Move ${esc(w.name)}" title="Move this workload to another eligible host" data-need="operator" onclick="this.closest('details').open=false;moveWorkload('${w.name}','${w.ns}')">${icon("move")}Move</button>
               ${update?.can_rollback ? `<button aria-label="Rollback ${esc(w.name)}" title="Restore the exact image digest saved before the last update" data-need="operator" onclick="this.closest('details').open=false;imageRollback('${w.ns}','${w.name}')">${icon("rollback")}Rollback</button>` : ""}
               <button class="danger" aria-label="Delete ${esc(w.name)}" title="Delete the workload; persistent volumes are kept" onclick="this.closest('details').open=false;wlDelete('${w.ns}','${w.name}')">${icon("trash")}Delete</button>
@@ -286,10 +398,21 @@ function workloadCard(w) {
 }
 
 /* One line per workload: for a long list, or anyone who would rather scan than browse. */
-function workloadTable(rows) {
+function workloadTable(rows, sections = null, folded = new Set()) {
+  // Grouped, each group is a body of its own under a heading body, so sorting
+  // orders the rows within each group rather than mixing them.
+  const bodies = sections ? sections.map(([name, members]) => {
+    const shut = folded.has(name || NO_GROUP);
+    return `<tbody class="grouphead"><tr><td colspan="7">${workloadGroupHead(name, members, shut)}</td></tr></tbody>
+      <tbody${shut ? " hidden" : ""}>${workloadTableRows(members)}</tbody>`;
+  }).join("") : `<tbody>${workloadTableRows(rows)}</tbody>`;
   return `<div class="card flat pad0 wltable-wrap"><table class="tbl dense stack wltable" data-sort="containers"><thead><tr>
-    <th>Workload</th><th>Status</th><th class="wl-image">Image</th><th>CPU</th><th>RAM</th><th class="wl-access">Access</th><th></th></tr></thead><tbody>
-    ${rows.map(w => {
+    <th>Workload</th><th>Status</th><th class="wl-image">Image</th><th>CPU</th><th>RAM</th><th class="wl-access">Access</th><th></th></tr></thead>
+    ${bodies}</table></div>`;
+}
+
+function workloadTableRows(rows) {
+  return `${rows.map(w => {
       const ok = w.ready === w.desired && w.desired > 0, off = w.desired === 0;
       const update = workloadUpdate(w.ns, w.name);
       const updateError = update?.images?.find(x => x.error);
@@ -306,7 +429,7 @@ function workloadTable(rows) {
         <td class="wl-access"><div class="waccess">${accessPorts(w.ports)}</div></td>
         <td class="wl-actions"><div class="row nowrap wacts">${workloadActions(w, update, off, true)}</div></td>
       </tr>`;
-    }).join("")}</tbody></table></div>`;
+    }).join("")}`;
 }
 
 
