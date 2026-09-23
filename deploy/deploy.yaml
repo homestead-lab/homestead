@@ -183,7 +183,7 @@ metadata:
   annotations:
     # Homestead reads harvui.io/* as well, so an install made before the
     # rename keeps its update history, workload metadata and rollback state.
-    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.68"}'
+    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.69"}'
 spec:
   replicas: 1
   strategy:
@@ -215,7 +215,7 @@ spec:
           tolerationSeconds: 15
       initContainers:
         - name: data-permissions
-          image: ghcr.io/wjcloudy/homestead:2.8.68
+          image: ghcr.io/wjcloudy/homestead:2.8.69
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "chown 10001:10001 /data && chmod 0770 /data"]
           securityContext:
@@ -232,7 +232,7 @@ spec:
               mountPath: /data
       containers:
         - name: homestead
-          image: ghcr.io/wjcloudy/homestead:2.8.68
+          image: ghcr.io/wjcloudy/homestead:2.8.69
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT
@@ -249,6 +249,15 @@ spec:
               value: "longhorn-r2"
             - name: LB_IP
               value: "192.0.2.242"
+            # Published through a Cloudflare Tunnel behind Cloudflare Access?
+            # Name the Access team and the application's AUD tag, and Homestead
+            # refuses any request that came through Cloudflare without Access's
+            # signature - a safety net under the Access policy. LAN access is
+            # unaffected. Leave empty when Homestead is not published.
+            - name: CF_ACCESS_TEAM_DOMAIN
+              value: ""          # e.g. myteam.cloudflareaccess.com
+            - name: CF_ACCESS_AUD
+              value: ""          # Access > Applications > Homestead > Overview > AUD tag
           ports:
             - containerPort: 8080
               name: http

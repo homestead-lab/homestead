@@ -66,9 +66,12 @@ def allows(user_role, needed):
     return rank(user_role) >= rank(needed)
 
 _store_cache = {"at": 0, "data": None}
-_attempts = {}          # addr -> [(timestamp), ...]
+_attempts = {}          # "ip:<addr>" or "user:<name>" -> [timestamp, ...]
 MAX_ATTEMPTS = 8
+# Per account, across every address: an address can be changed, a name cannot.
+MAX_USER_ATTEMPTS = 20
 ATTEMPT_WINDOW = 300
+MAX_TRACKED = 10000
 
 
 def bind(_kget, _ksend, _ns):
@@ -221,15 +224,22 @@ def delete_user(username, acting_as):
 
 
 # ------------------------------------------------------------------ rate limit
-def _rate_ok(addr):
+def _rate_ok(key, limit=MAX_ATTEMPTS):
     now = time.time()
-    hits = [t for t in _attempts.get(addr, []) if now - t < ATTEMPT_WINDOW]
-    _attempts[addr] = hits
-    return len(hits) < MAX_ATTEMPTS
+    hits = [t for t in _attempts.get(key, []) if now - t < ATTEMPT_WINDOW]
+    if hits:
+        _attempts[key] = hits
+    else:
+        _attempts.pop(key, None)
+    return len(hits) < limit
 
 
-def _rate_hit(addr):
-    _attempts.setdefault(addr, []).append(time.time())
+def _rate_hit(key):
+    if len(_attempts) > MAX_TRACKED:
+        # Many addresses at once is an attack in itself; forget the oldest.
+        for stale in sorted(_attempts, key=lambda k: _attempts[k][-1] if _attempts[k] else 0)[:MAX_TRACKED // 2]:
+            _attempts.pop(stale, None)
+    _attempts.setdefault(key, []).append(time.time())
 
 
 # ------------------------------------------------------------------ tokens
@@ -287,7 +297,7 @@ def verify_token(token):
 
 def login(username, password, addr, remember=False):
     username = (username or "").strip().lower()
-    if not _rate_ok(addr):
+    if not _rate_ok(f"ip:{addr}") or not _rate_ok(f"user:{username}", MAX_USER_ATTEMPTS):
         raise PermissionError("too many attempts — wait a few minutes")
     data = _load(force=True)
     u = data.get("users", {}).get(username)
@@ -295,7 +305,8 @@ def login(username, password, addr, remember=False):
     salt = u["salt"] if u else base64.b64encode(b"\0" * 16).decode()
     calc = _hash(password or "", salt)
     if not u or not hmac.compare_digest(calc, u["hash"]):
-        _rate_hit(addr)
+        _rate_hit(f"ip:{addr}")
+        _rate_hit(f"user:{username}")
         raise PermissionError("incorrect username or password")
     u["last_login"] = time.strftime("%Y-%m-%d %H:%M")
     _save(data)

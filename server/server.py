@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.68"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.69"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2348,6 +2348,7 @@ import homestead_move_source as MOVE_SOURCE
 import homestead_move_engine as MOVE_ENGINE
 import homestead_compose as COMPOSE
 import homestead_onboard as ONBOARD
+import homestead_cfaccess as CFACCESS
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
@@ -2366,6 +2367,10 @@ MOVE_ENGINE.bind(kget, ksend, LH, MOVE, NETWORK, OPS, DATA_DIR, DEFAULT_NS)
 # A move reads in the Activity tray like every other long job.
 OPS.RESOLVERS["move"] = MOVE_ENGINE.op_state
 ONBOARD.bind(kget, ksend, DEFAULT_NS, DATA_DIR, OPS)
+# Published through a Cloudflare Tunnel behind Access: name the Access team and
+# application, and a request that came through Cloudflare without Access's
+# signature is refused, whatever the Access policy says.
+CFACCESS.configure(os.environ.get("CF_ACCESS_TEAM_DOMAIN", ""), os.environ.get("CF_ACCESS_AUD", ""))
 ONBOARD.kget_text = raw_get
 OPS.RESOLVERS["onboard"] = ONBOARD.op_state
 # A cleanup is recorded once it has happened, so it reads as done straight away.
@@ -2570,6 +2575,26 @@ def boot_path(path):
 
 BOOT_FILES = {"boot.ipxe", "config.yaml", "vmlinuz", "initrd", "event"}
 
+# The largest honest request is a 1 MiB file edit, JSON-encoded.
+MAX_BODY = 8 * 1024 * 1024
+
+# What every response says about how it may be used. Inline handlers are how
+# the pages are written, so scripts may be inline - but only from here: no
+# script, frame or form from elsewhere, and no framing of Homestead at all.
+CSP = "; ".join([
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' data: https://fonts.gstatic.com",
+    "img-src 'self' data: blob: https:",
+    "connect-src 'self'",
+    "worker-src 'self' blob:",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    "base-uri 'self'",
+    "object-src 'none'",
+])
+
 
 # Paths reachable without a session. Everything else needs one.
 PUBLIC = {"/healthz", "/style.css", "/index.html",
@@ -2692,10 +2717,31 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self._security_headers()
         for k, v in (self._extra_headers or []):
             self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
+
+    def _security_headers(self):
+        self.send_header("Content-Security-Policy", CSP)
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "same-origin")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        if self._over_tls():
+            self.send_header("Strict-Transport-Security", "max-age=31536000")
+
+    def _via_cloudflare(self):
+        """Whether this request came in through Cloudflare, which always says so."""
+        return bool(self.headers.get("Cf-Connecting-Ip") or self.headers.get("Cf-Ray"))
+
+    def _client_ip(self):
+        """Who is asking. X-Forwarded-For is whatever the client wrote, so it is not
+        used; Cloudflare's own header is, and it replaces anything sent in it."""
+        if self._via_cloudflare() and self.headers.get("Cf-Connecting-Ip"):
+            return self.headers.get("Cf-Connecting-Ip").strip()
+        return self.client_address[0] if self.client_address else ""
 
     def _file(self, path, ctype, cache=""):
         try:
@@ -2716,7 +2762,7 @@ class H(BaseHTTPRequestHandler):
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "private, max-age=31536000, immutable")
-            self.send_header("X-Content-Type-Options", "nosniff")
+            self._security_headers()
             self.end_headers()
             self.wfile.write(body)
         except FileNotFoundError:
@@ -2769,6 +2815,13 @@ class H(BaseHTTPRequestHandler):
 
     def _guard(self, path):
         """Returns None when the request may proceed, or sends the refusal."""
+        if CFACCESS.enabled() and self._via_cloudflare():
+            token = self.headers.get("Cf-Access-Jwt-Assertion") or self._cookies().get("CF_Authorization", "")
+            try:
+                CFACCESS.verify(token)
+            except ValueError as error:
+                self._send(403, {"error": f"Cloudflare Access did not sign this request: {error}"})
+                return True
         # A host being installed has no session: its plan's secret address is the key.
         if boot_path(path):
             return None
@@ -2851,6 +2904,8 @@ class H(BaseHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path)
         p, q = u.path, urllib.parse.parse_qs(u.query)
         if boot_path(p):
+            if self._via_cloudflare():
+                return self._send(404, "not found\n", "text/plain")
             return self._boot(p, q)
         try:
             if self._guard(p):
@@ -3119,15 +3174,24 @@ class H(BaseHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path)
         p = u.path
         if boot_path(p):
+            if self._via_cloudflare():
+                return self._send(404, "not found\n", "text/plain")
             # The installer's webhook: its body is not ours to parse.
             self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 65536))
             return self._boot(p, urllib.parse.parse_qs(u.query))
         try:
             if self._guard(p):
                 return
+            if int(self.headers.get("Content-Length") or 0) > MAX_BODY:
+                return self._send(413, {"error": "that request is larger than Homestead accepts"})
             b = self._body()
-            addr = self.headers.get("X-Forwarded-For") or self.client_address[0]
+            addr = self._client_ip()
             if p == "/api/auth/setup":
+                # Whoever finishes setup becomes the first administrator, so it is
+                # not offered to the internet, however the hostname is protected.
+                if self._via_cloudflare():
+                    return self._send(403, {"error": "finish setting Homestead up from your LAN; "
+                                                     "setup is not offered through the tunnel"})
                 AUTH.create_user(b.get("username"), b.get("password"), first_only=True)
                 remember = bool(b.get("remember"))
                 tok = AUTH.issue_token((b.get("username") or "").strip().lower(), remember)
@@ -3392,7 +3456,7 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/onboard/plan":
                 # The address the admin reached Homestead at is the first guess
                 # for where the new host can reach it too.
-                host = self.headers.get("Host") or ""
+                host = "" if self._via_cloudflare() else (self.headers.get("Host") or "")
                 return self._move(lambda: ONBOARD.create_plan(b, f"http://{host}" if host else ""))
             if p == "/api/onboard/revoke":
                 return self._move(lambda: ONBOARD.revoke(b.get("id")))

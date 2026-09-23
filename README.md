@@ -55,10 +55,10 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.68`, the workflow publishes:
+For a release such as `v2.8.69`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.68
+ghcr.io/wjcloudy/homestead:2.8.69
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -69,8 +69,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.68
-git push origin v2.8.68
+git tag v2.8.69
+git push origin v2.8.69
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -306,6 +306,31 @@ Certificate monitoring is read-only. The supplied ClusterRole may list
 Kubernetes certificate-signing requests but cannot approve them, and Homestead
 never returns CSR bodies, issued certificates, or private keys to the browser.
 
+## Publishing through a Cloudflare Tunnel
+
+Homestead can deploy, delete, open shells in and power off anything in the
+cluster, so treat a published hostname as a way into the whole cluster:
+
+- **Put Cloudflare Access in front**, with an allow policy for named people and
+  a second factor. Homestead's own sign-in stays on as the second lock.
+- **Set `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD`** on the Deployment. Homestead
+  then checks Access's signature on every request that came through Cloudflare
+  and refuses the rest, so an Access bypass rule or a policy on the wrong
+  hostname does not quietly publish it.
+- **Point the tunnel at the Service inside the cluster** (for example
+  `http://homestead.lab.svc:8080`), not at the LAN VIP, and run `cloudflared` in
+  the cluster.
+- **Finish setup on the LAN first.** Creating the first administrator is refused
+  through the tunnel.
+
+Homestead keeps some things off the tunnel by itself: the `/boot/` addresses a new
+host installs from (they carry a cluster join token) answer only on the LAN, and
+a join plan made from outside has to be given the LAN address itself. Every
+response forbids framing and scripts from elsewhere, sessions are signed and
+`Secure` behind TLS, requests over 8 MB are refused, and sign-in attempts are
+limited per address and per account, using Cloudflare's client address rather
+than a header the client can write.
+
 ## Updating Homestead
 
 Homestead appears in its own Containers page. **Check images** compares the running
@@ -325,7 +350,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.68 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.69 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
