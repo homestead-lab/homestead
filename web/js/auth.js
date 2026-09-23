@@ -55,7 +55,7 @@ function ungate() { $("#gate").classList.add("hidden"); }
 
 function loginForm(err, setup) {
   gate(`
-    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.70" alt="">
+    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.71" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}

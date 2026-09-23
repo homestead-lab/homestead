@@ -7,6 +7,7 @@ __pycache__
 tests
 docs
 deploy
+!deploy/deploy.yaml
 scripts
 PLAN.md
 *.local

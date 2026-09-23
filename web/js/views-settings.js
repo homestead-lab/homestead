@@ -137,11 +137,146 @@ async function viewSettings() {
             ${can("admin") ? `<div class="row" style="margin-top:6px">${info.node_probe?.state === "absent"
               ? '<button class="btn sm" onclick="probeInstallConfirm()">Install</button>'
               : '<button class="btn sm" onclick="probeRemove()">Remove</button>'}</div>` : ""}</div>
+          ${permissionsCell(info.permissions)}
+          <div id="selfNames" hidden></div>
         </div>
       </section>
     </div>`);
   pwaPaint();
+  if (can("admin")) selfNamesCell();
 }
+
+/* ------------------------------------------------ Homestead's own objects */
+const PERMISSION_WORDS = { current: "up to date", updated: "updated with this release",
+  manual: "needs a one-time command", unknown: "could not be checked", pending: "not checked yet" };
+
+function commandBlock(command) {
+  return `<div class="self-command"><pre class="onboard-args">${esc(command)}</pre>
+    <button class="btn sm" onclick="navigator.clipboard.writeText(this.previousElementSibling.textContent).then(() => toast('Copied', 'ok'))">Copy</button></div>`;
+}
+
+function permissionsCell(state) {
+  state = state || { state: "pending", detail: "" };
+  return `<div><span>Permissions ${tip("Homestead keeps its own ClusterRole in step with its release, so an upgrade brings the permissions new features need. Granting it that is a one-time command.")}</span>
+    <b>${esc(PERMISSION_WORDS[state.state] || state.state)}</b><small>${esc(state.detail || "")}</small>
+    ${state.state === "manual" && can("admin") ? `<div class="dim xs" style="margin-top:6px">Run once, wherever you use kubectl:</div>${commandBlock(state.command)}` : ""}
+    ${can("admin") && state.state === "manual" ? '<div class="row" style="margin-top:6px"><button class="btn sm" onclick="permissionsRecheck()">Check again</button></div>' : ""}</div>`;
+}
+
+window.permissionsRecheck = async () => {
+  try {
+    const result = await api("/api/self/permissions", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    toast(PERMISSION_WORDS[result.state] || result.state, result.state === "manual" ? "bad" : "ok");
+    STATE.data.appSettings = null;
+    await loadHealthSettings(true);
+    viewSettings();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+/* An install from the harvUI days: offer to move it to the Homestead names. */
+async function selfNamesCell() {
+  const host = $("#selfNames");
+  if (!host) return;
+  let names;
+  try { names = await api("/api/self/names", { keep: true }); } catch (e) { return; }
+  const pending = names.pending, left = (names.leftovers || []).length;
+  if (!pending && !left) return;
+  host.hidden = false;
+  host.innerHTML = `<span>Object names ${tip("This install was made as harvUI, and some of its Kubernetes objects still carry that name. Everything works either way.")}</span>
+    <b>${pending ? `${pending} still named harvui` : `${left} harvui leftover${left === 1 ? "" : "s"}`}</b>
+    <div class="row" style="margin-top:6px"><button class="btn sm" onclick="selfNamesOpen()">${pending ? "Move to Homestead names" : "Remove leftovers"}</button></div>`;
+}
+
+function selfNamesSteps(names) {
+  return `<div class="self-steps">${names.steps.map(step => `
+    <div class="self-step ${step.done ? "done" : ""}"><span class="self-tick">${step.done ? "✓" : "•"}</span>
+      <div><b>${esc(step.what)}</b>${step.note ? `<div class="dim xs">${esc(step.note)}</div>` : ""}</div></div>`).join("")}</div>`;
+}
+
+window.selfNamesOpen = async () => {
+  modal("Move to Homestead names", '<div class="empty small"><span class="spin2"></span></div>');
+  let names;
+  try { names = await api("/api/self/names"); } catch (e) {
+    $("#mbody").innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return;
+  }
+  if (!names.pending) return selfLeftovers(names);
+  STATE.data.selfDeployment = names.deployment || "homestead";
+  const restarts = names.steps.some(s => !s.done && ["service", "data", "account"].includes(s.id));
+  $("#mbody").innerHTML = `
+    <p class="muted small">This install still uses names from when Homestead was called harvUI. Moving copies
+      each object to its new name; the originals are left exactly as they are until you remove them afterwards.</p>
+    ${selfNamesSteps(names)}
+    ${names.blockers.length ? `<div class="note bad"><b>First:</b> ${esc(names.blockers[0])}</div>${commandBlock(names.command)}` : ""}
+    ${restarts ? `<div class="note"><b>Homestead restarts once.</b> Its data is copied to the new volume before it
+      starts again, while nothing is writing to it; the old volume is only read. Allow a minute or two -
+      this page reconnects by itself.</div>` : ""}
+    ${names.error ? `<div class="note bad"><b>Last attempt:</b> ${esc(names.error)}</div>` : ""}
+    <div class="row" style="margin-top:16px">
+      <button class="btn pri" ${names.blockers.length ? "disabled" : ""} onclick="selfNamesMove(this)">Move to Homestead names</button>
+      <button class="btn" onclick="closeModal()">Cancel</button></div>`;
+};
+
+window.selfNamesMove = async button => {
+  button.disabled = true; button.textContent = "Moving…";
+  let result;
+  try {
+    result = await api("/api/self/names/move", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", keep: true });
+  } catch (e) { toast(e.message, "bad"); button.disabled = false; button.textContent = "Move to Homestead names"; return; }
+  if (!result.restarting) return selfNamesOpen();
+  selfNamesWait(Date.now());
+};
+
+const selfNs = () => STATE.data.appSettings?.info?.namespace || "lab";
+
+async function selfNamesWait(started) {
+  const minutes = Math.floor((Date.now() - started) / 60000);
+  $("#mbody").innerHTML = `<div class="empty small"><span class="spin2"></span> Homestead is restarting under its new
+    names${minutes ? ` · ${minutes} min` : ""}…</div>
+    ${minutes >= 4 ? `<div class="note warn"><b>Taking longer than it should.</b> If Homestead does not come back,
+      the copy step's log says why, and rolling back returns the old volume and account untouched:</div>
+      ${commandBlock(`kubectl -n ${selfNs()} logs deploy/${STATE.data.selfDeployment || "homestead"} -c adopt-data`)}
+      ${commandBlock(`kubectl -n ${selfNs()} rollout undo deploy/${STATE.data.selfDeployment || "homestead"}`)}` : ""}`;
+  await new Promise(resolve => setTimeout(resolve, 4000));
+  if (!$("#mbody") || $("#modal").classList.contains("hidden")) return;
+  let names = null;
+  try { names = await api("/api/self/names", { keep: true }); } catch (e) { names = null; }
+  if (names && !names.pending && names.account === "homestead") {
+    toast("Homestead now runs under its own names", "ok");
+    return selfLeftovers(names);
+  }
+  if (names && names.error) return selfNamesOpen();
+  selfNamesWait(started);
+}
+
+function selfLeftovers(names) {
+  const rows = names.leftovers || [];
+  const data = rows.some(r => r.data);
+  $("#mtitle").textContent = "Remove harvUI leftovers";
+  $("#mbody").innerHTML = rows.length ? `
+    <p class="muted small">Homestead runs under its new names. These objects still carry the old ones and
+      nothing uses them now. Removing them cannot be undone.</p>
+    <div class="tblwrap"><table class="tbl dense"><thead><tr><th>Name</th><th>Kind</th><th>Namespace</th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td class="mono">${esc(r.name)} ${r.data ? '<span class="pill warn">old data</span>' : ""}</td>
+        <td class="dim">${esc(r.kind)}</td><td class="dim">${esc(r.namespace || "cluster")}</td></tr>`).join("")}</tbody></table></div>
+    ${data ? `<div class="note warn"><b>The old data volume goes too.</b> Everything on it was copied to homestead-data
+      when Homestead restarted. Type <b class="mono">harvui-data</b> to confirm.</div>
+      <div class="f"><input id="selfConfirm" placeholder="harvui-data" autocomplete="off"></div>` : ""}
+    <div class="row" style="margin-top:16px"><button class="btn danger" onclick="selfClean(this)">Remove ${rows.length} object${rows.length === 1 ? "" : "s"}</button>
+      <button class="btn" onclick="closeModal()">Keep them for now</button></div>`
+    : '<div class="empty small">Nothing is left under the old names.</div><div class="row"><button class="btn" onclick="closeModal()">Close</button></div>';
+}
+
+window.selfClean = async button => {
+  button.disabled = true;
+  try {
+    const result = await api("/api/self/names/clean", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: $("#selfConfirm")?.value.trim() || "" }), keep: true });
+    toast(result.failed.length ? `removed ${result.removed.length}; ${result.failed[0]}` : `removed ${result.removed.length} objects`,
+      result.failed.length ? "bad" : "ok");
+    closeModal();
+    if (!result.restarting) viewSettings();
+  } catch (e) { toast(e.message, "bad"); button.disabled = false; }
+};
 
 window.saveHealthSettings = async () => {
   const read = id => ({ warning: +$("#set_" + id + "_warn").value, critical: +$("#set_" + id + "_crit").value });

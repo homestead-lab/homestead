@@ -25,6 +25,9 @@ COPY --chown=homestead:homestead server/*.py /srv/
 # The node probe's scripts travel with the release that reads them, so an
 # upgrade can bring the probe with it instead of asking for a kubectl command.
 COPY --chown=homestead:homestead server/probe/*.py /srv/probe/
+# So do Homestead's own permissions: it brings its ClusterRole up to the one
+# this release's manifest describes.
+COPY --chown=homestead:homestead deploy/deploy.yaml /srv/deploy.yaml
 COPY --chown=homestead:homestead web/index.html web/style.css /web/
 COPY --chown=homestead:homestead web/js/*.js /web/js/
 COPY --chown=homestead:homestead web/assets/*.svg /web/assets/

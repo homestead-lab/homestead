@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.70"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.71"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -309,7 +309,8 @@ def app_settings_payload():
         kube = ""
     settings["info"] = {"version": HOMESTEAD_VERSION, "namespace": DEFAULT_NS,
                         "storage_class": STORAGE_CLASS, "vip": LB_IP,
-                        "kubernetes": kube, "node_probe": PROBE.status()}
+                        "kubernetes": kube, "node_probe": PROBE.status(),
+                        "permissions": SELF.status()}
     return settings
 
 
@@ -2351,6 +2352,7 @@ import homestead_onboard as ONBOARD
 import homestead_cfaccess as CFACCESS
 import homestead_push as PUSH
 import homestead_alerts as ALERTS
+import homestead_self as SELF
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
@@ -2374,6 +2376,17 @@ ONBOARD.bind(kget, ksend, DEFAULT_NS, DATA_DIR, OPS)
 # signature is refused, whatever the Access policy says.
 CFACCESS.configure(os.environ.get("CF_ACCESS_TEAM_DOMAIN", ""), os.environ.get("CF_ACCESS_AUD", ""))
 PUSH.bind(DATA_DIR, os.environ.get("PUSH_CONTACT", ""))
+
+
+def _own_namespace():
+    try:
+        with open(f"{SA}/namespace", encoding="utf-8") as handle:
+            return handle.read().strip() or DEFAULT_NS
+    except OSError:
+        return DEFAULT_NS
+
+
+SELF.bind(kget, ksend, _own_namespace(), DEFAULT_NS, SMB_NAMESPACE, HOMESTEAD_VERSION)
 ALERTS.bind(DATA_DIR)
 
 
@@ -2742,6 +2755,8 @@ ADMIN_ROUTES = {
     "/api/move/moves/abandon", "/api/move/moves/finish",
     "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete",
     "/api/lh/restore",
+    # Homestead's own permissions and object names.
+    "/api/self/permissions", "/api/self/names", "/api/self/names/move", "/api/self/names/clean",
 }
 # things a signed-in user may always do to their own account
 SELF_ROUTES = {"/api/auth/logout", "/api/auth/password", "/api/auth/signout-everywhere",
@@ -3083,6 +3098,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, ONBOARD.pxe_status((q.get("id") or [""])[0]))
             if p == "/api/cluster/cleanup":
                 return self._move(ONBOARD.cleanup_report)
+            if p == "/api/self/names":
+                return self._move(SELF.plan)
             if p == "/api/cluster/removal":
                 return self._move(lambda: ONBOARD.removal_plan((q.get("node") or [""])[0]))
             # Which release this is, asked by another Homestead before a move.
@@ -3318,6 +3335,12 @@ class H(BaseHTTPRequestHandler):
                         b.get("replaces", ""), cursor=ALERTS.log(limit=0)["latest"]))
                 except ValueError as error:
                     return self._send(400, {"error": str(error)})
+            if p == "/api/self/permissions":
+                return self._send(200, SELF.reconcile())
+            if p == "/api/self/names/move":
+                return self._move(SELF.move)
+            if p == "/api/self/names/clean":
+                return self._move(lambda: SELF.clean(str(b.get("confirm") or "")))
             if p == "/api/push/unsubscribe":
                 return self._send(200, PUSH.unsubscribe(self.user, str(b.get("endpoint") or "")))
             if p == "/api/push/status":
@@ -3857,6 +3880,16 @@ class H(BaseHTTPRequestHandler):
             return self._send(500, {"error": str(e)})
 
 
+def _reconcile_permissions():
+    """Bring Homestead's own ClusterRole up to this release, before anything needs it."""
+    try:
+        result = SELF.reconcile()
+    except Exception as error:
+        print(f"permissions: not checked ({str(error)[:120]})", flush=True)
+        return
+    print(f"permissions: {result['state']} - {result['detail']}", flush=True)
+
+
 def _upgrade_node_probe():
     """Finish the upgrade the image cannot finish by itself.
 
@@ -3876,6 +3909,7 @@ def _upgrade_node_probe():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8080"))
     threading.Thread(target=_sampler, daemon=True).start()
+    threading.Thread(target=_reconcile_permissions, daemon=True).start()
     threading.Thread(target=_upgrade_node_probe, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=MOVE_ENGINE.run, daemon=True).start()
