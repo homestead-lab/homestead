@@ -29,7 +29,7 @@ function renderOperations() {
     <span class="jobsummarycopy"><b>${active.length ? `${active.length} active job${active.length === 1 ? "" : "s"}` : "Recent jobs"}</b>
     <small>${esc(latest.title)} · ${esc(latest.message || latest.status)}</small></span>
     ${active.length ? `<span class="jobsummarypct">${Math.round(latest.progress || 0)}%</span>` : ""}
-    <span class="jobchev" aria-hidden="true">⌃</span>`;
+    <span class="jobchev" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg></span>`;
   $("#jobSummary").setAttribute("aria-expanded", String(operationPanelOpen));
   // Clearing one at a time is fine for a stray failure and tedious after a
   // batch, so the header offers the lot - and says how many, because it will

@@ -142,7 +142,7 @@ a{color:inherit;text-decoration:none}
 .jobsummarycopy{display:flex;flex-direction:column;min-width:0;flex:1}.jobsummarycopy b{font-size:12px}.jobsummarycopy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim);font-size:10.5px}
 .jobpulse{width:9px;height:9px;flex:0 0 auto;border-radius:50%;background:var(--med);box-shadow:0 0 0 5px rgba(255,176,32,.12);animation:jobpulse 1.8s ease-in-out infinite}.jobpulse.idle{background:var(--ok);box-shadow:none;animation:none}
 @keyframes jobpulse{0%,100%{box-shadow:0 0 0 3px rgba(255,176,32,.09)}50%{box-shadow:0 0 0 7px rgba(255,176,32,.18)}}
-.jobsummarypct{font:700 11px "JetBrains Mono",monospace;color:var(--mut)}.jobchev{font-size:14px;color:var(--dim);transition:transform .2s var(--e)}.jobtray.open .jobchev{transform:rotate(180deg)}
+.jobsummarypct{font:700 11px "JetBrains Mono",monospace;color:var(--mut)}.jobchev{display:grid;place-items:center;width:30px;height:30px;flex:0 0 auto;border-radius:50%;border:1px solid var(--line2);background:rgba(255,255,255,.05);color:var(--mut);transition:transform .2s var(--e),background .15s}.jobchev svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}.jobsummary:hover .jobchev{background:rgba(255,255,255,.1);color:var(--tx)}.jobtray.open .jobchev{transform:rotate(180deg)}
 .jobpanel{display:none;width:min(620px,100%);max-height:min(62vh,620px);margin-bottom:8px;overflow:hidden;border:1px solid var(--line2);border-radius:17px;background:rgba(16,16,19,.97);backdrop-filter:blur(26px);box-shadow:0 24px 70px rgba(0,0,0,.62);pointer-events:auto}.jobtray.open .jobpanel{display:block}
 .jobpanelhead{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line)}
 .jobpanelhead>div{display:flex;align-items:baseline;gap:10px;min-width:0}
@@ -1036,6 +1036,21 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
 /* Containers as rows: every workload on one line, its actions as icons. */
 .wltable-wrap{overflow:visible}
 .pill.slim{padding:2px 8px;font-size:11px;box-shadow:none}
+/* A page's shape while its data is on the way, and a page shown from last time. */
+.skel{display:block;position:relative;overflow:hidden;border-radius:9px;background:rgba(255,255,255,.045)}
+.skel::after{content:"";position:absolute;inset:0;transform:translateX(-100%);
+  background:linear-gradient(100deg,transparent 25%,rgba(255,255,255,.075) 50%,transparent 75%);animation:glint 1.6s var(--e) infinite}
+@keyframes glint{to{transform:translateX(100%)}}
+html[data-theme="light"] .skel{background:rgba(0,0,0,.055)}
+html[data-theme="light"] .skel::after{background:linear-gradient(100deg,transparent 25%,rgba(255,255,255,.65) 50%,transparent 75%)}
+html[data-motion="off"] .skel::after{animation:none}
+.skel-card{border-radius:var(--r2)}
+.skel-actions{gap:8px}
+.skel-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr));gap:14px}
+.skel-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(140px,100%),1fr));gap:14px;margin-bottom:14px}
+.skel-table{padding:4px 16px}
+.skel-row{display:flex;align-items:center;gap:18px;padding:14px 0;border-bottom:1px solid var(--line)}.skel-row:last-child{border-bottom:0}
+#views.refreshing{opacity:.78;transition:opacity .25s}
 th.sortable{cursor:pointer;user-select:none;white-space:nowrap}
 .sortbar{display:none}
 @media(max-width:560px){

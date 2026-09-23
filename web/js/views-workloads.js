@@ -228,9 +228,11 @@ function renderWorkloads() {
 function workloadActions(w, update, off, compact = false) {
   const label = (text, iconName) => compact ? icon(iconName) : `${icon(iconName)}${text}`;
   const cls = compact ? "btn sm iconic" : "btn sm";
-  return `<button class="${cls}" title="View live container logs" aria-label="Logs for ${esc(w.name)}" onclick="wlLogs('${w.ns}','${w.pods[0] ? w.pods[0].name : ""}','${w.name}')">${label("Logs", "log")}</button>
+  // Update comes first: the actions are right-aligned, so the ones every row
+  // has stay put whether or not an update is waiting.
+  return `${update?.available ? `<button class="btn sm pri" title="Review and install the available image update" data-need="operator" onclick="imageUpdateReview('${w.ns}','${w.name}')">${icon("update")}Update</button>` : ""}
+          <button class="${cls}" title="View live container logs" aria-label="Logs for ${esc(w.name)}" onclick="wlLogs('${w.ns}','${w.pods[0] ? w.pods[0].name : ""}','${w.name}')">${label("Logs", "log")}</button>
           ${off ? "" : `<button class="${cls}" title="Restart: replace every pod in this workload with a fresh one" aria-label="Restart ${esc(w.name)}" data-need="operator" onclick="wlRestart('${w.ns}','${w.name}')">${label("Restart", "restart")}</button>`}
-          ${update?.available ? `<button class="btn sm pri" title="Review and install the available image update" data-need="operator" onclick="imageUpdateReview('${w.ns}','${w.name}')">${icon("update")}Update</button>` : ""}
           ${off ? `<button class="${cls}" title="Start this workload" aria-label="Start ${esc(w.name)}" onclick="wlScale('${w.ns}','${w.name}',1)">${label("Start", "play")}</button>`
                 : `<button class="${cls}" title="Scale this workload to zero" aria-label="Stop ${esc(w.name)}" onclick="wlScale('${w.ns}','${w.name}',0)">${label("Stop", "stop")}</button>`}
           <details class="actionmenu"><summary class="btn sm" title="More actions" aria-label="More actions for ${esc(w.name)}">⋯</summary>
@@ -289,7 +291,6 @@ function workloadTable(rows) {
           <div class="wtitle"><div><b>${esc(w.name)}</b></div>
             <div class="dim xs">${esc(w.ns)} · ${off ? "stopped" : `<span class="nodelink" onclick="moveWorkload('${w.name}','${w.ns}')">${esc(w.nodes.join(", ") || "unscheduled")}</span>${w.uptime ? ` · up ${esc(fmtUp(w.uptime))}` : " · starting"}`}</div></div></div></td>
         <td class="wl-status" data-sort="${off ? -1 : w.desired ? w.ready / w.desired : 0}"><div class="row nowrap" style="gap:5px"><span class="pill slim ${ok ? "ok" : off ? "low" : "crit"}" title="${w.ready} of ${w.desired} ready">${w.ready}/${w.desired}</span>
-          ${update?.available ? '<span class="pill slim warn" title="An image update is available">update</span>' : ""}
           ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}</div></td>
         <td class="wl-image"><div class="mono xs wl-imagetext" title="${esc(w.images.join(" · "))}">${w.images.map(esc).join(" · ")}</div>
           ${(w.hardware || []).length || w.gpu ? `<div>${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</div>` : ""}</td>

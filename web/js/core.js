@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HOMESTEAD_VERSION = "2.8.74";
+const HOMESTEAD_VERSION = "2.8.75";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -507,8 +507,47 @@ document.addEventListener("click", event => {
 /* ---------------- no-flash rendering ----------------
    Re-rendering innerHTML on every poll is what makes the page flash and lose
    scroll/hover. paint() only touches nodes whose content actually changed. */
+/* A page opens at once. One seen before shows what it showed last time until
+   its data arrives, and is then brought up to date in place; one not seen yet
+   shows its shape - panels with a passing glint - rather than a spinner. */
+const PAGE_SNAPSHOT = {};
+function pagePlaceholder(view) {
+  const host = V();
+  const snapshot = PAGE_SNAPSHOT[view];
+  if (snapshot) {
+    host.innerHTML = snapshot;
+    enhanceActions(host);
+    loadAppIcons(host);
+    host.dataset.painted = "1";
+    host.classList.add("refreshing");
+    if (window.applyRole) window.applyRole();
+    return;
+  }
+  host.innerHTML = pageSkeleton(view);
+}
+window.pagePlaceholder = pagePlaceholder;
+
+function pageSkeleton(view) {
+  const bar = (width, height = 12) => `<span class="skel" style="width:${width};height:${height}px"></span>`;
+  const repeat = (count, fn) => Array.from({ length: count }, (_, i) => fn(i)).join("");
+  const head = `<div class="phead"><div>${bar("min(280px,60vw)")}</div><div class="row skel-actions">${bar("84px", 32)}${bar("118px", 32)}</div></div>`;
+  const cards = (count, height) => `<div class="skel-grid">${repeat(count, () => `<div class="skel skel-card" style="height:${height}px"></div>`)}</div>`;
+  const table = count => `<div class="card flat pad0 skel-table">${repeat(count, i => `<div class="skel-row">
+      ${bar("30px", 30)}${bar(`${18 + (i * 7) % 12}%`)}${bar("9%")}${bar(`${20 + (i * 5) % 16}%`)}${bar("7%")}</div>`)}</div>`;
+  const tiles = `<div class="skel-tiles">${repeat(4, () => '<div class="skel skel-card" style="height:96px"></div>')}</div>`;
+  const body = {
+    dash: tiles + cards(2, 260), cluster: tiles + cards(4, 170), flow: cards(1, 440),
+    nodes: viewLayout("nodes") === "rows" ? table(4) : cards(3, 290),
+    workloads: viewLayout("containers") === "rows" ? table(8) : cards(6, 230),
+    vms: cards(3, 200), store: cards(9, 150), deploy: cards(2, 320), settings: cards(4, 240),
+  }[view] || table(8);
+  return `<div class="skeleton" aria-busy="true" aria-label="Loading">${head}${body}</div>`;
+}
+
 function paint(html) {
   const host = V();
+  PAGE_SNAPSHOT[STATE.view] = html;
+  host.classList.remove("refreshing");
   if (!host.dataset.painted) {
     host.innerHTML = html;
     enhanceActions(host);
@@ -562,7 +601,7 @@ function syncAttrs(x, y) {
     if (!y.hasAttribute(at.name)) x.removeAttribute(at.name);
   }
 }
-function resetPaint() { const h = V(); delete h.dataset.painted; h.innerHTML = ""; }
+function resetPaint() { const h = V(); delete h.dataset.painted; h.classList.remove("refreshing"); h.innerHTML = ""; }
 
 /* ---------------- chart primitives ---------------- */
 function sparkline(vals, { w = 300, h = 74 } = {}) {

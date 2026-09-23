@@ -139,7 +139,7 @@ function go(v, options = {}) {
   $$("#nav a").forEach(a => a.classList.toggle("on", a.dataset.view === v));
   closeNav();
   resetPaint();
-  V().innerHTML = `<div class="empty"><span class="spin2"></span>loading…</div>`;
+  pagePlaceholder(v);
   // A new page starts at its top, not wherever the last one was scrolled to.
   window.scrollTo(0, 0);
   Promise.resolve(fn()).then(() => applyDeepLink(v, locationParams || options.params || {}))
