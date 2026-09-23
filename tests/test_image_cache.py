@@ -39,7 +39,7 @@ class ImageCacheTests(unittest.TestCase):
         }]
         deployments = [{
             "metadata": {"name": "web", "namespace": "lab", "annotations": {
-                "harvui.io/update-previous": json.dumps({
+                "homestead.io/update-previous": json.dumps({
                     "images": {"nginx": "docker.io/library/nginx@" + self.rollback},
                     "at": "2026-09-19T18:00:00Z",
                 })}},
@@ -150,7 +150,7 @@ class PrepullTests(unittest.TestCase):
                                            "status": "True" if ready else "False"}]}}
 
     def _pull(self, name="homestead-pull-frigate", desired=1, ready=1):
-        return {"metadata": {"name": name, "labels": {"harvui.io/task": "prepull"}},
+        return {"metadata": {"name": name, "labels": {"homestead.io/task": "prepull"}},
                 "spec": {"template": {"spec": {"initContainers": [
                     {"name": "pull", "image": "frigate:0.18.0"}]}}},
                 "status": {"desiredNumberScheduled": desired, "numberReady": ready}}
@@ -196,8 +196,3 @@ class PrepullTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "not an image pre-pull"):
                     imports.stop_prepull(name)
 
-    def test_a_pull_from_before_the_rename_can_still_be_stopped(self):
-        imports.stop_prepull("harvui-pull-frigate")
-
-        self.assertIn(("DELETE", "/apis/apps/v1/namespaces/lab/daemonsets/"
-                       "harvui-pull-frigate?propagationPolicy=Background"), self.sent)

@@ -1,6 +1,6 @@
 # Homestead's permissions on their own, from deploy/deploy.yaml.
 #
-# Apply this once to an existing install - including one made as harvUI - and
+# Apply this once to an install from before 2.8.71 and
 # Homestead keeps its permissions up to date itself from then on:
 #
 #   kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/<release>/deploy/rbac.yaml
@@ -136,35 +136,12 @@ rules:
   # cleanup, node power) already is. It reaches Homestead's own role only.
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: [clusterroles]
-    resourceNames: [homestead, harvui]
+    resourceNames: [homestead]
     verbs: [get, update, escalate]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: [clusterrolebindings]
-    resourceNames: [homestead, harvui]
+    resourceNames: [homestead]
     verbs: [get, update]
-  # An install made as harvUI moves to the Homestead names from Settings, and
-  # finishes by removing its harvui service account and permissions - these,
-  # and nothing else.
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: [clusterroles, clusterrolebindings]
-    resourceNames: [harvui]
-    verbs: [delete]
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: [roles, rolebindings]
-    resourceNames: [homestead-console, harvui-console]
-    verbs: [get]
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: [roles, rolebindings]
-    resourceNames: [harvui-console]
-    verbs: [delete]
-  - apiGroups: [""]
-    resources: [serviceaccounts]
-    resourceNames: [homestead, harvui]
-    verbs: [get]
-  - apiGroups: [""]
-    resources: [serviceaccounts]
-    resourceNames: [harvui]
-    verbs: [delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -177,12 +154,6 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: homestead
-    namespace: lab
-  # An install made as harvUI still runs as this account until it moves to the
-  # Homestead names; binding it here gives it these permissions straight away.
-  # Homestead drops this entry itself once no harvui account is left.
-  - kind: ServiceAccount
-    name: harvui
     namespace: lab
 ---
 # Interactive exec is deliberately namespace-scoped. The ClusterRole above does

@@ -16,7 +16,7 @@
     return (report?.workloads || []).filter(workload => workload?.available);
   }
 
-  function orderApply(workloads, controlPlaneNames = ["homestead", "harvui"]) {
+  function orderApply(workloads, controlPlaneNames = ["homestead"]) {
     const names = new Set(controlPlaneNames);
     return [...(workloads || [])].sort((left, right) =>
       Number(names.has(left?.name)) - Number(names.has(right?.name)));

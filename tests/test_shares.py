@@ -14,8 +14,8 @@ import homestead_shares as shares
 class ShareTests(unittest.TestCase):
     def setUp(self):
         self.objects = {
-            "/api/v1/namespaces/lab/configmaps/harvui-shares": {
-                "metadata": {"name": "harvui-shares", "resourceVersion": "4"},
+            "/api/v1/namespaces/lab/configmaps/homestead-shares": {
+                "metadata": {"name": "homestead-shares", "resourceVersion": "4"},
                 "data": {"shares.json": json.dumps([{
                     "name": "secure", "pvc": "share-secure", "path": "/shares/secure",
                     "size_gb": 5, "user": "lab", "password": "legacy-password",
@@ -69,7 +69,7 @@ class ShareTests(unittest.TestCase):
         shares.bind(get, send, create_pvc, "lab", {})
 
     def decoded_secret(self):
-        obj = self.objects["/api/v1/namespaces/lab/secrets/harvui-share-credentials"]
+        obj = self.objects["/api/v1/namespaces/lab/secrets/homestead-share-credentials"]
         return json.loads(base64.b64decode(obj["data"]["credentials.json"]).decode())
 
     def test_inventory_uses_live_pvc_size_and_never_returns_password(self):
@@ -86,7 +86,7 @@ class ShareTests(unittest.TestCase):
         pvc = self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/share-secure"]
         self.assertEqual("20Gi", pvc["spec"]["resources"]["requests"]["storage"])
         stored = json.loads(self.objects[
-            "/api/v1/namespaces/lab/configmaps/harvui-shares"]["data"]["shares.json"])
+            "/api/v1/namespaces/lab/configmaps/homestead-shares"]["data"]["shares.json"])
         self.assertNotIn("password", stored[0])
         self.assertEqual({"user": "media", "password": "new-password"},
                          self.decoded_secret()["secure"])
@@ -257,12 +257,12 @@ class ShareTests(unittest.TestCase):
     def test_mismatched_accounts_no_longer_block_unrelated_changes(self):
         """The bug behind 'guest access cannot be set on edit'."""
         rows = json.loads(self.objects[
-            "/api/v1/namespaces/lab/configmaps/harvui-shares"]["data"]["shares.json"])
+            "/api/v1/namespaces/lab/configmaps/homestead-shares"]["data"]["shares.json"])
         rows.append({"name": "media", "pvc": "share-media", "path": "/shares/media",
                      "size_gb": 5, "user": "lab", "public": False, "created": "existing"})
-        self.objects["/api/v1/namespaces/lab/configmaps/harvui-shares"]["data"]["shares.json"] = json.dumps(rows)
-        self.objects["/api/v1/namespaces/lab/secrets/harvui-share-credentials"] = {
-            "metadata": {"name": "harvui-share-credentials", "resourceVersion": "3"},
+        self.objects["/api/v1/namespaces/lab/configmaps/homestead-shares"]["data"]["shares.json"] = json.dumps(rows)
+        self.objects["/api/v1/namespaces/lab/secrets/homestead-share-credentials"] = {
+            "metadata": {"name": "homestead-share-credentials", "resourceVersion": "3"},
             "data": {"credentials.json": base64.b64encode(json.dumps({
                 "secure": {"user": "lab", "password": "one"},
                 "media": {"user": "lab", "password": "two"},

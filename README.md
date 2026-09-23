@@ -64,10 +64,10 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.72`, the workflow publishes:
+For a release such as `v2.8.73`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.72
+ghcr.io/wjcloudy/homestead:2.8.73
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -78,8 +78,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.72
-git push origin v2.8.72
+git tag v2.8.73
+git push origin v2.8.73
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -128,13 +128,6 @@ Everything a new install creates is called `homestead`: the Deployment and its
 containers, the ServiceAccount and roles, the `homestead-data` claim, the
 Service, the ConfigMaps and Secrets it writes, and the `homestead.io/*`
 annotation domain.
-
-Homestead was previously called harvUI. It still reads the `harvui-*` objects
-and `harvui.io/*` keys an older install created, and writes back to whichever
-of the two an object already uses, so an upgrade needs no migration and no
-flag day. Nothing new is ever created under the old name. To leave the old
-names behind, see [Moving an install to the Homestead
-names](#moving-an-install-to-the-homestead-names).
 
 Open the Service address on port `8088`. The first visit creates the initial
 administrator. Authentication is stored in a Kubernetes Secret, independently
@@ -390,52 +383,30 @@ through browser refreshes and Homestead restarts.
 
 The in-app update replaces Homestead's image, and a new release can need
 permissions the old one did not. Homestead carries its manifest inside the image
-and, on start, brings its own ClusterRole up to what that release describes -
-keeping any rules you added by hand - so an upgrade needs no `kubectl`.
+and, on start, makes its own ClusterRole exactly what that release describes -
+adding what new features need and dropping what nothing uses any more - so an
+upgrade needs no `kubectl`. Rules added to that role by hand do not survive
+this; give anything extra its own role and binding.
 **Settings → About this installation → Permissions** says what it last did.
 
-That needs the right to edit its own role, which an install from before 2.8.72
-does not have yet. Grant it once, wherever you use `kubectl` (a Rancher
+That needs the right to edit its own role, which an older install does not
+have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.72/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.73/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
 bindings from `deploy/deploy.yaml` - so it leaves your Deployment, Service,
 address and storage alone. Settings shows this command whenever Homestead finds
-it cannot update its role. It works for an install made as harvUI too: the
-binding also covers the old `harvui` account.
+it cannot update its role.
 
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.72 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.73 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
-
-### Moving an install to the Homestead names
-
-An install made as harvUI runs as the `harvui` service account, keeps its
-settings in `harvui-*` ConfigMaps and Secrets and its data on `harvui-data`.
-It all keeps working, but **Settings → About this installation → Object names**
-offers to move it, once the one-time permissions command above has been run:
-
-1. **Move to Homestead names** lists every object it will copy, then copies each
-   `harvui-*` ConfigMap and Secret to its `homestead-*` name, reinstalls the node
-   probe under its new name, renames the Service (same LAN address and port),
-   and switches Homestead to the `homestead` account and a new `homestead-data`
-   volume. Homestead restarts once: before it starts again, a step in the new pod
-   copies the old volume across, while nothing is writing to it. The old volume
-   is only ever read, so `kubectl -n lab rollout undo deploy/homestead` returns
-   exactly what was there. The page reconnects by itself.
-2. **Remove leftovers**, when you are happy, deletes what still carries the old
-   name - including `harvui-data`, which you confirm by typing its name.
-
-A Cloudflare Tunnel or proxy pointed at `harvui.lab.svc` needs pointing at
-`homestead.lab.svc` afterwards. The `harvui.io/*` annotations on your own
-workloads stay: they are invisible, and Homestead replaces each one the next
-time it changes that workload rather than restarting everything to do it.
 
 ## Image update behaviour
 
@@ -827,8 +798,7 @@ Homestead's ClusterRole lets it update that role itself (with Kubernetes'
 `escalate` verb), so each release can bring the permissions it needs. That is,
 in effect, cluster-admin; so is starting privileged pods with host access, which
 the node probe, image cleanup and node power already do. The right is limited
-by name to Homestead's own role, and the RBAC it may delete is limited to the
-`harvui` objects an older install leaves behind.
+by name to Homestead's own role and binding.
 
 Interactive container consoles require operator access. The supplied manifest
 grants `pods/exec` only through the `homestead-console` Role in the `lab`

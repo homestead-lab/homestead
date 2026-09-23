@@ -77,11 +77,11 @@ async function loadImageUpdates(force = false, quiet = false) {
     STATE.data.imageUpdateMap = Object.fromEntries((report.workloads || [])
       .map(x => [updateKey(x.ns, x.name), x]));
     paintUpdateBadge(report.updates || 0, report.errors || 0);
-    const previous = +(localStorage.getItem("homestead.update-count") || localStorage.getItem("harvui.update-count") || 0);
+    const previous = +(localStorage.getItem("homestead.update-count") || 0);
     const preferences = STATE.data.appSettings?.updates || {};
     if (!quiet && preferences.notify_available !== false && report.updates > previous)
       toast(`${report.updates} container image update${report.updates === 1 ? "" : "s"} available`, "ok");
-    const previousErrors = +(localStorage.getItem("homestead.update-errors") || localStorage.getItem("harvui.update-errors") || 0);
+    const previousErrors = +(localStorage.getItem("homestead.update-errors") || 0);
     if (!quiet && preferences.notify_failures !== false && report.errors > previousErrors)
       toast(`${report.errors} image registry check${report.errors === 1 ? " needs" : "s need"} attention`, "bad");
     localStorage.setItem("homestead.update-count", report.updates || 0);
@@ -229,7 +229,7 @@ function workloadActions(w, update, off, compact = false) {
   const label = (text, iconName) => compact ? icon(iconName) : `${icon(iconName)}${text}`;
   const cls = compact ? "btn sm iconic" : "btn sm";
   return `<button class="${cls}" title="View live container logs" aria-label="Logs for ${esc(w.name)}" onclick="wlLogs('${w.ns}','${w.pods[0] ? w.pods[0].name : ""}','${w.name}')">${label("Logs", "log")}</button>
-          <button class="${cls}" title="Restart all pods in this workload" aria-label="Restart ${esc(w.name)}" onclick="wlRestart('${w.ns}','${w.name}')">${label("Restart", "restart")}</button>
+          ${off ? "" : `<button class="${cls}" title="Restart: replace every pod in this workload with a fresh one" aria-label="Restart ${esc(w.name)}" data-need="operator" onclick="wlRestart('${w.ns}','${w.name}')">${label("Restart", "restart")}</button>`}
           ${update?.available ? `<button class="btn sm pri" title="Review and install the available image update" data-need="operator" onclick="imageUpdateReview('${w.ns}','${w.name}')">${icon("update")}Update</button>` : ""}
           ${off ? `<button class="${cls}" title="Start this workload" aria-label="Start ${esc(w.name)}" onclick="wlScale('${w.ns}','${w.name}',1)">${label("Start", "play")}</button>`
                 : `<button class="${cls}" title="Scale this workload to zero" aria-label="Stop ${esc(w.name)}" onclick="wlScale('${w.ns}','${w.name}',0)">${label("Stop", "stop")}</button>`}

@@ -32,10 +32,10 @@ class OperationTests(unittest.TestCase):
     def test_started_operation_is_persisted_without_private_ref(self):
         item = operations.start(
             "image-pull", "Pull example/image:1", {"kind": "Image", "name": "example/image:1"},
-            "/image-cache", {"namespace": "lab", "name": "harvui-pull-example"})
+            "/image-cache", {"namespace": "lab", "name": "homestead-pull-example"})
         self.assertNotIn("ref", item)
         stored = json.loads((Path(self.tmp.name) / operations.STORE).read_text())
-        self.assertEqual("harvui-pull-example", stored[0]["ref"]["name"])
+        self.assertEqual("homestead-pull-example", stored[0]["ref"]["name"])
 
     def test_image_pull_survives_reload_and_completes_from_daemonset(self):
         item = operations.start(

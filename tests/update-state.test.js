@@ -30,10 +30,8 @@ test("control-plane updates are applied last without disturbing the selected ord
   const selected = [
     { name: "homestead" },
     { name: "plex" },
-    { name: "harvui" },
     { name: "frigate" },
   ];
-  assert.deepEqual(state.orderApply(selected).map(item => item.name),
-    ["plex", "frigate", "homestead", "harvui"]);
-  assert.deepEqual(selected.map(item => item.name), ["homestead", "plex", "harvui", "frigate"]);
+  assert.deepEqual(state.orderApply(selected).map(item => item.name), ["plex", "frigate", "homestead"]);
+  assert.deepEqual(selected.map(item => item.name), ["homestead", "plex", "frigate"]);
 });

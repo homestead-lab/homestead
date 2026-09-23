@@ -26,8 +26,5 @@ fi
 
 echo "==> waiting for $IMAGE:$TAG"
 ssh "$HOST" "$K -n $NS rollout status deployment/homestead --timeout=300s"
-# A Deployment left over from the harvUI name is stateless, so it goes once
-# Homestead is ready. Its claim and Service stay: Homestead reads either name.
-ssh "$HOST" "$K -n $NS delete deployment/harvui --ignore-not-found"
 ssh "$HOST" "$K -n $NS get deployment/homestead"
 ssh "$HOST" "$K -n $NS get pvc,service -l app=homestead"

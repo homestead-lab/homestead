@@ -75,19 +75,10 @@ def _suffix(key):
 
 
 def _annotation(dep, key, default=""):
-    """Read under either naming domain.
-
-    An install made before the rename records what it tracks under harvui.io/*.
-    Reading only the current key loses the source tag an image was installed
-    from - and without a tag there is no next version to look for, so every
-    check comes back "up to date" for ever.
-    """
     return NAMES.annotation_of(dep.get("metadata", {}), _suffix(key), default)
 
 
 def _write(annotations, key, value):
-    """Set the current key and drop the old one, so only one is ever true."""
-    annotations.pop(NAMES.legacy_key(_suffix(key)), None)
     annotations[key] = value
 
 
@@ -419,7 +410,7 @@ def report(force=False):
 # An env var pinning the version in the Deployment outlives the image it
 # described: the image bakes HOMESTEAD_VERSION in itself, so a copy written
 # into the pod spec only ever goes stale. Updating an image drops it.
-PINNED_VERSION_ENV = ("HOMESTEAD_VERSION", "HARVUI_VERSION")
+PINNED_VERSION_ENV = ("HOMESTEAD_VERSION",)
 
 
 def _pod_containers(dep):

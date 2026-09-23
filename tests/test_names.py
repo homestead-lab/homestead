@@ -1,4 +1,5 @@
-"""Homestead was harvUI. Both names have to work, in the right directions."""
+"""The names Homestead gives its objects, and the keys it writes on them."""
+import re
 import sys
 import unittest
 import urllib.error
@@ -9,98 +10,63 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_names as names
 
+ROOT = Path(__file__).resolve().parents[1]
+
 
 class NameTests(unittest.TestCase):
-    def setUp(self):
-        self.existing = set()
-        names.bind(self._get)
-
-    def _get(self, path):
-        name = path.rsplit("/", 1)[-1].split("?")[0]
-        if name not in self.existing:
-            raise urllib.error.HTTPError(path, 404, "missing", {}, None)
-        return {"metadata": {"name": name}}
-
-    def test_a_new_install_is_given_the_new_name(self):
+    def test_objects_are_named_homestead(self):
         self.assertEqual("homestead-settings", names.object_name("settings", "lab"))
+        self.assertEqual("homestead-nodeprobe", names.NODEPROBE)
 
-    def test_an_install_that_already_has_the_old_object_keeps_using_it(self):
-        """Writing to the new name instead would fork the install's state into
-        two objects, one of them silently ignored."""
-        self.existing.add("harvui-settings")
-
-        self.assertEqual("harvui-settings", names.object_name("settings", "lab"))
-
-    def test_the_new_name_wins_once_both_somehow_exist(self):
-        self.existing.update({"harvui-settings", "homestead-settings"})
-
-        self.assertEqual("homestead-settings", names.object_name("settings", "lab"))
-
-    def test_an_annotation_is_read_under_either_domain(self):
-        self.assertEqual("1", names.read({"homestead.io/replicas": "1"}, "replicas"))
-        self.assertEqual("2", names.read({"harvui.io/replicas": "2"}, "replicas"))
-        self.assertEqual("", names.read({}, "replicas"))
-
-    def test_the_new_domain_answers_first(self):
-        both = {"homestead.io/icon": "new", "harvui.io/icon": "old"}
-
-        self.assertEqual("new", names.read(both, "icon"))
-
-    def test_writing_an_annotation_clears_the_old_key(self):
-        meta = {"annotations": {"harvui.io/icon": "old", "keep": "me"}}
-
-        names.write_annotation(meta, "icon", "new")
-
-        self.assertEqual({"homestead.io/icon": "new", "keep": "me"}, meta["annotations"])
-
-    def test_only_the_new_domain_is_ever_written(self):
+    def test_keys_are_in_the_homestead_domain(self):
         self.assertEqual("homestead.io/task", names.key("task"))
         self.assertEqual({"homestead.io/task": "import", "homestead.io/app": "frigate"},
                          names.labels("import", app="frigate"))
+        self.assertEqual("1", names.read({"homestead.io/replicas": "1"}, "replicas"))
+        self.assertEqual("", names.read({}, "replicas"))
+
+    def test_writing_and_clearing_an_annotation(self):
+        meta = {"annotations": {"keep": "me"}}
+        names.write_annotation(meta, "icon", "new")
+        self.assertEqual({"homestead.io/icon": "new", "keep": "me"}, meta["annotations"])
+        names.write_annotation(meta, "icon", None)
+        self.assertEqual({"keep": "me"}, meta["annotations"])
 
 
 class LabelSearchTests(unittest.TestCase):
-    """A label selector cannot say "or", so both domains are asked."""
+    def test_objects_are_found_by_their_label(self):
+        asked = []
 
-    def setUp(self):
-        self.answers = {}
         def get(path):
-            wanted = urllib.parse.unquote(path.split("labelSelector=", 1)[-1])
-            return {"items": self.answers.get(wanted.split("=", 1)[-1], [])}
+            asked.append(urllib.parse.unquote(path.split("labelSelector=", 1)[-1]))
+            return {"items": [{"metadata": {"name": "job"}}]}
 
         names.bind(get)
-
-    def test_objects_under_either_domain_come_back_once(self):
-        shared = {"metadata": {"uid": "u1", "name": "both"}}
-        self.answers["import"] = [shared, {"metadata": {"uid": "u2", "name": "new"}}]
-
         found = names.find("/apis/batch/v1/namespaces/lab/jobs", "task", "import")
 
-        self.assertEqual(["both", "new"], [item["metadata"]["name"] for item in found])
+        self.assertEqual(["homestead.io/task=import"], asked)
+        self.assertEqual(["job"], [item["metadata"]["name"] for item in found])
 
     def test_a_cluster_that_will_not_answer_is_not_an_error(self):
         def refuse(_path):
             raise urllib.error.URLError("no route to host")
 
         names.bind(refuse)
-
         self.assertEqual([], names.find("/apis/batch/v1/namespaces/lab/jobs", "task"))
 
 
-class NoNewLegacyNamesTests(unittest.TestCase):
-    """The old name is read in named places. It must not spread from them."""
+class NoOldNameTests(unittest.TestCase):
+    """Homestead was once harvUI. Only the one-time key rename may still say so."""
 
-    ROOT = Path(__file__).resolve().parents[1]
-
-    def test_no_module_writes_a_legacy_annotation_key_by_hand(self):
-        """Writing "harvui.io/x" as a literal puts the old domain on something
-        new. homestead_names decides what gets written."""
+    def test_nothing_else_mentions_the_old_name(self):
         offenders = []
-        for path in sorted((self.ROOT / "server").glob("*.py")):
-            if path.name == "homestead_names.py":
+        paths = [*(ROOT / "server").glob("*.py"), *(ROOT / "web" / "js").glob("*.js"), ROOT / "web" / "index.html",
+                 ROOT / "web" / "sw.js", *(ROOT / "deploy").glob("*.yaml"), *(ROOT / "scripts").glob("*")]
+        for path in sorted(paths):
+            if path.name == "homestead_self.py" or not path.is_file():
                 continue
             for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-                if '"harvui.io/' in line or "'harvui.io/" in line:
+                if re.search(r"harv(ui|UI)", line):
                     offenders.append(f"{path.name}:{number}")
         self.assertEqual([], offenders)
 
@@ -108,7 +74,7 @@ class NoNewLegacyNamesTests(unittest.TestCase):
         for name, wanted in (("router.js", "HomesteadRouter"),
                              ("update-state.js", "HomesteadUpdateState")):
             with self.subTest(file=name):
-                source = (self.ROOT / "web" / "js" / name).read_text(encoding="utf-8")
+                source = (ROOT / "web" / "js" / name).read_text(encoding="utf-8")
                 self.assertIn(wanted, source)
                 self.assertNotIn("Harv", source.replace("Harvester", ""))
 

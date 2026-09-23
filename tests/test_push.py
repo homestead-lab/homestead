@@ -279,7 +279,7 @@ class RouteTests(unittest.TestCase):
         import re
         root = Path(__file__).resolve().parents[1]
         worker = re.search(r'const VERSION = "([^"]+)"', (root / "web" / "sw.js").read_text(encoding="utf-8"))
-        release = re.search(r'"HARVUI_VERSION", "([^"]+)"', (root / "server" / "server.py").read_text(encoding="utf-8"))
+        release = re.search(r'"HOMESTEAD_VERSION", "([^"]+)"', (root / "server" / "server.py").read_text(encoding="utf-8"))
         self.assertEqual(release.group(1), worker.group(1))
 
     def test_every_icon_the_manifest_names_exists(self):

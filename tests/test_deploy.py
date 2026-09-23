@@ -388,30 +388,9 @@ class HomesteadManifestTests(unittest.TestCase):
     def test_runtime_workload_uses_homestead_names_and_image(self):
         manifest = (ROOT / "deploy" / "deploy.yaml").read_text()
         self.assertIn("kind: Deployment\nmetadata:\n  name: homestead", manifest)
-        self.assertIn("- name: homestead\n          image: ghcr.io/wjcloudy/homestead:2.8.72",
+        self.assertIn("- name: homestead\n          image: ghcr.io/wjcloudy/homestead:2.8.73",
                       manifest)
         self.assertIn("homestead.io/update-sources: '{\"homestead\":", manifest)
-
-    def test_a_new_install_creates_nothing_called_harvui(self):
-        """The old name survives in code, to read what older installs wrote.
-        It must not survive in the manifests, or every new install inherits it."""
-        import re
-        sys.path.insert(0, str(ROOT / "server"))
-        import homestead_yaml
-        for name in ("deploy.yaml", "nodeprobe.yaml"):
-            with self.subTest(manifest=name):
-                text = (ROOT / "deploy" / name).read_text()
-                for doc in (homestead_yaml.loads(d) for d in re.split(r"(?m)^---\s*$", text) if d.strip()):
-                    meta = doc.get("metadata") or {}
-                    self.assertNotIn("harvui", meta.get("name", ""))
-                    self.assertNotIn("harvui", str(meta.get("labels") or {}) + str(meta.get("annotations") or {}))
-                # It may still be named, to reach an older install's objects: the
-                # ones the move to the new names removes, and the old account
-                # Homestead's binding covers until then.
-                lines = [line.strip() for line in text.splitlines()
-                         if "harvui" in line and not line.strip().startswith("#")]
-                self.assertEqual([], [line for line in lines if not (
-                    line.startswith("resourceNames:") or line == "name: harvui")])
 
     def test_the_version_is_not_pinned_beside_the_image_it_describes(self):
         """The image bakes HOMESTEAD_VERSION in; a copy here goes stale the

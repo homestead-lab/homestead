@@ -137,7 +137,7 @@ def status():
 
 def installed():
     """The probe's name if it is installed, under either spelling."""
-    for name in NAMES.NODEPROBE:
+    for name in (NAMES.NODEPROBE,):
         try:
             found = kget("/apis/apps/v1/namespaces/" + NS + "/daemonsets/" + name)
         except Exception:
@@ -172,7 +172,7 @@ def install(version="dev"):
 def remove():
     """Take the probe away again, including one installed before the rename."""
     removed = []
-    for name in NAMES.NODEPROBE:
+    for name in (NAMES.NODEPROBE,):
         for path in ("/apis/apps/v1/namespaces/" + NS + "/daemonsets/" + name,
                      "/api/v1/namespaces/" + NS + "/configmaps/" + name):
             try:

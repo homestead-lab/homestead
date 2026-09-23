@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 KINDS = ("ServiceAccount", "ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding")
 HEADER = """# Homestead's permissions on their own, from deploy/deploy.yaml.
 #
-# Apply this once to an existing install - including one made as harvUI - and
+# Apply this once to an install from before 2.8.71 and
 # Homestead keeps its permissions up to date itself from then on:
 #
 #   kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/<release>/deploy/rbac.yaml

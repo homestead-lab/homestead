@@ -130,35 +130,12 @@ rules:
   # cleanup, node power) already is. It reaches Homestead's own role only.
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: [clusterroles]
-    resourceNames: [homestead, harvui]
+    resourceNames: [homestead]
     verbs: [get, update, escalate]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: [clusterrolebindings]
-    resourceNames: [homestead, harvui]
+    resourceNames: [homestead]
     verbs: [get, update]
-  # An install made as harvUI moves to the Homestead names from Settings, and
-  # finishes by removing its harvui service account and permissions - these,
-  # and nothing else.
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: [clusterroles, clusterrolebindings]
-    resourceNames: [harvui]
-    verbs: [delete]
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: [roles, rolebindings]
-    resourceNames: [homestead-console, harvui-console]
-    verbs: [get]
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: [roles, rolebindings]
-    resourceNames: [harvui-console]
-    verbs: [delete]
-  - apiGroups: [""]
-    resources: [serviceaccounts]
-    resourceNames: [homestead, harvui]
-    verbs: [get]
-  - apiGroups: [""]
-    resources: [serviceaccounts]
-    resourceNames: [harvui]
-    verbs: [delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -171,12 +148,6 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: homestead
-    namespace: lab
-  # An install made as harvUI still runs as this account until it moves to the
-  # Homestead names; binding it here gives it these permissions straight away.
-  # Homestead drops this entry itself once no harvui account is left.
-  - kind: ServiceAccount
-    name: harvui
     namespace: lab
 ---
 # Interactive exec is deliberately namespace-scoped. The ClusterRole above does
@@ -228,13 +199,11 @@ metadata:
   labels:
     app: homestead
   annotations:
-    # Homestead reads harvui.io/* as well, so an install made before the
-    # rename keeps its update history, workload metadata and rollback state.
-    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.72"}'
+    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.73"}'
 spec:
   replicas: 1
   strategy:
-    # One Homestead at a time: moves, join plans and alerts are driven from its
+    # One Homestead at a time: moves and alerts are driven from its
     # data volume, and two copies overlapping in a surge rollout would both act.
     type: Recreate
   selector:
@@ -262,7 +231,7 @@ spec:
           tolerationSeconds: 15
       initContainers:
         - name: data-permissions
-          image: ghcr.io/wjcloudy/homestead:2.8.72
+          image: ghcr.io/wjcloudy/homestead:2.8.73
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "chown 10001:10001 /data && chmod 0770 /data"]
           securityContext:
@@ -279,7 +248,7 @@ spec:
               mountPath: /data
       containers:
         - name: homestead
-          image: ghcr.io/wjcloudy/homestead:2.8.72
+          image: ghcr.io/wjcloudy/homestead:2.8.73
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT

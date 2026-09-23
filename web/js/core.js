@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HOMESTEAD_VERSION = "2.8.72";
+const HOMESTEAD_VERSION = "2.8.73";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -98,8 +98,7 @@ window.openSvc = (ip, port) => window.open(svcUrl(ip, port), "_blank", "noopener
 /* ---------------- settings ---------------- */
 const SET = Object.assign(
   { theme: "dark", bg: "soft", blur: 26, motion: "on", refresh: 15 },
-  JSON.parse(localStorage.getItem("homestead.settings") ||
-    localStorage.getItem("harvui.settings") || "{}"));
+  JSON.parse(localStorage.getItem("homestead.settings") || "{}"));
 
 function applySettings() {
   const root = document.documentElement;

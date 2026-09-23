@@ -104,13 +104,7 @@ def del_source(name):
 
 
 def source_secret(name):
-    """This source's password secret, under whichever name it was created with."""
-    for candidate in (f"homestead-src-{name}", f"harvui-src-{name}"):
-        try:
-            kget(f"/api/v1/namespaces/{NS}/secrets/{candidate}")
-            return candidate
-        except Exception:
-            continue
+    """This source's password secret."""
     return f"homestead-src-{name}"
 
 
@@ -252,7 +246,7 @@ def inspect_source_container(name, container):
         "name": (item.get("Name") or container).lstrip("/"),
         "image": config.get("Image", ""),
         "icon": (labels.get("net.unraid.docker.icon", "")
-                 or labels.get("homestead.icon", "") or labels.get("harvui.icon", "")),
+                 or labels.get("homestead.icon", "")),
         "webui": labels.get("net.unraid.docker.webui", ""),
         "env": env, "ports": ports, "mounts": mounts,
         "remote_path": app_mount["source"] if app_mount else "",
@@ -766,8 +760,8 @@ def import_container(cfg):
     access_mode = volumes[0]["access_mode"] if volumes else ""
 
     job = f"homestead-import-{name}"
-    for previous in (job, f"harvui-import-{name}"):
-        # A rerun clears the job from before the rename as well as its own.
+    for previous in (job,):
+        # A rerun clears the job from before.
         try:
             ksend("DELETE", f"/apis/batch/v1/namespaces/{NS}/jobs/{previous}"
                             "?propagationPolicy=Background")
@@ -1004,7 +998,7 @@ def import_progress(log):
 
 def import_cleanup_plan(name):
     """What an import job left behind, read from the job itself."""
-    if not re.fullmatch(r"(?:homestead|harvui)-import-[a-z0-9][a-z0-9-]{0,60}", str(name or "")):
+    if not re.fullmatch(r"homestead-import-[a-z0-9][a-z0-9-]{0,60}", str(name or "")):
         raise ValueError("unknown import job")
     try:
         job = kget(f"/apis/batch/v1/namespaces/{NS}/jobs/{name}")
@@ -1056,7 +1050,7 @@ def delete_import(name):
     references the appdata claim - which used to leave both the import and the
     volume it was filling unremovable from the UI.
     """
-    if not re.fullmatch(r"(?:homestead|harvui)-import-[a-z0-9][a-z0-9-]{0,60}", str(name or "")):
+    if not re.fullmatch(r"homestead-import-[a-z0-9][a-z0-9-]{0,60}", str(name or "")):
         raise ValueError("unknown import job")
     try:
         ksend("DELETE", f"/apis/batch/v1/namespaces/{NS}/jobs/{name}"
@@ -1067,7 +1061,7 @@ def delete_import(name):
     stopped = _stop_job_pods(name)
     # A pre-pull started for this app outlives the import that wanted it: it is
     # a DaemonSet, so deleting its pods only makes it build new ones.
-    app = re.sub(r"^(?:homestead|harvui)-import-", "", name)
+    app = re.sub(r"^homestead-import-", "", name)
     pulls = [f"{prefix}{app}" for prefix in PREPULL_NAMES]
     stopped_pulls = [pull for pull in pulls if _daemonset_exists(pull)]
     for pull in stopped_pulls:
@@ -1311,7 +1305,7 @@ def image_cache():
             "protected": sum(1 for image in shared if image["protected"])}
 
 
-PREPULL_NAMES = ("homestead-pull-", "harvui-pull-")
+PREPULL_NAMES = ("homestead-pull-",)
 
 
 def _pullable_nodes():
@@ -1363,7 +1357,7 @@ def prepull(image, nodes=None):
         "requiredDuringSchedulingIgnoredDuringExecution": {"nodeSelectorTerms": [
             {"matchExpressions": [{"key": "kubernetes.io/hostname",
                                    "operator": "In", "values": sorted(wanted)}]}]}}}
-    for previous in (name, f"harvui-pull-{tag}"):
+    for previous in (name,):
         try:
             ksend("DELETE", f"/apis/apps/v1/namespaces/{NS}/daemonsets/{previous}")
         except urllib.error.HTTPError:

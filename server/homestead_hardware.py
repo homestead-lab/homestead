@@ -41,7 +41,6 @@ ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,48}[a-z0-9])?$")
 USB_RE = re.compile(r"^[0-9a-f]{4}:[0-9a-f]{4}$")
 PATH_TYPES = {"Directory", "CharDevice", "BlockDevice", "Socket", "File"}
 AUTO_ANNOTATION = NAMES.key("auto-hardware")
-AUTO_ANNOTATION_LEGACY = NAMES.legacy_key("auto-hardware")
 
 
 def bind(_kget, _ksend, _ns, _cache_ref):
@@ -185,11 +184,7 @@ def reconcile_node(name, labels, annotations, devices):
     if changed_labels or auto != before_auto:
         value = ",".join(sorted(auto)) or None
         ksend("PATCH", f"/api/v1/nodes/{name}",
-              {"metadata": {"labels": changed_labels,
-                            # The old key is cleared in the same patch, so a
-                            # node never carries two answers to one question.
-                            "annotations": {AUTO_ANNOTATION: value,
-                                            AUTO_ANNOTATION_LEGACY: None}}},
+              {"metadata": {"labels": changed_labels, "annotations": {AUTO_ANNOTATION: value}}},
               ctype="application/merge-patch+json")
     return labels, auto
 

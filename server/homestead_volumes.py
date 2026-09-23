@@ -205,11 +205,8 @@ def deletion_plan(namespace, name):
     labels = meta.get("labels", {}) or {}
     if namespace in SYSTEM_NAMESPACES:
         protected.append("system namespaces can only be changed with Kubernetes administration tools")
-    # Both names, because the claim holding Homestead's own state is called
-    # homestead-data on a new install and harvui-data on an older one.
-    own_state = (labels.get("app") in ("harvui", "homestead")
-                 or name in ("homestead-data", "harvui-data")
-                 or any(row["name"] in ("harvui", "homestead") for row in consumers))
+    own_state = (labels.get("app") == "homestead" or name == "homestead-data"
+                 or any(row["name"] == "homestead" for row in consumers))
     if own_state:
         protected.append("this claim stores Homestead's own state")
 
@@ -258,7 +255,7 @@ def deletion_plan(namespace, name):
         # as part of the deletion instead of asking for manual kubectl work.
         "stale_consumers": stale,
         "removable_jobs": [row["name"] for row in stale if row["kind"] == "Job"
-                           and row["name"].startswith(("homestead-", "harvui-"))],
+                           and row["name"].startswith("homestead-")],
         "snapshots": {"count": len(snapshot_rows), "names": [x.get("name", "") for x in snapshot_rows[:20]]},
         "backups": {"count": len(backup_rows), "names": [x.get("name", "") for x in backup_rows[:20]]},
         "data_present": data_present,

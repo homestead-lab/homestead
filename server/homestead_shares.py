@@ -19,19 +19,12 @@ kget = ksend = create_pvc = None
 NAMESPACE = "lab"
 CACHE = {}
 def CONFIGMAP():
-    """Where share definitions live: the pre-rename name if that is what exists."""
+    """Where share definitions live."""
     return NAMES.object_name("shares", NAMESPACE)
 
 
 def SECRET():
-    """The passwords for those shares, named to match them.
-
-    The pair is one thing: an install whose definitions are still under the old
-    name keeps its credentials there too, rather than ending up with one of
-    each and no way to tell which half is which.
-    """
-    if CONFIGMAP().startswith(NAMES.LEGACY):
-        return f"{NAMES.LEGACY}-share-credentials"
+    """The passwords for those shares."""
     return NAMES.object_name("share-credentials", NAMESPACE, kind="secrets")
 LONGHORN_NAMESPACE = "longhorn-system"
 # A Samba rollout is a container restart, not a download: if the pod is not

@@ -139,14 +139,9 @@ class ImportJobRemovalTests(unittest.TestCase):
         self.assertLess(self.sent.index(("DELETE", pod_delete)), len(self.sent),
                         "the pod goes before the caller deletes any claim")
 
-    def test_a_job_from_before_the_rename_is_still_removable(self):
-        imports.delete_import("harvui-import-obsidian")
-
-        self.assertTrue(any("jobs/harvui-import-obsidian" in path for _, path in self.sent))
-
     def test_a_cleanup_plan_reports_what_the_import_created(self):
         self.job = {"metadata": {"name": "homestead-import-obsidian", "namespace": "lab",
-                                 "labels": {"harvui.io/app": "obsidian"},
+                                 "labels": {"homestead.io/app": "obsidian"},
                                  "annotations": {"homestead.io/import-workload": "obsidian",
                                                  "homestead.io/import-volume": "obsidian-appdata",
                                                  "homestead.io/import-volume-created": "true"}}}
@@ -219,7 +214,7 @@ class ImportJobRemovalTests(unittest.TestCase):
 
     def test_an_import_from_before_the_record_says_it_does_not_know(self):
         self.job = {"metadata": {"name": "homestead-import-old", "namespace": "lab",
-                                 "labels": {"harvui.io/app": "old"}}}
+                                 "labels": {"homestead.io/app": "old"}}}
         self.deployments = {"old"}
 
         plan = imports.import_cleanup_plan("homestead-import-old")

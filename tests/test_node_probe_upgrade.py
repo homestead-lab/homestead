@@ -93,13 +93,12 @@ class InstallTests(unittest.TestCase):
             probe.install("2.8.51")
         self.assertEqual([], self.sent)
 
-    def test_remove_takes_both_names_away(self):
+    def test_remove_takes_the_probe_away(self):
         result = probe.remove()
 
         self.assertEqual("absent", result["state"])
         deleted = [p for m, p, _ in self.sent if m == "DELETE"]
         self.assertIn("/apis/apps/v1/namespaces/lab/daemonsets/homestead-nodeprobe", deleted)
-        self.assertIn("/apis/apps/v1/namespaces/lab/daemonsets/harvui-nodeprobe", deleted)
 
 
 class ReconcileTests(unittest.TestCase):
@@ -146,19 +145,6 @@ class ReconcileTests(unittest.TestCase):
 
         self.assertEqual("current", probe.reconcile("2.8.49")["state"])
         self.assertEqual([], self.sent, "no needless restart of every node's probe")
-
-    def test_a_probe_installed_before_the_rename_is_updated_where_it_lives(self):
-        """Creating a second DaemonSet beside it would run two probes."""
-        self._install("harvui-nodeprobe", {"probe.py": "print(0)" + chr(10) + "",
-                                           "smart.py": "print(0)" + chr(10) + ""})
-
-        result = probe.reconcile("2.8.49")
-
-        self.assertEqual("updated", result["state"])
-        self.assertIn("harvui-nodeprobe", result["detail"])
-        self.assertEqual(["/api/v1/namespaces/lab/configmaps/harvui-nodeprobe",
-                          "/apis/apps/v1/namespaces/lab/daemonsets/harvui-nodeprobe"],
-                         [p for _, p, _ in self.sent])
 
     def test_an_uninstalled_probe_is_not_installed_uninvited(self):
         """The SMART sidecar is privileged; running one is the operator's call."""

@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.72"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.73")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -495,7 +495,7 @@ def get_nodes():
                      for p in npods if p["metadata"]["namespace"] not in SYS_NS
                      and not NAMES.label_of(p["metadata"], "task")
                      and (p["metadata"].get("labels", {}).get("app") or "") not in
-                         NAMES.NODEPROBE + ("image-prepull",)})
+                         (NAMES.NODEPROBE, "image-prepull")})
         probed = (temps.get(name) or {}).get("devices") or {}
         annotations = n["metadata"].get("annotations", {}) or {}
         try:
@@ -1866,8 +1866,7 @@ def set_node_hardware(cfg):
     labels = {f["label"]: "true" if f["id"] in selected else "false" for f in HW.features()}
     # These are deliberate overrides, so remove them from the auto-managed set.
     ksend("PATCH", f"/api/v1/nodes/{name}", {"metadata": {"labels": labels,
-          "annotations": {HW.AUTO_ANNOTATION: None,
-                          HW.AUTO_ANNOTATION_LEGACY: None}}},
+          "annotations": {HW.AUTO_ANNOTATION: None}}},
           ctype="application/merge-patch+json")
     for k in list(_cache):
         if k.startswith(("nodes", "ov")):
@@ -2386,7 +2385,7 @@ def _own_namespace():
         return DEFAULT_NS
 
 
-SELF.bind(kget, ksend, _own_namespace(), DEFAULT_NS, SMB_NAMESPACE, HOMESTEAD_VERSION)
+SELF.bind(kget, ksend, _own_namespace(), HOMESTEAD_VERSION, DATA_DIR)
 ALERTS.bind(DATA_DIR)
 
 
@@ -2744,8 +2743,8 @@ ADMIN_ROUTES = {
     "/api/move/moves/abandon", "/api/move/moves/finish",
     "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete",
     "/api/lh/restore",
-    # Homestead's own permissions and object names.
-    "/api/self/permissions", "/api/self/names", "/api/self/names/move", "/api/self/names/clean",
+    # Homestead's own permissions.
+    "/api/self/permissions",
 }
 # things a signed-in user may always do to their own account
 SELF_ROUTES = {"/api/auth/logout", "/api/auth/password", "/api/auth/signout-everywhere",
@@ -2927,10 +2926,7 @@ class H(BaseHTTPRequestHandler):
         # CSRF: the cookie is SameSite=Strict, and mutations additionally require a
         # header that a cross-site form cannot set.
         if self.command in ("POST", "DELETE", "PUT", "PATCH"):
-            # Either spelling: a browser holding a cached copy of the old UI
-            # would otherwise have every action refused after an update.
-            if "1" not in (self.headers.get("X-Homestead-Auth"),
-                           self.headers.get("X-HarvUI-Auth")):
+            if self.headers.get("X-Homestead-Auth") != "1":
                 self._send(403, {"error": "missing X-Homestead-Auth header"})
                 return True
         self.user, self.role = who["user"], who["role"]
@@ -3023,8 +3019,6 @@ class H(BaseHTTPRequestHandler):
                 return self._move(ONBOARD.guide)
             if p == "/api/cluster/cleanup":
                 return self._move(ONBOARD.cleanup_report)
-            if p == "/api/self/names":
-                return self._move(SELF.plan)
             if p == "/api/cluster/removal":
                 return self._move(lambda: ONBOARD.removal_plan((q.get("node") or [""])[0]))
             # Which release this is, asked by another Homestead before a move.
@@ -3256,10 +3250,6 @@ class H(BaseHTTPRequestHandler):
                     return self._send(400, {"error": str(error)})
             if p == "/api/self/permissions":
                 return self._send(200, SELF.reconcile())
-            if p == "/api/self/names/move":
-                return self._move(SELF.move)
-            if p == "/api/self/names/clean":
-                return self._move(lambda: SELF.clean(str(b.get("confirm") or "")))
             if p == "/api/push/unsubscribe":
                 return self._send(200, PUSH.unsubscribe(self.user, str(b.get("endpoint") or "")))
             if p == "/api/push/status":
@@ -3795,6 +3785,12 @@ def _reconcile_permissions():
         print(f"permissions: not checked ({str(error)[:120]})", flush=True)
         return
     print(f"permissions: {result['state']} - {result['detail']}", flush=True)
+    try:
+        adopted = SELF.adopt_old_keys()
+        if adopted.get("changed"):
+            print(f"moved {adopted['changed']} objects' keys to {NAMES.DOMAIN}", flush=True)
+    except Exception as error:
+        print(f"old keys: not moved ({str(error)[:120]})", flush=True)
 
 
 def _upgrade_node_probe():
@@ -3820,7 +3816,7 @@ if __name__ == "__main__":
     threading.Thread(target=_upgrade_node_probe, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=MOVE_ENGINE.run, daemon=True).start()
-    # Join plans from 2.8.68-2.8.72 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.73 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     print(f"Homestead listening on :{port}", flush=True)

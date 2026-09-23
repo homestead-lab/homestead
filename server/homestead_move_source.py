@@ -89,7 +89,7 @@ def _clean_metadata(meta, namespace=None):
     annotations = {
         key: value for key, value in (meta.get("annotations") or {}).items()
         if key not in DROP_ANNOTATIONS
-        and key not in NAMES.both_keys(ORIGIN) and key not in NAMES.both_keys(BACKUPS)}
+        and key not in (NAMES.key(ORIGIN), NAMES.key(BACKUPS))}
     if annotations:
         meta["annotations"] = annotations
     else:
@@ -371,9 +371,7 @@ def release(kind, name):
     origin = _origin(obj)
     if not origin:
         return {"ok": True, "detail": f"{name} was not stopped for a move"}
-    patch = {"metadata": {"annotations": {NAMES.key(ORIGIN): None, NAMES.key(BACKUPS): None,
-                                          NAMES.legacy_key(ORIGIN): None,
-                                          NAMES.legacy_key(BACKUPS): None}},
+    patch = {"metadata": {"annotations": {NAMES.key(ORIGIN): None, NAMES.key(BACKUPS): None}},
              "spec": dict(origin)}
     _merge(kind, name, patch)
     return {"ok": True, "detail": f"{name} is running here again, as it was"}

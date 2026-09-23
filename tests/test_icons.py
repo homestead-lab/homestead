@@ -14,7 +14,7 @@ import homestead_icons as icons
 import server
 
 
-PNG = b"\x89PNG\r\n\x1a\n" + b"harvui-test-icon"
+PNG = b"\x89PNG\r\n\x1a\n" + b"homestead-test-icon"
 
 
 class IconCacheTests(unittest.TestCase):
@@ -87,7 +87,7 @@ class IconCacheTests(unittest.TestCase):
                 mock.patch.object(icons, "_download", return_value=(PNG, "image/png")):
             reference = icons.persist("https://example.com/logo.png", data_dir)
             with mock.patch.object(server, "DATA_DIR", data_dir):
-                rendered = server.display_icon({"harvui.io/icon": reference})
+                rendered = server.display_icon({"homestead.io/icon": reference})
         self.assertTrue(rendered.startswith("data:image/png;base64,"))
         self.assertNotIn("example.com", rendered)
 
