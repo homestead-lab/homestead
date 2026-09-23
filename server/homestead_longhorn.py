@@ -61,10 +61,12 @@ def list_jobs():
     except Exception:
         return []
     vols = _volumes()
+    runs = _cron_runs()
     out = []
     for j in items:
         sp = j.get("spec", {})
         name = j["metadata"]["name"]
+        run = runs.get(name, {})
         groups = sp.get("groups") or []
         covered = [v["name"] for v in vols
                    if v["labels"].get(JOB_LABEL + name) == "enabled"
@@ -74,8 +76,73 @@ def list_jobs():
             "retain": sp.get("retain", 0), "concurrency": sp.get("concurrency", 1),
             "groups": groups, "covers": len(covered), "volumes": sorted(covered),
             "desc": TASKS.get(sp.get("task", ""), ""),
+            "last_run": run.get("last_run", ""), "last_success": run.get("last_success", ""),
+            "running": run.get("running", 0), "last_failed": run.get("last_failed", False),
         })
     return sorted(out, key=lambda x: x["name"])
+
+
+def _cron_runs():
+    """When each job last ran, from the CronJob Longhorn keeps for it.
+
+    Longhorn names the CronJob after its recurring job. A run that started
+    after the last success and is no longer active failed."""
+    try:
+        crons = kget(f"/apis/batch/v1/namespaces/{LHNS}/cronjobs").get("items", [])
+    except Exception:
+        return {}
+    runs = {}
+    for cron in crons:
+        status = cron.get("status", {}) or {}
+        last, ok = status.get("lastScheduleTime", "") or "", status.get("lastSuccessfulTime", "") or ""
+        active = len(status.get("active") or [])
+        runs[cron["metadata"]["name"]] = {
+            "last_run": last, "last_success": ok, "running": active,
+            "last_failed": bool(last and not active and (not ok or ok < last)),
+        }
+    return runs
+
+
+def run_job(name):
+    """Runs a recurring job now, as the schedule would, from its CronJob."""
+    if not SAFE.match(str(name or "")):
+        raise ValueError("unknown job")
+    try:
+        cron = kget(f"/apis/batch/v1/namespaces/{LHNS}/cronjobs/{name}")
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            raise ValueError(f"Longhorn has not set up {name}'s schedule yet; try again in a moment")
+        raise
+    template = (cron.get("spec", {}) or {}).get("jobTemplate", {}) or {}
+    job_name = f"{name[:40]}-now-{int(time.time()) % 1000000:06d}"
+    meta = template.get("metadata", {}) or {}
+    body = {
+        "apiVersion": "batch/v1", "kind": "Job",
+        "metadata": {"name": job_name, "namespace": LHNS,
+                     "labels": dict(meta.get("labels") or {}),
+                     "annotations": {**(meta.get("annotations") or {}), "cronjob.kubernetes.io/instantiate": "manual"},
+                     "ownerReferences": [{"apiVersion": "batch/v1", "kind": "CronJob", "name": name,
+                                          "uid": cron["metadata"]["uid"], "controller": False}]},
+        "spec": template.get("spec", {}),
+    }
+    ksend("POST", f"/apis/batch/v1/namespaces/{LHNS}/jobs", body)
+    _bust("lhjobs")
+    return {"ok": True, "job": job_name, "namespace": LHNS}
+
+
+def run_status(item):
+    """The operations poll's view of a job run started from Homestead."""
+    ref = item["ref"]
+    job = kget(f"/apis/batch/v1/namespaces/{ref['namespace']}/jobs/{ref['name']}")
+    status = job.get("status", {}) or {}
+    for condition in status.get("conditions", []) or []:
+        if condition.get("type") == "Failed" and condition.get("status") == "True":
+            return "failed", 100, condition.get("message") or condition.get("reason") or "The run failed"
+    if status.get("succeeded"):
+        return "succeeded", 100, "Finished"
+    if status.get("failed") and not status.get("active"):
+        return "failed", 100, "The run failed; its pod's log in longhorn-system says why"
+    return "running", 40 if status.get("active") else 10, "Running" if status.get("active") else "Starting"
 
 
 def save_job(cfg):

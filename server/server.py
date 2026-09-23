@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.82")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.83")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2562,6 +2562,7 @@ SMART.bind(kget, DEFAULT_NS, AUTH.internal_signing_key)
 OPS.bind(kget, DATA_DIR, UPDATES.progress, SMART.progress)
 RESTRUCTURE.bind(kget, ksend, raw_get)
 OPS.RESOLVERS["restructure"] = RESTRUCTURE.resolve
+OPS.RESOLVERS["protect-run"] = LH.run_status
 MOVE_SOURCE.bind(kget, ksend, LH, DEFAULT_NS)
 MOVE_ENGINE.bind(kget, ksend, LH, MOVE, NETWORK, OPS, DATA_DIR, DEFAULT_NS)
 # A move reads in the Activity tray like every other long job.
@@ -3893,6 +3894,13 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, LH.save_job(b))
             if p == "/api/lh/job/delete":
                 return self._send(200, LH.delete_job(b["name"]))
+            if p == "/api/lh/job/run":
+                result = LH.run_job(b.get("name"))
+                result["operation"] = OPS.start(
+                    "protect-run", f"Run {b['name']} now", {"kind": "Job", "name": result["job"],
+                                                            "namespace": result["namespace"]},
+                    "/data-protection", {"namespace": result["namespace"], "name": result["job"]}, "Starting")
+                return self._send(200, result)
             if p == "/api/lh/assign":
                 return self._send(200, LH.bulk_assign(
                     b["volumes"], b["name"], b.get("kind", "group"), b.get("enabled", True)))
@@ -4083,7 +4091,7 @@ if __name__ == "__main__":
     threading.Thread(target=_upgrade_node_probe, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=MOVE_ENGINE.run, daemon=True).start()
-    # Join plans from 2.8.68-2.8.82 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.83 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     print(f"Homestead listening on :{port}", flush=True)

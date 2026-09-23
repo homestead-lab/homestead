@@ -66,10 +66,10 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.82`, the workflow publishes:
+For a release such as `v2.8.83`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.82
+ghcr.io/wjcloudy/homestead:2.8.83
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -80,8 +80,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.82
-git push origin v2.8.82
+git tag v2.8.83
+git push origin v2.8.83
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -432,7 +432,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.82/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.83/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -443,7 +443,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.82 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.83 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -488,6 +488,28 @@ The exact claim name must be typed before either action. System namespaces and
 Homestead's own `homestead-data` claim are protected, and the supplied RBAC grants
 only the additional PV `patch` permission required to make the chosen reclaim
 behavior deterministic.
+
+## Data protection
+
+Data Protection drives Longhorn's own recurring jobs rather than a scheduler of
+Homestead's: a job has a task (snapshot, backup, trim, cleanup), a schedule, how
+many to keep, and the volume groups it covers, and Longhorn runs it. A volume
+joins a group, or a single job, by a label; every volume is in `default`.
+
+Schedules are chosen as shapes - every few minutes or hours, every day, chosen
+weekdays, monthly - and written to cron for you; anything else stays editable
+as cron. Longhorn keeps time in UTC, so schedules are set in UTC and the editor
+shows the next three runs in your own time. Each job shows when it runs next,
+when it last ran and whether that run failed, and **Run now** starts it at once
+from the schedule Longhorn made, tracked in the job tray.
+
+**Plans** set up a policy in one go - snapshots (hourly kept for a day, daily
+kept for a week), snapshots and backups (adding daily and weekly backups to
+the backup target), or housekeeping (weekly trim and snapshot cleanup) - for
+whichever group you pick. The jobs a plan makes are ordinary jobs afterwards.
+
+Any volume's snapshots and backups are also a click away on Volumes: take one
+now, back up now, or restore.
 
 ## Restore a Longhorn backup
 

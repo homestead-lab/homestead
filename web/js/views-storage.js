@@ -207,6 +207,7 @@ async function viewStorage() {
      <td class="volactions"><div class="row">
        <button class="iconbtn" data-need="operator" data-tip="Resize or change replicas" onclick='volumeEdit(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("edit")}</button>
        <button class="iconbtn" data-need="admin" data-tip="Browse and edit the files on this volume" onclick="volumeFiles('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}',${x.state === "attached"})">${icon("list")}</button>
+       <button class="iconbtn" data-tip="Snapshots and backups of this volume: take one now, or restore" onclick="lhSnaps('${esc(x.name)}','${esc(x.pvc_name || x.name)}')">${icon("snapshot")}</button>
        <button class="iconbtn" data-need="admin" data-tip="Hand this volume's files to the user the container runs as" onclick="volumeChown('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}')">${icon("shield")}</button>
        <button class="iconbtn danger" data-need="admin" data-tip="Review attachment and data-loss impact before deleting" onclick='volumeDelete(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("trash")}</button>
      </div></td>

@@ -5,13 +5,41 @@ const TASK_ICON = {
   "snapshot-delete": "✕", "backup": "☁", "backup-force-create": "☁",
   "filesystem-trim": "⇅",
 };
-const CRON_PRESETS = {
-  "0 * * * *": "Hourly",
-  "0 2 * * *": "Daily at 02:00",
-  "0 3 * * 0": "Weekly, Sunday 03:00",
-  "0 4 1 * *": "Monthly, 1st at 04:00",
-  "*/15 * * * *": "Every 15 minutes",
-};
+
+/* Ready-made protection: the jobs a sensible policy needs, made in one go.
+   A plan's jobs are ordinary jobs afterwards, edited or deleted one by one. */
+const PROTECT_PLANS = [
+  { id: "snapshots", title: "Snapshots", blurb: "Hourly snapshots kept for a day, daily ones kept for a week. Stored on the volumes themselves: quick to roll back to, and no use if the volume itself is lost.",
+    jobs: [{ name: "hourly-snapshot", task: "snapshot", cron: "0 * * * *", retain: 24, concurrency: 2 },
+      { name: "daily-snapshot", task: "snapshot", cron: "0 2 * * *", retain: 7, concurrency: 2 }] },
+  { id: "backups", title: "Snapshots and backups", blurb: "A daily snapshot kept for a week, a daily backup kept for two weeks and a weekly one kept for two months, uploaded to the backup target so they outlive the cluster.",
+    needsTarget: true,
+    jobs: [{ name: "daily-snapshot", task: "snapshot", cron: "0 2 * * *", retain: 7, concurrency: 2 },
+      { name: "daily-backup", task: "backup", cron: "30 2 * * *", retain: 14, concurrency: 1 },
+      { name: "weekly-backup", task: "backup", cron: "0 3 * * 0", retain: 8, concurrency: 1 }] },
+  { id: "tidy", title: "Housekeeping", blurb: "A weekly trim, so space an app has freed is given back to the disks, and a weekly purge of the system snapshots Longhorn takes during rebuilds.",
+    jobs: [{ name: "weekly-trim", task: "filesystem-trim", cron: "0 4 * * 6", retain: 0, concurrency: 1 },
+      { name: "weekly-cleanup", task: "snapshot-cleanup", cron: "30 4 * * 6", retain: 0, concurrency: 1 }] },
+];
+
+/* When a time on the cluster's clock is, for the person reading. */
+function localTime(date) {
+  return date.toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" });
+}
+function nextRun(cron) {
+  const at = CRON.next(cron, new Date(), 1)[0];
+  if (!at) return '<span class="dim">never</span>';
+  const minutes = Math.max(1, Math.round((at - Date.now()) / 60000));
+  const soon = minutes < 60 ? `in ${minutes} min` : minutes < 48 * 60 ? `in ${Math.round(minutes / 60)} h` : `in ${Math.round(minutes / 1440)} days`;
+  return `<span class="small" data-tip="${esc(localTime(at))}, your time">${soon}</span>`;
+}
+function lastRunText(j) {
+  if (j.running) return '<span class="pill slim med">running</span>';
+  if (!j.last_run) return '<span class="dim">not yet</span>';
+  const ago = fmtAgo(Math.max(0, (Date.now() - Date.parse(j.last_run)) / 1000));
+  return j.last_failed ? `<span class="pill slim crit" data-tip="The last run did not finish; its pod's log in longhorn-system says why">failed</span> <span class="dim xs">${esc(ago)}</span>`
+    : `<span class="small">${esc(ago)}</span>`;
+}
 
 /* A backup has to be written somewhere, and where decides what it is good for:
    a bucket inside this cluster moves workloads to another cluster, and is no
@@ -106,6 +134,7 @@ async function viewProtect() {
         <p>Longhorn recurring jobs, snapshot groups and backups across ${d.total} volume${d.total === 1 ? "" : "s"}</p></div>
       <div class="row">
         <button class="btn" data-need="admin" onclick="lhTarget()">Backup target</button>
+        <button class="btn" data-need="operator" onclick="lhPlans()">Plans</button>
         <button class="btn pri" data-need="operator" onclick="lhJob()">＋ New job</button>
       </div></div>
 
@@ -160,21 +189,21 @@ async function viewProtect() {
       <span class="pill ${j.covers ? "ok" : "med"}">${j.covers} vol</span>
     </div>
     <div class="wmeta">
-      <div><div class="dim xs">SCHEDULE</div>${CRON_PRESETS[j.cron]
-        ? `<div class="small" data-tip="cron ${esc(j.cron)}">${esc(CRON_PRESETS[j.cron])}</div>`
-        : `<div class="mono small" data-tip="a custom cron schedule">${esc(j.cron)}</div>`}</div>
-      <div><div class="dim xs">RETAIN</div><div class="mono small">${j.retain}</div></div>
-      <div><div class="dim xs">PARALLEL</div><div class="mono small">${j.concurrency}</div></div>
-      <div><div class="dim xs">GROUPS</div><div>${j.groups.map(g => `<span class="tag">${esc(g)}</span>`).join("") || '<span class="dim">—</span>'}</div></div>
+      <div><div class="dim xs">SCHEDULE</div><div class="small" data-tip="cron ${esc(j.cron)} on the cluster's clock (UTC)">${esc(CRON.describe(j.cron))}</div></div>
+      <div><div class="dim xs">NEXT</div><div>${nextRun(j.cron)}</div></div>
+      <div><div class="dim xs">LAST</div><div>${lastRunText(j)}</div></div>
+      <div><div class="dim xs">KEEPS</div><div class="mono small">${j.task.startsWith("snapshot") || j.task.startsWith("backup") ? j.retain : "—"}</div></div>
     </div>
-    <div class="dim xs">${esc(j.desc)}</div>
+    <div class="dim xs">${esc(j.desc)} · ${j.groups.length ? `groups ${j.groups.map(g => `<span class="tag">${esc(g)}</span>`).join("")}` : "no groups"} · ${j.concurrency} at a time</div>
     <div class="row wacts">
+      <button class="btn sm" data-need="operator" onclick="lhRun('${esc(j.name)}')" ${j.running ? "disabled" : ""}>${icon("play")}Run now</button>
       <button class="btn sm" onclick='lhJob(${JSON.stringify(j).replace(/'/g, "&#39;")})' data-need="operator">Edit</button>
       <button class="btn sm" onclick="lhCovered('${esc(j.name)}')">Volumes</button>
       <button class="btn sm danger" data-need="admin" onclick="lhJobDel('${esc(j.name)}')">Delete</button>
     </div></div>`).join("")}</div>`
-  : `<div class="empty">No recurring jobs yet. A daily snapshot of the <span class="mono">default</span>
-     group is the usual starting point — <a onclick="lhQuickStart()" style="cursor:pointer;text-decoration:underline">set that up</a>.</div>`}
+  : `<div class="empty">No recurring jobs yet. A plan sets up a sensible policy in one go -
+     <a onclick="lhPlans()" style="cursor:pointer;text-decoration:underline">choose one</a> - or a daily snapshot of the <span class="mono">default</span>
+     group is the usual starting point: <a onclick="lhQuickStart()" style="cursor:pointer;text-decoration:underline">set that up</a>.</div>`}
 
   <div class="sec">Volumes</div>
   <div class="card flat pad0"><div class="tblwrap"><table data-sort="protect" class="tbl stack"><thead><tr>
@@ -207,14 +236,7 @@ window.lhJob = (j) => {
           `<option value="${esc(k)}" ${j.task === k ? "selected" : ""}>${esc(v)}</option>`).join("")}
       </select></div>
     </div>
-    <div class="f"><label>Schedule</label>
-      <select id="lj_preset" onchange="lhPreset()">
-        ${Object.entries(CRON_PRESETS).map(([k, v]) =>
-          `<option value="${esc(k)}" ${j.cron === k ? "selected" : ""}>${esc(v)}</option>`).join("")}
-        <option value="">Custom…</option>
-      </select></div>
-    <div class="f"><label>Cron expression</label><input type="text" id="lj_cron" value="${esc(j.cron)}">
-      <div class="dim xs" style="margin-top:6px">min hour day month weekday</div></div>
+    ${scheduleBuilder(j.cron)}
     <div class="f2">
       <div class="f"><label>Retain</label><input type="number" id="lj_retain" value="${j.retain}" min="1" max="250">
         <div class="dim xs" style="margin-top:6px">How many to keep before the oldest is removed</div></div>
@@ -232,10 +254,77 @@ window.lhJob = (j) => {
     <div class="note" style="margin-top:14px">Snapshots are stored on the volume itself and are
     near-instant. Backups upload to the backup target and need one configured — without it a
     backup job fails on every run.</div>`, true);
+  scheduleChanged();
 };
-window.lhPreset = () => {
-  const v = $("#lj_preset").value;
-  if (v) $("#lj_cron").value = v;
+/* ---------------- schedule builder ----------------
+   Shapes people use - every few minutes or hours, daily, some weekdays,
+   monthly - written to cron for Longhorn, with the next runs shown in the
+   reader's own time. Custom keeps the raw expression. */
+function scheduleBuilder(cron) {
+  const plan = CRON.toPlan(cron);
+  const time = (hour, minute) => `${String(hour ?? 2).padStart(2, "0")}:${String(minute ?? 0).padStart(2, "0")}`;
+  const kinds = [["minutes", "Every few minutes"], ["hours", "Every few hours"], ["daily", "Every day"], ["weekly", "On chosen days"], ["monthly", "Every month"], ["custom", "Custom cron"]];
+  return `<div class="f sched"><label>Schedule</label>
+    <div class="sched-row"><select id="ls_kind" onchange="scheduleChanged()">${kinds.map(([value, label]) =>
+      `<option value="${value}" ${plan.kind === value ? "selected" : ""}>${label}</option>`).join("")}</select>
+      <select id="ls_minutes" data-for="minutes">${CRON.MINUTE_STEPS.map(n => `<option value="${n}" ${plan.every === n ? "selected" : ""}>every ${n} min</option>`).join("")}</select>
+      <select id="ls_hours" data-for="hours">${CRON.HOUR_STEPS.map(n => `<option value="${n}" ${plan.kind === "hours" && plan.every === n ? "selected" : ""}>every ${n === 1 ? "hour" : `${n} hours`}</option>`).join("")}</select>
+      <label class="inline" data-for="hours">at minute <input id="ls_minute" type="number" min="0" max="59" value="${plan.kind === "hours" ? plan.minute : 0}"></label>
+      <select id="ls_day" data-for="monthly">${Array.from({ length: 28 }, (_, i) => i + 1).map(n => `<option value="${n}" ${plan.day === n ? "selected" : ""}>on day ${n}</option>`).join("")}</select>
+      <label class="inline" data-for="daily weekly monthly">at <input id="ls_time" type="time" value="${time(plan.hour, plan.minute)}"> UTC</label></div>
+    <div class="sched-days" data-for="weekly">${CRON.SHORT.map((day, i) => `<label class="daychip"><input type="checkbox" value="${i}" ${(plan.days || [0]).includes(i) ? "checked" : ""}><span>${day}</span></label>`).join("")}</div>
+    <input type="text" id="lj_cron" class="mono" data-for="custom" value="${esc(cron)}" placeholder="min hour day month weekday">
+    <div class="dim xs sched-next" id="ls_next"></div></div>`;
+}
+window.scheduleChanged = () => {
+  const kind = $("#ls_kind").value;
+  $$(".sched [data-for]").forEach(el => { el.hidden = !el.dataset.for.split(" ").includes(kind); });
+  if (kind !== "custom") {
+    const [hour, minute] = ($("#ls_time").value || "02:00").split(":").map(Number);
+    $("#lj_cron").value = CRON.fromPlan({ kind, hour, minute,
+      every: +(kind === "minutes" ? $("#ls_minutes").value : $("#ls_hours").value),
+      ...(kind === "hours" ? { minute: Math.max(0, Math.min(59, +$("#ls_minute").value || 0)) } : {}),
+      days: $$(".sched-days input:checked").map(box => +box.value), day: +$("#ls_day").value });
+  }
+  const cron = $("#lj_cron").value.trim(), runs = CRON.next(cron, new Date(), 3);
+  $("#ls_next").innerHTML = runs.length
+    ? `${esc(CRON.describe(cron))}. Next: ${runs.map(at => esc(localTime(at))).join(" · ")} <span class="dim">(your time)</span>`
+    : `<span class="bad-text">That cron expression never runs, or is not five fields.</span>`;
+};
+document.addEventListener("input", event => { if (event.target.closest(".sched")) scheduleChanged(); });
+document.addEventListener("change", event => { if (event.target.closest(".sched") && event.target.id !== "ls_kind") scheduleChanged(); });
+
+window.lhRun = async name => {
+  try {
+    await api("/api/lh/job/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+    toast(`${name} started; follow it in the job tray`, "ok");
+    setTimeout(() => { resetPaint(); viewProtect(); }, 1500);
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+window.lhPlans = () => {
+  const d = STATE.data.lh || { groups: ["default"], jobs: [] };
+  const existing = new Set((d.jobs || []).map(j => j.name));
+  modal("Protection plans", `<p class="muted small">A plan makes the jobs a sensible policy needs. They are ordinary jobs afterwards: edit or delete any of them. A job of the same name is replaced.</p>
+    <div class="plan-list">${PROTECT_PLANS.map(plan => `<label class="plan-card card flat"><input type="radio" name="lp_plan" value="${plan.id}" ${plan.id === "snapshots" ? "checked" : ""}>
+      <div><b>${esc(plan.title)}</b>${plan.needsTarget && !(d.target || {}).configured ? ' <span class="pill slim warn">needs a backup target</span>' : ""}
+        <div class="dim small">${esc(plan.blurb)}</div>
+        <div class="plan-jobs">${plan.jobs.map(j => `<span class="tag${existing.has(j.name) ? " warn" : ""}" data-tip="${existing.has(j.name) ? "replaces the job of this name" : "new job"}">${esc(j.name)} · ${esc(CRON.describe(j.cron))}${j.retain ? ` · keeps ${j.retain}` : ""}</span>`).join("")}</div></div></label>`).join("")}</div>
+    <div class="f"><label>Volumes it protects</label><select id="lp_group">${(d.groups || ["default"]).map(g =>
+      `<option value="${esc(g)}">${esc(g)}${g === "default" ? " - every volume" : ""}</option>`).join("")}</select></div>
+    <div class="row" style="margin-top:14px"><button class="btn pri" onclick="lhPlanApply()">Set up plan</button><button class="btn" onclick="closeModal()">Cancel</button></div>`, true);
+};
+window.lhPlanApply = async () => {
+  const plan = PROTECT_PLANS.find(p => p.id === $("input[name=lp_plan]:checked")?.value);
+  if (!plan) return;
+  const group = $("#lp_group").value || "default";
+  try {
+    for (const job of plan.jobs) {
+      await api("/api/lh/job", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...job, groups: [group] }) });
+    }
+    toast(`${plan.title}: ${plan.jobs.length} jobs set up for ${group}`, "ok"); closeModal(); resetPaint(); viewProtect();
+  } catch (e) { toast(e.message, "bad"); }
 };
 window.lhJobSave = async () => {
   const groups = $$("#lj_groups .gk").filter(c => c.checked).map(c => c.value);
