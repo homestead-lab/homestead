@@ -13,6 +13,7 @@ import re
 import time
 import urllib.error
 import homestead_names as NAMES
+import homestead_restructure as RESTRUCTURE
 
 # Rebooting a host needs a privileged pod that enters the host namespaces.
 # That is a real escape hatch, so it is off unless the operator opts in on the
@@ -470,6 +471,14 @@ def _apply_container_volumes(ns, spec, container_requests):
                         "access_mode": "ReadWriteMany" if kind == "new-rwx" else "ReadWriteOnce",
                     })
             mount = {"name": volume_name, "mountPath": path}
+            # A folder within the volume: imports and App Store installs put
+            # several of an app's paths in one volume this way. Dropping it
+            # would mount the whole volume at each path.
+            sub_path = str(row.get("sub_path") or "").strip().strip("/")
+            if sub_path and kind not in ("ephemeral", "memory", "shm"):
+                if ".." in sub_path.split("/"):
+                    raise ValueError(f"{name}: the folder for {path} cannot leave its volume")
+                mount["subPath"] = sub_path
             if row.get("read_only"):
                 mount["readOnly"] = True
             mounts.append(mount)
@@ -566,8 +575,11 @@ def _apply_container_hardware(spec, dep, requested):
         annotations.pop(NAMES.key("hardware"), None)
 
 
-def edit_workload(cfg):
-    """Edit pod settings and one or more containers in an existing Deployment."""
+def edit_workload(cfg, hold=False):
+    """Edit pod settings and one or more containers in an existing Deployment.
+
+    hold saves the edit with the workload stopped and its replica count
+    parked, for a restructure that copies data before it starts again."""
     ns, name = cfg["ns"], cfg["name"]
     dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     spec = dep["spec"]["template"]["spec"]
@@ -654,11 +666,14 @@ def edit_workload(cfg):
     # Every container is validated by now, so new claims can be created safely.
     _create_pending_pvcs(ns, pending_claims)
     workload_name = dns_label(cfg.get("workload_name") or name, "workload name")
+    if workload_name != name and hold:
+        raise ValueError("rename the workload and move its data in separate saves")
+    held = RESTRUCTURE.hold(dep) if hold else None
     if workload_name != name:
         return rename_workload(ns, name, workload_name, dep)
     out = ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
     _bust("wl", "ov", "flow", "impact:")
-    return {"ok": True, "name": name}
+    return {"ok": True, "name": name, **({"held_replicas": held} if hold else {})}
 
 
 # --------------------------------------------------------------- move

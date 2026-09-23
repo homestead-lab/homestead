@@ -66,10 +66,10 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.80`, the workflow publishes:
+For a release such as `v2.8.81`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.80
+ghcr.io/wjcloudy/homestead:2.8.81
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -80,8 +80,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.80
-git push origin v2.8.80
+git tag v2.8.81
+git push origin v2.8.81
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -432,7 +432,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.80/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.81/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -443,7 +443,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.80 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.81 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -551,6 +551,23 @@ A folder sharing a volume with others is copied into its own subdirectory; a
 folder that has a volume to itself takes its root. Either way it is mounted
 back at the path the container expects, through `subPath`, and the workload
 ends up with one volume entry per claim rather than one per folder.
+
+App Store installs lay an app out the same way: the paths an Unraid template
+maps into appdata share one `<app>-appdata` volume, each in a folder named
+after its path, sized for all of them. Media stays for you to point at a
+library, and cache stays scratch space. Any storage row in the deploy wizard or
+the container editor has a **Folder in volume** field, so the same layout can
+be built by hand: give two rows the same new volume name and the second
+becomes another folder in it.
+
+The container editor can also restructure storage after the fact — combine two
+volumes into folders of one, split a folder out to a volume of its own, or
+rename a folder. When a path moves, the editor offers to bring its data: the
+save is applied with the container stopped, a job copies each old location to
+its new one (keeping owners and times), and the container starts again. The old
+volumes are only read, never deleted, so pointing the paths back undoes it;
+remove them from Volumes once you are happy. Progress is in the job tray, and
+the steps carry on from where they were if Homestead restarts part-way.
 
 The same RAM-backed volume is offered wherever storage is chosen — the deploy
 wizard, the container editor and the import form all share one picker — so an

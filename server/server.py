@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.80")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.81")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1179,6 +1179,24 @@ def get_storage():
 
 
 # ---------------------------------------------------------------- mutations
+def new_claims(volumes):
+    """The volumes a deploy creates: one per name, however many folders of it
+    are mounted, sized for the largest any of them asks."""
+    claims = {}
+    for v in volumes:
+        if v.get("type") != "pvc" or not v.get("create"):
+            continue
+        name = _dns_name(v.get("source"), "volume name")
+        size = max(1, int(v.get("size_gb") or 5))
+        if name in claims:
+            claims[name]["size_gb"] = max(claims[name]["size_gb"], size)
+            continue
+        claims[name] = {"name": name, "size_gb": size,
+                        "storage_class": v.get("storage_class") or STORAGE_CLASS,
+                        "access_mode": v.get("access_mode") or "ReadWriteOnce"}
+    return list(claims.values())
+
+
 def build_deployment(cfg):
     name = _dns_name(cfg.get("workload_name") or cfg.get("name"), "workload name")
     container_name = _dns_name(cfg.get("container_name") or cfg.get("name"), "container name")
@@ -1401,11 +1419,8 @@ def run_deploy(b):
         target = dep["metadata"]["name"]
     else:
         raise ValueError("deployment target must be new or existing")
-    for v in b.get("volumes") or []:
-        if v.get("type") == "pvc" and v.get("create"):
-            create_pvc(ns, _dns_name(v.get("source"), "volume name"), v.get("size_gb", 5),
-                       v.get("storage_class") or STORAGE_CLASS,
-                       v.get("access_mode") or "ReadWriteOnce")
+    for claim in new_claims(b.get("volumes") or []):
+        create_pvc(ns, claim["name"], claim["size_gb"], claim["storage_class"], claim["access_mode"])
     if target_mode == "existing":
         ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{target}", dep)
     else:
@@ -1603,6 +1618,8 @@ def build_sidecar_deployment(cfg, current):
                     pod_volumes.append({"name": volume_name,
                                         "persistentVolumeClaim": {"claimName": source}})
         mount = {"name": volume_name, "mountPath": mount_path}
+        if item.get("sub_path") and item.get("type") != "emptyDir":
+            mount["subPath"] = str(item["sub_path"]).strip("/")
         if item.get("read_only"):
             mount["readOnly"] = True
         mounts.append(mount)
@@ -2163,6 +2180,32 @@ def fetch_appstore():
     return cached(f"appstore:{source}", 21600, go)
 
 
+def appdata_folders(vols):
+    """Gives each path an app keeps in its appdata volume a folder of its own.
+
+    An Unraid template maps each path to its own host folder; here they share
+    one volume, as an import lays them out, each mounted from its own folder
+    with subPath. A single path takes the whole volume. The volume is sized
+    for everything in it."""
+    shared = [v for v in vols if v.get("type") == "pvc" and v.get("create")]
+    if len(shared) < 2:
+        return vols
+    taken, total = set(), 0
+    access = "ReadWriteMany" if any(v.get("access_mode") == "ReadWriteMany" for v in shared) else "ReadWriteOnce"
+    for v in shared:
+        base = re.sub(r"[^a-z0-9._-]+", "-", str(v["path"]).rstrip("/").rsplit("/", 1)[-1].lower()).strip("-.") or "data"
+        folder, n = base, 2
+        while folder in taken:
+            folder, n = f"{base}-{n}", n + 1
+        taken.add(folder)
+        v["sub_path"] = folder
+        total += int(v.get("size_gb") or 5)
+        v["access_mode"] = access
+    for v in shared:
+        v["size_gb"] = total
+    return vols
+
+
 def template_to_cfg(app):
     """Turn an Unraid CA template entry into our deploy config."""
     ports, envs, env_meta, vols, devices = [], {}, [], [], []
@@ -2172,7 +2215,6 @@ def template_to_cfg(app):
     if not isinstance(cfgs, list):
         cfgs = []
     name = re.sub(r"[^a-z0-9-]", "-", app["name"].lower()).strip("-")[:40]
-    volume_index = 0
     for c in cfgs:
         if not isinstance(c, dict):
             continue
@@ -2211,7 +2253,6 @@ def template_to_cfg(app):
                              "required": required, "masked": secret_value,
                              "generate": generate, "options": options})
         elif typ == "path" and tgt:
-            volume_index += 1
             system_bind = tgt in ("/etc/localtime", "/var/run/docker.sock") and val == tgt
             clean_path = tgt.rstrip("/").lower() or "/"
             context = " ".join((clean_path, label, description, val)).lower()
@@ -2229,8 +2270,7 @@ def template_to_cfg(app):
             size = 50 if role == "data" else 5
             access_mode = ("ReadWriteMany" if {"rwx", "shared", "multinode", "multi-node"} & tokens
                            else "ReadWriteOnce")
-            source = (val if system_bind else "" if role in ("cache", "media") else
-                      f"{name}-data{volume_index if volume_index > 1 else ''}")
+            source = (val if system_bind else "" if role in ("cache", "media") else f"{name}-appdata")
             vols.append({"path": tgt, "source": source,
                          "type": volume_type, "create": create, "role": role,
                          "access_mode": access_mode, "size_gb": size,
@@ -2239,6 +2279,7 @@ def template_to_cfg(app):
         elif typ == "device":
             devices.append({"host_path": val or tgt, "container_path": tgt or val,
                             "label": label, "description": description, "required": required})
+    appdata_folders(vols)
     network = str(app.get("network") or "bridge").strip().lower()
     network_mode = "host" if network == "host" else "loadbalancer"
     vip_mode = "auto" if network not in ("bridge", "host", "default", "") else "shared"
@@ -2474,6 +2515,7 @@ import homestead_push as PUSH
 import homestead_alerts as ALERTS
 import homestead_self as SELF
 import homestead_namespaces as NSMOD
+import homestead_restructure as RESTRUCTURE
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
@@ -2487,6 +2529,8 @@ PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.featur
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS)
 SMART.bind(kget, DEFAULT_NS, AUTH.internal_signing_key)
 OPS.bind(kget, DATA_DIR, UPDATES.progress, SMART.progress)
+RESTRUCTURE.bind(kget, ksend, raw_get)
+OPS.RESOLVERS["restructure"] = RESTRUCTURE.resolve
 MOVE_SOURCE.bind(kget, ksend, LH, DEFAULT_NS)
 MOVE_ENGINE.bind(kget, ksend, LH, MOVE, NETWORK, OPS, DATA_DIR, DEFAULT_NS)
 # A move reads in the Activity tray like every other long job.
@@ -2687,6 +2731,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
                         hardware.append(feature["id"])
             mounts.append({"name": mount.get("name", ""), "path": mount.get("mountPath", ""),
                            "source": source_label(volume), "read_only": bool(mount.get("readOnly", False)),
+                           "sub_path": mount.get("subPath", ""),
                            "kind": kind, "value": value,
                            "managed": device or kind in ("configMap", "secret", "other")})
         literals = {item["name"]: item.get("value", "") for item in container.get("env", []) or []
@@ -3639,7 +3684,17 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "name": cfg["name"], "operation": op})
             if p == "/api/edit":
                 persist_icon_config(b)
-                result = LC.edit_workload(b)
+                # Paths moved to other storage bring their data: the edit is
+                # saved stopped and a job copies before it starts again.
+                moves = RESTRUCTURE.copies(b)
+                result = LC.edit_workload(b, hold=bool(moves))
+                if moves:
+                    result["operation"] = OPS.start(
+                        "restructure", f"Move {b['name']}'s data",
+                        {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]}, "/containers",
+                        {"namespace": b["ns"], "name": b["name"], "moves": moves,
+                         "replicas": result.get("held_replicas", 0), "phase": "stopping"},
+                        f"Stopping {b['name']} to copy {len(moves)} location{'s' if len(moves) != 1 else ''}")
                 ports = [port for container in b.get("containers") or []
                          for port in container.get("ports") or []]
                 # manage_ports marks a client that owns the whole port list, so
@@ -3995,7 +4050,7 @@ if __name__ == "__main__":
     threading.Thread(target=_upgrade_node_probe, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=MOVE_ENGINE.run, daemon=True).start()
-    # Join plans from 2.8.68-2.8.80 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.81 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     print(f"Homestead listening on :{port}", flush=True)

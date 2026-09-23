@@ -72,7 +72,41 @@ function volumeRowIssue(v) {
       !/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(String(v.source || "").trim())) {
     return `new volume name for ${path} must use lowercase letters, numbers and dashes`;
   }
+  const folder = String((v && v.sub_path) || "").trim();
+  if (folder && (folder.startsWith("/") || folder.split("/").includes(".."))) {
+    return `the folder for ${path} must be a folder inside its volume, like "config"`;
+  }
   return "";
+}
+
+/* Where this row's data was before the edit, when the row now points
+   somewhere else that data could be copied to: another volume, or another
+   folder of the same one. */
+function volumeMove(row) {
+  const claim = row.dataset.originClaim;
+  if (!claim) return "";
+  const kind = $(".vk", row).value;
+  if (!["existing", "new-rwo", "new-rwx"].includes(kind)) return "";
+  const folder = row.dataset.originFolder || "", now = $(".vsub", row).value.trim().replace(/^\/+|\/+$/g, "");
+  if (volumeSourceValue(row) === claim && now === folder) return "";
+  return folder ? `${claim}/${folder}` : claim;
+}
+
+/* Kinds whose storage can hold several of the app's paths, each in a folder. */
+function volumeHasFolders(kind) { return !["ephemeral", "memory", "shm", "host"].includes(kind); }
+
+/* The earlier row that creates the same new volume, if any: this row is then
+   another folder in it rather than a volume of its own. */
+function sharedVolumeRow(row) {
+  const kind = $(".vk", row).value;
+  if (!kind.startsWith("new-")) return null;
+  const name = $(".vs", row).value.trim();
+  if (!name) return null;
+  for (const other of $$(".deploy-volume", row.parentNode)) {
+    if (other === row) return null;
+    if ($(".vk", other).value.startsWith("new-") && $(".vs", other).value.trim() === name) return other;
+  }
+  return null;
 }
 
 function volumeListIssue(rows) {
@@ -206,7 +240,12 @@ function syncVolumeRow(row) {
   const pathInput = $(".vp", row);
   if (shm) pathInput.value = SHM_PATH;
   pathInput.disabled = shm;
-  $(".vnew", row).style.display = isNew || ram ? "grid" : "none";
+  const first = sharedVolumeRow(row);
+  const moved = volumeMove(row);
+  $(".vcopy", row).style.display = moved ? "flex" : "none";
+  if (moved) $(".vcopy-text", row).textContent = `Copy the data from ${moved} (the container stops while it copies; the original files are kept)`;
+  $(".vnew", row).style.display = (isNew && !first) || ram ? "grid" : "none";
+  $(".vfolder", row).style.display = volumeHasFolders(actual) ? "block" : "none";
   $(".vnew", row).classList.toggle("ram", ram);
   const sizeLabel = $(".vsize-label", row);
   if (sizeLabel) sizeLabel.textContent = ram ? "Size MiB" : "Size GiB";
@@ -230,7 +269,8 @@ function syncVolumeRow(row) {
   const selectedSource = volumeSourceValue(row);
   const selectedPvc = actual === "existing" ? (ctx.pvcs() || []).find(v => v.name === selectedSource) : null;
   const selectedPodVolume = actual === "pod" ? (ctx.podVolumes() || []).find(v => v.name === selectedSource) : null;
-  $(".vhelp", row).textContent = actual === "new-rwo" ? (ctx.newSourceHelp || "Creates a Longhorn claim for this workload (single-node attachment).")
+  $(".vhelp", row).textContent = first ? `Another folder in ${$(".vs", row).value.trim()}, created once with the size and class set above.`
+    : actual === "new-rwo" ? (ctx.newSourceHelp || "Creates a Longhorn claim for this workload (single-node attachment).")
     : actual === "new-rwx" ? (ctx.newSourceHelp || "Creates shared Longhorn storage that several pods can mount at once.") +
         (hidden ? ` ${hidden} storage class${hidden === 1 ? "" : "es"} hidden: they create live-migratable VM volumes, which Longhorn cannot mount into a pod.` : "")
     : actual === "existing" ? selectedPvc ? `${selectedPvc.name}: ${claimSummary(selectedPvc)}. The claim and data are kept.${claimRisk(selectedPvc, ctx)}` : "Mounts an existing PVC without creating or deleting it."
@@ -252,6 +292,9 @@ function addVolumeRow(host, v = {}) {
   d.dataset.role = v.role || ""; d.dataset.volumeName = v.volume_name || "";
   d.dataset.templateOrigin = v.template_origin || "";
   d.dataset.storageClass = v.storage_class || "";
+  // Where an existing mount's data lives now, so moving it can bring the data.
+  d.dataset.originClaim = (v.origin && v.origin.claim) || "";
+  d.dataset.originFolder = (v.origin && v.origin.sub_path) || "";
   const classes = (ctx.storageClasses() || []).length ? ctx.storageClasses() : ["longhorn-r2"];
   d.innerHTML = `<div class="volume-title"><div><b>${esc(v.label || "Storage mapping")}</b>${v.role ? `<span class="tag">${esc(v.role)}</span>` : ""}${v.required ? ' <span class="pill warn">required</span>' : ""}</div>
       ${ctx.removable ? '<button class="iconbtn row-remove" type="button" title="Remove storage mapping" onclick="removeVolumeRow(this)">×</button>' : ""}</div>
@@ -261,15 +304,18 @@ function addVolumeRow(host, v = {}) {
       <div><label>Storage source</label><select class="vk">${kinds.map(k =>
         `<option value="${k}" ${k === kind ? "selected" : ""}>${esc(k === "pod" ? ctx.podLabel : VOLUME_KIND_LABELS[k])}</option>`).join("")}</select></div>
       <div class="vsource"><label class="vsource-label">Volume / path</label><input class="vs" type="text" value="${esc(v.source || "")}"><select class="vselect" style="display:none"></select></div>
+      <div class="vfolder"><label title="Mount one folder of the volume here, so several paths can share one volume">Folder in volume</label><input class="vsub" type="text" value="${esc(v.sub_path || "")}" placeholder="whole volume"></div>
       <div class="vnew"><div><label class="vsize-label">Size GiB</label><input class="vz" type="number" min="1" value="${v.size_gb || 5}"></div>
         <div><label>Storage class</label><select class="vsc">${storageClassOptions(classes, v.storage_class || "longhorn-r2", ctx.classFacts())}</select></div></div>
     </div>
     <div class="vclass-badges" style="display:none"></div>
+    <label class="switch vcopy" style="display:none"><input class="vcopy-on" type="checkbox" checked><span class="vcopy-text"></span></label>
     <div class="volume-foot"><span class="dim small vhelp"></span><label class="switch" ${ctx.readOnlyToggle ? "" : 'style="display:none"'}><input class="vro" type="checkbox" ${v.read_only ? "checked" : ""}>Read-only</label></div>
     ${v.template_source && v.template_source !== v.source ? `<div class="template-source">${esc(v.template_origin || "Unraid")} source: <span class="mono">${esc(v.template_source)}</span> · choose its Kubernetes backing above</div>` : ""}`;
   host.appendChild(d); syncVolumeRow(d);
-  d.addEventListener("input", event => { if (event.target.matches(".vs,.vselect")) syncVolumeRow(d); ctx.onChange(); });
-  d.addEventListener("change", event => { if (event.target.matches(".vk,.vs,.vselect,.vsc")) syncVolumeRow(d); ctx.onChange(); });
+  // A row's name decides whether later rows are folders in its volume.
+  d.addEventListener("input", event => { if (event.target.matches(".vs,.vselect,.vsub")) syncVolumeRows(host); ctx.onChange(); });
+  d.addEventListener("change", event => { if (event.target.matches(".vk,.vs,.vselect,.vsc")) syncVolumeRows(host); ctx.onChange(); });
   return d;
 }
 
@@ -282,10 +328,13 @@ function readVolumeRow(row) {
     size_limit: inRam ? `${size}Mi` : "",
     create: kind === "new-rwo" || kind === "new-rwx", size_gb: +$(".vz", row).value || 5,
     storage_class: $(".vsc", row).value, access_mode: kind === "new-rwx" ? "ReadWriteMany" : "ReadWriteOnce",
+    sub_path: volumeHasFolders(kind) ? $(".vsub", row).value.trim().replace(/^\/+|\/+$/g, "") : "",
     read_only: $(".vro", row).checked, label: row.dataset.label || "", description: row.dataset.description || "",
     required: row.dataset.required === "true", template_source: row.dataset.templateSource || "",
     template_origin: row.dataset.templateOrigin || "",
-    role: row.dataset.role || "", volume_name: row.dataset.volumeName || "" };
+    role: row.dataset.role || "", volume_name: row.dataset.volumeName || "",
+    ...(volumeMove(row) && $(".vcopy-on", row).checked
+      ? { copy_from: { claim: row.dataset.originClaim, sub_path: row.dataset.originFolder || "" } } : {}) };
 }
 
 function readVolumeRows(host) { return host ? $$(".deploy-volume", host).map(readVolumeRow) : []; }
@@ -306,8 +355,8 @@ function createVolumePicker(host, ctx = {}) {
 }
 
 window.removeVolumeRow = button => {
-  const row = button.closest(".deploy-volume"), ctx = volumePickerContext(row);
-  row.remove(); ctx.onChange();
+  const row = button.closest(".deploy-volume"), ctx = volumePickerContext(row), host = row.parentNode;
+  row.remove(); syncVolumeRows(host); ctx.onChange();
 };
 window.createVolumePicker = createVolumePicker;
 window.addVolumeRow = addVolumeRow;

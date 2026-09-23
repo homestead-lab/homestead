@@ -43,3 +43,9 @@ test("one container cannot mount two volumes on the same path", () => {
   assert.equal(volumeListIssue([rows[0], { path: "/media", kind: "pod", source: "config" }]), "");
   assert.equal(volumeListIssue([]), "");
 });
+
+test("a folder in a volume stays inside it", () => {
+  assert.equal(volumeRowIssue({ path: "/config", kind: "existing", source: "app", sub_path: "config" }), "");
+  assert.match(volumeRowIssue({ path: "/config", kind: "existing", source: "app", sub_path: "../x" }), /inside its volume/);
+  assert.match(volumeRowIssue({ path: "/config", kind: "existing", source: "app", sub_path: "/etc" }), /inside its volume/);
+});

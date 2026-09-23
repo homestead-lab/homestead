@@ -22,7 +22,8 @@ const editVolumeRow = mount => ({
   source: ["ephemeral", "memory"].includes(mount.kind) ? "" : (mount.value || mount.source || ""),
   // value carries the size limit for a RAM volume, e.g. "1024Mi".
   size_gb: mount.kind === "memory" ? (parseInt(mount.value, 10) || 1024) : undefined,
-  read_only: !!mount.read_only, volume_name: mount.name || "",
+  read_only: !!mount.read_only, volume_name: mount.name || "", sub_path: mount.sub_path || "",
+  origin: mount.kind === "existing" ? { claim: mount.value || mount.source || "", sub_path: mount.sub_path || "" } : null,
 });
 const editVolumePicker = index => createVolumePicker($("#e_vols_" + index), {
   pvcs: () => EDIT_STORAGE.pvcs,
@@ -187,6 +188,12 @@ window.editSave = async (ns, name) => {
   const body = { ns, name, workload_name: workloadName, pod_hostname: $("#e_pod_name").value.trim(),
     icon: $("#e_icon").value.trim(), replicas: Math.max(1, +$("#e_rep").value || 1),
     autostart: $("#e_autostart").checked, manage_ports: true, containers, seed_configs };
+  const moves = containers.flatMap(container => container.volumes.filter(volume => volume.copy_from));
+  if (moves.length && renaming) return toast("Rename the workload and move its data in separate saves", "bad");
+  const where = (claim, folder) => folder ? `${claim}/${folder}` : claim;
+  if (moves.length && !confirm(`Copy ${moves.length} location${moves.length === 1 ? "" : "s"} to new storage?\n\n` +
+      moves.map(volume => `${volume.path}: ${where(volume.copy_from.claim, volume.copy_from.sub_path)} → ${where(volume.source, volume.sub_path)}`).join("\n") +
+      `\n\n${name} stops, the data is copied, and it starts again. The old volumes are kept; delete them from Volumes once you have checked.`)) return;
   const button = $("#e_save");
   button.disabled = true;
   button.textContent = renaming ? "Renaming & checking readiness…"
@@ -200,7 +207,8 @@ window.editSave = async (ns, name) => {
       await api("/api/move", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ns, name: activeName, node: node || null }) });
     }
-    toast(result.network || (renaming ? `${name} renamed to ${activeName}` : `${activeName} updated`), "ok");
+    toast(result.operation ? `${activeName} saved; copying its data in the job tray` :
+      result.network || (renaming ? `${name} renamed to ${activeName}` : `${activeName} updated`), "ok");
     closeModal(); setTimeout(() => refresh(true), 1200);
   } catch (e) {
     toast(e.message, "bad");

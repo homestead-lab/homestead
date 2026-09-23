@@ -114,10 +114,39 @@ class AppStoreTemplateTests(unittest.TestCase):
                            "protocol": "UDP", "label": "Web", "description": "", "required": True}],
                          cfg["ports"])
         self.assertEqual({"TZ": "UTC"}, cfg["env"])
-        self.assertEqual("demo-app-data", cfg["volumes"][0]["source"])
+        self.assertEqual("demo-app-appdata", cfg["volumes"][0]["source"])
+        # One path takes the whole volume.
+        self.assertNotIn("sub_path", cfg["volumes"][0])
         self.assertTrue(cfg["volumes"][0]["create"])
         self.assertEqual("/mnt/user/appdata/demo", cfg["volumes"][0]["template_source"])
         self.assertEqual("/dev/bus/usb", cfg["template_devices"][0]["host_path"])
+
+    def test_an_apps_paths_share_one_volume_in_folders_of_their_own(self):
+        path = lambda target, name="": {"@attributes": {"Name": name or target, "Target": target, "Type": "Path"},
+                                       "value": f"/mnt/user/appdata/demo{target}"}
+        cfg = server.template_to_cfg({"name": "Demo", "repo": "demo", "config": [
+            path("/config"), {"@attributes": {"Target": "/data", "Type": "Path"}, "value": "/mnt/user/demo"},
+            path("/app/config"), path("/transcode"),
+            {"@attributes": {"Name": "Movies", "Target": "/movies", "Type": "Path"}, "value": "/mnt/user/movies"},
+        ]})
+        vols = {v["path"]: v for v in cfg["volumes"]}
+        shared = [vols["/config"], vols["/data"], vols["/app/config"]]
+        self.assertEqual({"demo-appdata"}, {v["source"] for v in shared})
+        self.assertEqual(["config", "data", "config-2"], [v["sub_path"] for v in shared])
+        # Sized for everything in it: 5 + 50 + 5.
+        self.assertEqual({60}, {v["size_gb"] for v in shared})
+        self.assertEqual("emptyDir", vols["/transcode"]["type"])
+        self.assertEqual("", vols["/movies"]["source"])
+        self.assertNotIn("sub_path", vols["/movies"])
+
+    def test_a_deploy_creates_each_new_volume_once(self):
+        claims = server.new_claims([
+            {"type": "pvc", "create": True, "source": "demo-appdata", "size_gb": 5},
+            {"type": "pvc", "create": True, "source": "demo-appdata", "size_gb": 60, "sub_path": "data"},
+            {"type": "pvc", "create": False, "source": "media"},
+            {"type": "emptyDir", "source": ""},
+        ])
+        self.assertEqual([("demo-appdata", 60)], [(c["name"], c["size_gb"]) for c in claims])
 
     def test_system_localtime_is_imported_as_read_only_host_path(self):
         cfg = server.template_to_cfg({"name": "Demo", "repo": "demo", "config": [{
@@ -388,7 +417,7 @@ class HomesteadManifestTests(unittest.TestCase):
     def test_runtime_workload_uses_homestead_names_and_image(self):
         manifest = (ROOT / "deploy" / "deploy.yaml").read_text()
         self.assertIn("kind: Deployment\nmetadata:\n  name: homestead", manifest)
-        self.assertIn("- name: homestead\n          image: ghcr.io/wjcloudy/homestead:2.8.80",
+        self.assertIn("- name: homestead\n          image: ghcr.io/wjcloudy/homestead:2.8.81",
                       manifest)
         self.assertIn("homestead.io/update-sources: '{\"homestead\":", manifest)
 

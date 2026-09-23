@@ -98,6 +98,27 @@ class ContainerStorageTests(WorkloadEditFixture, unittest.TestCase):
         # The claim already backing /config keeps its existing pod volume entry.
         self.assertEqual("config", mounts["/config"]["name"])
 
+    def test_folders_of_one_volume_survive_an_edit(self):
+        # An import or App Store install keeps /config and /data as folders of
+        # one volume; saving the editor must not mount the whole volume twice.
+        self.edit([
+            {"path": "/config", "kind": "existing", "source": "frigate-config", "sub_path": "config"},
+            {"path": "/data", "kind": "existing", "source": "frigate-config", "sub_path": "/data/"},
+        ])
+
+        spec = self.saved_spec()
+        mounts = {mount["mountPath"]: mount for mount in spec["containers"][0]["volumeMounts"]}
+        self.assertEqual("config", mounts["/config"]["subPath"])
+        self.assertEqual("data", mounts["/data"]["subPath"])
+        self.assertEqual(mounts["/config"]["name"], mounts["/data"]["name"])
+        self.assertEqual(1, sum(1 for v in spec["volumes"] if v.get("persistentVolumeClaim")))
+
+    def test_a_folder_cannot_climb_out_of_its_volume(self):
+        with self.assertRaises(ValueError):
+            self.edit([{"path": "/config", "kind": "existing", "source": "frigate-config",
+                        "sub_path": "../other"}])
+        self.assertEqual([], self.sent)
+
     def test_configmap_and_device_mounts_are_left_alone(self):
         self.edit([{"path": "/config", "kind": "existing", "source": "frigate-config"}],
                   hardware=["igpu"])
@@ -188,6 +209,13 @@ class AutostartTests(WorkloadEditFixture, unittest.TestCase):
 
 
 class EditPayloadStorageTests(unittest.TestCase):
+    def test_the_editor_reads_each_mount_folder(self):
+        deployment = copy.deepcopy(DEPLOYMENT)
+        deployment["spec"]["template"]["spec"]["containers"][0]["volumeMounts"][0]["subPath"] = "config"
+        payload = server.workload_edit_payload("lab", "frigate", deployment, FEATURES)
+        mounts = {mount["path"]: mount for mount in payload["containers"][0]["volumes"]}
+        self.assertEqual("config", mounts["/config"]["sub_path"])
+
     def test_payload_separates_editable_storage_from_kubernetes_wiring(self):
         payload = server.workload_edit_payload("lab", "frigate", copy.deepcopy(DEPLOYMENT), FEATURES)
 
