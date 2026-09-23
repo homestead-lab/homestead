@@ -28,6 +28,9 @@ SYSTEM_NAMESPACES = set()
 TRACKED = NAMES.key("update-sources")
 PREVIOUS = NAMES.key("update-previous")
 LAST_ACTION = NAMES.key("update-action")
+# The digest each container last ran on, so a stopped workload can still be
+# compared with the registry: without a pod there is nothing else to ask.
+RAN = NAMES.key("ran-digests")
 ROLLOUT_AT = NAMES.key("update-rollout-at")
 MANIFEST_ACCEPT = ", ".join((
     "application/vnd.oci.image.index.v1+json",
@@ -68,6 +71,15 @@ def parse_image(ref):
     base = f"{registry}/{repo}"
     return {"original": ref, "registry": registry, "endpoint": endpoint,
             "repo": repo, "base": base, "tag": tag, "digest": digest}
+
+
+def with_tag(ref):
+    """An image reference that says which tag it means: none is Docker's latest."""
+    ref = (ref or "").strip()
+    if not ref or "@" in ref:
+        return ref
+    name = ref.rsplit("/", 1)[-1]
+    return ref if ":" in name else ref + ":latest"
 
 
 def _suffix(key):
@@ -249,6 +261,8 @@ def _matching_pods(dep, pods):
 def _check_deployment(dep, pods, force=False):
     ns, name = dep["metadata"]["namespace"], dep["metadata"]["name"]
     tracked = _annotation_json(dep, TRACKED)
+    ran = _annotation_json(dep, RAN)
+    ran_now = dict(ran)
     auths = _secret_credentials(ns, dep)
     mine = _matching_pods(dep, pods)
     # A stopped workload has no running digest to compare, which is expected
@@ -263,7 +277,11 @@ def _check_deployment(dep, pods, force=False):
                 "candidate": source, "candidate_tag": "", "error": "", "running": running}
         try:
             parsed = parse_image(source)
-            current = parse_image(deployed).get("digest") or _pod_digest(mine, container["name"])
+            running_digest = _pod_digest(mine, container["name"]) if running else ""
+            if running_digest:
+                ran_now[container["name"]] = running_digest
+            current = (parse_image(deployed).get("digest") or running_digest
+                       or ran.get(container["name"], ""))
             candidate_tag = None
             try:
                 candidate_tag = newer_semver(parsed["tag"], registry_tags(source, auths, force))
@@ -285,6 +303,10 @@ def _check_deployment(dep, pods, force=False):
                                       and bool(current or candidate_tag)})
             if not current and running:
                 item["error"] = "running image digest is not available yet"
+            elif not current and not candidate_tag:
+                # Stopped, and never seen running here: nothing to compare the
+                # registry with. It is not "current" - it is unchecked.
+                item["unchecked"] = True
             elif not semver(parsed["tag"]) and parsed["digest"]:
                 # Pinned to a digest with no release recorded to follow. Saying
                 # nothing here reads as "up to date", which is not what it means.
@@ -296,7 +318,15 @@ def _check_deployment(dep, pods, force=False):
         except Exception as error:
             item["error"] = str(error)[:180]
         images.append(item)
+    if ran_now != ran:
+        try:
+            ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
+                  {"metadata": {"annotations": {RAN: json.dumps(ran_now, sort_keys=True)}}},
+                  ctype="application/merge-patch+json")
+        except Exception:
+            pass
     return {"ns": ns, "name": name, "images": images,
+            "unchecked": any(x.get("unchecked") for x in images),
             "available": any(x["available"] for x in images),
             "can_rollback": bool(_annotation_json(dep, PREVIOUS)),
             "last_action": _annotation(dep, LAST_ACTION)}

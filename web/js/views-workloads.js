@@ -206,9 +206,10 @@ function renderWorkloads() {
   const report = STATE.data.imageUpdates;
   const updateCount = report?.updates || 0;
   const updateErrors = report?.errors || 0;
+  const unchecked = (report?.workloads || []).filter(w => w.unchecked).length;
   const layout = viewLayout("containers");
   paint(`<div class="phead">
-      <div><h2>Containers</h2><p>${rows.length} workload${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""} · Harvester system pods hidden${report && !updateCount && !updateErrors ? " · images current" : ""}</p></div>
+      <div><h2>Containers</h2><p>${rows.length} workload${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""} · Harvester system pods hidden${report && !updateCount && !updateErrors ? (unchecked ? ` · ${unchecked} not checked yet` : " · images current") : ""}</p></div>
       <div class="row"><span class="dim xs scanprogress" id="scanprogress"></span>
       <span class="dim xs" title="When the registries were last asked">${checkedAgo()}</span>
       ${layoutSwitch("containers", "renderWorkloads")}
@@ -222,6 +223,12 @@ function renderWorkloads() {
 
     ${rows.length ? (layout === "rows" ? workloadTable(rows) : `<div class="cardlist">${rows.map(workloadCard).join("")}</div>`)
       : `<div class="empty">${q ? "Nothing matches that search." : "Nothing deployed yet."}</div>`}`);
+}
+
+/* An image with no tag is Docker's latest; saying so is clearer than leaving it off. */
+function imageLabel(ref) {
+  if (!ref || ref.includes("@")) return ref || "";
+  return ref.split("/").pop().includes(":") ? ref : `${ref}:latest`;
 }
 
 /* The same actions for a card and a row: a row shows them as icons. */
@@ -258,7 +265,7 @@ function workloadCard(w) {
               <div class="dim xs">${esc(w.ns)} · <span class="nodelink"
                 onclick="moveWorkload('${w.name}','${w.ns}')">${esc(w.nodes.join(", ") || "unscheduled")}</span></div></div>
           </div>
-          <div class="row">${update?.available ? '<span class="pill warn">update available</span>' : ""}
+          <div class="row">${update?.available ? '<span class="pill warn">update available</span>' : ""}${update?.unchecked ? '<span class="pill slim neutral" data-tip="Stopped, and not seen running here yet, so its image has not been compared with the registry. It is checked once it has run.">not checked</span>' : ""}
           ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}
           <span class="pill ${ok ? "ok" : off ? "low" : "crit"}">${w.ready}/${w.desired}</span></div>
         </div>
@@ -268,7 +275,7 @@ function workloadCard(w) {
           <div><div class="dim xs" data-tip="Memory in use right now">RAM</div><div class="mono small">${workloadMemory(w.mem_mb)}</div></div>
           <div><div class="dim xs">ACCESS</div><div class="waccess">${accessPorts(w.ports)}</div></div>
         </div>
-        <div class="dim xs mono wimg"><span class="wimage-name">${w.images.map(esc).join(" · ")}</span>
+        <div class="dim xs mono wimg"><span class="wimage-name">${w.images.map(i => esc(imageLabel(i))).join(" · ")}</span>
           <span class="wimage-hardware">${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</span></div>
         <div class="wfoot">
           ${workloadHierarchy(w)}
@@ -290,9 +297,9 @@ function workloadTable(rows) {
         <td class="wl-name" data-sort="${esc(w.name)}"><div class="row nowrap" style="gap:9px">${appAvatar(w.name, w.icon)}
           <div class="wtitle"><div><b>${esc(w.name)}</b></div>
             <div class="dim xs">${esc(w.ns)} · ${off ? "stopped" : `<span class="nodelink" onclick="moveWorkload('${w.name}','${w.ns}')">${esc(w.nodes.join(", ") || "unscheduled")}</span>${w.uptime ? ` · up ${esc(fmtUp(w.uptime))}` : " · starting"}`}</div></div></div></td>
-        <td class="wl-status" data-sort="${off ? -1 : w.desired ? w.ready / w.desired : 0}"><div class="row nowrap" style="gap:5px"><span class="pill slim ${ok ? "ok" : off ? "low" : "crit"}" title="${w.ready} of ${w.desired} ready">${w.ready}/${w.desired}</span>
+        <td class="wl-status" data-sort="${off ? -1 : w.desired ? w.ready / w.desired : 0}"><div class="row nowrap" style="gap:5px"><span class="pill slim ${ok ? "ok" : off ? "low" : "crit"}" title="${w.ready} of ${w.desired} ready">${w.ready}/${w.desired}</span>${update?.unchecked ? '<span class="pill slim neutral" data-tip="Stopped, and not seen running here yet, so its image has not been compared with the registry. It is checked once it has run.">not checked</span>' : ""}
           ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}</div></td>
-        <td class="wl-image"><div class="mono xs wl-imagetext" title="${esc(w.images.join(" · "))}">${w.images.map(esc).join(" · ")}</div>
+        <td class="wl-image"><div class="mono xs wl-imagetext" title="${esc(w.images.map(imageLabel).join(" · "))}">${w.images.map(i => esc(imageLabel(i))).join(" · ")}</div>
           ${(w.hardware || []).length || w.gpu ? `<div>${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</div>` : ""}</td>
         <td class="mono small nowrap" data-sort="${off ? "" : w.cpu}" data-tip="Live usage. 100% equals one fully used CPU core.">${workloadCpuPercent(w.cpu)}</td>
         <td class="mono small nowrap" data-sort="${off ? "" : w.mem_mb}">${workloadMemory(w.mem_mb)}</td>

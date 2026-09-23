@@ -53,6 +53,48 @@ class ImageUpdateTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_an_image_without_a_tag_is_given_latest(self):
+        self.assertEqual("n8nio/n8n:latest", updates.with_tag("n8nio/n8n"))
+        self.assertEqual("localhost:5000/app:latest", updates.with_tag("localhost:5000/app"))
+        self.assertEqual("ghcr.io/x/app:1.2", updates.with_tag("ghcr.io/x/app:1.2"))
+        digest = "ghcr.io/x/app@sha256:" + "a" * 64
+        self.assertEqual(digest, updates.with_tag(digest))
+
+    def _latest(self, remote_digest, running_digest=None, replicas=1):
+        self.dep["spec"]["replicas"] = replicas
+        self.dep["spec"]["template"]["spec"]["containers"] = [{"name": "demo", "image": "n8nio/n8n:latest"}]
+        pods = [] if running_digest is None else [{
+            "metadata": {"namespace": "lab", "labels": {"app": "demo"}},
+            "status": {"containerStatuses": [{"name": "demo", "imageID": "docker.io/n8nio/n8n@" + running_digest}]}}]
+        originals = updates.registry_tags, updates.manifest_info, updates._secret_credentials
+        try:
+            updates.registry_tags = lambda *a, **k: ["latest"]
+            updates.manifest_info = lambda *a, **k: {"digest": remote_digest, "children": []}
+            updates._secret_credentials = lambda *args: {}
+            return updates._check_deployment(self.dep, pods)
+        finally:
+            updates.registry_tags, updates.manifest_info, updates._secret_credentials = originals
+
+    def test_a_stopped_workload_is_compared_with_what_it_last_ran(self):
+        old, new = "sha256:" + "1" * 64, "sha256:" + "2" * 64
+        before = copy.deepcopy(self.dep)
+        self._latest(old, running_digest=old)
+        recorded = json.loads(self.sent[-1][2]["metadata"]["annotations"]["homestead.io/ran-digests"])
+        self.assertEqual({"demo": old}, recorded)
+        self.dep = before
+        self.dep["metadata"]["annotations"]["homestead.io/ran-digests"] = json.dumps(recorded)
+
+        report = self._latest(new, replicas=0)
+
+        self.assertTrue(report["available"], "latest moved on while it was stopped")
+        self.assertFalse(report["unchecked"])
+
+    def test_a_workload_that_never_ran_here_says_it_was_not_checked(self):
+        report = self._latest("sha256:" + "2" * 64, replicas=0)
+        self.assertFalse(report["available"])
+        self.assertTrue(report["unchecked"])
+        self.assertEqual([], self.sent, "nothing to record")
+
     def test_parses_docker_and_private_registry_references(self):
         docker = updates.parse_image("nginx:1.27")
         self.assertEqual("docker.io/library/nginx", docker["base"])

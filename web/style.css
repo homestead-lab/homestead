@@ -562,7 +562,11 @@ pre{background:rgba(0,0,0,.5);border:1px solid var(--line);border-radius:13px;pa
   max-height:88vh;overflow-y:auto;overflow-x:hidden;box-shadow:0 36px 100px rgba(0,0,0,.8);animation:pop .3s var(--e)}
 @keyframes pop{from{transform:translateY(16px) scale(.98);opacity:0}to{transform:none;opacity:1}}
 .modalhead{display:flex;justify-content:space-between;align-items:center;padding:18px 22px;
-  border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(20,20,22,.72);backdrop-filter:blur(20px);z-index:2}
+  border-bottom:1px solid var(--line);position:sticky;top:0;z-index:2;
+  /* Nearly opaque: a blur alone does not reach through the dialog's own glass,
+     so what scrolls under the title stayed readable through it. */
+  background:color-mix(in srgb,var(--surf) 93%,transparent);backdrop-filter:blur(24px) saturate(1.2);
+  -webkit-backdrop-filter:blur(24px) saturate(1.2)}
 #mbody{padding:22px}
 #toast{position:fixed;right:22px;bottom:calc(18px + var(--tray-lift, 4px));display:flex;flex-direction:column;gap:9px;z-index:80;transition:bottom .2s var(--e)}
 .tst{background:linear-gradient(140deg,rgba(255,255,255,.1),rgba(255,255,255,.04));backdrop-filter:blur(24px) saturate(1.3);-webkit-backdrop-filter:blur(24px) saturate(1.3);border:1px solid var(--line2);border-left:3px solid #fff;border-radius:13px;
@@ -1105,7 +1109,7 @@ th.sortable[aria-sort="descending"]::after{content:" ↓";color:var(--tx)}
 .removal-mode span{font-size:12px;color:var(--mut);line-height:1.45}
 .removal-stuck{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:10px;font-size:12px;color:var(--mut)}
 .removal-stuck span{padding:2px 8px;border:1px solid var(--line);border-radius:7px;font-family:"JetBrains Mono",monospace;font-size:11px}
-@media(max-width:560px){/* The way back to the dialog underneath, named for it. */
+/* The way back to the dialog underneath, named for it. */
 .modaltitle{display:flex;flex-direction:column;gap:2px;min-width:0}
 .modalback{align-self:flex-start;max-width:100%;border:0;background:none;padding:0;color:var(--low);font:600 11.5px "Inter Tight",sans-serif;
   cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

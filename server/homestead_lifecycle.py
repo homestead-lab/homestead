@@ -276,7 +276,11 @@ def _apply_container_edit(container, change, workload_name):
         image = str(change.get("image") or "").strip()
         if not image:
             raise ValueError(f"{container['name']}: image is required")
-        container["image"] = image
+        if image != container.get("image"):
+            # A changed image says its tag; an unchanged one is left exactly as
+            # it is, so an edit elsewhere does not roll the workload.
+            import homestead_updates as UPDATES
+            container["image"] = UPDATES.with_tag(image)
     if "env" in change:
         refs = [copy.deepcopy(item) for item in container.get("env", []) or []
                 if item.get("valueFrom") and item.get("name")]

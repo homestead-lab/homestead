@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.75")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.76")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1209,7 +1209,7 @@ def build_deployment(cfg):
               "name": (p.get("name") or f"p{p['container']}-{str(p.get('protocol', 'TCP')).lower()}")[:15],
               "protocol": str(p.get("protocol", "TCP")).upper()}
              for p in cfg.get("ports") or []]
-    c = {"name": container_name, "image": cfg["image"], "imagePullPolicy": "IfNotPresent"}
+    c = {"name": container_name, "image": UPDATES.with_tag(cfg["image"]), "imagePullPolicy": "IfNotPresent"}
     if env: c["env"] = env
     if ports: c["ports"] = ports
     if mounts: c["volumeMounts"] = mounts
@@ -1546,7 +1546,7 @@ def build_sidecar_deployment(cfg, current):
               "name": (p.get("name") or f"p{p['container']}-{str(p.get('protocol', 'TCP')).lower()}")[:15],
               "protocol": str(p.get("protocol", "TCP")).upper()}
              for p in cfg.get("ports") or [] if p.get("container")]
-    container = {"name": container_name, "image": cfg["image"], "imagePullPolicy": "IfNotPresent"}
+    container = {"name": container_name, "image": UPDATES.with_tag(cfg["image"]), "imagePullPolicy": "IfNotPresent"}
     if env:
         container["env"] = env
     if ports:
@@ -3816,7 +3816,7 @@ if __name__ == "__main__":
     threading.Thread(target=_upgrade_node_probe, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=MOVE_ENGINE.run, daemon=True).start()
-    # Join plans from 2.8.68-2.8.75 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.76 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     print(f"Homestead listening on :{port}", flush=True)
