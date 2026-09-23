@@ -1342,3 +1342,25 @@ html[data-theme="light"] .compose-editor{background:#fff}
   .sharetable td[data-label="Access"],.sharetable td[data-label="UNC path"],.sharetable .shareactions{grid-column:1/-1}
   .sharetable td[data-label="UNC path"]{overflow-wrap:anywhere}.sharetable .shareactions{padding-top:6px}.sharetable .shareactions .row{width:100%}.sharetable .shareactions .btn{flex:1}
 }
+
+/* Containers as rows on a phone: two lines each - name and status, then usage
+   and the actions - instead of the generic stacked card, which made "rows"
+   taller than the cards they were meant to condense. The image and ports are
+   in the card view and the container's own dialogs. */
+@media(max-width:560px){
+  .tbl.stack.wltable tr{display:grid;grid-template-columns:auto minmax(0,1fr) auto;
+    grid-template-areas:"name name status" "cpu ram acts";align-items:center;column-gap:12px;row-gap:6px;padding:9px 12px}
+  .tbl.stack.wltable td{display:block;padding:0;text-align:left;min-width:0}
+  .tbl.stack.wltable td::before{content:none}
+  .tbl.stack.wltable td.wl-cpu::before,.tbl.stack.wltable td.wl-ram::before{content:attr(data-label) " ";display:inline;
+    font:600 9px "JetBrains Mono",monospace;color:var(--dim);letter-spacing:.06em}
+  .tbl.stack.wltable td.wl-image,.tbl.stack.wltable td.wl-access{display:none}
+  .tbl.stack.wltable td.wl-name{grid-area:name;max-width:none}
+  .tbl.stack.wltable td.wl-name>.row{flex-wrap:nowrap}.tbl.stack.wltable td.wl-name .wtitle{flex:1;min-width:0}
+  .tbl.stack.wltable td.wl-status{grid-area:status}
+  .tbl.stack.wltable td.wl-cpu{grid-area:cpu}.tbl.stack.wltable td.wl-ram{grid-area:ram}
+  .tbl.stack.wltable td.wl-actions{grid-area:acts;width:auto}
+  .wltable .wl-actions .wacts{width:auto;gap:3px;flex-wrap:nowrap}
+  .wltable .wl-actions .wacts>.btn{flex:0 0 auto;width:30px;height:28px;padding:0;justify-content:center;font-size:0;gap:0}
+  .wltable .wl-actions .wacts>.btn svg{width:14px;height:14px}
+}

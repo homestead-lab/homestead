@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.78")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.79")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -46,6 +46,9 @@ DEFAULT_APP_SETTINGS = {
     # What to call this installation, shown under the Homestead wordmark. Blank
     # means nothing is shown: better than a word that describes nobody's setup.
     "site_name": "",
+    # Where the App Store reads its catalogue: any feed in the Community
+    # Applications format. Blank means the public Community Applications feed.
+    "catalog_url": "",
 }
 
 SYS_NS = {
@@ -223,6 +226,12 @@ def validate_app_settings(value):
     if len(site) > 40:
         raise ValueError("site name must be 40 characters or fewer")
     out["site_name"] = site
+    url = str((value or {}).get("catalog_url", out["catalog_url"]) or "").strip()
+    if url:
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or len(url) > 500:
+            raise ValueError("the catalogue address must be a plain http:// or https:// URL")
+    out["catalog_url"] = url
     return out
 
 
@@ -298,6 +307,9 @@ def save_app_settings(value):
             raise
         ksend("POST", f"/api/v1/namespaces/{DEFAULT_NS}/configmaps", body)
     _cache.pop("settings", None)
+    # A different catalogue source is a different catalogue.
+    for key in [k for k in _cache if k.startswith("appstore")]:
+        _cache.pop(key, None)
     return settings
 
 
@@ -2065,9 +2077,20 @@ def appstore_spotlight(apps):
                      ranked[0] if ranked else None))
 
 
+def catalog_source():
+    """The catalogue feed in use: the one set in Settings, else the default."""
+    try:
+        custom = cached("settings", 15, get_app_settings).get("catalog_url") or ""
+    except Exception:
+        custom = ""
+    return custom or CA_FEED
+
+
 def fetch_appstore():
+    source = catalog_source()
+
     def go():
-        req = urllib.request.Request(CA_FEED, headers={
+        req = urllib.request.Request(source, headers={
             "User-Agent": f"Homestead/{HOMESTEAD_VERSION} (+https://github.com/wjcloudy/homestead)",
             "Accept": "application/json",
         })
@@ -2134,7 +2157,7 @@ def fetch_appstore():
             item["deploy"] = template_to_cfg(item)
             out.append(item)
         return out
-    return cached("appstore", 21600, go)
+    return cached(f"appstore:{source}", 21600, go)
 
 
 def template_to_cfg(app):
@@ -3276,9 +3299,10 @@ class H(BaseHTTPRequestHandler):
                     apps = fetch_appstore()
                 except Exception as e:
                     return self._send(502, {"error": f"app feed unavailable: {e}"})
+                source = {"url": catalog_source(), "default": catalog_source() == CA_FEED}
                 if sort_mode == "home" and not term and not cat:
                     # The catalogue's front page, as Community Applications lays it out.
-                    return self._send(200, {"sort": "home", "total": len(apps), "sections": {
+                    return self._send(200, {"sort": "home", "total": len(apps), "source": source, "sections": {
                         mode: [appstore_summary(a) for a in rank_appstore(apps, mode)[:count]]
                         for mode, count in (("spotlight", 4), ("recent", 8), ("trending", 8), ("popular", 8))}})
                 if sort_mode == "home":
@@ -3292,7 +3316,7 @@ class H(BaseHTTPRequestHandler):
                 spotlight = None if term else appstore_spotlight(apps)
                 limit = 60 if term else 30
                 return self._send(200, {"total": len(apps), "apps": [appstore_summary(a) for a in apps[:limit]],
-                                        "sort": "search" if term else sort_mode,
+                                        "sort": "search" if term else sort_mode, "source": source,
                                         "spotlight": appstore_summary(spotlight) if spotlight else None})
             if p == "/api/appstore/app":
                 key = (q.get("key") or [""])[0]
@@ -3937,7 +3961,7 @@ if __name__ == "__main__":
     threading.Thread(target=_upgrade_node_probe, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=MOVE_ENGINE.run, daemon=True).start()
-    # Join plans from 2.8.68-2.8.78 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.79 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     print(f"Homestead listening on :{port}", flush=True)

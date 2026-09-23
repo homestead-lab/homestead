@@ -301,8 +301,8 @@ function workloadTable(rows) {
           ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}</div></td>
         <td class="wl-image"><div class="mono xs wl-imagetext" title="${esc(w.images.map(imageLabel).join(" · "))}">${w.images.map(i => esc(imageLabel(i))).join(" · ")}</div>
           ${(w.hardware || []).length || w.gpu ? `<div>${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</div>` : ""}</td>
-        <td class="mono small nowrap" data-sort="${off ? "" : w.cpu}" data-tip="Live usage. 100% equals one fully used CPU core.">${workloadCpuPercent(w.cpu)}</td>
-        <td class="mono small nowrap" data-sort="${off ? "" : w.mem_mb}">${workloadMemory(w.mem_mb)}</td>
+        <td class="mono small nowrap wl-cpu" data-sort="${off ? "" : w.cpu}" data-tip="Live usage. 100% equals one fully used CPU core.">${workloadCpuPercent(w.cpu)}</td>
+        <td class="mono small nowrap wl-ram" data-sort="${off ? "" : w.mem_mb}">${workloadMemory(w.mem_mb)}</td>
         <td class="wl-access"><div class="waccess">${accessPorts(w.ports)}</div></td>
         <td class="wl-actions"><div class="row nowrap wacts">${workloadActions(w, update, off, true)}</div></td>
       </tr>`;
@@ -1057,6 +1057,15 @@ function storeCard(app, mode) {
       <button class="btn pri sm" onclick="event.stopPropagation();storeInstall(${key})">Configure &amp; deploy</button></div></div>`;
 }
 
+/* Say where the listings come from: the public feed, or one set in Settings. */
+function storeSource(source) {
+  const host = $("#s_source");
+  if (!host || !source) return;
+  host.innerHTML = source.default
+    ? `Listings are read on demand from the public <a href="https://github.com/Squidly271/AppFeed" target="_blank" rel="noopener">Community Applications feed</a> and cached for six hours; another feed can be set in Settings. Homestead is independent and is not endorsed by the catalogue maintainers. Unraid® is a registered trademark of Lime Technology, Inc. This application is not affiliated with, endorsed, or sponsored by Lime Technology, Inc.`
+    : `Listings are read from <span class="mono">${esc(source.url)}</span>, set in Settings, and cached for six hours. Templates come from whoever publishes that feed; review what each one asks for before deploying it.`;
+}
+
 function storeSection(mode, apps, total) {
   const [title, detail] = STORE_MODES[mode];
   return `<section class="store-section">
@@ -1076,7 +1085,7 @@ async function viewStore() {
       ${Object.entries(STORE_MODES).map(([mode, [label]]) => `<button data-mode="${mode}" class="${STORE_MODE === mode ? "on" : ""}" onclick="storeBrowse('${mode}')">${label}</button>`).join("")}
     </div></div>
     <div id="s_res"><div class="empty"><span class="spin2"></span>loading catalogue…</div></div>
-    <div class="note catalogue-notice">Listings are read on demand from the public <a href="https://github.com/Squidly271/AppFeed" target="_blank" rel="noopener">Community Applications feed</a> and cached for six hours. Homestead is independent and is not endorsed by the catalogue maintainers. Unraid® is a registered trademark of Lime Technology, Inc. This application is not affiliated with, endorsed, or sponsored by Lime Technology, Inc.</div>`);
+    <div class="note catalogue-notice" id="s_source"></div>`);
   $("#s_q").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); storeSearch(); } });
   if (STATE.q) storeSearch(); else storeBrowse(STORE_MODE);
 }
@@ -1101,6 +1110,7 @@ window.storeBrowse = async mode => {
   $("#s_res").innerHTML = `<div class="empty"><span class="spin2"></span>loading catalogue…</div>`;
   try {
     const r = await api("/api/appstore?sort=" + encodeURIComponent(STORE_MODE));
+    storeSource(r.source);
     if (r.sections) {
       $("#s_res").innerHTML = ["spotlight", "recent", "trending", "popular"]
         .map(section => storeSection(section, r.sections[section] || [])).join("");

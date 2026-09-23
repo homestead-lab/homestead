@@ -22,6 +22,8 @@ RUN apk add --no-cache smartmontools \
     && chown -R homestead:homestead /data
 
 COPY --chown=homestead:homestead server/*.py /srv/
+# The licence and the notices for what the image carries travel with it.
+COPY --chown=homestead:homestead LICENSE THIRD_PARTY_NOTICES.md /srv/
 # The node probe's scripts travel with the release that reads them, so an
 # upgrade can bring the probe with it instead of asking for a kubectl command.
 COPY --chown=homestead:homestead server/probe/*.py /srv/probe/

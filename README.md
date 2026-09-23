@@ -57,6 +57,7 @@ deploy/rbac.yaml              Homestead's permissions alone, for existing instal
 scripts/deploy.sh             deploy a published image through an RKE2 host
 scripts/render_nodeprobe.py   regenerate deploy/nodeprobe.yaml from the probe's source
 scripts/render_icons.py       regenerate web/icons/ from the mark's geometry
+scripts/bump_version.py       move every file that names the release to a new version
 scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 ```
 
@@ -64,10 +65,10 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.78`, the workflow publishes:
+For a release such as `v2.8.79`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.78
+ghcr.io/wjcloudy/homestead:2.8.79
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -78,8 +79,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.78
-git push origin v2.8.78
+git tag v2.8.79
+git push origin v2.8.79
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -213,8 +214,9 @@ Pi-hole, and Nextcloud are release validation examples, not special-case profile
 The optional catalogue adapter reads the public Community Applications feed
 from `Squidly271/AppFeed` at runtime; catalogue content is not bundled into the
 Homestead image or repository. Requests identify Homestead, results are cached
-for six hours, and `COMMUNITY_CATALOG_URL` can point deployments at another
-authorized, compatible feed. Homestead links to and credits the upstream source
+for six hours. **Settings → App Store catalogue** points it at another feed in
+the same format - a mirror, or your own list of templates - and
+`COMMUNITY_CATALOG_URL` sets the default for a whole deployment. Homestead links to and credits the upstream source
 and does not use Unraid logos or imply endorsement.
 
 As of 20 September 2026, GitHub reports no declared repository license for the
@@ -394,7 +396,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.78/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.79/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -405,7 +407,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.78 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.79 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -708,7 +710,7 @@ authenticated.
 | `SESSION_REMEMBER_DAYS` | `30` | idle window when "keep me signed in" is ticked |
 | `SESSION_MAX_DAYS` | `90` | hard limit on a session's age, however active |
 | `ENABLE_NODE_POWER` | unset | `true` enables guarded reboot/shutdown actions |
-| `COMMUNITY_CATALOG_URL` | AppFeed | the App Store's Community Applications feed |
+| `COMMUNITY_CATALOG_URL` | AppFeed | the App Store's default catalogue feed; Settings can override it |
 | `FILES_IMAGE` | `alpine:3.20` | image of the helper pod that browses and edits files on a volume |
 | `FILES_SESSION_SECONDS` | `1800` | how long that helper pod may live |
 | `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD` | empty | require Cloudflare Access's signature on requests through a tunnel |
@@ -813,6 +815,14 @@ outside a trusted LAN - see [Publishing through a Cloudflare
 Tunnel](#publishing-through-a-cloudflare-tunnel). Host power control is disabled
 by default because it requires a short-lived privileged helper pod.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how the project is put together,
+running it locally against demo data, the tests, and how releases are made.
+
 ## Licence
 
-MIT
+Homestead is released under the [MIT License](LICENSE). The Monaco editor it
+bundles, the images it starts and the catalogue it reads are listed with their
+own terms in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), along with the
+trademarks it mentions.

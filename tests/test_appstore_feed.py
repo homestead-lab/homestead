@@ -43,8 +43,8 @@ class Response(io.BytesIO):
 
 class FeedTests(unittest.TestCase):
     def setUp(self):
-        server._cache.pop("appstore", None)
-        self.addCleanup(server._cache.pop, "appstore", None)
+        self.clear()
+        self.addCleanup(self.clear)
         with mock.patch.object(server.urllib.request, "urlopen",
                                lambda *a, **k: Response(json.dumps(FEED).encode())):
             self.apps = server.fetch_appstore()
@@ -74,6 +74,31 @@ class FeedTests(unittest.TestCase):
         self.assertNotIn("overview", summary)
         self.assertNotIn("config", summary)
         self.assertIn("deploy", summary, "a card can still be configured straight away")
+
+    @staticmethod
+    def clear():
+        for key in [k for k in server._cache if k.startswith("appstore")]:
+            server._cache.pop(key, None)
+
+
+class SourceTests(unittest.TestCase):
+    def test_the_catalogue_can_come_from_another_feed(self):
+        settings = server.validate_app_settings({"catalog_url": "https://mirror.example.com/feed.json"})
+        self.assertEqual("https://mirror.example.com/feed.json", settings["catalog_url"])
+        self.assertEqual("", server.validate_app_settings({})["catalog_url"], "blank means the public feed")
+        for bad in ("ftp://example.com/feed", "file:///etc/passwd", "https://user:pw@example.com/feed", "not a url"):
+            with self.subTest(bad):
+                with self.assertRaises(ValueError):
+                    server.validate_app_settings({"catalog_url": bad})
+
+    def test_the_feed_in_use_is_the_one_set_else_the_default(self):
+        with mock.patch.object(server, "get_app_settings", return_value={"catalog_url": ""}):
+            server._cache.pop("settings", None)
+            self.assertEqual(server.CA_FEED, server.catalog_source())
+        with mock.patch.object(server, "get_app_settings", return_value={"catalog_url": "https://m.example/f.json"}):
+            server._cache.pop("settings", None)
+            self.assertEqual("https://m.example/f.json", server.catalog_source())
+        server._cache.pop("settings", None)
 
 
 class MarkupTests(unittest.TestCase):

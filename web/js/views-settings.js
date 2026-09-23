@@ -119,6 +119,15 @@ async function viewSettings() {
 
       ${pwaCard()}
 
+      <section class="card flat settings-wide">
+        <div class="settings-card-head"><div><div class="ctitle">App Store catalogue</div>
+          <div class="csub">Any feed in the Community Applications format: the public one, a mirror, or your own list of templates</div></div>
+          ${can("admin") ? '<div class="row"><button class="btn sm" onclick="saveCatalog(true)">Use Community Applications</button><button class="btn sm pri" onclick="saveCatalog()">Save</button></div>' : '<span class="pill neutral">admin managed</span>'}</div>
+        <div class="f"><label>Catalogue feed URL ${tip("A JSON feed shaped like Community Applications' applicationFeed.json - an object with an applist, or a plain list of templates. Blank uses the public Community Applications feed. It is fetched on demand and cached for six hours.")}</label>
+          <input id="set_catalog" type="url" maxlength="500" placeholder="blank: https://raw.githubusercontent.com/Squidly271/AppFeed/master/applicationFeed.json"
+            value="${esc(STATE.data.appSettings?.catalog_url || "")}" ${can("admin") ? "" : "disabled"}></div>
+      </section>
+
       <section class="card flat settings-wide" id="nsCard">
         <div class="settings-card-head"><div><div class="ctitle">Namespaces</div>
           <div class="csub">Where apps live. Harvester, Rancher and Kubernetes keep their own, which are hidden here and in every picker.</div></div>
@@ -256,6 +265,19 @@ window.saveSiteName = async () => {
     STATE.data.appSettings = null;
     await loadHealthSettings(true);
     toast(saved.site_name ? `named ${saved.site_name}` : "site name cleared", "ok");
+    viewSettings();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+window.saveCatalog = async reset => {
+  const url = reset ? "" : $("#set_catalog").value.trim();
+  const body = { ...(STATE.data.appSettings || {}), catalog_url: url };
+  delete body.info;
+  try {
+    await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    STATE.data.appSettings = null;
+    await loadHealthSettings(true);
+    toast(url ? "App Store now reads that catalogue" : "App Store reads the Community Applications feed again", "ok");
     viewSettings();
   } catch (e) { toast(e.message, "bad"); }
 };
