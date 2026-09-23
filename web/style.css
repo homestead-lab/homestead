@@ -999,6 +999,42 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
 }
 /* Node cards and the tables beside them: names and lists shorten, numbers never break. */
 .nowrap{white-space:nowrap}
+/* Docker Compose import: the file on the left, what it becomes on the right. */
+.modalbox[data-context="compose"]{width:min(1240px,100%)}
+.compose{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:16px;align-items:start}
+.compose-left{display:flex;flex-direction:column;gap:10px;min-width:0}
+.compose-editorwrap{position:relative}
+.compose-editor{height:min(52vh,470px);min-height:260px;border:1px solid var(--line2);border-radius:12px;overflow:hidden;background:#1e1e1e}
+html[data-theme="light"] .compose-editor{background:#fff}
+.compose-editor>.empty{height:100%;display:grid;place-items:center}
+.compose-fallback{width:100%;height:100%;border:0;resize:none;padding:12px;background:transparent;color:var(--tx);font:12.5px/1.5 "JetBrains Mono",ui-monospace,monospace}
+.compose-hint{position:absolute;left:52px;top:40px;pointer-events:none;color:var(--dim);font-size:12.5px;line-height:1.6}
+.compose-vars>summary{cursor:pointer;font-size:12.5px;font-weight:620;padding:4px 0}
+.compose-vars textarea{width:100%;margin-top:6px;font:12px/1.5 "JetBrains Mono",ui-monospace,monospace}
+.compose-opts{margin:0}
+.compose-right{max-height:min(66vh,620px);overflow:auto;display:flex;flex-direction:column;gap:10px;min-width:0;padding-right:2px}
+.compose-head{display:flex;flex-direction:column;gap:3px;padding:11px 13px;border-radius:12px;border:1px solid var(--line2);background:rgba(255,255,255,.035)}
+.compose-head span{font-size:12px;color:var(--mut)}
+.compose-head.good{border-color:rgba(61,220,151,.28);background:rgba(61,220,151,.07)}
+.compose-head.bad{border-color:rgba(255,77,79,.28);background:rgba(255,77,79,.07)}
+.compose-svc{border:1px solid var(--line);border-radius:12px;padding:11px 13px;background:rgba(255,255,255,.025);display:flex;flex-direction:column;gap:7px;min-width:0}
+.compose-svc.bad{border-color:rgba(255,77,79,.3)}
+.compose-svc-name{min-width:0}.compose-svc-name>div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.compose-svc .between{align-items:flex-start;gap:10px}
+.compose-svc .between>.row{flex-wrap:nowrap;flex:0 0 auto;gap:8px}
+.compose-facts{display:flex;flex-wrap:wrap;gap:5px}
+.compose-cmd{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.compose-vols{display:flex;flex-direction:column;gap:3px;font-size:12px}
+.compose-vol{display:flex;gap:6px;align-items:baseline;flex-wrap:wrap;min-width:0}
+.compose-msgs{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px;font-size:12px}
+.compose-msgs li{display:flex;gap:7px;align-items:baseline;line-height:1.45}
+.compose-msgs li .linkish{flex:0 0 auto;font-size:11px}
+.compose-msgs.bad li{color:#ffb4b8}.compose-msgs.warn li{color:var(--med)}.compose-msgs.info li{color:var(--mut)}
+.compose-notes>summary{cursor:pointer;font-size:11.5px;color:var(--dim)}
+.compose-notes .compose-msgs{margin-top:6px}
+.compose-actions{margin-top:14px;align-items:center}
+.compose-actions #composeState{margin-right:auto}
+@media(max-width:900px){.compose{grid-template-columns:1fr}.compose-right{max-height:none}.compose-editor{height:34vh;min-height:220px}}
 .drow .dv.nowrap{overflow-wrap:normal}
 .nodehead>.row:first-child{min-width:0;flex:1 1 auto;flex-wrap:nowrap}
 .nodehead-acts{flex-wrap:nowrap}

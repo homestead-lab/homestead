@@ -561,7 +561,8 @@ async function viewImport() {
   setTimeout(() => clusters.forEach(c => clusterCheck(c.name)), 0);
   paint(`<div class="phead"><div><h2>Import</h2>
       <p>Bring containers, appdata and virtual-machine disks into Homestead</p></div>
-      <div class="row"><button class="btn" data-need="admin" onclick="clusterAdd()">＋ Homestead cluster</button>
+      <div class="row"><button class="btn" data-need="operator" onclick="composeImport()">＋ Docker Compose</button>
+      <button class="btn" data-need="admin" onclick="clusterAdd()">＋ Homestead cluster</button>
       <button class="btn" data-need="admin" onclick="srcAdd()">＋ Container source</button>
       <button class="btn pri" data-need="admin" onclick="vmDiskImport()">＋ VM disk</button></div></div>
 

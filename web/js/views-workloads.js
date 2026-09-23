@@ -732,7 +732,8 @@ async function viewDeploy(pre) {
   DOPT = await api("/api/deploy/options?ns=" + encodeURIComponent(DCFG.namespace)).catch(() => DOPT);
   resetPaint();
   paint(`<div class="phead"><div><h2>Deploy a container</h2>
-      <p>Run an independent workload or add a sidecar container to an existing pod</p></div></div>
+      <p>Run an independent workload or add a sidecar container to an existing pod</p></div>
+      <button class="btn" data-need="operator" onclick="composeImport()">Import Docker Compose</button></div>
   <div class="split">
     <div class="card flat">
       ${DCFG.app_profile ? `<div class="app-profile ${esc(DCFG.app_profile.level || "review")}">
@@ -861,6 +862,7 @@ function syncSummary() {
     row("❏", "Image", c.image ? `<span class="small mono">${esc(c.image)}</span>` : '<span class="dim">—</span>') +
     row("⌗", "Namespace", esc(c.namespace)) + row("⧉", c.target_mode === "existing" ? "Joins workload" : "Instances", c.target_mode === "existing" ? esc(c.target_workload || "—") : c.replicas) +
     row("◴", "Requests", `<span class="small mono">${esc(c.cpu)} · ${esc(c.memory)}</span>`) +
+    ((c.command || []).length || (c.args || []).length ? row("›", "Runs", `<span class="small mono">${esc([...(c.command || []), ...(c.args || [])].join(" "))}</span>`) : "") +
     row("▤", "Hardware", c.hardware.length ? hardwareTags(c.hardware) : '<span class="dim">none</span>') +
     row("◎", "Network", `<span class="small">${esc(c.network_mode)}${c.network_mode === "loadbalancer" ? ` · ${esc(c.vip_mode)} VIP` : ""}</span>`) +
     row("⇄", "Ports", c.ports.length ? c.ports.map(p => `<span class="tag ${p.expose ? "info" : ""}">${p.host}→${p.container}</span>`).join("") : '<span class="dim">—</span>') +

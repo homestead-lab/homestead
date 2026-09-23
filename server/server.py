@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.63"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.64"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1217,6 +1217,7 @@ def build_deployment(cfg):
     if cfg.get("memory"): res.setdefault("requests", {})["memory"] = cfg["memory"]
     if res: c["resources"] = res
     if cfg.get("privileged"): c["securityContext"] = {"privileged": True}
+    apply_container_settings(c, cfg)
 
     podspec = {"containers": [c]}
     if volumes: podspec["volumes"] = volumes
@@ -1280,6 +1281,34 @@ def build_deployment(cfg):
     return dep, svc
 
 
+def apply_container_settings(container, cfg):
+    """Command, working directory, user and capabilities, when a config has them.
+
+    Compose's entrypoint and command are Kubernetes' command and args: one
+    replaces the image's ENTRYPOINT, the other its CMD.
+    """
+    for key, field in (("command", "command"), ("args", "args")):
+        value = cfg.get(key)
+        if value:
+            if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+                raise ValueError(f"{key} must be a list of words")
+            container[field] = list(value)
+    if cfg.get("working_dir"):
+        container["workingDir"] = str(cfg["working_dir"])
+    security = container.setdefault("securityContext", {})
+    for key, field in (("run_as_user", "runAsUser"), ("run_as_group", "runAsGroup")):
+        if cfg.get(key) is not None and cfg.get(key) != "":
+            security[field] = int(cfg[key])
+    if cfg.get("cap_add"):
+        caps = [str(x).upper() for x in cfg["cap_add"]]
+        if not all(re.fullmatch(r"[A-Z_]{2,40}", cap) for cap in caps):
+            raise ValueError("capabilities are names like NET_ADMIN")
+        security.setdefault("capabilities", {})["add"] = caps
+    if not security:
+        container.pop("securityContext", None)
+    return container
+
+
 def _dns_name(value, label="name"):
     value = (value or "").strip().lower()
     if not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?", value):
@@ -1338,6 +1367,99 @@ def _pvc_rows(namespace):
             "workloads": facts.get("workloads", []),
         })
     return sorted(rows, key=lambda row: row["name"])
+
+
+def run_deploy(b):
+    """Create (or join) a workload from a deploy config, as the Deploy page does."""
+    b = analyze_deploy_intent(b)
+    b = ensure_profile_compatible(b)
+    persist_icon_config(b)
+    b = NETWORK.prepare_deploy(b)
+    b = apply_deploy_bindings(b)
+    b = apply_generated_secrets(b)
+    ns = b.get("namespace") or DEFAULT_NS
+    target_mode = b.get("target_mode", "new")
+    if target_mode == "existing":
+        target = _dns_name(b.get("target_workload"), "existing workload")
+        current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
+        dep, svc = build_sidecar_deployment(b, current)
+    elif target_mode == "new":
+        dep, svc = build_deployment(b)
+        target = dep["metadata"]["name"]
+    else:
+        raise ValueError("deployment target must be new or existing")
+    for v in b.get("volumes") or []:
+        if v.get("type") == "pvc" and v.get("create"):
+            create_pvc(ns, _dns_name(v.get("source"), "volume name"), v.get("size_gb", 5),
+                       v.get("storage_class") or STORAGE_CLASS,
+                       v.get("access_mode") or "ReadWriteOnce")
+    if target_mode == "existing":
+        ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{target}", dep)
+    else:
+        ksend("POST", f"/apis/apps/v1/namespaces/{ns}/deployments", dep)
+    if svc:
+        ksend("POST", f"/api/v1/namespaces/{ns}/services", svc)
+    _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
+    container_name = _dns_name(b.get("container_name") or b.get("name"), "container name")
+    action = f"Add {container_name} to {target}" if target_mode == "existing" else f"Deploy {target}"
+    op = OPS.start("deployment", action,
+                   {"kind": "Deployment", "name": target, "namespace": ns},
+                   "/containers", {"namespace": ns, "name": target})
+    return {"ok": True, "name": target, "container": container_name, "operation": op}
+
+
+def compose_report(b):
+    """Read a pasted Compose file against what this namespace already holds."""
+    ns = str(b.get("namespace") or DEFAULT_NS)
+    _dns_name(ns, "namespace")
+    text = str(b.get("text") or "")
+    if len(text) > 256 * 1024:
+        raise ValueError("a Compose file over 256 KB is more than Homestead will read")
+    try:
+        workloads = {d["metadata"]["name"] for d in
+                     kget(f"/apis/apps/v1/namespaces/{ns}/deployments").get("items", [])}
+    except Exception:
+        workloads = set()
+    try:
+        claims = {c["metadata"]["name"] for c in
+                  kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims").get("items", [])}
+    except Exception:
+        claims = set()
+    vip_mode = b.get("vip_mode") if b.get("vip_mode") in ("shared", "auto") else "shared"
+    return COMPOSE.convert(text, b.get("variables") or "", ns, workloads, claims,
+                           HW.features(), vip_mode)
+
+
+def compose_apply(b):
+    """Create every chosen service of a Compose file, dependencies first.
+
+    Read again here rather than trusted from the page, so what is created is
+    what was checked. It stops at the first failure and says what was made.
+    """
+    report = compose_report(b)
+    chosen = set(b.get("services") or [row["name"] for row in report["services"]])
+    rows = {row["name"]: row for row in report["services"] if row["name"] in chosen}
+    if not rows:
+        raise ValueError("choose at least one service to create")
+    problems = report["errors"] + [dict(e, service=name) for name, row in rows.items() for e in row["errors"]]
+    if problems:
+        first = problems[0]
+        where = f"{first['service']}: " if first.get("service") else ""
+        raise ValueError(f"fix the file first: {where}{first['message']}"
+                         + (f" (line {first['line']})" if first.get("line") else ""))
+    created = []
+    for name in report["order"]:
+        if name not in rows:
+            continue
+        try:
+            result = run_deploy(copy.deepcopy(rows[name]["config"]))
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", "replace")[:300]
+            return {"ok": False, "created": created, "failed": name, "error": f"HTTP {error.code}: {detail}"}
+        except Exception as error:
+            return {"ok": False, "created": created, "failed": name, "error": str(error)}
+        created.append(result["name"])
+    return {"ok": True, "created": created}
 
 
 def deploy_options(ns):
@@ -2224,6 +2346,7 @@ import homestead_objectstore as OBJECTS
 import homestead_move as MOVE
 import homestead_move_source as MOVE_SOURCE
 import homestead_move_engine as MOVE_ENGINE
+import homestead_compose as COMPOSE
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
@@ -2937,42 +3060,11 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/settings":
                 return self._send(200, {"ok": True, **save_app_settings(b)})
             if p == "/api/deploy":
-                b = analyze_deploy_intent(b)
-                b = ensure_profile_compatible(b)
-                persist_icon_config(b)
-                b = NETWORK.prepare_deploy(b)
-                b = apply_deploy_bindings(b)
-                b = apply_generated_secrets(b)
-                ns = b.get("namespace") or DEFAULT_NS
-                target_mode = b.get("target_mode", "new")
-                if target_mode == "existing":
-                    target = _dns_name(b.get("target_workload"), "existing workload")
-                    current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
-                    dep, svc = build_sidecar_deployment(b, current)
-                elif target_mode == "new":
-                    dep, svc = build_deployment(b)
-                    target = dep["metadata"]["name"]
-                else:
-                    raise ValueError("deployment target must be new or existing")
-                for v in b.get("volumes") or []:
-                    if v.get("type") == "pvc" and v.get("create"):
-                        create_pvc(ns, _dns_name(v.get("source"), "volume name"), v.get("size_gb", 5),
-                                   v.get("storage_class") or STORAGE_CLASS,
-                                   v.get("access_mode") or "ReadWriteOnce")
-                if target_mode == "existing":
-                    ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{target}", dep)
-                else:
-                    ksend("POST", f"/apis/apps/v1/namespaces/{ns}/deployments", dep)
-                if svc:
-                    ksend("POST", f"/api/v1/namespaces/{ns}/services", svc)
-                _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
-                container_name = _dns_name(b.get("container_name") or b.get("name"), "container name")
-                action = f"Add {container_name} to {target}" if target_mode == "existing" else f"Deploy {target}"
-                op = OPS.start("deployment", action,
-                               {"kind": "Deployment", "name": target, "namespace": ns},
-                               "/containers", {"namespace": ns, "name": target})
-                return self._send(200, {"ok": True, "name": target,
-                                        "container": container_name, "operation": op})
+                return self._send(200, run_deploy(b))
+            if p == "/api/compose/parse":
+                return self._send(200, compose_report(b))
+            if p == "/api/compose/apply":
+                return self._send(200, compose_apply(b))
             if p == "/api/scale":
                 ns, name, n = b["ns"], b["name"], int(b["replicas"])
                 ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}/scale",

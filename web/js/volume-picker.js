@@ -230,6 +230,7 @@ function addVolumeRow(host, v = {}) {
   d.dataset.label = v.label || ""; d.dataset.description = v.description || "";
   d.dataset.required = String(!!v.required); d.dataset.templateSource = v.template_source || "";
   d.dataset.role = v.role || ""; d.dataset.volumeName = v.volume_name || "";
+  d.dataset.templateOrigin = v.template_origin || "";
   d.dataset.storageClass = v.storage_class || "";
   const classes = (ctx.storageClasses() || []).length ? ctx.storageClasses() : ["longhorn-r2"];
   d.innerHTML = `<div class="volume-title"><div><b>${esc(v.label || "Storage mapping")}</b>${v.role ? `<span class="tag">${esc(v.role)}</span>` : ""}${v.required ? ' <span class="pill warn">required</span>' : ""}</div>
@@ -245,7 +246,7 @@ function addVolumeRow(host, v = {}) {
     </div>
     <div class="vclass-badges" style="display:none"></div>
     <div class="volume-foot"><span class="dim small vhelp"></span><label class="switch" ${ctx.readOnlyToggle ? "" : 'style="display:none"'}><input class="vro" type="checkbox" ${v.read_only ? "checked" : ""}>Read-only</label></div>
-    ${v.template_source && v.template_source !== v.source ? `<div class="template-source">Unraid source: <span class="mono">${esc(v.template_source)}</span> · choose its Kubernetes backing above</div>` : ""}`;
+    ${v.template_source && v.template_source !== v.source ? `<div class="template-source">${esc(v.template_origin || "Unraid")} source: <span class="mono">${esc(v.template_source)}</span> · choose its Kubernetes backing above</div>` : ""}`;
   host.appendChild(d); syncVolumeRow(d);
   d.addEventListener("input", event => { if (event.target.matches(".vs,.vselect")) syncVolumeRow(d); ctx.onChange(); });
   d.addEventListener("change", event => { if (event.target.matches(".vk,.vs,.vselect,.vsc")) syncVolumeRow(d); ctx.onChange(); });
@@ -263,6 +264,7 @@ function readVolumeRow(row) {
     storage_class: $(".vsc", row).value, access_mode: kind === "new-rwx" ? "ReadWriteMany" : "ReadWriteOnce",
     read_only: $(".vro", row).checked, label: row.dataset.label || "", description: row.dataset.description || "",
     required: row.dataset.required === "true", template_source: row.dataset.templateSource || "",
+    template_origin: row.dataset.templateOrigin || "",
     role: row.dataset.role || "", volume_name: row.dataset.volumeName || "" };
 }
 

@@ -347,12 +347,38 @@ class NewWorkloadNamingTests(unittest.TestCase):
         self.assertEqual("camera-stack", service["metadata"]["name"])
         self.assertEqual({"app": "camera-stack"}, service["spec"]["selector"])
 
+    def test_command_user_and_capabilities_reach_the_container(self):
+        """What a Compose service runs, and as whom, is not lost on the way."""
+        cfg = {"name": "app", "image": "app:1", "namespace": "lab", "ports": [], "volumes": [],
+               "hardware": [], "command": ["/bin/sh", "-c"], "args": ["run"], "working_dir": "/app",
+               "run_as_user": 1000, "run_as_group": 1000, "cap_add": ["NET_ADMIN"]}
+        with mock.patch.object(server.HW, "features", return_value=[]):
+            deployment, _ = server.build_deployment(cfg)
+        container = deployment["spec"]["template"]["spec"]["containers"][0]
+        self.assertEqual((["/bin/sh", "-c"], ["run"], "/app"),
+                         (container["command"], container["args"], container["workingDir"]))
+        self.assertEqual({"runAsUser": 1000, "runAsGroup": 1000, "capabilities": {"add": ["NET_ADMIN"]}},
+                         container["securityContext"])
+
+    def test_a_plain_workload_gets_no_empty_security_context(self):
+        cfg = {"name": "app", "image": "app:1", "namespace": "lab", "ports": [], "volumes": [], "hardware": []}
+        with mock.patch.object(server.HW, "features", return_value=[]):
+            deployment, _ = server.build_deployment(cfg)
+        self.assertNotIn("securityContext", deployment["spec"]["template"]["spec"]["containers"][0])
+
+    def test_a_command_must_be_words(self):
+        cfg = {"name": "app", "image": "app:1", "namespace": "lab", "ports": [], "volumes": [],
+               "hardware": [], "command": "rm -rf /"}
+        with mock.patch.object(server.HW, "features", return_value=[]):
+            with self.assertRaisesRegex(ValueError, "list of words"):
+                server.build_deployment(cfg)
+
 
 class HomesteadManifestTests(unittest.TestCase):
     def test_runtime_workload_uses_homestead_names_and_image(self):
         manifest = (ROOT / "deploy" / "deploy.yaml").read_text()
         self.assertIn("kind: Deployment\nmetadata:\n  name: homestead", manifest)
-        self.assertIn("- name: homestead\n          image: ghcr.io/wjcloudy/homestead:2.8.63",
+        self.assertIn("- name: homestead\n          image: ghcr.io/wjcloudy/homestead:2.8.64",
                       manifest)
         self.assertIn("homestead.io/update-sources: '{\"homestead\":", manifest)
 

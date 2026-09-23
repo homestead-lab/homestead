@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HOMESTEAD_VERSION = "2.8.63";
+const HOMESTEAD_VERSION = "2.8.64";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -199,6 +199,7 @@ function modal(t, h, wide, contextClass = "") {
   enhanceActions($("#mbody"));
   $(".modalbox").classList.toggle("wide", !!wide);
   $(".modalbox").classList.toggle("node-detail-modal", contextClass === "node-detail-modal");
+  $(".modalbox").dataset.context = contextClass || "";
   $("#modal").classList.toggle("node-detail-view", contextClass === "node-detail-modal");
   $("#modal").classList.remove("hidden");
 }
