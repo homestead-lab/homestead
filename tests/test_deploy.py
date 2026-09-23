@@ -375,10 +375,20 @@ class NewWorkloadNamingTests(unittest.TestCase):
 
 
 class HomesteadManifestTests(unittest.TestCase):
+    def test_removing_a_dead_host_has_the_permissions_it_needs(self):
+        manifest = (ROOT / "deploy" / "deploy.yaml").read_text()
+        for rule in ("resources: [nodes]\n    verbs: [get, list, watch, patch, update, delete]",
+                     "resources: [nodes]\n    verbs: [get, list, watch, patch, delete]",
+                     "resources: [replicas]\n    verbs: [get, list, watch, delete]",
+                     'apiGroups: ["cluster.x-k8s.io"]\n    resources: [machines]\n    verbs: [get, list, patch, delete]',
+                     "resources: [volumeattachments]\n    verbs: [get, list, delete]"):
+            with self.subTest(rule=rule.split("\n")[-1]):
+                self.assertIn(rule, manifest)
+
     def test_runtime_workload_uses_homestead_names_and_image(self):
         manifest = (ROOT / "deploy" / "deploy.yaml").read_text()
         self.assertIn("kind: Deployment\nmetadata:\n  name: homestead", manifest)
-        self.assertIn("- name: homestead\n          image: ghcr.io/wjcloudy/homestead:2.8.67",
+        self.assertIn("- name: homestead\n          image: ghcr.io/wjcloudy/homestead:2.8.68",
                       manifest)
         self.assertIn("homestead.io/update-sources: '{\"homestead\":", manifest)
 

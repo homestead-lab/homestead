@@ -85,15 +85,10 @@ async function viewCluster() {
     <section class="card flat cluster-wide cluster-onboard-preview"><div><span class="cluster-kicker">NEXT NODE</span>
       <div class="ctitle">Recommended role: ${esc(report.onboarding?.recommended_role || "Review required")}</div>
       <div class="csub">${esc(report.onboarding?.reason || "Review the current control-plane layout before joining another host.")}</div></div>
-      <button class="btn" onclick="clusterOnboarding()">Open onboarding checklist</button></section>
-  </div>`);
+      <button class="btn" data-need="admin" onclick="clusterOnboarding()">Onboard a node</button></section>
+  </div>
+  <div id="clusterCleanup"></div>`);
+  // Admin only, and a round trip of its own: the page does not wait for it.
+  if (window.can && can("admin")) clusterCleanupPaint();
 }
 
-window.clusterOnboarding = () => {
-  const data = STATE.data.cluster?.onboarding || {};
-  modal("Onboard a Harvester node", `<div class="onboard-role"><span>Recommended role</span><b>${esc(data.recommended_role || "Review required")}</b><p>${esc(data.reason || "")}</p></div>
-    <div class="sec">Before joining</div><ol class="onboard-checklist">${(data.checks || []).map(check => `<li><span>${icon("shield")}</span><div>${esc(check)}</div></li>`).join("")}</ol>
-    <div class="note"><b>Join from Harvester.</b> Homestead deliberately does not display or copy the cluster join token. Use Harvester’s supported node-join workflow, then return here to confirm roles, quorum, pressure, and hardware discovery.</div>
-    <div class="pxe-status"><div><b>Optional PXE service</b><span>${esc(data.pxe?.reason || "Designed separately for network safety.")}</span></div>${clusterPill("neutral", data.pxe?.status || "Not configured")}</div>
-    <div class="row end" style="margin-top:18px"><button class="btn pri" onclick="closeModal()">Done</button></div>`, true);
-};

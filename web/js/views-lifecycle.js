@@ -265,6 +265,10 @@ window.nodeActions = async name => {
     <div class="sec">Workload dependencies</div>
     ${(impact.workloads || []).length ? `<div class="dependency-list">${impactRows(impact)}</div>` : '<div class="empty small">No user workloads are currently running on this host.</div>'}
     ${(impact.stranded || []).length ? `<div class="note dependency-danger" style="margin-top:12px"><b>Stopping this host strands ${impact.stranded.length} workload${impact.stranded.length === 1 ? "" : "s"}.</b> ${impact.stranded.map(w => `<span class="mono">${esc(w.name)}</span>`).join(", ")} cannot run on any other ready host with the required hardware.</div>` : `<div class="note" style="margin-top:12px">Every current user workload has at least one compatible destination.</div>`}
+    <div class="sec">Leaving the cluster</div>
+    <div class="row between removal-entry"><p class="muted small">Take this host out for good: Homestead checks quorum and
+      volume copies first, then removes it in Harvester's order.</p>
+      <button class="btn danger" data-need="admin" onclick="nodeRemoval('${esc(name)}')">Remove from cluster…</button></div>
     <div class="sec">Power</div>
     ${off ? `<div class="note"><b>Host power control is disabled.</b> Rebooting needs a privileged
         helper pod that enters the host namespaces, so it ships off. Set

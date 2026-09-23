@@ -223,9 +223,7 @@ def build_report(kubernetes_version, raw_nodes, node_summaries, pods, events, cs
                            "Confirm the install disk is empty and data disks are intentionally assigned.",
                            "Review hardware features after join so workloads can use the new host.",
                            "Run drain and failover preflight before relying on the node for resilience.",
-                       ],
-                       "pxe": {"enabled": False, "status": "Not configured",
-                               "reason": "PXE can affect DHCP and boot traffic, so it remains a separately designed managed add-on."}},
+                       ]},
     }
 
 

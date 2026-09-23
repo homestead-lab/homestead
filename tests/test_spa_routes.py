@@ -40,6 +40,24 @@ class SpaRouteTests(unittest.TestCase):
         handler.do_GET()
         self.assertEqual([(f"{server.WEBROOT}/index.html", "text/html; charset=utf-8")], served)
 
+    def test_boot_addresses_are_never_mistaken_for_pages(self):
+        for path in ("/boot/abc123secretvalue/vmlinuz", "/boot/abc123secretvalue/initrd"):
+            self.assertFalse(server.is_page_path(path), path)
+            self.assertTrue(server.boot_path(path), path)
+        for path in ("/boot/abc/other", "/boot/abc/config.yaml/x", "/boot//vmlinuz"):
+            self.assertIsNone(server.boot_path(path), path)
+
+    def test_an_unknown_boot_secret_is_a_plain_not_found(self):
+        handler = object.__new__(server.H)
+        handler.path = "/boot/not-a-real-secret-value/config.yaml"
+        handler.command = "GET"
+        handler.headers = {}
+        handler.client_address = ("192.0.2.99", 5000)
+        sent = []
+        handler._send = lambda code, body, ctype="application/json": sent.append((code, ctype))
+        handler.do_GET()
+        self.assertEqual([(404, "text/plain")], sent)
+
     def test_browser_and_server_route_allowlists_match(self):
         source = (ROOT / "web" / "js" / "router.js").read_text(encoding="utf-8")
         browser_paths = set(re.findall(r'path:\s*"([^"]+)"', source))

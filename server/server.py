@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.67"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.68"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2347,6 +2347,7 @@ import homestead_move as MOVE
 import homestead_move_source as MOVE_SOURCE
 import homestead_move_engine as MOVE_ENGINE
 import homestead_compose as COMPOSE
+import homestead_onboard as ONBOARD
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
@@ -2364,6 +2365,11 @@ MOVE_SOURCE.bind(kget, ksend, LH, DEFAULT_NS)
 MOVE_ENGINE.bind(kget, ksend, LH, MOVE, NETWORK, OPS, DATA_DIR, DEFAULT_NS)
 # A move reads in the Activity tray like every other long job.
 OPS.RESOLVERS["move"] = MOVE_ENGINE.op_state
+ONBOARD.bind(kget, ksend, DEFAULT_NS, DATA_DIR, OPS)
+ONBOARD.kget_text = raw_get
+OPS.RESOLVERS["onboard"] = ONBOARD.op_state
+# A cleanup is recorded once it has happened, so it reads as done straight away.
+OPS.RESOLVERS["cluster-cleanup"] = lambda item: ("succeeded", 100, item.get("message", ""))
 VOLUMES.bind(kget, ksend, LH.snapshots, LH.backups, _cache, SYS_NS, DEFAULT_NS)
 SHARES.bind(kget, ksend, create_pvc, SMB_NAMESPACE, _cache)
 NETWORK.bind(kget, ksend, SYS_NS, DEFAULT_NS, LB_IP)
@@ -2550,8 +2556,19 @@ def is_page_path(path):
     """
     clean = path or "/"
     last = clean.rstrip("/").rsplit("/", 1)[-1]
-    return (not clean.startswith("/api/") and clean != "/api" and "." not in last
-            and ".." not in clean and len(clean) < 200)
+    return (not clean.startswith(("/api/", "/boot/")) and clean not in ("/api", "/boot")
+            and "." not in last and ".." not in clean and len(clean) < 200)
+
+
+def boot_path(path):
+    """/boot/<secret>/<what> - the addresses a host being installed fetches from."""
+    parts = (path or "").split("/")
+    if len(parts) == 4 and parts[1] == "boot" and parts[2] and parts[3] in BOOT_FILES:
+        return parts[2], parts[3]
+    return None
+
+
+BOOT_FILES = {"boot.ipxe", "config.yaml", "vmlinuz", "initrd", "event"}
 
 
 # Paths reachable without a session. Everything else needs one.
@@ -2609,6 +2626,11 @@ ADMIN_ROUTES = {
     # A cluster's credentials, and what they reach.
     "/api/move/clusters/add", "/api/move/clusters/remove", "/api/move/remote",
     "/api/move/clusters/check",
+    # Joining and removing hosts: the join token, disk wipes, a DHCP responder.
+    "/api/onboard/defaults", "/api/onboard/plans", "/api/onboard/plan", "/api/onboard/revoke",
+    "/api/onboard/config", "/api/onboard/usb", "/api/onboard/pxe", "/api/onboard/pxe/start",
+    "/api/onboard/pxe/stop", "/api/cluster/cleanup", "/api/cluster/removal",
+    "/api/cluster/remove-node", "/api/cluster/cleanup/run",
     # The source side of a move stops workloads, hands over definitions -
     # a VM's cloud-init Secrets among them - and the keys to the bucket.
     "/api/move/definition", "/api/move/target", "/api/move/source-status", "/api/move/source",
@@ -2747,6 +2769,9 @@ class H(BaseHTTPRequestHandler):
 
     def _guard(self, path):
         """Returns None when the request may proceed, or sends the refusal."""
+        # A host being installed has no session: its plan's secret address is the key.
+        if boot_path(path):
+            return None
         if (is_spa_route(path) or is_page_path(path) or is_public_path(path) or is_vendor_path(path) or
                 (path.startswith("/js/") and path.endswith(".js"))):
             return None
@@ -2780,10 +2805,53 @@ class H(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         return json.loads(self.rfile.read(n).decode()) if n else {}
 
+    def _boot(self, p, q):
+        """Serves a host being installed. Anything wrong is a plain 404: no hints."""
+        secret, what = boot_path(p)
+        source = self.client_address[0] if self.client_address else ""
+        try:
+            if what == "event":
+                event = (q.get("e") or [""])[0]
+                plan = ONBOARD.webhook(secret, event, source)
+                return self._send(200 if plan else 404, {"ok": bool(plan)})
+            if what in ("vmlinuz", "initrd"):
+                kind = "kernel" if what == "vmlinuz" else "initrd"
+                started = []
+
+                def headers(length):
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/octet-stream")
+                    if length:
+                        self.send_header("Content-Length", length)
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    started.append(True)
+
+                if not ONBOARD.stream_artifact(secret, kind, headers, self.wfile.write):
+                    return self._send(404, "not found\n", "text/plain")
+                return None
+            what_kind = {"boot.ipxe": "script", "config.yaml": "config"}[what]
+            plan = ONBOARD.note_fetch(secret, what_kind, source)
+            if not plan:
+                return self._send(404, "not found\n", "text/plain")
+            if what == "boot.ipxe":
+                return self._send(200, ONBOARD.ipxe_script(plan), "text/plain; charset=utf-8")
+            return self._send(200, ONBOARD.config_document(plan), "text/yaml; charset=utf-8")
+        except (BrokenPipeError, ConnectionResetError):
+            return None
+        except Exception as error:
+            print(f"boot {what}: {error}", file=sys.stderr)
+            try:
+                return self._send(502, "the installer file could not be fetched\n", "text/plain")
+            except Exception:
+                return None
+
     def do_GET(self):
         self._extra_headers = []
         u = urllib.parse.urlparse(self.path)
         p, q = u.path, urllib.parse.parse_qs(u.query)
+        if boot_path(p):
+            return self._boot(p, q)
         try:
             if self._guard(p):
                 return
@@ -2838,6 +2906,28 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, MOVE.inventory())
             if p == "/api/move/clusters":
                 return self._send(200, MOVE.list_clusters())
+            if p == "/api/onboard/defaults":
+                return self._move(ONBOARD.cluster_defaults)
+            if p == "/api/onboard/plans":
+                return self._send(200, ONBOARD.plans())
+            if p == "/api/onboard/config":
+                plan = ONBOARD._find((q.get("id") or [""])[0])
+                if not plan:
+                    return self._send(404, {"error": "no such join plan"})
+                return self._send(200, ONBOARD.config_document(plan, redact=True), "text/plain; charset=utf-8")
+            if p == "/api/onboard/usb":
+                try:
+                    name, image = ONBOARD.usb_image((q.get("id") or [""])[0])
+                except (ValueError, urllib.error.URLError) as error:
+                    return self._send(409, {"error": str(getattr(error, "reason", error))})
+                self._extra_headers = [("Content-Disposition", f'attachment; filename="{name}"')]
+                return self._send(200, image, "application/octet-stream")
+            if p == "/api/onboard/pxe":
+                return self._send(200, ONBOARD.pxe_status((q.get("id") or [""])[0]))
+            if p == "/api/cluster/cleanup":
+                return self._move(ONBOARD.cleanup_report)
+            if p == "/api/cluster/removal":
+                return self._move(lambda: ONBOARD.removal_plan((q.get("node") or [""])[0]))
             # Which release this is, asked by another Homestead before a move.
             if p == "/api/move/hello":
                 return self._send(200, MOVE.hello())
@@ -3028,6 +3118,10 @@ class H(BaseHTTPRequestHandler):
         self._extra_headers = []
         u = urllib.parse.urlparse(self.path)
         p = u.path
+        if boot_path(p):
+            # The installer's webhook: its body is not ours to parse.
+            self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 65536))
+            return self._boot(p, urllib.parse.parse_qs(u.query))
         try:
             if self._guard(p):
                 return
@@ -3295,6 +3389,23 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, MOVE.remote_inventory(b.get("name")))
             if p == "/api/move/clusters/check":
                 return self._move(lambda: MOVE.check_cluster(b.get("name")))
+            if p == "/api/onboard/plan":
+                # The address the admin reached Homestead at is the first guess
+                # for where the new host can reach it too.
+                host = self.headers.get("Host") or ""
+                return self._move(lambda: ONBOARD.create_plan(b, f"http://{host}" if host else ""))
+            if p == "/api/onboard/revoke":
+                return self._move(lambda: ONBOARD.revoke(b.get("id")))
+            if p == "/api/onboard/pxe/start":
+                return self._move(lambda: ONBOARD.pxe_start(b.get("id"), b.get("node"),
+                                                           b.get("interface") or "mgmt-br", b.get("subnet") or ""))
+            if p == "/api/onboard/pxe/stop":
+                return self._move(lambda: ONBOARD.pxe_stop(b.get("id")))
+            if p == "/api/cluster/remove-node":
+                return self._move(lambda: ONBOARD.remove_node(b.get("node"), bool(b.get("accept_loss")),
+                                                              bool(b.get("gone"))))
+            if p == "/api/cluster/cleanup/run":
+                return self._move(lambda: ONBOARD.cleanup(b.get("kind"), b.get("name") or "", bool(b.get("force"))))
             if p == "/api/move/source":
                 action, kind, name = b.get("action"), b.get("kind"), b.get("name")
                 actions = {"quiesce": lambda: MOVE_SOURCE.quiesce(kind, name),
@@ -3571,5 +3682,6 @@ if __name__ == "__main__":
     threading.Thread(target=_upgrade_node_probe, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=MOVE_ENGINE.run, daemon=True).start()
+    threading.Thread(target=ONBOARD.run, daemon=True).start()
     print(f"Homestead listening on :{port}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", port), H).serve_forever()

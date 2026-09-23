@@ -22,10 +22,11 @@ rules:
   - apiGroups: [""]
     resources: [persistentvolumes]
     verbs: [get, list, watch, patch]
-  # cordon / uncordon needs patch on the node object
+  # cordon / uncordon needs patch on the node object; removing a dead host
+  # deletes it, after a quorum and data-loss preflight refuses a live one
   - apiGroups: [""]
     resources: [nodes]
-    verbs: [get, list, watch, patch, update]
+    verbs: [get, list, watch, patch, update, delete]
   - apiGroups: [""]
     resources: [nodes/status]
     verbs: [get]
@@ -70,8 +71,27 @@ rules:
     # fromBackup parameter points at the selected Longhorn backup.
     verbs: [get, list, create]
   - apiGroups: ["longhorn.io"]
-    resources: [nodes, replicas, engines, settings, backupvolumes]
+    resources: [engines, settings, backupvolumes]
     verbs: [get, list, watch]
+  # Replica records on a host that is gone for good are deleted so Longhorn
+  # rebuilds them elsewhere; only on a node that no longer exists.
+  - apiGroups: ["longhorn.io"]
+    resources: [replicas]
+    verbs: [get, list, watch, delete]
+  # A removed host's Longhorn record is deleted once it holds no replicas;
+  # Longhorn only allows that after scheduling to it has been turned off.
+  - apiGroups: ["longhorn.io"]
+    resources: [nodes]
+    verbs: [get, list, watch, patch, delete]
+  # ...and the Cluster API machine Rancher kept for it.
+  - apiGroups: ["cluster.x-k8s.io"]
+    resources: [machines]
+    verbs: [get, list, patch, delete]
+  # A dead host's volume attachments hold its volumes there; letting go of them
+  # is what lets the volumes attach on another node.
+  - apiGroups: ["storage.k8s.io"]
+    resources: [volumeattachments]
+    verbs: [get, list, delete]
   # data protection: recurring jobs, snapshots, backups, and volume labels
   # (group membership is a label on the volume)
   - apiGroups: ["longhorn.io"]
@@ -163,7 +183,7 @@ metadata:
   annotations:
     # Homestead reads harvui.io/* as well, so an install made before the
     # rename keeps its update history, workload metadata and rollback state.
-    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.67"}'
+    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.68"}'
 spec:
   replicas: 1
   strategy:
@@ -195,7 +215,7 @@ spec:
           tolerationSeconds: 15
       initContainers:
         - name: data-permissions
-          image: ghcr.io/wjcloudy/homestead:2.8.67
+          image: ghcr.io/wjcloudy/homestead:2.8.68
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "chown 10001:10001 /data && chmod 0770 /data"]
           securityContext:
@@ -212,7 +232,7 @@ spec:
               mountPath: /data
       containers:
         - name: homestead
-          image: ghcr.io/wjcloudy/homestead:2.8.67
+          image: ghcr.io/wjcloudy/homestead:2.8.68
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT

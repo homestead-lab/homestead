@@ -55,10 +55,10 @@ scripts/deploy.sh             deploy a published image through an RKE2 host
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.67`, the workflow publishes:
+For a release such as `v2.8.68`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.67
+ghcr.io/wjcloudy/homestead:2.8.68
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -69,8 +69,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.67
-git push origin v2.8.67
+git tag v2.8.68
+git push origin v2.8.68
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -252,11 +252,55 @@ services, certificate-signing requests, and platform warning events from the
 last 24 hours. Partial RBAC or API availability is reported per section instead
 of hiding the rest of the page.
 
-The onboarding guide recommends a control-plane/etcd or worker role from the
-current quorum layout and provides a preflight checklist without exposing the
-cluster join token. The optional PXE service remains intentionally separate:
-DHCP and boot-network behaviour need an explicit network-safety design before
-Homestead can manage them.
+### Adding a host
+
+**Onboard a node** builds a join plan: the hostname, role, install and data
+disks, management network, the `rancher` user's password and SSH keys, the
+cluster address and version (read from the cluster), and the cluster token. The
+token is not read from the cluster; the form shows the one command that prints
+it on a management node (`sudo yq eval .token /etc/rancher/rancherd/config.yaml`).
+It is kept in a Secret for that plan alone and deleted when the node joins, the
+plan expires, or it is cancelled.
+
+The plan turns into Harvester's own join configuration, served with an iPXE boot
+script from a random `/boot/<secret>/` address that stops answering when the plan
+closes. The host can be pointed at it three ways:
+
+- **USB stick** - a 16 MB image with iPXE on it. It gets an address by DHCP and
+  network-boots the installer from Homestead, so nothing on the LAN changes.
+  UEFI only, with Secure Boot off; the stick holds no token.
+- **Network boot** - the host's own PXE boot, with nothing to plug in. A
+  temporary proxy-DHCP pod (Poseidon's dnsmasq, pinned by digest) on a chosen
+  node hands it iPXE over TFTP and then the installer. It adds boot instructions
+  without handing out addresses, answers the new host's MAC address and no
+  other, and stops by itself within six hours. A LAN that already runs a PXE
+  server can chain the plan's boot script from it instead.
+- **Harvester ISO** - the official ISO, with the config address added to its
+  boot line by hand; the plan shows the exact text.
+
+Unless turned off, the host asks for a key press before anything is erased. The
+installer reports back through its webhooks, so the plan - and Activity - follow
+it from boot script to configuration, install, reboot and Ready.
+
+### Removing a host
+
+**Remove from cluster** (host actions, or the cleanup list on the Cluster page)
+checks first: a Ready node is refused, because a running node registers itself
+again - maintenance mode and `rke2-uninstall.sh` on the host come first. Removing
+the last control-plane node, or one without which etcd loses quorum, is refused;
+volumes whose only healthy copy is on the node must be given up explicitly. It
+then follows Harvester's order: Longhorn stops scheduling there, the Kubernetes
+node is deleted (RKE2 drops its etcd membership), then its Cluster API machine,
+then Longhorn's node record once no replicas are listed on it.
+
+A host that is **gone for good** - dead and never coming back - can be removed
+that way too. Nothing then waits on it: the pods and VMs still bound to it are
+force-stopped so they start on other hosts, its volume attachments are
+released so those volumes can attach elsewhere, the replica records Longhorn
+keeps for it are deleted so it rebuilds them from the remaining copies, and a
+Cluster API machine whose deletion hangs on the missing host has its finalizers
+cleared. The Cluster page also lists leftovers - machines with no node or stuck
+deleting, Longhorn nodes with no host - to delete, or force, one at a time.
 
 Certificate monitoring is read-only. The supplied ClusterRole may list
 Kubernetes certificate-signing requests but cannot approve them, and Homestead
@@ -281,7 +325,7 @@ through browser refreshes and Homestead restarts.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.67 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.68 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour

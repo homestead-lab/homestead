@@ -91,6 +91,23 @@
       images: ["ghcr.io/paperless-ngx/paperless-ngx:latest"], ports: [{ port: 8000, ip: "192.0.2.216" }],
       pod_count: 1, container_count: 1, pods: [pod("paperless", "harvester-node3", "ghcr.io/paperless-ngx/paperless-ngx:latest")] },
   ];
+  function demoPlan(hostname, status, message, events, extra = {}) {
+    const id = Math.random().toString(16).slice(2, 14);
+    const base = `http://192.0.2.242:8080/boot/demo-${id}`;
+    return Object.assign({ id, hostname, role: "default", device: "/dev/nvme0n1", data_disk: "",
+      nic: "eno1", mac: "52:54:00:aa:bb:cc", network: { method: "dhcp" }, version: "1.4.1",
+      status, message, events, pxe: null, expired: false, created: Date.now() / 1000 - 1800,
+      expires: Date.now() / 1000 + 20 * 3600,
+      urls: { config: `${base}/config.yaml`, script: `${base}/boot.ipxe`, usb: `/api/onboard/usb?id=${id}` },
+      kernel_args: `initrd=initrd ip=dhcp … harvester.install.config_url=${base}/config.yaml` }, extra);
+  }
+  const DEMO_PLANS = [demoPlan("harvester-node4", "installing", "Installing Harvester", [
+    { at: Date.now() / 1000 - 1800, kind: "created", message: "Plan created for harvester-node4; valid for 24 hours", from: "" },
+    { at: Date.now() / 1000 - 1500, kind: "usb", message: "USB image downloaded", from: "" },
+    { at: Date.now() / 1000 - 600, kind: "script", message: "Host fetched the boot script", from: "192.0.2.54" },
+    { at: Date.now() / 1000 - 590, kind: "kernel", message: "Host downloaded the installer kernel", from: "192.0.2.54" },
+    { at: Date.now() / 1000 - 540, kind: "config", message: "Installer fetched its configuration", from: "192.0.2.54" },
+    { at: Date.now() / 1000 - 520, kind: "started", message: "Installation started", from: "192.0.2.54" }])];
   const storage = { cap_gb: 1392, avail_gb: 906, used_gb: 486, used_pct: 34.9,
     provisioned_gb: 670, actual_gb: 224, volumes: 8, healthy: 6, degraded: 1,
     faulted: 0, detached: 1, unknown: 1, attached: 7,
@@ -298,7 +315,7 @@
       detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.67", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.68", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" } } },
     "/api/overview": { health: "healthy", health_state: "healthy", health_summary: "All cluster services are healthy", health_issues: [],
@@ -372,20 +389,20 @@
       user: "admin", added: "2026-09-22 17:02" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "garage") return { name, version: "2.8.67", protocol: 1, local_version: "2.8.67",
+      if (name === "garage") return { name, version: "2.8.68", protocol: 1, local_version: "2.8.68",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "garage runs 2.8.67 and this one 2.8.67. Moves work between them; garage is the newer of the two." };
+        message: "garage runs 2.8.68 and this one 2.8.68. Moves work between them; garage is the newer of the two." };
       return name === "attic"
-        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.67", local_protocol: 1,
+        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.68", local_protocol: 1,
             state: "behind", compatible: false,
-            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.67). Update attic first." }
-        : { name, version: "2.8.67", protocol: 1, local_version: "2.8.67", local_protocol: 1,
-            state: "same", compatible: true, message: "Both run Homestead 2.8.67." };
+            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.68). Update attic first." }
+        : { name, version: "2.8.68", protocol: 1, local_version: "2.8.68", local_protocol: 1,
+            state: "same", compatible: true, message: "Both run Homestead 2.8.68." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "shed", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.67", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.68", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -460,6 +477,100 @@
             app_profile: { label: "Imported from Docker Compose", level: "review", intent: "compose",
               notes: ["./consume becomes new volume webserver-consume; its current contents are not copied. Import › Container source can bring them across"] } } }] }),
     "/api/compose/apply": { ok: true, created: ["broker", "db", "webserver"] },
+    "/api/onboard/defaults": { version: "1.4.1", server_url: "https://192.0.2.240:443", vip: "192.0.2.240",
+      nodes: ["harvester-node1", "harvester-node2", "harvester-node3"], releases: "https://releases.rancher.com/harvester" },
+    "/api/onboard/plans": () => DEMO_PLANS,
+    "/api/onboard/plan": (url, init) => {
+      const body = JSON.parse(init?.body || "{}");
+      if (!body.token) throw new Error("paste the cluster token from a management node");
+      const plan = demoPlan(body.hostname || "node4", "waiting", "Waiting for the host to boot",
+        [{ at: Date.now() / 1000, kind: "created", message: `Plan created for ${body.hostname || "node4"}; valid for 24 hours`, from: "" }],
+        { mac: (body.mac || "").toLowerCase(), role: body.role || "default", device: body.device || "/dev/sda",
+          data_disk: body.data_disk || "", version: body.version || "1.4.1" });
+      DEMO_PLANS.unshift(plan);
+      return plan;
+    },
+    "/api/onboard/config": url => `# Harvester join configuration for ${(DEMO_PLANS.find(p => p.id === url.searchParams.get("id")) || {}).hostname}, written by Homestead
+scheme_version: 1
+server_url: "https://192.0.2.240:443"
+token: "<cluster token>"
+os:
+  hostname: "node4"
+  password: "<password hash>"
+  dns_nameservers:
+    - "1.1.1.1"
+install:
+  mode: "join"
+  role: "default"
+  management_interface:
+    interfaces:
+      - hwAddr: "52:54:00:aa:bb:cc"
+    default_route: true
+    method: "dhcp"
+  device: "/dev/nvme0n1"
+  iso_url: "https://releases.rancher.com/harvester/v1.4.1/harvester-v1.4.1-amd64.iso"
+  automatic: true
+  webhooks:
+    - event: "STARTED"
+      method: "POST"
+      url: "http://192.0.2.242:8080/boot/…/event?e=STARTED"
+`,
+    "/api/onboard/pxe": url => (DEMO_PLANS.find(p => p.id === url.searchParams.get("id")) || {}).pxe
+      ? { running: true, phase: "Running", log: ["dnsmasq-dhcp: PXE(mgmt-br) 52:54:00:aa:bb:cc proxy",
+          "dnsmasq-tftp: sent /var/lib/tftpboot/ipxe.efi to 192.0.2.54",
+          "dnsmasq-dhcp: PXE(mgmt-br) 52:54:00:aa:bb:cc proxy http://192.0.2.242:8080/boot/…/boot.ipxe"] }
+      : { running: false, phase: "stopped", log: [] },
+    "/api/onboard/pxe/start": (url, init) => {
+      const body = JSON.parse(init?.body || "{}");
+      const plan = DEMO_PLANS.find(p => p.id === body.id);
+      if (plan) plan.pxe = { node: body.node || "harvester-node1", interface: body.interface || "mgmt-br", subnet: body.subnet || "192.0.2.0/24" };
+      return plan;
+    },
+    "/api/onboard/pxe/stop": (url, init) => {
+      const plan = DEMO_PLANS.find(p => p.id === JSON.parse(init?.body || "{}").id);
+      if (plan) plan.pxe = null;
+      return plan || {};
+    },
+    "/api/onboard/revoke": (url, init) => {
+      const plan = DEMO_PLANS.find(p => p.id === JSON.parse(init?.body || "{}").id);
+      if (plan) Object.assign(plan, { status: "cancelled", message: "Plan cancelled", pxe: null });
+      return plan || {};
+    },
+    "/api/cluster/cleanup": { finished_plans: 2,
+      dead_nodes: [{ name: "harvester-node5", roles: [], since: "2026-09-21T02:14:00Z" }],
+      stale_machines: [{ name: "custom-5f2c81a9e0d4", node: "harvester-node4", phase: "Deleting", stuck: true, created: "2026-08-01T10:00:00Z" }],
+      stale_longhorn: [{ name: "harvester-node4", replicas: 0 }] },
+    "/api/cluster/cleanup/run": { ok: true, message: "Deleted" },
+    "/api/cluster/removal": url => url.searchParams.get("node") === "harvester-node5" ? {
+      node: "harvester-node5", ready: false, roles: [], since: "2026-09-21T02:14:00Z", ok: true,
+      blockers: [], warnings: ["2 volumes will rebuild the copy harvester-node5 held, on the remaining nodes."],
+      lost_volumes: [], rebuilt_volumes: ["frigate-config", "paperless-data"],
+      stuck: { pods: 7, vms: ["home-assistant-os"], attachments: 2, replicas: 2 },
+      steps: ["Stop Longhorn scheduling new replicas to harvester-node5",
+        "Delete the Kubernetes node harvester-node5 (RKE2 removes its etcd membership)",
+        "Delete its Cluster API machine custom-8a1b2c3d", "Delete Longhorn's record of harvester-node5 once it holds no replicas"],
+      gone_steps: ["Force-delete the 7 pods still bound to it, so their workloads start elsewhere",
+        "Force-stop the 1 VM it was running (home-assistant-os), so each restarts on another host",
+        "Release 2 volume attachments, so those volumes can attach on another node",
+        "Delete the 2 replica records Longhorn keeps for it, so it rebuilds them from the remaining copies",
+        "Finish its Cluster API machine's deletion if finalizers hold it"],
+      machine: { name: "custom-8a1b2c3d", namespace: "fleet-local" } } : ({ node: url.searchParams.get("node"), ready: true, roles: ["control-plane", "etcd"],
+      since: "", ok: false, lost_volumes: [], rebuilt_volumes: ["frigate-config"],
+      blockers: [`${url.searchParams.get("node")} is Ready. A running node re-registers itself, so it is not removed from here: put it in maintenance mode in Harvester, run /opt/rke2/bin/rke2-uninstall.sh on it, power it off, and come back when it shows Not ready.`],
+      warnings: ["1 volume will rebuild the copy it held, on the remaining nodes."],
+      steps: ["Stop Longhorn scheduling new replicas to it", "Delete the Kubernetes node (RKE2 removes its etcd membership)",
+        "Delete its Cluster API machine", "Delete Longhorn's record of it once it holds no replicas"],
+      gone_steps: [], stuck: { pods: 0, vms: [], attachments: 0, replicas: 0 },
+      machine: { name: "custom-1", namespace: "fleet-local" } }),
+    "/api/cluster/remove-node": (url, init) => {
+      const body = JSON.parse(init?.body || "{}");
+      return { ok: true, node: body.node, log: [
+        `Longhorn stopped scheduling to ${body.node}`,
+        ...(body.gone ? ["Force-stopped the 1 VM it was running", `Force-deleted 7 pods bound to ${body.node}`, "Released 2 volume attachments"] : []),
+        `Deleted node ${body.node}`, "Deleted Cluster API machine custom-8a1b2c3d",
+        ...(body.gone ? ["Cleared the finalizers holding machine custom-8a1b2c3d", "Deleted 2 replica records; Longhorn rebuilds them from the remaining copies"] : []),
+        `Deleted Longhorn's record of ${body.node}`] };
+    },
     "/api/schedules": [
       { name: "nightly-db-dump", namespace: "lab", schedule: "0 3 * * *", image: "docker.io/library/postgres:16",
         command: "pg_dumpall -h db -U paperless > /backup/all.sql", last: "2026-09-22T03:00:04Z", suspend: false, active: 0 },
@@ -720,7 +831,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.67", candidate_tag: "2.8.67", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.68", candidate_tag: "2.8.68", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]
