@@ -23,6 +23,11 @@ rules:
   - apiGroups: [""]
     resources: [namespaces, events]
     verbs: [get, list, watch]
+  # Settings > Namespaces creates namespaces for apps, and removes one only
+  # when it is empty and not a platform namespace.
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [create, delete]
   # Volume deletion explicitly flips the bound PV between Retain and Delete
   # after an impact preview; no broader PV mutation is used.
   - apiGroups: [""]

@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.77")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.78")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1903,6 +1903,13 @@ def category_values(value):
     return found
 
 
+# Markup in catalogue text: HTML tags, and forum codes such as [b], [/span] and
+# [span style='color: red'] - a known tag name, so "[1]" or "[x86]" survive.
+CATALOG_MARKUP = re.compile(
+    r"<[^>]*>|\[/?(?:b|i|u|s|br|p|hr|img|url|span|color|size|font|center|left|right|quote|code|list|li|\*|h[1-6])"
+    r"(?:[= ][^\]]*)?\]", re.I)
+
+
 def catalog_text(value, limit=None):
     """Turn catalogue HTML fragments and entities into compact readable text."""
     text = str(value or "")
@@ -1913,14 +1920,66 @@ def catalog_text(value, limit=None):
         if decoded == text:
             break
         text = decoded
-    text = re.sub(r"(?i)<\s*br\s*/?\s*>", "\n", text)
+    text = re.sub(r"(?i)<\s*br\s*/?\s*>|\[\s*br\s*/?\s*\]", "\n", text)
     text = re.sub(r"(?i)</\s*(?:p|div|li|tr|h[1-6])\s*>", "\n", text)
-    text = re.sub(r"<[^>]*>", "", text)
+    # HTML, and the forum's [b]/[span style=...] codes that templates use too.
+    text = re.sub(CATALOG_MARKUP, "", text)
     text = html.unescape(text).replace("\xa0", " ")
     text = re.sub(r"[ \t\r\f\v]+", " ", text)
     text = re.sub(r"\s*\n+\s*", " · ", text)
     text = re.sub(r"(?:\s*·\s*)+", " · ", text).strip(" ·")
     return text[:limit] if limit is not None else text
+
+
+def catalog_paragraphs(value, limit=8000):
+    """Catalogue text with its paragraphs kept, for reading in full.
+
+    Overviews mix HTML, entities and the forum's [b]/[br] codes; each becomes
+    plain text with line breaks where the author put them."""
+    text = str(value or "")
+    for _ in range(2):
+        decoded = html.unescape(text)
+        if decoded == text:
+            break
+        text = decoded
+    text = re.sub(r"(?i)\[\s*br\s*/?\s*\]|<\s*br\s*/?\s*>", "\n", text)
+    text = re.sub(r"(?i)</\s*(?:p|div|li|tr|h[1-6])\s*>", "\n", text)
+    text = re.sub(CATALOG_MARKUP, "", text)
+    text = html.unescape(text).replace("\xa0", " ").replace("\r\n", "\n").replace("\r", "\n")
+    text = "\n".join(line.strip() for line in text.split("\n"))
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text[:limit]
+
+
+def catalog_reason(value):
+    """A spotlight's reason, which the feed gives as a dict - sometimes as its text."""
+    if isinstance(value, str) and value.strip().startswith("{"):
+        try:
+            import ast
+            value = ast.literal_eval(value)
+        except (ValueError, SyntaxError):
+            pass
+    if isinstance(value, dict):
+        value = value.get("en_US") or next(iter(value.values()), "")
+    return catalog_text(value)
+
+
+def catalog_links(value):
+    if isinstance(value, str):
+        value = [value]
+    return [str(x) for x in (value or []) if isinstance(x, str) and x.startswith(("http://", "https://"))][:6]
+
+
+def appstore_key(app):
+    return f"{app.get('name')}|{app.get('repo')}"
+
+
+# What a list of apps needs; the full record comes one app at a time.
+APPSTORE_HEAVY = ("overview", "config", "screenshots", "readme", "comment", "requires")
+
+
+def appstore_summary(app):
+    return {k: v for k, v in app.items() if k not in APPSTORE_HEAVY}
 
 
 def search_appstore(apps, term):
@@ -1976,9 +2035,13 @@ def unique_appstore_apps(apps):
 def rank_appstore(apps, mode="popular"):
     """Rank cached catalogue rows using only statistics supplied by the feed."""
     rows = unique_appstore_apps(apps)
+    if mode == "spotlight":
+        return sorted((app for app in rows if app.get("spotlight")),
+                      key=lambda app: -app["spotlight"]["date"])
     if mode == "recent":
-        key = lambda app: (-appstore_number(app.get("first_seen")),
-                           str(app.get("name") or "").lower())
+        # Templates added in one feed update share a timestamp; the feed's own
+        # order among them is the one Community Applications shows.
+        key = lambda app: -appstore_number(app.get("first_seen"))
     elif mode == "trending":
         key = lambda app: (-appstore_number(app.get("top_trending")),
                            -appstore_number(app.get("trending")),
@@ -2016,6 +2079,23 @@ def fetch_appstore():
             repo = a.get("Repository") or ""
             if not repo or not a.get("Name"):
                 continue
+            # Containers only, as Community Applications shows them: a plugin
+            # or language pack is Unraid's own software, and blacklisted,
+            # deprecated or hidden templates are not offered there either.
+            if (a.get("Plugin") or a.get("PluginURL") or a.get("Language") or a.get("LanguagePack")
+                    or a.get("Blacklist") or a.get("Deprecated") or a.get("hideFromCA")
+                    or str(repo).lower().endswith(".plg")):
+                continue
+            spotlight = None
+            if appstore_number(a.get("RecommendedDate")):
+                stamp = int(appstore_number(a.get("RecommendedDate")))
+                spotlight = {"date": stamp, "month": time.strftime("%b %Y", time.gmtime(stamp)),
+                             "reason": catalog_reason(a.get("RecommendedReason")),
+                             "who": catalog_text(a.get("RecommendedWho") or "")}
+            maintainer = a.get("Maintainer") or a.get("Author") or ""
+            if isinstance(maintainer, dict):
+                maintainer = maintainer.get("Name") or next((v for v in maintainer.values() if isinstance(v, str)), "")
+            maintainer = str(maintainer or re.sub(r"'s Repository$", "", str(a.get("Repo") or ""))).strip()
             categories = category_values(a.get("CategoryList") or a.get("Category") or "")
             item = {
                 "name": a.get("Name"),
@@ -2035,6 +2115,21 @@ def fetch_appstore():
                 "top_performing": appstore_number(a.get("topPerforming")),
                 "first_seen": int(appstore_number(a.get("FirstSeen"))),
                 "last_update": int(appstore_number(a.get("LastUpdate"))),
+                "spotlight": spotlight,
+                "maintainer": catalog_text(maintainer, 80),
+                "official": bool(a.get("Official") or a.get("LTOfficial")),
+                "beta": str(a.get("Beta") or "").lower() in ("true", "1", "yes"),
+                "privileged": str(a.get("Privileged") or "").lower() == "true",
+                "links": {k: v for k, v in {
+                    "project": a.get("Project"), "support": a.get("Support"), "registry": a.get("Registry"),
+                    "readme": a.get("ReadMe") or a.get("Readme"), "video": a.get("Video"),
+                    "discord": a.get("Discord"), "github": a.get("GitHub"), "web": a.get("WebPage"),
+                }.items() if isinstance(v, str) and v.startswith(("http://", "https://"))},
+                "overview": catalog_paragraphs(a.get("Overview") or a.get("Description") or ""),
+                "screenshots": catalog_links(a.get("Screenshot")),
+                "requires": catalog_text(a.get("Requires") or "", 600),
+                "comment": catalog_text(a.get("CAComment") or a.get("ModeratorComment") or "", 600),
+                "license": catalog_text(a.get("License") or a.get("Licence") or "", 80),
             }
             item["deploy"] = template_to_cfg(item)
             out.append(item)
@@ -2352,6 +2447,7 @@ import homestead_cfaccess as CFACCESS
 import homestead_push as PUSH
 import homestead_alerts as ALERTS
 import homestead_self as SELF
+import homestead_namespaces as NSMOD
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
@@ -2386,6 +2482,7 @@ def _own_namespace():
 
 
 SELF.bind(kget, ksend, _own_namespace(), HOMESTEAD_VERSION, DATA_DIR)
+NSMOD.bind(kget, ksend, DEFAULT_NS, _own_namespace())
 ALERTS.bind(DATA_DIR)
 
 
@@ -2743,8 +2840,8 @@ ADMIN_ROUTES = {
     "/api/move/moves/abandon", "/api/move/moves/finish",
     "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete",
     "/api/lh/restore",
-    # Homestead's own permissions.
-    "/api/self/permissions",
+    # Homestead's own permissions, and the namespaces apps live in.
+    "/api/self/permissions", "/api/namespaces/create", "/api/namespaces/delete",
 }
 # things a signed-in user may always do to their own account
 SELF_ROUTES = {"/api/auth/logout", "/api/auth/password", "/api/auth/signout-everywhere",
@@ -3142,7 +3239,11 @@ class H(BaseHTTPRequestHandler):
                 d = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{nm}")
                 return self._send(200, workload_edit_payload(ns, nm, d))
             if p == "/api/namespaces":
-                return self._send(200, sorted(n["metadata"]["name"] for n in kget("/api/v1/namespaces")["items"]))
+                # Places to put an app: Harvester's, Rancher's and Kubernetes'
+                # own namespaces are left out unless all are asked for.
+                return self._send(200, NSMOD.names((q.get("all") or [""])[0] == "1"))
+            if p == "/api/namespaces/manage":
+                return self._send(200, NSMOD.inventory())
             if p == "/api/storageclasses":
                 classes = storage_classes()
                 if (q.get("facts") or [""])[0] == "1":
@@ -3168,13 +3269,20 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/appstore":
                 term = (q.get("q") or [""])[0].lower().strip()
                 cat = (q.get("cat") or [""])[0].lower().strip()
-                sort_mode = (q.get("sort") or ["popular"])[0].lower().strip()
-                if sort_mode not in {"popular", "trending", "recent"}:
-                    sort_mode = "popular"
+                sort_mode = (q.get("sort") or ["home"])[0].lower().strip()
+                if sort_mode not in {"home", "spotlight", "popular", "trending", "recent"}:
+                    sort_mode = "home"
                 try:
                     apps = fetch_appstore()
                 except Exception as e:
                     return self._send(502, {"error": f"app feed unavailable: {e}"})
+                if sort_mode == "home" and not term and not cat:
+                    # The catalogue's front page, as Community Applications lays it out.
+                    return self._send(200, {"sort": "home", "total": len(apps), "sections": {
+                        mode: [appstore_summary(a) for a in rank_appstore(apps, mode)[:count]]
+                        for mode, count in (("spotlight", 4), ("recent", 8), ("trending", 8), ("popular", 8))}})
+                if sort_mode == "home":
+                    sort_mode = "popular"
                 if term:
                     apps = search_appstore(apps, term)
                 else:
@@ -3183,9 +3291,18 @@ class H(BaseHTTPRequestHandler):
                     apps = [a for a in apps if any(cat in value.lower() for value in a.get("categories", []))]
                 spotlight = None if term else appstore_spotlight(apps)
                 limit = 60 if term else 30
-                return self._send(200, {"total": len(apps), "apps": apps[:limit],
+                return self._send(200, {"total": len(apps), "apps": [appstore_summary(a) for a in apps[:limit]],
                                         "sort": "search" if term else sort_mode,
-                                        "spotlight": spotlight})
+                                        "spotlight": appstore_summary(spotlight) if spotlight else None})
+            if p == "/api/appstore/app":
+                key = (q.get("key") or [""])[0]
+                try:
+                    app = next((a for a in fetch_appstore() if appstore_key(a) == key), None)
+                except Exception as e:
+                    return self._send(502, {"error": f"app feed unavailable: {e}"})
+                if not app:
+                    return self._send(404, {"error": "that app is no longer in the catalogue"})
+                return self._send(200, {k: v for k, v in app.items() if k != "config"})
             if p == "/api/logs":
                 ns = q["ns"][0]
                 pod = (q.get("pod") or [""])[0]
@@ -3248,6 +3365,10 @@ class H(BaseHTTPRequestHandler):
                         b.get("replaces", ""), cursor=ALERTS.log(limit=0)["latest"]))
                 except ValueError as error:
                     return self._send(400, {"error": str(error)})
+            if p == "/api/namespaces/create":
+                return self._move(lambda: NSMOD.create(b.get("name")))
+            if p == "/api/namespaces/delete":
+                return self._move(lambda: NSMOD.delete(b.get("name"), str(b.get("confirm") or "")))
             if p == "/api/self/permissions":
                 return self._send(200, SELF.reconcile())
             if p == "/api/push/unsubscribe":
@@ -3816,7 +3937,7 @@ if __name__ == "__main__":
     threading.Thread(target=_upgrade_node_probe, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=MOVE_ENGINE.run, daemon=True).start()
-    # Join plans from 2.8.68-2.8.77 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.78 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     print(f"Homestead listening on :{port}", flush=True)

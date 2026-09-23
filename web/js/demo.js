@@ -271,7 +271,10 @@
   };
   const demoApp = { name: "Frigate", repo: "ghcr.io/blakeblackshear/frigate:stable", icon: "", cat: "HomeAutomation",
     desc: "Network video recorder with local AI object detection.", downloads: 24800000, stars: 42000,
-    trending: 7.8, top_trending: 5.4, top_performing: 7.8, first_seen: 1640995200, deploy: {
+    trending: 7.8, top_trending: 5.4, top_performing: 7.8, first_seen: 1640995200,
+    maintainer: "blakeblackshear", official: true, categories: ["HomeAutomation", "Security"],
+    spotlight: { date: 1785556800, month: "Aug 2026", reason: "Local AI object detection for every camera you own.", who: "Homestead demo" },
+    deploy: {
       name: "frigate", image: "ghcr.io/blakeblackshear/frigate:stable", icon: "",
       ports: [{ container: 8971, host: 8971, expose: true, protocol: "TCP" },
               { container: 8555, host: 8555, expose: true, protocol: "TCP" },
@@ -298,7 +301,7 @@
       detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.77", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.78", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
@@ -317,8 +320,20 @@
     },
     "/api/volumes/delete-plan": volumeDeletePlan, "/api/hardware/features": hardware,
     "/api/namespaces": ["default", "lab", "monitoring"],
+    "/api/namespaces/manage": { default: "lab", system_hidden: 31, namespaces: [
+      { name: "default", created: "2026-01-04T10:00:00Z", protected: "Kubernetes' own default namespace", deployments: 0, statefulsets: 0, volumes: 0, vms: 0, empty: true },
+      { name: "lab", created: "2026-01-04T10:20:00Z", protected: "new workloads go here by default", deployments: 12, statefulsets: 0, volumes: 11, vms: 1, empty: false },
+      { name: "monitoring", created: "2026-03-11T08:00:00Z", homestead: true, protected: "", deployments: 0, statefulsets: 0, volumes: 0, vms: 0, empty: true }] },
     "/api/deploy/options": deployOptions,
-    "/api/appstore": { total: 1, apps: [demoApp], sort: "popular", spotlight: demoApp },
+    "/api/appstore": url => (url.searchParams.get("q") || !["", "home"].includes(url.searchParams.get("sort") || "")
+      ? { total: 1, apps: [demoApp], sort: url.searchParams.get("sort") || "search", spotlight: null }
+      : { total: 1, sort: "home", sections: { spotlight: [demoApp], recent: [demoApp], trending: [demoApp], popular: [demoApp] } }),
+    "/api/appstore/app": () => Object.assign({}, demoApp, {
+      overview: ["Frigate is a complete, local network video recorder with realtime AI object detection for IP cameras.", "",
+        "Uses OpenCV and TensorFlow to detect people, cars and more, locally.", "Integrates with Home Assistant."].join("\n"),
+      links: { project: "https://frigate.video", support: "https://github.com/blakeblackshear/frigate/discussions",
+        registry: "https://github.com/blakeblackshear/frigate/pkgs/container/frigate" },
+      screenshots: [], comment: "", requires: "", license: "MIT" }),
     "/api/preview": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       const joining = body.target_mode === "existing";
@@ -373,20 +388,20 @@
       user: "admin", added: "2026-09-22 17:02" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "garage") return { name, version: "2.8.77", protocol: 1, local_version: "2.8.77",
+      if (name === "garage") return { name, version: "2.8.78", protocol: 1, local_version: "2.8.78",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "garage runs 2.8.77 and this one 2.8.77. Moves work between them; garage is the newer of the two." };
+        message: "garage runs 2.8.78 and this one 2.8.78. Moves work between them; garage is the newer of the two." };
       return name === "attic"
-        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.77", local_protocol: 1,
+        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.78", local_protocol: 1,
             state: "behind", compatible: false,
-            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.77). Update attic first." }
-        : { name, version: "2.8.77", protocol: 1, local_version: "2.8.77", local_protocol: 1,
-            state: "same", compatible: true, message: "Both run Homestead 2.8.77." };
+            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.78). Update attic first." }
+        : { name, version: "2.8.78", protocol: 1, local_version: "2.8.78", local_protocol: 1,
+            state: "same", compatible: true, message: "Both run Homestead 2.8.78." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "shed", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.77", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.78", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -765,7 +780,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.77", candidate_tag: "2.8.77", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.78", candidate_tag: "2.8.78", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

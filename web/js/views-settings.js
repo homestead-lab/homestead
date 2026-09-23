@@ -119,6 +119,14 @@ async function viewSettings() {
 
       ${pwaCard()}
 
+      <section class="card flat settings-wide" id="nsCard">
+        <div class="settings-card-head"><div><div class="ctitle">Namespaces</div>
+          <div class="csub">Where apps live. Harvester, Rancher and Kubernetes keep their own, which are hidden here and in every picker.</div></div>
+          ${can("admin") ? `<div class="row ns-new"><input id="nsName" placeholder="new-namespace" maxlength="63" autocomplete="off"
+            onkeydown="if(event.key==='Enter')namespaceCreate()"><button class="btn sm pri" onclick="namespaceCreate()">Create</button></div>` : ""}</div>
+        <div class="ns-body"><div class="empty small"><span class="spin2"></span></div></div>
+      </section>
+
       <section class="card flat settings-wide">
         <div class="ctitle">About this installation</div><div class="csub">Runtime and cluster connection details</div>
         <div class="f sitename"><label>Site name ${tip("Shown under the Homestead wordmark and at the foot of the page. Name the cluster or the house it lives in; leave it blank to show nothing.")}</label>
@@ -142,7 +150,56 @@ async function viewSettings() {
       </section>
     </div>`);
   pwaPaint();
+  namespacesPaint();
 }
+
+/* ------------------------------------------------ namespaces */
+async function namespacesPaint() {
+  const host = $("#nsCard .ns-body");
+  if (!host) return;
+  let inv;
+  try { inv = await api("/api/namespaces/manage", { keep: true }); }
+  catch (e) { host.innerHTML = `<div class="empty small">${esc(e.message)}</div>`; return; }
+  const what = r => [r.deployments && `${r.deployments} app${r.deployments === 1 ? "" : "s"}`,
+    r.statefulsets && `${r.statefulsets} stateful set${r.statefulsets === 1 ? "" : "s"}`,
+    r.volumes && `${r.volumes} volume${r.volumes === 1 ? "" : "s"}`,
+    r.vms && `${r.vms} VM${r.vms === 1 ? "" : "s"}`].filter(Boolean).join(" · ") || "empty";
+  host.innerHTML = `<div class="tblwrap"><table class="tbl stack dense" data-sort="namespaces"><thead><tr>
+      <th>Namespace</th><th>Holds</th><th data-nosort>Created</th><th></th></tr></thead><tbody>
+    ${inv.namespaces.map(r => `<tr><td data-sort="${esc(r.name)}"><b class="mono">${esc(r.name)}</b>
+        ${r.name === inv.default ? '<span class="tag ok">default for new apps</span>' : ""}${r.homestead ? '<span class="tag">made here</span>' : ""}</td>
+      <td class="small">${esc(what(r))}</td>
+      <td class="dim xs">${r.created ? esc(new Date(r.created).toLocaleDateString()) : ""}</td>
+      <td class="right">${can("admin") ? (r.protected ? `<span class="dim xs" title="${esc(r.protected)}">kept</span>`
+        : `<button class="btn sm danger" ${r.empty ? "" : `disabled title="Move or delete what it holds first"`}
+            onclick="namespaceDelete('${esc(r.name)}')">Delete</button>`) : ""}</td></tr>`).join("")}</tbody></table></div>
+    <div class="dim xs" style="margin-top:8px">${inv.system_hidden} platform namespace${inv.system_hidden === 1 ? "" : "s"} hidden.</div>`;
+  sortTables(host);
+}
+
+window.namespaceCreate = async () => {
+  const name = $("#nsName").value.trim().toLowerCase();
+  if (!name) return;
+  try {
+    await api("/api/namespaces/create", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+    toast(`${name} created`, "ok");
+    $("#nsName").value = "";
+    namespacesPaint();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+window.namespaceDelete = async name => {
+  const typed = prompt(`Delete the namespace ${name}? It is empty, and this cannot be undone.
+
+Type its name to confirm:`);
+  if (typed === null) return;
+  try {
+    await api("/api/namespaces/delete", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, confirm: typed.trim() }) });
+    toast(`${name} deleted`, "ok");
+    namespacesPaint();
+  } catch (e) { toast(e.message, "bad"); }
+};
 
 /* ------------------------------------------------ Homestead's own objects */
 const PERMISSION_WORDS = { current: "up to date", updated: "updated with this release",

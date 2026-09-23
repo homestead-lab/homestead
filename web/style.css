@@ -499,6 +499,8 @@ select option{background:#151517}
 /* Homestead's own objects */
 .self-command{display:flex;gap:8px;align-items:flex-start;margin-top:6px}
 .self-command pre{flex:1;min-width:0}
+.ns-new{gap:6px;flex-wrap:nowrap}.ns-new input{width:190px;padding:6px 10px;font-size:12.5px}
+#nsCard .tag{margin-left:6px}
 /* Notifications on this device */
 #pwaCard .pwa-body{display:grid;gap:12px}
 .pwa-state{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
@@ -536,6 +538,37 @@ pre{background:rgba(0,0,0,.5);border:1px solid var(--line);border-radius:13px;pa
 
 /* app store */
 .apps{display:grid;grid-template-columns:repeat(auto-fill,minmax(262px,1fr));gap:14px}
+/* The catalogue's front page and an app's details */
+.store-section{margin-bottom:26px}
+.app[role="button"]{cursor:pointer}.app[role="button"]:hover{border-color:var(--line2)}
+.store-by{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.store-official{color:var(--ok);font-weight:650}
+.store-tags{gap:5px;flex-wrap:wrap}
+.store-why{font-size:12px;font-style:italic;color:var(--mut);line-height:1.45}
+.store-card-actions{gap:6px;margin-top:auto}.store-card-actions .btn{flex:1;justify-content:center}
+.store-noicon{display:grid;place-items:center;background:rgba(255,255,255,.06);border-radius:10px}
+.modalbox[data-context="store"]{width:min(860px,100%)}
+.store-detail-head{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:16px;align-items:center;margin-bottom:14px}
+.store-detail-icon{width:72px;height:72px;border-radius:18px;object-fit:contain;background:rgba(255,255,255,.04);padding:6px}
+.store-detail-title h3{margin:0 0 3px;font-size:21px}
+.store-detail-title .store-tags{margin-top:8px}
+.store-links{gap:6px;flex-wrap:wrap;margin-bottom:16px}
+.store-links .btn svg{width:11px;height:11px}
+.store-spot{display:flex;gap:16px;align-items:center;padding:14px;margin-bottom:16px;border:1px solid rgba(255,138,61,.35);border-radius:14px;background:rgba(255,138,61,.07)}
+.store-spot p{margin:4px 0;font-size:13px;line-height:1.5}
+.store-spot-badge{flex:0 0 auto;display:grid;place-items:center;width:84px;height:84px;border-radius:50%;border:3px solid #ff8a3d;
+  box-shadow:0 0 22px rgba(255,138,61,.45);text-align:center;font-size:9px;line-height:1.25;text-transform:uppercase;letter-spacing:.05em}
+.store-spot-badge span{font-size:10px;color:var(--mut);text-transform:none;letter-spacing:0}
+.store-overview{white-space:pre-line;font-size:13px;line-height:1.6;color:var(--tx);max-height:340px;overflow:auto;padding:14px 16px;
+  border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.025);margin-bottom:14px}
+.store-shots{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px}
+.store-shots img{height:130px;border-radius:10px;border:1px solid var(--line)}
+.store-facts{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px}
+.store-facts div{display:flex;flex-direction:column;gap:2px;padding:9px 11px;border:1px solid var(--line);border-radius:10px;min-width:0}
+.store-facts span{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.07em}
+.store-facts b{font-size:12.5px;overflow-wrap:anywhere}
+@media(max-width:560px){.store-detail-head{grid-template-columns:auto minmax(0,1fr)}.store-detail-head>.btn{grid-column:1/-1}
+  .store-spot{flex-direction:column;align-items:flex-start}}
 .app{display:flex;flex-direction:column;gap:11px}
 .app .ico{width:44px;height:44px;border-radius:12px;object-fit:contain;background:rgba(255,255,255,.06);padding:5px}
 .app .nm{font-weight:680;font-size:14px}
