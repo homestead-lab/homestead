@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HOMESTEAD_VERSION = "2.8.64";
+const HOMESTEAD_VERSION = "2.8.65";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -188,9 +188,21 @@ window.hardwareManagerBack = () => {
 
 /* ---------------- toast / modal ---------------- */
 function toast(msg, kind = "") {
+  liftToasts();
   const d = document.createElement("div");
   d.className = "tst " + kind; d.textContent = msg;
   $("#toast").appendChild(d); setTimeout(() => d.remove(), 4200);
+}
+/* Toasts and the job tray share the bottom-right corner, so toasts stand on
+   top of the tray - however tall it is, open or closed - rather than over it. */
+function liftToasts() {
+  const tray = $("#jobTray");
+  const height = tray && !tray.classList.contains("hidden") ? tray.getBoundingClientRect().height : 0;
+  document.documentElement.style.setProperty("--tray-lift", height ? `${Math.ceil(height) + 8}px` : "4px");
+}
+if (window.ResizeObserver && $("#jobTray")) {
+  new ResizeObserver(liftToasts).observe($("#jobTray"));
+  new MutationObserver(liftToasts).observe($("#jobTray"), { attributes: true, attributeFilter: ["class"] });
 }
 function modal(t, h, wide, contextClass = "") {
   window.__modalGuard = null;   // each modal decides for itself what is at stake
