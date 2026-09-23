@@ -71,13 +71,17 @@ def observe(results, now=None):
     now = now or time.time()
     with _lock:
         state = _load()
-        seeding = not state.get("seeded")
+        # A source seen for the first time - on a first start, or one a new
+        # release added - has history, not news: its events start silent.
+        watched = set(state.get("sources") or [])
         active, fresh, seen = state["active"], [], set()
         for source, facts in results.items():
             if facts is None:
                 # Could not look: whatever it said before still stands.
                 seen.update(k for k in active if k.startswith(source + ":"))
                 continue
+            seeding = source not in watched
+            watched.add(source)
             for fact in facts:
                 key = fact["key"]
                 seen.add(key)
@@ -105,7 +109,7 @@ def observe(results, now=None):
             del active[key]
             if row["announced"] > 0 and not row.get("event"):
                 fresh.append(_append(state, row, "resolved", now))
-        state["seeded"] = True
+        state["sources"] = sorted(watched)
         _save(state)
         return fresh
 
@@ -163,21 +167,20 @@ def job_facts(operations):
             for op in operations if op.get("status") == "failed"]
 
 
-def join_facts(plans):
+def join_facts(nodes):
+    """A host joining: said once, when a node first appears; again once it is Ready."""
     facts = []
-    for plan in plans:
-        host, status = plan.get("hostname", "a host"), plan.get("status")
-        kinds = {e.get("kind") for e in plan.get("events") or []}
-        says = []
-        if "started" in kinds:
-            says.append(("started", "info", f"Installing Harvester on {host}", "The installer has started"))
-        if status == "joined":
-            says.append(("joined", "info", f"{host} joined the cluster", plan.get("message", "")))
-        elif status in ("failed", "expired"):
-            says.append((status, "degraded", f"{host} did not join", plan.get("message", "")))
-        for what, severity, title, body in says:
-            facts.append({"key": f"joins:{plan.get('id')}:{what}", "category": "joins", "event": True,
-                          "severity": severity, "title": title, "body": body, "href": "/system/cluster"})
+    for node in nodes:
+        meta = node.get("metadata") or {}
+        name, uid = meta.get("name", "a host"), meta.get("uid") or meta.get("name")
+        ready = any(c.get("type") == "Ready" and c.get("status") == "True"
+                    for c in (node.get("status") or {}).get("conditions") or [])
+        facts.append({"key": f"joins:{uid}:seen", "category": "joins", "event": True, "severity": "info",
+                      "title": f"{name} is joining the cluster", "body": "Harvester has registered the new host",
+                      "href": "/nodes"})
+        if ready:
+            facts.append({"key": f"joins:{uid}:ready", "category": "joins", "event": True, "severity": "info",
+                          "title": f"{name} joined the cluster", "body": f"{name} is Ready", "href": "/nodes"})
     return facts
 
 

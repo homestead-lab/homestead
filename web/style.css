@@ -1051,40 +1051,22 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
 @media(max-width:1060px) and (min-width:561px){.wltable .wl-access{display:none}}
 /* Onboarding: a form in sections, then one plan's three ways to boot and its timeline. */
 .modalbox[data-context="onboard"]{width:min(1080px,100%)}
-.onboard-form{display:flex;flex-direction:column;gap:12px}
-.onboard-form fieldset{border:1px solid var(--line);border-radius:12px;padding:10px 14px 12px;margin:0;min-width:0}
-.onboard-form legend{padding:0 6px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);font-weight:700}
-.onboard-form .f{margin-bottom:8px}.onboard-form .switch{display:flex;margin-top:4px}
-.onboard-token{margin-top:4px;font-size:12px}.onboard-token code{user-select:all}
-.onboard-more>summary{cursor:pointer;font-size:12px;color:var(--mut);margin:4px 0 8px}
-.onboard-plans{display:flex;flex-direction:column;gap:6px}
-.onboard-planrow{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;text-align:left;padding:9px 12px;
-  border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.03);color:var(--tx);cursor:pointer}
-.onboard-planrow:hover{background:rgba(255,255,255,.07)}
-.onboard-status{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 14px;border-radius:12px;
-  border:1px solid var(--line2);background:rgba(255,255,255,.035)}
-.onboard-status>div{display:flex;flex-direction:column;gap:3px}.onboard-status span{font-size:12px;color:var(--mut)}
-.onboard-status.joined{border-color:rgba(61,220,151,.3);background:rgba(61,220,151,.07)}
-.onboard-status.failed{border-color:rgba(255,77,79,.3);background:rgba(255,77,79,.07)}
-.onboard-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:10px 0}
-.onboard-facts span{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;min-width:0}
-.onboard-facts small{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.07em}
-.onboard-facts b{font-size:12.5px;overflow-wrap:anywhere}
-.onboard-ways{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px}
-.onboard-ways section{border:1px solid var(--line);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;min-width:0}
-.onboard-ways h4{margin:0;display:flex;gap:7px;align-items:center;font-size:13.5px}
-.onboard-ways p,.onboard-ways ol{margin:0;font-size:12.5px;color:var(--mut);line-height:1.5}
-.onboard-ways ol{padding-left:18px}.onboard-ways .btn{align-self:flex-start}
-.onboard-ways code{font-size:11px;overflow-wrap:anywhere}
-.onboard-args,.onboard-log,.onboard-config{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;max-height:220px}
-.onboard-config{max-height:360px}
-.onboard-pxe{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.onboard-pxe b{color:var(--ok)}
-.onboard-pxeform{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 8px}
-.onboard-pxeform .f{margin-bottom:6px;min-width:0}.onboard-pxeform .f:first-child{grid-column:1/-1}
-.onboard-timeline{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
-.onboard-timeline li{display:grid;grid-template-columns:72px 1fr auto;gap:10px;font-size:12.5px;padding:5px 0;border-bottom:1px solid var(--line)}
-.onboard-timeline li span,.onboard-timeline li small{color:var(--dim);font-family:"JetBrains Mono",monospace;font-size:11px}
-.onboard-timeline li.failed b{color:var(--crit)}.onboard-timeline li.joined b,.onboard-timeline li.succeeded b{color:var(--ok)}
+/* Adding a host: a guide to Harvester's installer */
+.guide-step{border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:10px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.guide-step h4{margin:0;display:flex;gap:9px;align-items:center;font-size:13.5px}
+.guide-step h4 span{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:rgba(255,255,255,.08);font-size:12px}
+.guide-step p{margin:0;font-size:12.5px;color:var(--mut);line-height:1.5}
+.guide-copy{display:flex;align-items:center;gap:6px;min-width:0}
+.guide-copy code{font-size:11.5px;overflow-wrap:anywhere;user-select:all}
+.guide-screens{display:grid;border-top:1px solid var(--line)}
+.guide-screen{display:grid;grid-template-columns:170px minmax(0,1fr);gap:12px;padding:8px 0;border-bottom:1px solid var(--line);font-size:12.5px;line-height:1.5}
+.guide-screen>span{color:var(--dim);font-weight:600}
+.guide-screen .guide-copy{display:inline-flex}
+.guide-joined{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:8px 10px;border:1px solid var(--line);border-radius:10px}
+.guide-joined.ok{border-color:rgba(61,220,151,.3);background:rgba(61,220,151,.07)}
+.guide-joined span{font-size:12px;color:var(--mut)}
+@media(max-width:560px){.guide-screen{grid-template-columns:1fr;gap:2px}}
+.onboard-args{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;max-height:220px}
 /* Cleanup rows on the Cluster page, and a removal's steps. */
 .cleanup-card{padding:4px 14px}
 .cleanup-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
@@ -1101,8 +1083,7 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
 .removal-mode span{font-size:12px;color:var(--mut);line-height:1.45}
 .removal-stuck{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:10px;font-size:12px;color:var(--mut)}
 .removal-stuck span{padding:2px 8px;border:1px solid var(--line);border-radius:7px;font-family:"JetBrains Mono",monospace;font-size:11px}
-@media(max-width:560px){.onboard-timeline li{grid-template-columns:64px 1fr}.onboard-timeline li small{display:none}}
-/* The way back to the dialog underneath, named for it. */
+@media(max-width:560px){/* The way back to the dialog underneath, named for it. */
 .modaltitle{display:flex;flex-direction:column;gap:2px;min-width:0}
 .modalback{align-self:flex-start;max-width:100%;border:0;background:none;padding:0;color:var(--low);font:600 11.5px "Inter Tight",sans-serif;
   cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

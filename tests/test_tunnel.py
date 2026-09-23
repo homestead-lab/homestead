@@ -128,11 +128,6 @@ CF = {"Cf-Connecting-Ip": "203.0.113.9", "Cf-Ray": "8a1b2c3d4e5f-LHR"}
 
 
 class TunnelTests(unittest.TestCase):
-    def test_boot_addresses_are_not_served_through_the_tunnel(self):
-        h, sent = handler("/boot/some-long-secret-value/config.yaml", headers=CF)
-        h.do_GET()
-        self.assertEqual(404, sent[0][0])
-
     def test_setup_is_not_offered_through_the_tunnel(self):
         h, sent = handler("/api/auth/setup", "POST", CF, b'{"username": "x", "password": "y"}')
         h.do_POST()

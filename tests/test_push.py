@@ -184,15 +184,22 @@ class AlertTests(unittest.TestCase):
         self.assertEqual([], self.tick({}, jobs=[old, new]))
         self.assertEqual([], self.tick({}, jobs=[]), "a dismissed job is not news")
 
-    def test_joins_say_when_the_install_starts_and_when_it_ends(self):
-        self.tick({})
-        plan = {"id": "p1", "hostname": "h4", "status": "installing", "events": [{"kind": "started"}]}
-        started = alerts.observe({"joins": alerts.join_facts([plan])}, self.now + 1)
-        plan.update(status="joined", message="h4 has joined and is Ready")
-        joined = alerts.observe({"joins": alerts.join_facts([plan])}, self.now + 2)
+    def test_a_new_host_is_news_but_the_hosts_already_there_are_not(self):
+        def node(name, uid, ready):
+            return {"metadata": {"name": name, "uid": uid},
+                    "status": {"conditions": [{"type": "Ready", "status": "True" if ready else "False"}]}}
+        old = [node("harvester-1", "u1", True), node("harvester-2", "u2", True)]
+        self.assertEqual([], alerts.observe({"joins": alerts.join_facts(old)}, self.now))
+        registering = alerts.observe({"joins": alerts.join_facts(old + [node("harvester-3", "u3", False)])}, self.now + 1)
+        ready = alerts.observe({"joins": alerts.join_facts(old + [node("harvester-3", "u3", True)])}, self.now + 2)
 
-        self.assertEqual(["Installing Harvester on h4"], [a["title"] for a in started])
-        self.assertEqual(["h4 joined the cluster"], [a["title"] for a in joined])
+        self.assertEqual(["harvester-3 is joining the cluster"], [a["title"] for a in registering])
+        self.assertEqual(["harvester-3 joined the cluster"], [a["title"] for a in ready])
+
+    def test_a_source_added_by_an_upgrade_starts_quiet(self):
+        alerts.observe({"jobs": []}, self.now)
+        node = {"metadata": {"name": "harvester-1", "uid": "u1"}, "status": {"conditions": []}}
+        self.assertEqual([], alerts.observe({"jobs": [], "joins": alerts.join_facts([node])}, self.now + 1))
 
     def test_a_newer_image_is_news_again(self):
         def report(digest):

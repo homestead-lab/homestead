@@ -1,4 +1,4 @@
-"""Joining a host to the cluster, and removing a dead one."""
+"""The guide to adding a host, and removing a dead one."""
 import base64
 import sys
 import tempfile
@@ -9,9 +9,7 @@ from pathlib import Path
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
-import homestead_fatimg as fat
 import homestead_onboard as onboard
-import homestead_yaml as yaml
 
 
 def node(name, ready=True, roles=(), machine=""):
@@ -115,200 +113,49 @@ class Ops:
         return {"id": "op1"}
 
 
-PLAN = {"hostname": "node4", "role": "worker", "device": "/dev/nvme0n1", "data_disk": "/dev/sdb",
-        "nic": "eno1", "mac": "52:54:00:AA:BB:CC", "method": "static", "address": "192.0.2.54/24",
-        "gateway": "192.0.2.1", "dns": "1.1.1.1, 8.8.8.8", "ntp": "pool.ntp.org",
-        "password": "correct horse", "server_url": "https://192.0.2.240:443",
-        "token": "K10abc::server:secrettoken", "version": "1.4.1", "hours": 12,
-        "homestead_url": "http://192.0.2.242:8080"}
-
-
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.cluster = Cluster()
         self.ops = Ops()
-        onboard.bind(self.cluster.get, self.cluster.send, "lab", self.tmp.name, self.ops)
-
-    def plan(self, **changes):
-        return onboard.create_plan(dict(PLAN, **changes), "")
-
-    def stored(self, plan_id):
-        return onboard._find(plan_id)
+        onboard.bind(self.cluster.get, self.cluster.send, "lab", self.ops)
 
 
-class PlanTests(Base):
-    def test_defaults_come_from_the_cluster(self):
-        defaults = onboard.cluster_defaults()
+class GuideTests(Base):
+    def test_the_guide_answers_from_the_cluster(self):
+        self.cluster.objects["/apis/harvesterhci.io/v1beta1/settings/ntp-servers"] = {
+            "value": '{"ntpServers":["0.uk.pool.ntp.org","1.uk.pool.ntp.org"]}'}
+        g = onboard.guide()
 
-        self.assertEqual(("1.4.1", "https://192.0.2.240:443"), (defaults["version"], defaults["server_url"]))
+        self.assertEqual("1.4.1", g["version"])
+        self.assertEqual("https://releases.rancher.com/harvester/v1.4.1/harvester-v1.4.1-amd64.iso", g["iso"])
+        self.assertEqual("https://releases.rancher.com/harvester/v1.4.1/harvester-v1.4.1-amd64.sha512", g["checksums"])
+        self.assertEqual("192.0.2.240", g["vip"])
+        self.assertEqual(["0.uk.pool.ntp.org", "1.uk.pool.ntp.org"], g["ntp"])
+        self.assertEqual("node4", g["hostname"])
+        self.assertEqual(3, g["management_count"])
+        self.assertEqual("192.0.2.51", g["token_host"])
+        self.assertEqual("sudo grep '^token:' /etc/rancher/rancherd/config.yaml", g["token_command"])
 
-    def test_the_token_goes_to_a_secret_not_the_plan(self):
-        plan = self.plan()
+    def test_the_guide_never_reads_the_token(self):
+        onboard.guide()
+        self.assertFalse(any("secret" in path for _, path in self.cluster.sent))
+        self.assertNotIn("token", {k for k in onboard.guide() if not k.startswith("token_")})
 
-        self.assertNotIn("K10abc", str(plan))
-        self.assertNotIn("K10abc", Path(self.tmp.name, "onboard.json").read_text())
-        self.assertIn(f"homestead-onboard-{plan['id']}", self.cluster.secrets)
-        self.assertEqual(("onboard", "Join node4"), self.ops.started[0])
+    def test_the_next_name_follows_the_pattern(self):
+        self.assertEqual("harvester-04", onboard.next_hostname(["harvester-01", "harvester-02", "harvester-03"]))
+        self.assertEqual("node3", onboard.next_hostname(["node1", "node2", "witness"]))
+        self.assertEqual("", onboard.next_hostname(["alpha"]))
 
-    def test_the_page_never_sees_the_url_secret_as_a_field(self):
-        plan = self.plan()
+    def test_join_plans_left_by_an_older_release_are_deleted_with_their_tokens(self):
+        self.cluster.secrets = {"homestead-onboard-abc": {}, "homestead-auth": {}}
+        self.cluster.objects["/api/v1/namespaces/lab/secrets"] = {"items": [
+            {"metadata": {"name": n}} for n in self.cluster.secrets]}
+        self.cluster.objects["/api/v1/namespaces/lab/pods?labelSelector=app%3Dhomestead-pxe"] = {"items": []}
 
-        self.assertNotIn("secret", plan)
-        self.assertIn("/boot/", plan["urls"]["config"])
-
-    def test_a_node_already_in_the_cluster_is_refused(self):
-        with self.assertRaisesRegex(ValueError, "already in the cluster"):
-            self.plan(hostname="node2")
-
-    def test_bad_input_is_refused_plainly(self):
-        for changes, words in (({"hostname": "Node_4"}, "hostname"), ({"device": "sda"}, "device path"),
-                               ({"nic": "", "mac": ""}, "management network"), ({"mac": "zz"}, "MAC"),
-                               ({"address": "192.0.2.54"}, "prefix"), ({"password": "short"}, "8 characters"),
-                               ({"server_url": "192.0.2.240"}, "https"), ({"token": ""}, "token"),
-                               ({"version": "latest"}, "version"), ({"homestead_url": "https://x"}, "plain HTTP")):
-            with self.subTest(changes=changes):
-                with self.assertRaisesRegex(ValueError, words):
-                    self.plan(**changes)
-
-    def test_the_join_config_is_harvesters_format(self):
-        plan = self.plan()
-
-        doc = yaml.loads(onboard.config_document(self.stored(plan["id"])))
-
-        self.assertEqual(("https://192.0.2.240:443", "K10abc::server:secrettoken"), (doc["server_url"], doc["token"]))
-        self.assertEqual(("join", "worker", "/dev/nvme0n1", "/dev/sdb"),
-                         (doc["install"]["mode"], doc["install"]["role"], doc["install"]["device"], doc["install"]["data_disk"]))
-        management = doc["install"]["management_interface"]
-        self.assertEqual([{"name": "eno1", "hwAddr": "52:54:00:aa:bb:cc"}], management["interfaces"])
-        self.assertEqual(("static", "192.0.2.54", "255.255.255.0", "192.0.2.1"),
-                         (management["method"], management["ip"], management["subnet_mask"], management["gateway"]))
-        self.assertEqual(["1.1.1.1", "8.8.8.8"], doc["os"]["dns_nameservers"])
-        self.assertEqual("node4", doc["os"]["hostname"])
-        self.assertNotEqual("correct horse", doc["os"]["password"] if doc["os"]["password"].startswith("$6$") else "x")
-        self.assertIn("harvester-v1.4.1-amd64.iso", doc["install"]["iso_url"])
-        self.assertEqual({"STARTED", "SUCCEEDED", "FAILED"}, {w["event"] for w in doc["install"]["webhooks"]})
-
-    def test_the_preview_hides_the_token(self):
-        plan = self.plan()
-
-        text = onboard.config_document(self.stored(plan["id"]), redact=True)
-
-        self.assertNotIn("K10abc", text)
-        self.assertIn("<cluster token>", text)
-
-    def test_the_boot_script_asks_before_wiping(self):
-        script = onboard.ipxe_script(self.stored(self.plan()["id"]))
-
-        self.assertTrue(script.startswith("#!ipxe"))
-        self.assertIn("ERASES /dev/nvme0n1 and /dev/sdb", script)
-        self.assertIn("prompt --key i", script)
-        self.assertIn("initrd=initrd", script, "UEFI needs the initrd named on the kernel line")
-        self.assertIn("harvester.install.config_url=http://192.0.2.242:8080/boot/", script)
-
-    def test_without_confirmation_it_goes_straight_to_install(self):
-        script = onboard.ipxe_script(self.stored(self.plan(confirm_wipe=False)["id"]))
-
-        self.assertNotIn("prompt --key i", script)
-
-    def test_the_usb_image_holds_ipxe_and_the_script_but_no_token(self):
-        plan = self.plan()
-        onboard.ipxe_binary = lambda: b"MZ" + b"\0" * 200_000
-
-        name, image = onboard.usb_image(plan["id"])
-        files = fat.read(image)
-
-        self.assertEqual("homestead-join-node4.img", name)
-        self.assertEqual({"EFI/BOOT/BOOTX64.EFI", "EFI/BOOT/autoexec.ipxe", "autoexec.ipxe", "README.txt"}, set(files))
-        self.assertIn(b"chain http://192.0.2.242:8080/boot/", files["autoexec.ipxe"])
-        self.assertNotIn(b"K10abc", image)
-
-
-class BootTests(Base):
-    def test_a_secret_opens_only_its_own_plan_and_only_while_open(self):
-        plan = self.stored(self.plan()["id"])
-
-        self.assertEqual(plan["id"], onboard.by_secret(plan["secret"])["id"])
-        self.assertIsNone(onboard.by_secret("x" * 32))
-        self.assertIsNone(onboard.by_secret(""))
-
-        plan["expires"] = time.time() - 1
-        onboard._store(plan)
-        self.assertIsNone(onboard.by_secret(plan["secret"]), "expired plans stop answering")
-
-    def test_fetching_the_config_marks_it_installing(self):
-        plan = self.stored(self.plan()["id"])
-
-        onboard.note_fetch(plan["secret"], "config", "192.0.2.54")
-
-        self.assertEqual("installing", self.stored(plan["id"])["status"])
-
-    def test_webhooks_move_the_plan_along(self):
-        plan = self.stored(self.plan()["id"])
-
-        onboard.webhook(plan["secret"], "STARTED")
-        self.assertEqual("Installing Harvester", self.stored(plan["id"])["message"])
-        onboard.webhook(plan["secret"], "FAILED")
-        self.assertEqual("failed", self.stored(plan["id"])["status"])
-        self.assertIsNone(onboard.by_secret(plan["secret"]), "a failed plan stops serving")
-
-    def test_a_joined_node_closes_its_plan_and_deletes_the_token(self):
-        plan = self.plan()
-        self.cluster.objects["/api/v1/nodes"]["items"].append(node("node4"))
-
-        onboard.tick()
-
-        self.assertEqual("joined", self.stored(plan["id"])["status"])
-        self.assertNotIn(f"homestead-onboard-{plan['id']}", self.cluster.secrets)
-        self.assertEqual(("succeeded", 100), onboard.op_state({"ref": {"plan": plan["id"]}})[:2])
-
-    def test_an_expired_plan_deletes_its_token(self):
-        plan = self.stored(self.plan()["id"])
-        plan["expires"] = time.time() - 1
-        onboard._store(plan)
-
-        onboard.tick()
-
-        self.assertEqual("expired", self.stored(plan["id"])["status"])
-        self.assertEqual({}, self.cluster.secrets)
-
-    def test_revoking_ends_it(self):
-        plan = self.plan()
-
-        onboard.revoke(plan["id"])
-
-        self.assertEqual("cancelled", self.stored(plan["id"])["status"])
-        self.assertEqual({}, self.cluster.secrets)
-
-
-class PxeTests(Base):
-    def test_the_pxe_pod_answers_only_the_new_hosts_mac(self):
-        plan = self.stored(self.plan()["id"])
-
-        pod = onboard.pxe_pod(plan, "node1", "mgmt-br", "192.0.2.0/24")
-        args = pod["spec"]["containers"][0]["args"]
-
-        self.assertTrue(pod["spec"]["hostNetwork"])
-        self.assertIn("--dhcp-mac=set:joining,52:54:00:aa:bb:cc", args)
-        self.assertIn("--dhcp-range=192.0.2.0,proxy,255.255.255.0", args)
-        self.assertTrue(all("tag:bootipxe" in a or "tag:runscript" in a for a in args if a.startswith("--pxe-service")))
-        self.assertLessEqual(pod["spec"]["activeDeadlineSeconds"], 6 * 3600, "it stops by itself")
-        self.assertIn("@sha256:", pod["spec"]["containers"][0]["image"], "a pinned image")
-
-    def test_pxe_needs_a_mac(self):
-        plan = self.stored(self.plan(mac="")["id"])
-
-        with self.assertRaisesRegex(ValueError, "MAC"):
-            onboard.pxe_pod(plan, "node1", "mgmt-br", "192.0.2.0/24")
-
-    def test_starting_pxe_guesses_the_subnet_from_the_node(self):
-        plan = self.plan()
-
-        onboard.pxe_start(plan["id"], "node1")
-
-        self.assertEqual("192.0.2.0/24", self.stored(plan["id"])["pxe"]["subnet"])
-        self.assertIn(("POST", "/api/v1/namespaces/lab/pods"), self.cluster.sent)
+        self.assertEqual(1, onboard.tidy_old_plans())
+        self.assertEqual({"homestead-auth"}, set(self.cluster.secrets))
 
 
 class RemovalTests(Base):
@@ -459,27 +306,6 @@ class RemovalTests(Base):
             onboard.cleanup("longhorn", "node1")
         with self.assertRaisesRegex(ValueError, "not a leftover"):
             onboard.cleanup("machine", "custom-1")
-
-
-class FatImageTests(unittest.TestCase):
-    def test_files_come_back_as_written_with_long_names(self):
-        files = {"EFI/BOOT/BOOTX64.EFI": bytes(range(256)) * 5000, "autoexec.ipxe": b"#!ipxe\n",
-                 "Read Me Please.txt": b"hello"}
-
-        back = fat.read(fat.build(files, 16))
-
-        self.assertEqual(files, back)
-
-    def test_a_partition_table_marks_one_bootable_fat_partition(self):
-        image = fat.build({"a.txt": b"x"}, 16)
-
-        self.assertEqual(16 * 1024 * 1024, len(image))
-        self.assertEqual(b"\x55\xaa", image[510:512])
-        self.assertEqual((0x80, 0x0E), (image[446], image[450]))
-
-    def test_too_much_for_the_image_is_refused(self):
-        with self.assertRaisesRegex(ValueError, "fit"):
-            fat.build({"big.bin": b"\0" * (20 * 1024 * 1024)}, 16)
 
 
 if __name__ == "__main__":

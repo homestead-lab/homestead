@@ -44,7 +44,7 @@ async function viewCluster() {
   const marginCopy = margin === null || margin === undefined ? "Unknown" : margin === 0 ? "No failure margin" : `${margin} member${margin === 1 ? "" : "s"}`;
   const serviceRows = (report.services || []).filter(service => service.pods || service.required);
   paint(`<div class="phead"><div><h2>Cluster</h2><p>Harvester and Kubernetes platform health, separate from application health</p></div>
-    <button class="btn pri" onclick="clusterOnboarding()">${icon("plus")}Onboard a node</button></div>
+    <button class="btn pri" data-need="admin" onclick="clusterOnboarding()">${icon("plus")}Add a host</button></div>
 
   <section class="cluster-hero ${esc(report.state)}">
     <div><span class="cluster-kicker">PLATFORM STATUS</span><h3>${esc(report.state === "healthy" ? "Platform healthy" : report.state === "critical" ? "Platform action required" : "Platform online · review items")}</h3>
@@ -85,7 +85,7 @@ async function viewCluster() {
     <section class="card flat cluster-wide cluster-onboard-preview"><div><span class="cluster-kicker">NEXT NODE</span>
       <div class="ctitle">Recommended role: ${esc(report.onboarding?.recommended_role || "Review required")}</div>
       <div class="csub">${esc(report.onboarding?.reason || "Review the current control-plane layout before joining another host.")}</div></div>
-      <button class="btn" data-need="admin" onclick="clusterOnboarding()">Onboard a node</button></section>
+      <button class="btn" data-need="admin" onclick="clusterOnboarding()">Add a host</button></section>
   </div>
   <div id="clusterCleanup"></div>`);
   // Admin only, and a round trip of its own: the page does not wait for it.

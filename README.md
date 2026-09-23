@@ -29,7 +29,7 @@ not affiliated with, endorsed, or sponsored by Lime Technology, Inc.
 | **Virtual machines** | Create from a Harvester image or an imported disk, power actions, and live migration between hosts |
 | **Architecture** | VIP → workload → claim → Longhorn volume → replica dependency view |
 | **Networking** | Service, ClusterIP, VIP, ingress, listener ownership, orphaned-listener release, endpoint health and guided collision-free exposure |
-| **Cluster** | Harvester/Kubernetes versions, control-plane and etcd quorum, node pressure, critical services, certificate requests, adding hosts by USB image, network boot or ISO, and removing hosts - including ones that are dead for good |
+| **Cluster** | Harvester/Kubernetes versions, control-plane and etcd quorum, node pressure, critical services, certificate requests, a step-by-step guide to adding a host, and removing hosts - including ones that are dead for good |
 | **Between clusters** | Browse another Homestead cluster, check the two releases can talk, and move its containers and VMs here through shared backup storage |
 | **Storage** | RWO/RWX volume creation, growth and guarded deletion, file browsing and editing, storage-class inventory and creation, usage, health, snapshots, backups and recurring jobs |
 | **Hardware** | Host device browser and reusable mappings for iGPU, Coral, USB/PCIe and other devices |
@@ -64,10 +64,10 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.71`, the workflow publishes:
+For a release such as `v2.8.72`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.71
+ghcr.io/wjcloudy/homestead:2.8.72
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -78,8 +78,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.71
-git push origin v2.8.71
+git tag v2.8.72
+git push origin v2.8.72
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -265,33 +265,23 @@ of hiding the rest of the page.
 
 ### Adding a host
 
-**Onboard a node** builds a join plan: the hostname, role, install and data
-disks, management network, the `rancher` user's password and SSH keys, the
-cluster address and version (read from the cluster), and the cluster token. The
-token is not read from the cluster; the form shows the one command that prints
-it on a management node (`sudo yq eval .token /etc/rancher/rancherd/config.yaml`).
-It is kept in a Secret for that plan alone and deleted when the node joins, the
-plan expires, or it is cancelled.
+**Add a host** on the Cluster page is a guide to Harvester's own installer.
+An unattended install needs the new machine's install disk and network card
+named in advance, and those are only known once the machine is in front of
+you, so you choose them in the installer; the guide covers the rest:
 
-The plan turns into Harvester's own join configuration, served with an iPXE boot
-script from a random `/boot/<secret>/` address that stops answering when the plan
-closes. The host can be pointed at it three ways:
-
-- **USB stick** - a 16 MB image with iPXE on it. It gets an address by DHCP and
-  network-boots the installer from Homestead, so nothing on the LAN changes.
-  UEFI only, with Secure Boot off; the stick holds no token.
-- **Network boot** - the host's own PXE boot, with nothing to plug in. A
-  temporary proxy-DHCP pod (Poseidon's dnsmasq, pinned by digest) on a chosen
-  node hands it iPXE over TFTP and then the installer. It adds boot instructions
-  without handing out addresses, answers the new host's MAC address and no
-  other, and stops by itself within six hours. A LAN that already runs a PXE
-  server can chain the plan's boot script from it instead.
-- **Harvester ISO** - the official ISO, with the config address added to its
-  boot line by hand; the plan shows the exact text.
-
-Unless turned off, the host asks for a key press before anything is erased. The
-installer reports back through its webhooks, so the plan - and Activity - follow
-it from boot script to configuration, install, reboot and Ready.
+1. **The ISO** - a direct link to the Harvester release this cluster runs, for
+   its CPU architecture, with its checksums. Write it to a USB stick (Rufus in
+   DD mode, or balenaEtcher) or mount it from the server's BMC.
+2. **The cluster token** - Homestead never reads or stores it. The guide gives
+   the two commands that print it on a management node, with that node's
+   address filled in.
+3. **Each installer screen** - join an existing cluster, the node role (with
+   how many management nodes the cluster already has), disks, hostname (the
+   next free name), management network, and the values Homestead reads from the
+   cluster: its VIP, NTP servers and proxy.
+4. **Watching it join** - the new host appears in the guide as soon as
+   Harvester registers it, and again when it is Ready.
 
 ### Removing a host
 
@@ -334,10 +324,7 @@ cluster, so treat a published hostname as a way into the whole cluster:
 - **Finish setup on the LAN first.** Creating the first administrator is refused
   through the tunnel.
 
-Homestead keeps some things off the tunnel by itself: the `/boot/` addresses a new
-host installs from (they carry a cluster join token) answer only on the LAN, and
-a join plan made from outside has to be given the LAN address itself. Every
-response forbids framing and scripts from elsewhere, sessions are signed and
+Every response forbids framing and scripts from elsewhere, sessions are signed and
 `Secure` behind TLS, requests over 8 MB are refused, and sign-in attempts are
 limited per address and per account, using Cloudflare's client address rather
 than a header the client can write.
@@ -361,7 +348,7 @@ a plain-HTTP LAN address; Settings says so there instead.
 | Outages | a node not Ready, a volume faulted, a drive failing SMART |
 | Degraded | a volume rebuilding a replica, a workload not ready after its start-up grace |
 | Failed jobs | anything in the activity tray that ends in failure |
-| Hosts joining | a join plan's install starting, the host joining, or the plan failing |
+| Hosts joining | a new host registering with the cluster, and becoming Ready |
 | Image updates | a newer image for a workload (off by default; checked every six hours) |
 
 A problem is announced once it has lasted a minute, so restarts and rollouts do
@@ -407,12 +394,12 @@ and, on start, brings its own ClusterRole up to what that release describes -
 keeping any rules you added by hand - so an upgrade needs no `kubectl`.
 **Settings → About this installation → Permissions** says what it last did.
 
-That needs the right to edit its own role, which an install from before 2.8.71
+That needs the right to edit its own role, which an install from before 2.8.72
 does not have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.71/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.72/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -424,7 +411,7 @@ binding also covers the old `harvui` account.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.71 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.72 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ### Moving an install to the Homestead names
