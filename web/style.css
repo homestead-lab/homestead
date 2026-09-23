@@ -979,6 +979,41 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
 
 /* ---------------- move workload ---------------- */
 .tag.movable{cursor:pointer;padding-right:7px}
+/* Dashboard top row: the charts take up whatever height the row has, and the
+   storage donut sits beside its figures so it does not set a tall row alone. */
+.dashcard{display:flex;flex-direction:column}
+.dashcard>.spark{flex:1 1 78px;min-height:78px;height:auto}
+.dashcard .spark .ln{vector-effect:non-scaling-stroke}
+.dashnums{gap:26px;margin-top:12px;flex-wrap:wrap;row-gap:12px}
+.storagecard{container-type:inline-size}
+.storbody{display:flex;align-items:center;gap:16px;margin-top:10px}
+.nodecard{display:flex;flex-direction:column}
+.nodecard>.nodebadges{margin-top:auto;padding-top:10px}
+.nodecard>.podgrid{margin-bottom:12px}
+.stordonut{flex:0 0 auto;display:grid;place-items:center}
+.storstats{flex:1 1 auto;min-width:0}
+.storstats .drow{padding:8px 0}
+.storstats .drow .dl{flex:0 1 auto}
+@container (max-width:290px){
+  .storbody{flex-direction:column;align-items:stretch;gap:6px}
+}
+/* Node cards and the tables beside them: names and lists shorten, numbers never break. */
+.nowrap{white-space:nowrap}
+.drow .dv.nowrap{overflow-wrap:normal}
+.nodehead>.row:first-child{min-width:0;flex:1 1 auto;flex-wrap:nowrap}
+.nodehead-acts{flex-wrap:nowrap}
+.nodename{min-width:0}
+.nodename>div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nodehead-acts{flex:0 0 auto}
+.nodecard .between>.small.mono{white-space:nowrap}
+.badgegroup{min-width:0}
+.badgegroup .tag{max-width:100%;min-width:0}
+.badgegroup .tag.movable{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block}
+.tbl td.cell-name,.tbl td.cell-nodes,.tbl td.cell-roles{max-width:170px}
+.tbl td.cell-name>*,.tbl td.cell-nodes,.tbl td.cell-roles{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tbl td.cell-name>*{display:block}
+.tbl td.cell-tags{max-width:200px;min-width:110px}
+.tbl td.cell-tags .tag{margin:2px 4px 2px 0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle}
 .tag.movable:hover{background:rgba(74,158,255,.18);border-color:rgba(74,158,255,.45);color:#9ecbff}
 .tag.movable .mv{opacity:.45;font-size:10px;margin-left:1px}
 .tag.movable:hover .mv{opacity:1}

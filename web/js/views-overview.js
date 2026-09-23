@@ -66,42 +66,43 @@ async function viewDash() {
   </div>` : ""}
 
   <div class="grid g3 stagger">
-    <div class="card glow ${worstMetricClass([{ value: o.cpu_pct, metric: "cpu" }, { value: o.mem_pct, metric: "memory" }])}">
+    <div class="card glow dashcard ${worstMetricClass([{ value: o.cpu_pct, metric: "cpu" }, { value: o.mem_pct, metric: "memory" }])}">
       <div class="between"><div><div class="ctitle">Compute</div>
         <div class="csub">CPU and memory across the cluster</div></div>${trend(H.cpu)}</div>
       ${dualSpark((H.cpu || []).slice(-40), (H.mem || []).slice(-40))}
-      <div class="row" style="gap:26px;margin-top:12px">
+      <div class="row dashnums">
         <div><div class="bignum">${o.cpu_pct}<span class="unit">%</span></div>
           <div class="csub"><span class="kdot s1"></span>CPU · ${o.cpu_cap} cores capacity</div></div>
         <div><div class="bignum">${o.mem_pct}<span class="unit">%</span></div>
-          <div class="csub"><span class="kdot s2"></span>RAM · ${o.mem_used_gb}/${o.mem_cap_gb} GB</div></div>
+          <div class="csub"><span class="kdot s2"></span>RAM · ${sizePair(o.mem_used_gb, o.mem_cap_gb)}</div></div>
       </div>
     </div>
 
-    <div class="card glow g-info">
+    <div class="card glow g-info dashcard">
       <div class="between"><div><div class="ctitle">Throughput</div>
         <div class="csub">Network and local disk</div></div>${trend(rx)}</div>
       ${dualSpark(rx, tx)}
-      <div class="row" style="gap:26px;margin-top:12px">
-        <div><div class="bignum">${netNow.toFixed(1)}<span class="unit">Mb/s</span></div>
-          <div class="csub"><span class="kdot s1"></span>in · ${txNow.toFixed(1)} out</div></div>
-        <div><div class="midnum">${diskUsed.toFixed(0)}<span class="unit">GB</span></div>
-          <div class="csub">node disk of ${diskCap.toFixed(0)} GB</div>
+      <div class="row dashnums">
+        <div><div class="bignum">${rateParts(netNow)[0]}<span class="unit">${rateParts(netNow)[1]}</span></div>
+          <div class="csub"><span class="kdot s1"></span>in · ${rateParts(txNow).join(" ")} out</div></div>
+        <div><div class="midnum">${sizeParts(diskUsed)[0]}<span class="unit">${sizeParts(diskUsed)[1]}</span></div>
+          <div class="csub">node disk of ${sizeText(diskCap)}</div>
           ${meter(diskCap ? diskUsed / diskCap * 100 : 0, "", "disk")}</div>
       </div>
     </div>
 
-    <div class="card flat">
+    <div class="card flat storagecard">
       <div class="ctitle">Storage</div><div class="csub">Longhorn capacity and replica health</div>
-      ${st ? `
-      <div class="row" style="margin-top:12px;justify-content:center">
-        ${segDonut(storParts, st.volumes, "volumes", 150)}</div>
-      <div class="drow"><div class="dl">Free</div><div class="dv mono">${st.avail_gb} GB</div></div>
-      <div class="drow"><div class="dl">Used</div><div class="dv mono">${st.used_gb} / ${st.cap_gb} GB</div></div>
-      <div class="drow"><div class="dl">Provisioned</div><div class="dv mono">${st.provisioned_gb} GB</div></div>
+      ${st ? `<div class="storbody">
+      <div class="stordonut">${segDonut(storParts, st.volumes, "volumes", 128)}</div>
+      <div class="storstats">
+      <div class="drow"><div class="dl">Free</div><div class="dv mono nowrap">${sizeText(st.avail_gb)}</div></div>
+      <div class="drow"><div class="dl">Used</div><div class="dv mono nowrap">${sizePair(st.used_gb, st.cap_gb)}</div></div>
+      <div class="drow"><div class="dl">Provisioned</div><div class="dv mono nowrap">${sizeText(st.provisioned_gb)}</div></div>
       <div style="margin-top:10px">${meter(st.used_pct)}
         <div class="csub" style="margin-top:6px">${st.used_pct}% of raw capacity used
-          ${st.degraded || st.faulted ? `· <span class="tag ${st.faulted ? "bad" : "warn"}">${st.degraded + st.faulted} unhealthy</span>` : `· <span class="tag ok">all healthy</span>`}</div></div>`
+          ${st.degraded || st.faulted ? `· <span class="tag ${st.faulted ? "bad" : "warn"}">${st.degraded + st.faulted} unhealthy</span>` : `· <span class="tag ok">all healthy</span>`}</div></div>
+      </div></div>`
       : '<div class="empty">storage data unavailable</div>'}
     </div>
   </div>
@@ -113,17 +114,17 @@ async function viewDash() {
   <div class="grid g2">
     <div class="card flat pad0">
       <div class="cardhd"><div class="ctitle">Top CPU</div></div>
-      <div class="tblwrap"><table class="tbl"><thead><tr><th>Workload</th><th>Node</th><th style="width:150px">CPU</th></tr></thead><tbody>
-      ${o.top_cpu.slice(0, 5).map(w => `<tr><td><b>${esc(w.name)}</b><div class="dim xs">${esc(w.ns)}</div></td>
-        <td class="small muted">${esc(w.nodes.join(", ") || "—")}</td>
+      <div class="tblwrap"><table class="tbl"><thead><tr><th>Workload</th><th>Node</th><th style="width:130px">CPU</th></tr></thead><tbody>
+      ${o.top_cpu.slice(0, 5).map(w => `<tr><td class="cell-name"><b title="${esc(w.name)}">${esc(w.name)}</b><div class="dim xs">${esc(w.ns)}</div></td>
+        <td class="small muted cell-nodes" title="${esc(w.nodes.join(", "))}">${esc(w.nodes.join(", ") || "—")}</td>
         <td>${meter(Math.min(100, Number(w.cpu || 0) * 100))}<div class="dim xs mono" style="margin-top:4px" title="100% equals one CPU core">${workloadCpuPercent(w.cpu)}</div></td></tr>`).join("")}
       </tbody></table></div></div>
     <div class="card flat pad0">
       <div class="cardhd"><div class="ctitle">Top memory</div></div>
-      <div class="tblwrap"><table class="tbl"><thead><tr><th>Workload</th><th>Node</th><th style="width:120px">RAM</th></tr></thead><tbody>
-      ${o.top_mem.slice(0, 5).map(w => `<tr><td><b>${esc(w.name)}</b><div class="dim xs">${esc(w.ns)}</div></td>
-        <td class="small muted">${esc(w.nodes.join(", ") || "—")}</td>
-        <td class="mono"><b>${w.mem_mb}</b> <span class="dim xs">MB</span></td></tr>`).join("")}
+      <div class="tblwrap"><table class="tbl"><thead><tr><th>Workload</th><th>Node</th><th style="width:90px">RAM</th></tr></thead><tbody>
+      ${o.top_mem.slice(0, 5).map(w => `<tr><td class="cell-name"><b title="${esc(w.name)}">${esc(w.name)}</b><div class="dim xs">${esc(w.ns)}</div></td>
+        <td class="small muted cell-nodes" title="${esc(w.nodes.join(", "))}">${esc(w.nodes.join(", ") || "—")}</td>
+        <td class="mono nowrap"><b>${workloadMemory(w.mem_mb)}</b></td></tr>`).join("")}
       </tbody></table></div></div>
   </div>`);
 }
@@ -135,15 +136,15 @@ function nodeCard(n) {
     { value: n.cpu_pct, metric: "cpu" }, { value: n.mem_pct, metric: "memory" },
     { value: n.fs_pct || 0, metric: "disk" }, { value: n.temps?.cpu_c || 0, metric: "temperature" },
   ]);
-  return `<div class="card glow ${bad ? "g-bad" : health} clickable"
+  return `<div class="card glow ${bad ? "g-bad" : health} clickable nodecard"
        onclick="nodeDetail('${esc(n.name)}')">
-    <div class="between">
+    <div class="between nodehead">
       <div class="row" style="gap:10px">
         <div class="av n2">${esc(n.name.replace(/[^0-9a-z]/gi, "").slice(-2).toUpperCase())}</div>
-        <div><div style="font-weight:680">${esc(n.name)}</div>
-          <div class="dim xs">${n.roles.join(" · ")}</div></div>
+        <div class="nodename"><div style="font-weight:680" title="${esc(n.name)}">${esc(n.name)}</div>
+          <div class="dim xs" title="${esc(n.roles.join(" · "))}">${n.roles.join(" · ")}</div></div>
       </div>
-      <div class="row" style="gap:7px">
+      <div class="row nodehead-acts" style="gap:7px">
         ${n.schedulable === false ? '<span class="pill med">cordoned</span>' : ""}
         <span class="pill ${bad ? "crit" : "low"}">${n.status}</span>
         <button class="btn sm" onclick="event.stopPropagation();nodeActions('${esc(n.name)}')">⋯</button>
@@ -155,13 +156,13 @@ function nodeCard(n) {
           <span class="small mono"><b>${n.cpu_pct}%</b> <span class="dim">of ${n.cpu_cap}</span></span></div>
         ${meter(n.cpu_pct, 'style="margin:5px 0 11px"', "cpu")}
         <div class="between"><span class="dim xs">MEMORY</span>
-          <span class="small mono"><b>${n.mem_pct}%</b> <span class="dim">${n.mem_used_gb}/${n.mem_cap_gb}G</span></span></div>
+          <span class="small mono"><b>${n.mem_pct}%</b> <span class="dim">${sizePair(n.mem_used_gb, n.mem_cap_gb)}</span></span></div>
         ${meter(n.mem_pct, 'style="margin:5px 0 11px"', "memory")}
         <div class="between"><span class="dim xs">DISK</span>
-          <span class="small mono"><b>${n.fs_pct || 0}%</b> <span class="dim">${n.fs_used_gb}/${n.fs_cap_gb}G</span></span></div>
+          <span class="small mono"><b>${n.fs_pct || 0}%</b> <span class="dim">${sizePair(n.fs_used_gb, n.fs_cap_gb)}</span></span></div>
         ${meter(n.fs_pct || 0, 'style="margin:5px 0 11px"', "disk")}
         <div class="between"><span class="dim xs">NETWORK</span>
-          <span class="small mono">↓${(n.rx_mbps || 0).toFixed(1)} ↑${(n.tx_mbps || 0).toFixed(1)} <span class="dim">Mb/s</span></span></div>
+          <span class="small mono">${ratePair(n.rx_mbps, n.tx_mbps)[0]} <span class="dim">${ratePair(n.rx_mbps, n.tx_mbps)[1]}</span></span></div>
         ${n.temps && n.temps.cpu_c != null ? `<div class="between" style="margin-top:9px">
           <span class="dim xs">TEMP</span>
           <span class="small mono ${tempCls(n.temps.cpu_c)}"><b>${n.temps.cpu_c}°C</b>
@@ -180,6 +181,7 @@ function nodeCard(n) {
         ${n.workloads.length ? n.workloads.slice(0, 5).map(w =>
             `<span class="tag movable" title="Move ${esc(w)} to another host"
                onclick="event.stopPropagation();moveWorkload('${esc(w)}')">${esc(w)} <span class="mv">⇄</span></span>`).join("")
+            + (n.workloads.length > 5 ? `<span class="tag more" data-tip="${esc(n.workloads.slice(5).join(", "))}">+${n.workloads.length - 5}</span>` : "")
           : '<span class="dim xs">none</span>'}</div>
     </div></div>`;
 }
@@ -504,20 +506,20 @@ async function viewNodes() {
    <div class="nodegrid stagger">${n.map(nodeCard).join("")}</div>
    <div class="sec">Detail</div>
    <div class="card flat pad0"><div class="tblwrap"><table class="tbl"><thead><tr>
-     <th>Node</th><th>Roles</th><th>CPU</th><th>Memory</th><th>Network</th><th>Temp</th><th>Disk</th><th>Pods</th><th>Hardware</th><th>Workloads</th></tr></thead><tbody>
+     <th>Node</th><th>CPU</th><th>Memory</th><th>Network</th><th>Temp</th><th>Disk</th><th>Pods</th><th>Hardware</th><th>Workloads</th></tr></thead><tbody>
    ${n.map(x => `<tr class="clickable" onclick="nodeDetail('${esc(x.name)}')">
-     <td><b>${esc(x.name)}</b><div class="dim xs">${esc(x.kernel)}</div></td>
-     <td>${x.roles.map(r => `<span class="tag">${esc(r)}</span>`).join("")}</td>
-      <td style="min-width:120px">${meter(x.cpu_pct, "", "cpu")}<div class="dim xs mono" style="margin-top:4px">${x.cpu_pct}% of ${x.cpu_cap}</div></td>
-      <td style="min-width:120px">${meter(x.mem_pct, "", "memory")}<div class="dim xs mono" style="margin-top:4px">${x.mem_used_gb}/${x.mem_cap_gb} GB</div></td>
-     <td class="mono small">↓${(x.rx_mbps || 0).toFixed(1)}<br>↑${(x.tx_mbps || 0).toFixed(1)}</td>
+     <td class="cell-name"><b title="${esc(x.name)} · kernel ${esc(x.kernel)}">${esc(x.name)}</b><div class="dim xs" title="${esc(x.roles.join(" · "))}">${esc(x.roles.join(" · "))}</div></td>
+      <td style="min-width:120px">${meter(x.cpu_pct, "", "cpu")}<div class="dim xs mono nowrap" style="margin-top:4px">${x.cpu_pct}% of ${x.cpu_cap}</div></td>
+      <td style="min-width:120px">${meter(x.mem_pct, "", "memory")}<div class="dim xs mono nowrap" style="margin-top:4px">${sizePair(x.mem_used_gb, x.mem_cap_gb)}</div></td>
+     <td class="mono small nowrap">${ratePair(x.rx_mbps, x.tx_mbps)[0]} <span class="dim xs">${ratePair(x.rx_mbps, x.tx_mbps)[1]}</span></td>
      <td class="mono ${tempCls(x.temps && x.temps.cpu_c)}">${x.temps && x.temps.cpu_c != null ? x.temps.cpu_c + "°" : '<span class="dim">—</span>'}</td>
-      <td style="min-width:100px">${meter(x.fs_pct || 0, "", "disk")}<div class="dim xs mono" style="margin-top:4px">${x.fs_used_gb}/${x.fs_cap_gb}G</div></td>
-     <td class="mono"><b>${x.pods_wl}</b><div class="dim xs">${x.pods_sys} sys</div></td>
-     <td>${hardwareTags(nodeHardwareIds(x)) || '<span class="dim">—</span>'}</td>
-     <td onclick="event.stopPropagation()">${x.workloads.length
-        ? x.workloads.slice(0, 3).map(w => `<span class="tag movable"
+      <td style="min-width:100px">${meter(x.fs_pct || 0, "", "disk")}<div class="dim xs mono nowrap" style="margin-top:4px">${sizePair(x.fs_used_gb, x.fs_cap_gb)}</div></td>
+     <td class="mono nowrap"><b>${x.pods_wl}</b> <span class="dim xs">+${x.pods_sys} sys</span></td>
+     <td class="cell-tags">${hardwareTags(nodeHardwareIds(x)) || '<span class="dim">—</span>'}</td>
+     <td class="cell-tags" onclick="event.stopPropagation()">${x.workloads.length
+        ? x.workloads.slice(0, 2).map(w => `<span class="tag movable"
             onclick="moveWorkload('${esc(w)}')">${esc(w)} <span class="mv">⇄</span></span>`).join("")
+          + (x.workloads.length > 2 ? `<span class="tag more" data-tip="${esc(x.workloads.slice(2).join(", "))}">+${x.workloads.length - 2}</span>` : "")
         : '<span class="dim xs">—</span>'}</td></tr>`).join("")}
    </tbody></table></div></div>`);
 }
