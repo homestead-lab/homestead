@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HOMESTEAD_VERSION = "2.8.73";
+const HOMESTEAD_VERSION = "2.8.74";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -378,6 +378,7 @@ const ACTION_ICONS = [
 ];
 function enhanceActions(root = document) {
   labelStackTables(root);
+  sortTables(root);
   $$("button.btn", root).forEach(button => {
     if ($(".btnicon", button)) return;
     const label = button.textContent.trim().replace(/^[＋↻←]+\s*/, "").toLowerCase();
@@ -403,6 +404,105 @@ function labelStackTables(root = document) {
     });
   });
 }
+
+/* A table marked data-sort="<name>" sorts by whichever heading the reader
+   clicks, and remembers it per table in this browser. Rows are put in order as
+   each render is built, before it is compared with the page, so a live refresh
+   keeps the reader's order instead of shuffling back. A cell's data-sort gives
+   the value to compare when its text is not it (a ratio, a size in bytes). */
+const SORT_UNITS = { "": 1, "%": 1, b: 1, kb: 1e3, mb: 1e6, gb: 1e9, tb: 1e12, kib: 1024, mib: 1024 ** 2,
+  gib: 1024 ** 3, tib: 1024 ** 4 };
+function sortState(name) {
+  try { return JSON.parse(localStorage.getItem(`homestead.sort.${name}`) || "null"); } catch (e) { return null; }
+}
+function sortValue(cell) {
+  if (!cell) return null;
+  const given = cell.dataset.sort;
+  const text = (given ?? cell.textContent).trim();
+  if (!text || text === "—") return null;
+  if (given !== undefined && given !== "" && Number.isFinite(+given)) return +given;
+  const size = text.match(/^(-?\d+(?:[.,]\d+)?)\s*(%|[kmgt]i?b|b)?(?:\s|$)/i);
+  if (size) return parseFloat(size[1].replace(",", ".")) * (SORT_UNITS[(size[2] || "").toLowerCase()] || 1);
+  return text.toLowerCase();
+}
+function sortRows(table) {
+  const state = sortState(table.dataset.sort);
+  const heads = $$("thead th", table);
+  heads.forEach((th, index) => {
+    if (!th.textContent.trim() || th.hasAttribute("data-nosort")) return;
+    th.classList.add("sortable");
+    th.dataset.col = index;
+    th.setAttribute("aria-sort", state && state.col === index ? (state.dir > 0 ? "ascending" : "descending") : "none");
+  });
+  sortBar(table, heads, state);
+  const body = table.tBodies[0];
+  if (!state || !body || !heads[state.col]) return;
+  const rows = [...body.rows];
+  const keyed = rows.filter(row => row.cells.length === heads.length);
+  const rest = rows.filter(row => row.cells.length !== heads.length);
+  keyed.map((row, at) => ({ row, at, value: sortValue(row.cells[state.col]) }))
+    .sort((a, b) => {
+      // Empty cells go last whichever way the column is sorted.
+      if (a.value === null || b.value === null) return (a.value === null) - (b.value === null) || a.at - b.at;
+      const order = typeof a.value === "number" && typeof b.value === "number" ? a.value - b.value
+        : String(a.value).localeCompare(String(b.value), undefined, { numeric: true });
+      return order * state.dir || a.at - b.at;
+    })
+    .concat(rest.map(row => ({ row })))
+    .forEach(({ row }) => body.appendChild(row));
+}
+/* On a phone a stacked table has no headings to click, so it gets a menu. */
+function sortBar(table, heads, state) {
+  if (!table.classList.contains("stack")) return;
+  const wrap = table.closest(".card") || table.parentElement;
+  let bar = wrap.previousElementSibling;
+  if (!bar || !bar.classList.contains("sortbar")) {
+    bar = document.createElement("div");
+    bar.className = "sortbar";
+    wrap.before(bar);
+  }
+  const options = heads.map((th, index) => th.classList.contains("sortable")
+    ? `<option value="${index}" ${state && state.col === index ? "selected" : ""}>${esc(th.textContent.replace(/[↑↓]/g, "").trim())}</option>` : "").join("");
+  bar.innerHTML = `<label>Sort by <select data-sort-for="${esc(table.dataset.sort)}">
+      <option value="" ${state ? "" : "selected"}>as listed</option>${options}</select></label>
+    ${state ? `<button class="btn sm" data-sort-flip="${esc(table.dataset.sort)}">${state.dir > 0 ? "↑ ascending" : "↓ descending"}</button>` : ""}`;
+}
+function saveSort(name, state) {
+  try {
+    if (state) localStorage.setItem(`homestead.sort.${name}`, JSON.stringify(state));
+    else localStorage.removeItem(`homestead.sort.${name}`);
+  } catch (e) { /* this visit only */ }
+  const table = document.querySelector(`table[data-sort="${CSS.escape(name)}"]`);
+  if (table) { if (!state) refresh(true); else sortRows(table); }
+}
+document.addEventListener("change", event => {
+  const select = event.target.closest("select[data-sort-for]");
+  if (!select) return;
+  const col = select.value === "" ? null : +select.value;
+  const table = document.querySelector(`table[data-sort="${CSS.escape(select.dataset.sortFor)}"]`);
+  const numeric = col !== null && table && typeof sortValue(table.tBodies[0]?.rows[0]?.cells[col]) === "number";
+  saveSort(select.dataset.sortFor, col === null ? null : { col, dir: numeric ? -1 : 1 });
+});
+document.addEventListener("click", event => {
+  const flip = event.target.closest("[data-sort-flip]");
+  if (!flip) return;
+  const current = sortState(flip.dataset.sortFlip);
+  if (current) saveSort(flip.dataset.sortFlip, { col: current.col, dir: -current.dir });
+});
+function sortTables(root = document) {
+  $$("table[data-sort]", root).forEach(sortRows);
+}
+document.addEventListener("click", event => {
+  const th = event.target.closest("table[data-sort] th.sortable");
+  if (!th) return;
+  const table = th.closest("table");
+  const col = +th.dataset.col, current = sortState(table.dataset.sort);
+  // Numbers read best biggest first; names from A.
+  const firstRow = table.tBodies[0]?.rows[0];
+  const numeric = typeof sortValue(firstRow?.cells[col]) === "number";
+  const dir = current && current.col === col ? -current.dir : numeric ? -1 : 1;
+  saveSort(table.dataset.sort, { col, dir });
+});
 
 /* ---------------- no-flash rendering ----------------
    Re-rendering innerHTML on every poll is what makes the page flash and lose

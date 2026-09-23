@@ -177,8 +177,8 @@ async function viewProtect() {
      group is the usual starting point — <a onclick="lhQuickStart()" style="cursor:pointer;text-decoration:underline">set that up</a>.</div>`}
 
   <div class="sec">Volumes</div>
-  <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack"><thead><tr>
-    <th>Volume</th><th>Size</th><th>Health</th><th>Groups</th><th>Direct jobs</th><th>Last backup</th><th></th>
+  <div class="card flat pad0"><div class="tblwrap"><table data-sort="protect" class="tbl stack"><thead><tr>
+    <th>Volume</th><th>Size</th><th>Health</th><th>Groups</th><th>Direct jobs</th><th data-nosort>Last backup</th><th></th>
   </tr></thead><tbody>
   ${d.volumes.map(v => `<tr>
     <td><b>${esc(v.pvc || v.name.slice(0, 16))}</b><div class="dim xs mono">${esc(v.namespace)}</div></td>
@@ -339,8 +339,8 @@ window.lhSnaps = async (vol, label) => {
         <button class="btn" data-need="operator" onclick="lhBackupNow('${esc(vol)}','${esc(label)}')">Back up now</button>
       </div>
       <div class="sec">Snapshots (${snaps.length})</div>
-      <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack">
-        <thead><tr><th>Name</th><th>Created</th><th>Size</th><th>Source</th><th></th></tr></thead><tbody>
+      <div class="card flat pad0"><div class="tblwrap"><table data-sort="snapshots" class="tbl stack">
+        <thead><tr><th>Name</th><th data-nosort>Created</th><th>Size</th><th>Source</th><th></th></tr></thead><tbody>
         ${snaps.map(s => `<tr>
           <td class="mono small">${esc(s.name.slice(0, 28))}</td>
           <td class="small dim">${esc((s.created || "").replace("T", " ").replace("Z", ""))}</td>
@@ -351,8 +351,8 @@ window.lhSnaps = async (vol, label) => {
         </tr>`).join("") || `<tr><td colspan=5 class="empty">no snapshots yet</td></tr>`}
       </tbody></table></div></div>
       <div class="sec">Backups (${bks.length})</div>
-      <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack">
-        <thead><tr><th>Name</th><th>State</th><th>Size</th><th>Created</th><th></th></tr></thead><tbody>
+      <div class="card flat pad0"><div class="tblwrap"><table data-sort="backups" class="tbl stack">
+        <thead><tr><th>Name</th><th>State</th><th>Size</th><th data-nosort>Created</th><th></th></tr></thead><tbody>
         ${bks.map(b => `<tr><td class="mono small">${esc(b.name.slice(0, 28))}</td>
           <td><span class="pill ${b.state === "Completed" ? "ok" : b.state === "Error" ? "crit" : "med"}">${esc(b.state || "?")}</span>
               ${b.error ? `<div class="dim xs">${esc(b.error.slice(0, 80))}</div>` : ""}</td>

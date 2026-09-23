@@ -438,7 +438,7 @@ async function viewImages() {
       <button class="btn sm danger" data-need="admin" onclick="prepullStop('${esc(pull.name)}')">Stop</button></div>`).join("")}
     ${(d.pulls_finished || []).length ? `<div class="note good" style="margin-bottom:12px">Finished pre-pulling
       ${d.pulls_finished.map(pull => `<span class="mono">${esc(pull.image)}</span>`).join(", ")} — cleared away.</div>` : ""}
-    <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack imgtable"><thead><tr>
+    <div class="card flat pad0"><div class="tblwrap"><table data-sort="images" class="tbl stack imgtable"><thead><tr>
       <th>Image</th><th>Size</th><th>Cached on</th><th>Retention</th><th></th></tr></thead><tbody>
       ${imgs.slice(0, 80).map(i => {
         const missing = d.node_names.filter(n => !i.nodes.includes(n));
@@ -480,8 +480,8 @@ async function viewSchedules() {
   paint(`<div class="phead"><div><h2>Schedules</h2>
       <p>${js.length} scheduled job${js.length === 1 ? "" : "s"} · standard cron syntax</p></div>
       <button class="btn pri" data-need="operator" onclick="jobEdit()">＋ New schedule</button></div>
-    <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack"><thead><tr>
-      <th>Name</th><th>Schedule</th><th>Image</th><th>Last run</th><th>State</th><th></th></tr></thead><tbody>
+    <div class="card flat pad0"><div class="tblwrap"><table data-sort="schedules" class="tbl stack"><thead><tr>
+      <th>Name</th><th>Schedule</th><th>Image</th><th data-nosort>Last run</th><th>State</th><th></th></tr></thead><tbody>
       ${js.map(j => `<tr>
         <td><b>${esc(j.name)}</b></td>
         <td class="mono">${esc(j.schedule)}</td>
@@ -590,7 +590,7 @@ async function viewImport() {
        backup storage.</div>`}
 
     <div class="sec">VM disk images ${tip("CDI downloads supported QEMU disk formats, including qcow2 and vmdk, converts them into a VM-ready disk, and writes the result into a new Longhorn PVC.")}</div>
-    ${disks.length ? `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack"><thead><tr>
+    ${disks.length ? `<div class="card flat pad0"><div class="tblwrap"><table data-sort="vm-disks" class="tbl stack"><thead><tr>
       <th>Disk / PVC</th><th>Capacity</th><th>Status</th><th>Progress</th><th>Attached to</th><th></th></tr></thead><tbody>
       ${disks.map(d => { const done = d.phase === "Succeeded", failed = ["Failed","Error","Unknown"].includes(d.phase); return `<tr>
         <td><b>${esc(d.name)}</b><div class="dim xs mono">${esc(d.namespace)} · ${esc(d.storage_class || "storage class unknown")}</div></td>
@@ -611,8 +611,8 @@ async function viewImport() {
     </div>`).join("") || `<div class="empty">No import sources yet. Add the host you want to pull from.</div>`}</div>
 
     ${jobs.length ? `<div class="sec">Transfers</div>
-    <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack"><thead><tr>
-      <th>App</th><th>Job</th><th>State</th><th>Progress</th><th>Started</th><th></th></tr></thead><tbody>
+    <div class="card flat pad0"><div class="tblwrap"><table data-sort="imports" class="tbl stack"><thead><tr>
+      <th>App</th><th>Job</th><th>State</th><th>Progress</th><th data-nosort>Started</th><th></th></tr></thead><tbody>
       ${jobs.map(j => `<tr><td><b>${esc(j.app || "—")}</b>${j.kind === "chown" ? '<span class="tag">ownership</span>' : ""}</td>
         <td class="mono small dim">${esc(j.name)}</td>
         <td><span class="pill ${j.state === "done" ? "ok" : j.state === "failed" ? "crit" : "med"}">${esc(j.state)}</span></td>

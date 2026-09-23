@@ -278,24 +278,23 @@ function workloadCard(w) {
 
 /* One line per workload: for a long list, or anyone who would rather scan than browse. */
 function workloadTable(rows) {
-  return `<div class="card flat pad0 wltable-wrap"><table class="tbl dense stack wltable"><thead><tr>
+  return `<div class="card flat pad0 wltable-wrap"><table class="tbl dense stack wltable" data-sort="containers"><thead><tr>
     <th>Workload</th><th>Status</th><th class="wl-image">Image</th><th>CPU</th><th>RAM</th><th class="wl-access">Access</th><th></th></tr></thead><tbody>
     ${rows.map(w => {
       const ok = w.ready === w.desired && w.desired > 0, off = w.desired === 0;
       const update = workloadUpdate(w.ns, w.name);
       const updateError = update?.images?.find(x => x.error);
       return `<tr>
-        <td class="wl-name"><div class="row nowrap" style="gap:9px">${appAvatar(w.name, w.icon)}
+        <td class="wl-name" data-sort="${esc(w.name)}"><div class="row nowrap" style="gap:9px">${appAvatar(w.name, w.icon)}
           <div class="wtitle"><div><b>${esc(w.name)}</b></div>
-            <div class="dim xs">${esc(w.ns)} · <span class="nodelink" onclick="moveWorkload('${w.name}','${w.ns}')">${esc(w.nodes.join(", ") || "unscheduled")}</span></div></div></div></td>
-        <td class="wl-status"><div class="row nowrap" style="gap:6px"><span class="pill ${ok ? "ok" : off ? "low" : "crit"}">${w.ready}/${w.desired}</span>
-          ${update?.available ? '<span class="pill warn" title="An image update is available">update</span>' : ""}
-          ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}</div>
-          <div class="dim xs">${w.uptime ? `up ${esc(fmtUp(w.uptime))}` : off ? "stopped" : "starting"}</div></td>
+            <div class="dim xs">${esc(w.ns)} · ${off ? "stopped" : `<span class="nodelink" onclick="moveWorkload('${w.name}','${w.ns}')">${esc(w.nodes.join(", ") || "unscheduled")}</span>${w.uptime ? ` · up ${esc(fmtUp(w.uptime))}` : " · starting"}`}</div></div></div></td>
+        <td class="wl-status" data-sort="${off ? -1 : w.desired ? w.ready / w.desired : 0}"><div class="row nowrap" style="gap:5px"><span class="pill slim ${ok ? "ok" : off ? "low" : "crit"}" title="${w.ready} of ${w.desired} ready">${w.ready}/${w.desired}</span>
+          ${update?.available ? '<span class="pill slim warn" title="An image update is available">update</span>' : ""}
+          ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}</div></td>
         <td class="wl-image"><div class="mono xs wl-imagetext" title="${esc(w.images.join(" · "))}">${w.images.map(esc).join(" · ")}</div>
           ${(w.hardware || []).length || w.gpu ? `<div>${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</div>` : ""}</td>
-        <td class="mono small nowrap" data-tip="Live usage. 100% equals one fully used CPU core.">${workloadCpuPercent(w.cpu)}</td>
-        <td class="mono small nowrap">${workloadMemory(w.mem_mb)}</td>
+        <td class="mono small nowrap" data-sort="${off ? "" : w.cpu}" data-tip="Live usage. 100% equals one fully used CPU core.">${workloadCpuPercent(w.cpu)}</td>
+        <td class="mono small nowrap" data-sort="${off ? "" : w.mem_mb}">${workloadMemory(w.mem_mb)}</td>
         <td class="wl-access"><div class="waccess">${accessPorts(w.ports)}</div></td>
         <td class="wl-actions"><div class="row nowrap wacts">${workloadActions(w, update, off, true)}</div></td>
       </tr>`;

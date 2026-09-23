@@ -517,18 +517,18 @@ async function viewNodes() {
       <div class="row">${layoutSwitch("nodes", "viewNodes")}
       <button class="btn" data-need="admin" onclick="hardwareFeatureSettings()">Hardware features</button></div></div>
    ${layout === "cards" ? `<div class="nodegrid stagger">${n.map(nodeCard).join("")}</div>` : `
-   <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack"><thead><tr>
+   <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack" data-sort="nodes"><thead><tr>
      <th>Node</th><th>CPU</th><th>Memory</th><th>Network</th><th>Temp</th><th>Disk</th><th>Pods</th><th>Hardware</th><th>Workloads</th></tr></thead><tbody>
    ${n.map(x => `<tr class="clickable" onclick="nodeDetail('${esc(x.name)}')">
-     <td class="cell-name"><b title="${esc(x.name)} · kernel ${esc(x.kernel)}">${esc(x.name)}</b><div class="dim xs" title="${esc(x.roles.join(" · "))}">${esc(x.roles.join(" · "))}</div></td>
-      <td style="min-width:120px">${meter(x.cpu_pct, "", "cpu")}<div class="dim xs mono nowrap" style="margin-top:4px">${x.cpu_pct}% of ${x.cpu_cap}</div></td>
-      <td style="min-width:120px">${meter(x.mem_pct, "", "memory")}<div class="dim xs mono nowrap" style="margin-top:4px">${sizePair(x.mem_used_gb, x.mem_cap_gb)}</div></td>
-     <td class="mono small nowrap">${ratePair(x.rx_mbps, x.tx_mbps)[0]} <span class="dim xs">${ratePair(x.rx_mbps, x.tx_mbps)[1]}</span></td>
-     <td class="mono ${tempCls(x.temps && x.temps.cpu_c)}">${x.temps && x.temps.cpu_c != null ? x.temps.cpu_c + "°" : '<span class="dim">—</span>'}</td>
-      <td style="min-width:100px">${meter(x.fs_pct || 0, "", "disk")}<div class="dim xs mono nowrap" style="margin-top:4px">${sizePair(x.fs_used_gb, x.fs_cap_gb)}</div></td>
-     <td class="mono nowrap"><b>${x.pods_wl}</b> <span class="dim xs">+${x.pods_sys} sys</span></td>
+     <td class="cell-name" data-sort="${esc(x.name)}"><b title="${esc(x.name)} · kernel ${esc(x.kernel)}">${esc(x.name)}</b><div class="dim xs" title="${esc(x.roles.join(" · "))}">${esc(x.roles.join(" · "))}</div></td>
+      <td style="min-width:120px" data-sort="${+x.cpu_pct || 0}">${meter(x.cpu_pct, "", "cpu")}<div class="dim xs mono nowrap" style="margin-top:4px">${x.cpu_pct}% of ${x.cpu_cap}</div></td>
+      <td style="min-width:120px" data-sort="${+x.mem_pct || 0}">${meter(x.mem_pct, "", "memory")}<div class="dim xs mono nowrap" style="margin-top:4px">${sizePair(x.mem_used_gb, x.mem_cap_gb)}</div></td>
+     <td class="mono small nowrap" data-sort="${(+x.rx_mbps || 0) + (+x.tx_mbps || 0)}">${ratePair(x.rx_mbps, x.tx_mbps)[0]} <span class="dim xs">${ratePair(x.rx_mbps, x.tx_mbps)[1]}</span></td>
+     <td class="mono ${tempCls(x.temps && x.temps.cpu_c)}" data-sort="${x.temps && x.temps.cpu_c != null ? x.temps.cpu_c : ""}">${x.temps && x.temps.cpu_c != null ? x.temps.cpu_c + "°" : '<span class="dim">—</span>'}</td>
+      <td style="min-width:100px" data-sort="${+x.fs_pct || 0}">${meter(x.fs_pct || 0, "", "disk")}<div class="dim xs mono nowrap" style="margin-top:4px">${sizePair(x.fs_used_gb, x.fs_cap_gb)}</div></td>
+     <td class="mono nowrap" data-sort="${+x.pods_wl || 0}"><b>${x.pods_wl}</b> <span class="dim xs">+${x.pods_sys} sys</span></td>
      <td class="cell-tags">${hardwareTags(nodeHardwareIds(x)) || '<span class="dim">—</span>'}</td>
-     <td class="cell-tags" onclick="event.stopPropagation()">${x.workloads.length
+     <td class="cell-tags" data-sort="${x.workloads.length}" onclick="event.stopPropagation()">${x.workloads.length
         ? x.workloads.slice(0, 2).map(w => `<span class="tag movable"
             onclick="moveWorkload('${esc(w)}')">${esc(w)} <span class="mv">⇄</span></span>`).join("")
           + (x.workloads.length > 2 ? `<span class="tag more" data-tip="${esc(x.workloads.slice(2).join(", "))}">+${x.workloads.length - 2}</span>` : "")
