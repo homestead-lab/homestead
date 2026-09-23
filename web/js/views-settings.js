@@ -114,7 +114,7 @@ async function viewSettings() {
         <div class="role-legend">
           ${Object.entries(ROLE_COPY).map(([role, copy]) => `<div><span class="${roleClass(role)} rolechip">${role}</span><span class="dim xs">${esc(copy)}</span></div>`).join("")}
         </div>
-        ${users.length ? `<div class="sec">Users</div><div class="tblwrap"><table class="tbl dense"><thead><tr><th>User</th><th>Role</th><th>Last sign-in</th></tr></thead><tbody>${userRows}</tbody></table></div>` : ""}
+        ${users.length ? `<div class="sec">Users</div><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>User</th><th>Role</th><th>Last sign-in</th></tr></thead><tbody>${userRows}</tbody></table></div>` : ""}
       </section>
 
       <section class="card flat settings-wide">

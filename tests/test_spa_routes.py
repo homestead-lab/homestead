@@ -21,6 +21,25 @@ class SpaRouteTests(unittest.TestCase):
         for path in ("/api/overview", "/api/not-found", "/unknown", "/style.css"):
             self.assertFalse(server.is_spa_route(path), path)
 
+    def test_a_mistyped_page_address_gets_the_app_to_say_so(self):
+        """A typo used to answer with raw JSON; the app now lands on the dashboard."""
+        for path in ("/protection", "/containers/extra", "/Volumes"):
+            self.assertTrue(server.is_page_path(path), path)
+
+    def test_api_and_file_paths_keep_their_plain_not_found(self):
+        for path in ("/api/not-found", "/api", "/missing.js", "/js/nope.js", "/favicon.ico", "/../etc/passwd"):
+            self.assertFalse(server.is_page_path(path), path)
+
+    def test_an_unknown_page_serves_the_app_before_authentication(self):
+        handler = object.__new__(server.H)
+        handler.path = "/protection"
+        handler.command = "GET"
+        handler.headers = {}
+        served = []
+        handler._file = lambda path, content_type: served.append((path, content_type))
+        handler.do_GET()
+        self.assertEqual([(f"{server.WEBROOT}/index.html", "text/html; charset=utf-8")], served)
+
     def test_browser_and_server_route_allowlists_match(self):
         source = (ROOT / "web" / "js" / "router.js").read_text(encoding="utf-8")
         browser_paths = set(re.findall(r'path:\s*"([^"]+)"', source))

@@ -93,7 +93,10 @@
   ];
   const storage = { cap_gb: 1392, avail_gb: 906, used_gb: 486, used_pct: 34.9,
     provisioned_gb: 670, actual_gb: 224, volumes: 8, healthy: 6, degraded: 1,
-    faulted: 0, detached: 1, unknown: 1, attached: 7, disks: [],
+    faulted: 0, detached: 1, unknown: 1, attached: 7,
+    disks: [{ node: "harvester-node1", cap_gb: 464, avail_gb: 312, sched_gb: 190 },
+      { node: "harvester-node2", cap_gb: 464, avail_gb: 298, sched_gb: 210 },
+      { node: "harvester-node3", cap_gb: 464, avail_gb: 296, sched_gb: 205 }],
     reasons: [{ name: "arr-dashboard-data", robustness: "degraded",
       reason: "no disk space to create the replicas required: 1 of 2 replicas scheduled" }] };
   const history = {
@@ -295,7 +298,7 @@
       detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.65", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.66", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" } } },
     "/api/overview": { health: "healthy", health_state: "healthy", health_summary: "All cluster services are healthy", health_issues: [],
@@ -313,7 +316,6 @@
     },
     "/api/volumes/delete-plan": volumeDeletePlan, "/api/hardware/features": hardware,
     "/api/namespaces": ["default", "lab", "monitoring"],
-    "/api/storageclasses": ["harvester-longhorn", "longhorn-r2"],
     "/api/deploy/options": deployOptions,
     "/api/appstore": { total: 1, apps: [demoApp], sort: "popular", spotlight: demoApp },
     "/api/preview": (url, init) => {
@@ -370,20 +372,20 @@
       user: "admin", added: "2026-09-22 17:02" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "garage") return { name, version: "2.8.65", protocol: 1, local_version: "2.8.65",
+      if (name === "garage") return { name, version: "2.8.66", protocol: 1, local_version: "2.8.66",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "garage runs 2.8.65 and this one 2.8.65. Moves work between them; garage is the newer of the two." };
+        message: "garage runs 2.8.66 and this one 2.8.66. Moves work between them; garage is the newer of the two." };
       return name === "attic"
-        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.65", local_protocol: 1,
+        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.66", local_protocol: 1,
             state: "behind", compatible: false,
-            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.65). Update attic first." }
-        : { name, version: "2.8.65", protocol: 1, local_version: "2.8.65", local_protocol: 1,
-            state: "same", compatible: true, message: "Both run Homestead 2.8.65." };
+            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.66). Update attic first." }
+        : { name, version: "2.8.66", protocol: 1, local_version: "2.8.66", local_protocol: 1,
+            state: "same", compatible: true, message: "Both run Homestead 2.8.66." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "shed", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.65", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.66", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -403,7 +405,19 @@
         warnings: ["uses the lab/vlan20 network, which must exist on the destination"],
         volumes: [{ claim: "haos-disk-0", path: "rootdisk", sub_path: "", read_only: false,
           size_gb: 32, storage_class: "longhorn-haos", access_modes: ["ReadWriteMany"] }] }] },
-    "/api/move/plan": { ok: true, blockers: [], cluster: "shed", kind: "container", name: "frigate",
+    // One path, two questions: where this can move within the cluster (GET),
+    // and what bringing it from another cluster involves (POST).
+    "/api/move/plan": (url, init) => (init?.method || "GET") === "GET" ? {
+      current: "harvester-node2", recommended: "harvester-node1",
+      requirements: { devices: [{ id: "igpu", label: "Intel/AMD iGPU" }], features: ["igpu"], labels: {}, resources: {} },
+      candidates: [
+        { name: "harvester-node2", ok: true, current: true, pods_wl: 3, score: 71, cpu_after: 42, mem_after: 54,
+          hardware: { igpu: true, coral_usb: true }, temp_c: 34, why: [] },
+        { name: "harvester-node1", ok: true, current: false, pods_wl: 2, score: 88, cpu_after: 31, mem_after: 66,
+          hardware: { igpu: true }, temp_c: 39, why: [] },
+        { name: "harvester-node3", ok: false, current: false, pods_wl: 1, score: 0, cpu_after: 24, mem_after: 49,
+          hardware: {}, temp_c: 36, why: ["no Intel/AMD iGPU on this host"] }] } : {
+      ok: true, blockers: [], cluster: "shed", kind: "container", name: "frigate",
       namespace: "lab", joined: false, will_run: true, addresses: ["frigate on 192.0.2.242"],
       warnings: ["this cluster's Longhorn backup target changes from (none) to s3://homestead-backups@us-east-1/; backups already written to the old one stay there"],
       claims: [{ claim: "frigate-config", size_gb: 10, access_mode: "ReadWriteOnce",
@@ -446,6 +460,21 @@
             app_profile: { label: "Imported from Docker Compose", level: "review", intent: "compose",
               notes: ["./consume becomes new volume webserver-consume; its current contents are not copied. Import › Container source can bring them across"] } } }] }),
     "/api/compose/apply": { ok: true, created: ["broker", "db", "webserver"] },
+    "/api/schedules": [
+      { name: "nightly-db-dump", namespace: "lab", schedule: "0 3 * * *", image: "docker.io/library/postgres:16",
+        command: "pg_dumpall -h db -U paperless > /backup/all.sql", last: "2026-09-22T03:00:04Z", suspend: false, active: 0 },
+      { name: "prune-recordings-older-than-thirty-days", namespace: "lab", schedule: "*/30 * * * *",
+        image: "ghcr.io/example/long-image-name-for-cleanup-tasks:2026.09.1", command: "find /media -mtime +30 -delete",
+        last: "2026-09-22T13:30:00Z", suspend: true, active: 0 }],
+    "/api/events": () => [
+      { obj: "frigate-7d9f8c6b5-x2abc", ns: "lab", kind: "Pod", type: "Normal", reason: "Pulled",
+        msg: "Successfully pulled image \"ghcr.io/blakeblackshear/frigate:stable\" in 12.4s", count: 1,
+        time: new Date(Date.now() - 4 * 60e3).toISOString() },
+      { obj: "arr-dashboard-data", ns: "lab", kind: "PersistentVolumeClaim", type: "Warning", reason: "ProvisioningFailed",
+        msg: "failed to provision volume with StorageClass \"longhorn-r2\": no disk space to create the replicas required: 1 of 2 replicas scheduled on nodes with enough free space",
+        count: 14, time: new Date(Date.now() - 11 * 60e3).toISOString() },
+      { obj: "home-assistant", ns: "lab", kind: "Deployment", type: "Normal", reason: "ScalingReplicaSet",
+        msg: "Scaled up replica set home-assistant-6c8d9 to 1", count: 1, time: new Date(Date.now() - 20 * 60e3).toISOString() }],
     "/api/move/moves/retry": { ok: true }, "/api/move/moves/abandon": { ok: true },
     "/api/move/moves/finish": { ok: true, message: "mosquitto lives here now; removed workload mosquitto on shed" },
     "/api/move/moves": () => [
@@ -691,7 +720,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.65", candidate_tag: "2.8.65", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.66", candidate_tag: "2.8.66", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

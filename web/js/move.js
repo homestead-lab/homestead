@@ -31,8 +31,12 @@ window.moveWorkload = async (name, ns) => {
   const wl = Object.assign(findWl(name), ns ? { ns } : {});
   modal("Move · " + name, '<div class="empty"><span class="spin2"></span>checking capacity and hardware constraints…</div>', true);
   let plan;
-  try { await loadHardwareFeatures(); plan = await api(`/api/move/plan?ns=${encodeURIComponent(wl.ns)}&name=${encodeURIComponent(name)}&cpu=${wl.cpu || 0}&mem=${wl.mem_mb || 0}`); }
-  catch (e) { $("#mbody").innerHTML = `<div class="empty"><b>Could not build a placement plan</b><br><span class="dim small">${esc(e.message)}</span></div>`; return; }
+  try {
+    await loadHardwareFeatures();
+    plan = await api(`/api/move/plan?ns=${encodeURIComponent(wl.ns)}&name=${encodeURIComponent(name)}&cpu=${wl.cpu || 0}&mem=${wl.mem_mb || 0}`);
+    // An answer with no hosts in it is an error to show, not a spinner to leave running.
+    if (!Array.isArray(plan?.candidates)) throw new Error("the plan came back without any hosts to compare");
+  } catch (e) { $("#mbody").innerHTML = `<div class="empty"><b>Could not build a placement plan</b><br><span class="dim small">${esc(e.message)}</span></div>`; return; }
   const here = plan.current || wl.node || (wl.nodes && wl.nodes[0]) || "";
   const req = plan.requirements || { devices: [], resources: {}, labels: {} };
   const viable = (plan.candidates || []).filter(n => n.ok && !n.current);

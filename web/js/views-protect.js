@@ -160,8 +160,9 @@ async function viewProtect() {
       <span class="pill ${j.covers ? "ok" : "med"}">${j.covers} vol</span>
     </div>
     <div class="wmeta">
-      <div><div class="dim xs">SCHEDULE</div><div class="mono small">${esc(j.cron)}</div>
-        <div class="dim xs">${esc(CRON_PRESETS[j.cron] || "custom")}</div></div>
+      <div><div class="dim xs">SCHEDULE</div>${CRON_PRESETS[j.cron]
+        ? `<div class="small" data-tip="cron ${esc(j.cron)}">${esc(CRON_PRESETS[j.cron])}</div>`
+        : `<div class="mono small" data-tip="a custom cron schedule">${esc(j.cron)}</div>`}</div>
       <div><div class="dim xs">RETAIN</div><div class="mono small">${j.retain}</div></div>
       <div><div class="dim xs">PARALLEL</div><div class="mono small">${j.concurrency}</div></div>
       <div><div class="dim xs">GROUPS</div><div>${j.groups.map(g => `<span class="tag">${esc(g)}</span>`).join("") || '<span class="dim">—</span>'}</div></div>
@@ -176,7 +177,7 @@ async function viewProtect() {
      group is the usual starting point — <a onclick="lhQuickStart()" style="cursor:pointer;text-decoration:underline">set that up</a>.</div>`}
 
   <div class="sec">Volumes</div>
-  <div class="card flat pad0"><div class="tblwrap"><table class="tbl"><thead><tr>
+  <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack"><thead><tr>
     <th>Volume</th><th>Size</th><th>Health</th><th>Groups</th><th>Direct jobs</th><th>Last backup</th><th></th>
   </tr></thead><tbody>
   ${d.volumes.map(v => `<tr>
@@ -338,7 +339,7 @@ window.lhSnaps = async (vol, label) => {
         <button class="btn" data-need="operator" onclick="lhBackupNow('${esc(vol)}','${esc(label)}')">Back up now</button>
       </div>
       <div class="sec">Snapshots (${snaps.length})</div>
-      <div class="card flat pad0"><div class="tblwrap"><table class="tbl">
+      <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack">
         <thead><tr><th>Name</th><th>Created</th><th>Size</th><th>Source</th><th></th></tr></thead><tbody>
         ${snaps.map(s => `<tr>
           <td class="mono small">${esc(s.name.slice(0, 28))}</td>
@@ -350,7 +351,7 @@ window.lhSnaps = async (vol, label) => {
         </tr>`).join("") || `<tr><td colspan=5 class="empty">no snapshots yet</td></tr>`}
       </tbody></table></div></div>
       <div class="sec">Backups (${bks.length})</div>
-      <div class="card flat pad0"><div class="tblwrap"><table class="tbl">
+      <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack">
         <thead><tr><th>Name</th><th>State</th><th>Size</th><th>Created</th><th></th></tr></thead><tbody>
         ${bks.map(b => `<tr><td class="mono small">${esc(b.name.slice(0, 28))}</td>
           <td><span class="pill ${b.state === "Completed" ? "ok" : b.state === "Error" ? "crit" : "med"}">${esc(b.state || "?")}</span>

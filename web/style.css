@@ -124,6 +124,8 @@ a{color:inherit;text-decoration:none}
 #nav a.on svg{opacity:1}
 .iconbtn svg{width:16px;height:16px}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px}.btnicon{width:14px;height:14px;flex:0 0 auto}
+/* A button keeps its label on one line; the text beside it wraps instead. */
+.btn{white-space:nowrap;flex-shrink:0}
 #nav a:hover{background:rgba(255,255,255,.055);color:var(--tx);transform:translateX(2px)}
 #nav a.on{background:#fff;color:#0a0a0b;box-shadow:0 5px 20px rgba(255,255,255,.16)}
 #nav a.on i{opacity:1}
@@ -321,6 +323,10 @@ h1{margin:2px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em}
 .pill.med{background:linear-gradient(135deg,#ffc247,#ffa000);color:#1a1200;box-shadow:0 3px 14px rgba(255,176,32,.3)}
 .pill.low{background:rgba(255,255,255,.08);color:#d2d2da;border:1px solid var(--line2)}
 .pill.ok{background:linear-gradient(135deg,#3ddc91,#12b981);color:#03251a;box-shadow:0 3px 14px rgba(61,220,145,.3)}
+/* warn and info were used across the app with no style, so they read as bare text. */
+.pill{white-space:nowrap}
+.pill.warn{background:rgba(255,176,32,.14);color:var(--med);border:1px solid rgba(255,176,32,.34)}
+.pill.info{background:rgba(74,158,255,.13);color:var(--low);border:1px solid rgba(74,158,255,.32)}
 .pill.neutral{background:rgba(255,255,255,.07);color:#c9c9d1;border:1px solid var(--line)}
 
 .badge{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;
@@ -361,8 +367,8 @@ h1{margin:2px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em}
 .drow:last-child{border-bottom:0}
 .drow .di{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;font-size:12px;
   background:rgba(255,255,255,.06);color:var(--mut);flex:0 0 auto}
-.drow .dl{color:var(--mut);font-size:12.5px;flex:0 0 118px}
-.drow .dv{font-size:12.5px;font-weight:620;flex:1;min-width:0;text-align:right;overflow-wrap:anywhere}
+.drow .dl{color:var(--mut);font-size:12.5px;flex:0 1 118px;min-width:0}
+.drow .dv{font-size:12.5px;font-weight:620;flex:1;min-width:auto;text-align:right;overflow-wrap:anywhere}
 
 /* sparkline */
 .spark{width:100%;height:78px;display:block;overflow:visible}
@@ -704,7 +710,7 @@ html[data-motion="off"] .uptime .ld{animation:none}
 .waccess .tag.more{cursor:help;flex:0 0 auto}
 .waccess .more-narrow{display:none}
 .wmeta [data-tip]{cursor:help}
-.whead>.row:first-child{flex:1 1 auto}
+.whead>.row:first-child{flex:1 1 auto;min-width:0;flex-wrap:nowrap}
 .wtitle>div:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .whead>.row:last-child{flex:0 0 auto}
 .attachlist{display:inline-flex;flex-wrap:wrap;gap:4px;vertical-align:middle}
@@ -851,12 +857,18 @@ html[data-motion="off"] .uptime .ld{animation:none}
 }
 @media(max-width:560px){
   .apps{grid-template-columns:1fr}
+  /* Short stat tiles pair up on a phone rather than taking a screen each. */
+  .grid.statgrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .statgrid .bignum{font-size:28px}.statgrid .card{padding:14px;min-width:0}
+  .statgrid .ctitle{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .statgrid .statwide{grid-column:1/-1}
   .wmeta{grid-template-columns:repeat(2,1fr)}
   .cardlist,.wcard,.whead,.wfoot,.wacts{min-width:0;max-width:100%}
   .whead{align-items:flex-start;gap:6px}.whead>.row:last-child{flex-wrap:wrap;justify-content:flex-end}
   .wfoot>.workloadtree{flex:1 1 100%;min-width:0}
-  .wacts{width:100%;flex-wrap:wrap}.wacts>.btn{flex:1 1 auto}
-  .actionmenu{margin-left:0}
+  /* One row on a phone: the actions share it evenly and the menu keeps its own width. */
+  .wacts{width:100%;flex-wrap:nowrap;gap:4px}.wacts>.btn{flex:1 1 0;min-width:0;padding:4px 5px;gap:4px}
+  .actionmenu{margin-left:0;flex:0 0 auto}
   .f2,.f3,.f4,.hwchoices,.volume-impact-grid,.volume-delete-grid,.edit-port-row{grid-template-columns:1fr}
   .managed-env-list>div{grid-template-columns:1fr}.edit-container>summary .pill{display:none}.edit-container-body{padding:12px}
   .opts{grid-template-columns:1fr 1fr}
@@ -999,6 +1011,34 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
 }
 /* Node cards and the tables beside them: names and lists shorten, numbers never break. */
 .nowrap{white-space:nowrap}
+/* Tables marked "stack" become one small card per row on a phone: the first
+   cell is the row's title, the rest are labelled lines, actions sit at the foot. */
+@media(max-width:560px){
+  .tblwrap:has(> table.stack){overflow:visible}
+  .tbl.stack,.tbl.stack tbody,.tbl.stack tr,.tbl.stack td{display:block;width:100%}
+  .tbl.stack thead{display:none}
+  .tbl.stack tr{padding:11px 14px;border-bottom:1px solid var(--line)}
+  .tbl.stack tbody tr:last-child{border-bottom:0}
+  .tbl.stack td{border:0;padding:3px 0;display:flex;align-items:center;justify-content:space-between;gap:12px;
+    min-width:0;max-width:none;text-align:right;white-space:normal}
+  .tbl.stack td::before{content:attr(data-label);flex:0 0 auto;color:var(--dim);font:600 9.5px/1.4 "JetBrains Mono",monospace;
+    letter-spacing:.08em;text-transform:uppercase;text-align:left}
+  .tbl.stack td>*{min-width:0}
+  .tbl.stack td:first-child{display:block;text-align:left;padding-bottom:6px}
+  .tbl.stack td:first-child::before,.tbl.stack td[data-label=""]::before,.tbl.stack td[colspan]::before{content:none}
+  .tbl.stack td[data-label=""]{justify-content:flex-start;padding-top:7px}
+  .tbl.stack td[colspan]{display:block;text-align:center}
+  .tbl.stack td .row{justify-content:flex-end;flex-wrap:wrap}
+  .tbl.stack td[data-label=""] .row{justify-content:flex-start}
+  .tbl.stack .meter{min-width:90px}
+  .tbl.stack td.imgname,.tbl.stack td.cell-name,.tbl.stack td.cell-nodes,.tbl.stack td.cell-tags{min-width:0;max-width:none}
+  .tbl.stack td.cell-tags{white-space:normal;justify-content:space-between}
+}
+/* Image cache: a name the table can squeeze to nothing, and a notice whose
+   unbroken image name pushed its button out of the box. */
+.imgtable td.imgname{min-width:220px;max-width:420px;word-break:break-all}
+.imgtable td:nth-child(3),.imgtable td:nth-child(4){white-space:nowrap}
+.prepull-note{gap:12px;align-items:center}.prepull-note>span{min-width:0;overflow-wrap:anywhere}.prepull-note>.btn{flex:0 0 auto}
 /* Docker Compose import: the file on the left, what it becomes on the right. */
 .modalbox[data-context="compose"]{width:min(1240px,100%)}
 .compose{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:16px;align-items:start}
@@ -1049,6 +1089,11 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .tbl td.cell-name>*,.tbl td.cell-nodes,.tbl td.cell-roles{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tbl td.cell-name>*{display:block}
 .tbl td.cell-tags{max-width:200px;min-width:110px}
+.tag{white-space:nowrap;max-width:100%}
+/* Networking: the path is the point of the page, so it stays readable in a table. */
+.tbl td.netsvc b{white-space:nowrap}
+.tbl td.netpathcell{min-width:230px}
+.tbl .netpath{gap:4px;font-size:10.5px}.tbl .netpath span{padding:2px 6px;white-space:nowrap}
 .tbl td.cell-tags .tag{margin:2px 4px 2px 0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle}
 .tag.movable:hover{background:rgba(74,158,255,.18);border-color:rgba(74,158,255,.45);color:#9ecbff}
 .tag.movable .mv{opacity:.45;font-size:10px;margin-left:1px}
@@ -1106,7 +1151,11 @@ html[data-theme="light"] .compose-editor{background:#fff}
   .sharetable thead{display:none}.sharetable tr{display:grid;grid-template-columns:minmax(0,1fr) auto;padding:10px 12px;border-bottom:1px solid var(--line)}
   .sharetable tr:last-child{border-bottom:0}.sharetable td{border:0;padding:4px 0;display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}
   .sharetable td[data-label]::before{content:attr(data-label);color:var(--dim);font-size:9px;letter-spacing:.09em;text-transform:uppercase;flex:0 0 auto}
-  .sharetable .shareidentity{grid-column:1;padding:0}.sharetable td[data-label="Size"]{grid-column:2;width:auto;padding-left:12px}
+  /* The name has a row to itself: a long storage path beside it took its room. */
+  .sharetable .shareidentity{grid-column:1/-1;padding:0 0 4px}
+  .sharetable td[data-label="Storage"],.sharetable td[data-label="Size"]{grid-column:1/-1}
+  .sharetable td[data-label="Storage"] .sharevol{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sharetable td[data-label="Storage"] .tag{flex:0 0 auto;white-space:nowrap}
   .sharetable td[data-label="Access"],.sharetable td[data-label="UNC path"],.sharetable .shareactions{grid-column:1/-1}
   .sharetable td[data-label="UNC path"]{overflow-wrap:anywhere}.sharetable .shareactions{padding-top:6px}.sharetable .shareactions .row{width:100%}.sharetable .shareactions .btn{flex:1}
 }

@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HOMESTEAD_VERSION = "2.8.65";
+const HOMESTEAD_VERSION = "2.8.66";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -306,6 +306,7 @@ const ACTION_ICONS = [
   [/^rollback\b/, "rollback"], [/^update\b/, "update"],
 ];
 function enhanceActions(root = document) {
+  labelStackTables(root);
   $$("button.btn", root).forEach(button => {
     if ($(".btnicon", button)) return;
     const label = button.textContent.trim().replace(/^[＋↻←]+\s*/, "").toLowerCase();
@@ -314,6 +315,23 @@ function enhanceActions(root = document) {
   });
 }
 window.enhanceActions = enhanceActions;
+
+/* A table marked "stack" turns each row into a small card on a phone, and each
+   cell needs its column's name to make sense on its own there. The headings
+   already say it, so each cell is labelled from them rather than by hand. */
+function labelStackTables(root = document) {
+  $$("table.stack", root).forEach(table => {
+    const heads = $$("thead th", table).map(th => th.textContent.trim());
+    $$("tbody tr", table).forEach(row => {
+      let column = 0;
+      [...row.children].forEach(cell => {
+        const span = +cell.getAttribute("colspan") || 1;
+        if (span === 1 && !cell.hasAttribute("data-label")) cell.dataset.label = heads[column] || "";
+        column += span;
+      });
+    });
+  });
+}
 
 /* ---------------- no-flash rendering ----------------
    Re-rendering innerHTML on every poll is what makes the page flash and lose

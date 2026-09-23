@@ -107,7 +107,12 @@ window.imageUpdateCenter = async () => {
     modal("Image updates", '<div class="empty"><span class="spin2"></span>checking registries…</div>');
     report = await loadImageUpdates(false, true);
   }
-  if (!report) return;
+  if (!report) {
+    // A quiet load says nothing when it fails, so this dialog has to.
+    if (!$("#modal").classList.contains("hidden")) $("#mbody").innerHTML = `<div class="empty"><b>The registries could not be checked</b>
+      <br><span class="dim small">Try ↻ Check images on the Containers page, which shows what went wrong.</span></div>`;
+    return;
+  }
   const affected = (report.workloads || []).filter(w => w.available || w.images?.some(image => image.error));
   const available = HomesteadUpdateState.availableWorkloads(report);
   const policy = report.policy || {};

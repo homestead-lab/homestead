@@ -114,14 +114,14 @@ async function viewDash() {
   <div class="grid g2">
     <div class="card flat pad0">
       <div class="cardhd"><div class="ctitle">Top CPU</div></div>
-      <div class="tblwrap"><table class="tbl"><thead><tr><th>Workload</th><th>Node</th><th style="width:130px">CPU</th></tr></thead><tbody>
+      <div class="tblwrap"><table class="tbl stack"><thead><tr><th>Workload</th><th>Node</th><th style="width:130px">CPU</th></tr></thead><tbody>
       ${o.top_cpu.slice(0, 5).map(w => `<tr><td class="cell-name"><b title="${esc(w.name)}">${esc(w.name)}</b><div class="dim xs">${esc(w.ns)}</div></td>
         <td class="small muted cell-nodes" title="${esc(w.nodes.join(", "))}">${esc(w.nodes.join(", ") || "—")}</td>
         <td>${meter(Math.min(100, Number(w.cpu || 0) * 100))}<div class="dim xs mono" style="margin-top:4px" title="100% equals one CPU core">${workloadCpuPercent(w.cpu)}</div></td></tr>`).join("")}
       </tbody></table></div></div>
     <div class="card flat pad0">
       <div class="cardhd"><div class="ctitle">Top memory</div></div>
-      <div class="tblwrap"><table class="tbl"><thead><tr><th>Workload</th><th>Node</th><th style="width:90px">RAM</th></tr></thead><tbody>
+      <div class="tblwrap"><table class="tbl stack"><thead><tr><th>Workload</th><th>Node</th><th style="width:90px">RAM</th></tr></thead><tbody>
       ${o.top_mem.slice(0, 5).map(w => `<tr><td class="cell-name"><b title="${esc(w.name)}">${esc(w.name)}</b><div class="dim xs">${esc(w.ns)}</div></td>
         <td class="small muted cell-nodes" title="${esc(w.nodes.join(", "))}">${esc(w.nodes.join(", ") || "—")}</td>
         <td class="mono nowrap"><b>${workloadMemory(w.mem_mb)}</b></td></tr>`).join("")}
@@ -505,7 +505,7 @@ async function viewNodes() {
       <button class="btn" data-need="admin" onclick="hardwareFeatureSettings()">Hardware features</button></div>
    <div class="nodegrid stagger">${n.map(nodeCard).join("")}</div>
    <div class="sec">Detail</div>
-   <div class="card flat pad0"><div class="tblwrap"><table class="tbl"><thead><tr>
+   <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack"><thead><tr>
      <th>Node</th><th>CPU</th><th>Memory</th><th>Network</th><th>Temp</th><th>Disk</th><th>Pods</th><th>Hardware</th><th>Workloads</th></tr></thead><tbody>
    ${n.map(x => `<tr class="clickable" onclick="nodeDetail('${esc(x.name)}')">
      <td class="cell-name"><b title="${esc(x.name)} · kernel ${esc(x.kernel)}">${esc(x.name)}</b><div class="dim xs" title="${esc(x.roles.join(" · "))}">${esc(x.roles.join(" · "))}</div></td>

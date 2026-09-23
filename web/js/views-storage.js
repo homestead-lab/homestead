@@ -147,14 +147,14 @@ async function viewStorage() {
   paint(`<div class="phead"><div><h2>Volumes</h2>
       <p>${v.length} Longhorn volume${v.length === 1 ? "" : "s"} · replicated block storage</p></div>
       <button class="btn pri" data-need="operator" onclick="volumeCreate()">＋ Create volume</button></div>
-  ${st ? `<div class="grid g4" style="margin-bottom:18px">
+  ${st ? `<div class="grid g4 statgrid" style="margin-bottom:18px">
     <div class="card glow g-info"><div class="ctitle">Free space</div>
       <div class="bignum" style="margin-top:8px">${st.avail_gb}<span class="unit">GB</span></div>
       <div class="csub">of ${st.cap_gb} GB raw</div>${meter(st.used_pct, 'style="margin-top:10px"')}</div>
     <div class="card flat"><div class="ctitle">Provisioned</div>
       <div class="bignum" style="margin-top:8px">${st.provisioned_gb}<span class="unit">GB</span></div>
       <div class="csub">${st.actual_gb} GB actually written</div></div>
-    <div class="card flat"><div class="ctitle">Replica health</div>${(st.reasons || []).length
+    <div class="card flat statwide"><div class="ctitle">Replica health</div>${(st.reasons || []).length
       ? `<div class="dim xs volume-reason" style="margin-top:8px">${esc(st.reasons[0].name)}: ${esc(st.reasons[0].reason)}${st.reasons.length > 1 ? ` · and ${st.reasons.length - 1} more` : ""}</div>` : ""}
       <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap">
         <span class="tag ok">${st.healthy} healthy</span>
@@ -162,9 +162,10 @@ async function viewStorage() {
         ${st.faulted ? `<span class="tag bad">${st.faulted} faulted</span>` : ""}
         ${(st.detached ?? st.unknown) ? `<span class="tag">${st.detached ?? st.unknown} detached</span>` : ""}</div>
       <div class="csub" style="margin-top:10px">${st.attached} attached of ${st.volumes}</div></div>
-    <div class="card flat"><div class="ctitle">Per-node disks</div>
-      ${st.disks.map(d => `<div class="drow"><div class="dl">${esc(d.node.replace("harvester-", ""))}</div>
-        <div class="dv mono">${d.avail_gb}<span class="dim"> / ${d.cap_gb} GB free</span></div></div>`).join("")}</div>
+    <div class="card flat statwide"><div class="ctitle">Per-node disks</div><div class="csub">free of total</div>
+      ${(st.disks || []).map(d => `<div class="drow"><div class="dl">${esc(d.node.replace("harvester-", ""))}</div>
+        <div class="dv mono nowrap" title="${esc(sizeText(d.avail_gb))} free of ${esc(sizeText(d.cap_gb))}">${esc(sizePair(d.avail_gb, d.cap_gb))}</div></div>`).join("")
+        || '<div class="csub" style="margin-top:8px">Longhorn has not reported any node disks yet.</div>'}</div>
   </div>` : ""}
   <div class="card flat pad0"><div class="tblwrap voltable"><table class="tbl dense"><thead><tr>
    <th>Volume</th><th>Attached to</th><th>Health</th><th>Mode</th><th>Usage</th><th>Last used</th><th></th>
@@ -335,7 +336,7 @@ function storageClassCard(classes) {
       <div><div class="ctitle">Storage classes</div>
         <div class="csub">What a new volume is built from. Kubernetes fixes a class at creation, so Homestead creates and removes them rather than editing them in place.</div></div>
       <button class="btn pri" data-need="admin" onclick="storageClassCreate()">＋ New storage class</button></div>
-    <div class="tblwrap"><table class="tbl storage-class-table"><thead><tr>
+    <div class="tblwrap"><table class="tbl stack storage-class-table"><thead><tr>
       <th>Class</th><th>Replicas</th><th>Shared (RWX)</th><th>Encryption</th><th>Expansion</th><th>Volumes</th><th></th>
     </tr></thead><tbody>${rows.map(row => `<tr>
       <td><b>${esc(row.name)}</b>${row.default ? '<span class="tag ok">default</span>' : ""}${row.internal ? '<span class="tag">Harvester internal</span>' : ""}
@@ -836,12 +837,14 @@ window.rmShare = async name => {
 async function viewEvents() {
   const e = await api("/api/events");
   const q = STATE.q.toLowerCase();
-  const rows = e.filter(x => !q || [x.obj, x.ns, x.kind, x.reason, x.msg].join(" ").toLowerCase().includes(q));
+  // The count says what the table shows, so the warnings filter counts too.
+  const rows = e.filter(x => (!q || [x.obj, x.ns, x.kind, x.reason, x.msg].join(" ").toLowerCase().includes(q))
+    && (!STATE.eventWarnings || x.type === "Warning"));
   paint(`<div class="phead"><div><h2>Events</h2><p>${rows.length} of ${e.length} recent events · newest first</p></div>
     <div class="row"><button class="btn sm ${STATE.eventWarnings ? "pri" : ""}" onclick="STATE.eventWarnings=!STATE.eventWarnings;viewEvents()">Warnings only</button></div></div>
-  <div class="card flat pad0 eventtable"><div class="tblwrap"><table class="tbl dense"><thead><tr>
+  <div class="card flat pad0 eventtable"><div class="tblwrap"><table class="tbl stack dense"><thead><tr>
     <th>Object</th><th>Reason</th><th>Message</th><th>When</th></tr></thead><tbody>
-  ${rows.filter(x => !STATE.eventWarnings || x.type === "Warning").map(x => `<tr><td><b>${esc(x.obj)}</b><div class="dim xs">${esc(x.ns)} · ${esc(x.kind)}</div></td>
+  ${rows.map(x => `<tr><td><b>${esc(x.obj)}</b><div class="dim xs">${esc(x.ns)} · ${esc(x.kind)}</div></td>
     <td><span class="pill ${x.type === "Warning" ? "med" : "low"}">${esc(x.reason)}</span></td>
     <td class="small muted">${esc(x.msg)}${x.count > 1 ? ` <span class="tag">×${x.count}</span>` : ""}</td>
     <td class="dim xs mono" title="${esc((x.time || "").replace("T", " ").replace("Z", ""))}">${esc(fmtAgo(ageSecs(x.time)))}</td></tr>`).join("")

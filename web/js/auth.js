@@ -55,7 +55,7 @@ function ungate() { $("#gate").classList.add("hidden"); }
 
 function loginForm(err, setup) {
   gate(`
-    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.65" alt="">
+    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.66" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}
@@ -240,7 +240,15 @@ async function afterAuth() {
   paintWho();
   await loadHealthSettings();
   const route = HomesteadRouter.resolve(window.location.pathname);
-  go(route.view, { history: false, fromLocation: true });
+  if (!route.known) {
+    // A mistyped or outdated address: land on the dashboard, and say so.
+    const asked = window.location.pathname;
+    window.history.replaceState({ view: "dash" }, "", "/");
+    toast(`There is no page at ${asked}, so here is the dashboard`, "warn");
+    go("dash", { history: false });
+  } else {
+    go(route.view, { history: false, fromLocation: true });
+  }
   startLoop();
   if (window.startOperationChecks) window.startOperationChecks();
   if (window.startUpdateChecks) window.startUpdateChecks();

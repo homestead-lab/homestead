@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.65"))
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", os.environ.get("HARVUI_VERSION", "2.8.66"))
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2542,6 +2542,18 @@ def is_spa_route(path):
     return clean in SPA_ROUTES
 
 
+def is_page_path(path):
+    """A browser address that is not a known page: the app says so itself.
+
+    An API path or anything that looks like a file keeps its plain 404, so a
+    missing endpoint or script is never answered with a web page.
+    """
+    clean = path or "/"
+    last = clean.rstrip("/").rsplit("/", 1)[-1]
+    return (not clean.startswith("/api/") and clean != "/api" and "." not in last
+            and ".." not in clean and len(clean) < 200)
+
+
 # Paths reachable without a session. Everything else needs one.
 PUBLIC = {"/healthz", "/style.css", "/index.html",
           "/api/auth/login", "/api/auth/state", "/api/auth/setup"}
@@ -2735,7 +2747,7 @@ class H(BaseHTTPRequestHandler):
 
     def _guard(self, path):
         """Returns None when the request may proceed, or sends the refusal."""
-        if (is_spa_route(path) or is_public_path(path) or is_vendor_path(path) or
+        if (is_spa_route(path) or is_page_path(path) or is_public_path(path) or is_vendor_path(path) or
                 (path.startswith("/js/") and path.endswith(".js"))):
             return None
         who = self._who()
@@ -2779,7 +2791,7 @@ class H(BaseHTTPRequestHandler):
                 return CONSOLE_PROXY.handle(self, self.user, q)
             if p.startswith("/api/icons/"):
                 return self._icon(p)
-            if is_spa_route(p) or p == "/index.html":
+            if is_spa_route(p) or p == "/index.html" or is_page_path(p):
                 return self._file(f"{WEBROOT}/index.html", "text/html; charset=utf-8")
             if p.startswith("/js/") and p.endswith(".js") and ".." not in p:
                 return self._file(f"{WEBROOT}/js/{os.path.basename(p)}", "application/javascript")

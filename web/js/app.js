@@ -140,6 +140,8 @@ function go(v, options = {}) {
   closeNav();
   resetPaint();
   V().innerHTML = `<div class="empty"><span class="spin2"></span>loading…</div>`;
+  // A new page starts at its top, not wherever the last one was scrolled to.
+  window.scrollTo(0, 0);
   Promise.resolve(fn()).then(() => applyDeepLink(v, locationParams || options.params || {}))
     .catch(e => { resetPaint(); V().innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
 }
