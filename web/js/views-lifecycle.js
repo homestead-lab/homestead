@@ -242,7 +242,7 @@ window.nodeActions = async name => {
   const isEtcd = (qr.members || []).includes(name);
   const risky = isEtcd && qr.can_lose < 1;
   const off = qr.power_enabled === false;
-  modal("Host actions · " + name, `
+  childModal("Host actions · " + name, `
     <div class="grid g2" style="gap:12px">
       <div class="card flat"><div class="ctitle">Scheduling</div>
         <p class="muted small" style="margin:6px 0 14px">Cordon stops new pods landing here.
@@ -1056,7 +1056,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
   const storage = await api("/api/deploy/options?ns=lab").catch(() => ({ pvcs: [], storage_classes: ["longhorn-r2"] }));
   STATE.data.importStorage = storage;
   const classes = storage.storage_classes?.length ? storage.storage_classes : ["longhorn-r2"];
-  modal("Import · " + dir, `
+  childModal("Import · " + dir, `
     <div class="f"><label>Workload name</label><input type="text" id="im_name" value="${esc(name)}"></div>
     <div class="f"><label>Remote path</label>
       <input type="text" id="im_path" value="${esc(cfg.remote_path || "")}" placeholder="${esc((src.base_path || "") + "/" + dir)}"></div>
@@ -1229,7 +1229,7 @@ window.clusterInventory = report => {
 /* Before anything stops: where it lands, what address it gets, and every
    reason it would fail or surprise someone - asked of both clusters. */
 window.moveReview = (cluster, kind, name) => {
-  modal(`Move ${name} from ${cluster}`, `
+  childModal(`Move ${name} from ${cluster}`, `
   <p class="muted small">Stops ${esc(name)} on ${esc(cluster)}, backs up its volumes to the shared backup
     storage, restores them here, and starts it here. The original stays on ${esc(cluster)}, stopped,
     until you remove it, so it can be put back at any point before then.</p>
@@ -1245,7 +1245,7 @@ window.moveReview = (cluster, kind, name) => {
     <button class="btn" onclick="movePlan('${esc(cluster)}','${esc(kind)}','${esc(name)}')">Check again</button>
     <button class="btn pri" id="mv_go" data-need="admin" disabled
       onclick="moveStart('${esc(cluster)}','${esc(kind)}','${esc(name)}')">Start move</button>
-    <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    <button class="btn" onclick="modalBack()">Cancel</button></div>`);
   movePlan(cluster, kind, name);
 };
 

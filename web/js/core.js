@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HOMESTEAD_VERSION = "2.8.66";
+const HOMESTEAD_VERSION = "2.8.67";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -167,24 +167,17 @@ function hardwareChoices(cls, selected = []) {
 }
 const selectedHardware = cls => $$(`.${cls}:checked`).map(x => x.dataset.hwid);
 window.openHardwareManager = cls => {
-  const active = !$("#modal").classList.contains("hidden") && $("#mtitle").textContent !== "Hardware features";
-  if (active) {
-    const body = $("#mbody"), fragment = document.createDocumentFragment();
+  if ($("#mtitle").textContent !== "Hardware features") {
+    // Coming back, the editor's choices are redrawn: a feature may have been added.
     const selected = selectedHardware(cls);
-    while (body.firstChild) fragment.appendChild(body.firstChild);
-    window.__hardwareReturn = { title: $("#mtitle").textContent, fragment, wide: $(".modalbox").classList.contains("wide"), cls, selected };
+    pushModal(() => {
+      const host = $("#mbody .hwchoices");
+      if (host) host.innerHTML = hardwareChoices(cls, selected);
+    });
   }
   hardwareFeatureSettings();
 };
-window.hardwareManagerBack = () => {
-  const back = window.__hardwareReturn;
-  if (!back) return closeModal();
-  $("#mtitle").textContent = back.title; $("#mbody").replaceChildren(back.fragment);
-  $(".modalbox").classList.toggle("wide", back.wide);
-  const host = $("#mbody .hwchoices");
-  if (host) host.innerHTML = hardwareChoices(back.cls, back.selected);
-  window.__hardwareReturn = null;
-};
+window.hardwareManagerBack = () => modalBack();
 
 /* ---------------- toast / modal ---------------- */
 function toast(msg, kind = "") {
@@ -214,7 +207,86 @@ function modal(t, h, wide, contextClass = "") {
   $(".modalbox").dataset.context = contextClass || "";
   $("#modal").classList.toggle("node-detail-view", contextClass === "node-detail-modal");
   $("#modal").classList.remove("hidden");
+  paintModalBack();
 }
+
+/* Dialogs opened from dialogs - a drive from its host, a feature from the
+   hardware list - sit on top of the one they came from. Closing one goes back
+   a level, with the dialog underneath as it was left: scrolled, half-filled,
+   its address restored. Code that finishes a job calls closeModal, which
+   closes the whole stack. */
+const MODAL_STACK = [];
+const modalIsOpen = () => !$("#modal").classList.contains("hidden");
+
+function pushModal(onReturn) {
+  if (!modalIsOpen()) return false;
+  const body = $("#mbody"), fragment = document.createDocumentFragment();
+  const scroll = $(".modalbox").scrollTop;     // the box scrolls, not its body
+  while (body.firstChild) fragment.appendChild(body.firstChild);
+  MODAL_STACK.push({ title: $("#mtitle").textContent, fragment, scroll,
+    wide: $(".modalbox").classList.contains("wide"), context: $(".modalbox").dataset.context || "",
+    guard: window.__modalGuard, url: window.location.pathname + window.location.search,
+    route: STATE.modalRoute, detail: STATE.modalDetail, onReturn });
+  return true;
+}
+
+/* Opens a dialog on top of the current one; with none open, it is a dialog.
+   The same title again is the same dialog redrawing, not a new level. */
+function childModal(t, h, wide, contextClass = "") {
+  const deeper = modalIsOpen() && $("#mtitle").textContent !== t;
+  if (deeper) pushModal();
+  modal(t, h, wide, contextClass);
+  if (deeper) $(".modalbox").scrollTop = 0;
+}
+
+function modalBack() {
+  const back = MODAL_STACK.pop();
+  if (!back) return closeModal();
+  modal(back.title, "", back.wide, back.context);
+  $("#mbody").replaceChildren(back.fragment);
+  $(".modalbox").scrollTop = back.scroll;
+  window.__modalGuard = back.guard;
+  if (back.url !== window.location.pathname + window.location.search) {
+    window.history.replaceState(window.history.state, "", back.url);
+  }
+  STATE.modalRoute = back.route;
+  STATE.modalDetail = back.detail;
+  if (window.renderBreadcrumb) renderBreadcrumb(STATE.view, STATE.modalDetail);
+  if (back.onReturn) back.onReturn();
+}
+
+function paintModalBack() {
+  const button = $("#mback");
+  if (!button) return;
+  const under = MODAL_STACK[MODAL_STACK.length - 1];
+  button.hidden = !under;
+  if (under) {
+    button.querySelector("span").textContent = under.title;
+    button.title = `Back to ${under.title}`;
+  }
+}
+window.childModal = childModal;
+
+/* Some pages come as cards or as rows. Which is the reader's choice, kept per
+   browser and per page; nothing about it is worth a round trip. */
+function viewLayout(page) {
+  try { return localStorage.getItem(`homestead.layout.${page}`) === "rows" ? "rows" : "cards"; }
+  catch (e) { return "cards"; }
+}
+function layoutSwitch(page, redraw) {
+  const layout = viewLayout(page);
+  const option = (value, label, iconName) => `<button class="${layout === value ? "on" : ""}" title="${label}"
+    aria-label="Show as ${label.toLowerCase()}" aria-pressed="${layout === value}"
+    onclick="setViewLayout('${page}','${redraw}','${value}')">${icon(iconName)}</button>`;
+  return `<div class="seg" role="group" aria-label="Layout">${option("cards", "Cards", "dash")}${option("rows", "Rows", "list")}</div>`;
+}
+window.setViewLayout = (page, redraw, layout) => {
+  try { localStorage.setItem(`homestead.layout.${page}`, layout); } catch (e) { /* this visit only */ }
+  resetPaint();
+  if (typeof window[redraw] === "function") window[redraw]();
+};
+window.modalBack = modalBack;
+window.pushModal = pushModal;
 /* The X and Escape are the only ways a person dismisses a modal, and either can
    land on unsaved work, so both ask a modal that has something at stake first.
    Code that closes a modal after finishing its job calls closeModal directly. */
@@ -224,13 +296,13 @@ function dismissModal() {
     const question = guard();
     if (question && !confirm(question)) return;
   }
+  if (MODAL_STACK.length) return modalBack();
   closeModal();
 }
 function closeModal(updateRoute = true) {
   window.__modalGuard = null;
-  if (window.__hardwareReturn && /hardware feature/i.test($("#mtitle").textContent)) {
-    return hardwareManagerBack();
-  }
+  MODAL_STACK.length = 0;
+  paintModalBack();
   $("#modal").classList.add("hidden");
   if (window.__logTimer) { clearInterval(window.__logTimer); window.__logTimer = null; }
   if (window.__updateTimer) { clearInterval(window.__updateTimer); window.__updateTimer = null; }

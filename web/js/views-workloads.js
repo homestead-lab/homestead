@@ -206,24 +206,49 @@ function renderWorkloads() {
   const report = STATE.data.imageUpdates;
   const updateCount = report?.updates || 0;
   const updateErrors = report?.errors || 0;
+  const layout = viewLayout("containers");
   paint(`<div class="phead">
-      <div><h2>Containers</h2><p>${rows.length} workload${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""} · Harvester system pods hidden</p></div>
+      <div><h2>Containers</h2><p>${rows.length} workload${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""} · Harvester system pods hidden${report && !updateCount && !updateErrors ? " · images current" : ""}</p></div>
       <div class="row"><span class="dim xs scanprogress" id="scanprogress"></span>
       <span class="dim xs" title="When the registries were last asked">${checkedAgo()}</span>
+      ${layoutSwitch("containers", "renderWorkloads")}
       <button class="btn" onclick="checkImageUpdates()">↻ Check images</button>
       <button class="btn pri hide-sm" data-need="operator" onclick="go('deploy')">＋ Deploy</button></div></div>
 
     ${updateCount ? `<div class="updatebar"><div><b>${updateCount} update${updateCount === 1 ? "" : "s"} available</b>
       <span>Registry manifests were compared with the digests running in Kubernetes.</span></div>
       <span class="pill warn">review below</span></div>` : updateErrors ? `<div class="updatebar"><div><b>${updateErrors} registry check${updateErrors === 1 ? " needs" : "s need"} attention</b>
-      <span>See the affected container cards and check their imagePullSecrets.</span></div><span class="pill crit">check failed</span></div>` : report ? `<div class="updatebar quiet"><div><b>Images are current</b>
-      <span>Last checked ${esc(new Date(report.checked_at).toLocaleString())}</span></div><span class="pill ok">up to date</span></div>` : ""}
+      <span>See the affected container cards and check their imagePullSecrets.</span></div><span class="pill crit">check failed</span></div>` : ""}
 
-    <div class="cardlist">${rows.map(w => {
+    ${rows.length ? (layout === "rows" ? workloadTable(rows) : `<div class="cardlist">${rows.map(workloadCard).join("")}</div>`)
+      : `<div class="empty">${q ? "Nothing matches that search." : "Nothing deployed yet."}</div>`}`);
+}
+
+/* The same actions for a card and a row: a row shows them as icons. */
+function workloadActions(w, update, off, compact = false) {
+  const label = (text, iconName) => compact ? icon(iconName) : `${icon(iconName)}${text}`;
+  const cls = compact ? "btn sm iconic" : "btn sm";
+  return `<button class="${cls}" title="View live container logs" aria-label="Logs for ${esc(w.name)}" onclick="wlLogs('${w.ns}','${w.pods[0] ? w.pods[0].name : ""}','${w.name}')">${label("Logs", "log")}</button>
+          <button class="${cls}" title="Restart all pods in this workload" aria-label="Restart ${esc(w.name)}" onclick="wlRestart('${w.ns}','${w.name}')">${label("Restart", "restart")}</button>
+          ${update?.available ? `<button class="btn sm pri" title="Review and install the available image update" data-need="operator" onclick="imageUpdateReview('${w.ns}','${w.name}')">${icon("update")}Update</button>` : ""}
+          ${off ? `<button class="${cls}" title="Start this workload" aria-label="Start ${esc(w.name)}" onclick="wlScale('${w.ns}','${w.name}',1)">${label("Start", "play")}</button>`
+                : `<button class="${cls}" title="Scale this workload to zero" aria-label="Stop ${esc(w.name)}" onclick="wlScale('${w.ns}','${w.name}',0)">${label("Stop", "stop")}</button>`}
+          <details class="actionmenu"><summary class="btn sm" title="More actions" aria-label="More actions for ${esc(w.name)}">⋯</summary>
+            <div class="actionmenu-pop">
+              <button aria-label="Console for ${esc(w.name)}" title="Open an audited interactive shell in a running container" data-need="operator" onclick="this.closest('details').open=false;wlConsole('${w.ns}','${w.name}')">${icon("console")}Console</button>
+              <button aria-label="Edit ${esc(w.name)}" title="Edit image, resources, environment, storage and hardware" onclick="this.closest('details').open=false;wlEdit('${w.ns}','${w.name}')">${icon("edit")}Edit</button>
+              <button aria-label="Move ${esc(w.name)}" title="Move this workload to another eligible host" data-need="operator" onclick="this.closest('details').open=false;moveWorkload('${w.name}','${w.ns}')">${icon("move")}Move</button>
+              ${update?.can_rollback ? `<button aria-label="Rollback ${esc(w.name)}" title="Restore the exact image digest saved before the last update" data-need="operator" onclick="this.closest('details').open=false;imageRollback('${w.ns}','${w.name}')">${icon("rollback")}Rollback</button>` : ""}
+              <button class="danger" aria-label="Delete ${esc(w.name)}" title="Delete the workload; persistent volumes are kept" onclick="this.closest('details').open=false;wlDelete('${w.ns}','${w.name}')">${icon("trash")}Delete</button>
+            </div>
+          </details>`;
+}
+
+function workloadCard(w) {
       const ok = w.ready === w.desired && w.desired > 0, off = w.desired === 0;
       const update = workloadUpdate(w.ns, w.name);
       const updateError = update?.images?.find(x => x.error);
-      return `<div class="wcard card flat">
+  return `<div class="wcard card flat">
         <div class="between whead">
           <div class="row" style="gap:10px;min-width:0">
             ${appAvatar(w.name, w.icon)}
@@ -246,24 +271,37 @@ function renderWorkloads() {
         <div class="wfoot">
           ${workloadHierarchy(w)}
           <div class="row wacts">
-          <button class="btn sm" title="View live container logs" onclick="wlLogs('${w.ns}','${w.pods[0] ? w.pods[0].name : ""}','${w.name}')">${icon("log")}Logs</button>
-          <button class="btn sm" title="Restart all pods in this workload" onclick="wlRestart('${w.ns}','${w.name}')">${icon("restart")}Restart</button>
-          ${update?.available ? `<button class="btn sm pri" title="Review and install the available image update" data-need="operator" onclick="imageUpdateReview('${w.ns}','${w.name}')">${icon("update")}Update</button>` : ""}
-          ${off ? `<button class="btn sm" title="Start this workload" onclick="wlScale('${w.ns}','${w.name}',1)">${icon("play")}Start</button>`
-                : `<button class="btn sm" title="Scale this workload to zero" onclick="wlScale('${w.ns}','${w.name}',0)">${icon("stop")}Stop</button>`}
-          <details class="actionmenu"><summary class="btn sm" title="More actions" aria-label="More actions for ${esc(w.name)}">⋯</summary>
-            <div class="actionmenu-pop">
-              <button aria-label="Console for ${esc(w.name)}" title="Open an audited interactive shell in a running container" data-need="operator" onclick="this.closest('details').open=false;wlConsole('${w.ns}','${w.name}')">${icon("console")}Console</button>
-              <button aria-label="Edit ${esc(w.name)}" title="Edit image, resources, environment, storage and hardware" onclick="this.closest('details').open=false;wlEdit('${w.ns}','${w.name}')">${icon("edit")}Edit</button>
-              <button aria-label="Move ${esc(w.name)}" title="Move this workload to another eligible host" data-need="operator" onclick="this.closest('details').open=false;moveWorkload('${w.name}','${w.ns}')">${icon("move")}Move</button>
-              ${update?.can_rollback ? `<button aria-label="Rollback ${esc(w.name)}" title="Restore the exact image digest saved before the last update" data-need="operator" onclick="this.closest('details').open=false;imageRollback('${w.ns}','${w.name}')">${icon("rollback")}Rollback</button>` : ""}
-              <button class="danger" aria-label="Delete ${esc(w.name)}" title="Delete the workload; persistent volumes are kept" onclick="this.closest('details').open=false;wlDelete('${w.ns}','${w.name}')">${icon("trash")}Delete</button>
-            </div>
-          </details>
+          ${workloadActions(w, update, off)}
           </div>
         </div></div>`;
-    }).join("") || `<div class="empty">nothing here yet</div>`}</div>`);
 }
+
+/* One line per workload: for a long list, or anyone who would rather scan than browse. */
+function workloadTable(rows) {
+  return `<div class="card flat pad0 wltable-wrap"><table class="tbl dense stack wltable"><thead><tr>
+    <th>Workload</th><th>Status</th><th class="wl-image">Image</th><th>CPU</th><th>RAM</th><th class="wl-access">Access</th><th></th></tr></thead><tbody>
+    ${rows.map(w => {
+      const ok = w.ready === w.desired && w.desired > 0, off = w.desired === 0;
+      const update = workloadUpdate(w.ns, w.name);
+      const updateError = update?.images?.find(x => x.error);
+      return `<tr>
+        <td class="wl-name"><div class="row nowrap" style="gap:9px">${appAvatar(w.name, w.icon)}
+          <div class="wtitle"><div><b>${esc(w.name)}</b></div>
+            <div class="dim xs">${esc(w.ns)} · <span class="nodelink" onclick="moveWorkload('${w.name}','${w.ns}')">${esc(w.nodes.join(", ") || "unscheduled")}</span></div></div></div></td>
+        <td class="wl-status"><div class="row nowrap" style="gap:6px"><span class="pill ${ok ? "ok" : off ? "low" : "crit"}">${w.ready}/${w.desired}</span>
+          ${update?.available ? '<span class="pill warn" title="An image update is available">update</span>' : ""}
+          ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}</div>
+          <div class="dim xs">${w.uptime ? `up ${esc(fmtUp(w.uptime))}` : off ? "stopped" : "starting"}</div></td>
+        <td class="wl-image"><div class="mono xs wl-imagetext" title="${esc(w.images.join(" · "))}">${w.images.map(esc).join(" · ")}</div>
+          ${(w.hardware || []).length || w.gpu ? `<div>${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</div>` : ""}</td>
+        <td class="mono small nowrap" data-tip="Live usage. 100% equals one fully used CPU core.">${workloadCpuPercent(w.cpu)}</td>
+        <td class="mono small nowrap">${workloadMemory(w.mem_mb)}</td>
+        <td class="wl-access"><div class="waccess">${accessPorts(w.ports)}</div></td>
+        <td class="wl-actions"><div class="row nowrap wacts">${workloadActions(w, update, off, true)}</div></td>
+      </tr>`;
+    }).join("")}</tbody></table></div>`;
+}
+
 
 function accessPorts(ports) {
   const rows = ports || [];
@@ -418,7 +456,7 @@ window.imageUpdateReview = (ns, name) => {
   const changes = update.images.filter(x => x.available);
   const policy = STATE.data.imageUpdates?.policy || {};
   const blocked = policy.allows_install === false;
-  modal("Update · " + name, `<div class="update-review">
+  childModal("Update · " + name, `<div class="update-review">
     <div class="note"><b>Managed update.</b> Homestead will pin the selected registry manifest by digest,
       monitor Kubernetes readiness, and keep the current immutable image ready for rollback.</div>
     ${changes.map(x => `<div class="update-image">
@@ -432,7 +470,7 @@ window.imageUpdateReview = (ns, name) => {
       onchange="document.getElementById('updateInstall').disabled=!this.checked"> I reviewed the image change and approve this rollout</label>
     <div class="row" style="margin-top:18px"><button class="btn pri" id="updateInstall" data-need="operator" ${blocked ? "disabled" : "disabled"}
       onclick="imageUpdateApply('${esc(ns)}','${esc(name)}')">Install update</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div></div>`, true);
+      <button class="btn" onclick="modalBack()">Cancel</button></div></div>`, true);
   if (window.applyRole) window.applyRole();
 };
 

@@ -289,7 +289,7 @@ window.nodeDetail = async (name, fromRoute = false) => {
 };
 
 window.smartDisk = async (node, disk) => {
-  modal(`Drive · ${disk}`, `<div class="empty"><span class="spin2"></span>reading SMART data</div>`, true);
+  childModal(`Drive · ${disk}`, `<div class="empty"><span class="spin2"></span>reading SMART data</div>`, true);
   try {
     const s = await api(`/api/node/smart?node=${encodeURIComponent(node)}&disk=${encodeURIComponent(disk)}`);
     const tests = s.self_tests || [], active = s.test?.active;
@@ -348,7 +348,7 @@ window.smartDisk = async (node, disk) => {
 /* The probe is two containers. One reads sensors with nothing special
    granted to it; the other must be privileged to reach the drives at all, so
    installing it is stated plainly and asked for rather than assumed. */
-window.probeInstallConfirm = () => modal("Install the node probe?", `
+window.probeInstallConfirm = () => childModal("Install the node probe?", `
   <p>The probe runs one pod on every node and reports what Kubernetes does not:
     temperatures, host devices, per-disk throughput, and SMART drive health.</p>
   <div class="note"><b>Telemetry container.</b> Mounts <span class="mono">/sys</span>,
@@ -382,15 +382,17 @@ window.probeRemove = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
-window.smartStartConfirm = (node, disk, type) => modal(`Start ${type} SMART test?`, `
+window.smartStartConfirm = (node, disk, type) => childModal(`Start ${type} SMART test?`, `
   <p>This asks <b>${esc(node)} / ${esc(disk)}</b> to run its built-in ${esc(type)} self-test.</p>
   <div class="note">The test does not erase data, but a long test can reduce storage performance and may take hours. Progress and the final drive result remain in Activity.</div>
-  <div class="row" style="margin-top:16px"><button class="btn pri" onclick="smartStart('${esc(node)}','${esc(disk)}','${esc(type)}')">Start ${esc(type)} test</button><button class="btn" onclick="smartDisk('${esc(node)}','${esc(disk)}')">Cancel</button></div>`);
+  <div class="row" style="margin-top:16px"><button class="btn pri" onclick="smartStart('${esc(node)}','${esc(disk)}','${esc(type)}')">Start ${esc(type)} test</button><button class="btn" onclick="modalBack()">Cancel</button></div>`);
 
 window.smartStart = async (node, disk, type) => {
   try {
     const result = await api("/api/node/smart/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node, disk, test: type }) });
-    toast(result.message || `${type} SMART test started`, "ok"); closeModal();
+    toast(result.message || `${type} SMART test started`, "ok");
+    // Back to the drive, redrawn so the running test shows.
+    modalBack(); smartDisk(node, disk);
   } catch (e) { toast(e.message, "bad"); }
 };
 window.hardwareEdit = n => modal("Hardware · " + n.name, `
@@ -408,7 +410,7 @@ window.hardwareFeatureSettings = async () => {
   const defs = await loadHardwareFeatures(true);
   modal("Hardware features", `
     <div class="between"><p class="muted small">Define reusable passthrough and placement features. iGPU remains built in; everything else is editable.</p>
-      <div class="row">${window.__hardwareReturn ? '<button class="btn sm" onclick="hardwareManagerBack()">← Back to container</button>' : ""}<button class="btn pri sm" data-need="admin" onclick="hardwareFeatureEdit()">＋ Add feature</button></div></div>
+      <div class="row"><button class="btn pri sm" data-need="admin" onclick="hardwareFeatureEdit()">＋ Add feature</button></div></div>
     <div class="featurelist" style="margin-top:14px">${defs.map(f => `<div class="card flat featurecard">
       <div class="between"><div><b>${esc(f.name)}</b> ${f.builtin ? '<span class="tag">built in</span>' : ""}<div class="dim xs mono">${esc(f.id)} · ${esc(f.label)}</div></div>
       ${f.builtin ? "" : `<div class="row"><button class="btn sm" onclick="hardwareFeatureEdit('${esc(f.id)}')">Edit</button><button class="btn sm danger" onclick="hardwareFeatureDelete('${esc(f.id)}')">Delete</button></div>`}</div>
@@ -417,13 +419,20 @@ window.hardwareFeatureSettings = async () => {
       ${f.description ? `<div class="dim small" style="margin-top:7px">${esc(f.description)}</div>` : ""}</div>`).join("")}</div>
     <div class="note" style="margin-top:14px">A feature adds a node selector and mounts its host path into the container. USB IDs control node detection; the configured path controls passthrough.</div>`, true);
 };
+/* After a save or delete in the feature editor, the list it opened from is
+   shown again, redrawn with the change. */
+function backToHardwareList() {
+  if (/hardware feature$/.test($("#mtitle").textContent)) modalBack();
+  hardwareFeatureSettings();
+}
+
 window.hardwareFeatureEdit = async id => {
   const old = id ? hardwareDef(id) : { id: "", name: "", description: "", host_path: "/dev/", container_path: "/dev/", path_type: "CharDevice", usb_ids: [] };
   if (!(STATE.data.nodes || STATE.data.ov?.nodes)?.length) {
     STATE.data.nodes = await api("/api/nodes").catch(() => []);
   }
   const nodes = STATE.data.nodes || STATE.data.ov?.nodes || [];
-  modal((id ? "Edit" : "Add") + " hardware feature", `
+  childModal((id ? "Edit" : "Add") + " hardware feature", `
     <div class="f2"><div class="f"><label>Feature ID ${tip("Stable internal ID used by workloads and node labels. It cannot be changed after creation.")}</label><input id="hf_id" value="${esc(old.id)}" ${id ? "disabled" : ""} placeholder="hailo-8"></div>
       <div class="f"><label>Display name</label><input id="hf_name" value="${esc(old.name)}" placeholder="Hailo-8 accelerator"></div></div>
     <div class="f"><label>Description</label><input id="hf_desc" value="${esc(old.description || "")}" placeholder="Optional note for operators"></div>
@@ -440,7 +449,7 @@ window.hardwareFeatureEdit = async id => {
       <div id="hf_browse_results"></div>
     </div>
     <div class="note">Device passthrough makes the container privileged. Use the narrowest stable /dev path available. For a USB VID:PID, /dev/bus/usb is commonly required because bus addresses can change after reboot.</div>
-    <div class="row" style="margin-top:16px"><button class="btn pri" onclick="hardwareFeatureSave('${esc(id || "")}' )">Save feature</button><button class="btn" onclick="hardwareFeatureSettings()">Cancel</button></div>`, true);
+    <div class="row" style="margin-top:16px"><button class="btn pri" onclick="hardwareFeatureSave('${esc(id || "")}' )">Save feature</button><button class="btn" onclick="modalBack()">Cancel</button></div>`, true);
   hardwareBrowseRender();
 };
 window.hardwareBrowseRender = () => {
@@ -485,7 +494,7 @@ window.hardwareFeatureSave = async oldId => {
   const custom = (STATE.data.hardwareFeatures || []).filter(x => !x.builtin && x.id !== oldId).map(x => ({ ...x }));
   custom.push(feature);
   try { await api("/api/hardware/features", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ features: custom }) });
-    STATE.data.hardwareFeatures = null; toast(`${feature.name} saved`, "ok"); hardwareFeatureSettings(); }
+    STATE.data.hardwareFeatures = null; toast(`${feature.name} saved`, "ok"); backToHardwareList(); }
   catch (e) { toast(e.message, "bad"); }
 };
 window.hardwareFeatureDelete = async id => {
@@ -493,18 +502,20 @@ window.hardwareFeatureDelete = async id => {
   if (!confirm(`Delete hardware feature "${f.name}"?\n\nExisting workloads using its node label are not changed.`)) return;
   const custom = (STATE.data.hardwareFeatures || []).filter(x => !x.builtin && x.id !== id);
   try { await api("/api/hardware/features", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ features: custom }) });
-    STATE.data.hardwareFeatures = null; toast(`${f.name} deleted`, "ok"); hardwareFeatureSettings(); }
+    STATE.data.hardwareFeatures = null; toast(`${f.name} deleted`, "ok"); backToHardwareList(); }
   catch (e) { toast(e.message, "bad"); }
 };
 
 async function viewNodes() {
   const [n] = await Promise.all([api("/api/nodes"), loadHardwareFeatures()]);
   STATE.data.nodes = n;
+  // Cards and the table said the same things twice; now it is one or the other.
+  const layout = viewLayout("nodes");
   paint(`<div class="phead"><div><h2>Nodes</h2>
-      <p>${n.length} node${n.length === 1 ? "" : "s"} · click any card for detail</p></div>
-      <button class="btn" data-need="admin" onclick="hardwareFeatureSettings()">Hardware features</button></div>
-   <div class="nodegrid stagger">${n.map(nodeCard).join("")}</div>
-   <div class="sec">Detail</div>
+      <p>${n.length} node${n.length === 1 ? "" : "s"} · click any ${layout === "rows" ? "row" : "card"} for detail</p></div>
+      <div class="row">${layoutSwitch("nodes", "viewNodes")}
+      <button class="btn" data-need="admin" onclick="hardwareFeatureSettings()">Hardware features</button></div></div>
+   ${layout === "cards" ? `<div class="nodegrid stagger">${n.map(nodeCard).join("")}</div>` : `
    <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack"><thead><tr>
      <th>Node</th><th>CPU</th><th>Memory</th><th>Network</th><th>Temp</th><th>Disk</th><th>Pods</th><th>Hardware</th><th>Workloads</th></tr></thead><tbody>
    ${n.map(x => `<tr class="clickable" onclick="nodeDetail('${esc(x.name)}')">
@@ -521,5 +532,5 @@ async function viewNodes() {
             onclick="moveWorkload('${esc(w)}')">${esc(w)} <span class="mv">⇄</span></span>`).join("")
           + (x.workloads.length > 2 ? `<span class="tag more" data-tip="${esc(x.workloads.slice(2).join(", "))}">+${x.workloads.length - 2}</span>` : "")
         : '<span class="dim xs">—</span>'}</td></tr>`).join("")}
-   </tbody></table></div></div>`);
+   </tbody></table></div></div>`}`);
 }

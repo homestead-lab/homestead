@@ -29,7 +29,7 @@ function fitAfter(node, wl) {
 
 window.moveWorkload = async (name, ns) => {
   const wl = Object.assign(findWl(name), ns ? { ns } : {});
-  modal("Move · " + name, '<div class="empty"><span class="spin2"></span>checking capacity and hardware constraints…</div>', true);
+  childModal("Move · " + name, '<div class="empty"><span class="spin2"></span>checking capacity and hardware constraints…</div>', true);
   let plan;
   try {
     await loadHardwareFeatures();
@@ -88,7 +88,7 @@ window.moveWorkload = async (name, ns) => {
 
     <div class="row" style="margin-top:6px">
       <button class="btn pri" id="mv_go" onclick="doMoveNow('${esc(wl.ns)}','${esc(name)}')" disabled>Move</button>
-      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn" onclick="modalBack()">Cancel</button>
     </div>
     <div class="note" style="margin-top:14px">Eligible hosts already account for every configured hardware feature, passthrough path, USB ID, node label, advertised device resource, readiness and cordon. This is a stop-then-start, not a live move. A
     ReadWriteOnce volume can only attach to one node at a time, so the old pod must fully
