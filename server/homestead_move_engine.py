@@ -33,6 +33,7 @@ LHNS = "longhorn-system"
 LH_API = "/apis/longhorn.io/v1beta2"
 JOIN_SECRET = "homestead-move-credentials"
 VIP_ANNOTATION = "kube-vip.io/loadbalancerIPs"
+import homestead_platform as PLATFORM
 MOVE_ID = "move-id"
 MOVED_FROM = "moved-from"
 TICK_SECONDS = 5
@@ -590,7 +591,7 @@ def _creating(move):
                                 chosen)
         meta = _stamp(service["metadata"], move, namespace)
         if planned.get("vip"):
-            meta["annotations"][VIP_ANNOTATION] = planned["vip"]
+            meta["annotations"].update(PLATFORM.vip_annotations(planned["vip"]))
             meta["annotations"][NAMES.key("vip-mode")] = planned["vip_mode"]
             chosen = chosen or planned["vip"]
             move["flags"]["vip"] = chosen

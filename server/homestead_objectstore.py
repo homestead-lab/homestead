@@ -30,6 +30,7 @@ PORT = 9000
 CONSOLE_PORT = 9001
 IMAGE = "quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z"
 VIP_ANNOTATION = "kube-vip.io/loadbalancerIPs"
+import homestead_platform as PLATFORM
 
 
 def bind(_kget, _ksend, _create_pvc, namespace):
@@ -186,7 +187,7 @@ def deploy(cfg=None):
     service = {
         "apiVersion": "v1", "kind": "Service",
         "metadata": {"name": NAME, "namespace": NS, "labels": labels,
-                     "annotations": {VIP_ANNOTATION: address} if address else {}},
+                     "annotations": PLATFORM.vip_annotations(address)},
         "spec": {"type": "LoadBalancer", "selector": {"app": NAME},
                  "ports": [{"name": "s3", "port": PORT, "targetPort": "s3"},
                            {"name": "console", "port": CONSOLE_PORT,

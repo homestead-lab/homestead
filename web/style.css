@@ -1560,4 +1560,5 @@ tr.clickable{cursor:pointer}
 .hist-node{display:flex;gap:8px;align-items:center}
 @media(max-width:900px){.mqtt-grid,.hist-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:560px){.mqtt-grid,.hist-grid{grid-template-columns:1fr}}
-
+.platform-missing{padding:28px}
+#nav a[hidden]{display:none}

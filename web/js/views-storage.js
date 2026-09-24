@@ -155,6 +155,7 @@ const volumeReason = v => (v.health_reason && v.state === "attached"
   && v.robustness !== "healthy") ? v.health_reason : "";
 
 async function viewStorage() {
+  if (platformLacks("longhorn", "Volumes")) return;
   const [v, st, classes, v2] = await Promise.all([api("/api/volumes"), api("/api/storage").catch(() => null),
     api("/api/storage/classes").catch(() => []), api("/api/storage/v2").catch(() => null)]);
   STATE.data.storageClasses = classes;

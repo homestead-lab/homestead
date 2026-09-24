@@ -120,6 +120,7 @@ window.objectStoreRemove = async () => {
 };
 
 async function viewProtect() {
+  if (platformLacks("longhorn", "Data protection")) return;
   const [d, objects] = await Promise.all([
     api("/api/lh/overview"),
     api("/api/objectstore").catch(() => ({ deployed: false })),

@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.94")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.95")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1334,7 +1334,7 @@ def build_deployment(cfg):
         svc = {
             "apiVersion": "v1", "kind": "Service",
             "metadata": {"name": name, "namespace": ns, "labels": {"app": name, NAMES.key("managed"): "true"},
-                         "annotations": {"kube-vip.io/loadbalancerIPs": vip} if vip and svc_type == "LoadBalancer" else {}},
+                         "annotations": PLATFORM.vip_annotations(vip) if svc_type == "LoadBalancer" else {}},
             "spec": {"type": svc_type, "selector": {"app": name},
                       "ports": [{"name": (p.get("name") or f"p{p['container']}-{str(p.get('protocol', 'TCP')).lower()}")[:15],
                                  "port": int(p.get("host") or p["container"]),
@@ -2626,6 +2626,7 @@ import homestead_ipam as IPAM
 import homestead_helm as HELM
 import homestead_mqtt as MQTT
 import homestead_history as HISTORY
+import homestead_platform as PLATFORM
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
@@ -2673,6 +2674,7 @@ IPAM.bind(kget, ksend, DEFAULT_NS, lambda: cached("network", 5, NETWORK.inventor
 HELM.bind(kget, ksend)
 MQTT.bind(kget, ksend, DEFAULT_NS, lambda: mqtt_snapshot(), LEADER.is_leader)
 HISTORY.bind(DATA_DIR)
+PLATFORM.bind(kget)
 OPS.RESOLVERS["helm"] = HELM.job_status
 NSMOD.bind(kget, ksend, DEFAULT_NS, _own_namespace())
 ALERTS.bind(DATA_DIR)
@@ -3452,6 +3454,10 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, homestead_replicas())
             if p == "/api/ipam":
                 return self._send(200, IPAM.view())
+            if p == "/api/platform":
+                return self._send(200, PLATFORM.detect(force=(q.get("force") or [""])[0] == "1"))
+            if p == "/api/platform/join":
+                return self._send(200, PLATFORM.join_guide())
             if p == "/api/mqtt":
                 return self._send(200, {**MQTT.public(), "hv_exporter": hv_exporter_present(),
                                         "sensors": {"cluster": len(MQTT.CLUSTER_SENSORS), "node": len(MQTT.NODE_SENSORS)}})
@@ -4389,7 +4395,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.94 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.95 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

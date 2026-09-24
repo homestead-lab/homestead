@@ -53,7 +53,9 @@ async function viewCluster() {
   ${(report.unavailable || []).length ? `<div class="note"><b>Partial platform data.</b> ${esc(report.unavailable.map(row => row.section).join(", "))} could not be read. Other sections remain live.</div>` : ""}
 
   <div class="cluster-facts">
-    <section><span>Harvester</span><b>${versions.harvester ? `v${esc(versions.harvester)}` : "Not reported"}</b><small>Host operating platform</small></section>
+    ${STATE.platform && !STATE.platform.harvester
+      ? `<section><span>${esc(platformName(STATE.platform))}</span><b>${STATE.platform.version ? `v${esc(STATE.platform.version)}` : "Not reported"}</b><small>Kubernetes distribution</small></section>`
+      : `<section><span>Harvester</span><b>${versions.harvester ? `v${esc(versions.harvester)}` : "Not reported"}</b><small>Host operating platform</small></section>`}
     <section><span>Kubernetes</span><b>${versions.kubernetes ? `v${esc(versions.kubernetes)}` : "Not reported"}</b><small>Cluster API version</small></section>
     <section><span>Control plane</span><b>${cp.ready ?? 0}/${cp.total ?? 0} ready</b><small>API and scheduling hosts</small></section>
     <section><span>etcd quorum ${tip("The number of additional ready etcd members that can be lost before the control plane loses quorum.")}</span><b>${esc(marginCopy)}</b><small>${cp.etcd_ready ?? 0}/${cp.etcd_total ?? 0} ready · ${cp.quorum_needed ?? "—"} needed</small></section>
@@ -99,6 +101,7 @@ async function viewCluster() {
    Shown and followed, never started: an upgrade rewrites every host, so it
    is begun from Harvester's own dashboard. */
 async function clusterUpgradesPaint(force = false) {
+  if (STATE.platform && !STATE.platform.harvester) return;   // Harvester's releases only mean something on Harvester
   try {
     const report = await api("/api/cluster/upgrades" + (force ? "?force=1" : ""));
     STATE.data.upgrades = report;

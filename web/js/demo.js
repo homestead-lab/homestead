@@ -77,6 +77,8 @@
   const pod = (name, node, image) => ({ name: `${name}-7d8f6d4c9-demo`, node, phase: "Running",
     ready: true, restarts: 0, container_count: 1,
     containers: [{ name, image, kind: "app", state: "running", ready: true, restarts: 0 }] });
+  // Harvester unless ?platform=k3s: a plain k3s cluster, for the pages that differ.
+  const demoPlatform = new URLSearchParams(location.search).get("platform") || "harvester";
   // The IP addresses page with UniFi connected, until Settings disconnects it.
   let demoUnifi = new URLSearchParams(location.search).get("unifi") !== "0";
   let portalLinks = [
@@ -315,7 +317,7 @@
       detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.94", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.95", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
@@ -402,20 +404,20 @@
       user: "admin", added: "2026-09-22 17:02" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "garage") return { name, version: "2.8.94", protocol: 1, local_version: "2.8.94",
+      if (name === "garage") return { name, version: "2.8.95", protocol: 1, local_version: "2.8.95",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "garage runs 2.8.94 and this one 2.8.94. Moves work between them; garage is the newer of the two." };
+        message: "garage runs 2.8.95 and this one 2.8.95. Moves work between them; garage is the newer of the two." };
       return name === "attic"
-        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.94", local_protocol: 1,
+        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.95", local_protocol: 1,
             state: "behind", compatible: false,
-            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.94). Update attic first." }
-        : { name, version: "2.8.94", protocol: 1, local_version: "2.8.94", local_protocol: 1,
-            state: "same", compatible: true, message: "Both run Homestead 2.8.94." };
+            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.95). Update attic first." }
+        : { name, version: "2.8.95", protocol: 1, local_version: "2.8.95", local_protocol: 1,
+            state: "same", compatible: true, message: "Both run Homestead 2.8.95." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "shed", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.94", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.95", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -869,6 +871,15 @@
         nodes: [{ name: "harvester-node1", cpu: 21.4, mem: 44.1, availability: 100 }, { name: "harvester-node2", cpu: 17.9, mem: 39.8, availability: 99.31 },
           { name: "harvester-node3", cpu: 12.2, mem: 35.0, availability: 100 }] };
     },
+    "/api/platform": demoPlatform === "k3s"
+      ? { distribution: "k3s", version: "1.31.4+k3s1", harvester: false, longhorn: false, kubevirt: false, helm_controller: true,
+          metrics: true, load_balancer: "servicelb", control_plane: ["192.0.2.50"], arch: ["amd64"] }
+      : { distribution: "harvester", version: "1.31.4+rke2r1", harvester: true, longhorn: true, kubevirt: true, helm_controller: true,
+          metrics: true, load_balancer: "kube-vip", control_plane: ["192.0.2.207", "192.0.2.208"], arch: ["amd64"] },
+    "/api/platform/join": { distribution: "k3s", server: "192.0.2.50", version: "1.31.4+k3s1", token_file: "/var/lib/rancher/k3s/server/node-token",
+      agent: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_URL=https://192.0.2.50:6443 K3S_TOKEN=<token> sh -',
+      server_join: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_TOKEN=<token> sh -s - server --server https://192.0.2.50:6443',
+      longhorn: "sudo apt-get install -y open-iscsi nfs-common   # or: sudo dnf install -y iscsi-initiator-utils nfs-utils" },
     "/api/ipam/record": { ok: true },
     "/api/ipam/bulk": { ok: true, detail: "updated" },
     "/api/ipam/scan": { ok: true, detail: "scanning 254 addresses in 192.0.2.0/24" },
@@ -921,7 +932,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.94", candidate_tag: "2.8.94", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.95", candidate_tag: "2.8.95", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

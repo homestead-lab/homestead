@@ -55,7 +55,7 @@ function ungate() { $("#gate").classList.add("hidden"); }
 
 function loginForm(err, setup) {
   gate(`
-    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.94" alt="">
+    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.95" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}
@@ -239,7 +239,7 @@ $("#whoami").onclick = () => go("settings");
 
 async function afterAuth() {
   paintWho();
-  await loadHealthSettings();
+  await Promise.all([loadHealthSettings(), window.loadPlatform ? loadPlatform() : null]);
   const route = HomesteadRouter.resolve(window.location.pathname);
   if (!route.known) {
     // A mistyped or outdated address: land on the dashboard, and say so.

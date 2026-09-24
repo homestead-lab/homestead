@@ -45,6 +45,8 @@ function guideScreens(g) {
 }
 
 window.clusterOnboarding = async () => {
+  // Not Harvester: its installer is not how hosts join; k3s's or RKE2's is.
+  if (STATE.platform && !STATE.platform.harvester) return platformJoinGuide();
   modal("Add a Harvester host", '<div class="empty"><span class="spin2"></span>reading the cluster</div>', true, "onboard");
   let g;
   try { g = await api("/api/onboard/guide"); } catch (e) {

@@ -69,10 +69,10 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.94`, the workflow publishes:
+For a release such as `v2.8.95`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.94
+ghcr.io/wjcloudy/homestead:2.8.95
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -83,8 +83,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.94
-git push origin v2.8.94
+git tag v2.8.95
+git push origin v2.8.95
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -94,6 +94,39 @@ Each tagged release also launches Homestead against deterministic demo data,
 captures polished Dashboard, Containers, Architecture, and Networking views in headless
 Chromium, and attaches them to the GitHub release. The stable screenshot above
 always follows the latest release; no live cluster data or credentials are used.
+
+## Without Harvester: k3s, RKE2 or any Kubernetes
+
+Homestead grew up on Harvester but does not need it. It checks what the cluster
+has - Harvester, Longhorn, KubeVirt, which load balancer, which distribution -
+and each page works with that: without KubeVirt there are no VM pages, without
+Longhorn the volume and data-protection pages say so and offer to install it
+through the Helm page, and on k3s or RKE2 **Cluster → Add a host** gives that
+distribution's join commands for this cluster, with where to find the token.
+A Service asks for its address the way the cluster's load balancer reads it:
+kube-vip's annotation (Harvester), MetalLB's when MetalLB is what runs - never
+both - and on k3s's built-in ServiceLB a Service simply takes the nodes' own
+addresses.
+
+**From bare Linux**, one command makes the first machine a k3s cluster with
+Longhorn and Homestead:
+
+```bash
+curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - server
+```
+
+It installs what Longhorn needs on the host, installs k3s with an embedded etcd
+(so more servers can join), and drops a HelmChart for Longhorn and Homestead's
+own manifest into k3s's manifests folder, which k3s applies itself; then it
+prints Homestead's address. `--no-longhorn` uses k3s's local-path storage
+instead. Further machines join with `agent <server-url> <token>` (a worker) or
+`join <server-url> <token>` (another server); Homestead's Add a host shows the
+exact lines.
+
+**On an existing cluster**, apply `deploy/deploy.yaml` after changing
+`storageClassName` and the `STORAGE_CLASS` value to one the cluster has (RWX
+for the data claim, e.g. Longhorn's), and `LB_IP` to an address its load
+balancer can give out.
 
 ## Fresh-cluster installation
 
@@ -558,7 +591,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.94/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.95/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -569,7 +602,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.94 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.95 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour

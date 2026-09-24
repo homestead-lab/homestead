@@ -20,6 +20,7 @@ DEFAULT_NAMESPACE = "lab"
 SHARED_VIP = ""
 DNS_NAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 VIP_ANNOTATION = "kube-vip.io/loadbalancerIPs"
+import homestead_platform as PLATFORM
 
 
 def bind(_kget, _ksend, system_namespaces, default_namespace, shared_vip):
@@ -173,7 +174,7 @@ def inventory():
     deployments = _items("/apis/apps/v1/deployments")
     nodes = _items("/api/v1/nodes")
     ingresses = _items("/apis/networking.k8s.io/v1/ingresses")
-    pools_raw = _items("/apis/loadbalancer.harvesterhci.io/v1beta1/ippools")
+    pools_raw = _items("/apis/loadbalancer.harvesterhci.io/v1beta1/ippools") + PLATFORM.metallb_pools()
     endpoint_by_service = _endpoint_index(slices)
 
     deployment_rows, deployment_labels = [], {}
@@ -203,7 +204,9 @@ def inventory():
         annotations, labels = meta.get("annotations", {}) or {}, meta.get("labels", {}) or {}
         assigned = [row.get("ip") or row.get("hostname") for row in
                     (status.get("loadBalancer", {}) or {}).get("ingress", []) or []]
-        requested = [value.strip() for value in str(annotations.get(VIP_ANNOTATION) or "").split(",") if value.strip()]
+        requested = [value.strip() for value in str(annotations.get(VIP_ANNOTATION)
+                                                     or annotations.get("metallb.universe.tf/loadBalancerIPs") or "").split(",")
+                     if value.strip()]
         external = [value for value in assigned + requested + (spec.get("externalIPs", []) or []) if value]
         external = list(dict.fromkeys(external))
         endpoint = endpoint_by_service.get((ns, name), {"ready": [], "not_ready": [], "ports": []})
@@ -283,16 +286,7 @@ def inventory():
                          "services": len({(owner['namespace'], owner['service']) for owner in owners}),
                          "listeners": sorted(owners, key=lambda owner: (owner["port"], owner["protocol"]))})
 
-    kube_vip = None
-    try:
-        kube_vip = kget("/apis/apps/v1/namespaces/harvester-system/daemonsets/kube-vip")
-    except Exception:
-        pass
-    kube_status = (kube_vip or {}).get("status", {}) or {}
-    desired, ready = int(kube_status.get("desiredNumberScheduled", 0) or 0), int(kube_status.get("numberReady", 0) or 0)
-    controller = {"name": "kube-vip", "installed": bool(kube_vip), "desired": desired, "ready": ready,
-                  "healthy": bool(kube_vip) and desired > 0 and ready == desired,
-                  "mode": "ARP Service controller · explicit VIP allocation"}
+    controller = _controller()
 
     return {"services": sorted(raw_rows, key=lambda row: (row["system"], row["namespace"], row["name"])),
             "vips": vip_rows, "conflicts": conflicts, "pools": pools,
@@ -305,6 +299,33 @@ def inventory():
                         "vips": len(vip_rows), "listeners": sum(len(row["listeners"]) for row in vip_rows),
                         "unhealthy": sum(row["health"] not in ("healthy",) for row in raw_rows if not row["system"]),
                         "ready_endpoints": sum(row["ready_endpoints"] for row in raw_rows)}}
+
+
+def _controller():
+    """Whichever load balancer this cluster runs: kube-vip on Harvester, or
+    MetalLB, or k3s's built-in ServiceLB on a plain cluster."""
+    candidates = (
+        ("kube-vip", "/apis/apps/v1/namespaces/harvester-system/daemonsets/kube-vip", "ARP Service controller · explicit VIP allocation"),
+        ("kube-vip", "/apis/apps/v1/namespaces/kube-system/daemonsets/kube-vip-ds", "ARP Service controller · explicit VIP allocation"),
+        ("MetalLB", "/apis/apps/v1/namespaces/metallb-system/daemonsets/speaker", "MetalLB speakers · addresses from its pools"),
+    )
+    for name, path, mode in candidates:
+        try:
+            status = kget(path).get("status", {}) or {}
+        except Exception:
+            continue
+        desired, ready = int(status.get("desiredNumberScheduled", 0) or 0), int(status.get("numberReady", 0) or 0)
+        return {"name": name, "installed": True, "desired": desired, "ready": ready,
+                "healthy": desired > 0 and ready == desired, "mode": mode}
+    svclb = [d for d in _items("/apis/apps/v1/namespaces/kube-system/daemonsets")
+             if (d.get("metadata") or {}).get("name", "").startswith("svclb-")]
+    if svclb:
+        desired = sum(int((d.get("status") or {}).get("desiredNumberScheduled", 0) or 0) for d in svclb)
+        ready = sum(int((d.get("status") or {}).get("numberReady", 0) or 0) for d in svclb)
+        return {"name": "ServiceLB", "installed": True, "desired": desired, "ready": ready,
+                "healthy": ready == desired, "mode": "k3s ServiceLB · each Service on the nodes' own addresses"}
+    return {"name": "none", "installed": False, "desired": 0, "ready": 0, "healthy": False,
+            "mode": "no load balancer: LoadBalancer Services stay pending"}
 
 
 def _ports(cfg):
@@ -411,8 +432,7 @@ def create_service(cfg):
         raise ValueError("the selected Deployment has no matchLabels selector")
     annotations = {"homestead.io/vip-mode": plan["vip_mode"],
                    "homestead.io/workload": plan["workload"]}
-    if plan["vip"]:
-        annotations[VIP_ANNOTATION] = plan["vip"]
+    annotations.update(PLATFORM.vip_annotations(plan["vip"]))
     body = {"apiVersion": "v1", "kind": "Service",
             "metadata": {"name": plan["name"], "namespace": plan["namespace"],
                          "labels": {"homestead.io/managed": "true"}, "annotations": annotations},

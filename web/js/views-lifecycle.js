@@ -386,6 +386,7 @@ window.nodePower = async (node, action) => {
 
 /* ---------------- VMs ---------------- */
 async function viewVMs() {
+  if (platformLacks("kubevirt", "Virtual machines")) return;
   const [vms, nodes] = await Promise.all([api("/api/vms"), api("/api/nodes").catch(() => [])]);
   paint(`<div class="phead"><div><h2>Virtual machines</h2>
       <p>${vms.length} VM${vms.length === 1 ? "" : "s"} · KubeVirt on Longhorn</p></div>
