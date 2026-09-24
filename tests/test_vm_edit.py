@@ -48,6 +48,9 @@ class Cluster:
             return {"items": [MADE]}
         if path.endswith("/secrets/web-ci"):
             return {"data": dict(self.secret)}
+        if path.endswith("/namespaces/lab/datavolumes"):
+            return {"items": [{"metadata": {"name": "web-disk", "namespace": "lab"},
+                               "status": {"phase": "ImportInProgress", "progress": "47.5%"}}]}
         raise urllib.error.HTTPError(path, 404, "missing", None, None)
 
     def send(self, method, path, body=None, **kw):
@@ -120,6 +123,20 @@ class VmEditTests(unittest.TestCase):
         self.assertEqual(["cloudinit"], [d["name"] for d in c.vm["spec"]["template"]["spec"]["domain"]["devices"]["disks"]])
         self.assertIn("detached and kept", result["detail"])
         self.assertFalse([m for m, p, b in c.sent if m == "DELETE" and "persistentvolumeclaims" in p])
+
+    def test_deleting_mid_download_stops_it_instead_of_keeping_half_a_disk(self):
+        c = Cluster({"harvester": False, "cdi": True})
+        self.assertEqual([{"claim": "web-disk", "phase": "ImportInProgress", "progress": 47.5}],
+                         VMS._filling(copy.deepcopy(VM), VMS._datavolumes("lab")))
+        result = VMS.delete("lab", "web")
+        self.assertFalse([p for m, p, b in c.sent if m == "PATCH"])       # never released
+        vm_delete = next(b for m, p, b in c.sent if m == "DELETE" and p.endswith("/virtualmachines/web"))
+        self.assertEqual("Foreground", vm_delete["propagationPolicy"])
+        self.assertIn(("DELETE", "/apis/cdi.kubevirt.io/v1beta1/namespaces/lab/datavolumes/web-disk", None), c.sent)
+        self.assertIn("unfinished download", result["detail"])
+        deleting = copy.deepcopy(VM)
+        deleting["metadata"]["deletionTimestamp"] = "2026-09-24T12:00:00Z"
+        self.assertEqual(("Deleting", []), (VMS._row(deleting, {})["status"], VMS._row(deleting, {})["actions"]))
 
     def test_cloud_init_in_harvesters_secret_is_edited_there(self):
         c = Cluster({"harvester": True, "cdi": True})

@@ -63,6 +63,10 @@ def _memory(dom):
 
 
 def _status(vm, vmi):
+    if (vm.get("metadata") or {}).get("deletionTimestamp"):
+        # Deleted in the foreground: it stays until its instance and the
+        # disks it owns are gone, and says so rather than looking stuck.
+        return "Deleting"
     printable = ((vm.get("status") or {}).get("printableStatus") or "")
     if printable:
         return printable
@@ -82,6 +86,8 @@ def actions_for(status, migratable=False):
         return ["force-stop"]
     if status == "Migrating":
         return ["console"]
+    if status == "Deleting":
+        return []
     # Starting, Provisioning, WaitingForVolumeBinding, ErrorUnschedulable,
     # ErrImagePull, CrashLoopBackOff, DataVolumeError...: stop the attempt.
     return ["stop", "force-stop"]
@@ -794,12 +800,20 @@ def delete(ns, name, with_disks=False):
     the VM first, the way Harvester's own UI asks its controller to remove
     them, and deleted here as well for clusters without that controller.
     Disks that are kept are released from the VM first, or they would go
-    with it."""
+    with it - but not one CDI is still filling: half a download is no disk,
+    and released it would carry on downloading with no VM to use it. That
+    stays the VM's and goes with it, which stops the import.
+
+    The delete runs in the foreground, so the VM is listed as Deleting until
+    its instance and the disks it owns are gone."""
     vm = _get(ns, name)
-    every = [d["claim"] for d in _row(vm, {})["disks"] if d["claim"] and d["kind"] == "disk"]
-    claims = every if with_disks else []
+    every = [d["claim"] for d in _row(vm, {})["disks"] if d["claim"] and d["kind"] in ("disk", "cd-rom")]
+    dvs = _datavolumes(ns)
+    unfinished = [c for c in every if ((dvs.get((ns, c)) or {}).get("status") or {}).get("phase") not in (None, "", "Succeeded")
+                  and (ns, c) in dvs]
+    claims = every if with_disks else unfinished
     uid = vm["metadata"].get("uid", "")
-    for claim in ([] if with_disks else every):
+    for claim in ([] if with_disks else [c for c in every if c not in unfinished]):
         if uid:
             _release(ns, claim, uid)
     if claims:
@@ -810,15 +824,33 @@ def delete(ns, name, with_disks=False):
         except urllib.error.HTTPError:
             pass
     try:
-        ksend("DELETE", f"{API}/namespaces/{ns}/virtualmachines/{name}")
+        ksend("DELETE", f"{API}/namespaces/{ns}/virtualmachines/{name}",
+              {"kind": "DeleteOptions", "apiVersion": "v1", "propagationPolicy": "Foreground"})
     except urllib.error.HTTPError as error:
         raise ValueError(f"KubeVirt refused to delete {name}: {_refusal(error)}")
     removed = []
     for claim in claims:
-        try:
-            ksend("DELETE", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(claim)}")
+        # The DataVolume first: deleting it stops CDI's importer; the claim
+        # alone would be made again by a DataVolume still wanting it.
+        paths = ([f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{urllib.parse.quote(claim)}"]
+                 if (ns, claim) in dvs else [])
+        paths.append(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(claim)}")
+        gone = False
+        for path in paths:
+            try:
+                ksend("DELETE", path)
+                gone = True
+            except urllib.error.HTTPError as error:
+                gone = gone or error.code == 404
+        if gone:
             removed.append(claim)
-        except urllib.error.HTTPError as error:
-            if error.code == 404:
-                removed.append(claim)
-    return {"ok": True, "detail": f"{name} deleted" + (f" with {len(removed)} disk{'s' if len(removed) != 1 else ''}" if claims else "; its disks are kept")}
+    detail = f"{name} is being deleted"
+    if with_disks:
+        detail += f" with {len(removed)} disk{'s' if len(removed) != 1 else ''}"
+    else:
+        kept = [c for c in every if c not in unfinished]
+        if unfinished:
+            detail += f"; the unfinished download{'s' if len(unfinished) != 1 else ''} ({', '.join(unfinished)}) stopped and removed"
+        if kept:
+            detail += f"; {', '.join(kept)} kept"
+    return {"ok": True, "detail": detail}

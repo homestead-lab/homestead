@@ -1,7 +1,7 @@
 /* Virtual machines: each one's real state and the actions that fit it, a
    page per VM (disks, network, guest, events), editing and deleting. */
 
-const VM_TONE = { Running: "ok", Stopped: "low", Paused: "info", Migrating: "info", Starting: "med", Stopping: "med",
+const VM_TONE = { Running: "ok", Stopped: "low", Paused: "info", Migrating: "info", Starting: "med", Stopping: "med", Deleting: "med",
   Provisioning: "med", WaitingForVolumeBinding: "med" };
 const VM_ACTIONS = {
   start: ["Start", "play", "Boot the VM"], stop: ["Stop", "stop", "Shut the VM down: the guest is asked to power off, then it is stopped"],
@@ -264,8 +264,11 @@ window.vmEditSave = async () => {
 
 window.vmDelete = (ns, name) => {
   const v = (STATE.data.vms || []).find(x => x.ns === ns && x.name === name) || { disks: [] };
-  const disks = v.disks.filter(d => d.kind === "disk" && d.claim);
-  modal(`Delete · ${name}`, `<p>The VM is deleted${v.status === "Running" ? ", and stopped first" : ""}.</p>
+  const filling = v.filling || [], unfinished = new Set(filling.map(f => f.claim));
+  const disks = v.disks.filter(d => (d.kind === "disk" || d.kind === "cd-rom") && d.claim && !unfinished.has(d.claim));
+  modal(`Delete · ${name}`, `<p>The VM is deleted${v.status === "Running" ? ", and stopped first" : ""}. It shows as Deleting until everything it owns is gone.</p>
+    ${filling.length ? `<div class="note warn">${filling.map(f => `<b class="mono">${esc(f.claim)}</b> is still being filled${f.progress != null ? ` (${f.progress.toFixed(0)}%)` : ""}`).join("; ")}.
+      Deleting the VM stops that and removes the unfinished disk.</div>` : ""}
     ${disks.length ? `<label class="switch"><input type="checkbox" id="vd_disks"> Delete its disks too: ${disks.map(d => `<span class="mono">${esc(d.claim)}</span>`).join(", ")}</label>
       <div class="dim xs">Left unticked, the disks are kept and can be attached to another VM or deleted from Volumes later.</div>` : ""}
     <div class="f" style="margin-top:12px"><label>Type the VM's name to delete it</label><input id="vd_confirm" autocomplete="off"></div>
