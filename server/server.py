@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.89")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.90")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2622,6 +2622,7 @@ import homestead_upgrades as UPGRADES
 import homestead_vmconsole as VMCONSOLE
 import homestead_shared as SHARED
 import homestead_leader as LEADER
+import homestead_ipam as IPAM
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
@@ -2665,6 +2666,7 @@ def _own_namespace():
 SELF.bind(kget, ksend, _own_namespace(), HOMESTEAD_VERSION, DATA_DIR)
 SHARED.bind(DATA_DIR)
 LEADER.bind(kget, ksend, _own_namespace())
+IPAM.bind(kget, ksend, DEFAULT_NS, lambda: cached("network", 5, NETWORK.inventory))
 NSMOD.bind(kget, ksend, DEFAULT_NS, _own_namespace())
 ALERTS.bind(DATA_DIR)
 
@@ -3112,7 +3114,7 @@ def needed_role(path, method):
         return "admin"
     if path == "/api/storage/classes" and method != "GET":
         return "admin"
-    if path in ("/api/portal", "/api/self/replicas") and method != "GET":
+    if path in ("/api/portal", "/api/self/replicas", "/api/ipam/unifi") and method != "GET":
         return "admin"
     if path in ("/api/console", "/api/vm/console"):
         return "operator"
@@ -3371,6 +3373,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("cluster", 15, CLUSTER.inventory))
             if p == "/api/self/replicas":
                 return self._send(200, homestead_replicas())
+            if p == "/api/ipam":
+                return self._send(200, IPAM.view())
             if p == "/api/cluster/upgrades":
                 current = ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", "")
                 return self._send(200, UPGRADES.report(current, force=(q.get("force") or [""])[0] == "1"))
@@ -3711,6 +3715,18 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, PORTAL.save(b.get("links")))
             if p == "/api/self/replicas":
                 return self._send(200, set_homestead_replicas(b.get("replicas")))
+            if p == "/api/ipam/subnets":
+                return self._send(200, IPAM.save_subnets(b.get("subnets")))
+            if p == "/api/ipam/record":
+                return self._send(200, IPAM.save_record(b))
+            if p == "/api/ipam/bulk":
+                return self._send(200, IPAM.bulk(b.get("ips"), b.get("changes")))
+            if p == "/api/ipam/scan":
+                return self._send(200, IPAM.scan(b.get("subnet")))
+            if p == "/api/ipam/unifi":
+                return self._send(200, IPAM.save_unifi(b))
+            if p == "/api/ipam/unifi/sync":
+                return self._send(200, IPAM.sync_unifi())
             if p == "/api/workloads/group":
                 return self._send(200, set_workload_groups(b))
             if p == "/api/scale":
@@ -4264,7 +4280,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.89 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.90 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     # On a rolling update or a drain, hand the lease over now rather than

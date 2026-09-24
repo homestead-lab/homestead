@@ -30,7 +30,7 @@ not affiliated with, endorsed, or sponsored by Lime Technology, Inc.
 | **Virtual machines** | Create from a Harvester image or an imported disk, power actions, live migration between hosts, and a console: the VM's screen (VNC) or its serial port |
 | **Portal** | A page of tiles for every web interface - containers picked from their exposed ports with their logos, and the router, switches, access points and NAS around them - in sections, with a live reachability dot |
 | **Architecture** | VIP → workload → claim → Longhorn volume → replica dependency view |
-| **Networking** | Service, ClusterIP, VIP, ingress, listener ownership, orphaned-listener release, endpoint health and guided collision-free exposure |
+| **Networking** | Service, ClusterIP, VIP, ingress, listener ownership, orphaned-listener release, endpoint health and guided collision-free exposure; IP address management per subnet with scanning, device categories, bulk edits, CSV export and UniFi sync |
 | **Cluster** | Harvester/Kubernetes versions, control-plane and etcd quorum, node pressure, critical services, certificate requests, a step-by-step guide to adding a host, and removing hosts - including ones that are dead for good |
 | **Between clusters** | Browse another Homestead cluster, check the two releases can talk, and move its containers and VMs here through shared backup storage |
 | **Storage** | RWO/RWX volume creation, growth and guarded deletion, file browsing and editing, storage-class inventory and creation, usage, health, snapshots, backups and recurring jobs |
@@ -67,10 +67,10 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.89`, the workflow publishes:
+For a release such as `v2.8.90`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.89
+ghcr.io/wjcloudy/homestead:2.8.90
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -81,8 +81,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.89
-git push origin v2.8.89
+git tag v2.8.90
+git push origin v2.8.90
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -286,6 +286,37 @@ pools. Service creation uses the existing Service permission and copies the
 selected Deployment's selector from the server rather than trusting browser
 input.
 
+### IP addresses
+
+Networking's **IP addresses** tab keeps, per subnet, what lives at each
+address: a name, the MAC, how it gets the address (static, DHCP reservation,
+DHCP, held for later, network gear), a device category (router or firewall,
+switch, access point, server, NAS, IoT, CCTV, printer, computer, phone, TV or
+media, other) shown as an icon, an owner, tags and notes. What the cluster
+uses - node addresses, load balancer VIPs, Harvester's VIP pools - is merged
+in live and cannot be edited here. Each subnet shows how much is used, its DHCP
+range, and the next addresses free for static use outside DHCP and the VIP
+pools. A static address or a VIP inside the DHCP range is flagged, as is a
+Harvester VIP pool overlapping it: the DHCP server may hand those addresses to
+something else.
+
+**Scan now** probes every address in the subnet from Homestead's pod with TCP
+connections to common ports - a refused connection proves a host as well as
+an accepted one - and adds reverse DNS; a host that answers but is not
+documented is flagged. Tick addresses to set a category, kind, tag or owner on
+all of them at once, or forget them. **Export CSV** downloads the subnet.
+
+**UniFi** brings in what a UniFi Network controller knows, read-only: its
+clients and devices with their MACs, the reserved (fixed) IPs even for clients
+that are offline, and its networks, whose DHCP range, gateway and VLAN fill in
+a matching subnet or are offered as new ones. UniFi's nickname and hostname
+for each client are kept beside the name you give an address, never over it.
+UniFi devices get a category from their model (switches, access points,
+gateways, cameras). It uses an API key from the console (Settings → Control
+Plane → Integrations), kept in the `homestead-unifi` Secret; reservations and
+networks come from the controller's classic API, and the sync says so if the
+key is not allowed there. The rest lives in the `homestead-ipam` ConfigMap.
+
 ## Cluster health and node onboarding
 
 System → **Cluster** separates platform health from application health. It
@@ -472,7 +503,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.89/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.90/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -483,7 +514,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.89 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.90 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour

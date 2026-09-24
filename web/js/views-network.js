@@ -4,6 +4,7 @@ const networkPill = health => health === "healthy" ? "ok" : health === "pending"
 const networkPortText = row => (row.ports || []).map(p => `${p.port}/${p.protocol}`).join(", ");
 
 async function viewNetworking() {
+  if (networkTab() === "ip") return viewIpam();
   const data = await api("/api/network");
   STATE.data.network = data;
   const q = STATE.q.toLowerCase();
@@ -17,6 +18,7 @@ async function viewNetworking() {
       <p>Addresses, listeners and the live path from your LAN to each workload</p></div>
       <div class="row"><button class="btn" onclick="networkToggleSystem()">${showSystem ? "Hide" : "Show"} system</button>
       <button class="btn pri" data-need="operator" onclick="networkExpose()">＋ Expose workload</button></div></div>
+    ${networkTabs("services")}
     <div class="grid g4 statgrid" style="margin-bottom:18px">
       <div class="card glow ${controller.healthy ? "g-ok" : "g-bad"}"><div class="ctitle">Load balancer</div>
         <div class="bignum" style="margin-top:8px">${controller.ready}<span class="unit">/${controller.desired}</span></div>
