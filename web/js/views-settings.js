@@ -18,7 +18,7 @@ function thresholdEditor(id, label, unit, help, pair) {
 
 /* One topic at a time: the page was every setting in one long column. */
 const SETTINGS_TABS = [["health", "Health"], ["updates", "Updates"], ["hardware", "Hardware"], ["access", "Access"],
-  ["apps", "Apps"], ["device", "This device"], ["about", "About"]];
+  ["apps", "Apps"], ["mqtt", "MQTT"], ["device", "This device"], ["about", "About"]];
 
 function settingsTab(pick) {
   if (pick) {
@@ -144,6 +144,8 @@ async function viewSettings() {
 
       ${ipamUnifiCard()}
 
+      <section class="card flat settings-wide" data-tab="mqtt" id="mqttCard"></section>
+
       <section class="card flat settings-wide" data-tab="apps">
         <div class="settings-card-head"><div><div class="ctitle">App Store catalogue</div>
           <div class="csub">Any feed in the Community Applications format: the public one, a mirror, or your own list of templates</div></div>
@@ -188,6 +190,7 @@ async function viewSettings() {
   pwaPaint();
   namespacesPaint();
   replicasPaint();
+  mqttPaint();
   // The UniFi card needs the IPAM record, which Settings does not otherwise load.
   api("/api/ipam").then(data => { STATE.data.ipam = data; const host = $("#unifiCard"); if (host) host.outerHTML = ipamUnifiCard(); }).catch(() => {});
 }

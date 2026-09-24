@@ -315,7 +315,7 @@
       detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.93", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.94", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
@@ -402,20 +402,20 @@
       user: "admin", added: "2026-09-22 17:02" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "garage") return { name, version: "2.8.93", protocol: 1, local_version: "2.8.93",
+      if (name === "garage") return { name, version: "2.8.94", protocol: 1, local_version: "2.8.94",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "garage runs 2.8.93 and this one 2.8.93. Moves work between them; garage is the newer of the two." };
+        message: "garage runs 2.8.94 and this one 2.8.94. Moves work between them; garage is the newer of the two." };
       return name === "attic"
-        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.93", local_protocol: 1,
+        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.94", local_protocol: 1,
             state: "behind", compatible: false,
-            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.93). Update attic first." }
-        : { name, version: "2.8.93", protocol: 1, local_version: "2.8.93", local_protocol: 1,
-            state: "same", compatible: true, message: "Both run Homestead 2.8.93." };
+            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.94). Update attic first." }
+        : { name, version: "2.8.94", protocol: 1, local_version: "2.8.94", local_protocol: 1,
+            state: "same", compatible: true, message: "Both run Homestead 2.8.94." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "shed", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.93", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.94", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -845,6 +845,30 @@
     "/api/helm/chart": { name: "grafana", version: "8.5.2", versions: ["8.5.2", "8.5.1", "8.4.0"], repo: "https://grafana.github.io/helm-charts",
       values: "replicas: 1\npersistence:\n  enabled: false\n  size: 10Gi\nservice:\n  type: ClusterIP\n  port: 80\n", readme_url: "https://artifacthub.io/packages/helm/grafana/grafana" },
     "/api/helm/install": { ok: true, name: "grafana", detail: "grafana is being installed as grafana in lab by the Helm controller" },
+    "/api/mqtt": (url, init) => init?.method === "POST" ? { ok: true } : {
+      enabled: true, host: "192.0.2.177", port: 1883, tls: false, username: "", has_password: false, base: "harvester",
+      discovery: "homeassistant", interval: 60, device_name: "Harvester Cluster", model: "Harvester", hv_exporter: "lab",
+      sensors: { cluster: 15, node: 9 },
+      status: { state: "publishing", detail: "publishing to 192.0.2.177:1883 every 60s", last_publish: Math.floor(Date.now() / 1000) - 20, published: 3120, error: "" } },
+    "/api/mqtt/test": { ok: true, detail: "192.0.2.177:1883 accepted the connection" },
+    "/api/mqtt/preview": { states: [
+      { topic: "harvester/cluster/state", payload: { nodes_ready: 3, nodes_total: 3, nodes_notready: 0, vol_total: 8, vol_degraded: 1, vol_faulted: 0,
+        pods_system: 96, pods_workload: 12, pods_sys_bad: 0, pods_wl_bad: 0, vms_running: 1, health: "degraded", wl_summary: "lab:12", cpu_pct: 18.2, mem_pct: 41.7 } },
+      { topic: "harvester/node/harvester_node1/state", payload: { cpu_pct: 21.3, mem_pct: 44.1, mem_gb: 27.6, rx_mbps: 12.4, tx_mbps: 3.1, pods: 41, vms: 1, wl: "home-assistant", status: "Ready" } }] },
+    "/api/history/long": url => {
+      const range = new URL(url, location.origin).searchParams.get("range") || "24h";
+      const points = { "24h": 288, "7d": 168, "30d": 720, "90d": 1440 }[range] || 288;
+      const step = range === "24h" ? 300 : 3600, now = Math.floor(Date.now() / 1000);
+      const wave = (i, base, amp, period) => +(base + amp * Math.sin(i / period * 2 * Math.PI) + (i * 7919 % 13) / 4).toFixed(1);
+      const t = Array.from({ length: points }, (_, i) => now - (points - i) * step);
+      return { range, step, t, samples: points, since: t[0],
+        cpu: t.map((_, i) => wave(i, 18, 8, range === "24h" ? 288 : 24)), mem: t.map((_, i) => wave(i, 42, 3, 96)),
+        rx: t.map((_, i) => wave(i, 14, 9, 48)), tx: t.map((_, i) => wave(i, 4, 2, 48)), pods: t.map(() => 12),
+        vol_bad: t.map((_, i) => (i > points * 0.6 && i < points * 0.62 ? 1 : 0)), nodes_ready: t.map(() => 3), nodes_total: t.map(() => 3),
+        cpu_max: 41.5, mem_max: 49.2,
+        nodes: [{ name: "harvester-node1", cpu: 21.4, mem: 44.1, availability: 100 }, { name: "harvester-node2", cpu: 17.9, mem: 39.8, availability: 99.31 },
+          { name: "harvester-node3", cpu: 12.2, mem: 35.0, availability: 100 }] };
+    },
     "/api/ipam/record": { ok: true },
     "/api/ipam/bulk": { ok: true, detail: "updated" },
     "/api/ipam/scan": { ok: true, detail: "scanning 254 addresses in 192.0.2.0/24" },
@@ -897,7 +921,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.93", candidate_tag: "2.8.93", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.94", candidate_tag: "2.8.94", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

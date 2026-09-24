@@ -127,7 +127,9 @@ async function viewDash() {
         <td class="small muted cell-nodes" title="${esc(w.nodes.join(", "))}">${esc(w.nodes.join(", ") || "—")}</td>
         <td class="mono nowrap"><b>${workloadMemory(w.mem_mb)}</b></td></tr>`).join("")}
       </tbody></table></div></div>
-  </div>`);
+  </div>
+  <section class="card flat history-card" id="historyCard">${STATE.data.historyHtml || ""}</section>`);
+  historyPaint();
 }
 
 function nodeCard(n) {

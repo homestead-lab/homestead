@@ -24,7 +24,8 @@ not affiliated with, endorsed, or sponsored by Lime Technology, Inc.
 
 | Area | Capability |
 |---|---|
-| **Dashboard** | Cluster CPU/RAM/network/disk telemetry, transition-aware health, top consumers, configurable warnings |
+| **Dashboard** | Cluster CPU/RAM/network/disk telemetry, transition-aware health, top consumers, configurable warnings, and 90 days of history with node availability, recorded with no browser open |
+| **MQTT** | Cluster and node stats to an MQTT broker with Home Assistant discovery |
 | **Containers** | Guided App Store and image deployment, Docker Compose import, independent or sidecar pods, guarded Kubernetes workload rename, edit/move/logs/console, autostart, LAN port and exposure editing, one storage picker for new and existing containers, hardware passthrough, update checks, monitored rollout with live image-pull state, rollback, groups with folding dividers and a filter per group, and a card or row layout |
 | **Helm** | Every Helm release in the cluster with its values, notes, history and objects; charts found on Artifact Hub and installed, upgraded and uninstalled through RKE2's Helm controller |
 | **App Store** | The Community Applications catalogue laid out as Unraid shows it - monthly spotlights, recently added, trending and top performing - with a full page per app, from the public feed or one you set |
@@ -68,10 +69,10 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.93`, the workflow publishes:
+For a release such as `v2.8.94`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.93
+ghcr.io/wjcloudy/homestead:2.8.94
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -82,8 +83,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.93
-git push origin v2.8.93
+git tag v2.8.94
+git push origin v2.8.94
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -436,6 +437,35 @@ Every response forbids framing and scripts from elsewhere, sessions are signed a
 limited per address and per account, using Cloudflare's client address rather
 than a header the client can write.
 
+## Long-term stats
+
+The Dashboard's charts cover the last hour. Its **Over time** card covers up to
+ninety days: cluster CPU and RAM (average and peak), network in and out,
+workload pods, and each node's availability - the share of samples it was
+Ready - with its average CPU and RAM. Homestead records a sample every five
+minutes whether or not a browser is open (the leading replica does, in the
+background), keeps them for two days, and keeps hourly averages and peaks for
+ninety, in `history.json` on its data volume - a few hundred kilobytes at most.
+It answers "was it busy last week?" and "has a node been dropping out?";
+Harvester's own monitoring (Prometheus and Grafana) is there for anything
+deeper.
+
+## MQTT and Home Assistant
+
+**Settings → MQTT** publishes cluster and node stats to an MQTT broker, with
+Home Assistant discovery: nodes ready, volumes degraded or faulted, pods
+running and failing, VMs, cluster health, CPU and RAM for the cluster, and for
+each node its CPU, RAM, network in and out, pods, VMs, workloads and status.
+The topics (`harvester/cluster/state`, `harvester/node/<node>/state`), entity
+names and unique ids are the ones the standalone hv-exporter used, so Home
+Assistant keeps its entities and their history when Homestead takes over; the
+card says when hv-exporter is still running and gives the commands to remove
+it. Availability follows Homestead: the broker marks the entities unavailable
+if Homestead stops without saying goodbye. MQTT 3.1.1 is spoken directly, with
+optional username, password (kept in a Secret) and TLS, and only the leading
+replica publishes. **Test connection** checks the broker, and **What is
+published** shows the messages.
+
 ## Installing the app and getting notifications
 
 Opened over HTTPS — through a Cloudflare Tunnel, or a reverse proxy with a
@@ -528,7 +558,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.93/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.94/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -539,7 +569,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.93 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.94 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour

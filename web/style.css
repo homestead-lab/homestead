@@ -1381,7 +1381,7 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .settings-grid[data-tab="health"]>section[data-tab="health"],.settings-grid[data-tab="updates"]>section[data-tab="updates"],
 .settings-grid[data-tab="hardware"]>section[data-tab="hardware"],.settings-grid[data-tab="access"]>section[data-tab="access"],
 .settings-grid[data-tab="apps"]>section[data-tab="apps"],.settings-grid[data-tab="device"]>section[data-tab="device"],
-.settings-grid[data-tab="about"]>section[data-tab="about"]{display:block}
+.settings-grid[data-tab="about"]>section[data-tab="about"],.settings-grid[data-tab="mqtt"]>section[data-tab="mqtt"]{display:block}
 /* A threshold is one row: its name, then warning and critical side by side. */
 .threshold-card{padding:10px 12px;gap:12px}
 .threshold-values{gap:8px}
@@ -1550,4 +1550,14 @@ textarea.helm-values{width:100%;white-space:pre}
 .helm-hit img,.helm-hit-blank{width:36px;height:36px;border-radius:8px;object-fit:contain;background:#fff;display:grid;place-items:center;color:#333;font-weight:700;font-size:12px}
 tr.clickable{cursor:pointer}
 @media(max-width:560px){.helm-values-pair{grid-template-columns:1fr}}
+
+/* MQTT settings and the long-term history card. */
+.mqtt-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px}
+.history-card{margin-top:18px}
+.hist-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:12px}
+.hist-chart .spark{width:100%;height:56px;margin-top:4px}
+.hist-nodes{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:12px}
+.hist-node{display:flex;gap:8px;align-items:center}
+@media(max-width:900px){.mqtt-grid,.hist-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:560px){.mqtt-grid,.hist-grid{grid-template-columns:1fr}}
 

@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.93")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.94")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2624,6 +2624,8 @@ import homestead_shared as SHARED
 import homestead_leader as LEADER
 import homestead_ipam as IPAM
 import homestead_helm as HELM
+import homestead_mqtt as MQTT
+import homestead_history as HISTORY
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
@@ -2669,6 +2671,8 @@ SHARED.bind(DATA_DIR)
 LEADER.bind(kget, ksend, _own_namespace())
 IPAM.bind(kget, ksend, DEFAULT_NS, lambda: cached("network", 5, NETWORK.inventory))
 HELM.bind(kget, ksend)
+MQTT.bind(kget, ksend, DEFAULT_NS, lambda: mqtt_snapshot(), LEADER.is_leader)
+HISTORY.bind(DATA_DIR)
 OPS.RESOLVERS["helm"] = HELM.job_status
 NSMOD.bind(kget, ksend, DEFAULT_NS, _own_namespace())
 ALERTS.bind(DATA_DIR)
@@ -2742,6 +2746,20 @@ def _alerts_loop():
         time.sleep(20)
 
 
+def _history_loop():
+    """Long-term stats, on the leader, every five minutes, browser or not."""
+    last = 0
+    while True:
+        # Checked often, recorded every STEP: a new leader starts at once.
+        if LEADER.is_leader() and time.time() - last >= HISTORY.STEP:
+            try:
+                HISTORY.record(cached("ov", 10, get_overview))
+                last = time.time()
+            except Exception as error:
+                print(f"history: {str(error)[:160]}", flush=True)
+        time.sleep(30)
+
+
 def _moves_loop():
     """The move engine, on the leader only: a move's next step is taken once."""
     while True:
@@ -2751,6 +2769,59 @@ def _moves_loop():
             except Exception:
                 pass
         time.sleep(MOVE_ENGINE.TICK_SECONDS)
+
+
+def mqtt_snapshot():
+    """The numbers hv-exporter published, counted the way it counted them."""
+    o = cached("ov", 10, get_overview)
+    pods = kget("/api/v1/pods").get("items", [])
+    try:
+        vmis = kget("/apis/kubevirt.io/v1/virtualmachineinstances").get("items", [])
+    except Exception:
+        vmis = []
+    system = lambda p: p["metadata"]["namespace"] in SYS_NS
+    running = [p for p in pods if (p.get("status") or {}).get("phase") == "Running"]
+    bad = [p for p in pods if (p.get("status") or {}).get("phase") in ("Failed", "Pending")]
+    namespaces = {}
+    for p in pods:
+        if not system(p):
+            namespaces[p["metadata"]["namespace"]] = namespaces.get(p["metadata"]["namespace"], 0) + 1
+    ready = o.get("nodes_ready", 0)
+    total = o.get("nodes_total", 0)
+    notready = total - ready
+    degraded, faulted = o.get("vol_degraded", 0), o.get("vol_faulted", 0)
+    wl_bad = sum(1 for p in bad if not system(p))
+    sys_bad = sum(1 for p in bad if system(p))
+    health = ("critical" if notready or faulted else "degraded" if degraded or wl_bad or sys_bad else "healthy")
+    nodes = []
+    for node in o.get("nodes") or []:
+        name = node["name"]
+        mine = [p for p in running if (p.get("spec") or {}).get("nodeName") == name]
+        nodes.append({"name": name, "cpu_pct": node.get("cpu_pct", 0), "mem_pct": node.get("mem_pct", 0),
+                      "mem_gb": node.get("mem_used_gb", 0), "rx_mbps": round(node.get("rx_mbps", 0) or 0, 2),
+                      "tx_mbps": round(node.get("tx_mbps", 0) or 0, 2), "pods": len(mine),
+                      "vms": sum(1 for v in vmis if (v.get("status") or {}).get("nodeName") == name),
+                      "wl": ", ".join(node.get("workloads") or []) or "none", "status": node.get("status", "NotReady")})
+    return {"cluster": {"nodes_ready": ready, "nodes_total": total, "nodes_notready": notready,
+                        "vol_total": o.get("volumes", 0), "vol_degraded": degraded, "vol_faulted": faulted,
+                        "pods_system": sum(1 for p in running if system(p)),
+                        "pods_workload": sum(1 for p in running if not system(p)),
+                        "pods_sys_bad": sys_bad, "pods_wl_bad": wl_bad,
+                        "vms_running": sum(1 for v in vmis if (v.get("status") or {}).get("phase") == "Running"),
+                        "health": health, "wl_summary": " ".join(f"{ns}:{n}" for ns, n in sorted(namespaces.items())),
+                        "cpu_pct": o.get("cpu_pct", 0), "mem_pct": o.get("mem_pct", 0)},
+            "nodes": nodes}
+
+
+def hv_exporter_present():
+    """hv-exporter, if it still runs: it publishes the same topics."""
+    for ns in (DEFAULT_NS, "lab"):
+        try:
+            kget(f"/apis/apps/v1/namespaces/{ns}/deployments/hv-exporter")
+            return ns
+        except Exception:
+            continue
+    return ""
 
 
 MAX_REPLICAS = 3
@@ -3117,7 +3188,7 @@ def needed_role(path, method):
         return "admin"
     if path == "/api/storage/classes" and method != "GET":
         return "admin"
-    if path in ("/api/portal", "/api/self/replicas", "/api/ipam/unifi") and method != "GET":
+    if path in ("/api/portal", "/api/self/replicas", "/api/ipam/unifi", "/api/mqtt", "/api/mqtt/test") and method != "GET":
         return "admin"
     # A chart can make anything anywhere in the cluster.
     if path in ("/api/helm/install", "/api/helm/upgrade", "/api/helm/uninstall"):
@@ -3381,6 +3452,12 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, homestead_replicas())
             if p == "/api/ipam":
                 return self._send(200, IPAM.view())
+            if p == "/api/mqtt":
+                return self._send(200, {**MQTT.public(), "hv_exporter": hv_exporter_present(),
+                                        "sensors": {"cluster": len(MQTT.CLUSTER_SENSORS), "node": len(MQTT.NODE_SENSORS)}})
+            if p == "/api/mqtt/preview":
+                snap = mqtt_snapshot()
+                return self._send(200, {"states": [{"topic": t, "payload": v} for t, v in MQTT.states(MQTT.load(), snap)]})
             if p == "/api/helm":
                 return self._send(200, cached("helm", 10, HELM.releases))
             if p == "/api/helm/release":
@@ -3456,6 +3533,8 @@ class H(BaseHTTPRequestHandler):
                 report["health_assessment"] = smart_disk_health(
                     report, get_app_settings().get("smart"))
                 return self._send(200, report)
+            if p == "/api/history/long":
+                return self._send(200, HISTORY.series((q.get("range") or ["24h"])[0]))
             if p == "/api/history":
                 with _lock:
                     return self._send(200, {k: list(v) for k, v in HIST.items()})
@@ -3741,6 +3820,10 @@ class H(BaseHTTPRequestHandler):
                                                 "/helm", {"namespace": HELM.CONTROLLER_NS, "name": job},
                                                 "Waiting for the Helm controller")
                 return self._send(200, result)
+            if p == "/api/mqtt":
+                return self._send(200, MQTT.save(b))
+            if p == "/api/mqtt/test":
+                return self._send(200, MQTT.test(b))
             if p == "/api/ipam/subnets":
                 return self._send(200, IPAM.save_subnets(b.get("subnets")))
             if p == "/api/ipam/record":
@@ -4306,9 +4389,11 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.93 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.94 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
+    threading.Thread(target=MQTT.run, daemon=True).start()
+    threading.Thread(target=_history_loop, daemon=True).start()
     # On a rolling update or a drain, hand the lease over now rather than
     # leaving the others to wait out its expiry.
     signal.signal(signal.SIGTERM, lambda *_: (LEADER.release(), os._exit(0)))
