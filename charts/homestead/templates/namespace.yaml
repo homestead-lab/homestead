@@ -1,0 +1,11 @@
+{{- if and .Values.workloadNamespace.create (ne .Values.workloadNamespace.name .Release.Namespace) }}
+{{- if not (lookup "v1" "Namespace" "" .Values.workloadNamespace.name) }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.workloadNamespace.name }}
+  annotations:
+    # Your apps live here: uninstalling Homestead must not take them with it.
+    helm.sh/resource-policy: keep
+{{- end }}
+{{- end }}

@@ -1,0 +1,18 @@
+Homestead {{ .Chart.AppVersion }} is starting in {{ .Release.Namespace }}.
+
+{{- if eq .Values.service.type "LoadBalancer" }}
+{{- if .Values.service.loadBalancerIP }}
+Open http://{{ .Values.service.loadBalancerIP }}:{{ .Values.service.port }}
+{{- else }}
+Its address, once the load balancer has given one:
+  kubectl -n {{ .Release.Namespace }} get service homestead
+{{- end }}
+{{- end }}
+
+The first visit sets up the admin account. Apps are deployed to the
+{{ .Values.workloadNamespace.name }} namespace.
+{{- if .Values.nodeprobe.enabled }}
+The node probe reports temperatures, devices and drive health from every node.
+{{- end }}
+
+There is only one Homestead per cluster: its objects have fixed names.

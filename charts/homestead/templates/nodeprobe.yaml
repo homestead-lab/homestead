@@ -1,0 +1,126 @@
+{{- if .Values.nodeprobe.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: homestead-nodeprobe
+  namespace: {{ .Values.workloadNamespace.name }}
+  labels:
+    app: homestead-nodeprobe
+spec:
+  selector:
+    matchLabels:
+      app: homestead-nodeprobe
+  template:
+    metadata:
+      labels:
+        app: homestead-nodeprobe
+      annotations:
+        checksum/scripts: {{ (.Files.Glob "files/probe/*").AsConfig | sha256sum }}
+    spec:
+      terminationGracePeriodSeconds: 2
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: probe
+          image: python:3.12-alpine
+          command:
+            - python3
+            - "/srv/probe.py"
+          ports:
+            - containerPort: 9099
+              name: http
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          resources:
+            requests:
+              cpu: 5m
+              memory: 24Mi
+            limits:
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: code
+              mountPath: "/srv"
+              readOnly: true
+            - name: sys
+              mountPath: "/host/sys"
+              readOnly: true
+            - name: dev
+              mountPath: "/host/dev"
+              readOnly: true
+            - name: proc
+              mountPath: "/host/proc"
+              readOnly: true
+        - name: smart
+          image: {{ include "homestead.image" . }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - python3
+            - "/srv/smart.py"
+          ports:
+            - containerPort: 9100
+              name: smart
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          readinessProbe:
+            httpGet:
+              path: "/healthz"
+              port: smart
+            initialDelaySeconds: 5
+            periodSeconds: 30
+            timeoutSeconds: 20
+          resources:
+            requests:
+              cpu: 5m
+              memory: 24Mi
+            limits:
+              cpu: 250m
+              memory: 96Mi
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: code
+              mountPath: "/srv"
+              readOnly: true
+            - name: sys
+              mountPath: "/host/sys"
+              readOnly: true
+            - name: dev
+              mountPath: "/host/dev"
+            - name: auth
+              mountPath: "/auth"
+              readOnly: true
+      volumes:
+        - name: code
+          configMap:
+            name: homestead-nodeprobe
+        - name: sys
+          hostPath:
+            path: "/sys"
+            type: Directory
+        - name: dev
+          hostPath:
+            path: "/dev"
+            type: Directory
+        - name: proc
+          hostPath:
+            path: "/proc"
+            type: Directory
+        - name: auth
+          secret:
+            secretName: homestead-auth
+            optional: true
+{{- end }}

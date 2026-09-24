@@ -1,13 +1,9 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: lab
----
+{{- if .Values.rbac.create }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: homestead
-  namespace: lab
+  namespace: {{ .Release.Namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -176,7 +172,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: homestead
-    namespace: lab
+    namespace: {{ .Release.Namespace }}
 ---
 # Interactive exec is deliberately namespace-scoped. The ClusterRole above does
 # not grant pods/exec anywhere else, and the backend also enforces this boundary.
@@ -184,7 +180,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: homestead-console
-  namespace: lab
+  namespace: {{ .Values.workloadNamespace.name }}
 rules:
   - apiGroups: [""]
     resources: [pods/exec]
@@ -195,7 +191,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: homestead-console
-  namespace: lab
+  namespace: {{ .Values.workloadNamespace.name }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -203,162 +199,5 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: homestead
-    namespace: lab
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: homestead-data
-  namespace: lab
-  labels:
-    app: homestead
-spec:
-  accessModes: [ReadWriteMany]
-  storageClassName: longhorn-r2
-  resources:
-    requests:
-      storage: 2Gi
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: homestead
-  namespace: lab
-  labels:
-    app: homestead
-  annotations:
-    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.106"}'
-spec:
-  replicas: 1
-  strategy:
-    # The old Homestead stops before the new one starts, so only one pod ever
-    # mounts the data volume. On a migratable class a second pod on another
-    # node makes Longhorn start a VM-style migration - two controllers - and
-    # the mount is refused. Once the data is on a shareable volume
-    # (Settings, Redundancy) Homestead switches itself to rolling updates.
-    type: Recreate
-  selector:
-    matchLabels:
-      app: homestead
-  template:
-    metadata:
-      labels:
-        app: homestead
-        lab-workload: "true"
-    spec:
-      serviceAccountName: homestead
-      securityContext:
-        fsGroup: 10001
-        fsGroupChangePolicy: OnRootMismatch
-      terminationGracePeriodSeconds: 10
-      tolerations:
-        - key: node.kubernetes.io/unreachable
-          operator: Exists
-          effect: NoExecute
-          tolerationSeconds: 15
-        - key: node.kubernetes.io/not-ready
-          operator: Exists
-          effect: NoExecute
-          tolerationSeconds: 15
-      initContainers:
-        - name: data-permissions
-          image: ghcr.io/wjcloudy/homestead:2.8.106
-          imagePullPolicy: IfNotPresent
-          command: ["sh", "-c", "chown 10001:10001 /data && chmod 0770 /data"]
-          securityContext:
-            runAsUser: 0
-            runAsGroup: 0
-            runAsNonRoot: false
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-              add: ["CHOWN", "FOWNER", "DAC_OVERRIDE"]
-          volumeMounts:
-            - name: data
-              mountPath: /data
-      containers:
-        - name: homestead
-          image: ghcr.io/wjcloudy/homestead:2.8.106
-          imagePullPolicy: IfNotPresent
-          env:
-            - name: PORT
-              value: "8080"
-            - name: WEBROOT
-              value: "/web"
-            - name: DATA_DIR
-              value: "/data"
-            - name: DEFAULT_NS
-              value: "lab"
-            - name: SMB_NAMESPACE
-              value: "lab"
-            - name: STORAGE_CLASS
-              value: "longhorn-r2"
-            - name: LB_IP
-              value: "192.0.2.242"
-            # Published through a Cloudflare Tunnel behind Cloudflare Access?
-            # Name the Access team and the application's AUD tag, and Homestead
-            # refuses any request that came through Cloudflare without Access's
-            # signature - a safety net under the Access policy. LAN access is
-            # unaffected. Leave empty when Homestead is not published.
-            - name: CF_ACCESS_TEAM_DOMAIN
-              value: ""          # e.g. myteam.cloudflareaccess.com
-            - name: CF_ACCESS_AUD
-              value: ""          # Access > Applications > Homestead > Overview > AUD tag
-          ports:
-            - containerPort: 8080
-              name: http
-          resources:
-            requests:
-              cpu: 50m
-              memory: 96Mi
-            limits:
-              memory: 256Mi
-          securityContext:
-            runAsUser: 10001
-            runAsGroup: 10001
-            runAsNonRoot: true
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-          readinessProbe:
-            httpGet:
-              path: /healthz
-              port: 8080
-            initialDelaySeconds: 3
-            timeoutSeconds: 3
-            periodSeconds: 10
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: 8080
-            initialDelaySeconds: 15
-            timeoutSeconds: 3
-            periodSeconds: 20
-          volumeMounts:
-            - name: data
-              mountPath: /data
-      volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: homestead-data
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: homestead
-  namespace: lab
-  labels:
-    app: homestead
-  annotations:
-    kube-vip.io/loadbalancerIPs: 192.0.2.242
-spec:
-  type: LoadBalancer
-  selector:
-    app: homestead
-  ports:
-    - name: http
-      port: 8088
-      targetPort: 8080
-      protocol: TCP
+    namespace: {{ .Release.Namespace }}
+{{- end }}

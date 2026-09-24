@@ -14,7 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FILES = ("README.md", "deploy/deploy.yaml", "server/server.py", "tests/test_deploy.py", "web/index.html",
          "web/js/auth.js", "web/js/core.js", "web/js/demo.js", "web/sw.js")
-GENERATED = ("scripts/render_nodeprobe.py", "scripts/render_rbac.py")
+GENERATED = ("scripts/render_nodeprobe.py", "scripts/render_rbac.py", "scripts/render_chart.py")
 
 
 def current():

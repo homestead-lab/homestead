@@ -233,6 +233,41 @@ data:
             del disk["write_sectors"]
         return sorted(disks, key=lambda d: d["name"])
 
+    def mounts():
+        """Which disk each host filesystem lives on, from PID 1's mount table:
+        lets Homestead tell which physical disk a Longhorn disk folder is on,
+        and which disk the system runs from."""
+        out, seen = [], set()
+        raw = _read(os.path.join(PROC, "1/mountinfo")) or ""
+        for line in raw.splitlines():
+            left, _, right = line.partition(" - ")
+            fields, tail = left.split(), right.split()
+            if len(fields) < 5 or len(tail) < 2:
+                continue
+            majmin, mountpoint, fstype, source = fields[2], fields[4], tail[0], tail[1]
+            if majmin.startswith("0:"):
+                continue                     # tmpfs, overlay, proc: no disk behind them
+            try:
+                target = os.readlink(os.path.join(SYS, "dev/block", majmin))
+            except OSError:
+                continue
+            # .../block/sda/sda1 for SATA, .../nvme0/nvme0n1/nvme0n1p1 for NVMe:
+            # the device is the last part, and a partition's disk the one before.
+            parts = [x for x in target.split("/") if x]
+            device = parts[-1] if parts else ""
+            partition = os.path.exists(os.path.join(SYS, "class/block", device, "partition"))
+            disk = parts[-2] if partition and len(parts) > 1 else device
+            after = [disk, device]
+            key = (disk, mountpoint)
+            if not disk or key in seen or mountpoint.startswith(("/var/lib/kubelet/pods", "/run/", "/proc", "/sys")):
+                continue
+            seen.add(key)
+            out.append({"disk": disk, "device": after[-1], "mountpoint": mountpoint.replace("\040", " "),
+                        "fstype": fstype, "source": source})
+            if len(out) >= 200:
+                break
+        return out
+
     def payload():
         t, hw = thermal(), hwmon()
         allt = [x["celsius"] for x in t] + [x["celsius"] for x in hw]
@@ -249,7 +284,8 @@ data:
                 "thermal": t, "hwmon": hw,
                 "sensors": len(t) + len(hw),
                 "devices": devices(),
-                "disks": disk_activity()}
+                "disks": disk_activity(),
+                "mounts": mounts()}
 
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -633,7 +669,7 @@ spec:
               mountPath: "/host/proc"
               readOnly: true
         - name: smart
-          image: ghcr.io/wjcloudy/homestead:2.8.105
+          image: ghcr.io/wjcloudy/homestead:2.8.106
           imagePullPolicy: IfNotPresent
           command:
             - python3

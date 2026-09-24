@@ -16,6 +16,8 @@ import urllib.error
 
 
 kget = ksend = create_pvc = None
+# Bound by the server: puts Samba in place when the first share needs it.
+install = None
 NAMESPACE = "lab"
 CACHE = {}
 def CONFIGMAP():
@@ -400,6 +402,9 @@ def _volume_name(name):
 
 def apply_samba(rows, credentials, deployment=None):
     deployment = deployment or _deployment_state()[2]
+    if not deployment and install:
+        # The first share brings Samba with it rather than asking for it.
+        deployment = install()
     if not deployment:
         raise ValueError("the samba deployment is not installed")
     users = _validate_access(rows, credentials)
@@ -478,8 +483,9 @@ def _clear_cache():
 
 
 def create_share(name, size_gb, user, password, public, read_only=False,
-                 pvc=None, sub_path="", storage_class=None, access_mode=None):
-    """Create a share on a new Longhorn claim, or on a folder of an existing one."""
+                 pvc=None, sub_path="", storage_class=None, access_mode=None, new_name=""):
+    """Create a share on a new Longhorn claim, or on a folder of an existing one.
+    pvc names a claim that exists; new_name the one to create, if not share-<name>."""
     name, user, sub_path = _name(name), _user(user), _sub_path(sub_path)
     rows, credentials, config_obj, secret_obj, deployment = _state()
     if any(row.get("name") == name for row in rows):
@@ -491,7 +497,7 @@ def create_share(name, size_gb, user, password, public, read_only=False,
         if not password:
             raise ValueError("a password is required for a private share")
     reuse = bool(pvc)
-    pvc_name = _claim_name(pvc) if reuse else _claim_name(f"share-{name}")
+    pvc_name = _claim_name(pvc) if reuse else _claim_name(new_name or f"share-{name}")
     warnings = []
     if reuse:
         warnings = claim_warnings(pvc_name)

@@ -1,0 +1,9 @@
+{{- if .Values.nodeprobe.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: homestead-nodeprobe
+  namespace: {{ .Values.workloadNamespace.name }}
+data:
+  {{- (.Files.Glob "files/probe/*").AsConfig | nindent 2 }}
+{{- end }}

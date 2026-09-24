@@ -17,10 +17,12 @@ WEBROOT = os.environ.get("WEBROOT", "/web")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 SMB_NAMESPACE = os.environ.get("SMB_NAMESPACE", "lab")
 DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
+# Empty (as the Helm chart leaves it): the cluster's default class, read once
+# the API is reachable - see _resolve_storage_class below.
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.105")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.106")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -367,6 +369,39 @@ def node_temps():
     return out
 
 
+def reconcile_hardware(fresh=False):
+    """Every node's hardware labels, from what its probe sees now.
+
+    The scheduler places a workload that needs a Coral by these labels, so
+    they have to follow a device plugged in later - not wait until someone
+    opens the Nodes page."""
+    if fresh:
+        _TEMP_CACHE["at"] = 0
+    temps = node_temps()
+    found = {}
+    for n in kget("/api/v1/nodes").get("items", []):
+        name = n["metadata"]["name"]
+        devices = (temps.get(name) or {}).get("devices")
+        if devices is None:
+            continue                 # no probe here: nothing to say either way
+        labels, auto = HW.reconcile_node(name, n["metadata"].get("labels", {}) or {},
+                                         n["metadata"].get("annotations", {}) or {}, devices)
+        found[name] = sorted(x["id"] for x in HW.inventory(labels, devices, auto) if x["detected"])
+    if fresh:
+        _cache.pop("nodes", None); _cache.pop("ov", None)
+    return found
+
+
+def _hardware_loop():
+    while True:
+        if LEADER.is_leader():
+            try:
+                reconcile_hardware()
+            except Exception as error:
+                print(f"hardware: {str(error)[:160]}", flush=True)
+        time.sleep(30)
+
+
 def node_stats(name):
     """Per-node network + filesystem counters from the kubelet summary API."""
     try:
@@ -489,6 +524,10 @@ def get_nodes():
         vmis = []
 
     temps = node_temps()
+    try:
+        disk_lines = DISKS.summary()
+    except Exception:
+        disk_lines = {}
     smart_cfg = get_app_settings().get("smart") or DEFAULT_APP_SETTINGS["smart"]
     out = []
     for n in nodes.get("items", []):
@@ -535,6 +574,7 @@ def get_nodes():
             "pods_wl": len([p for p in npods if p["metadata"]["namespace"] not in SYS_NS]),
             "vms": len([v for v in vmis if v.get("status", {}).get("nodeName") == name]),
             "igpu": hardware["igpu"],
+            "disks": disk_lines.get(name, []),
             "hardware": hardware,
             "hardware_inventory": hardware_inventory,
             "workloads": wl,
@@ -1430,6 +1470,29 @@ def _pvc_rows(namespace):
             "workloads": facts.get("workloads", []),
         })
     return sorted(rows, key=lambda row: row["name"])
+
+
+SAMBA_IMAGE = os.environ.get("SAMBA_IMAGE", "dperson/samba:latest")
+
+
+def install_samba():
+    """The Samba server shares are served from, made when the first share is:
+    SMB on port 445 at an address of its own. Shares are its arguments, which
+    Homestead writes, so it starts with none."""
+    cfg = {"name": "samba", "container_name": "samba", "image": SAMBA_IMAGE, "namespace": SMB_NAMESPACE,
+           "ports": [{"container": 445, "name": "smb", "protocol": "TCP", "expose": True}],
+           "vip_mode": "automatic", "args": ["-p", "-g", "server min protocol = SMB2"]}
+    cfg = NETWORK.prepare_deploy(cfg)
+    dep, svc = build_deployment(cfg)
+    created = ksend("POST", f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments", dep)
+    if svc:
+        try:
+            ksend("POST", f"/api/v1/namespaces/{SMB_NAMESPACE}/services", svc)
+        except urllib.error.HTTPError as error:
+            if error.code != 409:
+                raise
+    _cache.pop("wl", None); _cache.pop("network", None)
+    return created
 
 
 def run_deploy(b):
@@ -2664,11 +2727,25 @@ import homestead_platform as PLATFORM
 import homestead_resources as RESOURCES
 import homestead_vms as VMS
 import homestead_lhcapacity as LHCAP
+import homestead_disks as DISKS
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
 MOVE.bind(kget, ksend, DEFAULT_NS, HOMESTEAD_VERSION)
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
+def _resolve_storage_class():
+    """An empty STORAGE_CLASS means the cluster's default. It cannot stay
+    empty: a claim asking for class "" asks for no class at all, and never
+    binds on a cluster whose volumes all come from a provisioner."""
+    if STORAGE_CLASS:
+        return STORAGE_CLASS
+    try:
+        return vm_default_class() or "longhorn-r2"
+    except Exception:
+        return "longhorn-r2"
+
+
+STORAGE_CLASS = _resolve_storage_class()
 LC.bind(kget, ksend, SYS_NS, _cache, HW.features, create_pvc, STORAGE_CLASS)
 IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.features)
 AUTH.bind(kget, ksend, DEFAULT_NS)
@@ -2727,6 +2804,7 @@ RESOURCES.bind(kget, ksend, ktable)
 VMS.bind(kget, ksend, RESOURCES.events_for)
 VMS.platform, VMS.images = PLATFORM.detect, IMP.list_vm_images
 LHCAP.bind(kget, ksend, v2_engine_status)
+DISKS.bind(kget, ksend, node_temps)
 OPS.RESOLVERS["helm"] = HELM.job_status
 NSMOD.bind(kget, ksend, DEFAULT_NS, _own_namespace())
 ALERTS.bind(DATA_DIR)
@@ -3081,6 +3159,7 @@ OPS.RESOLVERS["onboard"] = lambda item: ("cancelled", item.get("progress", 0),
 OPS.RESOLVERS["cluster-cleanup"] = lambda item: ("succeeded", 100, item.get("message", ""))
 VOLUMES.bind(kget, ksend, LH.snapshots, LH.backups, _cache, SYS_NS, DEFAULT_NS)
 SHARES.bind(kget, ksend, create_pvc, SMB_NAMESPACE, _cache)
+SHARES.install = install_samba
 NETWORK.bind(kget, ksend, SYS_NS, DEFAULT_NS, LB_IP)
 CLUSTER.bind(kget, SYS_NS, lambda: cached("nodes", 5, get_nodes))
 CONSOLE_PROXY = CONSOLE.ConsoleProxy(API, TOKEN, CTX, DATA_DIR, SYS_NS, {DEFAULT_NS}, kget)
@@ -3393,7 +3472,7 @@ def needed_role(path, method):
     # A chart can make anything anywhere in the cluster, and so can raw YAML;
     # a secret's values are for admins only.
     if path in ("/api/helm/install", "/api/helm/upgrade", "/api/helm/uninstall", "/api/resources/save", "/api/vm/delete",
-                "/api/longhorn/settings",
+                "/api/longhorn/settings", "/api/disks/add", "/api/disks/scheduling", "/api/disks/evict", "/api/disks/remove",
                 "/api/resources/delete", "/api/resources/create", "/api/resources/reveal"):
         return "admin"
     if path in ("/api/console", "/api/vm/console"):
@@ -3842,6 +3921,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, storage_class_inventory())
             if p == "/api/storage/v2":
                 return self._send(200, v2_engine_status())
+            if p == "/api/disks":
+                return self._send(200, cached("disks", 10, DISKS.inventory))
             if p == "/api/longhorn/capacity":
                 return self._send(200, cached("lhcap", 15, LHCAP.status))
             if p == "/api/pvcs":
@@ -4192,7 +4273,7 @@ class H(BaseHTTPRequestHandler):
                     b["name"], b.get("size_gb", 10), b.get("user", "lab"),
                     b.get("password"), b.get("public", False), b.get("read_only", False),
                     b.get("pvc"), b.get("sub_path", ""), b.get("storage_class"),
-                    b.get("access_mode"))
+                    b.get("access_mode"), b.get("new_name", ""))
                 deployment = result.pop("deployment", None)
                 if deployment:
                     result["operation"] = OPS.start(
@@ -4354,6 +4435,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, result)
             if p == "/api/hardware/features":
                 return self._send(200, HW.save_features(b.get("features")))
+            if p == "/api/hardware/rescan":
+                return self._send(200, {"ok": True, "nodes": reconcile_hardware(fresh=True)})
             if p == "/api/node/drain":
                 impact = PLACE.impact(b["node"])
                 if impact["stranded"] and not b.get("allow_stranded"):
@@ -4389,6 +4472,15 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/vm/delete":
                 _cache.pop("vms", None)
                 return self._send(200, VMS.delete(b.get("ns", DEFAULT_NS), b.get("name", ""), bool(b.get("disks"))))
+            if p in ("/api/disks/add", "/api/disks/scheduling", "/api/disks/evict", "/api/disks/remove"):
+                action = p.rsplit("/", 1)[1]
+                result = (DISKS.add(b) if action == "add"
+                          else DISKS.set_scheduling(b.get("node", ""), b.get("disk", ""), b.get("allow", True)) if action == "scheduling"
+                          else DISKS.evict(b.get("node", ""), b.get("disk", ""), b.get("on", True)) if action == "evict"
+                          else DISKS.remove(b.get("node", ""), b.get("disk", "")))
+                for key in ("disks", "lhcap", "nodes", "ov"):
+                    _cache.pop(key, None)
+                return self._send(200, result)
             if p == "/api/longhorn/settings":
                 _cache.pop("lhcap", None)
                 return self._send(200, LHCAP.save(b))
@@ -4636,12 +4728,13 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.105 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.106 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()
     threading.Thread(target=_history_loop, daemon=True).start()
     threading.Thread(target=fit_own_strategy, daemon=True).start()
+    threading.Thread(target=_hardware_loop, daemon=True).start()
     # On a rolling update or a drain, hand the lease over now rather than
     # leaving the others to wait out its expiry.
     signal.signal(signal.SIGTERM, lambda *_: (LEADER.release(), os._exit(0)))

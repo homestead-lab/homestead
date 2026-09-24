@@ -57,6 +57,7 @@ web/sw.js, manifest.webmanifest  the installable app's service worker and manife
 deploy/deploy.yaml            namespace, RBAC, Longhorn PVC, Deployment, Service
 deploy/nodeprobe.yaml         optional per-node telemetry and device inventory
 deploy/rbac.yaml              Homestead's permissions alone, for existing installs
+charts/homestead/             the Helm chart (from scripts/render_chart.py)
 .github/workflows/ci.yml      tests and container build validation
 .github/workflows/release.yml multi-architecture GHCR and screenshot release pipeline
 scripts/deploy.sh             deploy a published image through an RKE2 host
@@ -64,16 +65,17 @@ scripts/render_nodeprobe.py   regenerate deploy/nodeprobe.yaml from the probe's 
 scripts/render_icons.py       regenerate web/icons/ from the mark's geometry
 scripts/bump_version.py       move every file that names the release to a new version
 scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
+scripts/render_chart.py       regenerate charts/homestead from the manifests
 ```
 
 ## Container releases
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.105`, the workflow publishes:
+For a release such as `v2.8.106`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.105
+ghcr.io/wjcloudy/homestead:2.8.106
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -84,8 +86,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.105
-git push origin v2.8.105
+git tag v2.8.106
+git push origin v2.8.106
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -128,6 +130,25 @@ exact lines.
 `storageClassName` and the `STORAGE_CLASS` value to one the cluster has (RWX
 for the data claim, e.g. Longhorn's), and `LB_IP` to an address its load
 balancer can give out.
+
+## Install with Helm
+
+Each release publishes a chart to GitHub's registry, with the node probe
+included (switch it off with `nodeprobe.enabled=false`):
+
+```bash
+helm install homestead oci://ghcr.io/wjcloudy/charts/homestead -n homestead --create-namespace --set service.loadBalancerIP=192.0.2.242
+```
+
+Homestead runs in its own namespace and deploys apps, shares and the probe to
+`lab` (`workloadNamespace.name`), creating it if needed and keeping it if the
+chart is ever uninstalled - as it keeps its own data volume. Values worth
+knowing: `service.loadBalancerIP` (with `service.kubeVip`, on by default for
+Harvester), `persistence.storageClass` and `storageClass` (empty: the
+cluster's default), `cloudflareAccess.*`. `helm show values
+oci://ghcr.io/wjcloudy/charts/homestead` lists them all. The chart is made
+from the same manifests as `deploy/` by `scripts/render_chart.py`, so both
+install the same thing; there is one Homestead per cluster.
 
 ## Fresh-cluster installation
 
@@ -630,7 +651,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.105/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.106/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -641,7 +662,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.105 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.106 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -770,7 +791,10 @@ once** — define the volumes, then point each folder at the one it belongs to.
 A folder sharing a volume with others is copied into its own subdirectory; a
 folder that has a volume to itself takes its root. Either way it is mounted
 back at the path the container expects, through `subPath`, and the workload
-ends up with one volume entry per claim rather than one per folder.
+ends up with one volume entry per claim rather than one per folder. Each folder
+is **Copy** (its files come across), **Mount empty** (the volume is mounted at
+that path with nothing copied - new recordings on a new volume, the old ones
+left behind) or **Leave out**.
 
 App Store installs lay an app out the same way: the paths an Unraid template
 maps into appdata share one `<app>-appdata` volume, each in a folder named
@@ -872,6 +896,24 @@ textarea, which saves through exactly the same path.
 `server/homestead_files.py` holds the server side, reusing the exec WebSocket the
 console already speaks.
 
+## Disks
+
+Each node card lists every disk on the host - the system disk, the disks
+Longhorn stores data on, and any nothing uses yet - with each Longhorn disk's
+use. A node's page has **Disks**, and **Volumes** and **Settings → Cluster**
+open every node's at once. On Harvester a disk it has found and not been given
+has **Add to Longhorn**: Harvester formats it (erasing it first, if you say so,
+when it already holds a filesystem) and hands it to Longhorn, as its own UI
+does. Elsewhere, mount the disk on the host and give Longhorn the folder, or
+the raw device for the V2 engine. A Longhorn disk can stop taking new
+replicas, have its replicas moved off, and be removed once it is empty; its
+files stay on the disk. Which physical disk holds which folder comes from the
+node probe, which reads the host's mount table.
+
+Hardware features - a Coral, a Zigbee stick - are checked on every host every
+30 seconds, so one plugged in later is found and labelled without a restart;
+**Rescan hosts** in Settings → Hardware checks at once.
+
 ## Longhorn allocation
 
 Longhorn books a replica's full size on a disk when it places it, however
@@ -949,8 +991,9 @@ Homestead reads Longhorn's settings rather than changing them.
 
 ## Network shares
 
-Network Shares manages the existing `samba` Deployment and Longhorn-backed
-claims without replacing their data. A new share either creates its own
+Network Shares manages the `samba` Deployment and Longhorn-backed claims
+without replacing their data; the first share installs Samba if the cluster
+has none, at an address of its own on port 445. A new share either creates its own
 Longhorn claim or publishes a volume that already exists — including one a
 container is using — optionally narrowed to a single folder inside it, so
 appdata can be reached from Windows without copying it. Two shares on one claim
@@ -1124,6 +1167,7 @@ authenticated.
 | `DATA_DIR` | `/data` | persistent operation history, audit, and workload-icon cache directory |
 | `DEFAULT_NS` | `lab` | namespace for new workloads |
 | `SMB_NAMESPACE` | `lab` | namespace containing the managed Samba deployment |
+| `SAMBA_IMAGE` | `dperson/samba:latest` | image Samba is installed from when the first share is created |
 | `STORAGE_CLASS` | `longhorn-r2` | default StorageClass for new volumes |
 | `LB_IP` | empty | shared kube-vip address |
 | `SESSION_TTL_HOURS` | `12` | idle window for an ordinary session |

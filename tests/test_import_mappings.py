@@ -40,7 +40,7 @@ class ImportMappingTests(unittest.TestCase):
 
         self.assertEqual([{"remote_path": "/mnt/user/appdata/plex", "mount_path": "/config",
                            "folder": "", "bytes": 0, "pvc": "app-appdata",
-                           "medium": "", "size_mb": 0, "exclude": []}], rows)
+                           "medium": "", "size_mb": 0, "copy": True, "exclude": []}], rows)
 
     def test_bad_mappings_are_refused(self):
         with self.assertRaisesRegex(ValueError, "remote path must be absolute"):
@@ -307,6 +307,38 @@ class ImportCapacityTests(unittest.TestCase):
         self._import(mappings=[{"remote_path": "/mnt/user/appdata/ha", "mount_path": "/config"}])
 
         self.assertTrue(any("jobs" in path for _, path in self.sent))
+
+
+class MountEmptyTests(unittest.TestCase):
+    """A folder can be mounted without being copied: new recordings on a new
+    volume, the old ones left on the source."""
+
+    def setUp(self):
+        self.bodies, self.built = [], []
+        imports.bind(lambda path: {"items": []},
+                     lambda method, path, body=None, **kw: self.bodies.append(body) or body or {},
+                     lambda *a, **k: {},
+                     lambda cfg: self.built.append(cfg) or ({"metadata": {"name": "frigate"}}, None), "lab", {})
+        imports._source = lambda name: dict(SOURCE)
+
+    def test_a_volume_mounted_empty_is_mapped_but_never_copied(self):
+        imports.import_container({
+            "source": "tower", "name": "frigate", "image": "frigate:1",
+            "volumes": [{"name": "frigate-appdata", "size_gb": 5}, {"name": "frigate-media", "size_gb": 500}],
+            "mappings": [{"remote_path": "/mnt/user/appdata/frigate", "mount_path": "/config", "pvc": "frigate-appdata"},
+                         {"remote_path": "/mnt/user/media/frigate", "mount_path": "/media/frigate",
+                          "pvc": "frigate-media", "copy": False}]})
+        mounts = {v["path"]: v["source"] for v in self.built[0]["volumes"]}
+        self.assertEqual({"/config": "frigate-appdata", "/media/frigate": "frigate-media"}, mounts)
+        job = next(b for b in self.bodies if b and b.get("kind") == "Job")
+        script = job["spec"]["template"]["spec"]["containers"][0]["command"][-1]
+        self.assertIn("appdata/frigate", script)
+        self.assertNotIn("media/frigate", script)
+        self.assertIn("step 1/1", script)
+
+    def test_mounted_empty_needs_no_source_folder(self):
+        rows = imports.import_mappings({"mappings": [{"remote_path": "", "mount_path": "/media", "copy": False}]})
+        self.assertEqual((False, 0), (rows[0]["copy"], rows[0]["bytes"]))
 
 
 class OwnershipTests(unittest.TestCase):

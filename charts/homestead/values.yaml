@@ -1,0 +1,64 @@
+# Homestead's Helm values. Everything else is fixed by the release.
+
+image:
+  repository: ghcr.io/wjcloudy/homestead
+  # Empty: the chart's appVersion, which is the release this chart came with.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Where Homestead deploys containers, shares and the node probe. It can be the
+# namespace Homestead itself is installed in. An existing namespace is used as
+# it is; one Homestead creates is kept when the chart is uninstalled, because
+# your apps live in it.
+workloadNamespace:
+  name: lab
+  create: true
+
+service:
+  type: LoadBalancer
+  port: 8088
+  # The LAN address Homestead is reached on. Empty lets the load balancer pick.
+  loadBalancerIP: ""
+  # Harvester's load balancer (kube-vip) takes the address from an annotation.
+  kubeVip: true
+  annotations: {}
+
+persistence:
+  # Settings, users, history and the audit log. Off keeps them only until the
+  # pod restarts.
+  enabled: true
+  # Empty: the cluster's default class. On Harvester a migratable class
+  # (harvester-longhorn, longhorn-r2) cannot be mounted by a second node, so
+  # running more than one copy of Homestead needs a shareable class later.
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 2Gi
+  existingClaim: ""
+
+# The class new volumes default to on the Deploy and Import pages. Empty: the
+# cluster's default.
+storageClass: ""
+
+# Homestead published through a Cloudflare Tunnel behind Cloudflare Access:
+# requests that came through Cloudflare without Access's signature are refused.
+cloudflareAccess:
+  teamDomain: ""
+  aud: ""
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 96Mi
+  limits:
+    memory: 256Mi
+
+# Homestead's permissions. Off only if you manage an equivalent ClusterRole
+# yourself; Homestead keeps its own role current after install either way.
+rbac:
+  create: true
+
+# Temperatures, host devices (a Coral, a Zigbee stick, an iGPU), every disk and
+# drive health from each node. Its SMART reader runs privileged, because
+# smartctl needs the raw drives; turn it off to go without drive health.
+nodeprobe:
+  enabled: true

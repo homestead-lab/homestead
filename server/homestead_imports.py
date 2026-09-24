@@ -550,7 +550,7 @@ def import_volumes(cfg):
     requested = cfg.get("volumes") or []
     copies = [row for row in (cfg.get("mappings") or [])
               if str(row.get("medium") or "").lower() != "memory"
-              and str(row.get("remote_path") or "").strip()]
+              and (str(row.get("remote_path") or "").strip() or row.get("copy") is False)]
     if not requested and not copies and cfg.get("mappings") is not None:
         # Plenty of containers keep nothing: a webhook relay, a bridge, a
         # snapshot helper. Inventing an appdata claim for one creates storage
@@ -620,7 +620,10 @@ def import_mappings(cfg):
             rows.append({"remote_path": "", "mount_path": mount, "folder": "", "bytes": 0,
                          "pvc": "", "medium": "memory", "size_mb": size_mb})
             continue
-        if not remote.startswith("/"):
+        # Mounted empty: a volume the container gets without anything copied
+        # into it - new recordings, say, where the old ones stay behind.
+        copy = item.get("copy") is not False
+        if copy and not remote.startswith("/"):
             raise ValueError(f"remote path must be absolute, got {remote or '(blank)'}")
         if not mount.startswith("/"):
             raise ValueError(f"container path must be absolute, got {mount}")
@@ -650,8 +653,8 @@ def import_mappings(cfg):
         if claim not in names:
             raise ValueError(f"{mount} points at volume {claim}, which this import does not create")
         rows.append({"remote_path": remote, "mount_path": mount, "folder": folder,
-                     "bytes": size, "pvc": claim, "medium": "", "size_mb": 0,
-                     "exclude": _excludes(remote, requested, item.get("exclude"))})
+                     "bytes": size if copy else 0, "pvc": claim, "medium": "", "size_mb": 0, "copy": copy,
+                     "exclude": _excludes(remote, requested, item.get("exclude")) if copy else []})
     return rows
 
 
@@ -718,7 +721,8 @@ def import_container(cfg):
     src = _source(cfg["source"])
     volumes = import_volumes(cfg)
     mappings = import_mappings(cfg)
-    copied = [row for row in mappings if not row.get("medium")]
+    # What the job copies; a mapping mounted empty is only the workload's.
+    copied = [row for row in mappings if not row.get("medium") and row.get("copy", True)]
     pvc = volumes[0]["name"] if volumes else ""
 
     # Each volume is judged on what is going into it, not on the import total:
@@ -777,7 +781,7 @@ def import_container(cfg):
              "apk add --no-cache rsync openssh-client sshpass >/dev/null 2>&1"]
     # rsync fails per folder, halfway through, after the volume exists. Asking
     # the source about all of them first turns that into one clear refusal.
-    sources = [mapping["remote_path"] for mapping in mappings if not mapping.get("medium")]
+    sources = [mapping["remote_path"] for mapping in copied]
     if sources:
         remote_check = "; ".join(f"[ -e {shlex.quote(source)} ] || echo {shlex.quote(source)}"
                                  for source in sources)
@@ -787,15 +791,14 @@ def import_container(cfg):
             "-o UserKnownHostsFile=/dev/null "
             f"{shlex.quote(src['user'] + '@' + src['host'])} {shlex.quote(remote_check)})")
         steps.append('if [ -n "$missing" ]; then echo "==> missing $missing"; exit 4; fi')
-    total = len([row for row in mappings if not row.get("medium")])
+    total = len(copied)
     # Measured up front, the copy can report bytes rather than folder counts.
-    copied_rows = [row for row in mappings if not row.get("medium")]
+    copied_rows = copied
     measured = sum(mapping.get("bytes") or 0 for mapping in copied_rows)
     if measured and copied_rows and all(mapping.get("bytes") for mapping in copied_rows):
         steps.append("echo " + shlex.quote(f"==> total {total} folders {measured}B"))
     mount_of = {volume["name"]: (f"/mnt/{volume['name']}" if len(volumes) > 1 else "/appdata")
                 for volume in volumes}
-    copied = [row for row in mappings if not row.get("medium")]
     for index, mapping in enumerate(copied, start=1):
         base = mount_of[mapping["pvc"]]
         target = (base + "/" + mapping["folder"]) if mapping["folder"] else base

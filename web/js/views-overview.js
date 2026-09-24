@@ -166,9 +166,7 @@ function nodeCard(n) {
         <div class="between"><span class="dim xs">MEMORY</span>
           <span class="small mono"><b>${n.mem_pct}%</b> <span class="dim">${sizePair(n.mem_used_gb, n.mem_cap_gb)}</span></span></div>
         ${meter(n.mem_pct, 'style="margin:5px 0 11px"', "memory")}
-        <div class="between"><span class="dim xs">DISK</span>
-          <span class="small mono"><b>${n.fs_pct || 0}%</b> <span class="dim">${sizePair(n.fs_used_gb, n.fs_cap_gb)}</span></span></div>
-        ${meter(n.fs_pct || 0, 'style="margin:5px 0 11px"', "disk")}
+        ${nodeDiskLines(n)}
         <div class="between"><span class="dim xs">NETWORK</span>
           <span class="small mono">${ratePair(n.rx_mbps, n.tx_mbps)[0]} <span class="dim">${ratePair(n.rx_mbps, n.tx_mbps)[1]}</span></span></div>
         ${n.temps && n.temps.cpu_c != null ? `<div class="between" style="margin-top:9px">
@@ -192,6 +190,22 @@ function nodeCard(n) {
             + (n.workloads.length > 5 ? `<span class="tag more" data-tip="${esc(n.workloads.slice(5).join(", "))}">+${n.workloads.length - 5}</span>` : "")
           : '<span class="dim xs">none</span>'}</div>
     </div></div>`;
+}
+
+/* A line per disk: the system disk's use as Kubernetes sees it, and each
+   Longhorn disk's own. A disk nothing uses says so. */
+function nodeDiskLines(n) {
+  const disks = n.disks || [];
+  if (!disks.length) return `<div class="between"><span class="dim xs">DISK</span>
+      <span class="small mono"><b>${n.fs_pct || 0}%</b> <span class="dim">${sizePair(n.fs_used_gb, n.fs_cap_gb)}</span></span></div>
+    ${meter(n.fs_pct || 0, 'style="margin:5px 0 11px"', "disk")}`;
+  return disks.map(d => {
+    const lh = d.lh_size_gb > 0, pct = lh ? Math.round(d.lh_used_gb / d.lh_size_gb * 100) : d.role === "system" ? (n.fs_pct || 0) : 0;
+    const used = lh ? sizePair(d.lh_used_gb, d.lh_size_gb) : d.role === "system" ? sizePair(n.fs_used_gb, n.fs_cap_gb) : sizeText(d.size_gb);
+    return `<div class="between"><span class="dim xs">${esc(d.device.toUpperCase())} ${lh ? '<span class="tag ok slimtag">Longhorn</span>' : d.role === "system" ? '<span class="tag slimtag">system</span>' : `<span class="tag slimtag ${d.role === "unused" ? "info" : ""}">${esc(d.role)}</span>`}</span>
+      <span class="small mono">${lh || d.role === "system" ? `<b>${pct}%</b> ` : ""}<span class="dim">${esc(used)}</span></span></div>
+      ${lh || d.role === "system" ? meter(pct, 'style="margin:5px 0 11px"', "disk") : '<div style="height:11px"></div>'}`;
+  }).join("");
 }
 
 window.nodeDetail = async (name, fromRoute = false) => {
@@ -235,6 +249,10 @@ window.nodeDetail = async (name, fromRoute = false) => {
           ${row("Address", esc((n.addresses || {}).InternalIP || "—"))}
         </div>
       </div>
+      <div class="card flat" style="margin-bottom:16px">
+        <div class="between node-section-head"><div><div class="ctitle">Disks</div>
+          <div class="csub">Every disk on this host, and the Longhorn storage on it</div></div></div>
+        <div id="nodeDisks"><div class="dim small"><span class="spin2"></span> reading disks</div></div></div>
       <div class="card flat node-disk-card" style="margin-bottom:16px">
         <div class="between node-section-head"><div><div class="ctitle">Disk activity</div>
           <div class="csub">Live host block-device throughput · read and write megabytes per second</div></div>
@@ -293,6 +311,8 @@ window.nodeDetail = async (name, fromRoute = false) => {
       <div class="row" style="margin-top:16px">
         <button class="btn" onclick="nodeActions('${esc(n.name)}')">Host actions…</button></div>
       </div>`;
+    window.__disksModal = false;
+    nodeDisksPaint(n.name);
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
 

@@ -971,7 +971,11 @@ function importMappingRow(row = {}) {
     <div><label>Goes to volume</label><select class="imm-pvc" onchange="imSyncMaps()"></select></div>
     <div><label>Subfolder</label><input class="imm-folder" type="text" value="${esc(row.folder || "")}" placeholder="${esc(importFolderName(row.remote_path, row.mount_path))}" oninput="imSyncMaps()"></div>
     <div><label>Path inside the container</label><input class="imm-mount" type="text" value="${esc(row.mount_path || "")}" placeholder="/config"></div>
-    <label class="switch"><input class="imm-on" type="checkbox" ${row.include === false ? "" : "checked"} onchange="imSyncMaps()">Copy</label>
+    <div><label>Contents ${tip("Copy: the folder's files are copied into the volume. Mount empty: the volume is mounted at this path with nothing copied - new recordings, say, where the old ones stay behind. Leave out: not mounted at all.")}</label>
+      <select class="imm-mode" onchange="imSyncMaps()">
+        <option value="copy" ${row.include === false || row.copy === false ? "" : "selected"}>Copy</option>
+        <option value="empty" ${row.copy === false && row.include !== false ? "selected" : ""}>Mount empty</option>
+        <option value="skip" ${row.include === false ? "selected" : ""}>Leave out</option></select></div>
     <button class="iconbtn row-remove" type="button" title="Remove folder" onclick="this.closest('.im-map').remove();imSyncMaps()">×</button>
     <div class="dim xs imm-size" style="grid-column:1/-1;margin-top:-4px"></div></div>`;
 }
@@ -1040,17 +1044,19 @@ window.imAddMap = () => {
   imSyncMaps();
 };
 window.imSyncMaps = () => {
-  const all = $$("#im_maps .im-map").filter(row => $(".imm-on", row).checked);
+  const all = $$("#im_maps .im-map").filter(row => imMode(row) !== "skip");
   const scratch = all.filter(row => row.dataset.medium === "memory");
-  const rows = all.filter(row => row.dataset.medium !== "memory");
+  const empty = all.filter(row => row.dataset.medium !== "memory" && imMode(row) === "empty");
+  const rows = all.filter(row => row.dataset.medium !== "memory" && imMode(row) === "copy");
   const note = $("#im_maps_note");
   if (note) {
     const targets = new Set(rows.map(row => $(".imm-pvc", row)?.value).filter(Boolean));
     const ram = scratch.length ? ` ${scratch.length} RAM scratch volume${scratch.length === 1 ? "" : "s"} is created empty.` : "";
+    const mounted = empty.length ? ` ${empty.length} more mounted empty, nothing copied.` : "";
     note.textContent = (!rows.length ? "Nothing selected to copy."
       : targets.size > 1 ? `${rows.length} folders across ${targets.size} volumes, each mounted back separately.`
       : rows.length > 1 ? `${rows.length} folders into one volume, each in its own subfolder.`
-      : "One folder copied to the root of its volume.") + ram;
+      : "One folder copied to the root of its volume.") + mounted + ram;
   }
   const sizes = STATE.data.importSizes || {};
   const everything = importSourcePaths();
@@ -1125,20 +1131,25 @@ window.importSourcePaths = () => $$("#im_maps .im-map")
   .filter(path => path.startsWith("/"))
   .map(path => path.replace(/\/+$/, ""));
 
+/* Whether a folder row is in the import: copied, mounted empty, or left out. */
+const imMode = row => row.dataset.medium === "memory" ? ($(".imm-on", row).checked ? "copy" : "skip")
+  : ($(".imm-mode", row)?.value || "copy");
+
 window.importMappings = () => {
   const all = importSourcePaths();
   return $$("#im_maps .im-map")
-    .filter(row => $(".imm-on", row).checked)
+    .filter(row => imMode(row) !== "skip")
     .map(row => {
       if (row.dataset.medium === "memory") {
         return { medium: "memory", mount_path: $(".imm-mount", row).value.trim() || "/tmp/cache",
           size_mb: +$(".imm-ram", row).value || 1024 };
       }
       const remote = $(".imm-remote", row).value.trim().replace(/\/+$/, "");
+      const copy = imMode(row) === "copy";
       return { remote_path: remote, mount_path: $(".imm-mount", row).value.trim() || "/config",
-        folder: $(".imm-folder", row).value.trim(), pvc: $(".imm-pvc", row)?.value || "",
-        exclude: all.filter(path => path.startsWith(remote + "/")).map(path => path.slice(remote.length)),
-        bytes: Number((STATE.data.importSizes || {})[remote]) || 0 };
+        folder: $(".imm-folder", row).value.trim(), pvc: $(".imm-pvc", row)?.value || "", copy,
+        exclude: copy ? all.filter(path => path.startsWith(remote + "/")).map(path => path.slice(remote.length)) : [],
+        bytes: copy ? Number((STATE.data.importSizes || {})[remote]) || 0 : 0 };
     });
 };
 
@@ -1146,7 +1157,11 @@ window.importSetup = async (source, dir, cfg = {}) => {
   const src = (STATE.data.srcs || []).find(s => s.name === source) || {};
   const name = (cfg.name || dir).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 38);
   STATE.data.importCfg = cfg;
-  const storage = await api("/api/deploy/options?ns=lab").catch(() => ({ pvcs: [], storage_classes: ["longhorn-r2"] }));
+  // Live nodes, so hardware plugged in since the page loaded is offered.
+  const [storage, liveNodes] = await Promise.all([
+    api("/api/deploy/options?ns=lab").catch(() => ({ pvcs: [], storage_classes: ["longhorn-r2"] })),
+    api("/api/nodes").catch(() => [])]);
+  if (liveNodes.length) STATE.data.nodes = liveNodes;
   STATE.data.importStorage = storage;
   const classes = storage.storage_classes?.length ? storage.storage_classes : ["longhorn-r2"];
   childModal("Import · " + dir, `
@@ -1482,7 +1497,7 @@ window.doImport = async source => {
   const first = volumes[0];
   // A container that keeps nothing imports as just the workload. Demanding a
   // volume for it would mean creating storage nobody asked for.
-  const keepsNothing = !mappings.some(row => !row.medium && row.remote_path);
+  const keepsNothing = !mappings.some(row => !row.medium && (row.remote_path || row.copy === false));
   if (!first && !keepsNothing) return toast("add at least one volume", "bad");
   const existing = !!first && !first.create;
   const body = { source, name: $("#im_name").value.trim(), remote_path: $("#im_path").value.trim(),
@@ -1510,8 +1525,8 @@ window.doImport = async source => {
   }
   // A RAM scratch mapping has no source by design, so only copied folders are
   // asked for one.
-  const copied = body.mappings.filter(row => !row.medium);
-  const bad = body.mappings.find(row => row.medium
+  const copied = body.mappings.filter(row => !row.medium && row.copy !== false);
+  const bad = body.mappings.find(row => row.medium || row.copy === false
     ? !String(row.mount_path || "").startsWith("/")
     : !String(row.remote_path || "").startsWith("/") || !String(row.mount_path || "").startsWith("/"));
   if (bad) {

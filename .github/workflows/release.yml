@@ -79,6 +79,19 @@ jobs:
           sbom: true
       - name: Published digest
         run: echo "${{ env.IMAGE }}@${{ steps.build.outputs.digest }}"
+      # The chart is generated from the manifests (scripts/render_chart.py) and
+      # carries the release's version, so it installs the image just pushed.
+      - name: Publish Helm chart
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          helm version --short
+          grep -qx "version: ${{ steps.version.outputs.version }}" charts/homestead/Chart.yaml || { echo "charts/homestead is not at ${{ steps.version.outputs.version }}"; exit 1; }
+          helm lint charts/homestead
+          mkdir -p release-assets
+          helm package charts/homestead --destination release-assets
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm push "release-assets/homestead-${{ steps.version.outputs.version }}.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
       - name: Install screenshot browser
         run: |
           npm install --no-save --no-package-lock playwright@1.55.0
@@ -103,4 +116,4 @@ jobs:
           if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "Homestead $GITHUB_REF_NAME"
           fi
-          gh release upload "$GITHUB_REF_NAME" release-assets/*.png --clobber
+          gh release upload "$GITHUB_REF_NAME" release-assets/*.png release-assets/*.tgz --clobber

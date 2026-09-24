@@ -120,7 +120,9 @@ async function viewSettings() {
 
       <section class="card flat" data-tab="hardware">
         <div class="settings-card-head"><div><div class="ctitle">Hardware features</div><div class="csub">Reusable passthrough paths and automatic host detection</div></div>
-          ${can("admin") ? '<button class="btn sm" onclick="hardwareFeatureSettings()">Manage</button>' : ""}</div>
+          <div class="row">${can("operator") ? '<button class="btn sm" onclick="hardwareRescan(this)" title="Look for devices plugged in since the last check">Rescan hosts</button>' : ""}
+          ${can("admin") ? '<button class="btn sm" onclick="hardwareFeatureSettings()">Manage</button>' : ""}</div></div>
+        <div class="dim xs" style="margin:-4px 0 8px">Hosts are checked every 30 seconds, so a device plugged in later is found without a restart.</div>
         <div class="settings-list">${hardwareRows || '<div class="empty small">No hardware features configured.</div>'}</div>
       </section>
 
@@ -389,4 +391,19 @@ window.saveUpdateSettings = async () => {
     await loadImageUpdates(false, true);
     viewSettings();
   } catch (e) { toast(e.message, "bad"); }
+};
+
+/* Look for hardware now rather than at the next 30-second check. */
+window.hardwareRescan = async button => {
+  if (button) { button.disabled = true; button.textContent = "Scanning…"; }
+  try {
+    const r = await api("/api/hardware/rescan", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const names = Object.fromEntries((STATE.data.hardwareFeatures || []).map(f => [f.id, f.name]));
+    const found = Object.entries(r.nodes || {}).filter(([, ids]) => ids.length)
+      .map(([node, ids]) => `${node.replace("harvester-", "")}: ${ids.map(id => names[id] || id).join(", ")}`);
+    toast(found.length ? found.join(" · ") : "no hardware features detected on any host", found.length ? "ok" : "warn");
+    STATE.data.ov = await api("/api/overview").catch(() => STATE.data.ov);
+    if (STATE.view === "settings") viewSettings();
+  } catch (e) { toast(e.message, "bad"); }
+  finally { if (button) { button.disabled = false; button.textContent = "Rescan hosts"; } }
 };

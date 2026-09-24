@@ -72,6 +72,31 @@ class ShareTests(unittest.TestCase):
         obj = self.objects["/api/v1/namespaces/lab/secrets/homestead-share-credentials"]
         return json.loads(base64.b64decode(obj["data"]["credentials.json"]).decode())
 
+    def test_a_new_volume_is_created_under_the_name_given(self):
+        shares.create_share("nas", 50, "lab", "a-password", False, new_name="nas-data",
+                            storage_class="longhorn-r2")
+        self.assertEqual(("nas-data", 50, "longhorn-r2"), self.created[-1][:3])
+
+    def test_the_first_share_installs_samba(self):
+        dep = self.objects.pop("/apis/apps/v1/namespaces/lab/deployments/samba")
+        installed = []
+
+        def install():
+            installed.append(True)
+            fresh = copy.deepcopy(dep)
+            fresh["spec"]["template"]["spec"]["containers"][0].update(args=["-p"], volumeMounts=[])
+            fresh["spec"]["template"]["spec"]["volumes"] = []
+            self.objects["/apis/apps/v1/namespaces/lab/deployments/samba"] = fresh
+            return copy.deepcopy(fresh)
+        shares.install = install
+        try:
+            shares.create_share("media", 10, "lab", "a-password", False)
+        finally:
+            shares.install = None
+        self.assertEqual([True], installed)
+        args = self.objects["/apis/apps/v1/namespaces/lab/deployments/samba"]["spec"]["template"]["spec"]["containers"][0]["args"]
+        self.assertIn("media;/shares/media;yes;no;no;lab", args)
+
     def test_inventory_uses_live_pvc_size_and_never_returns_password(self):
         result = shares.list_shares()
         self.assertEqual(10, result[0]["size_gb"])

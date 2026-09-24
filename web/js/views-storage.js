@@ -828,7 +828,8 @@ window.mkShare = async button => {
   const body = { name, user: $("#sh_user").value.trim(), password: $("#sh_pass").value,
     public: $("#sh_pub").checked, read_only: $("#sh_ro").checked, sub_path: folder };
   if (reusing) body.pvc = storage.source;
-  else Object.assign(body, { pvc: storage.source || "", size_gb: storage.size_gb,
+  // A new volume's name is the one to create, not one to look up.
+  else Object.assign(body, { new_name: storage.source || "", size_gb: storage.size_gb,
     storage_class: storage.storage_class, access_mode: storage.access_mode });
   if (button) { button.disabled = true; button.textContent = "Creating…"; }
   try {
@@ -941,7 +942,8 @@ function lhCapacityCard(cap, st) {
       ${(st?.disks || []).map(d => `<div class="drow"><div class="dl">${esc(lhShort(d.node))}</div>
         <div class="dv mono nowrap">${esc(sizePair(d.avail_gb, d.cap_gb))}</div></div>`).join("") || '<div class="csub" style="margin-top:8px">Longhorn has not reported any node disks yet.</div>'}</div>`;
   return `<div class="card flat statwide lh-card"><div class="between"><div class="ctitle">Allocated per node</div>
-      <a class="dim xs" onclick="go('settings');settingsTab('cluster')" data-tip="Over-provisioning is ${cap.over_provisioning}%">Longhorn settings</a></div>
+      <span class="row" style="gap:10px"><a class="dim xs" data-need="admin" onclick="lhDisks()" data-tip="Every disk on every node; add one to Longhorn">Disks</a>
+        <a class="dim xs" onclick="go('settings');settingsTab('cluster')" data-tip="Over-provisioning is ${cap.over_provisioning}%">Longhorn settings</a></span></div>
     ${lhNodeRows(cap) || '<div class="csub" style="margin-top:8px">Longhorn has not reported any node disks yet.</div>'}
     <div class="dim xs" style="margin-top:8px">Largest new volume</div><div class="row lh-largest">${lhLargest(cap)}</div></div>`;
 }
@@ -962,7 +964,8 @@ async function lhSettingsPaint() {
   const admin = can("admin"), v2 = cap.v2 || {};
   host.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">Longhorn storage</div>
       <div class="csub">How much Longhorn may promise on each disk, and its V2 data engine</div></div>
-      ${admin ? '<button class="btn pri" onclick="lhSettingsSave()">Save</button>' : '<span class="pill neutral">admin managed</span>'}</div>
+      <div class="row"><button class="btn" onclick="lhDisks()">Disks</button>
+      ${admin ? '<button class="btn pri" onclick="lhSettingsSave()">Save</button>' : '<span class="pill neutral">admin managed</span>'}</div></div>
     <div class="f2">
       <div class="f"><label>Over-provisioning ${tip("Longhorn books a volume's full size on a disk when it places a replica, however little it holds. At 100% a disk can be promised its own size; at 200%, twice that, betting volumes never fill up. If they do, the disk runs out and its replicas fail.")}</label>
         <div class="row" style="flex-wrap:nowrap"><input id="lh_over" type="number" min="100" max="1000" step="10" value="${cap.over_provisioning}" ${admin ? "" : "disabled"} oninput="lhPreview()"><span class="dim">%</span></div></div>
@@ -1005,5 +1008,119 @@ window.lhSettingsSave = async () => {
   try {
     const r = await api("/api/longhorn/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(r.detail, "ok"); lhSettingsPaint();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+/* ---------------- node disks ----------------
+   Every disk on a node, what it is for, and the Longhorn disks on it - with
+   adding a disk to Longhorn and taking one out. */
+const DISK_ROLE = { longhorn: ["Longhorn", "ok"], system: ["system", ""], provisioning: ["being added", "warn"],
+  "in use": ["in use", ""], unused: ["unused", "info"] };
+
+function diskRowsHtml(node, disks, harvester) {
+  const v2 = STATE.data.lhcap?.v2?.enabled;
+  return disks.map(d => {
+    const [word, tone] = DISK_ROLE[d.role] || [d.role, ""];
+    const lh = d.longhorn.map(x => {
+      const pct = x.size_gb ? Math.round(x.used_gb / x.size_gb * 100) : 0;
+      return `<div class="disk-lh">
+        <div class="between"><span class="mono xs">${esc(x.path)}${x.type === "block" ? ' <span class="tag info">V2</span>' : ""}</span>
+          <span class="mono xs">${esc(sizePair(x.used_gb, x.size_gb))} used · ${esc(sizeText(x.allocated_gb))} allocated · ${x.replicas} replica${x.replicas === 1 ? "" : "s"}</span></div>
+        ${meter(pct, "", "disk")}
+        <div class="row disk-lh-acts">
+          ${!x.ready ? `<span class="tag bad" data-tip="${esc(x.problem)}">not ready</span>` : ""}
+          ${x.evicting ? '<span class="tag warn">moving replicas off</span>' : !x.scheduling ? '<span class="tag">no new replicas</span>' : ""}
+          <button class="btn sm" data-need="admin" onclick="diskAction('scheduling','${esc(node)}','${esc(x.id)}',${!x.scheduling})">${x.scheduling ? "Stop new replicas" : "Allow new replicas"}</button>
+          ${x.replicas && !x.evicting ? `<button class="btn sm" data-need="admin" onclick="diskAction('evict','${esc(node)}','${esc(x.id)}',true)" title="Rebuild every replica on this disk somewhere else">Move replicas off</button>` : ""}
+          ${x.evicting ? `<button class="btn sm" data-need="admin" onclick="diskAction('evict','${esc(node)}','${esc(x.id)}',false)">Stop moving</button>` : ""}
+          ${!x.replicas && !x.scheduling ? `<button class="btn sm danger" data-need="admin" onclick="diskAction('remove','${esc(node)}','${esc(x.id)}')">Remove from Longhorn</button>` : ""}</div></div>`;
+    }).join("");
+    return `<div class="disk-card">
+      <div class="between"><div><b class="mono">${esc(d.device || "Longhorn")}</b> <span class="dim xs">${esc(d.model || "")}</span>
+          <div class="dim xs">${esc(sizeText(d.size_gb))}${d.kind ? ` · ${esc(d.kind)}` : ""}${d.mounts.length ? ` · ${esc(d.mounts.slice(0, 3).join(", "))}` : ""}</div></div>
+        <div class="row">${d.system ? '<span class="tag">system</span>' : ""}<span class="tag ${tone}">${esc(word)}</span>
+          ${d.can_add ? `<button class="btn sm pri" data-need="admin" onclick="diskAdd('${esc(node)}','${esc(d.blockdevice.name)}','${esc(d.path)}',${d.needs_wipe})">Add to Longhorn</button>` : ""}</div></div>
+      ${lh}</div>`;
+  }).join("") + (harvester ? "" : `<button class="btn sm" data-need="admin" style="margin-top:8px" onclick="diskAdd('${esc(node)}')">＋ Add a disk to Longhorn</button>`)
+    + (harvester && !disks.some(d => d.can_add) ? '<div class="dim xs" style="margin-top:8px">Every disk Harvester found here is in use. A new disk shows up once it is plugged in and Harvester has scanned it.</div>' : "");
+}
+
+async function loadDisks(force = false) {
+  if (!force && STATE.data.disks && Date.now() - STATE.data.disksAt < 8000) return STATE.data.disks;
+  STATE.data.disks = await api("/api/disks");
+  STATE.data.disksAt = Date.now();
+  return STATE.data.disks;
+}
+
+/* The node page's disk card. */
+window.nodeDisksPaint = async node => {
+  const host = $("#nodeDisks");
+  if (!host) return;
+  try {
+    const inv = await loadDisks(true);
+    const disks = inv.nodes[node] || [];
+    host.innerHTML = disks.length ? diskRowsHtml(node, disks, inv.harvester)
+      : '<div class="dim small">No disks reported yet: the node probe tells Homestead which disks this host has.</div>';
+    if (window.applyRole) applyRole();
+  } catch (e) { host.innerHTML = `<div class="dim small">${esc(e.message)}</div>`; }
+};
+
+/* Every node's disks in one place, from Volumes or Settings. */
+window.lhDisks = async () => {
+  modal("Disks", '<div class="empty"><span class="spin2"></span>reading every node</div>', true);
+  try {
+    const inv = await loadDisks(true);
+    $("#mbody").innerHTML = `<p class="dim small" style="margin-top:0">${inv.harvester
+      ? "Harvester lists each host's disks. Adding one lets Harvester format it and hand it to Longhorn, as its own UI does."
+      : "Longhorn stores data in folders where a disk is mounted, or - for the V2 engine - on a raw device."}</p>
+      ${Object.entries(inv.nodes).map(([node, disks]) => `<div class="sec">${esc(node)}</div>${diskRowsHtml(node, disks, inv.harvester)}`).join("")
+        || '<div class="empty small">No node has reported its disks yet.</div>'}`;
+    window.__disksModal = true;
+    if (window.applyRole) applyRole();
+  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+};
+
+function disksRepaint(node) {
+  if ($("#nodeDisks")) nodeDisksPaint(node);
+  else if (window.__disksModal && !$("#modal").classList.contains("hidden")) lhDisks();
+}
+
+window.diskAction = async (action, node, disk, value) => {
+  if (action === "remove" && !confirm(`Remove ${disk} on ${node} from Longhorn? Nothing is on it, and its files are left where they are.`)) return;
+  if (action === "evict" && value && !confirm(`Move every replica off ${disk}? Longhorn rebuilds each one on another disk first, which copies their data.`)) return;
+  const body = { node, disk };
+  if (action === "scheduling") body.allow = value;
+  if (action === "evict") body.on = value;
+  try {
+    const r = await api(`/api/disks/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    toast(r.detail, "ok"); STATE.data.disks = null; setTimeout(() => disksRepaint(node), 800);
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+window.diskAdd = (node, blockdevice = "", path = "", needsWipe = false) => {
+  const v2 = STATE.data.lhcap?.v2?.enabled;
+  const back = $("#nodeDisks") ? null : true;
+  childModal(`Add a disk · ${node}`, `
+    ${blockdevice ? `<p>Harvester formats <b class="mono">${esc(path)}</b> and gives it to Longhorn, which starts placing replicas on it.</p>`
+      : `<div class="f"><label>Where the disk is ${tip("For the V1 engine: the folder a formatted disk is mounted at on the host, like /mnt/disk2. Mount it (and add it to /etc/fstab) on the host first. For V2: the raw device, like /dev/sdb.")}</label>
+        <input id="da_path" class="mono" placeholder="/mnt/disk2"></div>`}
+    <div class="f"><label>Engine</label><select id="da_engine">
+      <option value="v1">V1 — ${blockdevice ? "formatted and mounted" : "a mounted folder"}</option>
+      ${v2 ? `<option value="v2">V2 (SPDK) — the raw device</option>` : ""}</select>
+      ${v2 ? "" : '<div class="dim xs">The V2 engine is off; switch it on in Settings › Cluster to add a V2 disk.</div>'}</div>
+    ${blockdevice ? `<label class="switch"><input type="checkbox" id="da_wipe" ${needsWipe ? "" : "disabled"}> Erase it first
+      ${needsWipe ? '<span class="badtext xs">— it already holds a filesystem or partitions, which are destroyed</span>' : '<span class="dim xs">— it is blank</span>'}</label>` : ""}
+    <div class="row" style="margin-top:14px"><button class="btn pri" onclick="diskAddGo('${esc(node)}','${esc(blockdevice)}')">Add</button>
+      <button class="btn" onclick="modalBack()">Cancel</button></div>`);
+};
+window.diskAddGo = async (node, blockdevice) => {
+  const body = { node, engine: $("#da_engine").value };
+  if (blockdevice) {
+    body.blockdevice = blockdevice; body.wipe = !!$("#da_wipe")?.checked;
+    if (body.wipe && !confirm("Erase everything on this disk? This cannot be undone.")) return;
+  } else body.path = $("#da_path").value.trim();
+  try {
+    const r = await api("/api/disks/add", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    toast(r.detail, "ok"); STATE.data.disks = null; modalBack(); setTimeout(() => disksRepaint(node), 800);
   } catch (e) { toast(e.message, "bad"); }
 };

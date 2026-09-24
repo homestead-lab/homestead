@@ -1647,3 +1647,6 @@ div.ipam-line.dim{display:block}
 .lh-v2{margin-top:16px;padding-top:14px;border-top:1px solid var(--line);display:grid;gap:6px}.lh-v2-nodes{display:flex;gap:6px;flex-wrap:wrap}
 .badtext{color:var(--crit)}
 .lh-tight{display:inline-block;margin-top:8px;cursor:pointer}
+.disk-card{padding:11px 0;border-bottom:1px solid var(--line)}.disk-card:last-of-type{border-bottom:0}
+.disk-lh{margin-top:8px;padding:8px 10px;border-radius:10px;background:rgba(255,255,255,.025);display:grid;gap:6px}
+.disk-lh-acts{gap:6px;flex-wrap:wrap}.slimtag{padding:0 5px;font-size:8.5px;margin-left:4px}
