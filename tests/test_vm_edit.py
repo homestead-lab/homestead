@@ -126,7 +126,8 @@ class VmEditTests(unittest.TestCase):
 
     def test_deleting_mid_download_stops_it_instead_of_keeping_half_a_disk(self):
         c = Cluster({"harvester": False, "cdi": True})
-        self.assertEqual([{"claim": "web-disk", "phase": "ImportInProgress", "progress": 47.5}],
+        self.assertEqual([{"claim": "web-disk", "phase": "ImportInProgress", "progress": 47.5,
+                           "seconds": 0, "stuck": False, "why": []}],
                          VMS._filling(copy.deepcopy(VM), VMS._datavolumes("lab")))
         result = VMS.delete("lab", "web")
         self.assertFalse([p for m, p, b in c.sent if m == "PATCH"])       # never released
@@ -137,6 +138,25 @@ class VmEditTests(unittest.TestCase):
         deleting = copy.deepcopy(VM)
         deleting["metadata"]["deletionTimestamp"] = "2026-09-24T12:00:00Z"
         self.assertEqual(("Deleting", []), (VMS._row(deleting, {})["status"], VMS._row(deleting, {})["actions"]))
+
+    def test_an_import_stuck_scheduled_says_why(self):
+        c = Cluster({"harvester": False, "cdi": True})
+        dv = {"metadata": {"name": "web-disk", "namespace": "lab", "creationTimestamp": "2020-01-01T00:00:00Z"},
+              "status": {"phase": "ImportScheduled",
+                         "conditions": [{"type": "Bound", "status": "False", "message": "PVC prime-u9 Pending"}]}}
+        pods = {"items": [{"metadata": {"name": "importer-prime-u9"},
+                           "status": {"conditions": [{"type": "PodScheduled", "status": "False",
+                                                      "message": "0/3 nodes are available: 3 Insufficient memory."}]}}]}
+        get = c.get
+        c.get = lambda path: (pods if path.endswith("/pods") else
+                              {"metadata": {"uid": "u9"}} if path.endswith("/persistentvolumeclaims/web-disk") else get(path))
+        VMS.bind(c.get, c.send, lambda ns, name, uid="": [{"type": "Warning", "message": f"{name}: waiting"}]
+                 if name.startswith("prime-u9") and not name.endswith("scratch") else [])
+        row = VMS._filling(copy.deepcopy(VM), {("lab", "web-disk"): dv})[0]
+        self.assertTrue(row["stuck"])
+        self.assertEqual(["PVC prime-u9 Pending",
+                          "the importer cannot be placed: 0/3 nodes are available: 3 Insufficient memory.",
+                          "prime-u9: waiting"], row["why"])
 
     def test_cloud_init_in_harvesters_secret_is_edited_there(self):
         c = Cluster({"harvester": True, "cdi": True})

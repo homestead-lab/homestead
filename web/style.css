@@ -1660,3 +1660,7 @@ div.ipam-line.dim{display:block}
 .rc-step.done{color:var(--tx)}.rc-step.done>span{color:var(--ok)}.rc-step.active{color:var(--tx);font-weight:650}
 .rc-copy{grid-column:2;display:grid;gap:4px;font-weight:400}
 @media(max-width:650px){.rc-space{grid-template-columns:1fr}}
+.vm-why{grid-column:1/-1;margin:4px 0 0;font-size:11.5px}
+.health-list{display:grid;gap:2px}.health-row{display:grid;grid-template-columns:110px 1fr auto;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}
+.health-row:last-child{border-bottom:0}.health-row>.tag{justify-self:start}
+@media(max-width:650px){.health-row{grid-template-columns:1fr}}

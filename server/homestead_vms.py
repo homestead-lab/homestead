@@ -20,6 +20,7 @@ harvesterhci.io/removedPVCs annotation, which its UI uses the same way.
 import base64
 import json
 import re
+import time
 import urllib.error
 import urllib.parse
 
@@ -129,9 +130,77 @@ def _datavolumes(ns=""):
         return {}
 
 
-def _filling(vm, dvs):
+# How long a DataVolume may sit waiting before the page says it is stuck.
+STUCK_AFTER = 180
+WAITING_PHASES = {"Pending", "ImportScheduled", "CloneScheduled", "UploadScheduled", "WaitForFirstConsumer",
+                  "PendingPopulation", "ImportInProgress", "CloneInProgress", "Unknown"}
+
+
+def _age(stamp):
+    try:
+        import calendar
+        return time.time() - calendar.timegm(time.strptime(str(stamp), "%Y-%m-%dT%H:%M:%SZ"))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _why_not_filling(ns, dv):
+    """Why a DataVolume is not getting on: its importer pod (named for the
+    DataVolume, or for its "prime" claim when CDI uses volume populators),
+    the claims it waits on - its own, prime and scratch - and their warning
+    events. CDI's own phase only says it has been scheduled."""
+    name = dv["metadata"]["name"]
+    reasons = []
+    for c in (dv.get("status") or {}).get("conditions") or []:
+        if c.get("status") == "False" and c.get("message") and c.get("type") in ("Bound", "Running"):
+            reasons.append(c["message"])
+    try:
+        claim = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(name)}")
+        uid = claim["metadata"].get("uid", "")
+    except Exception:
+        claim, uid = None, ""
+    watched = [name, f"{name}-scratch"] + ([f"prime-{uid}", f"prime-{uid}-scratch"] if uid else [])
+    try:
+        pods = kget(f"/api/v1/namespaces/{ns}/pods").get("items", [])
+    except Exception:
+        pods = []
+    for pod in pods:
+        pname = pod["metadata"]["name"]
+        if not pname.startswith("importer-") or not (name in pname or (uid and uid in pname)):
+            continue
+        watched.append(pname)
+        for c in (pod.get("status") or {}).get("conditions") or []:
+            if c.get("type") == "PodScheduled" and c.get("status") == "False" and c.get("message"):
+                reasons.append(f"the importer cannot be placed: {c['message']}")
+        for cs in (pod.get("status") or {}).get("containerStatuses") or []:
+            waiting = (cs.get("state") or {}).get("waiting") or {}
+            if waiting.get("reason") in ("ErrImagePull", "ImagePullBackOff", "CrashLoopBackOff", "CreateContainerError"):
+                reasons.append(f"the importer {waiting['reason']}: {waiting.get('message', '')}".rstrip(": "))
+    for other in watched:
+        for event in events_for(ns, other, "")[:5]:
+            if event.get("type") == "Warning" and event.get("message"):
+                reasons.append(event["message"])
+    seen, out = set(), []
+    for reason in reasons:
+        text = " ".join(str(reason).split())[:240]
+        if text not in seen:
+            seen.add(text)
+            out.append(text)
+    return out[:4]
+
+
+def _stuck_problem(filling):
+    stuck = next((f for f in filling if f["stuck"]), None)
+    if not stuck:
+        return ""
+    return (f"disk {stuck['claim']} has been {stuck['phase']} for {stuck['seconds'] // 60} min"
+            + (f": {stuck['why'][0]}" if stuck["why"] else ""))
+
+
+def _filling(vm, dvs, explain=False):
     """Disks CDI is still filling - a download or a copy - with how far it got:
-    a Provisioning VM is waiting on these, not stuck."""
+    a Provisioning VM is waiting on these, not stuck. One that has waited long
+    says why, from the importer and the claims it waits on."""
     ns = (vm.get("metadata") or {}).get("namespace", "")
     out = []
     for v in ((vm.get("spec") or {}).get("template") or {}).get("spec", {}).get("volumes") or []:
@@ -143,7 +212,14 @@ def _filling(vm, dvs):
                 percent = float(progress)
             except ValueError:
                 percent = None
-            out.append({"claim": dv["metadata"]["name"], "phase": status["phase"], "progress": percent})
+            since = _age(dv["metadata"].get("creationTimestamp"))
+            row = {"claim": dv["metadata"]["name"], "phase": status["phase"], "progress": percent,
+                   "seconds": int(since), "stuck": False, "why": []}
+            waiting = status["phase"] in WAITING_PHASES and not percent
+            if explain or (waiting and since > STUCK_AFTER) or status["phase"] == "Failed":
+                row["why"] = _why_not_filling(ns, dv)
+                row["stuck"] = bool(waiting and since > STUCK_AFTER) or status["phase"] == "Failed"
+            out.append(row)
     return out
 
 
@@ -182,6 +258,7 @@ def _row(vm, vmi, claims=None, dvs=None):
     labels, annotations = meta.get("labels") or {}, meta.get("annotations") or {}
     restart_required = any(c.get("type") == "RestartRequired" and c.get("status") == "True"
                            for c in (vm.get("status") or {}).get("conditions") or [])
+    filling = _filling(vm, dvs or {})
     return {"ns": meta.get("namespace", ""), "name": meta.get("name", ""), "status": status,
             "run_strategy": _strategy(vm), "running": istatus.get("phase") == "Running",
             "node": istatus.get("nodeName", ""), "cores": _cores(dom), "memory": _memory(dom),
@@ -189,8 +266,8 @@ def _row(vm, vmi, claims=None, dvs=None):
             "os": guest.get("prettyName") or labels.get(OS_LABEL, ""), "hostname": guest.get("hostname") or istatus.get("guestOSInfo", {}).get("name", ""),
             "description": annotations.get(DESCRIPTION, ""), "created": meta.get("creationTimestamp", ""),
             "uid": meta.get("uid", ""), "migratable": migratable, "restart_required": restart_required,
-            "problem": _problem(vm, vmi),
-            "filling": _filling(vm, dvs or {}),
+            "problem": _problem(vm, vmi) or _stuck_problem(filling),
+            "filling": filling,
             "actions": actions_for(status, migratable)}
 
 
@@ -229,6 +306,8 @@ def detail(ns, name):
     except urllib.error.HTTPError:
         vmi = {}
     row = _row(vm, vmi, _claims(ns), _datavolumes(ns))
+    # The VM's own page always explains a disk that is still filling.
+    row["filling"] = _filling(vm, _datavolumes(ns), explain=True)
     guest = (vmi.get("status") or {}).get("guestOSInfo") or {}
     row["guest"] = {k: guest.get(k, "") for k in ("prettyName", "kernelRelease", "version", "id")}
     row["conditions"] = [{"type": c.get("type"), "status": c.get("status"), "reason": c.get("reason", ""),

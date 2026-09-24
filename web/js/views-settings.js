@@ -188,6 +188,7 @@ async function viewSettings() {
         </div>
       </section>
 
+      <section class="card flat settings-wide" data-tab="about" id="selfHealthCard"><div class="empty small"><span class="spin2"></span> checking Homestead</div></section>
       <section class="card flat settings-wide" data-tab="about" id="replicaCard">${STATE.data.replicaHtml || ""}</section>
     </div>`);
   pwaPaint();
@@ -195,6 +196,7 @@ async function viewSettings() {
   replicasPaint();
   mqttPaint();
   lhSettingsPaint();
+  selfHealthPaint();
   // The UniFi card needs the IPAM record, which Settings does not otherwise load.
   api("/api/ipam").then(data => { STATE.data.ipam = data; const host = $("#unifiCard"); if (host) host.outerHTML = ipamUnifiCard(); }).catch(() => {});
 }
@@ -406,4 +408,67 @@ window.hardwareRescan = async button => {
     if (STATE.view === "settings") viewSettings();
   } catch (e) { toast(e.message, "bad"); }
   finally { if (button) { button.disabled = false; button.textContent = "Rescan hosts"; } }
+};
+
+/* ---------------- Homestead's own health ----------------
+   Whether the parts that work in the background are working: the API it
+   leans on, each loop, the node probe and Samba - with Samba switchable. */
+const HEALTH_TONE = { ok: "ok", standby: "neutral", starting: "neutral", late: "warn", failing: "bad" };
+const agoText = t => !t ? "not yet" : Date.now() / 1000 - t < 60 ? "just now" : fmtAgo(Math.round(Date.now() / 1000 - t));
+
+async function selfHealthPaint() {
+  const host = $("#selfHealthCard");
+  if (!host) return;
+  let h;
+  try { h = await api("/api/self/health"); }
+  catch (e) { host.innerHTML = `<div class="ctitle">Homestead's health</div><div class="note bad">${esc(e.message)}</div>`; return; }
+  const admin = can("admin"), probe = h.probe || {}, samba = h.samba || {}, pods = h.replicas?.pods || [];
+  const row = (label, tone, word, detail = "", action = "") => `<div class="health-row"><span class="tag ${tone}">${esc(word)}</span>
+    <div><b>${esc(label)}</b>${detail ? `<div class="dim xs">${detail}</div>` : ""}</div>${action ? `<div class="row">${action}</div>` : ""}</div>`;
+  const problems = h.loops.filter(l => ["failing", "late"].includes(l.state)).length + (h.api.ok ? 0 : 1)
+    + (probe.installed && probe.ready < probe.desired ? 1 : 0) + (samba.enabled && samba.ready < samba.desired ? 1 : 0);
+  host.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">Homestead's health</div>
+      <div class="csub">What works in the background, checked every 15 seconds while this is open</div></div>
+      <span class="pill ${problems ? "warn" : "ok"}">${problems ? `${problems} to look at` : "all well"}</span></div>
+    <div class="health-list">
+      ${row("Kubernetes API", h.api.ok ? (h.api.ms > 2000 ? "warn" : "ok") : "bad", h.api.ok ? `${h.api.ms} ms` : "no answer",
+        h.api.ok ? (h.api.ms > 2000 ? "Slow to answer: pages and actions wait on it." : "Answering promptly.") : esc(h.api.error || ""))}
+      ${row("Homestead", "ok", `v${h.version}`, `${pods.filter(p => p.ready).length} of ${h.replicas?.desired ?? "?"} cop${(h.replicas?.desired ?? 1) === 1 ? "y" : "ies"} ready`
+        + (pods.length ? ` · ${pods.map(p => `${esc(p.node.replace("harvester-", ""))}${p.leader ? " (leader)" : ""}${p.this ? " - this one" : ""}`).join(", ")}` : "")
+        + (h.leader ? "" : " · this copy is standing by"))}
+      ${h.loops.map(l => row(l.label, HEALTH_TONE[l.state] || "", l.state === "ok" ? "running" : l.state,
+        l.state === "standby" ? "Runs on the leader copy." : `Last done ${esc(agoText(l.last_ok))}` + (l.error ? ` · <span class="badtext">${esc(l.error)}</span>` : ""))).join("")}
+      ${row("Node probe", !probe.installed ? "neutral" : probe.ready < probe.desired || probe.reporting < probe.desired ? "warn" : "ok",
+        !probe.installed ? "not installed" : `${probe.ready}/${probe.desired} nodes`,
+        !probe.installed ? "Temperatures, host devices, every disk and drive health come from it."
+          : `${probe.reporting} reporting · drive health on ${probe.smart} · ${esc(probe.detail || "")}`,
+        admin ? (!probe.installed ? '<button class="btn sm" onclick="probeInstallConfirm()">Install</button>' : '<button class="btn sm" onclick="probeRemove()">Remove</button>') : "")}
+      ${row("Samba (network shares)", !samba.installed || !samba.enabled ? "neutral" : samba.ready < samba.desired ? "warn" : "ok",
+        !samba.installed ? "not installed" : !samba.enabled ? "off" : samba.ready < samba.desired ? "starting" : "serving",
+        (samba.installed ? `${samba.shares} share${samba.shares === 1 ? "" : "s"}${samba.address ? ` at <span class="mono">\\${esc(samba.address)}</span>` : ""} · ${esc(samba.image || "")}`
+          : `Installed with the first share, or here. ${samba.shares ? `${samba.shares} share${samba.shares === 1 ? " is" : "s are"} defined.` : ""}`),
+        admin ? `<label class="switch"><input type="checkbox" ${samba.enabled ? "checked" : ""} onchange="sambaToggle(this)"> ${samba.enabled ? "On" : "Off"}</label>` : "")}
+      ${row("Permissions", h.permissions?.state === "error" ? "bad" : h.permissions?.state === "current" || h.permissions?.state === "updated" ? "ok" : "neutral",
+        h.permissions?.state || "unknown", esc(h.permissions?.detail || ""))}
+      ${row("Backup storage", h.backups?.ready ? "ok" : h.backups?.deployed ? "warn" : "neutral",
+        h.backups?.ready ? "ready" : h.backups?.deployed ? "starting" : "none", h.backups?.endpoint ? `<span class="mono">${esc(h.backups.endpoint)}</span>` : "Set up under Data protection.")}
+      ${h.mqtt?.state && h.mqtt.state !== "off" ? row("MQTT", h.mqtt.state === "publishing" ? "ok" : "warn", h.mqtt.state,
+        h.mqtt.error ? `<span class="badtext">${esc(h.mqtt.error)}</span>` : esc(h.mqtt.detail || "")) : ""}
+    </div>`;
+  clearTimeout(window.__selfHealthTimer);
+  window.__selfHealthTimer = setTimeout(() => { if (STATE.view === "settings" && settingsTab() === "about") selfHealthPaint(); }, 15000);
+}
+window.selfHealthPaint = selfHealthPaint;
+
+window.sambaToggle = async box => {
+  const on = box.checked;
+  if (!on && !confirm("Stop Samba? Every share stops being served until it is switched on again; their volumes, settings and passwords are kept.")) {
+    box.checked = true; return;
+  }
+  box.disabled = true;
+  try {
+    const r = await api("/api/self/samba", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: on }) });
+    toast(r.detail, "ok");
+    setTimeout(selfHealthPaint, 1500);
+  } catch (e) { toast(e.message, "bad"); box.checked = !on; box.disabled = false; }
 };

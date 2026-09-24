@@ -72,10 +72,10 @@ scripts/render_chart.py       regenerate charts/homestead from the manifests
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.108`, the workflow publishes:
+For a release such as `v2.8.109`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.108
+ghcr.io/wjcloudy/homestead:2.8.109
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -86,8 +86,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.108
-git push origin v2.8.108
+git tag v2.8.109
+git push origin v2.8.109
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -589,6 +589,21 @@ the manifest and icons are served without Access's signature so the browser can
 install the app; if installation still fails, add an Access **Bypass** policy for
 `/manifest.webmanifest` and `/icons/*`.
 
+## Homestead's own health
+
+**Settings → About** shows whether the parts that work in the background are
+working, refreshed every 15 seconds while it is open: how quickly the
+Kubernetes API answers, each copy of Homestead and which one leads, every
+background task (live charts, alerts, long-term stats, hardware detection,
+cluster moves) with when it last did its work and its last error, the node
+probe (nodes running it, reporting, and with drive health), Samba, the
+permissions check, backup storage and MQTT. Samba can be switched off there -
+shares stop being served, and their volumes, settings and passwords are kept -
+and on again, which installs it if the cluster has none.
+
+A VM whose disk has waited to start downloading for more than three minutes
+says why, from CDI's importer pod and the claims it waits on.
+
 ## Redundancy: more than one Homestead
 
 **Settings → About → Redundancy** sets how many copies of Homestead run, one
@@ -651,7 +666,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.108/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.109/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -662,7 +677,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.108 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.109 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour

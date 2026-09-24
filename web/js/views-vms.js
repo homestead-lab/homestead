@@ -10,9 +10,16 @@ const VM_ACTIONS = {
 };
 const vmTone = status => VM_TONE[status] || (/Error|Fail|Crash|BackOff/i.test(status) ? "crit" : "med");
 /* A disk CDI is still filling: what a Provisioning VM is waiting for. */
-const vmFilling = v => (v.filling || []).map(f => `<div class="vm-filling"><span>${esc(f.phase === "ImportInProgress" ? "Downloading" : f.phase === "CloneInProgress" ? "Copying" : f.phase)} <b class="mono">${esc(f.claim)}</b></span>
+const VM_FILL_WORDS = { ImportInProgress: "Downloading", CloneInProgress: "Copying", ImportScheduled: "Waiting to start the download",
+  CloneScheduled: "Waiting to start the copy", Pending: "Waiting for its volume", WaitForFirstConsumer: "Waiting for the VM to be placed",
+  PendingPopulation: "Waiting for its volume", Failed: "Failed" };
+const vmWaited = s => s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.floor(s % 3600 / 60)} min` : s >= 60 ? `${Math.floor(s / 60)} min` : `${s} s`;
+const vmFilling = v => (v.filling || []).map(f => `<div class="vm-filling ${f.stuck ? "stuck" : ""}"><span>${esc(VM_FILL_WORDS[f.phase] || f.phase)} <b class="mono">${esc(f.claim)}</b>
+    ${f.seconds ? `<span class="dim xs">· ${esc(vmWaited(f.seconds))}</span>` : ""}</span>
   ${f.progress != null ? `<span class="mono">${f.progress.toFixed(1)}%</span>` : ""}
-  <div class="rollout-meter"><span style="width:${Math.max(2, f.progress || 0)}%"></span></div></div>`).join("");
+  <div class="rollout-meter"><span style="width:${Math.max(2, f.progress || 0)}%"></span></div>
+  ${f.why?.length ? `<div class="note ${f.stuck ? "warn" : ""} vm-why">${f.stuck ? "<b>Stuck.</b> " : ""}${f.why.map(w => esc(w)).join("<br>")}</div>`
+    : f.stuck ? '<div class="note warn vm-why"><b>Stuck</b>, and CDI says nothing about why. The events of its importer pod, on the Resources page, may.</div>' : ""}</div>`).join("");
 
 async function viewVMs() {
   if (platformLacks("kubevirt", "Virtual machines")) return;

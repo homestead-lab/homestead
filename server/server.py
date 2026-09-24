@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.108")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.109")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -80,6 +80,25 @@ def rate(key, value, now=None):
     return (value - prev[0]) / (now - prev[1])
 
 
+# Each background task says when it last did its work, and what went wrong
+# if it did not, so Settings › About can say whether Homestead is healthy
+# rather than only whether it answers.
+HEART = {}
+_heart_lock = threading.Lock()
+
+
+def beat(name, every, error=None, leader_only=False):
+    now = time.time()
+    with _heart_lock:
+        row = HEART.setdefault(name, {"every": every, "leader_only": leader_only, "last_ok": 0, "error": "", "error_at": 0})
+        row["seen"] = now
+        if error is None:
+            row["last_ok"] = now
+            row["error"] = ""
+        else:
+            row["error"], row["error_at"] = str(error)[:200], now
+
+
 def _sampler():
     while True:
         try:
@@ -96,8 +115,9 @@ def _sampler():
                 for k in HIST:
                     if len(HIST[k]) > HIST_MAX:
                         HIST[k] = HIST[k][-HIST_MAX:]
-        except Exception:
-            pass
+            beat("sampler", 30)
+        except Exception as error:
+            beat("sampler", 30, error)
         time.sleep(30)
 
 
@@ -397,7 +417,9 @@ def _hardware_loop():
         if LEADER.is_leader():
             try:
                 reconcile_hardware()
+                beat("hardware", 30, leader_only=True)
             except Exception as error:
+                beat("hardware", 30, error, leader_only=True)
                 print(f"hardware: {str(error)[:160]}", flush=True)
         time.sleep(30)
 
@@ -2877,7 +2899,9 @@ def _alerts_loop():
         if LEADER.is_leader():
             try:
                 push_alerts(ALERTS.observe(_alert_sources()))
+                beat("alerts", 20, leader_only=True)
             except Exception as error:
+                beat("alerts", 20, error, leader_only=True)
                 print(f"alerts: {str(error)[:160]}", flush=True)
         time.sleep(20)
 
@@ -2891,7 +2915,9 @@ def _history_loop():
             try:
                 HISTORY.record(cached("ov", 10, get_overview))
                 last = time.time()
+                beat("history", HISTORY.STEP, leader_only=True)
             except Exception as error:
+                beat("history", HISTORY.STEP, error, leader_only=True)
                 print(f"history: {str(error)[:160]}", flush=True)
         time.sleep(30)
 
@@ -2902,8 +2928,9 @@ def _moves_loop():
         if LEADER.is_leader():
             try:
                 MOVE_ENGINE.tick_all()
-            except Exception:
-                pass
+                beat("moves", MOVE_ENGINE.TICK_SECONDS, leader_only=True)
+            except Exception as error:
+                beat("moves", MOVE_ENGINE.TICK_SECONDS, error, leader_only=True)
         time.sleep(MOVE_ENGINE.TICK_SECONDS)
 
 
@@ -3098,6 +3125,129 @@ def _data_move_status(item):
 
 
 OPS.RESOLVERS["self-data-move"] = _data_move_status
+
+
+LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats",
+              "hardware": "Hardware detection", "moves": "Cluster moves"}
+
+
+def samba_state():
+    """The Samba server shares are served from: whether it runs, and where."""
+    dep = None
+    try:
+        dep = kget(f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments/samba")
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+    try:
+        shares = len(SHARES.list_shares())
+    except Exception:
+        shares = 0
+    if not dep:
+        return {"installed": False, "enabled": False, "shares": shares, "image": SAMBA_IMAGE}
+    status = dep.get("status") or {}
+    address = ""
+    try:
+        svc = kget(f"/api/v1/namespaces/{SMB_NAMESPACE}/services/samba")
+        address = next((i.get("ip", "") for i in ((svc.get("status") or {}).get("loadBalancer") or {}).get("ingress") or []), "") \
+            or ((svc.get("metadata") or {}).get("annotations") or {}).get("kube-vip.io/loadbalancerIPs", "")
+    except Exception:
+        pass
+    containers = ((dep.get("spec") or {}).get("template") or {}).get("spec", {}).get("containers") or [{}]
+    desired = int((dep.get("spec") or {}).get("replicas", 1) or 0)
+    return {"installed": True, "enabled": desired > 0, "desired": desired,
+            "ready": int(status.get("readyReplicas", 0) or 0), "address": address, "shares": shares,
+            "image": containers[0].get("image", "")}
+
+
+def set_samba(enabled):
+    """Samba on or off. Off stops serving; every share, its volume and its
+    password are kept for when it is switched back on. On installs it first
+    if the cluster has none, with the shares already defined."""
+    state = samba_state()
+    if not enabled:
+        if state["installed"]:
+            ksend("PATCH", f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments/samba", {"spec": {"replicas": 0}},
+                  ctype="application/merge-patch+json")
+        _cache.pop("wl", None)
+        return {"ok": True, "detail": "Samba is stopping; the shares, their volumes and passwords are kept"}
+    if not state["installed"]:
+        install_samba()
+        rows, credentials, *_ = SHARES._state()
+        if rows:
+            SHARES.apply_samba(rows, credentials)
+        _cache.pop("wl", None)
+        return {"ok": True, "detail": "Samba is being installed" + (f" with {len(rows)} share{'s' if len(rows) != 1 else ''}" if rows else "")}
+    ksend("PATCH", f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments/samba", {"spec": {"replicas": 1}},
+          ctype="application/merge-patch+json")
+    _cache.pop("wl", None)
+    return {"ok": True, "detail": "Samba is starting"}
+
+
+def self_health():
+    """Homestead's own health: the API it depends on, its copies and leader,
+    each background task, the node probe, Samba and its permissions."""
+    started = time.time()
+    try:
+        kget("/version")
+        api = {"ok": True, "ms": int((time.time() - started) * 1000)}
+    except Exception as error:
+        api = {"ok": False, "ms": int((time.time() - started) * 1000), "error": str(error)[:160]}
+    leading = LEADER.is_leader()
+    now = time.time()
+    loops = []
+    with _heart_lock:
+        rows = {k: dict(v) for k, v in HEART.items()}
+    for name, word in LOOP_WORDS.items():
+        row = rows.get(name)
+        if not row:
+            state = "standby" if name != "sampler" and not leading else "starting"
+        elif row["leader_only"] and not leading:
+            state = "standby"
+        elif row["error"] and row["error_at"] >= row["last_ok"]:
+            state = "failing"
+        elif now - row["last_ok"] > max(3 * row["every"], 120):
+            state = "late"
+        else:
+            state = "ok"
+        loops.append({"name": name, "label": word, "state": state,
+                      "last_ok": int(row["last_ok"]) if row and row["last_ok"] else 0,
+                      "error": (row or {}).get("error", ""), "every": (row or {}).get("every", 0)})
+    try:
+        replicas = homestead_replicas()
+    except Exception as error:
+        replicas = {"error": str(error)[:160]}
+    probe = dict(PROBE.status())
+    try:
+        ds = kget(f"/apis/apps/v1/namespaces/{DEFAULT_NS}/daemonsets/{NAMES.NODEPROBE}")
+        st = ds.get("status") or {}
+        probe.update(installed=True, desired=int(st.get("desiredNumberScheduled", 0) or 0),
+                     ready=int(st.get("numberReady", 0) or 0))
+    except Exception:
+        probe.update(installed=False, desired=0, ready=0)
+    try:
+        temps = node_temps()
+        probe["reporting"] = len(temps)
+        probe["smart"] = sum(1 for t in temps.values() if (t.get("smart_helper") or {}).get("available"))
+    except Exception:
+        probe["reporting"] = probe["smart"] = 0
+    try:
+        samba = samba_state()
+    except Exception as error:
+        samba = {"error": str(error)[:160]}
+    try:
+        backups = OBJECTS.status()
+    except Exception:
+        backups = {}
+    mqtt = {}
+    try:
+        mqtt = dict(MQTT.STATUS)
+    except Exception:
+        pass
+    return {"version": HOMESTEAD_VERSION, "api": api, "leader": leading, "identity": LEADER.IDENTITY,
+            "replicas": replicas, "loops": loops, "probe": probe, "samba": samba,
+            "permissions": dict(SELF.LAST), "backups": {k: backups.get(k) for k in ("deployed", "ready", "endpoint")},
+            "mqtt": {k: mqtt.get(k) for k in ("state", "detail", "error", "last_publish")}}
 
 
 def homestead_replicas():
@@ -3432,7 +3582,7 @@ ADMIN_ROUTES = {
     "/api/images/cleanup",
     "/api/volumes/delete", "/api/volumes/chown",
     # A class change stops workloads and swaps their volume underneath them.
-    "/api/volumes/reclass/start", "/api/volumes/old-copies/remove",
+    "/api/volumes/reclass/start", "/api/volumes/old-copies/remove", "/api/self/samba",
     "/api/files/list", "/api/files/read", "/api/files/write", "/api/files/close",
     "/api/node/smart/test",
     # Installing the probe stands a privileged container on every node.
@@ -3924,6 +4074,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, selectable_storage_classes(classes))
             if p == "/api/storage/classes":
                 return self._send(200, storage_class_inventory())
+            if p == "/api/self/health":
+                return self._send(200, self_health())
             if p == "/api/volumes/old-copies":
                 return self._send(200, RECLASS.old_copies())
             if p == "/api/storage/v2":
@@ -4529,6 +4681,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, create_volume(b))
             if p == "/api/volumes/edit":
                 return self._send(200, edit_volume(b))
+            if p == "/api/self/samba":
+                return self._send(200, set_samba(bool(b.get("enabled"))))
             if p == "/api/volumes/reclass/plan":
                 return self._send(200, RECLASS.plan(b.get("namespace") or DEFAULT_NS, b.get("claim", ""), b.get("target", "")))
             if p == "/api/volumes/reclass/start":
@@ -4757,7 +4911,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.108 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.109 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()
