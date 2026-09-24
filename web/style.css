@@ -1388,7 +1388,8 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .settings-grid[data-tab="health"]>section[data-tab="health"],.settings-grid[data-tab="updates"]>section[data-tab="updates"],
 .settings-grid[data-tab="hardware"]>section[data-tab="hardware"],.settings-grid[data-tab="access"]>section[data-tab="access"],
 .settings-grid[data-tab="apps"]>section[data-tab="apps"],.settings-grid[data-tab="device"]>section[data-tab="device"],
-.settings-grid[data-tab="about"]>section[data-tab="about"],.settings-grid[data-tab="mqtt"]>section[data-tab="mqtt"]{display:block}
+.settings-grid[data-tab="about"]>section[data-tab="about"],.settings-grid[data-tab="mqtt"]>section[data-tab="mqtt"],
+.settings-grid[data-tab="cluster"]>section[data-tab="cluster"]{display:block}
 /* A threshold is one row: its name, then warning and critical side by side. */
 .threshold-card{padding:10px 12px;gap:12px}
 .threshold-values{gap:8px}
@@ -1641,3 +1642,8 @@ div.ipam-line.dim{display:block}
 .vm-filling{display:grid;grid-template-columns:1fr auto;gap:4px 10px;margin:10px 0 2px;font-size:12px}.vm-filling .rollout-meter{grid-column:1/-1;margin:0}
 .ve-table td{vertical-align:top}.ve-table select,.ve-table input{min-width:0}.ve-table .vd_bus,.ve-table .vn_model{min-width:92px}
 .vd-add{margin-top:10px;padding:12px}.vd-add .f2{margin-top:8px}
+.lh-node{margin-top:10px;display:grid;gap:4px}.lh-largest{gap:6px;flex-wrap:wrap;margin-top:4px}
+.lh-nodes{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:4px 18px;margin-top:6px}
+.lh-v2{margin-top:16px;padding-top:14px;border-top:1px solid var(--line);display:grid;gap:6px}.lh-v2-nodes{display:flex;gap:6px;flex-wrap:wrap}
+.badtext{color:var(--crit)}
+.lh-tight{display:inline-block;margin-top:8px;cursor:pointer}

@@ -70,10 +70,10 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.104`, the workflow publishes:
+For a release such as `v2.8.105`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.104
+ghcr.io/wjcloudy/homestead:2.8.105
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -84,8 +84,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.104
-git push origin v2.8.104
+git tag v2.8.105
+git push origin v2.8.105
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -630,7 +630,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.104/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.105/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -641,7 +641,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.104 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.105 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -871,6 +871,24 @@ textarea, which saves through exactly the same path.
 
 `server/homestead_files.py` holds the server side, reusing the exec WebSocket the
 console already speaks.
+
+## Longhorn allocation
+
+Longhorn books a replica's full size on a disk when it places it, however
+little the volume holds, and a disk takes no new replica once that allocation
+reaches its size times the over-provisioning percentage - or once less than
+the minimal-available share of it is physically free. Past that, new volumes
+come up a copy short, rebuilds wait and expansions are refused; nothing
+already placed moves. **Volumes** shows each node's allocation against that
+limit, the room left for a replica, and the largest new volume that still
+fits with one, two or three copies - each copy needs a different node, so the
+tightest node decides. The dashboard names a node past 80%, and it raises a
+notification like any other health problem.
+
+**Settings → Cluster** sets over-provisioning and minimal free space, with a
+live preview of what each node's limit becomes, and switches Longhorn's V2
+(SPDK) data engine on or off - on Harvester through Harvester's own setting,
+which prepares each host - showing which nodes are ready for it.
 
 ## Storage classes
 

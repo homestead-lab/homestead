@@ -18,14 +18,17 @@ const nodeHardwareIds = n => (STATE.data.hardwareFeatures || [])
 /* Dashboard, Nodes, node detail modal */
 
 async function viewDash() {
-  const [o, hist, st] = await Promise.all([
+  const [o, hist, st, cap] = await Promise.all([
     api("/api/overview"),
     api("/api/history").catch(() => ({})),
     api("/api/storage").catch(() => null),
+    STATE.platform?.longhorn === false ? null : api("/api/longhorn/capacity").catch(() => null),
     loadHardwareFeatures(),
     loadHealthSettings(),
   ]);
-  STATE.data.ov = o; STATE.data.stor = st;
+  STATE.data.ov = o; STATE.data.stor = st; STATE.data.lhcap = cap || STATE.data.lhcap;
+  // A node near its allocation limit takes no new replicas: said before it bites.
+  const tight = (cap?.nodes || []).filter(n => n.level !== "ok");
   pwaBadge((o.health_issues || []).length);
   const hp = $("#healthPill");
   const healthState = o.health_state || o.health;
@@ -102,7 +105,9 @@ async function viewDash() {
       <div class="drow"><div class="dl">Provisioned</div><div class="dv mono nowrap">${sizeText(st.provisioned_gb)}</div></div>
       <div style="margin-top:10px">${meter(st.used_pct)}
         <div class="csub" style="margin-top:6px">${st.used_pct}% of raw capacity used
-          ${st.degraded || st.faulted ? `· <span class="tag ${st.faulted ? "bad" : "warn"}">${st.degraded + st.faulted} unhealthy</span>` : `· <span class="tag ok">all healthy</span>`}</div></div>
+          ${st.degraded || st.faulted ? `· <span class="tag ${st.faulted ? "bad" : "warn"}">${st.degraded + st.faulted} unhealthy</span>` : `· <span class="tag ok">all healthy</span>`}</div>
+        ${tight.length ? `<a class="tag ${tight.some(n => n.level === "crit") ? "bad" : "warn"} lh-tight" onclick="go('storage')"
+          data-tip="${esc(tight.map(n => `${n.name}: ${n.allocated_gb} of ${n.limit_gb} GB allocated, room for a ${n.room_gb} GB replica`).join("; "))}">${esc(tight.map(n => n.name.replace("harvester-", "")).join(", "))} nearly full · a new ${cap.nodes.length > 1 ? "2-copy" : ""} volume fits ${esc(sizeText(cap.largest[Math.min(2, cap.nodes.length)]))}</a>` : ""}</div>
       </div></div>`
       : '<div class="empty">storage data unavailable</div>'}
     </div>

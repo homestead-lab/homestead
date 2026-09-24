@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.104")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.105")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2663,6 +2663,7 @@ import homestead_history as HISTORY
 import homestead_platform as PLATFORM
 import homestead_resources as RESOURCES
 import homestead_vms as VMS
+import homestead_lhcapacity as LHCAP
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
@@ -2725,6 +2726,7 @@ def ktable(path, timeout=20):
 RESOURCES.bind(kget, ksend, ktable)
 VMS.bind(kget, ksend, RESOURCES.events_for)
 VMS.platform, VMS.images = PLATFORM.detect, IMP.list_vm_images
+LHCAP.bind(kget, ksend, v2_engine_status)
 OPS.RESOLVERS["helm"] = HELM.job_status
 NSMOD.bind(kget, ksend, DEFAULT_NS, _own_namespace())
 ALERTS.bind(DATA_DIR)
@@ -2748,6 +2750,7 @@ def _alert_sources():
     take("health", lambda: ALERTS.health_facts(cached("ov", 10, get_overview)))
     take("jobs", lambda: ALERTS.job_facts(OPS.list_operations()))
     take("joins", lambda: ALERTS.join_facts(kget("/api/v1/nodes").get("items", [])))
+    take("capacity", lambda: LHCAP.alert_facts(cached("lhcap", 15, LHCAP.status)))
     take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
         ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", ""))))
     if PUSH.wanted_by(["updates"]) and time.time() - _last_update_scan[0] > UPDATE_SCAN_EVERY:
@@ -3390,6 +3393,7 @@ def needed_role(path, method):
     # A chart can make anything anywhere in the cluster, and so can raw YAML;
     # a secret's values are for admins only.
     if path in ("/api/helm/install", "/api/helm/upgrade", "/api/helm/uninstall", "/api/resources/save", "/api/vm/delete",
+                "/api/longhorn/settings",
                 "/api/resources/delete", "/api/resources/create", "/api/resources/reveal"):
         return "admin"
     if path in ("/api/console", "/api/vm/console"):
@@ -3838,6 +3842,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, storage_class_inventory())
             if p == "/api/storage/v2":
                 return self._send(200, v2_engine_status())
+            if p == "/api/longhorn/capacity":
+                return self._send(200, cached("lhcap", 15, LHCAP.status))
             if p == "/api/pvcs":
                 ns = (q.get("ns") or [DEFAULT_NS])[0]
                 items = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims")["items"]
@@ -4383,6 +4389,9 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/vm/delete":
                 _cache.pop("vms", None)
                 return self._send(200, VMS.delete(b.get("ns", DEFAULT_NS), b.get("name", ""), bool(b.get("disks"))))
+            if p == "/api/longhorn/settings":
+                _cache.pop("lhcap", None)
+                return self._send(200, LHCAP.save(b))
             if p == "/api/vm/create":
                 _cache.pop("vms", None)
                 return self._send(200, IMP.create_vm(b, PLATFORM.detect(), vm_default_class()))
@@ -4627,7 +4636,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.104 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.105 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

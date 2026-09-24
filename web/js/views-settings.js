@@ -17,7 +17,7 @@ function thresholdEditor(id, label, unit, help, pair) {
 }
 
 /* One topic at a time: the page was every setting in one long column. */
-const SETTINGS_TABS = [["health", "Health"], ["updates", "Updates"], ["hardware", "Hardware"], ["access", "Access"],
+const SETTINGS_TABS = [["health", "Health"], ["updates", "Updates"], ["cluster", "Cluster"], ["hardware", "Hardware"], ["access", "Access"],
   ["apps", "Apps"], ["mqtt", "MQTT"], ["device", "This device"], ["about", "About"]];
 
 function settingsTab(pick) {
@@ -145,6 +145,7 @@ async function viewSettings() {
       ${ipamUnifiCard()}
 
       <section class="card flat settings-wide" data-tab="mqtt" id="mqttCard"></section>
+      <section class="card flat settings-wide" data-tab="cluster" id="lhSettingsCard"><div class="empty small"><span class="spin2"></span>reading Longhorn</div></section>
 
       <section class="card flat settings-wide" data-tab="apps">
         <div class="settings-card-head"><div><div class="ctitle">App Store catalogue</div>
@@ -191,6 +192,7 @@ async function viewSettings() {
   namespacesPaint();
   replicasPaint();
   mqttPaint();
+  lhSettingsPaint();
   // The UniFi card needs the IPAM record, which Settings does not otherwise load.
   api("/api/ipam").then(data => { STATE.data.ipam = data; const host = $("#unifiCard"); if (host) host.outerHTML = ipamUnifiCard(); }).catch(() => {});
 }

@@ -156,8 +156,10 @@ const volumeReason = v => (v.health_reason && v.state === "attached"
 
 async function viewStorage() {
   if (platformLacks("longhorn", "Volumes")) return;
-  const [v, st, classes, v2] = await Promise.all([api("/api/volumes"), api("/api/storage").catch(() => null),
-    api("/api/storage/classes").catch(() => []), api("/api/storage/v2").catch(() => null)]);
+  const [v, st, classes, v2, cap] = await Promise.all([api("/api/volumes"), api("/api/storage").catch(() => null),
+    api("/api/storage/classes").catch(() => []), api("/api/storage/v2").catch(() => null),
+    api("/api/longhorn/capacity").catch(() => null)]);
+  STATE.data.lhcap = cap || STATE.data.lhcap;
   STATE.data.storageClasses = classes;
   STATE.data.v2 = v2;
   STATE.data.vols = v;
@@ -182,10 +184,7 @@ async function viewStorage() {
         ${st.faulted ? `<span class="tag bad">${st.faulted} faulted</span>` : ""}
         ${(st.detached ?? st.unknown) ? `<span class="tag">${st.detached ?? st.unknown} detached</span>` : ""}</div>
       <div class="csub" style="margin-top:10px">${st.attached} attached of ${st.volumes}</div></div>
-    <div class="card flat statwide"><div class="ctitle">Per-node disks</div><div class="csub">free of total</div>
-      ${(st.disks || []).map(d => `<div class="drow"><div class="dl">${esc(d.node.replace("harvester-", ""))}</div>
-        <div class="dv mono nowrap" title="${esc(sizeText(d.avail_gb))} free of ${esc(sizeText(d.cap_gb))}">${esc(sizePair(d.avail_gb, d.cap_gb))}</div></div>`).join("")
-        || '<div class="csub" style="margin-top:8px">Longhorn has not reported any node disks yet.</div>'}</div>
+    ${lhCapacityCard(cap, st)}
   </div>` : ""}
   <div class="card flat pad0"><div class="tblwrap voltable"><table data-sort="volumes" class="tbl dense"><thead><tr>
    <th>Volume</th><th>Attached to</th><th>Health</th><th>Mode</th><th>Usage</th><th data-nosort>Last used</th><th></th>
@@ -913,3 +912,98 @@ async function viewEvents() {
     <td class="dim xs mono" title="${esc((x.time || "").replace("T", " ").replace("Z", ""))}">${esc(fmtAgo(ageSecs(x.time)))}</td></tr>`).join("")
     || `<tr><td colspan=4 class="empty">no events</td></tr>`}</tbody></table></div></div>`);
 }
+
+/* ---------------- Longhorn allocation ----------------
+   Longhorn books each replica's full size on a disk when it places it, and a
+   disk takes no new replica past its size x over-provisioning. New volumes
+   then come up a copy short and rebuilds wait - so each node's allocation is
+   shown against that limit, with the biggest volume that still fits. */
+const lhLevel = level => level === "crit" ? "b" : level === "warn" ? "w" : "";
+const lhShort = name => name.replace("harvester-", "");
+
+function lhNodeRows(cap) {
+  return (cap.nodes || []).map(n => `<div class="lh-node">
+    <div class="between"><b>${esc(lhShort(n.name))}</b>
+      <span class="mono xs ${n.level === "ok" ? "dim" : n.level === "warn" ? "warntext" : "badtext"}">${esc(sizePair(n.allocated_gb, n.limit_gb))} allocated</span></div>
+    <div class="meter ${lhLevel(n.level)}" data-tip="${esc(`${n.pct}% of what Longhorn may place here (${n.size_gb} GB × ${cap.over_provisioning}%)`)}"><span style="width:${Math.min(100, n.pct)}%"></span></div>
+    <div class="dim xs">${n.blocked ? `<span class="badtext">${esc(n.blocked)}</span>` : `room for a ${esc(sizeText(n.room_gb))} replica`} · ${esc(sizeText(n.used_gb))} actually used</div></div>`).join("");
+}
+
+function lhLargest(cap) {
+  const count = (cap.nodes || []).length;
+  return [1, 2, 3].filter(c => c <= count).map(c => `<span class="tag ${cap.largest[c] < 10 ? "bad" : cap.largest[c] < 50 ? "warn" : ""}"
+    data-tip="The biggest new volume with ${c} cop${c === 1 ? "y" : "ies"} that Longhorn can still place, each copy on a different node">${c} cop${c === 1 ? "y" : "ies"} · ${esc(sizeText(cap.largest[c]))}</span>`).join("");
+}
+
+/* The Volumes page's per-node card. */
+function lhCapacityCard(cap, st) {
+  if (!cap) return `<div class="card flat statwide"><div class="ctitle">Per-node disks</div><div class="csub">free of total</div>
+      ${(st?.disks || []).map(d => `<div class="drow"><div class="dl">${esc(lhShort(d.node))}</div>
+        <div class="dv mono nowrap">${esc(sizePair(d.avail_gb, d.cap_gb))}</div></div>`).join("") || '<div class="csub" style="margin-top:8px">Longhorn has not reported any node disks yet.</div>'}</div>`;
+  return `<div class="card flat statwide lh-card"><div class="between"><div class="ctitle">Allocated per node</div>
+      <a class="dim xs" onclick="go('settings');settingsTab('cluster')" data-tip="Over-provisioning is ${cap.over_provisioning}%">Longhorn settings</a></div>
+    ${lhNodeRows(cap) || '<div class="csub" style="margin-top:8px">Longhorn has not reported any node disks yet.</div>'}
+    <div class="dim xs" style="margin-top:8px">Largest new volume</div><div class="row lh-largest">${lhLargest(cap)}</div></div>`;
+}
+window.lhCapacityCard = lhCapacityCard;
+
+/* Settings > Cluster: over-provisioning, minimal free space, the V2 engine. */
+async function lhSettingsPaint() {
+  const host = $("#lhSettingsCard");
+  if (!host) return;
+  if (STATE.platform && STATE.platform.longhorn === false) {
+    host.innerHTML = `<div class="ctitle">Longhorn storage</div><div class="empty small">Longhorn is not installed on this cluster.</div>`;
+    return;
+  }
+  let cap;
+  try { cap = await api("/api/longhorn/capacity"); }
+  catch (e) { host.innerHTML = `<div class="ctitle">Longhorn storage</div><div class="empty small">${esc(e.message)}</div>`; return; }
+  STATE.data.lhcap = cap;
+  const admin = can("admin"), v2 = cap.v2 || {};
+  host.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">Longhorn storage</div>
+      <div class="csub">How much Longhorn may promise on each disk, and its V2 data engine</div></div>
+      ${admin ? '<button class="btn pri" onclick="lhSettingsSave()">Save</button>' : '<span class="pill neutral">admin managed</span>'}</div>
+    <div class="f2">
+      <div class="f"><label>Over-provisioning ${tip("Longhorn books a volume's full size on a disk when it places a replica, however little it holds. At 100% a disk can be promised its own size; at 200%, twice that, betting volumes never fill up. If they do, the disk runs out and its replicas fail.")}</label>
+        <div class="row" style="flex-wrap:nowrap"><input id="lh_over" type="number" min="100" max="1000" step="10" value="${cap.over_provisioning}" ${admin ? "" : "disabled"} oninput="lhPreview()"><span class="dim">%</span></div></div>
+      <div class="f"><label>Minimal free space ${tip("A disk with less than this share physically free takes no new replica, whatever is allocated. Longhorn's default is 25%.")}</label>
+        <div class="row" style="flex-wrap:nowrap"><input id="lh_min" type="number" min="0" max="100" value="${cap.minimal_available}" ${admin ? "" : "disabled"}><span class="dim">%</span></div></div></div>
+    <div id="lh_nodes" class="lh-nodes">${lhNodeRows(cap)}</div>
+    <div class="dim xs" style="margin-top:10px">Largest new volume</div><div class="row lh-largest" id="lh_largest">${lhLargest(cap)}</div>
+    <div class="note" style="margin-top:12px">Past a node's limit, new volumes come up a copy short, replica rebuilds wait and expansions are refused;
+      nothing already placed is moved. What fills a disk for real is data written — ${esc(sizeText((cap.nodes || []).reduce((s, n) => s + n.used_gb, 0)))} across all nodes now.</div>
+    <div class="lh-v2">
+      <label class="switch"><input type="checkbox" id="lh_v2" ${v2.enabled ? "checked" : ""} ${admin ? "" : "disabled"}> <b>V2 data engine</b> (SPDK)</label>
+      <div class="dim xs">Faster volumes for a price: each host needs a disk given to Longhorn as a block device and 2 GiB of hugepages, and V2 volumes are a separate storage class.
+        ${v2.harvester_setting !== null && v2.harvester_setting !== undefined ? "On Harvester this switches Harvester's own setting, which sets up hugepages and the kernel modules on each host." : ""}
+        It cannot be switched off while V2 volumes exist.</div>
+      ${(v2.nodes || []).length ? `<div class="lh-v2-nodes">${v2.nodes.map(n => `<span class="tag ${n.ready ? "ok" : ""}" ${n.missing.length ? `data-tip="Needs ${esc(n.missing.join(" and "))}"` : ""}>${esc(lhShort(n.name))} · ${n.ready ? "ready" : "not ready"}</span>`).join("")}</div>` : ""}</div>`;
+}
+window.lhSettingsPaint = lhSettingsPaint;
+
+/* What the limits become at the over-provisioning being typed. */
+window.lhPreview = () => {
+  const cap = STATE.data.lhcap, over = +$("#lh_over").value;
+  if (!cap || !(over >= 100)) return;
+  const nodes = cap.nodes.map(n => {
+    const limit = Math.round(n.size_gb * over) / 100, pct = limit ? Math.round(n.allocated_gb / limit * 1000) / 10 : 0;
+    const room = n.blocked ? 0 : Math.max(0, Math.round((Math.max(...n.disks.filter(d => !d.blocked).map(d => d.size_gb * over / 100 - d.allocated_gb), 0)) * 10) / 10);
+    return { ...n, limit_gb: limit, pct, room_gb: room, level: n.blocked || pct >= cap.crit_pct ? "crit" : pct >= cap.warn_pct ? "warn" : "ok" };
+  });
+  const rooms = nodes.map(n => n.room_gb).sort((a, b) => b - a);
+  const preview = { ...cap, over_provisioning: over, nodes, largest: { 1: rooms[0] || 0, 2: rooms[1] || 0, 3: rooms[2] || 0 } };
+  $("#lh_nodes").innerHTML = lhNodeRows(preview);
+  $("#lh_largest").innerHTML = lhLargest(preview);
+};
+
+window.lhSettingsSave = async () => {
+  const cap = STATE.data.lhcap || {};
+  const body = { over_provisioning: +$("#lh_over").value, minimal_available: +$("#lh_min").value, v2: $("#lh_v2").checked };
+  if (body.v2 !== !!cap.v2?.enabled && !confirm(body.v2
+    ? "Enable Longhorn's V2 data engine? Longhorn starts V2 instance managers on every node, which reserve CPU and hugepages even before any V2 volume exists."
+    : "Disable the V2 data engine? Longhorn refuses while V2 volumes exist.")) return;
+  try {
+    const r = await api("/api/longhorn/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    toast(r.detail, "ok"); lhSettingsPaint();
+  } catch (e) { toast(e.message, "bad"); }
+};
