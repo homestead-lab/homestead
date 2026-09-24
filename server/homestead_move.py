@@ -463,7 +463,15 @@ def readiness(name):
     except Exception as error:
         out["target"] = {"configured": False, "error": str(error)[:200]}
     release = _release(out["version"].get("version") or "")
-    out["update_first"] = bool(release and release < RUSTFS_SINCE and not out["target"].get("configured"))
+    out["update_first"] = bool(release and release < RUSTFS_SINCE and not out["target"].get("configured")
+                               and not out["storage"].get("ready"))
+    # Addresses free over there, for the store to be given one this side can reach.
+    try:
+        there = remote(name, "/api/network")
+        own = {row.get("ip"): row.get("label", "") for row in there.get("registered_vips") or []}
+        out["free_vips"] = [{"ip": ip, "label": own.get(ip, "")} for ip in (there.get("available_vips") or [])[:24]]
+    except Exception:
+        out["free_vips"] = []
     out["ready"] = bool(out["target"].get("configured") and out["target"].get("reachable_off_cluster")
                         and out["version"].get("compatible") is not False)
     return out
@@ -485,7 +493,13 @@ def setup_storage(name, size_gb=100, lb_ip=""):
     """Put backup storage on the far cluster, as its own Data protection page
     would: MinIO on a Longhorn volume, with Longhorn's backups pointed at it.
     Done as the stored account, which a move already needs to be admin."""
-    old = _needs_update(name)
+    # A store already running there only needs its address; an older
+    # Homestead redeploys it as it is. Only a new one needs the update.
+    try:
+        running = bool((remote(name, "/api/objectstore") or {}).get("ready"))
+    except Exception:
+        running = False
+    old = "" if running else _needs_update(name)
     if old:
         raise ValueError(f"{name} runs Homestead {old}, which sets up backup storage with MinIO - and MinIO's "
                          "images can no longer be downloaded. Update it to 2.8.111 or later first, then set it up: "

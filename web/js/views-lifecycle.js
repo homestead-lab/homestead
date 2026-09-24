@@ -1308,6 +1308,7 @@ window.clusterReady = async name => {
       body: JSON.stringify({ name }) });
   } catch (e) { host.innerHTML = `<div class="dim xs">${esc(e.message)}</div>`; return; }
   const target = r.target || {}, store = r.storage || {};
+  (window.__clusterReady ||= {})[name] = r;
   const step = (ok, text, action = "") => `<div class="clstep ${ok ? "done" : "todo"}"><span>${ok ? "✓" : "•"}</span><div>${text}${action}</div></div>`;
   host.innerHTML = step(true, "Connected")
     + (r.update_first
@@ -1336,17 +1337,28 @@ window.clusterReady = async name => {
    Homestead already holds for it - what its own Data protection page does. */
 window.clusterStorage = (name, addressOnly = false, after = null) => {
   window.__clusterStorageAfter = after;
+  window.__clusterStorageAddressOnly = addressOnly;
+  const free = (window.__clusterReady?.[name]?.free_vips) || [];
   childModal(`Backup storage on ${name}`, `
-    <p class="small">Homestead puts MinIO on a Longhorn volume on <b>${esc(name)}</b> and points that cluster's Longhorn backups at it.
-      A move backs each volume up there, then restores it here. It shares ${esc(name)}'s disks, so it is for moving, not your only copy of anything.</p>
+    <p class="small">${addressOnly
+      ? `The backup storage on <b>${esc(name)}</b> runs, but only inside that cluster. Give it an address on your LAN - one nothing else uses - and this cluster reads the backups from there.`
+      : `Homestead puts an S3 store (RustFS) on a Longhorn volume on <b>${esc(name)}</b> and points that cluster's Longhorn backups at it.
+        A move backs each volume up there, then restores it here. It shares ${esc(name)}'s disks, so it is for moving, not your only copy of anything.`}</p>
     <div class="f2">
       ${addressOnly ? "" : '<div class="f"><label>Size (GB)</label><input id="cs_size" type="number" min="5" value="100"></div>'}
-      <div class="f"><label>LAN address ${tip("This cluster reads the backups from here, so it needs an address on your network. Empty lets the load balancer choose one.")}</label>
-        <input id="cs_ip" class="mono" placeholder="${addressOnly ? "192.0.2.243" : "automatic"}"></div></div>
+      <div class="f"><label>LAN address ${tip(`An address on your network that nothing else uses, outside your router's DHCP range. The list is what ${name}'s Homestead has free: its own VIPs and IP pools.`)}</label>
+        ${free.length ? `<select id="cs_pick" onchange="$('#cs_ip').hidden = this.value !== '__typed'; if (this.value !== '__typed') $('#cs_ip').value = this.value">
+            ${free.map((v, i) => `<option value="${esc(v.ip)}" ${i === 0 ? "selected" : ""}>${esc(v.ip)}${v.label ? ` · ${esc(v.label)}` : ""}</option>`).join("")}
+            <option value="__typed">Type an address…</option></select>
+          <input id="cs_ip" class="mono" value="${esc(free[0].ip)}" hidden style="margin-top:6px">`
+          : `<input id="cs_ip" class="mono" placeholder="e.g. 192.0.2.243">
+            <div class="dim xs">${esc(name)} has no free address listed; type one nothing else on your LAN uses.</div>`}</div></div>
     <div class="row" style="margin-top:14px"><button class="btn pri" id="cs_go" onclick="clusterStorageGo('${esc(name)}')">${addressOnly ? "Set the address" : "Set it up"}</button>
       <button class="btn" onclick="modalBack()">Cancel</button></div>`);
 };
 window.clusterStorageGo = async name => {
+  if (window.__clusterStorageAddressOnly && !$("#cs_ip").value.trim())
+    return toast("choose the address this cluster should reach it at", "bad");
   const button = $("#cs_go");
   if (button) { button.disabled = true; button.textContent = "Working…"; }
   try {

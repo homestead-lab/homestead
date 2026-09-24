@@ -44,8 +44,8 @@ class MoveReadinessTests(unittest.TestCase):
             return {"endpoint": "http://192.0.2.244:9000", "longhorn": {"secret": "homestead-backup-credentials"}}
         with mock.patch.object(move, "remote", remote),                 mock.patch.object(move, "check_cluster", lambda name: {"version": "2.8.111"}):
             r = move.setup_storage("oldcluster", 50, "192.0.2.244")
-        self.assertEqual(("oldcluster", "/api/objectstore/deploy",
-                          {"size_gb": 50, "lb_ip": "192.0.2.244", "point_longhorn": True}), calls[0])
+        self.assertIn(("oldcluster", "/api/objectstore/deploy",
+                       {"size_gb": 50, "lb_ip": "192.0.2.244", "point_longhorn": True}), calls)
         # An older Homestead over there never set its target; this side does.
         self.assertEqual(("oldcluster", "/api/lh/target", {"url": "s3://homestead-backups@us-east-1/",
                           "secret": "homestead-backup-credentials", "poll": "5m"}), calls[-1])
@@ -56,7 +56,20 @@ class MoveReadinessTests(unittest.TestCase):
         with mock.patch.object(move, "remote", lambda *a, **k: calls.append(a)),                 mock.patch.object(move, "check_cluster", lambda name: {"version": "2.8.100"}):
             with self.assertRaisesRegex(ValueError, "MinIO's images can no longer be downloaded"):
                 move.setup_storage("oldcluster")
-        self.assertEqual([], calls, "nothing is deployed that could not start")
+        self.assertFalse([c for c in calls if c[1] == "/api/objectstore/deploy"], "nothing is deployed that could not start")
+
+    def test_a_running_store_on_an_older_homestead_can_still_be_given_its_address(self):
+        calls = []
+
+        def remote(name, path, body=None):
+            calls.append((name, path, body))
+            if path == "/api/objectstore":
+                return {"ready": True, "backup_url": "s3://homestead-backups@us-east-1/"}
+            return {"endpoint": "http://192.0.2.243:9000"}
+        with mock.patch.object(move, "remote", remote),                 mock.patch.object(move, "check_cluster", lambda name: {"version": "2.8.100"}):
+            move.setup_storage("oldcluster", 100, "192.0.2.243")
+        self.assertIn(("oldcluster", "/api/objectstore/deploy",
+                       {"size_gb": 100, "lb_ip": "192.0.2.243", "point_longhorn": True}), calls)
 
     def test_the_move_review_offers_the_fix(self):
         def remote(name, path, body=None):
