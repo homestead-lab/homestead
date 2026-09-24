@@ -20,9 +20,25 @@ window.fetch = (url, opts = {}) => {
 window.AUTH_STATE = {};
 async function authState() {
   try {
-    window.AUTH_STATE = await (await _fetch("/api/auth/state")).json();
+    const r = await _fetch("/api/auth/state");
+    const body = await r.json();
+    // The cluster did not answer: that is not "no accounts yet", and must
+    // never be offered as first-time setup.
+    if (!r.ok) return { unavailable: true, error: body.error || r.statusText };
+    window.AUTH_STATE = body;
     return window.AUTH_STATE;
-  } catch (e) { return { setup: false, user: null }; }
+  } catch (e) { return { unavailable: true, error: e.message }; }
+}
+
+/* Homestead is up but its cluster is not answering: say so, and keep trying. */
+function clusterUnavailable(error) {
+  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.107" alt="">
+    <h2>Homestead</h2><p class="sub">Waiting for the cluster</p>
+    <div class="gateerr">${esc(error || "The Kubernetes API did not answer.")}</div>
+    <p class="dim small">This page tries again every few seconds.</p>
+    <button class="btn wide" onclick="location.reload()">Try now</button>`);
+  clearTimeout(window.__authRetry);
+  window.__authRetry = setTimeout(boot, 5000);
 }
 
 window.sessionSummary = (state = {}) => {
@@ -55,7 +71,7 @@ function ungate() { $("#gate").classList.add("hidden"); }
 
 function loginForm(err, setup) {
   gate(`
-    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.106" alt="">
+    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.107" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}
@@ -230,12 +246,14 @@ window.applyRole = paintWho;
 $("#whoami").onclick = () => go("settings");
 
 /* boot: decide between setup, sign-in, and running the app */
-(async () => {
+async function boot() {
   const st = await authState();
+  if (st.unavailable) return clusterUnavailable(st.error);
   if (st.setup) return loginForm(null, true);
   if (!st.user) return loginForm();
   ME = st.user; ROLE = st.role || "admin"; ungate(); afterAuth();
-})();
+}
+boot();
 
 async function afterAuth() {
   paintWho();

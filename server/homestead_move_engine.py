@@ -219,7 +219,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="")
     should know about first.
     """
     namespace = namespace or NS
-    blockers, warnings = [], []
+    blockers, warnings, fixes = [], [], []
     if kind not in ("container", "vm"):
         raise ValueError("kind must be container or vm")
     if address_mode not in ("shared", "automatic", "manual"):
@@ -236,7 +236,10 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="")
     except CLIENT.Unreachable as error:
         return {"ok": False, "blockers": [str(error)], "warnings": [], "claims": []}
     except ValueError as error:
-        return {"ok": False, "blockers": [str(error)], "warnings": [], "claims": []}
+        # No backup storage over there is the usual first hurdle, and this
+        # side can clear it: say so, so the page can offer to.
+        fixes = [{"kind": "source-storage", "cluster": cluster}] if "backup target" in str(error) else []
+        return {"ok": False, "blockers": [str(error)], "warnings": [], "claims": [], "fixes": fixes}
 
     here = LH.backup_target()
     joined = bool(_same_target(here, there))
@@ -244,6 +247,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="")
         if not there.get("reachable_off_cluster"):
             blockers.append(f"backup storage on {cluster} is only reachable inside that cluster; "
                             "give its object store a LAN address first")
+            fixes.append({"kind": "source-address", "cluster": cluster})
         if here.get("configured"):
             warnings.append(f"this cluster's Longhorn backup target changes from {here.get('url')} "
                             f"to {there.get('url')}; backups already written to the old one stay there")
@@ -303,7 +307,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="")
     will_run = (origin.get("replicas", 0) > 0 if kind == "container"
                 else origin.get("runStrategy", "Halted") != "Halted" or origin.get("running"))
     return {
-        "ok": not blockers, "blockers": blockers,
+        "ok": not blockers, "blockers": blockers, "fixes": fixes,
         "warnings": list(dict.fromkeys(warnings)),
         "cluster": cluster, "kind": kind, "name": name, "namespace": namespace,
         "joined": joined, "will_run": bool(will_run), "addresses": addresses,

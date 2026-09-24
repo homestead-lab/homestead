@@ -72,10 +72,10 @@ scripts/render_chart.py       regenerate charts/homestead from the manifests
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.106`, the workflow publishes:
+For a release such as `v2.8.107`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.106
+ghcr.io/wjcloudy/homestead:2.8.107
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -86,8 +86,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.106
-git push origin v2.8.106
+git tag v2.8.107
+git push origin v2.8.107
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -651,7 +651,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.106/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.107/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -662,7 +662,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.106 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.107 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -756,8 +756,10 @@ workload's definition directly, and reads its volumes from the Longhorn backups
 the other cluster wrote, so the source never holds credentials for the
 destination.
 
-1. **Give the source cluster backup storage.** Data Protection ▸ **Set up
-   storage** runs MinIO on a Longhorn volume and points Longhorn's backups at it.
+1. **Give the source cluster backup storage.** Its card here offers **Set it
+   up** once the cluster is added (it uses the admin account you gave), or on
+   that cluster Data Protection ▸ **Set up storage** does the same: it runs
+   MinIO on a Longhorn volume and points Longhorn's backups at it.
    Give it a LAN address, or the other cluster cannot read from it. It shares
    fate with the cluster it protects: it is for moving workloads, not for your
    only copy of anything.
@@ -770,7 +772,10 @@ destination.
    releases that speak the same move protocol work together.
 3. **Browse and move.** **Browse workloads** lists what the other cluster runs,
    with the reason anything cannot move (for example a ConfigMap, Secret or
-   host-path volume, which Homestead did not write and cannot rebuild). **Move to this
+   host folder, which Homestead did not write and cannot rebuild). A passed-through
+   device such as `/dev/dri` travels, with a note that this cluster needs a host
+   that has it. Each cluster's card lists what a move still needs, with the fix
+   beside each step, and the move review offers the same fixes. **Move to this
    cluster** reviews the namespace, address and storage here, and lists every
    blocker and warning from both clusters before anything stops.
 

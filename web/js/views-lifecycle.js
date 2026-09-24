@@ -671,12 +671,15 @@ async function viewImport() {
         <span id="clver_${esc(c.name)}"><span class="dim xs"><span class="spin2"></span> checking…</span></span>
         <button class="iconbtn clrecheck" data-tip="Check the version again" onclick="clusterCheck('${esc(c.name)}')">${icon("refresh")}</button></div>
       <div id="clvermsg_${esc(c.name)}"></div>
+      <div class="clsteps" id="clready_${esc(c.name)}"></div>
       <div class="row" style="margin-top:12px"><button class="btn sm" onclick="clusterBrowse('${esc(c.name)}')">Browse workloads</button></div>
       <div class="dim xs" id="cluster_${esc(c.name)}" style="margin-top:10px"></div>
     </div>`).join("")}</div>`
-    : `<div class="empty">No other clusters connected. Add a Homestead running on another Harvester
-       cluster to browse its workloads, and to move them here once both clusters point at the same
-       backup storage.</div>`}
+    : `<div class="empty">No other clusters connected.
+       <ol class="clguide">
+         <li><b>＋ Homestead cluster</b> above: the other Homestead's address and an admin account there.</li>
+         <li>Backup storage on that cluster, which its volumes travel through - its card offers to set it up.</li>
+         <li><b>Browse workloads</b> on its card, then <b>Move to this cluster</b>.</li></ol></div>`}
 
     <div class="sec">VM disk images ${tip("CDI downloads supported QEMU disk formats, including qcow2 and vmdk, converts them into a VM-ready disk, and writes the result into a new Longhorn PVC.")}</div>
     ${disks.length ? `<div class="card flat pad0"><div class="tblwrap"><table data-sort="vm-disks" class="tbl stack"><thead><tr>
@@ -1289,6 +1292,63 @@ window.clusterCheck = async name => {
   if (!note) return;
   if (trouble) note.innerHTML = `<div class="note ${tone === "warn" ? "warn" : "bad"} clvernote">${esc(check.message || "")}</div>`;
   else if (check.state === "differs") note.innerHTML = `<div class="dim xs clverdim">This cluster runs v${esc(HOMESTEAD_VERSION)}. Moves work between the two.</div>`;
+  if (!trouble) clusterReady(name);
+};
+
+/* What a move from this cluster still needs, as steps with the fix beside
+   each: the connection, then backup storage over there that this cluster
+   can reach. */
+window.clusterReady = async name => {
+  const host = $("#clready_" + name);
+  if (!host) return;
+  host.innerHTML = '<span class="dim xs"><span class="spin2"></span> checking what a move needs…</span>';
+  let r;
+  try {
+    r = await api("/api/move/clusters/readiness", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }) });
+  } catch (e) { host.innerHTML = `<div class="dim xs">${esc(e.message)}</div>`; return; }
+  const target = r.target || {}, store = r.storage || {};
+  const step = (ok, text, action = "") => `<div class="clstep ${ok ? "done" : "todo"}"><span>${ok ? "✓" : "•"}</span><div>${text}${action}</div></div>`;
+  host.innerHTML = step(true, "Connected")
+    + (target.configured && target.reachable_off_cluster
+      ? step(true, `Backup storage on ${esc(name)}`, `<div class="dim xs mono">${esc(target.url || "")}</div>`)
+      : target.configured
+        ? step(false, `Backup storage on ${esc(name)} has no LAN address, so this cluster cannot read it`,
+            `<div><button class="btn sm" data-need="admin" onclick="clusterStorage('${esc(name)}',true)">Give it an address</button></div>`)
+        : step(false, `${esc(name)} has no backup storage yet${store.deployed && !store.ready ? " - it is starting" : ""}`,
+            `<div><button class="btn sm pri" data-need="admin" onclick="clusterStorage('${esc(name)}')">Set it up on ${esc(name)}</button></div>`))
+    + step(r.ready, "Browse its workloads and move them here");
+  if (window.applyRole) applyRole();
+};
+
+/* Backup storage on the other cluster, made from here with the account
+   Homestead already holds for it - what its own Data protection page does. */
+window.clusterStorage = (name, addressOnly = false, after = null) => {
+  window.__clusterStorageAfter = after;
+  childModal(`Backup storage on ${name}`, `
+    <p class="small">Homestead puts MinIO on a Longhorn volume on <b>${esc(name)}</b> and points that cluster's Longhorn backups at it.
+      A move backs each volume up there, then restores it here. It shares ${esc(name)}'s disks, so it is for moving, not your only copy of anything.</p>
+    <div class="f2">
+      ${addressOnly ? "" : '<div class="f"><label>Size (GB)</label><input id="cs_size" type="number" min="5" value="100"></div>'}
+      <div class="f"><label>LAN address ${tip("This cluster reads the backups from here, so it needs an address on your network. Empty lets the load balancer choose one.")}</label>
+        <input id="cs_ip" class="mono" placeholder="${addressOnly ? "192.0.2.243" : "automatic"}"></div></div>
+    <div class="row" style="margin-top:14px"><button class="btn pri" id="cs_go" onclick="clusterStorageGo('${esc(name)}')">${addressOnly ? "Set the address" : "Set it up"}</button>
+      <button class="btn" onclick="modalBack()">Cancel</button></div>`);
+};
+window.clusterStorageGo = async name => {
+  const button = $("#cs_go");
+  if (button) { button.disabled = true; button.textContent = "Working…"; }
+  try {
+    const r = await api("/api/move/clusters/storage", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, size_gb: +($("#cs_size")?.value || 100), lb_ip: $("#cs_ip").value.trim() }) });
+    toast(r.detail, "ok");
+    modalBack();
+    const after = window.__clusterStorageAfter;
+    setTimeout(() => { clusterReady(name); if (after) after(); }, 1500);
+  } catch (e) {
+    toast(e.message, "bad");
+    if (button) { button.disabled = false; button.textContent = "Set it up"; }
+  }
 };
 
 window.clusterBrowse = async name => {
@@ -1376,8 +1436,11 @@ window.movePlan = async (cluster, kind, name) => {
     const plan = await api("/api/move/plan", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(moveBody(cluster, kind, name)) });
     const volumes = plan.claims || [];
+    const fix = (plan.fixes || [])[0];
     host.innerHTML = `
-      ${plan.blockers?.length ? `<div class="note bad"><b>This move would fail.</b><ul>${plan.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul></div>` : ""}
+      ${plan.blockers?.length ? `<div class="note bad"><b>This move would fail.</b><ul>${plan.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>
+        ${fix ? `<button class="btn sm pri" data-need="admin" onclick="clusterStorage('${esc(cluster)}',${fix.kind === "source-address"},() => movePlan('${esc(cluster)}','${esc(kind)}','${esc(name)}'))">${fix.kind === "source-address"
+          ? `Give ${esc(cluster)}'s backup storage an address` : `Set up backup storage on ${esc(cluster)}`}</button>` : ""}</div>` : ""}
       ${plan.warnings?.length ? `<div class="note warn"><b>Worth knowing first.</b><ul>${plan.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
       ${plan.ok ? `<div class="note good"><b>Ready to move.</b>
         ${volumes.length ? `${volumes.length === 1 ? "Its volume" : `Its ${volumes.length} volumes`} (${plan.total_gb} GB) ${volumes.length === 1 ? "goes" : "go"}

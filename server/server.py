@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.106")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.107")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -3436,7 +3436,7 @@ ADMIN_ROUTES = {
     "/api/objectstore/deploy", "/api/objectstore/longhorn", "/api/objectstore/remove",
     # A cluster's credentials, and what they reach.
     "/api/move/clusters/add", "/api/move/clusters/remove", "/api/move/remote",
-    "/api/move/clusters/check",
+    "/api/move/clusters/check", "/api/move/clusters/readiness", "/api/move/clusters/storage",
     # Joining and removing hosts: the join token, disk wipes, a DHCP responder.
     "/api/onboard/guide", "/api/cluster/cleanup", "/api/cluster/removal",
     "/api/cluster/remove-node", "/api/cluster/cleanup/run",
@@ -4007,6 +4007,9 @@ class H(BaseHTTPRequestHandler):
                     return self._send(409 if error.code in (400, 404) else error.code,
                                       {"error": logs_refusal(error, pod, container)})
             return self._send(404, {"error": "no route"})
+        except AUTH.StoreUnavailable as e:
+            # Not an empty account store: the cluster did not answer.
+            return self._send(503, {"error": str(e), "unavailable": True})
         except urllib.error.HTTPError as e:
             return self._send(e.code, {"error": e.read().decode("utf-8", "replace")[:500]})
         except Exception as e:
@@ -4383,6 +4386,10 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, MOVE.remote_inventory(b.get("name")))
             if p == "/api/move/clusters/check":
                 return self._move(lambda: MOVE.check_cluster(b.get("name")))
+            if p == "/api/move/clusters/readiness":
+                return self._move(lambda: MOVE.readiness(b.get("name")))
+            if p == "/api/move/clusters/storage":
+                return self._move(lambda: MOVE.setup_storage(b.get("name"), b.get("size_gb") or 100, b.get("lb_ip") or ""))
             if p == "/api/cluster/remove-node":
                 return self._move(lambda: ONBOARD.remove_node(b.get("node"), bool(b.get("accept_loss")),
                                                               bool(b.get("gone"))))
@@ -4636,6 +4643,9 @@ class H(BaseHTTPRequestHandler):
             return self._send(403, {"error": str(e)})
         except ValueError as e:
             return self._send(400, {"error": str(e)})
+        except AUTH.StoreUnavailable as e:
+            # Not an empty account store: the cluster did not answer.
+            return self._send(503, {"error": str(e), "unavailable": True})
         except urllib.error.HTTPError as e:
             return self._send(e.code, {"error": e.read().decode("utf-8", "replace")[:600]})
         except Exception as e:
@@ -4665,6 +4675,9 @@ class H(BaseHTTPRequestHandler):
                 _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
                 return self._send(200, {"ok": True, "services": removed})
             return self._send(404, {"error": "no route"})
+        except AUTH.StoreUnavailable as e:
+            # Not an empty account store: the cluster did not answer.
+            return self._send(503, {"error": str(e), "unavailable": True})
         except urllib.error.HTTPError as e:
             return self._send(e.code, {"error": e.read().decode("utf-8", "replace")[:500]})
         except Exception as e:
@@ -4728,7 +4741,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.106 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.107 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

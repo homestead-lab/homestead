@@ -104,6 +104,15 @@ class InventoryTests(unittest.TestCase):
 
         self.assertFalse(move.inventory()["workloads"][0]["movable"])
 
+    def test_a_passed_through_device_travels_and_asks_for_the_same_hardware(self):
+        self.deployments = [deployment(
+            "birdnet", volumes=[{"name": "hw-igpu", "hostPath": {"path": "/dev/dri"}}],
+            mounts=[{"name": "hw-igpu", "mountPath": "/dev/dri"}])]
+
+        row = move.inventory()["workloads"][0]
+        self.assertTrue(row["movable"])
+        self.assertIn("/dev/dri", row["warnings"][0])
+
     def test_workloads_outside_the_namespace_are_not_offered(self):
         other = deployment("elsewhere")
         other["metadata"]["namespace"] = "kube-system"

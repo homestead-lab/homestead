@@ -69,7 +69,7 @@ def _workload_row(deployment):
     containers = spec.get("containers", []) or []
     by_volume = {volume.get("name"): volume for volume in spec.get("volumes", []) or []}
 
-    volumes, blockers = [], []
+    volumes, blockers, warnings = [], [], []
     for container in containers:
         for mount in container.get("volumeMounts", []) or []:
             source = by_volume.get(mount.get("name")) or {}
@@ -89,6 +89,14 @@ def _workload_row(deployment):
                 continue
             if "emptyDir" in source:
                 continue            # rebuilt empty on the far side, as intended
+            host = (source.get("hostPath") or {}).get("path", "")
+            if host == "/dev" or host.startswith("/dev/"):
+                # A device - an iGPU, a Coral, a Zigbee stick - is what hardware
+                # features pass through. It travels as it is; the destination
+                # just needs a host that has the same device.
+                warnings.append(f"{mount.get('mountPath', '?')} passes the host's {host} through; "
+                                "the destination needs a host with the same device")
+                continue
             carried = next((kind for kind in UNMODELLED if kind in source), "")
             if carried:
                 blockers.append(f"{mount.get('mountPath', '?')} comes from a {carried} "
@@ -107,7 +115,7 @@ def _workload_row(deployment):
                                            "hardware").split(",") if x],
         "movable": not blockers,
         "blockers": blockers,
-        "warnings": [],
+        "warnings": sorted(set(warnings)),
     }
 
 
@@ -434,3 +442,39 @@ def check_cluster(name):
     return {**result, "state": "differs", "compatible": True,
             "message": f"{name} runs {shown} and this one {VERSION}. Moves work between "
                        f"them; {newer} is the newer of the two."}
+
+
+# ------------------------------------------------------------ getting ready
+def readiness(name):
+    """What a move from this cluster still needs, for its card: that the two
+    Homesteads can talk, and that the far side has backup storage the
+    volumes can travel through, at an address this cluster can reach."""
+    out = {"version": check_cluster(name), "storage": {}, "target": {}}
+    try:
+        store = remote(name, "/api/objectstore")
+        out["storage"] = {k: store.get(k) for k in ("deployed", "ready", "endpoint", "reachable_off_cluster")}
+    except Exception as error:
+        out["storage"] = {"error": str(error)[:200]}
+    try:
+        target = remote(name, "/api/move/target")
+        # The keys stay on the server; the card only needs to know it is there.
+        out["target"] = {"configured": True, "url": target.get("url", ""),
+                         "reachable_off_cluster": bool(target.get("reachable_off_cluster"))}
+    except Exception as error:
+        out["target"] = {"configured": False, "error": str(error)[:200]}
+    out["ready"] = bool(out["target"].get("configured") and out["target"].get("reachable_off_cluster")
+                        and out["version"].get("compatible") is not False)
+    return out
+
+
+def setup_storage(name, size_gb=100, lb_ip=""):
+    """Put backup storage on the far cluster, as its own Data protection page
+    would: MinIO on a Longhorn volume, with Longhorn's backups pointed at it.
+    Done as the stored account, which a move already needs to be admin."""
+    size_gb = int(size_gb or 100)
+    result = remote(name, "/api/objectstore/deploy",
+                    {"size_gb": size_gb, "lb_ip": str(lb_ip or "").strip(), "point_longhorn": True})
+    where = result.get("endpoint") or ""
+    return {"ok": True, "endpoint": where,
+            "detail": f"backup storage is starting on {name}" + (f" at {where}" if where else "")
+                      + "; its first start can take a minute while the image downloads"}

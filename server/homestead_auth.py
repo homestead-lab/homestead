@@ -81,6 +81,23 @@ def bind(_kget, _ksend, _ns):
 
 
 # ------------------------------------------------------------------ store
+class StoreUnavailable(Exception):
+    """The accounts could not be read, which is not the same as there being
+    none. A slow or unreachable API server must never look like a fresh
+    install: that offers first-admin setup to whoever asks, and saving it
+    would replace every real account."""
+
+
+def _unavailable(error):
+    # The last good read stands in while the cluster is slow to answer; its
+    # time is left alone, so the next request tries the cluster again.
+    if _store_cache["data"] is not None:
+        return _store_cache["data"]
+    raise StoreUnavailable("Homestead cannot read its accounts from the cluster right now "
+                           f"({str(error)[:120] or type(error).__name__}); the Kubernetes API may be slow "
+                           "or unreachable. Try again in a moment.")
+
+
 def _load(force=False):
     if not force and _store_cache["data"] is not None and time.time() - _store_cache["at"] < 10:
         return _store_cache["data"]
@@ -90,10 +107,10 @@ def _load(force=False):
         data = json.loads(raw.decode() or "{}")
     except urllib.error.HTTPError as e:
         if e.code != 404:
-            raise
-        data = {}
-    except Exception:
-        data = {}
+            return _unavailable(e)
+        data = {}                       # no Secret yet: genuinely a fresh install
+    except Exception as e:
+        return _unavailable(e)
     data.setdefault("users", {})
     data.setdefault("signing_key", "")
     _store_cache.update(at=time.time(), data=data)
