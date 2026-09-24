@@ -1539,3 +1539,15 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .ipam-cat svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .ipam-unifi-name{font-style:italic;color:var(--mut)}
 .ipam-bulk[hidden]{display:none}
+
+/* Helm */
+.helm-values{max-height:420px;overflow:auto;white-space:pre;font-size:12px;padding:10px;border-radius:9px;background:rgba(0,0,0,.25);border:1px solid var(--line)}
+textarea.helm-values{width:100%;white-space:pre}
+.helm-values-pair{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.helm-values-pair pre{margin:0;max-height:330px}
+.helm-results{display:grid;gap:6px;margin-bottom:8px;max-height:360px;overflow:auto}
+.helm-hit{display:grid;grid-template-columns:36px 1fr;gap:10px;align-items:center;text-align:left;padding:8px 10px;cursor:pointer;color:inherit;font:inherit;margin:0}
+.helm-hit img,.helm-hit-blank{width:36px;height:36px;border-radius:8px;object-fit:contain;background:#fff;display:grid;place-items:center;color:#333;font-weight:700;font-size:12px}
+tr.clickable{cursor:pointer}
+@media(max-width:560px){.helm-values-pair{grid-template-columns:1fr}}
+

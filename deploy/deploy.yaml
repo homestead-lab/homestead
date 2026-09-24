@@ -131,6 +131,11 @@ rules:
     verbs: [get, list]
   # Cluster health reads certificate request state only; certificate/key bodies
   # are never returned to the UI and Homestead cannot approve CSRs.
+  # Helm: releases are read from Helm's own Secrets (secrets are listed
+  # above); charts are installed as HelmChart objects for RKE2's Helm controller.
+  - apiGroups: ["helm.cattle.io"]
+    resources: [helmcharts]
+    verbs: [get, list, watch, create, update, patch, delete]
   # Replicas elect the one that raises alerts and advances moves.
   - apiGroups: ["coordination.k8s.io"]
     resources: [leases]
@@ -215,7 +220,7 @@ metadata:
   labels:
     app: homestead
   annotations:
-    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.92"}'
+    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.93"}'
 spec:
   replicas: 1
   strategy:
@@ -251,7 +256,7 @@ spec:
           tolerationSeconds: 15
       initContainers:
         - name: data-permissions
-          image: ghcr.io/wjcloudy/homestead:2.8.92
+          image: ghcr.io/wjcloudy/homestead:2.8.93
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "chown 10001:10001 /data && chmod 0770 /data"]
           securityContext:
@@ -268,7 +273,7 @@ spec:
               mountPath: /data
       containers:
         - name: homestead
-          image: ghcr.io/wjcloudy/homestead:2.8.92
+          image: ghcr.io/wjcloudy/homestead:2.8.93
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT

@@ -26,6 +26,7 @@ not affiliated with, endorsed, or sponsored by Lime Technology, Inc.
 |---|---|
 | **Dashboard** | Cluster CPU/RAM/network/disk telemetry, transition-aware health, top consumers, configurable warnings |
 | **Containers** | Guided App Store and image deployment, Docker Compose import, independent or sidecar pods, guarded Kubernetes workload rename, edit/move/logs/console, autostart, LAN port and exposure editing, one storage picker for new and existing containers, hardware passthrough, update checks, monitored rollout with live image-pull state, rollback, groups with folding dividers and a filter per group, and a card or row layout |
+| **Helm** | Every Helm release in the cluster with its values, notes, history and objects; charts found on Artifact Hub and installed, upgraded and uninstalled through RKE2's Helm controller |
 | **App Store** | The Community Applications catalogue laid out as Unraid shows it - monthly spotlights, recently added, trending and top performing - with a full page per app, from the public feed or one you set |
 | **Virtual machines** | Create from a Harvester image or an imported disk, power actions, live migration between hosts, and a console: the VM's screen (VNC) or its serial port |
 | **Portal** | A page of tiles for every web interface - containers picked from their exposed ports with their logos, and the router, switches, access points and NAS around them - in sections, with a live reachability dot |
@@ -67,10 +68,10 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.92`, the workflow publishes:
+For a release such as `v2.8.93`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.92
+ghcr.io/wjcloudy/homestead:2.8.93
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -81,8 +82,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.92
-git push origin v2.8.92
+git tag v2.8.93
+git push origin v2.8.93
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -262,6 +263,27 @@ headers, but that alone does not establish a license for generated feed metadata
 listing descriptions, or icons. Operators redistributing or commercially hosting
 the catalogue should obtain permission from its maintainers/Lime Technology or
 configure a feed whose reuse terms are explicit.
+
+## Helm
+
+**Helm** lists every Helm release in the cluster - chart and app version,
+status, revision, when it last changed - whoever installed it. Helm keeps each
+revision in a Secret of its own, and that record is the same whether a person,
+Rancher, Fleet or RKE2 ran Helm, so reading it misses nothing. A release opens
+to the values it was installed with, the chart's notes, its history and the
+objects it made. The platform's own releases (Harvester, Rancher, Longhorn and
+the like) are hidden until asked for.
+
+**Install chart** searches Artifact Hub, shows the chart's versions and its
+default values beside yours, and installs it as a `HelmChart` object for the
+Helm controller RKE2 already runs: Homestead carries no Helm of its own, and a
+chart it installed is an ordinary object anyone can see with kubectl. Changing
+the version or values of such a release upgrades it; uninstalling removes the
+object and the controller removes what the chart made. A repository can also be
+entered by hand, including an `oci://` registry. Releases installed some other
+way are shown, not changed - whatever installed them would change them back.
+Installing, upgrading and uninstalling are admin actions, followed in the job
+tray.
 
 ## Networking and virtual IPs
 
@@ -506,7 +528,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.92/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.93/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -517,7 +539,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.92 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.93 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour

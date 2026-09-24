@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.92")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.93")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2623,6 +2623,7 @@ import homestead_vmconsole as VMCONSOLE
 import homestead_shared as SHARED
 import homestead_leader as LEADER
 import homestead_ipam as IPAM
+import homestead_helm as HELM
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
@@ -2667,6 +2668,8 @@ SELF.bind(kget, ksend, _own_namespace(), HOMESTEAD_VERSION, DATA_DIR)
 SHARED.bind(DATA_DIR)
 LEADER.bind(kget, ksend, _own_namespace())
 IPAM.bind(kget, ksend, DEFAULT_NS, lambda: cached("network", 5, NETWORK.inventory))
+HELM.bind(kget, ksend)
+OPS.RESOLVERS["helm"] = HELM.job_status
 NSMOD.bind(kget, ksend, DEFAULT_NS, _own_namespace())
 ALERTS.bind(DATA_DIR)
 
@@ -2976,7 +2979,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
 # explicit allowlist: an unknown path must not accidentally shadow an API 404.
 SPA_ROUTES = frozenset({
     "/", "/architecture", "/nodes", "/deploy", "/containers", "/vms",
-    "/app-store", "/shares", "/volumes", "/image-cache", "/data-protection", "/portal",
+    "/app-store", "/shares", "/volumes", "/image-cache", "/data-protection", "/portal", "/helm",
     "/schedules", "/import", "/events", "/networking", "/system/cluster", "/settings",
 })
 
@@ -3115,6 +3118,9 @@ def needed_role(path, method):
     if path == "/api/storage/classes" and method != "GET":
         return "admin"
     if path in ("/api/portal", "/api/self/replicas", "/api/ipam/unifi") and method != "GET":
+        return "admin"
+    # A chart can make anything anywhere in the cluster.
+    if path in ("/api/helm/install", "/api/helm/upgrade", "/api/helm/uninstall"):
         return "admin"
     if path in ("/api/console", "/api/vm/console"):
         return "operator"
@@ -3375,6 +3381,14 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, homestead_replicas())
             if p == "/api/ipam":
                 return self._send(200, IPAM.view())
+            if p == "/api/helm":
+                return self._send(200, cached("helm", 10, HELM.releases))
+            if p == "/api/helm/release":
+                return self._send(200, HELM.release((q.get("ns") or [""])[0], (q.get("name") or [""])[0]))
+            if p == "/api/helm/search":
+                return self._send(200, HELM.search((q.get("q") or [""])[0]))
+            if p == "/api/helm/chart":
+                return self._send(200, HELM.chart((q.get("repo") or [""])[0], (q.get("name") or [""])[0]))
             if p == "/api/cluster/upgrades":
                 current = ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", "")
                 return self._send(200, UPGRADES.report(current, force=(q.get("force") or [""])[0] == "1"))
@@ -3715,6 +3729,18 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, PORTAL.save(b.get("links")))
             if p == "/api/self/replicas":
                 return self._send(200, set_homestead_replicas(b.get("replicas")))
+            if p in ("/api/helm/install", "/api/helm/upgrade", "/api/helm/uninstall"):
+                action = p.rsplit("/", 1)[1]
+                result = (HELM.install(b) if action == "install" else HELM.upgrade(b) if action == "upgrade"
+                          else HELM.uninstall(b.get("namespace", ""), b.get("name", "")))
+                _cache.pop("helm", None)
+                name = result.get("name") or b.get("name", "")
+                job = f"helm-{'delete' if action == 'uninstall' else 'install'}-{name}"
+                result["operation"] = OPS.start("helm", f"Helm {action} {name}",
+                                                {"kind": "HelmChart", "name": name, "namespace": HELM.CONTROLLER_NS},
+                                                "/helm", {"namespace": HELM.CONTROLLER_NS, "name": job},
+                                                "Waiting for the Helm controller")
+                return self._send(200, result)
             if p == "/api/ipam/subnets":
                 return self._send(200, IPAM.save_subnets(b.get("subnets")))
             if p == "/api/ipam/record":
@@ -4280,7 +4306,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.92 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.93 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     # On a rolling update or a drain, hand the lease over now rather than

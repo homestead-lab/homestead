@@ -18,6 +18,7 @@
     workloads: Object.freeze({ path: "/containers",      label: "Containers",      section: "Workloads" }),
     vms:       Object.freeze({ path: "/vms",             label: "Virtual Machines", section: "Workloads" }),
     store:     Object.freeze({ path: "/app-store",       label: "App Store",       section: "Workloads" }),
+    helm:      Object.freeze({ path: "/helm",            label: "Helm",            section: "Workloads" }),
     shares:    Object.freeze({ path: "/shares",          label: "Network Shares",  section: "Storage" }),
     storage:   Object.freeze({ path: "/volumes",         label: "Volumes",         section: "Storage" }),
     images:    Object.freeze({ path: "/image-cache",     label: "Image Cache",     section: "Storage" }),

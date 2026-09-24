@@ -137,6 +137,11 @@ rules:
     verbs: [get, list]
   # Cluster health reads certificate request state only; certificate/key bodies
   # are never returned to the UI and Homestead cannot approve CSRs.
+  # Helm: releases are read from Helm's own Secrets (secrets are listed
+  # above); charts are installed as HelmChart objects for RKE2's Helm controller.
+  - apiGroups: ["helm.cattle.io"]
+    resources: [helmcharts]
+    verbs: [get, list, watch, create, update, patch, delete]
   # Replicas elect the one that raises alerts and advances moves.
   - apiGroups: ["coordination.k8s.io"]
     resources: [leases]

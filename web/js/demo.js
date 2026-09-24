@@ -315,7 +315,7 @@
       detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.92", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.93", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
@@ -402,20 +402,20 @@
       user: "admin", added: "2026-09-22 17:02" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "garage") return { name, version: "2.8.92", protocol: 1, local_version: "2.8.92",
+      if (name === "garage") return { name, version: "2.8.93", protocol: 1, local_version: "2.8.93",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "garage runs 2.8.92 and this one 2.8.92. Moves work between them; garage is the newer of the two." };
+        message: "garage runs 2.8.93 and this one 2.8.93. Moves work between them; garage is the newer of the two." };
       return name === "attic"
-        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.92", local_protocol: 1,
+        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.93", local_protocol: 1,
             state: "behind", compatible: false,
-            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.92). Update attic first." }
-        : { name, version: "2.8.92", protocol: 1, local_version: "2.8.92", local_protocol: 1,
-            state: "same", compatible: true, message: "Both run Homestead 2.8.92." };
+            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.93). Update attic first." }
+        : { name, version: "2.8.93", protocol: 1, local_version: "2.8.93", local_protocol: 1,
+            state: "same", compatible: true, message: "Both run Homestead 2.8.93." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "shed", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.92", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.93", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -818,6 +818,33 @@
           scan: { at: Math.floor(Date.now() / 1000) - 3600, state: "done", progress: 100 } }] };
     },
     "/api/ipam/unifi": (url, init) => { demoUnifi = !JSON.parse(init?.body || "{}").forget; return { ok: true }; },
+    "/api/helm": [
+      { name: "grafana", namespace: "monitoring", chart: "grafana", chart_version: "8.5.2", app_version: "11.3.0", status: "deployed",
+        revision: 3, updated: new Date(Date.now() - 86400000 * 2).toISOString(), managed: "homestead", system: false, icon: "" },
+      { name: "cert-manager", namespace: "cert-manager", chart: "cert-manager", chart_version: "v1.16.1", app_version: "v1.16.1",
+        status: "deployed", revision: 1, updated: new Date(Date.now() - 86400000 * 30).toISOString(), managed: "", system: false, icon: "" },
+      { name: "immich", namespace: "media", chart: "immich", chart_version: "0.9.3", app_version: "v1.119.0", status: "pending-install",
+        revision: 0, updated: "", managed: "homestead", system: false, icon: "" },
+      { name: "rancher-monitoring", namespace: "cattle-monitoring-system", chart: "rancher-monitoring", chart_version: "103.1.1",
+        app_version: "45.31.1", status: "deployed", revision: 2, updated: new Date(Date.now() - 86400000 * 90).toISOString(), managed: "", system: true, icon: "" }],
+    "/api/helm/release": () => ({ name: "grafana", namespace: "monitoring", chart: "grafana", chart_version: "8.5.2", app_version: "11.3.0",
+      status: "deployed", revision: 3, managed: "homestead", system: false, description: "The leading tool for querying and visualizing time series and metrics.",
+      notes: "1. Get your 'admin' user password by running:\n   kubectl get secret --namespace monitoring grafana -o jsonpath=\"{.data.admin-password}\" | base64 --decode",
+      values: "persistence:\n  enabled: true\n  size: 10Gi\nservice:\n  type: LoadBalancer",
+      history: [3, 2, 1].map(revision => ({ revision, status: revision === 3 ? "deployed" : "superseded", chart_version: `8.${revision + 2}.0`,
+        app_version: "11.3.0", updated: new Date(Date.now() - 86400000 * (5 - revision)).toISOString(), description: revision === 1 ? "Install complete" : "Upgrade complete" })),
+      objects: [["ServiceAccount", "grafana"], ["Secret", "grafana"], ["ConfigMap", "grafana"], ["PersistentVolumeClaim", "grafana"],
+        ["Service", "grafana"], ["Deployment", "grafana"]].map(([kind, name]) => ({ kind, name, namespace: "monitoring" })),
+      source: { repo: "https://grafana.github.io/helm-charts", chart: "grafana", version: "8.5.2",
+        values: "persistence:\n  enabled: true\n  size: 10Gi\nservice:\n  type: LoadBalancer\n" } }),
+    "/api/helm/search": [
+      { name: "grafana", version: "8.5.2", app_version: "11.3.0", description: "The leading tool for querying and visualizing time series and metrics.",
+        repo: "https://grafana.github.io/helm-charts", repo_name: "grafana", publisher: "Grafana", verified: true, official: true, logo: "" },
+      { name: "grafana-operator", version: "5.15.1", app_version: "v5.15.1", description: "Helm chart for the Grafana Operator",
+        repo: "https://grafana.github.io/helm-charts", repo_name: "grafana", publisher: "Grafana", verified: true, official: false, logo: "" }],
+    "/api/helm/chart": { name: "grafana", version: "8.5.2", versions: ["8.5.2", "8.5.1", "8.4.0"], repo: "https://grafana.github.io/helm-charts",
+      values: "replicas: 1\npersistence:\n  enabled: false\n  size: 10Gi\nservice:\n  type: ClusterIP\n  port: 80\n", readme_url: "https://artifacthub.io/packages/helm/grafana/grafana" },
+    "/api/helm/install": { ok: true, name: "grafana", detail: "grafana is being installed as grafana in lab by the Helm controller" },
     "/api/ipam/record": { ok: true },
     "/api/ipam/bulk": { ok: true, detail: "updated" },
     "/api/ipam/scan": { ok: true, detail: "scanning 254 addresses in 192.0.2.0/24" },
@@ -870,7 +897,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.92", candidate_tag: "2.8.92", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.93", candidate_tag: "2.8.93", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

@@ -10,6 +10,7 @@ const VIEWS = {
   vms:       ["Virtual Machines","workloads", viewVMs,       true],
   deploy:    ["Deploy",         "workloads", () => viewDeploy(), false],
   store:     ["App Store",      "workloads", viewStore,     false],
+  helm:      ["Helm",           "workloads", viewHelm,      true],
   shares:    ["Network Shares", "storage",   viewShares,    false],
   storage:   ["Volumes",        "storage",   viewStorage,   true],
   images:    ["Image Cache",    "storage",   viewImages,    false],
@@ -21,7 +22,7 @@ const VIEWS = {
   settings:  ["Settings",       "system",    viewSettings,  false],
 };
 
-const FILTERABLE_VIEWS = new Set(["workloads", "storage", "images", "events", "store", "network", "portal"]);
+const FILTERABLE_VIEWS = new Set(["workloads", "storage", "images", "events", "store", "network", "portal", "helm"]);
 
 function routeParamsForView(v, extra = {}) {
   const params = FILTERABLE_VIEWS.has(v) && STATE.q ? { q: STATE.q } : {};
