@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.119")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.120")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -657,11 +657,49 @@ def _volume_health_reason(volume):
     return reason[:300], conditions, scheduling
 
 
+def _engine_progress(engines):
+    """Rebuilds and restores in flight, per volume, from Longhorn's engines.
+
+    The volume object only says "degraded" or "restoreRequired"; how far a
+    replica rebuild or a backup restore has got is on the engine, keyed by
+    replica address. The slowest replica is the one the volume waits on.
+    """
+    out = {}
+    for engine in engines:
+        volume = (engine.get("spec", {}) or {}).get("volumeName") or \
+            (engine.get("metadata", {}).get("labels", {}) or {}).get("longhornvolume", "")
+        if not volume:
+            continue
+        status = engine.get("status", {}) or {}
+        entry = out.setdefault(volume, {})
+        rebuilding = [row for row in (status.get("rebuildStatus") or {}).values()
+                      if row and (row.get("isRebuilding") or row.get("error"))]
+        if rebuilding:
+            entry["rebuild"] = {
+                "pct": min(int(row.get("progress") or 0) for row in rebuilding),
+                "replicas": len(rebuilding),
+                "error": next((str(row["error"])[:300] for row in rebuilding if row.get("error")), ""),
+            }
+        restoring = [row for row in (status.get("restoreStatus") or {}).values()
+                     if row and (row.get("isRestoring") or row.get("error"))]
+        if restoring:
+            entry["restore"] = {
+                "pct": min(int(row.get("progress") or 0) for row in restoring),
+                "error": next((str(row["error"])[:300] for row in restoring if row.get("error")), ""),
+            }
+    return {name: entry for name, entry in out.items() if entry}
+
+
 def get_volumes():
     try:
         vols = kget("/apis/longhorn.io/v1beta2/volumes").get("items", [])
     except Exception:
         return []
+    try:
+        progress = _engine_progress(
+            kget("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/engines").get("items", []))
+    except Exception:
+        progress = {}
     try:
         pvcs = {(p["metadata"]["namespace"], p["metadata"]["name"]): p
                 for p in kget("/api/v1/persistentvolumeclaims").get("items", [])}
@@ -701,6 +739,13 @@ def get_volumes():
             "health_reason": health_reason,
             "conditions": [row for row in conditions if row["status"] == "False"],
             "scheduling_error": scheduling_error,
+            "rebuild": progress.get(v["metadata"]["name"], {}).get("rebuild"),
+            # A restored volume keeps restoreRequired until its data is all
+            # in, even between engine updates that carry no restore rows. A
+            # disaster-recovery standby keeps it for good, so is left out.
+            "restore": progress.get(v["metadata"]["name"], {}).get("restore") or (
+                {"pct": 0, "error": ""}
+                if st.get("restoreRequired") and not st.get("isStandby") else None),
         })
     return sorted(out, key=lambda x: x["name"])
 
@@ -4971,7 +5016,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.119 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.120 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

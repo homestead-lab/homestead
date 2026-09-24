@@ -154,6 +154,63 @@ function drawArch(keep = STATE.data.archKeep) {
 const volumeReason = v => (v.health_reason && v.state === "attached"
   && v.robustness !== "healthy") ? v.health_reason : "";
 
+/* A replica rebuild or a backup restore in flight, as Longhorn's engine reports
+   it: the slowest replica's progress, since that is what the volume waits on. */
+const volumeBusy = v => v.restore || v.rebuild || null;
+
+// Not meter(): that colours by how full something is, and a restore at 95%
+// is nearly done, not nearly out of room.
+const volumeProgressBar = pct => `<div class="meter volprogress" role="progressbar" aria-valuenow="${+pct || 0}" aria-valuemin="0" aria-valuemax="100"><span style="width:${Math.min(100, +pct || 0)}%"></span></div>`;
+
+function volumeHealthCell(x) {
+  const restore = x.restore, rebuild = x.rebuild;
+  if (restore && restore.error) return `<span class="pill crit">restore failed</span>
+    <span class="dim xs volume-reason">${esc(restore.error)}</span>`;
+  if (restore) return `<span class="pill info" data-tip="Longhorn is copying this volume's data in from a backup; it can be used once the restore finishes">restoring ${restore.pct}%</span>
+    ${volumeProgressBar(restore.pct)}`;
+  if (rebuild && rebuild.error) return `<span class="pill crit">rebuild failed</span>
+    <span class="dim xs volume-reason">${esc(rebuild.error)}</span>`;
+  if (rebuild) return `<span class="pill med" data-tip="Longhorn is copying a replica from a healthy one; the volume is readable and writable meanwhile">rebuilding ${rebuild.pct}%</span>
+    ${volumeProgressBar(rebuild.pct)}
+    <span class="dim xs volume-reason">${rebuild.replicas === 1 ? "1 replica" : `${rebuild.replicas} replicas`} catching up</span>`;
+  return `${x.state === "attached"
+    ? `<span class="pill ${x.robustness === "healthy" ? "ok" : x.robustness === "degraded" ? "med" : "crit"}"${x.health_reason ? ` data-tip="${esc(x.health_reason)}"` : ""}>${esc(x.robustness)}</span>`
+    // Detached is where a volume sits when nothing is using it - a stopped
+    // workload, not a fault. Longhorn calls it detached, so do we.
+    : `<span class="pill neutral" data-tip="Nothing is mounting this volume, so Longhorn reports no live replica health">detached</span>`}
+    ${volumeReason(x) ? `<span class="dim xs volume-reason">${esc(x.health_reason)}</span>` : ""}`;
+}
+
+const volumeUsageCell = x => `<div>${meter(x.used_pct || 0)}
+  <span class="dim xs mono">${x.actual_gb} / ${x.size_gb} GB</span></div>`;
+
+/* While anything rebuilds or restores, re-read the volumes every few seconds
+   and repaint only their Health and Usage cells, so the percentages move
+   without the table jumping. The request is an ordinary one: leaving the page
+   abandons it, which ends the loop, and coming back starts it again. */
+function volumeProgressWatch() {
+  clearTimeout(window.__volProgressTimer);
+  if (!(STATE.data.vols || []).some(volumeBusy)) return;
+  window.__volProgressTimer = setTimeout(async () => {
+    if (STATE.view !== "storage") return;
+    let vols;
+    try { vols = await api("/api/volumes"); } catch (e) { return volumeProgressWatch(); }
+    if (STATE.view !== "storage") return;
+    STATE.data.vols = vols;
+    for (const x of vols) {
+      const row = document.querySelector(`#views tr[data-vol="${CSS.escape(x.name)}"]`);
+      if (!row) continue;
+      const health = row.querySelector("td.volhealth"), usage = row.querySelector("td.volusage");
+      if (health) {
+        health.innerHTML = volumeHealthCell(x);
+        health.classList.toggle("hasreason", !!(volumeReason(x) || volumeBusy(x)));
+      }
+      if (usage) usage.innerHTML = volumeUsageCell(x);
+    }
+    volumeProgressWatch();
+  }, 4000);
+}
+
 async function viewStorage() {
   if (platformLacks("longhorn", "Volumes")) return;
   const [v, st, classes, v2, cap] = await Promise.all([api("/api/volumes"), api("/api/storage").catch(() => null),
@@ -189,22 +246,16 @@ async function viewStorage() {
   </div>` : ""}
   <div class="card flat pad0"><div class="tblwrap voltable"><table data-sort="volumes" class="tbl dense"><thead><tr>
    <th>Volume</th><th>Attached to</th><th>Health</th><th>Mode</th><th>Usage</th><th data-nosort>Last used</th><th></th>
-   </tr></thead><tbody>${rows.map(x => `<tr>
+   </tr></thead><tbody>${rows.map(x => `<tr data-vol="${esc(x.name)}">
      <td class="volname"><b>${esc(x.pvc_name || x.name.slice(0, 18))}</b>
        <span class="dim xs mono">${esc(x.namespace || "")}${x.node ? ` · ${esc(x.node.replace("harvester-", ""))}` : ""}</span></td>
      <td data-label="Attached to">${attachedWorkloads(x).length
        ? `<div class="attachlist">${attachedWorkloads(x).map(w => `<span class="tag info">${esc(w)}</span>`).join("")}</div>`
        : '<span class="dim">detached</span>'}${x.pod_status ? `<span class="dim xs"> · ${esc(x.pod_status)}</span>` : ""}</td>
-     <td data-label="Health" class="volhealth${volumeReason(x) ? " hasreason" : ""}">${x.state === "attached"
-       ? `<span class="pill ${x.robustness === "healthy" ? "ok" : x.robustness === "degraded" ? "med" : "crit"}"${x.health_reason ? ` data-tip="${esc(x.health_reason)}"` : ""}>${esc(x.robustness)}</span>`
-       // Detached is where a volume sits when nothing is using it - a stopped
-       // workload, not a fault. Longhorn calls it detached, so do we.
-       : `<span class="pill neutral" data-tip="Nothing is mounting this volume, so Longhorn reports no live replica health">detached</span>`}
-       ${volumeReason(x) ? `<span class="dim xs volume-reason">${esc(x.health_reason)}</span>` : ""}</td>
+     <td data-label="Health" class="volhealth${volumeReason(x) || volumeBusy(x) ? " hasreason" : ""}">${volumeHealthCell(x)}</td>
      <td data-label="Mode"><span class="tag">${esc((x.access_modes || ["?"]).map(m => m === "ReadWriteMany" ? "RWX" : m === "ReadWriteOnce" ? "RWO" : m).join(", "))}</span>
        <span class="tag ${+x.replicas === 1 ? "warn" : ""}" data-tip="${+x.replicas === 1 ? "One copy: if its node or disk fails, this volume is gone until they come back" : `${esc(x.replicas)} copies, each on a different node`}">×${esc(x.replicas)}</span><span class="tag ${x.engine === "v2" ? "info" : ""}" data-tip="${x.engine === "v2" ? "Longhorn's V2 data engine (SPDK)" : "Longhorn's V1 data engine - the default"}">${x.engine === "v2" ? "V2" : "V1"}</span></td>
-     <td data-label="Usage" class="volusage"><div>${meter(x.used_pct || 0)}
-       <span class="dim xs mono">${x.actual_gb} / ${x.size_gb} GB</span></div></td>
+     <td data-label="Usage" class="volusage">${volumeUsageCell(x)}</td>
      <td data-label="Last used" class="small dim">${x.state === "attached" ? '<span class="tag ok">in use</span>' : esc(fmtAgo(x.last_used_secs))}</td>
      <td class="volactions"><div class="row">
        <button class="iconbtn" data-need="operator" data-tip="Resize or change replicas" onclick='volumeEdit(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("edit")}</button>
@@ -221,6 +272,7 @@ async function viewStorage() {
     ${oldCopies.map(o => `<tr><td><b>${esc(o.was)}</b><div class="dim xs mono">${esc(o.pv)}</div></td><td>${esc(o.storage_class)}</td><td class="mono">${esc(o.size)}</td>
       <td><button class="btn sm danger" data-need="admin" onclick="reclassRemoveOld('${esc(o.pv)}')">Remove</button></td></tr>`).join("")}</tbody></table></div></div>` : ""}
   ${storageClassCard(classes, v2)}`);
+  volumeProgressWatch();
 }
 window.volumeCreate = async () => {
   const [nss, classes] = await Promise.all([api("/api/namespaces"),

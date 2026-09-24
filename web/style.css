@@ -828,6 +828,8 @@ html[data-motion="off"] .uptime .ld{animation:none}
 .whead>.row:last-child{flex:0 0 auto}
 .attachlist{display:inline-flex;flex-wrap:wrap;gap:4px;vertical-align:middle}
 .volume-reason{display:block;margin-top:2px;max-width:30ch;line-height:1.35;overflow-wrap:anywhere}
+.volprogress{margin-top:6px;max-width:16ch}
+.volprogress span{transition:width .6s ease}
 /* The volume list is long and mostly skim-read, so a row is one line of text
    with its secondary facts beside the primary ones rather than under them. */
 .voltable .volname{display:flex;align-items:baseline;flex-wrap:wrap;gap:3px 7px}
@@ -1341,6 +1343,7 @@ html[data-theme="light"] .compose-editor{background:#fff}
   .voltable .volusage{order:7;flex:1 1 100%;min-width:0}
   .voltable .volusage .mono{flex:0 0 auto}
   .voltable .volume-reason{flex:1 1 100%;max-width:none;margin:0}
+  .voltable .volprogress{flex:1 1 100%;max-width:none;margin:2px 0 0}
   .voltable td.empty{flex:1 1 100%;justify-content:center}
 }
 
