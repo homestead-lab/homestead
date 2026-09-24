@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.87")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.88")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2619,6 +2619,7 @@ import homestead_restructure as RESTRUCTURE
 import homestead_affinity as AFFINITY
 import homestead_portal as PORTAL
 import homestead_upgrades as UPGRADES
+import homestead_vmconsole as VMCONSOLE
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
@@ -2738,6 +2739,7 @@ SHARES.bind(kget, ksend, create_pvc, SMB_NAMESPACE, _cache)
 NETWORK.bind(kget, ksend, SYS_NS, DEFAULT_NS, LB_IP)
 CLUSTER.bind(kget, SYS_NS, lambda: cached("nodes", 5, get_nodes))
 CONSOLE_PROXY = CONSOLE.ConsoleProxy(API, TOKEN, CTX, DATA_DIR, SYS_NS, {DEFAULT_NS}, kget)
+VM_CONSOLE = VMCONSOLE.VmConsole(CONSOLE_PROXY, SYS_NS, kget)
 FILES.bind(kget, ksend, urllib.parse.urlparse(API), TOKEN, CTX, SYS_NS)
 
 
@@ -3043,7 +3045,7 @@ def needed_role(path, method):
         return "admin"
     if path == "/api/portal" and method != "GET":
         return "admin"
-    if path == "/api/console":
+    if path in ("/api/console", "/api/vm/console"):
         return "operator"
     if path in ADMIN_ROUTES:
         return "admin"
@@ -3231,6 +3233,8 @@ class H(BaseHTTPRequestHandler):
                 return
             if p == "/api/console":
                 return CONSOLE_PROXY.handle(self, self.user, q)
+            if p == "/api/vm/console":
+                return VM_CONSOLE.handle(self, self.user, q)
             if p.startswith("/api/icons/"):
                 return self._icon(p)
             if is_spa_route(p) or p == "/index.html" or is_page_path(p):
@@ -4185,7 +4189,7 @@ if __name__ == "__main__":
     threading.Thread(target=_upgrade_node_probe, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=MOVE_ENGINE.run, daemon=True).start()
-    # Join plans from 2.8.68-2.8.87 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.88 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     print(f"Homestead listening on :{port}", flush=True)

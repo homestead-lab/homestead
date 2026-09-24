@@ -57,7 +57,7 @@ def _read_exact(stream, length):
     return bytes(chunks)
 
 
-def read_frame(stream, require_mask=None):
+def read_frame(stream, require_mask=None, max_size=None):
     first, second = _read_exact(stream, 2)
     final, opcode = bool(first & 0x80), first & 0x0F
     masked, length = bool(second & 0x80), second & 0x7F
@@ -67,7 +67,7 @@ def read_frame(stream, require_mask=None):
         length = struct.unpack("!H", _read_exact(stream, 2))[0]
     elif length == 127:
         length = struct.unpack("!Q", _read_exact(stream, 8))[0]
-    if length > MAX_FRAME:
+    if length > (max_size or MAX_FRAME):
         raise ValueError("websocket frame is too large")
     mask = _read_exact(stream, 4) if masked else b""
     payload = _read_exact(stream, length)
@@ -152,7 +152,7 @@ class ConsoleProxy:
         if obj.get("status", {}).get("phase") != "Running":
             raise ValueError("the pod is not running")
 
-    def connect_upstream(self, path):
+    def connect_upstream(self, path, protocol="v4.channel.k8s.io"):
         port = self.api.port or 443
         raw = socket.create_connection((self.api.hostname, port), timeout=15)
         sock = self.ssl_context.wrap_socket(raw, server_hostname=self.api.hostname)
@@ -160,7 +160,7 @@ class ConsoleProxy:
         request = (f"GET {path} HTTP/1.1\r\nHost: {self.api.netloc}\r\n"
                    f"Authorization: Bearer {self.token}\r\nUpgrade: websocket\r\n"
                    "Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
-                   f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Protocol: v4.channel.k8s.io\r\n\r\n")
+                   f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Protocol: {protocol}\r\n\r\n")
         sock.sendall(request.encode())
         response = bytearray()
         while not response.endswith(b"\r\n\r\n") and len(response) < 65536:

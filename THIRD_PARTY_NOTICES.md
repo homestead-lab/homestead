@@ -11,6 +11,8 @@ are listed here with their terms.
 |---|---|---|
 | [Monaco Editor](https://github.com/microsoft/monaco-editor) 0.52.2 (a trimmed subset) | `web/vendor/monaco/` | MIT - © Microsoft Corporation; the full text is in [`web/vendor/monaco/LICENSE`](web/vendor/monaco/LICENSE) |
 | Codicon icon font, shipped with Monaco | `web/vendor/monaco/vs/base/browser/ui/codicons/codicon/codicon.ttf` | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) - © Microsoft Corporation, from [vscode-codicons](https://github.com/microsoft/vscode-codicons) |
+| [noVNC](https://github.com/novnc/noVNC) 1.7.0 (`core` and `vendor` from the npm package) | `web/vendor/novnc/` | MPL-2.0 - © the noVNC authors (see [`AUTHORS`](web/vendor/novnc/AUTHORS)); the full text is in [`web/vendor/novnc/LICENSE.txt`](web/vendor/novnc/LICENSE.txt). The files are unmodified, so their source is the upstream release. |
+| pako, shipped with noVNC | `web/vendor/novnc/vendor/pako/` | MIT - © Vitaly Puzrin; see [`web/vendor/novnc/vendor/pako/LICENSE`](web/vendor/novnc/vendor/pako/LICENSE) |
 
 ## In the Homestead container image
 

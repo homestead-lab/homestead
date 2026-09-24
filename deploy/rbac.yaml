@@ -122,6 +122,11 @@ rules:
       - virtualmachineinstances/pause
       - virtualmachineinstances/unpause
     verbs: [update]
+  # The VM console: the screen (VNC) and the serial port, streamed through
+  # Homestead so the browser never holds the service-account token.
+  - apiGroups: ["subresources.kubevirt.io"]
+    resources: [virtualmachineinstances/vnc, virtualmachineinstances/console]
+    verbs: [get]
   - apiGroups: ["cdi.kubevirt.io"]
     resources: [datavolumes]
     verbs: [get, list, watch, create, delete]

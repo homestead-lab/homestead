@@ -27,7 +27,7 @@ not affiliated with, endorsed, or sponsored by Lime Technology, Inc.
 | **Dashboard** | Cluster CPU/RAM/network/disk telemetry, transition-aware health, top consumers, configurable warnings |
 | **Containers** | Guided App Store and image deployment, Docker Compose import, independent or sidecar pods, guarded Kubernetes workload rename, edit/move/logs/console, autostart, LAN port and exposure editing, one storage picker for new and existing containers, hardware passthrough, update checks, monitored rollout with live image-pull state, rollback, groups with folding dividers and a filter per group, and a card or row layout |
 | **App Store** | The Community Applications catalogue laid out as Unraid shows it - monthly spotlights, recently added, trending and top performing - with a full page per app, from the public feed or one you set |
-| **Virtual machines** | Create from a Harvester image or an imported disk, power actions, and live migration between hosts |
+| **Virtual machines** | Create from a Harvester image or an imported disk, power actions, live migration between hosts, and a console: the VM's screen (VNC) or its serial port |
 | **Portal** | A page of tiles for every web interface - containers picked from their exposed ports with their logos, and the router, switches, access points and NAS around them - in sections, with a live reachability dot |
 | **Architecture** | VIP → workload → claim → Longhorn volume → replica dependency view |
 | **Networking** | Service, ClusterIP, VIP, ingress, listener ownership, orphaned-listener release, endpoint health and guided collision-free exposure |
@@ -67,10 +67,10 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.87`, the workflow publishes:
+For a release such as `v2.8.88`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.87
+ghcr.io/wjcloudy/homestead:2.8.88
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -81,8 +81,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.87
-git push origin v2.8.87
+git tag v2.8.88
+git push origin v2.8.88
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -452,7 +452,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.87/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.88/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -463,7 +463,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.87 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.88 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -823,6 +823,19 @@ a container's own logo - which follows the app if its logo changes - or an
 image from a public URL, fetched and cached the way workload logos are. Links
 are kept in the `homestead-portal` ConfigMap and are readable by every signed-in
 user, so passwords are refused in addresses.
+
+## VM console
+
+A running VM's card has **Console**, with two views. **Screen** is the VM's
+display over VNC, drawn by noVNC in the page and scaled to fit, with
+Ctrl+Alt+Del, full screen, and **Type text** to send a password or a long
+command key by key, since a VM has no clipboard to paste into. **Serial** is
+the VM's first serial port in the same terminal view as container consoles,
+for a VM that boots without a display. Both are KubeVirt subresources that
+Homestead proxies, so the browser never holds the service-account token; like
+container consoles they are for operators, and each session's start and end
+are audited while what is typed and shown is not recorded. noVNC is vendored
+under `web/vendor/novnc` and loaded only when a console opens.
 
 ## Container groups
 

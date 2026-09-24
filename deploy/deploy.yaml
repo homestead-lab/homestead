@@ -116,6 +116,11 @@ rules:
       - virtualmachineinstances/pause
       - virtualmachineinstances/unpause
     verbs: [update]
+  # The VM console: the screen (VNC) and the serial port, streamed through
+  # Homestead so the browser never holds the service-account token.
+  - apiGroups: ["subresources.kubevirt.io"]
+    resources: [virtualmachineinstances/vnc, virtualmachineinstances/console]
+    verbs: [get]
   - apiGroups: ["cdi.kubevirt.io"]
     resources: [datavolumes]
     verbs: [get, list, watch, create, delete]
@@ -206,7 +211,7 @@ metadata:
   labels:
     app: homestead
   annotations:
-    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.87"}'
+    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.88"}'
 spec:
   replicas: 1
   strategy:
@@ -238,7 +243,7 @@ spec:
           tolerationSeconds: 15
       initContainers:
         - name: data-permissions
-          image: ghcr.io/wjcloudy/homestead:2.8.87
+          image: ghcr.io/wjcloudy/homestead:2.8.88
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "chown 10001:10001 /data && chmod 0770 /data"]
           securityContext:
@@ -255,7 +260,7 @@ spec:
               mountPath: /data
       containers:
         - name: homestead
-          image: ghcr.io/wjcloudy/homestead:2.8.87
+          image: ghcr.io/wjcloudy/homestead:2.8.88
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT

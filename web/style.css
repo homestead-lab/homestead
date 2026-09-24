@@ -1511,3 +1511,10 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .upgrade-bar span{display:block;height:100%;border-radius:inherit;background:var(--med);transition:width .4s var(--e)}
 .upgrade-bar.succeeded span{background:var(--ok)}
 .upgrade-bar.failed span{background:var(--crit)}
+
+/* VM console: the screen fills the dialog's width at the VM's aspect. */
+.vmc-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.vmc-tools{display:flex;gap:6px;margin-left:auto;flex-wrap:wrap}
+.vmc-screen{width:100%;height:max(240px,min(calc(88vh - 300px),720px));background:#000;border-radius:10px;overflow:hidden;border:1px solid var(--line)}
+.vmc-screen:fullscreen{height:100vh;border-radius:0;border:0}
+

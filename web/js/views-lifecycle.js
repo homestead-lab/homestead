@@ -403,7 +403,8 @@ async function viewVMs() {
         <div><div class="dim xs">MIGRATE</div><div>${v.migratable ? '<span class="tag ok">live</span>' : '<span class="dim">no</span>'}</div></div>
       </div>
       <div class="row wacts">
-        ${v.running ? `<button class="btn sm" onclick="vmPower('${esc(v.ns)}','${esc(v.name)}','stop')">Stop</button>
+        ${v.running ? `<button class="btn sm" data-need="operator" title="The VM's screen, or its serial port" onclick="vmConsole('${esc(v.ns)}','${esc(v.name)}')">${icon("console")}Console</button>
+          <button class="btn sm" onclick="vmPower('${esc(v.ns)}','${esc(v.name)}','stop')">Stop</button>
           <button class="btn sm" onclick="vmPower('${esc(v.ns)}','${esc(v.name)}','restart')">Restart</button>`
           : `<button class="btn sm" onclick="vmPower('${esc(v.ns)}','${esc(v.name)}','start')">Start</button>`}
         ${v.migratable ? `<button class="btn sm" onclick="vmMove('${esc(v.ns)}','${esc(v.name)}')">Move host</button>` : ""}
