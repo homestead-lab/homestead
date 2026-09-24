@@ -125,8 +125,10 @@ rules:
   - apiGroups: ["cdi.kubevirt.io"]
     resources: [datavolumes]
     verbs: [get, list, watch, create, delete]
+  # upgrades and versions: the Cluster page shows what Harvester offers and
+  # follows an upgrade started in Harvester's dashboard; it never starts one.
   - apiGroups: ["harvesterhci.io"]
-    resources: [virtualmachineimages, settings, upgrades]
+    resources: [virtualmachineimages, settings, upgrades, versions]
     verbs: [get, list]
   # Cluster health reads certificate request state only; certificate/key bodies
   # are never returned to the UI and Homestead cannot approve CSRs.

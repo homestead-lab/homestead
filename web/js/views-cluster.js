@@ -87,8 +87,77 @@ async function viewCluster() {
       <div class="csub">${esc(report.onboarding?.reason || "Review the current control-plane layout before joining another host.")}</div></div>
       <button class="btn" data-need="admin" onclick="clusterOnboarding()">Add a host</button></section>
   </div>
+  <div id="clusterUpgrades">${STATE.data.upgradeHtml || ""}</div>
   <div id="clusterCleanup">${STATE.data.cleanupHtml || ""}</div>`);
   // Admin only, and a round trip of its own: the page does not wait for it.
   if (window.can && can("admin")) clusterCleanupPaint();
+  // GitHub is asked at most hourly, so this is cheap; still, the page does not wait.
+  clusterUpgradesPaint();
+}
+
+/* ---------------- Harvester releases and upgrades ----------------
+   Shown and followed, never started: an upgrade rewrites every host, so it
+   is begun from Harvester's own dashboard. */
+async function clusterUpgradesPaint(force = false) {
+  try {
+    const report = await api("/api/cluster/upgrades" + (force ? "?force=1" : ""));
+    STATE.data.upgrades = report;
+    STATE.data.upgradeHtml = upgradesCard(report);
+    const host = $("#clusterUpgrades");
+    if (host) host.innerHTML = STATE.data.upgradeHtml;
+    if (force) toast("releases checked", "ok");
+  } catch (e) { if (force) toast(e.message, "bad"); }
+}
+window.clusterUpgradesPaint = clusterUpgradesPaint;
+
+function releaseDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  return isNaN(date) ? "" : date.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
+
+function releaseRow(label, row, kind) {
+  if (!row) return "";
+  return `<div class="release-row"><div><span class="cluster-kicker">${esc(label)}</span>
+      <div><b>${esc(row.tag)}</b> <span class="pill slim ${kind === "stable" ? "ok" : "warn"}">${esc(row.channel === "stable" ? "stable" : row.channel)}</span>
+        ${row.offered ? '<span class="pill slim info" data-tip="Harvester lists this version, so its dashboard shows an Upgrade button for it">offered by Harvester</span>' : ""}</div>
+      <div class="dim xs">${esc(releaseDate(row.published))}${row.channel !== "stable" ? " · a test build: for a lab cluster, not one you depend on" : ""}</div></div>
+    ${row.url ? `<a class="btn sm" href="${esc(row.url)}" target="_blank" rel="noopener noreferrer">${icon("ext")}Release notes</a>` : ""}</div>`;
+}
+
+function upgradeProgress(up) {
+  const stateText = up.state === "succeeded" ? "finished" : up.state === "failed" ? "failed" : "in progress";
+  return `<div class="upgrade-live ${esc(up.state)}">
+    <div class="between"><div><span class="cluster-kicker">${up.state === "running" ? "UPGRADE UNDER WAY" : "LAST UPGRADE"}</span>
+      <div><b>${esc(up.previous ? `v${up.previous.replace(/^v/, "")} → ` : "")}${esc(up.version)}</b> · ${esc(stateText)}
+        <span class="dim xs">${up.started ? `started ${esc(fmtAgo(Math.max(0, (Date.now() - Date.parse(up.started)) / 1000)))}` : ""}</span></div></div>
+      ${clusterPill(up.state === "succeeded" ? "healthy" : up.state === "failed" ? "critical" : "attention", `${up.progress}%`)}</div>
+    <div class="upgrade-bar ${esc(up.state)}"><span style="width:${Math.max(0, Math.min(100, +up.progress || 0))}%"></span></div>
+    ${up.message ? `<div class="note ${up.state === "failed" ? "bad" : ""}">${esc(up.message)}</div>` : ""}
+    <div class="upgrade-steps">${up.steps.map(step => `<span class="upgrade-step ${esc(step.state)}" ${step.message ? `data-tip="${esc(step.message)}"` : ""}>${esc(step.label)}</span>`).join("")}</div>
+    ${up.nodes.length ? `<table class="tbl dense stack upgrade-nodes"><thead><tr><th>Node</th><th>State</th><th data-nosort>Detail</th></tr></thead><tbody>
+      ${up.nodes.map(node => `<tr><td><b>${esc(node.name)}</b></td>
+        <td data-label="State"><span class="pill slim ${/succeed/i.test(node.state) ? "ok" : /fail/i.test(node.state) ? "crit" : "med"}">${esc(node.state || "waiting")}</span></td>
+        <td data-label="Detail" class="dim xs">${esc(node.message || node.reason || "")}</td></tr>`).join("")}</tbody></table>` : ""}</div>`;
+}
+
+function upgradesCard(r) {
+  const behind = r.stable && r.current;
+  const status = !r.current ? "Harvester did not report its version"
+    : behind ? `${r.stable.tag} is out; this cluster runs v${r.current}` : `v${r.current} is the newest stable release`;
+  return `<section class="card flat cluster-wide upgrades-card" style="margin-top:14px">
+    <div class="settings-card-head"><div><div class="ctitle">Harvester releases</div>
+      <div class="csub">${esc(status)}. Upgrades are started from Harvester's own dashboard; Homestead follows them here.</div></div>
+      <div class="row">${clusterPill(r.active ? "attention" : behind ? "attention" : "healthy", r.active ? "upgrading" : behind ? "update available" : "up to date")}
+        <button class="btn sm" onclick="clusterUpgradesPaint(true)">${icon("refresh")}Check</button></div></div>
+    ${r.last ? upgradeProgress(r.last) : ""}
+    <div class="release-list">
+      ${releaseRow("NEWEST STABLE", r.stable, "stable")}
+      ${releaseRow("NEWEST TEST BUILD", r.test, "test")}
+      ${!r.stable && !r.test ? `<div class="dim small">${r.error ? `Could not reach GitHub for Harvester's releases: ${esc(r.error)}` : "Nothing newer than this cluster's version has been published."}</div>` : ""}
+    </div>
+    ${(r.offered || []).length ? `<div class="dim xs" style="margin-top:8px">Harvester offers: ${r.offered.map(o => `<span class="tag">${esc(o.version)}</span>`).join("")}</div>` : ""}
+    ${r.stable && !r.stable.offered ? `<div class="note" style="margin-top:10px">Harvester shows an Upgrade button once it lists a version, which its upgrade checker does for supported upgrade paths - sometimes a few days after release. A test build is never offered: installing one means creating its Version by hand, as Harvester's upgrade guide describes.</div>` : ""}
+  </section>`;
 }
 

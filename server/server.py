@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.86")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.87")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2618,6 +2618,7 @@ import homestead_namespaces as NSMOD
 import homestead_restructure as RESTRUCTURE
 import homestead_affinity as AFFINITY
 import homestead_portal as PORTAL
+import homestead_upgrades as UPGRADES
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
@@ -2633,6 +2634,7 @@ SMART.bind(kget, DEFAULT_NS, AUTH.internal_signing_key)
 OPS.bind(kget, DATA_DIR, UPDATES.progress, SMART.progress)
 RESTRUCTURE.bind(kget, ksend, raw_get)
 AFFINITY.bind(kget)
+UPGRADES.bind(kget)
 PORTAL.bind(kget, ksend, DEFAULT_NS, lambda: cached("wl", 5, get_workloads),
             lambda source: ICONS.persist(source, DATA_DIR), lambda reference: ICONS.data_url(reference, DATA_DIR))
 OPS.RESOLVERS["restructure"] = RESTRUCTURE.resolve
@@ -2680,6 +2682,8 @@ def _alert_sources():
     take("health", lambda: ALERTS.health_facts(cached("ov", 10, get_overview)))
     take("jobs", lambda: ALERTS.job_facts(OPS.list_operations()))
     take("joins", lambda: ALERTS.join_facts(kget("/api/v1/nodes").get("items", [])))
+    take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
+        ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", ""))))
     if PUSH.wanted_by(["updates"]) and time.time() - _last_update_scan[0] > UPDATE_SCAN_EVERY:
         # Only scanned for someone who asked: it asks every registry.
         _last_update_scan[0] = time.time()
@@ -3292,6 +3296,9 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("network", 5, NETWORK.inventory))
             if p == "/api/cluster":
                 return self._send(200, cached("cluster", 15, CLUSTER.inventory))
+            if p == "/api/cluster/upgrades":
+                current = ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", "")
+                return self._send(200, UPGRADES.report(current, force=(q.get("force") or [""])[0] == "1"))
             # What this cluster offers another one. Read-only, and the half
             # of a move the far cluster calls.
             if p == "/api/move/inventory":
@@ -4178,7 +4185,7 @@ if __name__ == "__main__":
     threading.Thread(target=_upgrade_node_probe, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=MOVE_ENGINE.run, daemon=True).start()
-    # Join plans from 2.8.68-2.8.86 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.87 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     print(f"Homestead listening on :{port}", flush=True)

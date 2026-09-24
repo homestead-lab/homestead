@@ -67,10 +67,10 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.86`, the workflow publishes:
+For a release such as `v2.8.87`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.86
+ghcr.io/wjcloudy/homestead:2.8.87
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -81,8 +81,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.86
-git push origin v2.8.86
+git tag v2.8.87
+git push origin v2.8.87
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -339,6 +339,25 @@ Certificate monitoring is read-only. The supplied ClusterRole may list
 Kubernetes certificate-signing requests but cannot approve them, and Homestead
 never returns CSR bodies, issued certificates, or private keys to the browser.
 
+### Harvester releases and upgrades
+
+The Cluster page lists what there is to upgrade to: the newest stable Harvester
+release and the newest test build (release candidates and development builds
+newer than that), each with its release notes, from Harvester's GitHub
+releases checked at most hourly. A version this cluster's Harvester itself
+lists is marked **offered by Harvester** - only those get an Upgrade button in
+Harvester's dashboard, often a few days after release; a test build never
+does.
+
+Homestead does not start upgrades: one rewrites every host, and that belongs
+in Harvester's own dashboard. It follows one instead. While an upgrade runs,
+the card shows each stage - upgrade image, package repository, node
+preparation, system services, nodes - and each host's state, and the last
+upgrade stays shown once it has finished or failed. With notifications on,
+an upgrade starting, finishing or failing is announced, as is a new stable
+release (under Updates). Reading this needs the `versions` and `upgrades`
+resources in `harvesterhci.io`, which Homestead's permissions include.
+
 ## Publishing through a Cloudflare Tunnel
 
 Homestead can deploy, delete, open shells in and power off anything in the
@@ -433,7 +452,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.86/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.87/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -444,7 +463,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.86 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.87 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour

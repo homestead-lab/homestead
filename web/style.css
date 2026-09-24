@@ -1493,3 +1493,21 @@ html[data-theme="light"] .compose-editor{background:#fff}
   .pe-row{grid-template-columns:1fr auto}
   .pe-icon{display:none}
 }
+
+/* Harvester releases and upgrade progress on the Cluster page. */
+.release-list{display:grid;gap:8px;margin-top:12px}
+.release-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:11px}
+.release-row .pill{margin-left:4px}
+.upgrade-live{margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:12px}
+.upgrade-live.running{border-color:rgba(245,158,11,.45)}
+.upgrade-live.failed{border-color:rgba(239,68,68,.5)}
+.upgrade-steps{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 10px}
+.upgrade-step{padding:4px 10px;border-radius:999px;font-size:11.5px;border:1px solid var(--line2);color:var(--mut)}
+.upgrade-step.done{color:var(--ok);border-color:rgba(48,186,120,.45)}
+.upgrade-step.running{color:var(--tx);border-color:rgba(245,158,11,.6)}
+.upgrade-step.failed{color:var(--crit);border-color:rgba(239,68,68,.6)}
+.upgrade-nodes{margin-top:4px}
+.upgrade-bar{height:6px;border-radius:99px;background:rgba(255,255,255,.07);margin:10px 0;overflow:hidden}
+.upgrade-bar span{display:block;height:100%;border-radius:inherit;background:var(--med);transition:width .4s var(--e)}
+.upgrade-bar.succeeded span{background:var(--ok)}
+.upgrade-bar.failed span{background:var(--crit)}

@@ -184,6 +184,30 @@ def join_facts(nodes):
     return facts
 
 
+def upgrade_facts(report):
+    """A Harvester upgrade starting, finishing or failing, and a new stable
+    release to upgrade to. Each is said once."""
+    facts = []
+    for up in (report or {}).get("history") or []:
+        name, version = up.get("name", ""), up.get("version", "")
+        facts.append({"key": f"platform:{name}:started", "category": "health", "event": True, "severity": "info",
+                      "title": f"Harvester upgrade to {version} started", "body": "Hosts are upgraded one at a time",
+                      "href": "/system/cluster"})
+        if up.get("state") in ("succeeded", "failed"):
+            ok = up["state"] == "succeeded"
+            facts.append({"key": f"platform:{name}:{up['state']}", "category": "health", "event": True,
+                          "severity": "info" if ok else "critical",
+                          "title": f"Harvester upgrade to {version} {'finished' if ok else 'failed'}",
+                          "body": "" if ok else (up.get("message") or "See the Cluster page"),
+                          "href": "/system/cluster"})
+    stable = (report or {}).get("stable")
+    if stable and (report or {}).get("current"):
+        facts.append({"key": f"platform:release:{stable['tag']}", "category": "updates", "event": True,
+                      "severity": "info", "title": f"Harvester {stable['tag']} is out",
+                      "body": f"This cluster runs v{report['current']}", "href": "/system/cluster"})
+    return facts
+
+
 def update_facts(report):
     facts = []
     for workload in (report or {}).get("workloads") or []:
