@@ -1562,3 +1562,22 @@ tr.clickable{cursor:pointer}
 @media(max-width:560px){.mqtt-grid,.hist-grid{grid-template-columns:1fr}}
 .platform-missing{padding:28px}
 #nav a[hidden]{display:none}
+
+/* Resources: kinds beside their objects. */
+.res-layout{display:grid;grid-template-columns:230px 1fr;gap:14px;align-items:start}
+.res-kinds{padding:10px;position:sticky;top:76px;max-height:calc(100vh - 100px);overflow:auto}
+.res-filter{margin-bottom:8px}
+.res-kind-select{display:none}
+.res-group{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin:12px 6px 4px}
+.res-kind{display:block;width:100%;text-align:left;background:none;border:0;color:var(--tx);font:inherit;font-size:13px;padding:5px 8px;border-radius:7px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.res-kind:hover{background:rgba(255,255,255,.05)}
+.res-kind.on{background:rgba(255,255,255,.1);font-weight:650}
+.res-head{margin-bottom:10px;gap:10px;flex-wrap:wrap}
+.res-head select{width:auto}
+.res-yaml{width:100%;min-height:52vh;white-space:pre}
+@media(max-width:800px){
+  .res-layout{grid-template-columns:1fr}
+  .res-kinds{position:static;max-height:none}
+  .res-kind-list,.res-filter{display:none}
+  .res-kind-select{display:block}
+}

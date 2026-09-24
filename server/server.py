@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.95")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.96")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2627,6 +2627,7 @@ import homestead_helm as HELM
 import homestead_mqtt as MQTT
 import homestead_history as HISTORY
 import homestead_platform as PLATFORM
+import homestead_resources as RESOURCES
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
@@ -2675,6 +2676,18 @@ HELM.bind(kget, ksend)
 MQTT.bind(kget, ksend, DEFAULT_NS, lambda: mqtt_snapshot(), LEADER.is_leader)
 HISTORY.bind(DATA_DIR)
 PLATFORM.bind(kget)
+
+
+def ktable(path, timeout=20):
+    """A list as the API server prints it: the columns kubectl get shows."""
+    req = urllib.request.Request(API + path, headers={
+        "Authorization": f"Bearer {TOKEN}",
+        "Accept": "application/json;as=Table;v=v1;g=meta.k8s.io,application/json"})
+    with urllib.request.urlopen(req, context=CTX, timeout=timeout) as r:
+        return json.loads(r.read().decode())
+
+
+RESOURCES.bind(kget, ksend, ktable)
 OPS.RESOLVERS["helm"] = HELM.job_status
 NSMOD.bind(kget, ksend, DEFAULT_NS, _own_namespace())
 ALERTS.bind(DATA_DIR)
@@ -3052,7 +3065,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
 # explicit allowlist: an unknown path must not accidentally shadow an API 404.
 SPA_ROUTES = frozenset({
     "/", "/architecture", "/nodes", "/deploy", "/containers", "/vms",
-    "/app-store", "/shares", "/volumes", "/image-cache", "/data-protection", "/portal", "/helm",
+    "/app-store", "/shares", "/volumes", "/image-cache", "/data-protection", "/portal", "/helm", "/resources",
     "/schedules", "/import", "/events", "/networking", "/system/cluster", "/settings",
 })
 
@@ -3192,8 +3205,10 @@ def needed_role(path, method):
         return "admin"
     if path in ("/api/portal", "/api/self/replicas", "/api/ipam/unifi", "/api/mqtt", "/api/mqtt/test") and method != "GET":
         return "admin"
-    # A chart can make anything anywhere in the cluster.
-    if path in ("/api/helm/install", "/api/helm/upgrade", "/api/helm/uninstall"):
+    # A chart can make anything anywhere in the cluster, and so can raw YAML;
+    # a secret's values are for admins only.
+    if path in ("/api/helm/install", "/api/helm/upgrade", "/api/helm/uninstall", "/api/resources/save",
+                "/api/resources/delete", "/api/resources/create", "/api/resources/reveal"):
         return "admin"
     if path in ("/api/console", "/api/vm/console"):
         return "operator"
@@ -3454,6 +3469,17 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, homestead_replicas())
             if p == "/api/ipam":
                 return self._send(200, IPAM.view())
+            if p in ("/api/resources/list", "/api/resources/object", "/api/resources/reveal"):
+                arg = lambda key: (q.get(key) or [""])[0]
+                if p == "/api/resources/list":
+                    return self._send(200, RESOURCES.list_objects(arg("group"), arg("version"), arg("resource"), arg("ns")))
+                return self._send(200, RESOURCES.get_object(arg("group"), arg("version"), arg("resource"), arg("ns"),
+                                                            arg("name"), reveal=p.endswith("reveal")))
+            if p == "/api/resources/kinds":
+                return self._send(200, RESOURCES.discover(force=(q.get("force") or [""])[0] == "1"))
+            if p == "/api/resources/events":
+                return self._send(200, RESOURCES.events_for((q.get("ns") or [""])[0], (q.get("name") or [""])[0],
+                                                            (q.get("uid") or [""])[0]))
             if p == "/api/platform":
                 return self._send(200, PLATFORM.detect(force=(q.get("force") or [""])[0] == "1"))
             if p == "/api/platform/join":
@@ -3826,6 +3852,14 @@ class H(BaseHTTPRequestHandler):
                                                 "/helm", {"namespace": HELM.CONTROLLER_NS, "name": job},
                                                 "Waiting for the Helm controller")
                 return self._send(200, result)
+            if p == "/api/resources/save":
+                return self._send(200, RESOURCES.save_object(b.get("group", ""), b.get("version", ""), b.get("resource", ""),
+                                                             b.get("ns", ""), b.get("name", ""), b.get("yaml", "")))
+            if p == "/api/resources/delete":
+                return self._send(200, RESOURCES.delete_object(b.get("group", ""), b.get("version", ""), b.get("resource", ""),
+                                                               b.get("ns", ""), b.get("name", "")))
+            if p == "/api/resources/create":
+                return self._send(200, RESOURCES.create_objects(b.get("yaml", ""), b.get("ns") or DEFAULT_NS))
             if p == "/api/mqtt":
                 return self._send(200, MQTT.save(b))
             if p == "/api/mqtt/test":
@@ -4395,7 +4429,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.95 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.96 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

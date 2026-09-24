@@ -101,6 +101,12 @@ def _covers(rule, grant):
     return not names or (name is not None and name in names)
 
 
+def _written(rule):
+    """A rule as a comparable value: its lists sorted, empty fields dropped."""
+    return tuple(sorted((key, tuple(sorted(value)) if isinstance(value, list) else value)
+                        for key, value in rule.items() if value))
+
+
 def missing(live, wanted):
     """What `wanted` grants that `live` does not."""
     return [grant for rule in wanted for grant in _grants(rule)
@@ -183,8 +189,12 @@ def reconcile():
                       "detail": f"Homestead cannot read its role {role}: {str(error)[:100]}"})
     rules = live.get("rules") or []
     gaps, surplus = missing(rules, wanted), missing(wanted, rules)
+    # Rules the manifest does not list, even ones a broader rule already
+    # covers: the role is kept exactly as written, so it reads the same.
+    written = [_written(rule) for rule in wanted]
+    extra = [rule for rule in rules if _written(rule) not in written]
     tidied = _own_binding(me["account"])
-    if not gaps and not surplus:
+    if not gaps and not surplus and not extra:
         return _note({"state": "current", "account": me["account"], "role": role,
                       "detail": f"{role} matches this release" + (f"; {tidied}" if tidied else "")})
     body = {"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRole",
@@ -198,9 +208,10 @@ def reconcile():
                       "detail": f"this release needs {_plural(len(gaps), 'permission')} {role} does not have, "
                                 f"and Homestead may not change its role itself (HTTP {error.code}); run the command once"})
     changes = [f"added {_plural(len(gaps), 'permission')}"] if gaps else []
-    changes += [f"removed {_plural(len(surplus), 'permission')} it no longer uses"] if surplus else []
+    removed = len(surplus) or len(extra)
+    changes += [f"removed {_plural(removed, 'permission')} it no longer uses"] if removed else []
     return _note({"state": "updated", "account": me["account"], "role": role, "added": len(gaps),
-                  "removed": len(surplus), "detail": f"{role} updated: {' and '.join(changes)}"})
+                  "removed": removed, "detail": f"{role} updated: {' and '.join(changes)}"})
 
 
 # ------------------------------------------------- the old annotation domain

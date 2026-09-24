@@ -142,6 +142,13 @@ rules:
   - apiGroups: ["helm.cattle.io"]
     resources: [helmcharts]
     verbs: [get, list, watch, create, update, patch, delete]
+  # Resources: every kind the cluster serves, as a general Kubernetes UI shows
+  # it - read by anyone signed in, and edited, created or deleted there by an
+  # admin. This is what a Headlamp user expects, and it makes plain what the
+  # escalate rule below already allows: Homestead can change the cluster.
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: [get, list, watch, create, update, patch, delete]
   # Replicas elect the one that raises alerts and advances moves.
   - apiGroups: ["coordination.k8s.io"]
     resources: [leases]

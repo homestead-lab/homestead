@@ -38,6 +38,7 @@ not affiliated with, endorsed, or sponsored by Lime Technology, Inc.
 | **Storage** | RWO/RWX volume creation, growth and guarded deletion, file browsing and editing, storage-class inventory and creation, usage, health, snapshots, backups and recurring jobs |
 | **Hardware** | Host device browser and reusable mappings for iGPU, Coral, USB/PCIe and other devices |
 | **Import** | Docker Compose files checked as you type, Unraid/Docker workload and appdata import, several folders across several volumes, measured sizing with a per-volume capacity preflight, byte-weighted progress, named failures, editable seed configuration |
+| **Resources** | Every kind the cluster serves, custom resources included, with the API server's own columns; any object as YAML with its events, edited, deleted or created from YAML - what a Headlamp user reaches for |
 | **Administration** | Direct URLs/breadcrumbs, persistent activity tray, viewer/operator/admin roles, namespaces for your apps, appearance, thresholds and version details |
 | **App & alerts** | Installable on phones and desktops over HTTPS, with push notifications for outages, degraded storage and workloads, failed jobs, joining hosts and image updates |
 
@@ -69,10 +70,10 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.95`, the workflow publishes:
+For a release such as `v2.8.96`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.95
+ghcr.io/wjcloudy/homestead:2.8.96
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -83,8 +84,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.95
-git push origin v2.8.95
+git tag v2.8.96
+git push origin v2.8.96
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -318,6 +319,27 @@ entered by hand, including an `oci://` registry. Releases installed some other
 way are shown, not changed - whatever installed them would change them back.
 Installing, upgrading and uninstalling are admin actions, followed in the job
 tray.
+
+## Resources
+
+Homestead's own pages cover what a homelab mostly does; **System → Resources**
+covers the rest, for anyone used to Headlamp, Lens or kubectl. It lists every
+kind the API server serves - built in, Harvester's, Longhorn's, KubeVirt's and
+any custom resource - grouped as Headlamp groups them (Workloads, Network,
+Storage, Configuration, Access, Cluster, Custom resources). Each kind is listed
+with the columns the API server itself prints for it, the ones `kubectl get`
+shows, so a custom resource gets its own columns too. An object opens as YAML,
+without the server's bookkeeping (managed fields, last-applied), with its
+recent events, and a pod with its logs.
+
+Admins can edit an object's YAML and save it - saved as a replace carrying the
+version it was read at, so a change made elsewhere meanwhile is refused rather
+than overwritten - delete one after typing its name, or create objects from
+pasted YAML, several documents at once. Secrets are listed with their keys;
+their values are sent only when an admin asks to reveal them. To serve this,
+Homestead's role reads every kind and can change any; that was already
+possible through its permission to extend its own role, and is now stated
+plainly in `deploy/rbac.yaml`.
 
 ## Networking and virtual IPs
 
@@ -591,7 +613,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.95/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.96/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -602,7 +624,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.95 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.96 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour

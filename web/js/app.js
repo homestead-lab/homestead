@@ -18,6 +18,7 @@ const VIEWS = {
   schedules: ["Schedules",      "system",    viewSchedules, true],
   imports:   ["Import",         "system",    viewImport,    false],
   events:    ["Events",         "system",    viewEvents,    true],
+  resources: ["Resources",      "system",    viewResources, true],
   cluster:   ["Cluster",        "system",    viewCluster,   true],
   settings:  ["Settings",       "system",    viewSettings,  false],
 };

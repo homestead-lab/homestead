@@ -136,6 +136,13 @@ rules:
   - apiGroups: ["helm.cattle.io"]
     resources: [helmcharts]
     verbs: [get, list, watch, create, update, patch, delete]
+  # Resources: every kind the cluster serves, as a general Kubernetes UI shows
+  # it - read by anyone signed in, and edited, created or deleted there by an
+  # admin. This is what a Headlamp user expects, and it makes plain what the
+  # escalate rule below already allows: Homestead can change the cluster.
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: [get, list, watch, create, update, patch, delete]
   # Replicas elect the one that raises alerts and advances moves.
   - apiGroups: ["coordination.k8s.io"]
     resources: [leases]
@@ -220,7 +227,7 @@ metadata:
   labels:
     app: homestead
   annotations:
-    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.95"}'
+    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.96"}'
 spec:
   replicas: 1
   strategy:
@@ -256,7 +263,7 @@ spec:
           tolerationSeconds: 15
       initContainers:
         - name: data-permissions
-          image: ghcr.io/wjcloudy/homestead:2.8.95
+          image: ghcr.io/wjcloudy/homestead:2.8.96
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "chown 10001:10001 /data && chmod 0770 /data"]
           securityContext:
@@ -273,7 +280,7 @@ spec:
               mountPath: /data
       containers:
         - name: homestead
-          image: ghcr.io/wjcloudy/homestead:2.8.95
+          image: ghcr.io/wjcloudy/homestead:2.8.96
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT

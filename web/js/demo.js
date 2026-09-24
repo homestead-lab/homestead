@@ -317,7 +317,7 @@
       detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.95", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.96", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
@@ -404,20 +404,20 @@
       user: "admin", added: "2026-09-22 17:02" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "garage") return { name, version: "2.8.95", protocol: 1, local_version: "2.8.95",
+      if (name === "garage") return { name, version: "2.8.96", protocol: 1, local_version: "2.8.96",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "garage runs 2.8.95 and this one 2.8.95. Moves work between them; garage is the newer of the two." };
+        message: "garage runs 2.8.96 and this one 2.8.96. Moves work between them; garage is the newer of the two." };
       return name === "attic"
-        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.95", local_protocol: 1,
+        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.96", local_protocol: 1,
             state: "behind", compatible: false,
-            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.95). Update attic first." }
-        : { name, version: "2.8.95", protocol: 1, local_version: "2.8.95", local_protocol: 1,
-            state: "same", compatible: true, message: "Both run Homestead 2.8.95." };
+            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.96). Update attic first." }
+        : { name, version: "2.8.96", protocol: 1, local_version: "2.8.96", local_protocol: 1,
+            state: "same", compatible: true, message: "Both run Homestead 2.8.96." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "shed", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.95", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.96", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -880,6 +880,30 @@
       agent: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_URL=https://192.0.2.50:6443 K3S_TOKEN=<token> sh -',
       server_join: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_TOKEN=<token> sh -s - server --server https://192.0.2.50:6443',
       longhorn: "sudo apt-get install -y open-iscsi nfs-common   # or: sudo dnf install -y iscsi-initiator-utils nfs-utils" },
+    "/api/resources/kinds": [
+      ["Workloads", "", "v1", "pods", "Pod", true], ["Workloads", "apps", "v1", "deployments", "Deployment", true],
+      ["Workloads", "apps", "v1", "statefulsets", "StatefulSet", true], ["Workloads", "apps", "v1", "daemonsets", "DaemonSet", true],
+      ["Workloads", "batch", "v1", "jobs", "Job", true], ["Workloads", "batch", "v1", "cronjobs", "CronJob", true],
+      ["Network", "", "v1", "services", "Service", true], ["Network", "networking.k8s.io", "v1", "ingresses", "Ingress", true],
+      ["Storage", "", "v1", "persistentvolumeclaims", "PersistentVolumeClaim", true], ["Storage", "storage.k8s.io", "v1", "storageclasses", "StorageClass", false],
+      ["Configuration", "", "v1", "configmaps", "ConfigMap", true], ["Configuration", "", "v1", "secrets", "Secret", true],
+      ["Access", "", "v1", "serviceaccounts", "ServiceAccount", true], ["Access", "rbac.authorization.k8s.io", "v1", "clusterroles", "ClusterRole", false],
+      ["Cluster", "", "v1", "nodes", "Node", false], ["Cluster", "", "v1", "namespaces", "Namespace", false],
+      ["Cluster", "apiextensions.k8s.io", "v1", "customresourcedefinitions", "CustomResourceDefinition", false],
+      ["Custom resources", "longhorn.io", "v1beta2", "volumes", "Volume", true], ["Custom resources", "kubevirt.io", "v1", "virtualmachines", "VirtualMachine", true],
+      ["Custom resources", "harvesterhci.io", "v1beta1", "settings", "Setting", false],
+    ].map(([category, group, version, resource, kind, namespaced]) => ({ category, group, version, resource, kind, namespaced, verbs: ["get", "list"], short: [] })),
+    "/api/resources/list": url => {
+      const resource = url.searchParams.get("resource");
+      if (resource === "namespaces") return { columns: [{ name: "Name" }], rows: ["default", "lab", "longhorn-system", "harvester-system"].map(name => ({ name, namespace: "", cells: [name] })) };
+      if (resource === "pods") return { columns: [{ name: "Name", description: "" }, { name: "Ready", description: "" }, { name: "Status", description: "" }, { name: "Restarts", description: "" }, { name: "Age", description: "" }],
+        rows: [["frigate-7d8f6d4c9-demo", "1/1", "Running", 0, "5d"], ["home-assistant-6b9c-demo", "2/2", "Running", 1, "10d"], ["paperless-5c8d-demo", "1/1", "Running", 0, "2d"]]
+          .map(([name, ...rest]) => ({ name, namespace: "lab", cells: [name, ...rest] })) };
+      return { columns: [{ name: "Name", description: "" }, { name: "Age", description: "" }], rows: [{ name: "example", namespace: "lab", cells: ["example", "3d"] }] };
+    },
+    "/api/resources/object": url => ({ secret_hidden: false, object: { metadata: { uid: "u1" } },
+      yaml: `apiVersion: v1\nkind: Pod\nmetadata:\n  name: ${url.searchParams.get("name")}\n  namespace: lab\n  labels:\n    app: frigate\n  resourceVersion: "48121"\nspec:\n  containers:\n  - name: frigate\n    image: ghcr.io/blakeblackshear/frigate:stable\n    ports:\n    - containerPort: 5000\nstatus:\n  phase: Running\n` }),
+    "/api/resources/events": [{ type: "Normal", reason: "Pulled", message: "Container image already present on machine", count: 1, last: new Date().toISOString() }],
     "/api/ipam/record": { ok: true },
     "/api/ipam/bulk": { ok: true, detail: "updated" },
     "/api/ipam/scan": { ok: true, detail: "scanning 254 addresses in 192.0.2.0/24" },
@@ -932,7 +956,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.95", candidate_tag: "2.8.95", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.96", candidate_tag: "2.8.96", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

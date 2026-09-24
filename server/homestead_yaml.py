@@ -467,3 +467,80 @@ class _Parser:
 def loads(source):
     """Parse one YAML document. Raises YamlError with the line it is about."""
     return _Parser(source or "").document()
+
+
+# ------------------------------------------------------------------ writing
+_PLAIN = re.compile(r"^[A-Za-z0-9_./][A-Za-z0-9_./@+-]*(?: [A-Za-z0-9_./@+-]+)*$")
+_SPECIAL = {"true", "false", "null", "yes", "no", "on", "off", "~", "y", "n"}
+
+
+def _dump_scalar(value):
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value) if isinstance(value, float) else str(value)
+    text = str(value)
+    if (_PLAIN.match(text) and text.lower() not in _SPECIAL
+            and not re.fullmatch(r"[-+]?(\d[\d_]*\.?\d*|\.\d+)([eE][-+]?\d+)?|0x[0-9a-fA-F]+|0o[0-7]+", text)):
+        return text
+    import json
+    return json.dumps(text, ensure_ascii=False)
+
+
+def _dump_block(text, pad):
+    """A multi-line string as a literal block, which reads as the text itself -
+    or quoted, where a block could not say it exactly (a first line that
+    starts with a space, blank lines at the end, carriage returns)."""
+    import json
+    if text[:1] in (" ", "\t") or text.endswith("\n\n") or "\r" in text:
+        return json.dumps(text, ensure_ascii=False)
+    chomp = "" if text.endswith("\n") else "-"
+    lines = text[:-1].split("\n") if text.endswith("\n") else text.split("\n")
+    body = "\n".join((pad + line) if line else "" for line in lines)
+    return f"|{chomp}\n{body}"
+
+
+def _dump(value, indent):
+    pad = "  " * indent
+    if isinstance(value, dict):
+        if not value:
+            return "{}"
+        lines = []
+        for key, item in value.items():
+            name = _dump_scalar(key)
+            if isinstance(item, dict) and item:
+                lines.append(f"{pad}{name}:\n{_dump(item, indent + 1)}")
+            elif isinstance(item, list) and item:
+                lines.append(f"{pad}{name}:\n{_dump(item, indent)}")
+            elif isinstance(item, str) and "\n" in item:
+                lines.append(f"{pad}{name}: {_dump_block(item, pad + '  ')}")
+            else:
+                lines.append(f"{pad}{name}: {_dump(item, indent + 1) if isinstance(item, (dict, list)) else _dump_scalar(item)}")
+        return "\n".join(lines)
+    if isinstance(value, list):
+        if not value:
+            return "[]"
+        lines = []
+        for item in value:
+            if isinstance(item, dict) and item:
+                inner = _dump(item, indent + 1)
+                lines.append(f"{pad}- {inner[len(pad) + 2:]}")
+            elif isinstance(item, list) and item:
+                # A list in a list: in flow style, which reads back plainly.
+                import json
+                lines.append(f"{pad}- {json.dumps(item, ensure_ascii=False)}")
+            elif isinstance(item, str) and "\n" in item:
+                lines.append(f"{pad}- {_dump_block(item, pad + '  ')}")
+            else:
+                lines.append(f"{pad}- {_dump(item, indent + 1) if isinstance(item, (dict, list)) else _dump_scalar(item)}")
+        return "\n".join(lines)
+    return _dump_scalar(value)
+
+
+def dump(value):
+    """YAML for plain data - maps, lists, strings, numbers, booleans, null - in
+    the block style kubectl prints, and that loads() reads back to the same
+    data."""
+    return _dump(value, 0) + "\n"
