@@ -1712,29 +1712,63 @@ def list_vm_disks():
 
 
 def list_vm_images():
+    """Harvester's images. Each is a Longhorn backing image with a storage
+    class of its own; a disk made on that class starts as a copy of it."""
     try:
-        return [{"name": i["metadata"]["name"],
+        return [{"name": i["metadata"]["name"], "namespace": i["metadata"].get("namespace", ""),
                  "display": i["spec"].get("displayName", i["metadata"]["name"]),
                  "size_gb": round(int(i.get("status", {}).get("size", 0) or 0) / 1024**3, 1),
+                 "storage_class": i.get("status", {}).get("storageClassName", ""),
                  "progress": i.get("status", {}).get("progress", 0)}
                 for i in kget("/apis/harvesterhci.io/v1beta1/virtualmachineimages").get("items", [])]
     except Exception:
         return []
 
 
-def create_vm(cfg):
-    """Create a KubeVirt VM backed by a Longhorn DataVolume."""
+def _harvester_image(ref):
+    """namespace/name of a Harvester image -> the image, or a clear refusal."""
+    ns, _, image = str(ref).rpartition("/")
+    for item in list_vm_images():
+        if item["name"] == image and (not ns or item["namespace"] == ns):
+            if not item["storage_class"]:
+                raise ValueError(f"image {item['display']} is not ready yet")
+            return item
+    raise ValueError(f"image {ref} was not found")
+
+
+def create_vm(cfg, platform=None, default_class=""):
+    """Create a KubeVirt VM with its boot disk, the way this cluster makes disks.
+
+    Harvester makes a VM's disks from its harvesterhci.io/volumeClaimTemplates
+    annotation - block volumes every node can reach, so the VM can live-migrate,
+    and a disk from an image is a claim on that image's own storage class. That
+    is how its UI does it, so its pages and delete-with-disks treat these VMs
+    as their own. Elsewhere, CDI fills a DataVolume and picks the access and
+    volume modes its storage profile says the class supports - local-path
+    cannot give ReadWriteMany - and with no CDI a blank disk is a plain claim,
+    which KubeVirt formats itself. Downloading an image needs CDI either way.
+    """
+    platform = platform or {}
+    harvester = bool(platform.get("harvester"))
+    cdi = platform.get("cdi", True)
     name = _required_name(cfg.get("name"))
     ns = _required_name(cfg.get("namespace") or NS, "namespace")
     cores = int(cfg.get("cores", 2))
     mem = cfg.get("memory", "2Gi")
     disk = int(cfg.get("disk_gb", 20))
-    sc = cfg.get("storage_class", "longhorn-r2")
+    sc = str(cfg.get("storage_class") or default_class or "").strip()
     imported_dv = str(cfg.get("disk_import") or "").strip()
+    image_ref = str(cfg.get("image_id") or "").strip()
+    image_url = str(cfg.get("image_url") or "").strip()
     dv = imported_dv or f"{name}-disk"
     password = str(cfg.get("password") or "")
     if not imported_dv and not cfg.get("cloud_init") and len(password) < 10:
         raise ValueError("root password must be at least 10 characters")
+    if image_ref and not harvester:
+        raise ValueError("images from the image list are Harvester's; use an image URL on this cluster")
+    if (image_url or imported_dv) and not cdi:
+        raise ValueError("CDI (the containerized data importer) is not installed, so disk images cannot be "
+                         "downloaded or imported; install it from kubevirt.io, or start from a blank disk")
 
     if imported_dv:
         _required_name(imported_dv, "imported disk")
@@ -1748,12 +1782,6 @@ def create_vm(cfg):
         if users:
             raise ValueError(f"imported disk is already attached to VM {users[0]}")
 
-    src = {"blank": {}}
-    if cfg.get("image_url"):
-        src = {"http": {"url": cfg["image_url"]}}
-    elif cfg.get("image_id"):
-        src = {"pvc": {"namespace": "harvester-public", "name": cfg["image_id"]}}
-
     cloudinit = cfg.get("cloud_init") or (password and (
         "#cloud-config\n"
         f"hostname: {name}\n"
@@ -1761,44 +1789,86 @@ def create_vm(cfg):
         f"password: {password}\n"
         "chpasswd: {expire: false}\n"))
 
+    annotations, templates = {}, []
+    size = f"{disk}Gi"
+    if imported_dv:
+        root = {"name": "root", "dataVolume": {"name": dv}}
+    elif harvester and not image_url:
+        claim = {"metadata": {"name": dv, "annotations": {}},
+                 "spec": {"accessModes": ["ReadWriteMany"], "volumeMode": "Block",
+                          "resources": {"requests": {"storage": size}}}}
+        if image_ref:
+            image = _harvester_image(image_ref)
+            claim["metadata"]["annotations"]["harvesterhci.io/imageId"] = f"{image['namespace']}/{image['name']}"
+            claim["spec"]["storageClassName"] = image["storage_class"]
+            if image["size_gb"] and disk < image["size_gb"]:
+                raise ValueError(f"the disk must be at least as big as the image ({image['size_gb']} GB)")
+        elif sc:
+            claim["spec"]["storageClassName"] = sc
+        annotations["harvesterhci.io/volumeClaimTemplates"] = json.dumps([claim])
+        root = {"name": "root", "persistentVolumeClaim": {"claimName": dv}}
+    elif cdi:
+        storage = {"resources": {"requests": {"storage": size}}}
+        if sc:
+            storage["storageClassName"] = sc
+        if harvester:
+            # A downloaded image on Harvester still gets a disk that can migrate.
+            storage.update(accessModes=["ReadWriteMany"], volumeMode="Block")
+        templates = [{"metadata": {"name": dv},
+                      "spec": {"source": {"http": {"url": image_url}} if image_url else {"blank": {}},
+                               "storage": storage}}]
+        root = {"name": "root", "dataVolume": {"name": dv}}
+    else:
+        claim = {"apiVersion": "v1", "kind": "PersistentVolumeClaim",
+                 "metadata": {"name": dv, "namespace": ns, "labels": {NAMES.key("managed"): "true", "app": name}},
+                 "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": size}}}}
+        if sc:
+            claim["spec"]["storageClassName"] = sc
+        if _get_or_none(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{dv}"):
+            raise ValueError(f"a volume named {dv} already exists")
+        ksend("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", claim)
+        root = {"name": "root", "persistentVolumeClaim": {"claimName": dv}}
+
     disks = [{"name": "root", "disk": {"bus": "virtio"}, "bootOrder": 1}]
-    volumes = [{"name": "root", "dataVolume": {"name": dv}}]
+    volumes = [root]
     if cloudinit:
         disks.append({"name": "cloudinit", "disk": {"bus": "virtio"}})
         volumes.append({"name": "cloudinit", "cloudInitNoCloud": {"userData": cloudinit}})
 
+    template_spec = {
+        "domain": {
+            "cpu": {"cores": cores},
+            "memory": {"guest": mem},
+            "resources": {"requests": {"memory": mem}},
+            "devices": {
+                "disks": disks,
+                "interfaces": [{"name": "default", "masquerade": {}}],
+            },
+        },
+        "networks": [{"name": "default", "pod": {}}],
+        "volumes": volumes,
+    }
+    if harvester:
+        # Harvester's disks are shared block volumes, so a node drain can move
+        # the VM. Elsewhere the cluster's own default applies: asking to
+        # live-migrate a VM on a local disk only blocks the drain.
+        template_spec["evictionStrategy"] = "LiveMigrate"
     vm = {
         "apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
         "metadata": {"name": name, "namespace": ns,
-                     "labels": {NAMES.key("managed"): "true", "app": name}},
+                     "labels": {NAMES.key("managed"): "true", "app": name},
+                     **({"annotations": annotations} if annotations else {})},
         "spec": {
-            "running": bool(cfg.get("start", True)),
-            **({} if imported_dv else {"dataVolumeTemplates": [{
-                "metadata": {"name": dv},
-                "spec": {"source": src,
-                         "pvc": {"accessModes": ["ReadWriteMany"],
-                                 "resources": {"requests": {"storage": f"{disk}Gi"}},
-                                 "storageClassName": sc}},
-            }]}),
+            # spec.running is deprecated; a run strategy is what KubeVirt and
+            # Harvester both read, and what start and stop change.
+            "runStrategy": "RerunOnFailure" if cfg.get("start", True) else "Halted",
+            **({"dataVolumeTemplates": templates} if templates else {}),
             "template": {
                 "metadata": {"labels": {"kubevirt.io/domain": name, "app": name}},
-                "spec": {
-                    "domain": {
-                        "cpu": {"cores": cores},
-                        "memory": {"guest": mem},
-                        "resources": {"requests": {"memory": mem}},
-                        "devices": {
-                            "disks": disks,
-                            "interfaces": [{"name": "default", "masquerade": {}}],
-                        },
-                    },
-                    "networks": [{"name": "default", "pod": {}}],
-                    "volumes": volumes,
-                    "evictionStrategy": "LiveMigrate",
-                },
+                "spec": template_spec,
             },
         },
     }
-    out = ksend("POST", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines", vm)
+    ksend("POST", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines", vm)
     _bust("flow", "ov")
     return {"ok": True, "vm": name, "datavolume": dv}

@@ -70,6 +70,8 @@ def detect(force=False):
         "harvester": harvester,
         "longhorn": "longhorn.io" in groups,
         "kubevirt": "kubevirt.io" in groups,
+        # CDI fills VM disks from images; without it a VM starts from a blank one.
+        "cdi": "cdi.kubevirt.io" in groups,
         "helm_controller": "helm.cattle.io" in groups,
         "metrics": "metrics.k8s.io" in groups,
         "load_balancer": load_balancer,

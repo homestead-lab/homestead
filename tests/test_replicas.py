@@ -119,6 +119,23 @@ class SharedLockTests(unittest.TestCase):
 
 
 class ReplicaSettingTests(unittest.TestCase):
+    def test_one_copy_on_an_unshareable_volume_is_replaced_not_rolled(self):
+        # Two pods on one migratable volume is a VM migration to Longhorn, and
+        # it refuses the mount: "invalid controller count 2".
+        import server
+        dep = {"metadata": {"name": "homestead"}, "spec": {"replicas": 1,
+               "strategy": {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": 1, "maxUnavailable": 0}},
+               "selector": {"matchLabels": {"app": "homestead"}}, "template": {"spec": {}}}}
+        sent = []
+        with mock.patch.object(server, "kget", lambda path: copy.deepcopy(dep)),                 mock.patch.object(server, "homestead_data_volume", lambda *a: {"shareable": False}),                 mock.patch.object(server, "ksend", lambda *a, **k: sent.append(a)):
+            server.fit_own_strategy()
+            server.set_homestead_replicas(1)
+        self.assertEqual({"spec": {"strategy": {"type": "Recreate", "rollingUpdate": None}}}, sent[0][2])
+        self.assertEqual({"type": "Recreate"}, sent[1][2]["spec"]["strategy"])
+        deploy = (Path(__file__).resolve().parents[1] / "deploy" / "deploy.yaml").read_text()
+        self.assertIn("type: Recreate", deploy)
+        self.assertNotIn("maxSurge", deploy)
+
     def test_more_copies_spread_over_nodes_and_roll_one_at_a_time(self):
         import server
         dep = {"metadata": {"name": "homestead"}, "spec": {"replicas": 1, "strategy": {"type": "Recreate"},

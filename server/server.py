@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.101")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.102")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1911,6 +1911,29 @@ def delete_storage_class(name):
             "message": f"Storage class {name} deleted; existing volumes are untouched"}
 
 
+def vm_default_class(rows=None):
+    """The class a new VM disk lands on: the cluster's default, else Longhorn's
+    usual one, else none named - the API server then applies its own default."""
+    rows = [row for row in (rows if rows is not None else storage_classes()) if not row["internal"]]
+    for row in rows:
+        if row["default"]:
+            return row["name"]
+    names = [row["name"] for row in rows]
+    return next((name for name in ("longhorn-r2", "harvester-longhorn", "longhorn") if name in names), "")
+
+
+def vm_create_options():
+    """What the New VM form can offer on this cluster."""
+    platform = PLATFORM.detect()
+    rows = storage_classes()
+    return {"harvester": platform.get("harvester", False), "cdi": platform.get("cdi", False),
+            "distribution": platform.get("distribution", ""),
+            "storage_classes": selectable_storage_classes(rows),
+            "storage_class_facts": storage_class_facts(rows),
+            "default_class": vm_default_class(rows),
+            "images": IMP.list_vm_images() if platform.get("harvester") else []}
+
+
 def selectable_storage_classes(rows=None):
     """Classes a person may pick for their own workloads."""
     return [row["name"] for row in (rows if rows is not None else storage_classes())
@@ -2877,6 +2900,35 @@ def homestead_data_volume(dep=None):
             "shareable": not reason, "reason": reason, "candidates": shared_storage_classes(rows)}
 
 
+ROLLING = {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": 1, "maxUnavailable": 0}}
+
+
+def own_strategy(shareable):
+    """How Homestead replaces itself. Rolling - the new copy up before the old
+    one goes - only when every node can mount the data volume; otherwise the
+    two overlap on one volume, and on a migratable class Longhorn takes that
+    for a VM migration and refuses the mount ("invalid controller count")."""
+    return dict(ROLLING) if shareable else {"type": "Recreate"}
+
+
+def fit_own_strategy():
+    """An update from this page changes only the image, so a Deployment that
+    was once set to roll keeps rolling. Put right at start-up what the data
+    volume can take. The strategy is not part of the pod template, so this
+    starts no rollout."""
+    try:
+        ns, name = SELF.NS, NAMES.BRAND
+        dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+        want = own_strategy(homestead_data_volume(dep)["shareable"])
+        if (dep["spec"].get("strategy") or {}).get("type") != want["type"]:
+            ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
+                  {"spec": {"strategy": {"type": want["type"], "rollingUpdate": want.get("rollingUpdate")}}},
+                  ctype="application/merge-patch+json")
+            print(f"own update strategy set to {want['type']}", flush=True)
+    except Exception as error:
+        print(f"could not check Homestead's own update strategy: {error}", flush=True)
+
+
 def move_homestead_data(storage_class):
     """Copies Homestead's data to a new shareable claim, then points it there.
 
@@ -2994,7 +3046,7 @@ def set_homestead_replicas(count):
     ns, name = SELF.NS, NAMES.BRAND
     dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     dep["spec"]["replicas"] = count
-    dep["spec"]["strategy"] = {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": 1, "maxUnavailable": 0}}
+    dep["spec"]["strategy"] = own_strategy(homestead_data_volume(dep)["shareable"])
     labels = (dep["spec"].get("selector") or {}).get("matchLabels") or {"app": name}
     spec = dep["spec"]["template"]["spec"]
     affinity = spec.setdefault("affinity", {})
@@ -3721,6 +3773,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("vms", 5, VMS.list_vms))
             if p == "/api/vm":
                 return self._send(200, VMS.detail((q.get("ns") or [""])[0], (q.get("name") or [""])[0]))
+            if p == "/api/vm/create-options":
+                return self._send(200, vm_create_options())
             if p == "/api/vmimages":
                 return self._send(200, cached("vmimg", 30, IMP.list_vm_images))
             if p == "/api/vm-disks":
@@ -4318,7 +4372,8 @@ class H(BaseHTTPRequestHandler):
                 _cache.pop("vms", None)
                 return self._send(200, VMS.delete(b.get("ns", DEFAULT_NS), b.get("name", ""), bool(b.get("disks"))))
             if p == "/api/vm/create":
-                return self._send(200, IMP.create_vm(b))
+                _cache.pop("vms", None)
+                return self._send(200, IMP.create_vm(b, PLATFORM.detect(), vm_default_class()))
             if p == "/api/vm-disks/import":
                 result = IMP.import_vm_disk(b)
                 result["operation"] = OPS.start(
@@ -4560,11 +4615,12 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.101 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.102 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()
     threading.Thread(target=_history_loop, daemon=True).start()
+    threading.Thread(target=fit_own_strategy, daemon=True).start()
     # On a rolling update or a drain, hand the lease over now rather than
     # leaving the others to wait out its expiry.
     signal.signal(signal.SIGTERM, lambda *_: (LEADER.release(), os._exit(0)))

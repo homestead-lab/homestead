@@ -18,7 +18,7 @@ async function viewVMs() {
   const rows = vms.filter(v => !q || [v.name, v.ns, v.os, v.ip, v.node, v.description].join(" ").toLowerCase().includes(q));
   const running = vms.filter(v => v.status === "Running").length;
   paint(`<div class="phead"><div><h2>Virtual machines</h2>
-      <p>${vms.length} VM${vms.length === 1 ? "" : "s"} · ${running} running · KubeVirt on Longhorn</p></div>
+      <p>${vms.length} VM${vms.length === 1 ? "" : "s"} · ${running} running · ${STATE.platform?.harvester === false ? `KubeVirt on ${esc(platformName(STATE.platform))}${STATE.platform.cdi ? "" : " · no CDI"}` : "KubeVirt on Harvester"}</p></div>
       <button class="btn pri" data-need="operator" onclick="vmNew()">＋ New VM</button></div>
     ${rows.length ? `<div class="vm-grid">${rows.map(vmCard).join("")}</div>`
       : `<div class="empty">${q ? "Nothing matches that search." : "No virtual machines yet — create one to get started."}</div>`}`);

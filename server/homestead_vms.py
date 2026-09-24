@@ -283,12 +283,38 @@ def edit(ns, name, cfg):
     return {"ok": True, "detail": detail, "restart_needed": changed_hardware and not restarted}
 
 
+def _release(ns, claim, uid):
+    """A disk made from the VM's dataVolumeTemplates belongs to the VM, and
+    Kubernetes deletes what a deleted owner owned. A disk that is being kept
+    is let go of first: its DataVolume and claim stop naming the VM."""
+    for path in (f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{urllib.parse.quote(claim)}",
+                 f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(claim)}"):
+        try:
+            owners = (kget(path).get("metadata") or {}).get("ownerReferences") or []
+        except Exception:
+            continue
+        kept = [o for o in owners if o.get("uid") != uid]
+        if len(kept) != len(owners):
+            try:
+                ksend("PATCH", path, {"metadata": {"ownerReferences": kept or None}},
+                      ctype="application/merge-patch+json")
+            except urllib.error.HTTPError as error:
+                raise ValueError(f"{claim} could not be kept, so nothing was deleted: {_refusal(error)}")
+
+
 def delete(ns, name, with_disks=False):
     """Deletes the VM; with its disks too when asked. The disks are named on
     the VM first, the way Harvester's own UI asks its controller to remove
-    them, and deleted here as well for clusters without that controller."""
+    them, and deleted here as well for clusters without that controller.
+    Disks that are kept are released from the VM first, or they would go
+    with it."""
     vm = _get(ns, name)
-    claims = [d["claim"] for d in _row(vm, {})["disks"] if d["claim"] and d["kind"] == "disk"] if with_disks else []
+    every = [d["claim"] for d in _row(vm, {})["disks"] if d["claim"] and d["kind"] == "disk"]
+    claims = every if with_disks else []
+    uid = vm["metadata"].get("uid", "")
+    for claim in ([] if with_disks else every):
+        if uid:
+            _release(ns, claim, uid)
     if claims:
         vm["metadata"].setdefault("annotations", {})["harvesterhci.io/removedPVCs"] = ",".join(claims)
         vm["metadata"].pop("managedFields", None)

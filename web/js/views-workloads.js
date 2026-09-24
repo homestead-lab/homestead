@@ -17,12 +17,17 @@ function paintUpdateBadge(count, errors = 0) {
     badge.textContent = count;
     badge.classList.toggle("hidden", !count);
   }
-  const notice = $("#updateNotice"), noticeBadge = $("#updateNoticeBadge");
+  const notice = $("#updateNotice"), noticeBadge = $("#updateNoticeBadge"), noticeErrors = $("#updateNoticeErrors");
   if (!notice || !noticeBadge) return;
-  const total = count + errors;
-  notice.classList.toggle("hidden", !total);
-  notice.classList.toggle("has-errors", !!errors);
-  noticeBadge.textContent = total;
+  // Updates and failed checks are counted apart: one registry that cannot be
+  // reached must not turn the updates that were found into a red error count.
+  notice.classList.toggle("hidden", !count && !errors);
+  notice.classList.toggle("only-errors", !count && !!errors);
+  noticeBadge.textContent = count;
+  if (noticeErrors) {
+    noticeErrors.textContent = errors;
+    noticeErrors.classList.toggle("hidden", !errors);
+  }
   notice.setAttribute("aria-label", `${count} image update${count === 1 ? "" : "s"} available${errors ? `, ${errors} registry check failure${errors === 1 ? "" : "s"}` : ""}`);
 }
 
@@ -113,7 +118,9 @@ window.imageUpdateCenter = async () => {
       <br><span class="dim small">Try ↻ Check images on the Containers page, which shows what went wrong.</span></div>`;
     return;
   }
-  const affected = (report.workloads || []).filter(w => w.available || w.images?.some(image => image.error));
+  // Updates first: a failed check beside them is a note, not the headline.
+  const affected = (report.workloads || []).filter(w => w.available || w.images?.some(image => image.error))
+    .sort((a, b) => Number(!!b.available) - Number(!!a.available));
   const available = HomesteadUpdateState.availableWorkloads(report);
   const policy = report.policy || {};
   modal("Image updates", `<div class="update-center">
@@ -322,14 +329,11 @@ function renderWorkloads() {
       <div><h2>Containers</h2><p>${rows.length} workload${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""}${group ? ` in ${esc(group === NO_GROUP ? "no group" : group)}` : ""} · Harvester system pods hidden${report && !updateCount && !updateErrors ? (unchecked ? ` · ${unchecked} not checked yet` : " · images current") : ""}</p></div>
       <div class="row"><span class="dim xs scanprogress" id="scanprogress"></span>
       <span class="dim xs" title="When the registries were last asked">${checkedAgo()}</span>
+      ${updateCount ? `<button class="pill warn pillbtn" title="Review and stage image updates" onclick="imageUpdateCenter()">${updateCount} update${updateCount === 1 ? "" : "s"}</button>` : ""}
+      ${updateErrors ? `<button class="pill crit pillbtn" data-tip="${updateErrors} image${updateErrors === 1 ? "" : "s"} could not be compared with ${updateErrors === 1 ? "its" : "their"} registry; every other image was" onclick="imageUpdateCenter()">${updateErrors} check${updateErrors === 1 ? "" : "s"} failed</button>` : ""}
       ${layoutSwitch("containers", "renderWorkloads")}
       <button class="btn" onclick="checkImageUpdates()">↻ Check images</button>
       <button class="btn pri hide-sm" data-need="operator" onclick="go('deploy')">＋ Deploy</button></div></div>
-
-    ${updateCount ? `<div class="updatebar"><div><b>${updateCount} update${updateCount === 1 ? "" : "s"} available</b>
-      <span>Registry manifests were compared with the digests running in Kubernetes.</span></div>
-      <span class="pill warn">review below</span></div>` : updateErrors ? `<div class="updatebar"><div><b>${updateErrors} registry check${updateErrors === 1 ? " needs" : "s need"} attention</b>
-      <span>See the affected container cards and check their imagePullSecrets.</span></div><span class="pill crit">check failed</span></div>` : ""}
 
     ${all.length ? workloadGroupBar(all, group) : ""}
     ${rows.length ? workloadSections(rows, layout, group)
@@ -602,7 +606,7 @@ window.checkImageUpdates = async () => {
     if (!report) return;      // the failure has been said already
     const updates = (report?.workloads || []).filter(x => x.available).length;
     const errors = report?.errors || 0;
-    toast(updates ? `${updates} update${updates === 1 ? "" : "s"} available`
+    toast(updates ? `${updates} update${updates === 1 ? "" : "s"} available${errors ? `; ${errors} image${errors === 1 ? "" : "s"} could not be checked` : ""}`
       : errors ? `no updates found; ${errors} image${errors === 1 ? "" : "s"} could not be checked`
       : "every image is up to date", updates ? "ok" : errors ? "warn" : "ok");
     if (report && STATE.view === "workloads") renderWorkloads();

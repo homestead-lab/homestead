@@ -424,11 +424,17 @@ window.doVmMove = async (ns, name) => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
-  const [imgs, disks] = await Promise.all([
-    api("/api/vmimages").catch(() => []), api("/api/vm-disks").catch(() => []),
+  const [opts, disks] = await Promise.all([
+    api("/api/vm/create-options").catch(() => ({ harvester: !!STATE.platform?.harvester, cdi: true, storage_classes: [], images: [] })),
+    api("/api/vm-disks").catch(() => []),
   ]);
-  const readyDisks = disks.filter(d => d.phase === "Succeeded" && !d.in_use);
+  // Imports are CDI DataVolumes, so without CDI there are none to attach.
+  const readyDisks = opts.cdi ? disks.filter(d => d.phase === "Succeeded" && !d.in_use) : [];
   const selected = selectedDisk ? `disk:${selectedNamespace || "lab"}/${selectedDisk}` : "";
+  const images = (opts.images || []).filter(i => i.storage_class);
+  const facts = opts.storage_class_facts || {};
+  const classLabel = c => `${c}${facts[c]?.default ? " (default)" : ""}${facts[c]?.replicas ? ` · ${facts[c].replicas} copies` : ""}`;
+  window.__vmCreateOptions = opts;
   modal("New virtual machine", `
     <div class="f"><label>Name</label><input type="text" id="v_name" placeholder="ubuntu-test"></div>
     <div class="f2">
@@ -439,22 +445,40 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
       <div class="f"><label>Disk (GB)</label><input type="number" id="v_disk" value="20" min="5"></div>
       <div class="f"><label>Root password ${tip("Required when Homestead provisions a new disk. Optional for an imported disk that already has login access configured.")}</label><input type="password" id="v_pass" autocomplete="new-password" placeholder="Set an initial password"></div>
     </div>
-    <div class="f"><label>Boot disk ${tip("Use a completed CDI import without copying it again, select a Harvester image, or let the VM download a URL while it is created.")}</label>
+    <div class="f"><label>Boot disk ${tip(opts.harvester
+      ? "Attach a completed import as it is, start from one of Harvester's images, or download an image while the VM is created."
+      : "Attach a completed import as it is, or download an image while the VM is created.")}</label>
       <select id="v_boot" onchange="vmBootChanged()">
         <option value="">blank disk</option>
         ${readyDisks.map(d => `<option value="disk:${esc(d.namespace)}/${esc(d.name)}" ${selected === `disk:${d.namespace}/${d.name}` ? "selected" : ""}>Imported · ${esc(d.namespace)}/${esc(d.name)} (${esc(d.capacity || "size unknown")})</option>`).join("")}
-        ${imgs.map(i => `<option value="image:${esc(i.name)}">Harvester · ${esc(i.display)} (${i.size_gb}G)</option>`).join("")}
-        <option value="url">Download from HTTP(S) URL</option>
+        ${images.map(i => `<option value="image:${esc(i.namespace)}/${esc(i.name)}" data-size="${i.size_gb}">Harvester image · ${esc(i.display)} (${i.size_gb}G)</option>`).join("")}
+        ${opts.cdi ? '<option value="url">Download from HTTP(S) URL</option>' : ""}
       </select></div>
     <div class="f" id="v_url_row" hidden><label>Image URL</label><input type="url" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img"></div>
+    ${(opts.storage_classes || []).length ? `<div class="f" id="v_sc_row"><label>Storage class ${tip(opts.harvester
+      ? "Where a blank or downloaded disk lives. A disk from a Harvester image always lives on that image's own class."
+      : "Where the disk lives. The cluster's default class is chosen for you.")}</label>
+      <select id="v_sc">${opts.storage_classes.map(c => `<option value="${esc(c)}" ${c === opts.default_class ? "selected" : ""}>${esc(classLabel(c))}</option>`).join("")}</select></div>` : ""}
     <div class="row" style="margin-top:18px">
       <button class="btn pri" onclick="doVmCreate()">Create VM</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div>
-    <div class="note" style="margin-top:14px">New disks are provisioned as Longhorn DataVolumes.
-    Imported disks are attached directly and remain visible on the Import page.</div>`, true);
+    <div class="note" style="margin-top:14px">${opts.harvester
+      ? "New disks are made the way Harvester makes them: shared block volumes, so the VM can move between hosts."
+      : opts.cdi ? `New disks are CDI DataVolumes on the class above, with the access mode that class supports.
+        A VM on a disk only one host can reach stays on that host.`
+      : `<b>CDI is not installed</b>, so a VM here starts from a blank disk that KubeVirt formats itself.
+        To download or import disk images, install CDI (the containerized data importer) from kubevirt.io.`}
+    ${readyDisks.length ? " Imported disks are attached directly and remain visible on the Import page." : ""}</div>`, true);
   vmBootChanged();
 };
-window.vmBootChanged = () => { if ($("#v_url_row")) $("#v_url_row").hidden = $("#v_boot").value !== "url"; };
+window.vmBootChanged = () => {
+  const boot = $("#v_boot")?.value || "";
+  if ($("#v_url_row")) $("#v_url_row").hidden = boot !== "url";
+  // An import brings its own disk; a Harvester image brings its own class.
+  if ($("#v_sc_row")) $("#v_sc_row").hidden = boot.startsWith("disk:") || boot.startsWith("image:");
+  const size = +($("#v_boot")?.selectedOptions[0]?.dataset.size || 0);
+  if (size && +$("#v_disk").value < Math.ceil(size)) $("#v_disk").value = Math.ceil(size);
+};
 window.doVmCreate = async () => {
   const boot = $("#v_boot").value;
   const imported = boot.startsWith("disk:") ? boot.slice(5).split("/") : [];
@@ -462,7 +486,8 @@ window.doVmCreate = async () => {
     memory: $("#v_mem").value.trim(), disk_gb: +$("#v_disk").value, password: $("#v_pass").value,
     namespace: imported[0] || "lab", disk_import: imported[1] || "",
     image_id: boot.startsWith("image:") ? boot.slice(6) : "",
-    image_url: boot === "url" ? $("#v_url").value.trim() : "" };
+    image_url: boot === "url" ? $("#v_url").value.trim() : "",
+    storage_class: $("#v_sc")?.value || "" };
   if (!body.name) return toast("name is required", "bad");
   if (!body.disk_import && body.password.length < 10) return toast("root password must be at least 10 characters", "bad");
   if (boot === "url" && !body.image_url) return toast("image URL is required", "bad");

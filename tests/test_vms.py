@@ -55,6 +55,9 @@ class Cluster:
             return copy.deepcopy(self.vmi)
         if path.endswith("/persistentvolumeclaims"):
             return PVCS
+        if path.endswith("/datavolumes/win11-disk-0") or path.endswith("/persistentvolumeclaims/win11-disk-0"):
+            # Made from dataVolumeTemplates: owned by the VM.
+            return {"metadata": {"ownerReferences": [{"kind": "VirtualMachine", "uid": "u1"}, {"kind": "Other", "uid": "x"}]}}
         raise AssertionError(path)
 
     def send(self, method, path, body=None, **kw):
@@ -130,8 +133,12 @@ class VmTests(unittest.TestCase):
         self.assertEqual(["DELETE", "DELETE"], [m for m, p, b in c.sent if m == "DELETE"])
         c = self.use()
         result = VMS.delete("default", "win11")
-        self.assertEqual(1, len(c.sent))
         self.assertIn("kept", result["detail"])
+        # A kept disk is let go of first, or deleting its owner takes it too.
+        patches = [(p, b) for m, p, b in c.sent if m == "PATCH"]
+        self.assertEqual(2, len(patches))
+        self.assertTrue(all(b == {"metadata": {"ownerReferences": [{"kind": "Other", "uid": "x"}]}} for p, b in patches))
+        self.assertEqual(["PATCH", "PATCH", "DELETE"], [m for m, p, b in c.sent])
 
 
 if __name__ == "__main__":

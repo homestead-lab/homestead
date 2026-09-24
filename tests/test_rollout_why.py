@@ -31,6 +31,7 @@ class RolloutWhyTests(unittest.TestCase):
             waiting = UPDATES._why_waiting("lab", pod(90))
             self.assertIn("invalid controller count 2", waiting["message"])
             self.assertFalse(waiting["stuck"])
+            self.assertIn("Scale the workload to 0", waiting["hint"])
             self.assertTrue(UPDATES._why_waiting("lab", pod(400))["stuck"])
 
     def test_no_warnings_no_reason(self):

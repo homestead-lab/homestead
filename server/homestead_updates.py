@@ -637,7 +637,15 @@ def _why_waiting(ns, pod):
         return None
     latest = max(events, key=lambda e: e.get("lastTimestamp") or e.get("eventTime") or "")
     message = " ".join(str(latest.get("message") or latest.get("reason") or "").split())[:300]
-    return {"message": message, "stuck": latest.get("reason") in STUCK_REASONS and age >= STUCK_AFTER}
+    found = {"message": message, "stuck": latest.get("reason") in STUCK_REASONS and age >= STUCK_AFTER}
+    if "invalid controller count" in message:
+        # Two pods on different nodes attached a volume on a migratable class,
+        # and Longhorn took that for a VM live migration. Nothing clears it but
+        # every pod letting go of the volume.
+        found["hint"] = ("Two pods on different nodes attached this volume, and Longhorn is treating it as "
+                         "a VM migration. Scale the workload to 0, wait for the volume to detach, then scale "
+                         "it back up. Recreate updates, or a shareable class, stop it happening again.")
+    return found
 
 
 def _age(stamp):
@@ -683,8 +691,10 @@ def progress(ns, name, dep=None):
             blocked = _why_waiting(ns, pod)
             if blocked:
                 row["blocked"] = blocked["message"]
-                if blocked["stuck"]:
-                    problems.append(f"{row['name']}: {blocked['message']}")
+                if blocked.get("hint"):
+                    row["blocked"] += " — " + blocked["hint"]
+                if blocked["stuck"] or blocked.get("hint"):
+                    problems.append(f"{row['name']}: {blocked['message']}" + (f" {blocked['hint']}" if blocked.get("hint") else ""))
         pod_rows.append(row)
     for condition in status.get("conditions", []) or []:
         if condition.get("type") == "Progressing" and condition.get("status") == "False":

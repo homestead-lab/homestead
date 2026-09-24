@@ -333,7 +333,7 @@
       detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.101", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.102", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
@@ -420,20 +420,20 @@
       user: "admin", added: "2026-09-22 17:02" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "garage") return { name, version: "2.8.101", protocol: 1, local_version: "2.8.101",
+      if (name === "garage") return { name, version: "2.8.102", protocol: 1, local_version: "2.8.102",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "garage runs 2.8.101 and this one 2.8.101. Moves work between them; garage is the newer of the two." };
+        message: "garage runs 2.8.102 and this one 2.8.102. Moves work between them; garage is the newer of the two." };
       return name === "attic"
-        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.101", local_protocol: 1,
+        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.102", local_protocol: 1,
             state: "behind", compatible: false,
-            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.101). Update attic first." }
-        : { name, version: "2.8.101", protocol: 1, local_version: "2.8.101", local_protocol: 1,
-            state: "same", compatible: true, message: "Both run Homestead 2.8.101." };
+            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.102). Update attic first." }
+        : { name, version: "2.8.102", protocol: 1, local_version: "2.8.102", local_protocol: 1,
+            state: "same", compatible: true, message: "Both run Homestead 2.8.102." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "shed", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.101", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.102", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -732,9 +732,9 @@
         message: "registry returned HTTP 429", started_at: new Date(Date.now() - 6e5).toISOString(),
         finished_at: new Date(Date.now() - 5e5).toISOString(), href: "/image-cache",
         resource: { kind: "Image", name: "plex", namespace: "lab" } },
-      { id: "op3", kind: "update", title: "Update home-assistant", status: "running", progress: 62,
+      { id: "op3", kind: "image-update", title: "Update home-assistant", status: "running", progress: 62,
         message: "rolling out", started_at: new Date(Date.now() - 6e4).toISOString(),
-        href: "/containers", resource: { kind: "Deployment", name: "home-assistant", namespace: "lab" } },
+        href: "/containers?q=home-assistant", resource: { kind: "Deployment", name: "home-assistant", namespace: "lab" } },
     ]),
     "/api/operations/dismiss": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
@@ -897,11 +897,20 @@
         nodes: [{ name: "harvester-node1", cpu: 21.4, mem: 44.1, availability: 100 }, { name: "harvester-node2", cpu: 17.9, mem: 39.8, availability: 99.31 },
           { name: "harvester-node3", cpu: 12.2, mem: 35.0, availability: 100 }] };
     },
-    "/api/platform": demoPlatform === "k3s"
-      ? { distribution: "k3s", version: "1.31.4+k3s1", harvester: false, longhorn: false, kubevirt: false, helm_controller: true,
-          metrics: true, load_balancer: "servicelb", control_plane: ["192.0.2.50"], arch: ["amd64"] }
-      : { distribution: "harvester", version: "1.31.4+rke2r1", harvester: true, longhorn: true, kubevirt: true, helm_controller: true,
+    // ?platform=k3s is a bare k3s; ?platform=kubevirt is k3s with KubeVirt but no CDI.
+    "/api/platform": demoPlatform === "k3s" || demoPlatform === "kubevirt"
+      ? { distribution: "k3s", version: "1.31.4+k3s1", harvester: false, longhorn: false, kubevirt: demoPlatform === "kubevirt", cdi: false,
+          helm_controller: true, metrics: true, load_balancer: "servicelb", control_plane: ["192.0.2.50"], arch: ["amd64"] }
+      : { distribution: "harvester", version: "1.31.4+rke2r1", harvester: true, longhorn: true, kubevirt: true, cdi: true, helm_controller: true,
           metrics: true, load_balancer: "kube-vip", control_plane: ["192.0.2.207", "192.0.2.208"], arch: ["amd64"] },
+    "/api/vm/create-options": demoPlatform === "harvester"
+      ? { harvester: true, cdi: true, distribution: "harvester", default_class: "longhorn-r2",
+          storage_classes: ["harvester-longhorn", "longhorn-r2", "longhorn-r3"],
+          storage_class_facts: { "harvester-longhorn": { replicas: "3" }, "longhorn-r2": { replicas: "2", default: true }, "longhorn-r3": { replicas: "3" } },
+          images: [{ namespace: "default", name: "image-ubuntu", display: "ubuntu-24.04-server-cloudimg-amd64.img", size_gb: 3.5, storage_class: "longhorn-image-ubuntu" }] }
+      : { harvester: false, cdi: false, distribution: "k3s", default_class: "local-path", storage_classes: ["local-path"],
+          storage_class_facts: { "local-path": { default: true } }, images: [] },
+    "/api/vm/create": { ok: true, vm: "demo", datavolume: "demo-disk" },
     "/api/platform/join": { distribution: "k3s", server: "192.0.2.50", version: "1.31.4+k3s1", token_file: "/var/lib/rancher/k3s/server/node-token",
       agent: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_URL=https://192.0.2.50:6443 K3S_TOKEN=<token> sh -',
       server_join: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_TOKEN=<token> sh -s - server --server https://192.0.2.50:6443',
@@ -979,14 +988,16 @@
         current: ["frigate", "home-assistant", "paperless", "samba"][at % 4],
         started_at: 0, finished_at: 0, elapsed: at * 0.5 };
     },
-    "/api/image-updates": { checked_at: new Date().toISOString(), updates: 3, errors: 0,
+    "/api/image-updates": { checked_at: new Date().toISOString(), updates: 3, errors: 1,
       policy: { policy: "approval_required", allows_install: true, reason: "Explicit operator approval is required before rollout." },
       workloads: [{ ns: "lab", name: "frigate", available: true, can_rollback: true,
         images: [{ container: "frigate", deployed: "ghcr.io/blakeblackshear/frigate:stable", candidate: "ghcr.io/blakeblackshear/frigate:stable", candidate_tag: "stable", remote_digest: "sha256:abc", available: true }] },
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.101", candidate_tag: "2.8.101", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.102", candidate_tag: "2.8.102", remote_digest: "sha256:ghi", available: true }] },
+      { ns: "lab", name: "paperless", available: false, can_rollback: false,
+        images: [{ container: "paperless", deployed: "registry.lan/paperless-ngx:2.11", candidate: "registry.lan/paperless-ngx:2.11", available: false, error: "registry authentication required" }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

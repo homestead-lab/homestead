@@ -227,17 +227,16 @@ metadata:
   labels:
     app: homestead
   annotations:
-    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.101"}'
+    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.102"}'
 spec:
   replicas: 1
   strategy:
-    # A new Homestead starts before the old one stops. Copies can overlap
-    # safely: they elect a leader to raise alerts and advance moves, and lock
-    # the files they share on the data volume.
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
+    # The old Homestead stops before the new one starts, so only one pod ever
+    # mounts the data volume. On a migratable class a second pod on another
+    # node makes Longhorn start a VM-style migration - two controllers - and
+    # the mount is refused. Once the data is on a shareable volume
+    # (Settings, Redundancy) Homestead switches itself to rolling updates.
+    type: Recreate
   selector:
     matchLabels:
       app: homestead
@@ -263,7 +262,7 @@ spec:
           tolerationSeconds: 15
       initContainers:
         - name: data-permissions
-          image: ghcr.io/wjcloudy/homestead:2.8.101
+          image: ghcr.io/wjcloudy/homestead:2.8.102
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "chown 10001:10001 /data && chmod 0770 /data"]
           securityContext:
@@ -280,7 +279,7 @@ spec:
               mountPath: /data
       containers:
         - name: homestead
-          image: ghcr.io/wjcloudy/homestead:2.8.101
+          image: ghcr.io/wjcloudy/homestead:2.8.102
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT

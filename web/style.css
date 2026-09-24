@@ -223,7 +223,11 @@ h1{margin:2px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em}
 .update-notice{position:relative;color:var(--med)}.update-notice.has-errors{color:var(--crit)}
 .update-notice>span{position:absolute;right:-4px;top:-5px;min-width:18px;height:18px;padding:0 5px;border-radius:99px;
   display:grid;place-items:center;background:var(--med);color:#15100a;font:750 9px/1 "JetBrains Mono",monospace;
-  box-shadow:0 0 0 2px var(--surf)}.update-notice.has-errors>span{background:var(--crit);color:#fff}
+  box-shadow:0 0 0 2px var(--surf)}.update-notice.only-errors{color:var(--crit)}.update-notice.only-errors>span{display:none}
+/* Failed checks get their own mark beside the update count, never mixed into it. */
+.update-notice>b{position:absolute;right:-4px;bottom:-5px;min-width:16px;height:16px;padding:0 4px;border-radius:99px;display:grid;place-items:center;
+  background:var(--crit);color:#fff;font:750 9px/1 "JetBrains Mono",monospace;box-shadow:0 0 0 2px var(--surf)}
+.update-notice.only-errors>b{bottom:auto;top:-5px}
 .spinning{animation:rot .9s linear infinite}
 @keyframes rot{to{transform:rotate(360deg)}}
 
@@ -364,7 +368,7 @@ h1{margin:2px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em}
 .av.appav .avfallback,.av.appav img{grid-area:1/1}.av.appav img{width:100%;height:100%;object-fit:contain;padding:3px}
 .tip{display:inline-grid;place-items:center;width:16px;height:16px;margin-left:3px;border-radius:50%;
   color:var(--low);border:1px solid rgba(74,158,255,.35);font:700 10px/1 sans-serif;cursor:help;position:relative;vertical-align:1px}
-.uitooltip{position:fixed;z-index:10000;width:max-content;max-width:min(280px,calc(100vw - 20px));padding:9px 11px;
+.uitooltip{position:fixed;z-index:10000;width:max-content;max-width:min(320px,calc(100vw - 20px));padding:9px 11px;overflow-wrap:anywhere;white-space:normal;
   border-radius:10px;background:#111216;border:1px solid var(--line2);color:#e5e5ea;pointer-events:none;
   font:500 11.5px/1.45 Inter,system-ui,sans-serif;text-transform:none;letter-spacing:0;
   box-shadow:0 14px 40px rgba(0,0,0,.7)}
@@ -905,7 +909,7 @@ html[data-motion="off"] .uptime .ld{animation:none}
 .updatebar{display:flex;align-items:center;justify-content:space-between;gap:18px;margin:-4px 0 16px;
   padding:13px 15px;border-radius:13px;border:1px solid rgba(255,176,32,.28);background:rgba(255,176,32,.075)}
 .updatebar.quiet{border-color:var(--line);background:rgba(255,255,255,.025)}
-.updatebar>div{display:flex;flex-direction:column;gap:3px}.updatebar span{font-size:11px;color:var(--dim)}
+.updatebar>div:first-child{display:flex;flex-direction:column;gap:3px}.updatebar>.row{flex:none;gap:8px}.updatebar span{font-size:11px;color:var(--dim)}
 .updateerror{margin-top:9px;padding:8px 10px;border-radius:9px;color:#ffb4b8;background:rgba(255,77,79,.07);border:1px solid rgba(255,77,79,.18);font-size:10.5px}
 .update-review{display:grid;gap:12px}.update-image{display:grid;gap:9px;padding:14px;border:1px solid var(--line);border-radius:13px;background:var(--surf2)}
 .update-approval{padding:11px 12px;border:1px solid var(--line);border-radius:11px;background:rgba(255,255,255,.025)}
@@ -1591,11 +1595,13 @@ tr.clickable{cursor:pointer}
 
 /* IP rows: two short lines, one-line badges, notes that open on hover. */
 .ipam-table td{vertical-align:middle;padding-top:6px;padding-bottom:6px}
-.ipam-name{max-width:280px}
+.ipam-name .ipam-line{max-width:clamp(140px,18vw,260px)}
 .ipam-line{display:flex;align-items:center;gap:6px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 div.ipam-line.dim{display:block}
 .ipam-line>b,.ipam-line>.ipam-unifi-name{overflow:hidden;text-overflow:ellipsis}
-.ipam-notes{max-width:300px}
+/* Notes take what width is left: no width of their own, all of the cell's. */
+.ipam-table td.ipam-notes{width:100%}
+.ipam-notes .ipam-line{max-width:0;min-width:100%}
 .ipam-note{overflow:hidden;text-overflow:ellipsis;min-width:0;font-size:12px}
 .ipam-notes .tag{flex:0 0 auto}
 .ipam-flag{margin-right:0;cursor:help}
@@ -1629,3 +1635,6 @@ div.ipam-line.dim{display:block}
 .vm-facts b{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .vm-actions{flex-wrap:wrap;gap:6px;margin-top:auto}
 @media(max-width:560px){.vm-grid{grid-template-columns:1fr}.vm-facts,.vm-facts.wide{grid-template-columns:1fr 1fr}}
+
+/* A pill that opens something: the update count beside the layout switch. */
+.pillbtn{cursor:pointer;font:inherit;font-size:11px;font-weight:650;border-style:solid}.pillbtn:hover{filter:brightness(1.15)}

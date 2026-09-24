@@ -29,7 +29,7 @@ not affiliated with, endorsed, or sponsored by Lime Technology, Inc.
 | **Containers** | Guided App Store and image deployment, Docker Compose import, independent or sidecar pods, guarded Kubernetes workload rename, edit/move/logs/console, autostart, LAN port and exposure editing, one storage picker for new and existing containers, hardware passthrough, update checks, monitored rollout with live image-pull state, rollback, groups with folding dividers and a filter per group, and a card or row layout |
 | **Helm** | Every Helm release in the cluster with its values, notes, history and objects; charts found on Artifact Hub and installed, upgraded and uninstalled through RKE2's Helm controller |
 | **App Store** | The Community Applications catalogue laid out as Unraid shows it - monthly spotlights, recently added, trending and top performing - with a full page per app, from the public feed or one you set |
-| **Virtual machines** | Create from a Harvester image or an imported disk, power actions, live migration between hosts, and a console: the VM's screen (VNC) or its serial port |
+| **Virtual machines** | Create from a Harvester image, a download or an imported disk - on Harvester or any KubeVirt cluster - power actions, live migration between hosts, and a console: the VM's screen (VNC) or its serial port |
 | **Portal** | A page of tiles for every web interface - containers picked from their exposed ports with their logos, and the router, switches, access points and NAS around them - in sections, with a live reachability dot |
 | **Architecture** | VIP → workload → claim → Longhorn volume → replica dependency view |
 | **Networking** | Service, ClusterIP, VIP, ingress, listener ownership, orphaned-listener release, endpoint health and guided collision-free exposure; IP address management per subnet with scanning, device categories, bulk edits, CSV export and UniFi sync |
@@ -70,10 +70,10 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.101`, the workflow publishes:
+For a release such as `v2.8.102`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.101
+ghcr.io/wjcloudy/homestead:2.8.102
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -84,8 +84,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.101
-git push origin v2.8.101
+git tag v2.8.102
+git push origin v2.8.102
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -630,7 +630,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.101/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.102/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -641,7 +641,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.101 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.102 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1014,7 +1014,17 @@ network interfaces (network, MAC, addresses), guest OS as its guest agent
 reports it, conditions and events. **Edit** sets CPU cores, memory, run
 strategy and description; CPU and memory apply at the next boot, or at once
 with a restart. **Delete** asks for the VM's name and can take its disks with
-it, marked for removal the way Harvester's own UI does.
+it, marked for removal the way Harvester's own UI does; disks that are kept
+are released from the VM first, so Kubernetes does not delete them with it.
+
+**New VM** makes the boot disk the way the cluster does. On Harvester it is a
+shared block volume declared the way Harvester's UI declares it, so the VM can
+live-migrate, and a disk from a Harvester image lives on that image's own
+class. On k3s, RKE2 or any other cluster with KubeVirt, a new disk lands on
+the class you pick - the cluster's default to begin with - and CDI picks the
+access mode that class supports, so local-path works; such a VM stays on the
+host its disk is on. Without CDI, a VM starts from a blank disk KubeVirt
+formats itself, and downloading or importing an image asks for CDI first.
 
 ## VM console
 

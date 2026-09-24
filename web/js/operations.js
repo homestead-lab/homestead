@@ -49,7 +49,7 @@ function renderOperations() {
     <div class="jobmeter"><span class="${operation.status === "failed" ? "failed" : ""}" style="width:${Math.max(2, Math.min(100, operation.progress || 0))}%"></span></div>
     <div class="jobfoot"><span>${esc(operation.message || "")}</span><span>${operationAge(operation.finished_at || operation.started_at)}</span></div>
     <div class="jobactions">
-      <button class="btn sm" onclick="openOperation('${esc(operation.href || "/")}')">Open</button>
+      <button class="btn sm" onclick="openOperation('${esc(operation.href || "/")}','${esc(operation.id || "")}')">Open</button>
       ${operationActive(operation) ? "" : `<button class="btn sm" data-need="operator" onclick="dismissOperation('${esc(operation.id)}')">Dismiss</button>`}
     </div>
   </article>`).join("");
@@ -80,12 +80,24 @@ window.toggleOperations = () => {
   operationPanelOpen = !operationPanelOpen;
   renderOperations();
 };
-window.openOperation = href => {
+window.openOperation = (href, id = "") => {
   const url = new URL(href || "/", window.location.origin);
   const route = HomesteadRouter.resolve(url.pathname);
+  const operation = (STATE.data.operations || []).find(item => item.id === id);
   operationPanelOpen = false;
+  // A search in the link is applied here: go() reads one only from the address
+  // bar on first load, so it used to land on the whole page instead.
+  const q = url.searchParams.get("q");
+  if (q !== null) {
+    STATE.q = q.trim();
+    if ($("#globalSearch")) $("#globalSearch").value = STATE.q;
+  }
   go(route.view, { params: Object.fromEntries(url.searchParams) });
   renderOperations();
+  // An image update or rollback opens its rollout, as it looked when it ran.
+  const target = operation?.resource || {};
+  if (["image-update", "image-rollback"].includes(operation?.kind) && target.name && window.monitorImageRollout)
+    setTimeout(() => monitorImageRollout(target.namespace || "lab", target.name), 150);
 };
 window.dismissFinishedOperations = async () => {
   try {
