@@ -621,6 +621,16 @@ def edit_workload(cfg, hold=False):
                 raise ValueError(f"container {final_name} already exists in {name}")
             _apply_container_edit(containers[0], legacy, name)
     pending_claims = _apply_container_volumes(ns, spec, container_requests)
+    import homestead_privileges as PRIV
+    for container, change in container_requests:
+        if "privileges" in change:
+            # Device passthrough keeps a container privileged whatever is asked.
+            hardware = bool(set(change.get("hardware") or ())) if "hardware" in change else bool(
+                (container.get("securityContext") or {}).get("privileged") and any(
+                    ((v.get("hostPath") or {}).get("path") or "").startswith("/dev/")
+                    and (v.get("hostPath") or {}).get("path") != PRIV.TUN
+                    for v in spec.get("volumes") or []))
+            PRIV.apply(container, spec, change["privileges"], hardware=hardware)
     if "pod_hostname" in cfg:
         pod_hostname = (cfg.get("pod_hostname") or "").strip()
         if pod_hostname:

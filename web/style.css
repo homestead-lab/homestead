@@ -1667,3 +1667,5 @@ div.ipam-line.dim{display:block}
 .vip-own{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px;margin-bottom:16px}
 .vip-chip{display:grid;grid-template-columns:1fr auto auto;gap:4px 8px;align-items:center;padding:9px 11px;border:1px solid var(--line);border-radius:12px}
 .vip-name{display:grid;min-width:0}.vip-name span{cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.vip-chip .tag{max-width:130px;overflow:hidden;text-overflow:ellipsis}
+.primary-ports{display:grid;gap:8px}
+.priv-fields{display:grid;gap:8px;margin-bottom:6px}

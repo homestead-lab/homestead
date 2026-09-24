@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.117")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.118")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -744,6 +744,17 @@ def pod_container_rows(pod):
     return rows
 
 
+OWN_GROUP = "Homestead"
+
+
+def own_group(ns, name):
+    """Homestead's own containers - itself, the Samba that serves shares, the
+    backup store moves go through - sit together, apart from your apps,
+    unless someone put them in a group of their own."""
+    own = {(SELF.NS, NAMES.BRAND), (SMB_NAMESPACE, "samba"), (DEFAULT_NS, OBJECTS.NAME)}
+    return OWN_GROUP if (ns, name) in own else ""
+
+
 def get_workloads():
     deps = kget("/apis/apps/v1/deployments").get("items", [])
     pods = kget("/api/v1/pods").get("items", [])
@@ -787,6 +798,16 @@ def get_workloads():
         st = d.get("status", {})
         pspec = d["spec"]["template"]["spec"]
         annotations = d["metadata"].get("annotations", {}) or {}
+        # The port chosen as the app's own - its web UI, usually - comes
+        # first, so the card's first link is the one people want.
+        try:
+            primary = int(NAMES.read(annotations, "primary-port") or 0)
+        except ValueError:
+            primary = 0
+        if primary:
+            ports.sort(key=lambda row: row.get("port") != primary)
+            for row in ports:
+                row["primary"] = row.get("port") == primary
         hardware = HW.workload_features(pspec, annotations)
         pod_rows = []
         transition_ages = []
@@ -848,7 +869,7 @@ def get_workloads():
             "gpu": "igpu" in hardware,
             "hardware": hardware,
             "icon": display_icon(annotations),
-            "group": NAMES.read(annotations, "group"),
+            "group": NAMES.read(annotations, "group") or own_group(ns, name),
         })
     return sorted(out, key=lambda x: (x["ns"], x["name"]))
 
@@ -1363,6 +1384,8 @@ def build_deployment(cfg):
             {"name": dev["name"], "mountPath": dev["container_path"]})
         podspec.setdefault("volumes", []).append(
             {"name": dev["name"], "hostPath": {"path": dev["host_path"], "type": dev["path_type"]}})
+    if any(key in cfg for key in ("privileged", "cap_add", "tun")):
+        PRIV.apply(podspec["containers"][0], podspec, cfg, hardware=bool(hardware))
     if cfg.get("fs_group") is not None:
         # The kubelet gives the volume to this group and makes it group
         # writable, which is what lets a container that is not root write to
@@ -2388,6 +2411,7 @@ def fetch_appstore():
                 "official": bool(a.get("Official") or a.get("LTOfficial")),
                 "beta": str(a.get("Beta") or "").lower() in ("true", "1", "yes"),
                 "privileged": str(a.get("Privileged") or "").lower() == "true",
+                "extra_params": catalog_text(a.get("ExtraParams") or "", 600),
                 "links": {k: v for k, v in {
                     "project": a.get("Project"), "support": a.get("Support"), "registry": a.get("Registry"),
                     "readme": a.get("ReadMe") or a.get("Readme"), "video": a.get("Video"),
@@ -2519,9 +2543,15 @@ def template_to_cfg(app):
                           "name": f"p{port}-tcp", "protocol": "TCP",
                           "label": "Web interface", "description": "Inferred from the template WebUI URL",
                           "required": True})
+    # What Unraid lets it do to its host: Privileged, and the capabilities and
+    # tunnel device its extra parameters ask for (VPN containers need them).
+    privileges = PRIV.from_docker(app.get("extra_params", ""), app.get("privileged"),
+                                  devices=[d["host_path"] for d in devices])
+    devices = [d for d in devices if PRIV.TUN not in (d["host_path"] + d["container_path"])]
     cfg = {"name": name,
             "image": app["repo"], "icon": app.get("icon") or "",
             "ports": ports, "env": envs, "env_meta": env_meta, "volumes": vols,
+            **privileges,
             "template_devices": devices, "template_network": network,
             "network_mode": network_mode, "vip_mode": vip_mode,
             "env_bindings": {}}
@@ -2756,6 +2786,7 @@ import homestead_resources as RESOURCES
 import homestead_vms as VMS
 import homestead_lhcapacity as LHCAP
 import homestead_disks as DISKS
+import homestead_privileges as PRIV
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
@@ -3445,7 +3476,9 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
                        "expose": (str(port.get("protocol") or "TCP").upper(),
                                   port.get("containerPort")) in listeners}
                       for port in container.get("ports", []) or []],
-            "hardware": hardware, "volumes": mounts,
+            "hardware": hardware,
+            "volumes": [m for m in mounts if m["name"] != PRIV.TUN_VOLUME],
+            "privileges": PRIV.read(container, pspec),
         })
     detected = HW.workload_features(pspec, annotations, definitions)
     assigned = {feature for container in containers for feature in container["hardware"]}
@@ -4701,6 +4734,15 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/network/vips/label":
                 _cache.pop("network", None)
                 return self._send(200, NETWORK.set_vip_label(b.get("ip", ""), b.get("label", "")))
+            if p == "/api/workload/primary-port":
+                ns, name = b.get("ns") or DEFAULT_NS, _dns_name(b.get("name"), "workload name")
+                port = int(b.get("port") or 0)
+                ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
+                      {"metadata": {"annotations": {NAMES.key("primary-port"): str(port) if port else None}}},
+                      ctype="application/merge-patch+json")
+                _cache.pop("wl", None)
+                return self._send(200, {"ok": True, "detail": f"{name} opens on port {port} first" if port
+                                        else f"{name} shows its ports in their own order"})
             if p == "/api/volumes/reclass/plan":
                 return self._send(200, RECLASS.plan(b.get("namespace") or DEFAULT_NS, b.get("claim", ""), b.get("target", "")))
             if p == "/api/volumes/reclass/start":
@@ -4929,7 +4971,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.117 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.118 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

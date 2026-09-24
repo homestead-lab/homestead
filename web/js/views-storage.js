@@ -201,8 +201,8 @@ async function viewStorage() {
        // workload, not a fault. Longhorn calls it detached, so do we.
        : `<span class="pill neutral" data-tip="Nothing is mounting this volume, so Longhorn reports no live replica health">detached</span>`}
        ${volumeReason(x) ? `<span class="dim xs volume-reason">${esc(x.health_reason)}</span>` : ""}</td>
-     <td data-label="Mode"><span class="tag">${esc((x.access_modes || ["?"]).map(m => m === "ReadWriteMany" ? "RWX" : m === "ReadWriteOnce" ? "RWO" : m).join(", "))}</span>${x.engine === "v2" ? '<span class="tag info" data-tip="On Longhorn\'s V2 data engine (SPDK)">V2</span>' : ""}
-       <span class="dim xs mono">×${x.replicas}</span></td>
+     <td data-label="Mode"><span class="tag">${esc((x.access_modes || ["?"]).map(m => m === "ReadWriteMany" ? "RWX" : m === "ReadWriteOnce" ? "RWO" : m).join(", "))}</span>
+       <span class="tag ${+x.replicas === 1 ? "warn" : ""}" data-tip="${+x.replicas === 1 ? "One copy: if its node or disk fails, this volume is gone until they come back" : `${esc(x.replicas)} copies, each on a different node`}">×${esc(x.replicas)}</span><span class="tag ${x.engine === "v2" ? "info" : ""}" data-tip="${x.engine === "v2" ? "Longhorn's V2 data engine (SPDK)" : "Longhorn's V1 data engine - the default"}">${x.engine === "v2" ? "V2" : "V1"}</span></td>
      <td data-label="Usage" class="volusage"><div>${meter(x.used_pct || 0)}
        <span class="dim xs mono">${x.actual_gb} / ${x.size_gb} GB</span></div></td>
      <td data-label="Last used" class="small dim">${x.state === "attached" ? '<span class="tag ok">in use</span>' : esc(fmtAgo(x.last_used_secs))}</td>
@@ -1227,7 +1227,7 @@ window.reclassWatch = async id => {
   clearInterval(window.__reclassTimer);
   const tick = async () => {
     if ($("#modal").classList.contains("hidden")) return clearInterval(window.__reclassTimer);
-    const op = (await api("/api/operations").catch(() => [])).find(o => o.id === id);
+    const op = (await api("/api/operations", { keep: true }).catch(() => [])).find(o => o.id === id);
     if (!op) return;
     $("#mtitle").textContent = op.title;
     paint(op);

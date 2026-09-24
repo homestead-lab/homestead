@@ -72,10 +72,10 @@ scripts/render_chart.py       regenerate charts/homestead from the manifests
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.117`, the workflow publishes:
+For a release such as `v2.8.118`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.117
+ghcr.io/wjcloudy/homestead:2.8.118
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -86,8 +86,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.117
-git push origin v2.8.117
+git tag v2.8.118
+git push origin v2.8.118
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -683,7 +683,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.117/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.118/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -694,7 +694,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.117 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.118 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1181,7 +1181,27 @@ container consoles they are for operators, and each session's start and end
 are audited while what is typed and shown is not recorded. noVNC is vendored
 under `web/vendor/novnc` and loaded only when a console opens.
 
+## Privileges, VPNs and the main port
+
+Some containers need more of their host than the defaults allow. A VPN client
+(transmission-openvpn, gluetun and the like) opens a tunnel device and adds
+routes - without that it stops at "RTNETLINK answers: Operation not
+permitted". Deploy, Edit and Import each have **Privileges**: **VPN tunnel**
+mounts `/dev/net/tun` and grants `NET_ADMIN`, which is all a VPN needs;
+**Extra capabilities** adds others by name; **Privileged** gives everything,
+as Unraid's Privileged does, and is a last resort. They are filled in for you
+from an Unraid template's Privileged flag and extra parameters
+(`--cap-add`, `--device=/dev/net/tun`), and from Docker's own settings on an
+import.
+
+A container listening on several ports can pick its **Main port** from its ⋯
+menu - usually its web UI - and its card links to that one first.
+
 ## Container groups
+
+Homestead's own containers - Homestead itself, the Samba that serves shares,
+and the backup storage moves go through - sit in a **Homestead** group of
+their own, unless you put them in another.
 
 Workloads can be gathered into groups - Media, Home, Monitoring, whatever suits
 - from **Group** in a container's menu, or **Groups** on the Containers page to

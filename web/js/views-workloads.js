@@ -361,6 +361,7 @@ function workloadActions(w, update, off, compact = false) {
             <div class="actionmenu-pop">
               <button aria-label="Console for ${esc(w.name)}" title="Open an audited interactive shell in a running container" data-need="operator" onclick="this.closest('details').open=false;wlConsole('${w.ns}','${w.name}')">${icon("console")}Console</button>
               <button aria-label="Edit ${esc(w.name)}" title="Edit image, resources, environment, storage and hardware" onclick="this.closest('details').open=false;wlEdit('${w.ns}','${w.name}')">${icon("edit")}Edit</button>
+              ${(w.ports || []).length > 1 ? `<button aria-label="Main port of ${esc(w.name)}" title="Which port the card links to first - usually its web UI" onclick="this.closest('details').open=false;wlPrimaryPort('${w.ns}','${w.name}')">${icon("ext")}Main port</button>` : ""}
               <button aria-label="Placement of ${esc(w.name)}" title="Where it runs: copies, spreading, and nodes shared with or kept apart from other workloads" onclick="this.closest('details').open=false;wlPlacement('${w.ns}','${w.name}')">${icon("node")}Placement</button>
               <button aria-label="Group ${esc(w.name)}" title="Put this workload in a group on the Containers page" data-need="operator" onclick="this.closest('details').open=false;wlGroup('${w.ns}','${w.name}')">${icon("list")}Group${w.group ? ` · ${esc(w.group)}` : ""}</button>
               <button aria-label="Move ${esc(w.name)}" title="Move this workload to another eligible host" data-need="operator" onclick="this.closest('details').open=false;moveWorkload('${w.name}','${w.ns}')">${icon("move")}Move</button>
@@ -982,6 +983,9 @@ async function viewDeploy(pre) {
       <div class="hwchoices">
         ${hardwareChoices("d_hw", (DCFG.hardware || []).concat(DCFG.gpu && !(DCFG.hardware || []).includes("igpu") ? ["igpu"] : []))}
       </div>
+      <div class="sec">Privileges ${tip("What the container may do to its host beyond the defaults. VPN containers need the tunnel.")}</div>
+      ${DCFG.tun || DCFG.privileged || (DCFG.cap_add || []).length ? '<div class="note">Set from the template: Unraid gives this app these privileges.</div>' : ""}
+      ${privilegeFields("d_pv", DCFG)}
       ${(DCFG.template_devices || []).length ? `<div class="note import-device-note"><b>Imported device mappings:</b> ${(DCFG.template_devices || []).map(d => `<span class="mono">${esc(d.host_path || "?")} → ${esc(d.container_path || "?")}</span>`).join(", ")}. Matching hardware features were selected; review them before deploying.</div>` : ""}
       <div class="sec">Network ${tip("Kubernetes replaces Docker bridge networking with Services. Use a dedicated VIP for DNS servers and other workloads that must own common ports.")}</div>
       <div class="f2"><div class="f"><label>Access mode</label><select id="d_net">
@@ -1061,6 +1065,7 @@ function collect() {
   DCFG.target_mode = $("#d_target_mode").value; DCFG.target_workload = $("#d_target_workload").value;
   DCFG.cpu = $("#d_cpu").value.trim(); DCFG.memory = $("#d_mem").value.trim(); DCFG.icon = $("#d_icon").value.trim();
   DCFG.hardware = selectedHardware("d_hw");
+  Object.assign(DCFG, readPrivileges("d_pv") || {});
   DCFG.gpu = DCFG.hardware.includes("igpu"); DCFG.network_mode = $("#d_net").value;
   DCFG.vip_mode = $("#d_vip_mode").value; DCFG.lb_ip = $("#d_lb_ip").value.trim();
   DCFG.ports = $$("#d_ports .port-row").map(r => ({ container: +$(".pc", r).value,
@@ -1381,4 +1386,23 @@ window.storeDetails = async key => {
       `<a href="${esc(src)}" target="_blank" rel="noopener noreferrer"><img src="${esc(src)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.remove()"></a>`).join("")}</div>` : ""}
     <div class="sec">Details</div>
     <div class="store-facts">${facts.map(([label, value]) => `<div><span>${label}</span><b class="${label === "Image" ? "mono" : ""}">${esc(value)}</b></div>`).join("")}</div>`;
+};
+
+/* The port a card links to first: the app's web UI, usually. */
+window.wlPrimaryPort = (ns, name) => {
+  const w = (STATE.data.wl || []).find(x => x.ns === ns && x.name === name) || { ports: [] };
+  const current = (w.ports.find(p => p.primary) || {}).port || 0;
+  modal(`Main port · ${name}`, `<p class="small">The card links to this port first - usually the app's web UI.</p>
+    <div class="primary-ports">${w.ports.map(p => `<label class="switch"><input type="radio" name="pp" value="${p.port}" ${p.port === current ? "checked" : ""}>
+      <b class="mono">${p.port}</b> <span class="dim xs">${esc(p.name || "")}${p.ip ? ` · ${esc(p.ip)}` : ""}</span></label>`).join("")}
+      <label class="switch"><input type="radio" name="pp" value="0" ${current ? "" : "checked"}> <span class="dim">No preference - their own order</span></label></div>
+    <div class="row" style="margin-top:14px"><button class="btn pri" onclick="wlPrimaryPortSave('${esc(ns)}','${esc(name)}')">Save</button>
+      <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+};
+window.wlPrimaryPortSave = async (ns, name) => {
+  const port = +(document.querySelector('input[name="pp"]:checked')?.value || 0);
+  try {
+    const r = await api("/api/workload/primary-port", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ns, name, port }) });
+    toast(r.detail, "ok"); closeModal(); refresh(true);
+  } catch (e) { toast(e.message, "bad"); }
 };

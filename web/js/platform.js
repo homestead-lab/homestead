@@ -10,7 +10,7 @@ const PLATFORM_NEEDS = {
 };
 
 async function loadPlatform() {
-  try { STATE.platform = await api("/api/platform"); } catch (e) { STATE.platform = null; return; }
+  try { STATE.platform = await api("/api/platform", { keep: true }); } catch (e) { STATE.platform = null; return; }
   const p = STATE.platform;
   // The sidebar offers what this cluster can do.
   const hide = { vms: !p.kubevirt, protect: !p.longhorn };

@@ -60,7 +60,10 @@ async function refreshOperations(immediate = false) {
   clearTimeout(operationTimer);
   if (!ME) return;
   try {
-    STATE.data.operations = await api("/api/operations");
+    // keep: the tray outlives every page. A read abandoned by navigating away
+    // never settles, which stopped this loop for good - the job an App Store
+    // install started sat at "queued" while its container ran.
+    STATE.data.operations = await api("/api/operations", { keep: true });
     renderOperations();
   } catch (_) { /* retain the last known state during API interruptions */ }
   const active = (STATE.data.operations || []).some(operationActive);

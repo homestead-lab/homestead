@@ -59,6 +59,8 @@ const editContainerPanel = (container, index) => {
       </div>
       <div class="subsec">Hardware passed to this container</div>
       <div class="hwchoices">${hardwareChoices(`e_hw_${index}`, container.hardware || [])}</div>
+      <div class="subsec">Privileges</div>
+      ${privilegeFields(`e_pv_${index}`, container.privileges || {})}
       <div class="subsec">Environment</div>
       ${refs.length ? `<div class="managed-env-list">${refs.map(ref => `<div><span class="mono">${esc(ref.name)}</span><span>${esc(ref.source)}</span><span class="pill info">managed reference</span></div>`).join("")}</div><div class="dim xs managed-env-note">References remain connected to Kubernetes and are not exposed or replaced when you save.</div>` : ""}
       <div class="e-env" id="e_env_${index}">${(env.length ? env : [["", ""]]).map(([key, value]) => editEnvRow(index, key, value)).join("")}</div>
@@ -255,6 +257,7 @@ window.editSave = async (ns, name) => {
     return { original_name: panel.dataset.originalName, name: $("#e_container_name_" + index).value.trim(),
       image: $("#e_image_" + index).value.trim(), cpu: $("#e_cpu_" + index).value.trim(),
       memory: $("#e_mem_" + index).value.trim(), hardware: selectedHardware("e_hw_" + index), env, ports,
+      privileges: readPrivileges("e_pv_" + index) || undefined,
       volumes: readVolumeRows($("#e_vols_" + index)) };
   });
   const storageIssue = containers.map(container => volumeListIssue(container.volumes)).find(Boolean);
@@ -1168,6 +1171,9 @@ window.importSetup = async (source, dir, cfg = {}) => {
   if (liveNodes.length) STATE.data.nodes = liveNodes;
   STATE.data.importStorage = storage;
   const classes = storage.storage_classes?.length ? storage.storage_classes : ["longhorn-r2"];
+  // A container that mounts nothing needs no storage: the folders and volumes
+  // stay out of the way, offered only if someone wants to add some anyway.
+  const keeps = (cfg.mounts || []).some(m => m.source || m.type === "tmpfs") || !!cfg.shm_mb;
   childModal("Import · " + dir, `
     <div class="f"><label>Workload name</label><input type="text" id="im_name" value="${esc(name)}"></div>
     <div class="f"><label>Remote path</label>
@@ -1177,12 +1183,15 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <div class="f"><label>Logo URL</label><input type="url" id="im_icon" value="${esc(cfg.icon || "")}" placeholder="https://…/icon.png"></div>
     <div class="sec">Hardware requirements ${tip("Docker device mappings are pre-selected. Add or remove features before import; placement will be limited to nodes that provide every selected feature.")}</div>
     <div class="hwchoices">${hardwareChoices("im_hw", cfg.hardware || [])}</div>
+    <div class="sec">Privileges ${tip("Read from Docker on the source: privileged mode, added capabilities, and the /dev/net/tun device a VPN needs.")}</div>
+    ${privilegeFields("im_pv", cfg)}
+    ${keeps ? "" : `<div class="note good" id="im_nothing">This container keeps nothing on disk, so there is nothing to copy and no
+        volume to create. Import will bring across its image, ports and environment alone.
+        <div style="margin-top:8px"><button class="btn sm" onclick="imStorageAnyway()">Add storage anyway</button></div></div>`}
+    <div id="im_storage" ${keeps ? "" : "hidden"}>
     <div class="sec">Folders to copy ${tip("Every Docker path under the source appdata directory can come across. They all live in one Longhorn volume for this app, each in its own subfolder, mounted back where the container expects it.")}</div>
     <div class="note">Source folders → the volumes you define below → mounted back at each container path.</div>
-    ${(cfg.mounts || []).some(m => m.source || m.type === "tmpfs") ? "" :
-      `<div class="note good">This container keeps nothing on disk, so there is nothing to copy and no
-        volume to create. Import will bring across its image, ports and environment alone.</div>`}
-    ${cfg.guessed_path ? `<div class="note warn">Nothing this container mounts sits under <span class="mono">${esc(src.base_path || "/mnt/user/appdata")}</span>,
+    ${keeps && cfg.guessed_path ? `<div class="note warn">Nothing this container mounts sits under <span class="mono">${esc(src.base_path || "/mnt/user/appdata")}</span>,
       so Homestead cannot tell which folder holds its configuration. Tick the ones to copy yourself.</div>` : ""}
     <div id="im_maps">${importMappingRows(cfg, src).map(importMappingRow).join("")}</div>
     <div class="row"><button class="btn sm" onclick="imAddMap()">＋ add folder</button>
@@ -1202,6 +1211,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
       heavy folders at it.</div>
     <div id="im_volumes"></div>
     <button class="btn sm" onclick="imAddVolume()">＋ add volume</button>
+    </div>
     <div class="sec">Network</div><div class="f2"><div class="f"><label>Docker network → Kubernetes</label><select id="im_net"><option value="loadbalancer">LAN access (VIP)</option><option value="internal">Cluster only</option><option value="host" ${cfg.network_mode === "host" ? "selected" : ""}>Host network (advanced)</option></select></div>
       <div class="f"><label>VIP allocation ${tip("Choose a new automatic or specific VIP for apps such as Pi-hole that need port 53 on their own address.")}</label><select id="im_vip" onchange="$('#im_vip_wrap').style.display = this.value === 'manual' ? '' : 'none'"><option value="shared">Shared Homestead VIP</option><option value="auto">New automatic VIP</option><option value="manual">Specific VIP</option></select></div></div>
     <div class="f" id="im_vip_wrap" style="display:none"><label>Specific VIP</label><div id="im_vip_pick"><span class="dim xs"><span class="spin2"></span></span></div></div>
@@ -1217,7 +1227,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
       <button class="btn" onclick="closeModal()">Cancel</button></div>
     <div class="note" style="margin-top:14px">The copy runs as a Job — you can close this and watch it
     on the Import page, folder by folder. Large appdata directories can take a while.</div>`, true);
-  $("#im_volumes").innerHTML = importVolumeRow({ name: `${name}-appdata`, size_gb: 10 }, 0);
+  if (keeps) $("#im_volumes").innerHTML = importVolumeRow({ name: `${name}-appdata`, size_gb: 10 }, 0);
   vipChoices().then(choices => { const host = $("#im_vip_pick"); if (host) host.innerHTML = vipPicker("im", "", choices); });
   imSyncVolumes();
 };
@@ -1608,7 +1618,7 @@ window.doImport = async source => {
     storage_class: first?.storage_class || "", access_mode: first?.access_mode || "",
     start_after_copy: $("#im_start").checked,
     ports: $$(".im-port").map(r => ({ container: +$(".ipc", r).value, host: +$(".iph", r).value || +$(".ipc", r).value, protocol: $(".ipp", r).value, expose: $(".ipe", r).checked })).filter(p => p.container),
-    env, hardware: selectedHardware("im_hw"), network_mode: $("#im_net").value, vip_mode: $("#im_vip").value, lb_ip: ($("#im_lb_ip")?.value || "").trim(),
+    env, hardware: selectedHardware("im_hw"), ...(readPrivileges("im_pv") || {}), network_mode: $("#im_net").value, vip_mode: $("#im_vip").value, lb_ip: ($("#im_lb_ip")?.value || "").trim(),
     uid: $("#im_uid").value.trim(), gid: $("#im_gid").value.trim() };
   if (!body.name || !body.image) return toast("workload name and image are required", "bad");
   for (const volume of volumes) {
@@ -1661,4 +1671,17 @@ window.moveDismiss = async (id = "") => {
     if (host) host.innerHTML = movesHtml(await api("/api/move/moves").catch(() => []));
     if (window.applyRole) applyRole();
   } catch (e) { toast(e.message, "bad"); }
+};
+
+/* Storage for an import that has none on the source: a volume and a folder
+   row to fill in, only because someone asked. */
+window.imStorageAnyway = () => {
+  $("#im_storage").hidden = false;
+  $("#im_nothing")?.remove();
+  if (!$$("#im_volumes .im-volume").length) {
+    const base = $("#im_name")?.value.trim() || "app";
+    $("#im_volumes").innerHTML = importVolumeRow({ name: `${base}-appdata`, size_gb: 10 }, 0);
+  }
+  if (!$$("#im_maps .im-map").length) imAddMap();
+  imSyncVolumes();
 };

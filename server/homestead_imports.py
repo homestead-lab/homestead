@@ -207,6 +207,9 @@ def inspect_source_container(name, container):
     except Exception as e:
         raise ValueError(f"could not inspect {container}: {e}")
     config, host = item.get("Config", {}) or {}, item.get("HostConfig", {}) or {}
+    import homestead_privileges as PRIV
+    privileges = PRIV.from_docker("", host.get("Privileged"), host.get("CapAdd") or (),
+                                  [d.get("PathOnHost", "") for d in host.get("Devices") or []])
     env = {}
     for pair in config.get("Env", []) or []:
         key, sep, val = pair.partition("=")
@@ -244,6 +247,7 @@ def inspect_source_container(name, container):
                 str(d.get("PathOnHost", "")).lower().startswith(host_path + "/") for d in devices)):
             hardware.append(feature["id"])
     return {
+        **privileges,
         "name": (item.get("Name") or container).lstrip("/"),
         "image": config.get("Image", ""),
         "icon": (labels.get("net.unraid.docker.icon", "")
@@ -896,6 +900,8 @@ def import_container(cfg):
             "icon_source": cfg.get("icon_source", cfg.get("icon", "")),
             "network_mode": cfg.get("network_mode", "loadbalancer"),
             "vip_mode": cfg.get("vip_mode", "shared"), "lb_ip": cfg.get("lb_ip", ""),
+            "privileged": bool(cfg.get("privileged")), "cap_add": cfg.get("cap_add") or [],
+            "tun": bool(cfg.get("tun")),
         }
         dep, svc = build_deployment(dcfg)
         try:
