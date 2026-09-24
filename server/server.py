@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.116")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.117")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -3607,7 +3607,7 @@ ADMIN_ROUTES = {
     "/api/move/definition", "/api/move/target", "/api/move/source-status", "/api/move/source",
     # The destination side creates, restores and removes.
     "/api/move/plan", "/api/move/start", "/api/move/moves/retry",
-    "/api/move/moves/abandon", "/api/move/moves/finish",
+    "/api/move/moves/abandon", "/api/move/moves/finish", "/api/move/moves/dismiss",
     "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete",
     "/api/lh/restore",
     # Homestead's own permissions, and the namespaces apps live in.
@@ -4581,6 +4581,8 @@ class H(BaseHTTPRequestHandler):
                 return self._move(lambda: MOVE_ENGINE.retry(b.get("id")))
             if p == "/api/move/moves/abandon":
                 return self._move(lambda: MOVE_ENGINE.abandon(b.get("id")))
+            if p == "/api/move/moves/dismiss":
+                return self._send(200, MOVE_ENGINE.dismiss(b.get("id") or None))
             if p == "/api/move/moves/finish":
                 return self._move(lambda: MOVE_ENGINE.finish(b.get("id"), bool(b.get("volumes"))))
             if p == "/api/objectstore/deploy":
@@ -4927,7 +4929,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.116 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.117 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

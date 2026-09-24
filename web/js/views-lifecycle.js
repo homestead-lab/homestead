@@ -659,7 +659,8 @@ async function viewImport() {
       <button class="btn" data-need="admin" onclick="srcAdd()">＋ Container source</button>
       <button class="btn pri" data-need="admin" onclick="vmDiskImport()">＋ VM disk</button></div></div>
 
-    ${moves.length ? `<div class="sec">Moves ${tip("Workloads being brought here from another Homestead cluster. Each keeps going across restarts of either Homestead; the source is only removed when you say so.")}</div>` : ""}
+    ${moves.length ? `<div class="between"><div class="sec">Moves ${tip("Workloads being brought here from another Homestead cluster. Each keeps going across restarts of either Homestead; the source is only removed when you say so.")}</div>
+      ${moves.some(m => ["succeeded", "cancelled"].includes(m.status)) ? '<button class="btn sm" data-need="admin" onclick="moveDismiss()">Clear finished</button>' : ""}</div>` : ""}
     <div id="movesList">${movesHtml(moves)}</div>
 
     <div class="sec">Other Homestead clusters ${tip("Another Homestead installation on the network. Its workloads can be listed here, and later moved across: volume data travels through the shared Longhorn backup target, the definition comes straight from the other Homestead.")}</div>
@@ -1520,6 +1521,9 @@ function movesHtml(moves) {
         ? `<button class="btn sm" data-need="admin" onclick="moveFinish('${m.id}','${esc(m.name)}','${esc(m.cluster)}')">Remove from ${esc(m.cluster)}</button>` : "",
       ["running", "failed", "succeeded"].includes(m.status) && !m.source_removed
         ? `<button class="btn sm danger" data-need="admin" onclick="moveBack('${m.id}','${esc(m.name)}','${esc(m.cluster)}','${m.status}')">Put back</button>` : "",
+      ["succeeded", "cancelled"].includes(m.status)
+        ? `<button class="btn sm" data-need="admin" data-tip="${m.status === "succeeded" && !m.source_removed ? `Clear it from this list. ${esc(m.cluster)} keeps its stopped copy until you remove it there.` : "Clear it from this list"}"
+            onclick="moveDismiss('${m.id}')">Dismiss</button>` : "",
     ].join("");
     const started = Math.max(0, (Date.now() - Date.parse(m.created_at)) / 1000);
     return `<div class="card flat moveitem">
@@ -1641,5 +1645,20 @@ window.doImport = async source => {
   try {
     const r = await api("/api/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(`import started (${r.job})`, "ok"); closeModal(); resetPaint(); viewImport();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+/* Finished moves off the list, leaving the source's stopped copy where it is. */
+window.moveDismiss = async (id = "") => {
+  const rows = (await api("/api/move/moves").catch(() => [])).filter(m => (!id || m.id === id) && m.status === "succeeded" && !m.source_removed);
+  if (rows.length && !confirm(`Clear ${id ? "this move" : "finished moves"} from the list?` + String.fromCharCode(10, 10)
+      + `${[...new Set(rows.map(m => m.cluster))].join(", ")} keeps the stopped original of ${rows.map(m => m.name).join(", ")} - `
+      + "nothing is removed there, and Put back is no longer offered here.")) return;
+  try {
+    const r = await api("/api/move/moves/dismiss", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+    toast(r.detail, "ok");
+    const host = $("#movesList");
+    if (host) host.innerHTML = movesHtml(await api("/api/move/moves").catch(() => []));
+    if (window.applyRole) applyRole();
   } catch (e) { toast(e.message, "bad"); }
 };

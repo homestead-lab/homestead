@@ -765,6 +765,30 @@ def abandon(move_id):
     return _public(move)
 
 
+DISMISSABLE = ("succeeded", "cancelled")
+
+
+def dismiss(move_id=None):
+    """Clear finished moves from the list - one, or all of them - and nothing
+    else. The source keeps its stopped original, to be removed there when it
+    suits; a failed move stays, since its workload is still stopped there."""
+    with _lock:
+        rows = _read()
+        gone = [m for m in rows if m.get("status") in DISMISSABLE and (move_id is None or m["id"] == move_id)]
+        if move_id is not None and not gone:
+            match = next((m for m in rows if m["id"] == move_id), None)
+            if not match:
+                raise ValueError("no such move")
+            raise ValueError("only a finished or put-back move can be cleared; retry or put back a failed one first")
+        _write([m for m in rows if m not in gone])
+    kept = [m for m in gone if m.get("status") == "succeeded" and not m.get("source_removed")]
+    return {"ok": True, "dismissed": len(gone),
+            "detail": f"cleared {len(gone)} move{'s' if len(gone) != 1 else ''}"
+                      + (f"; {', '.join(sorted({m['cluster'] for m in kept}))} still "
+                         f"{'has' if len({m['cluster'] for m in kept}) == 1 else 'have'} the stopped original"
+                         f"{'s' if len(kept) != 1 else ''} of {', '.join(m['name'] for m in kept)}" if kept else "")}
+
+
 def finish(move_id, volumes=False):
     """Remove the stopped original from the source, once the move has landed."""
     move = _find(move_id)
