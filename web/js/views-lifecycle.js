@@ -1311,13 +1311,17 @@ window.clusterReady = async name => {
   (window.__clusterReady ||= {})[name] = r;
   const step = (ok, text, action = "") => `<div class="clstep ${ok ? "done" : "todo"}"><span>${ok ? "✓" : "•"}</span><div>${text}${action}</div></div>`;
   host.innerHTML = step(true, "Connected")
-    + (r.update_first
+    + (target.configured && target.reachable_off_cluster && !target.answers
+      ? step(false, `Backup storage on ${esc(name)} is at <span class="mono">${esc(target.endpoint || "")}</span>, but this cluster cannot reach it`,
+          `<div class="dim xs">It may still be starting. Otherwise the address is taken by something else or firewalled - give it another.</div>
+           <div><button class="btn sm" data-need="admin" onclick="clusterStorage('${esc(name)}',true)">Give it another address</button></div>`)
+      : r.update_first
       ? step(false, `${esc(name)} runs Homestead v${esc(r.version?.version || "?")}, which sets up backup storage with MinIO - whose images can no longer be downloaded`,
           `<div class="dim xs">Update it to 2.8.111 or later, then set it up from here:</div><div class="mono xs">kubectl -n lab set image deployment/homestead homestead=ghcr.io/wjcloudy/homestead:2.8.111</div>`)
       : target.configured && target.reachable_off_cluster
-      ? step(true, `Backup storage on ${esc(name)}`, `<div class="dim xs mono">${esc(target.url || "")}</div>`)
+      ? step(true, `Backup storage on ${esc(name)}`, `<div class="dim xs mono">${esc(target.url || "")} · ${esc(target.endpoint || "")}</div>`)
       : target.configured
-        ? step(false, `Backup storage on ${esc(name)} has no LAN address, so this cluster cannot read it`,
+        ? step(false, `Backup storage on ${esc(name)} has no LAN address, so this cluster cannot read it${target.endpoint ? ` - it is at <span class="mono">${esc(target.endpoint)}</span>, inside that cluster` : ""}`,
             `<div><button class="btn sm" data-need="admin" onclick="clusterStorage('${esc(name)}',true)">Give it an address</button></div>`)
         : store.deployed && !store.ready
           ? step(false, `Backup storage on ${esc(name)} is starting`, '<div class="dim xs">Its first start downloads MinIO; this checks again every 15 seconds.</div>')

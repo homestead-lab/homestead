@@ -15,6 +15,7 @@ what of it can actually be moved.
 import base64
 import json
 import re
+import socket
 import ssl
 import time
 import urllib.error
@@ -445,6 +446,20 @@ def check_cluster(name):
 
 
 # ------------------------------------------------------------ getting ready
+def answers(endpoint, timeout=3):
+    """Whether this cluster can open a connection to the far store's S3 port -
+    which is the whole point of its LAN address."""
+    parsed = urllib.parse.urlparse(endpoint or "")
+    if not parsed.hostname or parsed.hostname.endswith(".svc") or ".svc." in parsed.hostname:
+        return False
+    try:
+        with socket.create_connection((parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)),
+                                      timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def readiness(name):
     """What a move from this cluster still needs, for its card: that the two
     Homesteads can talk, and that the far side has backup storage the
@@ -458,8 +473,10 @@ def readiness(name):
     try:
         target = remote(name, "/api/move/target")
         # The keys stay on the server; the card only needs to know it is there.
-        out["target"] = {"configured": True, "url": target.get("url", ""),
-                         "reachable_off_cluster": bool(target.get("reachable_off_cluster"))}
+        endpoint = target.get("endpoint", "")
+        out["target"] = {"configured": True, "url": target.get("url", ""), "endpoint": endpoint,
+                         "reachable_off_cluster": bool(target.get("reachable_off_cluster")),
+                         "answers": answers(endpoint) if target.get("reachable_off_cluster") else False}
     except Exception as error:
         out["target"] = {"configured": False, "error": str(error)[:200]}
     release = _release(out["version"].get("version") or "")
@@ -473,6 +490,7 @@ def readiness(name):
     except Exception:
         out["free_vips"] = []
     out["ready"] = bool(out["target"].get("configured") and out["target"].get("reachable_off_cluster")
+                        and out["target"].get("answers")
                         and out["version"].get("compatible") is not False)
     return out
 
@@ -508,6 +526,7 @@ def setup_storage(name, size_gb=100, lb_ip=""):
     result = remote(name, "/api/objectstore/deploy",
                     {"size_gb": size_gb, "lb_ip": str(lb_ip or "").strip(), "point_longhorn": True})
     where = result.get("endpoint") or ""
+    wanted = str(lb_ip or "").strip()
     # Releases before 2.8.110 gave Longhorn the keys but never its target, so
     # a move still found "no backup target". It is set here too, through a
     # route every release has - unless the target already points elsewhere.
@@ -518,6 +537,25 @@ def setup_storage(name, size_gb=100, lb_ip=""):
         secret = (result.get("longhorn") or {}).get("secret") or "homestead-backup-credentials"
         remote(name, "/api/lh/target", {"url": store.get("backup_url") or "s3://homestead-backups@us-east-1/",
                                         "secret": secret, "poll": "5m"})
+    # Checked, not assumed: the endpoint Longhorn over there now uses, and
+    # whether this cluster can reach it.
+    try:
+        endpoint = (remote(name, "/api/move/target") or {}).get("endpoint", "")
+    except ValueError:
+        endpoint = ""
+    if wanted and wanted not in endpoint:
+        raise ValueError(f"{name} did not take the address: its backups still go to {endpoint or 'nothing'}. "
+                         "Its Homestead may be too old to set one - update it and try again.")
+    reachable = False
+    for _ in range(6):
+        if answers(endpoint):
+            reachable = True
+            break
+        time.sleep(3)
+    if endpoint and not reachable:
+        return {"ok": True, "endpoint": endpoint, "answers": False,
+                "detail": f"{name}'s backups now go to {endpoint}, but this cluster cannot reach it yet - "
+                          "the store may still be starting, or the address may be taken or firewalled. The card re-checks."}
     return {"ok": True, "endpoint": where,
             "detail": f"backup storage is starting on {name}" + (f" at {where}" if where else "")
                       + "; its first start can take a minute while the image downloads"}
