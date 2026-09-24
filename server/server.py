@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.109")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.110")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -4579,7 +4579,7 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/objectstore/deploy":
                 return self._send(200, OBJECTS.deploy(b))
             if p == "/api/objectstore/longhorn":
-                return self._send(200, OBJECTS.point_longhorn())
+                return self._send(200, OBJECTS.point_longhorn(replace=bool(b.get("replace", True))))
             if p == "/api/objectstore/remove":
                 return self._send(200, OBJECTS.remove(bool(b.get("keep_data", True))))
             if p == "/api/node/probe/install":
@@ -4911,7 +4911,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.109 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.110 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

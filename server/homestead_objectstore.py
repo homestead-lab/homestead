@@ -31,6 +31,7 @@ CONSOLE_PORT = 9001
 IMAGE = "quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z"
 VIP_ANNOTATION = "kube-vip.io/loadbalancerIPs"
 import homestead_platform as PLATFORM
+import homestead_longhorn as LH
 
 
 def bind(_kget, _ksend, _create_pvc, namespace):
@@ -202,7 +203,7 @@ def deploy(cfg=None):
     return result
 
 
-def point_longhorn():
+def point_longhorn(replace=False):
     """Give Longhorn the keys and the URL, so backups have somewhere to go.
 
     The endpoint deliberately uses the LAN address rather than the in-cluster
@@ -223,11 +224,21 @@ def point_longhorn():
                # told, and a self-signed certificate would be no better.
                "VIRTUAL_HOSTED_STYLE": "false",
            }))
+    # The keys alone are not enough: Longhorn backs up wherever its target
+    # says. A target already pointing somewhere else - an NFS share - is left
+    # alone unless asked, since changing it moves where every backup goes.
+    current = LH.backup_target()
+    kept = ""
+    if current.get("configured") and current.get("url") != backup_url() and not replace:
+        kept = current.get("url", "")
+    else:
+        LH.set_backup_target(backup_url(), LONGHORN_SECRET)
     # Backups work either way; only the far cluster cares which address this is.
-    return {"url": backup_url(), "secret": LONGHORN_SECRET, "endpoint": where,
+    return {"url": backup_url(), "secret": LONGHORN_SECRET, "endpoint": where, "kept_target": kept,
             "reachable_off_cluster": ".svc:" not in where,
-            "detail": "Longhorn will back up here" + ("" if ".svc:" not in where else
-                      ", but only this cluster can read it until the store has a LAN address")}
+            "detail": (f"Longhorn still backs up to {kept}; point it here from Data protection to change that" if kept
+                       else "Longhorn will back up here" + ("" if ".svc:" not in where else
+                       ", but only this cluster can read it until the store has a LAN address"))}
 
 
 def remove(keep_data=True):

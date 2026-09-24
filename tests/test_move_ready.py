@@ -34,11 +34,21 @@ class MoveReadinessTests(unittest.TestCase):
 
     def test_storage_is_set_up_over_there_with_the_stored_account(self):
         calls = []
-        with mock.patch.object(move, "remote", lambda name, path, body=None: calls.append((name, path, body)) or
-                               {"endpoint": "http://192.0.2.244:9000"}):
+
+        def remote(name, path, body=None):
+            calls.append((name, path, body))
+            if path == "/api/move/target":
+                raise ValueError("oldcluster: this cluster has no Longhorn backup target")
+            if path == "/api/objectstore":
+                return {"backup_url": "s3://homestead-backups@us-east-1/"}
+            return {"endpoint": "http://192.0.2.244:9000", "longhorn": {"secret": "homestead-backup-credentials"}}
+        with mock.patch.object(move, "remote", remote):
             r = move.setup_storage("oldcluster", 50, "192.0.2.244")
-        self.assertEqual([("oldcluster", "/api/objectstore/deploy",
-                           {"size_gb": 50, "lb_ip": "192.0.2.244", "point_longhorn": True})], calls)
+        self.assertEqual(("oldcluster", "/api/objectstore/deploy",
+                          {"size_gb": 50, "lb_ip": "192.0.2.244", "point_longhorn": True}), calls[0])
+        # An older Homestead over there never set its target; this side does.
+        self.assertEqual(("oldcluster", "/api/lh/target", {"url": "s3://homestead-backups@us-east-1/",
+                          "secret": "homestead-backup-credentials", "poll": "5m"}), calls[-1])
         self.assertIn("192.0.2.244:9000", r["detail"])
 
     def test_the_move_review_offers_the_fix(self):

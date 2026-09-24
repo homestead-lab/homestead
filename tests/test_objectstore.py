@@ -17,6 +17,7 @@ class ObjectStoreTests(unittest.TestCase):
         self.sent = []
         self.claims = []
         store.bind(self._get, self._send, self._create_pvc, "lab")
+        store.LH.bind(self._get, self._send, {}, "longhorn-r2")
 
     def _get(self, path):
         key = path.split("?")[0]
@@ -90,6 +91,26 @@ class ObjectStoreTests(unittest.TestCase):
         self.assertEqual("http://192.0.2.243:9000",
                          base64.b64decode(secret["data"]["AWS_ENDPOINTS"]).decode())
         self.assertEqual("s3://homestead-backups@us-east-1/", result["url"])
+
+    def test_longhorn_is_pointed_at_the_bucket_not_just_given_its_keys(self):
+        """Before 2.8.110 only the keys were written, so a move still found no target."""
+        self._service(ip="192.0.2.243")
+        store.point_longhorn()
+        target = next(b for m, p, b in self.sent if p.endswith("/backuptargets"))
+        self.assertEqual(("s3://homestead-backups@us-east-1/", "homestead-backup-credentials"),
+                         (target["spec"]["backupTargetURL"], target["spec"]["credentialSecret"]))
+
+    def test_a_target_already_elsewhere_is_left_alone_unless_asked(self):
+        self._service(ip="192.0.2.243")
+        self.objects["/apis/longhorn.io/v1beta2/namespaces/longhorn-system/backuptargets"] = {"items": [
+            {"metadata": {"name": "default", "resourceVersion": "3"},
+             "spec": {"backupTargetURL": "nfs://192.0.2.177:/mnt/user/backups"}, "status": {}}]}
+        result = store.point_longhorn()
+        self.assertIn("nfs://", result["kept_target"])
+        self.assertFalse([p for m, p, b in self.sent if "backuptargets" in p])
+        self.objects["/apis/longhorn.io/v1beta2/namespaces/longhorn-system/backuptargets/default"] =             self.objects["/apis/longhorn.io/v1beta2/namespaces/longhorn-system/backuptargets"]["items"][0]
+        store.point_longhorn(replace=True)
+        self.assertTrue([p for m, p, b in self.sent if "backuptargets" in p])
 
     def test_without_a_lan_address_backups_still_work_and_say_what_they_cannot(self):
         """Refusing would block someone who only wants backups working today."""

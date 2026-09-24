@@ -475,6 +475,16 @@ def setup_storage(name, size_gb=100, lb_ip=""):
     result = remote(name, "/api/objectstore/deploy",
                     {"size_gb": size_gb, "lb_ip": str(lb_ip or "").strip(), "point_longhorn": True})
     where = result.get("endpoint") or ""
+    # Releases before 2.8.110 gave Longhorn the keys but never its target, so
+    # a move still found "no backup target". It is set here too, through a
+    # route every release has - unless the target already points elsewhere.
+    try:
+        remote(name, "/api/move/target")
+    except ValueError:
+        store = remote(name, "/api/objectstore")
+        secret = (result.get("longhorn") or {}).get("secret") or "homestead-backup-credentials"
+        remote(name, "/api/lh/target", {"url": store.get("backup_url") or "s3://homestead-backups@us-east-1/",
+                                        "secret": secret, "poll": "5m"})
     return {"ok": True, "endpoint": where,
             "detail": f"backup storage is starting on {name}" + (f" at {where}" if where else "")
                       + "; its first start can take a minute while the image downloads"}

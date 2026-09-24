@@ -1315,10 +1315,18 @@ window.clusterReady = async name => {
       : target.configured
         ? step(false, `Backup storage on ${esc(name)} has no LAN address, so this cluster cannot read it`,
             `<div><button class="btn sm" data-need="admin" onclick="clusterStorage('${esc(name)}',true)">Give it an address</button></div>`)
-        : step(false, `${esc(name)} has no backup storage yet${store.deployed && !store.ready ? " - it is starting" : ""}`,
+        : store.deployed && !store.ready
+          ? step(false, `Backup storage on ${esc(name)} is starting`, '<div class="dim xs">Its first start downloads MinIO; this checks again every 15 seconds.</div>')
+        : store.deployed
+          ? step(false, `Backup storage is running on ${esc(name)}, but its Longhorn is not pointed at it yet`,
+              `<div><button class="btn sm pri" data-need="admin" onclick="clusterStorage('${esc(name)}')">Finish setting it up</button></div>`)
+        : step(false, `${esc(name)} has no backup storage yet`,
             `<div><button class="btn sm pri" data-need="admin" onclick="clusterStorage('${esc(name)}')">Set it up on ${esc(name)}</button></div>`))
     + step(r.ready, "Browse its workloads and move them here");
   if (window.applyRole) applyRole();
+  clearTimeout(window["__clready_" + name]);
+  if (store.deployed && !store.ready)
+    window["__clready_" + name] = setTimeout(() => { if (STATE.view === "imports") clusterReady(name); }, 15000);
 };
 
 /* Backup storage on the other cluster, made from here with the account
