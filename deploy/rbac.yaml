@@ -137,6 +137,10 @@ rules:
     verbs: [get, list]
   # Cluster health reads certificate request state only; certificate/key bodies
   # are never returned to the UI and Homestead cannot approve CSRs.
+  # Replicas elect the one that raises alerts and advances moves.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: [leases]
+    verbs: [get, create, update]
   - apiGroups: ["certificates.k8s.io"]
     resources: [certificatesigningrequests]
     verbs: [get, list, watch]

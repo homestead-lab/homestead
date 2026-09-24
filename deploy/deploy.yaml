@@ -131,6 +131,10 @@ rules:
     verbs: [get, list]
   # Cluster health reads certificate request state only; certificate/key bodies
   # are never returned to the UI and Homestead cannot approve CSRs.
+  # Replicas elect the one that raises alerts and advances moves.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: [leases]
+    verbs: [get, create, update]
   - apiGroups: ["certificates.k8s.io"]
     resources: [certificatesigningrequests]
     verbs: [get, list, watch]
@@ -211,13 +215,17 @@ metadata:
   labels:
     app: homestead
   annotations:
-    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.88"}'
+    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.89"}'
 spec:
   replicas: 1
   strategy:
-    # One Homestead at a time: moves and alerts are driven from its
-    # data volume, and two copies overlapping in a surge rollout would both act.
-    type: Recreate
+    # A new Homestead starts before the old one stops. Copies can overlap
+    # safely: they elect a leader to raise alerts and advance moves, and lock
+    # the files they share on the data volume.
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app: homestead
@@ -243,7 +251,7 @@ spec:
           tolerationSeconds: 15
       initContainers:
         - name: data-permissions
-          image: ghcr.io/wjcloudy/homestead:2.8.88
+          image: ghcr.io/wjcloudy/homestead:2.8.89
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "chown 10001:10001 /data && chmod 0770 /data"]
           securityContext:
@@ -260,7 +268,7 @@ spec:
               mountPath: /data
       containers:
         - name: homestead
-          image: ghcr.io/wjcloudy/homestead:2.8.88
+          image: ghcr.io/wjcloudy/homestead:2.8.89
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT

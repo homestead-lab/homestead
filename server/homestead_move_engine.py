@@ -13,6 +13,7 @@ exactly where it was. Data moves take as long as data takes; nothing here has
 a timeout that would abandon a large volume halfway.
 """
 import base64
+import homestead_shared as SHARED
 import json
 import os
 import secrets
@@ -42,7 +43,8 @@ MAX_MOVES = 50
 
 PHASES = ("joining", "quiescing", "backing-up", "syncing", "restoring",
           "creating", "starting", "done")
-_lock = threading.RLock()
+# Shared with any other Homestead replica on the same data volume.
+_lock = SHARED.SharedLock("moves")
 
 
 def bind(_kget, _ksend, longhorn, client, network, operations, data_dir, namespace):
@@ -72,7 +74,7 @@ def _read():
 
 def _write(rows):
     os.makedirs(DATA_DIR, exist_ok=True)
-    tmp = _path() + ".tmp"
+    tmp = SHARED.temporary(_path())
     with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(rows[-MAX_MOVES:], handle, separators=(",", ":"))
         handle.flush()

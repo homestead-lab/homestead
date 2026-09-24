@@ -3,7 +3,7 @@
 Homestead - a friendly homelab control plane for Harvester, Rancher and Longhorn.
 Pure Python stdlib: no pip install at runtime, so it starts even with no internet.
 """
-import copy, html, json, os, re, secrets, ssl, sys, time, threading, urllib.request, urllib.parse, urllib.error
+import copy, html, json, os, re, secrets, signal, ssl, sys, time, threading, urllib.request, urllib.parse, urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Imported ahead of the feature modules because settings are read during start.
@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.88")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.89")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2620,6 +2620,8 @@ import homestead_affinity as AFFINITY
 import homestead_portal as PORTAL
 import homestead_upgrades as UPGRADES
 import homestead_vmconsole as VMCONSOLE
+import homestead_shared as SHARED
+import homestead_leader as LEADER
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
@@ -2661,6 +2663,8 @@ def _own_namespace():
 
 
 SELF.bind(kget, ksend, _own_namespace(), HOMESTEAD_VERSION, DATA_DIR)
+SHARED.bind(DATA_DIR)
+LEADER.bind(kget, ksend, _own_namespace())
 NSMOD.bind(kget, ksend, DEFAULT_NS, _own_namespace())
 ALERTS.bind(DATA_DIR)
 
@@ -2724,11 +2728,76 @@ def alerts_pending(user, endpoint):
 
 def _alerts_loop():
     while True:
-        try:
-            push_alerts(ALERTS.observe(_alert_sources()))
-        except Exception as error:
-            print(f"alerts: {str(error)[:160]}", flush=True)
+        # One replica raises alerts, or every notification arrives twice.
+        if LEADER.is_leader():
+            try:
+                push_alerts(ALERTS.observe(_alert_sources()))
+            except Exception as error:
+                print(f"alerts: {str(error)[:160]}", flush=True)
         time.sleep(20)
+
+
+def _moves_loop():
+    """The move engine, on the leader only: a move's next step is taken once."""
+    while True:
+        if LEADER.is_leader():
+            try:
+                MOVE_ENGINE.tick_all()
+            except Exception:
+                pass
+        time.sleep(MOVE_ENGINE.TICK_SECONDS)
+
+
+MAX_REPLICAS = 3
+
+
+def homestead_replicas():
+    """How many Homesteads run, where, and which one leads."""
+    ns, name = SELF.NS, NAMES.BRAND
+    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    selector = ",".join(f"{k}={v}" for k, v in sorted(((dep["spec"].get("selector") or {}).get("matchLabels") or {}).items()))
+    pods = kget(f"/api/v1/namespaces/{ns}/pods?labelSelector={urllib.parse.quote(selector, safe='')}").get("items", [])
+    try:
+        holder = (kget(f"/apis/coordination.k8s.io/v1/namespaces/{ns}/leases/{LEADER.NAME}").get("spec") or {}).get("holderIdentity", "")
+    except Exception:
+        holder = ""
+    rows = []
+    for pod in pods:
+        conditions = {c.get("type"): c.get("status") for c in (pod.get("status") or {}).get("conditions") or []}
+        rows.append({"name": pod["metadata"]["name"], "node": (pod.get("spec") or {}).get("nodeName", ""),
+                     "ready": conditions.get("Ready") == "True", "leader": pod["metadata"]["name"] == holder,
+                     "this": pod["metadata"]["name"] == LEADER.IDENTITY,
+                     "terminating": bool(pod["metadata"].get("deletionTimestamp"))})
+    nodes = len({row["node"] for row in rows if row["node"] and row["ready"]})
+    return {"desired": int(dep["spec"].get("replicas", 1) or 0), "pods": sorted(rows, key=lambda row: row["name"]),
+            "leader": holder, "spread_nodes": nodes, "max": MAX_REPLICAS}
+
+
+def set_homestead_replicas(count):
+    """Runs this many Homesteads, spread over different nodes where it can.
+
+    More than one means a node failure leaves another already serving: the
+    Service drops the dead one and the leader lease moves within seconds.
+    Rolling updates replace one at a time, so an update never takes it down."""
+    count = int(count)
+    if not 1 <= count <= MAX_REPLICAS:
+        raise ValueError(f"run between 1 and {MAX_REPLICAS} copies of Homestead")
+    ns, name = SELF.NS, NAMES.BRAND
+    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    dep["spec"]["replicas"] = count
+    dep["spec"]["strategy"] = {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": 1, "maxUnavailable": 0}}
+    labels = (dep["spec"].get("selector") or {}).get("matchLabels") or {"app": name}
+    spec = dep["spec"]["template"]["spec"]
+    affinity = spec.setdefault("affinity", {})
+    spread = {"weight": 100, "podAffinityTerm": {"labelSelector": {"matchLabels": dict(labels)},
+                                                 "topologyKey": "kubernetes.io/hostname"}}
+    anti = affinity.setdefault("podAntiAffinity", {})
+    preferred = [term for term in anti.get("preferredDuringSchedulingIgnoredDuringExecution") or [] if term != spread]
+    anti["preferredDuringSchedulingIgnoredDuringExecution"] = preferred + [spread]
+    ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
+    return {"ok": True, "desired": count,
+            "detail": f"Homestead runs as {count} cop{'ies' if count != 1 else 'y'}" +
+                      (", spread over different nodes" if count > 1 else "")}
 # Join plans are gone; a job one left in Activity says so rather than erroring.
 OPS.RESOLVERS["onboard"] = lambda item: ("cancelled", item.get("progress", 0),
                                          "Join plans were replaced by the install guide")
@@ -3043,7 +3112,7 @@ def needed_role(path, method):
         return "admin"
     if path == "/api/storage/classes" and method != "GET":
         return "admin"
-    if path == "/api/portal" and method != "GET":
+    if path in ("/api/portal", "/api/self/replicas") and method != "GET":
         return "admin"
     if path in ("/api/console", "/api/vm/console"):
         return "operator"
@@ -3300,6 +3369,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("network", 5, NETWORK.inventory))
             if p == "/api/cluster":
                 return self._send(200, cached("cluster", 15, CLUSTER.inventory))
+            if p == "/api/self/replicas":
+                return self._send(200, homestead_replicas())
             if p == "/api/cluster/upgrades":
                 current = ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", "")
                 return self._send(200, UPGRADES.report(current, force=(q.get("force") or [""])[0] == "1"))
@@ -3638,6 +3709,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, compose_apply(b))
             if p == "/api/portal":
                 return self._send(200, PORTAL.save(b.get("links")))
+            if p == "/api/self/replicas":
+                return self._send(200, set_homestead_replicas(b.get("replicas")))
             if p == "/api/workloads/group":
                 return self._send(200, set_workload_groups(b))
             if p == "/api/scale":
@@ -4187,10 +4260,15 @@ if __name__ == "__main__":
     threading.Thread(target=_sampler, daemon=True).start()
     threading.Thread(target=_reconcile_permissions, daemon=True).start()
     threading.Thread(target=_upgrade_node_probe, daemon=True).start()
+    # Which replica leads: the one that raises alerts and advances moves.
+    threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
-    threading.Thread(target=MOVE_ENGINE.run, daemon=True).start()
-    # Join plans from 2.8.68-2.8.88 each kept a join token in a Secret.
+    threading.Thread(target=_moves_loop, daemon=True).start()
+    # Join plans from 2.8.68-2.8.89 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
+    # On a rolling update or a drain, hand the lease over now rather than
+    # leaving the others to wait out its expiry.
+    signal.signal(signal.SIGTERM, lambda *_: (LEADER.release(), os._exit(0)))
     print(f"Homestead listening on :{port}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", port), H).serve_forever()

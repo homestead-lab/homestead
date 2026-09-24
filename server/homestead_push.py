@@ -12,6 +12,7 @@ services browsers actually use are accepted: anything else would let a signed-in
 user point Homestead at an address inside the network.
 """
 import base64
+import homestead_shared as SHARED
 import hashlib
 import json
 import os
@@ -25,7 +26,8 @@ import homestead_ecdsa as EC
 
 DATA_DIR = "/data"
 CONTACT = "https://github.com/wjcloudy/homestead"
-_lock = threading.Lock()
+# Shared with any other Homestead replica on the same data volume.
+_lock = SHARED.SharedLock("push")
 _key_cache = {}
 
 # The push services browsers subscribe to. Chrome and Edge on Android use FCM,
@@ -69,7 +71,7 @@ def private_key():
         except (OSError, ValueError, KeyError):
             private = EC.new_private_key()
             os.makedirs(DATA_DIR, exist_ok=True)
-            tmp = _key_path() + ".tmp"
+            tmp = SHARED.temporary(_key_path())
             with open(tmp, "w", encoding="utf-8") as handle:
                 json.dump({"private": f"{private:064x}", "created": int(time.time())}, handle)
             try:
@@ -116,7 +118,7 @@ def _read():
 
 def _write(rows):
     os.makedirs(DATA_DIR, exist_ok=True)
-    tmp = _subs_path() + ".tmp"
+    tmp = SHARED.temporary(_subs_path())
     with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(rows, handle, indent=1)
     try:

@@ -6,6 +6,7 @@ restart cannot lose an in-flight image pull, rollout, import, migration, or
 backup. Only identifiers and status are stored; request bodies and credentials
 are deliberately excluded.
 """
+import homestead_shared as SHARED
 import json
 import os
 import secrets
@@ -22,7 +23,8 @@ DATA_DIR = "/data"
 STORE = "operations.json"
 MAX_OPERATIONS = 100
 TERMINAL = {"succeeded", "failed", "cancelled"}
-_lock = threading.RLock()
+# Shared with any other Homestead replica on the same data volume.
+_lock = SHARED.SharedLock("operations")
 
 
 def bind(_kget, data_dir, _deployment_progress, _smart_progress=None):
@@ -51,7 +53,7 @@ def _read():
 def _write(items):
     os.makedirs(DATA_DIR, exist_ok=True)
     path = _store_path()
-    tmp = path + ".tmp"
+    tmp = SHARED.temporary(path)
     with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(items[-MAX_OPERATIONS:], handle, separators=(",", ":"))
         handle.flush()

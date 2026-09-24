@@ -13,6 +13,7 @@ Two kinds of fact:
 A source that cannot answer keeps what it said last time: Kubernetes being
 unreachable is not every node coming back.
 """
+import homestead_shared as SHARED
 import json
 import os
 import threading
@@ -21,7 +22,8 @@ import time
 DATA_DIR = "/data"
 HOLD = 60
 LOG_SIZE = 300
-_lock = threading.Lock()
+# Shared with any other Homestead replica on the same data volume.
+_lock = SHARED.SharedLock("alerts")
 
 
 def bind(data_dir):
@@ -49,7 +51,7 @@ def _load():
 
 def _save(state):
     os.makedirs(DATA_DIR, exist_ok=True)
-    tmp = _path() + ".tmp"
+    tmp = SHARED.temporary(_path())
     with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(state, handle)
     os.replace(tmp, _path())

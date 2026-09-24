@@ -67,10 +67,10 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.88`, the workflow publishes:
+For a release such as `v2.8.89`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.88
+ghcr.io/wjcloudy/homestead:2.8.89
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -81,8 +81,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.88
-git push origin v2.8.88
+git tag v2.8.89
+git push origin v2.8.89
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -421,6 +421,26 @@ the manifest and icons are served without Access's signature so the browser can
 install the app; if installation still fails, add an Access **Bypass** policy for
 `/manifest.webmanifest` and `/icons/*`.
 
+## Redundancy: more than one Homestead
+
+**Settings → About → Redundancy** sets how many copies of Homestead run, one
+to three. With two or more, spread over different nodes where the scheduler
+can, a node failure leaves another copy already answering: the Service drops
+the dead one, and nothing waits for Kubernetes to start a replacement.
+
+The copies share the RWX data volume. Work that must happen once - raising
+alerts and sending push notifications, advancing moves between clusters - is
+done by a leader, elected with a Kubernetes Lease (`homestead-leader`) the
+way Kubernetes' own controllers elect theirs; if the leader's node dies the
+lease runs out and another copy takes over within about fifteen seconds, and
+a copy shutting down hands it over at once. Files on the data volume that are
+read and written back - job records, alert history, push subscriptions,
+moves - are changed under a lock every copy honours (an `flock` on the shared
+volume, which Longhorn's NFS-backed RWX volumes carry between pods), and
+written through temporary files of their own. Sign-ins are signed tokens, so
+any copy accepts them. Updates roll one copy at a time, so an update no
+longer takes Homestead away either.
+
 ## Updating Homestead
 
 Homestead appears in its own Containers page. **Check images** compares the running
@@ -452,7 +472,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.88/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.89/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -463,7 +483,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.88 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.89 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour

@@ -180,10 +180,46 @@ async function viewSettings() {
           ${permissionsCell(info.permissions)}
         </div>
       </section>
+
+      <section class="card flat settings-wide" data-tab="about" id="replicaCard">${STATE.data.replicaHtml || ""}</section>
     </div>`);
   pwaPaint();
   namespacesPaint();
+  replicasPaint();
 }
+
+/* ---------------- Homestead's own redundancy ----------------
+   More than one copy: a node failure leaves another already serving, and
+   the leader lease (alerts, moves) moves within seconds. */
+async function replicasPaint() {
+  let r;
+  try { r = await api("/api/self/replicas"); } catch (e) { return; }
+  const ready = r.pods.filter(p => p.ready && !p.terminating).length;
+  const note = r.desired > 1 && r.spread_nodes < Math.min(r.desired, ready)
+    ? `<div class="note">${ready} copies are ready but only on ${r.spread_nodes} node${r.spread_nodes === 1 ? "" : "s"}: spreading is a preference, so the scheduler doubled up where it had to. They move apart as nodes free up.</div>`
+    : r.desired === 1 ? `<div class="note">One copy: if its node fails, Homestead is away until Kubernetes starts it elsewhere - about a minute. Two copies on different nodes keep it answering.</div>` : "";
+  STATE.data.replicaHtml = `<div class="settings-card-head between"><div><div class="ctitle">Redundancy</div>
+      <div class="csub">How many copies of Homestead run. They share its data volume; one, the leader, raises alerts and advances moves, and another takes over within seconds if it stops.</div></div>
+      ${can("admin") ? `<div class="row"><select id="rep_count">${Array.from({ length: r.max }, (_, i) => i + 1).map(n =>
+        `<option value="${n}" ${n === r.desired ? "selected" : ""}>${n} cop${n === 1 ? "y" : "ies"}</option>`).join("")}</select>
+        <button class="btn sm pri" onclick="replicasSave()">Apply</button></div>` : ""}</div>
+    <table class="tbl dense stack" style="margin-top:10px"><thead><tr><th>Copy</th><th>Node</th><th>State</th></tr></thead><tbody>
+      ${r.pods.map(p => `<tr><td class="mono small">${esc(p.name)}${p.this ? ' <span class="tag">this page</span>' : ""}</td>
+        <td data-label="Node">${esc(p.node || "unscheduled")}</td>
+        <td data-label="State">${p.terminating ? '<span class="pill slim neutral">stopping</span>' : p.ready ? '<span class="pill slim ok">ready</span>' : '<span class="pill slim med">starting</span>'}
+          ${p.leader ? '<span class="pill slim info" data-tip="Raises alerts and advances moves">leader</span>' : ""}</td></tr>`).join("")}</tbody></table>
+    ${note}`;
+  const host = $("#replicaCard");
+  if (host) host.innerHTML = STATE.data.replicaHtml;
+}
+window.replicasSave = async () => {
+  const replicas = +$("#rep_count").value;
+  try {
+    const result = await api("/api/self/replicas", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ replicas }) });
+    toast(result.detail, "ok");
+    setTimeout(replicasPaint, 3000);
+  } catch (e) { toast(e.message, "bad"); }
+};
 
 /* ------------------------------------------------ namespaces */
 async function namespacesPaint() {
