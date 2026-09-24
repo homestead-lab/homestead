@@ -72,10 +72,10 @@ scripts/render_chart.py       regenerate charts/homestead from the manifests
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.114`, the workflow publishes:
+For a release such as `v2.8.115`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.114
+ghcr.io/wjcloudy/homestead:2.8.115
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -86,8 +86,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.114
-git push origin v2.8.114
+git tag v2.8.115
+git push origin v2.8.115
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -683,7 +683,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.114/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.115/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -694,7 +694,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.114 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.115 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -793,7 +793,10 @@ destination.
    that cluster Data Protection ▸ **Set up storage** does the same: it runs
    an S3 server (RustFS - MinIO's images are no longer published) on a Longhorn
    volume, creates the bucket, and points Longhorn's backups at it.
-   Give it a LAN address, or the other cluster cannot read from it. It shares
+   Give it a LAN address, or the other cluster cannot read from it. The address
+   belongs to the source cluster - its load balancer announces the store on it -
+   and the destination only connects to it. The choices offered are the source's
+   own VIPs, then free addresses in its Harvester IP pools. It shares
    fate with the cluster it protects: it is for moving workloads, not for your
    only copy of anything.
 2. **On the destination, add the source.** Import ▸ **＋ Homestead cluster**

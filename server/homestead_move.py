@@ -486,7 +486,10 @@ def readiness(name):
     try:
         there = remote(name, "/api/network")
         own = {row.get("ip"): row.get("label", "") for row in there.get("registered_vips") or []}
-        out["free_vips"] = [{"ip": ip, "label": own.get(ip, "")} for ip in (there.get("available_vips") or [])[:24]]
+        # Where each came from, so the choice can say: that cluster's own VIP
+        # list, or a free address in one of its Harvester IP pools.
+        out["free_vips"] = [{"ip": ip, "label": own.get(ip, ""), "from": "vips" if ip in own else "pool"}
+                            for ip in (there.get("available_vips") or [])[:24]]
     except Exception:
         out["free_vips"] = []
     out["ready"] = bool(out["target"].get("configured") and out["target"].get("reachable_off_cluster")
