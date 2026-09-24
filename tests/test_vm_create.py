@@ -61,6 +61,35 @@ class VmCreateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "at least as big"):
             self.create(HARVESTER, disk_gb=2, image_id="default/image-ubuntu")
 
+    def test_on_harvester_a_url_becomes_a_harvester_image(self):
+        # CDI's importer cannot be given Harvester's shared block volumes; its
+        # own image download is what works there.
+        self.objects["/apis/harvesterhci.io/v1beta1/namespaces/lab/virtualmachineimages"] = {"items": []}
+        self.objects["/apis/storage.k8s.io/v1/storageclasses/longhorn-r2"] = {
+            "provisioner": "driver.longhorn.io", "parameters": {"numberOfReplicas": "2", "migratable": "true"}}
+        self.create({"harvester": True, "cdi": False}, "longhorn-r2",
+                    image_url="https://cloud-images.ubuntu.com/minimal/releases/resolute/release/ubuntu-26.04-minimal-cloudimg-amd64.img")
+        image = next(b for m, p, b in self.sent if p.endswith("/virtualmachineimages"))
+        self.assertEqual(("download", "ubuntu-26.04-minimal-cloudimg-amd64.img", "2", "true"),
+                         (image["spec"]["sourceType"], image["spec"]["displayName"],
+                          image["spec"]["storageClassParameters"]["numberOfReplicas"],
+                          image["spec"]["storageClassParameters"]["migratable"]))
+        vm = self.vm()
+        self.assertNotIn("dataVolumeTemplates", vm["spec"])
+        claim = json.loads(vm["metadata"]["annotations"]["harvesterhci.io/volumeClaimTemplates"])[0]
+        name = image["metadata"]["name"]
+        self.assertEqual((f"longhorn-{name}", f"lab/{name}"),
+                         (claim["spec"]["storageClassName"], claim["metadata"]["annotations"]["harvesterhci.io/imageId"]))
+
+    def test_the_same_url_is_not_downloaded_twice(self):
+        self.objects["/apis/harvesterhci.io/v1beta1/namespaces/lab/virtualmachineimages"] = {"items": [
+            {"metadata": {"name": "image-abc"}, "spec": {"url": "https://example.test/u.img", "displayName": "u.img"},
+             "status": {"storageClassName": "longhorn-image-abc"}}]}
+        self.create(HARVESTER, "longhorn-r2", image_url="https://example.test/u.img")
+        self.assertFalse([p for m, p, b in self.sent if p.endswith("/virtualmachineimages")])
+        claim = json.loads(self.vm()["metadata"]["annotations"]["harvesterhci.io/volumeClaimTemplates"])[0]
+        self.assertEqual("longhorn-image-abc", claim["spec"]["storageClassName"])
+
     def test_other_clusters_let_cdi_choose_the_access_mode(self):
         self.create(K3S_CDI, "local-path", image_url="https://example.test/u.img")
         vm = self.vm()

@@ -158,6 +158,19 @@ class VmEditTests(unittest.TestCase):
                           "the importer cannot be placed: 0/3 nodes are available: 3 Insufficient memory.",
                           "prime-u9: waiting"], row["why"])
 
+    def test_a_vm_waiting_on_its_harvester_image_shows_the_download(self):
+        Cluster({"harvester": True, "cdi": True})
+        VMS.images = lambda: [{"name": "image-abc", "namespace": "lab", "display": "ubuntu.img", "progress": 42,
+                               "ready": False, "failed": False, "message": ""}]
+        vm = copy.deepcopy(VM)
+        vm["spec"].pop("dataVolumeTemplates")
+        vm["status"] = {"printableStatus": "Provisioning", "conditions": []}
+        vm["metadata"]["annotations"] = {VMS.CLAIM_TEMPLATES: json.dumps([
+            {"metadata": {"name": "web-disk", "annotations": {"harvesterhci.io/imageId": "lab/image-abc"}}}])}
+        row = VMS._row(vm, {})
+        self.assertEqual([("web-disk", "ImageDownloading", 42.0)],
+                         [(f["claim"], f["phase"], f["progress"]) for f in row["filling"]])
+
     def test_cloud_init_in_harvesters_secret_is_edited_there(self):
         c = Cluster({"harvester": True, "cdi": True})
         self.assertEqual({"user_data": "#cloud-config\n", "network_data": "", "source": "secret"},

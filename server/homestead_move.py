@@ -462,15 +462,34 @@ def readiness(name):
                          "reachable_off_cluster": bool(target.get("reachable_off_cluster"))}
     except Exception as error:
         out["target"] = {"configured": False, "error": str(error)[:200]}
+    release = _release(out["version"].get("version") or "")
+    out["update_first"] = bool(release and release < RUSTFS_SINCE and not out["target"].get("configured"))
     out["ready"] = bool(out["target"].get("configured") and out["target"].get("reachable_off_cluster")
                         and out["version"].get("compatible") is not False)
     return out
+
+
+# Releases before this deploy MinIO, whose images can no longer be pulled.
+RUSTFS_SINCE = (2, 8, 111)
+
+
+def _needs_update(name):
+    """The far Homestead's release, when it is too old to set up storage that
+    can start; empty when it is fine."""
+    version = str((check_cluster(name) or {}).get("version") or "")
+    release = _release(version)
+    return version if release and release < RUSTFS_SINCE else ""
 
 
 def setup_storage(name, size_gb=100, lb_ip=""):
     """Put backup storage on the far cluster, as its own Data protection page
     would: MinIO on a Longhorn volume, with Longhorn's backups pointed at it.
     Done as the stored account, which a move already needs to be admin."""
+    old = _needs_update(name)
+    if old:
+        raise ValueError(f"{name} runs Homestead {old}, which sets up backup storage with MinIO - and MinIO's "
+                         "images can no longer be downloaded. Update it to 2.8.111 or later first, then set it up: "
+                         "kubectl -n lab set image deployment/homestead homestead=ghcr.io/wjcloudy/homestead:2.8.111")
     size_gb = int(size_gb or 100)
     result = remote(name, "/api/objectstore/deploy",
                     {"size_gb": size_gb, "lb_ip": str(lb_ip or "").strip(), "point_longhorn": True})

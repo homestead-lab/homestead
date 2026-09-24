@@ -6,15 +6,22 @@ from the cluster it came from. Neither Harvester nor Longhorn provides one, so
 without somewhere to write, none of the backup machinery Homestead already has
 can be used at all.
 
-This stands up MinIO on a Longhorn volume and points Longhorn at it. That is
+This stands up an S3 server on a Longhorn volume - RustFS, a drop-in for
+MinIO, whose images are no longer published for anyone to pull - creates the
+bucket, and points Longhorn at it. That is
 honest about what it is: storage inside the cluster it protects, which is what
 makes it useful for moving workloads to another cluster and useless as the only
 copy of anything. It is exposed on its own LAN address precisely so the other
 cluster can read it.
 """
 import base64
+import datetime
+import hashlib
+import hmac
 import secrets
 import urllib.error
+import urllib.parse
+import urllib.request
 
 import homestead_names as NAMES
 
@@ -28,7 +35,14 @@ BUCKET = "homestead-backups"
 REGION = "us-east-1"
 PORT = 9000
 CONSOLE_PORT = 9001
-IMAGE = "quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z"
+IMAGE = "rustfs/rustfs:1.0.0-rc.6"
+# MinIO's images stopped being published; one already running with backups in
+# it is left as it is rather than swapped for a server that may not read its
+# files. Anything else - a fresh store, or a MinIO that cannot start - gets
+# RustFS.
+MINIO = "minio/minio"
+UID = 10001                      # RustFS runs as this user, and needs its volume
+_bucket = {"ok": False}
 VIP_ANNOTATION = "kube-vip.io/loadbalancerIPs"
 import homestead_platform as PLATFORM
 import homestead_longhorn as LH
@@ -78,7 +92,16 @@ def status():
     claim = _get(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{NAME}")
     ready = int(((deployment or {}).get("status", {}) or {}).get("readyReplicas", 0) or 0)
     where = endpoint(service)
+    bucket = False
+    if deployment and ready:
+        try:
+            bucket = ensure_bucket()
+        except Exception:
+            bucket = False
+    containers = (((deployment or {}).get("spec") or {}).get("template") or {}).get("spec", {}).get("containers") or [{}]
     return {
+        "bucket_ready": bucket,
+        "server": containers[0].get("image", "") if deployment else "",
         "deployed": bool(deployment),
         "ready": bool(deployment) and ready > 0,
         "endpoint": where,
@@ -102,6 +125,54 @@ def _claim_size(claim):
 def backup_url():
     """The Longhorn backup target this bucket corresponds to."""
     return f"s3://{BUCKET}@{REGION}/"
+
+
+def _sign(method, url, access, secret, body=b""):
+    """AWS Signature Version 4 headers for one S3 request: what every
+    S3-compatible server checks, so the bucket can be made on any of them."""
+    parsed = urllib.parse.urlsplit(url)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    stamp, day = now.strftime("%Y%m%dT%H%M%SZ"), now.strftime("%Y%m%d")
+    payload = hashlib.sha256(body).hexdigest()
+    headers = {"host": parsed.netloc, "x-amz-content-sha256": payload, "x-amz-date": stamp}
+    signed = ";".join(sorted(headers))
+    canonical = "\n".join([method, urllib.parse.quote(parsed.path or "/"), parsed.query,
+                           "".join(f"{k}:{headers[k]}\n" for k in sorted(headers)), signed, payload])
+    scope = f"{day}/{REGION}/s3/aws4_request"
+    to_sign = "\n".join(["AWS4-HMAC-SHA256", stamp, scope, hashlib.sha256(canonical.encode()).hexdigest()])
+    key = ("AWS4" + secret).encode()
+    for part in (day, REGION, "s3", "aws4_request"):
+        key = hmac.new(key, part.encode(), hashlib.sha256).digest()
+    signature = hmac.new(key, to_sign.encode(), hashlib.sha256).hexdigest()
+    return {"Host": parsed.netloc, "x-amz-content-sha256": payload, "x-amz-date": stamp,
+            "Authorization": f"AWS4-HMAC-SHA256 Credential={access}/{scope}, SignedHeaders={signed}, Signature={signature}"}
+
+
+def _s3(method, url, access, secret):
+    request = urllib.request.Request(url, method=method, data=b"" if method == "PUT" else None,
+                                     headers=_sign(method, url, access, secret))
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status
+    except urllib.error.HTTPError as error:
+        return error.code
+
+
+def ensure_bucket(base=None):
+    """Make the bucket Longhorn writes to, if it is not there. Longhorn does
+    not make it, and neither does the server; a target without one only
+    ever reports itself unavailable."""
+    if _bucket["ok"]:
+        return True
+    keys = credentials()
+    url = f"{base or f'http://{NAME}.{NS}.svc:{PORT}'}/{BUCKET}"
+    if _s3("HEAD", url, keys["access_key"], keys["secret_key"]) == 200:
+        _bucket["ok"] = True
+        return True
+    code = _s3("PUT", url, keys["access_key"], keys["secret_key"])
+    # 409 is someone having made it first, which is as good.
+    _bucket["ok"] = code in (200, 409)
+    return _bucket["ok"]
 
 
 def credentials():
@@ -150,6 +221,11 @@ def deploy(cfg=None):
         create_pvc(NS, NAME, size_gb, cfg.get("storage_class") or None, "ReadWriteOnce")
 
     labels = {"app": NAME, NAMES.key("managed"): "true"}
+    current = _get(f"/apis/apps/v1/namespaces/{NS}/deployments/{NAME}")
+    running_image = ((((current or {}).get("spec") or {}).get("template") or {}).get("spec", {}).get("containers") or [{}])[0].get("image", "")
+    serving = int(((current or {}).get("status") or {}).get("readyReplicas", 0) or 0) > 0
+    keep_minio = MINIO in running_image and serving
+    _bucket["ok"] = False
     deployment = {
         "apiVersion": "apps/v1", "kind": "Deployment",
         "metadata": {"name": NAME, "namespace": NS, "labels": labels},
@@ -161,15 +237,19 @@ def deploy(cfg=None):
             "strategy": {"type": "Recreate"},
             "template": {
                 "metadata": {"labels": labels},
-                "spec": {"containers": [{
-                    "name": "minio", "image": IMAGE,
-                    "args": ["server", "/data", "--console-address", f":{CONSOLE_PORT}"],
+                "spec": {
+                    # The server's own user owns the volume, so a fresh
+                    # Longhorn volume (owned by root) can be written.
+                    "securityContext": {"fsGroup": UID, "fsGroupChangePolicy": "OnRootMismatch"},
+                    "containers": [{
+                    "name": "minio" if keep_minio else "s3", "image": running_image if keep_minio else IMAGE,
+                    **({"args": ["server", "/data", "--console-address", f":{CONSOLE_PORT}"]} if keep_minio else {}),
                     "env": [
-                        {"name": "MINIO_ROOT_USER", "valueFrom": {"secretKeyRef": {
+                        {"name": "MINIO_ROOT_USER" if keep_minio else "RUSTFS_ACCESS_KEY", "valueFrom": {"secretKeyRef": {
                             "name": SECRET, "key": "accesskey"}}},
-                        {"name": "MINIO_ROOT_PASSWORD", "valueFrom": {"secretKeyRef": {
+                        {"name": "MINIO_ROOT_PASSWORD" if keep_minio else "RUSTFS_SECRET_KEY", "valueFrom": {"secretKeyRef": {
                             "name": SECRET, "key": "secretkey"}}},
-                    ],
+                    ] + ([] if keep_minio else [{"name": "RUSTFS_VOLUMES", "value": "/data"}]),
                     "ports": [{"containerPort": PORT, "name": "s3"},
                               {"containerPort": CONSOLE_PORT, "name": "console"}],
                     "readinessProbe": {"httpGet": {"path": "/minio/health/ready", "port": "s3"},
@@ -197,7 +277,7 @@ def deploy(cfg=None):
     _apply(f"/api/v1/namespaces/{NS}/services", NAME, service)
 
     result = {"ok": True, "endpoint": endpoint(), "bucket": BUCKET,
-              "access_key": keys["access_key"]}
+              "access_key": keys["access_key"], "server": running_image if keep_minio else IMAGE}
     if cfg.get("point_longhorn", True):
         result["longhorn"] = point_longhorn()
     return result

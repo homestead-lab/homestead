@@ -452,7 +452,7 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
         <option value="">blank disk</option>
         ${readyDisks.map(d => `<option value="disk:${esc(d.namespace)}/${esc(d.name)}" ${selected === `disk:${d.namespace}/${d.name}` ? "selected" : ""}>Imported · ${esc(d.namespace)}/${esc(d.name)} (${esc(d.capacity || "size unknown")})</option>`).join("")}
         ${images.map(i => `<option value="image:${esc(i.namespace)}/${esc(i.name)}" data-size="${i.size_gb}">Harvester image · ${esc(i.display)} (${i.size_gb}G)</option>`).join("")}
-        ${opts.cdi ? '<option value="url">Download from HTTP(S) URL</option>' : ""}
+        ${opts.cdi || opts.harvester ? `<option value="url">${opts.harvester ? "Download from a URL (as a Harvester image)" : "Download from HTTP(S) URL"}</option>` : ""}
       </select></div>
     <div class="f" id="v_url_row" hidden><label>Image URL</label><input type="url" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img"></div>
     ${(opts.storage_classes || []).length ? `<div class="f" id="v_sc_row"><label>Storage class ${tip(opts.harvester
@@ -463,7 +463,7 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
       <button class="btn pri" onclick="doVmCreate()">Create VM</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div>
     <div class="note" style="margin-top:14px">${opts.harvester
-      ? "New disks are made the way Harvester makes them: shared block volumes, so the VM can move between hosts."
+      ? "New disks are made the way Harvester makes them: shared block volumes, so the VM can move between hosts. A URL is downloaded as a Harvester image, kept in its image list for the next VM."
       : opts.cdi ? `New disks are CDI DataVolumes on the class above, with the access mode that class supports.
         A VM on a disk only one host can reach stays on that host.`
       : `<b>CDI is not installed</b>, so a VM here starts from a blank disk that KubeVirt formats itself.
@@ -1310,7 +1310,10 @@ window.clusterReady = async name => {
   const target = r.target || {}, store = r.storage || {};
   const step = (ok, text, action = "") => `<div class="clstep ${ok ? "done" : "todo"}"><span>${ok ? "✓" : "•"}</span><div>${text}${action}</div></div>`;
   host.innerHTML = step(true, "Connected")
-    + (target.configured && target.reachable_off_cluster
+    + (r.update_first
+      ? step(false, `${esc(name)} runs Homestead v${esc(r.version?.version || "?")}, which sets up backup storage with MinIO - whose images can no longer be downloaded`,
+          `<div class="dim xs">Update it to 2.8.111 or later, then set it up from here:</div><div class="mono xs">kubectl -n lab set image deployment/homestead homestead=ghcr.io/wjcloudy/homestead:2.8.111</div>`)
+      : target.configured && target.reachable_off_cluster
       ? step(true, `Backup storage on ${esc(name)}`, `<div class="dim xs mono">${esc(target.url || "")}</div>`)
       : target.configured
         ? step(false, `Backup storage on ${esc(name)} has no LAN address, so this cluster cannot read it`,

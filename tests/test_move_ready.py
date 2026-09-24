@@ -42,7 +42,7 @@ class MoveReadinessTests(unittest.TestCase):
             if path == "/api/objectstore":
                 return {"backup_url": "s3://homestead-backups@us-east-1/"}
             return {"endpoint": "http://192.0.2.244:9000", "longhorn": {"secret": "homestead-backup-credentials"}}
-        with mock.patch.object(move, "remote", remote):
+        with mock.patch.object(move, "remote", remote),                 mock.patch.object(move, "check_cluster", lambda name: {"version": "2.8.111"}):
             r = move.setup_storage("oldcluster", 50, "192.0.2.244")
         self.assertEqual(("oldcluster", "/api/objectstore/deploy",
                           {"size_gb": 50, "lb_ip": "192.0.2.244", "point_longhorn": True}), calls[0])
@@ -50,6 +50,13 @@ class MoveReadinessTests(unittest.TestCase):
         self.assertEqual(("oldcluster", "/api/lh/target", {"url": "s3://homestead-backups@us-east-1/",
                           "secret": "homestead-backup-credentials", "poll": "5m"}), calls[-1])
         self.assertIn("192.0.2.244:9000", r["detail"])
+
+    def test_an_older_homestead_is_asked_to_update_before_it_makes_storage_that_cannot_start(self):
+        calls = []
+        with mock.patch.object(move, "remote", lambda *a, **k: calls.append(a)),                 mock.patch.object(move, "check_cluster", lambda name: {"version": "2.8.100"}):
+            with self.assertRaisesRegex(ValueError, "MinIO's images can no longer be downloaded"):
+                move.setup_storage("oldcluster")
+        self.assertEqual([], calls, "nothing is deployed that could not start")
 
     def test_the_move_review_offers_the_fix(self):
         def remote(name, path, body=None):

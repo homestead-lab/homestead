@@ -17,6 +17,7 @@ import urllib.error
 import urllib.parse
 
 import homestead_names as NAMES
+import homestead_hvimage as HVIMAGE
 
 kget = ksend = create_pvc = build_deployment = None
 NS = "lab"
@@ -1718,12 +1719,19 @@ def list_vm_images():
     """Harvester's images. Each is a Longhorn backing image with a storage
     class of its own; a disk made on that class starts as a copy of it."""
     try:
-        return [{"name": i["metadata"]["name"], "namespace": i["metadata"].get("namespace", ""),
-                 "display": i["spec"].get("displayName", i["metadata"]["name"]),
-                 "size_gb": round(int(i.get("status", {}).get("size", 0) or 0) / 1024**3, 1),
-                 "storage_class": i.get("status", {}).get("storageClassName", ""),
-                 "progress": i.get("status", {}).get("progress", 0)}
-                for i in kget("/apis/harvesterhci.io/v1beta1/virtualmachineimages").get("items", [])]
+        rows = []
+        for i in kget("/apis/harvesterhci.io/v1beta1/virtualmachineimages").get("items", []):
+            status = i.get("status", {}) or {}
+            imported = next((c for c in status.get("conditions") or [] if c.get("type") == "Imported"), {})
+            rows.append({"name": i["metadata"]["name"], "namespace": i["metadata"].get("namespace", ""),
+                         "display": i["spec"].get("displayName", i["metadata"]["name"]),
+                         "size_gb": round(int(status.get("size", 0) or 0) / 1024**3, 1),
+                         "storage_class": status.get("storageClassName", ""),
+                         "progress": status.get("progress", 0),
+                         "ready": imported.get("status") == "True",
+                         "failed": imported.get("status") == "False" and imported.get("reason") == "ImportFailed",
+                         "message": " ".join(str(imported.get("message") or "").split())[:240]})
+        return rows
     except Exception:
         return []
 
@@ -1774,7 +1782,8 @@ def create_vm(cfg, platform=None, default_class=""):
                              + (", or pick the Harvester image from the list" if harvester else ""))
     if image_ref and not harvester:
         raise ValueError("images from the image list are Harvester's; use an image URL on this cluster")
-    if (image_url or imported_dv) and not cdi:
+    # On Harvester a URL becomes one of its images, which needs no CDI.
+    if (imported_dv or (image_url and not harvester)) and not cdi:
         raise ValueError("CDI (the containerized data importer) is not installed, so disk images cannot be "
                          "downloaded or imported; install it from kubevirt.io, or start from a blank disk")
 
@@ -1801,11 +1810,17 @@ def create_vm(cfg, platform=None, default_class=""):
     size = f"{disk}Gi"
     if imported_dv:
         root = {"name": "root", "dataVolume": {"name": dv}}
-    elif harvester and not image_url:
+    elif harvester:
         claim = {"metadata": {"name": dv, "annotations": {}},
                  "spec": {"accessModes": ["ReadWriteMany"], "volumeMode": "Block",
                           "resources": {"requests": {"storage": size}}}}
-        if image_ref:
+        if image_url:
+            # Harvester downloads it as one of its images, and the disk starts
+            # as a copy of that - CDI's importer cannot be given its volumes.
+            image = HVIMAGE.download(kget, ksend, ns, image_url, sc)
+            claim["metadata"]["annotations"]["harvesterhci.io/imageId"] = f"{image['namespace']}/{image['name']}"
+            claim["spec"]["storageClassName"] = image["storage_class"]
+        elif image_ref:
             image = _harvester_image(image_ref)
             claim["metadata"]["annotations"]["harvesterhci.io/imageId"] = f"{image['namespace']}/{image['name']}"
             claim["spec"]["storageClassName"] = image["storage_class"]
@@ -1877,6 +1892,16 @@ def create_vm(cfg, platform=None, default_class=""):
             },
         },
     }
-    ksend("POST", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines", vm)
+    try:
+        ksend("POST", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines", vm)
+    except urllib.error.HTTPError as error:
+        if harvester and image_url:
+            try:
+                why = json.loads(error.read().decode("utf-8", "replace")).get("message", "")
+            except Exception:
+                why = f"HTTP {error.code}"
+            raise ValueError(f"Harvester would not take the VM yet ({why}). Its image keeps downloading: "
+                             "choose it under Boot disk once it is ready.") from error
+        raise
     _bust("flow", "ov")
     return {"ok": True, "vm": name, "datavolume": dv}

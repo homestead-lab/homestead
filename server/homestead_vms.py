@@ -24,6 +24,8 @@ import time
 import urllib.error
 import urllib.parse
 
+import homestead_hvimage as HVIMAGE
+
 kget = ksend = None
 events_for = lambda ns, name, uid="": []
 API = "/apis/kubevirt.io/v1"
@@ -189,6 +191,28 @@ def _why_not_filling(ns, dv):
     return out[:4]
 
 
+def _image_filling(vm):
+    """Disks waiting on a Harvester image still downloading: made from the
+    VM's claim templates, which name the image they start from."""
+    wanted = {}
+    for t in _claim_templates(vm):
+        ref = ((t.get("metadata") or {}).get("annotations") or {}).get("harvesterhci.io/imageId", "")
+        if ref:
+            wanted[ref] = (t.get("metadata") or {}).get("name", "")
+    if not wanted:
+        return []
+    out = []
+    for item in images():
+        claim = wanted.get(f"{item.get('namespace')}/{item.get('name')}")
+        if not claim or item.get("ready"):
+            continue
+        out.append({"claim": claim, "phase": "Failed" if item.get("failed") else "ImageDownloading",
+                    "progress": float(item.get("progress") or 0), "seconds": 0,
+                    "stuck": bool(item.get("failed")), "image": item.get("display", ""),
+                    "why": [item["message"]] if item.get("message") and item.get("failed") else []})
+    return out
+
+
 def _stuck_problem(filling):
     stuck = next((f for f in filling if f["stuck"]), None)
     if not stuck:
@@ -259,6 +283,9 @@ def _row(vm, vmi, claims=None, dvs=None):
     restart_required = any(c.get("type") == "RestartRequired" and c.get("status") == "True"
                            for c in (vm.get("status") or {}).get("conditions") or [])
     filling = _filling(vm, dvs or {})
+    status_word = ((vm.get("status") or {}).get("printableStatus") or "")
+    if status_word not in ("Running", "Paused", "Migrating"):
+        filling += _image_filling(vm)
     return {"ns": meta.get("namespace", ""), "name": meta.get("name", ""), "status": status,
             "run_strategy": _strategy(vm), "running": istatus.get("phase") == "Running",
             "node": istatus.get("nodeName", ""), "cores": _cores(dom), "memory": _memory(dom),
@@ -429,16 +456,21 @@ def _disk_volume(vm, ns, claim, size, klass, source, to_create):
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise ValueError(f"{url} is not a download address; give the full http(s):// URL"
                              + (", or pick the Harvester image" if harvester else ""))
-        if not cdi:
+        if not cdi and not harvester:
             raise ValueError("CDI is not installed, so a disk cannot be downloaded; install it from kubevirt.io")
     if image and not harvester:
         raise ValueError("images from the image list are Harvester's; use an image URL on this cluster")
     _forget_templates(vm, claim)
-    if harvester and not url:
+    if harvester:
         template = {"metadata": {"name": claim, "annotations": {}},
                     "spec": {"accessModes": ["ReadWriteMany"], "volumeMode": "Block",
                              "resources": {"requests": {"storage": size}}}}
-        if image:
+        if url:
+            # Harvester's own download: one of its images, the disk a copy of it.
+            downloaded = HVIMAGE.download(kget, ksend, (vm.get("metadata") or {}).get("namespace") or ns, url, klass)
+            template["metadata"]["annotations"]["harvesterhci.io/imageId"] = f"{downloaded['namespace']}/{downloaded['name']}"
+            template["spec"]["storageClassName"] = downloaded["storage_class"]
+        elif image:
             item = _image(image)
             template["metadata"]["annotations"]["harvesterhci.io/imageId"] = f"{item['namespace']}/{item['name']}"
             template["spec"]["storageClassName"] = item["storage_class"]

@@ -92,6 +92,43 @@ class ObjectStoreTests(unittest.TestCase):
                          base64.b64decode(secret["data"]["AWS_ENDPOINTS"]).decode())
         self.assertEqual("s3://homestead-backups@us-east-1/", result["url"])
 
+    def _deployed(self):
+        return next(b for m, p, b in self.sent if p.endswith("/deployments") and m == "POST")
+
+    def test_a_fresh_store_runs_rustfs_as_its_own_user(self):
+        """MinIO's images are no longer published; RustFS is a drop-in."""
+        store.deploy({"point_longhorn": False})
+        spec = self._deployed()["spec"]["template"]["spec"]
+        container = spec["containers"][0]
+        self.assertTrue(container["image"].startswith("rustfs/rustfs:"))
+        self.assertEqual({"RUSTFS_ACCESS_KEY", "RUSTFS_SECRET_KEY", "RUSTFS_VOLUMES"}, {e["name"] for e in container["env"]})
+        self.assertEqual(10001, spec["securityContext"]["fsGroup"])
+
+    def test_a_minio_already_serving_backups_is_left_as_it_is(self):
+        self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-objectstore"] = {
+            "metadata": {"resourceVersion": "5"}, "status": {"readyReplicas": 1},
+            "spec": {"template": {"spec": {"containers": [{"image": "quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z"}]}}}}
+        store.deploy({"point_longhorn": False})
+        put = next(b for m, p, b in self.sent if m == "PUT" and p.endswith("/deployments/homestead-objectstore"))
+        container = put["spec"]["template"]["spec"]["containers"][0]
+        self.assertIn("minio/minio", container["image"])
+        self.assertIn("MINIO_ROOT_USER", {e["name"] for e in container["env"]})
+
+    def test_a_minio_that_cannot_start_is_replaced(self):
+        self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-objectstore"] = {
+            "metadata": {"resourceVersion": "5"}, "status": {},
+            "spec": {"template": {"spec": {"containers": [{"image": "quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z"}]}}}}
+        store.deploy({"point_longhorn": False})
+        put = next(b for m, p, b in self.sent if m == "PUT" and p.endswith("/deployments/homestead-objectstore"))
+        self.assertTrue(put["spec"]["template"]["spec"]["containers"][0]["image"].startswith("rustfs/rustfs:"))
+
+    def test_requests_are_signed_the_way_s3_checks(self):
+        headers = store._sign("PUT", "http://store.lab.svc:9000/homestead-backups", "AKID", "SECRET")
+        self.assertTrue(headers["Authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKID/"))
+        self.assertIn("/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=",
+                      headers["Authorization"])
+        self.assertEqual("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", headers["x-amz-content-sha256"])
+
     def test_longhorn_is_pointed_at_the_bucket_not_just_given_its_keys(self):
         """Before 2.8.110 only the keys were written, so a move still found no target."""
         self._service(ip="192.0.2.243")

@@ -10,7 +10,7 @@ const VM_ACTIONS = {
 };
 const vmTone = status => VM_TONE[status] || (/Error|Fail|Crash|BackOff/i.test(status) ? "crit" : "med");
 /* A disk CDI is still filling: what a Provisioning VM is waiting for. */
-const VM_FILL_WORDS = { ImportInProgress: "Downloading", CloneInProgress: "Copying", ImportScheduled: "Waiting to start the download",
+const VM_FILL_WORDS = { ImageDownloading: "Harvester is downloading the image for", ImportInProgress: "Downloading", CloneInProgress: "Copying", ImportScheduled: "Waiting to start the download",
   CloneScheduled: "Waiting to start the copy", Pending: "Waiting for its volume", WaitForFirstConsumer: "Waiting for the VM to be placed",
   PendingPopulation: "Waiting for its volume", Failed: "Failed" };
 const vmWaited = s => s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.floor(s % 3600 / 60)} min` : s >= 60 ? `${Math.floor(s / 60)} min` : `${s} s`;
@@ -131,7 +131,7 @@ const vmOpt = (value, label, chosen) => `<option value="${esc(value)}" ${value =
 function vmSourceSelect(cls, o, current = "") {
   return `<select class="${cls}" onchange="vmSourceChanged(this)">
     ${vmOpt("blank", "blank disk", current)}
-    ${o.cdi ? vmOpt("url", "download from a URL", current) : ""}
+    ${o.cdi || o.harvester ? vmOpt("url", o.harvester ? "download from a URL (as a Harvester image)" : "download from a URL", current) : ""}
     ${(o.images || []).filter(i => i.storage_class).map(i => vmOpt(`image:${i.namespace}/${i.name}`, `Harvester image · ${i.display}`, current)).join("")}</select>`;
 }
 window.vmSourceChanged = select => {
