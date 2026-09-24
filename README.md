@@ -72,10 +72,10 @@ scripts/render_chart.py       regenerate charts/homestead from the manifests
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.111`, the workflow publishes:
+For a release such as `v2.8.112`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.111
+ghcr.io/wjcloudy/homestead:2.8.112
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -86,8 +86,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.111
-git push origin v2.8.111
+git tag v2.8.112
+git push origin v2.8.112
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -385,6 +385,23 @@ pools. Service creation uses the existing Service permission and copies the
 selected Deployment's selector from the server rather than trusting browser
 input.
 
+### Your VIPs
+
+kube-vip announces whatever address a Service asks for, and a plain Harvester
+install has nothing handing addresses out. **Networking → Services & VIPs →
+＋ Add VIPs** keeps addresses for Homestead to give to Services - one, or a
+range of up to 64, with a label saying what they are for. Keep them outside
+your router's DHCP range. Automatic VIPs come from these first, then from any
+Harvester IP pool, and the **Specific VIP** picker on Deploy, Import and
+elsewhere lists them by label. Node addresses and addresses already recorded
+as a device under IP addresses are refused, and a VIP can be let go only while
+nothing uses it. They appear under IP addresses as VIPs too.
+
+The first network share installs Samba, and asks which address it answers on;
+switching Samba on in Settings → About asks the same. Samba is put in place
+before anything of the share is made, so a share that cannot be served leaves
+nothing behind.
+
 ### IP addresses
 
 Networking's **IP addresses** tab keeps, per subnet, what lives at each
@@ -666,7 +683,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.111/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.112/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -677,7 +694,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.111 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.112 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour

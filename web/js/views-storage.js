@@ -782,6 +782,9 @@ window.newShare = async () => {
     <div class="f2" style="margin-top:14px"><div class="f"><label>Username</label><input type="text" id="sh_user" value="lab" autocomplete="username" oninput="shareAccountHint()"></div>
       <div class="f"><label>Password</label><input type="password" id="sh_pass" autocomplete="new-password" placeholder="Required unless guest access is enabled">
         <span class="dim xs" id="sh_account"></span></div></div>
+    ${options.samba_installed ? "" : `<div class="sec">Samba's address</div>
+      <div class="note">Samba is not installed yet; this share installs it. Choose the address Windows will find it at (\\\\address\\share).</div>
+      <div class="f" id="sh_smb"><span class="dim xs"><span class="spin2"></span></span></div>`}
     <label class="switch"><input type="checkbox" id="sh_pub"> Allow guest access</label>
     <label class="switch"><input type="checkbox" id="sh_ro"> Read only</label>
     <div class="row" style="margin-top:18px"><button class="btn pri" id="sh_go" data-need="admin" onclick="mkShare(this)">Create share</button>
@@ -802,6 +805,11 @@ window.newShare = async () => {
   });
   renderVolumeRows(host, [{ kind: "new-rwo", path: "", source: "", size_gb: 10,
     label: "Share storage" }]);
+  if (!options.samba_installed) vipChoices().then(choices => {
+    const own = (choices.own || []).find(v => v.free);
+    const smb = $("#sh_smb");
+    if (smb) smb.innerHTML = vipPicker("sh_smb", own ? own.ip : (choices.free[0] || ""), choices);
+  });
   shareAccountHint();
 };
 window.shareAccountHint = () => {
@@ -832,7 +840,9 @@ window.mkShare = async button => {
   const reusing = storage.kind === "existing";
   if (reusing && !storage.source) return toast("choose the volume this share should use", "bad");
   const body = { name, user: $("#sh_user").value.trim(), password: $("#sh_pass").value,
-    public: $("#sh_pub").checked, read_only: $("#sh_ro").checked, sub_path: folder };
+    public: $("#sh_pub").checked, read_only: $("#sh_ro").checked, sub_path: folder,
+    samba_ip: ($("#sh_smb_lb_ip")?.value || "").trim() };
+  if ($("#sh_smb") && !body.samba_ip) return toast("choose the address Samba should answer on - add VIPs under Networking if the list is empty", "bad");
   if (reusing) body.pvc = storage.source;
   // A new volume's name is the one to create, not one to look up.
   else Object.assign(body, { new_name: storage.source || "", size_gb: storage.size_gb,

@@ -26,7 +26,7 @@ class SambaSwitchTests(unittest.TestCase):
             raise urllib.error.HTTPError(path, 404, "missing", None, None)
         applied = []
         with mock.patch.object(server, "kget", missing), \
-                mock.patch.object(server, "install_samba", lambda: {"metadata": {"name": "samba"}}), \
+                mock.patch.object(server, "install_samba", lambda address="": {"metadata": {"name": "samba"}}), \
                 mock.patch.object(server.SHARES, "list_shares", lambda: []), \
                 mock.patch.object(server.SHARES, "_state", lambda: ([{"name": "media"}], {"media": {}}, None, None, None)), \
                 mock.patch.object(server.SHARES, "apply_samba", lambda rows, creds, dep=None: applied.append(rows)):

@@ -30,7 +30,15 @@ async function viewNetworking() {
       <div class="card flat"><div class="ctitle">Attention</div><div class="bignum" style="margin-top:8px">${data.summary.unhealthy}</div>
         <div class="csub">${data.conflicts.length ? `${data.conflicts.length} listener conflict(s)` : "no VIP/port conflicts"}</div></div>
     </div>
-    <div class="between"><div class="sec">Virtual IPs &amp; port ownership</div><div class="row">${data.available_vips.slice(0, 6).map(ip => `<span class="tag ok" title="Unused address in a ready Harvester IP pool">${esc(ip)} available</span>`).join("")}</div></div>
+    <div class="between"><div class="sec">Your VIPs ${tip("Addresses kept for Homestead to give to Services. kube-vip announces whichever address a Service asks for, so these need nothing else - just keep them out of your router's DHCP range. Automatic VIPs come from here first.")}</div>
+      <button class="btn sm pri" data-need="admin" onclick="vipAdd()">＋ Add VIPs</button></div>
+    ${(data.registered_vips || []).length ? `<div class="vip-own">${data.registered_vips.map(v => `<div class="vip-chip ${v.free ? "free" : "used"}">
+        <div class="vip-name"><b class="mono">${esc(v.ip)}</b><span class="dim xs" onclick="vipLabel('${esc(v.ip)}')" data-tip="Rename">${esc(v.label || "no label")}</span></div>
+        <span class="tag ${v.free ? "ok" : "info"}">${v.free ? "free" : esc(v.used_by.join(", ") || "in use")}</span>
+        ${v.free ? `<button class="iconbtn" data-need="admin" data-tip="No longer keep this address for Homestead" onclick="vipRemove('${esc(v.ip)}')">×</button>` : ""}</div>`).join("")}</div>`
+      : `<div class="card flat empty small">No VIPs of your own yet. Add the addresses Homestead may give to apps and shares - ${data.available_vip_count
+          ? `${data.available_vip_count} more are free in Harvester IP pools.` : "there are no Harvester IP pools to take them from either."}</div>`}
+    <div class="between"><div class="sec">Virtual IPs &amp; port ownership</div><div class="row">${data.available_vips.filter(ip => !(data.vip_labels || {}).hasOwnProperty(ip)).slice(0, 6).map(ip => `<span class="tag ok" title="Unused address in a ready Harvester IP pool">${esc(ip)} available</span>`).join("")}</div></div>
     <div class="cardlist network-vips">${data.vips.map(vip => `<div class="card flat">
       <div class="between"><div><div class="dim xs">${vip.shared ? "SHARED VIP" : "VIRTUAL IP"}</div><b class="mono">${esc(vip.ip)}</b></div>
         <span class="tag ${vip.listeners.some(x => x.health !== "healthy") ? "warn" : "ok"}">${vip.services} service${vip.services === 1 ? "" : "s"}</span></div>
@@ -130,4 +138,37 @@ window.networkCreate = async () => {
     const result = await api("/api/network/services", {method: "POST", headers: {"Content-Type": "application/json", "X-Homestead-Auth": "1"}, body: JSON.stringify(networkConfig())});
     closeModal(); toast(result.message, "ok"); await viewNetworking();
   } catch (error) { toast(error.message, "bad"); }
+};
+
+/* ---------------- your VIPs ----------------
+   Addresses kept for Homestead to hand to Services, one or a range. */
+window.vipAdd = () => modal("Add VIPs", `
+  <p class="small">Addresses Homestead may give to apps and shares. Choose ones outside your router's DHCP range, so nothing else takes them.</p>
+  <div class="f2"><div class="f"><label>Address</label><input id="va_start" class="mono" placeholder="192.0.2.230"></div>
+    <div class="f"><label>Up to (optional)</label><input id="va_end" class="mono" placeholder="192.0.2.239"></div></div>
+  <div class="f"><label>Label</label><input id="va_label" maxlength="60" placeholder="e.g. Media apps, Pi-hole, Shares"></div>
+  <div class="row" style="margin-top:14px"><button class="btn pri" onclick="vipAddGo()">Add</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+window.vipAddGo = async () => {
+  const body = { start: $("#va_start").value.trim(), end: $("#va_end").value.trim(), label: $("#va_label").value };
+  try {
+    const r = await api("/api/network/vips/add", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    toast(r.detail, r.added.length ? "ok" : "warn");
+    if (r.added.length) { closeModal(); viewNetworking(); }
+  } catch (e) { toast(e.message, "bad"); }
+};
+window.vipRemove = async ip => {
+  if (!confirm(`Stop keeping ${ip} for Homestead?`)) return;
+  try {
+    const r = await api("/api/network/vips/remove", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ip }) });
+    toast(r.detail, "ok"); viewNetworking();
+  } catch (e) { toast(e.message, "bad"); }
+};
+window.vipLabel = async ip => {
+  const current = (STATE.data.network?.vip_labels || {})[ip] || "";
+  const label = prompt(`Label for ${ip}`, current);
+  if (label === null) return;
+  try {
+    await api("/api/network/vips/label", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ip, label }) });
+    viewNetworking();
+  } catch (e) { toast(e.message, "bad"); }
 };

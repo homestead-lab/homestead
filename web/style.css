@@ -1664,3 +1664,6 @@ div.ipam-line.dim{display:block}
 .health-list{display:grid;gap:2px}.health-row{display:grid;grid-template-columns:110px 1fr auto;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}
 .health-row:last-child{border-bottom:0}.health-row>.tag{justify-self:start}
 @media(max-width:650px){.health-row{grid-template-columns:1fr}}
+.vip-own{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px;margin-bottom:16px}
+.vip-chip{display:grid;grid-template-columns:1fr auto auto;gap:4px 8px;align-items:center;padding:9px 11px;border:1px solid var(--line);border-radius:12px}
+.vip-name{display:grid;min-width:0}.vip-name span{cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.vip-chip .tag{max-width:130px;overflow:hidden;text-overflow:ellipsis}

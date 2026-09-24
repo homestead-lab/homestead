@@ -483,13 +483,17 @@ def _clear_cache():
 
 
 def create_share(name, size_gb, user, password, public, read_only=False,
-                 pvc=None, sub_path="", storage_class=None, access_mode=None, new_name=""):
+                 pvc=None, sub_path="", storage_class=None, access_mode=None, new_name="", samba_ip=""):
     """Create a share on a new Longhorn claim, or on a folder of an existing one.
     pvc names a claim that exists; new_name the one to create, if not share-<name>."""
     name, user, sub_path = _name(name), _user(user), _sub_path(sub_path)
     rows, credentials, config_obj, secret_obj, deployment = _state()
     if any(row.get("name") == name for row in rows):
         raise ValueError("share already exists; use Edit to change it")
+    if not deployment and install:
+        # Samba first: if it cannot be put in place - no address to give it,
+        # say - nothing of the share has been made yet to leave behind.
+        deployment = install(samba_ip)
     password, reused = str(password or ""), False
     if not public and not password:
         password = account_password(credentials, user)

@@ -1170,19 +1170,24 @@ window.confirmDeploy = async () => {
    "Type an address" is there for one outside the pools. */
 async function vipChoices() {
   const net = await api("/api/network", { keep: true }).catch(() => null);
-  return { free: net?.available_vips || [], freeCount: net?.available_vip_count || 0, used: net?.vips || [] };
+  const own = net?.registered_vips || [];
+  const mine = new Set(own.map(v => v.ip));
+  return { free: (net?.available_vips || []).filter(ip => !mine.has(ip)), freeCount: net?.available_vip_count || 0,
+    used: net?.vips || [], own, labels: net?.vip_labels || {} };
 }
 window.vipChoices = vipChoices;
 
 function vipPicker(prefix, current, choices) {
-  const known = choices.free.includes(current) || choices.used.some(v => v.ip === current);
+  const own = choices.own || [], labels = choices.labels || {};
+  const known = choices.free.includes(current) || choices.used.some(v => v.ip === current) || own.some(v => v.ip === current);
   const typed = !!current && !known;
   const option = (value, label) => `<option value="${esc(value)}" ${value === current ? "selected" : ""}>${esc(label)}</option>`;
   return `<select id="${prefix}_lb_pick" onchange="vipPicked('${prefix}')">
       <option value="" ${!current ? "selected" : ""}>Choose an address…</option>
-      ${choices.free.length ? `<optgroup label="Free in the IP pools (${choices.freeCount})">${choices.free.slice(0, 60).map(ip => option(ip, ip)).join("")}</optgroup>` : ""}
+      ${own.some(v => v.free) ? `<optgroup label="Your VIPs - free">${own.filter(v => v.free).map(v => option(v.ip, `${v.ip}${v.label ? ` · ${v.label}` : ""}`)).join("")}</optgroup>` : ""}
+      ${choices.free.length ? `<optgroup label="Free in the IP pools (${choices.free.length})">${choices.free.slice(0, 60).map(ip => option(ip, ip)).join("")}</optgroup>` : ""}
       ${choices.used.length ? `<optgroup label="In use - shared with what is there">${choices.used.map(v =>
-        option(v.ip, `${v.ip} · ${v.services} service${v.services === 1 ? "" : "s"} · ports ${v.listeners.map(l => l.port).slice(0, 5).join(", ")}`)).join("")}</optgroup>` : ""}
+        option(v.ip, `${v.ip}${labels[v.ip] ? ` · ${labels[v.ip]}` : ""} · ${v.services} service${v.services === 1 ? "" : "s"} · ports ${v.listeners.map(l => l.port).slice(0, 5).join(", ")}`)).join("")}</optgroup>` : ""}
       <option value="__typed" ${typed ? "selected" : ""}>Type an address…</option></select>
     <input id="${prefix}_lb_ip" value="${esc(current || "")}" placeholder="192.0.2.250" ${typed ? "" : 'style="display:none"'}>`;
 }

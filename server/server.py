@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.111")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.112")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1497,13 +1497,15 @@ def _pvc_rows(namespace):
 SAMBA_IMAGE = os.environ.get("SAMBA_IMAGE", "dperson/samba:latest")
 
 
-def install_samba():
+def install_samba(address=""):
     """The Samba server shares are served from, made when the first share is:
-    SMB on port 445 at an address of its own. Shares are its arguments, which
-    Homestead writes, so it starts with none."""
+    SMB on port 445 at an address of its own - the one chosen, or the next
+    free one. Shares are its arguments, which Homestead writes, so it starts
+    with none."""
     cfg = {"name": "samba", "container_name": "samba", "image": SAMBA_IMAGE, "namespace": SMB_NAMESPACE,
            "ports": [{"container": 445, "name": "smb", "protocol": "TCP", "expose": True}],
-           "vip_mode": "automatic", "args": ["-p", "-g", "server min protocol = SMB2"]}
+           "vip_mode": "manual" if address else "automatic", "lb_ip": address,
+           "args": ["-p", "-g", "server min protocol = SMB2"]}
     cfg = NETWORK.prepare_deploy(cfg)
     dep, svc = build_deployment(cfg)
     created = ksend("POST", f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments", dep)
@@ -1649,7 +1651,11 @@ def share_storage_options():
         node = next((pod["spec"].get("nodeName", "") for pod in pods if pod["spec"].get("nodeName")), "")
     except Exception:
         node = ""
-    return {"namespace": ns, "node": node, "pvcs": _pvc_rows(ns),
+    try:
+        samba = bool(kget(f"/apis/apps/v1/namespaces/{ns}/deployments/samba"))
+    except Exception:
+        samba = False
+    return {"namespace": ns, "node": node, "pvcs": _pvc_rows(ns), "samba_installed": samba,
             "storage_classes": selectable_storage_classes(classes),
             "shared_storage_classes": shared_storage_classes(classes),
             "storage_class_facts": storage_class_facts(classes)}
@@ -3160,7 +3166,7 @@ def samba_state():
             "image": containers[0].get("image", "")}
 
 
-def set_samba(enabled):
+def set_samba(enabled, address=""):
     """Samba on or off. Off stops serving; every share, its volume and its
     password are kept for when it is switched back on. On installs it first
     if the cluster has none, with the shares already defined."""
@@ -3172,7 +3178,7 @@ def set_samba(enabled):
         _cache.pop("wl", None)
         return {"ok": True, "detail": "Samba is stopping; the shares, their volumes and passwords are kept"}
     if not state["installed"]:
-        install_samba()
+        install_samba(address)
         rows, credentials, *_ = SHARES._state()
         if rows:
             SHARES.apply_samba(rows, credentials)
@@ -3583,6 +3589,7 @@ ADMIN_ROUTES = {
     "/api/volumes/delete", "/api/volumes/chown",
     # A class change stops workloads and swaps their volume underneath them.
     "/api/volumes/reclass/start", "/api/volumes/old-copies/remove", "/api/self/samba",
+    "/api/network/vips/add", "/api/network/vips/remove", "/api/network/vips/label",
     "/api/files/list", "/api/files/read", "/api/files/write", "/api/files/close",
     "/api/node/smart/test",
     # Installing the probe stands a privileged container on every node.
@@ -4435,7 +4442,7 @@ class H(BaseHTTPRequestHandler):
                     b["name"], b.get("size_gb", 10), b.get("user", "lab"),
                     b.get("password"), b.get("public", False), b.get("read_only", False),
                     b.get("pvc"), b.get("sub_path", ""), b.get("storage_class"),
-                    b.get("access_mode"), b.get("new_name", ""))
+                    b.get("access_mode"), b.get("new_name", ""), str(b.get("samba_ip") or "").strip())
                 deployment = result.pop("deployment", None)
                 if deployment:
                     result["operation"] = OPS.start(
@@ -4682,7 +4689,16 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/volumes/edit":
                 return self._send(200, edit_volume(b))
             if p == "/api/self/samba":
-                return self._send(200, set_samba(bool(b.get("enabled"))))
+                return self._send(200, set_samba(bool(b.get("enabled")), str(b.get("address") or "").strip()))
+            if p == "/api/network/vips/add":
+                _cache.pop("network", None)
+                return self._send(200, NETWORK.add_vips(b, IPAM.load()[0].get("records") or {}))
+            if p == "/api/network/vips/remove":
+                _cache.pop("network", None)
+                return self._send(200, NETWORK.remove_vip(b.get("ip", "")))
+            if p == "/api/network/vips/label":
+                _cache.pop("network", None)
+                return self._send(200, NETWORK.set_vip_label(b.get("ip", ""), b.get("label", "")))
             if p == "/api/volumes/reclass/plan":
                 return self._send(200, RECLASS.plan(b.get("namespace") or DEFAULT_NS, b.get("claim", ""), b.get("target", "")))
             if p == "/api/volumes/reclass/start":
@@ -4911,7 +4927,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.111 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.112 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

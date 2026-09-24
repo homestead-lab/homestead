@@ -423,6 +423,7 @@ async function selfHealthPaint() {
   try { h = await api("/api/self/health"); }
   catch (e) { host.innerHTML = `<div class="ctitle">Homestead's health</div><div class="note bad">${esc(e.message)}</div>`; return; }
   const admin = can("admin"), probe = h.probe || {}, samba = h.samba || {}, pods = h.replicas?.pods || [];
+  STATE.data.sambaInstalled = !!samba.installed;
   const row = (label, tone, word, detail = "", action = "") => `<div class="health-row"><span class="tag ${tone}">${esc(word)}</span>
     <div><b>${esc(label)}</b>${detail ? `<div class="dim xs">${detail}</div>` : ""}</div>${action ? `<div class="row">${action}</div>` : ""}</div>`;
   const problems = h.loops.filter(l => ["failing", "late"].includes(l.state)).length + (h.api.ok ? 0 : 1)
@@ -462,6 +463,14 @@ window.selfHealthPaint = selfHealthPaint;
 
 window.sambaToggle = async box => {
   const on = box.checked;
+  if (on && !STATE.data.sambaInstalled) {
+    box.checked = false;
+    const choices = await vipChoices();
+    const own = (choices.own || []).find(v => v.free);
+    return modal("Install Samba", `<p class="small">Samba serves the network shares. Choose the address Windows will find it at.</p>
+      <div class="f">${vipPicker("smb", own ? own.ip : (choices.free[0] || ""), choices)}</div>
+      <div class="row" style="margin-top:14px"><button class="btn pri" onclick="sambaInstallGo()">Install</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+  }
   if (!on && !confirm("Stop Samba? Every share stops being served until it is switched on again; their volumes, settings and passwords are kept.")) {
     box.checked = true; return;
   }
@@ -471,4 +480,13 @@ window.sambaToggle = async box => {
     toast(r.detail, "ok");
     setTimeout(selfHealthPaint, 1500);
   } catch (e) { toast(e.message, "bad"); box.checked = !on; box.disabled = false; }
+};
+
+window.sambaInstallGo = async () => {
+  const address = ($("#smb_lb_ip")?.value || "").trim();
+  if (!address) return toast("choose an address - add VIPs under Networking if the list is empty", "bad");
+  try {
+    const r = await api("/api/self/samba", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: true, address }) });
+    toast(r.detail, "ok"); closeModal(); setTimeout(selfHealthPaint, 1500);
+  } catch (e) { toast(e.message, "bad"); }
 };

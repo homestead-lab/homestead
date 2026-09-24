@@ -8,6 +8,7 @@ state rather than trusting an IPPool's allocation counter: explicitly requested
 kube-vip addresses are not recorded in the Harvester IPPool status.
 """
 import ipaddress
+import json
 import homestead_names as NAMES
 import re
 import time
@@ -269,6 +270,10 @@ def inventory():
         if row["cluster_ip"] and row["cluster_ip"] != "None":
             reserved.add(row["cluster_ip"])
     pools, candidates = _pool_inventory(pools_raw, reserved)
+    # Addresses reserved here come first: they are the ones someone chose.
+    own = registered()
+    own_free = [row["ip"] for row in own if row["ip"] not in reserved]
+    candidates = own_free + [ip for ip in candidates if ip not in set(own_free)]
 
     vip_rows = []
     for vip in sorted({ip for row in raw_rows for ip in row["external_ips"]},
@@ -290,6 +295,10 @@ def inventory():
 
     return {"services": sorted(raw_rows, key=lambda row: (row["system"], row["namespace"], row["name"])),
             "vips": vip_rows, "conflicts": conflicts, "pools": pools,
+            "registered_vips": [dict(row, free=row["ip"] not in reserved,
+                                     used_by=sorted({f"{l['namespace']}/{l['service']}" for v in vip_rows if v["ip"] == row["ip"]
+                                                     for l in v["listeners"]})) for row in own],
+            "vip_labels": {row["ip"]: row.get("label", "") for row in own},
             "available_vips": candidates[:128], "available_vip_count": len(candidates),
             "node_ips": sorted(node_ips), "controller": controller,
             "workloads": sorted(deployment_rows, key=lambda row: (row["namespace"], row["name"])),
@@ -381,7 +390,8 @@ def service_plan(cfg, require_workload=True):
         vip = _ipv4(SHARED_VIP, "shared VIP")
     elif mode == "automatic":
         if not state["available_vips"]:
-            raise ValueError("no unused IPv4 address is available in a Harvester IP pool")
+            raise ValueError("there is no free address to give it: add some under Networking › Virtual IPs "
+                             "(＋ Add VIPs), or choose a specific address")
         vip = state["available_vips"][0]
     elif mode == "manual":
         vip = _ipv4(cfg.get("vip"), "specific VIP")
@@ -589,3 +599,101 @@ def workload_service_names(namespace, workload):
         return [row["metadata"]["name"] for row in workload_services(namespace, workload)]
     except Exception:
         return []
+
+# ---- the addresses Homestead may hand out ----------------------------------------
+# kube-vip announces whatever address a Service asks for; nothing on a plain
+# Harvester install hands addresses out. A Harvester IP pool is one source of
+# free ones. This is the other: addresses reserved here, by hand, for
+# Homestead to give to Services - named, so the picker says what each is for.
+VIP_MAP = "homestead-vips"
+MAX_ADD = 64
+
+
+def _vip_map_path():
+    return f"/api/v1/namespaces/{DEFAULT_NAMESPACE}/configmaps/{VIP_MAP}"
+
+
+def registered():
+    try:
+        cm = kget(_vip_map_path())
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return []
+        raise
+    except Exception:
+        return []
+    try:
+        rows = json.loads((cm.get("data") or {}).get("vips.json") or "[]")
+    except ValueError:
+        rows = []
+    return [row for row in rows if isinstance(row, dict) and row.get("ip")]
+
+
+def _save_registered(rows):
+    body = {"apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {"name": VIP_MAP, "namespace": DEFAULT_NAMESPACE, "labels": {"homestead.io/managed": "true"}},
+            "data": {"vips.json": json.dumps(sorted(rows, key=lambda r: int(ipaddress.ip_address(r["ip"]))), indent=1)}}
+    try:
+        kget(_vip_map_path())
+        ksend("PUT", _vip_map_path(), body)
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        ksend("POST", f"/api/v1/namespaces/{DEFAULT_NAMESPACE}/configmaps", body)
+
+
+def add_vips(cfg, ipam_records=None):
+    """Reserve addresses for Services: one, or a range, with a label."""
+    start = _ipv4(cfg.get("ip") or cfg.get("start"), "address")
+    end = _ipv4(cfg.get("end") or start, "last address")
+    first, last = int(ipaddress.ip_address(start)), int(ipaddress.ip_address(end))
+    if last < first:
+        raise ValueError("the last address comes before the first")
+    if last - first + 1 > MAX_ADD:
+        raise ValueError(f"at most {MAX_ADD} addresses at once")
+    label = " ".join(str(cfg.get("label") or "").split())[:60]
+    state = inventory()
+    nodes = set(state["node_ips"])
+    rows = registered()
+    have = {row["ip"] for row in rows}
+    records = ipam_records or {}
+    added, skipped = [], []
+    for number in range(first, last + 1):
+        ip = str(ipaddress.ip_address(number))
+        if ip in have:
+            skipped.append(f"{ip} is already on the list")
+        elif ip in nodes:
+            skipped.append(f"{ip} is a node's own address")
+        elif (records.get(ip) or {}).get("category") not in (None, "", "vip"):
+            record = records[ip]
+            skipped.append(f"{ip} is {record.get('name') or 'a device'} in IP addresses")
+        else:
+            rows.append({"ip": ip, "label": label, "added": time.strftime("%Y-%m-%d %H:%M")})
+            added.append(ip)
+    if added:
+        _save_registered(rows)
+    return {"ok": bool(added), "added": added, "skipped": skipped,
+            "detail": (f"{len(added)} address{'es' if len(added) != 1 else ''} added" if added else "nothing added")
+                      + (f"; {len(skipped)} skipped: " + "; ".join(skipped[:4]) if skipped else "")}
+
+
+def remove_vip(ip):
+    ip = _ipv4(ip, "address")
+    state = inventory()
+    users = next((row for row in state["vips"] if row["ip"] == ip), None)
+    if users:
+        names = sorted({f"{l['namespace']}/{l['service']}" for l in users["listeners"]})
+        raise ValueError(f"{ip} is in use by {', '.join(names)}; remove or move those first")
+    rows = [row for row in registered() if row["ip"] != ip]
+    _save_registered(rows)
+    return {"ok": True, "detail": f"{ip} is no longer reserved for Homestead"}
+
+
+def set_vip_label(ip, label):
+    ip = _ipv4(ip, "address")
+    rows = registered()
+    for row in rows:
+        if row["ip"] == ip:
+            row["label"] = " ".join(str(label or "").split())[:60]
+    _save_registered(rows)
+    return {"ok": True}

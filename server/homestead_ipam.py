@@ -299,6 +299,14 @@ def view():
                 row = row_for(ip)
                 row["cluster"] = row["cluster"] or "vip"
                 row["services"] = services
+        # Reserved for Homestead's Services, used yet or not.
+        for reserved in facts.get("registered_vips") or []:
+            ip = reserved.get("ip", "")
+            if _is_v4(ip) and ipaddress.ip_address(ip) in network:
+                row = row_for(ip)
+                row["cluster"] = row["cluster"] or "vip"
+                if reserved.get("label") and not row["name"]:
+                    row["name"] = reserved["label"]
         for ip, host in found.items():
             if _is_v4(ip) and ipaddress.ip_address(ip) in network:
                 row_for(ip)["scan"] = host

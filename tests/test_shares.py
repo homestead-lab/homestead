@@ -81,8 +81,8 @@ class ShareTests(unittest.TestCase):
         dep = self.objects.pop("/apis/apps/v1/namespaces/lab/deployments/samba")
         installed = []
 
-        def install():
-            installed.append(True)
+        def install(address=""):
+            installed.append(address)
             fresh = copy.deepcopy(dep)
             fresh["spec"]["template"]["spec"]["containers"][0].update(args=["-p"], volumeMounts=[])
             fresh["spec"]["template"]["spec"]["volumes"] = []
@@ -90,12 +90,26 @@ class ShareTests(unittest.TestCase):
             return copy.deepcopy(fresh)
         shares.install = install
         try:
-            shares.create_share("media", 10, "lab", "a-password", False)
+            shares.create_share("media", 10, "lab", "a-password", False, samba_ip="192.0.2.245")
         finally:
             shares.install = None
-        self.assertEqual([True], installed)
+        self.assertEqual(["192.0.2.245"], installed)
         args = self.objects["/apis/apps/v1/namespaces/lab/deployments/samba"]["spec"]["template"]["spec"]["containers"][0]["args"]
         self.assertIn("media;/shares/media;yes;no;no;lab", args)
+
+    def test_samba_that_cannot_be_installed_leaves_no_share_behind(self):
+        self.objects.pop("/apis/apps/v1/namespaces/lab/deployments/samba")
+
+        def install(address=""):
+            raise ValueError("there is no free address to give it")
+        shares.install = install
+        try:
+            with self.assertRaisesRegex(ValueError, "no free address"):
+                shares.create_share("media", 10, "lab", "a-password", False)
+        finally:
+            shares.install = None
+        self.assertEqual([], self.created, "no volume was made")
+        self.assertEqual([], [p for m, p, b in self.sent if "configmaps" in p or "secrets" in p])
 
     def test_inventory_uses_live_pvc_size_and_never_returns_password(self):
         result = shares.list_shares()
