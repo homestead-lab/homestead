@@ -357,6 +357,7 @@ function workloadActions(w, update, off, compact = false) {
             <div class="actionmenu-pop">
               <button aria-label="Console for ${esc(w.name)}" title="Open an audited interactive shell in a running container" data-need="operator" onclick="this.closest('details').open=false;wlConsole('${w.ns}','${w.name}')">${icon("console")}Console</button>
               <button aria-label="Edit ${esc(w.name)}" title="Edit image, resources, environment, storage and hardware" onclick="this.closest('details').open=false;wlEdit('${w.ns}','${w.name}')">${icon("edit")}Edit</button>
+              <button aria-label="Placement of ${esc(w.name)}" title="Where it runs: copies, spreading, and nodes shared with or kept apart from other workloads" onclick="this.closest('details').open=false;wlPlacement('${w.ns}','${w.name}')">${icon("node")}Placement</button>
               <button aria-label="Group ${esc(w.name)}" title="Put this workload in a group on the Containers page" data-need="operator" onclick="this.closest('details').open=false;wlGroup('${w.ns}','${w.name}')">${icon("list")}Group${w.group ? ` · ${esc(w.group)}` : ""}</button>
               <button aria-label="Move ${esc(w.name)}" title="Move this workload to another eligible host" data-need="operator" onclick="this.closest('details').open=false;moveWorkload('${w.name}','${w.ns}')">${icon("move")}Move</button>
               ${update?.can_rollback ? `<button aria-label="Rollback ${esc(w.name)}" title="Restore the exact image digest saved before the last update" data-need="operator" onclick="this.closest('details').open=false;imageRollback('${w.ns}','${w.name}')">${icon("rollback")}Rollback</button>` : ""}
@@ -747,7 +748,7 @@ function rolloutMarkup(s) {
       <div class="${s.phase === "ready" ? "done" : s.phase === "failed" ? "failed" : "active"}"><i></i><span><b>Readiness checks</b><small>${s.ready} pod${s.ready === 1 ? "" : "s"} serving</small></span></div>
     </div>
     ${s.problems?.length ? `<div class="gateerr">${s.problems.map(esc).join("<br>")}</div>` : ""}
-    <div class="podprogress">${(s.pods || []).map(p => `<div><span><b>${esc(p.name)}</b><small>${esc(p.node || "scheduling")}${p.pull?.state === "pulling" ? ` · pulling ${esc(pullElapsed(p.pull.seconds))}` : ""}</small></span>
+    <div class="podprogress">${(s.pods || []).map(p => `<div><span><b>${esc(p.name)}</b><small>${esc(p.node || "scheduling")}${p.pull?.state === "pulling" ? ` · pulling ${esc(pullElapsed(p.pull.seconds))}` : ""}</small>${p.blocked ? `<small class="pod-blocked">${esc(p.blocked)}</small>` : ""}</span>
       <span class="pill ${p.phase === "Running" ? "ok" : "warn"}">${esc(p.pull?.state === "pulling" ? "pulling image" : p.waiting?.[0]?.reason || p.phase)}</span></div>`).join("")}</div>
     <div class="row" style="margin-top:18px">
       ${s.can_rollback ? `<button class="btn ${s.phase === "failed" ? "danger" : ""}" data-need="operator" onclick="imageRollback('${esc(s.ns)}','${esc(s.name)}')">Rollback</button>` : ""}

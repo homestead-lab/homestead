@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.99")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.100")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2842,6 +2842,114 @@ def hv_exporter_present():
 MAX_REPLICAS = 3
 
 
+def homestead_data_volume(dep=None):
+    """Homestead's data claim, and whether pods on several nodes can mount it.
+
+    Copies of Homestead on different nodes all mount this one claim, so it has
+    to be ReadWriteMany on a class Longhorn serves through its share manager.
+    A migratable class - Harvester's own, and longhorn-r2 - hands out a VM-disk
+    volume that one node attaches, and a pod on a second node waits forever."""
+    ns, name = SELF.NS, NAMES.BRAND
+    dep = dep or kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    volumes = (dep["spec"]["template"]["spec"].get("volumes") or [])
+    claim = next(((v.get("persistentVolumeClaim") or {}).get("claimName") for v in volumes
+                  if v.get("name") == "data" and v.get("persistentVolumeClaim")), "")
+    if not claim:
+        return {"pvc": "", "shareable": False, "reason": "Homestead keeps no data claim", "candidates": []}
+    pvc = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}")
+    spec = pvc.get("spec") or {}
+    klass = spec.get("storageClassName") or ""
+    modes = spec.get("accessModes") or []
+    rows = storage_classes()
+    row = next((r for r in rows if r["name"] == klass), None)
+    size = str(((pvc.get("status") or {}).get("capacity") or {}).get("storage")
+               or ((spec.get("resources") or {}).get("requests") or {}).get("storage") or "2Gi")
+    if "ReadWriteMany" not in modes:
+        reason = f"{claim} is ReadWriteOnce: one node at a time can mount it"
+    elif row and row.get("migratable"):
+        reason = (f"{claim} is on {klass}, a migratable class: Longhorn gives it a VM-disk volume that "
+                  "only one node can mount, so a copy on a second node would never start")
+    else:
+        reason = ""
+    return {"pvc": claim, "storage_class": klass, "access_modes": modes, "size": size,
+            "shareable": not reason, "reason": reason, "candidates": shared_storage_classes(rows)}
+
+
+def move_homestead_data(storage_class):
+    """Copies Homestead's data to a new shareable claim, then points it there.
+
+    The copy runs as a job on the node that has the current volume attached,
+    since that is the only node that can mount it; Homestead keeps running
+    throughout and restarts once, onto the new claim. The old claim is kept."""
+    info = homestead_data_volume()
+    if info["shareable"]:
+        raise ValueError(f"{info['pvc']} can already be mounted on several nodes")
+    if storage_class not in info["candidates"]:
+        raise ValueError(f"choose a class that can share a volume between nodes: {', '.join(info['candidates']) or 'none here'}")
+    ns = SELF.NS
+    names = {i["metadata"]["name"] for i in kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims").get("items", [])}
+    target = f"{NAMES.BRAND}-data-shared"
+    n = 2
+    while target in names:
+        target, n = f"{NAMES.BRAND}-data-shared-{n}", n + 1
+    size_gb = max(1, int(-(-parse_mem(info["size"]) // 1024**3)))
+    selector = urllib.parse.quote(f"app={NAMES.BRAND}", safe="")
+    pods = [p for p in kget(f"/api/v1/namespaces/{ns}/pods?labelSelector={selector}").get("items", [])
+            if (p.get("status") or {}).get("phase") == "Running" and (p.get("spec") or {}).get("nodeName")]
+    if not pods:
+        raise ValueError("no running Homestead pod shows which node holds the data volume")
+    node = pods[0]["spec"]["nodeName"]
+    create_pvc(ns, target, size_gb, storage_class, "ReadWriteMany")
+    job = f"{NAMES.BRAND}-data-move-{secrets.token_hex(3)}"
+    body = {"apiVersion": "batch/v1", "kind": "Job",
+            "metadata": {"name": job, "namespace": ns, "labels": NAMES.labels("data-move")},
+            "spec": {"backoffLimit": 1, "ttlSecondsAfterFinished": 86400,
+                     "template": {"metadata": {"labels": NAMES.labels("data-move")},
+                                  "spec": {"restartPolicy": "Never", "nodeName": node,
+                                           "containers": [{"name": "copy", "image": "alpine:3.20",
+                                                           "command": ["sh", "-c", "set -e; cp -a /old/. /new/; sync; echo copied"],
+                                                           "securityContext": {"runAsUser": 0},
+                                                           "volumeMounts": [{"name": "old", "mountPath": "/old", "readOnly": True},
+                                                                            {"name": "new", "mountPath": "/new"}]}],
+                                           "volumes": [{"name": "old", "persistentVolumeClaim": {"claimName": info["pvc"], "readOnly": True}},
+                                                       {"name": "new", "persistentVolumeClaim": {"claimName": target}}]}}}}
+    ksend("POST", f"/apis/batch/v1/namespaces/{ns}/jobs", body)
+    op = OPS.start("self-data-move", f"Move Homestead's data to {target}",
+                   {"kind": "PersistentVolumeClaim", "name": target, "namespace": ns}, "/settings",
+                   {"namespace": ns, "job": job, "old": info["pvc"], "new": target}, "Copying")
+    return {"ok": True, "operation": op, "detail": f"copying {info['pvc']} to {target} on {storage_class}; Homestead restarts onto it when done"}
+
+
+def _data_move_status(item):
+    """Waits for the copy, then points Homestead at the new claim. Run again
+    after the switch - by the new pods, from the copied record - it finds the
+    claim already switched and finishes."""
+    ref = item["ref"]
+    ns, name = ref["namespace"], NAMES.BRAND
+    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    volumes = dep["spec"]["template"]["spec"].get("volumes") or []
+    data = next((v for v in volumes if v.get("name") == "data"), None)
+    if data and (data.get("persistentVolumeClaim") or {}).get("claimName") == ref["new"]:
+        return "succeeded", 100, (f"Homestead keeps its data on {ref['new']}, which every node can mount; "
+                                  f"{ref['old']} is kept - delete it from Volumes once all is well")
+    try:
+        status = kget(f"/apis/batch/v1/namespaces/{ns}/jobs/{ref['job']}").get("status") or {}
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return "failed", 50, "the copy job went missing; Homestead still uses its old data claim"
+        raise
+    if status.get("failed") and not status.get("active") and not status.get("succeeded"):
+        return "failed", 60, f"the copy failed; Homestead still uses {ref['old']}. The {ref['job']} job's log says why"
+    if not status.get("succeeded"):
+        return "running", 40 if status.get("active") else 15, "Copying Homestead's data"
+    data["persistentVolumeClaim"]["claimName"] = ref["new"]
+    ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
+    return "running", 90, f"Copied; Homestead is restarting onto {ref['new']}"
+
+
+OPS.RESOLVERS["self-data-move"] = _data_move_status
+
+
 def homestead_replicas():
     """How many Homesteads run, where, and which one leads."""
     ns, name = SELF.NS, NAMES.BRAND
@@ -2860,8 +2968,12 @@ def homestead_replicas():
                      "this": pod["metadata"]["name"] == LEADER.IDENTITY,
                      "terminating": bool(pod["metadata"].get("deletionTimestamp"))})
     nodes = len({row["node"] for row in rows if row["node"] and row["ready"]})
+    try:
+        data = homestead_data_volume(dep)
+    except Exception as error:
+        data = {"pvc": "", "shareable": False, "reason": f"could not read the data claim: {str(error)[:120]}", "candidates": []}
     return {"desired": int(dep["spec"].get("replicas", 1) or 0), "pods": sorted(rows, key=lambda row: row["name"]),
-            "leader": holder, "spread_nodes": nodes, "max": MAX_REPLICAS}
+            "leader": holder, "spread_nodes": nodes, "max": MAX_REPLICAS, "data": data}
 
 
 def set_homestead_replicas(count):
@@ -2873,6 +2985,10 @@ def set_homestead_replicas(count):
     count = int(count)
     if not 1 <= count <= MAX_REPLICAS:
         raise ValueError(f"run between 1 and {MAX_REPLICAS} copies of Homestead")
+    if count > 1:
+        data = homestead_data_volume()
+        if not data["shareable"]:
+            raise ValueError(f"{data['reason']}. Move Homestead's data to a shareable volume first (Settings, Redundancy).")
     ns, name = SELF.NS, NAMES.BRAND
     dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     dep["spec"]["replicas"] = count
@@ -3203,7 +3319,7 @@ def needed_role(path, method):
         return "admin"
     if path == "/api/storage/classes" and method != "GET":
         return "admin"
-    if path in ("/api/portal", "/api/self/replicas", "/api/ipam/unifi", "/api/mqtt", "/api/mqtt/test") and method != "GET":
+    if path in ("/api/portal", "/api/self/replicas", "/api/self/data/move", "/api/ipam/unifi", "/api/mqtt", "/api/mqtt/test") and method != "GET":
         return "admin"
     # A chart can make anything anywhere in the cluster, and so can raw YAML;
     # a secret's values are for admins only.
@@ -3840,6 +3956,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, PORTAL.save(b.get("links")))
             if p == "/api/self/replicas":
                 return self._send(200, set_homestead_replicas(b.get("replicas")))
+            if p == "/api/self/data/move":
+                return self._send(200, move_homestead_data(b.get("storage_class", "")))
             if p in ("/api/helm/install", "/api/helm/upgrade", "/api/helm/uninstall"):
                 action = p.rsplit("/", 1)[1]
                 result = (HELM.install(b) if action == "install" else HELM.upgrade(b) if action == "upgrade"
@@ -4431,7 +4549,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.99 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.100 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

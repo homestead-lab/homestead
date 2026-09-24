@@ -1451,10 +1451,14 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .v2line{margin-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 
 /* Placement rules in the container editor. */
-.placement{margin:4px 0 12px;padding:10px 14px}
-.placement>summary{cursor:pointer;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;list-style:none}
-.placement>summary::-webkit-details-marker{display:none}
-.placement[open]>summary{margin-bottom:12px}
+.placement{margin:4px 0 12px;padding:12px 14px}
+.place-level{padding:10px 0;border-top:1px solid var(--line)}
+.place-level:first-of-type{border-top:0;padding-top:4px}
+.place-title{font-weight:650;font-size:13px;margin-bottom:6px}
+.place-grid{display:grid;grid-template-columns:110px 1fr 1fr;gap:10px}
+.place-grid.two{grid-template-columns:1fr 1fr}
+.place-grid .f{margin:0}
+@media(max-width:700px){.place-grid,.place-grid.two{grid-template-columns:1fr}}
 .aff-row{display:grid;grid-template-columns:1fr 120px auto;gap:8px;align-items:center;margin-bottom:8px}
 .aff-row .row-remove{margin-top:0}
 @media(max-width:560px){.aff-row{grid-template-columns:1fr 96px auto}}
@@ -1608,3 +1612,4 @@ div.ipam-line.dim{display:block}
 .ipam-doc{cursor:pointer;font-size:12px;color:var(--mut)}
 .ipam-doc:hover{color:var(--tx);text-decoration:underline}
 .ipam-free td{padding-top:2px;padding-bottom:2px;font-size:12.5px}
+.podprogress small.pod-blocked{display:block;color:var(--med);white-space:normal;margin-top:2px}

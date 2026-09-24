@@ -91,21 +91,47 @@ function placementRow(kind, row = {}) {
     <select class="aff-mode">${PLACEMENT_MODES.map(([value, label]) => `<option value="${value}" ${row.mode === value ? "selected" : ""}>${label}</option>`).join("")}</select>
     <button class="iconbtn row-remove" type="button" title="Remove this rule" onclick="this.closest('.aff-row').remove();placementChanged()">×</button></div>`;
 }
-function placementSection(p) {
-  return `<details class="placement card flat" ${p.spread || (p.with || []).length || (p.apart || []).length ? "open" : ""}>
-    <summary><b>Placement rules</b> <span class="dim xs">which nodes this runs on, relative to itself and to other workloads</span></summary>
-    <div class="f"><label>Spread instances ${tip("Puts this workload's instances on different nodes, so losing one host does not take every copy. Only matters with more than one instance.")}</label>
-      <select id="e_spread" onchange="placementChanged()"><option value="">no preference</option>
-        <option value="prefer" ${p.spread === "prefer" ? "selected" : ""}>prefer different nodes</option>
-        <option value="require" ${p.spread === "require" ? "selected" : ""}>require different nodes</option></select></div>
-    <div class="f"><label>Run on the same node as ${tip("For apps that talk constantly or share a device. Required: this does not start until that workload is running, and only on its node.")}</label>
-      <div id="e_with">${(p.with || []).map(row => placementRow("with", row)).join("")}</div>
-      <button class="btn sm" type="button" onclick="placementAdd('with')">＋ Add</button></div>
-    <div class="f"><label>Keep off the node of ${tip("For pairs that should never share a host: two DNS servers, or two apps that would compete for one disk.")}</label>
-      <div id="e_apart">${(p.apart || []).map(row => placementRow("apart", row)).join("")}</div>
-      <button class="btn sm" type="button" onclick="placementAdd('apart')">＋ Add</button></div>
-    <div class="note" id="e_place_note" hidden></div></details>`;
+/* Where it runs, at the three levels there are: the containers in one pod
+   (always together - that is what a pod is), the copies of this workload,
+   and other workloads. */
+function placementSection(p, w, nodes, containers) {
+  const names = (containers || []).map(c => c.name);
+  return `<section class="placement card flat" id="e_placement">
+    <div class="sec" style="margin-top:0">Where it runs</div>
+    <div class="place-level"><div class="place-title">Containers in this pod</div>
+      <div class="dim small">${names.length > 1 ? `${names.map(n => `<span class="tag">${esc(n)}</span>`).join(" ")} always run together on one node, sharing its network and any pod volumes.`
+        : `<span class="tag">${esc(names[0] || w.name)}</span> is this pod's only container.`}
+        Containers in one pod cannot be spread apart; to run one on its own node, make it a workload of its own and use the rules below.</div></div>
+    <div class="place-level"><div class="place-title">Copies of this workload</div>
+      <div class="place-grid">
+        <div class="f"><label>Copies ${tip("How many copies of this workload run at once - Kubernetes calls them replicas. Most homelab apps want one; Longhorn volume replicas are a separate, storage-level idea.")}</label><input type="number" id="e_rep" value="${w.start_replicas ?? w.replicas ?? 1}" min="1" max="5" ${w.autostart === false ? "disabled" : ""}></div>
+        <div class="f"><label>Spread copies ${tip("Puts this workload's copies on different nodes, so losing one host does not take every copy. Only matters with more than one copy.")}</label>
+          <select id="e_spread" onchange="placementChanged()"><option value="">no preference</option>
+            <option value="prefer" ${p.spread === "prefer" ? "selected" : ""}>prefer different nodes</option>
+            <option value="require" ${p.spread === "require" ? "selected" : ""}>require different nodes</option></select></div>
+        <div class="f"><label>Preferred node ${tip("A preference guides placement but still allows failover. Use Move for hardware-aware choices and optional hard pinning.")}</label><select id="e_node" data-current="${esc(w.node || "")}">
+          <option value="">any node</option>
+          ${(nodes || []).map(n => `<option value="${esc(n.name)}" ${n.name === w.node ? "selected" : ""}>${esc(n.name)}</option>`).join("")}
+        </select></div></div></div>
+    <div class="place-level"><div class="place-title">Other workloads</div>
+      <div class="place-grid two">
+        <div class="f"><label>Run on the same node as ${tip("For apps that talk constantly or share a device. Required: this does not start until that workload is running, and only on its node.")}</label>
+          <div id="e_with">${(p.with || []).map(row => placementRow("with", row)).join("")}</div>
+          <button class="btn sm" type="button" onclick="placementAdd('with')">＋ Add</button></div>
+        <div class="f"><label>Keep off the node of ${tip("For pairs that should never share a host: two DNS servers, or two apps that would compete for one disk.")}</label>
+          <div id="e_apart">${(p.apart || []).map(row => placementRow("apart", row)).join("")}</div>
+          <button class="btn sm" type="button" onclick="placementAdd('apart')">＋ Add</button></div></div></div>
+    <div class="note" id="e_place_note" hidden></div></section>`;
 }
+/* From a container's menu: the editor, opened at its placement. */
+window.wlPlacement = async (ns, name) => {
+  await wlEdit(ns, name);
+  setTimeout(() => {
+    const box = $(".modalbox"), section = $("#e_placement");
+    // Clear of the dialog's own header, which stays at the top as it scrolls.
+    if (box && section) box.scrollTo({ top: section.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop - 72, behavior: "smooth" });
+  }, 80);
+};
 window.placementAdd = kind => { $("#e_" + kind).insertAdjacentHTML("beforeend", placementRow(kind)); placementChanged(); };
 function readPlacement() {
   const rows = kind => $$(`#e_${kind} .aff-row`).map(row => {
@@ -158,14 +184,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       <div class="f"><label>Workload name ${tip("The real Kubernetes Deployment name. Renaming creates a replacement Deployment, waits for it to become ready, then removes the old one. Generated pods use this name plus a Kubernetes suffix.")}</label><input type="text" id="e_workload_name" value="${esc(w.name)}"></div>
       <div class="f"><label>Pod hostname ${tip("The hostname visible inside the pod. It does not rename the Kubernetes Pod; generated pods use the workload name plus a suffix.")}</label><input type="text" id="e_pod_name" value="${esc(w.pod_hostname || "")}" placeholder="optional"></div>
       <div class="f"><label>Container logo ${tip("Optional public HTTPS image URL. Homestead validates it and keeps a persistent local copy while retaining this source for later edits.")}</label><input type="url" id="e_icon" value="${esc(w.icon || "")}" placeholder="https://…/icon.png"></div>
-      <div class="f2">
-        <div class="f"><label>Instances ${tip("How many copies of this workload run at once. Most homelab apps want one; Longhorn replicas are a separate, storage-level idea.")}</label><input type="number" id="e_rep" value="${w.start_replicas ?? w.replicas ?? 1}" min="1" max="5" ${w.autostart === false ? "disabled" : ""}></div>
-        <div class="f"><label>Preferred node ${tip("A preference guides placement but still allows failover. Use Move for hardware-aware choices and optional hard pinning.")}</label><select id="e_node" data-current="${esc(w.node || "")}">
-          <option value="">any node</option>
-          ${nodes.map(n => `<option value="${esc(n.name)}" ${n.name === w.node ? "selected" : ""}>${esc(n.name)}</option>`).join("")}
-        </select></div>
-      </div>
-      ${placementSection(w.placement || {})}
+      ${placementSection(w.placement || {}, w, nodes, containers)}
       <label class="switch" id="e_autostart_wrap"><input type="checkbox" id="e_autostart" onchange="editAutostartToggle()" ${w.autostart === false ? "" : "checked"}>
         Autostart ${tip("On keeps the workload running: Kubernetes restarts it after a crash, a node reboot or a cluster restart. Off scales it to zero and remembers the instance count for when you switch it back on.")}</label>
       <div class="dim xs" id="e_autostart_note" style="margin:-4px 0 6px">${w.autostart === false ? "Stays stopped until you switch autostart back on." : "Runs continuously and comes back after a reboot."}</div>

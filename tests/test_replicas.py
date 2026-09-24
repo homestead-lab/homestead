@@ -125,6 +125,7 @@ class ReplicaSettingTests(unittest.TestCase):
                "selector": {"matchLabels": {"app": "homestead"}}, "template": {"spec": {}}}}
         sent = []
         with mock.patch.object(server, "kget", lambda path: copy.deepcopy(dep)), \
+                mock.patch.object(server, "homestead_data_volume", lambda *a: {"shareable": True}), \
                 mock.patch.object(server, "ksend", lambda *a, **k: sent.append(a)):
             server.set_homestead_replicas(2)
             with self.assertRaises(ValueError):

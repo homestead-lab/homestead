@@ -208,8 +208,14 @@ async function replicasPaint() {
   STATE.data.replicaHtml = `<div class="settings-card-head between"><div><div class="ctitle">Redundancy</div>
       <div class="csub">How many copies of Homestead run. They share its data volume; one, the leader, raises alerts and advances moves, and another takes over within seconds if it stops.</div></div>
       ${can("admin") ? `<div class="row"><select id="rep_count">${Array.from({ length: r.max }, (_, i) => i + 1).map(n =>
-        `<option value="${n}" ${n === r.desired ? "selected" : ""}>${n} cop${n === 1 ? "y" : "ies"}</option>`).join("")}</select>
+        `<option value="${n}" ${n === r.desired ? "selected" : ""} ${n > 1 && !r.data?.shareable && n !== r.desired ? "disabled" : ""}>${n} cop${n === 1 ? "y" : "ies"}</option>`).join("")}</select>
         <button class="btn sm pri" onclick="replicasSave()">Apply</button></div>` : ""}</div>
+    ${r.data && !r.data.shareable ? `<div class="note ${r.desired > 1 ? "bad" : ""}" style="margin-top:10px"><b>More than one copy needs a volume every node can mount.</b> ${esc(r.data.reason)}.
+      ${r.data.candidates.length && can("admin") ? `<div class="row" style="margin-top:8px">Move its data to
+        <select id="rep_class">${r.data.candidates.map(c => `<option ${c === "longhorn" ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>
+        <button class="btn sm" onclick="replicasMoveData()">Move data</button></div>
+        <div class="dim xs" style="margin-top:4px">Homestead keeps running while the data is copied, then restarts once onto the new volume. ${esc(r.data.pvc)} is kept until you delete it.</div>`
+        : r.data.candidates.length ? "" : "<div>This cluster has no storage class that shares a volume between nodes; create one under Volumes, without live migration.</div>"}</div>` : ""}
     <table class="tbl dense stack" style="margin-top:10px"><thead><tr><th>Copy</th><th>Node</th><th>State</th></tr></thead><tbody>
       ${r.pods.map(p => `<tr><td class="mono small">${esc(p.name)}${p.this ? ' <span class="tag">this page</span>' : ""}</td>
         <td data-label="Node">${esc(p.node || "unscheduled")}</td>
@@ -219,6 +225,14 @@ async function replicasPaint() {
   const host = $("#replicaCard");
   if (host) host.innerHTML = STATE.data.replicaHtml;
 }
+window.replicasMoveData = async () => {
+  const storage_class = $("#rep_class").value;
+  if (!confirm(`Copy Homestead's data to a new volume on ${storage_class} and restart onto it?`)) return;
+  try {
+    const r = await api("/api/self/data/move", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ storage_class }) });
+    toast(r.detail, "ok");
+  } catch (e) { toast(e.message, "bad"); }
+};
 window.replicasSave = async () => {
   const replicas = +$("#rep_count").value;
   try {

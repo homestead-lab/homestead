@@ -70,10 +70,10 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.99`, the workflow publishes:
+For a release such as `v2.8.100`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.99
+ghcr.io/wjcloudy/homestead:2.8.100
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -84,8 +84,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.99
-git push origin v2.8.99
+git tag v2.8.100
+git push origin v2.8.100
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -588,6 +588,17 @@ written through temporary files of their own. Sign-ins are signed tokens, so
 any copy accepts them. Updates roll one copy at a time, so an update no
 longer takes Homestead away either.
 
+Copies on different nodes all mount Homestead's data claim, so more than one
+copy needs a claim every node can mount: ReadWriteMany on a class Longhorn
+serves through its share manager. A migratable class - Harvester's own and
+`longhorn-r2` - gives a VM-disk volume only one node can mount, and a copy on
+a second node would wait forever. Redundancy says so and offers **Move data**:
+a job on the node that has the volume attached copies it to a new claim on a
+shareable class (the stock `longhorn`, say), and Homestead restarts once onto
+it; the old claim is kept until you delete it. A rollout that stalls shows
+why - a volume that will not attach or mount, or a pod that cannot be placed -
+beside the pod.
+
 ## Updating Homestead
 
 Homestead appears in its own Containers page. **Check images** compares the running
@@ -619,7 +630,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.99/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.100/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -630,7 +641,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.99 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.100 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1016,8 +1027,12 @@ Deployment, so it needs no list of its own and exists while something is in it.
 
 ## Placement rules
 
-A container's editor has **Placement rules** for where it runs relative to
-itself and to other workloads, each a preference or a requirement:
+A container's editor has a **Where it runs** section - also reached from
+**Placement** in its menu - at the three levels there are. The containers in
+one pod always run together on one node; that is what a pod is, so to run one
+apart it becomes a workload of its own. The workload's copies can be spread
+across nodes or kept near a preferred node. And the workload can be kept with
+or apart from other workloads. Each rule is a preference or a requirement:
 
 - **Spread instances** puts its own instances on different nodes, so losing a
   host does not take every copy;

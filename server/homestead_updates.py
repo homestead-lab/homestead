@@ -616,6 +616,37 @@ def pull_state(namespace, pod):
             "detail": message[:220]}
 
 
+STUCK_REASONS = {"FailedAttachVolume", "FailedMount", "FailedScheduling"}
+STUCK_AFTER = 180
+
+
+def _why_waiting(ns, pod):
+    """The newest warning about a pod that has not started, once it has been
+    waiting a minute; stuck when a volume or scheduling warning has lasted
+    three."""
+    age = _age(pod.get("metadata", {}).get("creationTimestamp"))
+    if age < 60:
+        return None
+    name = pod["metadata"]["name"]
+    try:
+        events = kget(f"/api/v1/namespaces/{ns}/events?fieldSelector="
+                      f"{urllib.parse.quote(f'involvedObject.name={name},type=Warning')}").get("items", [])
+    except Exception:
+        return None
+    if not events:
+        return None
+    latest = max(events, key=lambda e: e.get("lastTimestamp") or e.get("eventTime") or "")
+    message = " ".join(str(latest.get("message") or latest.get("reason") or "").split())[:300]
+    return {"message": message, "stuck": latest.get("reason") in STUCK_REASONS and age >= STUCK_AFTER}
+
+
+def _age(stamp):
+    try:
+        return time.time() - calendar.timegm(time.strptime(str(stamp), "%Y-%m-%dT%H:%M:%SZ"))
+    except (TypeError, ValueError):
+        return 0
+
+
 def progress(ns, name, dep=None):
     dep = dep or kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     pods = _matching_pods(dep, kget("/api/v1/pods").get("items", []))
@@ -646,6 +677,14 @@ def progress(ns, name, dep=None):
                       pod.get("status", {}).get("containerStatuses", []) or [{}])
         if not running:
             row["pull"] = pull_state(ns, row["name"])
+            # PodInitializing and ContainerCreating say only that a pod is
+            # waiting; its warning events say for what - most often a volume
+            # it cannot attach or mount.
+            blocked = _why_waiting(ns, pod)
+            if blocked:
+                row["blocked"] = blocked["message"]
+                if blocked["stuck"]:
+                    problems.append(f"{row['name']}: {blocked['message']}")
         pod_rows.append(row)
     for condition in status.get("conditions", []) or []:
         if condition.get("type") == "Progressing" and condition.get("status") == "False":
