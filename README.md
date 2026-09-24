@@ -70,10 +70,10 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.100`, the workflow publishes:
+For a release such as `v2.8.101`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.100
+ghcr.io/wjcloudy/homestead:2.8.101
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -84,8 +84,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.100
-git push origin v2.8.100
+git tag v2.8.101
+git push origin v2.8.101
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -630,7 +630,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.100/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.101/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -641,7 +641,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.100 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.101 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1001,6 +1001,20 @@ a container's own logo - which follows the app if its logo changes - or an
 image from a public URL, fetched and cached the way workload logos are. Links
 are kept in the `homestead-portal` ConfigMap and are readable by every signed-in
 user, so passwords are refused in addresses.
+
+## Virtual machines
+
+Each VM shows what it is actually doing - KubeVirt's own status: Running,
+Stopped, Starting, Paused, or an error such as ErrorUnschedulable with its
+reason - and offers what fits: Start a stopped VM; Stop, Restart, Pause or
+open the Console of a running one; stop one stuck starting; Force stop one
+that will not shut down. Harvester's run strategy is honoured, not the older
+`running` flag. A VM opens to its disks (volume, size, class, boot order),
+network interfaces (network, MAC, addresses), guest OS as its guest agent
+reports it, conditions and events. **Edit** sets CPU cores, memory, run
+strategy and description; CPU and memory apply at the next boot, or at once
+with a restart. **Delete** asks for the VM's name and can take its disks with
+it, marked for removal the way Harvester's own UI does.
 
 ## VM console
 

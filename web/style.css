@@ -1613,3 +1613,19 @@ div.ipam-line.dim{display:block}
 .ipam-doc:hover{color:var(--tx);text-decoration:underline}
 .ipam-free td{padding-top:2px;padding-bottom:2px;font-size:12.5px}
 .podprogress small.pod-blocked{display:block;color:var(--med);white-space:normal;margin-top:2px}
+
+/* Virtual machines */
+.vm-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px}
+.vm-card{display:flex;flex-direction:column;gap:10px;padding:14px}
+.vm-title{display:flex;gap:10px;align-items:center;cursor:pointer;color:inherit;text-decoration:none;min-width:0}
+.vm-title b{font-size:14.5px}
+.vm-desc{margin-top:-4px}
+.vm-problem{margin:0;font-size:12px}
+.vm-restart{color:var(--med)}
+.vm-facts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px 12px}
+.vm-facts.wide{grid-template-columns:repeat(3,1fr)}
+.vm-facts>div{display:grid;gap:2px;min-width:0}
+.vm-facts span{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}
+.vm-facts b{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vm-actions{flex-wrap:wrap;gap:6px;margin-top:auto}
+@media(max-width:560px){.vm-grid{grid-template-columns:1fr}.vm-facts,.vm-facts.wide{grid-template-columns:1fr 1fr}}

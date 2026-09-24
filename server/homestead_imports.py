@@ -1802,32 +1802,3 @@ def create_vm(cfg):
     out = ksend("POST", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines", vm)
     _bust("flow", "ov")
     return {"ok": True, "vm": name, "datavolume": dv}
-
-
-def list_vms():
-    try:
-        vms = kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
-    except Exception:
-        return []
-    try:
-        vmis = {(v["metadata"]["namespace"], v["metadata"]["name"]): v
-                for v in kget("/apis/kubevirt.io/v1/virtualmachineinstances").get("items", [])}
-    except Exception:
-        vmis = {}
-    out = []
-    for v in vms:
-        ns, name = v["metadata"]["namespace"], v["metadata"]["name"]
-        i = vmis.get((ns, name), {})
-        dom = v["spec"]["template"]["spec"]["domain"]
-        out.append({
-            "ns": ns, "name": name,
-            "running": bool(v["spec"].get("running")),
-            "phase": i.get("status", {}).get("phase", "Stopped"),
-            "node": i.get("status", {}).get("nodeName", ""),
-            "cores": dom.get("cpu", {}).get("cores", 0),
-            "memory": dom.get("memory", {}).get("guest", ""),
-            "ip": (i.get("status", {}).get("interfaces") or [{}])[0].get("ipAddress", ""),
-            "migratable": any(c.get("type") == "LiveMigratable" and c.get("status") == "True"
-                              for c in i.get("status", {}).get("conditions", []) or []),
-        })
-    return sorted(out, key=lambda x: x["name"])

@@ -81,6 +81,22 @@
   const demoPlatform = new URLSearchParams(location.search).get("platform") || "harvester";
   // The IP addresses page with UniFi connected, until Settings disconnects it.
   let demoUnifi = new URLSearchParams(location.search).get("unifi") !== "0";
+  const vmDisk = (claim, size, extra = {}) => ({ name: "disk-0", kind: "disk", claim, boot: 1, bus: "virtio", size, storage_class: "harvester-longhorn", ...extra });
+  const demoVms = [
+    { ns: "default", name: "home-assistant-os", status: "Running", run_strategy: "RerunOnFailure", running: true, node: "harvester-node1",
+      cores: 2, memory: "4Gi", ip: "192.0.2.60", os: "Home Assistant OS 13.2", description: "HAOS with the Zigbee stick passed through",
+      nics: [{ name: "default", model: "virtio", network: "default/vlan1", mac: "52:54:00:6a:11:02", ips: ["192.0.2.60"] }],
+      disks: [vmDisk("haos-disk-0", "32Gi")], migratable: false, restart_required: false, problem: "", created: "2026-08-02T10:00:00Z",
+      actions: ["console", "stop", "restart", "pause"] },
+    { ns: "default", name: "win11", status: "Stopped", run_strategy: "Halted", running: false, node: "", cores: 4, memory: "8Gi", ip: "",
+      os: "windows", description: "", nics: [{ name: "default", model: "e1000", network: "default/vlan1", mac: "52:54:00:aa:bb:cc", ips: [] }],
+      disks: [vmDisk("win11-disk-0", "80Gi"), { name: "cdrom", kind: "cd-rom", claim: "win11-iso", boot: 2, bus: "sata", size: "6Gi", storage_class: "" }],
+      migratable: false, restart_required: false, problem: "", created: "2026-09-10T10:00:00Z", actions: ["start"] },
+    { ns: "lab", name: "ubuntu-test", status: "ErrorUnschedulable", run_strategy: "RerunOnFailure", running: false, node: "", cores: 16, memory: "64Gi", ip: "",
+      os: "ubuntu", description: "", nics: [{ name: "default", model: "virtio", network: "pod network", mac: "", ips: [] }],
+      disks: [vmDisk("ubuntu-test-disk-0", "40Gi")], migratable: false, restart_required: true,
+      problem: "0/3 nodes are available: 3 Insufficient memory.", created: "2026-09-23T10:00:00Z", actions: ["stop", "force-stop"] },
+  ];
   let portalLinks = [
     { id: "demo0", title: "Home Assistant", url: "http://192.0.2.215:8123", section: "Home", icon: "workload:lab/home-assistant", note: "", shown: { kind: "letter" } },
     { id: "demo1", title: "Frigate", url: "http://192.0.2.214:5000", section: "Home", icon: "workload:lab/frigate", note: "cameras", shown: { kind: "letter" } },
@@ -317,7 +333,7 @@
       detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.100", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.101", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
@@ -404,20 +420,20 @@
       user: "admin", added: "2026-09-22 17:02" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "garage") return { name, version: "2.8.100", protocol: 1, local_version: "2.8.100",
+      if (name === "garage") return { name, version: "2.8.101", protocol: 1, local_version: "2.8.101",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "garage runs 2.8.100 and this one 2.8.100. Moves work between them; garage is the newer of the two." };
+        message: "garage runs 2.8.101 and this one 2.8.101. Moves work between them; garage is the newer of the two." };
       return name === "attic"
-        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.100", local_protocol: 1,
+        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.101", local_protocol: 1,
             state: "behind", compatible: false,
-            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.100). Update attic first." }
-        : { name, version: "2.8.100", protocol: 1, local_version: "2.8.100", local_protocol: 1,
-            state: "same", compatible: true, message: "Both run Homestead 2.8.100." };
+            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.101). Update attic first." }
+        : { name, version: "2.8.101", protocol: 1, local_version: "2.8.101", local_protocol: 1,
+            state: "same", compatible: true, message: "Both run Homestead 2.8.101." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "shed", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.100", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.101", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -575,7 +591,17 @@
       reachable_off_cluster: true, detail: "Longhorn will back up here" },
     "/api/objectstore/remove": { ok: true, detail: "object storage removed" },
     "/api/vmimages": [],
-    "/api/vms": [],
+    "/api/vms": demoVms,
+    "/api/vm": url => {
+      const v = demoVms.find(x => x.name === url.searchParams.get("name")) || demoVms[0];
+      return { ...v, guest: { prettyName: v.os, kernelRelease: v.status === "Running" ? "6.8.0-45-generic" : "" },
+        conditions: v.status === "Running" ? [{ type: "Ready", status: "True", reason: "", message: "" }, { type: "LiveMigratable", status: "True", reason: "", message: "" }]
+          : [{ type: "Ready", status: "False", reason: v.problem ? "Unschedulable" : "", message: v.problem }],
+        events: [{ type: "Normal", reason: "SuccessfulCreate", message: `Created virtual machine pod virt-launcher-${v.name}-x7k2p`, count: 1, last: new Date().toISOString() }] };
+    },
+    "/api/vm/power": (url, init) => ({ ok: true, detail: `${JSON.parse(init.body).name} is ${{ start: "starting", stop: "stopping" }[JSON.parse(init.body).action] || "done"}` }),
+    "/api/vm/edit": { ok: true, detail: "saved; the new CPU and memory apply when it next starts" },
+    "/api/vm/delete": { ok: true, detail: "deleted; its disks are kept" },
     "/api/sources": [{ name: "unraid", host: "192.0.2.10", user: "root", kind: "unraid", base_path: "/mnt/user/appdata", added: "2026-09-20 12:00" }],
     "/api/sources/containers": { containers: [{ name: "media-server", image: "example/media-server:latest", state: "running" }] },
     "/api/sources/browse": { entries: ["media-server", "home-automation"] },
@@ -960,7 +986,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.100", candidate_tag: "2.8.100", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.101", candidate_tag: "2.8.101", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]

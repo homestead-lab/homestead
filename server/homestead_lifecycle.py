@@ -840,11 +840,3 @@ def vm_migrate(ns, name, target=None):
     out = ksend("POST", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachineinstancemigrations", body)
     _bust("flow", "ov")
     return {"ok": True, "migration": out.get("metadata", {}).get("name", ""), "vm": name}
-
-
-def vm_power(ns, name, action):
-    if action not in ("start", "stop", "restart"):
-        raise ValueError("bad action")
-    ksend("PUT", f"/apis/subresources.kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}/{action}", {})
-    _bust("flow", "ov")
-    return {"ok": True, "vm": name, "action": action}

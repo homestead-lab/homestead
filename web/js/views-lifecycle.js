@@ -403,42 +403,7 @@ window.nodePower = async (node, action) => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
-/* ---------------- VMs ---------------- */
-async function viewVMs() {
-  if (platformLacks("kubevirt", "Virtual machines")) return;
-  const [vms, nodes] = await Promise.all([api("/api/vms"), api("/api/nodes").catch(() => [])]);
-  paint(`<div class="phead"><div><h2>Virtual machines</h2>
-      <p>${vms.length} VM${vms.length === 1 ? "" : "s"} · KubeVirt on Longhorn</p></div>
-      <button class="btn pri" data-need="operator" onclick="vmNew()">＋ New VM</button></div>
-    ${vms.length ? `<div class="cardlist">${vms.map(v => `<div class="card flat wcard">
-      <div class="between">
-        <div class="row" style="gap:10px"><div class="av n3">${esc(v.name.slice(0, 2).toUpperCase())}</div>
-          <div><div style="font-weight:680">${esc(v.name)}</div><div class="dim xs">${esc(v.ns)} · ${esc(v.node || "unscheduled")}</div></div></div>
-        <span class="pill ${v.phase === "Running" ? "ok" : v.phase === "Stopped" ? "low" : "med"}">${esc(v.phase)}</span>
-      </div>
-      <div class="wmeta">
-        <div><div class="dim xs">CPU</div><div class="mono small">${v.cores} cores</div></div>
-        <div><div class="dim xs">RAM</div><div class="mono small">${esc(v.memory)}</div></div>
-        <div><div class="dim xs">IP</div><div class="mono small">${esc(v.ip || "—")}</div></div>
-        <div><div class="dim xs">MIGRATE</div><div>${v.migratable ? '<span class="tag ok">live</span>' : '<span class="dim">no</span>'}</div></div>
-      </div>
-      <div class="row wacts">
-        ${v.running ? `<button class="btn sm" data-need="operator" title="The VM's screen, or its serial port" onclick="vmConsole('${esc(v.ns)}','${esc(v.name)}')">${icon("console")}Console</button>
-          <button class="btn sm" onclick="vmPower('${esc(v.ns)}','${esc(v.name)}','stop')">Stop</button>
-          <button class="btn sm" onclick="vmPower('${esc(v.ns)}','${esc(v.name)}','restart')">Restart</button>`
-          : `<button class="btn sm" onclick="vmPower('${esc(v.ns)}','${esc(v.name)}','start')">Start</button>`}
-        ${v.migratable ? `<button class="btn sm" onclick="vmMove('${esc(v.ns)}','${esc(v.name)}')">Move host</button>` : ""}
-      </div></div>`).join("")}</div>`
-    : `<div class="empty">No virtual machines yet — create one to get started.</div>`}`);
-  STATE.data.nodes = nodes;
-}
-window.vmPower = async (ns, name, action) => {
-  try {
-    await api("/api/vm/power", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ns, name, action }) });
-    toast(`${name} ${action}`, "ok"); setTimeout(() => refresh(true), 1500);
-  } catch (e) { toast(e.message, "bad"); }
-};
+/* ---------------- VMs: the page is views-vms.js; moving and creating stay here ---------------- */
 window.vmMove = (ns, name) => {
   const nodes = STATE.data.nodes || [];
   modal("Migrate · " + name, `

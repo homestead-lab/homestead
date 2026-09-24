@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.100")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.101")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2628,6 +2628,7 @@ import homestead_mqtt as MQTT
 import homestead_history as HISTORY
 import homestead_platform as PLATFORM
 import homestead_resources as RESOURCES
+import homestead_vms as VMS
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
@@ -2688,6 +2689,7 @@ def ktable(path, timeout=20):
 
 
 RESOURCES.bind(kget, ksend, ktable)
+VMS.bind(kget, ksend, RESOURCES.events_for)
 OPS.RESOLVERS["helm"] = HELM.job_status
 NSMOD.bind(kget, ksend, DEFAULT_NS, _own_namespace())
 ALERTS.bind(DATA_DIR)
@@ -3323,7 +3325,7 @@ def needed_role(path, method):
         return "admin"
     # A chart can make anything anywhere in the cluster, and so can raw YAML;
     # a secret's values are for admins only.
-    if path in ("/api/helm/install", "/api/helm/upgrade", "/api/helm/uninstall", "/api/resources/save",
+    if path in ("/api/helm/install", "/api/helm/upgrade", "/api/helm/uninstall", "/api/resources/save", "/api/vm/delete",
                 "/api/resources/delete", "/api/resources/create", "/api/resources/reveal"):
         return "admin"
     if path in ("/api/console", "/api/vm/console"):
@@ -3716,7 +3718,9 @@ class H(BaseHTTPRequestHandler):
                 r = LC.quorum_report(); r["power_enabled"] = LC.NODE_POWER_ENABLED
                 return self._send(200, r)
             if p == "/api/vms":
-                return self._send(200, cached("vms", 5, IMP.list_vms))
+                return self._send(200, cached("vms", 5, VMS.list_vms))
+            if p == "/api/vm":
+                return self._send(200, VMS.detail((q.get("ns") or [""])[0], (q.get("name") or [""])[0]))
             if p == "/api/vmimages":
                 return self._send(200, cached("vmimg", 30, IMP.list_vm_images))
             if p == "/api/vm-disks":
@@ -4305,7 +4309,14 @@ class H(BaseHTTPRequestHandler):
                         "/vms", {"namespace": ns, "name": result["migration"]})
                 return self._send(200, result)
             if p == "/api/vm/power":
-                return self._send(200, LC.vm_power(b.get("ns", DEFAULT_NS), b["name"], b["action"]))
+                _cache.pop("vms", None)
+                return self._send(200, VMS.power(b.get("ns", DEFAULT_NS), b.get("name", ""), b.get("action", "")))
+            if p == "/api/vm/edit":
+                _cache.pop("vms", None)
+                return self._send(200, VMS.edit(b.get("ns", DEFAULT_NS), b.get("name", ""), b))
+            if p == "/api/vm/delete":
+                _cache.pop("vms", None)
+                return self._send(200, VMS.delete(b.get("ns", DEFAULT_NS), b.get("name", ""), bool(b.get("disks"))))
             if p == "/api/vm/create":
                 return self._send(200, IMP.create_vm(b))
             if p == "/api/vm-disks/import":
@@ -4549,7 +4560,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.100 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.101 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()
