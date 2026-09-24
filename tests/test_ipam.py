@@ -210,6 +210,27 @@ class IpamTests(unittest.TestCase):
         self.assertFalse(view["unifi"]["configured"])
         self.assertEqual([], view["unifi_networks"])
 
+    def test_csv_import_adds_updates_and_keeps_what_it_is_not_told(self):
+        IPAM.save_record({"ip": "192.0.2.10", "name": "Tower", "note": "keep me"})
+        result = IPAM.import_csv("\ufeffAddress,Name,MAC,Kind,Category,Tags,Note,unifi_name\n"
+                                 "192.0.2.10,,AA-BB-CC-DD-EE-10,static,nas,storage backup,,ignored\n"
+                                 "192.0.2.11,Printer,,,printer,,,\n"
+                                 ",,,,,,,\n")
+        self.assertEqual((1, 1), (result["created"], result["updated"]))
+        tower = self.row("192.0.2.10")
+        self.assertEqual(("Tower", "keep me", "aa:bb:cc:dd:ee:10", "nas", ["backup", "storage"]),
+                         (tower["name"], tower["note"], tower["mac"], tower["category"], tower["tags"]))
+        self.assertEqual("printer", self.row("192.0.2.11")["category"])
+
+    def test_a_bad_csv_changes_nothing_and_names_the_rows(self):
+        before = self.store.version
+        with self.assertRaisesRegex(ValueError, "row 3: .*MAC.*row 4: .*kind"):
+            IPAM.import_csv("address,name,mac,kind\n192.0.2.20,ok,,\n192.0.2.21,x,zz,\n192.0.2.22,y,,weird\n")
+        self.assertEqual(before, self.store.version)
+        for bad in ("", "name,mac\nx,y\n", "address\n"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                IPAM.import_csv(bad)
+
     def test_a_refused_key_says_so(self):
         IPAM.save_unifi({"url": "https://192.0.2.1", "api_key": "bad"})
 

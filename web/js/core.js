@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HOMESTEAD_VERSION = "2.8.96";
+const HOMESTEAD_VERSION = "2.8.99";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -277,7 +277,7 @@ function layoutSwitch(page, redraw) {
   const option = (value, label, iconName) => `<button class="${layout === value ? "on" : ""}" title="${label}"
     aria-label="Show as ${label.toLowerCase()}" aria-pressed="${layout === value}"
     onclick="setViewLayout('${page}','${redraw}','${value}')">${icon(iconName)}</button>`;
-  return `<div class="seg" role="group" aria-label="Layout">${option("cards", "Cards", "dash")}${option("rows", "Rows", "list")}</div>`;
+  return `<div class="seg iconseg" role="group" aria-label="Layout">${option("cards", "Cards", "dash")}${option("rows", "Rows", "list")}</div>`;
 }
 window.setViewLayout = (page, redraw, layout) => {
   try { localStorage.setItem(`homestead.layout.${page}`, layout); } catch (e) { /* this visit only */ }

@@ -188,7 +188,7 @@ def _clean_record(row, existing=None):
     if "kind" in row:
         kind = str(row.get("kind") or "")
         if kind and kind not in KINDS:
-            raise ValueError(f"an address is one of: {', '.join(KINDS)}")
+            raise ValueError(f"the kind is one of: {', '.join(KINDS)}")
         record["kind"] = kind
     if "category" in row:
         category = str(row.get("category") or "")
@@ -661,3 +661,59 @@ def _record_sync(ok, message):
         update(change)
     except Exception:
         pass
+
+
+# ------------------------------------------------------------------ CSV import
+CSV_COLUMNS = ("address", "name", "mac", "kind", "category", "owner", "tags", "note")
+
+
+def import_csv(text):
+    """Documents addresses from a spreadsheet. Each row names an address and
+    any of the columns above; a blank cell leaves what is recorded alone, and
+    columns Homestead does not know are skipped, so an export can be edited and
+    imported back. Every row is checked before anything is written."""
+    import csv
+    import io
+    rows = list(csv.DictReader(io.StringIO(str(text or "").lstrip("\ufeff"))))
+    if not rows:
+        raise ValueError("the file has no rows under its header")
+    header = {str(h or "").strip().lower() for h in rows[0].keys()}
+    if "address" not in header and "ip" not in header:
+        raise ValueError("the first row must name the columns, with one called address")
+    if len(rows) > 4096:
+        raise ValueError("import at most 4096 addresses at a time")
+    parsed, errors = [], []
+    for number, raw in enumerate(rows, start=2):
+        cells = {str(k or "").strip().lower(): str(v or "").strip() for k, v in raw.items()}
+        ip = cells.get("address") or cells.get("ip")
+        if not ip:
+            continue
+        change = {key: cells[key] for key in ("name", "mac", "kind", "category", "owner", "note") if cells.get(key)}
+        if cells.get("tags"):
+            change["tags"] = [t for t in re.split(r"[\s,;]+", cells["tags"]) if t]
+        try:
+            ip = str(_ip(ip))
+            _clean_record(change)
+        except ValueError as error:
+            errors.append(f"row {number}: {error}")
+            continue
+        parsed.append((ip, change))
+    if errors:
+        more = f" (and {len(errors) - 5} more)" if len(errors) > 5 else ""
+        raise ValueError("; ".join(errors[:5]) + more)
+    if not parsed:
+        raise ValueError("no row names an address")
+
+    def change(data):
+        created = updated = 0
+        for ip, row in parsed:
+            existing = data["records"].get(ip)
+            record = _clean_record(row, existing)
+            sources = record.setdefault("sources", [])
+            if "manual" not in sources:
+                sources.append("manual")
+            data["records"][ip] = record
+            created, updated = (created + 1, updated) if existing is None else (created, updated + 1)
+        return {"ok": True, "created": created, "updated": updated,
+                "detail": f"{created} address{'es' if created != 1 else ''} added, {updated} updated"}
+    return update(change)

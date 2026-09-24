@@ -269,6 +269,10 @@ h1{margin:2px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em}
 .btn.danger:hover{border-color:rgba(255,77,79,.45);color:var(--crit);background:rgba(255,77,79,.09)}
 .btn.ghost{background:transparent}
 
+/* hidden means hidden, whatever display a class gives the element: a folded
+   group's rows are a table body that phones show as a block, for one. */
+[hidden]{display:none!important}
+
 /* segmented toggle */
 .seg{display:inline-flex;gap:3px;padding:4px;border-radius:999px;background:rgba(255,255,255,.05);
   border:1px solid var(--line)}
@@ -1116,12 +1120,11 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
 }
 /* Node cards and the tables beside them: names and lists shorten, numbers never break. */
 .nowrap{white-space:nowrap}
-/* A two-way switch, such as cards or rows. */
-.seg{display:inline-flex;border:1px solid var(--line2);border-radius:10px;overflow:hidden;background:rgba(255,255,255,.04);flex:0 0 auto}
-.seg button{border:0;background:none;color:var(--mut);padding:7px 10px;cursor:pointer;display:grid;place-items:center}
-.seg button+button{border-left:1px solid var(--line)}
-.seg button.on{background:rgba(255,255,255,.13);color:var(--tx)}
-.seg button:hover:not(.on){color:var(--tx);background:rgba(255,255,255,.07)}
+/* Every segmented control is the pill one above; a two-way icon switch, such
+   as cards or rows, only needs tighter buttons. */
+.seg{flex:0 0 auto}
+.seg.iconseg{padding:3px}
+.seg.iconseg button{padding:6px 10px;display:grid;place-items:center}
 .seg .btnicon{width:15px;height:15px}
 .btn.iconic{padding:5px 8px;gap:0;min-width:30px}
 /* Containers as rows: every workload on one line, its actions as icons. */
@@ -1581,3 +1584,27 @@ tr.clickable{cursor:pointer}
   .res-kind-list,.res-filter{display:none}
   .res-kind-select{display:block}
 }
+
+/* IP rows: two short lines, one-line badges, notes that open on hover. */
+.ipam-table td{vertical-align:middle;padding-top:6px;padding-bottom:6px}
+.ipam-name{max-width:280px}
+.ipam-line{display:flex;align-items:center;gap:6px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+div.ipam-line.dim{display:block}
+.ipam-line>b,.ipam-line>.ipam-unifi-name{overflow:hidden;text-overflow:ellipsis}
+.ipam-notes{max-width:300px}
+.ipam-note{overflow:hidden;text-overflow:ellipsis;min-width:0;font-size:12px}
+.ipam-notes .tag{flex:0 0 auto}
+.ipam-flag{margin-right:0;cursor:help}
+.ipam-gap td{padding:0 12px;background:rgba(255,255,255,.015)}
+.ipam-gap-head{display:flex;align-items:center;gap:10px;width:100%;padding:5px 2px;background:none;border:0;color:var(--mut);font:inherit;font-size:12px;text-align:left;cursor:pointer}
+.ipam-gap-head:hover{color:var(--tx)}
+.ipam-gap-head[aria-expanded="false"] .wgroup-chevron{transform:none}
+.ipam-free td{padding-top:3px;padding-bottom:3px;background:rgba(255,255,255,.015)}
+@media(max-width:560px){
+  .ipam-gap tr,.ipam-gap td{display:block}
+  .ipam-gap td::before{display:none}
+  .ipam-name,.ipam-notes{max-width:none}
+}
+.ipam-doc{cursor:pointer;font-size:12px;color:var(--mut)}
+.ipam-doc:hover{color:var(--tx);text-decoration:underline}
+.ipam-free td{padding-top:2px;padding-bottom:2px;font-size:12.5px}

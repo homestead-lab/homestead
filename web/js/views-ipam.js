@@ -86,7 +86,8 @@ function renderIpam() {
   const data = STATE.data.ipam || { subnets: [], suggested: [], unifi: {} };
   const head = `<div class="phead"><div><h2>Networking</h2><p>Every address on your subnets: documented, used by the cluster${(data.unifi || {}).configured ? ", answering, or known to UniFi" : " or answering a scan"}</p></div>
     <div class="row"><button class="btn" data-need="operator" onclick="ipamSubnets()">Subnets</button>
-      ${data.subnets.length ? `<button class="btn" onclick="ipamExport()">Export CSV</button>
+      ${data.subnets.length ? `<button class="btn" data-need="operator" onclick="ipamImport()">Import CSV</button>
+      <button class="btn" onclick="ipamExport()">Export CSV</button>
       <button class="btn pri" data-need="operator" onclick="ipamEdit()">＋ Address</button>` : ""}</div></div>
     ${networkTabs("ip")}`;
   if (!data.subnets.length) {
@@ -131,21 +132,83 @@ function renderIpam() {
         <button class="btn sm danger" onclick="ipamBulk(true)" title="Remove what is documented about these addresses">Forget</button></div></div>
     <div class="card flat pad0"><div class="tblwrap"><table class="tbl dense stack ipam-table" data-sort="ipam"><thead><tr>
       <th data-nosort><input type="checkbox" aria-label="Select every address shown" onchange="ipamSelectAll(this.checked)"></th>
-      <th>Address</th><th>Name</th><th>MAC</th><th>Kind</th><th data-nosort>Seen</th><th data-nosort>Notes</th></tr></thead><tbody>
-      ${rows.map(row => `<tr class="${row.flags.some(f => f.level === "warn") ? "ipam-warn" : ""}">
-        <td>${row.cluster ? "" : `<input type="checkbox" class="ipam-pick" value="${esc(row.ip)}" onchange="ipamPicked()">`}</td>
-        <td class="mono" data-sort="${row.ip.split(".").reduce((n, o) => n * 256 + +o, 0)}"><a style="cursor:pointer" onclick="ipamEdit('${esc(row.ip)}')">${esc(row.ip)}</a>${row.in_dhcp ? ' <span class="dim xs" data-tip="Inside the DHCP range">dhcp</span>' : ""}</td>
-        <td data-label="Name">${ipamCategoryIcon(row.category)}${row.name ? `<b>${esc(row.name)}</b>` : row.unifi?.name ? `<span class="ipam-unifi-name" data-tip="UniFi's name; give it your own to replace it here">${esc(row.unifi.name)}</span>` : ""}
-          ${row.unifi && (row.unifi.name || row.unifi.hostname) && row.name ? `<div class="dim xs">UniFi: ${esc([row.unifi.name !== row.name ? row.unifi.name : "", row.unifi.hostname].filter(Boolean).join(" · ") || "same name")}</div>`
-            : row.unifi?.hostname ? `<div class="dim xs mono">${esc(row.unifi.hostname)}</div>` : ""}${row.scan?.rdns && row.scan.rdns !== row.name ? `<div class="dim xs mono">${esc(row.scan.rdns)}</div>` : ""}${row.cluster === "vip" ? `<div class="dim xs">${esc((row.services || []).join(", "))}</div>` : ""}</td>
-        <td data-label="MAC" class="mono xs">${esc(row.mac || "")}</td>
-        <td data-label="Kind">${ipamKind(row)}</td>
-        <td data-label="Seen">${ipamSeen(row)}</td>
-        <td data-label="Notes" class="small">${row.flags.map(f => `<span class="ipam-flag ${f.level}" data-tip="${esc(f.text)}">${f.level === "warn" ? "⚠" : "ℹ"} ${esc(f.text.split(":")[0])}</span>`).join("")}
-          ${esc(row.note || "")}${row.owner ? ` <span class="dim xs">· ${esc(row.owner)}</span>` : ""} ${(row.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join("")}</td></tr>`).join("")
-        || `<tr><td colspan="7" class="empty">Nothing here yet. Scan the subnet${u.configured ? ", sync UniFi," : ""} or add an address.</td></tr>`}</tbody></table></div></div>`);
+      <th>Address</th><th>Name</th><th>MAC</th><th>Kind</th><th data-nosort>Seen</th><th data-nosort>Notes</th></tr></thead>
+      ${rows.length ? ipamBodies(rows, subnet, !STATE.ipamFilter && !STATE.q)
+        : `<tbody><tr><td colspan="7" class="empty">Nothing here yet. Scan the subnet${u.configured ? ", sync UniFi," : ""} or add an address.</td></tr></tbody>`}
+      </table></div></div>`);
   if (scanning) setTimeout(() => { if (STATE.view === "network" && networkTab() === "ip") viewIpam(); }, 3000);
 }
+
+/* ---------------- the table ---------------- */
+const ipNum = ip => ip.split(".").reduce((n, o) => n * 256 + +o, 0);
+const ipStr = n => [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join(".");
+
+/* A row in two short lines: the name, then one line of what else it is
+   called - UniFi's hostname, reverse DNS, or the Services on a VIP. */
+function ipamRow(row) {
+  const second = row.cluster === "vip" ? (row.services || []).join(", ")
+    : [row.name && row.unifi?.name && row.unifi.name !== row.name ? row.unifi.name : "", row.unifi?.hostname, row.scan?.rdns && row.scan.rdns !== row.name ? row.scan.rdns : ""]
+      .filter(Boolean).join(" · ");
+  const name = row.name ? `<b>${esc(row.name)}</b>`
+    : row.unifi?.name ? `<span class="ipam-unifi-name" data-tip="UniFi's name; give it your own to replace it here">${esc(row.unifi.name)}</span>` : "";
+  const note = [row.note, row.owner ? `owner: ${row.owner}` : ""].filter(Boolean).join(" · ");
+  return `<tr class="${row.flags.some(f => f.level === "warn") ? "ipam-warn" : ""}">
+    <td>${row.cluster ? "" : `<input type="checkbox" class="ipam-pick" value="${esc(row.ip)}" onchange="ipamPicked()">`}</td>
+    <td class="mono nowrap" data-sort="${ipNum(row.ip)}"><a style="cursor:pointer" onclick="ipamEdit('${esc(row.ip)}')">${esc(row.ip)}</a>${row.in_dhcp ? ' <span class="dim xs" data-tip="Inside the DHCP range">dhcp</span>' : ""}</td>
+    <td data-label="Name" class="ipam-name"><div class="ipam-line">${ipamCategoryIcon(row.category)}${name}</div>
+      ${second ? `<div class="ipam-line dim xs mono" title="${esc(second)}">${esc(second)}</div>` : ""}</td>
+    <td data-label="MAC" class="mono xs nowrap">${esc(row.mac || "")}</td>
+    <td data-label="Kind" class="nowrap">${ipamKind(row)}</td>
+    <td data-label="Seen" class="nowrap">${ipamSeen(row)}</td>
+    <td data-label="Notes" class="ipam-notes"><div class="ipam-line">${row.flags.map(f => `<span class="ipam-flag ${f.level}" data-tip="${esc(f.text)}">${f.level === "warn" ? "⚠" : "ℹ"}</span>`).join("")}
+      ${(row.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join("")}${note ? `<span class="ipam-note" data-tip="${esc(note)}">${esc(note)}</span>` : ""}</div></td></tr>`;
+}
+
+/* Rows in address order, with the free runs between them as dividers that
+   open to list each free address. Only in address order and unfiltered:
+   anywhere else a gap means nothing. */
+function ipamBodies(rows, subnet, gaps) {
+  const sort = sortState("ipam");
+  if (!gaps || (sort && !(sort.col === 1 && sort.dir > 0))) return `<tbody>${rows.map(ipamRow).join("")}</tbody>`;
+  const [base, bits] = subnet.cidr.split("/");
+  // >>> 0: JavaScript's & is signed, and 192.x is past 2^31.
+  const first = ((ipNum(base) & (~0 << (32 - +bits))) >>> 0) + 1, last = first + 2 ** (32 - +bits) - 3;
+  const sorted = [...rows].sort((a, b) => ipNum(a.ip) - ipNum(b.ip));
+  const out = [];
+  let cursor = first, chunk = [];
+  const flush = () => { if (chunk.length) out.push(`<tbody>${chunk.map(ipamRow).join("")}</tbody>`); chunk = []; };
+  sorted.forEach(row => {
+    const n = ipNum(row.ip);
+    if (n > cursor) { flush(); out.push(ipamGap(cursor, n - 1, subnet)); }
+    chunk.push(row);
+    cursor = Math.max(cursor, n + 1);
+  });
+  flush();
+  if (cursor <= last) out.push(ipamGap(cursor, last, subnet));
+  return out.join("");
+}
+
+function ipamGap(from, to, subnet) {
+  const key = `${subnet.id}:${from}`, open = (STATE.ipamOpenGaps || new Set()).has(key);
+  const count = to - from + 1;
+  const d1 = subnet.dhcp_start ? ipNum(subnet.dhcp_start) : 0, d2 = subnet.dhcp_end ? ipNum(subnet.dhcp_end) : -1;
+  const inDhcp = Math.max(0, Math.min(to, d2) - Math.max(from, d1) + 1);
+  const range = count === 1 ? ipStr(from) : `${ipStr(from)} – ${ipStr(to)}`;
+  const addresses = open ? Array.from({ length: count }, (_, i) => from + i).map(n => {
+    const ip = ipStr(n), dhcp = n >= d1 && n <= d2, gw = subnet.gateway === ip;
+    return `<tr class="ipam-free"><td></td><td class="mono nowrap">${ip}</td>
+      <td colspan="4" class="dim xs">${gw ? "the gateway" : dhcp ? "free · inside the DHCP range, so the DHCP server may lease it" : "free"}</td>
+      <td class="nowrap">${gw ? "" : `<a class="ipam-doc" data-need="operator" onclick="ipamEdit('${ip}')">＋ Document</a>`}</td></tr>`;
+  }).join("") : "";
+  return `<tbody class="grouphead ipam-gap"><tr><td colspan="7"><button type="button" class="ipam-gap-head" aria-expanded="${open}" onclick="ipamToggleGap('${key}')">
+      <span class="wgroup-chevron">›</span><span class="mono">${esc(range)}</span>
+      <span class="dim xs">${count} free${inDhcp ? ` · ${inDhcp === count ? "all" : inDhcp} in the DHCP range` : ""}</span></button></td></tr>${addresses}</tbody>`;
+}
+window.ipamToggleGap = key => {
+  STATE.ipamOpenGaps = STATE.ipamOpenGaps || new Set();
+  STATE.ipamOpenGaps.has(key) ? STATE.ipamOpenGaps.delete(key) : STATE.ipamOpenGaps.add(key);
+  renderIpam();
+};
 
 window.ipamCopy = ip => { navigator.clipboard?.writeText(ip); toast(`${ip} copied`, "ok"); };
 window.ipamPicked = () => {
@@ -303,4 +366,36 @@ window.ipamExport = () => {
   link.download = `${subnet.cidr.replace(/[./]/g, "-")}-addresses.csv`;
   link.click();
   setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+};
+
+/* ---------------- import ---------------- */
+const IPAM_TEMPLATE = [
+  "address,name,mac,kind,category,owner,tags,note",
+  "192.0.2.10,Tower,aa:bb:cc:dd:ee:10,static,nas,,storage backup,Unraid - admin on port 80",
+  "192.0.2.2,Core switch,aa:bb:cc:dd:ee:02,infrastructure,switch,,network,Rack top",
+].join("\n") + "\n";
+function ipamDownload(name, text) {
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
+  link.download = name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+window.ipamTemplate = () => ipamDownload("homestead-addresses-template.csv", IPAM_TEMPLATE);
+window.ipamImport = () => {
+  modal("Import addresses", `<p class="muted small">A CSV with a header row. <span class="mono">address</span> is required; any of
+      <span class="mono">name, mac, kind, category, owner, tags, note</span> may follow. A blank cell leaves what is recorded; other columns are skipped, so an export can be edited and imported back.</p>
+    <p class="dim xs">kind: ${Object.keys(IPAM_KIND_LABELS).join(", ")} · category: ${Object.keys(IPAM_CATEGORIES).join(", ")} · tags separated by spaces</p>
+    <div class="row" style="margin:12px 0"><button class="btn" onclick="ipamTemplate()">Download template</button>
+      <label class="btn pri" style="cursor:pointer">Choose CSV…<input type="file" accept=".csv,text/csv" hidden onchange="ipamImportFile(this.files[0])"></label></div>
+    <div id="ipamImportResult"></div>`);
+};
+window.ipamImportFile = async file => {
+  if (!file) return;
+  const host = $("#ipamImportResult");
+  host.innerHTML = '<div class="dim small"><span class="spin2"></span> importing</div>';
+  try {
+    const r = await ipamPost("/api/ipam/import", { csv: await file.text() });
+    toast(r.detail, "ok"); closeModal(); viewIpam();
+  } catch (e) { host.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; }
 };

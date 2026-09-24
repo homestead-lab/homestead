@@ -317,7 +317,7 @@
       detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.96", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.99", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
@@ -404,20 +404,20 @@
       user: "admin", added: "2026-09-22 17:02" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "garage") return { name, version: "2.8.96", protocol: 1, local_version: "2.8.96",
+      if (name === "garage") return { name, version: "2.8.99", protocol: 1, local_version: "2.8.99",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "garage runs 2.8.96 and this one 2.8.96. Moves work between them; garage is the newer of the two." };
+        message: "garage runs 2.8.99 and this one 2.8.99. Moves work between them; garage is the newer of the two." };
       return name === "attic"
-        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.96", local_protocol: 1,
+        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.99", local_protocol: 1,
             state: "behind", compatible: false,
-            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.96). Update attic first." }
-        : { name, version: "2.8.96", protocol: 1, local_version: "2.8.96", local_protocol: 1,
-            state: "same", compatible: true, message: "Both run Homestead 2.8.96." };
+            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.99). Update attic first." }
+        : { name, version: "2.8.99", protocol: 1, local_version: "2.8.99", local_protocol: 1,
+            state: "same", compatible: true, message: "Both run Homestead 2.8.99." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "shed", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.96", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.99", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -796,7 +796,7 @@
           unifi: { type: "device", model: "USW-Pro-24", name: "USW Pro 24", hostname: "" } }),
         r("192.0.2.3", { kind: "infrastructure", category: "access-point", mac: "74:ac:b9:00:00:03",
           unifi: { type: "device", model: "U6-Lite", name: "Hallway AP", hostname: "u6-lite-hall" } }),
-        r("192.0.2.10", { kind: "static", category: "nas", name: "Tower", mac: "d0:50:99:00:00:10", tags: ["storage"], note: "Unraid",
+        r("192.0.2.10", { kind: "static", category: "nas", name: "Tower", mac: "d0:50:99:00:00:10", tags: ["storage"], note: "Unraid server in the rack - web UI on port 80, parity check runs Sunday nights, UPS on the second shelf",
           scan: { up: true, ports: [22, 80, 445], rdns: "tower.lan" } }),
         r("192.0.2.21", { cluster: "node", scan: { up: true, ports: [22, 443] } }),
         r("192.0.2.22", { cluster: "node", scan: { up: true, ports: [22, 443] } }),
@@ -904,6 +904,7 @@
     "/api/resources/object": url => ({ secret_hidden: false, object: { metadata: { uid: "u1" } },
       yaml: `apiVersion: v1\nkind: Pod\nmetadata:\n  name: ${url.searchParams.get("name")}\n  namespace: lab\n  labels:\n    app: frigate\n  resourceVersion: "48121"\nspec:\n  containers:\n  - name: frigate\n    image: ghcr.io/blakeblackshear/frigate:stable\n    ports:\n    - containerPort: 5000\nstatus:\n  phase: Running\n` }),
     "/api/resources/events": [{ type: "Normal", reason: "Pulled", message: "Container image already present on machine", count: 1, last: new Date().toISOString() }],
+    "/api/ipam/import": { ok: true, created: 2, updated: 1, detail: "2 addresses added, 1 updated" },
     "/api/ipam/record": { ok: true },
     "/api/ipam/bulk": { ok: true, detail: "updated" },
     "/api/ipam/scan": { ok: true, detail: "scanning 254 addresses in 192.0.2.0/24" },
@@ -956,7 +957,7 @@
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.96", candidate_tag: "2.8.96", remote_digest: "sha256:ghi", available: true }] }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.99", candidate_tag: "2.8.99", remote_digest: "sha256:ghi", available: true }] }] },
     "/api/flow": {
       nodes: nodes.map((n, i) => ({ id: `n:${n.name}`, name: n.name, copies: i === 0
         ? [{ vid: "v:home", vol: "home-assistant", running: true }, { vid: "v:paperless", vol: "paperless-data", running: true }]
