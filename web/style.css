@@ -1653,3 +1653,10 @@ div.ipam-line.dim{display:block}
 .clsteps{display:grid;gap:6px;margin-top:10px}.clstep{display:flex;gap:8px;font-size:11.5px;align-items:flex-start}
 .clstep>span{width:16px;flex:none;text-align:center;font-weight:700}.clstep.done>span{color:var(--ok)}.clstep.todo>span{color:var(--med)}
 .clstep .btn{margin-top:5px}.clguide{text-align:left;max-width:520px;margin:12px auto 0;display:grid;gap:6px;font-size:12px}
+.rc-uses{display:grid;gap:6px}.rc-uses>div{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}.rc-uses .small{color:var(--mut);margin-left:auto}
+.rc-space{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.rc-space>div{display:grid;gap:3px;padding:10px;border:1px solid var(--line);border-radius:11px}
+.rc-room{margin-top:10px;display:grid;gap:6px}
+.rc-steps{display:grid;gap:10px}.rc-step{display:grid;grid-template-columns:22px 1fr;gap:4px 8px;align-items:center;color:var(--dim)}
+.rc-step.done{color:var(--tx)}.rc-step.done>span{color:var(--ok)}.rc-step.active{color:var(--tx);font-weight:650}
+.rc-copy{grid-column:2;display:grid;gap:4px;font-weight:400}
+@media(max-width:650px){.rc-space{grid-template-columns:1fr}}

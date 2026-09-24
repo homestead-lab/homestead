@@ -359,7 +359,7 @@
       detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.107", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.108", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
@@ -446,15 +446,15 @@
       user: "admin", added: "2026-09-22 17:02" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "garage") return { name, version: "2.8.107", protocol: 1, local_version: "2.8.107",
+      if (name === "garage") return { name, version: "2.8.108", protocol: 1, local_version: "2.8.108",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "garage runs 2.8.107 and this one 2.8.107. Moves work between them; garage is the newer of the two." };
+        message: "garage runs 2.8.108 and this one 2.8.108. Moves work between them; garage is the newer of the two." };
       return name === "attic"
-        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.107", local_protocol: 1,
+        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.108", local_protocol: 1,
             state: "behind", compatible: false,
-            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.107). Update attic first." }
-        : { name, version: "2.8.107", protocol: 1, local_version: "2.8.107", local_protocol: 1,
-            state: "same", compatible: true, message: "Both run Homestead 2.8.107." };
+            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.108). Update attic first." }
+        : { name, version: "2.8.108", protocol: 1, local_version: "2.8.108", local_protocol: 1,
+            state: "same", compatible: true, message: "Both run Homestead 2.8.108." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     // shed is ready to move from; garage has no backup storage yet.
@@ -465,7 +465,7 @@
     "/api/move/clusters/storage": { ok: true, detail: "backup storage is starting on garage at http://192.0.2.244:9000" },
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "shed", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.107", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.108", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -777,7 +777,23 @@ ssh_pwauth: true
       { id: "op3", kind: "image-update", title: "Update home-assistant", status: "running", progress: 62,
         message: "rolling out", started_at: new Date(Date.now() - 6e4).toISOString(),
         href: "/containers?q=home-assistant", resource: { kind: "Deployment", name: "home-assistant", namespace: "lab" } },
+      { id: "op4", kind: "reclass", title: "Move paperless-data to longhorn-r3", status: "running", progress: 41,
+        message: "Copying 52% at 96.4MB/s", started_at: new Date(Date.now() - 3e5).toISOString(),
+        href: "/volumes?q=paperless-data", resource: { kind: "PersistentVolumeClaim", name: "paperless-data", namespace: "lab" },
+        copy: { percent: 52, speed: "96.4MB/s", verifying: false },
+        steps: [["stop", "Stop what uses it", "done"], ["create", "Make the new volume", "done"], ["copy", "Copy the data", "active"],
+          ["verify", "Check the copy", "todo"], ["swap", "Swap the new volume in", "todo"], ["start", "Start everything again", "todo"]]
+          .map(([id, label, state]) => ({ id, label, state })) },
     ]),
+    "/api/volumes/reclass/plan": { ok: true, blockers: [], namespace: "lab", claim: "frigate-config",
+      warnings: [], from_class: "longhorn-r2", to_class: "longhorn-r3", volume_mode: "Filesystem", access_modes: ["ReadWriteOnce"],
+      consumers: [{ kind: "Deployment", name: "frigate", replicas: 1, running: true }, { kind: "Deployment", name: "samba", replicas: 1, running: true }],
+      space: { size_gb: 20, used_gb: 6.4, replicas: 3, allocated_gb: 60, written_gb: 19.2, longhorn: true, room_gb: 36.8 },
+      minutes: 3, downtime: true },
+    "/api/volumes/reclass/start": { ok: true, operation: { id: "op4" } },
+    "/api/volumes/old-copies": [{ pv: "pvc-7f3a9c1e-2b44-4d1b-9a55-0c1f2e3d4a5b", was: "lab/mosquitto-appdata",
+      storage_class: "longhorn-r2", size: "10Gi", since: "2026-09-24T12:00:00Z" }],
+    "/api/volumes/old-copies/remove": { ok: true, detail: "removing the old copy" },
     "/api/operations/dismiss": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       const before = (window.__demoOps || []).length;
@@ -1056,7 +1072,7 @@ ssh_pwauth: true
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.107", candidate_tag: "2.8.107", remote_digest: "sha256:ghi", available: true }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.108", candidate_tag: "2.8.108", remote_digest: "sha256:ghi", available: true }] },
       { ns: "lab", name: "paperless", available: false, can_rollback: false,
         images: [{ container: "paperless", deployed: "registry.lan/paperless-ngx:2.11", candidate: "registry.lan/paperless-ngx:2.11", available: false, error: "registry authentication required" }] }] },
     "/api/flow": {

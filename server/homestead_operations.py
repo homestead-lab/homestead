@@ -394,8 +394,11 @@ def _refresh(item):
     resolver = RESOLVERS.get(item.get("kind"))
     if not resolver:
         return _finish(item, "failed", item.get("progress", 0), "Unknown operation type")
+    # A step can move on without its message changing - a new job's name, the
+    # next phase - and that has to be written too, or a restart repeats it.
+    before = json.dumps(item, sort_keys=True, default=str)
     try:
-        return _finish(item, *resolver(item))
+        return _finish(item, *resolver(item)) or json.dumps(item, sort_keys=True, default=str) != before
     except urllib.error.HTTPError as error:
         if error.code == 404:
             return _finish(item, "failed", item.get("progress", 0),

@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.107")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.108")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2760,6 +2760,8 @@ UPGRADES.bind(kget)
 PORTAL.bind(kget, ksend, DEFAULT_NS, lambda: cached("wl", 5, get_workloads),
             lambda source: ICONS.persist(source, DATA_DIR), lambda reference: ICONS.data_url(reference, DATA_DIR))
 OPS.RESOLVERS["restructure"] = RESTRUCTURE.resolve
+import homestead_reclass as RECLASS
+OPS.RESOLVERS["reclass"] = RECLASS.resolve
 OPS.RESOLVERS["protect-run"] = LH.run_status
 MOVE_SOURCE.bind(kget, ksend, LH, DEFAULT_NS)
 MOVE_ENGINE.bind(kget, ksend, LH, MOVE, NETWORK, OPS, DATA_DIR, DEFAULT_NS)
@@ -2804,6 +2806,7 @@ RESOURCES.bind(kget, ksend, ktable)
 VMS.bind(kget, ksend, RESOURCES.events_for)
 VMS.platform, VMS.images = PLATFORM.detect, IMP.list_vm_images
 LHCAP.bind(kget, ksend, v2_engine_status)
+RECLASS.bind(kget, ksend, raw_get, storage_classes, LHCAP.status, _own_namespace())
 DISKS.bind(kget, ksend, node_temps)
 OPS.RESOLVERS["helm"] = HELM.job_status
 NSMOD.bind(kget, ksend, DEFAULT_NS, _own_namespace())
@@ -3428,6 +3431,8 @@ ADMIN_ROUTES = {
     "/api/network/service/delete",
     "/api/images/cleanup",
     "/api/volumes/delete", "/api/volumes/chown",
+    # A class change stops workloads and swaps their volume underneath them.
+    "/api/volumes/reclass/start", "/api/volumes/old-copies/remove",
     "/api/files/list", "/api/files/read", "/api/files/write", "/api/files/close",
     "/api/node/smart/test",
     # Installing the probe stands a privileged container on every node.
@@ -3919,6 +3924,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, selectable_storage_classes(classes))
             if p == "/api/storage/classes":
                 return self._send(200, storage_class_inventory())
+            if p == "/api/volumes/old-copies":
+                return self._send(200, RECLASS.old_copies())
             if p == "/api/storage/v2":
                 return self._send(200, v2_engine_status())
             if p == "/api/disks":
@@ -4522,6 +4529,15 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, create_volume(b))
             if p == "/api/volumes/edit":
                 return self._send(200, edit_volume(b))
+            if p == "/api/volumes/reclass/plan":
+                return self._send(200, RECLASS.plan(b.get("namespace") or DEFAULT_NS, b.get("claim", ""), b.get("target", "")))
+            if p == "/api/volumes/reclass/start":
+                op = RECLASS.start(b.get("namespace") or DEFAULT_NS, b.get("claim", ""), b.get("target", ""), OPS)
+                _cache.pop("vol", None)
+                return self._send(200, {"ok": True, "operation": op})
+            if p == "/api/volumes/old-copies/remove":
+                _cache.pop("vol", None)
+                return self._send(200, RECLASS.remove_old_copy(b.get("pv", "")))
             if p == "/api/volumes/delete":
                 result = VOLUMES.delete(b)
                 result["operation"] = OPS.start(
@@ -4741,7 +4757,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.107 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.108 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

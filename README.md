@@ -72,10 +72,10 @@ scripts/render_chart.py       regenerate charts/homestead from the manifests
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.107`, the workflow publishes:
+For a release such as `v2.8.108`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.107
+ghcr.io/wjcloudy/homestead:2.8.108
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -86,8 +86,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.107
-git push origin v2.8.107
+git tag v2.8.108
+git push origin v2.8.108
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -651,7 +651,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.107/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.108/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -662,7 +662,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.107 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.108 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -936,6 +936,35 @@ notification like any other health problem.
 live preview of what each node's limit becomes, and switches Longhorn's V2
 (SPDK) data engine on or off - on Harvester through Harvester's own setting,
 which prepares each host - showing which nodes are ready for it.
+
+## Changing a volume's storage class
+
+Kubernetes cannot change a volume's class, so **Change storage class** on a
+volume copies it instead, and the copy takes the original's name - so the
+containers, VMs, shares and backups that use it by name need no change. The
+review first lists everything that uses it and what happens to each, the room
+the new copy needs (checked against Longhorn's per-node limit for the new
+class's number of copies), how much data moves and roughly how long it stops
+things for. Then, as a job you can watch or leave:
+
+1. everything using the volume stops - containers, stateful sets, cron jobs,
+   VMs - and how each was running is recorded;
+2. a volume the same size is made on the new class;
+3. the data is copied and checked: files with rsync, owners, permissions, ACLs,
+   extended attributes and links kept, then compared by checksum; a VM disk
+   block for block, skipping empty space, then compared byte for byte;
+4. both volumes are set to keep their data, the original is released, and a
+   volume of the original name is bound to the copy;
+5. everything starts again the way it was.
+
+Anything going wrong before the swap - the copy failing, not matching, or the
+new class never making a volume within ten minutes - puts everything back as
+it was: the new volume removed, the workloads started on the untouched
+original. The original is kept as an **old copy** on Volumes until you remove
+it, so both copies take room until then. A VM on a DataVolume is switched to
+the plain volume, as a moved VM is; a DaemonSet, a bare pod, or a volume a
+StatefulSet's template made cannot be stopped or recreated safely, and is
+said so up front. Homestead's own data moves from Settings › Redundancy.
 
 ## Storage classes
 

@@ -159,6 +159,7 @@ async function viewStorage() {
   const [v, st, classes, v2, cap] = await Promise.all([api("/api/volumes"), api("/api/storage").catch(() => null),
     api("/api/storage/classes").catch(() => []), api("/api/storage/v2").catch(() => null),
     api("/api/longhorn/capacity").catch(() => null)]);
+  const oldCopies = await api("/api/volumes/old-copies").catch(() => []);
   STATE.data.lhcap = cap || STATE.data.lhcap;
   STATE.data.storageClasses = classes;
   STATE.data.v2 = v2;
@@ -207,6 +208,7 @@ async function viewStorage() {
      <td data-label="Last used" class="small dim">${x.state === "attached" ? '<span class="tag ok">in use</span>' : esc(fmtAgo(x.last_used_secs))}</td>
      <td class="volactions"><div class="row">
        <button class="iconbtn" data-need="operator" data-tip="Resize or change replicas" onclick='volumeEdit(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("edit")}</button>
+       <button class="iconbtn" data-need="admin" data-tip="Change storage class: copy it to a volume on another class, under the same name" onclick='volumeReclass(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("move")}</button>
        <button class="iconbtn" data-need="admin" data-tip="Browse and edit the files on this volume" onclick="volumeFiles('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}',${x.state === "attached"})">${icon("list")}</button>
        <button class="iconbtn" data-tip="Snapshots and backups of this volume: take one now, or restore" onclick="lhSnaps('${esc(x.name)}','${esc(x.pvc_name || x.name)}')">${icon("snapshot")}</button>
        <button class="iconbtn" data-need="admin" data-tip="Hand this volume's files to the user the container runs as" onclick="volumeChown('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}')">${icon("shield")}</button>
@@ -214,6 +216,10 @@ async function viewStorage() {
      </div></td>
       </tr>`).join("") || `<tr><td colspan=7 class="empty">none</td></tr>`}
    </tbody></table></div></div>
+  ${oldCopies.length ? `<div class="sec">Old copies ${tip("The original of a volume moved to another storage class, kept in case the new copy disappoints. Remove each once its app works on the new one.")}</div>
+    <div class="card flat pad0"><div class="tblwrap"><table class="tbl dense"><thead><tr><th>Was</th><th>Class</th><th>Size</th><th></th></tr></thead><tbody>
+    ${oldCopies.map(o => `<tr><td><b>${esc(o.was)}</b><div class="dim xs mono">${esc(o.pv)}</div></td><td>${esc(o.storage_class)}</td><td class="mono">${esc(o.size)}</td>
+      <td><button class="btn sm danger" data-need="admin" onclick="reclassRemoveOld('${esc(o.pv)}')">Remove</button></td></tr>`).join("")}</tbody></table></div></div>` : ""}
   ${storageClassCard(classes, v2)}`);
 }
 window.volumeCreate = async () => {
@@ -1122,5 +1128,112 @@ window.diskAddGo = async (node, blockdevice) => {
   try {
     const r = await api("/api/disks/add", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(r.detail, "ok"); STATE.data.disks = null; modalBack(); setTimeout(() => disksRepaint(node), 800);
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+/* ---------------- changing a volume's storage class ----------------
+   A review first - what uses it, what stops, how much room it takes while
+   both copies exist - then the move as a tracked job with its steps. */
+window.volumeReclass = async x => {
+  const classes = (STATE.data.storageClasses || []).filter(c => !c.internal && c.name !== x.storage_class);
+  if (!classes.length) return toast("there is no other storage class to move it to", "warn");
+  const pick = classes.find(c => c.default) || classes[0];
+  modal(`Change storage class · ${x.pvc_name || x.name}`, `
+    <div class="note">Kubernetes cannot change a volume's class, so Homestead copies it: everything using it is stopped,
+      the data is copied to a new volume and checked, and the new volume takes the old one's name - so nothing that uses it has to change.
+      The original is kept until you remove it.</div>
+    <div class="f2" style="margin-top:12px">
+      <div class="f"><label>From</label><input value="${esc(x.storage_class || "unknown")}" disabled></div>
+      <div class="f"><label>To</label><select id="rc_to" onchange="volumeReclassPlan('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}')">
+        ${classes.map(c => `<option value="${esc(c.name)}" ${c.name === pick.name ? "selected" : ""}>${esc(c.name)}${c.replicas ? ` · ${esc(c.replicas)} copies` : ""}${c.migratable ? " · migratable" : ""}${c.default ? " · default" : ""}</option>`).join("")}</select></div></div>
+    <div id="rc_plan"><div class="empty"><span class="spin2"></span> checking</div></div>
+    <div class="row" style="margin-top:14px"><button class="btn pri" id="rc_go" data-need="admin" disabled
+      onclick="volumeReclassStart('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}')">Move it</button>
+      <button class="btn" onclick="closeModal()">Cancel</button></div>`, true);
+  volumeReclassPlan(x.namespace || "lab", x.pvc_name || x.name);
+};
+
+window.volumeReclassPlan = async (ns, claim) => {
+  const host = $("#rc_plan"), go = $("#rc_go");
+  if (!host) return;
+  host.innerHTML = '<div class="empty"><span class="spin2"></span> checking what uses it and where it fits</div>';
+  if (go) go.disabled = true;
+  let p;
+  try {
+    p = await api("/api/volumes/reclass/plan", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ namespace: ns, claim, target: $("#rc_to").value }) });
+  } catch (e) { host.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return; }
+  const sp = p.space || {};
+  const verb = c => c.kind === "VirtualMachine" ? (c.running ? "shut down, then started again" : "stopped already; stays stopped")
+    : c.kind === "CronJob" ? "paused, then resumed" : c.running ? "stopped, then started again" : "stopped already; stays stopped";
+  const roomPct = sp.room_gb ? Math.min(100, Math.round(sp.size_gb / sp.room_gb * 100)) : 0;
+  host.innerHTML = `
+    ${p.blockers.length ? `<div class="note bad" style="margin-top:12px"><b>This cannot start yet.</b><ul>${p.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul></div>` : ""}
+    ${p.warnings.length ? `<div class="note warn" style="margin-top:12px"><ul>${p.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
+    <div class="sec">What uses it</div>
+    ${p.consumers.length ? `<div class="rc-uses">${p.consumers.map(c => `<div><b>${esc(c.name)}</b> <span class="dim xs">${esc(c.kind)}</span>
+      <span class="small">${esc(verb(c))}</span></div>`).join("")}</div>` : '<div class="dim small">Nothing - it can move without stopping anything.</div>'}
+    <div class="sec">Space while it moves</div>
+    <div class="rc-space">
+      <div><span class="dim xs">NEW VOLUME</span><b class="mono">${esc(sizeText(sp.size_gb))}</b><span class="dim xs">${sp.replicas} cop${sp.replicas === 1 ? "y" : "ies"} · ${esc(sizeText(sp.allocated_gb))} allocated</span></div>
+      <div><span class="dim xs">DATA TO COPY</span><b class="mono">${sp.used_gb == null ? "—" : esc(sizeText(sp.used_gb))}</b><span class="dim xs">about ${esc(sizeText(sp.written_gb))} written across its copies</span></div>
+      <div><span class="dim xs">TIME</span><b class="mono">~${p.minutes} min</b><span class="dim xs">copy and check${p.downtime ? ", while stopped" : ""}</span></div>
+    </div>
+    ${sp.room_gb != null ? `<div class="rc-room"><div class="between"><span class="small">Room on ${esc(p.to_class)} for a ${sp.replicas}-copy volume</span>
+        <span class="mono xs">${esc(sizeText(sp.size_gb))} of ${esc(sizeText(sp.room_gb))}</span></div>${meter(roomPct, "", "disk")}</div>` : ""}
+    <div class="dim xs" style="margin-top:8px">Both copies exist until you remove the original from Volumes, so ${esc(p.from_class || "its current class")} keeps its
+      ${esc(sizeText(sp.size_gb))} allocated until then.</div>`;
+  if (go) go.disabled = !p.ok;
+  if (window.applyRole) applyRole();
+};
+
+window.volumeReclassStart = async (ns, claim) => {
+  const target = $("#rc_to").value;
+  if (!confirm(`Move ${claim} to ${target}?` + String.fromCharCode(10, 10)
+      + "Everything using it stops until the copy is made and checked.")) return;
+  try {
+    const r = await api("/api/volumes/reclass/start", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ namespace: ns, claim, target }) });
+    reclassWatch(r.operation.id);
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+/* The move as it runs: its steps, the copy's progress, and at the end the
+   old copy to remove when you are happy. */
+window.reclassWatch = async id => {
+  const paint = op => {
+    const steps = op.steps || [];
+    const copy = op.copy || {};
+    $("#mbody").innerHTML = `<div class="rc-steps">${steps.map(s => `<div class="rc-step ${s.state}"><span>${s.state === "done" ? "✓" : s.state === "active" ? '<span class="spin2"></span>' : "•"}</span>${esc(s.label)}
+        ${s.state === "active" && (s.id === "copy" || s.id === "verify") ? `<div class="rc-copy">${meter(s.id === "verify" ? 100 : copy.percent || 0, "", "cpu")}
+          <span class="mono xs">${s.id === "verify" ? "comparing with the original" : `${copy.percent || 0}%${copy.speed ? ` · ${esc(copy.speed)}` : ""}`}</span></div>` : ""}</div>`).join("")}</div>
+      <div class="note ${op.status === "failed" ? "bad" : op.status === "succeeded" ? "good" : ""}" style="margin-top:12px">${esc(op.message || "")}</div>
+      ${op.status === "succeeded" && op.old_pv ? `<div class="row" style="margin-top:12px"><button class="btn danger" data-need="admin" onclick="reclassRemoveOld('${esc(op.old_pv)}')">Remove the old copy</button>
+        <span class="dim xs">Keep it until the app is working on the new one.</span></div>` : ""}
+      <div class="row" style="margin-top:12px"><button class="btn" onclick="closeModal()">${op.status === "running" ? "Keep going in the background" : "Close"}</button></div>`;
+    if (window.applyRole) applyRole();
+  };
+  modal("Changing storage class", '<div class="empty"><span class="spin2"></span></div>', true);
+  clearInterval(window.__reclassTimer);
+  const tick = async () => {
+    if ($("#modal").classList.contains("hidden")) return clearInterval(window.__reclassTimer);
+    const op = (await api("/api/operations").catch(() => [])).find(o => o.id === id);
+    if (!op) return;
+    $("#mtitle").textContent = op.title;
+    paint(op);
+    if (op.status !== "running") { clearInterval(window.__reclassTimer); if (STATE.view === "storage") refresh(true); }
+  };
+  tick();
+  window.__reclassTimer = setInterval(tick, 2500);
+};
+
+window.reclassRemoveOld = async pv => {
+  if (!confirm(`Remove the old copy ${pv}? Its data is deleted.`)) return;
+  try {
+    const r = await api("/api/volumes/old-copies/remove", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pv }) });
+    toast(r.detail, "ok");
+    if ($("#modal") && !$("#modal").classList.contains("hidden") && $("#mtitle").textContent.startsWith("Move")) closeModal();
+    if (STATE.view === "storage") refresh(true);
   } catch (e) { toast(e.message, "bad"); }
 };
