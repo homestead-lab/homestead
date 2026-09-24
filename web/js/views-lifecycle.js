@@ -75,15 +75,75 @@ const editContainerPanel = (container, index) => {
   </details>`;
 };
 
+/* ---------------- placement rules ----------------
+   Keep this workload's instances on different nodes, or run it with or apart
+   from other workloads. Each rule is a preference or a requirement. */
+let EDIT_PLACEMENT = { others: [], nodes: 0 };
+const nodes0 = list => (list || []).filter(n => n.schedulable !== false);
+const PLACEMENT_MODES = [["prefer", "prefer"], ["require", "require"]];
+function placementRow(kind, row = {}) {
+  const others = EDIT_PLACEMENT.others || [];
+  const key = row.name ? `${row.ns || EDIT_PLACEMENT.ns}/${row.name}` : "";
+  const known = !key || others.some(w => `${w.ns}/${w.name}` === key);
+  return `<div class="aff-row" data-kind="${kind}">
+    <select class="aff-target"><option value="">choose a workload…</option>${known ? "" : `<option value="${esc(key)}" selected>${esc(key)} (gone)</option>`}
+      ${others.map(w => `<option value="${esc(w.ns)}/${esc(w.name)}" ${`${w.ns}/${w.name}` === key ? "selected" : ""}>${esc(w.name)}${w.ns !== EDIT_PLACEMENT.ns ? ` · ${esc(w.ns)}` : ""}</option>`).join("")}</select>
+    <select class="aff-mode">${PLACEMENT_MODES.map(([value, label]) => `<option value="${value}" ${row.mode === value ? "selected" : ""}>${label}</option>`).join("")}</select>
+    <button class="iconbtn row-remove" type="button" title="Remove this rule" onclick="this.closest('.aff-row').remove();placementChanged()">×</button></div>`;
+}
+function placementSection(p) {
+  return `<details class="placement card flat" ${p.spread || (p.with || []).length || (p.apart || []).length ? "open" : ""}>
+    <summary><b>Placement rules</b> <span class="dim xs">which nodes this runs on, relative to itself and to other workloads</span></summary>
+    <div class="f"><label>Spread instances ${tip("Puts this workload's instances on different nodes, so losing one host does not take every copy. Only matters with more than one instance.")}</label>
+      <select id="e_spread" onchange="placementChanged()"><option value="">no preference</option>
+        <option value="prefer" ${p.spread === "prefer" ? "selected" : ""}>prefer different nodes</option>
+        <option value="require" ${p.spread === "require" ? "selected" : ""}>require different nodes</option></select></div>
+    <div class="f"><label>Run on the same node as ${tip("For apps that talk constantly or share a device. Required: this does not start until that workload is running, and only on its node.")}</label>
+      <div id="e_with">${(p.with || []).map(row => placementRow("with", row)).join("")}</div>
+      <button class="btn sm" type="button" onclick="placementAdd('with')">＋ Add</button></div>
+    <div class="f"><label>Keep off the node of ${tip("For pairs that should never share a host: two DNS servers, or two apps that would compete for one disk.")}</label>
+      <div id="e_apart">${(p.apart || []).map(row => placementRow("apart", row)).join("")}</div>
+      <button class="btn sm" type="button" onclick="placementAdd('apart')">＋ Add</button></div>
+    <div class="note" id="e_place_note" hidden></div></details>`;
+}
+window.placementAdd = kind => { $("#e_" + kind).insertAdjacentHTML("beforeend", placementRow(kind)); placementChanged(); };
+function readPlacement() {
+  const rows = kind => $$(`#e_${kind} .aff-row`).map(row => {
+    const [ns, name] = ($(".aff-target", row).value || "/").split("/");
+    return { ns, name, mode: $(".aff-mode", row).value };
+  }).filter(row => row.name);
+  return { spread: $("#e_spread")?.value || "", with: rows("with"), apart: rows("apart") };
+}
+window.placementChanged = () => {
+  const note = $("#e_place_note");
+  if (!note) return;
+  const p = readPlacement(), replicas = +$("#e_rep")?.value || 1, warnings = [];
+  if (p.spread === "require" && replicas > EDIT_PLACEMENT.nodes)
+    warnings.push(`${replicas} instances but ${EDIT_PLACEMENT.nodes} schedulable node${EDIT_PLACEMENT.nodes === 1 ? "" : "s"}: the extra instances stay pending.`);
+  const singleNode = readVolumeRows($("#e_containers")).some(v => v.kind === "new-rwo" || (v.kind === "existing" &&
+    ((EDIT_STORAGE.pvcs || []).find(c => c.name === v.source)?.access_modes || []).includes("ReadWriteOnce")));
+  if (p.spread && replicas > 1 && singleNode)
+    warnings.push("A single-node (RWO) volume attaches to one node at a time, so instances spread across nodes cannot all mount it.");
+  const names = [...p.with, ...p.apart].map(row => `${row.ns}/${row.name}`);
+  if (names.length !== new Set(names).size) warnings.push("A workload is named twice; each can be kept either with this one or apart from it.");
+  if (p.with.some(row => row.mode === "require")) warnings.push("Required: this workload waits for the one it runs with, and stops being schedulable if that one stops.");
+  note.hidden = !warnings.length;
+  note.innerHTML = warnings.map(esc).join("<br>");
+};
+document.addEventListener("change", event => { if (event.target.closest(".placement") || event.target.id === "e_rep") placementChanged(); });
+
 window.wlEdit = async (ns, name, fromRoute = false) => {
   if (!fromRoute && window.setModalRoute) setModalRoute({ panel: "edit", ns, workload: name }, name);
   modal("Edit · " + name, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
   try {
-    const [w, liveNodes, options] = await Promise.all([
+    const [w, liveNodes, options, others] = await Promise.all([
       api(`/api/workload?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`),
       loadHardwareFeatures().then(() => api("/api/nodes").catch(() => [])),
       api(`/api/deploy/options?ns=${encodeURIComponent(ns)}`).catch(() => ({})),
+      STATE.data.wl ? Promise.resolve(STATE.data.wl) : api("/api/workloads").catch(() => []),
     ]);
+    EDIT_PLACEMENT = { ns, name, others: (others || []).filter(x => !(x.ns === ns && x.name === name)),
+      nodes: nodes0(liveNodes).length };
     if (liveNodes.length) STATE.data.nodes = liveNodes;
     const nodes = (liveNodes.length ? liveNodes : (STATE.data.ov ? STATE.data.ov.nodes : [])).filter(n => n.schedulable !== false);
     const seeds = w.seed_configs || [];
@@ -105,6 +165,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
           ${nodes.map(n => `<option value="${esc(n.name)}" ${n.name === w.node ? "selected" : ""}>${esc(n.name)}</option>`).join("")}
         </select></div>
       </div>
+      ${placementSection(w.placement || {})}
       <label class="switch" id="e_autostart_wrap"><input type="checkbox" id="e_autostart" onchange="editAutostartToggle()" ${w.autostart === false ? "" : "checked"}>
         Autostart ${tip("On keeps the workload running: Kubernetes restarts it after a crash, a node reboot or a cluster restart. Off scales it to zero and remembers the instance count for when you switch it back on.")}</label>
       <div class="dim xs" id="e_autostart_note" style="margin:-4px 0 6px">${w.autostart === false ? "Stays stopped until you switch autostart back on." : "Runs continuously and comes back after a reboot."}</div>
@@ -129,6 +190,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       (container.volumes || []).filter(volume => !volume.managed).map(editVolumeRow)));
     window.__editHadService = !!w.has_service;
     editPortsChanged();
+    placementChanged();
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
 window.editAddEnv = (index, key = "", value = "") => $("#e_env_" + index).insertAdjacentHTML("beforeend", editEnvRow(index, key, value));
@@ -187,7 +249,8 @@ window.editSave = async (ns, name) => {
   if (renaming && !confirm(`Rename Kubernetes Deployment “${name}” to “${workloadName}”?\n\nHomestead will stop the old workload, start the renamed one, wait for readiness, and restore the original if startup fails. Expect a short outage.`)) return;
   const body = { ns, name, workload_name: workloadName, pod_hostname: $("#e_pod_name").value.trim(),
     icon: $("#e_icon").value.trim(), replicas: Math.max(1, +$("#e_rep").value || 1),
-    autostart: $("#e_autostart").checked, manage_ports: true, containers, seed_configs };
+    autostart: $("#e_autostart").checked, manage_ports: true, containers, seed_configs,
+    placement: readPlacement() };
   const moves = containers.flatMap(container => container.volumes.filter(volume => volume.copy_from));
   if (moves.length && renaming) return toast("Rename the workload and move its data in separate saves", "bad");
   const where = (claim, folder) => folder ? `${claim}/${folder}` : claim;

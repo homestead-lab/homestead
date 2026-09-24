@@ -66,10 +66,10 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.84`, the workflow publishes:
+For a release such as `v2.8.85`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.84
+ghcr.io/wjcloudy/homestead:2.8.85
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -80,8 +80,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.84
-git push origin v2.8.84
+git tag v2.8.85
+git push origin v2.8.85
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -432,7 +432,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.84/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.85/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -443,7 +443,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.84 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.85 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -795,6 +795,26 @@ divider that folds, ungrouped workloads last, and a chip per group shows that
 one alone; the search box matches group names too. Sorting a column sorts
 within each group. A group is the `homestead.io/group` annotation on each
 Deployment, so it needs no list of its own and exists while something is in it.
+
+## Placement rules
+
+A container's editor has **Placement rules** for where it runs relative to
+itself and to other workloads, each a preference or a requirement:
+
+- **Spread instances** puts its own instances on different nodes, so losing a
+  host does not take every copy;
+- **Run on the same node as** keeps it with another workload, for apps that
+  talk constantly or share a device;
+- **Keep off the node of** keeps it away from one, for two DNS servers or two
+  apps that would compete for a disk.
+
+They become pod affinity terms matched on each workload's own selector. A
+preference steers the scheduler and still lets the pod start anywhere; a
+requirement leaves it pending rather than break the rule. The editor warns
+when a rule cannot be met - more required-apart instances than nodes, or
+instances spread across nodes that share a single-node volume. The rules are
+recorded in `homestead.io/placement`, so an edit replaces only the terms
+Homestead wrote and leaves any added by hand or by a chart.
 
 ## Workload logos
 

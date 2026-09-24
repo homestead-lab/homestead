@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.84")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.85")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2616,6 +2616,7 @@ import homestead_alerts as ALERTS
 import homestead_self as SELF
 import homestead_namespaces as NSMOD
 import homestead_restructure as RESTRUCTURE
+import homestead_affinity as AFFINITY
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
@@ -2630,6 +2631,7 @@ UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS)
 SMART.bind(kget, DEFAULT_NS, AUTH.internal_signing_key)
 OPS.bind(kget, DATA_DIR, UPDATES.progress, SMART.progress)
 RESTRUCTURE.bind(kget, ksend, raw_get)
+AFFINITY.bind(kget)
 OPS.RESOLVERS["restructure"] = RESTRUCTURE.resolve
 OPS.RESOLVERS["protect-run"] = LH.run_status
 MOVE_SOURCE.bind(kget, ksend, LH, DEFAULT_NS)
@@ -2882,6 +2884,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         "pod_volumes": reusable,
         "hardware": detected, "icon": NAMES.read(annotations, "icon-source") or NAMES.read(annotations, "icon"),
         "node": pspec.get("nodeSelector", {}).get("kubernetes.io/hostname", ""),
+        "placement": AFFINITY.public(deployment),
         "network_mode": "host" if pspec.get("hostNetwork") else "",
         "has_service": bool(listeners),
         "seed_configs": LC.seed_configs(ns, deployment),
@@ -4162,7 +4165,7 @@ if __name__ == "__main__":
     threading.Thread(target=_upgrade_node_probe, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=MOVE_ENGINE.run, daemon=True).start()
-    # Join plans from 2.8.68-2.8.84 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.85 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     print(f"Homestead listening on :{port}", flush=True)

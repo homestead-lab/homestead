@@ -14,6 +14,7 @@ import time
 import urllib.error
 import homestead_names as NAMES
 import homestead_restructure as RESTRUCTURE
+import homestead_affinity as AFFINITY
 
 # Rebooting a host needs a privileged pod that enters the host namespaces.
 # That is a real escape hatch, so it is off unless the operator opts in on the
@@ -663,6 +664,9 @@ def edit_workload(cfg, hold=False):
 
     dep["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[
         NAMES.key("editedAt")] = time.strftime("%Y-%m-%dT%H:%M:%SZ")
+    if "placement" in cfg:
+        dep["metadata"].setdefault("namespace", ns)
+        AFFINITY.apply(dep, cfg.get("placement") or {})
     # Every container is validated by now, so new claims can be created safely.
     _create_pending_pvcs(ns, pending_claims)
     workload_name = dns_label(cfg.get("workload_name") or name, "workload name")
