@@ -80,6 +80,11 @@ class VmCreateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "CDI"):
             self.create(K3S_BARE, image_url="https://example.test/u.img")
 
+    def test_a_file_name_is_not_a_download_address(self):
+        with self.assertRaisesRegex(ValueError, "not a download address"):
+            self.create(K3S_CDI, image_url="ubuntu-26.04-minimal-cloudimg-amd64.img")
+        self.assertEqual([], self.sent)
+
     def test_harvester_images_are_refused_elsewhere(self):
         with self.assertRaisesRegex(ValueError, "Harvester"):
             self.create(K3S_CDI, image_id="default/image-ubuntu")

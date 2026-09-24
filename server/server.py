@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.102")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.103")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1931,7 +1931,18 @@ def vm_create_options():
             "storage_classes": selectable_storage_classes(rows),
             "storage_class_facts": storage_class_facts(rows),
             "default_class": vm_default_class(rows),
-            "images": IMP.list_vm_images() if platform.get("harvester") else []}
+            "images": IMP.list_vm_images() if platform.get("harvester") else [],
+            "networks": vm_networks(),
+            "nodes": sorted(n["metadata"]["name"] for n in kget("/api/v1/nodes").get("items", []))}
+
+
+def vm_networks():
+    """The pod network and every network attachment (Multus) a VM can join."""
+    try:
+        items = kget("/apis/k8s.cni.cncf.io/v1/network-attachment-definitions").get("items", [])
+    except Exception:
+        items = []
+    return ["pod"] + sorted(f"{i['metadata']['namespace']}/{i['metadata']['name']}" for i in items)
 
 
 def selectable_storage_classes(rows=None):
@@ -2713,6 +2724,7 @@ def ktable(path, timeout=20):
 
 RESOURCES.bind(kget, ksend, ktable)
 VMS.bind(kget, ksend, RESOURCES.events_for)
+VMS.platform, VMS.images = PLATFORM.detect, IMP.list_vm_images
 OPS.RESOLVERS["helm"] = HELM.job_status
 NSMOD.bind(kget, ksend, DEFAULT_NS, _own_namespace())
 ALERTS.bind(DATA_DIR)
@@ -4615,7 +4627,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.102 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.103 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

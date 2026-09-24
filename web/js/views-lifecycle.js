@@ -491,6 +491,12 @@ window.doVmCreate = async () => {
   if (!body.name) return toast("name is required", "bad");
   if (!body.disk_import && body.password.length < 10) return toast("root password must be at least 10 characters", "bad");
   if (boot === "url" && !body.image_url) return toast("image URL is required", "bad");
+  if (boot === "url" && !/^https?:\/\/[^/\s]+/i.test(body.image_url)) {
+    // A file name here is usually a Harvester image, which is picked from the list instead.
+    const image = (window.__vmCreateOptions?.images || []).find(i => i.display === body.image_url || i.name === body.image_url);
+    return toast(image ? `${image.display} is a Harvester image: choose it under Boot disk instead of a URL`
+      : "the image URL must start with http:// or https://", "bad");
+  }
   try {
     await api("/api/vm/create", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(`${body.name} created`, "ok"); closeModal(); go("vms");

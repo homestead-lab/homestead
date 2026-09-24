@@ -1764,6 +1764,11 @@ def create_vm(cfg, platform=None, default_class=""):
     password = str(cfg.get("password") or "")
     if not imported_dv and not cfg.get("cloud_init") and len(password) < 10:
         raise ValueError("root password must be at least 10 characters")
+    if image_url:
+        parsed = urllib.parse.urlparse(image_url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(f"{image_url} is not a download address; give the full http(s):// URL"
+                             + (", or pick the Harvester image from the list" if harvester else ""))
     if image_ref and not harvester:
         raise ValueError("images from the image list are Harvester's; use an image URL on this cluster")
     if (image_url or imported_dv) and not cdi:

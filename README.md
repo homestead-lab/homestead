@@ -70,10 +70,10 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.102`, the workflow publishes:
+For a release such as `v2.8.103`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.102
+ghcr.io/wjcloudy/homestead:2.8.103
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -84,8 +84,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.102
-git push origin v2.8.102
+git tag v2.8.103
+git push origin v2.8.103
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -630,7 +630,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.102/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.103/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -641,7 +641,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.102 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.103 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1011,9 +1011,20 @@ open the Console of a running one; stop one stuck starting; Force stop one
 that will not shut down. Harvester's run strategy is honoured, not the older
 `running` flag. A VM opens to its disks (volume, size, class, boot order),
 network interfaces (network, MAC, addresses), guest OS as its guest agent
-reports it, conditions and events. **Edit** sets CPU cores, memory, run
-strategy and description; CPU and memory apply at the next boot, or at once
-with a restart. **Delete** asks for the VM's name and can take its disks with
+reports it, conditions and events. A VM whose disk is still downloading
+shows how far CDI has got, and one whose disk could not be made says why.
+
+**Edit** covers what the VM is made of. General: CPU cores, memory, run
+strategy, description, and a host to keep it on. Disks: boot order, bus,
+growing a disk, detaching one (its volume is kept), adding a disk or a CD-ROM
+from a Harvester image or a download, and - for a disk that was never made,
+say because its URL was refused - a new source. Network: model, network (the
+pod network or any Multus attachment), MAC, adding and removing interfaces.
+Cloud-init: user and network data, inline or in the secret Harvester keeps
+them in. **Edit YAML** opens the VM in the Resources editor for anything
+else. Changes apply at the next boot, or at once with a restart.
+
+**Delete** asks for the VM's name and can take its disks with
 it, marked for removal the way Harvester's own UI does; disks that are kept
 are released from the VM first, so Kubernetes does not delete them with it.
 

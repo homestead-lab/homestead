@@ -1638,3 +1638,6 @@ div.ipam-line.dim{display:block}
 
 /* A pill that opens something: the update count beside the layout switch. */
 .pillbtn{cursor:pointer;font:inherit;font-size:11px;font-weight:650;border-style:solid}.pillbtn:hover{filter:brightness(1.15)}
+.vm-filling{display:grid;grid-template-columns:1fr auto;gap:4px 10px;margin:10px 0 2px;font-size:12px}.vm-filling .rollout-meter{grid-column:1/-1;margin:0}
+.ve-table td{vertical-align:top}.ve-table select,.ve-table input{min-width:0}.ve-table .vd_bus,.ve-table .vn_model{min-width:92px}
+.vd-add{margin-top:10px;padding:12px}.vd-add .f2{margin-top:8px}

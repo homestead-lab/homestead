@@ -7,11 +7,17 @@ status.printableStatus: Running, Stopped, Starting, Paused, ErrorUnschedulable
 and so on. Actions follow from that, so a stopped VM offers Start and a
 running one Stop, Restart and Pause, and one stuck starting can be stopped.
 
-Editing changes the VM's CPU, memory, run strategy and description. KubeVirt
-applies CPU and memory at the next boot, so a save can restart it at once.
+Editing covers what the VM is made of: CPU, memory, run strategy,
+description and host; its disks (boot order, bus, growing, detaching, adding a
+disk or CD-ROM, and the source of a disk not yet made); its network
+interfaces; and its cloud-init, inline or in Harvester's secret. KubeVirt
+applies most of that at the next boot, so a save can restart it at once.
+New disks are made the way the cluster makes them - Harvester's volume claim
+templates, CDI DataVolumes, or a plain claim - as a new VM's are.
 Deleting can take the VM's disks with it; on Harvester that is its own
 harvesterhci.io/removedPVCs annotation, which its UI uses the same way.
 """
+import base64
 import json
 import re
 import urllib.error
@@ -24,6 +30,13 @@ SUB = "/apis/subresources.kubevirt.io/v1"
 RUN_STRATEGIES = ("RerunOnFailure", "Always", "Manual", "Halted")
 DESCRIPTION = "field.cattle.io/description"
 OS_LABEL = "harvesterhci.io/os"
+CLAIM_TEMPLATES = "harvesterhci.io/volumeClaimTemplates"
+HOST = "kubernetes.io/hostname"
+BUSES = ("virtio", "sata", "scsi")
+MODELS = ("virtio", "e1000", "e1000e", "rtl8139")
+# Bound by the server: what the cluster is, and Harvester's images.
+platform = lambda: {}
+images = lambda: []
 
 
 def bind(_kget, _ksend, _events_for):
@@ -75,10 +88,22 @@ def actions_for(status, migratable=False):
 
 
 def _problem(vm, vmi):
-    for condition in ((vm.get("status") or {}).get("conditions") or []) + ((vmi.get("status") or {}).get("conditions") or []):
-        if condition.get("type") in ("Failure", "Ready", "PodScheduled", "Synchronized") and condition.get("status") == "False" \
-                and condition.get("message"):
-            return " ".join(str(condition["message"]).split())[:300]
+    """What is wrong, if anything. Failure is True when something failed -
+    a DataVolume CDI refused, say - while Ready, PodScheduled and
+    Synchronized are False. A stopped VM's Ready says only that it has no
+    instance, which is not a problem."""
+    conditions = ((vm.get("status") or {}).get("conditions") or []) + ((vmi.get("status") or {}).get("conditions") or [])
+    text = lambda c: " ".join(str(c.get("message") or c.get("reason") or "").split())[:300]
+    for condition in conditions:
+        if condition.get("type") == "Failure" and condition.get("status") == "True" and text(condition):
+            message = text(condition)
+            if "DataVolume" in message:
+                message += " — the disk was never made, so the VM cannot start. Edit its disk source, or delete the VM."
+            return message
+    for condition in conditions:
+        if condition.get("type") in ("Ready", "PodScheduled", "Synchronized") and condition.get("status") == "False" \
+                and condition.get("message") and "VMI does not exist" not in condition["message"]:
+            return text(condition)
     return ""
 
 
@@ -90,7 +115,33 @@ def _claims(ns):
     return {i["metadata"]["name"]: i for i in items}
 
 
-def _row(vm, vmi, claims=None):
+def _datavolumes(ns=""):
+    try:
+        path = f"/apis/cdi.kubevirt.io/v1beta1{'/namespaces/' + ns if ns else ''}/datavolumes"
+        return {(d["metadata"]["namespace"], d["metadata"]["name"]): d for d in kget(path).get("items", [])}
+    except Exception:
+        return {}
+
+
+def _filling(vm, dvs):
+    """Disks CDI is still filling - a download or a copy - with how far it got:
+    a Provisioning VM is waiting on these, not stuck."""
+    ns = (vm.get("metadata") or {}).get("namespace", "")
+    out = []
+    for v in ((vm.get("spec") or {}).get("template") or {}).get("spec", {}).get("volumes") or []:
+        dv = dvs.get((ns, _volume_claim(v)))
+        status = (dv or {}).get("status") or {}
+        if dv and status.get("phase") not in ("Succeeded", None, ""):
+            progress = str(status.get("progress") or "").rstrip("%")
+            try:
+                percent = float(progress)
+            except ValueError:
+                percent = None
+            out.append({"claim": dv["metadata"]["name"], "phase": status["phase"], "progress": percent})
+    return out
+
+
+def _row(vm, vmi, claims=None, dvs=None):
     meta, spec = vm.get("metadata") or {}, vm.get("spec") or {}
     tspec = (spec.get("template") or {}).get("spec") or {}
     dom = tspec.get("domain") or {}
@@ -132,7 +183,8 @@ def _row(vm, vmi, claims=None):
             "os": guest.get("prettyName") or labels.get(OS_LABEL, ""), "hostname": guest.get("hostname") or istatus.get("guestOSInfo", {}).get("name", ""),
             "description": annotations.get(DESCRIPTION, ""), "created": meta.get("creationTimestamp", ""),
             "uid": meta.get("uid", ""), "migratable": migratable, "restart_required": restart_required,
-            "problem": _problem(vm, vmi) if status not in ("Running", "Stopped", "Paused") else "",
+            "problem": _problem(vm, vmi),
+            "filling": _filling(vm, dvs or {}),
             "actions": actions_for(status, migratable)}
 
 
@@ -148,7 +200,8 @@ def list_vms():
     claims = {}
     for ns in {v["metadata"]["namespace"] for v in vms}:
         claims.update(_claims(ns))
-    return sorted((_row(v, vmis.get((v["metadata"]["namespace"], v["metadata"]["name"]), {}), claims) for v in vms),
+    dvs = _datavolumes()
+    return sorted((_row(v, vmis.get((v["metadata"]["namespace"], v["metadata"]["name"]), {}), claims, dvs) for v in vms),
                   key=lambda r: (r["ns"], r["name"]))
 
 
@@ -169,14 +222,408 @@ def detail(ns, name):
         vmi = kget(f"{API}/namespaces/{ns}/virtualmachineinstances/{name}")
     except urllib.error.HTTPError:
         vmi = {}
-    row = _row(vm, vmi, _claims(ns))
+    row = _row(vm, vmi, _claims(ns), _datavolumes(ns))
     guest = (vmi.get("status") or {}).get("guestOSInfo") or {}
     row["guest"] = {k: guest.get(k, "") for k in ("prettyName", "kernelRelease", "version", "id")}
     row["conditions"] = [{"type": c.get("type"), "status": c.get("status"), "reason": c.get("reason", ""),
                           "message": (c.get("message") or "")[:300]}
                          for c in ((vm.get("status") or {}).get("conditions") or []) + ((vmi.get("status") or {}).get("conditions") or [])]
     row["events"] = events_for(ns, name, "")[:30]
+    claims = _claims(ns)
+    for disk in row["disks"]:
+        disk.update(_disk_source(vm, ns, disk["claim"], claims))
+    row["cloud_init"] = _read_cloud_init(vm, ns)
+    row["node_selector"] = ((vm["spec"]["template"].get("spec") or {}).get("nodeSelector") or {}).get(HOST, "")
     return row
+
+
+# ---- what a disk is made from ---------------------------------------------
+
+def _claim_templates(vm):
+    try:
+        return json.loads(((vm.get("metadata") or {}).get("annotations") or {}).get(CLAIM_TEMPLATES) or "[]")
+    except ValueError:
+        return []
+
+
+def _set_claim_templates(vm, items):
+    annotations = vm["metadata"].setdefault("annotations", {})
+    if items:
+        annotations[CLAIM_TEMPLATES] = json.dumps(items)
+    else:
+        annotations.pop(CLAIM_TEMPLATES, None)
+
+
+def _dv_templates(vm):
+    return vm["spec"].get("dataVolumeTemplates") or []
+
+
+def _forget_templates(vm, claim):
+    vm["spec"]["dataVolumeTemplates"] = [t for t in _dv_templates(vm) if (t.get("metadata") or {}).get("name") != claim]
+    if not vm["spec"]["dataVolumeTemplates"]:
+        vm["spec"].pop("dataVolumeTemplates")
+    _set_claim_templates(vm, [t for t in _claim_templates(vm) if (t.get("metadata") or {}).get("name") != claim])
+
+
+def _template_size(vm, claim):
+    for t in _dv_templates(vm):
+        if (t.get("metadata") or {}).get("name") == claim:
+            box = t["spec"].get("storage") or t["spec"].get("pvc") or {}
+            return ((box.get("resources") or {}).get("requests") or {}).get("storage", ""), box.get("storageClassName", "")
+    for t in _claim_templates(vm):
+        if (t.get("metadata") or {}).get("name") == claim:
+            spec = t.get("spec") or {}
+            return ((spec.get("resources") or {}).get("requests") or {}).get("storage", ""), spec.get("storageClassName", "")
+    return "", ""
+
+
+def _disk_source(vm, ns, claim, claims):
+    """Where a disk comes from, and whether it has been made yet. A disk that
+    was never made - CDI refused its source, say - can be given another."""
+    if not claim:
+        return {"made": True, "template": "", "source": {}}
+    made = claim in claims
+    for t in _dv_templates(vm):
+        if (t.get("metadata") or {}).get("name") == claim:
+            src = t["spec"].get("source") or {}
+            phase = ""
+            try:
+                dv = kget(f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{urllib.parse.quote(claim)}")
+                phase = (dv.get("status") or {}).get("phase", "")
+            except Exception:
+                pass
+            source = ({"url": src["http"].get("url", "")} if "http" in src else {"blank": True} if "blank" in src
+                      else {"other": next(iter(src), "")})
+            size, klass = _template_size(vm, claim)
+            return {"made": made and phase in ("Succeeded", ""), "template": "datavolume", "phase": phase,
+                    "source": source, "template_size": size, "template_class": klass}
+    for t in _claim_templates(vm):
+        if (t.get("metadata") or {}).get("name") == claim:
+            image = ((t.get("metadata") or {}).get("annotations") or {}).get("harvesterhci.io/imageId", "")
+            size, klass = _template_size(vm, claim)
+            return {"made": made, "template": "claim", "source": {"image": image} if image else {"blank": True},
+                    "template_size": size, "template_class": klass}
+    return {"made": made, "template": "", "source": {}}
+
+
+def _size(value):
+    value = str(value or "").strip()
+    if re.fullmatch(r"\d+", value):
+        value += "Gi"
+    if not re.fullmatch(r"\d+(Mi|Gi|Ti)", value):
+        raise ValueError("a disk size is like 20Gi")
+    return value
+
+
+def _bytes(quantity):
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)(Ki|Mi|Gi|Ti|K|M|G|T)?", str(quantity or "").strip())
+    if not match:
+        return 0
+    scale = {"Ki": 2**10, "Mi": 2**20, "Gi": 2**30, "Ti": 2**40, "K": 10**3, "M": 10**6, "G": 10**9, "T": 10**12}
+    return float(match.group(1)) * scale.get(match.group(2) or "", 1)
+
+
+def _image(ref):
+    ns, _, name = str(ref).rpartition("/")
+    for item in images():
+        if item["name"] == name and (not ns or item.get("namespace") == ns):
+            if not item.get("storage_class"):
+                raise ValueError(f"image {item['display']} is not ready yet")
+            return item
+    raise ValueError(f"image {ref} was not found")
+
+
+def _disk_volume(vm, ns, claim, size, klass, source, to_create):
+    """A disk named claim, made the way this cluster makes disks; returns the
+    VM volume that points at it. A plain claim is queued in to_create."""
+    p = platform() or {}
+    harvester, cdi = bool(p.get("harvester")), p.get("cdi", True)
+    url, image = str(source.get("url") or "").strip(), str(source.get("image") or "").strip()
+    if url:
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(f"{url} is not a download address; give the full http(s):// URL"
+                             + (", or pick the Harvester image" if harvester else ""))
+        if not cdi:
+            raise ValueError("CDI is not installed, so a disk cannot be downloaded; install it from kubevirt.io")
+    if image and not harvester:
+        raise ValueError("images from the image list are Harvester's; use an image URL on this cluster")
+    _forget_templates(vm, claim)
+    if harvester and not url:
+        template = {"metadata": {"name": claim, "annotations": {}},
+                    "spec": {"accessModes": ["ReadWriteMany"], "volumeMode": "Block",
+                             "resources": {"requests": {"storage": size}}}}
+        if image:
+            item = _image(image)
+            template["metadata"]["annotations"]["harvesterhci.io/imageId"] = f"{item['namespace']}/{item['name']}"
+            template["spec"]["storageClassName"] = item["storage_class"]
+            if item.get("size_gb") and _bytes(size) < item["size_gb"] * 2**30:
+                raise ValueError(f"the disk must be at least as big as the image ({item['size_gb']} GB)")
+        elif klass:
+            template["spec"]["storageClassName"] = klass
+        _set_claim_templates(vm, _claim_templates(vm) + [template])
+        return {"persistentVolumeClaim": {"claimName": claim}}
+    if cdi:
+        storage = {"resources": {"requests": {"storage": size}}}
+        if klass:
+            storage["storageClassName"] = klass
+        if harvester:
+            storage.update(accessModes=["ReadWriteMany"], volumeMode="Block")
+        vm["spec"]["dataVolumeTemplates"] = _dv_templates(vm) + [{
+            "metadata": {"name": claim},
+            "spec": {"source": {"http": {"url": url}} if url else {"blank": {}}, "storage": storage}}]
+        return {"dataVolume": {"name": claim}}
+    claim_obj = {"apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": {"name": claim, "namespace": ns},
+                 "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": size}}}}
+    if klass:
+        claim_obj["spec"]["storageClassName"] = klass
+    to_create.append(claim_obj)
+    return {"persistentVolumeClaim": {"claimName": claim}}
+
+
+def _volume_claim(volume):
+    return (volume.get("persistentVolumeClaim") or {}).get("claimName") or (volume.get("dataVolume") or {}).get("name") or ""
+
+
+def _edit_disks(vm, ns, edits, adds, claims, to_create, resize, dropped):
+    tspec = vm["spec"]["template"]["spec"]
+    devices = tspec["domain"].setdefault("devices", {})
+    disks, volumes = devices.get("disks") or [], tspec.get("volumes") or []
+    changed = False
+    for e in edits:
+        d = next((x for x in disks if x.get("name") == e.get("name")), None)
+        if not d:
+            raise ValueError(f"there is no disk {e.get('name')}")
+        v = next((x for x in volumes if x.get("name") == d["name"]), {})
+        claim = _volume_claim(v)
+        if e.get("remove"):
+            disks.remove(d)
+            if v in volumes:
+                volumes.remove(v)
+            if claim:
+                _forget_templates(vm, claim)
+                dropped.append(claim)
+            changed = True
+            continue
+        kind = "cdrom" if "cdrom" in d else "disk" if "disk" in d else ""
+        if "boot" in e:
+            boot = int(e["boot"]) if str(e["boot"] if e["boot"] is not None else "").strip() else None
+            if boot is not None and not 1 <= boot <= 64:
+                raise ValueError("boot order is a number from 1")
+            if d.get("bootOrder") != boot:
+                if boot is None:
+                    d.pop("bootOrder", None)
+                else:
+                    d["bootOrder"] = boot
+                changed = True
+        if e.get("bus") and kind:
+            if e["bus"] not in BUSES or (kind == "cdrom" and e["bus"] == "virtio"):
+                raise ValueError(f"{e['bus']} is not a bus for a {'CD-ROM' if kind == 'cdrom' else 'disk'}")
+            if (d.get(kind) or {}).get("bus") != e["bus"]:
+                d[kind] = dict(d.get(kind) or {}, bus=e["bus"])
+                changed = True
+        made = claim in claims
+        if e.get("source") is not None and claim and not made:
+            size, klass = _template_size(vm, claim)
+            size = _size(e.get("size") or size or "20Gi")
+            volume = _disk_volume(vm, ns, claim, size, e.get("storage_class") or klass, e["source"] or {}, to_create)
+            v.clear()
+            v.update({"name": d["name"], **volume})
+            # A DataVolume CDI took but could not fill is made again from the new source.
+            try:
+                ksend("DELETE", f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{urllib.parse.quote(claim)}")
+            except urllib.error.HTTPError:
+                pass
+            changed = True
+        elif e.get("size") and claim:
+            size = _size(e["size"])
+            pvc = claims.get(claim)
+            if pvc:
+                current = (((pvc.get("status") or {}).get("capacity") or {}).get("storage")
+                           or (((pvc.get("spec") or {}).get("resources") or {}).get("requests") or {}).get("storage", ""))
+                if _bytes(size) < _bytes(current):
+                    raise ValueError(f"{claim} is {current}; a disk can grow but not shrink")
+                if _bytes(size) > _bytes(current):
+                    resize.append((claim, size))
+            else:
+                for t in _dv_templates(vm):
+                    if t["metadata"].get("name") == claim:
+                        box = t["spec"].get("storage") or t["spec"].setdefault("pvc", {})
+                        box.setdefault("resources", {}).setdefault("requests", {})["storage"] = size
+                        changed = True
+                items = _claim_templates(vm)
+                for t in items:
+                    if t["metadata"].get("name") == claim:
+                        t["spec"].setdefault("resources", {}).setdefault("requests", {})["storage"] = size
+                        changed = True
+                _set_claim_templates(vm, items)
+    taken = {d.get("name") for d in disks} | {v.get("name") for v in volumes}
+    claim_names = set(claims) | {_volume_claim(v) for v in volumes}
+    for a in adds:
+        cdrom = a.get("kind") == "cd-rom"
+        index = 0
+        while f"{'cdrom' if cdrom else 'disk'}-{index}" in taken:
+            index += 1
+        disk_name = f"{'cdrom' if cdrom else 'disk'}-{index}"
+        claim = f"{vm['metadata']['name']}-{disk_name}"
+        while claim in claim_names:
+            claim += "-x"
+        source = {"url": a["url"]} if a.get("url") else {"image": a["image"]} if a.get("image") else {}
+        if cdrom and not source:
+            raise ValueError("a CD-ROM needs an image to hold")
+        bus = a.get("bus") or ("sata" if cdrom else "virtio")
+        if bus not in BUSES or (cdrom and bus == "virtio"):
+            raise ValueError(f"{bus} is not a bus for a {'CD-ROM' if cdrom else 'disk'}")
+        volume = _disk_volume(vm, ns, claim, _size(a.get("size") or "20Gi"), a.get("storage_class") or "", source, to_create)
+        device = {"name": disk_name, ("cdrom" if cdrom else "disk"): {"bus": bus}}
+        if a.get("boot"):
+            device["bootOrder"] = int(a["boot"])
+        disks.append(device)
+        volumes.append({"name": disk_name, **volume})
+        taken.add(disk_name)
+        claim_names.add(claim)
+        changed = True
+    devices["disks"], tspec["volumes"] = disks, volumes
+    return changed
+
+
+def _set_network(iface, net, network):
+    for binding in ("masquerade", "bridge"):
+        iface.pop(binding, None)
+    net.pop("pod", None)
+    net.pop("multus", None)
+    if network == "pod":
+        net["pod"] = {}
+        iface["masquerade"] = {}
+    else:
+        if not re.fullmatch(r"[a-z0-9-]+/[a-z0-9.-]+", network or ""):
+            raise ValueError("a network is 'pod' or namespace/name of a network attachment")
+        net["multus"] = {"networkName": network}
+        iface["bridge"] = {}
+
+
+def _edit_nics(tspec, edits, adds):
+    devices = tspec["domain"].setdefault("devices", {})
+    ifaces, nets = devices.get("interfaces") or [], tspec.get("networks") or []
+    changed = False
+    for e in edits:
+        iface = next((x for x in ifaces if x.get("name") == e.get("name")), None)
+        if not iface:
+            raise ValueError(f"there is no network interface {e.get('name')}")
+        net = next((x for x in nets if x.get("name") == iface["name"]), None)
+        if net is None:
+            net = {"name": iface["name"]}
+            nets.append(net)
+        if e.get("remove"):
+            ifaces.remove(iface)
+            nets.remove(net)
+            changed = True
+            continue
+        if e.get("model") and e["model"] != iface.get("model", "virtio"):
+            if e["model"] not in MODELS:
+                raise ValueError(f"the model is one of {', '.join(MODELS)}")
+            iface["model"] = e["model"]
+            changed = True
+        if "mac" in e:
+            mac = str(e.get("mac") or "").strip().lower()
+            if mac and not re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", mac):
+                raise ValueError(f"{mac} is not a MAC address")
+            if mac != iface.get("macAddress", ""):
+                if mac:
+                    iface["macAddress"] = mac
+                else:
+                    iface.pop("macAddress", None)
+                changed = True
+        current = "pod" if "pod" in net else (net.get("multus") or {}).get("networkName", "")
+        if e.get("network") and e["network"] != current:
+            _set_network(iface, net, e["network"])
+            changed = True
+    for a in adds:
+        index = 0
+        names = {i.get("name") for i in ifaces}
+        while f"nic-{index}" in names:
+            index += 1
+        iface, net = {"name": f"nic-{index}", "model": a.get("model") or "virtio"}, {"name": f"nic-{index}"}
+        if iface["model"] not in MODELS:
+            raise ValueError(f"the model is one of {', '.join(MODELS)}")
+        _set_network(iface, net, a.get("network") or "pod")
+        ifaces.append(iface)
+        nets.append(net)
+        changed = True
+    if sum(1 for n in nets if "pod" in n) > 1:
+        raise ValueError("a VM can be on the pod network once")
+    devices["interfaces"], tspec["networks"] = ifaces, nets
+    return changed
+
+
+# ---- cloud-init -------------------------------------------------------------
+
+def _cloud_volume(tspec):
+    for v in tspec.get("volumes") or []:
+        for key in ("cloudInitNoCloud", "cloudInitConfigDrive"):
+            if key in v:
+                return v, key
+    return None, ""
+
+
+def _secret_values(ns, name):
+    data = (kget(f"/api/v1/namespaces/{ns}/secrets/{urllib.parse.quote(name)}").get("data") or {})
+    return {k: base64.b64decode(v).decode("utf-8", "replace") for k, v in data.items()}
+
+
+def _read_cloud_init(vm, ns):
+    volume, key = _cloud_volume(vm["spec"]["template"].get("spec") or {})
+    if not volume:
+        return {"user_data": "", "network_data": "", "source": ""}
+    c = volume[key]
+    user, network, source = c.get("userData", ""), c.get("networkData", ""), "inline"
+    try:
+        if (c.get("secretRef") or c.get("userDataSecretRef") or {}).get("name"):
+            values = _secret_values(ns, (c.get("secretRef") or c.get("userDataSecretRef"))["name"])
+            user, source = values.get("userdata", values.get("userData", "")), "secret"
+        if (c.get("networkDataSecretRef") or {}).get("name"):
+            values = _secret_values(ns, c["networkDataSecretRef"]["name"])
+            network = values.get("networkdata", values.get("networkData", ""))
+    except Exception:
+        source = "unreadable"
+    return {"user_data": user, "network_data": network, "source": source}
+
+
+def _write_secret(ns, name, key, text):
+    ksend("PATCH", f"/api/v1/namespaces/{ns}/secrets/{urllib.parse.quote(name)}",
+          {"data": {key: base64.b64encode(text.encode()).decode()}}, ctype="application/merge-patch+json")
+
+
+def _edit_cloud_init(vm, ns, cfg):
+    tspec = vm["spec"]["template"]["spec"]
+    user, network = str(cfg.get("user_data") or ""), str(cfg.get("network_data") or "")
+    volume, key = _cloud_volume(tspec)
+    current = _read_cloud_init(vm, ns)
+    if user == current["user_data"] and network == current["network_data"]:
+        return False
+    if not volume:
+        tspec["domain"].setdefault("devices", {}).setdefault("disks", []).append(
+            {"name": "cloudinitdisk", "disk": {"bus": "virtio"}})
+        tspec.setdefault("volumes", []).append(
+            {"name": "cloudinitdisk", "cloudInitNoCloud": dict({"userData": user}, **({"networkData": network} if network else {}))})
+        return True
+    c = volume[key]
+    user_ref = (c.get("secretRef") or c.get("userDataSecretRef") or {}).get("name")
+    if user_ref:
+        # Harvester keeps cloud-init in a secret of the VM's; that is what changes.
+        if user != current["user_data"]:
+            _write_secret(ns, user_ref, "userdata", user)
+    else:
+        c["userData"] = user
+    net_ref = (c.get("networkDataSecretRef") or {}).get("name")
+    if net_ref:
+        if network != current["network_data"]:
+            _write_secret(ns, net_ref, "networkdata", network)
+    elif network:
+        c["networkData"] = network
+    else:
+        c.pop("networkData", None)
+    return True
 
 
 def _refusal(error):
@@ -221,12 +668,35 @@ def power(ns, name, action):
 
 
 def edit(ns, name, cfg):
-    """CPU, memory, run strategy and description. CPU and memory take effect
-    at the next boot, so restart says whether to restart now."""
+    """Everything the VM is made of. Changes to its hardware, disks, network,
+    host or cloud-init take effect at the next boot, so restart says whether
+    to restart now."""
     vm = _get(ns, name)
     spec = vm["spec"]
-    dom = spec["template"]["spec"]["domain"]
+    tspec = spec["template"]["spec"]
+    dom = tspec["domain"]
     changed_hardware = False
+    to_create, resize, dropped = [], [], []
+    if "node" in cfg:
+        selector = dict(tspec.get("nodeSelector") or {})
+        node = str(cfg.get("node") or "")
+        if node != selector.get(HOST, ""):
+            if node:
+                selector[HOST] = _name(node, "node name")
+            else:
+                selector.pop(HOST, None)
+            if selector:
+                tspec["nodeSelector"] = selector
+            else:
+                tspec.pop("nodeSelector", None)
+            changed_hardware = True
+    if cfg.get("disks") or cfg.get("add_disks"):
+        changed_hardware |= _edit_disks(vm, ns, cfg.get("disks") or [], cfg.get("add_disks") or [],
+                                        _claims(ns), to_create, resize, dropped)
+    if cfg.get("nics") or cfg.get("add_nics"):
+        changed_hardware |= _edit_nics(tspec, cfg.get("nics") or [], cfg.get("add_nics") or [])
+    if cfg.get("cloud_init") is not None:
+        changed_hardware |= _edit_cloud_init(vm, ns, cfg["cloud_init"])
     if "cores" in cfg:
         cores = int(cfg["cores"])
         if not 1 <= cores <= 128:
@@ -266,10 +736,23 @@ def edit(ns, name, cfg):
         else:
             annotations.pop(DESCRIPTION, None)
     vm["metadata"].pop("managedFields", None)
+    for claim in to_create:
+        try:
+            ksend("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", claim)
+        except urllib.error.HTTPError as error:
+            raise ValueError(f"the disk {claim['metadata']['name']} could not be made: {_refusal(error)}")
     try:
         ksend("PUT", f"{API}/namespaces/{ns}/virtualmachines/{name}", vm)
     except urllib.error.HTTPError as error:
         raise ValueError(f"the VM was not saved: {_refusal(error)}")
+    grown = []
+    for claim, size in resize:
+        try:
+            ksend("PATCH", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(claim)}",
+                  {"spec": {"resources": {"requests": {"storage": size}}}}, ctype="application/merge-patch+json")
+            grown.append(f"{claim} to {size}")
+        except urllib.error.HTTPError as error:
+            raise ValueError(f"the VM was saved, but {claim} could not grow: {_refusal(error)}")
     restarted = False
     if changed_hardware and cfg.get("restart"):
         try:
@@ -278,8 +761,12 @@ def edit(ns, name, cfg):
         except urllib.error.HTTPError:
             pass
     detail = f"{name} saved"
+    if grown:
+        detail += "; growing " + ", ".join(grown)
+    if dropped:
+        detail += f"; {', '.join(dropped)} detached and kept"
     if changed_hardware:
-        detail += "; restarting now to use the new CPU and memory" if restarted else "; the new CPU and memory apply when it next starts"
+        detail += "; restarting now to use the changes" if restarted else "; the changes apply when it next starts"
     return {"ok": True, "detail": detail, "restart_needed": changed_hardware and not restarted}
 
 
