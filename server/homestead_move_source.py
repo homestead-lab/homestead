@@ -335,8 +335,10 @@ def backup(kind, name):
             _backup_backing_image(row["backing_image"])
         recorded.append({"claim": claim, "volume": row["volume"], "backup": made["backup"],
                          "backing_image": row["backing_image"]})
-    _merge(kind, name, {"metadata": {"annotations": {
-        NAMES.key(BACKUPS): json.dumps(recorded, separators=(",", ":"))}}})
+        # Recorded as each is made: a retry after a failure part-way carries
+        # on from there instead of backing up the first volumes again.
+        _merge(kind, name, {"metadata": {"annotations": {
+            NAMES.key(BACKUPS): json.dumps(recorded, separators=(",", ":"))}}})
     return {"ok": True, "backups": recorded}
 
 

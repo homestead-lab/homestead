@@ -19,6 +19,7 @@ import homestead_names as NAMES
 import hashlib
 import math
 import re
+import secrets
 import time
 import urllib.error
 
@@ -267,7 +268,9 @@ def snapshots(volume=None):
 
 
 def create_snapshot(volume, name=None):
-    name = name or f"homestead-{int(time.time())}"
+    # The second alone is not enough: a workload with two volumes has both
+    # snapshotted in the same one, and the second name was refused.
+    name = name or f"homestead-{int(time.time())}-{secrets.token_hex(3)}"
     body = {"apiVersion": "longhorn.io/v1beta2", "kind": "Snapshot",
             "metadata": {"name": name, "namespace": LHNS,
                          "labels": {NAMES.key("managed"): "true"}},
