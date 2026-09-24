@@ -194,6 +194,22 @@ class IpamTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             IPAM.save_record({"ip": "192.0.2.9", "category": "toaster"})
 
+    def test_unifi_is_optional_and_can_be_disconnected(self):
+        self.assertFalse(IPAM.view()["unifi"]["configured"])
+        IPAM.save_unifi({"url": "https://192.0.2.1"})
+        self.assertFalse(IPAM.view()["unifi"]["configured"], "an address without a key is not a connection")
+        IPAM.save_unifi({"url": "https://192.0.2.1", "api_key": "k"})
+        self.assertTrue(IPAM.view()["unifi"]["configured"])
+        deleted = []
+        send = self.store.send
+        IPAM.bind(self.store.get, lambda m, path, body=None, **k: deleted.append(path) if m == "DELETE" else send(m, path, body),
+                  "lab", lambda: FACTS)
+        IPAM.save_unifi({"forget": True})
+        self.assertTrue(any(path.endswith("/secrets/homestead-unifi") for path in deleted))
+        view = IPAM.view()
+        self.assertFalse(view["unifi"]["configured"])
+        self.assertEqual([], view["unifi_networks"])
+
     def test_a_refused_key_says_so(self):
         IPAM.save_unifi({"url": "https://192.0.2.1", "api_key": "bad"})
 

@@ -142,6 +142,8 @@ async function viewSettings() {
 
       ${portalSettingsCard()}
 
+      ${ipamUnifiCard()}
+
       <section class="card flat settings-wide" data-tab="apps">
         <div class="settings-card-head"><div><div class="ctitle">App Store catalogue</div>
           <div class="csub">Any feed in the Community Applications format: the public one, a mirror, or your own list of templates</div></div>
@@ -186,6 +188,8 @@ async function viewSettings() {
   pwaPaint();
   namespacesPaint();
   replicasPaint();
+  // The UniFi card needs the IPAM record, which Settings does not otherwise load.
+  api("/api/ipam").then(data => { STATE.data.ipam = data; const host = $("#unifiCard"); if (host) host.outerHTML = ipamUnifiCard(); }).catch(() => {});
 }
 
 /* ---------------- Homestead's own redundancy ----------------

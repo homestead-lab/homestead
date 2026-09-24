@@ -63,6 +63,11 @@ function ipamKind(row) {
   return `<span class="tag ${row.kind === "static" ? "ok" : row.kind === "reservation" ? "info" : ""}">${esc(IPAM_KIND_LABELS[row.kind] || row.kind)}</span>`;
 }
 
+/* Without UniFi connected, the page is plain IPAM: rows carry nothing of it,
+   even from a sync made before it was disconnected. */
+function ipamUnifiOn() { return !!((STATE.data.ipam || {}).unifi || {}).configured; }
+function ipamRows(subnet) { return ipamUnifiOn() ? subnet.rows : subnet.rows.map(row => ({ ...row, unifi: null })); }
+
 function ipamFiltered(rows) {
   const f = STATE.ipamFilter || "", q = STATE.q.toLowerCase();
   return rows.filter(row => {
@@ -79,9 +84,8 @@ function ipamFiltered(rows) {
 
 function renderIpam() {
   const data = STATE.data.ipam || { subnets: [], suggested: [], unifi: {} };
-  const head = `<div class="phead"><div><h2>Networking</h2><p>Every address on your subnets: documented, used by the cluster, answering, or known to UniFi</p></div>
+  const head = `<div class="phead"><div><h2>Networking</h2><p>Every address on your subnets: documented, used by the cluster${(data.unifi || {}).configured ? ", answering, or known to UniFi" : " or answering a scan"}</p></div>
     <div class="row"><button class="btn" data-need="operator" onclick="ipamSubnets()">Subnets</button>
-      <button class="btn" data-need="operator" onclick="ipamUnifi()">UniFi</button>
       ${data.subnets.length ? `<button class="btn" onclick="ipamExport()">Export CSV</button>
       <button class="btn pri" data-need="operator" onclick="ipamEdit()">＋ Address</button>` : ""}</div></div>
     ${networkTabs("ip")}`;
@@ -92,7 +96,7 @@ function renderIpam() {
         <button class="btn" data-need="operator" onclick="ipamSubnets()">Add a subnet</button></div></div>`);
   }
   const subnet = ipamSubnetPick(data.subnets);
-  const rows = ipamFiltered(subnet.rows);
+  const rows = ipamFiltered(ipamRows(subnet));
   const flagged = subnet.rows.filter(r => r.flags.length).length;
   const scanning = subnet.scan.state === "running";
   const u = data.unifi || {};
@@ -110,7 +114,7 @@ function renderIpam() {
           ${u.configured ? `<button class="btn sm" data-need="operator" onclick="ipamSync()">Sync UniFi</button>` : ""}</div></div>
     </div>
     ${(subnet.pool_clash || []).length ? `<div class="note bad"><b>Harvester's ${esc(subnet.pool_clash.join(", "))} VIP pool overlaps the DHCP range.</b> A VIP it hands out may already be leased to a device; move the pool or shrink the DHCP range.</div>` : ""}
-    ${u.last_error ? `<div class="note">UniFi: ${esc(u.last_error)}</div>` : ""}
+    ${u.configured && u.last_error ? `<div class="note">UniFi: ${esc(u.last_error)}</div>` : ""}
     <div class="between ipam-tools"><div class="row">
       <select onchange="ipamFilter(this.value)">${[["", "Every address"], ["static", "Static"], ["reservation", "DHCP reservations"], ["dhcp", "DHCP"],
         ["reserved", "Held"], ["infrastructure", "Network gear"], ["cluster", "Cluster"], ["undocumented", "Undocumented"], ["flagged", `Needs attention (${flagged})`]]
@@ -139,7 +143,7 @@ function renderIpam() {
         <td data-label="Seen">${ipamSeen(row)}</td>
         <td data-label="Notes" class="small">${row.flags.map(f => `<span class="ipam-flag ${f.level}" data-tip="${esc(f.text)}">${f.level === "warn" ? "⚠" : "ℹ"} ${esc(f.text.split(":")[0])}</span>`).join("")}
           ${esc(row.note || "")}${row.owner ? ` <span class="dim xs">· ${esc(row.owner)}</span>` : ""} ${(row.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join("")}</td></tr>`).join("")
-        || `<tr><td colspan="7" class="empty">Nothing here yet. Scan the subnet, sync UniFi, or add an address.</td></tr>`}</tbody></table></div></div>`);
+        || `<tr><td colspan="7" class="empty">Nothing here yet. Scan the subnet${u.configured ? ", sync UniFi," : ""} or add an address.</td></tr>`}</tbody></table></div></div>`);
   if (scanning) setTimeout(() => { if (STATE.view === "network" && networkTab() === "ip") viewIpam(); }, 3000);
 }
 
@@ -155,7 +159,7 @@ const ipamPost = (path, body) => api(path, { method: "POST", headers: { "Content
 
 window.ipamBulk = async (forget = false) => {
   const ips = $$(".ipam-pick:checked").map(box => box.value);
-  if (forget && !confirm(`Forget what is documented about ${ips.length} address${ips.length === 1 ? "" : "es"}? Scan and UniFi results come back on the next scan or sync.`)) return;
+  if (forget && !confirm(`Forget what is documented about ${ips.length} address${ips.length === 1 ? "" : "es"}? Scan${ipamUnifiOn() ? " and UniFi" : ""} results come back on the next ${ipamUnifiOn() ? "scan or sync" : "scan"}.`)) return;
   const changes = forget ? { forget: true } : {};
   if (!forget) {
     if ($("#ipamBulkKind").value) changes.kind = $("#ipamBulkKind").value;
@@ -170,7 +174,7 @@ window.ipamBulk = async (forget = false) => {
 
 window.ipamEdit = (ip = "") => {
   const data = STATE.data.ipam, subnet = ipamSubnetPick(data.subnets);
-  const row = subnet.rows.find(r => r.ip === ip) || { ip: ip || subnet.next_free[0] || "", tags: [] };
+  const row = ipamRows(subnet).find(r => r.ip === ip) || { ip: ip || subnet.next_free[0] || "", tags: [] };
   if (row.cluster) {
     return modal(ip, `<p class="muted small">${row.cluster === "node" ? "A cluster node's address, read from Kubernetes." : `A cluster VIP, used by ${esc((row.services || []).join(", "))}.`} It is shown here so nothing else is given it, and is changed where it is set, not here.</p>`);
   }
@@ -201,8 +205,9 @@ window.ipamScan = async id => {
   catch (e) { toast(e.message, "bad"); }
 };
 window.ipamSync = async () => {
-  try { const r = await ipamPost("/api/ipam/unifi/sync", {}); toast(r.detail, "ok"); viewIpam(); }
-  catch (e) { toast(e.message, "bad"); viewIpam(); }
+  try { const r = await ipamPost("/api/ipam/unifi/sync", {}); toast(r.detail, "ok"); }
+  catch (e) { toast(e.message, "bad"); }
+  await ipamAfterUnifi();
 };
 
 /* ---------------- subnets ---------------- */
@@ -223,7 +228,7 @@ window.ipamSubnets = (add = "") => {
     <div id="is_rows">${data.subnets.map(ipamSubnetRow).join("")}${add ? ipamSubnetRow({ cidr: add, name: "LAN", gateway: add.replace(/\.0\/24$/, ".1") }) : ""}</div>
     <div class="row" style="margin-top:10px"><button class="btn" onclick="$('#is_rows').insertAdjacentHTML('beforeend', ipamSubnetRow())">＋ Subnet</button>
       ${(data.suggested || []).map(c => `<button class="btn" onclick="$('#is_rows').insertAdjacentHTML('beforeend', ipamSubnetRow({cidr:'${esc(c)}'}))">＋ ${esc(c)} <span class="dim">(cluster nodes)</span></button>`).join("")}
-      ${(data.unifi_networks || []).map((n, i) => `<button class="btn" onclick="$('#is_rows').insertAdjacentHTML('beforeend', ipamSubnetRow(STATE.data.ipam.unifi_networks[${i}]))">＋ ${esc(n.name || n.cidr)} <span class="dim">(UniFi${n.vlan ? ` · VLAN ${n.vlan}` : ""})</span></button>`).join("")}</div>
+      ${(ipamUnifiOn() ? data.unifi_networks || [] : []).map((n, i) => `<button class="btn" onclick="$('#is_rows').insertAdjacentHTML('beforeend', ipamSubnetRow(STATE.data.ipam.unifi_networks[${i}]))">＋ ${esc(n.name || n.cidr)} <span class="dim">(UniFi${n.vlan ? ` · VLAN ${n.vlan}` : ""})</span></button>`).join("")}</div>
     <div class="row" style="margin-top:14px"><button class="btn pri" onclick="ipamSubnetsSave()">Save subnets</button><button class="btn" onclick="closeModal()">Cancel</button></div>`, true);
 };
 window.ipamSubnetRow = ipamSubnetRow;
@@ -236,7 +241,8 @@ window.ipamSubnetsSave = async () => {
 };
 
 /* ---------------- UniFi ---------------- */
-window.ipamUnifi = () => {
+window.ipamUnifi = async () => {
+  if (!STATE.data.ipam) { try { STATE.data.ipam = await api("/api/ipam"); } catch (e) { STATE.data.ipam = { subnets: [], unifi: {} }; } }
   const u = (STATE.data.ipam || {}).unifi || {};
   modal("UniFi", `<p class="muted small">Brings in the clients and devices a UniFi Network controller knows - names, MACs, addresses - and its DHCP reservations. It never changes the controller. Create an API key on the console under <b>Settings → Control Plane → Integrations</b>.</p>
     <div class="f"><label>Console address</label><input id="uf_url" value="${esc(u.url || "")}" placeholder="https://192.0.2.1"></div>
@@ -246,23 +252,52 @@ window.ipamUnifi = () => {
     ${u.last_sync ? `<div class="dim xs">Last synced ${esc(fmtAgo(Date.now() / 1000 - u.last_sync))}${u.site_name ? ` from ${esc(u.site_name)}` : ""}${u.note ? ` · ${esc(u.note)}` : ""}</div>` : ""}
     ${u.last_error ? `<div class="note bad">${esc(u.last_error)}</div>` : ""}
     <div class="row" style="margin-top:14px"><button class="btn pri" data-need="admin" onclick="ipamUnifiSave(true)">Save and sync</button>
-      <button class="btn" data-need="admin" onclick="ipamUnifiSave(false)">Save</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+      <button class="btn" data-need="admin" onclick="ipamUnifiSave(false)">Save</button>
+      ${u.configured ? '<button class="btn danger" data-need="admin" onclick="ipamUnifiForget()">Disconnect</button>' : ""}
+      <button class="btn" onclick="closeModal()">Cancel</button></div>`);
 };
 window.ipamUnifiSave = async sync => {
   try {
     await ipamPost("/api/ipam/unifi", { url: $("#uf_url").value.trim(), api_key: $("#uf_key").value, site: $("#uf_site").value.trim(), verify_tls: $("#uf_tls").checked });
     closeModal();
-    if (sync) await ipamSync(); else { toast("UniFi settings saved", "ok"); viewIpam(); }
+    if (sync) await ipamSync(); else toast("UniFi settings saved", "ok");
+    ipamAfterUnifi();
   } catch (e) { toast(e.message, "bad"); }
 };
+window.ipamUnifiForget = async () => {
+  if (!confirm("Disconnect UniFi? Its key is deleted, and the IP addresses page stops showing what UniFi knows. Nothing on the controller changes.")) return;
+  try { await ipamPost("/api/ipam/unifi", { forget: true }); toast("UniFi disconnected", "ok"); closeModal(); ipamAfterUnifi(); }
+  catch (e) { toast(e.message, "bad"); }
+};
+/* Whichever page the dialog was opened from shows the change. */
+async function ipamAfterUnifi() {
+  try { STATE.data.ipam = await api("/api/ipam"); } catch (e) { /* the page's next refresh will */ }
+  if (STATE.view === "settings") { const host = $("#unifiCard"); if (host) host.outerHTML = ipamUnifiCard(); }
+  else if (STATE.view === "network") renderIpam();
+}
+
+/* Settings > Apps: where UniFi is connected. */
+function ipamUnifiCard() {
+  const u = ((STATE.data.ipam || {}).unifi) || {};
+  return `<section class="card flat settings-wide" data-tab="apps" id="unifiCard">
+    <div class="settings-card-head between"><div><div class="ctitle">UniFi Network</div>
+      <div class="csub">${u.configured ? `Connected to ${esc(u.url)}${u.last_sync ? ` · last synced ${esc(fmtAgo(Date.now() / 1000 - u.last_sync))}` : " · not synced yet"}`
+        : "Optional. Connect a UniFi controller and the IP addresses page adds its clients, devices, reserved IPs, networks and the names it knows. Without it, IP addresses works from scans and what you write."}</div>
+      ${u.configured && u.last_error ? `<div class="note bad" style="margin-top:8px">${esc(u.last_error)}</div>` : ""}</div>
+      <div class="row">${u.configured ? '<button class="btn" data-need="operator" onclick="ipamSync()">Sync now</button>' : ""}
+        <button class="btn ${u.configured ? "" : "pri"}" data-need="admin" onclick="ipamUnifi()">${u.configured ? "Edit" : "Connect UniFi"}</button></div></div></section>`;
+}
+window.ipamUnifiCard = ipamUnifiCard;
 
 /* ---------------- export ---------------- */
 window.ipamExport = () => {
   const subnet = ipamSubnetPick(STATE.data.ipam.subnets);
   const cell = value => `"${String(value ?? "").replace(/"/g, '""')}"`;
-  const lines = [["address", "name", "unifi_name", "hostname", "mac", "kind", "category", "cluster", "owner", "tags", "note", "answering", "unifi"].join(",")]
-    .concat(subnet.rows.map(r => [r.ip, r.name, r.unifi?.name, r.unifi?.hostname, r.mac, r.kind, r.category, r.cluster, r.owner, (r.tags || []).join(" "), r.note,
-      r.scan?.up ? "yes" : "", r.unifi ? r.unifi.type || "yes" : ""].map(cell).join(",")));
+  const unifi = ipamUnifiOn();
+  const head = ["address", "name", ...(unifi ? ["unifi_name", "hostname"] : []), "mac", "kind", "category", "cluster", "owner", "tags", "note", "answering", ...(unifi ? ["unifi"] : [])];
+  const lines = [head.join(",")].concat(ipamRows(subnet).map(r => [r.ip, r.name, ...(unifi ? [r.unifi?.name, r.unifi?.hostname] : []),
+    r.mac, r.kind, r.category, r.cluster, r.owner, (r.tags || []).join(" "), r.note, r.scan?.up ? "yes" : "",
+    ...(unifi ? [r.unifi ? r.unifi.type || "yes" : ""] : [])].map(cell).join(",")));
   const link = document.createElement("a");
   link.href = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv" }));
   link.download = `${subnet.cidr.replace(/[./]/g, "-")}-addresses.csv`;

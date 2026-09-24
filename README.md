@@ -67,10 +67,10 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.90`, the workflow publishes:
+For a release such as `v2.8.92`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.90
+ghcr.io/wjcloudy/homestead:2.8.92
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -81,8 +81,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.90
-git push origin v2.8.90
+git tag v2.8.92
+git push origin v2.8.92
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -306,7 +306,9 @@ an accepted one - and adds reverse DNS; a host that answers but is not
 documented is flagged. Tick addresses to set a category, kind, tag or owner on
 all of them at once, or forget them. **Export CSV** downloads the subnet.
 
-**UniFi** brings in what a UniFi Network controller knows, read-only: its
+**UniFi** is optional: without it the tab works from scans and what you write,
+and shows nothing of UniFi. Connected under **Settings → Apps → UniFi
+Network**, it brings in what a UniFi Network controller knows, read-only: its
 clients and devices with their MACs, the reserved (fixed) IPs even for clients
 that are offline, and its networks, whose DHCP range, gateway and VLAN fill in
 a matching subnet or are offered as new ones. UniFi's nickname and hostname
@@ -315,7 +317,8 @@ UniFi devices get a category from their model (switches, access points,
 gateways, cameras). It uses an API key from the console (Settings → Control
 Plane → Integrations), kept in the `homestead-unifi` Secret; reservations and
 networks come from the controller's classic API, and the sync says so if the
-key is not allowed there. The rest lives in the `homestead-ipam` ConfigMap.
+key is not allowed there. **Disconnect** deletes the key and hides everything
+UniFi supplied. The rest lives in the `homestead-ipam` ConfigMap.
 
 ## Cluster health and node onboarding
 
@@ -503,7 +506,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.90/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.92/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -514,7 +517,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.90 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.92 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour

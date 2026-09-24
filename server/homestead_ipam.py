@@ -337,7 +337,8 @@ def view():
                         "scan": {"at": scan.get("at", 0), "state": (live or {}).get("state") or scan.get("state") or "",
                                  "progress": (live or {}).get("progress", 100 if scan.get("at") else 0)}})
     unifi = dict(data.get("unifi") or {})
-    unifi["configured"] = bool(unifi.get("url"))
+    # UniFi is optional: without an address and a key, nothing of it is shown.
+    unifi["configured"] = bool(unifi.get("url") and unifi.get("has_key"))
     known = {s["cidr"] for s in data["subnets"]}
     return {"subnets": subnets, "kinds": list(KINDS), "categories": list(CATEGORIES),
             "suggested": [c for c in suggested_subnets() if c not in known],
@@ -434,6 +435,18 @@ def _unifi_key():
 
 
 def save_unifi(cfg):
+    if cfg.get("forget"):
+        # Disconnect: the key goes, and so does everything that shows UniFi.
+        try:
+            ksend("DELETE", f"/api/v1/namespaces/{NAMESPACE}/secrets/{_secret()}")
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+
+        def forget(data):
+            data["unifi"], data["unifi_networks"] = {}, []
+            return {"ok": True, "unifi": {}}
+        return update(forget)
     url = str(cfg.get("url") or "").strip().rstrip("/")
     if url:
         parsed = urllib.parse.urlparse(url)
