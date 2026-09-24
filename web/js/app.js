@@ -5,6 +5,7 @@ const VIEWS = {
   flow:      ["Architecture",   "overview",  viewFlow,      true],
   nodes:     ["Nodes",          "overview",  viewNodes,     true],
   network:   ["Networking",     "overview",  viewNetworking,true],
+  portal:    ["Portal",         "overview",  viewPortal,    true],
   workloads: ["Containers",     "workloads", viewWorkloads, true],
   vms:       ["Virtual Machines","workloads", viewVMs,       true],
   deploy:    ["Deploy",         "workloads", () => viewDeploy(), false],
@@ -20,7 +21,7 @@ const VIEWS = {
   settings:  ["Settings",       "system",    viewSettings,  false],
 };
 
-const FILTERABLE_VIEWS = new Set(["workloads", "storage", "images", "events", "store", "network"]);
+const FILTERABLE_VIEWS = new Set(["workloads", "storage", "images", "events", "store", "network", "portal"]);
 
 function routeParamsForView(v, extra = {}) {
   const params = FILTERABLE_VIEWS.has(v) && STATE.q ? { q: STATE.q } : {};

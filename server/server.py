@@ -20,7 +20,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.85")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.86")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2617,6 +2617,7 @@ import homestead_self as SELF
 import homestead_namespaces as NSMOD
 import homestead_restructure as RESTRUCTURE
 import homestead_affinity as AFFINITY
+import homestead_portal as PORTAL
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
@@ -2632,6 +2633,8 @@ SMART.bind(kget, DEFAULT_NS, AUTH.internal_signing_key)
 OPS.bind(kget, DATA_DIR, UPDATES.progress, SMART.progress)
 RESTRUCTURE.bind(kget, ksend, raw_get)
 AFFINITY.bind(kget)
+PORTAL.bind(kget, ksend, DEFAULT_NS, lambda: cached("wl", 5, get_workloads),
+            lambda source: ICONS.persist(source, DATA_DIR), lambda reference: ICONS.data_url(reference, DATA_DIR))
 OPS.RESOLVERS["restructure"] = RESTRUCTURE.resolve
 OPS.RESOLVERS["protect-run"] = LH.run_status
 MOVE_SOURCE.bind(kget, ksend, LH, DEFAULT_NS)
@@ -2896,7 +2899,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
 # explicit allowlist: an unknown path must not accidentally shadow an API 404.
 SPA_ROUTES = frozenset({
     "/", "/architecture", "/nodes", "/deploy", "/containers", "/vms",
-    "/app-store", "/shares", "/volumes", "/image-cache", "/data-protection",
+    "/app-store", "/shares", "/volumes", "/image-cache", "/data-protection", "/portal",
     "/schedules", "/import", "/events", "/networking", "/system/cluster", "/settings",
 })
 
@@ -3033,6 +3036,8 @@ def needed_role(path, method):
     if path == "/api/settings" and method != "GET":
         return "admin"
     if path == "/api/storage/classes" and method != "GET":
+        return "admin"
+    if path == "/api/portal" and method != "GET":
         return "admin"
     if path == "/api/console":
         return "operator"
@@ -3277,6 +3282,12 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("nodes", 5, get_nodes))
             if p == "/api/workloads":
                 return self._send(200, cached("wl", 5, get_workloads))
+            if p == "/api/portal":
+                return self._send(200, {"links": PORTAL.view(), "icons": list(PORTAL.BUILTIN)})
+            if p == "/api/portal/status":
+                return self._send(200, PORTAL.status(force=(q.get("force") or [""])[0] == "1"))
+            if p == "/api/portal/candidates":
+                return self._send(200, PORTAL.candidates())
             if p == "/api/network":
                 return self._send(200, cached("network", 5, NETWORK.inventory))
             if p == "/api/cluster":
@@ -3614,6 +3625,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, compose_report(b))
             if p == "/api/compose/apply":
                 return self._send(200, compose_apply(b))
+            if p == "/api/portal":
+                return self._send(200, PORTAL.save(b.get("links")))
             if p == "/api/workloads/group":
                 return self._send(200, set_workload_groups(b))
             if p == "/api/scale":
@@ -4165,7 +4178,7 @@ if __name__ == "__main__":
     threading.Thread(target=_upgrade_node_probe, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=MOVE_ENGINE.run, daemon=True).start()
-    # Join plans from 2.8.68-2.8.85 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.86 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     print(f"Homestead listening on :{port}", flush=True)

@@ -140,6 +140,8 @@ async function viewSettings() {
 
       ${pwaCard()}
 
+      ${portalSettingsCard()}
+
       <section class="card flat settings-wide" data-tab="apps">
         <div class="settings-card-head"><div><div class="ctitle">App Store catalogue</div>
           <div class="csub">Any feed in the Community Applications format: the public one, a mirror, or your own list of templates</div></div>
