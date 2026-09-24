@@ -20,6 +20,10 @@ not affiliated with, endorsed, or sponsored by Lime Technology, Inc.
 
 ![Homestead cluster dashboard](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-dashboard.png)
 
+**New here?** The [wiki](https://github.com/wjcloudy/homestead/wiki) is the
+guided tour: building a cluster from nothing - Harvester, k3s, or the one you
+already run - with Homestead on it, then each part of Homestead in turn.
+
 ## Highlights
 
 | Area | Capability |
@@ -66,16 +70,18 @@ scripts/render_icons.py       regenerate web/icons/ from the mark's geometry
 scripts/bump_version.py       move every file that names the release to a new version
 scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 scripts/render_chart.py       regenerate charts/homestead from the manifests
+scripts/capture_screenshots.mjs  the release screenshots, from demo data
+docs/wiki/                    the wiki's pages, published by .github/workflows/wiki.yml
 ```
 
 ## Container releases
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.118`, the workflow publishes:
+For a release such as `v2.8.119`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.118
+ghcr.io/wjcloudy/homestead:2.8.119
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -86,17 +92,20 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.118
-git push origin v2.8.118
+git tag v2.8.119
+git push origin v2.8.119
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
 The OCI source label in the image links releases back to this repository.
 
 Each tagged release also launches Homestead against deterministic demo data,
-captures polished Dashboard, Containers, Architecture, and Networking views in headless
-Chromium, and attaches them to the GitHub release. The stable screenshot above
-always follows the latest release; no live cluster data or credentials are used.
+captures every page and the main dialogs in headless Chromium
+(`scripts/capture_screenshots.mjs`), and attaches them to the GitHub release.
+The screenshot above and every picture in the wiki link to the latest
+release's, so they follow it; no live cluster data or credentials are used.
+The wiki itself is written in `docs/wiki` and published by
+`.github/workflows/wiki.yml` whenever it changes on `main`.
 
 ## Without Harvester: k3s, RKE2 or any Kubernetes
 
@@ -683,7 +692,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.118/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.119/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -694,7 +703,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.118 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.119 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour

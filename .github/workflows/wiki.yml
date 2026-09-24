@@ -1,0 +1,46 @@
+name: Wiki
+
+# The wiki is written in docs/wiki and published from here, so it is reviewed
+# and versioned with the code it describes. Its pictures are the release's
+# screenshots, linked from releases/latest, so each release updates them.
+on:
+  push:
+    branches: [main]
+    paths: ["docs/wiki/**", ".github/workflows/wiki.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wiki
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Publish docs/wiki
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          # GitHub makes a wiki's repository only once its first page has been
+          # saved in the browser; until then there is nowhere to push.
+          if ! git clone -q "https://x-access-token:${TOKEN}@github.com/${REPO}.wiki.git" wiki; then
+            echo "::warning::The wiki has no pages yet. Turn it on in Settings > Features, save any first page, then run this workflow again."
+            exit 0
+          fi
+          # The wiki is exactly docs/wiki: pages removed there are removed here.
+          find wiki -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -R docs/wiki/. wiki/
+          cd wiki
+          git add -A
+          if git diff --cached --quiet; then
+            echo "The wiki is already up to date."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "Wiki from ${GITHUB_SHA::7}"
+          git push -q origin HEAD

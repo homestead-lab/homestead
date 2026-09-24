@@ -446,7 +446,7 @@ async function selfHealthPaint() {
         admin ? (!probe.installed ? '<button class="btn sm" onclick="probeInstallConfirm()">Install</button>' : '<button class="btn sm" onclick="probeRemove()">Remove</button>') : "")}
       ${row("Samba (network shares)", !samba.installed || !samba.enabled ? "neutral" : samba.ready < samba.desired ? "warn" : "ok",
         !samba.installed ? "not installed" : !samba.enabled ? "off" : samba.ready < samba.desired ? "starting" : "serving",
-        (samba.installed ? `${samba.shares} share${samba.shares === 1 ? "" : "s"}${samba.address ? ` at <span class="mono">\\${esc(samba.address)}</span>` : ""} · ${esc(samba.image || "")}`
+        (samba.installed ? `${samba.shares} share${samba.shares === 1 ? "" : "s"}${samba.address ? ` at <span class="mono">\\\\${esc(samba.address)}</span>` : ""} · ${esc(samba.image || "")}`
           : `Installed with the first share, or here. ${samba.shares ? `${samba.shares} share${samba.shares === 1 ? " is" : "s are"} defined.` : ""}`),
         admin ? `<label class="switch"><input type="checkbox" ${samba.enabled ? "checked" : ""} onchange="sambaToggle(this)"> ${samba.enabled ? "On" : "Off"}</label>` : "")}
       ${row("Permissions", h.permissions?.state === "error" ? "bad" : h.permissions?.state === "current" || h.permissions?.state === "updated" ? "ok" : "neutral",
