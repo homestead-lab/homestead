@@ -101,6 +101,18 @@ def persist(source, data_dir):
     if len(source) > 2048:
         raise ValueError("logo URL is too long")
     data, mime = _download(source)
+    return store(data, data_dir, mime)
+
+
+def store(data, data_dir, mime=""):
+    """Cache image bytes already in hand, and return their same-origin URL.
+
+    The name is the bytes' digest, so the same logo fetched by another
+    Homestead - the source of a move - lands under the name it had there.
+    """
+    if len(data) > MAX_ICON_BYTES:
+        raise ValueError("logo is too large (maximum 256 KiB)")
+    mime = mime or _sniff_mime(data)
     digest = hashlib.sha256(data).hexdigest()
     ext = MIME_EXTENSIONS[mime]
     icon_dir = os.path.join(data_dir, "icons")
@@ -118,6 +130,15 @@ def persist(source, data_dir):
             if os.path.exists(temporary):
                 os.unlink(temporary)
     return f"/api/icons/{digest}.{ext}"
+
+
+def exists(reference, data_dir):
+    """Whether a same-origin icon reference is in this Homestead's cache."""
+    try:
+        resolve(reference, data_dir)
+        return True
+    except FileNotFoundError:
+        return False
 
 
 def resolve(path, data_dir):

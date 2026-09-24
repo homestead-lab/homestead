@@ -22,6 +22,7 @@ import time
 import urllib.error
 import urllib.parse
 
+import homestead_icons as ICONS
 import homestead_names as NAMES
 
 kget = ksend = None
@@ -576,6 +577,31 @@ def _stamp(meta, move, namespace):
     return meta
 
 
+def carry_icon(cluster, annotations):
+    """Make a workload's logo work here, where its cache reference is unknown.
+
+    The logo annotation names the source Homestead's icon cache, which a move
+    does not bring. The bytes are fetched from the source (they keep their
+    name, being named by their digest), or failing that from the original
+    URL. A logo is never a reason for a move to fail: without one the card
+    shows the usual placeholder.
+    """
+    reference = NAMES.read(annotations, "icon") or ""
+    if not reference.startswith("/api/icons/") or ICONS.exists(reference, DATA_DIR):
+        return reference
+    try:
+        found = ICONS.store(CLIENT.icon_bytes(cluster, reference), DATA_DIR)
+    except Exception:
+        source = NAMES.read(annotations, "icon-source") or ""
+        try:
+            found = ICONS.persist(source, DATA_DIR) if source.startswith(("http://", "https://")) else ""
+        except Exception:
+            found = ""
+    if found:
+        annotations[NAMES.key("icon")] = found
+    return found
+
+
 def _creating(move):
     namespace, name = move["namespace"], move["name"]
     definition = _definition(move)
@@ -602,6 +628,7 @@ def _creating(move):
         _post_ours(path, f"/api/v1/namespaces/{namespace}/services", service, move)
     body = definition["object"]
     _stamp(body["metadata"], move, namespace)
+    carry_icon(move["cluster"], body["metadata"]["annotations"])
     _post_ours(_object_path(move["kind"], namespace, name),
                _collection_path(move["kind"], namespace), body, move)
     move["origin"] = definition.get("origin") or move.get("origin") or {}

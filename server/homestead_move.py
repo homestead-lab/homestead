@@ -378,6 +378,24 @@ def remote(name, path, body=None):
     raise ValueError(f"{name} would not accept a fresh sign-in")
 
 
+def icon_bytes(name, reference, limit=256 * 1024):
+    """A cached logo from another Homestead, by the reference it gave it.
+
+    A workload's logo annotation names that Homestead's own icon cache, which
+    a move does not bring; the bytes come across so the name works here too.
+    Icons are served without signing in, as they are to browsers.
+    """
+    if not re.fullmatch(r"/api/icons/[0-9a-f]{64}\.(png|jpg|gif|webp|ico)", str(reference or "")):
+        raise ValueError("not a cached icon reference")
+    request = urllib.request.Request(_cluster(name)["url"] + reference)
+    request.add_header("Accept", "image/*")
+    with _open(request) as response:
+        data = response.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("icon is too large")
+    return data
+
+
 def remote_inventory(name):
     """Ask another cluster what it has. The first half of every move."""
     try:

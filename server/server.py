@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.120")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.121")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -3402,11 +3402,44 @@ VM_CONSOLE = VMCONSOLE.VmConsole(CONSOLE_PROXY, SYS_NS, kget)
 FILES.bind(kget, ksend, urllib.parse.urlparse(API), TOKEN, CTX, SYS_NS)
 
 
+# Logos whose cached file is missing here - a workload moved from another
+# cluster before moves brought logos, or a data volume that was replaced -
+# fetched again in the background: reference -> what it is cached as now.
+_ICON_HEALED = {}
+_ICON_TRIED = {}
+ICON_RETRY_SECONDS = 15 * 60
+
+
+def _heal_icon(reference, annotations):
+    moved_from = (NAMES.read(annotations, "moved-from") or "").split("/", 1)[0]
+    found = ""
+    if moved_from:
+        try:
+            found = MOVE_ENGINE.carry_icon(moved_from, dict(annotations))
+        except Exception:
+            found = ""
+    if not found:
+        source = NAMES.read(annotations, "icon-source") or ""
+        if source.startswith(("http://", "https://")):
+            try:
+                found = ICONS.persist(source, DATA_DIR)
+            except Exception:
+                found = ""
+    if found:
+        _ICON_HEALED[reference] = found
+
+
 def display_icon(annotations):
     reference = NAMES.read(annotations, "icon")
     try:
-        return ICONS.data_url(reference, DATA_DIR)
-    except (FileNotFoundError, ValueError, OSError):
+        return ICONS.data_url(_ICON_HEALED.get(reference, reference), DATA_DIR)
+    except FileNotFoundError:
+        if str(reference or "").startswith("/api/icons/") and                 time.time() - _ICON_TRIED.get(reference, 0) > ICON_RETRY_SECONDS:
+            _ICON_TRIED[reference] = time.time()
+            threading.Thread(target=_heal_icon, args=(reference, dict(annotations or {})),
+                             daemon=True, name="icon-heal").start()
+        return ""
+    except (ValueError, OSError):
         return ""
 
 
@@ -5016,7 +5049,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.120 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.121 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()
