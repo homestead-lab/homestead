@@ -47,10 +47,13 @@ class Cluster:
 
 
 class DataMoveTests(unittest.TestCase):
+    running = []
+
     def use(self, cluster):
         self.c = cluster
         patches = [mock.patch.object(server, "kget", cluster.get), mock.patch.object(server, "ksend", cluster.send),
-                   mock.patch.object(server.OPS, "start", lambda *a, **k: {"id": "op"})]
+                   mock.patch.object(server.OPS, "start", lambda *a, **k: {"id": "op"}),
+                   mock.patch.object(server.OPS, "list_operations", lambda: self.running)]
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
@@ -76,7 +79,7 @@ class DataMoveTests(unittest.TestCase):
 
     def test_moving_copies_on_the_attached_node_then_switches_the_claim(self):
         self.use(Cluster())
-        with self.assertRaisesRegex(ValueError, "choose a class"):
+        with self.assertRaisesRegex(ValueError, "on longhorn-r2 already"):
             server.move_homestead_data("longhorn-r2")
         server.move_homestead_data("longhorn")
         pvc = next(b for m, p, b in self.c.sent if p.endswith("/persistentvolumeclaims"))
@@ -97,6 +100,44 @@ class DataMoveTests(unittest.TestCase):
                          self.c.dep["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"])
         # the new pods, reading the copied record, find the switch made
         self.assertEqual("succeeded", server._data_move_status(item)[0])
+
+
+    def test_it_can_move_to_a_class_one_node_mounts(self):
+        """Not only for redundancy: any class, as a volume's class change is."""
+        CLASSES["items"].append({"metadata": {"name": "longhorn-v1-1x"}, "provisioner": "driver.longhorn.io",
+                                 "parameters": {"migratable": "true", "numberOfReplicas": "1"}})
+        self.addCleanup(CLASSES["items"].pop)
+        self.use(Cluster("longhorn"))
+        self.assertIn({"name": "longhorn-v1-1x", "shareable": False}, server.homestead_data_volume()["classes"])
+        server.move_homestead_data("longhorn-v1-1x")
+        pvc = next(b for m, p, b in self.c.sent if p.endswith("/persistentvolumeclaims"))
+        self.assertEqual(("homestead-data-moved", ["ReadWriteOnce"]), (pvc["metadata"]["name"], pvc["spec"]["accessModes"]))
+        job = next(b for m, p, b in self.c.sent if p.endswith("/jobs"))
+        self.c.jobs[job["metadata"]["name"]] = {"status": {"succeeded": 1}}
+        item = {"ref": {"namespace": server.SELF.NS, "job": job["metadata"]["name"], "old": "homestead-data",
+                        "new": "homestead-data-moved", "storage_class": "longhorn-v1-1x", "shareable": False}}
+        server._data_move_status(item)
+        # One node mounts it, so the old copy goes before the new one starts.
+        self.assertEqual("Recreate", self.c.dep["spec"]["strategy"]["type"])
+
+    def test_a_one_node_class_needs_one_copy_first(self):
+        CLASSES["items"].append({"metadata": {"name": "longhorn-v1-1x"}, "provisioner": "driver.longhorn.io",
+                                 "parameters": {"migratable": "true"}})
+        self.addCleanup(CLASSES["items"].pop)
+        cluster = Cluster("longhorn")
+        cluster.dep["spec"]["replicas"] = 2
+        self.use(cluster)
+        with self.assertRaisesRegex(ValueError, "set Redundancy to one copy first"):
+            server.move_homestead_data("longhorn-v1-1x")
+
+    def test_nothing_moves_while_a_job_is_running(self):
+        """The copy is of the moment: a job running meanwhile would come back
+        after the restart from an older step."""
+        self.use(Cluster())
+        self.running = [{"status": "running", "kind": "reclass", "title": "Move qdirstat-appdata to longhorn-v1-1x"}]
+        with self.assertRaisesRegex(ValueError, "1 job is still running .Move qdirstat-appdata"):
+            server.move_homestead_data("longhorn")
+        self.assertEqual([], self.c.sent)
 
 
 if __name__ == "__main__":

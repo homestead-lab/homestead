@@ -6,7 +6,7 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const HOMESTEAD_VERSION = "2.8.126";
+const HOMESTEAD_VERSION = "2.8.127";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -552,8 +552,25 @@ function pageSkeleton(view) {
   return `<div class="skeleton" aria-busy="true" aria-label="Loading">${head}${body}</div>`;
 }
 
+/* A search narrows these pages. On a phone the search box folds away behind
+   its icon, and a list filtered by a search no longer on screen looked like
+   things had gone missing - so the page itself says what it is showing. */
+function filterBar() {
+  const filterable = typeof FILTERABLE_VIEWS !== "undefined" && FILTERABLE_VIEWS.has(STATE.view);
+  const q = filterable ? String(STATE.q || "") : "";
+  $("#searchbtn")?.classList.toggle("filtering", !!q);
+  return q ? `<div class="filterbar"><span>Showing matches for <b>“${esc(q)}”</b></span>
+    <button class="btn sm" onclick="clearSearch()">Clear</button></div>` : "";
+}
+window.clearSearch = () => {
+  const input = $("#globalSearch");
+  if (input) { input.value = ""; input.dispatchEvent(new Event("input")); }
+  document.body.classList.remove("searching");
+};
+
 function paint(html) {
   const host = V();
+  html = filterBar() + html;
   PAGE_SNAPSHOT[STATE.view] = html;
   host.classList.remove("refreshing");
   if (!host.dataset.painted) {

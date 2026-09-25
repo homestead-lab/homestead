@@ -356,7 +356,7 @@ function workloadActions(w, update, off, compact = false) {
           <button class="${cls}" title="View live container logs" aria-label="Logs for ${esc(w.name)}" onclick="wlLogs('${w.ns}','${w.pods[0] ? w.pods[0].name : ""}','${w.name}')">${label("Logs", "log")}</button>
           ${off ? "" : `<button class="${cls}" title="Restart: replace every pod in this workload with a fresh one" aria-label="Restart ${esc(w.name)}" data-need="operator" onclick="wlRestart('${w.ns}','${w.name}')">${label("Restart", "restart")}</button>`}
           ${off ? `<button class="${cls}" title="Start this workload" aria-label="Start ${esc(w.name)}" onclick="wlScale('${w.ns}','${w.name}',1)">${label("Start", "play")}</button>`
-                : `<button class="${cls}" title="Scale this workload to zero" aria-label="Stop ${esc(w.name)}" onclick="wlScale('${w.ns}','${w.name}',0)">${label("Stop", "stop")}</button>`}
+                : `<button class="${cls}" title="Scale this workload to zero" aria-label="Stop ${esc(w.name)}" onclick="${w.self ? `wlStopSelf('${w.ns}','${w.name}')` : `wlScale('${w.ns}','${w.name}',0)`}">${label("Stop", "stop")}</button>`}
           <details class="actionmenu"><summary class="btn sm" title="More actions" aria-label="More actions for ${esc(w.name)}">⋯</summary>
             <div class="actionmenu-pop">
               <button aria-label="Console for ${esc(w.name)}" title="Open an audited interactive shell in a running container" data-need="operator" onclick="this.closest('details').open=false;wlConsole('${w.ns}','${w.name}')">${icon("console")}Console</button>
@@ -460,6 +460,29 @@ window.wlScale = async (ns, name, n) => {
     toast(`${name} ${n ? "started" : "stopped"}`, "ok"); setTimeout(() => refresh(true), 900);
   } catch (e) { toast(e.message, "bad"); }
 };
+/* Homestead stopping itself takes this page with it, and nothing here can
+   start it again - so it is said plainly, with restart offered instead. */
+window.wlStopSelf = (ns, name) => {
+  modal("Stop Homestead?", `
+    <div class="note bad"><b>This takes Homestead down, and this page with it.</b> Nothing here can start it again:
+      it stays down until someone runs this on the cluster -
+      <pre class="mono xs" style="white-space:pre-wrap;margin:8px 0">kubectl -n ${esc(ns)} scale deployment/${esc(name)} --replicas=1</pre>
+      Your apps keep running; jobs in the tray, alerts and moves pause until it is back.</div>
+    <p class="small">If it needs a fresh start, <b>Restart</b> brings it straight back.</p>
+    <label class="switch"><input type="checkbox" id="ss_ok"> I understand - stop it</label>
+    <div class="row" style="margin-top:14px"><button class="btn pri" onclick="closeModal();wlRestart('${esc(ns)}','${esc(name)}')">Restart instead</button>
+      <button class="btn danger" onclick="wlStopSelfGo('${esc(ns)}','${esc(name)}')">Stop Homestead</button>
+      <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+};
+window.wlStopSelfGo = async (ns, name) => {
+  if (!$("#ss_ok").checked) return toast("Tick the box to confirm", "bad");
+  try {
+    await api("/api/scale", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ns, name, replicas: 0, confirm_self: true }) });
+    closeModal(); toast("Homestead is stopping", "ok");
+  } catch (e) { toast(e.message, "bad"); }
+};
+
 window.wlRestart = async (ns, name) => {
   try {
     await api("/api/restart", { method: "POST", headers: { "Content-Type": "application/json" },

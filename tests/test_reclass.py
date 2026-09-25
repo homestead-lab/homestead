@@ -361,6 +361,46 @@ class NotFoundPartWayTests(unittest.TestCase):
         self.assertEqual("pv-new", c.pvcs["frigate-config"]["spec"]["volumeName"])
         self.assertEqual(1, c.deps["frigate"]["spec"]["replicas"])
 
+    def test_the_file_browser_holding_the_claim_is_closed(self):
+        """Volumes > Files leaves a helper pod mounting the claim for half an
+        hour; the swap waited on it, telling you to stop it yourself."""
+        c = Cluster()
+        helper = {"metadata": {"name": "homestead-files-frigate-config",
+                               "labels": {"homestead.io/task": "files", "homestead.io/app": "frigate-config"}},
+                  "spec": {"volumes": [{"persistentVolumeClaim": {"claimName": "frigate-config"}}]},
+                  "status": {"phase": "Running"}}
+        state = {"helper": True}
+        real_get, real_send = c.get, c.send
+
+        def get(path):
+            if path == "/api/v1/namespaces/lab/pods":
+                pods = real_get(path)["items"]
+                return {"items": pods + ([helper] if state["helper"] else [])}
+            claim = c.pvcs.get("frigate-config") or {}
+            if (claim.get("metadata") or {}).get("deletionTimestamp") and not state["helper"]:
+                real_send("DELETE", "/api/v1/namespaces/lab/persistentvolumeclaims/frigate-config")
+            return real_get(path)
+
+        def send(method, path, body=None, **kw):
+            if method == "DELETE" and "/pods/homestead-files-" in path:
+                state["helper"] = False
+                return body
+            if method == "DELETE" and path.endswith("/persistentvolumeclaims/frigate-config") and state["helper"]:
+                c.pvcs["frigate-config"]["metadata"]["deletionTimestamp"] = "now"
+                return body
+            return real_send(method, path, body, **kw)
+        RC.kget, RC.ksend = get, send
+
+        review = RC.plan("lab", "frigate-config", "longhorn-r3")
+        self.assertTrue(review["ok"], review["blockers"])
+        self.assertTrue(any("file browser" in w for w in review["warnings"]))
+        item = RC.start("lab", "frigate-config", "longhorn-r3", OPS())
+        self.advance_to(item, "swap")
+        state["helper"] = True                     # opened again mid-move
+        run(item)
+        self.assertEqual("succeeded", item["status"], item["message"])
+        self.assertFalse(state["helper"])
+
     def test_each_attempt_has_a_copy_job_of_its_own(self):
         Cluster()
         first = RC.start("lab", "frigate-config", "longhorn-r3", OPS())["ref"]["job_name"]

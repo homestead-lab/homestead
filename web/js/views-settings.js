@@ -217,11 +217,13 @@ async function replicasPaint() {
         `<option value="${n}" ${n === r.desired ? "selected" : ""} ${n > 1 && !r.data?.shareable && n !== r.desired ? "disabled" : ""}>${n} cop${n === 1 ? "y" : "ies"}</option>`).join("")}</select>
         <button class="btn sm pri" onclick="replicasSave()">Apply</button></div>` : ""}</div>
     ${r.data && !r.data.shareable ? `<div class="note ${r.desired > 1 ? "bad" : ""}" style="margin-top:10px"><b>More than one copy needs a volume every node can mount.</b> ${esc(r.data.reason)}.
-      ${r.data.candidates.length && can("admin") ? `<div class="row" style="margin-top:8px">Move its data to
-        <select id="rep_class">${r.data.candidates.map(c => `<option ${c === "longhorn" ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>
-        <button class="btn sm" onclick="replicasMoveData()">Move data</button></div>
-        <div class="dim xs" style="margin-top:4px">Homestead keeps running while the data is copied, then restarts once onto the new volume. ${esc(r.data.pvc)} is kept until you delete it.</div>`
-        : r.data.candidates.length ? "" : "<div>This cluster has no storage class that shares a volume between nodes; create one under Volumes, without live migration.</div>"}</div>` : ""}
+      ${r.data.candidates.length ? "" : "<div>This cluster has no storage class that shares a volume between nodes; create one under Volumes, without live migration.</div>"}</div>` : ""}
+    ${r.data?.pvc ? `<div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px"><span class="small">Its data: <span class="mono">${esc(r.data.pvc)}</span> on <b>${esc(r.data.storage_class || "?")}</b></span>
+      ${(r.data.classes || []).length && can("admin") ? `<span class="small">· move to</span>
+        <select id="rep_class">${r.data.classes.map(c => `<option value="${esc(c.name)}" ${c.name === "longhorn" && !r.data.shareable ? "selected" : ""}>${esc(c.name)}${c.shareable ? " · every node" : " · one node"}</option>`).join("")}</select>
+        <button class="btn sm" onclick="replicasMoveData()">Move data</button>` : ""}</div>
+      <div class="dim xs" style="margin-top:4px">Homestead keeps running while its data is copied, then restarts once onto the new volume;
+        the old one is kept until you delete it. Wait for running jobs to finish first - the copy is taken as it stands.</div>` : ""}
     <table class="tbl dense stack" style="margin-top:10px"><thead><tr><th>Copy</th><th>Node</th><th>State</th></tr></thead><tbody>
       ${r.pods.map(p => `<tr><td class="mono small">${esc(p.name)}${p.this ? ' <span class="tag">this page</span>' : ""}</td>
         <td data-label="Node">${esc(p.node || "unscheduled")}</td>

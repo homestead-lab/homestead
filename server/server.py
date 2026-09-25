@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.126")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.127")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -792,6 +792,38 @@ def pod_container_rows(pod):
 OWN_GROUP = "Homestead"
 
 
+def is_self(ns, name):
+    """The Deployment this Homestead runs as."""
+    return (ns, name) == (SELF.NS, NAMES.BRAND)
+
+
+def self_stop_warning():
+    return (f"Stopping Homestead takes this page down with it, and nothing here can start it again: "
+            f"it stays down until someone runs  kubectl -n {SELF.NS} scale deployment/{NAMES.BRAND} --replicas=1  "
+            "on the cluster. Restart it instead if it needs a fresh start.")
+
+
+def guard_self(ns, name, stopping=False, confirmed=False, renaming=False, deleting=False, moving=False):
+    """Changes that would take Homestead down from its own page.
+
+    Stopping is allowed once it has been said out loud and confirmed; deleting,
+    renaming and moving its storage never are from here - each needs the page
+    running to finish, and would leave it gone halfway.
+    """
+    if not is_self(ns, name):
+        return
+    if deleting:
+        raise ValueError("Homestead cannot delete itself from its own page - that removes this page for good. "
+                         "Use helm uninstall, or kubectl, if that is what you want")
+    if renaming:
+        raise ValueError("Homestead cannot rename itself: its permissions, Service and data are tied to its name")
+    if moving:
+        raise ValueError("Homestead's own data moves from Settings > About > Redundancy, which restarts it safely; "
+                         "a storage move here would stop the page doing the move")
+    if stopping and not confirmed:
+        raise ValueError(self_stop_warning())
+
+
 def own_group(ns, name):
     """Homestead's own containers - itself, the Samba that serves shares, the
     backup store moves go through - sit together, apart from your apps,
@@ -915,6 +947,7 @@ def get_workloads():
             "hardware": hardware,
             "icon": display_icon(annotations),
             "group": NAMES.read(annotations, "group") or own_group(ns, name),
+            "self": is_self(ns, name),
         })
     return sorted(out, key=lambda x: (x["ns"], x["name"]))
 
@@ -3132,8 +3165,13 @@ def homestead_data_volume(dep=None):
                   "only one node can mount, so a copy on a second node would never start")
     else:
         reason = ""
+    shared = shared_storage_classes(rows)
+    # Every class it could move to, and whether copies on several nodes could
+    # then share it: the move is not only for redundancy.
+    classes = [{"name": r["name"], "shareable": r["name"] in shared} for r in rows
+               if not r.get("internal") and r["name"] != klass]
     return {"pvc": claim, "storage_class": klass, "access_modes": modes, "size": size,
-            "shareable": not reason, "reason": reason, "candidates": shared_storage_classes(rows)}
+            "shareable": not reason, "reason": reason, "candidates": shared, "classes": classes}
 
 
 ROLLING = {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": 1, "maxUnavailable": 0}}
@@ -3166,19 +3204,35 @@ def fit_own_strategy():
 
 
 def move_homestead_data(storage_class):
-    """Copies Homestead's data to a new shareable claim, then points it there.
+    """Copies Homestead's data to a new claim on another class, then points it there.
 
     The copy runs as a job on the node that has the current volume attached,
     since that is the only node that can mount it; Homestead keeps running
-    throughout and restarts once, onto the new claim. The old claim is kept."""
+    throughout and restarts once, onto the new claim. The old claim is kept.
+
+    The copy is of the moment it runs. Jobs record each step on this volume,
+    so one still running would come back after the restart from an older
+    step - a storage class change mid-swap, say - which is why nothing else
+    may be running."""
     info = homestead_data_volume()
-    if info["shareable"]:
-        raise ValueError(f"{info['pvc']} can already be mounted on several nodes")
-    if storage_class not in info["candidates"]:
-        raise ValueError(f"choose a class that can share a volume between nodes: {', '.join(info['candidates']) or 'none here'}")
+    target_row = next((c for c in info.get("classes") or [] if c["name"] == storage_class), None)
+    if storage_class == info.get("storage_class"):
+        raise ValueError(f"{info['pvc']} is on {storage_class} already")
+    if not target_row:
+        raise ValueError(f"storage class {storage_class} is not one Homestead's data can move to")
     ns = SELF.NS
+    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{NAMES.BRAND}")
+    if not target_row["shareable"] and int((dep.get("spec") or {}).get("replicas") or 1) > 1:
+        raise ValueError(f"{storage_class} gives a volume one node can mount, and {dep['spec']['replicas']} copies "
+                         "of Homestead run: set Redundancy to one copy first")
+    busy = [o for o in OPS.list_operations() if o.get("status") in ("queued", "running")
+            and o.get("kind") != "self-data-move"]
+    if busy:
+        raise ValueError(f"{len(busy)} job{'s are' if len(busy) != 1 else ' is'} still running ({busy[0].get('title', '')}"
+                         f"{' and more' if len(busy) > 1 else ''}). The copy is taken as it stands and Homestead restarts "
+                         "onto it, so a job running meanwhile would lose its later steps: let them finish first")
     names = {i["metadata"]["name"] for i in kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims").get("items", [])}
-    target = f"{NAMES.BRAND}-data-shared"
+    target = f"{NAMES.BRAND}-data-shared" if target_row["shareable"] else f"{NAMES.BRAND}-data-moved"
     n = 2
     while target in names:
         target, n = f"{NAMES.BRAND}-data-shared-{n}", n + 1
@@ -3189,7 +3243,7 @@ def move_homestead_data(storage_class):
     if not pods:
         raise ValueError("no running Homestead pod shows which node holds the data volume")
     node = pods[0]["spec"]["nodeName"]
-    create_pvc(ns, target, size_gb, storage_class, "ReadWriteMany")
+    create_pvc(ns, target, size_gb, storage_class, "ReadWriteMany" if target_row["shareable"] else "ReadWriteOnce")
     job = f"{NAMES.BRAND}-data-move-{secrets.token_hex(3)}"
     body = {"apiVersion": "batch/v1", "kind": "Job",
             "metadata": {"name": job, "namespace": ns, "labels": NAMES.labels("data-move")},
@@ -3206,7 +3260,8 @@ def move_homestead_data(storage_class):
     ksend("POST", f"/apis/batch/v1/namespaces/{ns}/jobs", body)
     op = OPS.start("self-data-move", f"Move Homestead's data to {target}",
                    {"kind": "PersistentVolumeClaim", "name": target, "namespace": ns}, "/settings",
-                   {"namespace": ns, "job": job, "old": info["pvc"], "new": target}, "Copying")
+                   {"namespace": ns, "job": job, "old": info["pvc"], "new": target,
+                    "storage_class": storage_class, "shareable": target_row["shareable"]}, "Copying")
     return {"ok": True, "operation": op, "detail": f"copying {info['pvc']} to {target} on {storage_class}; Homestead restarts onto it when done"}
 
 
@@ -3220,7 +3275,9 @@ def _data_move_status(item):
     volumes = dep["spec"]["template"]["spec"].get("volumes") or []
     data = next((v for v in volumes if v.get("name") == "data"), None)
     if data and (data.get("persistentVolumeClaim") or {}).get("claimName") == ref["new"]:
-        return "succeeded", 100, (f"Homestead keeps its data on {ref['new']}, which every node can mount; "
+        where = ("which every node can mount" if ref.get("shareable", True)
+                 else f"on {ref.get('storage_class', 'its new class')}")
+        return "succeeded", 100, (f"Homestead keeps its data on {ref['new']}, {where}; "
                                   f"{ref['old']} is kept - delete it from Volumes once all is well")
     try:
         status = kget(f"/apis/batch/v1/namespaces/{ns}/jobs/{ref['job']}").get("status") or {}
@@ -3233,6 +3290,9 @@ def _data_move_status(item):
     if not status.get("succeeded"):
         return "running", 40 if status.get("active") else 15, "Copying Homestead's data"
     data["persistentVolumeClaim"]["claimName"] = ref["new"]
+    # How it replaces itself follows the new volume: rolling only when
+    # several nodes can mount it, otherwise the old copy goes first.
+    dep["spec"]["strategy"] = own_strategy(ref.get("shareable", True))
     ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
     return "running", 90, f"Copied; Homestead is restarting onto {ref['new']}"
 
@@ -4481,6 +4541,7 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, set_workload_groups(b))
             if p == "/api/scale":
                 ns, name, n = b["ns"], b["name"], int(b["replicas"])
+                guard_self(ns, name, stopping=n == 0, confirmed=b.get("confirm_self") is True)
                 ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}/scale",
                       {"spec": {"replicas": n}}, ctype="application/merge-patch+json")
                 _cache.pop("wl", None)
@@ -4658,6 +4719,12 @@ class H(BaseHTTPRequestHandler):
                 # Paths moved to other storage bring their data: the edit is
                 # saved stopped and a job copies before it starts again.
                 moves = RESTRUCTURE.copies(b)
+                guard_self(b.get("ns", ""), b.get("name", ""),
+                           stopping=("autostart" in b and not b["autostart"]) or
+                                    ("replicas" in b and int(b.get("replicas") or 0) == 0),
+                           confirmed=b.get("confirm_self") is True,
+                           renaming=bool(b.get("workload_name")) and b.get("workload_name") != b.get("name"),
+                           moving=bool(moves))
                 result = LC.edit_workload(b, hold=bool(moves))
                 if moves:
                     result["operation"] = OPS.start(
@@ -5031,6 +5098,7 @@ class H(BaseHTTPRequestHandler):
         try:
             if len(parts) == 4 and parts[:2] == ["api", "workload"]:
                 ns, name = parts[2], parts[3]
+                guard_self(ns, name, deleting=True)
                 # Every Service selecting these pods, not just the one sharing the
                 # workload's name: a sidecar or a hand-made listener is named
                 # differently and would otherwise keep its VIP port forever.
@@ -5112,7 +5180,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.126 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.127 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

@@ -128,9 +128,31 @@ def consumers(ns, claim):
     return out
 
 
-def _using_pods(ns, claim):
+def _helper(pod):
+    """Homestead's own file-browser pod: it holds the claim for up to half an
+    hour after Volumes > Files was opened, and is Homestead's to close."""
+    labels = (pod.get("metadata") or {}).get("labels") or {}
+    return labels.get(NAMES.key("task")) == "files"
+
+
+def _close_helpers(ns, claim):
+    closed = []
+    for pod in _using_pods(ns, claim, helpers=True):
+        if not _helper(pod):
+            continue
+        try:
+            ksend("DELETE", f"/api/v1/namespaces/{ns}/pods/{pod['metadata']['name']}?gracePeriodSeconds=0")
+            closed.append(pod["metadata"]["name"])
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+    return closed
+
+
+def _using_pods(ns, claim, helpers=True):
     return [p for p in _items(f"/api/v1/namespaces/{ns}/pods")
-            if claim in _claims_in(p.get("spec")) and (p.get("status") or {}).get("phase") not in ("Succeeded", "Failed")]
+            if claim in _claims_in(p.get("spec")) and (p.get("status") or {}).get("phase") not in ("Succeeded", "Failed")
+            and (helpers or not _helper(p))]
 
 
 def _longhorn_used(ns, claim):
@@ -176,7 +198,9 @@ def plan(ns, claim, target):
         if c["kind"] == "Deployment" and ns == OWN_NS and c["name"] == NAMES.BRAND:
             blockers.append("this is Homestead's own data; move it from Settings › Redundancy instead")
     known = {(c["kind"], c["name"]) for c in used}
-    for pod in _using_pods(ns, claim):
+    if any(_helper(pod) for pod in _using_pods(ns, claim)):
+        warnings.append("the file browser open on it (Volumes > Files) is closed")
+    for pod in _using_pods(ns, claim, helpers=False):
         owners = pod["metadata"].get("ownerReferences") or []
         if not owners:
             blockers.append(f"pod {pod['metadata']['name']} uses it and belongs to nothing Homestead can stop")
@@ -270,6 +294,7 @@ def _steps(item, phase, copy=None):
 
 
 def _stop(ns, ref):
+    _close_helpers(ns, ref["claim"])
     for c in ref["consumers"]:
         if c.get("stopped"):
             continue
@@ -502,6 +527,7 @@ def _resolve(item):
         return "running", 5, "Stopping " + ", ".join(c["name"] for c in ref["consumers"]) if ref["consumers"] else "Nothing uses it"
     if phase == "stopping":
         _steps(item, "stop")
+        _close_helpers(ns, claim)
         left = _using_pods(ns, claim)
         if left:
             return "running", 8, f"Waiting for {len(left)} pod{'s' if len(left) != 1 else ''} to let go of {claim}"
@@ -657,6 +683,9 @@ def _held(ns, ref, claim_obj):
         _stop(ns, ref)
         return (f"{', '.join(again)} had started again and was holding the original {claim}; "
                 "stopped it again")
+    closed = _close_helpers(ns, claim)
+    if closed:
+        return f"Closed the file browser that was holding the original {claim}"
     pods = [p["metadata"]["name"] for p in _using_pods(ns, claim)]
     if pods:
         return (f"Waiting for {', '.join(pods[:3])}{' and more' if len(pods) > 3 else ''} to stop using "

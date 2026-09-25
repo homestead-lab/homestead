@@ -275,6 +275,10 @@ window.editSave = async (ns, name) => {
     placement: readPlacement() };
   const moves = containers.flatMap(container => container.volumes.filter(volume => volume.copy_from));
   if (moves.length && renaming) return toast("Rename the workload and move its data in separate saves", "bad");
+  if ((STATE.data.wl || []).some(x => x.self && x.ns === ns && x.name === name) && !body.autostart) {
+    if (!confirm(`Turning autostart off stops Homestead, and this page with it. Nothing here can start it again - it stays down until someone runs\n\n  kubectl -n ${ns} scale deployment/${name} --replicas=1\n\non the cluster. Stop it anyway?`)) return;
+    body.confirm_self = true;
+  }
   const where = (claim, folder) => folder ? `${claim}/${folder}` : claim;
   if (moves.length && !confirm(`Copy ${moves.length} location${moves.length === 1 ? "" : "s"} to new storage?\n\n` +
       moves.map(volume => `${volume.path}: ${where(volume.copy_from.claim, volume.copy_from.sub_path)} → ${where(volume.source, volume.sub_path)}`).join("\n") +

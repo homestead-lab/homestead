@@ -1028,6 +1028,14 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
 .topright{flex:0 0 auto}
 #searchbtn{display:none}
 
+/* What a search is narrowing the page to: only where the search box itself
+   is folded behind its icon, which then carries a dot. */
+.filterbar{display:none;align-items:center;justify-content:space-between;gap:10px;margin:0 0 12px;
+  padding:8px 10px 8px 14px;border-radius:12px;border:1px solid var(--line2);background:var(--surf);font-size:13px}
+#searchbtn.filtering{position:relative}
+#searchbtn.filtering::after{content:"";position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--vio)}
+@media(max-width:1080px){.filterbar{display:flex}}
+
 /* The title and the search bar stop fitting side by side well before the
    sidebar collapses, so the search becomes an icon that overlays the bar. */
 @media(max-width:1080px){
