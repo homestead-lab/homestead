@@ -2050,6 +2050,27 @@ def _harvester_image(ref):
     raise ValueError(f"image {ref} was not found")
 
 
+def _modes_for_cdi(sc):
+    """How a VM disk is claimed where CDI cannot tell: CDI takes a class's
+    access and volume mode from its StorageProfile, which is empty for
+    provisioners it does not know - k3s's local-path among them - and the
+    disk is then refused (ErrClaimNotValid). Such a class gets a plain
+    single-node file-backed disk, which is what it can give."""
+    name = sc
+    if not name:
+        for item in (_get_or_none("/apis/storage.k8s.io/v1/storageclasses") or {}).get("items", []):
+            if ((item.get("metadata") or {}).get("annotations") or {}).get(
+                    "storageclass.kubernetes.io/is-default-class") == "true":
+                name = item["metadata"]["name"]
+                break
+    if not name:
+        return {}
+    profile = _get_or_none(f"/apis/cdi.kubevirt.io/v1beta1/storageprofiles/{name}") or {}
+    if (profile.get("status") or {}).get("claimPropertySets") or (profile.get("spec") or {}).get("claimPropertySets"):
+        return {}
+    return {"accessModes": ["ReadWriteOnce"], "volumeMode": "Filesystem"}
+
+
 def _vm_mac():
     """A MAC of the kind KubeVirt gives, fixed here so cloud-init can find the
     interface its address belongs to whatever the guest names it."""
@@ -2180,6 +2201,8 @@ def create_vm(cfg, platform=None, default_class=""):
         if harvester:
             # A downloaded image on Harvester still gets a disk that can migrate.
             storage.update(accessModes=["ReadWriteMany"], volumeMode="Block")
+        else:
+            storage.update(_modes_for_cdi(sc))
         templates = [{"metadata": {"name": dv},
                       "spec": {"source": {"http": {"url": image_url}} if image_url else {"blank": {}},
                                "storage": storage}}]

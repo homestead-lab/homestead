@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.153")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.154")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1107,6 +1107,18 @@ def get_workloads():
                         fatal_waits.append(f"{p['metadata']['name']}: {reason}")
             if not ready:
                 transition_ages.append(age_secs(p["metadata"].get("creationTimestamp")))
+            # Pending and unscheduled says nothing; the scheduler said why.
+            unplaced = ""
+            placed = conditions.get("PodScheduled") or {}
+            if placed.get("status") == "False" and not p["metadata"].get("deletionTimestamp"):
+                own = []
+                if pspec.get("hostNetwork") and NETWORK.servicelb_present():
+                    wanted = {cp.get("containerPort") for c in pspec.get("containers", []) or []
+                              for cp in c.get("ports", []) or []}
+                    own = sorted({row["port"] for row in ports if row.get("port") in wanted})
+                unplaced = UPDATES.explain_unplaced(placed.get("message", ""), own)
+                if age_secs(p["metadata"].get("creationTimestamp")) > 60:
+                    fatal_waits.append(f"{p['metadata']['name']} cannot be placed: {unplaced}")
             containers = pod_container_rows(p)
             # A pod still fetching its image says how far it has got: events
             # say Pulling, containerd says how many bytes.
@@ -1126,6 +1138,7 @@ def get_workloads():
                              "node": p["spec"].get("nodeName", ""), "ready": ready,
                              # Told to stop, and not stopped yet.
                              "terminating": bool(p["metadata"].get("deletionTimestamp")),
+                             "unplaced": unplaced,
                              "pull": pull,
                              "waiting": waits,
                              "uptime": age_secs(p["status"].get("startTime")),
@@ -6017,7 +6030,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.153 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.154 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

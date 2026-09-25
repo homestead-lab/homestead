@@ -306,6 +306,8 @@ b.uptime-ok{color:var(--ok)}b.uptime-warn{color:var(--med)}b.uptime-bad{color:va
 .v2mark.ok{background:color-mix(in srgb,var(--ok) 20%,transparent);color:var(--ok)}
 .v2mark.bad{background:color-mix(in srgb,var(--crit) 20%,transparent);color:var(--crit)}
 .v2mark.unknown{background:var(--line2);color:var(--mut)}
+.wblocked{margin:6px 0 2px;font-size:11px;line-height:1.4;color:var(--med);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.tree-why.unplaced{margin-left:0}
 .pullbar{display:grid;gap:3px;margin:6px 0 2px}.pullbar .meter{height:5px}
 .tree-container{padding:3px 0}.tree-branch{font-size:9px;letter-spacing:.06em;text-transform:uppercase;flex:0 0 58px}.tree-branch.init{color:var(--vio)}
 .tree-image{margin-left:auto;max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

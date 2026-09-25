@@ -32,7 +32,7 @@ async function authState() {
 
 /* Homestead is up but its cluster is not answering: say so, and keep trying. */
 function clusterUnavailable(error) {
-  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.153" alt="">
+  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.154" alt="">
     <h2>Homestead</h2><p class="sub">Waiting for the cluster</p>
     <div class="gateerr">${esc(error || "The Kubernetes API did not answer.")}</div>
     <p class="dim small">This page tries again every few seconds.</p>
@@ -71,7 +71,7 @@ function ungate() { $("#gate").classList.add("hidden"); }
 
 function loginForm(err, setup) {
   gate(`
-    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.153" alt="">
+    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.154" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}

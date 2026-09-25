@@ -642,6 +642,31 @@ STUCK_REASONS = {"FailedAttachVolume", "FailedMount", "FailedScheduling"}
 STUCK_AFTER = 180
 
 
+def explain_unplaced(message, own_service_ports=()):
+    """What the scheduler's refusal means, and what to do about it. The
+    message counts nodes by reason ("0/1 nodes are available: 1 node(s)
+    didn't have free ports ..."); the reasons are what matter."""
+    text = " ".join(str(message or "").split())
+    if "free ports" in text:
+        if own_service_ports:
+            ports = ", ".join(str(p) for p in own_service_ports)
+            return (f"port {ports} is taken on the node - by k3s's ServiceLB, publishing this app's own Service. "
+                    "An app on the host network answers on the node itself and needs no Service: remove it under "
+                    "Networking (or Edit → Network → Host network, and save)")
+        return "a port it needs on the host is taken on every node that could run it - by another host-network app, or a Service ServiceLB publishes"
+    if "Insufficient memory" in text:
+        return "no node has enough free memory for what it asks: lower its memory under Edit, or free some up"
+    if "Insufficient cpu" in text:
+        return "no node has enough free CPU for what it asks: lower its CPU under Edit, or free some up"
+    if "didn't match Pod's node affinity/selector" in text or "node(s) didn't match" in text:
+        return "it may only run on a host - pinned, or needing hardware - that cannot take it now"
+    if "unbound immediate PersistentVolumeClaims" in text or "persistentvolumeclaim" in text.lower():
+        return "its volume is not ready yet"
+    if "untolerated taint" in text or "had taint" in text:
+        return "every node that could run it is cordoned or tainted"
+    return text[:240]
+
+
 def _why_waiting(ns, pod):
     """The newest warning about a pod that has not started, once it has been
     waiting a minute; stuck when a volume or scheduling warning has lasted
@@ -660,6 +685,9 @@ def _why_waiting(ns, pod):
     latest = max(events, key=lambda e: e.get("lastTimestamp") or e.get("eventTime") or "")
     message = " ".join(str(latest.get("message") or latest.get("reason") or "").split())[:300]
     found = {"message": message, "stuck": latest.get("reason") in STUCK_REASONS and age >= STUCK_AFTER}
+    if latest.get("reason") == "FailedScheduling":
+        found["message"] = f"cannot be placed: {explain_unplaced(message)}"
+        found["stuck"] = age >= STUCK_AFTER
     if "invalid controller count" in message:
         # Two pods on different nodes attached a volume on a migratable class,
         # and Longhorn took that for a VM live migration. Nothing clears it but

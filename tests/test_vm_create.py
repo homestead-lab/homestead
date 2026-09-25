@@ -146,12 +146,22 @@ class VmCreateTests(unittest.TestCase):
         claim = json.loads(self.vm()["metadata"]["annotations"]["harvesterhci.io/volumeClaimTemplates"])[0]
         self.assertEqual("longhorn-image-abc", claim["spec"]["storageClassName"])
 
-    def test_other_clusters_let_cdi_choose_the_access_mode(self):
+    def test_other_clusters_let_cdi_choose_the_access_mode_where_it_can(self):
+        self.objects["/apis/cdi.kubevirt.io/v1beta1/storageprofiles/longhorn"] = {
+            "status": {"claimPropertySets": [{"accessModes": ["ReadWriteMany"], "volumeMode": "Block"}]}}
+        self.create(K3S_CDI, "longhorn", image_url="https://example.test/u.img")
+        self.assertEqual({"resources": {"requests": {"storage": "20Gi"}}, "storageClassName": "longhorn"},
+                         self.vm()["spec"]["dataVolumeTemplates"][0]["spec"]["storage"])
+
+    def test_a_class_cdi_knows_nothing_of_gets_its_modes_spelled_out(self):
+        """On k3s, a VM disk on local-path was refused: CDI's StorageProfile for
+        it is empty, so it could not tell an access mode (ErrClaimNotValid)."""
+        self.objects["/apis/cdi.kubevirt.io/v1beta1/storageprofiles/local-path"] = {"status": {}}
         self.create(K3S_CDI, "local-path", image_url="https://example.test/u.img")
         vm = self.vm()
         template = vm["spec"]["dataVolumeTemplates"][0]["spec"]
-        self.assertEqual({"resources": {"requests": {"storage": "20Gi"}}, "storageClassName": "local-path"},
-                         template["storage"])
+        self.assertEqual({"resources": {"requests": {"storage": "20Gi"}}, "storageClassName": "local-path",
+                          "accessModes": ["ReadWriteOnce"], "volumeMode": "Filesystem"}, template["storage"])
         self.assertEqual("https://example.test/u.img", template["source"]["http"]["url"])
         self.assertNotIn("evictionStrategy", vm["spec"]["template"]["spec"])
         self.assertNotIn("annotations", vm["metadata"])

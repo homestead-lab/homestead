@@ -230,8 +230,12 @@ def _filling(vm, dvs, explain=False):
     out = []
     for v in ((vm.get("spec") or {}).get("template") or {}).get("spec", {}).get("volumes") or []:
         dv = dvs.get((ns, _volume_claim(v)))
-        status = (dv or {}).get("status") or {}
-        if dv and status.get("phase") not in ("Succeeded", None, ""):
+        status = dict((dv or {}).get("status") or {})
+        # A DataVolume CDI refused outright - ErrClaimNotValid, a class it
+        # cannot read - never gets a phase at all; it is waiting, and why.
+        if dv and not status.get("phase"):
+            status["phase"] = "Pending"
+        if dv and status.get("phase") != "Succeeded":
             progress = str(status.get("progress") or "").rstrip("%")
             try:
                 percent = float(progress)

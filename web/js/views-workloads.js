@@ -39,6 +39,11 @@ function pullBar(pull) {
     <div class="meter"><span style="width:${pct}%"></span></div></div>`;
 }
 const workloadPull = w => (w.pods || []).map(p => p.pull).find(pull => pull?.total_bytes);
+/* Why a workload that should run does not: the scheduler's reason, said plainly. */
+const workloadBlocked = w => {
+  const pod = (w.pods || []).find(p => p.unplaced);
+  return pod ? `Cannot start: ${pod.unplaced}` : "";
+};
 
 function workloadHierarchy(w) {
   const pods = w.pods || [];
@@ -56,6 +61,7 @@ function workloadHierarchy(w) {
         <span class="pill ${p.terminating ? "low" : p.ready ? "ok" : p.phase === "Pending" ? "med" : "crit"}" ${p.terminating ? 'data-tip="Told to stop and not gone yet. One that never started is cleared when the container is stopped or started again"' : ""}>${p.terminating ? "stopping" : p.ready ? "ready" : esc(p.phase || "pending")}</span>
         <span class="dim xs tree-node">${esc(p.node || "unscheduled")}${p.restarts ? ` · ${p.restarts} restart${p.restarts === 1 ? "" : "s"}` : ""}</span></div>
       ${p.pull?.total_bytes ? `<div class="tree-pull">${pullBar(p.pull)}</div>` : ""}
+      ${p.unplaced ? `<div class="tree-why unplaced" title="${esc(p.unplaced)}">Cannot be placed: ${esc(p.unplaced)}</div>` : ""}
       <div class="tree-containers">${(p.containers || []).map(c => `<div class="tree-container">
         <span class="tree-branch ${c.kind === "init" ? "init" : ""}">${c.kind === "init" ? "Init" : "Container"}</span>
         <b>${esc(c.name)}</b><span class="pill ${c.ready || (c.kind === "init" && c.state === "Completed") ? "ok" : c.state === "running" ? "med" : "low"}">${esc(c.state || "pending")}</span>
@@ -437,6 +443,7 @@ function workloadCard(w) {
         <div class="dim xs mono wimg"><span class="wimage-name">${w.images.map(i => esc(imageLabel(i))).join(" · ")}</span>
           <span class="wimage-hardware">${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</span></div>
         ${workloadPull(w) ? pullBar(workloadPull(w)) : ""}
+        ${workloadBlocked(w) ? `<div class="wblocked" title="${esc(workloadBlocked(w))}">${esc(workloadBlocked(w))}</div>` : ""}
         <div class="wfoot">
           ${workloadHierarchy(w)}
           <div class="row wacts">
@@ -469,7 +476,8 @@ function workloadTableRows(rows) {
           <div class="wtitle"><div><b>${esc(w.name)}</b></div>
             <div class="dim xs">${w.platform ? `${platformTag(w)} ` : ""}${esc(w.ns)} · ${off ? "stopped" : `<span class="nodelink" onclick="moveWorkload('${w.name}','${w.ns}')">${esc(w.nodes.join(", ") || "unscheduled")}</span>${w.uptime ? ` · up ${esc(fmtUp(w.uptime))}` : " · starting"}`}</div></div></div></td>
         <td class="wl-status" data-sort="${off ? -1 : w.desired ? w.ready / w.desired : 0}"><div class="row nowrap" style="gap:5px"><span class="pill slim ${ok ? "ok" : off ? "low" : "crit"}" title="${w.ready} of ${w.desired} ready">${w.ready}/${w.desired}</span>${update?.unchecked ? `<span class="pill slim neutral" data-tip="${update.images?.some(i => i.starting) ? "Still starting: its image is compared with the registry once it runs." : "Stopped, and not seen running here yet, so its image has not been compared with the registry. It is checked once it has run."}">${update.images?.some(i => i.starting) ? "starting" : "not checked"}</span>` : ""}
-          ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}</div>${workloadPull(w) ? pullBar(workloadPull(w)) : ""}</td>
+          ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}</div>${workloadPull(w) ? pullBar(workloadPull(w)) : ""}
+          ${workloadBlocked(w) ? `<div class="wblocked" title="${esc(workloadBlocked(w))}">${esc(workloadBlocked(w))}</div>` : ""}</td>
         <td class="wl-image"><div class="mono xs wl-imagetext" title="${esc(w.images.map(imageLabel).join(" · "))}">${w.images.map(i => esc(imageLabel(i))).join(" · ")}</div>
           ${(w.hardware || []).length || w.gpu ? `<div>${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</div>` : ""}</td>
         <td class="mono small nowrap wl-cpu" data-sort="${off ? "" : w.cpu}" data-tip="Live usage. 100% equals one fully used CPU core.">${workloadCpuPercent(w.cpu)}</td>

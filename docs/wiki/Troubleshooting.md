@@ -42,6 +42,14 @@ causes:
 - an RWX volume on a migratable class - see [Storage](Storage#storage-classes);
 - a hardware feature no host has.
 
+**A container stays Pending, "unscheduled".** Its card says why the scheduler
+cannot place it: not enough free memory or CPU on any node, pinned to a host
+that cannot take it, or a port taken. On k3s, an app on the **host network**
+with a LoadBalancer Service of its own blocks itself: ServiceLB holds the
+Service's ports on every node, the same ports the app needs there. It needs no
+Service - it answers on the node itself - so remove the Service under
+**Networking**. Moving such an app to k3s leaves the Service behind.
+
 **A container runs but its update check failed.** The registry could not be
 reached or needs credentials; that container shows the error, and the others
 still show their updates.
@@ -86,6 +94,11 @@ Service and whether its pods are ready. On Harvester, check the address is not
 also given out by your router's DHCP.
 
 ## VMs
+
+**On k3s, a VM's disk is refused: "cannot get access mode from StorageProfile
+local-path".** CDI knows nothing of k3s's `local-path` class. From 2.8.154
+Homestead spells out the access mode for such a class; delete the VM with its
+disk and create it again.
 
 **A VM waits at "Provisioning" or "ImportScheduled".** The VM's card says why
 after three minutes - most often the image URL is wrong or unreachable from the

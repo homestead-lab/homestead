@@ -638,11 +638,20 @@ def _creating(move):
         _post_ours(f"/api/v1/namespaces/{namespace}/secrets/{secret['metadata']['name']}",
                    f"/api/v1/namespaces/{namespace}/secrets", secret, move)
     chosen = move.setdefault("flags", {}).get("vip")
+    pod_spec = ((((definition.get("object") or {}).get("spec") or {}).get("template") or {}).get("spec") or {})
     for service in definition.get("services", []):
         service_name = service["metadata"]["name"]
         path = f"/api/v1/namespaces/{namespace}/services/{service_name}"
         existing = _get(path)
         if existing and _ours(existing, move["id"]):
+            continue
+        # On the host network an app answers on the node itself. Here k3s's
+        # ServiceLB would publish its Service by holding the same ports on
+        # every node - and the app could then never be placed. It needs none.
+        if (pod_spec.get("hostNetwork") and (service.get("spec") or {}).get("type") == "LoadBalancer"
+                and NETWORK.servicelb_present()):
+            move.setdefault("flags", {})["skipped_services"] = sorted(
+                set(move["flags"].get("skipped_services") or []) | {service_name})
             continue
         planned = _plan_service(service, definition, namespace, name,
                                 move.get("address_mode") or "shared", move.get("address", ""),
