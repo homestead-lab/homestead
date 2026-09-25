@@ -837,7 +837,9 @@ function pullElapsed(seconds) {
 function pullDetail(s) {
   const pull = s.pull || {};
   if (pull.state === "pulling") {
-    return `Fetching ${pull.image || "the image"}${pull.node ? ` on ${pull.node}` : ""} · ${pullElapsed(pull.seconds)} so far`;
+    // containerd's own count of the layers fetched, against the registry's sizes.
+    const amount = pull.total_bytes ? ` · ${pull.percent || 0}% of ${pullSize(pull.total_bytes)}` : "";
+    return `Fetching ${pull.image || "the image"}${pull.node ? ` on ${pull.node}` : ""}${amount} · ${pullElapsed(pull.seconds)} so far`;
   }
   if (pull.state === "failed") return pull.detail || "The image could not be pulled";
   if (pull.state === "pulled" && s.updated < s.desired) {
@@ -846,8 +848,13 @@ function pullDetail(s) {
   return `${s.updated} replacement pod${s.updated === 1 ? "" : "s"} created`;
 }
 
+const pullSize = b => b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1024 ** 2))} MB`;
+
 function rolloutMarkup(s) {
-  const pct = s.desired ? Math.min(100, Math.round(s.ready / s.desired * 100)) : (s.phase === "ready" ? 100 : 0);
+  // While the new image is fetched, the bar is the fetch: it is most of the wait.
+  const pulling = s.pull?.state === "pulling" && s.pull.total_bytes;
+  const pct = pulling ? Math.min(99, s.pull.percent || 0)
+    : s.desired ? Math.min(100, Math.round(s.ready / s.desired * 100)) : (s.phase === "ready" ? 100 : 0);
   return `<div class="rollout-head"><span class="pill ${s.phase === "ready" ? "ok" : s.phase === "failed" ? "crit" : "warn"}">${esc(s.phase)}</span>
     <span class="mono small">${s.ready}/${s.desired} ready · ${s.updated}/${s.desired} updated</span></div>
     <div class="rollout-meter"><span style="width:${pct}%"></span></div>
@@ -857,7 +864,7 @@ function rolloutMarkup(s) {
       <div class="${s.phase === "ready" ? "done" : s.phase === "failed" ? "failed" : "active"}"><i></i><span><b>Readiness checks</b><small>${s.ready} pod${s.ready === 1 ? "" : "s"} serving</small></span></div>
     </div>
     ${s.problems?.length ? `<div class="gateerr">${s.problems.map(esc).join("<br>")}</div>` : ""}
-    <div class="podprogress">${(s.pods || []).map(p => `<div><span><b>${esc(p.name)}</b><small>${esc(p.node || "scheduling")}${p.pull?.state === "pulling" ? ` · pulling ${esc(pullElapsed(p.pull.seconds))}` : ""}</small>${p.blocked ? `<small class="pod-blocked">${esc(p.blocked)}</small>` : ""}</span>
+    <div class="podprogress">${(s.pods || []).map(p => `<div><span><b>${esc(p.name)}</b><small>${esc(p.node || "scheduling")}${p.pull?.state === "pulling" ? ` · pulling${p.pull.total_bytes ? ` ${p.pull.percent || 0}%` : ""} ${esc(pullElapsed(p.pull.seconds))}` : ""}</small>${p.blocked ? `<small class="pod-blocked">${esc(p.blocked)}</small>` : ""}</span>
       <span class="pill ${p.phase === "Running" ? "ok" : "warn"}">${esc(p.pull?.state === "pulling" ? "pulling image" : p.waiting?.[0]?.reason || p.phase)}</span></div>`).join("")}</div>
     <div class="row" style="margin-top:18px">
       ${s.can_rollback ? `<button class="btn ${s.phase === "failed" ? "danger" : ""}" data-need="operator" onclick="imageRollback('${esc(s.ns)}','${esc(s.name)}')">Rollback</button>` : ""}

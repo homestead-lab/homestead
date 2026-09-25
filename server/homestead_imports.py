@@ -19,6 +19,7 @@ import urllib.parse
 
 import homestead_names as NAMES
 import homestead_hvimage as HVIMAGE
+import homestead_runtime as RUNTIME
 
 kget = ksend = create_pvc = build_deployment = None
 NS = "lab"
@@ -1270,10 +1271,14 @@ def image_cache():
     """What container images each node already has on disk."""
     nodes = kget("/api/v1/nodes").get("items", [])
     retained = image_retention_inventory()
+    scanning = _collect_scans()
     per_node, totals = [], {}
+    full = True
     for n in nodes:
         name = n["metadata"]["name"]
-        imgs = n["status"].get("images", []) or []
+        scanned = _scanned_images(name)
+        full = full and scanned is not None
+        imgs = scanned if scanned is not None else (n["status"].get("images", []) or [])
         rows = []
         for i in imgs:
             names = sorted(set(i.get("names") or ["<none>"]))
@@ -1290,7 +1295,8 @@ def image_cache():
         rows.sort(key=lambda x: -x["size_mb"])
         per_node.append({"node": name, "count": len(rows),
                          "total_gb": round(sum(r["size_mb"] for r in rows) / 1024, 1),
-                         "images": rows[:60]})
+                         "images": rows, "complete": scanned is not None,
+                         "scanned_at": int((_SCANS.get(name) or {}).get("at", 0))})
     shared = []
     for value in totals.values():
         aliases = {_canonical_image(ref) for ref in value["names"]}
@@ -1307,12 +1313,75 @@ def image_cache():
     # cache is exactly who wants to know a pull is running, or has finished and
     # been cleared away.
     pulls = prepull_status()
-    return {"nodes": per_node, "images": shared[:200],
+    return {"nodes": per_node, "images": shared, "complete": full, "scanning": scanning,
             "pulls": pulls["pulls"], "pulls_finished": pulls["finished"],
             "distinct": len(shared),
             "node_names": [n["metadata"]["name"] for n in nodes],
             "retained": retained,
             "protected": sum(1 for image in shared if image["protected"])}
+
+
+# ---- every image a node holds ----------------------------------------------
+# A node's status lists only its largest images (the kubelet reports fifty by
+# default), so plenty that are running never showed. A scan asks containerd on
+# each node for all of them, and the answer stands in for the status list
+# until the next scan.
+SCAN_TASK = "image-scan"
+SCAN_FRESH = 15 * 60
+_SCANS = {}          # node -> {"at": time, "images": [...]}
+
+
+def start_image_scan():
+    """One pod per Ready node, printing everything its containerd holds."""
+    started = []
+    attempt = format(int(time.time()), "x")[-6:]
+    for node in kget("/api/v1/nodes").get("items", []):
+        conditions = {c.get("type"): c.get("status") for c in (node.get("status") or {}).get("conditions") or []}
+        if conditions.get("Ready") != "True":
+            continue
+        name = node["metadata"]["name"]
+        suffix = hashlib.sha256(name.encode()).hexdigest()[:10]
+        body = RUNTIME.pod(f"homestead-image-scan-{suffix}-{attempt}", NS, name,
+                           f"{RUNTIME.CRICTL} images -o json", SCAN_TASK,
+                           {NAMES.key("cache-node"): name}, memory="64Mi", deadline=120)
+        ksend("POST", f"/api/v1/namespaces/{NS}/pods", body)
+        started.append(name)
+    _bust("imgcache")
+    return {"ok": True, "nodes": started,
+            "detail": f"asking containerd on {len(started)} node{'s' if len(started) != 1 else ''} for every image"}
+
+
+def _collect_scans():
+    """Read finished scan pods into _SCANS and remove them; say which run."""
+    running = []
+    for pod in NAMES.find(f"/api/v1/namespaces/{NS}/pods", "task", SCAN_TASK):
+        meta, phase = pod.get("metadata") or {}, (pod.get("status") or {}).get("phase")
+        node = NAMES.annotation_of(meta, "cache-node", "") or (pod.get("spec") or {}).get("nodeName", "")
+        if phase == "Succeeded":
+            try:
+                from homestead_shim import raw_get
+                listed = json.loads(raw_get(f"/api/v1/namespaces/{NS}/pods/{meta['name']}/log") or "{}")
+                _SCANS[node] = {"at": time.time(), "images": listed.get("images") or []}
+            except Exception:
+                pass
+        if phase in ("Succeeded", "Failed"):
+            try:
+                ksend("DELETE", f"/api/v1/namespaces/{NS}/pods/{meta['name']}")
+            except Exception:
+                pass
+        else:
+            running.append(node)
+    return running
+
+
+def _scanned_images(node):
+    """This node's images as containerd listed them, shaped like a node
+    status's, when a scan is fresh enough to trust."""
+    scan = _SCANS.get(node)
+    if not scan or time.time() - scan["at"] > SCAN_FRESH:
+        return None
+    return [{"names": list(i.get("repoTags") or []) + list(i.get("repoDigests") or []),
+             "sizeBytes": int(i.get("size") or 0)} for i in scan["images"]]
 
 
 PREPULL_NAMES = ("homestead-pull-",)
@@ -1425,6 +1494,24 @@ def stop_prepull(name):
     return {"ok": True, "daemonset": name, "message": f"Pre-pull {name} stopped"}
 
 
+def forget_rollback(namespace, name):
+    """Stop keeping a workload's previous image for a one-click rollback.
+
+    Homestead keeps it after an update so Roll back returns to exactly it;
+    forgetting it makes the old image ordinary and unused, to be cleaned up
+    like any other - and Roll back is gone for that update."""
+    dep = kget(f"/apis/apps/v1/namespaces/{namespace}/deployments/{name}")
+    annotations = (dep.get("metadata") or {}).get("annotations") or {}
+    keys = [key for key in annotations if key.endswith("/update-previous")]
+    if not keys:
+        raise ValueError(f"{name} keeps no previous image")
+    ksend("PATCH", f"/apis/apps/v1/namespaces/{namespace}/deployments/{name}",
+          {"metadata": {"annotations": {key: None for key in keys}}},
+          ctype="application/merge-patch+json")
+    _bust("imgcache", "wl")
+    return {"ok": True, "detail": f"{name} no longer keeps its previous image; it can be cleaned up now"}
+
+
 def cleanup_image(digest, nodes=None):
     """Start one tightly scoped CRI removal pod per selected cache node."""
     digest = str(digest or "").lower()
@@ -1447,8 +1534,7 @@ def cleanup_image(digest, nodes=None):
     if not image_ref:
         raise ValueError("the cache did not report a removable repository digest")
     pods = []
-    socket = "unix:///host/run/k3s/containerd/containerd.sock"
-    crictl = f"/usr/local/bin/crictl --runtime-endpoint {socket} --image-endpoint {socket}"
+    crictl = RUNTIME.CRICTL
     quoted = "'" + image_ref.replace("'", "") + "'"
     # Exited containers of pods long gone still hold the image, and rmi refuses
     # while any does. Only exited ones are removed - never a running container.
@@ -1460,39 +1546,9 @@ def cleanup_image(digest, nodes=None):
         # A name of its own per attempt: a retry used to delete the last pod and
         # recreate it at once, and Kubernetes had not finished deleting it.
         pod_name = f"homestead-image-clean-{suffix}-{attempt}"
-        body = {
-            "apiVersion": "v1", "kind": "Pod",
-            "metadata": {"name": pod_name, "namespace": NS,
-                         "labels": dict({"app": "homestead-image-cleaner"}, **NAMES.labels("image-cleanup")),
-                         "annotations": {NAMES.key("image-digest"): digest,
-                                         NAMES.key("cache-node"): node}},
-            "spec": {"nodeName": node, "restartPolicy": "Never",
-                     "terminationGracePeriodSeconds": 1,
-                     "tolerations": [{"operator": "Exists"}],
-                     "containers": [{
-                         "name": "cleanup", "image": "python:3.12-alpine",
-                         "command": ["sh", "-c", script],
-                         # crictl's own words become the failure the job tray shows.
-                         "terminationMessagePolicy": "FallbackToLogsOnError",
-                         "resources": {"requests": {"cpu": "5m", "memory": "16Mi"},
-                                       "limits": {"memory": "48Mi"}},
-                         "securityContext": {"runAsUser": 0, "runAsGroup": 0,
-                                             "runAsNonRoot": False,
-                                             "allowPrivilegeEscalation": False,
-                                             "readOnlyRootFilesystem": True,
-                                             "capabilities": {"drop": ["ALL"]}},
-                         "volumeMounts": [
-                             {"name": "crictl", "mountPath": "/usr/local/bin/crictl", "readOnly": True},
-                             {"name": "runtime", "mountPath": "/host/run/k3s/containerd", "readOnly": True},
-                         ],
-                     }],
-                     "volumes": [
-                         {"name": "crictl", "hostPath": {
-                             "path": "/var/lib/rancher/rke2/bin/crictl", "type": "File"}},
-                         {"name": "runtime", "hostPath": {
-                             "path": "/run/k3s/containerd", "type": "Directory"}},
-                     ]},
-        }
+        body = RUNTIME.pod(pod_name, NS, node, script, "image-cleanup",
+                           {NAMES.key("image-digest"): digest, NAMES.key("cache-node"): node},
+                           app="homestead-image-cleaner")
         for old in NAMES.find(f"/api/v1/namespaces/{NS}/pods", "task", "image-cleanup"):
             meta = old.get("metadata") or {}
             if meta.get("name", "").startswith(f"homestead-image-clean-{suffix}") and                     (old.get("status") or {}).get("phase") in ("Succeeded", "Failed"):

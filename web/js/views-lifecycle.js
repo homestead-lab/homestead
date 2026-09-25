@@ -613,6 +613,15 @@ window.doVmCreate = async () => {
 async function viewImages() {
   const d = await api("/api/images");
   STATE.data.imageCache = d;
+  // Kubernetes lists only each node's largest images; the full list is
+  // containerd's, asked for by a scan - started here at most every 15 minutes.
+  if (!d.complete && !(d.scanning || []).length && can("admin")
+      && Date.now() - (window.__imageScanAt || 0) > 15 * 60 * 1000) {
+    window.__imageScanAt = Date.now();
+    api("/api/images/scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
+      .then(() => setTimeout(() => { if (STATE.view === "images") viewImages(); }, 6000)).catch(() => {});
+  }
+  if ((d.scanning || []).length) setTimeout(() => { if (STATE.view === "images") viewImages(); }, 4000);
   const q = STATE.q.toLowerCase();
   const core = n => /(^|\/)(rancher|harvester|longhornio|kubevirt|cdi-|cilium|kube-|metrics-server|registry\.k8s\.io|pause|traefik|fleet|system-upgrade|k8snetworkplumbingwg|multus|whereabouts|kubeovn|calico|canal|flannel|coredns|etcd|rke2|neuvector|suse\/sles\/)/i.test(n);
   const all = d.images.filter(i => !q || i.name.toLowerCase().includes(q));
@@ -626,6 +635,12 @@ async function viewImages() {
         <div class="bignum" style="margin-top:8px">${n.total_gb}<span class="unit">GB</span></div>
         <div class="csub">${n.count} images cached</div></div>`).join("")}
     </div>
+    ${(d.scanning || []).length ? `<div class="note" style="margin-bottom:12px"><span class="spin2"></span> Asking containerd on ${d.scanning.length} node${d.scanning.length === 1 ? "" : "s"} for every image it holds…</div>`
+      : !d.complete ? `<div class="note warn between" style="margin-bottom:12px"><span>Kubernetes reports only each node's largest images, so some - running ones included - are missing here.
+          A scan asks each node's containerd for all of them.</span><button class="btn sm" data-need="admin" onclick="imageScan()">Scan every node</button></div>` : ""}
+    <div class="note" style="margin-bottom:12px"><b>Removing images.</b> <b>Clean up</b> removes an image nothing uses from the nodes that hold it.
+      <span class="tag ok">active</span> images are what running containers use, and stay. <span class="tag warn">rollback</span> copies are the image a container
+      had before its last update, kept so <b>Roll back</b> can return to it - <b>Forget</b> one and it becomes unused, to clean up like the rest.</div>
     ${(d.pulls || []).map(pull => `<div class="note warn between prepull-note" style="margin-bottom:12px">
       <span>Pre-pulling <span class="mono">${esc(pull.image)}</span> · ${pull.ready} of ${pull.desired} node${pull.desired === 1 ? "" : "s"} done.
         It runs until every node has the image; its pods come straight back if you delete them.</span>
@@ -634,11 +649,12 @@ async function viewImages() {
       ${d.pulls_finished.map(pull => `<span class="mono">${esc(pull.image)}</span>`).join(", ")} — cleared away.</div>` : ""}
     <div class="card flat pad0"><div class="tblwrap"><table data-sort="images" class="tbl stack imgtable"><thead><tr>
       <th>Image</th><th>Size</th><th>Cached on</th><th>Retention</th><th></th></tr></thead><tbody>
-      ${imgs.slice(0, 80).map(i => {
+      ${imgs.map(i => {
         const missing = d.node_names.filter(n => !i.nodes.includes(n));
         const retained = i.retained_by || [];
         const retention = retained.length ? retained.slice(0, 3).map(r => `<span class="tag ${r.reason === "rollback" ? "warn" : "ok"}"
-          title="${esc(r.namespace)} · ${esc(r.workload)} · ${esc(r.container)}">${r.reason === "rollback" ? "rollback" : "active"} · ${esc(r.workload)}</span>`).join("") +
+          title="${esc(r.namespace)} · ${esc(r.workload)} · ${esc(r.container)}">${r.reason === "rollback" ? "rollback" : "active"} · ${esc(r.workload)}</span>${r.reason === "rollback"
+          ? `<button class="btn sm" data-need="admin" data-tip="Stop keeping this image for ${esc(r.workload)}'s Roll back, so it can be cleaned up" onclick="forgetRollback('${esc(r.namespace)}','${esc(r.workload)}')">Forget</button>` : ""}`).join("") +
           (retained.length > 3 ? `<span class="tag">+${retained.length - 3}</span>` : "") : '<span class="tag">unreferenced</span>';
         return `<tr><td class="mono small imgname">${esc(i.name)}</td>
         <td class="mono">${i.size_mb >= 1024 ? (i.size_mb / 1024).toFixed(1) + " GB" : i.size_mb + " MB"}</td>
@@ -650,6 +666,21 @@ async function viewImages() {
       }).join("") || `<tr><td colspan=5 class="empty">none</td></tr>`}
     </tbody></table></div></div>`);
 }
+window.imageScan = async () => {
+  try {
+    const r = await api("/api/images/scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    toast(r.detail, "ok"); window.__imageScanAt = Date.now();
+    setTimeout(() => { if (STATE.view === "images") viewImages(); }, 5000);
+  } catch (e) { toast(e.message, "bad"); }
+};
+window.forgetRollback = async (namespace, name) => {
+  if (!confirm(`Stop keeping ${name}'s previous image? Roll back for its last update goes, and the image can be cleaned up.`)) return;
+  try {
+    const r = await api("/api/images/forget-rollback", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ namespace, name }) });
+    toast(r.detail, "ok"); resetPaint(); viewImages();
+  } catch (e) { toast(e.message, "bad"); }
+};
 window.prepull = async image => {
   try {
     const result = await api("/api/images/prepull", { method: "POST", headers: { "Content-Type": "application/json" },

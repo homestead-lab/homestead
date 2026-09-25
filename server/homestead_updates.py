@@ -207,6 +207,23 @@ def manifest_info(ref, auths=None, force=False):
     return info
 
 
+def image_layers(ref, arch="amd64", auths=None):
+    """The layers an image is pulled as on this architecture, with their
+    sizes - what a pull's progress is measured against."""
+    parsed = parse_image(ref)
+    reference = parsed["digest"] or parsed["tag"]
+    body, _ = _registry_json(parsed, "manifests/" + urllib.parse.quote(reference, safe=":"), auths or {}, MANIFEST_ACCEPT)
+    manifest = json.loads(body.decode())
+    if manifest.get("manifests"):
+        child = next((m for m in manifest["manifests"]
+                      if (m.get("platform") or {}).get("os", "linux") == "linux"
+                      and (m.get("platform") or {}).get("architecture") == arch), None) or manifest["manifests"][0]
+        body, _ = _registry_json(parsed, "manifests/" + child["digest"], auths or {}, MANIFEST_ACCEPT)
+        manifest = json.loads(body.decode())
+    return [{"digest": layer["digest"], "size": int(layer.get("size") or 0)}
+            for layer in manifest.get("layers") or [] if layer.get("digest")]
+
+
 def manifest_digest(ref, auths=None, force=False):
     return manifest_info(ref, auths, force)["digest"]
 
@@ -655,6 +672,10 @@ def _age(stamp):
         return 0
 
 
+# node, image -> {"percent", "done_bytes", "total_bytes"}; bound by server.
+pull_progress = None
+
+
 def progress(ns, name, dep=None):
     dep = dep or kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     pods = _matching_pods(dep, kget("/api/v1/pods").get("items", []))
@@ -711,6 +732,11 @@ def progress(ns, name, dep=None):
     pull = (next((row for row in pulls if row["state"] == "pulling"), None) or
             next((row for row in pulls if row["state"] == "failed"), None) or
             (pulls[0] if pulls else {}))
+    if pull.get("state") == "pulling" and pull_progress:
+        try:
+            pull.update(pull_progress(pull.get("node", ""), pull.get("image", "")))
+        except Exception:
+            pass
     return {"ns": ns, "name": name, "phase": phase, "desired": desired, "pull": pull,
             "replicas": replicas, "updated": updated, "ready": ready,
             "available": available, "unavailable": unavailable, "generation": generation,

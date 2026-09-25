@@ -106,6 +106,11 @@ def _finish(item, status, progress, message):
     return changed
 
 
+def _mb(size):
+    size = int(size or 0)
+    return f"{size / 1024 ** 3:.1f} GB" if size >= 1024 ** 3 else f"{max(1, round(size / 1024 ** 2))} MB"
+
+
 def _elapsed(seconds):
     seconds = max(0, int(seconds or 0))
     return f"{seconds}s" if seconds < 60 else f"{seconds // 60}m {seconds % 60:02d}s"
@@ -128,6 +133,12 @@ def _deployment(item):
     pull = state.get("pull") or {}
     if pull.get("state") == "pulling":
         where = f" on {pull['node']}" if pull.get("node") else ""
+        if pull.get("total_bytes"):
+            # containerd's own count of what it has fetched, against the
+            # registry's sizes: the pull is most of a first start.
+            pct = int(pull.get("percent") or 0)
+            return "running", max(progress, min(90, 5 + pct * 85 // 100)), (
+                f"Pulling image{where} · {pct}% of {_mb(pull['total_bytes'])} · {_elapsed(pull.get('seconds'))} so far")
         return "running", progress, f"Pulling image{where} · {_elapsed(pull.get('seconds'))} so far"
     if pull.get("state") == "pulled" and ready < desired:
         took = f" in {pull['took']}" if pull.get("took") else ""

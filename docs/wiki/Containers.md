@@ -65,6 +65,20 @@ their updates. **Settings → Updates** sets the policy: notify only, apply when
 approved, or apply in a maintenance window. Updates never jump a major version
 by themselves.
 
+While a new image is fetched - on an update or a first start - the rollout
+and the job tray show how far it has got: a percentage of the image's size,
+from containerd's own count of the layers it has fetched against the sizes
+the registry gives. Kubernetes itself reports no more than "Pulling".
+
+### Image cache
+
+**Image cache** lists the images on each node. Kubernetes reports only each
+node's largest ones, so the page asks each node's containerd for all of them
+(a short scan, run when you open it). **Clean up** removes an image nothing
+uses. *Active* images are what running containers use. *Rollback* copies are
+the image a container had before its last update, kept so **Roll back** can
+return to it; **Forget** one and it becomes unused, to clean up like the rest.
+
 ## Groups
 
 Groups gather containers under a heading - Media, Home, Monitoring - that folds

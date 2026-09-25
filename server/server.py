@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.133")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.134")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -3269,6 +3269,7 @@ import homestead_affinity as AFFINITY
 import homestead_failover as FAILOVER
 import homestead_k3scluster as K3SC
 import homestead_lan as LAN
+import homestead_pullwatch as PULLWATCH
 import homestead_portal as PORTAL
 import homestead_upgrades as UPGRADES
 import homestead_vmconsole as VMCONSOLE
@@ -3314,6 +3315,15 @@ RESTRUCTURE.bind(kget, ksend, raw_get)
 AFFINITY.bind(kget)
 FAILOVER.bind(kget, ksend)
 LAN.bind(kget, ksend)
+PULLWATCH.bind(kget, ksend, raw_get, lambda image, arch: UPDATES.image_layers(image, arch), DEFAULT_NS)
+
+
+def _pull_progress(node, image):
+    PULLWATCH.sweep()
+    return PULLWATCH.progress(node, image)
+
+
+UPDATES.pull_progress = _pull_progress
 K3SC.bind(kget, lambda cfg: create_vm_with_address(cfg), lambda ip: vm_address_problem(ip))
 OPS.RESOLVERS["k3s-cluster"] = K3SC.status
 MOVE_ENGINE.after_finish = cleanup_restore_classes
@@ -4214,7 +4224,7 @@ ADMIN_ROUTES = {
     "/api/shares", "/api/shares/edit", "/api/shares/delete", "/api/shares/options",
     "/api/storage/classes/default", "/api/storage/classes/delete", "/api/storage/classes/cleanup",
     "/api/network/service/delete",
-    "/api/images/cleanup",
+    "/api/images/cleanup", "/api/images/scan", "/api/images/forget-rollback",
     "/api/volumes/delete", "/api/volumes/chown",
     # A class change stops workloads and swaps their volume underneath them.
     "/api/volumes/reclass/start", "/api/volumes/old-copies/remove", "/api/self/samba",
@@ -5344,6 +5354,10 @@ class H(BaseHTTPRequestHandler):
                     {"kind": "Image", "name": b["image"], "namespace": DEFAULT_NS},
                     "/image-cache", {"namespace": DEFAULT_NS, "name": result["daemonset"]})
                 return self._send(200, result)
+            if p == "/api/images/scan":
+                return self._send(200, IMP.start_image_scan())
+            if p == "/api/images/forget-rollback":
+                return self._send(200, IMP.forget_rollback(b.get("namespace") or DEFAULT_NS, b.get("name", "")))
             if p == "/api/images/cleanup":
                 result = IMP.cleanup_image(b.get("digest"), b.get("nodes"))
                 result["operation"] = OPS.start(
@@ -5629,7 +5643,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.133 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.134 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()
