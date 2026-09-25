@@ -341,6 +341,7 @@ def view():
                         "usable": len(usable), "used": len(used),
                         "dhcp_size": (int(_ip(end)) - int(_ip(start)) + 1) if start and end else 0,
                         "free_static": len(free), "next_free": [str(ipaddress.ip_address(a)) for a in free[:8]],
+                        "free_list": [str(ipaddress.ip_address(a)) for a in free[:64]],
                         "pool_clash": pool_clash,
                         "scan": {"at": scan.get("at", 0), "state": (live or {}).get("state") or scan.get("state") or "",
                                  "progress": (live or {}).get("progress", 100 if scan.get("at") else 0)}})

@@ -49,6 +49,35 @@ network (Harvester's VM networks, or any Multus network), where it gets an
 address from your router. **Edit → Cloud-init** takes SSH keys, users and
 packages.
 
+### An address of its own
+
+On the **pod network** a VM is reached through a Service, like a container.
+On a **VM network bridged to the LAN** it is a machine there like any other:
+choose **Address → One of its own** and pick one of the free addresses
+[IP addresses](Networking#ip-addresses) knows of in that subnet - outside the
+DHCP range and the VIP pools. It is written into cloud-init's network config
+(matched to the VM's MAC, so it lands on the right interface whatever the
+guest calls it), checked against everything already on the network, and
+recorded in IP addresses under the VM's name. Cloud-init - the password
+included - is kept in a Secret, not in the VM's own definition.
+
+On Harvester, a VM network is made in its dashboard: **Networks → VM
+Networks → Create**, an *Untagged Network* on the `mgmt` cluster network (or
+an *L2 VLAN Network* with your VLAN's ID).
+
+## A k3s cluster of VMs
+
+**＋ k3s cluster** makes a small k3s cluster from VMs here - for trying k3s,
+an app, or Homestead itself on a cluster of its own. Choose how many servers
+(one, or three to survive one failing) and workers, their size, the image
+(Ubuntu 24.04 by default), the VM network and one address each. **Review**
+says what goes where and names anything already at an address; **Create
+cluster** makes the VMs with a join token made for them, and the job tray
+follows the cluster coming up - VMs running, k3s answering, then its own
+Homestead at `http://<first address>:8088`. It can run k3s with Longhorn and
+Homestead (what a new install gets), k3s and Homestead on local-path storage,
+or k3s alone. The nodes' login is `ubuntu` with the password you chose.
+
 ## Edit
 
 ![Edit VM](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-vm-edit.png)

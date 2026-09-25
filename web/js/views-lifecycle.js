@@ -447,6 +447,58 @@ window.doVmMove = async (ns, name) => {
     toast(`migration ${r.migration} started`, "ok"); closeModal(); setTimeout(() => refresh(true), 2000);
   } catch (e) { toast(e.message, "bad"); }
 };
+/* ---------------- a VM's own address ----------------
+   A VM on the pod network is reached through a Service. One on a VM network
+   bridged to the LAN is a machine there like any other, and can be given an
+   address of its own: picked from what IP addresses knows is free outside
+   the DHCP range, written into cloud-init's network config, and recorded
+   under the VM's name so nothing else is given it. */
+function vmLanNetworks(opts) {
+  return (opts.network_details || []).filter(n => n.lan);
+}
+function vmNetworkNote(opts) {
+  if (vmLanNetworks(opts).length) return "";
+  return `<div class="note" style="margin-top:8px"><b>No VM network reaches the LAN yet.</b> ${opts.harvester
+    ? "In Harvester's dashboard, <b>Networks → VM Networks → Create</b>: an <i>Untagged Network</i> on the <span class=\"mono\">mgmt</span> cluster network puts VMs on the same LAN as the hosts (or an <i>L2 VLAN Network</i> with your VLAN's ID). Then come back here."
+    : "Create a Multus bridge network attachment on the host bridge your LAN is on; VMs on it get LAN addresses."}</div>`;
+}
+function vmSubnetFor(opts, cidr) { return (opts.subnets || []).find(s => s.cidr === cidr); }
+function vmAddressFields(p, opts, count = 1) {
+  const subnets = opts.subnets || [];
+  const first = subnets[0];
+  return `<div class="f2">
+      <div class="f"><label>Subnet ${tip("From Networking › IP addresses: the addresses offered are free there, outside the DHCP range and the VIP pools.")}</label>
+        <select id="${p}_subnet" onchange="vmSubnetPicked('${p}', ${count})">${subnets.map(s => `<option value="${esc(s.cidr)}">${esc(s.cidr)}${s.name ? ` · ${esc(s.name)}` : ""} · ${s.free.length} free</option>`).join("")}
+          <option value="">another - type it in</option></select></div>
+      <div class="f"><label>${count > 1 ? "Addresses, one per node" : "Address"}</label>
+        <input id="${p}_ip" class="mono" placeholder="${count > 1 ? "192.0.2.60, 192.0.2.61" : "192.0.2.60"}" list="${p}_free">
+        <datalist id="${p}_free"></datalist></div></div>
+    <div class="f2">
+      <div class="f"><label>Prefix length</label><input id="${p}_prefix" type="number" min="8" max="30" value="${first ? esc(first.cidr.split("/")[1]) : 24}"></div>
+      <div class="f"><label>Gateway</label><input id="${p}_gw" class="mono" value="${esc(first?.gateway || "")}" placeholder="192.0.2.1"></div></div>
+    <div class="f"><label>DNS servers ${tip("Comma-separated. Left empty, the gateway answers DNS.")}</label><input id="${p}_dns" class="mono" placeholder="${esc(first?.gateway || "192.0.2.1")}"></div>
+    ${subnets.length ? "" : '<div class="dim xs">IP addresses knows no subnet yet: add yours under Networking › IP addresses to be offered free addresses and have these recorded.</div>'}`;
+}
+window.vmSubnetPicked = (p, count = 1) => {
+  const opts = window.__vmCreateOptions || {};
+  const subnet = vmSubnetFor(opts, $(`#${p}_subnet`)?.value);
+  $(`#${p}_free`).innerHTML = (subnet?.free || []).map(ip => `<option value="${esc(ip)}">`).join("");
+  if (!subnet) return;
+  $(`#${p}_prefix`).value = subnet.cidr.split("/")[1];
+  $(`#${p}_gw`).value = subnet.gateway || "";
+  $(`#${p}_ip`).value = (subnet.free || []).slice(0, count).join(", ");
+};
+function vmReadAddress(p) {
+  return { prefix: +$(`#${p}_prefix`).value || 24, gateway: $(`#${p}_gw`).value.trim(),
+    dns: $(`#${p}_dns`).value.split(",").map(x => x.trim()).filter(Boolean) };
+}
+window.vmNetChanged = () => {
+  const net = $("#v_net")?.value || "pod";
+  const lan = vmLanNetworks(window.__vmCreateOptions || {}).some(n => n.name === net);
+  $("#v_addr_wrap").hidden = !lan;
+  $("#v_static").hidden = !lan || $("#v_addr_mode").value !== "static";
+};
+
 window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
   const [opts, disks] = await Promise.all([
     api("/api/vm/create-options").catch(() => ({ harvester: !!STATE.platform?.harvester, cdi: true, storage_classes: [], images: [] })),
@@ -479,6 +531,14 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
         ${opts.cdi || opts.harvester ? `<option value="url">${opts.harvester ? "Download from a URL (as a Harvester image)" : "Download from HTTP(S) URL"}</option>` : ""}
       </select></div>
     <div class="f" id="v_url_row" hidden><label>Image URL</label><input type="url" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img"></div>
+    <div class="f"><label>Network ${tip("The pod network: reached through a Service, like a container. A VM network bridged to the LAN: a machine there like any other, with an address from DHCP or one of its own.")}</label>
+      <select id="v_net" onchange="vmNetChanged()"><option value="pod">Pod network - reached through a Service</option>
+        ${(opts.network_details || []).map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.lan ? ` · LAN${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}` : ""}</option>`).join("")}</select>
+      ${vmNetworkNote(opts)}</div>
+    <div id="v_addr_wrap" hidden>
+      <div class="f"><label>Address</label><select id="v_addr_mode" onchange="vmNetChanged();vmSubnetPicked('v')">
+        <option value="dhcp">From the network's DHCP</option><option value="static">One of its own</option></select></div>
+      <div id="v_static" hidden>${vmAddressFields("v", opts)}</div></div>
     ${(opts.storage_classes || []).length ? `<div class="f" id="v_sc_row"><label>Storage class ${tip(opts.harvester
       ? "Where a blank or downloaded disk lives. A disk from a Harvester image always lives on that image's own class."
       : "Where the disk lives. The cluster's default class is chosen for you.")}</label>
@@ -511,7 +571,11 @@ window.doVmCreate = async () => {
     namespace: imported[0] || "lab", disk_import: imported[1] || "",
     image_id: boot.startsWith("image:") ? boot.slice(6) : "",
     image_url: boot === "url" ? $("#v_url").value.trim() : "",
-    storage_class: $("#v_sc")?.value || "" };
+    storage_class: $("#v_sc")?.value || "", network: $("#v_net")?.value || "pod" };
+  if (body.network !== "pod" && $("#v_addr_mode")?.value === "static") {
+    body.static_ip = Object.assign(vmReadAddress("v"), { address: $("#v_ip").value.trim() });
+    if (!body.static_ip.address) return toast("give the VM its address", "bad");
+  }
   if (!body.name) return toast("name is required", "bad");
   if (!body.disk_import && body.password.length < 10) return toast("root password must be at least 10 characters", "bad");
   if (boot === "url" && !body.image_url) return toast("image URL is required", "bad");
@@ -522,8 +586,8 @@ window.doVmCreate = async () => {
       : "the image URL must start with http:// or https://", "bad");
   }
   try {
-    await api("/api/vm/create", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    toast(`${body.name} created`, "ok"); closeModal(); go("vms");
+    const r = await api("/api/vm/create", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    toast(r.address ? `${body.name} created at ${r.address}, recorded in IP addresses` : `${body.name} created`, "ok"); closeModal(); go("vms");
   } catch (e) { toast(e.message, "bad"); }
 };
 

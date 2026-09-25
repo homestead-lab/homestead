@@ -92,6 +92,12 @@ after three minutes - most often the image URL is wrong or unreachable from the
 cluster, or its volume cannot be scheduled. **Edit → Disks** can give a failed
 disk a new source.
 
+**A VM from a downloaded image stays Unschedulable: "pod has unbound
+immediate PersistentVolumeClaims".** Releases before 2.8.132 guessed the name
+of the storage class Harvester makes for a downloaded image, and newer
+Harvester names it differently. Delete the VM with its disk and create it
+again: the image is already downloaded, so it is quick.
+
 ## Moves between clusters
 
 **The backup storage card says "no LAN address".** The S3 server on the source

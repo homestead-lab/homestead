@@ -137,6 +137,21 @@ async function viewDash() {
   historyPaint();
 }
 
+/* What falls to this node rather than another: the addresses kube-vip has
+   it announce - the management VIP hosts join through among them - and the
+   shared volumes whose share manager runs here. */
+function nodeDutyTags(n) {
+  const d = n.duties || {};
+  const tags = [];
+  if ((d.management_vip || []).length) tags.push(`<span class="tag info" data-tip="This node answers for the cluster's management address - the dashboard and hosts joining. If it fails, another node takes the address within seconds.">management VIP ${esc(d.management_vip.join(", "))}</span>`);
+  const others = (d.vips || []).filter(ip => !(d.management_vip || []).includes(ip));
+  if (others.length) tags.push(`<span class="tag" data-tip="kube-vip has this node announce these load-balanced addresses: ${esc(others.join(", "))}">${others.length} VIP${others.length === 1 ? "" : "s"}</span>`);
+  if (d.control_plane_vip) tags.push('<span class="tag info" data-tip="This node holds the control-plane address the Kubernetes API answers on">API VIP</span>');
+  if ((d.rwx || []).length) tags.push(`<span class="tag" data-tip="Longhorn serves these shared (RWX) volumes from this node: ${esc(d.rwx.join(", "))}. If it fails they pause until their share manager starts elsewhere">serves ${d.rwx.length} shared volume${d.rwx.length === 1 ? "" : "s"}</span>`);
+  return tags.join("");
+}
+window.nodeDutyTags = nodeDutyTags;
+
 function nodeCard(n) {
   const dots = "<i></i>".repeat(Math.min(n.pods_sys, 80)) + '<i class="wl"></i>'.repeat(Math.min(n.pods_wl, 40));
   const bad = n.status !== "Ready";
@@ -150,7 +165,8 @@ function nodeCard(n) {
       <div class="row" style="gap:10px">
         <div class="av n2">${esc(n.name.replace(/[^0-9a-z]/gi, "").slice(-2).toUpperCase())}</div>
         <div class="nodename"><div style="font-weight:680" title="${esc(n.name)}">${esc(n.name)}</div>
-          <div class="dim xs" title="${esc(n.roles.join(" · "))}">${n.roles.join(" · ")}</div></div>
+          <div class="dim xs" title="${esc(n.roles.join(" · "))}">${n.roles.join(" · ")}</div>
+          ${nodeDutyTags(n) ? `<div class="row node-duties" style="gap:4px;flex-wrap:wrap;margin-top:4px">${nodeDutyTags(n)}</div>` : ""}</div>
       </div>
       <div class="row nodehead-acts" style="gap:7px">
         ${n.schedulable === false ? '<span class="pill med">cordoned</span>' : ""}
@@ -262,6 +278,7 @@ window.nodeDetail = async (name, fromRoute = false) => {
       <div class="card flat node-system-card"><div class="ctitle">System</div>
         ${row("Status", `<span class="pill ${n.status === "Ready" ? "ok" : "crit"}">${esc(n.status)}</span>`)}
         ${row("Roles", n.roles.map(r => `<span class="tag">${esc(r)}</span>`).join(""))}
+        ${nodeDutyTags(n) ? row("Serves", nodeDutyTags(n)) : ""}
         ${row("Schedulable", n.schedulable ? "yes" : `<span class="tag warn">cordoned</span>`)}
         ${row("Hardware", hardwareTags(nodeHardwareIds(n)) || "—")}
         ${row("Pods", `${n.pods_wl} yours · ${n.pods_sys} system`)}

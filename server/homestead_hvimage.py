@@ -31,9 +31,32 @@ def display_name(url):
 
 
 def storage_class(image):
-    """The class a disk from this image is made on: Harvester's own name for it."""
-    return ((image.get("status") or {}).get("storageClassName")
-            or "longhorn-" + (image.get("metadata") or {}).get("name", ""))
+    """The class a disk from this image is made on, as Harvester reports it.
+
+    Never guessed: older Harvester named it longhorn-<image>, newer ones
+    lh-<uuid>, and a claim on a guessed name that does not exist leaves the
+    VM unschedulable ("pod has unbound immediate PersistentVolumeClaims").
+    """
+    return (image.get("status") or {}).get("storageClassName") or ""
+
+
+# Harvester makes an image's storage class moments after the image itself.
+CLASS_WAIT_SECONDS = 30
+
+
+def _wait_for_class(kget, ns, name, sleep=None):
+    import time
+    sleep = sleep or time.sleep
+    for _ in range(CLASS_WAIT_SECONDS):
+        try:
+            klass = storage_class(kget(f"{_images(ns)}/{name}"))
+        except Exception:
+            klass = ""
+        if klass:
+            return klass
+        sleep(1)
+    raise ValueError(f"Harvester has not set up the storage for image {name} yet. It keeps downloading; "
+                     "create the VM again in a minute and it is used")
 
 
 def _parameters(kget, klass):
@@ -52,7 +75,7 @@ def _parameters(kget, klass):
     return params
 
 
-def download(kget, ksend, ns, url, klass=""):
+def download(kget, ksend, ns, url, klass="", sleep=None):
     """An image downloading (or downloaded) from url, in ns. One already made
     from the same address is used again rather than fetched twice."""
     for item in (kget(_images(ns)).get("items") or []):
@@ -60,8 +83,9 @@ def download(kget, ksend, ns, url, klass=""):
         failed = any(c.get("type") == "Imported" and c.get("status") == "False" and c.get("reason") == "ImportFailed"
                      for c in (item.get("status") or {}).get("conditions") or [])
         if spec.get("url") == url and not failed and not (item.get("metadata") or {}).get("deletionTimestamp"):
+            klass = storage_class(item) or _wait_for_class(kget, ns, item["metadata"]["name"], sleep)
             return {"name": item["metadata"]["name"], "namespace": ns, "display": spec.get("displayName", ""),
-                    "storage_class": storage_class(item), "reused": True}
+                    "storage_class": klass, "reused": True}
     name = "image-" + secrets.token_hex(3)
     body = {"apiVersion": "harvesterhci.io/v1beta1", "kind": "VirtualMachineImage",
             "metadata": {"name": name, "namespace": ns, "labels": {NAMES.key("managed"): "true"}},
@@ -69,4 +93,4 @@ def download(kget, ksend, ns, url, klass=""):
                      "storageClassParameters": _parameters(kget, klass)}}
     ksend("POST", _images(ns), body)
     return {"name": name, "namespace": ns, "display": body["spec"]["displayName"],
-            "storage_class": "longhorn-" + name, "reused": False}
+            "storage_class": _wait_for_class(kget, ns, name, sleep), "reused": False}

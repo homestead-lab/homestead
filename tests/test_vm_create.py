@@ -1,6 +1,7 @@
 import json
 import sys
 import unittest
+import unittest.mock
 import urllib.error
 from pathlib import Path
 
@@ -67,6 +68,7 @@ class VmCreateTests(unittest.TestCase):
         self.objects["/apis/harvesterhci.io/v1beta1/namespaces/lab/virtualmachineimages"] = {"items": []}
         self.objects["/apis/storage.k8s.io/v1/storageclasses/longhorn-r2"] = {
             "provisioner": "driver.longhorn.io", "parameters": {"numberOfReplicas": "2", "migratable": "true"}}
+        self.harvester_names_classes_later()
         self.create({"harvester": True, "cdi": False}, "longhorn-r2",
                     image_url="https://cloud-images.ubuntu.com/minimal/releases/resolute/release/ubuntu-26.04-minimal-cloudimg-amd64.img")
         image = next(b for m, p, b in self.sent if p.endswith("/virtualmachineimages"))
@@ -78,8 +80,55 @@ class VmCreateTests(unittest.TestCase):
         self.assertNotIn("dataVolumeTemplates", vm["spec"])
         claim = json.loads(vm["metadata"]["annotations"]["harvesterhci.io/volumeClaimTemplates"])[0]
         name = image["metadata"]["name"]
-        self.assertEqual((f"longhorn-{name}", f"lab/{name}"),
+        self.assertEqual(("lh-8b6ca866-806d-430a-8fd4-d584f0f06128", f"lab/{name}"),
                          (claim["spec"]["storageClassName"], claim["metadata"]["annotations"]["harvesterhci.io/imageId"]))
+
+    def harvester_names_classes_later(self, klass="lh-8b6ca866-806d-430a-8fd4-d584f0f06128", after=2):
+        """Harvester reports an image's storage class in its status a moment
+        after the image is made - under a name of its choosing."""
+        real_get, asked = self.objects, {"n": 0}
+        base = "/apis/harvesterhci.io/v1beta1/namespaces/lab/virtualmachineimages/"
+
+        def get(path):
+            if path.startswith(base):
+                asked["n"] += 1
+                return {"metadata": {"name": path[len(base):]},
+                        "status": {"storageClassName": klass} if klass and asked["n"] >= after else {}}
+            if path in real_get:
+                return real_get[path]
+            raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+        imports.kget = get
+        self.addCleanup(setattr, imports.HVIMAGE, "CLASS_WAIT_SECONDS", imports.HVIMAGE.CLASS_WAIT_SECONDS)
+        imports.HVIMAGE.CLASS_WAIT_SECONDS = 5
+        patcher = unittest.mock.patch("time.sleep", lambda s: None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_downloaded_images_class_is_harvesters_never_a_guess(self):
+        """The disk's claim asked for longhorn-image-151065, which did not exist
+        - Harvester had named it lh-8b6ca866-... - so the VM sat unschedulable:
+        "pod has unbound immediate PersistentVolumeClaims"."""
+        self.objects["/apis/harvesterhci.io/v1beta1/namespaces/lab/virtualmachineimages"] = {"items": []}
+        self.harvester_names_classes_later()
+        self.create(HARVESTER, "longhorn-r2", image_url="https://example.test/noble.img")
+        claim = json.loads(self.vm()["metadata"]["annotations"]["harvesterhci.io/volumeClaimTemplates"])[0]
+        self.assertEqual("lh-8b6ca866-806d-430a-8fd4-d584f0f06128", claim["spec"]["storageClassName"])
+        self.assertFalse(claim["spec"]["storageClassName"].startswith("longhorn-image-"))
+
+    def test_a_reused_image_without_its_class_yet_is_waited_for(self):
+        self.objects["/apis/harvesterhci.io/v1beta1/namespaces/lab/virtualmachineimages"] = {"items": [
+            {"metadata": {"name": "image-151065"}, "spec": {"url": "https://example.test/noble.img"}, "status": {}}]}
+        self.harvester_names_classes_later()
+        self.create(HARVESTER, "longhorn-r2", image_url="https://example.test/noble.img")
+        claim = json.loads(self.vm()["metadata"]["annotations"]["harvesterhci.io/volumeClaimTemplates"])[0]
+        self.assertEqual("lh-8b6ca866-806d-430a-8fd4-d584f0f06128", claim["spec"]["storageClassName"])
+
+    def test_no_vm_is_made_while_harvester_has_no_class_for_the_image(self):
+        self.objects["/apis/harvesterhci.io/v1beta1/namespaces/lab/virtualmachineimages"] = {"items": []}
+        self.harvester_names_classes_later(klass="")
+        with self.assertRaisesRegex(ValueError, "not set up the storage"):
+            self.create(HARVESTER, "longhorn-r2", image_url="https://example.test/noble.img")
+        self.assertFalse([p for m, p, b in self.sent if p.endswith("/virtualmachines")])
 
     def test_the_same_url_is_not_downloaded_twice(self):
         self.objects["/apis/harvesterhci.io/v1beta1/namespaces/lab/virtualmachineimages"] = {"items": [

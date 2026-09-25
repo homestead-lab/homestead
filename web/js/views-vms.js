@@ -30,7 +30,8 @@ async function viewVMs() {
   const running = vms.filter(v => v.status === "Running").length;
   paint(`<div class="phead"><div><h2>Virtual machines</h2>
       <p>${vms.length} VM${vms.length === 1 ? "" : "s"} · ${running} running · ${STATE.platform?.harvester === false ? `KubeVirt on ${esc(platformName(STATE.platform))}${STATE.platform.cdi ? "" : " · no CDI"}` : "KubeVirt on Harvester"}</p></div>
-      <button class="btn pri" data-need="operator" onclick="vmNew()">＋ New VM</button></div>
+      <div class="row"><button class="btn" data-need="operator" onclick="k3sCluster()" title="A k3s cluster made of VMs here, each with an address of its own">＋ k3s cluster</button>
+      <button class="btn pri" data-need="operator" onclick="vmNew()">＋ New VM</button></div></div>
     ${rows.length ? `<div class="vm-grid">${rows.map(vmCard).join("")}</div>`
       : `<div class="empty">${q ? "Nothing matches that search." : "No virtual machines yet — create one to get started."}</div>`}`);
 }
@@ -286,4 +287,87 @@ window.vmDeleteGo = async (ns, name) => {
   try { const r = await api("/api/vm/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ns, name, disks: !!$("#vd_disks")?.checked }) });
     toast(r.detail, "ok"); closeModal(); refresh(true); } catch (e) { toast(e.message, "bad"); }
+};
+
+
+/* ---------------- a k3s cluster of VMs ----------------
+   Servers and workers as VMs on a LAN network, each with an address of its
+   own, the first a server the rest join with a token made here. The review
+   says what goes where - and anything already at an address - before a
+   single VM is made. */
+const K3S_SETUPS = { homestead: "k3s, Longhorn and Homestead - what a new install gets",
+  local: "k3s and Homestead, on local-path storage", k3s: "k3s alone" };
+const K3S_UBUNTU = "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img";
+
+window.k3sCluster = async () => {
+  modal("New k3s cluster", '<div class="empty"><span class="spin2"></span></div>', true);
+  const opts = await api("/api/vm/create-options").catch(() => ({}));
+  window.__vmCreateOptions = opts;
+  const lan = vmLanNetworks(opts);
+  const images = (opts.images || []).filter(i => i.storage_class);
+  $("#mbody").innerHTML = `
+    <p class="small" style="margin-top:0">VMs here become a k3s cluster: the first is its server, the rest join it. Each gets an address of
+      its own on the LAN, so the cluster is reached - and joins - as one built from real machines would be.</p>
+    ${lan.length ? "" : vmNetworkNote(opts)}
+    <div class="f2"><div class="f"><label>Name</label><input id="k_name" value="k3s-demo"></div>
+      <div class="f"><label>What it runs</label><select id="k_setup">${Object.entries(K3S_SETUPS).map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("")}</select></div></div>
+    <div class="f2"><div class="f"><label>Servers ${tip("One is enough to try things. Three keep the cluster running if one fails.")}</label>
+        <select id="k_servers" onchange="k3sCountChanged()"><option value="1">1</option><option value="3">3</option></select></div>
+      <div class="f"><label>Workers</label><input id="k_agents" type="number" min="0" max="6" value="2" oninput="k3sCountChanged()"></div></div>
+    <div class="f2"><div class="f"><label>Cores each</label><input id="k_cores" type="number" min="1" max="16" value="2"></div>
+      <div class="f"><label>Memory each</label><input id="k_mem" value="4Gi"></div></div>
+    <div class="f2"><div class="f"><label>Disk each (GB) ${tip("Longhorn inside the cluster keeps its volumes here, so leave room for your apps.")}</label><input id="k_disk" type="number" min="20" value="40"></div>
+      <div class="f"><label>Login password ${tip("For the ubuntu user on every node, at the console or over SSH.")}</label><input id="k_pass" type="password" autocomplete="new-password"></div></div>
+    <div class="f"><label>Image</label><select id="k_image">
+      ${images.map(i => `<option value="image:${esc(i.namespace)}/${esc(i.name)}" ${/noble|24\.04|ubuntu/i.test(i.display) ? "selected" : ""}>Harvester image · ${esc(i.display)}</option>`).join("")}
+      <option value="url" ${images.some(i => /noble|24\.04|ubuntu/i.test(i.display)) ? "" : "selected"}>Ubuntu 24.04 cloud image (downloaded${opts.harvester ? " as a Harvester image" : ""})</option></select></div>
+    ${(opts.storage_classes || []).length ? `<div class="f"><label>Storage class</label><select id="k_sc">${opts.storage_classes.map(c => `<option ${c === opts.default_class ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></div>` : ""}
+    <div class="sec">Network</div>
+    <div class="f"><label>VM network</label><select id="k_net">${lan.map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}</option>`).join("") || '<option value="">none reaches the LAN</option>'}</select></div>
+    ${vmAddressFields("k", opts, 3)}
+    <div id="k_review"></div>
+    <div class="row" style="margin-top:14px"><button class="btn" onclick="k3sReview()" ${lan.length ? "" : "disabled"}>Review</button>
+      <button class="btn pri" id="k_go" data-need="operator" onclick="k3sCreate()" disabled>Create cluster</button>
+      <button class="btn" onclick="closeModal()">Cancel</button></div>`;
+  k3sCountChanged();
+  if (window.applyRole) applyRole();
+};
+window.k3sCountChanged = () => {
+  const count = +$("#k_servers").value + Math.max(0, +$("#k_agents").value || 0);
+  vmSubnetPicked("k", count);
+  $("#k_go").disabled = true;
+  $("#k_review").innerHTML = "";
+};
+function k3sBody() {
+  const image = $("#k_image").value;
+  return Object.assign(vmReadAddress("k"), {
+    name: $("#k_name").value.trim(), setup: $("#k_setup").value,
+    servers: +$("#k_servers").value, agents: +$("#k_agents").value || 0,
+    cores: +$("#k_cores").value, memory: $("#k_mem").value.trim(), disk_gb: +$("#k_disk").value,
+    password: $("#k_pass").value, network: $("#k_net").value, storage_class: $("#k_sc")?.value || "",
+    image_id: image.startsWith("image:") ? image.slice(6) : "", image_url: image === "url" ? K3S_UBUNTU : "",
+    addresses: $("#k_ip").value.split(",").map(x => x.trim()).filter(Boolean) });
+}
+window.k3sReview = async () => {
+  try {
+    const plan = await api("/api/vm/k3s-cluster/plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(k3sBody()) });
+    $("#k_review").innerHTML = `<div class="sec">What it makes</div>
+      <table class="tbl dense stack"><thead><tr><th>VM</th><th>Role</th><th>Address</th></tr></thead><tbody>
+      ${plan.nodes.map(n => `<tr><td><b>${esc(n.name)}</b></td><td data-label="Role">${n.role === "server" ? '<span class="tag info">server</span>' : '<span class="tag">worker</span>'}</td>
+        <td data-label="Address" class="mono">${esc(n.address)}${n.problem ? `<div class="badtext xs">${esc(n.problem)}</div>` : ""}</td></tr>`).join("")}</tbody></table>
+      <div class="note ${plan.ok ? "" : "bad"}" style="margin-top:10px">${plan.ok
+        ? `Each address is recorded under its VM in IP addresses. Allow 10-15 minutes: the VMs start, install ${esc(K3S_SETUPS[plan.setup])}, and join.
+           ${plan.url ? `Its own Homestead then answers at <span class="mono">${esc(plan.url)}</span>.` : ""} The job tray follows it.`
+        : "Choose other addresses for the ones marked: something already has them."}</div>`;
+    $("#k_go").disabled = !plan.ok;
+  } catch (e) { $("#k_review").innerHTML = `<div class="note bad">${esc(e.message)}</div>`; $("#k_go").disabled = true; }
+};
+window.k3sCreate = async () => {
+  const button = $("#k_go");
+  button.disabled = true; button.textContent = "Creating VMs…";
+  try {
+    await api("/api/vm/k3s-cluster", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(k3sBody()) });
+    toast("Cluster VMs created - the job tray follows them coming up", "ok");
+    closeModal(); if (window.refreshOperations) refreshOperations(true); go("vms");
+  } catch (e) { toast(e.message, "bad"); button.disabled = false; button.textContent = "Create cluster"; }
 };

@@ -8,6 +8,7 @@ ConfigMap, with credentials in a Secret. Importing a container means:
   3. create the Deployment pointing at it.
 Step 2 is the part that takes real time, so it runs as a Job we can poll.
 """
+import base64
 import json
 import hashlib
 import re
@@ -1752,6 +1753,46 @@ def _harvester_image(ref):
     raise ValueError(f"image {ref} was not found")
 
 
+def _vm_mac():
+    """A MAC of the kind KubeVirt gives, fixed here so cloud-init can find the
+    interface its address belongs to whatever the guest names it."""
+    import secrets as _secrets
+    return "52:54:00:" + ":".join(f"{b:02x}" for b in _secrets.token_bytes(3))
+
+
+def static_network(cfg, mac):
+    """cloud-init's network config for one address on the VM's interface.
+
+    Matched by MAC, so it lands on the right interface whether the guest calls
+    it eth0, enp1s0 or ens3.
+    """
+    import ipaddress
+    address = str(cfg.get("address") or "").strip()
+    try:
+        iface = ipaddress.ip_interface(f"{address}/{int(cfg.get('prefix') or 24)}")
+    except ValueError as error:
+        raise ValueError(f"{address or '(blank)'} with /{cfg.get('prefix')} is not an address like 192.0.2.51/24") from error
+    net = iface.network
+    if iface.version != 4 or iface.ip in (net.network_address, net.broadcast_address):
+        raise ValueError(f"{iface.ip} cannot be a machine's address in {net}")
+    gateway = str(cfg.get("gateway") or "").strip()
+    if gateway:
+        if ipaddress.ip_address(gateway) not in net:
+            raise ValueError(f"the gateway {gateway} is outside {net}")
+        if ipaddress.ip_address(gateway) == iface.ip:
+            raise ValueError(f"{iface.ip} is the gateway's address")
+    dns = [d for d in (cfg.get("dns") or ([gateway] if gateway else [])) if d]
+    for d in dns:
+        ipaddress.ip_address(d)
+    lines = ["version: 2", "ethernets:", "  lan:", "    match:", f"      macaddress: \"{mac}\"",
+             "    set-name: eth0", "    dhcp4: false", f"    addresses: [\"{iface.with_prefixlen}\"]"]
+    if gateway:
+        lines += ["    routes:", f"      - to: default", f"        via: {gateway}"]
+    if dns:
+        lines += ["    nameservers:", f"      addresses: [{', '.join(dns)}]"]
+    return "\n".join(lines) + "\n", str(iface.ip)
+
+
 def create_vm(cfg, platform=None, default_class=""):
     """Create a KubeVirt VM with its boot disk, the way this cluster makes disks.
 
@@ -1857,11 +1898,47 @@ def create_vm(cfg, platform=None, default_class=""):
         ksend("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", claim)
         root = {"name": "root", "persistentVolumeClaim": {"claimName": dv}}
 
+    # Which network: the pod network (reached through a Service), or a VM
+    # network bridged to the LAN, where the VM has an address of its own.
+    network = str(cfg.get("network") or "pod").strip()
+    mac = _vm_mac()
+    if network == "pod":
+        if cfg.get("static_ip"):
+            raise ValueError("an address of its own needs a VM network bridged to the LAN, not the pod network")
+        interface, net = {"name": "default", "masquerade": {}}, {"name": "default", "pod": {}}
+    else:
+        if not re.fullmatch(r"[a-z0-9-]+/[a-z0-9.-]+", network):
+            raise ValueError(f"{network} is not a VM network like default/vlan1")
+        nad_ns, nad = network.split("/", 1)
+        if not _get_or_none(f"/apis/k8s.cni.cncf.io/v1/namespaces/{nad_ns}/network-attachment-definitions/{nad}"):
+            raise ValueError(f"there is no VM network {network}")
+        interface = {"name": "default", "bridge": {}, "model": "virtio", "macAddress": mac}
+        net = {"name": "default", "multus": {"networkName": network}}
+    network_data, address = ("", "")
+    if cfg.get("static_ip"):
+        network_data, address = static_network(cfg["static_ip"], mac)
+
     disks = [{"name": "root", "disk": {"bus": "virtio"}, "bootOrder": 1}]
     volumes = [root]
-    if cloudinit:
+    secret_name = ""
+    if cloudinit or network_data:
+        # In a Secret, as Harvester keeps them: a password or a join token is
+        # not something to leave in the VM's own definition for every reader.
+        secret_name = f"{name}-cloudinit"
+        if _get_or_none(f"/api/v1/namespaces/{ns}/secrets/{secret_name}"):
+            raise ValueError(f"a secret named {secret_name} already exists in {ns}")
+        data = {"userdata": base64.b64encode((cloudinit or "#cloud-config\n").encode()).decode()}
+        if network_data:
+            data["networkdata"] = base64.b64encode(network_data.encode()).decode()
+        ksend("POST", f"/api/v1/namespaces/{ns}/secrets", {
+            "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+            "metadata": {"name": secret_name, "namespace": ns, "labels": {NAMES.key("managed"): "true", "app": name}},
+            "data": data})
+        source = {"secretRef": {"name": secret_name}}
+        if network_data:
+            source["networkDataSecretRef"] = {"name": secret_name}
         disks.append({"name": "cloudinit", "disk": {"bus": "virtio"}})
-        volumes.append({"name": "cloudinit", "cloudInitNoCloud": {"userData": cloudinit}})
+        volumes.append({"name": "cloudinit", "cloudInitNoCloud": source})
 
     template_spec = {
         "domain": {
@@ -1870,10 +1947,10 @@ def create_vm(cfg, platform=None, default_class=""):
             "resources": {"requests": {"memory": mem}},
             "devices": {
                 "disks": disks,
-                "interfaces": [{"name": "default", "masquerade": {}}],
+                "interfaces": [interface],
             },
         },
-        "networks": [{"name": "default", "pod": {}}],
+        "networks": [net],
         "volumes": volumes,
     }
     if harvester:
@@ -1884,7 +1961,7 @@ def create_vm(cfg, platform=None, default_class=""):
     vm = {
         "apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
         "metadata": {"name": name, "namespace": ns,
-                     "labels": {NAMES.key("managed"): "true", "app": name},
+                     "labels": {NAMES.key("managed"): "true", "app": name, **(cfg.get("labels") or {})},
                      **({"annotations": annotations} if annotations else {})},
         "spec": {
             # spec.running is deprecated; a run strategy is what KubeVirt and
@@ -1898,8 +1975,13 @@ def create_vm(cfg, platform=None, default_class=""):
         },
     }
     try:
-        ksend("POST", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines", vm)
+        created = ksend("POST", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines", vm)
     except urllib.error.HTTPError as error:
+        if secret_name:
+            try:
+                ksend("DELETE", f"/api/v1/namespaces/{ns}/secrets/{secret_name}")
+            except Exception:
+                pass
         if harvester and image_url:
             try:
                 why = json.loads(error.read().decode("utf-8", "replace")).get("message", "")
@@ -1908,5 +1990,15 @@ def create_vm(cfg, platform=None, default_class=""):
             raise ValueError(f"Harvester would not take the VM yet ({why}). Its image keeps downloading: "
                              "choose it under Boot disk once it is ready.") from error
         raise
+    # The Secret goes when the VM does.
+    uid = ((created or {}).get("metadata") or {}).get("uid") if isinstance(created, dict) else ""
+    if secret_name and uid:
+        try:
+            ksend("PATCH", f"/api/v1/namespaces/{ns}/secrets/{secret_name}",
+                  {"metadata": {"ownerReferences": [{"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
+                                                     "name": name, "uid": uid}]}},
+                  ctype="application/merge-patch+json")
+        except Exception:
+            pass
     _bust("flow", "ov")
-    return {"ok": True, "vm": name, "datavolume": dv}
+    return {"ok": True, "vm": name, "datavolume": dv, "address": address, "mac": mac if network != "pod" else ""}

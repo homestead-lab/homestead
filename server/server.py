@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.131")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.132")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -533,6 +533,64 @@ def smart_disk_health(report, settings=None):
             "spare_pct": None if spare is None else int(spare)}
 
 
+def node_duties(pods):
+    """What falls to one node rather than another: the load-balancer addresses
+    it announces, and the shared volumes it serves.
+
+    kube-vip elects one node to answer for load-balanced addresses - on
+    Harvester, the management VIP hosts join through among them - and records
+    the winner in a Lease: plndr-svcs-lock for every Service at once,
+    kubevip-<service> where each is elected on its own, plndr-cp-lock for the
+    control-plane address. Longhorn serves each shared (RWX) volume through a
+    share-manager pod on one node; that node going down pauses the volume
+    until the pod starts elsewhere.
+    """
+    duties = {}
+
+    def note(node, key, value):
+        if node and value not in duties.setdefault(node, {"vips": [], "rwx": [], "control_plane_vip": False})[key]:
+            duties[node][key].append(value)
+    try:
+        leases = kget("/apis/coordination.k8s.io/v1/namespaces/kube-system/leases").get("items", [])
+    except Exception:
+        leases = []
+    try:
+        network = cached("network", 5, NETWORK.inventory)
+    except Exception:
+        network = {}
+    platform = network.get("platform_addresses") or {}
+    by_service = {}
+    for row in network.get("services") or []:
+        if row.get("type") == "LoadBalancer":
+            by_service.setdefault(row["name"], []).extend(row.get("external_ips") or [])
+    for lease in leases:
+        name = lease["metadata"]["name"]
+        holder = str((lease.get("spec") or {}).get("holderIdentity") or "")
+        if not holder:
+            continue
+        if name == "plndr-cp-lock":
+            duties.setdefault(holder, {"vips": [], "rwx": [], "control_plane_vip": False})["control_plane_vip"] = True
+        elif name == "plndr-svcs-lock":
+            for ips in by_service.values():
+                for ip in ips:
+                    note(holder, "vips", ip)
+        elif name.startswith("kubevip-"):
+            for ip in by_service.get(name[len("kubevip-"):], []):
+                note(holder, "vips", ip)
+    for node in duties.values():
+        node["management_vip"] = [ip for ip in node["vips"] if ip in platform]
+    try:
+        claims = {row["name"]: row.get("pvc_name") or row["name"] for row in cached("volmap", 30, get_volumes)}
+    except Exception:
+        claims = {}
+    for pod in pods.get("items", []) if isinstance(pods, dict) else pods:
+        meta = pod.get("metadata") or {}
+        if meta.get("namespace") == "longhorn-system" and meta.get("name", "").startswith("share-manager-")                 and (pod.get("status") or {}).get("phase") == "Running":
+            volume = meta["name"][len("share-manager-"):]
+            note((pod.get("spec") or {}).get("nodeName", ""), "rwx", claims.get(volume, volume))
+    return duties
+
+
 def get_nodes():
     nodes = kget("/api/v1/nodes")
     try:
@@ -545,6 +603,10 @@ def get_nodes():
     except Exception:
         vmis = []
 
+    try:
+        duties = node_duties(pods)
+    except Exception:
+        duties = {}
     temps = node_temps()
     try:
         disk_lines = DISKS.summary()
@@ -614,6 +676,7 @@ def get_nodes():
             "temps": temp_payload,
             "disk_issues": disk_issues,
             "smart_notify": smart_cfg.get("notify_failures", True),
+            "duties": duties.get(name) or {"vips": [], "rwx": [], "control_plane_vip": False, "management_vip": []},
         })
     return out
 
@@ -1712,8 +1775,11 @@ def run_deploy(b):
         target = dep["metadata"]["name"]
     else:
         raise ValueError("deployment target must be new or existing")
+    reused = []
     for claim in new_claims(b.get("volumes") or []):
-        create_pvc(ns, claim["name"], claim["size_gb"], claim["storage_class"], claim["access_mode"])
+        if ensure_claim(ns, claim["name"], claim["size_gb"], claim["storage_class"], claim["access_mode"]):
+            reused.append(claim["name"])
+    b["_reused_claims"] = reused
     if target_mode == "existing":
         ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{target}", dep)
     else:
@@ -1726,7 +1792,8 @@ def run_deploy(b):
     op = OPS.start("deployment", action,
                    {"kind": "Deployment", "name": target, "namespace": ns},
                    "/containers", {"namespace": ns, "name": target})
-    return {"ok": True, "name": target, "container": container_name, "operation": op}
+    return {"ok": True, "name": target, "container": container_name, "operation": op,
+            "reused_volumes": b.get("_reused_claims") or []}
 
 
 def compose_report(b):
@@ -1999,8 +2066,76 @@ def storage_classes():
             "reclaim": item.get("reclaimPolicy", "Delete"),
             "default": annotations.get("storageclass.kubernetes.io/is-default-class") == "true",
             "internal": _internal_class(meta),
+            "made_for": _class_made_for(meta.get("name", ""), parameters),
         })
-    return sorted(rows, key=lambda row: row["name"])
+    rows = sorted(rows, key=lambda row: row["name"])
+    _note_default_class(rows)
+    return rows
+
+
+def _class_made_for(name, parameters):
+    """A class made for one thing, not for choosing: a Harvester image's
+    (its disks start as that image - named longhorn-image-* or lh-<uuid>,
+    with the image as its backing image) or a restore's (Homestead's
+    homestead-restore-*, reading one backup). Neither belongs in a picker."""
+    if name.startswith("homestead-restore-") or parameters.get("fromBackup"):
+        return "restore"
+    if parameters.get("backingImage") or name.startswith("longhorn-image-"):
+        return "image"
+    return ""
+
+
+def class_selectable(row):
+    return not row.get("internal") and not row.get("made_for")
+
+
+# The class new volumes go on when none is chosen. The cluster's own default
+# wins - making a class the default in Volumes is how you say which - then
+# the STORAGE_CLASS Homestead was installed with, then Longhorn's usual one.
+ENV_STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
+
+
+def _note_default_class(rows):
+    global STORAGE_CLASS
+    usable = [row for row in rows if class_selectable(row)]
+    names = {row["name"] for row in usable}
+    chosen = (next((row["name"] for row in usable if row["default"]), "")
+              or (ENV_STORAGE_CLASS if ENV_STORAGE_CLASS in names else "")
+              or next((n for n in ("longhorn-r2", "harvester-longhorn", "longhorn") if n in names), "")
+              or STORAGE_CLASS)
+    if chosen and chosen != STORAGE_CLASS:
+        STORAGE_CLASS = chosen
+        for module in ("LC", "LH"):
+            if module in globals():
+                globals()[module].STORAGE_CLASS = chosen
+
+
+def cleanup_restore_classes():
+    """Delete the classes restores left behind once nothing waits on them.
+
+    A restore makes a class that reads one backup; the claim made from it
+    keeps its volume when the class goes, so the class is only needed until
+    the claim is bound. Left behind, they filled every class picker."""
+    try:
+        pending = {(p.get("spec") or {}).get("storageClassName")
+                   for p in kget("/api/v1/persistentvolumeclaims").get("items", [])
+                   if (p.get("status") or {}).get("phase") != "Bound"}
+        items = kget("/apis/storage.k8s.io/v1/storageclasses").get("items", [])
+    except Exception:
+        return []
+    removed = []
+    for item in items:
+        name = item["metadata"]["name"]
+        if name.startswith("homestead-restore-") and name not in pending:
+            try:
+                ksend("DELETE", f"/apis/storage.k8s.io/v1/storageclasses/{name}")
+                removed.append(name)
+            except Exception:
+                pass
+    for key in list(_cache):
+        if key.startswith(("stor", "sc")):
+            _cache.pop(key, None)
+    return removed
 
 
 DEFAULT_CLASS_ANNOTATION = "storageclass.kubernetes.io/is-default-class"
@@ -2179,7 +2314,7 @@ def delete_storage_class(name):
 def vm_default_class(rows=None):
     """The class a new VM disk lands on: the cluster's default, else Longhorn's
     usual one, else none named - the API server then applies its own default."""
-    rows = [row for row in (rows if rows is not None else storage_classes()) if not row["internal"]]
+    rows = [row for row in (rows if rows is not None else storage_classes()) if class_selectable(row)]
     for row in rows:
         if row["default"]:
             return row["name"]
@@ -2198,6 +2333,8 @@ def vm_create_options():
             "default_class": vm_default_class(rows),
             "images": IMP.list_vm_images() if platform.get("harvester") else [],
             "networks": vm_networks(),
+            "network_details": vm_network_details(),
+            "subnets": vm_subnets(),
             "nodes": sorted(n["metadata"]["name"] for n in kget("/api/v1/nodes").get("items", []))}
 
 
@@ -2210,10 +2347,97 @@ def vm_networks():
     return ["pod"] + sorted(f"{i['metadata']['namespace']}/{i['metadata']['name']}" for i in items)
 
 
+def vm_network_details():
+    """Each VM network, and whether it puts a VM on the LAN with an address
+    of its own - a bridge, as Harvester's VM networks are."""
+    try:
+        items = kget("/apis/k8s.cni.cncf.io/v1/network-attachment-definitions").get("items", [])
+    except Exception:
+        items = []
+    out = []
+    for item in items:
+        try:
+            config = json.loads((item.get("spec") or {}).get("config") or "{}")
+        except ValueError:
+            config = {}
+        labels = item["metadata"].get("labels") or {}
+        out.append({"name": f"{item['metadata']['namespace']}/{item['metadata']['name']}",
+                    "type": config.get("type", ""), "vlan": config.get("vlan"),
+                    "bridge": config.get("bridge", ""),
+                    "kind": labels.get("network.harvesterhci.io/type", ""),
+                    "lan": config.get("type") == "bridge"})
+    return sorted(out, key=lambda row: row["name"])
+
+
+def vm_subnets():
+    """The subnets IP addresses knows, with the free addresses outside DHCP."""
+    try:
+        view = IPAM.view()
+    except Exception:
+        return []
+    return [{"cidr": s["cidr"], "name": s.get("name", ""), "gateway": s.get("gateway", ""),
+             "dhcp_start": s.get("dhcp_start", ""), "dhcp_end": s.get("dhcp_end", ""),
+             "free": s.get("free_list") or s.get("next_free") or []} for s in view.get("subnets") or []]
+
+
+def vm_address_problem(ip):
+    """Why a VM cannot have this address, or "": something already has it."""
+    import ipaddress
+    try:
+        view = IPAM.view()
+    except Exception:
+        view = {"subnets": []}
+    for subnet in view.get("subnets") or []:
+        if ipaddress.ip_address(ip) not in ipaddress.ip_network(subnet["cidr"]):
+            continue
+        if subnet.get("gateway") == ip:
+            return f"{ip} is the gateway of {subnet['cidr']}"
+        row = next((r for r in subnet.get("rows") or [] if r["ip"] == ip), None)
+        if row and (row.get("name") or row.get("kind") or row.get("cluster")):
+            return f"{ip} is taken: {row.get('name') or row.get('cluster') or row.get('kind')} in IP addresses"
+        if row and (row.get("scan") or {}).get("up"):
+            return f"{ip} answered the last scan: something is already there"
+        start, end = subnet.get("dhcp_start"), subnet.get("dhcp_end")
+        if start and end and int(ipaddress.ip_address(start)) <= int(ipaddress.ip_address(ip)) <= int(ipaddress.ip_address(end)):
+            return f"{ip} is inside the DHCP range {start}-{end}: the router may hand it to something else"
+    try:
+        network = cached("network", 5, NETWORK.inventory)
+    except Exception:
+        network = {}
+    if ip in (network.get("node_ips") or []) or ip in (network.get("platform_addresses") or {}):
+        return f"{ip} is one of the cluster's own addresses"
+    if any(v.get("ip") == ip for v in network.get("vips") or []):
+        return f"{ip} is a Service's address"
+    # A few ports a machine usually has, quickly: a free address answers none.
+    if IPAM._probe(ip, ports=(22, 80, 443, 3389, 6443), timeout=0.4).get("up"):
+        return f"{ip} answers on the network: something is already there"
+    return ""
+
+
+def create_vm_with_address(cfg):
+    """A VM, and - when it has an address of its own - that address checked
+    as free first and recorded in IP addresses after, under the VM's name."""
+    static = cfg.get("static_ip") or None
+    if static:
+        problem = vm_address_problem(str(static.get("address") or "").strip())
+        if problem:
+            raise ValueError(problem)
+    result = IMP.create_vm(cfg, PLATFORM.detect(), vm_default_class())
+    if result.get("address"):
+        try:
+            IPAM.save_record({"ip": result["address"], "name": cfg.get("name", ""), "kind": "static",
+                              "category": "server", "mac": result.get("mac", ""), "owner": "homestead",
+                              "note": f"VM {cfg.get('namespace') or 'lab'}/{cfg.get('name', '')}"
+                                      + (f" · {cfg['ipam_note']}" if cfg.get("ipam_note") else "")})
+        except Exception:
+            pass
+    return result
+
+
 def selectable_storage_classes(rows=None):
-    """Classes a person may pick for their own workloads."""
-    return [row["name"] for row in (rows if rows is not None else storage_classes())
-            if not row["internal"]]
+    """Classes a person may pick for their own workloads - the default first."""
+    rows = [row for row in (rows if rows is not None else storage_classes()) if class_selectable(row)]
+    return [row["name"] for row in sorted(rows, key=lambda row: (row["name"] != STORAGE_CLASS, row["name"]))]
 
 
 def storage_class_facts(rows=None):
@@ -2221,13 +2445,13 @@ def storage_class_facts(rows=None):
     return {row["name"]: {"replicas": row["replicas"], "engine": row["engine"], "migratable": row["migratable"],
                           "encrypted": row["encrypted"], "expandable": row["expandable"],
                           "reclaim": row["reclaim"], "default": row["default"]}
-            for row in (rows if rows is not None else storage_classes()) if not row["internal"]}
+            for row in (rows if rows is not None else storage_classes()) if class_selectable(row)}
 
 
 def shared_storage_classes(rows=None):
     """Classes that can actually serve ReadWriteMany to a pod."""
     return [row["name"] for row in (rows if rows is not None else storage_classes())
-            if not row["internal"] and not row["migratable"]]
+            if class_selectable(row) and not row["migratable"]]
 
 
 def create_pvc(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce"):
@@ -2246,6 +2470,34 @@ def create_pvc(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce"):
                      "storageClassName": sc,
                      "resources": {"requests": {"storage": f"{size_gb}Gi"}}}}
     return ksend("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", body)
+
+
+def ensure_claim(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce"):
+    """A deploy's new volume - or the one of that name already there, when
+    nothing uses it.
+
+    A failed install leaves its volumes behind (deleting a container keeps
+    its data), and installing again then stopped at "already exists". One
+    that nothing refers to is taken as it is, data and all, and said so; one
+    another container, VM or job uses is refused by name.
+    """
+    try:
+        existing = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}")
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        existing = None
+    if not existing:
+        create_pvc(ns, name, size_gb, sc, access_mode)
+        return ""
+    try:
+        users = _references_for(claim_references(), ns, name)
+    except Exception:
+        users = ["something"]
+    if users:
+        raise ValueError(f"a volume named {name} already exists in {ns} and {', '.join(users)} uses it; "
+                         "give this app's volume another name, or choose the existing one to share it")
+    return name
 
 
 def create_volume(cfg):
@@ -2951,6 +3203,7 @@ import homestead_namespaces as NSMOD
 import homestead_restructure as RESTRUCTURE
 import homestead_affinity as AFFINITY
 import homestead_failover as FAILOVER
+import homestead_k3scluster as K3SC
 import homestead_portal as PORTAL
 import homestead_upgrades as UPGRADES
 import homestead_vmconsole as VMCONSOLE
@@ -2995,6 +3248,21 @@ OPS.bind(kget, DATA_DIR, UPDATES.progress, SMART.progress)
 RESTRUCTURE.bind(kget, ksend, raw_get)
 AFFINITY.bind(kget)
 FAILOVER.bind(kget, ksend)
+K3SC.bind(kget, lambda cfg: create_vm_with_address(cfg), lambda ip: vm_address_problem(ip))
+OPS.RESOLVERS["k3s-cluster"] = K3SC.status
+MOVE_ENGINE.after_finish = cleanup_restore_classes
+
+
+def _restore_then_tidy(item, _resolve=OPS.RESOLVERS["volume-restore"]):
+    """A restore, and - once it has finished - the class it read the backup
+    through removed, as nothing needs it after the claim is bound."""
+    result = _resolve(item)
+    if result and result[0] in ("succeeded", "failed"):
+        cleanup_restore_classes()
+    return result
+
+
+OPS.RESOLVERS["volume-restore"] = _restore_then_tidy
 UPGRADES.bind(kget)
 PORTAL.bind(kget, ksend, DEFAULT_NS, lambda: cached("wl", 5, get_workloads),
             lambda source: ICONS.persist(source, DATA_DIR), lambda reference: ICONS.data_url(reference, DATA_DIR))
@@ -3244,7 +3512,7 @@ def homestead_data_volume(dep=None):
     # Every class it could move to, and whether copies on several nodes could
     # then share it: the move is not only for redundancy.
     classes = [{"name": r["name"], "shareable": r["name"] in shared} for r in rows
-               if not r.get("internal") and r["name"] != klass]
+               if class_selectable(r) and r["name"] != klass]
     # Data volumes an earlier move left behind: kept until deleted, so they
     # are said out loud rather than found later as a mystery.
     try:
@@ -3877,7 +4145,7 @@ ADMIN_ROUTES = {
     "/api/import", "/api/imports/delete", "/api/imports/cleanup-plan",
     "/api/vm-disks/import",
     "/api/shares", "/api/shares/edit", "/api/shares/delete", "/api/shares/options",
-    "/api/storage/classes/default", "/api/storage/classes/delete",
+    "/api/storage/classes/default", "/api/storage/classes/delete", "/api/storage/classes/cleanup",
     "/api/network/service/delete",
     "/api/images/cleanup",
     "/api/volumes/delete", "/api/volumes/chown",
@@ -4783,12 +5051,14 @@ class H(BaseHTTPRequestHandler):
                 cfg = apply_generated_secrets(cfg)
                 dep, svc = build_deployment(cfg)
                 ns = dep["metadata"]["namespace"]
+                reused = []
                 for volume in cfg.get("volumes") or []:
                     if volume.get("type") == "pvc" and volume.get("create"):
-                        create_pvc(ns, _dns_name(volume.get("source"), "volume name"),
-                                   volume.get("size_gb", 5),
-                                   volume.get("storage_class") or STORAGE_CLASS,
-                                   volume.get("access_mode") or "ReadWriteOnce")
+                        if ensure_claim(ns, _dns_name(volume.get("source"), "volume name"),
+                                        volume.get("size_gb", 5),
+                                        volume.get("storage_class") or STORAGE_CLASS,
+                                        volume.get("access_mode") or "ReadWriteOnce"):
+                            reused.append(volume.get("source"))
                 ksend("POST", f"/apis/apps/v1/namespaces/{ns}/deployments", dep)
                 if svc:
                     ksend("POST", f"/api/v1/namespaces/{ns}/services", svc)
@@ -4796,7 +5066,10 @@ class H(BaseHTTPRequestHandler):
                 op = OPS.start("deployment", f"Install {cfg['name']}",
                                {"kind": "Deployment", "name": cfg["name"], "namespace": ns},
                                "/containers", {"namespace": ns, "name": cfg["name"]})
-                return self._send(200, {"ok": True, "name": cfg["name"], "operation": op})
+                return self._send(200, {"ok": True, "name": cfg["name"], "operation": op, "reused_volumes": reused,
+                                        **({"detail": f"kept the existing {', '.join(reused)} - nothing was using "
+                                                      f"{'it' if len(reused) == 1 else 'them'}, so its data carries on"}
+                                           if reused else {})})
             if p == "/api/edit":
                 persist_icon_config(b)
                 # Paths moved to other storage bring their data: the edit is
@@ -4971,9 +5244,13 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/longhorn/settings":
                 _cache.pop("lhcap", None)
                 return self._send(200, LHCAP.save(b))
+            if p == "/api/vm/k3s-cluster/plan":
+                return self._send(200, K3SC.review(b))
+            if p == "/api/vm/k3s-cluster":
+                return self._send(200, {"ok": True, "operation": K3SC.start(b, OPS)})
             if p == "/api/vm/create":
                 _cache.pop("vms", None)
-                return self._send(200, IMP.create_vm(b, PLATFORM.detect(), vm_default_class()))
+                return self._send(200, create_vm_with_address(b))
             if p == "/api/vm-disks/import":
                 result = IMP.import_vm_disk(b)
                 result["operation"] = OPS.start(
@@ -5013,6 +5290,11 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/network/vips/label":
                 _cache.pop("network", None)
                 return self._send(200, NETWORK.set_vip_label(b.get("ip", ""), b.get("label", "")))
+            if p == "/api/storage/classes/cleanup":
+                removed = cleanup_restore_classes()
+                return self._send(200, {"ok": True, "removed": removed,
+                                        "detail": f"removed {len(removed)} class{'es' if len(removed) != 1 else ''} left by restores"
+                                                  if removed else "nothing to remove: every restore class is still in use"})
             if p == "/api/workloads/failover":
                 result = FAILOVER.set_many(b.get("items") or [])
                 _cache.pop("wl", None)
@@ -5267,7 +5549,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.131 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.132 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

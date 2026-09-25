@@ -455,8 +455,18 @@ window.v2Details = () => {
 };
 
 function storageClassCard(classes, v2 = null) {
-  const rows = classes || [];
-  if (!rows.length) return "";
+  const every = classes || [];
+  if (!every.length) return "";
+  // Classes made for one image or one restore are not for choosing: folded
+  // away, with the restore ones - spent once their claim is bound - clearable.
+  const special = every.filter(row => row.made_for);
+  const restores = special.filter(row => row.made_for === "restore");
+  const rows = STATE.showSpecialClasses ? every : every.filter(row => !row.made_for);
+  const specialLine = special.length ? `<div class="dim xs" style="padding:10px 16px">${special.length} class${special.length === 1 ? "" : "es"} made for
+      ${[special.length - restores.length ? `${special.length - restores.length} Harvester image${special.length - restores.length === 1 ? "" : "s"}` : "", restores.length ? `${restores.length} restore${restores.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ")}
+      ${STATE.showSpecialClasses ? "shown" : "hidden"}, and never offered when choosing a class.
+      <a style="cursor:pointer;text-decoration:underline" onclick="STATE.showSpecialClasses=!STATE.showSpecialClasses;viewStorage()">${STATE.showSpecialClasses ? "Hide" : "Show"} them</a>
+      ${restores.length ? ` · <button class="btn sm" data-need="admin" onclick="storageClassCleanup()">Remove the restore ones</button>` : ""}</div>` : "";
   return `<div class="card flat pad0" style="margin-top:18px">
     <div class="between storage-class-head">
       <div><div class="ctitle">Storage classes</div>
@@ -466,7 +476,7 @@ function storageClassCard(classes, v2 = null) {
     <div class="tblwrap"><table data-sort="storage-classes" class="tbl stack storage-class-table"><thead><tr>
       <th>Class</th><th>Engine</th><th>Replicas</th><th>Shared (RWX)</th><th>Encryption</th><th>Expansion</th><th>Volumes</th><th></th>
     </tr></thead><tbody>${rows.map(row => `<tr>
-      <td><b>${esc(row.name)}</b>${row.default ? '<span class="tag ok">default</span>' : ""}${row.internal ? '<span class="tag">Harvester internal</span>' : ""}
+      <td><b>${esc(row.name)}</b>${row.default ? '<span class="tag ok">default</span>' : ""}${row.internal ? '<span class="tag">Harvester internal</span>' : ""}${row.made_for === "image" ? '<span class="tag" data-tip="Harvester made it for one image: disks from that image are made on it">image</span>' : row.made_for === "restore" ? '<span class="tag warn" data-tip="Made to read one backup into a new volume; not needed once that volume exists">restore</span>' : ""}
         <div class="dim xs mono">${esc(row.provisioner || "")}</div></td>
       <td data-label="Engine">${row.engine === "v2" ? '<span class="tag info" data-tip="Longhorn V2 (SPDK)">V2</span>' : row.engine ? '<span class="tag">V1</span>' : '<span class="dim">—</span>'}</td>
       <td class="mono" data-label="Replicas">${esc(row.replicas || "—")}</td>
@@ -477,10 +487,16 @@ function storageClassCard(classes, v2 = null) {
       <td data-label="Expansion">${row.expandable ? '<span class="tag ok">can grow</span>' : '<span class="tag">fixed size</span>'}</td>
       <td class="mono" data-label="Volumes">${row.in_use ?? 0}</td>
       <td><div class="row" style="gap:6px;flex-wrap:nowrap">
-        ${row.default || row.internal ? "" : `<button class="btn sm" data-need="admin" title="Use this class when nothing else is chosen" onclick="storageClassDefault('${esc(row.name)}')">Make default</button>`}
+        ${row.default || row.internal || row.made_for ? "" : `<button class="btn sm" data-need="admin" title="Use this class when nothing else is chosen" onclick="storageClassDefault('${esc(row.name)}')">Make default</button>`}
         ${row.internal || row.default || row.in_use ? "" : `<button class="btn sm danger" data-need="admin" onclick="storageClassDelete('${esc(row.name)}')">${icon("trash")}Delete</button>`}
-      </div></td></tr>`).join("")}</tbody></table></div></div>`;
+      </div></td></tr>`).join("")}</tbody></table></div>${specialLine}</div>`;
 }
+window.storageClassCleanup = async () => {
+  try {
+    const r = await api("/api/storage/classes/cleanup", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    toast(r.detail, "ok"); viewStorage();
+  } catch (e) { toast(e.message, "bad"); }
+};
 window.storageClassCreate = () => {
   modal("New storage class", `
     <p class="muted small">A storage class is a recipe Longhorn follows when it creates a volume:
@@ -1293,7 +1309,7 @@ window.diskAddGo = async (node, blockdevice) => {
    A review first - what uses it, what stops, how much room it takes while
    both copies exist - then the move as a tracked job with its steps. */
 window.volumeReclass = async x => {
-  const classes = (STATE.data.storageClasses || []).filter(c => !c.internal && c.name !== x.storage_class);
+  const classes = (STATE.data.storageClasses || []).filter(c => !c.internal && !c.made_for && c.name !== x.storage_class);
   if (!classes.length) return toast("there is no other storage class to move it to", "warn");
   const pick = classes.find(c => c.default) || classes[0];
   modal(`Change storage class · ${x.pvc_name || x.name}`, `

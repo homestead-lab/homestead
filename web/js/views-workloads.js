@@ -1235,8 +1235,9 @@ window.doDeploy = async () => {
 };
 window.confirmDeploy = async () => {
   const c = collect();
-  try { $("#deployGo").disabled = true; await api("/api/deploy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
-    closeModal(); toast(c.target_mode === "existing" ? `${c.container_name} added to ${c.target_workload}` : `${c.workload_name} deployed`, "ok"); go("workloads");
+  try { $("#deployGo").disabled = true; const r = await api("/api/deploy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
+    const kept = (r.reused_volumes || []).length ? ` - kept the existing ${r.reused_volumes.join(", ")}, which nothing was using` : "";
+    closeModal(); toast((c.target_mode === "existing" ? `${c.container_name} added to ${c.target_workload}` : `${c.workload_name} deployed`) + kept, "ok"); go("workloads");
   } catch (e) { if ($("#deployGo")) $("#deployGo").disabled = false; toast(e.message, "bad"); }
 };
 

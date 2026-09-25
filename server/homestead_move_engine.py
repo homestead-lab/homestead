@@ -706,10 +706,19 @@ HANDLERS = {"joining": _joining, "quiescing": _quiescing, "backing-up": _backing
             "starting": _starting}
 
 
+# Called once a move has finished: the restore classes it made are spent.
+after_finish = None
+
+
 def _finish(move, status, message):
     move.update(status=status, message=message, finished_at=_now())
     if status == "succeeded":
         move.update(phase="done", progress=100)
+    if after_finish:
+        try:
+            after_finish()
+        except Exception:
+            pass
 
 
 def _tick(move):
