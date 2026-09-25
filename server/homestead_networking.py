@@ -811,7 +811,7 @@ def vm_network_options():
 def create_vm_network(cfg):
     options = vm_network_options()
     if not options["harvester"]:
-        raise ValueError("VM networks are made here on Harvester. Elsewhere, create a Multus bridge network "
+        raise ValueError("LAN networks are made here on Harvester. Elsewhere, create a Multus bridge network "
                          "attachment on the host bridge your LAN is on")
     name = _name(cfg.get("name"), "network name")
     namespace = _name(cfg.get("namespace") or "default", "namespace")
@@ -832,7 +832,7 @@ def create_vm_network(cfg):
     path = f"/apis/k8s.cni.cncf.io/v1/namespaces/{namespace}/network-attachment-definitions"
     try:
         kget(f"{path}/{name}")
-        raise ValueError(f"a VM network {namespace}/{name} already exists")
+        raise ValueError(f"a LAN network {namespace}/{name} already exists")
     except urllib.error.HTTPError as error:
         if error.code != 404:
             raise
@@ -841,4 +841,4 @@ def create_vm_network(cfg):
                          "spec": {"config": json.dumps(config)}})
     where = f"VLAN {vlan} on {cluster}" if vlan else f"the untagged LAN of {cluster}"
     return {"ok": True, "name": f"{namespace}/{name}",
-            "detail": f"VM network {namespace}/{name} made, on {where}; VMs and containers can join it now"}
+            "detail": f"LAN network {namespace}/{name} made, on {where}; VMs and containers can join it now"}

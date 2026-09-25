@@ -476,8 +476,8 @@ function vmLanNetworks(opts) {
 }
 function vmNetworkNote(opts) {
   if (vmLanNetworks(opts).length) return "";
-  return `<div class="note" style="margin-top:8px"><b>No VM network reaches the LAN yet.</b> ${opts.harvester
-    ? `A VM network puts VMs and containers on your LAN, untagged like the hosts or on a VLAN.
+  return `<div class="note" style="margin-top:8px"><b>No LAN network yet.</b> ${opts.harvester
+    ? `A LAN network puts VMs and containers on your LAN, untagged like the hosts or on a VLAN.
        <button class="btn sm pri" data-need="admin" style="margin-top:6px" onclick="vmNetworkAdd()">＋ Make one</button>`
     : "Create a Multus bridge network attachment on the host bridge your LAN is on; VMs on it get LAN addresses."}</div>`;
 }
@@ -489,7 +489,7 @@ window.vmNetworkAdd = async (reopen = null) => {
   const opts = window.__vmCreateOptions || await api("/api/vm/create-options").catch(() => ({}));
   const back = reopen || window.__vmNetworkReopen || null;
   const clusters = (opts.vm_network_options || {}).cluster_networks || ["mgmt"];
-  (window.childModal && !$("#modal").classList.contains("hidden") ? childModal : modal)("New VM network", `
+  (window.childModal && !$("#modal").classList.contains("hidden") ? childModal : modal)("New LAN network", `
     <p class="small" style="margin-top:0">VMs and containers on it are on your LAN - with addresses from your router's DHCP, or ones of their own.</p>
     <div class="f2"><div class="f"><label>Name ${tip("How it is listed wherever a network is chosen, like lan or vlan20.")}</label><input id="vn_name" value="lan"></div>
       <div class="f"><label>Cluster network ${tip("Which of Harvester's cluster networks it rides on. mgmt is the hosts' own network - the usual choice.")}</label>
@@ -584,7 +584,7 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
         ${opts.cdi || opts.harvester ? `<option value="url">${opts.harvester ? "Download from a URL (as a Harvester image)" : "Download from HTTP(S) URL"}</option>` : ""}
       </select></div>
     <div class="f" id="v_url_row" hidden><label>Image URL</label><input type="url" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img"></div>
-    <div class="f"><label>Network ${tip("The pod network: reached through a Service, like a container. A VM network bridged to the LAN: a machine there like any other, with an address from DHCP or one of its own.")}</label>
+    <div class="f"><label>Network ${tip("The pod network: reached through a Service, like a container. A LAN network (bridged): a machine there like any other, with an address from DHCP or one of its own.")}</label>
       <select id="v_net" onchange="vmNetChanged()"><option value="pod">Pod network - reached through a Service</option>
         ${(opts.network_details || []).map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.lan ? ` · LAN${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}` : ""}</option>`).join("")}</select>
       ${vmNetworkNote(opts)}</div>

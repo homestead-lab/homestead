@@ -256,6 +256,14 @@ h1{margin:2px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em}
 .tree-body{padding:0 9px 7px}.tree-pod{border-top:1px solid rgba(255,255,255,.055);padding:7px 0 1px}
 .tree-pod-head,.tree-container{display:flex;align-items:center;gap:8px;min-width:0;font-size:11.5px}
 .tree-pod-head .pill,.tree-container .pill{padding:2px 7px;font-size:9.5px}.tree-containers{margin:7px 0 0 15px;padding-left:12px;border-left:1px solid var(--line)}
+.tree-pod-head>b.mono{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tree-pod-head .tree-node{flex:0 1 auto;min-width:0;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tree-pod-head .pill,.tree-container .pill{flex:0 0 auto}
+.tree-container>b{flex:0 1 auto;max-width:50%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tree-container .tree-image{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tree-why{margin:0 0 4px 70px;font-size:10.5px;line-height:1.35;color:var(--med);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.tree-pull{margin:4px 0 2px}
+.pullbar{display:grid;gap:3px;margin:6px 0 2px}.pullbar .meter{height:5px}
 .tree-container{padding:3px 0}.tree-branch{font-size:9px;letter-spacing:.06em;text-transform:uppercase;flex:0 0 58px}.tree-branch.init{color:var(--vio)}
 .tree-image{margin-left:auto;max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media(max-width:720px){.tree-hint,.tree-image{display:none}.tree-pod-head{flex-wrap:wrap}.tree-container{flex-wrap:wrap}}

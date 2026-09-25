@@ -45,9 +45,9 @@ async function viewNetworking() {
         ${v.free || v.blocked ? `<button class="iconbtn" data-need="admin" data-tip="No longer keep this address for Homestead" onclick="vipRemove('${esc(v.ip)}')">×</button>` : ""}</div>`).join("")}</div>`
       : `<div class="card flat empty small">No VIPs of your own yet. Add the addresses Homestead may give to apps and shares - ${data.available_vip_count
           ? `${data.available_vip_count} more are free in Harvester IP pools.` : "there are no Harvester IP pools to take them from either."}</div>`}
-    <div class="between"><div class="sec">VM networks ${tip("Networks bridged to the LAN. A VM, or a container given an address of its own, joins one to be on the LAN like any machine there.")}</div>
-      <button class="btn sm" data-need="admin" onclick="vmNetworkAdd()">＋ VM network</button></div>
-    <div id="netVmNets"><div class="dim small">reading VM networks…</div></div>
+    <div class="between"><div class="sec">LAN networks ${tip("Networks bridged to the LAN - Harvester calls them VM networks. A VM, or a container given an address of its own, joins one to be on the LAN like any machine there.")}</div>
+      <button class="btn sm" data-need="admin" onclick="vmNetworkAdd()">＋ LAN network</button></div>
+    <div id="netVmNets"><div class="dim small">reading LAN networks…</div></div>
     <div class="between"><div class="sec">Virtual IPs &amp; port ownership</div><div class="row">${data.available_vips.filter(ip => !(data.vip_labels || {}).hasOwnProperty(ip)).slice(0, 6).map(ip => `<span class="tag ok" title="Unused address in a ready Harvester IP pool">${esc(ip)} available</span>`).join("")}</div></div>
     <div class="cardlist network-vips">${data.vips.map(vip => `<div class="card flat">
       <div class="between"><div><div class="dim xs">${vip.shared ? "SHARED VIP" : "VIRTUAL IP"}</div><b class="mono">${esc(vip.ip)}</b></div>
@@ -196,6 +196,6 @@ async function networkVmNetsPaint() {
   host.innerHTML = rows.length ? `<div class="vip-own">${rows.map(n => `<div class="vip-chip ${n.lan ? "free" : "used"}">
       <div class="vip-name"><b class="mono">${esc(n.name)}</b><span class="dim xs">${n.vlan ? `VLAN ${esc(n.vlan)}` : n.lan ? "untagged" : esc(n.type || "network")}${n.bridge ? ` · ${esc(n.bridge)}` : ""}</span></div>
       <span class="tag ${n.lan ? "ok" : ""}">${n.lan ? "LAN" : "not bridged"}</span></div>`).join("")}</div>`
-    : `<div class="card flat empty small">No VM networks yet. ${opts.harvester ? "<b>＋ VM network</b> makes one on your LAN, untagged like the hosts or on a VLAN." : ""}</div>`;
+    : `<div class="card flat empty small">No LAN networks yet. ${opts.harvester ? "<b>＋ LAN network</b> makes one on your LAN, untagged like the hosts or on a VLAN." : ""}</div>`;
   if (window.applyRole) applyRole();
 }

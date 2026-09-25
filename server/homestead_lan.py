@@ -39,7 +39,7 @@ def clean(lan):
     """The LAN address asked for, checked: {network, address, prefix, gateway}."""
     network = str((lan or {}).get("network") or "")
     if "/" not in network:
-        raise ValueError("choose the VM network the container's LAN address is on")
+        raise ValueError("choose the LAN network the container's address is on")
     try:
         iface = ipaddress.ip_interface(f"{str(lan.get('address') or '').strip()}/{int(lan.get('prefix') or 24)}")
     except ValueError as error:
@@ -59,7 +59,7 @@ def nad_body(ns, workload, lan):
         base = kget(f"{NAD_API}/namespaces/{base_ns}/network-attachment-definitions/{base_name}")
     except urllib.error.HTTPError as error:
         if error.code == 404:
-            raise ValueError(f"there is no VM network {lan['network']}") from error
+            raise ValueError(f"there is no LAN network {lan['network']}") from error
         raise
     try:
         config = json.loads((base.get("spec") or {}).get("config") or "{}")

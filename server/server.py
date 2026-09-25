@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.135")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.136")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -930,6 +930,44 @@ def pod_container_rows(pod):
 OWN_GROUP = "Homestead"
 
 
+def _never_started(pod):
+    """Nothing ever ran in it: every container still waiting, or none reported."""
+    statuses = (pod.get("status") or {}).get("containerStatuses") or []
+    return all(not (cs.get("state") or {}).get("running") and not (cs.get("state") or {}).get("terminated")
+               and not (cs.get("lastState") or {}).get("terminated") for cs in statuses)
+
+
+def clear_unstarted_pods(ns, name, stopping):
+    """Remove pods of a container that never started, so they cannot pile up.
+
+    A pod stuck before its first start - an image that will not pull, a
+    volume or network that will not attach - often never finishes stopping,
+    and every Stop and Start left one more behind. Nothing ran in it, so
+    removing it at once loses nothing. When stopping, every such pod goes;
+    when starting, those still stuck stopping from before."""
+    try:
+        dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+        selector = ((dep.get("spec") or {}).get("selector") or {}).get("matchLabels") or {}
+        if not selector:
+            return []
+        query = urllib.parse.quote(",".join(f"{k}={v}" for k, v in selector.items()), safe="")
+        pods = kget(f"/api/v1/namespaces/{ns}/pods?labelSelector={query}").get("items", [])
+    except Exception:
+        return []
+    removed = []
+    for pod in pods:
+        meta = pod.get("metadata") or {}
+        stuck_stopping = meta.get("deletionTimestamp") and age_secs(meta["deletionTimestamp"]) > 20
+        if not _never_started(pod) or not (stopping or stuck_stopping):
+            continue
+        try:
+            ksend("DELETE", f"/api/v1/namespaces/{ns}/pods/{meta['name']}?gracePeriodSeconds=0")
+            removed.append(meta["name"])
+        except Exception:
+            pass
+    return removed
+
+
 def is_self(ns, name):
     """The Deployment this Homestead runs as."""
     return (ns, name) == (SELF.NS, NAMES.BRAND)
@@ -1051,9 +1089,25 @@ def get_workloads():
             if not ready:
                 transition_ages.append(age_secs(p["metadata"].get("creationTimestamp")))
             containers = pod_container_rows(p)
+            # A pod still fetching its image says how far it has got: events
+            # say Pulling, containerd says how many bytes.
+            pull = {}
+            if not ready and not p["metadata"].get("deletionTimestamp") and any(
+                    w["reason"] in ("ContainerCreating", "PodInitializing") for w in waits):
+                try:
+                    pull = UPDATES.pull_state(ns, p["metadata"]["name"]) or {}
+                    if pull.get("state") == "pulling":
+                        pull.update(_pull_progress(p["spec"].get("nodeName", ""), pull.get("image", "")))
+                    else:
+                        pull = {}
+                except Exception:
+                    pull = {}
             pod_rows.append({"name": p["metadata"]["name"], "hostname": p["spec"].get("hostname", ""),
                              "phase": p["status"].get("phase"),
                              "node": p["spec"].get("nodeName", ""), "ready": ready,
+                             # Told to stop, and not stopped yet.
+                             "terminating": bool(p["metadata"].get("deletionTimestamp")),
+                             "pull": pull,
                              "waiting": waits,
                              "uptime": age_secs(p["status"].get("startTime")),
                              "containers": containers,
@@ -4972,8 +5026,12 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/scale":
                 ns, name, n = b["ns"], b["name"], int(b["replicas"])
                 guard_self(ns, name, stopping=n == 0, confirmed=b.get("confirm_self") is True)
+                if n:
+                    clear_unstarted_pods(ns, name, stopping=False)
                 ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}/scale",
                       {"spec": {"replicas": n}}, ctype="application/merge-patch+json")
+                if not n:
+                    clear_unstarted_pods(ns, name, stopping=True)
                 _cache.pop("wl", None)
                 return self._send(200, {"ok": True})
             if p == "/api/restart":
@@ -5648,7 +5706,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.135 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.136 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

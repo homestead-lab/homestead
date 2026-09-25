@@ -1960,14 +1960,14 @@ def create_vm(cfg, platform=None, default_class=""):
     mac = _vm_mac()
     if network == "pod":
         if cfg.get("static_ip"):
-            raise ValueError("an address of its own needs a VM network bridged to the LAN, not the pod network")
+            raise ValueError("an address of its own needs a LAN network (bridged), not the pod network")
         interface, net = {"name": "default", "masquerade": {}}, {"name": "default", "pod": {}}
     else:
         if not re.fullmatch(r"[a-z0-9-]+/[a-z0-9.-]+", network):
-            raise ValueError(f"{network} is not a VM network like default/vlan1")
+            raise ValueError(f"{network} is not a LAN network like default/vlan1")
         nad_ns, nad = network.split("/", 1)
         if not _get_or_none(f"/apis/k8s.cni.cncf.io/v1/namespaces/{nad_ns}/network-attachment-definitions/{nad}"):
-            raise ValueError(f"there is no VM network {network}")
+            raise ValueError(f"there is no LAN network {network}")
         interface = {"name": "default", "bridge": {}, "model": "virtio", "macAddress": mac}
         net = {"name": "default", "multus": {"networkName": network}}
     network_data, address = ("", "")

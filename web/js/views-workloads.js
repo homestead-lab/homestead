@@ -31,6 +31,15 @@ function paintUpdateBadge(count, errors = 0) {
   notice.setAttribute("aria-label", `${count} image update${count === 1 ? "" : "s"} available${errors ? `, ${errors} registry check failure${errors === 1 ? "" : "s"}` : ""}`);
 }
 
+/* An image being fetched: containerd's count of the bytes so far. */
+function pullBar(pull) {
+  const pct = Math.min(100, pull.percent || 0);
+  return `<div class="pullbar" title="Fetching ${esc(pull.image || "the image")}${pull.node ? ` on ${esc(pull.node)}` : ""}">
+    <span class="dim xs">Pulling image · ${pct}% of ${pullSize(pull.total_bytes)}</span>
+    <div class="meter"><span style="width:${pct}%"></span></div></div>`;
+}
+const workloadPull = w => (w.pods || []).map(p => p.pull).find(pull => pull?.total_bytes);
+
 function workloadHierarchy(w) {
   const pods = w.pods || [];
   const podCount = w.pod_count ?? pods.length;
@@ -44,14 +53,15 @@ function workloadHierarchy(w) {
     <div class="tree-body">${pods.map(p => `<div class="tree-pod">
       <div class="tree-pod-head"><span class="tree-branch">Pod</span><b class="mono">${esc(p.hostname || p.name)}</b>
         ${p.hostname ? `<span class="mono dim tree-resource" title="Kubernetes runtime name">${esc(p.name)}</span>` : ""}
-        <span class="pill ${p.ready ? "ok" : p.phase === "Pending" ? "med" : "crit"}">${p.ready ? "ready" : esc(p.phase || "pending")}</span>
-        <span class="dim xs">${esc(p.node || "unscheduled")}${p.restarts ? ` · ${p.restarts} restart${p.restarts === 1 ? "" : "s"}` : ""}</span></div>
+        <span class="pill ${p.terminating ? "low" : p.ready ? "ok" : p.phase === "Pending" ? "med" : "crit"}" ${p.terminating ? 'data-tip="Told to stop and not gone yet. One that never started is cleared when the container is stopped or started again"' : ""}>${p.terminating ? "stopping" : p.ready ? "ready" : esc(p.phase || "pending")}</span>
+        <span class="dim xs tree-node">${esc(p.node || "unscheduled")}${p.restarts ? ` · ${p.restarts} restart${p.restarts === 1 ? "" : "s"}` : ""}</span></div>
+      ${p.pull?.total_bytes ? `<div class="tree-pull">${pullBar(p.pull)}</div>` : ""}
       <div class="tree-containers">${(p.containers || []).map(c => `<div class="tree-container">
         <span class="tree-branch ${c.kind === "init" ? "init" : ""}">${c.kind === "init" ? "Init" : "Container"}</span>
         <b>${esc(c.name)}</b><span class="pill ${c.ready || (c.kind === "init" && c.state === "Completed") ? "ok" : c.state === "running" ? "med" : "low"}">${esc(c.state || "pending")}</span>
         ${c.restarts ? `<span class="tag warn">${c.restarts} restart${c.restarts === 1 ? "" : "s"}</span>` : ""}
         <span class="mono dim tree-image">${esc(c.image || "image unavailable")}</span>
-      </div>`).join("") || `<div class="dim xs">Container detail is unavailable for this pod.</div>`}</div>
+      </div>${c.message && !c.ready ? `<div class="tree-why" title="${esc(c.message)}">${esc(c.message)}</div>` : ""}`).join("") || `<div class="dim xs">Container detail is unavailable for this pod.</div>`}</div>
     </div>`).join("") || `<div class="dim xs">No pods exist yet. The workload controller will create them when the instance count is above zero.</div>`}</div>
   </details>`;
 }
@@ -395,6 +405,7 @@ function workloadCard(w) {
         </div>
         <div class="dim xs mono wimg"><span class="wimage-name">${w.images.map(i => esc(imageLabel(i))).join(" · ")}</span>
           <span class="wimage-hardware">${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</span></div>
+        ${workloadPull(w) ? pullBar(workloadPull(w)) : ""}
         <div class="wfoot">
           ${workloadHierarchy(w)}
           <div class="row wacts">
@@ -427,7 +438,7 @@ function workloadTableRows(rows) {
           <div class="wtitle"><div><b>${esc(w.name)}</b></div>
             <div class="dim xs">${esc(w.ns)} · ${off ? "stopped" : `<span class="nodelink" onclick="moveWorkload('${w.name}','${w.ns}')">${esc(w.nodes.join(", ") || "unscheduled")}</span>${w.uptime ? ` · up ${esc(fmtUp(w.uptime))}` : " · starting"}`}</div></div></div></td>
         <td class="wl-status" data-sort="${off ? -1 : w.desired ? w.ready / w.desired : 0}"><div class="row nowrap" style="gap:5px"><span class="pill slim ${ok ? "ok" : off ? "low" : "crit"}" title="${w.ready} of ${w.desired} ready">${w.ready}/${w.desired}</span>${update?.unchecked ? `<span class="pill slim neutral" data-tip="${update.images?.some(i => i.starting) ? "Still starting: its image is compared with the registry once it runs." : "Stopped, and not seen running here yet, so its image has not been compared with the registry. It is checked once it has run."}">${update.images?.some(i => i.starting) ? "starting" : "not checked"}</span>` : ""}
-          ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}</div></td>
+          ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}</div>${workloadPull(w) ? pullBar(workloadPull(w)) : ""}</td>
         <td class="wl-image"><div class="mono xs wl-imagetext" title="${esc(w.images.map(imageLabel).join(" · "))}">${w.images.map(i => esc(imageLabel(i))).join(" · ")}</div>
           ${(w.hardware || []).length || w.gpu ? `<div>${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</div>` : ""}</td>
         <td class="mono small nowrap wl-cpu" data-sort="${off ? "" : w.cpu}" data-tip="Live usage. 100% equals one fully used CPU core.">${workloadCpuPercent(w.cpu)}</td>
@@ -539,7 +550,7 @@ async function containerLanFields(p, current) {
   window.__vmCreateOptions = opts;
   const lan = vmLanNetworks(opts);
   if (!lan.length) return vmNetworkNote(opts);
-  return `<div class="f"><label>VM network ${tip("Its bridge and VLAN; the container joins it as a second interface, lan0, and keeps the pod network for everything else.")}</label>
+  return `<div class="f"><label>LAN network ${tip("Its bridge and VLAN; the container joins it as a second interface, lan0, and keeps the pod network for everything else.")}</label>
       <select id="${p}_net">${lan.map(n => `<option value="${esc(n.name)}" ${current?.network === n.name ? "selected" : ""}>${esc(n.name)}${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}</option>`).join("")}</select></div>
     ${vmAddressFields(p, opts)}
     <div class="dim xs">It answers on this address directly - no Service or VIP - and it is recorded under the container's name in IP addresses.</div>`;
@@ -848,7 +859,7 @@ function pullDetail(s) {
   return `${s.updated} replacement pod${s.updated === 1 ? "" : "s"} created`;
 }
 
-const pullSize = b => b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1024 ** 2))} MB`;
+function pullSize(b) { return b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1024 ** 2))} MB`; }
 
 function rolloutMarkup(s) {
   // While the new image is fetched, the bar is the fetch: it is most of the wait.

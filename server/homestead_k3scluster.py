@@ -71,7 +71,7 @@ def plan(cfg):
         raise ValueError("up to six workers")
     network = str(cfg.get("network") or "")
     if not network or network == "pod":
-        raise ValueError("choose a VM network bridged to the LAN: the nodes need addresses of their own")
+        raise ValueError("choose a LAN network (bridged): the nodes need addresses of their own")
     addresses = [str(a).strip() for a in cfg.get("addresses") or [] if str(a).strip()]
     count = servers + agents
     if len(addresses) != count:
@@ -175,7 +175,7 @@ def status(item):
     if waited > START_LIMIT:
         return "failed", item.get("progress", 0), (
             f"After {int(waited // 60)} minutes the cluster is not up. Open {names[0]}'s console and read {LOG}; "
-            "most often the VMs cannot reach the internet from the VM network, or an address clashes.")
+            "most often the VMs cannot reach the internet from the LAN network, or an address clashes.")
     if running < len(names):
         return "running", 10 + int(40 * running / len(names)), f"{running} of {len(names)} VMs running"
     if not _answers(first, 6443):

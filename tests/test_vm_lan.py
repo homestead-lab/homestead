@@ -54,7 +54,7 @@ class StaticAddressTests(unittest.TestCase):
         self.assertEqual("uid-1", owner["metadata"]["ownerReferences"][0]["uid"])
 
     def test_the_pod_network_cannot_have_an_address_of_its_own(self):
-        with self.assertRaisesRegex(ValueError, "VM network bridged to the LAN"):
+        with self.assertRaisesRegex(ValueError, r"LAN network \(bridged\)"):
             self.create(static_ip={"address": "192.0.2.60", "prefix": 24})
 
     def test_addresses_that_cannot_be_a_machines_are_refused(self):
@@ -65,7 +65,7 @@ class StaticAddressTests(unittest.TestCase):
                 self.create(network="default/vlan1", static_ip={"address": address, "prefix": 24, "gateway": gateway})
 
     def test_an_unknown_network_is_refused(self):
-        with self.assertRaisesRegex(ValueError, "no VM network default/nope"):
+        with self.assertRaisesRegex(ValueError, "no LAN network default/nope"):
             self.create(network="default/nope")
 
 
@@ -89,7 +89,7 @@ class K3sClusterTests(unittest.TestCase):
         for change, pattern in (({"servers": 2}, "one server, or three"),
                                 ({"addresses": ["192.0.2.60"]}, "need 3 addresses"),
                                 ({"addresses": ["192.0.2.60"] * 3}, "an address of its own"),
-                                ({"network": "pod"}, "bridged to the LAN")):
+                                ({"network": "pod"}, r"LAN network \(bridged\)")):
             with self.subTest(change=change), self.assertRaisesRegex(ValueError, pattern):
                 K3S.plan(dict(self.CFG, **change))
 

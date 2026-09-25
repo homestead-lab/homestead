@@ -39,7 +39,7 @@ class VmNetworkTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "1 to 4094"):
             NET.create_vm_network({"name": "x", "vlan": "5000"})
         self.harvester = False
-        with self.assertRaisesRegex(ValueError, "made here on Harvester"):
+        with self.assertRaisesRegex(ValueError, "LAN networks are made here on Harvester"):
             NET.create_vm_network({"name": "x"})
 
 
