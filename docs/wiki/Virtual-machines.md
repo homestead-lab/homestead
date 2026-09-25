@@ -80,6 +80,11 @@ Homestead at `http://<first address>:8088`. It can run k3s with Longhorn and
 Homestead (what a new install gets), k3s and Homestead on local-path storage,
 or k3s alone. The nodes' login is `ubuntu` with the password you chose.
 
+**Cancel** on the job, while the cluster is still coming up, deletes its VMs
+with their disks and frees their addresses in IP addresses, after the cluster's
+name is typed. Only VMs carrying the cluster's label are deleted. A build that
+fails part-way, one VM not made, removes the ones it had made already.
+
 ## Edit
 
 ![Edit VM](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-vm-edit.png)

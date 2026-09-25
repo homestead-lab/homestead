@@ -51,6 +51,7 @@ function renderOperations() {
     <div class="jobactions">
       <button class="btn sm" onclick="openOperation('${esc(operation.href || "/")}','${esc(operation.id || "")}')">Open</button>
       ${operation.resumable ? `<button class="btn sm pri" data-need="admin" data-tip="Run the steps that are left, from the one it stopped at" onclick="resumeOperation('${esc(operation.id)}')">Carry on</button>` : ""}
+      ${operation.cancellable ? `<button class="btn sm danger" data-need="operator" data-tip="Says what stopping it would undo and what it cannot, before anything changes" onclick="cancelOperation('${esc(operation.id)}')">${operation.status === "cancelling" ? "Cancel again" : "Cancel"}</button>` : ""}
       ${operationActive(operation) ? "" : `<button class="btn sm" data-need="operator" onclick="dismissOperation('${esc(operation.id)}')">Dismiss</button>`}
     </div>
   </article>`).join("");
@@ -142,6 +143,72 @@ window.resumeOperation = async id => {
     refreshOperations(true);
     if (op?.kind === "reclass" && window.reclassWatch) reclassWatch(id);
   } catch (e) { toast(e.message, "bad"); }
+};
+
+/* Cancelling a job says first what it would do: what is put back, what is
+   stopped with the work so far kept, and what Kubernetes cannot take back -
+   for a few jobs only the tracking stops. Nothing changes until the button
+   in the dialog is pressed, and a cancel that deletes data asks for the name. */
+const CANCEL_LEAD = {
+  rollback: "Cancelling stops this job and puts back what it changed.",
+  stop: "Cancelling stops this job. What it has already done stays done.",
+  forget: "This job cannot be stopped from Homestead. Cancelling only stops tracking it here.",
+};
+window.cancelOperation = async id => {
+  let plan;
+  try {
+    plan = await api("/api/operations/cancel-plan", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }) });
+  } catch (e) { toast(e.message, "bad"); refreshOperations(true); return; }
+  operationPanelOpen = false;
+  renderOperations();
+  const list = rows => `<ul>${rows.map(row => `<li>${esc(row)}</li>`).join("")}</ul>`;
+  const high = plan.severity === "high";
+  const body = !plan.can
+    ? `<div class="note warn"><b>It cannot be cancelled at this step.</b><div>${esc(plan.why_not || "")}</div></div>
+       <div class="row" style="margin-top:12px"><button class="btn" onclick="closeModal()">Close</button></div>`
+    : `<p>${esc(CANCEL_LEAD[plan.mode] || CANCEL_LEAD.stop)}</p>
+      <div class="dim xs">${esc(plan.message || "")} · ${Math.round(plan.progress || 0)}% done</div>
+      ${plan.undo.length ? `<div class="note ${high ? "warn" : ""}" style="margin-top:12px"><b>${plan.mode === "rollback" ? "What cancelling puts back" : "What cancelling does"}</b>${list(plan.undo)}</div>` : ""}
+      ${plan.keeps.length ? `<div class="note" style="margin-top:10px"><b>${plan.mode === "forget" ? "What carries on" : "What stays as it is"}</b>${list(plan.keeps)}</div>` : ""}
+      ${plan.options.map(option => `<label class="switch" style="margin-top:12px"><input type="checkbox" data-cancel-option="${esc(option.id)}" ${option.default ? "checked" : ""}> ${esc(option.label)}</label>
+        ${option.detail ? `<div class="dim xs">${esc(option.detail)}</div>` : ""}`).join("")}
+      ${plan.confirm ? `<div class="f" style="margin-top:12px"><label>Type <b class="mono">${esc(plan.confirm)}</b> to confirm</label>
+        <input id="oc_confirm" autocomplete="off" oninput="cancelOperationGate()"></div>` : ""}
+      ${plan.needs === "admin" && !can("admin") ? `<div class="note warn" style="margin-top:12px">Cancelling this job needs an admin.</div>` : ""}
+      <div class="row" style="margin-top:12px">
+        <button class="btn ${high ? "danger" : "pri"}" id="oc_go" data-need="${esc(plan.needs || "operator")}" ${plan.confirm ? "disabled" : ""}
+          onclick="cancelOperationGo('${esc(plan.id)}')">${esc(plan.action)}</button>
+        <button class="btn" onclick="closeModal()">Keep it running</button></div>`;
+  modal(`Cancel · ${plan.title}`, body);
+  window.__cancelPlan = plan;
+  if (window.applyRole) window.applyRole();
+};
+window.cancelOperationGate = () => {
+  const plan = window.__cancelPlan || {};
+  const go = $("#oc_go");
+  if (go) go.disabled = !!plan.confirm && ($("#oc_confirm")?.value || "").trim() !== plan.confirm;
+};
+window.cancelOperationGo = async id => {
+  const plan = window.__cancelPlan || {};
+  const confirm = ($("#oc_confirm")?.value || "").trim();
+  if (plan.confirm && confirm !== plan.confirm) return toast(`type ${plan.confirm} exactly to confirm`, "bad");
+  const options = Object.fromEntries([...document.querySelectorAll("[data-cancel-option]")]
+    .map(box => [box.dataset.cancelOption, box.checked]));
+  const go = $("#oc_go");
+  if (go) { go.disabled = true; go.textContent = "Cancelling…"; }
+  try {
+    const result = await api("/api/operations/cancel", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, options, confirm }) });
+    toast(result.detail || "cancelled", "ok");
+    closeModal();
+    if (result.operation) window.noteOperation(result.operation);
+    if (typeof refresh === "function") refresh(true);
+  } catch (e) {
+    toast(e.message, "bad");
+    if (go) { go.disabled = false; go.textContent = plan.action || "Cancel"; }
+  }
+  refreshOperations(true);
 };
 
 window.dismissOperation = async id => {

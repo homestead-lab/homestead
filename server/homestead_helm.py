@@ -29,6 +29,7 @@ import homestead_names as NAMES
 
 kget = ksend = None
 CONTROLLER_NS = "kube-system"
+PREVIOUS_SPEC = NAMES.key("helm-previous")
 HUB = "https://artifacthub.io/api/v1"
 SYSTEM_PREFIXES = ("cattle-", "harvester-", "longhorn-", "kube-", "fleet-", "rancher-", "cis-operator")
 _cache = {}
@@ -257,6 +258,10 @@ def upgrade(cfg):
     namespace, name = str(cfg.get("namespace") or ""), str(cfg.get("name") or "")
     item = _helmchart(namespace, name)
     spec = item.setdefault("spec", {})
+    # What it was, on the chart itself, so cancelling the upgrade can put it
+    # back. It holds nothing the chart's own spec does not already show.
+    item.setdefault("metadata", {}).setdefault("annotations", {})[PREVIOUS_SPEC] = json.dumps(
+        {key: spec[key] for key in ("version", "valuesContent") if key in spec}, separators=(",", ":"))
     if "version" in cfg:
         version = str(cfg.get("version") or "").strip()
         if version and not re.fullmatch(r"[A-Za-z0-9.+_-]{1,60}", version):
@@ -269,6 +274,29 @@ def upgrade(cfg):
         spec["valuesContent"] = str(cfg.get("values") or "")
     ksend("PUT", f"/apis/helm.cattle.io/v1/namespaces/{item['metadata']['namespace']}/helmcharts/{name}", item)
     return {"ok": True, "detail": f"{name} is being upgraded by the Helm controller"}
+
+
+def restore_previous(item):
+    """Put a chart's version and values back as they were before its last
+    upgrade; False when none were kept."""
+    annotations = (item.get("metadata") or {}).get("annotations") or {}
+    try:
+        previous = json.loads(annotations.get(PREVIOUS_SPEC) or "")
+    except ValueError:
+        return False
+    if not isinstance(previous, dict):
+        return False
+    spec = item.setdefault("spec", {})
+    for key in ("version", "valuesContent"):
+        if key in previous:
+            spec[key] = previous[key]
+        else:
+            spec.pop(key, None)
+    annotations.pop(PREVIOUS_SPEC, None)
+    item["metadata"].pop("managedFields", None)
+    ksend("PUT", f"/apis/helm.cattle.io/v1/namespaces/{item['metadata']['namespace']}/helmcharts/"
+                 f"{item['metadata']['name']}", item)
+    return True
 
 
 def uninstall(namespace, name):

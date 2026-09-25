@@ -43,7 +43,7 @@ already run - with Homestead on it, then each part of Homestead in turn.
 | **Hardware** | Host device browser and reusable mappings for iGPU, Coral, USB/PCIe and other devices |
 | **Import** | Docker Compose files checked as you type, Unraid/Docker workload and appdata import, several folders across several volumes, measured sizing with a per-volume capacity preflight, byte-weighted progress, named failures, editable seed configuration |
 | **Resources** | Every kind the cluster serves, custom resources included, with the API server's own columns; any object as YAML with its events, edited, deleted or created from YAML - what a Headlamp user reaches for |
-| **Administration** | Direct URLs/breadcrumbs, persistent activity tray, viewer/operator/admin roles, namespaces for your apps, appearance, thresholds and version details |
+| **Administration** | Direct URLs/breadcrumbs, persistent activity tray with cancel and roll back for every job, viewer/operator/admin roles, namespaces for your apps, appearance, thresholds and version details |
 | **App & alerts** | Installable on phones and desktops over HTTPS, with push notifications for outages, degraded storage and workloads, failed jobs, joining hosts and image updates |
 
 ## Repository layout
@@ -676,6 +676,18 @@ rules are enforced by the server, every rollout still requires acknowledgement,
 and semantic-version discovery never silently crosses a major release. Image
 pulls, updates, and rollbacks remain visible in the persistent Activity tray
 through browser refreshes and Homestead restarts.
+
+Every job still running has **Cancel**. It first says what cancelling would
+do: what is put back, what stays as it is, and anything Kubernetes cannot take
+back. Where it can, a cancel rolls back - a deploy is removed, an update or
+edit returns to the version before it, a volume move starts everything again
+on its untouched original, a k3s cluster's VMs, disks and addresses are
+removed, a restore or disk import deletes its half-filled claim. Where what is
+done cannot be undone, it stops the rest (an image cleanup keeps the nodes it
+already cleaned). A step that must not be interrupted, such as a volume swap,
+is refused until it has finished, and the few things Kubernetes cannot take
+back once asked, such as a volume deletion, are only no longer tracked.
+Cancelling something that deletes VMs or stops a volume move needs an admin.
 
 ### Permissions look after themselves
 

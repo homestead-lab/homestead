@@ -123,6 +123,21 @@ def start_test(node, name, test_type):
     }
 
 
+def abort_test(node, name):
+    """Stop the self-test running on a disk: smartctl -X on its node."""
+    node, name = _name(node, "node"), _name(name, "disk")
+    try:
+        result = _request(node, body={"node": node, "disk": name, "test": "abort"})
+    except ValueError as error:
+        if "short or long" in str(error):
+            # A helper from before aborting existed only knows how to start.
+            raise ValueError(f"the SMART helper on {node} is too old to abort a test: update it on the "
+                             "node's page, or let the test finish") from error
+        raise
+    return {"ok": True, "node": node, "disk": name,
+            "message": str(result.get("message") or "SMART self-test aborted")}
+
+
 def progress(ref):
     report = disk(ref["node"], ref["disk"])
     test = report.get("test") or {}

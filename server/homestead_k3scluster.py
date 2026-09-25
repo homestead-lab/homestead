@@ -34,11 +34,12 @@ START_LIMIT = 45 * 60
 kget = None
 create = None       # makes one VM, with its address checked and recorded
 check = None        # why an address cannot be a VM's, or ""
+remove = None       # deletes one VM with its disks, and forgets its address
 
 
-def bind(_kget, _create, _check):
-    global kget, create, check
-    kget, create, check = _kget, _create, _check
+def bind(_kget, _create, _check, _remove=None):
+    global kget, create, check, remove
+    kget, create, check, remove = _kget, _create, _check, _remove
 
 
 def review(cfg):
@@ -148,14 +149,32 @@ def start(cfg, ops):
         try:
             create(vm)
         except Exception as error:
-            done = ", ".join(made) or "none"
-            raise ValueError(f"{node['name']} could not be made: {error}. Made so far: {done}") from error
-        made.append(node["name"])
+            raise ValueError(f"{node['name']} could not be made: {error}. {_undo(ns, made)}") from error
+        made.append(node)
     return ops.start("k3s-cluster", f"k3s cluster {built['name']}",
                      {"kind": "VirtualMachine", "name": built["nodes"][0]["name"], "namespace": ns}, "/vms",
                      {"namespace": ns, "name": built["name"], "nodes": built["nodes"], "first": built["first"],
                       "setup": built["setup"], "started": time.time()},
                      f"Starting {len(made)} VM{'s' if len(made) != 1 else ''}")
+
+
+def _undo(ns, made):
+    """A build that stops part-way takes back the VMs it made, so a second
+    try does not find its own addresses and names taken."""
+    if not made:
+        return "Nothing was made."
+    if not remove:
+        return "Made so far: " + ", ".join(node["name"] for node in made)
+    left = []
+    for node in made:
+        try:
+            remove(ns, node)
+        except Exception:
+            left.append(node["name"])
+    if left:
+        return (f"{', '.join(left)} could not be removed again: delete {'it' if len(left) == 1 else 'them'} "
+                "from Virtual machines")
+    return f"The {len(made)} VM{'s' if len(made) != 1 else ''} made before it were removed again."
 
 
 def status(item):

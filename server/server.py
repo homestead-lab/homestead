@@ -1916,7 +1916,10 @@ def run_deploy(b):
     action = f"Add {container_name} to {target}" if target_mode == "existing" else f"Deploy {target}"
     op = OPS.start("deployment", action,
                    {"kind": "Deployment", "name": target, "namespace": ns},
-                   "/containers", {"namespace": ns, "name": target})
+                   "/containers", {"namespace": ns, "name": target,
+                                   # What cancelling it undoes: a new one is removed,
+                                   # an existing one goes back to its last version.
+                                   "undo": "rollout" if target_mode == "existing" else "delete"})
     return {"ok": True, "name": target, "container": container_name, "operation": op,
             "reused_volumes": b.get("_reused_claims") or []}
 
@@ -3306,6 +3309,7 @@ import homestead_place as PLACE
 import homestead_hardware as HW
 import homestead_updates as UPDATES
 import homestead_operations as OPS
+import homestead_cancel as CANCEL
 import homestead_console as CONSOLE
 import homestead_files as FILES
 import homestead_icons as ICONS
@@ -3386,7 +3390,14 @@ def _pull_progress(node, image):
 
 
 UPDATES.pull_progress = _pull_progress
-K3SC.bind(kget, lambda cfg: create_vm_with_address(cfg), lambda ip: vm_address_problem(ip))
+def _remove_cluster_vm(ns, node):
+    """One VM of a k3s cluster whose build stopped part-way: gone with its
+    disks, and its address free again."""
+    VMS.delete(ns, node["name"], with_disks=True)
+    CANCEL.forget_addresses({node["address"]: node["name"]})
+
+
+K3SC.bind(kget, lambda cfg: create_vm_with_address(cfg), lambda ip: vm_address_problem(ip), _remove_cluster_vm)
 OPS.RESOLVERS["k3s-cluster"] = K3SC.status
 MOVE_ENGINE.after_finish = cleanup_restore_classes
 
@@ -3457,6 +3468,35 @@ DISKS.bind(kget, ksend, node_temps)
 OPS.RESOLVERS["disk-retire"] = DISKS.retire_step
 OPS.RESUMABLE["disk-retire"] = DISKS.retire_resumable
 OPS.RESOLVERS["helm"] = HELM.job_status
+
+
+def delete_workload(ns, name):
+    """A workload deleted, with every Service that points at it and its own
+    LAN network; the Services removed are returned."""
+    guard_self(ns, name, deleting=True)
+    try:
+        LAN.remove_nad(ns, name)       # its own LAN network, if it had one
+    except Exception:
+        pass
+    # Every Service selecting these pods, not just the one sharing the
+    # workload's name: a sidecar or a hand-made listener is named
+    # differently and would otherwise keep its VIP port forever.
+    services = set(NETWORK.workload_service_names(ns, name)) | {name}
+    ksend("DELETE", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    removed = []
+    for service in sorted(services):
+        try:
+            ksend("DELETE", f"/api/v1/namespaces/{ns}/services/{service}")
+            removed.append(service)
+        except urllib.error.HTTPError:
+            pass
+    _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
+    return removed
+
+
+# Every job can be cancelled; what that does for each kind is said there.
+CANCEL.bind(kget, ksend, delete_workload, lambda: cleanup_restore_classes())
+CANCEL.register(OPS)
 NSMOD.bind(kget, ksend, DEFAULT_NS, _own_namespace())
 ALERTS.bind(DATA_DIR)
 
@@ -3714,7 +3754,7 @@ def move_homestead_data(storage_class):
     if not target_row["shareable"] and int((dep.get("spec") or {}).get("replicas") or 1) > 1:
         raise ValueError(f"{storage_class} gives a volume one node can mount, and {dep['spec']['replicas']} copies "
                          "of Homestead run: set Redundancy to one copy first")
-    busy = [o for o in OPS.list_operations() if o.get("status") in ("queued", "running")
+    busy = [o for o in OPS.list_operations() if o.get("status") not in OPS.TERMINAL
             and o.get("kind") != "self-data-move"]
     if busy:
         raise ValueError(f"{len(busy)} job{'s are' if len(busy) != 1 else ' is'} still running ({busy[0].get('title', '')}"
@@ -5001,7 +5041,8 @@ class H(BaseHTTPRequestHandler):
                 job = f"helm-{'delete' if action == 'uninstall' else 'install'}-{name}"
                 result["operation"] = OPS.start("helm", f"Helm {action} {name}",
                                                 {"kind": "HelmChart", "name": name, "namespace": HELM.CONTROLLER_NS},
-                                                "/helm", {"namespace": HELM.CONTROLLER_NS, "name": job},
+                                                "/helm", {"namespace": HELM.CONTROLLER_NS, "name": job,
+                                                          "action": action},
                                                 "Waiting for the Helm controller")
                 return self._send(200, result)
             if p == "/api/resources/save":
@@ -5161,7 +5202,7 @@ class H(BaseHTTPRequestHandler):
                     result["operation"] = OPS.start(
                         "deployment", f"Create share {b['name']}",
                         {"kind": "Deployment", "name": "samba", "namespace": SMB_NAMESPACE},
-                        "/shares", {"namespace": SMB_NAMESPACE, "name": "samba"},
+                        "/shares", {"namespace": SMB_NAMESPACE, "name": "samba", "undo": "keep"},
                         "Restarting Samba with the new share")
                 return self._send(200, {"ok": True, **result})
             if p == "/api/shares/edit":
@@ -5173,7 +5214,7 @@ class H(BaseHTTPRequestHandler):
                     result["operation"] = OPS.start(
                         "deployment", f"Update share {b['name']}",
                         {"kind": "Deployment", "name": "samba", "namespace": SMB_NAMESPACE},
-                        "/shares", {"namespace": SMB_NAMESPACE, "name": "samba"},
+                        "/shares", {"namespace": SMB_NAMESPACE, "name": "samba", "undo": "keep"},
                         "Restarting Samba with updated access")
                 return self._send(200, {"ok": True, **result})
             if p == "/api/shares/delete":
@@ -5183,7 +5224,7 @@ class H(BaseHTTPRequestHandler):
                     result["operation"] = OPS.start(
                         "deployment", f"Remove share {b['name']}",
                         {"kind": "Deployment", "name": "samba", "namespace": SMB_NAMESPACE},
-                        "/shares", {"namespace": SMB_NAMESPACE, "name": "samba"},
+                        "/shares", {"namespace": SMB_NAMESPACE, "name": "samba", "undo": "keep"},
                         "Restarting Samba without the removed share")
                 return self._send(200, {"ok": True, **result})
             if p == "/api/appstore/install":
@@ -5214,7 +5255,7 @@ class H(BaseHTTPRequestHandler):
                 _cache.pop("wl", None)
                 op = OPS.start("deployment", f"Install {cfg['name']}",
                                {"kind": "Deployment", "name": cfg["name"], "namespace": ns},
-                               "/containers", {"namespace": ns, "name": cfg["name"]})
+                               "/containers", {"namespace": ns, "name": cfg["name"], "undo": "delete"})
                 return self._send(200, {"ok": True, "name": cfg["name"], "operation": op, "reused_volumes": reused,
                                         **({"detail": f"kept the existing {', '.join(reused)} - nothing was using "
                                                       f"{'it' if len(reused) == 1 else 'them'}, so its data carries on"}
@@ -5270,7 +5311,7 @@ class H(BaseHTTPRequestHandler):
                 result["operation"] = OPS.start(
                     "deployment", f"Move {b['name']}",
                     {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
-                    "/containers", {"namespace": b["ns"], "name": b["name"]})
+                    "/containers", {"namespace": b["ns"], "name": b["name"], "undo": "rollout"})
                 return self._send(200, result)
             if p == "/api/node/cordon":
                 return self._send(200, LC.set_cordon(b["node"], b.get("cordon", True)))
@@ -5572,6 +5613,19 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, result)
             if p == "/api/operations/resume":
                 return self._send(200, OPS.resume(b.get("id", "")))
+            if p == "/api/operations/cancel-plan":
+                return self._send(200, OPS.cancel_plan(b.get("id", "")))
+            if p == "/api/operations/cancel":
+                # The route lets any operator in; what the job's own cancel
+                # does - delete VMs, stop a volume move - may need more.
+                try:
+                    result = OPS.cancel(b.get("id", ""), b.get("options") or {}, b.get("confirm", ""),
+                                        allowed=lambda need: AUTH.allows(self.role, need), by=self.user)
+                except PermissionError as error:
+                    return self._send(403, {"error": str(error), "role": self.role})
+                for key in ("wl", "ov", "network", "vms", "vol", "helm", "disks", "lhcap", "flow2"):
+                    _cache.pop(key, None)
+                return self._send(200, result)
             if p == "/api/operations/dismiss":
                 if b.get("all"):
                     return self._send(200, OPS.dismiss_finished())
@@ -5628,26 +5682,7 @@ class H(BaseHTTPRequestHandler):
         parts = [x for x in u.path.split("/") if x]
         try:
             if len(parts) == 4 and parts[:2] == ["api", "workload"]:
-                ns, name = parts[2], parts[3]
-                guard_self(ns, name, deleting=True)
-                try:
-                    LAN.remove_nad(ns, name)       # its own LAN network, if it had one
-                except Exception:
-                    pass
-                # Every Service selecting these pods, not just the one sharing the
-                # workload's name: a sidecar or a hand-made listener is named
-                # differently and would otherwise keep its VIP port forever.
-                services = set(NETWORK.workload_service_names(ns, name)) | {name}
-                ksend("DELETE", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-                removed = []
-                for service in sorted(services):
-                    try:
-                        ksend("DELETE", f"/api/v1/namespaces/{ns}/services/{service}")
-                        removed.append(service)
-                    except urllib.error.HTTPError:
-                        pass
-                _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
-                return self._send(200, {"ok": True, "services": removed})
+                return self._send(200, {"ok": True, "services": delete_workload(parts[2], parts[3])})
             return self._send(404, {"error": "no route"})
         except AUTH.StoreUnavailable as e:
             # Not an empty account store: the cluster did not answer.

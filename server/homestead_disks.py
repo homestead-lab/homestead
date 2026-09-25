@@ -383,7 +383,10 @@ def retire_start(cfg, ops):
     if force and cfg.get("confirm") != disk_id:
         raise ValueError(f"type {disk_id} to confirm")
     keep = [r["replica"] for r in review["volumes"] if r["outcome"] == "only-copy" and not force]
-    ref = {"node": node, "disk": disk_id, "path": review["path"], "force": force, "phase": "stop", "keep": keep}
+    disk, _ = _lh_disk(node, disk_id)
+    # How it was, so cancelling before anything is removed puts it back so.
+    ref = {"node": node, "disk": disk_id, "path": review["path"], "force": force, "phase": "stop", "keep": keep,
+           "was_scheduling": disk.get("allowScheduling", True) is not False}
     return ops.start("disk-retire", f"Replace failed disk {review['path'] or disk_id} on {node}",
                      {"kind": "Node", "name": node}, f"/nodes/{node}", ref, "Stopping new replicas on the disk")
 

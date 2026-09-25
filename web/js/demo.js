@@ -872,17 +872,49 @@ ssh_pwauth: true
         message: "registry returned HTTP 429", started_at: new Date(Date.now() - 6e5).toISOString(),
         finished_at: new Date(Date.now() - 5e5).toISOString(), href: "/image-cache",
         resource: { kind: "Image", name: "plex", namespace: "lab" } },
-      { id: "op3", kind: "image-update", title: "Update home-assistant", status: "running", progress: 62,
+      { id: "op3", kind: "image-update", title: "Update home-assistant", status: "running", progress: 62, cancellable: true,
         message: "rolling out", started_at: new Date(Date.now() - 6e4).toISOString(),
         href: "/containers?q=home-assistant", resource: { kind: "Deployment", name: "home-assistant", namespace: "lab" } },
-      { id: "op4", kind: "reclass", title: "Move paperless-data to longhorn-r3", status: "running", progress: 41,
+      { id: "op4", kind: "reclass", title: "Move paperless-data to longhorn-r3", status: "running", progress: 41, cancellable: true,
         message: "Copying 52% at 96.4MB/s", started_at: new Date(Date.now() - 3e5).toISOString(),
         href: "/volumes?q=paperless-data", resource: { kind: "PersistentVolumeClaim", name: "paperless-data", namespace: "lab" },
         copy: { percent: 52, speed: "96.4MB/s", verifying: false },
         steps: [["stop", "Stop what uses it", "done"], ["create", "Make the new volume", "done"], ["copy", "Copy the data", "active"],
           ["verify", "Check the copy", "todo"], ["swap", "Swap the new volume in", "todo"], ["start", "Start everything again", "todo"]]
           .map(([id, label, state]) => ({ id, label, state })) },
+      { id: "op5", kind: "k3s-cluster", title: "k3s cluster k3s-lab", status: "running", progress: 60, cancellable: true,
+        message: "VMs running; installing k3s on k3s-lab-server-1 (192.0.2.60) - a few minutes",
+        started_at: new Date(Date.now() - 4e5).toISOString(), href: "/vms",
+        resource: { kind: "VirtualMachine", name: "k3s-lab-server-1", namespace: "lab" } },
     ]),
+    // What cancelling each running job above would do, as the server says it.
+    "/api/operations/cancel-plan": (url, init) => {
+      const id = JSON.parse(init?.body || "{}").id;
+      const op = (window.__demoOps || []).find(item => item.id === id) || {};
+      const base = { id, kind: op.kind, title: op.title, status: op.status, progress: op.progress,
+        message: op.message, resource: op.resource, can: true, why_not: "", severity: "high",
+        confirm: "", needs: "operator", options: [] };
+      if (op.kind === "k3s-cluster") return { ...base, mode: "rollback", action: "Cancel and put back", needs: "admin",
+        confirm: "k3s-lab",
+        undo: ["Deletes 3 VMs - k3s-lab-server-1, k3s-lab-agent-1 and k3s-lab-agent-2 - with their disks",
+          "Forgets 192.0.2.60, 192.0.2.61 and 192.0.2.62 in IP addresses, so they can be used again"],
+        keeps: ["Anything installed inside the VMs so far is lost", "The VM image the nodes started from is kept"] };
+      if (op.kind === "reclass") return { ...base, mode: "rollback", action: "Cancel and put back", needs: "admin",
+        undo: ["Stops the copy and deletes the new volume on longhorn-r3",
+          "Starts paperless again as it was, on the original paperless-data"],
+        keeps: ["paperless-data and its data were only read, and are as they were"] };
+      return { ...base, mode: "rollback", action: "Cancel and put back",
+        undo: ["home-assistant's home-assistant goes back to ghcr.io/home-assistant/home-assistant@sha256:4be1…"],
+        keeps: ["home-assistant's pods restart once more, onto that image"] };
+    },
+    "/api/operations/cancel": (url, init) => {
+      const id = JSON.parse(init?.body || "{}").id;
+      const op = (window.__demoOps || []).find(item => item.id === id);
+      if (op) Object.assign(op, { status: "cancelled", cancellable: false, finished_at: new Date().toISOString(),
+        message: op.kind === "k3s-cluster" ? "Cluster k3s-lab cancelled: its VMs are being deleted with their disks, and their addresses are free again"
+          : "Cancelled and put back" });
+      return { ok: true, id, detail: op?.message || "cancelled", operation: op };
+    },
     "/api/volumes/reclass/plan": { ok: true, blockers: [], namespace: "lab", claim: "frigate-config",
       warnings: [], from_class: "longhorn-r2", to_class: "longhorn-r3", volume_mode: "Filesystem", access_modes: ["ReadWriteOnce"],
       consumers: [{ kind: "Deployment", name: "frigate", replicas: 1, running: true }, { kind: "Deployment", name: "samba", replicas: 1, running: true }],

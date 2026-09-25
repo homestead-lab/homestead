@@ -595,8 +595,17 @@ data:
                     raise ValueError("node does not match this helper")
                 name = str(body.get("disk") or "")
                 test = str(body.get("test") or "").lower()
+                if test == "abort":
+                    path = next((path for disk, path in disks() if disk == name), None)
+                    if not path:
+                        raise ValueError("disk was not found on this host")
+                    code, _, message = run(["-d", device_type(name), "-X", "-j", path], timeout=20)
+                    if code & 3:
+                        raise ValueError(message or "smartctl could not abort the test")
+                    return self.send_json(200, {"ok": True, "node": NODE, "disk": name,
+                        "message": message or "Self-test aborted"})
                 if test not in ("short", "long"):
-                    raise ValueError("test must be short or long")
+                    raise ValueError("test must be short, long or abort")
                 before = one(name)
                 if test not in before.get("supported_tests", []):
                     raise ValueError(f"this disk does not advertise a {test} self-test")

@@ -23,6 +23,12 @@ DATA_DIR = "/data"
 STORE = "operations.json"
 MAX_OPERATIONS = 100
 TERMINAL = {"succeeded", "failed", "cancelled"}
+# A cancel that has begun and not yet finished. The poll leaves such a job
+# alone, so a step cannot move it on while it is being put back.
+CANCELLING = "cancelling"
+# A cancel that stops part-way - Homestead restarted during it - may be asked
+# again after this long; every canceller's steps are safe to repeat.
+CANCEL_RETRY_AFTER = 120
 # Shared with any other Homestead replica on the same data volume.
 _lock = SHARED.SharedLock("operations")
 
@@ -83,7 +89,11 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
 
 
 def _public(item):
-    out = {key: value for key, value in item.items() if key != "ref"}
+    out = {key: value for key, value in item.items() if key not in ("ref", "cancel_started", "previous_status")}
+    # Every job still going can be cancelled; what that does is asked for
+    # separately, as it reads Kubernetes and the tray is polled often.
+    out["cancellable"] = item.get("status") not in TERMINAL and (
+        item.get("status") != CANCELLING or _cancel_stale(item))
     check = RESUMABLE.get(item.get("kind"))
     if item.get("status") == "failed" and check:
         try:
@@ -407,7 +417,7 @@ RESOLVERS = {
 
 
 def _refresh(item):
-    if item.get("status") in TERMINAL:
+    if item.get("status") in TERMINAL or item.get("status") == CANCELLING:
         return False
     resolver = RESOLVERS.get(item.get("kind"))
     if not resolver:
@@ -499,3 +509,130 @@ def dismiss(operation_id):
         items = [item for item in items if item.get("id") != operation_id]
         _write(items)
     return {"ok": True, "id": operation_id}
+
+
+# What cancelling each kind of job does: kind -> (plan, run).
+#
+#   plan(item) -> dict saying what a cancel would do, read before anything
+#     changes, so the person sees the cost first. Keys, all optional:
+#       mode      "rollback" puts things back as they were; "stop" halts it,
+#                 keeping what is already done; "forget" cannot stop it and
+#                 only stops tracking it here.
+#       can       False when it cannot be cancelled at this step (why_not says
+#                 why), as in the seconds a volume swap takes.
+#       undo      what is put back or removed
+#       keeps     what stays as it is, and anything that cannot be undone
+#       severity  "high" when the cancel deletes or restarts something
+#       confirm   a name that must be typed, when data is deleted
+#       needs     the role cancelling needs: "operator" or "admin"
+#       options   [{"id", "label", "detail", "default"}] choices for the person
+#   run(item, options) -> the message the cancelled job is left with. It may
+#     change item["ref"], which is kept. Each step must be safe to run again:
+#     a cancel interrupted part-way is asked again from the start.
+CANCELLERS = {}
+MODES = {"rollback": "Cancel and put back", "stop": "Cancel it", "forget": "Stop tracking it"}
+
+
+def _cancel_stale(item):
+    try:
+        started = float(item.get("cancel_started") or 0)
+    except (TypeError, ValueError):
+        started = 0
+    return time.time() - started > CANCEL_RETRY_AFTER
+
+
+def _plan_for(item):
+    plan = {"mode": "forget", "can": True, "why_not": "", "undo": [], "severity": "low",
+            "keeps": ["Homestead has no way to stop this kind of job: it carries on in Kubernetes "
+                      "and only stops showing here."],
+            "confirm": "", "needs": "operator", "options": []}
+    entry = CANCELLERS.get(item.get("kind"))
+    if entry:
+        plan.update(entry[0](item) or {})
+    plan["mode"] = plan["mode"] if plan["mode"] in MODES else "stop"
+    plan.setdefault("action", MODES[plan["mode"]])
+    plan["undo"] = [str(line) for line in plan.get("undo") or []]
+    plan["keeps"] = [str(line) for line in plan.get("keeps") or []]
+    return plan
+
+
+def _active(operation_id):
+    match = next((item for item in _read() if item.get("id") == operation_id), None)
+    if not match:
+        raise ValueError("operation not found")
+    if match.get("status") in TERMINAL:
+        raise ValueError(f"it has {match['status']} already, so there is nothing left to cancel")
+    return match
+
+
+def cancel_plan(operation_id):
+    """What cancelling a job would do, before anything is changed."""
+    with _lock:
+        item = _active(operation_id)
+    plan = _plan_for(item)
+    return {"id": item["id"], "kind": item.get("kind", ""), "title": item.get("title", ""),
+            "status": item.get("status", ""), "progress": item.get("progress", 0),
+            "message": item.get("message", ""), "resource": item.get("resource") or {}, **plan}
+
+
+def cancel(operation_id, options=None, confirm="", allowed=None, by=""):
+    """Cancel a job: stop it, and put back what it changed where that can be.
+
+    The job is marked as being cancelled first, under the lock the poll takes,
+    so no step of it runs while it is put back. The work itself runs outside
+    the lock - some of it waits for pods to go - and the job is left
+    cancelled, or, if putting it back failed, running again as it was, with
+    the reason, so nothing is left pretending to be finished."""
+    with _lock:
+        items = _read()
+        match = next((item for item in items if item.get("id") == operation_id), None)
+        if not match:
+            raise ValueError("operation not found")
+        status = match.get("status")
+        if status in TERMINAL:
+            raise ValueError(f"it has {status} already, so there is nothing left to cancel")
+        if status == CANCELLING and not _cancel_stale(match):
+            raise ValueError("it is being cancelled already")
+        plan = _plan_for(match)
+        if not plan["can"]:
+            raise ValueError(plan["why_not"] or "it cannot be cancelled at this step")
+        if allowed and not allowed(plan["needs"]):
+            raise PermissionError(f"cancelling this job needs the {plan['needs']} role")
+        if plan["confirm"] and str(confirm or "").strip() != plan["confirm"]:
+            raise ValueError(f"type {plan['confirm']} to confirm")
+        chosen = {row["id"]: bool((options or {}).get(row["id"], row.get("default", False)))
+                  for row in plan["options"]}
+        before = match.get("previous_status") or status
+        match.update(status=CANCELLING, previous_status=before, cancel_started=time.time(),
+                     updated_at=_now(), message=f"Cancelling: {plan['action'].lower()}")
+        _write(items)
+        work = json.loads(json.dumps(match))
+    entry = CANCELLERS.get(work.get("kind"))
+    try:
+        message = entry[1](work, chosen) if entry else ""
+    except Exception as error:
+        with _lock:
+            items = _read()
+            match = next((item for item in items if item.get("id") == operation_id), None)
+            if match:
+                match["ref"] = work.get("ref", match.get("ref"))
+                match.pop("cancel_started", None)
+                match.update(status=match.pop("previous_status", "running"), updated_at=_now(),
+                             message=f"Cancelling did not finish: {error}"[:500])
+                _write(items)
+        raise ValueError(f"cancelling did not finish: {error}") from error
+    message = message or ("Stopped tracking it here; it carries on in Kubernetes"
+                          if plan["mode"] == "forget" else "Cancelled")
+    with _lock:
+        items = _read()
+        match = next((item for item in items if item.get("id") == operation_id), None)
+        if match:
+            match["ref"] = work.get("ref", match.get("ref"))
+            match.pop("cancel_started", None)
+            match.pop("previous_status", None)
+            if by:
+                match["cancelled_by"] = str(by)[:120]
+            _finish(match, "cancelled", match.get("progress", 0), message)
+            _write(items)
+    return {"ok": True, "id": operation_id, "detail": message,
+            "operation": _public(match) if match else None}
