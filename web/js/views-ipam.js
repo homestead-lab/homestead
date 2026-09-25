@@ -38,12 +38,27 @@ function ipamSubnetPick(subnets) {
   try { saved = localStorage.getItem("homestead.ipam.subnet") || ""; } catch (e) { /* default */ }
   return subnets.find(s => s.id === saved) || subnets[0];
 }
-window.ipamPickSubnet = id => { try { localStorage.setItem("homestead.ipam.subnet", id); } catch (e) { /* this visit only */ } renderIpam(); };
-window.ipamFilter = value => { STATE.ipamFilter = value; renderIpam(); };
+window.ipamPickSubnet = id => { try { localStorage.setItem("homestead.ipam.subnet", id); } catch (e) { /* this visit only */ } ipamPicks().clear(); renderIpam(); };
+window.ipamFilter = value => { STATE.ipamFilter = value; ipamPicks().clear(); renderIpam(); };
+
+/* The addresses ticked for a bulk change. Kept here rather than read off the
+   checkboxes: the page refreshes itself every few seconds, and a redraw used
+   to untick them all and hide the bar mid-choice. */
+const ipamPicks = () => (STATE.ipamPicked = STATE.ipamPicked || new Set());
 
 async function viewIpam() {
-  STATE.data.ipam = await api("/api/ipam");
+  const data = await api("/api/ipam");
+  // Someone part-way through a bulk change - typing a tag, choosing a
+  // category - keeps the page as it is; the next refresh catches up.
+  if (document.activeElement?.closest?.("#ipamBulk")) return;
+  STATE.data.ipam = data;
+  const known = new Set(data.subnets.flatMap(s => s.rows.map(r => r.ip)));
+  [...ipamPicks()].forEach(ip => { if (!known.has(ip)) ipamPicks().delete(ip); });
+  // What was chosen in the bar survives the redraw with the ticks.
+  const kept = Object.fromEntries(["ipamBulkCategory", "ipamBulkKind", "ipamBulkTag", "ipamBulkOwner"]
+    .map(id => [id, document.getElementById(id)?.value || ""]));
   renderIpam();
+  Object.entries(kept).forEach(([id, value]) => { const el = document.getElementById(id); if (el && value) el.value = value; });
 }
 window.viewIpam = viewIpam;
 
@@ -122,16 +137,18 @@ function renderIpam() {
         .map(([v, l]) => `<option value="${v}" ${STATE.ipamFilter === v || (!STATE.ipamFilter && !v) ? "selected" : ""}>${esc(l)}</option>`).join("")}
         <optgroup label="Category">${Object.entries(IPAM_CATEGORIES).map(([k, [label]]) =>
           `<option value="cat:${k}" ${STATE.ipamFilter === `cat:${k}` ? "selected" : ""}>${esc(label)}</option>`).join("")}</optgroup></select>
-      <span class="dim xs">${rows.length} shown</span></div>
-      <div class="row ipam-bulk" id="ipamBulk" hidden><span class="dim xs" id="ipamBulkCount"></span>
+      <span class="dim xs">${rows.length} shown</span></div></div>
+      <div class="row ipam-bulk" id="ipamBulk" ${ipamPicks().size ? "" : "hidden"}><b class="small" id="ipamBulkCount">${ipamPicks().size} selected</b>
+        <button class="btn sm" type="button" onclick="ipamSelectAll(false)" title="Untick every address">Clear</button>
         <select id="ipamBulkCategory">${ipamCategoryOptions("", "category…")}</select>
         <select id="ipamBulkKind"><option value="">kind…</option>${Object.entries(IPAM_KIND_LABELS).map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join("")}</select>
         <input id="ipamBulkTag" placeholder="add tag" style="width:110px">
         <input id="ipamBulkOwner" placeholder="owner" style="width:110px">
         <button class="btn sm pri" onclick="ipamBulk()">Apply</button>
-        <button class="btn sm danger" onclick="ipamBulk(true)" data-tip="Remove these addresses and everything written about them">Remove</button></div></div>
+        <button class="btn sm danger" onclick="ipamBulk(true)" data-tip="Remove these addresses and everything written about them">Remove</button></div>
     <div class="card flat pad0"><div class="tblwrap"><table class="tbl dense stack ipam-table" data-sort="ipam"><thead><tr>
-      <th data-nosort><input type="checkbox" aria-label="Select every address shown" onchange="ipamSelectAll(this.checked)"></th>
+      <th data-nosort><input type="checkbox" id="ipamAll" aria-label="Select every address shown" onchange="ipamSelectAll(this.checked)"
+        ${rows.some(r => !r.cluster) && rows.filter(r => !r.cluster).every(r => ipamPicks().has(r.ip)) ? "checked" : ""}></th>
       <th>Address</th><th>Name</th><th>MAC</th><th>Kind</th><th data-nosort>Seen</th><th data-nosort>Notes</th></tr></thead>
       ${rows.length ? ipamBodies(rows, subnet, !STATE.ipamFilter && !STATE.q)
         : `<tbody><tr><td colspan="7" class="empty">Nothing here yet. Scan the subnet${u.configured ? ", sync UniFi," : ""} or add an address.</td></tr></tbody>`}
@@ -153,7 +170,7 @@ function ipamRow(row) {
     : row.unifi?.name ? `<span class="ipam-unifi-name" data-tip="UniFi's name; give it your own to replace it here">${esc(row.unifi.name)}</span>` : "";
   const note = [row.note, row.owner ? `owner: ${row.owner}` : ""].filter(Boolean).join(" · ");
   return `<tr class="${row.flags.some(f => f.level === "warn") ? "ipam-warn" : ""}">
-    <td>${row.cluster ? "" : `<input type="checkbox" class="ipam-pick" value="${esc(row.ip)}" onchange="ipamPicked()">`}</td>
+    <td>${row.cluster ? "" : `<input type="checkbox" class="ipam-pick" value="${esc(row.ip)}" onchange="ipamPicked(this)" ${ipamPicks().has(row.ip) ? "checked" : ""}>`}</td>
     <td class="mono nowrap" data-sort="${ipNum(row.ip)}"><a style="cursor:pointer" onclick="ipamEdit('${esc(row.ip)}')">${esc(row.ip)}</a>${row.in_dhcp ? ' <span class="dim xs" data-tip="Inside the DHCP range">dhcp</span>' : ""}</td>
     <td data-label="Name" class="ipam-name"><div class="ipam-line">${ipamCategoryIcon(row.category)}${name}</div>
       ${second ? `<div class="ipam-line dim xs mono" title="${esc(second)}">${esc(second)}</div>` : ""}</td>
@@ -211,12 +228,18 @@ window.ipamToggleGap = key => {
 };
 
 window.ipamCopy = ip => { navigator.clipboard?.writeText(ip); toast(`${ip} copied`, "ok"); };
-window.ipamPicked = () => {
-  const n = $$(".ipam-pick:checked").length;
+window.ipamPicked = box => {
+  if (box) box.checked ? ipamPicks().add(box.value) : ipamPicks().delete(box.value);
+  const n = ipamPicks().size, boxes = $$(".ipam-pick");
   $("#ipamBulk").hidden = !n;
   $("#ipamBulkCount").textContent = `${n} selected`;
+  if ($("#ipamAll")) $("#ipamAll").checked = boxes.length > 0 && boxes.every(b => b.checked);
 };
-window.ipamSelectAll = on => { $$(".ipam-pick").forEach(box => { box.checked = on; }); ipamPicked(); };
+window.ipamSelectAll = on => {
+  $$(".ipam-pick").forEach(box => { box.checked = on; on ? ipamPicks().add(box.value) : ipamPicks().delete(box.value); });
+  if (!on) ipamPicks().clear();
+  ipamPicked();
+};
 
 const ipamPost = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
@@ -225,7 +248,7 @@ const ipamPost = (path, body) => api(path, { method: "POST", headers: { "Content
 const ipamRemoveQuestion = count => `Remove ${count === 1 ? "this address" : `${count} addresses`} from the list? ` +
   `Its name, notes and tags are deleted. A device still using ${count === 1 ? "it" : "one"} shows up again after the next scan${ipamUnifiOn() ? " or UniFi sync" : ""}.`;
 window.ipamBulk = async (forget = false) => {
-  const ips = $$(".ipam-pick:checked").map(box => box.value);
+  const ips = [...ipamPicks()];
   if (forget && !confirm(ipamRemoveQuestion(ips.length))) return;
   const changes = forget ? { forget: true } : {};
   if (!forget) {
@@ -235,7 +258,13 @@ window.ipamBulk = async (forget = false) => {
     if ($("#ipamBulkOwner").value.trim()) changes.owner = $("#ipamBulkOwner").value.trim();
     if (!Object.keys(changes).length) return toast("Choose a category, a kind, a tag or an owner to set", "bad");
   }
-  try { const r = await ipamPost("/api/ipam/bulk", { ips, changes }); toast(r.detail, "ok"); viewIpam(); }
+  try {
+    const r = await ipamPost("/api/ipam/bulk", { ips, changes }); toast(r.detail, "ok");
+    ipamPicks().clear();
+    ["ipamBulkCategory", "ipamBulkKind", "ipamBulkTag", "ipamBulkOwner"].forEach(id => { const el = document.getElementById(id); if (el) el.value = ""; });
+    document.activeElement?.blur?.();
+    viewIpam();
+  }
   catch (e) { toast(e.message, "bad"); }
 };
 
@@ -263,7 +292,7 @@ window.ipamEdit = (ip = "") => {
 };
 window.ipamRemove = async ip => {
   if (!confirm(ipamRemoveQuestion(1))) return;
-  try { const r = await ipamPost("/api/ipam/bulk", { ips: [ip], changes: { forget: true } }); toast(r.detail, "ok"); closeModal(); viewIpam(); }
+  try { const r = await ipamPost("/api/ipam/bulk", { ips: [ip], changes: { forget: true } }); toast(r.detail, "ok"); ipamPicks().delete(ip); closeModal(); viewIpam(); }
   catch (e) { toast(e.message, "bad"); }
 };
 window.ipamSave = async () => {
