@@ -126,6 +126,15 @@ function go(v, options = {}) {
   if (locationParams) {
     STATE.q = typeof locationParams.q === "string" ? locationParams.q.trim() : "";
     $("#globalSearch").value = STATE.q;
+    const find = typeof locationParams.find === "string" ? locationParams.find.trim() : "";
+    if (find) {
+      // Found and marked once, then dropped from the address, so a reload
+      // does not look for it again.
+      setTimeout(() => window.highlightInPage && highlightInPage(find), 300);
+      const clean = new URL(window.location.href);
+      clean.searchParams.delete("find");
+      window.history.replaceState(window.history.state, "", clean.pathname + clean.search);
+    }
   }
   const [t, , fn] = VIEWS[v];
   $("#title").textContent = t;

@@ -135,6 +135,41 @@ def _helper(pod):
     return labels.get(NAMES.key("task")) == "files"
 
 
+FINISHED = ("Succeeded", "Failed")
+
+
+def _finished_holders(ns, claim):
+    """Finished pods that still name the claim.
+
+    Kubernetes will not finish deleting a claim while any scheduled pod names
+    it - finished ones included. The file browser ends itself after half an
+    hour and stays behind as a Failed pod nothing removes, and a finished
+    Job's pod stays until the Job is cleaned up; either held the original
+    claim at the swap indefinitely, invisible to a check for running pods.
+    """
+    return [p for p in _items(f"/api/v1/namespaces/{ns}/pods")
+            if claim in _claims_in(p.get("spec")) and (p.get("status") or {}).get("phase") in FINISHED
+            and (p.get("spec") or {}).get("nodeName")]
+
+
+def _clear_finished(ns, claim):
+    """Removes finished pods naming the claim that are safe to remove - the
+    file browser's, and a finished Job's - and names any other."""
+    cleared, others = [], []
+    for pod in _finished_holders(ns, claim):
+        owners = [o.get("kind") for o in (pod["metadata"].get("ownerReferences") or [])]
+        if _helper(pod) or "Job" in owners:
+            try:
+                ksend("DELETE", f"/api/v1/namespaces/{ns}/pods/{pod['metadata']['name']}?gracePeriodSeconds=0")
+                cleared.append(pod["metadata"]["name"])
+            except urllib.error.HTTPError as error:
+                if error.code != 404:
+                    raise
+        else:
+            others.append(pod["metadata"]["name"])
+    return cleared, others
+
+
 def _close_helpers(ns, claim):
     closed = []
     for pod in _using_pods(ns, claim, helpers=True):
@@ -278,7 +313,7 @@ def start(ns, claim, target, ops):
            "started": time.time()}
     return ops.start("reclass", f"Move {claim} to {target}",
                      {"kind": "PersistentVolumeClaim", "name": claim, "namespace": ns},
-                     "/volumes?" + urllib.parse.urlencode({"q": claim}), ref,
+                     "/volumes?" + urllib.parse.urlencode({"find": claim}), ref,
                      f"Stopping what uses {claim}")
 
 
@@ -295,6 +330,7 @@ def _steps(item, phase, copy=None):
 
 def _stop(ns, ref):
     _close_helpers(ns, ref["claim"])
+    _clear_finished(ns, ref["claim"])
     for c in ref["consumers"]:
         if c.get("stopped"):
             continue
@@ -686,6 +722,14 @@ def _held(ns, ref, claim_obj):
     closed = _close_helpers(ns, claim)
     if closed:
         return f"Closed the file browser that was holding the original {claim}"
+    cleared, others = _clear_finished(ns, claim)
+    if cleared:
+        return (f"Removed {len(cleared)} finished pod{'' if len(cleared) == 1 else 's'} still naming the original "
+                f"{claim} ({', '.join(cleared[:2])}): Kubernetes keeps a claim any pod names, finished or not")
+    if others:
+        return (f"Waiting for the finished pod{'' if len(others) == 1 else 's'} {', '.join(others[:3])} to be removed: "
+                f"Kubernetes keeps {claim} while any pod names it, finished or not. Delete "
+                f"{'it' if len(others) == 1 else 'them'} (kubectl -n {ns} delete pod {others[0]}) and this carries on")
     pods = [p["metadata"]["name"] for p in _using_pods(ns, claim)]
     if pods:
         return (f"Waiting for {', '.join(pods[:3])}{' and more' if len(pods) > 3 else ''} to stop using "

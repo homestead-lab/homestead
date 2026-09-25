@@ -710,7 +710,15 @@ svg use,#nav a svg,.iconbtn svg,.sicon svg{stroke:currentColor;fill:none;stroke-
 .a2flow.access{stroke:var(--arch-access)}.a2flow.mount{stroke:var(--arch-mount)}.a2flow.copy{stroke:var(--arch-copy)}
 html[data-theme="light"] .a2item{background:#fff}
 html[data-theme="light"] .a2act{background:rgba(0,0,0,.07)}
-/* Narrow screens: the columns stack and the lines, which would cross the page, go. */
+/* Too narrow for four columns: they pair up, and the lines, which would cross
+   the page, go. Four need about 880px of board, which depends on the sidebar
+   as much as the window - a 1024px window with the sidebar open has ~780 - so
+   this follows the board's own width, not the window's. */
+.arch2wrap{container-type:inline-size}
+@container (max-width: 880px){
+  .arch2{grid-template-columns:1fr 1fr;row-gap:22px;column-gap:18px}
+  #archsvg{display:none}
+}
 @media(max-width:1000px){
   .arch2{grid-template-columns:1fr 1fr;row-gap:22px;column-gap:18px}
   .arch2wrap #archsvg{display:none}
@@ -1027,6 +1035,11 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
 .topleft h1{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .topright{flex:0 0 auto}
 #searchbtn{display:none}
+
+/* The item a job is about, found on its page for a moment. */
+.flash-find{animation:flashfind 2.6s ease}
+@keyframes flashfind{0%,60%{box-shadow:0 0 0 2px var(--vio);background-color:rgba(140,120,255,.10)}100%{box-shadow:none}}
+@media(prefers-reduced-motion:reduce){.flash-find{animation:none;outline:2px solid var(--vio)}}
 
 /* What a search is narrowing the page to: only where the search box itself
    is folded behind its icon, which then carries a dot. */

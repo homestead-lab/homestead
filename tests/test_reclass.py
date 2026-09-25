@@ -401,6 +401,64 @@ class NotFoundPartWayTests(unittest.TestCase):
         self.assertEqual("succeeded", item["status"], item["message"])
         self.assertFalse(state["helper"])
 
+    def finished_pod_holds(self, c, pod):
+        """Kubernetes keeps the claim while this finished pod names it."""
+        state = {"pod": True}
+        real_get, real_send = c.get, c.send
+
+        def get(path):
+            if path == "/api/v1/namespaces/lab/pods":
+                return {"items": real_get(path)["items"] + ([pod] if state["pod"] else [])}
+            claim = c.pvcs.get("frigate-config") or {}
+            if (claim.get("metadata") or {}).get("deletionTimestamp") and not state["pod"]:
+                real_send("DELETE", "/api/v1/namespaces/lab/persistentvolumeclaims/frigate-config")
+            return real_get(path)
+
+        def send(method, path, body=None, **kw):
+            if method == "DELETE" and f"/pods/{pod['metadata']['name']}" in path:
+                state["pod"] = False
+                return body
+            if method == "DELETE" and path.endswith("/persistentvolumeclaims/frigate-config") and state["pod"]:
+                c.pvcs["frigate-config"]["metadata"]["deletionTimestamp"] = "now"
+                return body
+            return real_send(method, path, body, **kw)
+        RC.kget, RC.ksend = get, send
+        return state
+
+    def test_a_finished_file_browser_pod_is_removed_at_the_swap(self):
+        """The file browser ends itself after half an hour and stays as a
+        Failed pod; Kubernetes still counts it, and the swap sat at "Letting
+        go of the original" for good."""
+        c = Cluster()
+        item = RC.start("lab", "frigate-config", "longhorn-r3", OPS())
+        self.advance_to(item, "swap")
+        pod = {"metadata": {"name": "homestead-files-frigate-config", "labels": {"homestead.io/task": "files"}},
+               "spec": {"nodeName": "node1", "volumes": [{"persistentVolumeClaim": {"claimName": "frigate-config"}}]},
+               "status": {"phase": "Failed", "reason": "DeadlineExceeded"}}
+        state = self.finished_pod_holds(c, pod)
+        messages = []
+        for _ in range(30):
+            item.update(zip(("status", "progress", "message"), RC.resolve(item)))
+            messages.append(item["message"])
+            if item["status"] != "running":
+                break
+        self.assertEqual("succeeded", item["status"], item["message"])
+        self.assertFalse(state["pod"])
+        self.assertTrue(any("finished pod" in m for m in messages), messages)
+
+    def test_someone_elses_finished_pod_is_named_not_removed(self):
+        c = Cluster()
+        item = RC.start("lab", "frigate-config", "longhorn-r3", OPS())
+        self.advance_to(item, "swap")
+        pod = {"metadata": {"name": "hand-made-debug", "labels": {}},
+               "spec": {"nodeName": "node1", "volumes": [{"persistentVolumeClaim": {"claimName": "frigate-config"}}]},
+               "status": {"phase": "Succeeded"}}
+        state = self.finished_pod_holds(c, pod)
+        for _ in range(4):
+            item.update(zip(("status", "progress", "message"), RC.resolve(item)))
+        self.assertTrue(state["pod"])
+        self.assertIn("kubectl -n lab delete pod hand-made-debug", item["message"])
+
     def test_each_attempt_has_a_copy_job_of_its_own(self):
         Cluster()
         first = RC.start("lab", "frigate-config", "longhorn-r3", OPS())["ref"]["job_name"]

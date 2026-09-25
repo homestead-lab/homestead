@@ -194,9 +194,8 @@ window.imageUpdateBatchReview = () => {
 };
 window.openUpdateWorkload = name => {
   closeModal();
-  STATE.q = name;
-  $("#globalSearch").value = name;
-  go("workloads", { params: { q: name } });
+  go("workloads");
+  highlightInPage(name);
 };
 const updateNoticeButton = $("#updateNotice");
 if (updateNoticeButton) {

@@ -47,9 +47,9 @@ window.addEventListener("appinstalled", () => { PWA.installPrompt = null; if (ST
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.addEventListener("message", event => {
     if (event.data?.type !== "homestead-open") return;
-    const url = new URL(event.data.href, location.origin);
-    const route = HomesteadRouter.resolve(url.pathname);
-    go(route.view, { params: HomesteadRouter.queryParams(url.search) });
+    // The same door as the job tray: the item a job is about is found on its
+    // page, never made the site-wide search.
+    window.openOperation(event.data.href);
   });
 }
 

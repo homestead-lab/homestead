@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.127")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.128")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -4560,7 +4560,7 @@ class H(BaseHTTPRequestHandler):
                 result["operation"] = OPS.start(
                     "image-update", f"Update {b['name']}",
                     {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
-                    "/containers?" + urllib.parse.urlencode({"q": b["name"]}),
+                    "/containers?" + urllib.parse.urlencode({"find": b["name"]}),
                     {"namespace": b["ns"], "name": b["name"]})
                 _cache.pop("wl", None); _cache.pop("ov", None); UPDATES.invalidate()
                 return self._send(200, result)
@@ -4569,7 +4569,7 @@ class H(BaseHTTPRequestHandler):
                 result["operation"] = OPS.start(
                     "image-rollback", f"Roll back {b['name']}",
                     {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
-                    "/containers?" + urllib.parse.urlencode({"q": b["name"]}),
+                    "/containers?" + urllib.parse.urlencode({"find": b["name"]}),
                     {"namespace": b["ns"], "name": b["name"]})
                 _cache.pop("wl", None); _cache.pop("ov", None); UPDATES.invalidate()
                 return self._send(200, result)
@@ -5004,7 +5004,7 @@ class H(BaseHTTPRequestHandler):
                     "volume-restore", f"Restore {result['name']}",
                     {"kind": "PersistentVolumeClaim", "name": result["name"],
                      "namespace": result["namespace"]},
-                    "/volumes?" + urllib.parse.urlencode({"q": result["name"]}),
+                    "/volumes?" + urllib.parse.urlencode({"find": result["name"]}),
                     {"namespace": result["namespace"], "name": result["name"],
                      "backup": result["backup"]},
                     "Waiting for Longhorn to provision the restored volume")
@@ -5180,7 +5180,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.127 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.128 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

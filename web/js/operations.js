@@ -89,21 +89,39 @@ window.openOperation = (href, id = "") => {
   const route = HomesteadRouter.resolve(url.pathname);
   const operation = (STATE.data.operations || []).find(item => item.id === id);
   operationPanelOpen = false;
-  // A search in the link is applied here: go() reads one only from the address
-  // bar on first load, so it used to land on the whole page instead.
-  const q = url.searchParams.get("q");
-  if (q !== null) {
-    STATE.q = q.trim();
-    if ($("#globalSearch")) $("#globalSearch").value = STATE.q;
-  }
+  // The link names what the job is about. It used to become the site-wide
+  // search, which then narrowed every page until cleared by hand; now the
+  // page opens whole and the item is brought into view and marked.
+  // find= in links made now; q= in the links of jobs from older releases.
+  const q = (url.searchParams.get("find") || url.searchParams.get("q") || "").trim();
+  url.searchParams.delete("find");
+  url.searchParams.delete("q");
   go(route.view, { params: Object.fromEntries(url.searchParams) });
   renderOperations();
+  const opensItsOwn = ["reclass", "image-update", "image-rollback"].includes(operation?.kind);
+  if (q && !opensItsOwn) highlightInPage(q);
   // An image update or rollback opens its rollout, as it looked when it ran.
   const target = operation?.resource || {};
   if (["image-update", "image-rollback"].includes(operation?.kind) && target.name && window.monitorImageRollout)
     setTimeout(() => monitorImageRollout(target.namespace || "lab", target.name), 150);
   if (operation?.kind === "reclass" && window.reclassWatch) setTimeout(() => reclassWatch(operation.id), 150);
 };
+/* Bring the row or card that mentions this name into view and mark it for a
+   moment, once the page has drawn. The name must match a whole word, so
+   "frigate" does not land on "frigate-config". */
+function highlightInPage(name, tries = 8) {
+  const words = new RegExp(`(^|[^a-z0-9-])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^a-z0-9-])`, "i");
+  const find = () => [...document.querySelectorAll("#views tr, #views .card, #views [data-vol], #views .wlcard, #views .row-item")]
+    .filter(el => el.offsetParent !== null && words.test(el.innerText || ""))
+    .sort((a, b) => (a.innerText || "").length - (b.innerText || "").length)[0];
+  const el = find();
+  if (!el) { if (tries > 0) setTimeout(() => highlightInPage(name, tries - 1), 400); return; }
+  el.scrollIntoView({ block: "center", behavior: "smooth" });
+  el.classList.add("flash-find");
+  setTimeout(() => el.classList.remove("flash-find"), 2600);
+}
+window.highlightInPage = highlightInPage;
+
 window.dismissFinishedOperations = async () => {
   try {
     const result = await api("/api/operations/dismiss", { method: "POST",
