@@ -414,7 +414,10 @@ def scan(force=False):
 _LATEST = {"report": None, "number": 0, "finished": 0.0}
 _STARTED = [0]      # scans begun so far; a clock is too coarse to order them
 _RUN_LOCK = threading.Lock()
-FRESH_FOR = 600
+# How long a report stands before a quiet request checks the registries
+# again: twice a day. Check images asks for a fresh one whenever it is pressed,
+# and the leader checks on this same rhythm with no page open.
+FRESH_FOR = 12 * 3600
 
 
 def invalidate():

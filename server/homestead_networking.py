@@ -788,3 +788,57 @@ def set_vip_label(ip, label):
             row["label"] = " ".join(str(label or "").split())[:60]
     _save_registered(rows)
     return {"ok": True}
+
+
+# ---- VM networks ---------------------------------------------------------------
+# A VM (or a container given a LAN address) is on the LAN through a VM network:
+# on Harvester, a bridge on one of its cluster networks - mgmt is the hosts'
+# own - untagged, or on a VLAN. Harvester's dashboard makes them under
+# Networks > VM Networks; this makes the same object, so it shows there too.
+CLUSTER_NETWORKS = "/apis/network.harvesterhci.io/v1beta1/clusternetworks"
+
+
+def vm_network_options():
+    """Harvester's cluster networks a VM network can be made on."""
+    try:
+        items = kget(CLUSTER_NETWORKS).get("items", [])
+    except Exception:
+        return {"harvester": False, "cluster_networks": []}
+    names = sorted(item["metadata"]["name"] for item in items)
+    return {"harvester": True, "cluster_networks": names or ["mgmt"]}
+
+
+def create_vm_network(cfg):
+    options = vm_network_options()
+    if not options["harvester"]:
+        raise ValueError("VM networks are made here on Harvester. Elsewhere, create a Multus bridge network "
+                         "attachment on the host bridge your LAN is on")
+    name = _name(cfg.get("name"), "network name")
+    namespace = _name(cfg.get("namespace") or "default", "namespace")
+    cluster = str(cfg.get("cluster_network") or "mgmt")
+    if cluster not in options["cluster_networks"]:
+        raise ValueError(f"Harvester has no cluster network {cluster}")
+    vlan = str(cfg.get("vlan") or "").strip()
+    config = {"cniVersion": "0.3.1", "name": name, "type": "bridge", "bridge": f"{cluster}-br",
+              "promiscMode": True, "ipam": {}}
+    labels = {"network.harvesterhci.io/clusternetwork": cluster}
+    if vlan:
+        if not vlan.isdigit() or not 1 <= int(vlan) <= 4094:
+            raise ValueError("a VLAN ID is a number from 1 to 4094; leave it empty for the hosts' own, untagged LAN")
+        config["vlan"] = int(vlan)
+        labels.update({"network.harvesterhci.io/type": "L2VlanNetwork", "network.harvesterhci.io/vlan-id": vlan})
+    else:
+        labels["network.harvesterhci.io/type"] = "UntaggedNetwork"
+    path = f"/apis/k8s.cni.cncf.io/v1/namespaces/{namespace}/network-attachment-definitions"
+    try:
+        kget(f"{path}/{name}")
+        raise ValueError(f"a VM network {namespace}/{name} already exists")
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+    ksend("POST", path, {"apiVersion": "k8s.cni.cncf.io/v1", "kind": "NetworkAttachmentDefinition",
+                         "metadata": {"name": name, "namespace": namespace, "labels": labels},
+                         "spec": {"config": json.dumps(config)}})
+    where = f"VLAN {vlan} on {cluster}" if vlan else f"the untagged LAN of {cluster}"
+    return {"ok": True, "name": f"{namespace}/{name}",
+            "detail": f"VM network {namespace}/{name} made, on {where}; VMs and containers can join it now"}

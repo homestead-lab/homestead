@@ -301,6 +301,7 @@ const K3S_UBUNTU = "https://cloud-images.ubuntu.com/noble/current/noble-server-c
 
 window.k3sCluster = async () => {
   modal("New k3s cluster", '<div class="empty"><span class="spin2"></span></div>', true);
+  window.__vmNetworkReopen = "k3s";
   const opts = await api("/api/vm/create-options").catch(() => ({}));
   window.__vmCreateOptions = opts;
   const lan = vmLanNetworks(opts);
@@ -309,21 +310,21 @@ window.k3sCluster = async () => {
     <p class="small" style="margin-top:0">VMs here become a k3s cluster: the first is its server, the rest join it. Each gets an address of
       its own on the LAN, so the cluster is reached - and joins - as one built from real machines would be.</p>
     ${lan.length ? "" : vmNetworkNote(opts)}
-    <div class="f2"><div class="f"><label>Name</label><input id="k_name" value="k3s-demo"></div>
-      <div class="f"><label>What it runs</label><select id="k_setup">${Object.entries(K3S_SETUPS).map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("")}</select></div></div>
+    <div class="f2"><div class="f"><label>Name ${tip("Starts each VM's name: k3s-demo-server-1, k3s-demo-agent-1 and so on.")}</label><input id="k_name" value="k3s-demo"></div>
+      <div class="f"><label>Install ${tip("What each node sets up. k3s, Longhorn and Homestead is what a new install from our bootstrap script gets; local-path skips Longhorn and keeps each volume on one node; k3s alone installs nothing else.")}</label><select id="k_setup">${Object.entries(K3S_SETUPS).map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("")}</select></div></div>
     <div class="f2"><div class="f"><label>Servers ${tip("One is enough to try things. Three keep the cluster running if one fails.")}</label>
         <select id="k_servers" onchange="k3sCountChanged()"><option value="1">1</option><option value="3">3</option></select></div>
-      <div class="f"><label>Workers</label><input id="k_agents" type="number" min="0" max="6" value="2" oninput="k3sCountChanged()"></div></div>
-    <div class="f2"><div class="f"><label>Cores each</label><input id="k_cores" type="number" min="1" max="16" value="2"></div>
-      <div class="f"><label>Memory each</label><input id="k_mem" value="4Gi"></div></div>
+      <div class="f"><label>Workers ${tip("Nodes that run apps but not the cluster's control plane. They join the first server. Zero is fine: a server runs apps too.")}</label><input id="k_agents" type="number" min="0" max="6" value="2" oninput="k3sCountChanged()"></div></div>
+    <div class="f2"><div class="f"><label>Cores each ${tip("CPU cores for every node. Two is enough to try things; k3s itself needs little.")}</label><input id="k_cores" type="number" min="1" max="16" value="2"></div>
+      <div class="f"><label>Memory each ${tip("Memory for every node, like 4Gi. Longhorn and Homestead inside want at least 4Gi on the server.")}</label><input id="k_mem" value="4Gi"></div></div>
     <div class="f2"><div class="f"><label>Disk each (GB) ${tip("Longhorn inside the cluster keeps its volumes here, so leave room for your apps.")}</label><input id="k_disk" type="number" min="20" value="40"></div>
       <div class="f"><label>Login password ${tip("For the ubuntu user on every node, at the console or over SSH.")}</label><input id="k_pass" type="password" autocomplete="new-password"></div></div>
-    <div class="f"><label>Image</label><select id="k_image">
+    <div class="f"><label>Image ${tip("The operating system every node starts from. An Ubuntu cloud image works best: it runs cloud-init, which sets up the address, login and k3s.")}</label><select id="k_image">
       ${images.map(i => `<option value="image:${esc(i.namespace)}/${esc(i.name)}" ${/noble|24\.04|ubuntu/i.test(i.display) ? "selected" : ""}>Harvester image · ${esc(i.display)}</option>`).join("")}
       <option value="url" ${images.some(i => /noble|24\.04|ubuntu/i.test(i.display)) ? "" : "selected"}>Ubuntu 24.04 cloud image (downloaded${opts.harvester ? " as a Harvester image" : ""})</option></select></div>
-    ${(opts.storage_classes || []).length ? `<div class="f"><label>Storage class</label><select id="k_sc">${opts.storage_classes.map(c => `<option ${c === opts.default_class ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></div>` : ""}
+    ${(opts.storage_classes || []).length ? `<div class="f"><label>Storage class ${tip("Where each node's disk lives on this cluster.")}</label><select id="k_sc">${opts.storage_classes.map(c => `<option ${c === opts.default_class ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></div>` : ""}
     <div class="sec">Network</div>
-    <div class="f"><label>VM network</label><select id="k_net">${lan.map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}</option>`).join("") || '<option value="">none reaches the LAN</option>'}</select></div>
+    <div class="f"><label>VM network ${tip("The network bridged to your LAN the nodes join, so each has an address of its own there.")}</label><select id="k_net">${lan.map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}</option>`).join("") || '<option value="">none reaches the LAN</option>'}</select></div>
     ${vmAddressFields("k", opts, 3)}
     <div id="k_review"></div>
     <div class="row" style="margin-top:14px"><button class="btn" onclick="k3sReview()" ${lan.length ? "" : "disabled"}>Review</button>

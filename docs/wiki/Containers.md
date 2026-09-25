@@ -52,7 +52,7 @@ old volume is kept until you remove it.
 
 ## Updates
 
-Homestead checks each container's image against its registry - by digest for
+Twice a day - or whenever you press **Check images** - Homestead checks each container's image against its registry - by digest for
 tags like `latest`, by version for tags like `1.2.3` - and shows a pill on the
 container and a count at the top of the page.
 

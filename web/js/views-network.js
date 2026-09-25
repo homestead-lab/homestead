@@ -45,6 +45,9 @@ async function viewNetworking() {
         ${v.free || v.blocked ? `<button class="iconbtn" data-need="admin" data-tip="No longer keep this address for Homestead" onclick="vipRemove('${esc(v.ip)}')">×</button>` : ""}</div>`).join("")}</div>`
       : `<div class="card flat empty small">No VIPs of your own yet. Add the addresses Homestead may give to apps and shares - ${data.available_vip_count
           ? `${data.available_vip_count} more are free in Harvester IP pools.` : "there are no Harvester IP pools to take them from either."}</div>`}
+    <div class="between"><div class="sec">VM networks ${tip("Networks bridged to the LAN. A VM, or a container given an address of its own, joins one to be on the LAN like any machine there.")}</div>
+      <button class="btn sm" data-need="admin" onclick="vmNetworkAdd()">＋ VM network</button></div>
+    <div id="netVmNets"><div class="dim small">reading VM networks…</div></div>
     <div class="between"><div class="sec">Virtual IPs &amp; port ownership</div><div class="row">${data.available_vips.filter(ip => !(data.vip_labels || {}).hasOwnProperty(ip)).slice(0, 6).map(ip => `<span class="tag ok" title="Unused address in a ready Harvester IP pool">${esc(ip)} available</span>`).join("")}</div></div>
     <div class="cardlist network-vips">${data.vips.map(vip => `<div class="card flat">
       <div class="between"><div><div class="dim xs">${vip.shared ? "SHARED VIP" : "VIRTUAL IP"}</div><b class="mono">${esc(vip.ip)}</b></div>
@@ -65,6 +68,7 @@ async function viewNetworking() {
         <td><span class="pill ${networkPill(row.health)}">${esc(row.health)}</span><div class="dim xs" style="margin-top:5px">${esc(row.reason)}</div></td>
         <td>${row.system ? "" : `<button class="btn sm ${row.orphaned ? "danger" : ""}" data-need="admin" title="${row.orphaned ? "Release this listener" : "Remove this Service and take its workload off the LAN"}" onclick="networkServiceDelete('${esc(row.namespace)}','${esc(row.name)}')">${icon("trash")}${row.orphaned ? "Release" : "Remove"}</button>`}</td></tr>`).join("") || '<tr><td colspan="5" class="empty">No matching services</td></tr>'}</tbody></table></div></div>
     ${data.ingresses.length ? `<div class="sec" style="margin-top:22px">Ingress routes</div><div class="card flat pad0"><div class="tblwrap"><table data-sort="ingresses" class="tbl stack dense"><thead><tr><th>Ingress</th><th>Address</th><th>Route</th><th>Backend</th></tr></thead><tbody>${data.ingresses.filter(x => showSystem || !x.system).flatMap(row => row.rules.map(rule => `<tr><td>${esc(row.namespace)}/${esc(row.name)}</td><td class="mono">${esc(row.addresses.join(", ") || "pending")}</td><td>${esc(rule.host)}${esc(rule.path)}</td><td>${esc(rule.service)}:${esc(rule.port)}</td></tr>`)).join("")}</tbody></table></div></div>` : ""}`);
+  networkVmNetsPaint();
 }
 
 window.networkToggleSystem = () => { STATE.networkSystem = !STATE.networkSystem; viewNetworking(); };
@@ -179,3 +183,19 @@ window.vipLabel = async ip => {
     viewNetworking();
   } catch (e) { toast(e.message, "bad"); }
 };
+
+
+/* The VM networks there are, from the same list the VM and container forms
+   choose from. */
+async function networkVmNetsPaint() {
+  const opts = await api("/api/vm/create-options").catch(() => ({}));
+  window.__vmCreateOptions = opts;
+  const host = $("#netVmNets");
+  if (!host) return;
+  const rows = opts.network_details || [];
+  host.innerHTML = rows.length ? `<div class="vip-own">${rows.map(n => `<div class="vip-chip ${n.lan ? "free" : "used"}">
+      <div class="vip-name"><b class="mono">${esc(n.name)}</b><span class="dim xs">${n.vlan ? `VLAN ${esc(n.vlan)}` : n.lan ? "untagged" : esc(n.type || "network")}${n.bridge ? ` · ${esc(n.bridge)}` : ""}</span></div>
+      <span class="tag ${n.lan ? "ok" : ""}">${n.lan ? "LAN" : "not bridged"}</span></div>`).join("")}</div>`
+    : `<div class="card flat empty small">No VM networks yet. ${opts.harvester ? "<b>＋ VM network</b> makes one on your LAN, untagged like the hosts or on a VLAN." : ""}</div>`;
+  if (window.applyRole) applyRole();
+}

@@ -477,9 +477,43 @@ function vmLanNetworks(opts) {
 function vmNetworkNote(opts) {
   if (vmLanNetworks(opts).length) return "";
   return `<div class="note" style="margin-top:8px"><b>No VM network reaches the LAN yet.</b> ${opts.harvester
-    ? "In Harvester's dashboard, <b>Networks → VM Networks → Create</b>: an <i>Untagged Network</i> on the <span class=\"mono\">mgmt</span> cluster network puts VMs on the same LAN as the hosts (or an <i>L2 VLAN Network</i> with your VLAN's ID). Then come back here."
+    ? `A VM network puts VMs and containers on your LAN, untagged like the hosts or on a VLAN.
+       <button class="btn sm pri" data-need="admin" style="margin-top:6px" onclick="vmNetworkAdd()">＋ Make one</button>`
     : "Create a Multus bridge network attachment on the host bridge your LAN is on; VMs on it get LAN addresses."}</div>`;
 }
+
+/* A VM network, made here: the same object Harvester's dashboard makes under
+   Networks > VM Networks, so it shows there too. When made from a form that
+   needed one, that form opens again with it to choose. */
+window.vmNetworkAdd = async (reopen = null) => {
+  const opts = window.__vmCreateOptions || await api("/api/vm/create-options").catch(() => ({}));
+  const back = reopen || window.__vmNetworkReopen || null;
+  const clusters = (opts.vm_network_options || {}).cluster_networks || ["mgmt"];
+  (window.childModal && !$("#modal").classList.contains("hidden") ? childModal : modal)("New VM network", `
+    <p class="small" style="margin-top:0">VMs and containers on it are on your LAN - with addresses from your router's DHCP, or ones of their own.</p>
+    <div class="f2"><div class="f"><label>Name ${tip("How it is listed wherever a network is chosen, like lan or vlan20.")}</label><input id="vn_name" value="lan"></div>
+      <div class="f"><label>Cluster network ${tip("Which of Harvester's cluster networks it rides on. mgmt is the hosts' own network - the usual choice.")}</label>
+        <select id="vn_cluster">${clusters.map(c => `<option ${c === "mgmt" ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></div></div>
+    <div class="f"><label>VLAN ${tip("Empty: untagged - the same LAN the hosts are on. A number: that VLAN, which your switch must carry to the hosts.")}</label>
+      <input id="vn_vlan" type="number" min="1" max="4094" placeholder="empty - untagged, the hosts' own LAN"></div>
+    <div class="row" style="margin-top:14px"><button class="btn pri" onclick="vmNetworkAddGo()">Make it</button>
+      <button class="btn" onclick="modalBack()">Cancel</button></div>`);
+  window.__vmNetworkReopen = back;
+};
+window.vmNetworkAddGo = async () => {
+  try {
+    const r = await api("/api/network/vm-networks", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: $("#vn_name").value.trim(), cluster_network: $("#vn_cluster").value, vlan: $("#vn_vlan").value.trim() }) });
+    toast(r.detail, "ok");
+    window.__vmCreateOptions = null;
+    const reopen = window.__vmNetworkReopen;
+    window.__vmNetworkReopen = null;
+    closeModal();
+    if (reopen === "k3s" && window.k3sCluster) k3sCluster();
+    else if (reopen === "vm") vmNew();
+    else if (STATE.view === "network") viewNetworking();
+  } catch (e) { toast(e.message, "bad"); }
+};
 function vmSubnetFor(opts, cidr) { return (opts.subnets || []).find(s => s.cidr === cidr); }
 function vmAddressFields(p, opts, count = 1) {
   const subnets = opts.subnets || [];
@@ -518,6 +552,7 @@ window.vmNetChanged = () => {
 };
 
 window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
+  window.__vmNetworkReopen = "vm";
   const [opts, disks] = await Promise.all([
     api("/api/vm/create-options").catch(() => ({ harvester: !!STATE.platform?.harvester, cdi: true, storage_classes: [], images: [] })),
     api("/api/vm-disks").catch(() => []),

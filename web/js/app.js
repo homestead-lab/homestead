@@ -4,7 +4,7 @@ const VIEWS = {
   dash:      ["Dashboard",      "overview",  viewDash,      true],
   flow:      ["Architecture",   "overview",  viewFlow,      true],
   nodes:     ["Nodes",          "overview",  viewNodes,     true],
-  network:   ["Networking",     "overview",  viewNetworking,true],
+  network:   ["Networking",     "system",    viewNetworking,true],
   portal:    ["Portal",         "overview",  viewPortal,    true],
   workloads: ["Containers",     "workloads", viewWorkloads, true],
   vms:       ["Virtual Machines","workloads", viewVMs,       true],

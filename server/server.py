@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.134")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.135")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2398,6 +2398,7 @@ def vm_create_options():
             "images": IMP.list_vm_images() if platform.get("harvester") else [],
             "networks": vm_networks(),
             "network_details": vm_network_details(),
+            "vm_network_options": NETWORK.vm_network_options(),
             "subnets": vm_subnets(),
             "nodes": sorted(n["metadata"]["name"] for n in kget("/api/v1/nodes").get("items", []))}
 
@@ -3400,7 +3401,7 @@ ALERTS.bind(DATA_DIR)
 
 
 # ------------------------------------------------------------- alerts
-UPDATE_SCAN_EVERY = 6 * 3600
+UPDATE_SCAN_EVERY = UPDATES.FRESH_FOR
 _last_update_scan = [0.0]
 
 
@@ -3421,8 +3422,9 @@ def _alert_sources():
     take("disks", lambda: DISKS.alert_facts(cached("disks", 15, DISKS.inventory)))
     take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
         ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", ""))))
-    if PUSH.wanted_by(["updates"]) and time.time() - _last_update_scan[0] > UPDATE_SCAN_EVERY:
-        # Only scanned for someone who asked: it asks every registry.
+    # Twice a day whether or not anyone is looking - the Containers header and
+    # the update notifications both read the result.
+    if time.time() - _last_update_scan[0] > UPDATE_SCAN_EVERY:
         _last_update_scan[0] = time.time()
         try:
             UPDATES.report()
@@ -4230,7 +4232,7 @@ ADMIN_ROUTES = {
     "/api/volumes/reclass/start", "/api/volumes/old-copies/remove", "/api/self/samba",
     # Carrying a stopped job on runs its remaining steps - a swap, for one.
     "/api/operations/resume",
-    "/api/network/vips/add", "/api/network/vips/remove", "/api/network/vips/label",
+    "/api/network/vips/add", "/api/network/vips/remove", "/api/network/vips/label", "/api/network/vm-networks",
     "/api/files/list", "/api/files/read", "/api/files/write", "/api/files/close",
     "/api/node/smart/test",
     # Installing the probe stands a privileged container on every node.
@@ -5380,6 +5382,9 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/network/vips/label":
                 _cache.pop("network", None)
                 return self._send(200, NETWORK.set_vip_label(b.get("ip", ""), b.get("label", "")))
+            if p == "/api/network/vm-networks":
+                _cache.pop("network", None)
+                return self._send(200, NETWORK.create_vm_network(b))
             if p == "/api/storage/classes/cleanup":
                 removed = cleanup_restore_classes()
                 return self._send(200, {"ok": True, "removed": removed,
@@ -5643,7 +5648,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.134 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.135 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()
