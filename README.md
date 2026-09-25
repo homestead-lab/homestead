@@ -78,10 +78,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.125`, the workflow publishes:
+For a release such as `v2.8.126`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.125
+ghcr.io/wjcloudy/homestead:2.8.126
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -92,8 +92,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.125
-git push origin v2.8.125
+git tag v2.8.126
+git push origin v2.8.126
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -692,7 +692,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.125/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.126/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -703,7 +703,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.125 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.126 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -963,6 +963,23 @@ node probe, which reads the host's mount table.
 Hardware features - a Coral, a Zigbee stick - are checked on every host every
 30 seconds, so one plugged in later is found and labelled without a restart;
 **Rescan hosts** in Settings → Hardware checks at once.
+
+### A failed drive
+
+A Longhorn disk that is not ready says why in words - Harvester no longer
+finding the drive, or nothing mounted at its folder because the drive is dead
+or was missing at boot - and raises an alert. **Replace failed disk** reviews
+each volume that had a copy on it (rebuilds elsewhere, waits for the new
+drive, or only copy), then as a resumable job stops new replicas on the disk,
+deletes its failed replicas where a healthy copy exists elsewhere, takes the
+disk out of Longhorn (through Harvester where it runs) and clears Harvester's
+record of the dead drive, ready for **Add to Longhorn** on the new one. A
+volume's only copy is kept, and the disk with it, unless given up by typing
+the disk's name: a drive that is merely unplugged comes back with its data.
+Off Harvester, Add to Longhorn gives the commands to mount a drive with
+`nofail`, so a host starts without a dead drive rather than stopping at an
+emergency shell, and with its empty folder locked so nothing lands on the
+system disk in its place.
 
 ## Longhorn allocation
 

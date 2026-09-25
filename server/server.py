@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.125")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.126")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2940,6 +2940,8 @@ VMS.platform, VMS.images = PLATFORM.detect, IMP.list_vm_images
 LHCAP.bind(kget, ksend, v2_engine_status)
 RECLASS.bind(kget, ksend, raw_get, storage_classes, LHCAP.status, _own_namespace())
 DISKS.bind(kget, ksend, node_temps)
+OPS.RESOLVERS["disk-retire"] = DISKS.retire_step
+OPS.RESUMABLE["disk-retire"] = DISKS.retire_resumable
 OPS.RESOLVERS["helm"] = HELM.job_status
 NSMOD.bind(kget, ksend, DEFAULT_NS, _own_namespace())
 ALERTS.bind(DATA_DIR)
@@ -2964,6 +2966,7 @@ def _alert_sources():
     take("jobs", lambda: ALERTS.job_facts(OPS.list_operations()))
     take("joins", lambda: ALERTS.join_facts(kget("/api/v1/nodes").get("items", [])))
     take("capacity", lambda: LHCAP.alert_facts(cached("lhcap", 15, LHCAP.status)))
+    take("disks", lambda: DISKS.alert_facts(cached("disks", 15, DISKS.inventory)))
     take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
         ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", ""))))
     if PUSH.wanted_by(["updates"]) and time.time() - _last_update_scan[0] > UPDATE_SCAN_EVERY:
@@ -3785,6 +3788,8 @@ def needed_role(path, method):
     # a secret's values are for admins only.
     if path in ("/api/helm/install", "/api/helm/upgrade", "/api/helm/uninstall", "/api/resources/save", "/api/vm/delete",
                 "/api/longhorn/settings", "/api/disks/add", "/api/disks/scheduling", "/api/disks/evict", "/api/disks/remove",
+                # Replacing a failed disk deletes replicas and takes the disk out.
+                "/api/disks/retire", "/api/disks/retire/plan",
                 "/api/resources/delete", "/api/resources/create", "/api/resources/reveal"):
         return "admin"
     if path in ("/api/console", "/api/vm/console"):
@@ -4797,6 +4802,13 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/vm/delete":
                 _cache.pop("vms", None)
                 return self._send(200, VMS.delete(b.get("ns", DEFAULT_NS), b.get("name", ""), bool(b.get("disks"))))
+            if p == "/api/disks/retire/plan":
+                return self._send(200, DISKS.retire_plan(b.get("node", ""), b.get("disk", "")))
+            if p == "/api/disks/retire":
+                op = DISKS.retire_start(b, OPS)
+                for key in ("disks", "lhcap", "nodes", "ov"):
+                    _cache.pop(key, None)
+                return self._send(200, {"ok": True, "operation": op})
             if p in ("/api/disks/add", "/api/disks/scheduling", "/api/disks/evict", "/api/disks/remove"):
                 action = p.rsplit("/", 1)[1]
                 result = (DISKS.add(b) if action == "add"
@@ -5100,7 +5112,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.125 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.126 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

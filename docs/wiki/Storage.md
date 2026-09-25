@@ -60,6 +60,49 @@ Settings → Cluster) opens them all.
   (**Move replicas off**), and be taken away once empty (**Remove from
   Longhorn**). Its files stay on the disk.
 
+## When a drive fails
+
+A volume keeps running on its other copies when a drive dies, and Longhorn
+starts rebuilding the lost copies on other nodes after about ten minutes -
+**Volumes** shows each rebuild's progress. What it cannot do alone is let go
+of the dead disk: it keeps the disk, and the failed copies it held, until told
+otherwise. A volume that already has a copy on every other node then has
+nowhere to rebuild until that node has a working disk again.
+
+The failed disk shows on its node, and in **Disks**, with what happened in
+words - *Harvester no longer finds this drive*, or *nothing is mounted at
+/mnt/disk2* - and an alert goes out. **Replace failed disk** reviews every
+volume that had a copy on it:
+
+| Outcome | Means |
+|---|---|
+| **rebuilds elsewhere** | another node has room and no copy yet: it rebuilds there now |
+| **waits for the new disk** | every other node already has a copy: it rebuilds on this node once the new drive is added |
+| **only copy** | a single-copy volume that lived on this disk |
+
+Then, as a job you can follow and carry on if interrupted: new copies stop
+going to the disk, its failed copies are let go of (only where a healthy copy
+exists elsewhere), the disk is taken out of Longhorn - on Harvester, released
+the way Harvester's own UI does it - and Harvester's record of the dead drive
+is cleared. Add the new drive with **Add to Longhorn** and the waiting copies
+rebuild onto it.
+
+**Only copies are never given up unless you say so.** A drive that is only
+unplugged, or not mounted, comes back with its data - reconnect it instead.
+If it is truly dead, restore those volumes from a backup (Data protection), or
+tick *Give it up* and type the disk's name.
+
+### Booting with a dead or missing drive
+
+- **Harvester** mounts the drives it manages itself, so a host starts without
+  one; the disk shows as failed, as above.
+- **k3s and other Linux** mount Longhorn's drives from `/etc/fstab`. A plain
+  line there makes the host wait for the drive and stop at an emergency shell
+  when it never appears. **Add to Longhorn** off Harvester gives the commands
+  to mount a drive safely: `nofail` so the host starts without it, and the
+  empty folder locked (`chattr +i`) so nothing is written onto the system disk
+  in its place - Longhorn marks the disk failed instead.
+
 ## Longhorn allocation
 
 Longhorn books a copy's full size on a disk when it places it, however little

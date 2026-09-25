@@ -56,6 +56,17 @@ Cluster**.
 **A volume is degraded for hours.** Its row says why - usually a copy that
 cannot be placed because too few hosts have room.
 
+**A drive died.** Volumes keep running on their other copies. The node's
+disk shows as failed with the reason; **Replace failed disk** lets go of it so
+volumes can rebuild, then add the new drive. See
+[Storage](Storage#when-a-drive-fails).
+
+**A k3s machine stops at an emergency shell after a drive died.** Its
+`/etc/fstab` line for the drive lacks `nofail`. At the emergency prompt, run
+`nano /etc/fstab`, add `nofail` to that line's options (after `defaults,`),
+save, and `reboot`. The machine starts without the drive, and Homestead shows
+the disk as failed.
+
 ## Networking
 
 **"No free address"** when exposing an app or making a share. Nothing is

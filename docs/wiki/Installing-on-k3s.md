@@ -90,6 +90,14 @@ volume a single failed disk would lose - and
 [Changing a volume's storage class](Storage#changing-a-volumes-storage-class)
 moves an existing one onto the new class.
 
+### More disks
+
+Longhorn starts on each machine's system disk. To give it another drive,
+**Nodes → Disks → Add to Longhorn** shows the commands to run on that machine
+first. Mount it the way they do - with `nofail` in `/etc/fstab` - or a machine
+whose drive dies stops at an emergency shell when it next starts, instead of
+starting without it. See [Storage](Storage#booting-with-a-dead-or-missing-drive).
+
 ## 4. Addresses for apps
 
 k3s's built-in load balancer, ServiceLB, publishes a LoadBalancer service on

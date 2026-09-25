@@ -1095,11 +1095,14 @@ function diskRowsHtml(node, disks, harvester) {
         <div class="between"><span class="mono xs">${esc(x.path)}${x.type === "block" ? ' <span class="tag info">V2</span>' : ""}</span>
           <span class="mono xs">${esc(sizePair(x.used_gb, x.size_gb))} used · ${esc(sizeText(x.allocated_gb))} allocated · ${x.replicas} replica${x.replicas === 1 ? "" : "s"}</span></div>
         ${meter(pct, "", "disk")}
+        ${!x.ready ? `<div class="badtext xs disk-why">${esc(x.missing || x.problem || "Longhorn reports this disk not ready")}</div>` : ""}
         <div class="row disk-lh-acts">
-          ${!x.ready ? `<span class="tag bad" data-tip="${esc(x.problem)}">not ready</span>` : ""}
+          ${!x.ready ? `<span class="tag bad" data-tip="${esc(x.problem)}">${x.missing ? "drive missing" : "failed"}</span>
+            <button class="btn sm pri" data-need="admin" onclick="diskRetire('${esc(node)}','${esc(x.id)}')"
+              title="Let go of its failed replicas so they rebuild from healthy copies, and take it out of Longhorn for a new drive">Replace failed disk</button>` : ""}
           ${x.evicting ? '<span class="tag warn">moving replicas off</span>' : !x.scheduling ? '<span class="tag">no new replicas</span>' : ""}
           <button class="btn sm" data-need="admin" onclick="diskAction('scheduling','${esc(node)}','${esc(x.id)}',${!x.scheduling})">${x.scheduling ? "Stop new replicas" : "Allow new replicas"}</button>
-          ${x.replicas && !x.evicting ? `<button class="btn sm" data-need="admin" onclick="diskAction('evict','${esc(node)}','${esc(x.id)}',true)" title="Rebuild every replica on this disk somewhere else">Move replicas off</button>` : ""}
+          ${x.ready && x.replicas && !x.evicting ? `<button class="btn sm" data-need="admin" onclick="diskAction('evict','${esc(node)}','${esc(x.id)}',true)" title="Rebuild every replica on this disk somewhere else">Move replicas off</button>` : ""}
           ${x.evicting ? `<button class="btn sm" data-need="admin" onclick="diskAction('evict','${esc(node)}','${esc(x.id)}',false)">Stop moving</button>` : ""}
           ${!x.replicas && !x.scheduling ? `<button class="btn sm danger" data-need="admin" onclick="diskAction('remove','${esc(node)}','${esc(x.id)}')">Remove from Longhorn</button>` : ""}</div></div>`;
     }).join("");
@@ -1107,7 +1110,8 @@ function diskRowsHtml(node, disks, harvester) {
       <div class="between"><div><b class="mono">${esc(d.device || "Longhorn")}</b> <span class="dim xs">${esc(d.model || "")}</span>
           <div class="dim xs">${esc(sizeText(d.size_gb))}${d.kind ? ` · ${esc(d.kind)}` : ""}${d.mounts.length ? ` · ${esc(d.mounts.slice(0, 3).join(", "))}` : ""}</div></div>
         <div class="row">${d.system ? '<span class="tag">system</span>' : ""}<span class="tag ${tone}">${esc(word)}</span>
-          ${d.can_add ? `<button class="btn sm pri" data-need="admin" onclick="diskAdd('${esc(node)}','${esc(d.blockdevice.name)}','${esc(d.path)}',${d.needs_wipe})">Add to Longhorn</button>` : ""}</div></div>
+          ${d.can_add ? `<button class="btn sm pri" data-need="admin" onclick="diskAdd('${esc(node)}','${esc(d.blockdevice.name)}','${esc(d.path)}',${d.needs_wipe})">Add to Longhorn</button>` : ""}
+          ${!harvester && d.role === "unused" && d.device ? `<button class="btn sm pri" data-need="admin" onclick="diskAdd('${esc(node)}','','/dev/${esc(d.device)}')">Add to Longhorn</button>` : ""}</div></div>
       ${lh}</div>`;
   }).join("") + (harvester ? "" : `<button class="btn sm" data-need="admin" style="margin-top:8px" onclick="diskAdd('${esc(node)}')">＋ Add a disk to Longhorn</button>`)
     + (harvester && !disks.some(d => d.can_add) ? '<div class="dim xs" style="margin-top:8px">Every disk Harvester found here is in use. A new disk shows up once it is plugged in and Harvester has scanned it.</div>' : "");
@@ -1170,8 +1174,9 @@ window.diskAdd = (node, blockdevice = "", path = "", needsWipe = false) => {
   const back = $("#nodeDisks") ? null : true;
   childModal(`Add a disk · ${node}`, `
     ${blockdevice ? `<p>Harvester formats <b class="mono">${esc(path)}</b> and gives it to Longhorn, which starts placing replicas on it.</p>`
-      : `<div class="f"><label>Where the disk is ${tip("For the V1 engine: the folder a formatted disk is mounted at on the host, like /mnt/disk2. Mount it (and add it to /etc/fstab) on the host first. For V2: the raw device, like /dev/sdb.")}</label>
-        <input id="da_path" class="mono" placeholder="/mnt/disk2"></div>`}
+      : `${diskMountGuide(path)}
+        <div class="f"><label>Where the disk is ${tip("For the V1 engine: the folder a formatted disk is mounted at on the host, like /mnt/disk2. For V2: the raw device, like /dev/sdb.")}</label>
+        <input id="da_path" class="mono" placeholder="/mnt/disk2" value="${path ? `/mnt/${esc(path.replace("/dev/", ""))}` : ""}"></div>`}
     <div class="f"><label>Engine</label><select id="da_engine">
       <option value="v1">V1 — ${blockdevice ? "formatted and mounted" : "a mounted folder"}</option>
       ${v2 ? `<option value="v2">V2 (SPDK) — the raw device</option>` : ""}</select>
@@ -1181,6 +1186,67 @@ window.diskAdd = (node, blockdevice = "", path = "", needsWipe = false) => {
     <div class="row" style="margin-top:14px"><button class="btn pri" onclick="diskAddGo('${esc(node)}','${esc(blockdevice)}')">Add</button>
       <button class="btn" onclick="modalBack()">Cancel</button></div>`);
 };
+/* Off Harvester, a disk is mounted on the host by hand before Longhorn is
+   given the folder - and how it is mounted decides what a dead drive does at
+   the next boot. A plain fstab line makes systemd wait for the drive and drop
+   the host to an emergency shell when it never comes; nofail lets the host
+   start without it. The folder is made immutable while empty, so when the
+   drive is missing nothing can write into the folder on the system disk:
+   Longhorn marks the disk failed instead of filling the system disk. */
+function diskMountGuide(device) {
+  const dev = device || "/dev/sdX";
+  const dir = device ? `/mnt/${device.replace("/dev/", "")}` : "/mnt/disk2";
+  const lines = [
+    `sudo mkfs.ext4 ${dev}                # erases it`,
+    `sudo mkdir -p ${dir} && sudo chattr +i ${dir}`,
+    `echo "UUID=$(sudo blkid -s UUID -o value ${dev}) ${dir} ext4 defaults,nofail,x-systemd.device-timeout=10s 0 2" | sudo tee -a /etc/fstab`,
+    `sudo mount ${dir}`];
+  return `<div class="note" style="margin-bottom:12px"><b>Mount it on the host first</b>, as root on ${device ? "that machine" : "the machine the disk is in"}:
+    <pre class="mono xs" style="white-space:pre-wrap;margin:8px 0">${esc(lines.join("\n"))}</pre>
+    <span class="dim xs"><b>nofail</b> lets the machine start when this drive is dead or missing - without it, it stops at an emergency
+    shell. The empty folder is locked (<span class="mono">chattr +i</span>) so that, with the drive gone, nothing lands on the system disk
+    in its place: Longhorn marks the disk failed, and Homestead offers to replace it.</span></div>`;
+}
+
+/* Replacing a failed disk: the review says what happens to every volume
+   that had a copy on it before anything is let go of. */
+window.diskRetire = async (node, disk) => {
+  childModal(`Replace failed disk · ${node}`, '<div class="empty"><span class="spin2"></span>reading its replicas</div>');
+  let p;
+  try {
+    p = await api("/api/disks/retire/plan", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node, disk }) });
+  } catch (e) { $("#mbody").innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return; }
+  const word = { "only-copy": ["only copy", "bad"], waits: ["waits for the new disk", "warn"], elsewhere: ["rebuilds elsewhere", "ok"] };
+  $("#mbody").innerHTML = `
+    <p style="margin-top:0"><b class="mono">${esc(p.path)}</b> on ${esc(node)}${p.problem ? ` - <span class="badtext">${esc(p.problem)}</span>` : ""}</p>
+    <p class="small">Longhorn keeps a failed disk, and the replicas it held, until told otherwise. This lets go of them, so
+      each volume rebuilds from its healthy copy, then takes the disk out of Longhorn${p.harvester_device ? " and Harvester" : ""}
+      so the new drive can be added in its place.</p>
+    ${p.volumes.length ? `<div class="sec">${p.volumes.length} volume${p.volumes.length === 1 ? "" : "s"} had a copy on it</div>
+      <div class="rc-uses">${p.volumes.map(v => `<div><b>${esc(v.claim)}</b> <span class="tag ${word[v.outcome][1]}">${word[v.outcome][0]}</span>
+        <span class="dim xs">${esc(v.why)}</span></div>`).join("")}</div>` : '<div class="dim small">No replicas were on it.</div>'}
+    ${p.only_copies ? `<div class="note bad" style="margin-top:12px"><b>${p.only_copies} volume${p.only_copies === 1 ? "" : "s"} had the only copy on this disk.</b>
+      If the drive is only unplugged, reconnect it instead: the data comes back with it. Otherwise restore
+      ${p.only_copies === 1 ? "it" : "them"} from a backup (Data protection). Carrying on leaves ${p.only_copies === 1 ? "it" : "them"} alone and keeps the disk,
+      unless you give ${p.only_copies === 1 ? "it" : "them"} up:
+      <label class="switch" style="margin-top:8px"><input type="checkbox" id="dr_force" onchange="$('#dr_confirm_row').hidden=!this.checked"> Give ${p.only_copies === 1 ? "it" : "them"} up - the data is lost</label>
+      <div id="dr_confirm_row" hidden class="f" style="margin-top:8px"><label>Type <span class="mono">${esc(disk)}</span> to confirm</label><input id="dr_confirm" class="mono"></div></div>` : ""}
+    <div class="row" style="margin-top:14px"><button class="btn pri" data-need="admin" onclick="diskRetireGo('${esc(node)}','${esc(disk)}')">Replace it</button>
+      <button class="btn" onclick="modalBack()">Cancel</button></div>`;
+  if (window.applyRole) applyRole();
+};
+window.diskRetireGo = async (node, disk) => {
+  const force = !!$("#dr_force")?.checked;
+  try {
+    await api("/api/disks/retire", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node, disk, force, confirm: force ? $("#dr_confirm").value.trim() : "" }) });
+    toast("Replacing the failed disk - follow it in the job tray", "ok");
+    STATE.data.disks = null; modalBack(); if (window.refreshOperations) refreshOperations(true);
+    setTimeout(() => disksRepaint(node), 1500);
+  } catch (e) { toast(e.message, "bad"); }
+};
+
 window.diskAddGo = async (node, blockdevice) => {
   const body = { node, engine: $("#da_engine").value };
   if (blockdevice) {
