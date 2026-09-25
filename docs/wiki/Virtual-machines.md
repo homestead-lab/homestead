@@ -9,9 +9,11 @@ cluster has KubeVirt.
 ## Each VM
 
 A VM shows what it is really doing - Running, Stopped, Starting, Paused, or an
-error with its reason - and offers what fits: **Start**; **Stop**, **Restart**,
-**Pause** or **Console** for a running one; **Force stop** for one that will
-not shut down. It opens to its disks, network cards and addresses, the guest OS
+error with its reason - and offers what fits: **Start**; **Shut down**,
+**Restart**, **Pause** or **Console** for a running one; **Force off** for one
+that will not shut down. **Shut down** asks the guest to power off, as its own
+power button would; **Force off** cuts the power at once, like pulling the
+plug, so unsaved work in it is lost. It opens to its disks, network cards and addresses, the guest OS
 (when the guest agent runs), and recent events.
 
 A VM whose disk is still downloading shows how far it has got; one whose

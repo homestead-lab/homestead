@@ -4,9 +4,12 @@
 const VM_TONE = { Running: "ok", Stopped: "low", Paused: "info", Migrating: "info", Starting: "med", Stopping: "med", Deleting: "med",
   Provisioning: "med", WaitingForVolumeBinding: "med" };
 const VM_ACTIONS = {
-  start: ["Start", "play", "Boot the VM"], stop: ["Stop", "stop", "Shut the VM down: the guest is asked to power off, then it is stopped"],
-  restart: ["Restart", "restart", "Restart the VM"], pause: ["Pause", "stop", "Freeze the VM where it is, keeping its memory"],
-  unpause: ["Resume", "play", "Carry on from where it was paused"], "force-stop": ["Force stop", "stop", "Stop at once, without asking the guest: like pulling the plug"],
+  // Shut down asks the guest to power off, as its own power button would;
+  // Force off cuts it at once, like pulling the plug. Each has an icon of
+  // its own - they were all a square, and Pause with them.
+  start: ["Start", "play", "Boot the VM"], stop: ["Shut down", "power", "Ask the guest to power off, as its own power button would, then stop the VM"],
+  restart: ["Restart", "restart", "Restart the VM"], pause: ["Pause", "pause", "Freeze the VM where it is, keeping its memory"],
+  unpause: ["Resume", "play", "Carry on from where it was paused"], "force-stop": ["Force off", "plug", "Cut the power at once, without asking the guest - like pulling the plug; unsaved work in it is lost"],
 };
 const vmTone = status => VM_TONE[status] || (/Error|Fail|Crash|BackOff/i.test(status) ? "crit" : "med");
 /* A disk CDI is still filling: what a Provisioning VM is waiting for. */
@@ -86,9 +89,9 @@ function vmActions(v, compact = false) {
         <button onclick="this.closest('details').open=false;vmOpen('${esc(v.ns)}','${esc(v.name)}')">${icon("list")}Details</button>
         ${main.filter(a => !shown.includes(a)).map(a => `<button data-need="operator" onclick="this.closest('details').open=false;vmPower('${esc(v.ns)}','${esc(v.name)}','${a}')">${icon(VM_ACTIONS[a][1])}${VM_ACTIONS[a][0]}</button>`).join("")}
         <button data-need="operator" onclick="this.closest('details').open=false;vmEdit('${esc(v.ns)}','${esc(v.name)}')">${icon("edit")}Edit</button>
-        ${v.actions.includes("pause") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmPower('${esc(v.ns)}','${esc(v.name)}','pause')">${icon("stop")}Pause</button>` : ""}
+        ${v.actions.includes("pause") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmPower('${esc(v.ns)}','${esc(v.name)}','pause')">${icon("pause")}Pause</button>` : ""}
         ${v.actions.includes("migrate") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmMove('${esc(v.ns)}','${esc(v.name)}')">${icon("move")}Move host</button>` : ""}
-        ${v.actions.includes("force-stop") ? `<button class="danger" data-need="operator" onclick="this.closest('details').open=false;vmPower('${esc(v.ns)}','${esc(v.name)}','force-stop')">${icon("stop")}Force stop</button>` : ""}
+        ${v.actions.includes("force-stop") ? `<button class="danger" data-need="operator" onclick="this.closest('details').open=false;vmPower('${esc(v.ns)}','${esc(v.name)}','force-stop')" title="${esc(VM_ACTIONS["force-stop"][2])}">${icon("plug")}Force off</button>` : ""}
         <button class="danger" data-need="admin" onclick="this.closest('details').open=false;vmDelete('${esc(v.ns)}','${esc(v.name)}')">${icon("trash")}Delete</button>
       </div></details>`;
 }
@@ -141,7 +144,7 @@ function vmCard(v) {
 }
 
 window.vmPower = async (ns, name, action) => {
-  if (action === "force-stop" && !confirm(`Force stop ${name}? The guest is not asked to shut down, so unsaved work in it is lost.`)) return;
+  if (action === "force-stop" && !confirm(`Force off ${name}? The power is cut at once - the guest is not asked to shut down, so unsaved work in it is lost. Shut down asks it first.`)) return;
   try {
     const r = await api("/api/vm/power", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ns, name, action }) });
     toast(r.detail, "ok"); setTimeout(() => refresh(true), 1200);
