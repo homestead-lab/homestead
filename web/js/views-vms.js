@@ -28,50 +28,116 @@ async function viewVMs() {
   const q = STATE.q.toLowerCase();
   const rows = vms.filter(v => !q || [v.name, v.ns, v.os, v.ip, v.node, v.description].join(" ").toLowerCase().includes(q));
   const running = vms.filter(v => v.status === "Running").length;
+  const layout = viewLayout("vms");
   paint(`<div class="phead"><div><h2>Virtual machines</h2>
       <p>${vms.length} VM${vms.length === 1 ? "" : "s"} · ${running} running · ${STATE.platform?.harvester === false ? `KubeVirt on ${esc(platformName(STATE.platform))}${STATE.platform.cdi ? "" : " · no CDI"}` : "KubeVirt on Harvester"}</p></div>
-      <div class="row"><button class="btn" data-need="operator" onclick="k3sCluster()" title="A k3s cluster made of VMs here, each with an address of its own">＋ k3s cluster</button>
+      <div class="row">${layoutSwitch("vms", "viewVMs")}
+      <button class="btn" data-need="operator" onclick="k3sCluster()" title="A k3s cluster made of VMs here, each with an address of its own">＋ k3s cluster</button>
       <button class="btn pri" data-need="operator" onclick="vmNew()">＋ New VM</button></div></div>
-    ${rows.length ? `<div class="vm-grid">${rows.map(vmCard).join("")}</div>`
-      : `<div class="empty">${q ? "Nothing matches that search." : "No virtual machines yet — create one to get started."}</div>`}`);
-}
-window.viewVMs = viewVMs;
-
-function vmActionButton(v, action, primary = false) {
-  const [label, iconName, title] = VM_ACTIONS[action];
-  return `<button class="btn sm ${primary ? "pri" : ""}" data-need="operator" title="${esc(title)}" onclick="vmPower('${esc(v.ns)}','${esc(v.name)}','${action}')">${icon(iconName)}${label}</button>`;
+    ${!rows.length ? `<div class="empty">${q ? "Nothing matches that search." : "No virtual machines yet — create one to get started."}</div>`
+      : layout === "rows" ? vmTable(rows) : `<div class="vm-grid">${rows.map(vmCard).join("")}</div>`}`);
 }
 
-function vmCard(v) {
+/* What a VM is, in one line: its size, its disk and where it runs. */
+function vmSpecs(v) {
+  const disks = v.disks.filter(d => d.kind === "disk");
+  const size = disks.map(d => d.size).filter(Boolean).join(" + ");
+  return [`${v.cores} core${v.cores === 1 ? "" : "s"}`, v.memory || "",
+    disks.length ? (size ? `${size} disk${disks.length > 1 ? "s" : ""}` : `${disks.length} disk${disks.length > 1 ? "s" : ""}`) : "no disk"]
+    .filter(Boolean);
+}
+/* Its addresses, whole: the first, and how many more. Stopped, it has none. */
+function vmAddress(v, withNetwork = true) {
+  const ips = v.ips?.length ? v.ips : v.ip ? [v.ip] : [];
+  if (!ips.length) return `<span class="dim">${v.running ? "no address reported yet" : "no address while stopped"}</span>`;
+  return `<span class="mono vm-ip">${esc(ips[0])}</span>
+    <button class="iconbtn vm-copy" type="button" title="Copy ${esc(ips[0])}" onclick="event.stopPropagation();ipamCopy('${esc(ips[0])}')">${icon("copy")}</button>
+    ${ips.length > 1 ? `<span class="tag" data-tip="${esc(ips.slice(1).join(", "))}">+${ips.length - 1}</span>` : ""}
+    ${withNetwork && v.network ? `<span class="dim xs vm-net" title="${esc(v.network)}">on ${esc(v.network)}</span>` : ""}`;
+}
+/* What a running VM is using. CPU and memory are its launcher pod's, from
+   the metrics API; disk traffic is KubeVirt's own count, as a rate over the
+   last half minute. Anything not measured is left out, not guessed. */
+const vmBytes = b => b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} GiB` : b >= 1024 ** 2 ? `${Math.round(b / 1024 ** 2)} MiB` : `${Math.round(b / 1024)} KiB`;
+const vmRate = b => b >= 1024 ** 2 ? `${(b / 1024 ** 2).toFixed(1)} MB/s` : b >= 1024 ? `${Math.round(b / 1024)} KB/s` : `${Math.round(b || 0)} B/s`;
+function vmIo(u) {
+  if (!u || u.read_bps == null) return `<span class="dim" data-tip="${esc(u?.io_note || "Measured from the second reading, half a minute after Homestead starts")}">—</span>`;
+  return `<span class="vm-io"><span class="mono" title="Read from its disks">↓ ${vmRate(u.read_bps)}</span><span class="mono" title="Written to its disks">↑ ${vmRate(u.write_bps)}</span></span>`;
+}
+function vmUsage(v) {
+  const u = v.usage;
+  if (!v.running) return "";
+  if (!u) return '<div class="dim xs vm-usage-none">Usage appears once the metrics API reports it</div>';
+  const cell = (label, pct, text, metric) => `<div><div class="between"><span>${label}</span><b class="mono">${text}</b></div>
+    ${pct != null ? meter(pct, "", metric) : '<div class="meter"><span style="width:0"></span></div>'}</div>`;
+  return `<div class="vm-usage">
+    ${cell("CPU", u.cpu_pct, u.cpu_pct != null ? `${u.cpu_pct}%` : "—", "cpu")}
+    ${cell("RAM", u.mem_pct, u.mem != null ? vmBytes(u.mem) : "—", "memory")}
+    <div><span>DISK</span>${vmIo(u)}</div></div>`;
+}
+const vmClusterTag = v => v.cluster ? `<span class="tag info" data-tip="A node of the k3s cluster ${esc(v.cluster)}, made here">${esc(v.cluster)}${v.cluster_role ? ` · ${esc(v.cluster_role)}` : ""}</span>` : "";
+
+function vmActions(v, compact = false) {
   const main = v.actions.filter(a => ["start", "stop", "restart", "unpause"].includes(a));
-  const disk = v.disks.filter(d => d.kind === "disk");
-  return `<div class="card flat vm-card">
-    <div class="between vm-head">
-      <a class="vm-title" onclick="vmOpen('${esc(v.ns)}','${esc(v.name)}')"><div class="av n3">${esc(v.name.slice(0, 2).toUpperCase())}</div>
-        <div><b>${esc(v.name)}</b><div class="dim xs">${esc(v.ns)}${v.os ? ` · ${esc(v.os)}` : ""}</div></div></a>
-      <span class="pill ${vmTone(v.status)}" ${v.problem ? `data-tip="${esc(v.problem)}"` : ""}>${esc(v.status)}</span></div>
-    ${v.description ? `<div class="dim small vm-desc">${esc(v.description)}</div>` : ""}
-    ${v.problem ? `<div class="note bad vm-problem">${esc(v.problem)}</div>` : ""}
-    ${vmFilling(v)}
-    ${v.restart_required ? '<div class="dim xs vm-restart">Changes are waiting for a restart</div>' : ""}
-    <div class="vm-facts">
-      <div><span>CPU</span><b>${v.cores} core${v.cores === 1 ? "" : "s"}</b></div>
-      <div><span>RAM</span><b>${esc(v.memory || "—")}</b></div>
-      <div><span>IP</span><b class="mono">${esc(v.ip || "—")}</b></div>
-      <div><span>Host</span><b>${esc(v.node || "—")}</b></div>
-      <div><span>Disks</span><b>${disk.length}${disk.length ? ` · ${esc(disk.map(d => d.size).filter(Boolean).join(" + "))}` : ""}</b></div>
-    </div>
-    <div class="row vm-actions">
-      ${main.map((a, i) => vmActionButton(v, a, i === 0 && a === "start")).join("")}
-      ${v.actions.includes("console") ? `<button class="btn sm" data-need="operator" onclick="vmConsole('${esc(v.ns)}','${esc(v.name)}')">${icon("console")}Console</button>` : ""}
+  const shown = compact ? main.slice(0, 1) : main;
+  return `${shown.map((a, i) => vmActionButton(v, a, i === 0 && a === "start", compact)).join("")}
+      ${v.actions.includes("console") ? `<button class="btn sm ${compact ? "vm-iconbtn" : ""}" data-need="operator" title="Console" aria-label="Console" onclick="vmConsole('${esc(v.ns)}','${esc(v.name)}')">${icon("console")}${compact ? "" : "Console"}</button>` : ""}
       <details class="actionmenu"><summary class="btn sm" title="More actions">⋯</summary><div class="actionmenu-pop">
         <button onclick="this.closest('details').open=false;vmOpen('${esc(v.ns)}','${esc(v.name)}')">${icon("list")}Details</button>
+        ${main.filter(a => !shown.includes(a)).map(a => `<button data-need="operator" onclick="this.closest('details').open=false;vmPower('${esc(v.ns)}','${esc(v.name)}','${a}')">${icon(VM_ACTIONS[a][1])}${VM_ACTIONS[a][0]}</button>`).join("")}
         <button data-need="operator" onclick="this.closest('details').open=false;vmEdit('${esc(v.ns)}','${esc(v.name)}')">${icon("edit")}Edit</button>
         ${v.actions.includes("pause") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmPower('${esc(v.ns)}','${esc(v.name)}','pause')">${icon("stop")}Pause</button>` : ""}
         ${v.actions.includes("migrate") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmMove('${esc(v.ns)}','${esc(v.name)}')">${icon("move")}Move host</button>` : ""}
         ${v.actions.includes("force-stop") ? `<button class="danger" data-need="operator" onclick="this.closest('details').open=false;vmPower('${esc(v.ns)}','${esc(v.name)}','force-stop')">${icon("stop")}Force stop</button>` : ""}
         <button class="danger" data-need="admin" onclick="this.closest('details').open=false;vmDelete('${esc(v.ns)}','${esc(v.name)}')">${icon("trash")}Delete</button>
-      </div></details></div></div>`;
+      </div></details>`;
+}
+
+/* The same VMs as rows: everything a card says, one VM a line. */
+function vmTable(rows) {
+  return `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack vm-table" data-sort="vms"><thead><tr>
+    <th>VM</th><th>Status</th><th>Address</th><th>CPU</th><th>RAM</th><th>Disk IO</th><th data-nosort></th></tr></thead><tbody>
+    ${rows.map(v => `<tr class="clickable" onclick="if(!event.target.closest('button,details,a'))vmOpen('${esc(v.ns)}','${esc(v.name)}')">
+      <td class="cell-name" data-sort="${esc(v.name)}"><b>${esc(v.name)}</b> ${vmClusterTag(v)}
+        <div class="dim xs vm-sub">${esc([v.ns, v.os, v.node ? `on ${v.node}` : ""].filter(Boolean).join(" · "))}</div></td>
+      <td data-label="Status" data-sort="${esc(v.status)}"><span class="pill ${vmTone(v.status)}" data-tip="${esc([v.status, v.problem].filter(Boolean).join(": "))}">${esc(v.status)}</span>
+        ${v.restart_required ? '<div class="dim xs">restart to apply changes</div>' : ""}
+        ${(v.filling || []).length ? `<div class="dim xs">${esc(VM_FILL_WORDS[v.filling[0].phase] || v.filling[0].phase)}${v.filling[0].progress != null ? ` · ${v.filling[0].progress.toFixed(0)}%` : ""}</div>` : ""}</td>
+      <td data-label="Address" class="nowrap" data-sort="${esc((v.ips || [])[0] || "")}"><div class="vm-addr">${vmAddress(v, false)}</div>
+        ${v.network ? `<div class="dim xs">${esc(v.network)}</div>` : ""}</td>
+      <td data-label="CPU" class="nowrap vm-cell-use" data-sort="${v.usage?.cpu_pct ?? -1}">${v.usage?.cpu_pct != null ? `${meter(v.usage.cpu_pct, "", "cpu")}<div class="dim xs mono">${v.usage.cpu_pct}% of ${v.cores}</div>` : `<span class="dim xs">${v.cores} core${v.cores === 1 ? "" : "s"}</span>`}</td>
+      <td data-label="RAM" class="nowrap vm-cell-use" data-sort="${v.usage?.mem_pct ?? -1}">${v.usage?.mem_pct != null ? `${meter(v.usage.mem_pct, "", "memory")}<div class="dim xs mono">${vmBytes(v.usage.mem)} of ${esc(v.memory)}</div>` : `<span class="dim xs">${esc(v.memory || "—")}</span>`}</td>
+      <td data-label="Disk IO" class="nowrap small" data-sort="${(v.usage?.read_bps || 0) + (v.usage?.write_bps || 0)}">${v.running ? vmIo(v.usage) : '<span class="dim">—</span>'}</td>
+      <td class="nowrap"><div class="row vm-actions" style="justify-content:flex-end">${vmActions(v, true)}</div></td></tr>`).join("")}
+    </tbody></table></div></div>`;
+}
+window.viewVMs = viewVMs;
+
+function vmActionButton(v, action, primary = false, iconOnly = false) {
+  const [label, iconName, title] = VM_ACTIONS[action];
+  return `<button class="btn sm ${primary ? "pri" : ""} ${iconOnly ? "vm-iconbtn" : ""}" data-need="operator" title="${esc(iconOnly ? `${label}: ${title}` : title)}"
+    aria-label="${esc(label)}" onclick="vmPower('${esc(v.ns)}','${esc(v.name)}','${action}')">${icon(iconName)}${iconOnly ? "" : label}</button>`;
+}
+
+/* A VM at a glance. Its address has a line of its own, whole - it is what
+   people come here for, and three narrow columns cut it off - and its size
+   reads as one line rather than five labelled boxes. */
+function vmCard(v) {
+  return `<div class="card flat vm-card vm-${vmTone(v.status)}">
+    <div class="between vm-head">
+      <a class="vm-title" onclick="vmOpen('${esc(v.ns)}','${esc(v.name)}')"><div class="av n3">${esc(v.name.slice(0, 2).toUpperCase())}</div>
+        <div class="vm-name"><b title="${esc(v.name)}">${esc(v.name)}</b><div class="dim xs" title="${esc([v.ns, v.os].filter(Boolean).join(" · "))}">${esc(v.ns)}${v.os ? ` · ${esc(v.os)}` : ""}</div></div></a>
+      <span class="pill ${vmTone(v.status)}" ${v.problem ? `data-tip="${esc(v.problem)}"` : ""}>${esc(v.status)}</span></div>
+    ${v.cluster ? `<div class="vm-tags">${vmClusterTag(v)}</div>` : ""}
+    ${v.description ? `<div class="dim small vm-desc">${esc(v.description)}</div>` : ""}
+    ${v.problem ? `<div class="note bad vm-problem">${esc(v.problem)}</div>` : ""}
+    ${vmFilling(v)}
+    ${v.restart_required ? '<div class="dim xs vm-restart">Changes are waiting for a restart</div>' : ""}
+    <div class="vm-addr">${vmAddress(v)}</div>
+    <div class="vm-specs">${vmSpecs(v).map(x => `<span>${esc(x)}</span>`).join("")}
+      ${v.node ? `<span class="vm-host" title="The node it runs on">${esc(v.node)}</span>` : ""}</div>
+    ${vmUsage(v)}
+    <div class="row vm-actions">${vmActions(v)}</div></div>`;
 }
 
 window.vmPower = async (ns, name, action) => {

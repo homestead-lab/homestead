@@ -154,10 +154,22 @@
   const vmDisk = (claim, size, extra = {}) => ({ name: "disk-0", kind: "disk", claim, boot: 1, bus: "virtio", size, storage_class: "harvester-longhorn", ...extra });
   const demoVms = [
     { ns: "default", name: "home-assistant-os", status: "Running", run_strategy: "RerunOnFailure", running: true, node: "harvester-node1",
-      cores: 2, memory: "4Gi", ip: "192.0.2.60", os: "Home Assistant OS 13.2", description: "HAOS with the Zigbee stick passed through",
+      cores: 2, memory: "4Gi", ip: "192.0.2.60", ips: ["192.0.2.60"], network: "default/vlan1",
+      usage: { cpu: 0.46, cpu_pct: 23, mem: 2.9 * 1024 ** 3, mem_pct: 72.5, read_bps: 184320, write_bps: 1.6 * 1024 ** 2 },
+      os: "Home Assistant OS 13.2", description: "HAOS with the Zigbee stick passed through",
       nics: [{ name: "default", model: "virtio", network: "default/vlan1", mac: "52:54:00:6a:11:02", ips: ["192.0.2.60"] }],
       disks: [vmDisk("haos-disk-0", "32Gi")], migratable: false, restart_required: false, problem: "", created: "2026-08-02T10:00:00Z",
       actions: ["console", "stop", "restart", "pause"] },
+    // Two nodes of a k3s cluster made here: an address each, and k3s's own on the server.
+    ...[["server", "192.0.2.231", ["192.0.2.231", "10.42.0.1"]], ["agent", "192.0.2.232", ["192.0.2.232"]]].map(([role, ip, ips]) => ({
+      ns: "lab", name: `k3s-demo-${role}-1`, status: "Running", run_strategy: "RerunOnFailure", running: true, node: "harvester-node2",
+      cores: 2, memory: "1Gi", ip, ips, network: "default/lan", os: "Ubuntu 26.04.1 LTS", description: "",
+      cluster: "k3s-demo", cluster_role: role,
+      usage: role === "server" ? { cpu: 0.71, cpu_pct: 35.5, mem: 0.84 * 1024 ** 3, mem_pct: 84, read_bps: 40960, write_bps: 2.4 * 1024 ** 2 }
+        : { cpu: 0.12, cpu_pct: 6, mem: 0.52 * 1024 ** 3, mem_pct: 52, read_bps: 0, write_bps: 120 * 1024 },
+      nics: [{ name: "default", model: "virtio", network: "default/lan", mac: "52:54:00:12:34:" + (role === "server" ? "01" : "02"), ips }],
+      disks: [vmDisk(`k3s-demo-${role}-1-disk`, "10Gi")], migratable: true, restart_required: false, problem: "",
+      created: "2026-09-25T12:00:00Z", actions: ["console", "stop", "restart", "pause", "migrate"] })),
     { ns: "default", name: "win11", status: "Stopped", run_strategy: "Halted", running: false, node: "", cores: 4, memory: "8Gi", ip: "",
       os: "windows", description: "", nics: [{ name: "default", model: "e1000", network: "default/vlan1", mac: "52:54:00:aa:bb:cc", ips: [] }],
       disks: [vmDisk("win11-disk-0", "80Gi"), { name: "cdrom", kind: "cd-rom", claim: "win11-iso", boot: 2, bus: "sata", size: "6Gi", storage_class: "" }],

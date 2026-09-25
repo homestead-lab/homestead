@@ -67,6 +67,17 @@ them. Any form that needs one offers to make it, and comes back once it is
 made. It is the same network Harvester's dashboard makes under *Networks → VM
 Networks*, so it shows there too.
 
+## The list
+
+Each VM shows its address in full - with a button to copy it, how many more
+it has, and the network it is on - then its size and host on one line. A
+running VM also shows what it is using: CPU against its cores, memory against
+what it was given, and how fast it is reading from and writing to its disks.
+CPU and memory are its launcher pod's, from the metrics API; disk traffic is
+KubeVirt's own count, read from virt-handler on each node every half minute.
+What cannot be measured shows a dash that says why. The switch at the top
+shows the same as rows, one VM a line.
+
 ## A k3s cluster of VMs
 
 **＋ k3s cluster** makes a small k3s cluster from VMs here - for trying k3s,

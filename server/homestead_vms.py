@@ -25,6 +25,7 @@ import urllib.error
 import urllib.parse
 
 import homestead_hvimage as HVIMAGE
+import homestead_vmusage as VMUSAGE
 
 kget = ksend = None
 events_for = lambda ns, name, uid="": []
@@ -290,6 +291,11 @@ def _row(vm, vmi, claims=None, dvs=None):
             "run_strategy": _strategy(vm), "running": istatus.get("phase") == "Running",
             "node": istatus.get("nodeName", ""), "cores": _cores(dom), "memory": _memory(dom),
             "ip": next((ip for n in nics for ip in n["ips"] if ":" not in ip), ""), "nics": nics, "disks": disks,
+            # Every IPv4 address, first first, and the network the VM is on.
+            "ips": list(dict.fromkeys(ip for n in nics for ip in n["ips"] if ":" not in ip)),
+            "network": next((n["network"] for n in nics if n["network"]), ""),
+            # A node of a k3s cluster made here, and which.
+            "cluster": labels.get("homestead.io/k3s-cluster", ""), "cluster_role": labels.get("homestead.io/k3s-role", ""),
             "os": guest.get("prettyName") or labels.get(OS_LABEL, ""), "hostname": guest.get("hostname") or istatus.get("guestOSInfo", {}).get("name", ""),
             "description": annotations.get(DESCRIPTION, ""), "created": meta.get("creationTimestamp", ""),
             "uid": meta.get("uid", ""), "migratable": migratable, "restart_required": restart_required,
@@ -311,8 +317,21 @@ def list_vms():
     for ns in {v["metadata"]["namespace"] for v in vms}:
         claims.update(_claims(ns))
     dvs = _datavolumes()
-    return sorted((_row(v, vmis.get((v["metadata"]["namespace"], v["metadata"]["name"]), {}), claims, dvs) for v in vms),
+    rows = sorted((_row(v, vmis.get((v["metadata"]["namespace"], v["metadata"]["name"]), {}), claims, dvs) for v in vms),
                   key=lambda r: (r["ns"], r["name"]))
+    try:
+        measured, note = VMUSAGE.usage()
+    except Exception:
+        measured, note = {}, ""
+    for row in rows:
+        got = measured.get((row["ns"], row["name"])) if row["running"] else None
+        if got:
+            cpus, memory = max(1, int(row["cores"] or 1)), _bytes(row["memory"])
+            row["usage"] = {**got,
+                            "cpu_pct": round(100 * got["cpu"] / cpus, 1) if "cpu" in got else None,
+                            "mem_pct": round(100 * got["mem"] / memory, 1) if "mem" in got and memory else None,
+                            "io_note": note}
+    return rows
 
 
 def _name(value, label):

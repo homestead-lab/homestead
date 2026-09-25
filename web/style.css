@@ -1697,6 +1697,35 @@ div.ipam-line.dim{display:block}
 .vm-facts span{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}
 .vm-facts b{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .vm-actions{flex-wrap:wrap;gap:6px;margin-top:auto}
+.vm-actions>.actionmenu{margin-left:auto}
+.vm-name{min-width:0}.vm-name>*{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vm-head>.pill{flex:0 0 auto}
+.vm-tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:-4px}
+/* The address line: whole, copyable, with the network it is on. */
+.vm-addr{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap;font-size:13px}
+.vm-ip{font-size:14px;font-weight:650;letter-spacing:.01em}
+.vm-copy{width:24px;height:24px;padding:0;display:inline-grid;place-items:center}
+.vm-copy svg{width:13px;height:13px}
+.vm-net{margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:50%}
+.vm-specs{display:flex;flex-wrap:wrap;gap:4px 0;font-size:12.5px;color:var(--mut)}
+.vm-specs>span:not(:last-child):not(:has(+ .vm-host))::after{content:"·";margin:0 7px;color:var(--dim)}
+/* What a running VM uses: CPU and RAM as meters, disk traffic as rates. */
+.vm-usage{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;padding-top:10px;border-top:1px solid var(--line)}
+.vm-usage>div{min-width:0}
+.vm-usage span{font-size:10.5px;letter-spacing:.06em;color:var(--mut)}
+.vm-usage b{font-size:12px;font-weight:600;white-space:nowrap}
+.vm-usage .meter{margin-top:5px;min-width:0}
+.vm-io{display:flex;flex-direction:column;gap:2px;margin-top:3px;font-size:12px}
+.vm-usage .vm-io span{font-size:12px;letter-spacing:0;color:inherit;white-space:nowrap}
+.vm-table .vm-io{margin-top:0}
+.vm-table .vm-sub{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vm-usage-none{padding-top:8px;border-top:1px solid var(--line)}
+.vm-cell-use{min-width:96px}.vm-table td>.pill{max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle}.vm-cell-use .meter{margin-bottom:4px}
+.vm-host{margin-left:auto;color:var(--txt,inherit)}
+.vm-host::before{content:"on ";color:var(--dim)}
+.vm-table .vm-addr{flex-wrap:nowrap}
+.vm-table .vm-actions{flex-wrap:nowrap}
+.vm-iconbtn{padding-left:9px;padding-right:9px}.vm-iconbtn .btnicon{margin:0}
 @media(max-width:560px){.vm-grid{grid-template-columns:1fr}.vm-facts,.vm-facts.wide{grid-template-columns:1fr 1fr}}
 
 /* A pill that opens something: the update count beside the layout switch. */

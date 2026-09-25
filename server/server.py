@@ -115,6 +115,11 @@ def _sampler():
                 for k in HIST:
                     if len(HIST[k]) > HIST_MAX:
                         HIST[k] = HIST[k][-HIST_MAX:]
+            # Each VM's disk traffic is a count, and a rate needs two readings.
+            try:
+                VMUSAGE.sample()
+            except Exception:
+                pass
             beat("sampler", 30)
         except Exception as error:
             beat("sampler", 30, error)
@@ -3309,6 +3314,7 @@ import homestead_place as PLACE
 import homestead_hardware as HW
 import homestead_updates as UPDATES
 import homestead_operations as OPS
+import homestead_vmusage as VMUSAGE
 import homestead_cancel as CANCEL
 import homestead_console as CONSOLE
 import homestead_files as FILES
@@ -3462,6 +3468,7 @@ def ktable(path, timeout=20):
 
 RESOURCES.bind(kget, ksend, ktable)
 VMS.bind(kget, ksend, RESOURCES.events_for)
+VMUSAGE.bind(kget)
 VMS.platform, VMS.images = PLATFORM.detect, IMP.list_vm_images
 LHCAP.bind(kget, ksend, v2_engine_status)
 RECLASS.bind(kget, ksend, raw_get, storage_classes, LHCAP.status, _own_namespace())
