@@ -373,12 +373,12 @@ window.k3sCluster = async () => {
   window.__vmNetworkReopen = "k3s";
   const opts = await api("/api/vm/create-options").catch(() => ({}));
   window.__vmCreateOptions = opts;
-  const lan = vmLanNetworks(opts);
+  const lan = vmLanNetworks(opts, true);
   const images = (opts.images || []).filter(i => i.storage_class);
   $("#mbody").innerHTML = `
     <p class="small" style="margin-top:0">VMs here become a k3s cluster: the first is its server, the rest join it. Each gets an address of
       its own on the LAN, so the cluster is reached - and joins - as one built from real machines would be.</p>
-    ${lan.length ? "" : vmNetworkNote(opts)}
+    ${lan.length ? "" : vmNetworkNote(opts, true)}
     <div class="f2"><div class="f"><label>Name ${tip("Starts each VM's name: k3s-demo-server-1, k3s-demo-agent-1 and so on.")}</label><input id="k_name" value="k3s-demo"></div>
       <div class="f"><label>Install ${tip("What each node sets up. k3s, Longhorn and Homestead is what a new install from our bootstrap script gets; local-path skips Longhorn and keeps each volume on one node; k3s alone installs nothing else.")}</label><select id="k_setup" onchange="k3sSetupChanged()">${Object.entries(K3S_SETUPS).map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("")}</select></div></div>
     <label class="switch" style="margin:0 0 14px"><input type="checkbox" id="k_kubevirt" onchange="k3sCountChanged()">

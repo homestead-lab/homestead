@@ -298,7 +298,9 @@ def inventory():
         if selector and ready_count == 0:
             health, reason = "unavailable", "No ready endpoints match the Service selector"
         elif service_type == "LoadBalancer" and not assigned:
-            health, reason = "pending", "Waiting for kube-vip to advertise the requested address"
+            health, reason = "pending", ("Waiting for ServiceLB to publish it on the nodes - another Service on "
+                                         "the same port holds it back" if node_addresses_only()
+                                         else "Waiting for kube-vip to advertise the requested address")
         elif not_ready_count:
             health, reason = "degraded", f"{not_ready_count} endpoint(s) are not ready"
         else:
@@ -418,6 +420,37 @@ def _controller():
             "mode": "no load balancer: LoadBalancer Services stay pending"}
 
 
+def node_addresses_only():
+    """k3s's ServiceLB: every LoadBalancer Service is published on every
+    node's own address, and a VIP asked for is ignored. There is no address
+    to choose, only a port, which must be free across all of them."""
+    try:
+        return PLATFORM.detect().get("load_balancer") == "servicelb"
+    except Exception:
+        return False
+
+
+def _node_port_owner(state, namespace, service_name, ports):
+    """Another LoadBalancer Service already on one of these ports - system
+    ones too, like Traefik on 80 and 443 - when every Service shares the
+    nodes' addresses."""
+    for row in state["services"]:
+        if row.get("type") != "LoadBalancer" or (row["namespace"], row["name"]) == (namespace, service_name):
+            continue
+        for existing in row["ports"]:
+            for port in ports:
+                if int(existing["port"]) == int(port["port"]) and str(existing["protocol"]).upper() == port["protocol"]:
+                    return {"namespace": row["namespace"], "service": row["name"],
+                            "port": existing["port"], "protocol": str(existing["protocol"]).upper()}
+    return None
+
+
+def _node_port_problem(owner):
+    return (f"port {owner['port']}/{owner['protocol']} is already answered by {owner['namespace']}/{owner['service']}: "
+            "k3s's ServiceLB puts every Service on every node's own address, so each needs ports of its own - "
+            "choose another LAN port")
+
+
 def _ports(cfg):
     rows, seen = [], set()
     for raw in cfg.get("ports") or []:
@@ -465,7 +498,14 @@ def service_plan(cfg, require_workload=True):
         raise ValueError("VIP mode must be shared, automatic or manual")
     warnings = []
     vip = ""
-    if mode == "shared":
+    if mode != "cluster" and node_addresses_only():
+        # Whatever was asked for, ServiceLB publishes it on the nodes' own
+        # addresses: the shared VIP (none is set on k3s) is not needed.
+        mode = "nodes"
+        owner = _node_port_owner(state, namespace, service_name, ports)
+        if owner:
+            raise ValueError(_node_port_problem(owner))
+    elif mode == "shared":
         if not SHARED_VIP:
             raise ValueError("the shared Homestead VIP is not configured")
         vip = _ipv4(SHARED_VIP, "shared VIP")
@@ -511,7 +551,8 @@ def service_plan(cfg, require_workload=True):
     return {"ready": True, "namespace": namespace, "name": service_name,
             "workload": workload_name, "type": service_type, "vip_mode": mode, "vip": vip,
             "ports": ports, "warnings": warnings,
-            "path": {"vip": vip or "cluster only", "service": f"{namespace}/{service_name}",
+            "path": {"vip": vip or ("each node's own address" if mode == "nodes" else "cluster only"),
+                     "service": f"{namespace}/{service_name}",
                      "workload": f"Deployment/{workload_name}",
                      "endpoints": (workload or {}).get("replicas", 0)},
             "available_vips": state["available_vips"][:16]}
@@ -582,6 +623,8 @@ def _listener_owner(service, ports):
     """Another Service already answering on one of these VIP listeners."""
     state = inventory()
     mine = (service["metadata"]["namespace"], service["metadata"]["name"])
+    if node_addresses_only() and (service.get("spec") or {}).get("type") == "LoadBalancer":
+        return _node_port_owner(state, mine[0], mine[1], ports)
     addresses = set()
     for row in state["services"]:
         if (row["namespace"], row["name"]) == mine:
@@ -646,6 +689,8 @@ def sync_workload_ports(namespace, workload, ports, network_mode=None, vip_mode=
         return ""
     owner = _listener_owner(service, desired)
     if owner:
+        if node_addresses_only():
+            raise ValueError(_node_port_problem(owner))
         raise ValueError(f"port {owner['port']}/{owner['protocol']} is already answered by "
                          f"{owner['namespace']}/{owner['service']} on this address")
     service["spec"]["ports"] = desired
@@ -795,41 +840,119 @@ def set_vip_label(ip, label):
 # on Harvester, a bridge on one of its cluster networks - mgmt is the hosts'
 # own - untagged, or on a VLAN. Harvester's dashboard makes them under
 # Networks > VM Networks; this makes the same object, so it shows there too.
+#
+# Elsewhere (k3s, RKE2, any cluster with Multus) there are no cluster
+# networks, only the hosts' own interfaces: a bridge already on the hosts
+# carries VMs and containers alike; a plain NIC carries containers through
+# macvlan, each with a MAC of its own on the LAN. macvlan cannot carry a VM
+# (KubeVirt bridges the VM's own MAC behind it), so VMs need a bridge.
 CLUSTER_NETWORKS = "/apis/network.harvesterhci.io/v1beta1/clusternetworks"
+NAD_API = "/apis/k8s.cni.cncf.io/v1"
+MULTUS_HELP = ("Multus is not installed, so pods cannot join a second network. On k3s: "
+               "helm repo add rke2-charts https://rke2-charts.rancher.io, then helm install multus rke2-charts/rke2-multus "
+               "-n kube-system --set config.cni_conf.confDir=/var/lib/rancher/k3s/agent/etc/cni/net.d "
+               "--set config.cni_conf.binDir=/var/lib/rancher/k3s/data/cni/ "
+               "--set config.cni_conf.kubeconfig=/var/lib/rancher/k3s/agent/etc/cni/net.d/multus.d/multus.kubeconfig. "
+               "On RKE2: set cni: [multus, canal] in /etc/rancher/rke2/config.yaml and restart rke2-server")
 
 
-def vm_network_options():
-    """Harvester's cluster networks a VM network can be made on."""
+def _multus():
+    try:
+        kget(NAD_API)
+        return True
+    except Exception:
+        return False
+
+
+def host_interfaces(probes):
+    """Each interface the node probes saw, with the nodes it is on. A LAN
+    network is one object for every node, so the ones on all of them lead."""
+    seen, nodes = {}, sorted(probes or {})
+    for node in nodes:
+        for iface in (probes[node] or {}).get("interfaces") or []:
+            row = seen.setdefault(iface["name"], {"name": iface["name"], "kind": iface.get("kind", ""),
+                                                  "nodes": [], "master": iface.get("master", "")})
+            row["nodes"].append(node)
+            if iface.get("kind") == "bridge":
+                row["kind"] = "bridge"
+    rows = list(seen.values())
+    for row in rows:
+        row["everywhere"] = len(row["nodes"]) == len(nodes)
+    # A NIC already in a bridge is carried by that bridge, not on its own.
+    return sorted(rows, key=lambda r: (not r["everywhere"], r["kind"] != "bridge", bool(r["master"]), r["name"]))
+
+
+def vm_network_options(probes=None):
+    """Where a LAN network can be made: Harvester's cluster networks, or
+    elsewhere the hosts' interfaces (and whether Multus is there to use them)."""
     try:
         items = kget(CLUSTER_NETWORKS).get("items", [])
     except Exception:
-        return {"harvester": False, "cluster_networks": []}
+        return {"harvester": False, "cluster_networks": [], "multus": _multus(),
+                "interfaces": host_interfaces(probes), "multus_help": MULTUS_HELP}
     names = sorted(item["metadata"]["name"] for item in items)
-    return {"harvester": True, "cluster_networks": names or ["mgmt"]}
+    return {"harvester": True, "cluster_networks": names or ["mgmt"], "multus": True}
+
+
+def _vlan(cfg):
+    vlan = str(cfg.get("vlan") or "").strip()
+    if vlan and (not vlan.isdigit() or not 1 <= int(vlan) <= 4094):
+        raise ValueError("a VLAN ID is a number from 1 to 4094; leave it empty for the hosts' own, untagged LAN")
+    return vlan
+
+
+def _host_network_config(cfg, options, name):
+    """The CNI config for a LAN network on the hosts' own interface."""
+    if not options["multus"]:
+        raise ValueError(MULTUS_HELP)
+    iface = str(cfg.get("interface") or "").strip()
+    if not iface or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", iface):
+        raise ValueError("choose the host interface your LAN is on, like eth0 or br0")
+    known = {row["name"]: row for row in options.get("interfaces") or []}
+    row = known.get(iface) or {"kind": "bridge" if iface.startswith(("br", "vmbr", "virbr")) else "nic"}
+    vlan = _vlan(cfg)
+    if row.get("master") and known.get(row["master"], {}).get("kind") == "bridge":
+        # The NIC is inside a bridge already: ride the bridge, as the host does.
+        iface, row = row["master"], known[row["master"]]
+    if row["kind"] == "bridge":
+        config = {"cniVersion": "0.3.1", "name": name, "type": "bridge", "bridge": iface, "promiscMode": True, "ipam": {}}
+        if vlan:
+            config["vlan"] = int(vlan)
+        return config, iface, True
+    master = f"{iface}.{vlan}" if vlan else iface
+    if vlan and known and master not in known:
+        # macvlan rides a host interface; a VLAN needs the host's own for it.
+        raise ValueError(f"the hosts have no {master} interface for VLAN {vlan} on {iface}: add it on each host "
+                         f"(ip link add link {iface} name {master} type vlan id {vlan}), or use a host bridge")
+    return {"cniVersion": "0.3.1", "name": name, "type": "macvlan", "master": master, "mode": "bridge", "ipam": {}}, master, False
 
 
 def create_vm_network(cfg):
-    options = vm_network_options()
-    if not options["harvester"]:
-        raise ValueError("LAN networks are made here on Harvester. Elsewhere, create a Multus bridge network "
-                         "attachment on the host bridge your LAN is on")
+    options = vm_network_options(cfg.get("_probes"))
     name = _name(cfg.get("name"), "network name")
     namespace = _name(cfg.get("namespace") or "default", "namespace")
-    cluster = str(cfg.get("cluster_network") or "mgmt")
-    if cluster not in options["cluster_networks"]:
-        raise ValueError(f"Harvester has no cluster network {cluster}")
-    vlan = str(cfg.get("vlan") or "").strip()
-    config = {"cniVersion": "0.3.1", "name": name, "type": "bridge", "bridge": f"{cluster}-br",
-              "promiscMode": True, "ipam": {}}
-    labels = {"network.harvesterhci.io/clusternetwork": cluster}
-    if vlan:
-        if not vlan.isdigit() or not 1 <= int(vlan) <= 4094:
-            raise ValueError("a VLAN ID is a number from 1 to 4094; leave it empty for the hosts' own, untagged LAN")
-        config["vlan"] = int(vlan)
-        labels.update({"network.harvesterhci.io/type": "L2VlanNetwork", "network.harvesterhci.io/vlan-id": vlan})
+    labels = {}
+    if options["harvester"]:
+        cluster = str(cfg.get("cluster_network") or "mgmt")
+        if cluster not in options["cluster_networks"]:
+            raise ValueError(f"Harvester has no cluster network {cluster}")
+        vlan = _vlan(cfg)
+        config = {"cniVersion": "0.3.1", "name": name, "type": "bridge", "bridge": f"{cluster}-br",
+                  "promiscMode": True, "ipam": {}}
+        labels = {"network.harvesterhci.io/clusternetwork": cluster}
+        if vlan:
+            config["vlan"] = int(vlan)
+            labels.update({"network.harvesterhci.io/type": "L2VlanNetwork", "network.harvesterhci.io/vlan-id": vlan})
+        else:
+            labels["network.harvesterhci.io/type"] = "UntaggedNetwork"
+        where = f"VLAN {vlan} on {cluster}" if vlan else f"the untagged LAN of {cluster}"
+        joins = "VMs and containers"
     else:
-        labels["network.harvesterhci.io/type"] = "UntaggedNetwork"
-    path = f"/apis/k8s.cni.cncf.io/v1/namespaces/{namespace}/network-attachment-definitions"
+        config, carrier, vms = _host_network_config(cfg, options, name)
+        vlan = _vlan(cfg)
+        where = f"{'VLAN ' + vlan + ' on ' if vlan and config['type'] == 'bridge' else ''}{carrier}"
+        joins = "VMs and containers" if vms else "containers (a VM needs a host bridge)"
+    path = f"{NAD_API}/namespaces/{namespace}/network-attachment-definitions"
     try:
         kget(f"{path}/{name}")
         raise ValueError(f"a LAN network {namespace}/{name} already exists")
@@ -839,6 +962,5 @@ def create_vm_network(cfg):
     ksend("POST", path, {"apiVersion": "k8s.cni.cncf.io/v1", "kind": "NetworkAttachmentDefinition",
                          "metadata": {"name": name, "namespace": namespace, "labels": labels},
                          "spec": {"config": json.dumps(config)}})
-    where = f"VLAN {vlan} on {cluster}" if vlan else f"the untagged LAN of {cluster}"
     return {"ok": True, "name": f"{namespace}/{name}",
-            "detail": f"LAN network {namespace}/{name} made, on {where}; VMs and containers can join it now"}
+            "detail": f"LAN network {namespace}/{name} made, on {where}; {joins} can join it now"}

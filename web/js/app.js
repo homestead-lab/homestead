@@ -149,7 +149,7 @@ function go(v, options = {}) {
   const [t, , fn] = VIEWS[v];
   $("#title").textContent = t;
   renderBreadcrumb(v);
-  document.title = `${t} · Homestead`;
+  pageTitle(t);
   if (options.history !== false) {
     const url = HomesteadRouter.urlFor(v, options.params || routeParamsForView(v));
     const current = window.location.pathname + window.location.search;

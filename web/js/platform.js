@@ -18,6 +18,15 @@ async function loadPlatform(force = false) {
 }
 window.loadPlatform = loadPlatform;
 
+/* k3s's ServiceLB puts every Service on every node's own address: there is
+   no VIP to choose, so the forms offer that one choice and say so. */
+const nodeAddressesOnly = () => STATE.platform?.load_balancer === "servicelb";
+const NODE_ADDRESS_TIP = "k3s's ServiceLB puts every Service on every node's own address, at the LAN port you give it - so each needs a port no other Service uses (Traefik has 80 and 443).";
+function nodeAddressOption() {
+  return `<option value="shared" selected>Every node's own address · k3s ServiceLB</option>`;
+}
+window.nodeAddressesOnly = nodeAddressesOnly;
+
 /* true (and the page says why) when this cluster lacks what a page needs. */
 function platformLacks(need, title) {
   const p = STATE.platform;

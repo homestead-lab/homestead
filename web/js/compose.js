@@ -26,8 +26,8 @@ window.composeImport = async () => {
         <div class="f"><label>Namespace</label><select id="composeNs">${namespaces.map(n =>
           `<option ${n === COMPOSE.namespace ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
         <div class="f"><label>LAN address ${tip("Where published ports are reachable. The shared address is Homestead's own; with it, two services cannot publish the same port. A new address gives each service its own from the pool.")}</label>
-          <select id="composeVip"><option value="shared" ${COMPOSE.vip_mode === "shared" ? "selected" : ""}>Shared Homestead address</option>
-            <option value="auto" ${COMPOSE.vip_mode === "auto" ? "selected" : ""}>A new address per service</option></select></div>
+          <select id="composeVip">${nodeAddressesOnly() ? nodeAddressOption() : `<option value="shared" ${COMPOSE.vip_mode === "shared" ? "selected" : ""}>Shared Homestead address</option>
+            <option value="auto" ${COMPOSE.vip_mode === "auto" ? "selected" : ""}>A new address per service</option>`}</select></div>
       </div>
     </div>
     <div class="compose-right" id="composeResult"><div class="empty">Paste a Compose file to check it.</div></div>

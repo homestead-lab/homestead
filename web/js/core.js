@@ -24,7 +24,7 @@ async function copyText(text) {
 async function readClipboard() {
   try { return navigator.clipboard?.readText ? await navigator.clipboard.readText() : null; } catch (_) { return null; }
 }
-const HOMESTEAD_VERSION = "2.8.146";
+const HOMESTEAD_VERSION = "2.8.147";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -52,9 +52,11 @@ async function loadHealthSettings(force = false) {
 /* The line under the wordmark: what this installation is called, and what it
    is running. The name is a setting, because "HOMELAB" described nobody. */
 function paintBrand(settings = {}) {
+  const site = String(settings.site_name || "").trim();
+  window.__siteName = site;
+  pageTitle();
   const host = $(".bver");
   if (!host) return;
-  const site = String(settings.site_name || "").trim();
   const version = (settings.info || {}).version || host.dataset.version || "";
   host.textContent = [site, version && "v" + version].filter(Boolean).join(" · ");
   host.title = site ? `${site} · Homestead v${version}` : `Homestead v${version}`;
@@ -63,6 +65,14 @@ function paintBrand(settings = {}) {
     .filter(Boolean).join(" · ");
 }
 window.paintBrand = paintBrand;
+/* The tab and bookmark title: the site first, when it has a name, so tabs and
+   bookmarks from several clusters tell themselves apart. */
+function pageTitle(view) {
+  if (view !== undefined) window.__pageTitle = view;
+  const site = window.__siteName || "";
+  document.title = [site, window.__pageTitle, "Homestead"].filter(Boolean).join(" · ");
+}
+window.pageTitle = pageTitle;
 const tip = (text, label = "?") => `<span class="tip" tabindex="0" aria-label="${esc(text)}" data-tip="${esc(text)}">${esc(label)}</span>`;
 const icon = name => `<svg class="btnicon" aria-hidden="true"><use href="#i-${esc(name)}"/></svg>`;
 const appAvatar = (name, icon, cls = "") => icon

@@ -474,15 +474,18 @@ window.doVmMove = async (ns, name) => {
    address of its own: picked from what IP addresses knows is free outside
    the DHCP range, written into cloud-init's network config, and recorded
    under the VM's name so nothing else is given it. */
-function vmLanNetworks(opts) {
-  return (opts.network_details || []).filter(n => n.lan);
+/* LAN networks a container can join; for a VM, only those on a bridge -
+   macvlan cannot carry a VM's own MAC. */
+function vmLanNetworks(opts, forVm = false) {
+  return (opts.network_details || []).filter(n => n.lan && (!forVm || n.vms !== false));
 }
-function vmNetworkNote(opts) {
-  if (vmLanNetworks(opts).length) return "";
-  return `<div class="note" style="margin-top:8px"><b>No LAN network yet.</b> ${opts.harvester
-    ? `A LAN network puts VMs and containers on your LAN, untagged like the hosts or on a VLAN.
-       <button class="btn sm pri" data-need="admin" style="margin-top:6px" onclick="vmNetworkAdd()">＋ Make one</button>`
-    : "Create a Multus bridge network attachment on the host bridge your LAN is on; VMs on it get LAN addresses."}</div>`;
+function vmNetworkNote(opts, forVm = false) {
+  if (vmLanNetworks(opts, forVm).length) return "";
+  const other = forVm && vmLanNetworks(opts).length;
+  return `<div class="note" style="margin-top:8px"><b>${other ? "No LAN network a VM can join yet." : "No LAN network yet."}</b>
+    ${other ? "The ones there use macvlan, which carries containers only; a VM needs one on a host bridge."
+      : `A LAN network puts ${opts.harvester ? "VMs and containers" : "containers (and, on a host bridge, VMs)"} on your LAN, untagged like the hosts or on a VLAN.`}
+    <button class="btn sm pri" data-need="admin" style="margin-top:6px" onclick="vmNetworkAdd()">＋ Make one</button></div>`;
 }
 
 /* A VM network, made here: the same object Harvester's dashboard makes under
@@ -491,12 +494,30 @@ function vmNetworkNote(opts) {
 window.vmNetworkAdd = async (reopen = null) => {
   const opts = window.__vmCreateOptions || await api("/api/vm/create-options").catch(() => ({}));
   const back = reopen || window.__vmNetworkReopen || null;
-  const clusters = (opts.vm_network_options || {}).cluster_networks || ["mgmt"];
-  (window.childModal && !$("#modal").classList.contains("hidden") ? childModal : modal)("New LAN network", `
-    <p class="small" style="margin-top:0">VMs and containers on it are on your LAN - with addresses from your router's DHCP, or ones of their own.</p>
+  const o = opts.vm_network_options || {};
+  const open = window.childModal && !$("#modal").classList.contains("hidden") ? childModal : modal;
+  if (!o.harvester && !o.multus) {
+    open("New LAN network", `<div class="note"><b>Multus is needed first.</b> A container or VM joins the LAN as a second network,
+        which Kubernetes does through Multus - k3s and RKE2 leave it out unless asked.</div>
+      <p class="small">${esc(o.multus_help || "Install Multus, then come back here.")}</p>
+      <div class="row" style="margin-top:14px"><button class="btn" onclick="modalBack()">Close</button></div>`);
+    window.__vmNetworkReopen = back;
+    return;
+  }
+  const clusters = o.cluster_networks?.length ? o.cluster_networks : ["mgmt"];
+  const ifaces = o.interfaces || [];
+  const ifaceWord = i => `${i.name} · ${i.kind === "bridge" ? "bridge - VMs and containers" : `${i.kind}${i.master ? ` in ${i.master}` : ""} - containers`}${i.everywhere ? "" : ` · only on ${i.nodes.join(", ")}`}`;
+  const carrier = o.harvester
+    ? `<div class="f"><label>Cluster network ${tip("Which of Harvester's cluster networks it rides on. mgmt is the hosts' own network - the usual choice.")}</label>
+        <select id="vn_cluster">${clusters.map(c => `<option ${c === "mgmt" ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></div>`
+    : `<div class="f"><label>Host interface ${tip("The interface on each host that your LAN is on. A bridge (br0) carries VMs and containers. A plain NIC (eth0) carries containers through macvlan, each with a MAC of its own - a VM needs a bridge. Every host needs one of the same name.")}</label>
+        ${ifaces.length ? `<select id="vn_iface">${ifaces.map(i => `<option value="${esc(i.name)}">${esc(ifaceWord(i))}</option>`).join("")}</select>`
+          : `<input id="vn_iface" class="mono" placeholder="eth0 or br0">`}</div>`;
+  open("New LAN network", `
+    <p class="small" style="margin-top:0">${o.harvester ? "VMs and containers" : "Containers - and VMs, on a host bridge -"} on it are on your LAN, with addresses from your router's DHCP or ones of their own.</p>
     <div class="f2"><div class="f"><label>Name ${tip("How it is listed wherever a network is chosen, like lan or vlan20.")}</label><input id="vn_name" value="lan"></div>
-      <div class="f"><label>Cluster network ${tip("Which of Harvester's cluster networks it rides on. mgmt is the hosts' own network - the usual choice.")}</label>
-        <select id="vn_cluster">${clusters.map(c => `<option ${c === "mgmt" ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></div></div>
+      ${carrier}</div>
+    ${!o.harvester && !ifaces.length ? '<div class="dim xs">The node probe has not reported the hosts\' interfaces, so type the name - <span class="mono">ip link</span> on a host lists them.</div>' : ""}
     <div class="f"><label>VLAN ${tip("Empty: untagged - the same LAN the hosts are on. A number: that VLAN, which your switch must carry to the hosts.")}</label>
       <input id="vn_vlan" type="number" min="1" max="4094" placeholder="empty - untagged, the hosts' own LAN"></div>
     <div class="row" style="margin-top:14px"><button class="btn pri" onclick="vmNetworkAddGo()">Make it</button>
@@ -506,7 +527,8 @@ window.vmNetworkAdd = async (reopen = null) => {
 window.vmNetworkAddGo = async () => {
   try {
     const r = await api("/api/network/vm-networks", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: $("#vn_name").value.trim(), cluster_network: $("#vn_cluster").value, vlan: $("#vn_vlan").value.trim() }) });
+      body: JSON.stringify({ name: $("#vn_name").value.trim(), cluster_network: $("#vn_cluster")?.value || "",
+        interface: $("#vn_iface")?.value.trim() || "", vlan: $("#vn_vlan").value.trim() }) });
     toast(r.detail, "ok");
     window.__vmCreateOptions = null;
     const reopen = window.__vmNetworkReopen;
@@ -549,7 +571,7 @@ function vmReadAddress(p) {
 }
 window.vmNetChanged = () => {
   const net = $("#v_net")?.value || "pod";
-  const lan = vmLanNetworks(window.__vmCreateOptions || {}).some(n => n.name === net);
+  const lan = vmLanNetworks(window.__vmCreateOptions || {}, true).some(n => n.name === net);
   $("#v_addr_wrap").hidden = !lan;
   $("#v_static").hidden = !lan || $("#v_addr_mode").value !== "static";
 };
@@ -589,8 +611,8 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
     <div class="f" id="v_url_row" hidden><label>Image URL</label><input type="url" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img"></div>
     <div class="f"><label>Network ${tip("The pod network: reached through a Service, like a container. A LAN network (bridged): a machine there like any other, with an address from DHCP or one of its own.")}</label>
       <select id="v_net" onchange="vmNetChanged()"><option value="pod">Pod network - reached through a Service</option>
-        ${(opts.network_details || []).map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.lan ? ` · LAN${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}` : ""}</option>`).join("")}</select>
-      ${vmNetworkNote(opts)}</div>
+        ${(opts.network_details || []).filter(n => n.vms !== false).map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.lan ? ` · LAN${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}` : ""}</option>`).join("")}</select>
+      ${vmNetworkNote(opts, true)}</div>
     <div id="v_addr_wrap" hidden>
       <div class="f"><label>Address</label><select id="v_addr_mode" onchange="vmNetChanged();vmSubnetPicked('v')">
         <option value="dhcp">From the network's DHCP</option><option value="static">One of its own</option></select></div>
@@ -1439,7 +1461,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <button class="btn sm" onclick="imAddVolume()">＋ add volume</button>
     </div>
     <div class="sec">Network</div><div class="f2"><div class="f"><label>Docker network → Kubernetes</label><select id="im_net"><option value="loadbalancer">LAN access (VIP)</option><option value="internal">Cluster only</option><option value="host" ${cfg.network_mode === "host" ? "selected" : ""}>Host network (advanced)</option></select></div>
-      <div class="f"><label>VIP allocation ${tip("Choose a new automatic or specific VIP for apps such as Pi-hole that need port 53 on their own address.")}</label><select id="im_vip" onchange="$('#im_vip_wrap').style.display = this.value === 'manual' ? '' : 'none'"><option value="shared">Shared Homestead VIP</option><option value="auto">New automatic VIP</option><option value="manual">Specific VIP</option></select></div></div>
+      <div class="f"><label>VIP allocation ${tip("Choose a new automatic or specific VIP for apps such as Pi-hole that need port 53 on their own address.")}</label><select id="im_vip" onchange="$('#im_vip_wrap').style.display = this.value === 'manual' ? '' : 'none'">${nodeAddressesOnly() ? nodeAddressOption() : '<option value="shared">Shared Homestead VIP</option><option value="auto">New automatic VIP</option><option value="manual">Specific VIP</option>'}</select></div></div>
     <div class="f" id="im_vip_wrap" style="display:none"><label>Specific VIP</label><div id="im_vip_pick"><span class="dim xs"><span class="spin2"></span></span></div></div>
     <div class="sec">Port mappings ${tip("Container port is what the app listens on. LAN port is what you open from another device. TCP and UDP mappings are kept separately.")}</div>
     <div id="im_ports">${(cfg.ports || []).map(p => `<div class="f4 im-port"><div><label>Container</label><input class="ipc" type="number" value="${p.container}"></div><div><label>LAN</label><input class="iph" type="number" value="${p.host}"></div><div><label>Protocol</label><select class="ipp"><option ${p.protocol === "TCP" ? "selected" : ""}>TCP</option><option ${p.protocol === "UDP" ? "selected" : ""}>UDP</option></select></div><label class="switch"><input class="ipe" type="checkbox" ${p.expose !== false ? "checked" : ""}>Expose</label></div>`).join("")}</div>

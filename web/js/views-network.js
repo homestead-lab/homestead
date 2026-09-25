@@ -47,7 +47,7 @@ async function viewNetworking() {
           ? `${data.available_vip_count} more are free in Harvester IP pools.` : "there are no Harvester IP pools to take them from either."}</div>`}
     <div class="between"><div class="sec">LAN networks ${tip("Networks bridged to the LAN - Harvester calls them VM networks. A VM, or a container given an address of its own, joins one to be on the LAN like any machine there.")}</div>
       <button class="btn sm" data-need="admin" onclick="vmNetworkAdd()">＋ LAN network</button></div>
-    <div id="netVmNets"><div class="dim small">reading LAN networks…</div></div>
+    <div id="netVmNets">${window.__vmCreateOptions ? networkVmNetsHtml(window.__vmCreateOptions) : '<div class="dim small">reading LAN networks…</div>'}</div>
     <div class="between"><div class="sec">Virtual IPs &amp; port ownership</div><div class="row">${data.available_vips.filter(ip => !(data.vip_labels || {}).hasOwnProperty(ip)).slice(0, 6).map(ip => `<span class="tag ok" title="Unused address in a ready Harvester IP pool">${esc(ip)} available</span>`).join("")}</div></div>
     <div class="cardlist network-vips">${data.vips.map(vip => `<div class="card flat">
       <div class="between"><div><div class="dim xs">${vip.shared ? "SHARED VIP" : "VIRTUAL IP"}</div><b class="mono">${esc(vip.ip)}</b></div>
@@ -103,7 +103,7 @@ window.networkExpose = () => {
     <div class="f2"><div class="f"><label>Workload</label><select id="net_workload" onchange="networkWorkloadChanged()">${options}</select></div>
       <div class="f"><label>Service name</label><input id="net_name" type="text" value="${esc(first.name)}"></div></div>
     <div class="f2"><div class="f"><label>Reachability ${tip("Cluster only is reachable inside Kubernetes. LAN access asks kube-vip to advertise an address on your network.")}</label><select id="net_type" onchange="networkModeChanged()"><option value="LoadBalancer">LAN access</option><option value="ClusterIP">Cluster only</option></select></div>
-      <div class="f" id="net_mode_wrap"><label>VIP allocation ${tip("Automatic reserves the first unused address in a Harvester IP pool. Shared reuses the Homestead address when the requested port is free.")}</label><select id="net_mode" onchange="networkModeChanged()"><option value="automatic">New automatic VIP</option><option value="shared">Shared Homestead VIP</option><option value="manual">Specific VIP</option></select></div></div>
+      <div class="f" id="net_mode_wrap"><label>VIP allocation ${tip("Automatic reserves the first unused address in a Harvester IP pool. Shared reuses the Homestead address when the requested port is free.")}</label><select id="net_mode" onchange="networkModeChanged()">${nodeAddressesOnly() ? nodeAddressOption() : '<option value="automatic">New automatic VIP</option><option value="shared">Shared Homestead VIP</option><option value="manual">Specific VIP</option>'}</select></div></div>
     <div class="f hidden" id="net_vip_wrap"><label>Specific VIP</label><input id="net_vip" type="text" class="mono" placeholder="192.0.2.243"></div>
     <div class="sec">Listeners</div><div id="net_ports">${networkModalPort(first.ports[0] || {}, true)}</div>
     <button class="btn sm" type="button" onclick="$('#net_ports').insertAdjacentHTML('beforeend',networkModalPort())">＋ Add listener</button>
@@ -186,16 +186,23 @@ window.vipLabel = async ip => {
 
 
 /* The VM networks there are, from the same list the VM and container forms
-   choose from. */
+   choose from. The page repaints on its own every few seconds, so it draws the last list
+   it had at once and swaps in the new one when it comes, rather than going
+   back to "reading" each time. */
 async function networkVmNetsPaint() {
-  const opts = await api("/api/vm/create-options").catch(() => ({}));
-  window.__vmCreateOptions = opts;
+  const opts = await api("/api/vm/create-options").catch(() => null);
+  if (opts) window.__vmCreateOptions = opts;
   const host = $("#netVmNets");
   if (!host) return;
-  const rows = opts.network_details || [];
-  host.innerHTML = rows.length ? `<div class="vip-own">${rows.map(n => `<div class="vip-chip ${n.lan ? "free" : "used"}">
-      <div class="vip-name"><b class="mono">${esc(n.name)}</b><span class="dim xs">${n.vlan ? `VLAN ${esc(n.vlan)}` : n.lan ? "untagged" : esc(n.type || "network")}${n.bridge ? ` · ${esc(n.bridge)}` : ""}</span></div>
-      <span class="tag ${n.lan ? "ok" : ""}">${n.lan ? "LAN" : "not bridged"}</span></div>`).join("")}</div>`
-    : `<div class="card flat empty small">No LAN networks yet. ${opts.harvester ? "<b>＋ LAN network</b> makes one on your LAN, untagged like the hosts or on a VLAN." : ""}</div>`;
+  const html = networkVmNetsHtml(window.__vmCreateOptions || {});
+  if (host.innerHTML !== html) host.innerHTML = html;
   if (window.applyRole) applyRole();
+}
+
+function networkVmNetsHtml(opts) {
+  const rows = opts.network_details || [];
+  return rows.length ? `<div class="vip-own">${rows.map(n => `<div class="vip-chip ${n.lan ? "free" : "used"}">
+      <div class="vip-name"><b class="mono">${esc(n.name)}</b><span class="dim xs">${n.vlan ? `VLAN ${esc(n.vlan)}` : n.lan ? "untagged" : esc(n.type || "network")}${n.bridge ? ` · ${esc(n.bridge)}` : ""}</span></div>
+      <span class="tag ${n.lan ? "ok" : ""}" ${n.type === "macvlan" ? 'data-tip="macvlan: containers only - a VM needs a network on a host bridge"' : ""}>${n.lan ? (n.type === "macvlan" ? "LAN · containers" : "LAN") : "not bridged"}</span></div>`).join("")}</div>`
+    : `<div class="card flat empty small">No LAN networks yet. <b>＋ LAN network</b> makes one on your LAN, untagged like the hosts or on a VLAN.</div>`;
 }

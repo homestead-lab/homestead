@@ -61,8 +61,10 @@ def detect(force=False):
                 control.append(ip)
     kube_vip = harvester or _exists("/apis/apps/v1/namespaces/kube-system/daemonsets/kube-vip-ds")
     metallb = "metallb.io" in groups
-    servicelb = distribution == "k3s" and any(
-        (d.get("metadata") or {}).get("name", "").startswith("svclb-") for d in _items("/apis/apps/v1/namespaces/kube-system/daemonsets"))
+    # k3s's own load balancer, unless something else is doing the job. Its
+    # svclb- DaemonSets only appear with the first LoadBalancer Service, so
+    # a k3s cluster with none yet still has it.
+    servicelb = distribution == "k3s" and not metallb
     load_balancer = "kube-vip" if kube_vip else "metallb" if metallb else "servicelb" if servicelb else ""
     value = {
         "distribution": distribution,

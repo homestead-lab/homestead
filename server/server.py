@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.146")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.147")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2016,6 +2016,9 @@ def compose_report(b):
     except Exception:
         claims = set()
     vip_mode = b.get("vip_mode") if b.get("vip_mode") in ("shared", "auto") else "shared"
+    if NETWORK.node_addresses_only():
+        # On k3s every service shares the nodes' addresses, so ports must differ.
+        vip_mode = "shared"
     return COMPOSE.convert(text, b.get("variables") or "", ns, workloads, claims,
                            HW.features(), vip_mode)
 
@@ -2555,7 +2558,7 @@ def vm_create_options():
             "images": IMP.list_vm_images() if platform.get("harvester") else [],
             "networks": vm_networks(),
             "network_details": vm_network_details(),
-            "vm_network_options": NETWORK.vm_network_options(),
+            "vm_network_options": NETWORK.vm_network_options(node_temps()),
             "subnets": vm_subnets(),
             "nodes": sorted(n["metadata"]["name"] for n in kget("/api/v1/nodes").get("items", []))}
 
@@ -2585,9 +2588,12 @@ def vm_network_details():
         labels = item["metadata"].get("labels") or {}
         out.append({"name": f"{item['metadata']['namespace']}/{item['metadata']['name']}",
                     "type": config.get("type", ""), "vlan": config.get("vlan"),
-                    "bridge": config.get("bridge", ""),
+                    "bridge": config.get("bridge", "") or config.get("master", ""),
                     "kind": labels.get("network.harvesterhci.io/type", ""),
-                    "lan": config.get("type") == "bridge"})
+                    # On the LAN: a bridge carries VMs and containers; macvlan
+                    # gives containers a MAC of their own but cannot carry a VM.
+                    "lan": config.get("type") in ("bridge", "macvlan"),
+                    "vms": config.get("type") == "bridge"})
     return sorted(out, key=lambda row: row["name"])
 
 
@@ -5627,7 +5633,7 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, NETWORK.set_vip_label(b.get("ip", ""), b.get("label", "")))
             if p == "/api/network/vm-networks":
                 _cache.pop("network", None)
-                return self._send(200, NETWORK.create_vm_network(b))
+                return self._send(200, NETWORK.create_vm_network(dict(b, _probes=node_temps())))
             if p == "/api/storage/classes/cleanup":
                 removed = cleanup_restore_classes()
                 return self._send(200, {"ok": True, "removed": removed,
@@ -5891,7 +5897,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.146 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.147 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

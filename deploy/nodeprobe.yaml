@@ -276,6 +276,39 @@ data:
         except (ValueError, IndexError):
             return None
 
+    # Interfaces the pod network makes for itself, which no LAN network rides on.
+    POD_IFACES = ("lo", "veth", "cni", "flannel", "cali", "vxlan", "kube", "docker", "tunl", "genev",
+                  "lxc", "tap", "vnet", "cilium", "weave", "nodelocaldns", "k6t", "virbr")
+
+    def interfaces():
+        """The host's own network interfaces a LAN network can sit on: NICs,
+        bridges, bonds and VLANs, with the bridge each NIC is in. Read from the
+        host's /sys, whose network entries are the host's, not this pod's."""
+        base = f"{SYS}/class/net"
+        try:
+            names = sorted(os.listdir(base))
+        except OSError:
+            return []
+        out = []
+        for name in names:
+            if name.startswith(POD_IFACES):
+                continue
+            path = f"{base}/{name}"
+            if os.path.isdir(f"{path}/bridge"):
+                kind = "bridge"
+            elif os.path.isdir(f"{path}/bonding"):
+                kind = "bond"
+            elif os.path.exists(f"{path}/device"):
+                kind = "nic"
+            elif "." in name:
+                kind = "vlan"
+            else:
+                continue
+            master = os.path.basename(os.path.realpath(f"{path}/master")) if os.path.exists(f"{path}/master") else ""
+            out.append({"name": name, "kind": kind, "up": _read(f"{path}/operstate") in ("up", "unknown"),
+                        "master": master})
+        return out
+
     def payload():
         t, hw = thermal(), hwmon()
         allt = [x["celsius"] for x in t] + [x["celsius"] for x in hw]
@@ -297,7 +330,8 @@ data:
                 "uptime_s": uptime(),
                 # Hardware virtualisation, which KubeVirt runs VMs with; without
                 # it KubeVirt can only emulate, many times slower.
-                "kvm": os.path.exists(f"{DEV}/kvm")}
+                "kvm": os.path.exists(f"{DEV}/kvm"),
+                "interfaces": interfaces()}
 
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -690,7 +724,7 @@ spec:
               mountPath: "/host/proc"
               readOnly: true
         - name: smart
-          image: ghcr.io/wjcloudy/homestead:2.8.146
+          image: ghcr.io/wjcloudy/homestead:2.8.147
           imagePullPolicy: IfNotPresent
           command:
             - python3

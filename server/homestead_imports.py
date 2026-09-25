@@ -2207,8 +2207,12 @@ def create_vm(cfg, platform=None, default_class=""):
         if not re.fullmatch(r"[a-z0-9-]+/[a-z0-9.-]+", network):
             raise ValueError(f"{network} is not a LAN network like default/vlan1")
         nad_ns, nad = network.split("/", 1)
-        if not _get_or_none(f"/apis/k8s.cni.cncf.io/v1/namespaces/{nad_ns}/network-attachment-definitions/{nad}"):
+        found = _get_or_none(f"/apis/k8s.cni.cncf.io/v1/namespaces/{nad_ns}/network-attachment-definitions/{nad}")
+        if not found:
             raise ValueError(f"there is no LAN network {network}")
+        if '"macvlan"' in ((found.get("spec") or {}).get("config") or ""):
+            raise ValueError(f"{network} is a macvlan network, which carries containers only: "
+                             "a VM needs a LAN network on a host bridge")
         interface = {"name": "default", "bridge": {}, "model": "virtio", "macAddress": mac}
         net = {"name": "default", "multus": {"networkName": network}}
     network_data, address = ("", "")

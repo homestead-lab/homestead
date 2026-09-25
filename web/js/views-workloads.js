@@ -1127,13 +1127,14 @@ async function viewDeploy(pre) {
         <option value="internal" ${DCFG.network_mode === "internal" ? "selected" : ""}>Cluster only</option>
         <option value="host" ${DCFG.network_mode === "host" ? "selected" : ""}>Host network (advanced)</option>
         <option value="lan" ${DCFG.network_mode === "lan" ? "selected" : ""}>Its own LAN address (bridged)</option></select></div>
-        <div class="f"><label>VIP allocation</label><select id="d_vip_mode">
-          <option value="shared" ${DCFG.vip_mode === "shared" ? "selected" : ""}>Shared Homestead VIP${sharedVip ? ` · ${esc(sharedVip)}` : ""}</option>
+        <div class="f"><label>${nodeAddressesOnly() ? `LAN address ${tip(NODE_ADDRESS_TIP)}` : "VIP allocation"}</label><select id="d_vip_mode">
+          ${nodeAddressesOnly() ? nodeAddressOption() : `<option value="shared" ${DCFG.vip_mode === "shared" ? "selected" : ""}>Shared Homestead VIP${sharedVip ? ` · ${esc(sharedVip)}` : ""}</option>
           <option value="auto" ${DCFG.vip_mode === "auto" ? "selected" : ""}>New automatic VIP${vips.freeCount ? ` · ${vips.freeCount} free` : ""}</option>
-          <option value="manual" ${DCFG.vip_mode === "manual" ? "selected" : ""}>Specific VIP</option></select></div></div>
+          <option value="manual" ${DCFG.vip_mode === "manual" ? "selected" : ""}>Specific VIP</option>`}</select></div></div>
       <div class="f" id="d_vip_wrap"><label>Specific VIP</label>${vipPicker("d", DCFG.lb_ip || "", vips)}</div>
       <div id="d_lan_box" hidden></div>
-      <div class="note"><b>Docker bridge → Kubernetes Service.</b> Shared VIP reuses ${esc((STATE.data.ov && STATE.data.ov.lb_ip) || "the cluster VIP")} on a unique LAN port. New automatic VIP asks kube-vip IPAM for another address. A dedicated VIP is ideal for DNS when port 53 must live on its own address. Host network binds directly on one node and reduces failover safety.</div>
+      ${nodeAddressesOnly() ? `<div class="note"><b>Docker bridge → Kubernetes Service.</b> On k3s it answers on every node's own address at its LAN port.
+        Each port can be used by one Service only; a DNS server wanting port 53 needs it free there. Host network binds directly on one node and reduces failover safety.</div>` : `<div class="note"><b>Docker bridge → Kubernetes Service.</b> Shared VIP reuses ${esc((STATE.data.ov && STATE.data.ov.lb_ip) || "the cluster VIP")} on a unique LAN port. New automatic VIP asks kube-vip IPAM for another address. A dedicated VIP is ideal for DNS when port 53 must live on its own address. Host network binds directly on one node and reduces failover safety.</div>`}
       <div class="sec">Ports ${tip("Container port is where the process listens. LAN port is what clients use through the Kubernetes Service. TCP and UDP on the same number are separate listeners.")}</div><div id="d_ports"></div><button class="btn sm" onclick="addPort()">＋ add port</button>
       <div class="sec">Storage ${tip("The mount path is inside the container. Choose whether its backing storage is a new Longhorn claim, an existing claim, an existing volume in a shared pod, or a path on one host.")}</div>
       <div class="note storage-guide"><b>Choose deliberately:</b> RWO is best for one workload; RWX permits multi-node sharing; an existing PVC keeps its current data; a pod volume shares the exact backing volume with a sidecar. Host paths reduce failover portability.</div>

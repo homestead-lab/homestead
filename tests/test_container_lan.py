@@ -58,11 +58,19 @@ class ContainerLanTests(unittest.TestCase):
         self.assertNotIn(LAN.NETWORKS, dep["spec"]["template"]["metadata"]["annotations"])
         self.assertIsNone(LAN.read(dep))
 
-    def test_only_a_bridged_network_can_give_an_address(self):
+    def test_only_a_network_on_the_lan_can_give_an_address(self):
         c = Cluster()
-        c.objects[BASE] = {"spec": {"config": json.dumps({"type": "macvlan"})}}
+        c.objects[BASE] = {"spec": {"config": json.dumps({"type": "host-device", "device": "eth1"})}}
         with self.assertRaisesRegex(ValueError, "not a network bridged"):
             LAN.ensure_nad("lab", "zigbee2mqtt", LAN.clean(WANTED))
+
+    def test_a_macvlan_network_carries_its_nic_into_the_copy(self):
+        """k3s LAN networks on a plain NIC are macvlan."""
+        body_config = {"cniVersion": "0.3.1", "type": "macvlan", "master": "eth0", "mode": "bridge", "ipam": {}}
+        c = Cluster()
+        c.objects[BASE] = {"spec": {"config": json.dumps(body_config)}}
+        own = json.loads(LAN.nad_body("lab", "zigbee2mqtt", LAN.clean(WANTED))["spec"]["config"])
+        self.assertEqual(("macvlan", "eth0", "bridge", "static"), (own["type"], own["master"], own["mode"], own["ipam"]["type"]))
 
     def test_a_bad_address_is_refused(self):
         with self.assertRaisesRegex(ValueError, "cannot be a machine's"):

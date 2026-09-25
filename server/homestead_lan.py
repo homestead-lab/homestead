@@ -65,12 +65,13 @@ def nad_body(ns, workload, lan):
         config = json.loads((base.get("spec") or {}).get("config") or "{}")
     except ValueError:
         config = {}
-    if config.get("type") != "bridge":
+    if config.get("type") not in ("bridge", "macvlan"):
         raise ValueError(f"{lan['network']} is not a network bridged to the LAN, so it cannot give an address on it")
     address = {"address": f"{lan['address']}/{lan['prefix']}"}
     if lan.get("gateway"):
         address["gateway"] = lan["gateway"]
-    own = {key: config[key] for key in ("cniVersion", "type", "bridge", "vlan", "mtu", "promiscMode") if key in config}
+    own = {key: config[key] for key in ("cniVersion", "type", "bridge", "vlan", "mtu", "promiscMode", "master", "mode")
+           if key in config}
     own.update(name=nad_name(workload), ipam={"type": "static", "addresses": [address]})
     return {"apiVersion": "k8s.cni.cncf.io/v1", "kind": "NetworkAttachmentDefinition",
             "metadata": {"name": nad_name(workload), "namespace": ns,

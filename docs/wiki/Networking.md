@@ -40,6 +40,24 @@ they are for - "media apps", "DNS".
 
 On k3s with ServiceLB, every Service uses the hosts' own addresses, so VIPs do
 not apply; see [Installing on k3s](Installing-on-k3s#4-addresses-for-apps).
+The forms there offer just **Every node's own address**. What must be free is
+the port: two Services cannot share one, and Traefik already has 80 and 443.
+Homestead refuses a port that is taken before it changes anything.
+
+## LAN networks
+
+A LAN network puts a VM, or a container given an address of its own, on your
+LAN like any other machine. **＋ LAN network** makes one:
+
+- **On Harvester**, on one of its cluster networks - `mgmt` is the hosts' own -
+  untagged, or on a VLAN. It is the same object Harvester's dashboard makes, so
+  it shows there too.
+- **On k3s, RKE2 and other clusters**, on a host interface, which the node
+  probe lists. A **bridge** (`br0`) carries VMs and containers. A plain **NIC**
+  (`eth0`) carries containers only, through macvlan, each with a MAC address of
+  its own. A VM needs a bridge. On a VLAN, a NIC needs the host's VLAN
+  interface (`eth0.20`) first. These networks need Multus, which k3s and RKE2
+  leave out. The form says how to add it when it is missing.
 
 ## IP addresses
 
