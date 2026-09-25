@@ -50,6 +50,7 @@ function renderOperations() {
     <div class="jobfoot"><span>${esc(operation.message || "")}</span><span>${operationAge(operation.finished_at || operation.started_at)}</span></div>
     <div class="jobactions">
       <button class="btn sm" onclick="openOperation('${esc(operation.href || "/")}','${esc(operation.id || "")}')">Open</button>
+      ${operation.resumable ? `<button class="btn sm pri" data-need="admin" data-tip="Run the steps that are left, from the one it stopped at" onclick="resumeOperation('${esc(operation.id)}')">Carry on</button>` : ""}
       ${operationActive(operation) ? "" : `<button class="btn sm" data-need="operator" onclick="dismissOperation('${esc(operation.id)}')">Dismiss</button>`}
     </div>
   </article>`).join("");
@@ -110,6 +111,19 @@ window.dismissFinishedOperations = async () => {
     toast(result.detail || "finished jobs cleared", "ok");
   } catch (e) { toast(e.message, "bad"); }
   refreshOperations(true);
+};
+
+/* A job stopped part-way whose steps are safe to repeat - a storage class
+   change caught mid-swap - runs the rest from the step it stopped at. */
+window.resumeOperation = async id => {
+  try {
+    await api("/api/operations/resume", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }) });
+    toast("Carrying on from where it stopped", "ok");
+    const op = (STATE.data.operations || []).find(o => o.id === id);
+    refreshOperations(true);
+    if (op?.kind === "reclass" && window.reclassWatch) reclassWatch(id);
+  } catch (e) { toast(e.message, "bad"); }
 };
 
 window.dismissOperation = async id => {

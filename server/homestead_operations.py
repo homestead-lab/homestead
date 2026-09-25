@@ -83,7 +83,14 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
 
 
 def _public(item):
-    return {key: value for key, value in item.items() if key != "ref"}
+    out = {key: value for key, value in item.items() if key != "ref"}
+    check = RESUMABLE.get(item.get("kind"))
+    if item.get("status") == "failed" and check:
+        try:
+            out["resumable"] = not check(item)
+        except Exception:
+            out["resumable"] = False
+    return out
 
 
 def _finish(item, status, progress, message):
@@ -401,8 +408,12 @@ def _refresh(item):
         return _finish(item, *resolver(item)) or json.dumps(item, sort_keys=True, default=str) != before
     except urllib.error.HTTPError as error:
         if error.code == 404:
+            # Which object, so a job that stops here says what went missing.
+            path = urllib.parse.urlparse(getattr(error, "url", "") or "").path
+            parts = [part for part in path.split("/") if part][-2:]
+            what = " ".join(parts) if len(parts) == 2 else "the resource it follows"
             return _finish(item, "failed", item.get("progress", 0),
-                           "The Kubernetes operation resource no longer exists")
+                           f"Kubernetes no longer has {what}")
         return _finish(item, "running", item.get("progress", 0),
                        f"Status temporarily unavailable (HTTP {error.code})")
     except Exception as error:
@@ -440,6 +451,30 @@ def dismiss_finished():
             "detail": (f"cleared {removed} finished job" + ("" if removed == 1 else "s")
                        if removed else "nothing finished to clear")
                       + (f"; {len(keep)} still running" if keep else "")}
+
+
+# Kinds whose steps are each safe to run again, and which say whether a
+# stopped job of theirs can carry on: kind -> function(item) -> reason or "".
+RESUMABLE = {}
+
+
+def resume(operation_id):
+    """Carry a failed job on from the step it stopped at."""
+    with _lock:
+        items = _read()
+        match = next((item for item in items if item.get("id") == operation_id), None)
+        if not match:
+            raise ValueError("operation not found")
+        check = RESUMABLE.get(match.get("kind"))
+        if match.get("status") != "failed" or not check:
+            raise ValueError("only a failed job that can carry on can be resumed")
+        why_not = check(match)
+        if why_not:
+            raise ValueError(why_not)
+        match.update(status="running", finished_at="", updated_at=_now(),
+                     message="Carrying on from where it stopped")
+        _write(items)
+    return {"ok": True, "id": operation_id}
 
 
 def dismiss(operation_id):

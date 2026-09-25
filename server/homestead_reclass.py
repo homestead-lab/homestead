@@ -25,6 +25,7 @@ so a Homestead restart part-way picks up where it stopped.
 """
 import json
 import re
+import secrets
 import time
 import urllib.error
 import urllib.parse
@@ -218,6 +219,15 @@ def plan(ns, claim, target):
             "downtime": any(c.get("running") for c in used)}
 
 
+def stopped_attempt(ns, claim, ops):
+    """An earlier move of this claim that stopped part-way, which can carry on."""
+    for other in ops.list_operations():
+        res = other.get("resource") or {}
+        if other.get("kind") == "reclass" and other.get("status") == "failed" and other.get("resumable")                 and res.get("name") == claim and res.get("namespace") == ns:
+            return other
+    return None
+
+
 def start(ns, claim, target, ops):
     review = plan(ns, claim, target)
     if not review["ok"]:
@@ -234,6 +244,7 @@ def start(ns, claim, target, ops):
            "size": str(((pvc.get("status") or {}).get("capacity") or {}).get("storage")
                        or pvc["spec"]["resources"]["requests"]["storage"]),
            "temp": (claim[:63 - len(TEMP_SUFFIX)].rstrip("-") + TEMP_SUFFIX),
+           "job_name": f"{claim[:34].rstrip('-')}-reclass-{secrets.token_hex(3)}",
            "claim_spec": {"accessModes": pvc["spec"].get("accessModes") or ["ReadWriteOnce"],
                           "volumeMode": review["volume_mode"]},
            "labels": (pvc.get("metadata") or {}).get("labels") or {},
@@ -373,7 +384,9 @@ def job_body(ns, ref):
             "sync; echo '==> verified'"])
         mounts = {"volumeMounts": [{"name": "src", "mountPath": "/src", "readOnly": True},
                                    {"name": "dst", "mountPath": "/dst"}]}
-    name = f"{ref['claim'][:40].rstrip('-')}-reclass-copy"
+    # Each attempt its own: an earlier attempt's finished job lingers for a
+    # day, and sharing its name read that job's result as this one's.
+    name = ref.get("job_name") or f"{ref['claim'][:40].rstrip('-')}-reclass-copy"
     return name, {
         "apiVersion": "batch/v1", "kind": "Job",
         "metadata": {"name": name, "namespace": ns, "labels": NAMES.labels("reclass", ref["claim"])},
@@ -427,7 +440,56 @@ def _rollback(ns, ref, why):
     return "failed", 0, f"{why} Nothing changed: the new volume was removed and everything started again on the original."
 
 
+# Kubernetes answering "not found" part-way: once is a race (a claim being
+# replaced, a job cleaned up), so the step is tried again; this many in a row
+# is not, and the job stops saying what was missing.
+MISS_LIMIT = 12
+BEFORE_SWAP = ("stop", "stopping", "create", "copy")
+
+
+def _missing(error):
+    path = urllib.parse.urlparse(getattr(error, "url", "") or getattr(error, "filename", "") or "").path
+    parts = [part for part in path.split("/") if part]
+    return " ".join(parts[-2:]) if len(parts) >= 2 else "something it needed"
+
+
 def resolve(item):
+    """One step, and a "not found" from Kubernetes taken in its stride.
+
+    The operations poll marks a job failed on any 404 it sees, which left a
+    move stopped half-way through its swap. Every step here is safe to run
+    again, so a 404 is retried; only a persistent one stops the job - before
+    the swap by putting everything back, after it by saying what is left.
+    """
+    ref = item["ref"]
+    try:
+        result = _resolve(item)
+        ref.pop("misses", None)
+        return result
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        what = _missing(error)
+        ref["misses"] = int(ref.get("misses", 0) or 0) + 1
+        if ref["misses"] < MISS_LIMIT:
+            return "running", item.get("progress", 0), f"Kubernetes did not find {what}; trying again"
+        ref.pop("misses", None)
+        if ref.get("phase", "stop") in BEFORE_SWAP:
+            return _rollback(ref["namespace"], ref, f"Kubernetes kept answering that {what} does not exist.")
+        return "failed", item.get("progress", 0), (
+            f"Stopped at '{ref.get('phase')}': Kubernetes kept answering that {what} does not exist. "
+            "Nothing is lost - the original is kept as an old copy - and Carry on picks up from this step.")
+
+
+def resumable(item):
+    """Why a stopped move cannot carry on, or "" when it can."""
+    phase = (item.get("ref") or {}).get("phase", "stop")
+    if phase in ("rolled-back", "done"):
+        return "it finished: everything was put back or completed"
+    return ""
+
+
+def _resolve(item):
     ref = item["ref"]
     ns, claim = ref["namespace"], ref["claim"]
     phase = ref.get("phase", "stop")

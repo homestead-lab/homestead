@@ -261,5 +261,80 @@ class ReclassTests(unittest.TestCase):
         self.assertEqual(["/dev/src", "/dev/dst"], [d["devicePath"] for d in container["volumeDevices"]])
 
 
+class NotFoundPartWayTests(unittest.TestCase):
+    """The operations poll failed the whole job on any 404, which left a
+    move stopped half-way through its swap with nothing to carry it on."""
+
+    def flaky(self, cluster, where, times):
+        """Answer 404 to writes on a path containing `where`, `times` times."""
+        real = cluster.send
+        left = {"n": times}
+
+        def send(method, path, body=None, **kw):
+            if where in path and left["n"] > 0:
+                left["n"] -= 1
+                raise urllib.error.HTTPError("https://k8s" + path, 404, "not found", None, None)
+            return real(method, path, body, **kw)
+        RC.ksend = send
+
+    def advance_to(self, item, phase):
+        for _ in range(30):
+            if item["ref"].get("phase") == phase:
+                return
+            item.update(zip(("status", "progress", "message"), RC.resolve(item)))
+        raise AssertionError(f"never reached {phase}")
+
+    def test_a_passing_not_found_during_the_swap_is_tried_again(self):
+        c = Cluster()
+        item = RC.start("lab", "frigate-config", "longhorn-r3", OPS())
+        self.advance_to(item, "swap")
+        self.flaky(c, "/persistentvolumes/pv-old", 2)
+
+        status, _, message = RC.resolve(item)
+        self.assertEqual("running", status)
+        self.assertIn("did not find persistentvolumes pv-old", message)
+
+        run(item)
+        self.assertEqual("succeeded", item["status"], item["message"])
+        self.assertEqual("pv-new", c.pvcs["frigate-config"]["spec"]["volumeName"])
+
+    def test_a_lasting_not_found_after_the_swap_began_stops_and_can_carry_on(self):
+        c = Cluster()
+        item = RC.start("lab", "frigate-config", "longhorn-r3", OPS())
+        self.advance_to(item, "swap")
+        self.flaky(c, "/persistentvolumes/pv-old", RC.MISS_LIMIT)
+
+        run(item)
+        self.assertEqual("failed", item["status"])
+        self.assertIn("Stopped at 'swap'", item["message"])
+        self.assertEqual("", RC.resumable(item))
+
+        RC.ksend = c.send            # whatever was missing is back
+        item["status"] = "running"
+        run(item)
+        self.assertEqual("succeeded", item["status"], item["message"])
+
+    def test_a_lasting_not_found_before_the_swap_puts_everything_back(self):
+        c = Cluster()
+        item = RC.start("lab", "frigate-config", "longhorn-r3", OPS())
+        self.advance_to(item, "create")
+        self.flaky(c, "/persistentvolumeclaims", RC.MISS_LIMIT)
+
+        run(item)
+        self.assertEqual("failed", item["status"])
+        self.assertIn("Nothing changed", item["message"])
+        self.assertEqual("rolled-back", item["ref"]["phase"])
+        self.assertNotEqual("", RC.resumable(item))
+        self.assertEqual(1, c.deps["frigate"]["spec"]["replicas"])
+
+    def test_each_attempt_has_a_copy_job_of_its_own(self):
+        Cluster()
+        first = RC.start("lab", "frigate-config", "longhorn-r3", OPS())["ref"]["job_name"]
+        second = RC.start("lab", "frigate-config", "longhorn-r3", OPS())["ref"]["job_name"]
+        self.assertNotEqual(first, second)
+        self.assertTrue(first.startswith("frigate-config-reclass-"))
+        self.assertLessEqual(len(first), 63)
+
+
 if __name__ == "__main__":
     unittest.main()

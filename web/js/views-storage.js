@@ -1230,7 +1230,8 @@ window.volumeReclassPlan = async (ns, claim) => {
     : c.kind === "CronJob" ? "paused, then resumed" : c.running ? "stopped, then started again" : "stopped already; stays stopped";
   const roomPct = sp.room_gb ? Math.min(100, Math.round(sp.size_gb / sp.room_gb * 100)) : 0;
   host.innerHTML = `
-    ${p.blockers.length ? `<div class="note bad" style="margin-top:12px"><b>This cannot start yet.</b><ul>${p.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul></div>` : ""}
+    ${p.blockers.length ? `<div class="note bad" style="margin-top:12px"><b>This cannot start yet.</b><ul>${p.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>
+      ${p.stopped ? `<button class="btn sm pri" data-need="admin" style="margin-top:8px" onclick="closeModal();resumeOperation('${esc(p.stopped.id)}')">Carry on the earlier move</button>` : ""}</div>` : ""}
     ${p.warnings.length ? `<div class="note warn" style="margin-top:12px"><ul>${p.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
     <div class="sec">What uses it</div>
     ${p.consumers.length ? `<div class="rc-uses">${p.consumers.map(c => `<div><b>${esc(c.name)}</b> <span class="dim xs">${esc(c.kind)}</span>
@@ -1270,6 +1271,7 @@ window.reclassWatch = async id => {
         ${s.state === "active" && (s.id === "copy" || s.id === "verify") ? `<div class="rc-copy">${meter(s.id === "verify" ? 100 : copy.percent || 0, "", "cpu")}
           <span class="mono xs">${s.id === "verify" ? "comparing with the original" : `${copy.percent || 0}%${copy.speed ? ` · ${esc(copy.speed)}` : ""}`}</span></div>` : ""}</div>`).join("")}</div>
       <div class="note ${op.status === "failed" ? "bad" : op.status === "succeeded" ? "good" : ""}" style="margin-top:12px">${esc(op.message || "")}</div>
+      ${op.status === "failed" && op.resumable ? `<div class="row" style="margin-top:12px"><button class="btn pri" data-need="admin" onclick="resumeOperation('${esc(op.id)}')">Carry on from this step</button></div>` : ""}
       ${op.status === "succeeded" && op.old_pv ? `<div class="row" style="margin-top:12px"><button class="btn danger" data-need="admin" onclick="reclassRemoveOld('${esc(op.old_pv)}')">Remove the old copy</button>
         <span class="dim xs">Keep it until the app is working on the new one.</span></div>` : ""}
       <div class="row" style="margin-top:12px"><button class="btn" onclick="closeModal()">${op.status === "running" ? "Keep going in the background" : "Close"}</button></div>`;

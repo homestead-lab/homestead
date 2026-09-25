@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.122")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.123")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2866,6 +2866,7 @@ PORTAL.bind(kget, ksend, DEFAULT_NS, lambda: cached("wl", 5, get_workloads),
 OPS.RESOLVERS["restructure"] = RESTRUCTURE.resolve
 import homestead_reclass as RECLASS
 OPS.RESOLVERS["reclass"] = RECLASS.resolve
+OPS.RESUMABLE["reclass"] = RECLASS.resumable
 OPS.RESOLVERS["protect-run"] = LH.run_status
 MOVE_SOURCE.bind(kget, ksend, LH, DEFAULT_NS)
 MOVE_ENGINE.bind(kget, ksend, LH, MOVE, NETWORK, OPS, DATA_DIR, DEFAULT_NS)
@@ -3709,6 +3710,8 @@ ADMIN_ROUTES = {
     "/api/volumes/delete", "/api/volumes/chown",
     # A class change stops workloads and swaps their volume underneath them.
     "/api/volumes/reclass/start", "/api/volumes/old-copies/remove", "/api/self/samba",
+    # Carrying a stopped job on runs its remaining steps - a swap, for one.
+    "/api/operations/resume",
     "/api/network/vips/add", "/api/network/vips/remove", "/api/network/vips/label",
     "/api/files/list", "/api/files/read", "/api/files/write", "/api/files/close",
     "/api/node/smart/test",
@@ -4831,7 +4834,17 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "detail": f"{name} opens on port {port} first" if port
                                         else f"{name} shows its ports in their own order"})
             if p == "/api/volumes/reclass/plan":
-                return self._send(200, RECLASS.plan(b.get("namespace") or DEFAULT_NS, b.get("claim", ""), b.get("target", "")))
+                ns = b.get("namespace") or DEFAULT_NS
+                review = RECLASS.plan(ns, b.get("claim", ""), b.get("target", ""))
+                # An earlier move of this volume stopped part-way is finished
+                # by carrying it on, not by starting another over the top.
+                stopped = RECLASS.stopped_attempt(ns, b.get("claim", ""), OPS)
+                if stopped:
+                    review["stopped"] = stopped
+                    review["blockers"].insert(0, f"an earlier move of {b.get('claim', '')} stopped part-way "
+                                                 f"({stopped.get('message', '')[:160]}); carry that one on instead")
+                    review["ok"] = False
+                return self._send(200, review)
             if p == "/api/volumes/reclass/start":
                 op = RECLASS.start(b.get("namespace") or DEFAULT_NS, b.get("claim", ""), b.get("target", ""), OPS)
                 _cache.pop("vol", None)
@@ -4920,6 +4933,8 @@ class H(BaseHTTPRequestHandler):
                     {"kind": "Job", "name": result["job"], "namespace": DEFAULT_NS},
                     "/import", {"namespace": DEFAULT_NS, "name": result["job"]})
                 return self._send(200, result)
+            if p == "/api/operations/resume":
+                return self._send(200, OPS.resume(b.get("id", "")))
             if p == "/api/operations/dismiss":
                 if b.get("all"):
                     return self._send(200, OPS.dismiss_finished())
@@ -5058,7 +5073,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.122 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.123 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()
