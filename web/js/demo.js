@@ -936,6 +936,22 @@ ssh_pwauth: true
         undo: ["home-assistant's home-assistant goes back to ghcr.io/home-assistant/home-assistant@sha256:4be1…"],
         keeps: ["home-assistant's pods restart once more, onto that image"] };
     },
+    // A job's log: its steps, and for a k3s cluster each node's console.
+    "/api/operations/log": url => {
+      const op = (window.__demoOps || []).find(item => item.id === url.searchParams.get("id")) || {};
+      const at = s => new Date(Date.now() - s * 1000).toISOString();
+      const k3s = op.kind === "k3s-cluster";
+      return { ...op,
+        history: k3s ? [{ t: at(400), s: "queued", p: 0, m: "Starting 3 VMs" }, { t: at(380), s: "running", p: 10, m: "0 of 3 VMs running" },
+          { t: at(300), s: "running", p: 36, m: "2 of 3 VMs running" }, { t: at(240), s: "running", p: 50, m: "3 of 3 VMs running" },
+          { t: at(230), s: "running", p: 60, m: op.message }]
+          : [{ t: at(120), s: "queued", p: 0, m: "Waiting for Kubernetes" }, { t: at(60), s: op.status, p: op.progress, m: op.message || op.status }],
+        sources: k3s ? [
+          { title: "k3s-lab-server-1 · server · 192.0.2.60", text: "[  OK  ] Started cloud-final.service - Cloud-init: Final Stage.\n[INFO]  Finding release for channel stable\n[INFO]  Using v1.33.4+k3s1 as release\n[INFO]  Downloading hash https://github.com/k3s-io/k3s/releases/download/v1.33.4+k3s1/sha256sum-amd64.txt\n[INFO]  Downloading binary https://github.com/k3s-io/k3s/releases/download/v1.33.4+k3s1/k3s\n[INFO]  Verifying binary download\n[INFO]  Installing k3s to /usr/local/bin/k3s\n[INFO]  systemd: Starting k3s\n==> waiting for the API server\n==> installing Longhorn (this takes a few minutes)", note: "" },
+          { title: "k3s-lab-agent-1 · agent · 192.0.2.61", text: "[  OK  ] Started cloud-final.service - Cloud-init: Final Stage.\n[INFO]  Finding release for channel stable\n==> waiting for https://192.0.2.60:6443 to answer", note: "" },
+          { title: "k3s-lab-agent-2 · agent · 192.0.2.62", text: "", note: "the VM is not running yet" }]
+          : op.kind === "reclass" ? [{ title: "Copy and check", text: "==> copying 20.0 GiB\n  10,737,418,240  52%   96.40MB/s    0:01:50", note: "" }] : [] };
+    },
     "/api/operations/cancel": (url, init) => {
       const id = JSON.parse(init?.body || "{}").id;
       const op = (window.__demoOps || []).find(item => item.id === id);

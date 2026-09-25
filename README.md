@@ -677,6 +677,12 @@ and semantic-version discovery never silently crosses a major release. Image
 pulls, updates, and rollbacks remain visible in the persistent Activity tray
 through browser refreshes and Homestead restarts.
 
+Every job has **Log**: each step it has taken, with the time, and - where
+there is one - the output of what does its work, following along while it
+runs: an import's or storage move's copy, a Helm or backup run, a rollout's
+newest pod (its events and log), CDI's importer, and each node's console as a
+k3s cluster installs itself.
+
 Every job still running has **Cancel**. It first says what cancelling would
 do: what is put back, what stays as it is, and anything Kubernetes cannot take
 back. Where it can, a cancel rolls back - a deploy is removed, an update or

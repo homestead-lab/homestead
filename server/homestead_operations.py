@@ -80,6 +80,7 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
         "href": str(href or "/")[:500], "ref": dict(ref or {}),
         "status": "queued", "progress": 0, "message": str(message)[:500],
         "started_at": now, "updated_at": now, "finished_at": "",
+        "history": [{"t": now, "s": "queued", "p": 0, "m": str(message)[:240]}],
     }
     with _lock:
         items = _read()
@@ -89,7 +90,8 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
 
 
 def _public(item):
-    out = {key: value for key, value in item.items() if key not in ("ref", "cancel_started", "previous_status")}
+    out = {key: value for key, value in item.items()
+           if key not in ("ref", "cancel_started", "previous_status", "history")}
     # Every job still going can be cancelled; what that does is asked for
     # separately, as it reads Kubernetes and the tray is polled often.
     out["cancellable"] = item.get("status") not in TERMINAL and (
@@ -104,11 +106,25 @@ def _public(item):
     return out
 
 
+# Each step a job has said, kept with it: what the Log view shows for any job,
+# whatever it is, and all a job that runs no pod of its own has to show.
+HISTORY_KEEP = 40
+
+
+def _note(item, status, progress, message):
+    history = item.setdefault("history", [])
+    if history and (history[-1].get("m"), history[-1].get("s")) == (message, status):
+        return
+    history.append({"t": _now(), "s": status, "p": progress, "m": str(message or "")[:240]})
+    del history[:-HISTORY_KEEP]
+
+
 def _finish(item, status, progress, message):
     changed = (item.get("status"), item.get("progress"), item.get("message")) != (
         status, progress, message)
     item.update(status=status, progress=max(0, min(100, int(progress or 0))),
                 message=str(message or "")[:500])
+    _note(item, item["status"], item["progress"], item["message"])
     if status in TERMINAL and not item.get("finished_at"):
         item["finished_at"] = _now()
         changed = True
@@ -495,6 +511,7 @@ def resume(operation_id):
             raise ValueError(why_not)
         match.update(status="running", finished_at="", updated_at=_now(),
                      message="Carrying on from where it stopped")
+        _note(match, "running", match.get("progress", 0), match["message"])
         _write(items)
     return {"ok": True, "id": operation_id}
 
@@ -614,6 +631,7 @@ def cancel(operation_id, options=None, confirm="", allowed=None, by=""):
         before = match.get("previous_status") or status
         match.update(status=CANCELLING, previous_status=before, cancel_started=time.time(),
                      updated_at=_now(), message=f"Cancelling: {plan['action'].lower()}")
+        _note(match, CANCELLING, match.get("progress", 0), match["message"])
         _write(items)
         work = json.loads(json.dumps(match))
     entry = CANCELLERS.get(work.get("kind"))
@@ -645,8 +663,29 @@ def cancel(operation_id, options=None, confirm="", allowed=None, by=""):
                 # It failed; that stays its outcome. Only what it left is gone.
                 match.update(status="failed", cleaned=True, updated_at=_now(),
                              message=f"Cleaned up after failing: {message}"[:500])
+                _note(match, "failed", match.get("progress", 0), match["message"])
             else:
                 _finish(match, "cancelled", match.get("progress", 0), message)
             _write(items)
     return {"ok": True, "id": operation_id, "detail": message,
             "operation": _public(match) if match else None}
+
+
+# Where a kind of job has output of its own - a pod's log, a VM's console -
+# kind -> function(item) -> [{"title", "text", "note"}]. Read only when asked.
+LOGGERS = {}
+
+
+def log(operation_id):
+    """A job's steps so far and, where it has one, its own output."""
+    with _lock:
+        item = next((row for row in _read() if row.get("id") == operation_id), None)
+    if not item:
+        raise ValueError("operation not found")
+    sources, reader = [], LOGGERS.get(item.get("kind"))
+    if reader:
+        try:
+            sources = reader(item) or []
+        except Exception as error:
+            sources = [{"title": "Output", "text": "", "note": f"could not be read: {error}"[:300]}]
+    return {**_public(item), "history": item.get("history") or [], "sources": sources}

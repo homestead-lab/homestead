@@ -91,6 +91,10 @@ Homestead at `http://<first address>:8088`. It can run k3s with Longhorn and
 Homestead (what a new install gets), k3s and Homestead on local-path storage,
 or k3s alone. The nodes' login is `ubuntu` with the password you chose.
 
+**Log** on the job shows each step it has taken, and each node's console as it
+installs - cloud-init, then k3s and what comes with it - where KubeVirt keeps
+a VM's console output (1.1 and later); elsewhere, open the node's console.
+
 **Cancel** on the job, while the cluster is still coming up, deletes its VMs
 with their disks and frees their addresses in IP addresses, after the cluster's
 name is typed. Only VMs carrying the cluster's label are deleted. A build that

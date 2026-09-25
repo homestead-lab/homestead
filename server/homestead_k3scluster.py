@@ -121,7 +121,9 @@ def user_data(node, first, token, password, setup, k3s_version=""):
         "packages: [qemu-guest-agent, curl]",
         "runcmd:",
         "  - [systemctl, enable, --now, qemu-guest-agent]",
-        f"  - [sh, -c, {json.dumps(line + f' > {LOG} 2>&1')}]",
+        # Printed to the serial console as well as kept in LOG, so the job's
+        # log in Homestead shows the install as it happens.
+        f"  - [sh, -c, {json.dumps(line + f' 2>&1 | tee {LOG}')}]",
         ""])
 
 

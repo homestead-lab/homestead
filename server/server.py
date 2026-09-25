@@ -3316,6 +3316,7 @@ import homestead_updates as UPDATES
 import homestead_operations as OPS
 import homestead_vmusage as VMUSAGE
 import homestead_cancel as CANCEL
+import homestead_joblogs as JOBLOGS
 import homestead_console as CONSOLE
 import homestead_files as FILES
 import homestead_icons as ICONS
@@ -3505,6 +3506,9 @@ def delete_workload(ns, name):
 # Every job can be cancelled; what that does for each kind is said there.
 CANCEL.bind(kget, ksend, delete_workload, lambda: cleanup_restore_classes())
 CANCEL.register(OPS)
+# What each job has to show for itself: a pod's log, a VM's console.
+JOBLOGS.bind(kget, raw_get)
+JOBLOGS.register(OPS)
 NSMOD.bind(kget, ksend, DEFAULT_NS, _own_namespace())
 ALERTS.bind(DATA_DIR)
 
@@ -4726,6 +4730,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, UPDATES.progress(q["ns"][0], q["name"][0]))
             if p == "/api/operations":
                 return self._send(200, OPS.list_operations())
+            if p == "/api/operations/log":
+                return self._send(200, OPS.log((q.get("id") or [""])[0]))
             if p == "/api/volumes":
                 return self._send(200, cached("vol", 8, get_volumes))
             if p == "/api/volumes/delete-plan":

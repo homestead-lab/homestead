@@ -50,6 +50,7 @@ function renderOperations() {
     <div class="jobfoot"><span>${esc(operation.message || "")}</span><span>${operationAge(operation.finished_at || operation.started_at)}</span></div>
     <div class="jobactions">
       <button class="btn sm" onclick="openOperation('${esc(operation.href || "/")}','${esc(operation.id || "")}')">Open</button>
+      <button class="btn sm" data-tip="Every step it has taken, and the output of what does its work" onclick="operationLog('${esc(operation.id)}')">${icon("log")}Log</button>
       ${operation.resumable ? `<button class="btn sm pri" data-need="admin" data-tip="Run the steps that are left, from the one it stopped at" onclick="resumeOperation('${esc(operation.id)}')">Carry on</button>` : ""}
       ${operation.cleanable ? `<button class="btn sm danger" data-need="admin" data-tip="Says what it left behind - its VMs, disks and addresses - and removes it" onclick="cancelOperation('${esc(operation.id)}')">Clean up</button>` : ""}
       ${operation.cancellable ? `<button class="btn sm danger" data-need="operator" data-tip="Says what stopping it would undo and what it cannot, before anything changes" onclick="cancelOperation('${esc(operation.id)}')">${operation.status === "cancelling" ? "Cancel again" : "Cancel"}</button>` : ""}
@@ -211,6 +212,44 @@ window.cancelOperationGo = async id => {
     if (go) { go.disabled = false; go.textContent = plan.action || "Cancel"; }
   }
   refreshOperations(true);
+};
+
+/* A job's log: each step it has said, with the time, then - where it has
+   some - the output of what does its work: an import's copy, a rollout's
+   newest pod, a k3s node's console. Follows along while the job runs. */
+window.operationLog = async id => {
+  if (window.__logTimer) clearInterval(window.__logTimer);
+  operationPanelOpen = false;
+  renderOperations();
+  const title = (STATE.data.operations || []).find(o => o.id === id)?.title || "Job";
+  modal(`Log · ${title}`, `<div class="logtools"><span id="oplogState"><span class="spin2"></span> loading</span>
+      <label class="switch"><input type="checkbox" id="oplogFollow" checked> Follow latest</label></div>
+    <div id="oplogBody"></div>`, true);
+  const stamp = t => { const d = new Date(t); return isNaN(d) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }); };
+  const poll = async () => {
+    if ($("#modal").classList.contains("hidden") || !$("#oplogBody")) return clearInterval(window.__logTimer);
+    let d;
+    try { d = await api(`/api/operations/log?id=${encodeURIComponent(id)}`); }
+    catch (e) { $("#oplogState").textContent = e.message; return; }
+    const follow = $("#oplogFollow")?.checked;
+    const kept = [...$$("#oplogBody pre")].map(pre => pre.scrollTop);
+    $("#oplogBody").innerHTML = `<div class="between oplog-head"><span class="pill ${operationTone(d.status)}">${esc(d.status)}</span>
+        <span class="small">${esc(d.message || "")}</span><b class="mono">${Math.round(d.progress || 0)}%</b></div>
+      <div class="jobmeter"><span class="${d.status === "failed" ? "failed" : ""}" style="width:${Math.max(2, Math.min(100, d.progress || 0))}%"></span></div>
+      <div class="ctitle" style="margin-top:14px">Steps</div>
+      <ol class="oplog-steps">${(d.history || []).map(h => `<li class="oplog-${esc(h.s)}"><span class="mono dim xs">${esc(stamp(h.t))}</span>
+        <span>${esc(h.m)}</span>${h.p ? `<span class="mono dim xs">${Math.round(h.p)}%</span>` : ""}</li>`).join("") || '<li class="dim">Nothing recorded yet.</li>'}</ol>
+      ${(d.sources || []).map(src => `<div class="ctitle" style="margin-top:14px">${esc(src.title)}</div>
+        ${src.note ? `<div class="dim small">${esc(src.note)}</div>` : ""}
+        ${src.text ? `<pre class="logview oplog-pre">${esc(src.text)}</pre>` : ""}`).join("")}
+      ${d.sources?.length ? "" : '<p class="dim xs" style="margin-top:12px">This kind of job runs no pod of its own; its steps above are its log.</p>'}`;
+    $$("#oplogBody pre").forEach((pre, i) => { pre.scrollTop = follow ? pre.scrollHeight : (kept[i] || 0); });
+    const active = operationActive(d);
+    $("#oplogState").innerHTML = active ? '<span class="ld"></span> live · refreshes every 3s' : `${esc(d.status)} · ${esc(stamp(d.finished_at || d.updated_at))}`;
+    if (!active) clearInterval(window.__logTimer);
+  };
+  await poll();
+  window.__logTimer = setInterval(poll, 3000);
 };
 
 window.dismissOperation = async id => {

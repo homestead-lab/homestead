@@ -150,6 +150,12 @@ html[data-theme="light"] .jobchev{background:rgba(0,0,0,.04)}
 .jobpanelhead>div{display:flex;align-items:baseline;gap:10px;min-width:0}
 .jobpanelhead b{font-size:13px}.jobpanelhead span{color:var(--dim);font-size:10.5px}
 .jobpanelhead .btn{flex:0 0 auto;white-space:nowrap}.joblist{max-height:min(53vh,530px);overflow:auto;padding:6px}
+/* A job's log: its steps as a timeline, then any output, each scrolling on its own. */
+.oplog-head{gap:10px;margin-bottom:8px}.oplog-head>.small{flex:1;min-width:0}
+.oplog-steps{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:4px;max-height:260px;overflow:auto}
+.oplog-steps li{display:grid;grid-template-columns:62px 1fr auto;gap:10px;font-size:12.5px;padding:4px 0;border-bottom:1px solid var(--line)}
+.oplog-steps li.oplog-failed>span:nth-child(2){color:var(--crit)}.oplog-steps li.oplog-succeeded>span:nth-child(2){color:var(--ok)}
+.logview.oplog-pre{height:auto;max-height:340px;margin-top:6px}
 .jobitem{padding:11px;border-bottom:1px solid var(--line)}.jobitem:last-child{border-bottom:0}.jobitemtop,.jobfoot,.jobactions{display:flex;align-items:center;justify-content:space-between;gap:10px}.jobitemtop>div{display:flex;flex-direction:column;min-width:0}.jobitemtop b{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.jobitemtop span:not(.pill),.jobfoot{font-size:10px;color:var(--dim)}
 .jobmeter{height:5px;margin:9px 0 7px;overflow:hidden;border-radius:99px;background:rgba(255,255,255,.07)}.jobmeter span{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--med),var(--ok));transition:width .35s var(--e)}.jobmeter span.failed{background:var(--crit)}
 .jobfoot>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.jobfoot>span:last-child{flex:0 0 auto}.jobactions{justify-content:flex-end;margin-top:8px}
