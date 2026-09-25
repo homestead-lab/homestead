@@ -8,6 +8,24 @@ the kind of cluster people build and then look after with Headlamp.
 One script turns a bare machine into a k3s cluster with
 [Longhorn](https://longhorn.io) storage and Homestead running on it.
 
+## What works on k3s
+
+Everything Homestead does, with nothing Harvester-specific needed:
+
+- **Containers, App Store, Docker Compose, Portal, Resources** - as anywhere.
+- **Volumes, disks, data protection, network shares** - on Longhorn, which the
+  script installs. With `--no-longhorn` apps still get volumes from k3s's
+  `local-path`, but the Volumes and Data protection pages need Longhorn.
+- **Addresses** - k3s's built-in load balancer (ServiceLB) puts every app on the
+  machines' own addresses, so nothing else is needed; MetalLB, if you want an
+  address per app, is [below](#4-addresses-for-apps).
+- **Helm** - charts install through the Helm controller k3s already runs.
+- **Adding and removing machines** - **Cluster → Add a host** gives this
+  cluster's join lines; removing one gives k3s's uninstall steps.
+- **Virtual machines** - once [KubeVirt](https://kubevirt.io) and CDI are added
+  (see [Virtual machines](Virtual-machines#vms-on-k3s-or-rke2)); the machines
+  need hardware virtualisation.
+
 ## 1. What you need
 
 - **One or more Linux machines** with a 64-bit OS (Ubuntu Server 24.04 LTS,
@@ -103,7 +121,8 @@ starting without it. See [Storage](Storage#booting-with-a-dead-or-missing-drive)
 k3s's built-in load balancer, ServiceLB, publishes a LoadBalancer service on
 **every machine's own address**. So Homestead answers on
 `http://<any machine>:8088`, and each app is reached the same way on its own
-port. Two apps cannot both take port 80.
+port. Two apps cannot both take port 80. The script does not install MetalLB,
+and nothing in Homestead needs it.
 
 When you want an address per app, [MetalLB](https://metallb.io) replaces
 ServiceLB: install k3s with `disable: [servicelb]` in

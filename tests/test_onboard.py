@@ -170,6 +170,16 @@ class RemovalTests(Base):
         self.assertFalse(report["ok"])
         self.assertIn("rke2-uninstall.sh", report["blockers"][0])
 
+    def test_a_ready_k3s_node_gets_k3s_steps(self):
+        for n in self.cluster.objects["/api/v1/nodes"]["items"]:
+            if n["metadata"]["name"] == "node3":
+                n["status"].setdefault("nodeInfo", {})["kubeletVersion"] = "v1.33.4+k3s1"
+
+        blocker = onboard.removal_plan("node3")["blockers"][0]
+
+        self.assertIn("k3s-agent-uninstall.sh", blocker)
+        self.assertNotIn("Harvester", blocker)
+
     def test_removing_a_dead_control_plane_node_keeps_quorum_and_says_the_margin(self):
         self.kill("node3")
 

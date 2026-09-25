@@ -5,8 +5,10 @@
 </p>
 
 **Homestead is an open-source, NAS-style homelab dashboard and container
-management UI for Harvester HCI, Rancher, Longhorn, Fleet, KubeVirt and
-Kubernetes.** It runs inside your cluster, talks directly to the Kubernetes API
+management UI for Kubernetes - on [k3s](https://k3s.io),
+[Harvester HCI](https://harvesterhci.io), RKE2 or any cluster you already
+run**, with Longhorn, KubeVirt, Rancher and Fleet understood where they are
+there. It runs inside your cluster, talks directly to the Kubernetes API
 through a dedicated ServiceAccount, and turns workloads, storage, hardware
 passthrough, image updates and failover constraints into approachable controls.
 
@@ -24,104 +26,26 @@ not affiliated with, endorsed, or sponsored by Lime Technology, Inc.
 guided tour: building a cluster from nothing - Harvester, k3s, or the one you
 already run - with Homestead on it, then each part of Homestead in turn.
 
-## Highlights
+## Where it runs
 
-| Area | Capability |
-|---|---|
-| **Dashboard** | Cluster CPU/RAM/network/disk telemetry, transition-aware health, top consumers, configurable warnings, and 90 days of history with node availability, recorded with no browser open |
-| **MQTT** | Cluster and node stats to an MQTT broker with Home Assistant discovery |
-| **Containers** | Guided App Store and image deployment, Docker Compose import, independent or sidecar pods, guarded Kubernetes workload rename, edit/move/logs/console, autostart, LAN port and exposure editing, one storage picker for new and existing containers, hardware passthrough, update checks, monitored rollout with live image-pull state, rollback, groups with folding dividers and a filter per group, and a card or row layout |
-| **Helm** | Every Helm release in the cluster with its values, notes, history and objects; charts found on Artifact Hub and installed, upgraded and uninstalled through RKE2's Helm controller |
-| **App Store** | The Community Applications catalogue laid out as Unraid shows it - monthly spotlights, recently added, trending and top performing - with a full page per app, from the public feed or one you set |
-| **Virtual machines** | Create from a Harvester image, a download or an imported disk - on Harvester or any KubeVirt cluster - power actions, live migration between hosts, and a console: the VM's screen (VNC) or its serial port |
-| **Portal** | A page of tiles for every web interface - containers picked from their exposed ports with their logos, and the router, switches, access points and NAS around them - in sections, with a live reachability dot |
-| **Architecture** | VIP → workload → claim → Longhorn volume → replica dependency view |
-| **Networking** | Service, ClusterIP, VIP, ingress, listener ownership, orphaned-listener release, endpoint health and guided collision-free exposure; IP address management per subnet with scanning, device categories, bulk edits, CSV export and UniFi sync |
-| **Cluster** | Harvester/Kubernetes versions, control-plane and etcd quorum, node pressure, critical services, certificate requests, a step-by-step guide to adding a host, and removing hosts - including ones that are dead for good |
-| **Between clusters** | Browse another Homestead cluster, check the two releases can talk, and move its containers and VMs here through shared backup storage |
-| **Storage** | RWO/RWX volume creation, growth and guarded deletion, file browsing and editing, storage-class inventory and creation, usage, health, snapshots, backups and recurring jobs |
-| **Hardware** | Host device browser and reusable mappings for iGPU, Coral, USB/PCIe and other devices |
-| **Import** | Docker Compose files checked as you type, Unraid/Docker workload and appdata import, several folders across several volumes, measured sizing with a per-volume capacity preflight, byte-weighted progress, named failures, editable seed configuration |
-| **Resources** | Every kind the cluster serves, custom resources included, with the API server's own columns; any object as YAML with its events, edited, deleted or created from YAML - what a Headlamp user reaches for |
-| **Administration** | Direct URLs/breadcrumbs, persistent activity tray with cancel and roll back for every job, viewer/operator/admin roles, namespaces for your apps, appearance, thresholds and version details |
-| **App & alerts** | Installable on phones and desktops over HTTPS, with push notifications for outages, degraded storage and workloads, failed jobs, joining hosts and image updates |
+Homestead checks what the cluster has and each page works with that - nothing
+is Harvester-only unless Harvester is what it is about.
 
-## Repository layout
+| | k3s | Harvester | RKE2 or other Kubernetes |
+|---|---|---|---|
+| **Install** | [one command](#k3s-in-one-command) from bare Linux | [Helm or the manifest](#installing-with-the-manifest) | [Helm or the manifest](#installing-with-the-manifest) |
+| **Containers, App Store, Compose, Portal, Networking, IP addresses, Resources, dashboard** | yes | yes | yes |
+| **Volumes, data protection, disks** | yes, with Longhorn - the k3s script installs it | yes, Longhorn is built in | yes, with Longhorn - the Helm page installs it |
+| **Virtual machines** | add [KubeVirt](https://kubevirt.io) and CDI | built in | add KubeVirt and CDI |
+| **Addresses for apps** | the nodes' own addresses (k3s's ServiceLB), or a VIP per app with MetalLB | a VIP per app (kube-vip) | a VIP per app with MetalLB or kube-vip |
+| **Helm charts** | yes (k3s's Helm controller) | yes (RKE2's Helm controller) | yes on RKE2; listing only without a Helm controller |
+| **Adding a host** | the join command for a worker or a server | a guide to Harvester's installer | RKE2's join commands |
+| **Platform upgrades** | - | followed on the Cluster page | - |
 
-```text
-Dockerfile                    production container image
-server/server.py              stdlib HTTP server and Kubernetes API client
-server/homestead_*.py         feature modules: updates, networking, storage, imports
-server/homestead_names.py     the names Homestead writes, and the ones it still reads
-web/                          browser UI, no build step
-web/vendor/monaco/            vendored Monaco editor subset (see its README)
-web/assets/                   Homestead SVG identity
-web/icons/                    installed-app icons (from scripts/render_icons.py)
-web/sw.js, manifest.webmanifest  the installable app's service worker and manifest
-deploy/deploy.yaml            namespace, RBAC, Longhorn PVC, Deployment, Service
-deploy/nodeprobe.yaml         optional per-node telemetry and device inventory
-deploy/rbac.yaml              Homestead's permissions alone, for existing installs
-charts/homestead/             the Helm chart (from scripts/render_chart.py)
-.github/workflows/ci.yml      tests and container build validation
-.github/workflows/release.yml multi-architecture GHCR and screenshot release pipeline
-scripts/deploy.sh             deploy a published image through an RKE2 host
-scripts/render_nodeprobe.py   regenerate deploy/nodeprobe.yaml from the probe's source
-scripts/render_icons.py       regenerate web/icons/ from the mark's geometry
-scripts/bump_version.py       move every file that names the release to a new version
-scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
-scripts/render_chart.py       regenerate charts/homestead from the manifests
-scripts/capture_screenshots.mjs  the release screenshots, from demo data
-docs/wiki/                    the wiki's pages, published by .github/workflows/wiki.yml
-```
+### k3s in one command
 
-## Container releases
-
-Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
-`amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.144`, the workflow publishes:
-
-```text
-ghcr.io/wjcloudy/homestead:2.8.144
-ghcr.io/wjcloudy/homestead:2.8
-ghcr.io/wjcloudy/homestead:2
-ghcr.io/wjcloudy/homestead:latest
-ghcr.io/wjcloudy/homestead:sha-<commit>
-```
-
-The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
-password is stored in the repository. Create and publish a release with:
-
-```bash
-git tag v2.8.144
-git push origin v2.8.144
-```
-
-The official Homestead package is public and can be pulled without registry credentials.
-The OCI source label in the image links releases back to this repository.
-
-Each tagged release also launches Homestead against deterministic demo data,
-captures every page and the main dialogs in headless Chromium
-(`scripts/capture_screenshots.mjs`), and attaches them to the GitHub release.
-The screenshot above and every picture in the wiki link to the latest
-release's, so they follow it; no live cluster data or credentials are used.
-The wiki itself is written in `docs/wiki` and published by
-`.github/workflows/wiki.yml` whenever it changes on `main`.
-
-## Without Harvester: k3s, RKE2 or any Kubernetes
-
-Homestead grew up on Harvester but does not need it. It checks what the cluster
-has - Harvester, Longhorn, KubeVirt, which load balancer, which distribution -
-and each page works with that: without KubeVirt there are no VM pages, without
-Longhorn the volume and data-protection pages say so and offer to install it
-through the Helm page, and on k3s or RKE2 **Cluster → Add a host** gives that
-distribution's join commands for this cluster, with where to find the token.
-A Service asks for its address the way the cluster's load balancer reads it:
-kube-vip's annotation (Harvester), MetalLB's when MetalLB is what runs - never
-both - and on k3s's built-in ServiceLB a Service simply takes the nodes' own
-addresses.
-
-**From bare Linux**, one command makes the first machine a k3s cluster with
-Longhorn and Homestead:
+On a bare Linux machine (x86-64 or 64-bit ARM - old PCs, mini PCs, VMs), this
+makes a k3s cluster with Longhorn and Homestead:
 
 ```bash
 curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - server
@@ -132,13 +56,45 @@ It installs what Longhorn needs on the host, installs k3s with an embedded etcd
 own manifest into k3s's manifests folder, which k3s applies itself; then it
 prints Homestead's address. `--no-longhorn` uses k3s's local-path storage
 instead. Further machines join with `agent <server-url> <token>` (a worker) or
-`join <server-url> <token>` (another server); Homestead's Add a host shows the
-exact lines.
+`join <server-url> <token>` (another server); Homestead's **Cluster → Add a
+host** shows the exact lines. The
+[k3s guide](https://github.com/wjcloudy/homestead/wiki/Installing-on-k3s) walks
+through all of it.
 
-**On an existing cluster**, apply `deploy/deploy.yaml` after changing
-`storageClassName` and the `STORAGE_CLASS` value to one the cluster has (RWX
-for the data claim, e.g. Longhorn's), and `LB_IP` to an address its load
-balancer can give out.
+**Addresses on k3s.** k3s's built-in ServiceLB publishes each app on every
+node's own address, so Homestead and every app work without anything else -
+each on its own port. For an address per app, as Harvester gives, install
+MetalLB in place of ServiceLB (the guide says how); Homestead notices and asks
+it for addresses. A Service asks for its address the way the cluster's load
+balancer reads it: kube-vip's annotation, MetalLB's, or none on ServiceLB -
+never two at once.
+
+**On a cluster you already run** - k3s, RKE2, kubeadm - use Helm or the
+manifest below. Without Longhorn the volume and data-protection pages say so
+and offer to install it from the Helm page; without KubeVirt there are no VM
+pages.
+
+## Highlights
+
+| Area | Capability |
+|---|---|
+| **Dashboard** | Cluster CPU/RAM/network/disk telemetry, transition-aware health, top consumers, configurable warnings, and 90 days of history with node availability, recorded with no browser open |
+| **MQTT** | Cluster and node stats to an MQTT broker with Home Assistant discovery |
+| **Containers** | Guided App Store and image deployment, Docker Compose import, independent or sidecar pods, guarded Kubernetes workload rename, edit/move/logs/console, autostart, LAN port and exposure editing, one storage picker for new and existing containers, hardware passthrough, update checks, monitored rollout with live image-pull state, rollback, groups with folding dividers and a filter per group, and a card or row layout |
+| **Helm** | Every Helm release in the cluster with its values, notes, history and objects; charts found on Artifact Hub and installed, upgraded and uninstalled through the Helm controller k3s and RKE2 ship |
+| **App Store** | The Community Applications catalogue laid out as Unraid shows it - monthly spotlights, recently added, trending and top performing - with a full page per app, from the public feed or one you set |
+| **Virtual machines** | Create from a Harvester image, a download or an imported disk - on Harvester or any KubeVirt cluster - power actions, live migration between hosts, and a console: the VM's screen (VNC) or its serial port |
+| **Portal** | A page of tiles for every web interface - containers picked from their exposed ports with their logos, and the router, switches, access points and NAS around them - in sections, with a live reachability dot |
+| **Architecture** | VIP → workload → claim → Longhorn volume → replica dependency view |
+| **Networking** | Service, ClusterIP, VIP, ingress, listener ownership, orphaned-listener release, endpoint health and guided collision-free exposure; IP address management per subnet with scanning, device categories, bulk edits, CSV export and UniFi sync |
+| **Cluster** | k3s, RKE2 or Harvester version, control-plane and etcd quorum, node pressure, critical services, certificate requests, adding a host (k3s and RKE2 join commands, or a guide to Harvester's installer), and removing hosts - including ones that are dead for good |
+| **Between clusters** | Browse another Homestead cluster, check the two releases can talk, and move its containers and VMs here through shared backup storage |
+| **Storage** | RWO/RWX volume creation, growth and guarded deletion, file browsing and editing, storage-class inventory and creation, usage, health, snapshots, backups and recurring jobs |
+| **Hardware** | Host device browser and reusable mappings for iGPU, Coral, USB/PCIe and other devices |
+| **Import** | Docker Compose files checked as you type, Unraid/Docker workload and appdata import, several folders across several volumes, measured sizing with a per-volume capacity preflight, byte-weighted progress, named failures, editable seed configuration |
+| **Resources** | Every kind the cluster serves, custom resources included, with the API server's own columns; any object as YAML with its events, edited, deleted or created from YAML - what a Headlamp user reaches for |
+| **Administration** | Direct URLs/breadcrumbs, persistent activity tray with cancel and roll back for every job, viewer/operator/admin roles, namespaces for your apps, appearance, thresholds and version details |
+| **App & alerts** | Installable on phones and desktops over HTTPS, with push notifications for outages, degraded storage and workloads, failed jobs, joining hosts and image updates |
 
 ## Install with Helm
 
@@ -147,6 +103,14 @@ included (switch it off with `nodeprobe.enabled=false`):
 
 ```bash
 helm install homestead oci://ghcr.io/wjcloudy/charts/homestead -n homestead --create-namespace --set service.loadBalancerIP=192.0.2.242
+```
+
+On k3s with its built-in ServiceLB there is no address to choose - Homestead
+answers on every node's own address - and storage defaults to the cluster's
+class (`local-path`, or Longhorn once installed):
+
+```bash
+helm install homestead oci://ghcr.io/wjcloudy/charts/homestead -n homestead --create-namespace --set service.kubeVip=false
 ```
 
 Homestead runs in its own namespace and deploys apps, shares and the probe to
@@ -159,22 +123,28 @@ oci://ghcr.io/wjcloudy/charts/homestead` lists them all. The chart is made
 from the same manifests as `deploy/` by `scripts/render_chart.py`, so both
 install the same thing; there is one Homestead per cluster.
 
-## Fresh-cluster installation
+## Installing with the manifest
 
-### 1. Check Longhorn storage
+On k3s the [one-command install](#k3s-in-one-command) does all of this for
+you. This is applying `deploy/deploy.yaml` yourself - on Harvester, RKE2, or a
+k3s or other cluster you already run.
 
-Homestead persists registry update history and cache on a 2 GiB Longhorn RWX
-volume. A tightly scoped init container assigns that volume to Homestead's
-non-root UID on first start; the application container itself remains
-non-root with a read-only root filesystem. Confirm the StorageClass used in
-`deploy/deploy.yaml` exists:
+### 1. Check storage
+
+Homestead keeps its settings, history and cache on a 2 GiB volume - Longhorn
+and ReadWriteMany by default. A tightly scoped init container assigns that
+volume to Homestead's non-root UID on first start; the application container
+itself remains non-root with a read-only root filesystem. Confirm the
+StorageClass used in `deploy/deploy.yaml` exists:
 
 ```bash
 kubectl get storageclass
 ```
 
-The supplied manifest uses `longhorn-r2`. Change `storageClassName` if the fresh
-cluster uses another Longhorn class.
+The supplied manifest uses `longhorn-r2`. Change `storageClassName` (and the
+`STORAGE_CLASS` value) to a class the cluster has. Without Longhorn - k3s's
+`local-path`, say - use that class and change the claim to `ReadWriteOnce`,
+as the k3s script does.
 
 ### 2. Configure and install
 
@@ -182,7 +152,9 @@ Review these values in `deploy/deploy.yaml` before applying it:
 
 - `image`: published image/tag to run;
 - `storageClassName`: Longhorn StorageClass;
-- `LB_IP` and `kube-vip.io/loadbalancerIPs`: Homestead's LAN address;
+- `LB_IP` and `kube-vip.io/loadbalancerIPs`: Homestead's LAN address (with
+  MetalLB, keep `LB_IP` and drop the kube-vip annotation; on k3s's ServiceLB
+  drop both - Homestead answers on the nodes' own addresses);
 - `DEFAULT_NS`: default namespace for newly created workloads.
 
 Then install and wait for readiness:
@@ -454,7 +426,7 @@ UniFi supplied. The rest lives in the `homestead-ipam` ConfigMap.
 ## Cluster health and node onboarding
 
 System → **Cluster** separates platform health from application health. It
-shows the Harvester and Kubernetes versions, control-plane readiness, etcd
+shows the k3s, RKE2 or Harvester version, control-plane readiness, etcd
 quorum and failure margin, node roles and pressure conditions, observed core
 services, certificate-signing requests, and platform warning events from the
 last 24 hours. Partial RBAC or API availability is reported per section instead
@@ -462,7 +434,13 @@ of hiding the rest of the page.
 
 ### Adding a host
 
-**Add a host** on the Cluster page is a guide to Harvester's own installer.
+On **k3s and RKE2**, **Add a host** on the Cluster page gives the commands to
+run on the new machine - one for a worker, one for another server - with this
+cluster's server address and version filled in, and where on a server to find
+the join token (Homestead never reads it). A machine made with the k3s script
+joins with the script's `agent` or `join`.
+
+On **Harvester**, **Add a host** is a guide to Harvester's own installer.
 An unattended install needs the new machine's install disk and network card
 named in advance, and those are only known once the machine is in front of
 you, so you choose them in the installer; the guide covers the rest:
@@ -484,12 +462,16 @@ you, so you choose them in the installer; the guide covers the rest:
 
 **Remove from cluster** (host actions, or the cleanup list on the Cluster page)
 checks first: a Ready node is refused, because a running node registers itself
-again - maintenance mode and `rke2-uninstall.sh` on the host come first. Removing
+again - on the host come draining it and k3s's uninstall script
+(`k3s-agent-uninstall.sh`, or `k3s-uninstall.sh` on a server), RKE2's
+`rke2-uninstall.sh`, or on Harvester maintenance mode and its RKE2 uninstall;
+the page gives the right one. Removing
 the last control-plane node, or one without which etcd loses quorum, is refused;
 volumes whose only healthy copy is on the node must be given up explicitly. It
-then follows Harvester's order: Longhorn stops scheduling there, the Kubernetes
-node is deleted (RKE2 drops its etcd membership), then its Cluster API machine,
-then Longhorn's node record once no replicas are listed on it.
+then follows the platform's order: Longhorn stops scheduling there, the
+Kubernetes node is deleted (k3s and RKE2 drop its etcd membership), then - on
+Harvester - its Cluster API machine, then Longhorn's node record once no
+replicas are listed on it.
 
 A host that is **gone for good** - dead and never coming back - can be removed
 that way too. Nothing then waits on it: the pods and VMs still bound to it are
@@ -710,7 +692,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.144/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.145/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -721,7 +703,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.144 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.145 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1430,6 +1412,67 @@ The supplied Service is plain HTTP. Put it behind TLS before exposing Homestead
 outside a trusted LAN - see [Publishing through a Cloudflare
 Tunnel](#publishing-through-a-cloudflare-tunnel). Host power control is disabled
 by default because it requires a short-lived privileged helper pod.
+
+## Repository layout
+
+```text
+Dockerfile                    production container image
+server/server.py              stdlib HTTP server and Kubernetes API client
+server/homestead_*.py         feature modules: updates, networking, storage, imports
+server/homestead_names.py     the names Homestead writes, and the ones it still reads
+web/                          browser UI, no build step
+web/vendor/monaco/            vendored Monaco editor subset (see its README)
+web/assets/                   Homestead SVG identity
+web/icons/                    installed-app icons (from scripts/render_icons.py)
+web/sw.js, manifest.webmanifest  the installable app's service worker and manifest
+deploy/deploy.yaml            namespace, RBAC, Longhorn PVC, Deployment, Service
+deploy/nodeprobe.yaml         optional per-node telemetry and device inventory
+deploy/rbac.yaml              Homestead's permissions alone, for existing installs
+charts/homestead/             the Helm chart (from scripts/render_chart.py)
+.github/workflows/ci.yml      tests and container build validation
+.github/workflows/release.yml multi-architecture GHCR and screenshot release pipeline
+scripts/deploy.sh             deploy a published image through an RKE2 host
+scripts/render_nodeprobe.py   regenerate deploy/nodeprobe.yaml from the probe's source
+scripts/render_icons.py       regenerate web/icons/ from the mark's geometry
+scripts/bump_version.py       move every file that names the release to a new version
+scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
+scripts/render_chart.py       regenerate charts/homestead from the manifests
+scripts/capture_screenshots.mjs  the release screenshots, from demo data
+docs/wiki/                    the wiki's pages, published by .github/workflows/wiki.yml
+```
+
+## Container releases
+
+Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
+`amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
+For a release such as `v2.8.145`, the workflow publishes:
+
+```text
+ghcr.io/wjcloudy/homestead:2.8.145
+ghcr.io/wjcloudy/homestead:2.8
+ghcr.io/wjcloudy/homestead:2
+ghcr.io/wjcloudy/homestead:latest
+ghcr.io/wjcloudy/homestead:sha-<commit>
+```
+
+The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
+password is stored in the repository. Create and publish a release with:
+
+```bash
+git tag v2.8.145
+git push origin v2.8.145
+```
+
+The official Homestead package is public and can be pulled without registry credentials.
+The OCI source label in the image links releases back to this repository.
+
+Each tagged release also launches Homestead against deterministic demo data,
+captures every page and the main dialogs in headless Chromium
+(`scripts/capture_screenshots.mjs`), and attaches them to the GitHub release.
+The screenshot above and every picture in the wiki link to the latest
+release's, so they follow it; no live cluster data or credentials are used.
+The wiki itself is written in `docs/wiki` and published by
+`.github/workflows/wiki.yml` whenever it changes on `main`.
 
 ## Contributing
 

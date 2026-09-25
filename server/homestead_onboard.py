@@ -201,6 +201,21 @@ def _stuck_on(name):
     return pods, vmis, attachments, replicas
 
 
+def _stop_steps(node):
+    """How to take a node out of service on the host, for what runs it."""
+    kubelet = ((node.get("status") or {}).get("nodeInfo") or {}).get("kubeletVersion", "")
+    if "+k3s" in kubelet:
+        return ("drain it (kubectl drain --ignore-daemonsets --delete-emptydir-data), run "
+                "k3s-agent-uninstall.sh on it (k3s-uninstall.sh on a server)")
+    try:
+        harvester = any(g.get("name") == "harvesterhci.io" for g in (_get("/apis") or {}).get("groups", []))
+    except Exception:
+        harvester = True
+    if "+rke2" in kubelet and not harvester:
+        return "drain it (kubectl drain --ignore-daemonsets --delete-emptydir-data), run /usr/local/bin/rke2-uninstall.sh on it"
+    return "put it in maintenance mode in Harvester, run /opt/rke2/bin/rke2-uninstall.sh on it"
+
+
 def removal_plan(name):
     """What removing a node would do, and whether it is safe - before anything changes."""
     node = _get(f"/api/v1/nodes/{name}")
@@ -215,8 +230,7 @@ def removal_plan(name):
     control = [n for n in nodes if {"control-plane", "master"} & set(_roles(n))]
     if ready:
         blockers.append(f"{name} is Ready. A running node re-registers itself, so it is not removed from here: "
-                        f"put it in maintenance mode in Harvester, run /opt/rke2/bin/rke2-uninstall.sh on it, "
-                        f"power it off, and come back when it shows Not ready.")
+                        f"{_stop_steps(node)}, power it off, and come back when it shows Not ready.")
     else:
         down = _age(since)
         if down is not None and down < 600:
