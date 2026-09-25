@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.129")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.130")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -3245,8 +3245,15 @@ def homestead_data_volume(dep=None):
     # then share it: the move is not only for redundancy.
     classes = [{"name": r["name"], "shareable": r["name"] in shared} for r in rows
                if not r.get("internal") and r["name"] != klass]
+    # Data volumes an earlier move left behind: kept until deleted, so they
+    # are said out loud rather than found later as a mystery.
+    try:
+        kept = [p["metadata"]["name"] for p in kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims").get("items", [])
+                if p["metadata"]["name"].startswith(f"{name}-data") and p["metadata"]["name"] != claim]
+    except Exception:
+        kept = []
     return {"pvc": claim, "storage_class": klass, "access_modes": modes, "size": size,
-            "shareable": not reason, "reason": reason, "candidates": shared, "classes": classes}
+            "shareable": not reason, "reason": reason, "candidates": shared, "classes": classes, "kept": kept}
 
 
 ROLLING = {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": 1, "maxUnavailable": 0}}
@@ -5255,7 +5262,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.129 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.130 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

@@ -175,12 +175,28 @@ class VolumeDeletionTests(unittest.TestCase):
                         [i for i, p in enumerate(deletes) if "persistentvolumeclaims/" in p][0],
                         "the job goes before the claim, or the claim can hang in Terminating")
 
-    def test_homestead_and_system_claims_are_hard_blocked(self):
-        for app_name in ("homestead",):
-            with self.subTest(app_name=app_name):
-                self.claim(labels={"app": app_name})
-                plan = volumes.deletion_plan("lab", "media")
-                self.assertTrue(any("Homestead" in reason for reason in plan["blocking_reasons"]))
+    def test_the_claim_homestead_uses_is_hard_blocked(self):
+        self.claim(labels={"app": "homestead"})
+        self.objects["/apis/apps/v1/namespaces/lab/deployments"] = {"items": [{
+            "metadata": {"name": "homestead", "namespace": "lab"},
+            "spec": {"replicas": 1, "template": {"spec": {
+                "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "media"}}]}}},
+        }]}
+        plan = volumes.deletion_plan("lab", "media")
+        self.assertTrue(any("Homestead" in reason for reason in plan["blocking_reasons"]))
+
+    def test_homesteads_old_data_claim_can_go_once_it_has_moved(self):
+        """After its data moves to another class, the old claim is a copy
+        nothing uses - it was protected by its name for good."""
+        self.claim(labels={"app": "homestead"})
+        plan = volumes.deletion_plan("lab", "media")
+        self.assertFalse(any("Homestead" in reason for reason in plan["blocking_reasons"]))
+
+    def test_the_name_still_protects_when_users_cannot_be_read(self):
+        self.claim(labels={"app": "homestead"})
+        self.objects["/apis/apps/v1/namespaces/lab/deployments"] = None   # unreadable
+        plan = volumes.deletion_plan("lab", "media")
+        self.assertTrue(any("Homestead" in reason for reason in plan["blocking_reasons"]))
 
 
 if __name__ == "__main__":

@@ -222,6 +222,10 @@ async function replicasPaint() {
       ${(r.data.classes || []).length && can("admin") ? `<span class="small">· move to</span>
         <select id="rep_class">${r.data.classes.map(c => `<option value="${esc(c.name)}" ${c.name === "longhorn" && !r.data.shareable ? "selected" : ""}>${esc(c.name)}${c.shareable ? " · every node" : " · one node"}</option>`).join("")}</select>
         <button class="btn sm" onclick="replicasMoveData()">Move data</button>` : ""}</div>
+      ${(r.data.kept || []).length ? `<div class="note" style="margin-top:8px">Kept from moving its data:
+        ${r.data.kept.map(k => `<span class="mono">${esc(k)}</span>`).join(", ")} - Homestead no longer uses
+        ${r.data.kept.length === 1 ? "it" : "them"}. Delete ${r.data.kept.length === 1 ? "it" : "them"} from Volumes once Homestead is working on the new one.
+        <div class="row" style="margin-top:6px">${r.data.kept.map(k => `<button class="btn sm" onclick="openOperation('/volumes?find=${esc(k)}')">Show ${esc(k)}</button>`).join("")}</div></div>` : ""}
       <div class="dim xs" style="margin-top:4px">Homestead keeps running while its data is copied, then restarts once onto the new volume;
         the old one is kept until you delete it. Wait for running jobs to finish first - the copy is taken as it stands.</div>` : ""}
     <table class="tbl dense stack" style="margin-top:10px"><thead><tr><th>Copy</th><th>Node</th><th>State</th></tr></thead><tbody>

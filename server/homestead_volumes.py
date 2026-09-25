@@ -205,8 +205,12 @@ def deletion_plan(namespace, name):
     labels = meta.get("labels", {}) or {}
     if namespace in SYSTEM_NAMESPACES:
         protected.append("system namespaces can only be changed with Kubernetes administration tools")
-    own_state = (labels.get("app") == "homestead" or name == "homestead-data"
-                 or any(row["name"] == "homestead" for row in consumers))
+    # Protected while Homestead's Deployment refers to it - not by name: after
+    # its data moves to another class, the old homestead-data claim is a
+    # copy nothing uses, kept to be deleted once the move has proved itself.
+    # Only when what refers to claims could not be read does the name stand in.
+    own_state = (any(row["name"] == "homestead" for row in consumers)
+                 or (not dependency_inventory_complete and (labels.get("app") == "homestead" or name == "homestead-data")))
     if own_state:
         protected.append("this claim stores Homestead's own state")
 
