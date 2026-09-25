@@ -14,6 +14,9 @@ at the line it is about.
 import re
 
 
+TABS = "indent with spaces, not tabs"
+
+
 class YamlError(ValueError):
     def __init__(self, message, line=0):
         super().__init__(f"line {line}: {message}" if line else message)
@@ -144,7 +147,7 @@ class _Lines:
         self.raw = source.splitlines()
         for number, raw in enumerate(self.raw, 1):
             if "\t" in raw[:len(raw) - len(raw.lstrip())]:
-                raise YamlError("indent with spaces, not tabs", number)
+                raise YamlError(TABS, number)
             text = _strip_comment(raw)
             stripped = text.strip()
             if not stripped:
@@ -467,6 +470,45 @@ class _Parser:
 def loads(source):
     """Parse one YAML document. Raises YamlError with the line it is about."""
     return _Parser(source or "").document()
+
+
+def untab(source):
+    """The text with tabs in its indentation turned into spaces.
+
+    YAML forbids tabs there, but a file pasted from an editor or a web page
+    often has them. Each tab becomes one step of the file's own indentation -
+    the smallest indent a space-indented line uses, else two spaces. Returns
+    the new text, the step and the numbers of the lines changed. Only the
+    indentation is touched, never what follows it.
+    """
+    lines = (source or "").split("\n")
+    steps = [len(line) - len(line.lstrip(" ")) for line in lines
+             if line.strip() and not line.lstrip(" ").startswith("\t")]
+    width = min([n for n in steps if n] or [2])
+    out, changed = [], []
+    for number, line in enumerate(lines, 1):
+        body = line.lstrip(" \t")
+        lead = line[:len(line) - len(body)]
+        if "\t" in lead:
+            line = lead.replace("\t", " " * width) + body
+            changed.append(number)
+        out.append(line)
+    return "\n".join(out), width, changed
+
+
+def loads_untabbed(source):
+    """Like loads, but a document indented with tabs is read as untab reads it.
+
+    Returns the document and, when tabs were turned into spaces, what untab
+    returned; a document without tabs in its indentation is read unchanged.
+    """
+    try:
+        return loads(source), None
+    except YamlError as error:
+        if error.message != TABS:
+            raise
+    fixed = untab(source)
+    return loads(fixed[0]), fixed
 
 
 # ------------------------------------------------------------------ writing

@@ -154,7 +154,7 @@ def events_for(namespace, name, uid=""):
 
 def _parse(text):
     try:
-        obj = YAML.loads(text)
+        obj, _ = YAML.loads_untabbed(text)
     except YAML.YamlError as error:
         raise ValueError(f"YAML: {error}")
     obj = json.loads(json.dumps(obj))

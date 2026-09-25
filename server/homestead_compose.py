@@ -658,7 +658,7 @@ def convert(source, variables_text="", namespace="lab", existing_workloads=(), e
     configuration and its own messages, and the order to create them in.
     """
     variables = parse_variables(variables_text)
-    result = {"ok": False, "errors": [], "warnings": [], "services": [], "order": [],
+    result = {"ok": False, "errors": [], "warnings": [], "notes": [], "services": [], "order": [],
               "variables": {"used": [], "missing": []}, "project": ""}
     text, used, missing, errors = interpolate(source, variables)
     result["variables"] = {"used": used, "missing": list(dict.fromkeys(m["name"] for m in missing))}
@@ -667,10 +667,16 @@ def convert(source, variables_text="", namespace="lab", existing_workloads=(), e
         result["warnings"].append({"line": item["line"], "message":
                                    f"${{{item['name']}}} has no value, so it is empty; set it under Variables"})
     try:
-        doc = YAML.loads(text)
+        doc, untabbed = YAML.loads_untabbed(text)
     except YAML.YamlError as error:
         result["errors"].append({"line": error.line, "message": error.message})
         return result
+    if untabbed:
+        _, width, changed = untabbed
+        result["untab"] = {"width": width, "lines": len(changed)}
+        result["notes"].append({"line": changed[0], "message":
+                                f"{len(changed)} line{'' if len(changed) == 1 else 's'} indented with tabs, "
+                                f"read as {width} spaces each - YAML itself wants spaces"})
     if not isinstance(doc, dict) or not isinstance(doc.get("services"), dict) or not doc["services"]:
         result["errors"].append({"line": getattr(doc, "line", 1) or 1,
                                  "message": "a Compose file needs a services: mapping with at least one service"})

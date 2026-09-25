@@ -113,7 +113,7 @@ window.composeCheck = async (now = false) => {
 function composeMessages(report) {
   const out = [];
   const add = (list, severity, service) => (list || []).forEach(m => out.push({ ...m, severity, service }));
-  add(report.errors, "error"); add(report.warnings, "warning");
+  add(report.errors, "error"); add(report.warnings, "warning"); add(report.notes, "info");
   (report.services || []).forEach(s => { add(s.errors, "error", s.name); add(s.warnings, "warning", s.name); add(s.notes, "info", s.name); });
   return out;
 }
@@ -129,6 +129,23 @@ function composeMarkers(report) {
       endColumn: model.getLineMaxColumn(m.line), severity: severity[m.severity],
       message: (m.service ? `${m.service}: ` : "") + m.message })) : []);
 }
+
+/* Tabs in the indentation become the spaces the server read them as, so the
+   file in the editor is the one that was checked, and stays valid YAML. */
+window.composeUntab = width => {
+  const editor = COMPOSE.editor, step = " ".repeat(Math.max(1, +width || 2));
+  const text = editor ? editor.getValue() : COMPOSE.text;
+  const fixed = String(text || "").split("\n")
+    .map(line => line.replace(/^[ \t]+/, lead => lead.replace(/\t/g, step))).join("\n");
+  if (fixed === text) return;
+  if (editor) {
+    editor.pushUndoStop();
+    editor.executeEdits("untab", [{ range: editor.getModel().getFullModelRange(), text: fixed }]);
+    editor.pushUndoStop();
+  } else {
+    COMPOSE.text = fixed;
+  }
+};
 
 window.composeGoto = line => {
   const editor = COMPOSE.editor;
@@ -170,6 +187,9 @@ function composeShow(report) {
       <span>${services.length ? `Created in this order: ${order.map(esc).join(" → ")}` : "Nothing to create yet"}${report.project ? ` · project ${esc(report.project)}` : ""}</span>
     </div>
     ${composeMessageList(report.errors, "bad")}${composeMessageList(report.warnings, "warn")}
+    ${report.untab ? `<div class="compose-untab">${composeMessageList(report.notes, "info")}
+      <button class="btn sm" onclick="composeUntab(${+report.untab.width})">Use spaces in the editor</button></div>`
+      : composeMessageList(report.notes, "info")}
     ${services.map(composeServiceCard).join("")}`;
   if (window.applyRole) window.applyRole();
 }

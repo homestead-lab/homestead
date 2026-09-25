@@ -124,6 +124,18 @@ class ErrorTests(unittest.TestCase):
     def test_tabs(self):
         self.assertErrorAt("a:\n\tb: 1\n", 2, "tabs")
 
+    def test_tab_indentation_is_read_as_the_files_own_step(self):
+        doc, fixed = yaml.loads_untabbed("a:\n\tb:\n\t\tc: 1\n\td: |\n\t\tx\ty\n")
+        self.assertEqual({"a": {"b": {"c": 1}, "d": "x\ty\n"}}, doc)
+        self.assertEqual((2, [2, 3, 4, 5]), fixed[1:])
+        _, width, _ = yaml.untab("a:\n    b:\n\t\tc: 1\n")
+        self.assertEqual(4, width)
+
+    def test_a_file_without_tabs_is_read_unchanged(self):
+        self.assertEqual(({"a": "b\tc"}, None), yaml.loads_untabbed("a: b\tc\n"))
+        with self.assertRaises(yaml.YamlError):
+            yaml.loads_untabbed("a:\n\tb: 1\n  c: [\n")
+
     def test_a_key_set_twice(self):
         self.assertErrorAt("a: 1\nb: 2\na: 3\n", 3, "set twice")
 

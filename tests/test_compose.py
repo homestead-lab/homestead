@@ -59,6 +59,15 @@ def service(report, name):
 
 
 class ComposeTests(unittest.TestCase):
+    def test_a_file_indented_with_tabs_is_read_and_says_so(self):
+        report = convert("services:\n\tweb:\n\t\timage: nginx\n\t\tports:\n\t\t\t- \"8080:80\"\n")
+
+        self.assertEqual([], report["errors"])
+        self.assertEqual(["web"], [row["name"] for row in report["services"]])
+        self.assertEqual({"width": 2, "lines": 4}, report["untab"])
+        self.assertEqual(2, report["notes"][0]["line"])
+        self.assertIn("tabs", report["notes"][0]["message"])
+
     def test_a_real_stack_reads_cleanly(self):
         report = convert(PAPERLESS)
 

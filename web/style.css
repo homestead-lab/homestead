@@ -1337,6 +1337,7 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .compose-msgs.bad li{color:#ffb4b8}.compose-msgs.warn li{color:var(--med)}.compose-msgs.info li{color:var(--mut)}
 .compose-notes>summary{cursor:pointer;font-size:11.5px;color:var(--dim)}
 .compose-notes .compose-msgs{margin-top:6px}
+.compose-untab{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.compose-untab .compose-msgs{flex:1 1 220px}
 .compose-actions{margin-top:14px;align-items:center}
 .compose-actions #composeState{margin-right:auto}
 @media(max-width:900px){.compose{grid-template-columns:1fr}.compose-right{max-height:none}.compose-editor{height:34vh;min-height:220px}}

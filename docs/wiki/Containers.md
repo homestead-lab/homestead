@@ -25,7 +25,12 @@ The form asks, in order:
   Ports that stay inside the cluster need nothing.
 - **Storage.** Each path the app writes to becomes a folder in a volume: a new
   one, one that exists, a folder inside another app's volume, or a RAM disk for
-  a cache. Two paths can share one volume as two folders.
+  a cache. Two paths can share one volume as two folders. A new volume
+  belongs to the user the image gives that path, as a new Docker volume
+  would: an app that runs as a user of its own, such as sambee, can write
+  to it without a `chown` first. Homestead reads that owner from the image's
+  registry when it deploys, and a small first step (`homestead-owner`) sets
+  it only while the volume is still empty.
 - **Hardware** and **Privileges** - below.
 - **Autostart.** Off leaves it stopped until you start it.
 

@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.141")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.142")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1608,7 +1608,7 @@ def build_deployment(cfg):
     container_name = _dns_name(cfg.get("container_name") or cfg.get("name"), "container name")
     ns = cfg.get("namespace", DEFAULT_NS)
     env = [{"name": k, "value": str(v)} for k, v in (cfg.get("env") or {}).items()]
-    mounts, volumes, named = [], [], {}
+    mounts, volumes, named, owned = [], [], {}, []
     for i, v in enumerate(cfg.get("volumes") or []):
         if v.get("type") == "pod":
             raise ValueError("existing pod volumes can only be used when joining an existing workload")
@@ -1636,6 +1636,9 @@ def build_deployment(cfg):
             else:
                 volumes.append({"name": vn, "persistentVolumeClaim": {"claimName": v["source"]}})
         mount = {"name": vn, "mountPath": v["path"]}
+        owner = (cfg.get("volume_owners") or {}).get(v.get("path"))
+        if owner and v.get("type") == "pvc" and v.get("create"):
+            owned.append((vn, str(v.get("sub_path") or ""), *owner))
         if v.get("sub_path"):
             mount["subPath"] = str(v["sub_path"]).strip("/")
         if v.get("read_only"):
@@ -1658,6 +1661,9 @@ def build_deployment(cfg):
 
     podspec = {"containers": [c]}
     if volumes: podspec["volumes"] = volumes
+    if owned:
+        # A new volume is root's; the image may run as a user of its own.
+        podspec["initContainers"] = [VOLOWNER.init_container(owned)]
     hardware = set(cfg.get("hardware") or [])
     if cfg.get("gpu"):
         hardware.add("igpu")
@@ -1892,6 +1898,8 @@ def run_deploy(b):
     b = prepare_lan(b)
     ns = b.get("namespace") or DEFAULT_NS
     target_mode = b.get("target_mode", "new")
+    if target_mode == "new":
+        b = VOLOWNER.prepare(b)
     if target_mode == "existing":
         target = _dns_name(b.get("target_workload"), "existing workload")
         current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
@@ -3338,6 +3346,7 @@ import homestead_alerts as ALERTS
 import homestead_self as SELF
 import homestead_namespaces as NSMOD
 import homestead_restructure as RESTRUCTURE
+import homestead_volowner as VOLOWNER
 import homestead_affinity as AFFINITY
 import homestead_failover as FAILOVER
 import homestead_k3scluster as K3SC
@@ -5253,6 +5262,7 @@ class H(BaseHTTPRequestHandler):
                 cfg = apply_deploy_bindings(cfg)
                 cfg = apply_generated_secrets(cfg)
                 cfg = prepare_lan(cfg)
+                cfg = VOLOWNER.prepare(cfg)
                 dep, svc = build_deployment(cfg)
                 ns = dep["metadata"]["namespace"]
                 if cfg.get("network_mode") == "lan":
@@ -5769,7 +5779,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.141 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.142 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

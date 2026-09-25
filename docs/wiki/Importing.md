@@ -42,7 +42,9 @@ runs (databases especially), or it will copy a moving target.
 ## Docker Compose
 
 **Import → Docker Compose** takes a pasted `docker-compose.yml` (and an
-optional `.env`), and checks it as you type. Each service becomes a container,
+optional `.env`), and checks it as you type. A file indented with tabs, which
+YAML forbids, is read as if it had spaces and says so; **Use spaces in the
+editor** changes the file to match. Each service becomes a container,
 created in `depends_on` order:
 
 - named volumes become Longhorn volumes; one several services share becomes

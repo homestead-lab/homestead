@@ -171,7 +171,9 @@ def _open(req, credential=None, timeout=12):
             raise PermissionError("registry authentication did not return a token")
         retry = urllib.request.Request(req.full_url, method=req.get_method(),
                                        headers=dict(req.header_items()))
-        retry.add_header("Authorization", "Bearer " + token)
+        # A blob answers with a redirect to storage that has its own
+        # signature and refuses a second one, so the token stays here.
+        retry.add_unredirected_header("Authorization", "Bearer " + token)
         return urllib.request.urlopen(retry, context=ctx, timeout=timeout)
 
 
