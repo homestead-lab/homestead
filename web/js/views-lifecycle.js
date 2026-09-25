@@ -93,6 +93,19 @@ function placementRow(kind, row = {}) {
     <select class="aff-mode">${PLACEMENT_MODES.map(([value, label]) => `<option value="${value}" ${row.mode === value ? "selected" : ""}>${label}</option>`).join("")}</select>
     <button class="iconbtn row-remove" type="button" title="Remove this rule" onclick="this.closest('.aff-row').remove();placementChanged()">×</button></div>`;
 }
+window.editLanToggle = async () => {
+  const box = $("#e_lan_box");
+  box.hidden = !$("#e_lan_on").checked;
+  if (!box.hidden && !box.dataset.filled) {
+    let current = null;
+    try { current = JSON.parse(box.dataset.current || "null"); } catch (e) { /* none */ }
+    box.innerHTML = await containerLanFields("el", current);
+    box.dataset.filled = "1";
+    if ($("#el_subnet")) vmSubnetPicked("el");
+    if (current?.address) { $("#el_ip").value = current.address; $("#el_prefix").value = current.prefix || 24; $("#el_gw").value = current.gateway || ""; }
+  }
+};
+
 /* What a container does when the node it runs on stops answering. */
 const FAILOVER_WORDS = { move: "Move to another node", wait: "Wait for its node", default: "Kubernetes default (5 min)" };
 const FAILOVER_HELP = {
@@ -137,6 +150,9 @@ function placementSection(p, w, nodes, containers) {
         <div class="f"><label>Keep off the node of ${tip("For pairs that should never share a host: two DNS servers, or two apps that would compete for one disk.")}</label>
           <div id="e_apart">${(p.apart || []).map(row => placementRow("apart", row)).join("")}</div>
           <button class="btn sm" type="button" onclick="placementAdd('apart')">＋ Add</button></div></div></div>
+    <div class="place-level"><div class="place-title">Its own LAN address</div>
+      <label class="switch"><input type="checkbox" id="e_lan_on" ${w.lan ? "checked" : ""} onchange="editLanToggle()"> An address of its own on the LAN, beside the pod network</label>
+      <div id="e_lan_box" ${w.lan ? "" : "hidden"} data-current="${esc(JSON.stringify(w.lan || null))}"></div></div>
     <div class="place-level"><div class="place-title">If its node fails</div>
       <div class="place-grid"><div class="f">${failoverSelect("e_failover", w.failover || "default")}</div>
         <div class="dim small">${esc(FAILOVER_HELP[w.failover || "default"])}</div></div></div>
@@ -229,6 +245,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     window.__editHadService = !!w.has_service;
     editPortsChanged();
     placementChanged();
+    if ($("#e_lan_on")?.checked) editLanToggle();
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
 window.editAddEnv = (index, key = "", value = "") => $("#e_env_" + index).insertAdjacentHTML("beforeend", editEnvRow(index, key, value));
@@ -290,6 +307,7 @@ window.editSave = async (ns, name) => {
     icon: $("#e_icon").value.trim(), replicas: Math.max(1, +$("#e_rep").value || 1),
     autostart: $("#e_autostart").checked, manage_ports: true, containers, seed_configs,
     placement: readPlacement(), failover: $("#e_failover")?.value || "" };
+  if ($("#e_lan_on")) body.lan = $("#e_lan_on").checked && $("#el_ip") ? containerLanRead("el") : null;
   const moves = containers.flatMap(container => container.volumes.filter(volume => volume.copy_from));
   if (moves.length && renaming) return toast("Rename the workload and move its data in separate saves", "bad");
   if ((STATE.data.wl || []).some(x => x.self && x.ns === ns && x.name === name) && !body.autostart) {

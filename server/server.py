@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.132")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.133")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1013,6 +1013,13 @@ def get_workloads():
         st = d.get("status", {})
         pspec = d["spec"]["template"]["spec"]
         annotations = d["metadata"].get("annotations", {}) or {}
+        # On its own LAN address it answers on its container ports there,
+        # with no Service in between.
+        lan_ip = (LAN.read(d) or {}).get("address", "")
+        if lan_ip and not ports:
+            ports = [{"port": cp.get("containerPort"), "ip": lan_ip, "name": cp.get("name", "")}
+                     for c in pspec.get("containers", []) or [] for cp in c.get("ports", []) or []
+                     if cp.get("containerPort")]
         # The port chosen as the app's own - its web UI, usually - comes
         # first, so the card's first link is the one people want.
         try:
@@ -1087,6 +1094,7 @@ def get_workloads():
             "group": NAMES.read(annotations, "group") or own_group(ns, name),
             "self": is_self(ns, name),
             "failover": FAILOVER.mode_of(pspec),
+            "lan": (LAN.read(d) or {}).get("address", ""),
         })
     return sorted(out, key=lambda x: (x["ns"], x["name"]))
 
@@ -1614,6 +1622,7 @@ def build_deployment(cfg):
     if cfg.get("node"):
         podspec.setdefault("nodeSelector", {})["kubernetes.io/hostname"] = cfg["node"]
     FAILOVER.apply(podspec, cfg.get("failover") or "move")
+    lan_address = cfg.get("lan") if cfg.get("network_mode") == "lan" else None
     dep = {
         "apiVersion": "apps/v1", "kind": "Deployment",
         "metadata": {"name": name, "namespace": ns, "labels": {"app": name, NAMES.key("managed"): "true"},
@@ -1626,7 +1635,7 @@ def build_deployment(cfg):
     }
     svc = None
     exposed = [p for p in cfg.get("ports") or [] if p.get("expose")]
-    if exposed and cfg.get("network_mode") != "host":
+    if exposed and cfg.get("network_mode") not in ("host", "lan"):
         mode = cfg.get("vip_mode", "shared")
         vip = cfg.get("lb_ip") if mode in ("manual", "automatic") else (LB_IP if mode == "shared" else "")
         svc_type = "ClusterIP" if cfg.get("network_mode") == "internal" else "LoadBalancer"
@@ -1640,7 +1649,57 @@ def build_deployment(cfg):
                                  "targetPort": int(p["container"]),
                                  "protocol": str(p.get("protocol", "TCP")).upper()} for p in exposed]},
         }
+    if lan_address:
+        LAN.apply_to_template(dep, ns, name, lan_address)
     return dep, svc
+
+
+def edit_lan(ns, name, wanted):
+    """Give a container its own LAN address, change it, or take it away."""
+    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    current = LAN.read(dep)
+    if not wanted:
+        if not current:
+            return ""
+        LAN.apply_to_template(dep, ns, name, None)
+        dep["metadata"].pop("managedFields", None)
+        ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
+        LAN.remove_nad(ns, name)
+        return f"{name} no longer has a LAN address of its own"
+    lan = LAN.clean(wanted)
+    if current == lan:
+        return ""
+    if not current or current.get("address") != lan["address"]:
+        problem = vm_address_problem(lan["address"])
+        if problem:
+            raise ValueError(problem)
+    LAN.ensure_nad(ns, name, lan)
+    LAN.apply_to_template(dep, ns, name, lan)
+    dep["metadata"].pop("managedFields", None)
+    ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
+    record_lan(ns, name, lan)
+    return f"{name} answers on {lan['address']} on the LAN"
+
+
+def prepare_lan(cfg):
+    """A container's own LAN address, checked as free and its network made,
+    before the Deployment that joins it."""
+    if cfg.get("network_mode") != "lan":
+        return cfg
+    lan = LAN.clean(cfg.get("lan") or {})
+    problem = vm_address_problem(lan["address"])
+    if problem:
+        raise ValueError(problem)
+    cfg["lan"] = lan
+    return cfg
+
+
+def record_lan(ns, name, lan):
+    try:
+        IPAM.save_record({"ip": lan["address"], "name": name, "kind": "static", "category": "server",
+                          "owner": "homestead", "note": f"container {ns}/{name}, on {lan['network']}"})
+    except Exception:
+        pass
 
 
 def apply_container_settings(container, cfg):
@@ -1764,6 +1823,7 @@ def run_deploy(b):
     b = NETWORK.prepare_deploy(b)
     b = apply_deploy_bindings(b)
     b = apply_generated_secrets(b)
+    b = prepare_lan(b)
     ns = b.get("namespace") or DEFAULT_NS
     target_mode = b.get("target_mode", "new")
     if target_mode == "existing":
@@ -1780,10 +1840,14 @@ def run_deploy(b):
         if ensure_claim(ns, claim["name"], claim["size_gb"], claim["storage_class"], claim["access_mode"]):
             reused.append(claim["name"])
     b["_reused_claims"] = reused
+    if b.get("network_mode") == "lan" and target_mode == "new":
+        LAN.ensure_nad(ns, target, b["lan"])
     if target_mode == "existing":
         ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{target}", dep)
     else:
         ksend("POST", f"/apis/apps/v1/namespaces/{ns}/deployments", dep)
+    if b.get("network_mode") == "lan" and target_mode == "new":
+        record_lan(ns, target, b["lan"])
     if svc:
         ksend("POST", f"/api/v1/namespaces/{ns}/services", svc)
     _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
@@ -3204,6 +3268,7 @@ import homestead_restructure as RESTRUCTURE
 import homestead_affinity as AFFINITY
 import homestead_failover as FAILOVER
 import homestead_k3scluster as K3SC
+import homestead_lan as LAN
 import homestead_portal as PORTAL
 import homestead_upgrades as UPGRADES
 import homestead_vmconsole as VMCONSOLE
@@ -3248,6 +3313,7 @@ OPS.bind(kget, DATA_DIR, UPDATES.progress, SMART.progress)
 RESTRUCTURE.bind(kget, ksend, raw_get)
 AFFINITY.bind(kget)
 FAILOVER.bind(kget, ksend)
+LAN.bind(kget, ksend)
 K3SC.bind(kget, lambda cfg: create_vm_with_address(cfg), lambda ip: vm_address_problem(ip))
 OPS.RESOLVERS["k3s-cluster"] = K3SC.status
 MOVE_ENGINE.after_finish = cleanup_restore_classes
@@ -4039,6 +4105,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         "node": pspec.get("nodeSelector", {}).get("kubernetes.io/hostname", ""),
         "placement": AFFINITY.public(deployment),
         "failover": FAILOVER.mode_of(pspec),
+        "lan": LAN.read(deployment),
         "network_mode": "host" if pspec.get("hostNetwork") else "",
         "has_service": bool(listeners),
         "seed_configs": LC.seed_configs(ns, deployment),
@@ -5049,8 +5116,11 @@ class H(BaseHTTPRequestHandler):
                 cfg = NETWORK.prepare_deploy(cfg)
                 cfg = apply_deploy_bindings(cfg)
                 cfg = apply_generated_secrets(cfg)
+                cfg = prepare_lan(cfg)
                 dep, svc = build_deployment(cfg)
                 ns = dep["metadata"]["namespace"]
+                if cfg.get("network_mode") == "lan":
+                    LAN.ensure_nad(ns, dep["metadata"]["name"], cfg["lan"])
                 reused = []
                 for volume in cfg.get("volumes") or []:
                     if volume.get("type") == "pvc" and volume.get("create"):
@@ -5089,6 +5159,12 @@ class H(BaseHTTPRequestHandler):
                         {"namespace": b["ns"], "name": b["name"], "moves": moves,
                          "replicas": result.get("held_replicas", 0), "phase": "stopping"},
                         f"Stopping {b['name']} to copy {len(moves)} location{'s' if len(moves) != 1 else ''}")
+                if "lan" in b:
+                    lan_message = edit_lan(b["ns"], result.get("name") or b["name"], b.get("lan"))
+                    if lan_message:
+                        result["lan"] = lan_message
+                        if b.get("lan"):
+                            b["network_mode"] = "lan"
                 ports = [port for container in b.get("containers") or []
                          for port in container.get("ports") or []]
                 # manage_ports marks a client that owns the whole port list, so
@@ -5468,6 +5544,10 @@ class H(BaseHTTPRequestHandler):
             if len(parts) == 4 and parts[:2] == ["api", "workload"]:
                 ns, name = parts[2], parts[3]
                 guard_self(ns, name, deleting=True)
+                try:
+                    LAN.remove_nad(ns, name)       # its own LAN network, if it had one
+                except Exception:
+                    pass
                 # Every Service selecting these pods, not just the one sharing the
                 # workload's name: a sidecar or a hand-made listener is named
                 # differently and would otherwise keep its VIP port forever.
@@ -5549,7 +5629,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.132 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.133 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

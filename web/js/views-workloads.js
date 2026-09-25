@@ -531,6 +531,39 @@ window.wlFailoverPolicy = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
+/* A container with an address of its own on the LAN: a second interface on
+   a bridged VM network, beside its pod network, so it answers there directly
+   without a Service - what an app that wants to be found on the LAN needs. */
+async function containerLanFields(p, current) {
+  const opts = window.__vmCreateOptions || await api("/api/vm/create-options").catch(() => ({}));
+  window.__vmCreateOptions = opts;
+  const lan = vmLanNetworks(opts);
+  if (!lan.length) return vmNetworkNote(opts);
+  return `<div class="f"><label>VM network ${tip("Its bridge and VLAN; the container joins it as a second interface, lan0, and keeps the pod network for everything else.")}</label>
+      <select id="${p}_net">${lan.map(n => `<option value="${esc(n.name)}" ${current?.network === n.name ? "selected" : ""}>${esc(n.name)}${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}</option>`).join("")}</select></div>
+    ${vmAddressFields(p, opts)}
+    <div class="dim xs">It answers on this address directly - no Service or VIP - and it is recorded under the container's name in IP addresses.</div>`;
+}
+function containerLanRead(p) {
+  return Object.assign(vmReadAddress(p), { network: $(`#${p}_net`)?.value || "", address: ($(`#${p}_ip`)?.value || "").trim() });
+}
+window.containerLanFields = containerLanFields;
+window.containerLanRead = containerLanRead;
+window.deployLanChanged = async () => {
+  const lan = $("#d_net")?.value === "lan", box = $("#d_lan_box");
+  if (!box) return;
+  box.hidden = !lan;
+  const vip = $("#d_vip_mode")?.closest(".f");
+  if (vip) vip.hidden = lan;
+  if ($("#d_vip_wrap")) $("#d_vip_wrap").hidden = lan || $("#d_vip_mode").value !== "manual";
+  if (lan && !box.dataset.filled) {
+    box.innerHTML = await containerLanFields("dl", DCFG.lan);
+    box.dataset.filled = "1";
+    if ($("#dl_subnet")) vmSubnetPicked("dl");
+    if (DCFG.lan?.address) $("#dl_ip").value = DCFG.lan.address;
+  }
+};
+
 window.wlRestart = async (ns, name) => {
   try {
     await api("/api/restart", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -1062,12 +1095,14 @@ async function viewDeploy(pre) {
       <div class="f2"><div class="f"><label>Access mode</label><select id="d_net">
         <option value="loadbalancer" ${DCFG.network_mode === "loadbalancer" ? "selected" : ""}>LAN access (VIP)</option>
         <option value="internal" ${DCFG.network_mode === "internal" ? "selected" : ""}>Cluster only</option>
-        <option value="host" ${DCFG.network_mode === "host" ? "selected" : ""}>Host network (advanced)</option></select></div>
+        <option value="host" ${DCFG.network_mode === "host" ? "selected" : ""}>Host network (advanced)</option>
+        <option value="lan" ${DCFG.network_mode === "lan" ? "selected" : ""}>Its own LAN address (bridged)</option></select></div>
         <div class="f"><label>VIP allocation</label><select id="d_vip_mode">
           <option value="shared" ${DCFG.vip_mode === "shared" ? "selected" : ""}>Shared Homestead VIP${sharedVip ? ` · ${esc(sharedVip)}` : ""}</option>
           <option value="auto" ${DCFG.vip_mode === "auto" ? "selected" : ""}>New automatic VIP${vips.freeCount ? ` · ${vips.freeCount} free` : ""}</option>
           <option value="manual" ${DCFG.vip_mode === "manual" ? "selected" : ""}>Specific VIP</option></select></div></div>
       <div class="f" id="d_vip_wrap"><label>Specific VIP</label>${vipPicker("d", DCFG.lb_ip || "", vips)}</div>
+      <div id="d_lan_box" hidden></div>
       <div class="note"><b>Docker bridge → Kubernetes Service.</b> Shared VIP reuses ${esc((STATE.data.ov && STATE.data.ov.lb_ip) || "the cluster VIP")} on a unique LAN port. New automatic VIP asks kube-vip IPAM for another address. A dedicated VIP is ideal for DNS when port 53 must live on its own address. Host network binds directly on one node and reduces failover safety.</div>
       <div class="sec">Ports ${tip("Container port is where the process listens. LAN port is what clients use through the Kubernetes Service. TCP and UDP on the same number are separate listeners.")}</div><div id="d_ports"></div><button class="btn sm" onclick="addPort()">＋ add port</button>
       <div class="sec">Storage ${tip("The mount path is inside the container. Choose whether its backing storage is a new Longhorn claim, an existing claim, an existing volume in a shared pod, or a path on one host.")}</div>
@@ -1093,6 +1128,8 @@ async function viewDeploy(pre) {
   $("#d_target_mode").addEventListener("change", () => { applyDeployMode(); syncSummary(); });
   $("#d_target_workload").addEventListener("change", () => { collect(); updateJoinNote(); renderVols(); syncSummary(); });
   $("#d_ns").addEventListener("change", refreshDeployOptions);
+  $("#d_net").addEventListener("change", deployLanChanged);
+  deployLanChanged();
   $$(".d_hw").forEach(el => el.addEventListener("change", syncSummary));
 }
 function selectedTarget() { return DOPT.deployments.find(x => x.name === $("#d_target_workload")?.value); }
@@ -1139,6 +1176,7 @@ function collect() {
   Object.assign(DCFG, readPrivileges("d_pv") || {});
   DCFG.gpu = DCFG.hardware.includes("igpu"); DCFG.network_mode = $("#d_net").value;
   DCFG.vip_mode = $("#d_vip_mode").value; DCFG.lb_ip = $("#d_lb_ip").value.trim();
+  DCFG.lan = DCFG.network_mode === "lan" && $("#dl_ip") ? containerLanRead("dl") : null;
   DCFG.ports = $$("#d_ports .port-row").map(r => ({ container: +$(".pc", r).value,
     host: +$(".ph", r).value || +$(".pc", r).value, protocol: $(".pp", r).value, expose: $(".pe", r).checked }));
   DCFG.volumes = readVolumeRows($("#d_vols"));

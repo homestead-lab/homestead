@@ -116,6 +116,22 @@ that has it. Features are named under **Settings → Hardware**; see
 Each is a preference (steer, but start anyway) or a requirement (wait rather
 than break it). The editor warns when a rule cannot be met.
 
+## Its own LAN address
+
+A container can have an address of its own on the LAN, beside its pod
+network - for an app that wants to be found there (discovery, broadcasts), or
+simply to be reached on an address that is only its. In Deploy choose
+**Access mode → Its own LAN address (bridged)**, or in a container's editor
+tick *Its own LAN address* under *Where it runs*; pick the VM network and one
+of the free addresses [IP addresses](Networking#ip-addresses) knows of.
+
+The container joins that network as a second interface, `lan0`, and keeps
+the pod network for everything else. It answers on its address directly - no
+Service or VIP - and the address is recorded under the container's name in IP
+addresses. A Harvester VM network gives no addresses of its own, so the
+container gets a copy of it (same bridge and VLAN) holding its one address,
+named `<container>-lan`; it goes when the container does.
+
 ## If a node fails
 
 When a node stops answering, each container does one of three things -

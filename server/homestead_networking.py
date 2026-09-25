@@ -542,7 +542,7 @@ def create_service(cfg):
 def prepare_deploy(cfg):
     """Resolve and validate a deployment's Service before any workload mutation."""
     exposed = [port for port in cfg.get("ports") or [] if port.get("expose")]
-    if not exposed or cfg.get("network_mode") == "host":
+    if not exposed or cfg.get("network_mode") in ("host", "lan"):
         return cfg
     internal = cfg.get("network_mode") == "internal"
     planned = service_plan({"namespace": cfg.get("namespace") or DEFAULT_NAMESPACE,
@@ -611,7 +611,8 @@ def sync_workload_ports(namespace, workload, ports, network_mode=None, vip_mode=
     namespace = _name(namespace, "namespace")
     workload = _name(workload, "workload name")
     exposed = [port for port in ports or [] if port.get("expose")]
-    if network_mode == "host":
+    if network_mode in ("host", "lan"):
+        # On the host's network or its own LAN address, it answers directly.
         exposed = []
     desired = _ports({"ports": [{"name": port.get("name"),
                                  "port": port.get("host") or port.get("container"),
