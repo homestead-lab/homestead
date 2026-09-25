@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.145")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.146")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -3442,6 +3442,7 @@ import homestead_helm as HELM
 import homestead_mqtt as MQTT
 import homestead_history as HISTORY
 import homestead_platform as PLATFORM
+import homestead_addons as ADDONS
 import homestead_resources as RESOURCES
 import homestead_vms as VMS
 import homestead_lhcapacity as LHCAP
@@ -3545,6 +3546,7 @@ HELM.bind(kget, ksend)
 MQTT.bind(kget, ksend, DEFAULT_NS, lambda: mqtt_snapshot(), LEADER.is_leader)
 HISTORY.bind(DATA_DIR)
 PLATFORM.bind(kget)
+ADDONS.bind(kget, ksend, PLATFORM.detect, node_temps)
 
 
 def ktable(path, timeout=20):
@@ -4455,6 +4457,8 @@ ADMIN_ROUTES = {
     "/api/move/moves/abandon", "/api/move/moves/finish", "/api/move/moves/dismiss",
     "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete",
     "/api/lh/restore", "/api/lh/backup/delete", "/api/lh/group/delete",
+    # Installing Longhorn or KubeVirt changes the cluster itself.
+    "/api/addons/longhorn", "/api/addons/kubevirt",
     # Homestead's own permissions, and the namespaces apps live in.
     "/api/self/permissions", "/api/namespaces/create", "/api/namespaces/delete",
 }
@@ -4761,6 +4765,8 @@ class H(BaseHTTPRequestHandler):
                                                             (q.get("uid") or [""])[0]))
             if p == "/api/platform":
                 return self._send(200, PLATFORM.detect(force=(q.get("force") or [""])[0] == "1"))
+            if p == "/api/addons":
+                return self._send(200, ADDONS.status())
             if p == "/api/platform/join":
                 return self._send(200, PLATFORM.join_guide())
             if p == "/api/mqtt":
@@ -5140,6 +5146,17 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, set_homestead_replicas(b.get("replicas")))
             if p == "/api/self/data/move":
                 return self._send(200, move_homestead_data(b.get("storage_class", "")))
+            if p in ("/api/addons/longhorn", "/api/addons/kubevirt"):
+                what = p.rsplit("/", 1)[1]
+                result = ADDONS.install_longhorn(b) if what == "longhorn" else ADDONS.install_kubevirt(b)
+                for key in ("helm", "platform"):
+                    _cache.pop(key, None)
+                result["operation"] = OPS.start("helm", f"Install {'Longhorn' if what == 'longhorn' else 'KubeVirt'}",
+                                                {"kind": "HelmChart", "name": result["name"], "namespace": ADDONS.CONTROLLER_NS},
+                                                "/settings", {"namespace": ADDONS.CONTROLLER_NS, "name": result["job"],
+                                                              "action": "install"},
+                                                "Waiting for the Helm controller")
+                return self._send(200, result)
             if p in ("/api/helm/install", "/api/helm/upgrade", "/api/helm/uninstall"):
                 action = p.rsplit("/", 1)[1]
                 result = (HELM.install(b) if action == "install" else HELM.upgrade(b) if action == "upgrade"
@@ -5874,7 +5891,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.145 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.146 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

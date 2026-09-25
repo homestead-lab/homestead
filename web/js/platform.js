@@ -4,13 +4,13 @@
 
 const PLATFORM_NEEDS = {
   longhorn: { name: "Longhorn", why: "volumes, snapshots and backups are Longhorn's",
-    fix: "Install Longhorn from the Helm page (chart longhorn from charts.longhorn.io, namespace longhorn-system). Each node needs open-iscsi and nfs-common first." },
+    fix: "Homestead can install it here, as it can under Settings → Cluster. Each node needs open-iscsi and an NFS client (nfs-common) first." },
   kubevirt: { name: "KubeVirt", why: "virtual machines run on KubeVirt",
-    fix: "Harvester includes it. On another cluster, install KubeVirt and CDI following kubevirt.io." },
+    fix: "Homestead can install it with CDI, which fills VM disks from images - here or under Settings → Cluster. The machines need hardware virtualisation to run VMs at full speed." },
 };
 
-async function loadPlatform() {
-  try { STATE.platform = await api("/api/platform", { keep: true }); } catch (e) { STATE.platform = null; return; }
+async function loadPlatform(force = false) {
+  try { STATE.platform = await api(`/api/platform${force ? "?force=1" : ""}`, { keep: true }); } catch (e) { STATE.platform = null; return; }
   const p = STATE.platform;
   // The sidebar offers what this cluster can do.
   const hide = { vms: !p.kubevirt, protect: !p.longhorn };
@@ -26,7 +26,8 @@ function platformLacks(need, title) {
   paint(`<div class="phead"><div><h2>${esc(title)}</h2><p>${esc(platformName(p))} · ${esc(info.name)} is not installed</p></div></div>
     <div class="empty platform-missing"><b>This page needs ${esc(info.name)}</b>, because ${esc(info.why)}.
       <p class="dim small" style="max-width:560px;margin:10px auto 0">${esc(info.fix)}</p>
-      ${need === "longhorn" && can("admin") ? `<div class="row" style="justify-content:center;margin-top:12px"><button class="btn pri" onclick="platformInstallLonghorn()">Install Longhorn</button></div>` : ""}</div>`);
+      ${can("admin") && p.helm_controller ? `<div class="row" style="justify-content:center;margin-top:12px">
+        <button class="btn pri" onclick="addonInstall('${need}')">Install ${esc(info.name)}</button></div>` : ""}</div>`);
   return true;
 }
 window.platformLacks = platformLacks;
@@ -36,11 +37,65 @@ function platformName(p) {
 }
 window.platformName = platformName;
 
-window.platformInstallLonghorn = async () => {
-  go("helm");
-  await helmInstall();
-  $("#hi_q").value = "longhorn";
-  await helmSearch();
+/* ---------- add-ons: Longhorn and KubeVirt where the cluster lacks them ----------
+   Installed through the Helm controller k3s and RKE2 run, so they are
+   ordinary HelmCharts afterwards. Harvester brings both. */
+const ADDONS = {
+  longhorn: { name: "Longhorn", what: "Replicated volumes, snapshots and backups - the Volumes and Data protection pages",
+    needs: "Each node needs open-iscsi and an NFS client (nfs-common) installed and iscsid running; the k3s script does that. Volumes keep one copy per node, up to three." },
+  kubevirt: { name: "KubeVirt", what: "Virtual machines, with CDI to fill their disks from images",
+    needs: "The newest KubeVirt and CDI releases are installed. VMs run at full speed where a node has hardware virtualisation (/dev/kvm); without it KubeVirt emulates, many times slower." },
+};
+
+window.addonsPaint = async () => {
+  const card = $("#addonsCard");
+  if (!card) return;
+  let s;
+  try { s = await api("/api/addons"); } catch (e) { card.hidden = true; return; }
+  if (s.harvester) { card.hidden = true; return; }
+  card.hidden = false;
+  const kvmLine = !s.kvm_known ? '<span class="dim">The node probe has not said whether the nodes have hardware virtualisation.</span>'
+    : s.kvm_everywhere ? "Every node has hardware virtualisation."
+    : s.kvm_nowhere ? '<b>No node has hardware virtualisation</b>: KubeVirt will emulate, and VMs run slowly.'
+    : `Only ${Object.entries(s.kvm).filter(([, on]) => on).map(([n]) => esc(n)).join(", ")} ha${Object.values(s.kvm).filter(Boolean).length === 1 ? "s" : "ve"} hardware virtualisation; VMs run there.`;
+  const row = (key, state) => {
+    const a = ADDONS[key];
+    const pill = state.installed ? '<span class="pill ok">installed</span>'
+      : state.installing ? '<span class="pill med">installing</span>' : '<span class="pill">not installed</span>';
+    const button = state.installed || state.installing ? ""
+      : s.helm_controller ? `<button class="btn sm pri" data-need="admin" onclick="addonInstall('${key}')">Install ${esc(a.name)}</button>`
+      : '<span class="dim xs">needs the Helm controller k3s and RKE2 run</span>';
+    return `<div class="addon-row"><div><b>${esc(a.name)}</b> ${pill}<div class="dim small">${esc(a.what)}</div>
+        ${state.installed ? "" : `<div class="dim xs" style="margin-top:4px">${esc(a.needs)}</div>`}
+        ${key === "kubevirt" && !state.installed ? `<div class="xs" style="margin-top:4px">${kvmLine}</div>` : ""}</div>
+      <div class="row">${button}</div></div>`;
+  };
+  card.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">Add-ons</div>
+      <div class="csub">What this ${esc(platformName(STATE.platform || { distribution: s.distribution }))} cluster can add: Harvester has both built in</div></div></div>
+    ${row("longhorn", s.longhorn)}${row("kubevirt", s.kubevirt)}`;
+  if (window.applyRole) applyRole();
+};
+
+window.addonInstall = async key => {
+  const a = ADDONS[key];
+  let body = {};
+  if (key === "kubevirt") {
+    const s = await api("/api/addons").catch(() => ({}));
+    if (s.kvm_nowhere && !confirm("No node has hardware virtualisation (/dev/kvm), so KubeVirt will emulate: VMs work, but many times slower. Install anyway?")) return;
+    body = s.kvm_known ? {} : { emulation: false };
+  } else if (!confirm(`Install ${a.name}? ${a.needs}`)) return;
+  try {
+    const r = await api(`/api/addons/${key}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    toast(r.detail || `${a.name} is being installed`, "ok");
+    if (window.refreshOperations) refreshOperations(true);
+    addonsPaint();
+    // The pages that need it appear once it is there.
+    const watch = setInterval(async () => {
+      await loadPlatform(true);
+      if (STATE.platform?.[key]) { clearInterval(watch); toast(`${a.name} is ready - its pages are in the sidebar`, "ok"); addonsPaint(); }
+    }, 20000);
+    setTimeout(() => clearInterval(watch), 20 * 60000);
+  } catch (e) { toast(e.message, "bad"); }
 };
 
 /* Adding a host to a k3s or RKE2 cluster: the distribution's own installer,

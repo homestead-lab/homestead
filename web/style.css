@@ -1644,6 +1644,9 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .vmc-tools{display:flex;gap:6px;margin-left:auto;flex-wrap:wrap}
 .disk-tags{gap:5px;flex-wrap:wrap;margin:6px 0 2px;align-items:center}.node-tags{margin:0 0 10px}
 .sc-tags{gap:6px;flex-wrap:wrap}
+.addon-row{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;padding:12px 0;border-top:1px solid var(--line)}
+.addon-row:first-of-type{border-top:0}
+@media (max-width:560px){.addon-row{flex-direction:column}}
 .vmc-paste{margin-bottom:8px}.vmc-paste textarea{width:100%;min-height:64px;resize:vertical;font-family:"JetBrains Mono",monospace}
 .vmc-screen{width:100%;height:max(240px,min(calc(88vh - 300px),720px));background:#000;border-radius:10px;overflow:hidden;border:1px solid var(--line)}
 .vmc-screen:fullscreen{height:100vh;border-radius:0;border:0}

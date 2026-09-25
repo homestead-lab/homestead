@@ -294,7 +294,10 @@ data:
                 "devices": devices(),
                 "disks": disk_activity(),
                 "mounts": mounts(),
-                "uptime_s": uptime()}
+                "uptime_s": uptime(),
+                # Hardware virtualisation, which KubeVirt runs VMs with; without
+                # it KubeVirt can only emulate, many times slower.
+                "kvm": os.path.exists(f"{DEV}/kvm")}
 
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -687,7 +690,7 @@ spec:
               mountPath: "/host/proc"
               readOnly: true
         - name: smart
-          image: ghcr.io/wjcloudy/homestead:2.8.145
+          image: ghcr.io/wjcloudy/homestead:2.8.146
           imagePullPolicy: IfNotPresent
           command:
             - python3

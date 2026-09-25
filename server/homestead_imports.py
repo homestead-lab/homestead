@@ -2237,9 +2237,12 @@ def create_vm(cfg, platform=None, default_class=""):
         disks.append({"name": "cloudinit", "disk": {"bus": "virtio"}})
         volumes.append({"name": "cloudinit", "cloudInitNoCloud": source})
 
+    cpu = {"cores": cores}
+    if cfg.get("cpu_model") in ("host-passthrough", "host-model"):
+        cpu["model"] = cfg["cpu_model"]
     template_spec = {
         "domain": {
-            "cpu": {"cores": cores},
+            "cpu": cpu,
             "memory": {"guest": mem},
             "resources": {"requests": {"memory": mem}},
             "devices": {

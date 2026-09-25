@@ -22,9 +22,12 @@ Everything Homestead does, with nothing Harvester-specific needed:
 - **Helm** - charts install through the Helm controller k3s already runs.
 - **Adding and removing machines** - **Cluster → Add a host** gives this
   cluster's join lines; removing one gives k3s's uninstall steps.
-- **Virtual machines** - once [KubeVirt](https://kubevirt.io) and CDI are added
-  (see [Virtual machines](Virtual-machines#vms-on-k3s-or-rke2)); the machines
-  need hardware virtualisation.
+- **Virtual machines** - with [KubeVirt](https://kubevirt.io) and CDI: add
+  `--kubevirt` to the script, or install them later from **Settings → Cluster →
+  Add-ons** (see [Virtual machines](Virtual-machines#vms-on-k3s-or-rke2)). The
+  machines need hardware virtualisation for VMs to run at full speed.
+- **Longhorn later** - started with `--no-longhorn`? **Settings → Cluster →
+  Add-ons** installs it once the machines have open-iscsi.
 
 ## 1. What you need
 
@@ -67,6 +70,7 @@ Options go after `server`:
 | Option | Does |
 |---|---|
 | `--no-longhorn` | uses k3s's built-in local-path storage instead: simpler, no copies, and each volume stays on the machine it was made on |
+| `--kubevirt` | also installs KubeVirt and CDI, so Homestead can run virtual machines - emulated, and slow, if the machine has no hardware virtualisation (`/dev/kvm`) |
 | `--k3s-version v1.33.4+k3s1` | pins k3s instead of its stable channel |
 | `--homestead-version 2.8.118` | pins Homestead instead of the newest release |
 

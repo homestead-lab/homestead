@@ -35,8 +35,8 @@ is Harvester-only unless Harvester is what it is about.
 |---|---|---|---|
 | **Install** | [one command](#k3s-in-one-command) from bare Linux | [Helm or the manifest](#installing-with-the-manifest) | [Helm or the manifest](#installing-with-the-manifest) |
 | **Containers, App Store, Compose, Portal, Networking, IP addresses, Resources, dashboard** | yes | yes | yes |
-| **Volumes, data protection, disks** | yes, with Longhorn - the k3s script installs it | yes, Longhorn is built in | yes, with Longhorn - the Helm page installs it |
-| **Virtual machines** | add [KubeVirt](https://kubevirt.io) and CDI | built in | add KubeVirt and CDI |
+| **Volumes, data protection, disks** | yes, with Longhorn - the k3s script installs it, or Settings → Cluster → Add-ons | yes, Longhorn is built in | yes, with Longhorn - Settings → Cluster → Add-ons installs it on RKE2 |
+| **Virtual machines** | yes, with [KubeVirt](https://kubevirt.io) - the k3s script's `--kubevirt`, or Add-ons | built in | yes, with KubeVirt - Add-ons installs it on RKE2 |
 | **Addresses for apps** | the nodes' own addresses (k3s's ServiceLB), or a VIP per app with MetalLB | a VIP per app (kube-vip) | a VIP per app with MetalLB or kube-vip |
 | **Helm charts** | yes (k3s's Helm controller) | yes (RKE2's Helm controller) | yes on RKE2; listing only without a Helm controller |
 | **Adding a host** | the join command for a worker or a server | a guide to Harvester's installer | RKE2's join commands |
@@ -54,8 +54,8 @@ curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/boot
 It installs what Longhorn needs on the host, installs k3s with an embedded etcd
 (so more servers can join), and drops a HelmChart for Longhorn and Homestead's
 own manifest into k3s's manifests folder, which k3s applies itself; then it
-prints Homestead's address. `--no-longhorn` uses k3s's local-path storage
-instead. Further machines join with `agent <server-url> <token>` (a worker) or
+prints Homestead's address. `--kubevirt` adds KubeVirt and CDI for virtual
+machines, and `--no-longhorn` uses k3s's local-path storage instead. Further machines join with `agent <server-url> <token>` (a worker) or
 `join <server-url> <token>` (another server); Homestead's **Cluster → Add a
 host** shows the exact lines. The
 [k3s guide](https://github.com/wjcloudy/homestead/wiki/Installing-on-k3s) walks
@@ -70,9 +70,9 @@ balancer reads it: kube-vip's annotation, MetalLB's, or none on ServiceLB -
 never two at once.
 
 **On a cluster you already run** - k3s, RKE2, kubeadm - use Helm or the
-manifest below. Without Longhorn the volume and data-protection pages say so
-and offer to install it from the Helm page; without KubeVirt there are no VM
-pages.
+manifest below. **Settings → Cluster → Add-ons** then installs Longhorn and
+KubeVirt (with CDI) where they are missing, through the Helm controller k3s and
+RKE2 run, and the pages that need one offer the same install.
 
 ## Highlights
 
@@ -83,7 +83,7 @@ pages.
 | **Containers** | Guided App Store and image deployment, Docker Compose import, independent or sidecar pods, guarded Kubernetes workload rename, edit/move/logs/console, autostart, LAN port and exposure editing, one storage picker for new and existing containers, hardware passthrough, update checks, monitored rollout with live image-pull state, rollback, groups with folding dividers and a filter per group, and a card or row layout |
 | **Helm** | Every Helm release in the cluster with its values, notes, history and objects; charts found on Artifact Hub and installed, upgraded and uninstalled through the Helm controller k3s and RKE2 ship |
 | **App Store** | The Community Applications catalogue laid out as Unraid shows it - monthly spotlights, recently added, trending and top performing - with a full page per app, from the public feed or one you set |
-| **Virtual machines** | Create from a Harvester image, a download or an imported disk - on Harvester or any KubeVirt cluster - power actions, live migration between hosts, and a console: the VM's screen (VNC) or its serial port |
+| **Virtual machines** | Create from a Harvester image, a download or an imported disk - on Harvester, or on k3s and RKE2 with KubeVirt installed from Settings - power actions, live migration between hosts, a console (the VM's screen or its serial port), and a k3s cluster made of VMs, with KubeVirt inside if asked |
 | **Portal** | A page of tiles for every web interface - containers picked from their exposed ports with their logos, and the router, switches, access points and NAS around them - in sections, with a live reachability dot |
 | **Architecture** | VIP → workload → claim → Longhorn volume → replica dependency view |
 | **Networking** | Service, ClusterIP, VIP, ingress, listener ownership, orphaned-listener release, endpoint health and guided collision-free exposure; IP address management per subnet with scanning, device categories, bulk edits, CSV export and UniFi sync |
@@ -692,7 +692,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.145/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.146/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -703,7 +703,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.145 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.146 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1445,10 +1445,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.145`, the workflow publishes:
+For a release such as `v2.8.146`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.145
+ghcr.io/wjcloudy/homestead:2.8.146
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -1459,8 +1459,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.145
-git push origin v2.8.145
+git tag v2.8.146
+git push origin v2.8.146
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.

@@ -6,7 +6,9 @@ the cluster is reached - and joins - the way one built from real machines
 would be. The first VM is the server; the rest join it with a token made
 here, before anything starts, so no step has to read it back off a VM. What
 each runs comes from cloud-init: Homestead's bootstrap script, as a green-
-field install would use, or k3s's own installer for a bare cluster.
+field install would use, or k3s's own installer for a bare cluster. Asked for
+KubeVirt, the nodes get the host's CPU as it is, so VMs can run inside them
+where the host allows nested virtualisation, and emulated where it does not.
 
 The build is a job: the VMs start, k3s answers on the server's address,
 and - when it was asked for - the Homestead inside answers on port 8088.
@@ -85,14 +87,17 @@ def plan(cfg):
     setup = str(cfg.get("setup") or "homestead")
     if setup not in SETUPS:
         raise ValueError("what it runs is one of: " + ", ".join(SETUPS))
+    kubevirt = bool(cfg.get("kubevirt"))
+    if kubevirt and setup == "k3s":
+        raise ValueError("KubeVirt comes with the setups that install Homestead; k3s alone installs nothing more")
     nodes = [{"name": f"{prefix}-server-{i + 1}", "role": "server", "address": addresses[i]} for i in range(servers)]
     nodes += [{"name": f"{prefix}-agent-{i + 1}", "role": "agent", "address": addresses[servers + i]}
               for i in range(agents)]
-    return {"name": prefix, "nodes": nodes, "setup": setup, "first": nodes[0]["address"],
+    return {"name": prefix, "nodes": nodes, "setup": setup, "first": nodes[0]["address"], "kubevirt": kubevirt,
             "url": f"http://{nodes[0]['address']}:8088" if setup != "k3s" else ""}
 
 
-def user_data(node, first, token, password, setup, k3s_version=""):
+def user_data(node, first, token, password, setup, k3s_version="", kubevirt=False):
     """cloud-init for one node: a login, the guest agent (so its address shows
     here), and the line that makes it a server or joins it to the first."""
     version = f" --k3s-version {k3s_version}" if k3s_version else ""
@@ -106,7 +111,8 @@ def user_data(node, first, token, password, setup, k3s_version=""):
             line = f"curl -sfL {K3S} | {env} K3S_URL=https://{first}:6443 sh -s - agent"
     elif node["address"] == first:
         storage = " --no-longhorn" if setup == "local" else ""
-        line = f"curl -sfL {BOOTSTRAP} | K3S_TOKEN={token} sh -s - server{storage}{version}"
+        vms = " --kubevirt" if kubevirt else ""
+        line = f"curl -sfL {BOOTSTRAP} | K3S_TOKEN={token} sh -s - server{storage}{vms}{version}"
     elif node["role"] == "server":
         line = f"curl -sfL {BOOTSTRAP} | sh -s - join https://{first}:6443 {token}{version}"
     else:
@@ -145,7 +151,11 @@ def start(cfg, ops):
               "image_id": cfg.get("image_id") or "", "image_url": "" if cfg.get("image_id") else (cfg.get("image_url") or UBUNTU),
               "static_ip": dict(static, address=node["address"]),
               "cloud_init": user_data(node, built["first"], token, str(cfg["password"]), built["setup"],
-                                      str(cfg.get("k3s_version") or "")),
+                                      str(cfg.get("k3s_version") or ""), built["kubevirt"]),
+              # VMs inside these VMs need the host's CPU as it is, virtualisation
+              # included - where the host allows nesting. Without it KubeVirt in
+              # the cluster emulates.
+              **({"cpu_model": "host-passthrough"} if built["kubevirt"] else {}),
               "labels": {LABEL: built["name"], ROLE: node["role"]},
               # Its console kept as a log, so the job's Log shows the install.
               "log_console": True,

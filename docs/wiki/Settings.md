@@ -4,7 +4,7 @@
 |---|---|
 | **Health** | when bars and node cards turn yellow or red; the drive health policy |
 | **Updates** | the image update policy: notify only, approve each, or a maintenance window |
-| **Cluster** | Longhorn over-provisioning, minimum free space and the V2 engine; every node's disks |
+| **Cluster** | Add-ons - Longhorn and KubeVirt installed where the cluster lacks them; Longhorn over-provisioning, minimum free space and the V2 engine; every node's disks |
 | **Hardware** | hardware features (a Coral, an iGPU, a Zigbee stick) and **Rescan hosts** |
 | **Access** | your password, **Manage users**, sign out everywhere |
 | **Apps** | the App Store catalogue, Portal links, UniFi, namespaces |
@@ -13,6 +13,22 @@
 | **About** | Homestead's own health, Samba, redundancy, permissions, the node probe |
 
 ![Settings - Cluster](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-settings-cluster.png)
+
+## Add-ons
+
+On k3s and RKE2, **Settings → Cluster → Add-ons** installs what the cluster
+lacks, through the Helm controller both distributions run - so each is an
+ordinary HelmChart afterwards, on the Helm page:
+
+- **Longhorn** - volumes, snapshots and backups. It keeps one copy of each
+  volume per node, up to three. Each node needs open-iscsi and an NFS client
+  first (the k3s script installs them).
+- **KubeVirt** - virtual machines, with CDI to fill their disks from images:
+  the newest release of each. The card says which nodes have hardware
+  virtualisation; with none, KubeVirt emulates, and VMs run slowly.
+
+A page that needs one offers the same install. Harvester has both built in,
+so the card does not show there.
 
 ## Homestead's own health
 

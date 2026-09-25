@@ -276,7 +276,10 @@ def payload():
             "devices": devices(),
             "disks": disk_activity(),
             "mounts": mounts(),
-            "uptime_s": uptime()}
+            "uptime_s": uptime(),
+            # Hardware virtualisation, which KubeVirt runs VMs with; without
+            # it KubeVirt can only emulate, many times slower.
+            "kvm": os.path.exists(f"{DEV}/kvm")}
 
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"

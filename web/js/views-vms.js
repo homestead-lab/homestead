@@ -380,7 +380,10 @@ window.k3sCluster = async () => {
       its own on the LAN, so the cluster is reached - and joins - as one built from real machines would be.</p>
     ${lan.length ? "" : vmNetworkNote(opts)}
     <div class="f2"><div class="f"><label>Name ${tip("Starts each VM's name: k3s-demo-server-1, k3s-demo-agent-1 and so on.")}</label><input id="k_name" value="k3s-demo"></div>
-      <div class="f"><label>Install ${tip("What each node sets up. k3s, Longhorn and Homestead is what a new install from our bootstrap script gets; local-path skips Longhorn and keeps each volume on one node; k3s alone installs nothing else.")}</label><select id="k_setup">${Object.entries(K3S_SETUPS).map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("")}</select></div></div>
+      <div class="f"><label>Install ${tip("What each node sets up. k3s, Longhorn and Homestead is what a new install from our bootstrap script gets; local-path skips Longhorn and keeps each volume on one node; k3s alone installs nothing else.")}</label><select id="k_setup" onchange="k3sSetupChanged()">${Object.entries(K3S_SETUPS).map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("")}</select></div></div>
+    <label class="switch" style="margin:0 0 14px"><input type="checkbox" id="k_kubevirt" onchange="k3sCountChanged()">
+      <span>Include KubeVirt, for VMs inside the cluster
+      ${tip("Installs KubeVirt and CDI on the new cluster, so its Homestead can run VMs. The nodes get this host's CPU as it is, so VMs inside run with hardware virtualisation where this host allows nesting; where it does not, they are emulated - slower, but they run. Give the nodes more memory for this.")}</span></label>
     <div class="f2"><div class="f"><label>Servers ${tip("One is enough to try things. Three keep the cluster running if one fails.")}</label>
         <select id="k_servers" onchange="k3sCountChanged()"><option value="1">1</option><option value="3">3</option></select></div>
       <div class="f"><label>Workers ${tip("Nodes that run apps but not the cluster's control plane. They join the first server. Zero is fine: a server runs apps too.")}</label><input id="k_agents" type="number" min="0" max="6" value="2" oninput="k3sCountChanged()"></div></div>
@@ -402,6 +405,13 @@ window.k3sCluster = async () => {
   k3sCountChanged();
   if (window.applyRole) applyRole();
 };
+window.k3sSetupChanged = () => {
+  const bare = $("#k_setup").value === "k3s", box = $("#k_kubevirt");
+  box.disabled = bare;
+  if (bare) box.checked = false;
+  box.closest("label").title = bare ? "k3s alone installs nothing more; choose a setup with Homestead" : "";
+  k3sCountChanged();
+};
 window.k3sCountChanged = () => {
   const count = +$("#k_servers").value + Math.max(0, +$("#k_agents").value || 0);
   vmSubnetPicked("k", count);
@@ -411,7 +421,7 @@ window.k3sCountChanged = () => {
 function k3sBody() {
   const image = $("#k_image").value;
   return Object.assign(vmReadAddress("k"), {
-    name: $("#k_name").value.trim(), setup: $("#k_setup").value,
+    name: $("#k_name").value.trim(), setup: $("#k_setup").value, kubevirt: !!$("#k_kubevirt")?.checked,
     servers: +$("#k_servers").value, agents: +$("#k_agents").value || 0,
     cores: +$("#k_cores").value, memory: $("#k_mem").value.trim(), disk_gb: +$("#k_disk").value,
     password: $("#k_pass").value, network: $("#k_net").value, storage_class: $("#k_sc")?.value || "",
@@ -426,7 +436,7 @@ window.k3sReview = async () => {
       ${plan.nodes.map(n => `<tr><td><b>${esc(n.name)}</b></td><td data-label="Role">${n.role === "server" ? '<span class="tag info">server</span>' : '<span class="tag">worker</span>'}</td>
         <td data-label="Address" class="mono">${esc(n.address)}${n.problem ? `<div class="badtext xs">${esc(n.problem)}</div>` : ""}</td></tr>`).join("")}</tbody></table>
       <div class="note ${plan.ok ? "" : "bad"}" style="margin-top:10px">${plan.ok
-        ? `Each address is recorded under its VM in IP addresses. Allow 10-15 minutes: the VMs start, install ${esc(K3S_SETUPS[plan.setup])}, and join.
+        ? `Each address is recorded under its VM in IP addresses. Allow 10-15 minutes: the VMs start, install ${esc(K3S_SETUPS[plan.setup])}${plan.kubevirt ? " and KubeVirt" : ""}, and join.
            ${plan.url ? `Its own Homestead then answers at <span class="mono">${esc(plan.url)}</span>.` : ""} The job tray follows it.`
         : "Choose other addresses for the ones marked: something already has them."}</div>`;
     $("#k_go").disabled = !plan.ok;

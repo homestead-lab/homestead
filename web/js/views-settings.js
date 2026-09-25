@@ -147,6 +147,7 @@ async function viewSettings() {
       ${ipamUnifiCard()}
 
       <section class="card flat settings-wide" data-tab="mqtt" id="mqttCard"></section>
+      <section class="card flat settings-wide" data-tab="cluster" id="addonsCard" hidden></section>
       <section class="card flat settings-wide" data-tab="cluster" id="lhSettingsCard"><div class="empty small"><span class="spin2"></span>reading Longhorn</div></section>
 
       <section class="card flat settings-wide" data-tab="apps">
@@ -196,6 +197,7 @@ async function viewSettings() {
   replicasPaint();
   mqttPaint();
   lhSettingsPaint();
+  if (window.addonsPaint) addonsPaint();
   selfHealthPaint();
   // The UniFi card needs the IPAM record, which Settings does not otherwise load.
   api("/api/ipam").then(data => { STATE.data.ipam = data; const host = $("#unifiCard"); if (host) host.outerHTML = ipamUnifiCard(); }).catch(() => {});

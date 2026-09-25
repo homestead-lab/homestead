@@ -102,6 +102,12 @@ Homestead at `http://<first address>:8088`. It can run k3s with Longhorn and
 Homestead (what a new install gets), k3s and Homestead on local-path storage,
 or k3s alone. The nodes' login is `ubuntu` with the password you chose.
 
+**Include KubeVirt** installs KubeVirt and CDI on the new cluster too, so its
+Homestead can run VMs of its own. The nodes then get this host's CPU as it
+is, so VMs inside run with hardware virtualisation where this host allows
+nested virtualisation; where it does not, they are emulated. Give the nodes
+more memory for it.
+
 **Log** on the job shows each step it has taken, and each node's console as it
 installs - cloud-init, then k3s and what comes with it. The nodes ask KubeVirt
 to keep their console output, which it does from 1.1 even where Harvester
@@ -141,8 +147,21 @@ deleted while its image is still downloading stops the download.
 
 ## VMs on k3s or RKE2
 
-Install [KubeVirt](https://kubevirt.io/user-guide/cluster_admin/installation/)
-and, for disk images, [CDI](https://github.com/kubevirt/containerized-data-importer),
-following their instructions; hosts need hardware virtualisation (`ls
-/dev/kvm` shows it). Reload Homestead and the VMs page appears. Without CDI,
-VMs start from a blank disk and downloading images asks for CDI first.
+VMs need [KubeVirt](https://kubevirt.io), and
+[CDI](https://github.com/kubevirt/containerized-data-importer) to fill their
+disks from images. Three ways to get both:
+
+- **A new k3s cluster:** add `--kubevirt` to the k3s script's `server` line -
+  see [Installing on k3s](Installing-on-k3s).
+- **A cluster already running:** **Settings → Cluster → Add-ons → Install
+  KubeVirt**, or **Install KubeVirt** on the VMs page. Homestead installs the
+  newest KubeVirt and CDI releases through the Helm controller k3s and RKE2
+  run, and the VMs page appears once they are up.
+- **By hand**, following [KubeVirt's](https://kubevirt.io/user-guide/cluster_admin/installation/)
+  and CDI's instructions.
+
+Hosts need hardware virtualisation (`ls /dev/kvm` shows it) for VMs to run at
+full speed. The node probe reports it on each node, and Add-ons says which
+have it. With none, KubeVirt is set to emulate: VMs work, many times slower.
+Without CDI, VMs start from a blank disk and downloading images asks for CDI
+first.
