@@ -18,14 +18,16 @@ const nodeHardwareIds = n => (STATE.data.hardwareFeatures || [])
 /* Dashboard, Nodes, node detail modal */
 
 async function viewDash() {
-  const [o, hist, st, cap] = await Promise.all([
+  const [o, hist, st, cap, , , up] = await Promise.all([
     api("/api/overview"),
     api("/api/history").catch(() => ({})),
     api("/api/storage").catch(() => null),
     STATE.platform?.longhorn === false ? null : api("/api/longhorn/capacity").catch(() => null),
     loadHardwareFeatures(),
     loadHealthSettings(),
+    api("/api/nodes/uptime").catch(() => null),
   ]);
+  STATE.data.uptime = up || STATE.data.uptime;
   STATE.data.ov = o; STATE.data.stor = st; STATE.data.lhcap = cap || STATE.data.lhcap;
   // A node near its allocation limit takes no new replicas: said before it bites.
   const tight = (cap?.nodes || []).filter(n => n.level !== "ok");
@@ -137,6 +139,53 @@ async function viewDash() {
   historyPaint();
 }
 
+/* How long a node has been up, and how much of the last while. The host's
+   own uptime comes from the node probe; without it, how long Kubernetes has
+   had it Ready. Availability is from the samples Homestead keeps. */
+function nodeUpFor(n) {
+  if (n.status !== "Ready") return "";
+  if (n.uptime_s) return `up ${fmtUp(n.uptime_s)}`;
+  if (n.ready_since) return `Ready ${fmtAgo((Date.now() - Date.parse(n.ready_since)) / 1000).replace(" ago", "")}`;
+  return "";
+}
+function nodeUptimeLine(n) {
+  const u = STATE.data.uptime?.nodes?.[n.name];
+  const month = u?.windows?.["30d"], outs = (u?.outages || []).length;
+  const parts = [nodeUpFor(n), month != null ? `${uptimePct(month)} over 30 days` : ""].filter(Boolean);
+  return parts.length ? `<div class="dim xs node-uptime" data-tip="${outs ? `${outs} outage${outs === 1 ? "" : "s"} recorded - open the node for when` : "No outage recorded"}">${esc(parts.join(" · "))}</div>` : "";
+}
+const uptimePct = v => v == null ? "—" : v >= 99.995 ? "100%" : `${v.toFixed(v >= 99 ? 2 : 1)}%`;
+function uptimeDuration(s) {
+  s = Math.max(0, Math.round(s));
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.round(s % 3600 / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${Math.max(1, m)}m`;
+}
+const uptimeWhen = t => new Date(t * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+
+/* The node page's uptime card: windows, ninety days as a strip, and each
+   outage and reboot. */
+window.nodeUptimePaint = async n => {
+  const host = $("#nodeUptime");
+  if (!host) return;
+  const all = await api("/api/nodes/uptime").catch(() => null);
+  const u = all?.nodes?.[n.name];
+  if (!u) { host.innerHTML = `<div class="ctitle">Uptime</div><div class="dim small">${esc(nodeUpFor(n) || "No samples yet: Homestead records one every five minutes.")}</div>`; return; }
+  const tone = v => v == null ? "none" : v >= 99.9 ? "ok" : v >= 99 ? "warn" : "bad";
+  const events = [...(u.outages || []).map(o => ({ t: o.start, kind: "down", o })), ...(u.reboots || []).map(t => ({ t, kind: "reboot" }))]
+    .sort((a, b) => b.t - a.t).slice(0, 12);
+  host.innerHTML = `<div class="between"><div class="ctitle">Uptime</div><span class="mono small">${esc(nodeUpFor(n))}</span></div>
+    <div class="uptime-windows">${Object.entries(u.windows).map(([label, v]) => `<div><span class="dim xs">${label.toUpperCase()}</span>
+      <b class="mono uptime-${tone(v)}">${uptimePct(v)}</b></div>`).join("")}</div>
+    <div class="uptime-strip" aria-label="Each of the last 90 days">${u.days.map(d => `<i class="uptime-${tone(d.up)}"
+      data-tip="${new Date(d.day * 1000).toLocaleDateString()} · ${d.up == null ? "no samples" : uptimePct(d.up) + " up"}"></i>`).join("")}</div>
+    <div class="between dim xs" style="margin-top:3px"><span>90 days ago</span><span>today</span></div>
+    ${events.length ? `<div class="uptime-events">${events.map(e => e.kind === "reboot"
+      ? `<div><span class="tag">rebooted</span><span class="mono xs">${esc(uptimeWhen(e.t))}</span></div>`
+      : `<div><span class="tag ${e.o.ongoing ? "bad" : "warn"}">${e.o.ongoing ? "down now" : "down"}</span><span class="mono xs">${esc(uptimeWhen(e.o.start))}</span>
+        <span class="dim xs">${e.o.exact ? "" : "about "}${uptimeDuration(e.o.down_s)}${e.o.ongoing ? " so far" : ""}</span></div>`).join("")}</div>`
+      : '<div class="dim small" style="margin-top:10px">No outage or reboot recorded.</div>'}`;
+};
+
 /* What falls to this node rather than another: the addresses kube-vip has
    it announce - the management VIP hosts join through among them - and the
    shared volumes whose share manager runs here. */
@@ -166,6 +215,7 @@ function nodeCard(n) {
         <div class="av n2">${esc(n.name.replace(/[^0-9a-z]/gi, "").slice(-2).toUpperCase())}</div>
         <div class="nodename"><div style="font-weight:680" title="${esc(n.name)}">${esc(n.name)}</div>
           <div class="dim xs" title="${esc(n.roles.join(" · "))}">${n.roles.join(" · ")}</div>
+          ${nodeUptimeLine(n)}
           ${nodeDutyTags(n) ? `<div class="row node-duties" style="gap:4px;flex-wrap:wrap;margin-top:4px">${nodeDutyTags(n)}</div>` : ""}</div>
       </div>
       <div class="row nodehead-acts" style="gap:7px">
@@ -246,6 +296,7 @@ window.nodeDetail = async (name, fromRoute = false) => {
       <button class="btn sm" ${s ? "" : "disabled"} onclick="smartDisk('${esc(n.name)}','${esc(d.name)}')" title="${s ? "Drive health, history, and self-tests" : "SMART helper is not available on this host"}">Details</button>
     </div>`; }).join("");
     $("#mbody").innerHTML = `<div class="node-detail">
+      <div class="card flat" id="nodeUptime" style="margin-bottom:16px"><div class="ctitle">Uptime</div><div class="dim small"><span class="spin2"></span></div></div>
       <div class="grid g2 node-summary-grid" style="margin-bottom:16px">
         <div class="card flat"><div class="ctitle">Utilisation</div>
           <div style="margin-top:12px">
@@ -330,6 +381,7 @@ window.nodeDetail = async (name, fromRoute = false) => {
       </div>`;
     window.__disksModal = false;
     nodeDisksPaint(n.name);
+    nodeUptimePaint(n);
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
 
@@ -552,8 +604,9 @@ window.hardwareFeatureDelete = async id => {
 };
 
 async function viewNodes() {
-  const [n] = await Promise.all([api("/api/nodes"), loadHardwareFeatures()]);
+  const [n, up] = await Promise.all([api("/api/nodes"), api("/api/nodes/uptime").catch(() => null), loadHardwareFeatures()]);
   STATE.data.nodes = n;
+  STATE.data.uptime = up || STATE.data.uptime;
   // Cards and the table said the same things twice; now it is one or the other.
   const layout = viewLayout("nodes");
   paint(`<div class="phead"><div><h2>Nodes</h2>

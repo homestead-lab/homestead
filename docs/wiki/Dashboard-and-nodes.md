@@ -33,6 +33,24 @@ and write speed, and each drive's health.
 
 ![Node detail](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-node-detail.png)
 
+### Uptime
+
+Each node card says how long the host has been up since it last booted, and
+how much of the last 30 days it was Ready. A node's page has more:
+
+- the share of the last **24 hours, 7, 30 and 90 days** it was up;
+- a strip of the last 90 days, one bar a day: green is fully up, amber lost
+  a little, red lost more than 1%;
+- each **outage** (when it went down and for how long) and each **reboot**.
+
+Homestead checks every node every five minutes and keeps those checks for two
+days, then keeps hourly summaries for 90 days. So an outage in the last two
+days is timed to five minutes; an older one is shown as "about" a length.
+Reboots are noticed when a node's boot ID changes, so a quick reboot counts
+even if the node was never seen as down. The host's own uptime comes from the
+[node probe](#the-node-probe); without the probe, the card shows how long the
+node has been Ready.
+
 From a node you can:
 
 - **Cordon** it (no new pods) and **drain** it (move what runs there elsewhere),

@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.136")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.137")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -672,6 +672,13 @@ def get_nodes():
             "conditions": [{"type": c["type"], "status": c["status"], "reason": c.get("reason", "")}
                            for c in n["status"].get("conditions", [])],
             "created": n["metadata"].get("creationTimestamp", ""),
+            # A new boot ID is a reboot; Ready's last change is how long it
+            # has been up as far as Kubernetes is concerned; the probe knows
+            # how long the host itself has been running.
+            "boot_id": n["status"].get("nodeInfo", {}).get("bootID", ""),
+            "ready_since": next((c.get("lastTransitionTime", "") for c in n["status"].get("conditions", [])
+                                 if c.get("type") == "Ready" and c.get("status") == "True"), ""),
+            "uptime_s": (temp_payload or {}).get("uptime_s"),
             **node_stats(name),
             "temps": temp_payload,
             "disk_issues": disk_issues,
@@ -4579,6 +4586,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("ov", 5, get_overview))
             if p == "/api/nodes":
                 return self._send(200, cached("nodes", 5, get_nodes))
+            if p == "/api/nodes/uptime":
+                return self._send(200, cached("uptime", 60, HISTORY.uptime))
             if p == "/api/workloads":
                 return self._send(200, cached("wl", 5, get_workloads))
             if p == "/api/portal":
@@ -5706,7 +5715,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.136 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.137 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

@@ -74,6 +74,34 @@
         disks: [withHealth({ name: "nvme0n1", model: "Kingston NV2", serial: "DEMO-NVME-03", kind: "NVMe", size_gb: 465.8,
           read_mbps: 0.74, write_mbps: 1.15, smart: smartDisk("nvme0n1", "Kingston NV2", "DEMO-NVME-03", 38, 3912) })] } },
   ];
+  // How long each has been up, and what the history says of the last 90 days.
+  [[41 * 86400 + 5 * 3600], [9 * 86400 + 2 * 3600], [2 * 86400 + 7 * 3600]].forEach(([up], i) => {
+    nodes[i].uptime_s = up;
+    nodes[i].ready_since = new Date(Date.now() - up * 1000 + 95000).toISOString();
+  });
+  const demoUptime = (() => {
+    const now = Math.floor(Date.now() / 1000), today = now - now % 86400;
+    const plan = {
+      "harvester-node1": { outages: [], reboots: [now - nodes[0].uptime_s] },
+      "harvester-node2": { outages: [{ back: 9 * 86400 + 2 * 3600, down: 780, exact: true }, { back: 52 * 86400, down: 3 * 3600, exact: false }],
+                           reboots: [now - nodes[1].uptime_s] },
+      "harvester-node3": { outages: [{ back: 2 * 86400 + 7 * 3600 + 1500, down: 1500, exact: true }, { back: 23 * 86400, down: 600, exact: true }],
+                           reboots: [now - nodes[2].uptime_s, now - 23 * 86400 + 600] },
+    };
+    const out = {};
+    for (const [name, p] of Object.entries(plan)) {
+      const outages = p.outages.map(o => ({ start: now - o.back, end: now - o.back + o.down, down_s: o.down, exact: o.exact, ongoing: false }))
+        .sort((a, b) => a.start - b.start);
+      const downIn = (from, to) => outages.reduce((s, o) => s + Math.max(0, Math.min(to, o.end) - Math.max(from, o.start)), 0);
+      const pct = (from, to) => Math.round(1e5 * (1 - downIn(from, to) / (to - from))) / 1e3;
+      out[name] = {
+        windows: { "24h": pct(now - 86400, now), "7d": pct(now - 7 * 86400, now), "30d": pct(now - 30 * 86400, now), "90d": pct(now - 90 * 86400, now) },
+        days: Array.from({ length: 90 }, (_, i) => { const day = today - (89 - i) * 86400; return { day, up: pct(day, Math.min(now, day + 86400)) }; }),
+        outages, reboots: p.reboots.sort((a, b) => a - b), since: now - 90 * 86400,
+      };
+    }
+    return { nodes: out, step: 300 };
+  })();
   // Every disk on each node: the system disk with Longhorn's default folder,
   // a second disk given to Longhorn, and one nothing uses yet.
   const lhDisk = (id, path, size, used, alloc, replicas) => ({ id, path, type: "filesystem", scheduling: true, evicting: false,
@@ -178,8 +206,8 @@
     // Homestead itself: its Stop asks first, since it takes this page with it.
     { name: "homestead", ns: "lab", kind: "Deployment", group: "Homestead", self: true, desired: 1, ready: 1, uptime: 86400,
       cpu: 0.04, mem_mb: 88, nodes: ["harvester-node1"], hardware: [],
-      images: ["ghcr.io/wjcloudy/homestead:2.8.136"], ports: [{ port: 8088, ip: "192.0.2.242" }],
-      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/wjcloudy/homestead:2.8.136")] },
+      images: ["ghcr.io/wjcloudy/homestead:2.8.137"], ports: [{ port: 8088, ip: "192.0.2.242" }],
+      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/wjcloudy/homestead:2.8.137")] },
   ];
   const storage = { cap_gb: 1392, avail_gb: 906, used_gb: 486, used_pct: 34.9,
     provisioned_gb: 670, actual_gb: 224, volumes: 8, healthy: 6, degraded: 1,
@@ -426,7 +454,7 @@
       detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.136", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.137", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
@@ -436,7 +464,7 @@
       top_cpu: [{ name: "frigate", ns: "lab", nodes: ["harvester-node2"], cpu: .84 }, { name: "home-assistant", ns: "lab", nodes: ["harvester-node1"], cpu: .31 }, { name: "paperless", ns: "lab", nodes: ["harvester-node3"], cpu: .18 }],
       top_mem: [{ name: "frigate", ns: "lab", nodes: ["harvester-node2"], mem_mb: 1840 }, { name: "home-assistant", ns: "lab", nodes: ["harvester-node1"], mem_mb: 738 }, { name: "paperless", ns: "lab", nodes: ["harvester-node3"], mem_mb: 512 }] },
     "/api/history": history, "/api/storage": storage, "/api/volumes": volumes,
-    "/api/nodes": nodes, "/api/node": url => nodes.find(n => n.name === url.searchParams.get("name")) || {},
+    "/api/nodes": nodes, "/api/nodes/uptime": demoUptime, "/api/node": url => nodes.find(n => n.name === url.searchParams.get("name")) || {},
     "/api/node/smart": url => {
       const node = nodes.find(n => n.name === url.searchParams.get("node"));
       const disk = node?.temps?.disks?.find(d => d.name === url.searchParams.get("disk"));
@@ -516,15 +544,15 @@
       user: "admin", added: "2026-09-22 17:02" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "garage") return { name, version: "2.8.136", protocol: 1, local_version: "2.8.136",
+      if (name === "garage") return { name, version: "2.8.137", protocol: 1, local_version: "2.8.137",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "garage runs 2.8.136 and this one 2.8.136. Moves work between them; garage is the newer of the two." };
+        message: "garage runs 2.8.137 and this one 2.8.137. Moves work between them; garage is the newer of the two." };
       return name === "attic"
-        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.136", local_protocol: 1,
+        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.137", local_protocol: 1,
             state: "behind", compatible: false,
-            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.136). Update attic first." }
-        : { name, version: "2.8.136", protocol: 1, local_version: "2.8.136", local_protocol: 1,
-            state: "same", compatible: true, message: "Both run Homestead 2.8.136." };
+            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.137). Update attic first." }
+        : { name, version: "2.8.137", protocol: 1, local_version: "2.8.137", local_protocol: 1,
+            state: "same", compatible: true, message: "Both run Homestead 2.8.137." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     // shed is ready to move from; garage has no backup storage yet.
@@ -535,7 +563,7 @@
     "/api/move/clusters/storage": { ok: true, detail: "backup storage is starting on garage at http://192.0.2.244:9000" },
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "shed", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.136", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.137", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -863,7 +891,7 @@ ssh_pwauth: true
     "/api/volumes/reclass/start": { ok: true, operation: { id: "op4" } },
     "/api/self/health": () => {
       const now = Date.now() / 1000;
-      return { version: "2.8.136", leader: true, identity: "homestead-6d9f-abcde",
+      return { version: "2.8.137", leader: true, identity: "homestead-6d9f-abcde",
         api: { ok: true, ms: 38 },
         replicas: { desired: 1, pods: [{ name: "homestead-6d9f-abcde", node: "harvester-node1", ready: true, leader: true, this: true }] },
         loops: [{ name: "sampler", label: "Live charts", state: "ok", last_ok: now - 12, error: "", every: 30 },
@@ -1183,7 +1211,7 @@ ssh_pwauth: true
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.136", candidate_tag: "2.8.136", remote_digest: "sha256:ghi", available: true }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.137", candidate_tag: "2.8.137", remote_digest: "sha256:ghi", available: true }] },
       { ns: "lab", name: "paperless", available: false, can_rollback: false,
         images: [{ container: "paperless", deployed: "registry.lan/paperless-ngx:2.11", candidate: "registry.lan/paperless-ngx:2.11", available: false, error: "registry authentication required" }] }] },
     "/api/flow": {

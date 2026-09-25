@@ -250,6 +250,14 @@ def mounts():
             break
     return out
 
+def uptime():
+    """Seconds since the host booted, from its own /proc."""
+    raw = _read(f"{PROC}/uptime")
+    try:
+        return round(float(raw.split()[0])) if raw else None
+    except (ValueError, IndexError):
+        return None
+
 def payload():
     t, hw = thermal(), hwmon()
     allt = [x["celsius"] for x in t] + [x["celsius"] for x in hw]
@@ -267,7 +275,8 @@ def payload():
             "sensors": len(t) + len(hw),
             "devices": devices(),
             "disks": disk_activity(),
-            "mounts": mounts()}
+            "mounts": mounts(),
+            "uptime_s": uptime()}
 
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
