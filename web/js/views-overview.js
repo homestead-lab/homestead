@@ -156,28 +156,39 @@ function uptimeDuration(s) {
 }
 const uptimeWhen = t => new Date(t * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
-/* The node page's uptime card: windows, ninety days as a strip, and each
-   outage and reboot. */
+/* The node page's uptime card: how it is now, the windows, ninety days as a
+   strip, and a log of each outage and reboot. The log is history - an entry
+   says when it went down and how long for - so a node that came back does
+   not read as down; only one down at this moment says so. */
 window.nodeUptimePaint = async n => {
   const host = $("#nodeUptime");
   if (!host) return;
   const all = await api("/api/nodes/uptime").catch(() => null);
   const u = all?.nodes?.[n.name];
-  if (!u) { host.innerHTML = `<div class="ctitle">Uptime</div><div class="dim small">${esc(nodeUpFor(n) || "No samples yet: Homestead records one every five minutes.")}</div>`; return; }
+  const now = n.status === "Ready"
+    ? `<span class="pill low">Up now</span><span class="mono small">${esc(nodeUpFor(n))}</span>`
+    : `<span class="pill crit">${esc(n.status || "Down")} now</span>`;
+  const head = `<div class="between"><div class="ctitle">Uptime</div><div class="row" style="gap:8px">${now}</div></div>`;
+  if (!u) { host.innerHTML = `${head}<div class="dim small">No samples yet: Homestead records one every five minutes.</div>`; return; }
   const tone = uptimeTone;
   const events = [...(u.outages || []).map(o => ({ t: o.start, kind: "down", o })), ...(u.reboots || []).map(t => ({ t, kind: "reboot" }))]
     .sort((a, b) => b.t - a.t).slice(0, 12);
-  host.innerHTML = `<div class="between"><div class="ctitle">Uptime</div><span class="mono small">${esc(nodeUpFor(n))}</span></div>
-    <div class="uptime-windows">${Object.entries(u.windows).map(([label, v]) => `<div><span class="dim xs">${label.toUpperCase()}</span>
+  const took = o => `${o.exact ? "" : "about "}${uptimeDuration(o.down_s)}`;
+  host.innerHTML = `${head}
+    <div class="uptime-windows">${Object.entries(u.windows).map(([label, v]) => `<div><span class="dim xs">LAST ${label.toUpperCase()}</span>
       <b class="mono uptime-${tone(v)}">${uptimePct(v)}</b></div>`).join("")}</div>
     <div class="uptime-strip" aria-label="Each of the last 90 days">${u.days.map(d => `<i class="uptime-${tone(d.up)}"
       data-tip="${new Date(d.day * 1000).toLocaleDateString()} · ${d.up == null ? "no samples" : uptimePct(d.up) + " up"}"></i>`).join("")}</div>
     <div class="between dim xs" style="margin-top:3px"><span>90 days ago</span><span>today</span></div>
+    <div class="dim xs uptime-loghead">OUTAGES AND REBOOTS</div>
     ${events.length ? `<div class="uptime-events">${events.map(e => e.kind === "reboot"
       ? `<div><span class="tag">rebooted</span><span class="mono xs">${esc(uptimeWhen(e.t))}</span></div>`
-      : `<div><span class="tag ${e.o.ongoing ? "bad" : "warn"}">${e.o.ongoing ? "down now" : "down"}</span><span class="mono xs">${esc(uptimeWhen(e.o.start))}</span>
-        <span class="dim xs">${e.o.exact ? "" : "about "}${uptimeDuration(e.o.down_s)}${e.o.ongoing ? " so far" : ""}</span></div>`).join("")}</div>`
-      : '<div class="dim small" style="margin-top:10px">No outage or reboot recorded.</div>'}`;
+      : e.o.ongoing
+        ? `<div><span class="tag bad">down now</span><span class="mono xs">since ${esc(uptimeWhen(e.o.start))}</span>
+            <span class="dim xs">${took(e.o)} so far</span></div>`
+        : `<div><span class="tag warn">was down</span><span class="mono xs">${esc(uptimeWhen(e.o.start))}</span>
+            <span class="dim xs">for ${took(e.o)}, then back</span></div>`).join("")}</div>`
+      : '<div class="dim small">No outage or reboot recorded.</div>'}`;
 };
 
 /* What falls to this node rather than another: the addresses kube-vip has

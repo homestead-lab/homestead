@@ -284,10 +284,11 @@ h1{margin:2px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em}
 .uptime-windows{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:10px 0 12px}
 .uptime-windows>div{display:grid;gap:2px}.uptime-windows b{font-size:15px}
 b.uptime-ok{color:var(--ok)}b.uptime-warn{color:var(--med)}b.uptime-bad{color:var(--crit)}b.uptime-none{color:var(--dim)}
+.uptime-loghead{margin:14px 0 2px;letter-spacing:.08em}
 .uptime-strip{display:grid;grid-template-columns:repeat(90,minmax(0,1fr));gap:1px;height:26px}
 .uptime-strip i{border-radius:1px;background:var(--line)}
 .uptime-strip i.uptime-ok{background:var(--ok)}.uptime-strip i.uptime-warn{background:var(--med)}.uptime-strip i.uptime-bad{background:var(--crit)}
-.uptime-events{display:grid;gap:5px;margin-top:12px;max-height:200px;overflow:auto}
+.uptime-events{display:grid;gap:5px;margin-top:6px;max-height:200px;overflow:auto}
 .uptime-events>div{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .pullbar{display:grid;gap:3px;margin:6px 0 2px}.pullbar .meter{height:5px}
 .tree-container{padding:3px 0}.tree-branch{font-size:9px;letter-spacing:.06em;text-transform:uppercase;flex:0 0 58px}.tree-branch.init{color:var(--vio)}
