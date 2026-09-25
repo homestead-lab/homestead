@@ -124,11 +124,19 @@ rules:
   - apiGroups: ["cdi.kubevirt.io"]
     resources: [datavolumes]
     verbs: [get, list, watch, create, delete]
-  # upgrades and versions: the Cluster page shows what Harvester offers and
-  # follows an upgrade started in Harvester's dashboard; it never starts one.
+  # upgrades and versions: the Cluster page shows what Harvester offers,
+  # starts an upgrade to an offered version when an admin asks, and follows
+  # it, as Harvester's own dashboard does.
   - apiGroups: ["harvesterhci.io"]
-    resources: [settings, upgrades, versions]
+    resources: [settings, versions]
     verbs: [get, list]
+  - apiGroups: ["harvesterhci.io"]
+    resources: [upgrades]
+    verbs: [get, list, create]
+  # k3s and RKE2 upgrades: the system-upgrade-controller's Plans.
+  - apiGroups: ["upgrade.cattle.io"]
+    resources: [plans]
+    verbs: [get, list, create, update, delete]
   # VM images: downloaded for a VM from a URL, listed in Image cache, and
   # deleted there once no disk was made from one.
   - apiGroups: ["harvesterhci.io"]

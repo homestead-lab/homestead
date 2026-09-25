@@ -110,6 +110,29 @@ pressure, core services, and platform warnings from the last day.
 - **Remove from cluster** takes out a host that is gone - including one that
   died for good - after checking that etcd keeps quorum and that no volume
   loses its last copy.
-- On Harvester, the newest Harvester releases are listed, and a running
-  upgrade is followed stage by stage. Upgrades themselves are started from
-  Harvester's own dashboard.
+- On Harvester, the newest Harvester releases are listed. A version Harvester
+  offers can be upgraded to from here (type the version to confirm), as its
+  own dashboard's Upgrade button does. Either way, the upgrade is followed
+  stage by stage and node by node.
+
+### Platform versions
+
+**Platform versions** lists what runs under your apps: the cluster itself
+(k3s or RKE2), Longhorn, KubeVirt and CDI. For each it shows the version
+running and the newest release, with a link to the release notes. Homestead
+checks for releases twice a day; **Check** asks now.
+
+Where Homestead can upgrade something, it offers the next version. Each
+project supports going **one minor version at a time**: first the newest
+patch of the minor you are on, then the newest of the next minor. A further
+step is offered once that one is done.
+
+- **k3s and RKE2** are upgraded by Rancher's system-upgrade-controller.
+  Homestead installs it the first time. The servers are cordoned and upgraded
+  one at a time, then the agents. The job tray shows how many nodes are done.
+  Cancelling stops any further node being upgraded.
+- **Longhorn, KubeVirt and CDI** that Homestead installed (Settings > Cluster >
+  Add-ons) move on through their HelmChart. Installed another way, they are
+  shown with their notes: upgrade them the way they were installed.
+- **On Harvester**, Longhorn and KubeVirt come with Harvester and are upgraded
+  with it, so they are shown but not upgraded apart from it.

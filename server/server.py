@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.147")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.148")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -3449,6 +3449,7 @@ import homestead_mqtt as MQTT
 import homestead_history as HISTORY
 import homestead_platform as PLATFORM
 import homestead_addons as ADDONS
+import homestead_components as COMPONENTS
 import homestead_resources as RESOURCES
 import homestead_vms as VMS
 import homestead_lhcapacity as LHCAP
@@ -3553,6 +3554,24 @@ MQTT.bind(kget, ksend, DEFAULT_NS, lambda: mqtt_snapshot(), LEADER.is_leader)
 HISTORY.bind(DATA_DIR)
 PLATFORM.bind(kget)
 ADDONS.bind(kget, ksend, PLATFORM.detect, node_temps)
+COMPONENTS.bind(kget, ksend, PLATFORM.detect, lambda cfg: HELM.upgrade(cfg), ADDONS)
+OPS.RESOLVERS["platform-upgrade"] = COMPONENTS.status
+OPS.CANCELLERS["platform-upgrade"] = (COMPONENTS.cancel_plan, COMPONENTS.cancel_run)
+
+
+def _harvester_upgrade_status(item):
+    """A Harvester upgrade Homestead started, followed as the Cluster page
+    follows any: Harvester's own steps, then each node."""
+    name = item["ref"].get("upgrade", "")
+    row = next((row for row in UPGRADES.upgrades() if row["name"] == name), None)
+    if not row:
+        return "running", 1, "Waiting for Harvester to take the upgrade"
+    step = next((s["label"] for s in row["steps"] if s["state"] in ("running", "failed")), "")
+    message = row["message"] or (f"{step}" if step else f"Harvester {row['version']}")
+    return row["state"], row["progress"], message
+
+
+OPS.RESOLVERS["harvester-upgrade"] = _harvester_upgrade_status
 
 
 def ktable(path, timeout=20):
@@ -4465,6 +4484,8 @@ ADMIN_ROUTES = {
     "/api/lh/restore", "/api/lh/backup/delete", "/api/lh/group/delete",
     # Installing Longhorn or KubeVirt changes the cluster itself.
     "/api/addons/longhorn", "/api/addons/kubevirt",
+    # Upgrading the platform: the cluster, Longhorn, KubeVirt, CDI.
+    "/api/cluster/components/upgrade", "/api/cluster/upgrades/start",
     # Homestead's own permissions, and the namespaces apps live in.
     "/api/self/permissions", "/api/namespaces/create", "/api/namespaces/delete",
 }
@@ -4789,6 +4810,11 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, HELM.search((q.get("q") or [""])[0]))
             if p == "/api/helm/chart":
                 return self._send(200, HELM.chart((q.get("repo") or [""])[0], (q.get("name") or [""])[0]))
+            if p == "/api/cluster/components":
+                if (q.get("force") or [""])[0] == "1":
+                    _cache.pop("components", None)
+                    return self._send(200, COMPONENTS.report(force=True))
+                return self._send(200, cached("components", 60, COMPONENTS.report))
             if p == "/api/cluster/upgrades":
                 current = ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", "")
                 return self._send(200, UPGRADES.report(current, force=(q.get("force") or [""])[0] == "1"))
@@ -5152,6 +5178,29 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, set_homestead_replicas(b.get("replicas")))
             if p == "/api/self/data/move":
                 return self._send(200, move_homestead_data(b.get("storage_class", "")))
+            if p == "/api/cluster/components/upgrade":
+                result = COMPONENTS.upgrade(str(b.get("component") or ""), str(b.get("to") or ""))
+                for key in ("components", "helm", "platform"):
+                    _cache.pop(key, None)
+                result["operation"] = OPS.start(
+                    "platform-upgrade", f"Upgrade {result['name']} to {result['to']}",
+                    {"kind": "Cluster" if result["component"] == "cluster" else "HelmChart", "name": result["name"],
+                     "namespace": ""}, "/system/cluster",
+                    {"component": result["component"], "name": result["name"], "from": result["from"],
+                     "to": result["to"], "started": time.time(),
+                     "phase": "controller" if result["component"] == "cluster" else ""},
+                    result["detail"])
+                return self._send(200, result)
+            if p == "/api/cluster/upgrades/start":
+                version = str(b.get("version") or "")
+                name = COMPONENTS.start_harvester(version, UPGRADES.offered())
+                _cache.pop("cluster", None)
+                operation = OPS.start("harvester-upgrade", f"Upgrade Harvester to {version}",
+                                      {"kind": "Upgrade", "name": name, "namespace": "harvester-system"},
+                                      "/system/cluster", {"upgrade": name, "version": version},
+                                      "Harvester checks the cluster, then prepares each node")
+                return self._send(200, {"ok": True, "upgrade": name, "operation": operation,
+                                        "detail": f"Harvester is upgrading to {version}"})
             if p in ("/api/addons/longhorn", "/api/addons/kubevirt"):
                 what = p.rsplit("/", 1)[1]
                 result = ADDONS.install_longhorn(b) if what == "longhorn" else ADDONS.install_kubevirt(b)
@@ -5897,7 +5946,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.147 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.148 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

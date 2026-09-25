@@ -218,8 +218,8 @@
     // Homestead itself: its Stop asks first, since it takes this page with it.
     { name: "homestead", ns: "lab", kind: "Deployment", group: "Homestead", self: true, desired: 1, ready: 1, uptime: 86400,
       cpu: 0.04, mem_mb: 88, nodes: ["harvester-node1"], hardware: [],
-      images: ["ghcr.io/wjcloudy/homestead:2.8.147"], ports: [{ port: 8088, ip: "192.0.2.242" }],
-      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/wjcloudy/homestead:2.8.147")] },
+      images: ["ghcr.io/wjcloudy/homestead:2.8.148"], ports: [{ port: 8088, ip: "192.0.2.242" }],
+      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/wjcloudy/homestead:2.8.148")] },
   ];
   const storage = { cap_gb: 1392, avail_gb: 906, used_gb: 486, used_pct: 34.9,
     provisioned_gb: 670, actual_gb: 224, volumes: 8, healthy: 6, degraded: 1,
@@ -484,7 +484,7 @@
       detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.147", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.148", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
@@ -591,15 +591,15 @@
       user: "admin", added: "2026-09-22 17:02" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "garage") return { name, version: "2.8.147", protocol: 1, local_version: "2.8.147",
+      if (name === "garage") return { name, version: "2.8.148", protocol: 1, local_version: "2.8.148",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "garage runs 2.8.147 and this one 2.8.147. Moves work between them; garage is the newer of the two." };
+        message: "garage runs 2.8.148 and this one 2.8.148. Moves work between them; garage is the newer of the two." };
       return name === "attic"
-        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.147", local_protocol: 1,
+        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.148", local_protocol: 1,
             state: "behind", compatible: false,
-            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.147). Update attic first." }
-        : { name, version: "2.8.147", protocol: 1, local_version: "2.8.147", local_protocol: 1,
-            state: "same", compatible: true, message: "Both run Homestead 2.8.147." };
+            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.148). Update attic first." }
+        : { name, version: "2.8.148", protocol: 1, local_version: "2.8.148", local_protocol: 1,
+            state: "same", compatible: true, message: "Both run Homestead 2.8.148." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     // shed is ready to move from; garage has no backup storage yet.
@@ -610,7 +610,7 @@
     "/api/move/clusters/storage": { ok: true, detail: "backup storage is starting on garage at http://192.0.2.244:9000" },
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "shed", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.147", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.148", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -992,7 +992,7 @@ ssh_pwauth: true
     "/api/volumes/reclass/start": { ok: true, operation: { id: "op4" } },
     "/api/self/health": () => {
       const now = Date.now() / 1000;
-      return { version: "2.8.147", leader: true, identity: "homestead-6d9f-abcde",
+      return { version: "2.8.148", leader: true, identity: "homestead-6d9f-abcde",
         api: { ok: true, ms: 38 },
         replicas: { desired: 1, pods: [{ name: "homestead-6d9f-abcde", node: "harvester-node1", ready: true, leader: true, this: true }] },
         loops: [{ name: "sampler", label: "Live charts", state: "ok", last_ok: now - 12, error: "", every: 30 },
@@ -1082,6 +1082,24 @@ ssh_pwauth: true
       }
       return { links: portalLinks, icons: ["router", "switch", "wifi", "firewall", "nas", "server", "printer", "camera", "ups", "globe"] };
     },
+    "/api/cluster/components": demoPlatform === "harvester"
+      ? { distribution: "harvester", harvester: true, checked: Math.floor(Date.now() / 1000), components: [
+          { id: "cluster", name: "Harvester", how: "harvester", installed: "" },
+          { id: "longhorn", name: "Longhorn", installed: "v1.8.1", newest: "v1.9.1", next: "", behind: true, how: "harvester",
+            note: "Comes with Harvester, and is upgraded with it.", notes_url: "https://github.com/longhorn/longhorn/releases/tag/v1.9.1" },
+          { id: "kubevirt", name: "KubeVirt", installed: "v1.4.0", newest: "v1.6.0", next: "", behind: true, how: "harvester", phase: "Deployed",
+            note: "Comes with Harvester, and is upgraded with it.", notes_url: "https://github.com/kubevirt/kubevirt/releases/tag/v1.6.0" },
+          { id: "cdi", name: "CDI", installed: "v1.61.0", newest: "v1.62.0", next: "", behind: true, how: "harvester", phase: "Deployed",
+            note: "Comes with Harvester, and is upgraded with it." }] }
+      : { distribution: "k3s", harvester: false, checked: Math.floor(Date.now() / 1000), components: [
+          { id: "cluster", name: "k3s", installed: "v1.31.4+k3s1", newest: "v1.33.4+k3s1", next: "v1.31.12+k3s1", behind: true, how: "suc",
+            steps_left: true, note: "Upgraded by Rancher's system-upgrade-controller: servers one at a time, then agents.",
+            notes_url: "https://github.com/k3s-io/k3s/releases/tag/v1.31.12+k3s1", nodes: { "node-1": "v1.31.4+k3s1" } },
+          ...(demoPlatform === "kubevirt" ? [{ id: "kubevirt", name: "KubeVirt", installed: "v1.6.0", newest: "v1.6.0", next: "", behind: false,
+            how: "helmchart", phase: "Deployed", note: "" }] : [])] },
+    "/api/cluster/components/upgrade": { ok: true, component: "cluster", name: "k3s", from: "v1.31.4+k3s1", to: "v1.31.12+k3s1",
+      detail: "Installing Rancher's system-upgrade-controller first; then the servers move to v1.31.12+k3s1 one at a time, and the agents after them" },
+    "/api/cluster/upgrades/start": { ok: true, upgrade: "hvst-upgrade-demo", detail: "Harvester is upgrading to v1.9.0" },
     "/api/cluster/upgrades": { current: "1.8.2", error: "", offered: [{ version: "v1.9.0", released: "20260812", tags: [] }],
       stable: { tag: "v1.9.0", name: "Harvester v1.9.0", channel: "stable", published: "2026-08-12T09:00:00Z", url: "https://github.com/harvester/harvester/releases", offered: true },
       test: { tag: "v1.9.1-rc2", name: "Harvester v1.9.1-rc2", channel: "rc", published: "2026-09-18T09:00:00Z", url: "https://github.com/harvester/harvester/releases", offered: false },
@@ -1328,7 +1346,7 @@ ssh_pwauth: true
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.147", candidate_tag: "2.8.147", remote_digest: "sha256:ghi", available: true }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.148", candidate_tag: "2.8.148", remote_digest: "sha256:ghi", available: true }] },
       { ns: "lab", name: "paperless", available: false, can_rollback: false,
         images: [{ container: "paperless", deployed: "registry.lan/paperless-ngx:2.11", candidate: "registry.lan/paperless-ngx:2.11", available: false, error: "registry authentication required" }] }] },
     "/api/flow": {

@@ -128,11 +128,19 @@ rules:
   - apiGroups: ["cdi.kubevirt.io"]
     resources: [datavolumes]
     verbs: [get, list, watch, create, delete]
-  # upgrades and versions: the Cluster page shows what Harvester offers and
-  # follows an upgrade started in Harvester's dashboard; it never starts one.
+  # upgrades and versions: the Cluster page shows what Harvester offers,
+  # starts an upgrade to an offered version when an admin asks, and follows
+  # it, as Harvester's own dashboard does.
   - apiGroups: ["harvesterhci.io"]
-    resources: [settings, upgrades, versions]
+    resources: [settings, versions]
     verbs: [get, list]
+  - apiGroups: ["harvesterhci.io"]
+    resources: [upgrades]
+    verbs: [get, list, create]
+  # k3s and RKE2 upgrades: the system-upgrade-controller's Plans.
+  - apiGroups: ["upgrade.cattle.io"]
+    resources: [plans]
+    verbs: [get, list, create, update, delete]
   # VM images: downloaded for a VM from a URL, listed in Image cache, and
   # deleted there once no disk was made from one.
   - apiGroups: ["harvesterhci.io"]
@@ -242,7 +250,7 @@ metadata:
   labels:
     app: homestead
   annotations:
-    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.147"}'
+    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.148"}'
 spec:
   replicas: 1
   strategy:
@@ -277,7 +285,7 @@ spec:
           tolerationSeconds: 15
       initContainers:
         - name: data-permissions
-          image: ghcr.io/wjcloudy/homestead:2.8.147
+          image: ghcr.io/wjcloudy/homestead:2.8.148
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "chown 10001:10001 /data && chmod 0770 /data"]
           securityContext:
@@ -294,7 +302,7 @@ spec:
               mountPath: /data
       containers:
         - name: homestead
-          image: ghcr.io/wjcloudy/homestead:2.8.147
+          image: ghcr.io/wjcloudy/homestead:2.8.148
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT
