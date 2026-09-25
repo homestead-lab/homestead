@@ -645,17 +645,19 @@ window.doVmCreate = async () => {
 };
 
 /* ---------------- image cache ---------------- */
+/* Why an image is kept: something runs it, will run it, or can go back to it. */
+const IMAGE_REASONS = {
+  active: { tone: "ok", tip: "" },
+  rollback: { tone: "warn", tip: "kept so Roll back can return to it" },
+  stopped: { tone: "info", tip: "stopped, and starts from this image; delete it or change its image to clean this up" },
+  scheduled: { tone: "info", tip: "a scheduled job that runs this image" },
+};
 async function viewImages() {
   const d = await api("/api/images");
   STATE.data.imageCache = d;
   // Kubernetes lists only each node's largest images; the full list is
-  // containerd's, asked for by a scan - started here at most every 15 minutes.
-  if (!d.complete && !(d.scanning || []).length && can("admin")
-      && Date.now() - (window.__imageScanAt || 0) > 15 * 60 * 1000) {
-    window.__imageScanAt = Date.now();
-    api("/api/images/scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
-      .then(() => setTimeout(() => { if (STATE.view === "images") viewImages(); }, 6000)).catch(() => {});
-  }
+  // containerd's. Homestead asks for it itself when its last answer is old,
+  // so this only waits for a scan that is running to finish.
   if ((d.scanning || []).length) setTimeout(() => { if (STATE.view === "images") viewImages(); }, 4000);
   const q = STATE.q.toLowerCase();
   const core = n => /(^|\/)(rancher|harvester|longhornio|kubevirt|cdi-|cilium|kube-|metrics-server|registry\.k8s\.io|pause|traefik|fleet|system-upgrade|k8snetworkplumbingwg|multus|whereabouts|kubeovn|calico|canal|flannel|coredns|etcd|rke2|neuvector|suse\/sles\/)/i.test(n);
@@ -663,18 +665,18 @@ async function viewImages() {
   const hidden = all.filter(i => core(i.name)).length;
   const imgs = all.filter(i => STATE.showCoreImages || !core(i.name));
   paint(`<div class="phead"><div><h2>Image cache</h2>
-      <p>${imgs.length} app images across ${d.nodes.length} nodes · ${d.protected || 0} active/rollback retained · ${hidden && !STATE.showCoreImages ? `${hidden} Harvester/system images hidden` : `${d.distinct} total`} ${tip("Kubernetes reports each node's largest cached images. Smaller cache entries may not appear and cannot be removed here.")}</p></div>
+      <p>${imgs.length} app images across ${d.nodes.length} nodes · ${d.protected || 0} kept (running, stopped or for rollback) · ${hidden && !STATE.showCoreImages ? `${hidden} Harvester/system images hidden` : `${d.distinct} total`} ${tip("Each node's containerd is asked for every image it holds every 15 minutes or so; images pulled since are added from what Kubernetes reports.")}</p></div>
       <label class="switch"><input type="checkbox" ${STATE.showCoreImages ? "checked" : ""} onchange="STATE.showCoreImages=this.checked;viewImages()"> Show Harvester/system images</label></div>
     <div class="grid g3 statgrid" style="margin-bottom:18px">
       ${d.nodes.map(n => `<div class="card flat"><div class="ctitle" title="${esc(n.node)}">${esc(n.node)}</div>
         <div class="bignum" style="margin-top:8px">${n.total_gb}<span class="unit">GB</span></div>
-        <div class="csub">${n.count} images cached</div></div>`).join("")}
+        <div class="csub">${n.count} images cached${n.scanned_at ? ` · scanned ${esc(fmtAgo(Date.now() / 1000 - n.scanned_at))}` : " · not scanned yet"}</div></div>`).join("")}
     </div>
     ${(d.scanning || []).length ? `<div class="note" style="margin-bottom:12px"><span class="spin2"></span> Asking containerd on ${d.scanning.length} node${d.scanning.length === 1 ? "" : "s"} for every image it holds…</div>`
       : !d.complete ? `<div class="note warn between" style="margin-bottom:12px"><span>Kubernetes reports only each node's largest images, so some - running ones included - are missing here.
           A scan asks each node's containerd for all of them.</span><button class="btn sm" data-need="admin" onclick="imageScan()">Scan every node</button></div>` : ""}
     <div class="note" style="margin-bottom:12px"><b>Removing images.</b> <b>Clean up</b> removes an image nothing uses from the nodes that hold it.
-      <span class="tag ok">active</span> images are what running containers use, and stay. <span class="tag warn">rollback</span> copies are the image a container
+      <span class="tag ok">active</span> images are what running containers use, and <span class="tag info">stopped</span> ones what a container scaled to zero starts from; both stay. <span class="tag warn">rollback</span> copies are the image a container
       had before its last update, kept so <b>Roll back</b> can return to it - <b>Forget</b> one and it becomes unused, to clean up like the rest.</div>
     ${(d.pulls || []).map(pull => `<div class="note warn between prepull-note" style="margin-bottom:12px">
       <span>Pre-pulling <span class="mono">${esc(pull.image)}</span> · ${pull.ready} of ${pull.desired} node${pull.desired === 1 ? "" : "s"} done.
@@ -687,8 +689,8 @@ async function viewImages() {
       ${imgs.map(i => {
         const missing = d.node_names.filter(n => !i.nodes.includes(n));
         const retained = i.retained_by || [];
-        const retention = retained.length ? retained.slice(0, 3).map(r => `<span class="tag ${r.reason === "rollback" ? "warn" : "ok"}"
-          title="${esc(r.namespace)} · ${esc(r.workload)} · ${esc(r.container)}">${r.reason === "rollback" ? "rollback" : "active"} · ${esc(r.workload)}</span>${r.reason === "rollback"
+        const retention = retained.length ? retained.slice(0, 3).map(r => `<span class="tag ${IMAGE_REASONS[r.reason]?.tone ?? "ok"}"
+          data-tip="${esc(`${r.namespace} · ${r.workload} · ${r.container}`)}${IMAGE_REASONS[r.reason]?.tip ? esc(" - " + IMAGE_REASONS[r.reason].tip) : ""}">${esc(r.reason)} · ${esc(r.workload)}</span>${r.reason === "rollback"
           ? `<button class="btn sm" data-need="admin" data-tip="Stop keeping this image for ${esc(r.workload)}'s Roll back, so it can be cleaned up" onclick="forgetRollback('${esc(r.namespace)}','${esc(r.workload)}')">Forget</button>` : ""}`).join("") +
           (retained.length > 3 ? `<span class="tag">+${retained.length - 3}</span>` : "") : '<span class="tag">unreferenced</span>';
         return `<tr><td class="mono small imgname">${esc(i.name)}</td>

@@ -734,15 +734,19 @@ TAG=2.8.137 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ## Image cache cleanup
 
 Image Cache groups kubelet aliases by digest and labels images retained by a
-running pod or the immediate managed-update rollback. Admins can remove an
+running pod, a container scaled to zero or a scheduled job (which start from
+it), or the immediate managed-update rollback. Admins can remove an
 unreferenced application digest from selected nodes after an impact preview and
 typed confirmation. The backend rechecks live references immediately before
-starting one short-lived cleanup pod per node; active, rollback, and recognized
-Harvester/Kubernetes platform images are refused. Cleanup pods mount only the
+starting one short-lived cleanup pod per node; active, stopped, scheduled,
+rollback, and recognized Harvester/Kubernetes platform images are refused. Cleanup pods mount only the
 host RKE2 `crictl` binary and containerd socket, run as root without Linux
 capabilities or privilege escalation, and report progress through Activity.
-Kubernetes Node status exposes only each node's largest cached images; smaller
-entries may not appear in the table and Homestead will not attempt to remove them.
+Kubernetes Node status exposes only each node's fifty largest cached images, so
+Homestead asks each node's containerd for all of them - whenever its last answer
+is more than fifteen minutes old - and keeps that answer on its data volume,
+where every replica reads it and it survives a restart. Images pulled since the
+last scan are added from what Kubernetes reports.
 
 ## Safe volume deletion
 

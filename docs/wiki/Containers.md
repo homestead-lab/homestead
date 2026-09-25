@@ -73,9 +73,12 @@ the registry gives. Kubernetes itself reports no more than "Pulling".
 ### Image cache
 
 **Image cache** lists the images on each node. Kubernetes reports only each
-node's largest ones, so the page asks each node's containerd for all of them
-(a short scan, run when you open it). **Clean up** removes an image nothing
-uses. *Active* images are what running containers use. *Rollback* copies are
+node's largest ones, so Homestead asks each node's containerd for all of them
+(a short scan, again whenever the last is over fifteen minutes old) and keeps
+the answer, adding anything pulled since. **Clean up** removes an image nothing
+uses. *Active* images are what running containers use; *stopped* ones are what
+a container scaled to zero starts from, and *scheduled* ones a scheduled job's,
+so neither reads as unused. *Rollback* copies are
 the image a container had before its last update, kept so **Roll back** can
 return to it; **Forget** one and it becomes unused, to clean up like the rest.
 

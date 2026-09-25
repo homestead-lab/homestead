@@ -148,12 +148,6 @@ function nodeUpFor(n) {
   if (n.ready_since) return `Ready ${fmtAgo((Date.now() - Date.parse(n.ready_since)) / 1000).replace(" ago", "")}`;
   return "";
 }
-function nodeUptimeLine(n) {
-  const u = STATE.data.uptime?.nodes?.[n.name];
-  const month = u?.windows?.["30d"], outs = (u?.outages || []).length;
-  const parts = [nodeUpFor(n), month != null ? `${uptimePct(month)} over 30 days` : ""].filter(Boolean);
-  return parts.length ? `<div class="dim xs node-uptime" data-tip="${outs ? `${outs} outage${outs === 1 ? "" : "s"} recorded - open the node for when` : "No outage recorded"}">${esc(parts.join(" · "))}</div>` : "";
-}
 const uptimePct = v => v == null ? "—" : v >= 99.995 ? "100%" : `${v.toFixed(v >= 99 ? 2 : 1)}%`;
 function uptimeDuration(s) {
   s = Math.max(0, Math.round(s));
@@ -170,7 +164,7 @@ window.nodeUptimePaint = async n => {
   const all = await api("/api/nodes/uptime").catch(() => null);
   const u = all?.nodes?.[n.name];
   if (!u) { host.innerHTML = `<div class="ctitle">Uptime</div><div class="dim small">${esc(nodeUpFor(n) || "No samples yet: Homestead records one every five minutes.")}</div>`; return; }
-  const tone = v => v == null ? "none" : v >= 99.9 ? "ok" : v >= 99 ? "warn" : "bad";
+  const tone = uptimeTone;
   const events = [...(u.outages || []).map(o => ({ t: o.start, kind: "down", o })), ...(u.reboots || []).map(t => ({ t, kind: "reboot" }))]
     .sort((a, b) => b.t - a.t).slice(0, 12);
   host.innerHTML = `<div class="between"><div class="ctitle">Uptime</div><span class="mono small">${esc(nodeUpFor(n))}</span></div>
@@ -201,6 +195,10 @@ function nodeDutyTags(n) {
 }
 window.nodeDutyTags = nodeDutyTags;
 
+/* A node at a glance. The head is the same shape on every card - name, roles
+   and how long it has been up on two lines, then thirty days of uptime - so
+   the meters below line up across a row; what falls to one node alone (a
+   VIP, shared volumes it serves) sits in the footer with its hardware. */
 function nodeCard(n) {
   const dots = "<i></i>".repeat(Math.min(n.pods_sys, 80)) + '<i class="wl"></i>'.repeat(Math.min(n.pods_wl, 40));
   const bad = n.status !== "Ready";
@@ -208,15 +206,16 @@ function nodeCard(n) {
     { value: n.cpu_pct, metric: "cpu" }, { value: n.mem_pct, metric: "memory" },
     { value: n.fs_pct || 0, metric: "disk" }, { value: n.temps?.cpu_c || 0, metric: "temperature" },
   ]);
+  const duties = nodeDutyTags(n);
+  const up = nodeUpFor(n);
+  const net = ratePair(n.rx_mbps, n.tx_mbps);
   return `<div class="card glow ${bad ? "g-bad" : health} clickable nodecard"
        onclick="nodeDetail('${esc(n.name)}')">
     <div class="between nodehead">
       <div class="row" style="gap:10px">
         <div class="av n2">${esc(n.name.replace(/[^0-9a-z]/gi, "").slice(-2).toUpperCase())}</div>
         <div class="nodename"><div style="font-weight:680" title="${esc(n.name)}">${esc(n.name)}</div>
-          <div class="dim xs" title="${esc(n.roles.join(" · "))}">${n.roles.join(" · ")}</div>
-          ${nodeUptimeLine(n)}
-          ${nodeDutyTags(n) ? `<div class="row node-duties" style="gap:4px;flex-wrap:wrap;margin-top:4px">${nodeDutyTags(n)}</div>` : ""}</div>
+          <div class="dim xs" title="${esc(n.roles.join(" · "))}">${esc([n.roles.join(" · "), up].filter(Boolean).join(" · "))}</div></div>
       </div>
       <div class="row nodehead-acts" style="gap:7px">
         ${n.schedulable === false ? '<span class="pill med">cordoned</span>' : ""}
@@ -224,29 +223,26 @@ function nodeCard(n) {
         <button class="btn sm" onclick="event.stopPropagation();nodeActions('${esc(n.name)}')">⋯</button>
       </div>
     </div>
-    <div class="row" style="margin-top:16px;gap:14px;align-items:flex-start">
-      <div style="flex:1;min-width:0">
-        <div class="between"><span class="dim xs">CPU</span>
-          <span class="small mono"><b>${n.cpu_pct}%</b> <span class="dim">of ${n.cpu_cap}</span></span></div>
-        ${meter(n.cpu_pct, 'style="margin:5px 0 11px"', "cpu")}
-        <div class="between"><span class="dim xs">MEMORY</span>
-          <span class="small mono"><b>${n.mem_pct}%</b> <span class="dim">${sizePair(n.mem_used_gb, n.mem_cap_gb)}</span></span></div>
-        ${meter(n.mem_pct, 'style="margin:5px 0 11px"', "memory")}
-        ${nodeDiskLines(n)}
-        <div class="between"><span class="dim xs">NETWORK</span>
-          <span class="small mono">${ratePair(n.rx_mbps, n.tx_mbps)[0]} <span class="dim">${ratePair(n.rx_mbps, n.tx_mbps)[1]}</span></span></div>
-        ${n.temps && n.temps.cpu_c != null ? `<div class="between" style="margin-top:9px">
-          <span class="dim xs">TEMP</span>
-          <span class="small mono ${tempCls(n.temps.cpu_c)}"><b>${n.temps.cpu_c}°C</b>
-            ${n.temps.max_c > n.temps.cpu_c ? `<span class="dim">max ${n.temps.max_c}°</span>` : ""}</span></div>` : ""}
-      </div>
-      <div style="text-align:right">
-        <div class="midnum">${n.pods}</div><div class="dim xs">pods</div>
-        ${n.vms ? `<div class="midnum" style="margin-top:8px">${n.vms}</div><div class="dim xs">VMs</div>` : ""}
-      </div>
+    ${nodeUptimeStrip(n)}
+    <div class="nodemetrics">
+      <div><div class="between"><span class="dim xs">CPU</span>
+        <span class="small mono"><b>${n.cpu_pct}%</b> <span class="dim">of ${n.cpu_cap}</span></span></div>
+        ${meter(n.cpu_pct, "", "cpu")}</div>
+      <div><div class="between"><span class="dim xs">MEMORY</span>
+        <span class="small mono"><b>${n.mem_pct}%</b> <span class="dim">${sizePair(n.mem_used_gb, n.mem_cap_gb)}</span></span></div>
+        ${meter(n.mem_pct, "", "memory")}</div>
+      ${nodeDiskLines(n)}
+      <div class="between"><span class="dim xs">NETWORK</span>
+        <span class="small mono">${net[0]} <span class="dim">${net[1]}</span></span></div>
+      ${n.temps && n.temps.cpu_c != null ? `<div class="between"><span class="dim xs">TEMP</span>
+        <span class="small mono ${tempCls(n.temps.cpu_c)}"><b>${n.temps.cpu_c}°C</b>
+          ${n.temps.max_c > n.temps.cpu_c ? `<span class="dim">max ${n.temps.max_c}°</span>` : ""}</span></div>` : ""}
     </div>
-    <div class="podgrid">${dots}</div>
+    <div class="nodepods"><span class="small mono" data-tip="${n.pods_wl} of your pods (bright) and ${n.pods_sys} system pods">
+      <b>${n.pods}</b> <span class="dim">pods${n.vms ? ` · <b>${n.vms}</b> VM${n.vms === 1 ? "" : "s"}` : ""}</span></span>
+      <div class="podgrid">${dots}</div></div>
     <div class="nodebadges">
+      ${duties ? `<div class="badgegroup"><span class="badgecap">DUTIES</span>${duties}</div>` : ""}
       <div class="badgegroup"><span class="badgecap">HARDWARE</span>
         ${hardwareTags(nodeHardwareIds(n)) || '<span class="dim xs">none defined</span>'}</div>
       <div class="badgegroup"><span class="badgecap">WORKLOADS</span>
@@ -258,19 +254,37 @@ function nodeCard(n) {
     </div></div>`;
 }
 
+/* The last thirty days, a day a bar, as the node page draws ninety. The
+   row is there on every card - saying why when there is nothing yet - so
+   the cards stay the same shape. */
+const uptimeTone = v => v == null ? "none" : v >= 99.9 ? "ok" : v >= 99 ? "warn" : "bad";
+function nodeUptimeStrip(n) {
+  const u = STATE.data.uptime?.nodes?.[n.name];
+  const days = (u?.days || []).slice(-30);
+  const month = u?.windows?.["30d"], outs = (u?.outages || []).length;
+  const tip = u ? (outs ? `${outs} outage${outs === 1 ? "" : "s"} recorded - open the node for when` : "No outage recorded")
+    : "No samples yet: Homestead records one every five minutes";
+  return `<div class="node-upstrip" data-tip="${esc(tip)}">
+    <span class="dim xs">UPTIME</span>
+    <div class="uptime-strip mini" aria-label="Each of the last 30 days">${days.length
+      ? days.map(d => `<i class="uptime-${uptimeTone(d.up)}" data-tip="${new Date(d.day * 1000).toLocaleDateString()} · ${d.up == null ? "no samples" : uptimePct(d.up) + " up"}"></i>`).join("")
+      : "<i></i>".repeat(30)}</div>
+    <b class="small mono uptime-${uptimeTone(month)}">${month == null ? "—" : uptimePct(month)}</b><span class="dim xs">30d</span></div>`;
+}
+
 /* A line per disk: the system disk's use as Kubernetes sees it, and each
    Longhorn disk's own. A disk nothing uses says so. */
 function nodeDiskLines(n) {
   const disks = n.disks || [];
-  if (!disks.length) return `<div class="between"><span class="dim xs">DISK</span>
+  if (!disks.length) return `<div><div class="between"><span class="dim xs">DISK</span>
       <span class="small mono"><b>${n.fs_pct || 0}%</b> <span class="dim">${sizePair(n.fs_used_gb, n.fs_cap_gb)}</span></span></div>
-    ${meter(n.fs_pct || 0, 'style="margin:5px 0 11px"', "disk")}`;
+    ${meter(n.fs_pct || 0, "", "disk")}</div>`;
   return disks.map(d => {
     const lh = d.lh_size_gb > 0, pct = lh ? Math.round(d.lh_used_gb / d.lh_size_gb * 100) : d.role === "system" ? (n.fs_pct || 0) : 0;
     const used = lh ? sizePair(d.lh_used_gb, d.lh_size_gb) : d.role === "system" ? sizePair(n.fs_used_gb, n.fs_cap_gb) : sizeText(d.size_gb);
-    return `<div class="between"><span class="dim xs">${esc(d.device.toUpperCase())} ${lh ? '<span class="tag ok slimtag">Longhorn</span>' : d.role === "system" ? '<span class="tag slimtag">system</span>' : `<span class="tag slimtag ${d.role === "unused" ? "info" : ""}">${esc(d.role)}</span>`}</span>
+    return `<div><div class="between"><span class="dim xs disklabel-row"><span title="${esc(d.device)}">${esc(d.device.toUpperCase())}</span> ${lh ? '<span class="tag ok slimtag">Longhorn</span>' : d.role === "system" ? '<span class="tag slimtag">system</span>' : `<span class="tag slimtag ${d.role === "unused" ? "info" : ""}">${esc(d.role)}</span>`}</span>
       <span class="small mono">${lh || d.role === "system" ? `<b>${pct}%</b> ` : ""}<span class="dim">${esc(used)}</span></span></div>
-      ${lh || d.role === "system" ? meter(pct, 'style="margin:5px 0 11px"', "disk") : '<div style="height:11px"></div>'}`;
+      ${lh || d.role === "system" ? meter(pct, "", "disk") : ""}</div>`;
   }).join("");
 }
 

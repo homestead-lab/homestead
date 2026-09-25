@@ -54,6 +54,10 @@ class ImageCacheTests(unittest.TestCase):
                 return {"items": deployments}
             raise AssertionError(path)
 
+        # Scans saved to disk belong to the tests that ask for it.
+        self.addCleanup(setattr, imports, "SCAN_DIR", imports.SCAN_DIR)
+        imports.SCAN_DIR = ""
+        imports._SCANS.clear()
         imports.kget = get
         imports.NAMES.bind(get)
         def send(method, path, body=None, **kwargs):

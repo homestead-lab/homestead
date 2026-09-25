@@ -3371,6 +3371,7 @@ def _resolve_storage_class():
 STORAGE_CLASS = _resolve_storage_class()
 LC.bind(kget, ksend, SYS_NS, _cache, HW.features, create_pvc, STORAGE_CLASS)
 IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.features)
+IMP.SCAN_DIR = DATA_DIR       # each node's full image list, kept for every replica
 AUTH.bind(kget, ksend, DEFAULT_NS)
 LH.bind(kget, ksend, _cache, STORAGE_CLASS)
 PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.features)

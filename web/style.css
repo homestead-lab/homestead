@@ -263,7 +263,24 @@ h1{margin:2px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em}
 .tree-container .tree-image{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tree-why{margin:0 0 4px 70px;font-size:10.5px;line-height:1.35;color:var(--med);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 .tree-pull{margin:4px 0 2px}
-.node-uptime{margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* A node card: thirty days of uptime under the head, then its meters two
+   to a row where the card is wide enough, and its pods on one line. */
+.node-upstrip{display:flex;align-items:center;gap:8px;margin-top:10px}
+.node-upstrip .uptime-strip.mini{flex:1;min-width:0;height:12px;grid-template-columns:repeat(30,minmax(0,1fr));gap:2px}
+.node-upstrip b{min-width:44px;text-align:right}
+.nodemetrics{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:9px 20px;margin-top:12px}
+.nodemetrics .between{flex-wrap:nowrap;gap:8px}
+.nodemetrics .between>.dim{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nodemetrics .between>.small{flex:0 0 auto}
+/* A disk's name gives way before its role does: which disk is Longhorn's matters more. */
+.nodemetrics .disklabel-row{display:flex;align-items:center;gap:5px}
+.nodemetrics .disklabel-row>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.nodemetrics .disklabel-row>.tag{flex:0 0 auto}
+.nodemetrics .meter{margin-top:4px}
+.nodepods{display:flex;align-items:center;gap:12px;margin-top:12px}
+.nodepods>span{flex:0 0 auto;white-space:nowrap}
+.nodepods .podgrid{flex:1;min-width:0;margin-top:0}
+.nodecard .podgrid i{width:6px;height:6px;border-radius:1.5px}
 .uptime-windows{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:10px 0 12px}
 .uptime-windows>div{display:grid;gap:2px}.uptime-windows b{font-size:15px}
 b.uptime-ok{color:var(--ok)}b.uptime-warn{color:var(--med)}b.uptime-bad{color:var(--crit)}b.uptime-none{color:var(--dim)}
@@ -1157,7 +1174,7 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
 .storbody{display:flex;align-items:center;gap:16px;margin-top:10px}
 .nodecard{display:flex;flex-direction:column}
 .nodecard>.nodebadges{margin-top:auto;padding-top:10px}
-.nodecard>.podgrid{margin-bottom:12px}
+.nodecard>.nodepods{margin-bottom:12px}
 .stordonut{flex:0 0 auto;display:grid;place-items:center}
 .storstats{flex:1 1 auto;min-width:0}
 .storstats .drow{padding:8px 0}

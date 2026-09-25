@@ -11,6 +11,7 @@ Step 2 is the part that takes real time, so it runs as a Job we can poll.
 import base64
 import json
 import hashlib
+import os
 import re
 import shlex
 import time
@@ -18,6 +19,7 @@ import urllib.error
 import urllib.parse
 
 import homestead_names as NAMES
+import homestead_shared as SHARED
 import homestead_hvimage as HVIMAGE
 import homestead_runtime as RUNTIME
 
@@ -1257,6 +1259,7 @@ def image_retention_inventory():
                 "workload": meta.get("name", ""), "container": container,
                 "retained_at": previous.get("at", ""),
             })
+    retained += _stopped_references()
     # Deduplicate pods belonging to the same workload and digest while keeping
     # rollback and active reasons distinct.
     unique = {}
@@ -1267,18 +1270,71 @@ def image_retention_inventory():
     return list(unique.values())
 
 
+def _stopped_references():
+    """Images a workload with no pods still starts from: a Deployment or
+    StatefulSet scaled to zero, and a CronJob between runs. With no pod to
+    name them they read as unused, and cleaning one up meant the next start
+    - often the moment it is needed - waited on a pull.
+
+    The digest each container last ran on is used where Homestead recorded
+    it; the image may be matched by its name as well, since a tag in the
+    template and the digest the node lists are two names for one image."""
+    out = []
+    for kind, path, spec_of in (
+            ("Deployment", "/apis/apps/v1/deployments", lambda o: o["spec"]["template"]["spec"]),
+            ("StatefulSet", "/apis/apps/v1/statefulsets", lambda o: o["spec"]["template"]["spec"]),
+            ("CronJob", "/apis/batch/v1/cronjobs", lambda o: o["spec"]["jobTemplate"]["spec"]["template"]["spec"])):
+        try:
+            items = kget(path).get("items", [])
+        except Exception:
+            continue
+        for obj in items:
+            meta, spec = obj.get("metadata") or {}, obj.get("spec") or {}
+            if kind != "CronJob" and int(spec.get("replicas", 1) if spec.get("replicas") is not None else 1) > 0:
+                continue          # running ones are named by their pods
+            try:
+                podspec = spec_of(obj)
+            except (KeyError, TypeError):
+                continue
+            try:
+                ran = json.loads(NAMES.annotation_of(meta, "ran-digests", "{}") or "{}")
+            except (TypeError, ValueError):
+                ran = {}
+            ran = ran if isinstance(ran, dict) else {}
+            for container in (podspec.get("initContainers") or []) + (podspec.get("containers") or []):
+                ref = container.get("image", "")
+                if not ref:
+                    continue
+                out.append({"ref": _canonical_image(ref),
+                            "digest": _image_digest(ref) or _image_digest(ran.get(container.get("name"), "")),
+                            "reason": "scheduled" if kind == "CronJob" else "stopped", "by_name": True,
+                            "namespace": meta.get("namespace", ""), "workload": meta.get("name", ""),
+                            "container": container.get("name", "")})
+    return out
+
+
+def _holds(row, digest, aliases):
+    """Whether a retention row names this cached image."""
+    if row["digest"] and row["digest"] == digest:
+        return True
+    return row["ref"] in aliases and (not row["digest"] or bool(row.get("by_name")))
+
+
 def image_cache():
     """What container images each node already has on disk."""
     nodes = kget("/api/v1/nodes").get("items", [])
     retained = image_retention_inventory()
+    _load_scans()
     scanning = _collect_scans()
+    if not scanning:
+        scanning = _rescan_if_stale(nodes)
     per_node, totals = [], {}
     full = True
     for n in nodes:
         name = n["metadata"]["name"]
         scanned = _scanned_images(name)
         full = full and scanned is not None
-        imgs = scanned if scanned is not None else (n["status"].get("images", []) or [])
+        imgs = _merged(scanned, n["status"].get("images", []) or [])
         rows = []
         for i in imgs:
             names = sorted(set(i.get("names") or ["<none>"]))
@@ -1300,9 +1356,7 @@ def image_cache():
     shared = []
     for value in totals.values():
         aliases = {_canonical_image(ref) for ref in value["names"]}
-        reasons = [row for row in retained if
-                   (value["digest"] and row["digest"] == value["digest"]) or
-                   (not row["digest"] and row["ref"] in aliases)]
+        reasons = [row for row in retained if _holds(row, value["digest"], aliases)]
         shared.append({"name": value["name"], "names": sorted(value["names"]),
                        "digest": value["digest"], "size_mb": value["size_mb"],
                        "nodes": sorted(set(value["nodes"])),
@@ -1327,8 +1381,80 @@ def image_cache():
 # each node for all of them, and the answer stands in for the status list
 # until the next scan.
 SCAN_TASK = "image-scan"
+# A scan this old is asked again. Until the new one is in, the old one is
+# still used, with whatever Kubernetes lists added: images are pulled far more
+# often than removed, and dropping back to the fifty largest hid most apps.
 SCAN_FRESH = 15 * 60
+# However stale, a scan is not started again sooner than this after the last.
+SCAN_RETRY = 5 * 60
+# Kept on Homestead's own volume, so another replica, or this one after a
+# restart, has every image rather than only the ones Kubernetes lists.
+SCAN_DIR = ""        # set by the server; empty keeps scans in memory only
+SCAN_STORE = "image-scans.json"
 _SCANS = {}          # node -> {"at": time, "images": [...]}
+_SCAN_STARTED = [0.0]
+_scan_lock = SHARED.SharedLock("image-scans")
+
+
+def _scan_path():
+    return os.path.join(SCAN_DIR, SCAN_STORE) if SCAN_DIR else ""
+
+
+def _load_scans():
+    """Take in any newer scan another replica has saved."""
+    path = _scan_path()
+    if not path:
+        return
+    try:
+        with open(path, encoding="utf-8") as handle:
+            stored = json.load(handle)
+    except (OSError, ValueError):
+        return
+    for node, entry in (stored.get("nodes") or {}).items():
+        if isinstance(entry, dict) and float(entry.get("at") or 0) > float((_SCANS.get(node) or {}).get("at") or 0):
+            _SCANS[node] = {"at": float(entry["at"]), "images": entry.get("images") or []}
+    _SCAN_STARTED[0] = max(_SCAN_STARTED[0], float(stored.get("started") or 0))
+
+
+def _save_scans():
+    path = _scan_path()
+    if not path:
+        return
+    with _scan_lock:
+        try:
+            _load_scans()
+            os.makedirs(SCAN_DIR, exist_ok=True)
+            tmp = SHARED.temporary(path)
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump({"started": _SCAN_STARTED[0], "nodes": _SCANS}, handle, separators=(",", ":"))
+            os.replace(tmp, path)
+        except OSError:
+            pass
+
+
+def _merged(scanned, listed):
+    """A node's images: the scan, and anything Kubernetes lists that it has
+    not seen - pulled since."""
+    if scanned is None:
+        return listed
+    seen = {name for image in scanned for name in image.get("names") or []}
+    return scanned + [image for image in listed if not seen & set(image.get("names") or [])]
+
+
+def _rescan_if_stale(nodes):
+    """Start a scan when a Ready node has none, or an old one, so the list is
+    whole for whoever looks - not only an admin who presses Scan."""
+    now = time.time()
+    ready = [n["metadata"]["name"] for n in nodes
+             if any(c.get("type") == "Ready" and c.get("status") == "True"
+                    for c in (n.get("status") or {}).get("conditions") or [])]
+    stale = [name for name in ready if now - float((_SCANS.get(name) or {}).get("at") or 0) > SCAN_FRESH]
+    if not stale or now - _SCAN_STARTED[0] < SCAN_RETRY:
+        return []
+    try:
+        return start_image_scan()["nodes"]
+    except Exception:
+        return []
 
 
 def start_image_scan():
@@ -1346,6 +1472,8 @@ def start_image_scan():
                            {NAMES.key("cache-node"): name}, memory="64Mi", deadline=120)
         ksend("POST", f"/api/v1/namespaces/{NS}/pods", body)
         started.append(name)
+    _SCAN_STARTED[0] = time.time()
+    _save_scans()
     _bust("imgcache")
     return {"ok": True, "nodes": started,
             "detail": f"asking containerd on {len(started)} node{'s' if len(started) != 1 else ''} for every image"}
@@ -1361,7 +1489,10 @@ def _collect_scans():
             try:
                 from homestead_shim import raw_get
                 listed = json.loads(raw_get(f"/api/v1/namespaces/{NS}/pods/{meta['name']}/log") or "{}")
-                _SCANS[node] = {"at": time.time(), "images": listed.get("images") or []}
+                _SCANS[node] = {"at": time.time(), "images": [
+                    {key: image.get(key) for key in ("repoTags", "repoDigests", "size")}
+                    for image in listed.get("images") or []]}
+                _save_scans()
             except Exception:
                 pass
         if phase in ("Succeeded", "Failed"):
@@ -1375,10 +1506,10 @@ def _collect_scans():
 
 
 def _scanned_images(node):
-    """This node's images as containerd listed them, shaped like a node
-    status's, when a scan is fresh enough to trust."""
+    """This node's images as containerd last listed them, shaped like a node
+    status's; None when it has never been scanned."""
     scan = _SCANS.get(node)
-    if not scan or time.time() - scan["at"] > SCAN_FRESH:
+    if not scan:
         return None
     return [{"names": list(i.get("repoTags") or []) + list(i.get("repoDigests") or []),
              "sizeBytes": int(i.get("size") or 0)} for i in scan["images"]]
@@ -1558,6 +1689,14 @@ def cleanup_image(digest, nodes=None):
                     pass
         ksend("POST", f"/api/v1/namespaces/{NS}/pods", body)
         pods.append(pod_name)
+    # The saved scan would list it until the next one; it goes from there
+    # now, and a removal that fails shows up again at the next scan.
+    for node in selected:
+        scan = _SCANS.get(node)
+        if scan:
+            scan["images"] = [i for i in scan["images"]
+                              if digest not in {_image_digest(ref) for ref in i.get("repoDigests") or []}]
+    _save_scans()
     _bust("imgcache")
     return {"ok": True, "digest": digest, "image": image_ref,
             "nodes": selected, "pods": pods}

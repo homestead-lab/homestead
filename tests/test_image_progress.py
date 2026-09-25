@@ -94,6 +94,9 @@ class ScanTests(unittest.TestCase):
         self.addCleanup(setattr, NAMES, "kget", NAMES.kget)
         NAMES.kget = kget
         IMP._SCANS.clear()
+        # Scans saved to disk belong to the tests that ask for it.
+        self.addCleanup(setattr, IMP, "SCAN_DIR", IMP.SCAN_DIR)
+        IMP.SCAN_DIR = ""
 
     def test_a_scan_starts_a_pod_per_ready_node(self):
         with unittest.mock.patch("homestead_runtime.binaries", lambda: {"crictl": "/c", "ctr": "/t"}):
