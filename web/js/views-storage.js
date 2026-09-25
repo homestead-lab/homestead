@@ -307,8 +307,8 @@ window.volumeEdit = (x, fromRoute = false) => {
 };
 window.volumeEditNow = async (namespace, name) => {
   const body = { namespace, name, size_gb: +$("#ve_size").value, replicas: +$("#ve_reps").value };
-  try { await api("/api/volumes/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    toast(`${name} updated`, "ok"); closeModal(); resetPaint(); viewStorage(); } catch (e) { toast(e.message, "bad"); }
+  try { const r = await api("/api/volumes/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    toast(r.detail || `${name} updated`, "ok"); closeModal(); resetPaint(); viewStorage(); } catch (e) { toast(e.message, "bad"); }
 };
 
 function volumeDeleteConfirmationValid(name, value) {

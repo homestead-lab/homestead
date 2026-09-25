@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.124")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.125")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2161,21 +2161,48 @@ def create_volume(cfg):
 
 
 def edit_volume(cfg):
-    """Grow a PVC and optionally change Longhorn replica count."""
+    """Grow a PVC and optionally change Longhorn replica count.
+
+    Only what changed is sent. Longhorn's volumes live in its namespace; the
+    replica count was written to a path without it, which Kubernetes answers
+    "404 page not found" - after the size had already been changed, so every
+    save of the form reported a failure that had half happened.
+    """
     ns, name = cfg.get("namespace") or DEFAULT_NS, cfg["name"]
     pvc = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}")
+    done = []
     if cfg.get("size_gb"):
-        pvc["spec"]["resources"]["requests"]["storage"] = f"{int(cfg['size_gb'])}Gi"
-        ksend("PUT", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}", pvc)
+        wanted = int(cfg["size_gb"])
+        requested_mb = _quantity_mb(((pvc.get("spec") or {}).get("resources") or {})
+                                    .get("requests", {}).get("storage", "0"))
+        now_gb = -(-requested_mb // 1024) if requested_mb else 0
+        if now_gb and wanted < now_gb:
+            raise ValueError(f"{name} is {now_gb} GB; volumes can grow but not shrink")
+        if wanted != now_gb:
+            ksend("PATCH", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}",
+                  {"spec": {"resources": {"requests": {"storage": f"{wanted}Gi"}}}},
+                  ctype="application/merge-patch+json")
+            done.append(f"growing to {wanted} GB")
     reps = cfg.get("replicas")
     vol_name = pvc.get("spec", {}).get("volumeName")
     if reps is not None and vol_name:
-        ksend("PATCH", f"/apis/longhorn.io/v1beta2/volumes/{vol_name}",
-              {"spec": {"numberOfReplicas": int(reps)}}, ctype="application/merge-patch+json")
+        reps = int(reps)
+        if not 1 <= reps <= 5:
+            raise ValueError("replica count must be between 1 and 5")
+        path = f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/{vol_name}"
+        try:
+            current = int(((kget(path).get("spec") or {}).get("numberOfReplicas")) or 0)
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+            current = None          # not a Longhorn volume: nothing to set
+        if current is not None and current != reps:
+            ksend("PATCH", path, {"spec": {"numberOfReplicas": reps}}, ctype="application/merge-patch+json")
+            done.append(f"{reps} cop{'y' if reps == 1 else 'ies'}")
     for k in list(_cache):
         if k.startswith(("vol", "stor", "flow")):
             _cache.pop(k, None)
-    return {"ok": True, "name": name}
+    return {"ok": True, "name": name, "detail": (f"{name}: " + ", ".join(done)) if done else f"{name} is unchanged"}
 
 
 def set_node_hardware(cfg):
@@ -5073,7 +5100,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.124 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.125 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()
