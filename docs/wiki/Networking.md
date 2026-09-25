@@ -66,7 +66,13 @@ LAN like any other machine. **＋ LAN network** makes one:
 **IP addresses** documents your network, a subnet at a time: what lives at each
 address, its MAC, how it gets it (static, DHCP reservation, DHCP), a category
 (router, switch, access point, NAS, camera...) and notes. What the cluster uses -
-nodes, VIPs, IP pools - is filled in live.
+nodes, VIPs, IP pools - is filled in live, named for what holds it: each node by
+its name, a VIP by the apps on it, the cluster's own address by its owner. A
+name you give an address is kept over these.
+
+The subnet the cluster's nodes are on is added by itself, as **Cluster LAN**, if
+no subnet covers it yet - so a new cluster's addresses are listed from the
+start. Widen it, rename it or give it its DHCP range like any other.
 
 - Each subnet shows its DHCP range, what is used, and the next addresses free
   for static use. A static address or VIP inside the DHCP range is flagged.

@@ -321,9 +321,26 @@ window.saveWorkloadGroup = async (items, group) => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
+/* The platform's own containers - KubeVirt, CDI, the upgrade controller that
+   Homestead's add-ons install on k3s and RKE2 - are hidden unless asked for,
+   as Harvester's are. */
+window.togglePlatformContainers = () => {
+  STATE.showPlatform = !STATE.showPlatform;
+  try { localStorage.setItem("homestead.showPlatform", STATE.showPlatform ? "1" : ""); } catch (_) { /* private window */ }
+  renderWorkloads();
+};
+function platformShown() {
+  if (STATE.showPlatform === undefined) {
+    try { STATE.showPlatform = localStorage.getItem("homestead.showPlatform") === "1"; } catch (_) { STATE.showPlatform = false; }
+  }
+  return STATE.showPlatform;
+}
+
 function renderWorkloads() {
   const q = STATE.q.toLowerCase();
-  const all = STATE.data.wl || [];
+  const everything = STATE.data.wl || [];
+  const platform = everything.filter(w => w.platform);
+  const all = platformShown() ? everything : everything.filter(w => !w.platform);
   // A chip for a group that has since emptied would hide everything.
   const saved = workloadGroupPrefs().pick;
   const group = saved === NO_GROUP ? (all.some(w => !w.group) ? saved : "") : workloadGroupNames(all).includes(saved) ? saved : "";
@@ -331,12 +348,16 @@ function renderWorkloads() {
     x.images.join(" ").toLowerCase().includes(q) || x.nodes.join(" ").includes(q))
     .filter(x => !group || (group === NO_GROUP ? !x.group : x.group === group));
   const report = STATE.data.imageUpdates;
-  const updateCount = report?.updates || 0;
+  // Platform containers move on with the part they belong to, not one by one.
+  const platformKeys = new Set(platform.map(w => `${w.ns}/${w.name}`));
+  const updateCount = (report?.workloads || []).filter(w => w.available && !platformKeys.has(`${w.ns}/${w.name}`)).length;
   const updateErrors = report?.errors || 0;
   const unchecked = (report?.workloads || []).filter(w => w.unchecked).length;
   const layout = viewLayout("containers");
   paint(`<div class="phead">
-      <div><h2>Containers</h2><p>${rows.length} workload${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""}${group ? ` in ${esc(group === NO_GROUP ? "no group" : group)}` : ""} · Harvester system pods hidden${report && !updateCount && !updateErrors ? (unchecked ? ` · ${unchecked} not checked yet` : " · images current") : ""}</p></div>
+      <div><h2>Containers</h2><p>${rows.length} workload${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""}${group ? ` in ${esc(group === NO_GROUP ? "no group" : group)}` : ""} · ${platform.length
+        ? `<a class="linkish" onclick="togglePlatformContainers()" data-tip="KubeVirt, CDI and the like: installed by Homestead's add-ons, run by their own operators, and upgraded with them under System → Cluster">${platformShown() ? "hide" : "show"} ${platform.length} platform container${platform.length === 1 ? "" : "s"}</a>`
+        : "system pods hidden"}${report && !updateCount && !updateErrors ? (unchecked ? ` · ${unchecked} not checked yet` : " · images current") : ""}</p></div>
       <div class="row"><span class="dim xs scanprogress" id="scanprogress"></span>
       <span class="dim xs" title="When the registries were last asked">${checkedAgo()}</span>
       ${updateCount ? `<button class="pill warn pillbtn" title="Review and stage image updates" onclick="imageUpdateCenter()">${updateCount} update${updateCount === 1 ? "" : "s"}</button>` : ""}
@@ -356,10 +377,20 @@ function imageLabel(ref) {
   return ref.split("/").pop().includes(":") ? ref : `${ref}:latest`;
 }
 
+/* What a platform container belongs to, and where that is upgraded. */
+function platformTag(w) {
+  return `<span class="pill slim info" data-tip="Part of ${esc(w.platform)}, run by its operator, which puts back anything changed here. It is upgraded with ${esc(w.platform)} under System → Cluster → Platform versions." onclick="go('cluster')" style="cursor:pointer">${esc(w.platform)}</span>`;
+}
+
 /* The same actions for a card and a row: a row shows them as icons. */
 function workloadActions(w, update, off, compact = false) {
   const label = (text, iconName) => compact ? icon(iconName) : `${icon(iconName)}${text}`;
   const cls = compact ? "btn sm iconic" : "btn sm";
+  // A platform container's operator owns it: logs and a fresh start only.
+  if (w.platform) {
+    return `<button class="${cls}" title="View live container logs" aria-label="Logs for ${esc(w.name)}" onclick="wlLogs('${w.ns}','${w.pods[0] ? w.pods[0].name : ""}','${w.name}')">${label("Logs", "log")}</button>
+      <button class="${cls}" title="Restart: replace every pod with a fresh one" aria-label="Restart ${esc(w.name)}" data-need="operator" onclick="wlRestart('${w.ns}','${w.name}')">${label("Restart", "restart")}</button>`;
+  }
   // Update comes first: the actions are right-aligned, so the ones every row
   // has stay put whether or not an update is waiting.
   return `${update?.available ? `<button class="btn sm pri" title="Review and install the available image update" data-need="operator" onclick="imageUpdateReview('${w.ns}','${w.name}')">${icon("update")}Update</button>` : ""}
@@ -383,7 +414,7 @@ function workloadActions(w, update, off, compact = false) {
 
 function workloadCard(w) {
       const ok = w.ready === w.desired && w.desired > 0, off = w.desired === 0;
-      const update = workloadUpdate(w.ns, w.name);
+      const update = w.platform ? null : workloadUpdate(w.ns, w.name);
       const updateError = update?.images?.find(x => x.error);
   return `<div class="wcard card flat">
         <div class="between whead">
@@ -393,7 +424,7 @@ function workloadCard(w) {
               <div class="dim xs">${esc(w.ns)} · <span class="nodelink"
                 onclick="moveWorkload('${w.name}','${w.ns}')">${esc(w.nodes.join(", ") || "unscheduled")}</span></div></div>
           </div>
-          <div class="row">${update?.available ? '<span class="pill warn">update available</span>' : ""}${update?.unchecked ? `<span class="pill slim neutral" data-tip="${update.images?.some(i => i.starting) ? "Still starting: its image is compared with the registry once it runs." : "Stopped, and not seen running here yet, so its image has not been compared with the registry. It is checked once it has run."}">${update.images?.some(i => i.starting) ? "starting" : "not checked"}</span>` : ""}
+          <div class="row">${w.platform ? platformTag(w) : ""}${update?.available ? '<span class="pill warn">update available</span>' : ""}${update?.unchecked ? `<span class="pill slim neutral" data-tip="${update.images?.some(i => i.starting) ? "Still starting: its image is compared with the registry once it runs." : "Stopped, and not seen running here yet, so its image has not been compared with the registry. It is checked once it has run."}">${update.images?.some(i => i.starting) ? "starting" : "not checked"}</span>` : ""}
           ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}
           <span class="pill ${ok ? "ok" : off ? "low" : "crit"}">${w.ready}/${w.desired}</span></div>
         </div>
@@ -431,12 +462,12 @@ function workloadTable(rows, sections = null, folded = new Set()) {
 function workloadTableRows(rows) {
   return `${rows.map(w => {
       const ok = w.ready === w.desired && w.desired > 0, off = w.desired === 0;
-      const update = workloadUpdate(w.ns, w.name);
+      const update = w.platform ? null : workloadUpdate(w.ns, w.name);
       const updateError = update?.images?.find(x => x.error);
       return `<tr>
         <td class="wl-name" data-sort="${esc(w.name)}"><div class="row nowrap" style="gap:9px">${appAvatar(w.name, w.icon)}
           <div class="wtitle"><div><b>${esc(w.name)}</b></div>
-            <div class="dim xs">${esc(w.ns)} · ${off ? "stopped" : `<span class="nodelink" onclick="moveWorkload('${w.name}','${w.ns}')">${esc(w.nodes.join(", ") || "unscheduled")}</span>${w.uptime ? ` · up ${esc(fmtUp(w.uptime))}` : " · starting"}`}</div></div></div></td>
+            <div class="dim xs">${w.platform ? `${platformTag(w)} ` : ""}${esc(w.ns)} · ${off ? "stopped" : `<span class="nodelink" onclick="moveWorkload('${w.name}','${w.ns}')">${esc(w.nodes.join(", ") || "unscheduled")}</span>${w.uptime ? ` · up ${esc(fmtUp(w.uptime))}` : " · starting"}`}</div></div></div></td>
         <td class="wl-status" data-sort="${off ? -1 : w.desired ? w.ready / w.desired : 0}"><div class="row nowrap" style="gap:5px"><span class="pill slim ${ok ? "ok" : off ? "low" : "crit"}" title="${w.ready} of ${w.desired} ready">${w.ready}/${w.desired}</span>${update?.unchecked ? `<span class="pill slim neutral" data-tip="${update.images?.some(i => i.starting) ? "Still starting: its image is compared with the registry once it runs." : "Stopped, and not seen running here yet, so its image has not been compared with the registry. It is checked once it has run."}">${update.images?.some(i => i.starting) ? "starting" : "not checked"}</span>` : ""}
           ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}</div>${workloadPull(w) ? pullBar(workloadPull(w)) : ""}</td>
         <td class="wl-image"><div class="mono xs wl-imagetext" title="${esc(w.images.map(imageLabel).join(" · "))}">${w.images.map(i => esc(imageLabel(i))).join(" · ")}</div>

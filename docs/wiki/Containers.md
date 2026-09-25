@@ -106,6 +106,14 @@ Homestead's own containers - Homestead, the Samba that serves your shares, and
 the backup storage for moves - start in a **Homestead** group, out of the way of
 your apps.
 
+On k3s and RKE2, the platform Homestead's add-ons install - KubeVirt, CDI, the
+upgrade controller - runs as containers too. They go in the **Homestead** group
+and are hidden until **show N platform containers** at the top of the page, as
+Harvester's own always are. Each is tagged with what it belongs to and offers
+only **Logs** and **Restart**: its operator puts back anything changed by hand,
+so it is not updated on its own but upgraded with KubeVirt (or CDI) under
+**System → Cluster → Platform versions**.
+
 ## Privileges
 
 Some apps need more of the host than containers get by default. A VPN client

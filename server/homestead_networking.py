@@ -261,10 +261,12 @@ def inventory():
             deployment_rows.append({"namespace": ns, "name": name, "ports": ports,
                                     "replicas": int(spec.get("replicas", 0) or 0)})
 
-    node_ips = set()
+    node_ips, node_names = set(), {}
     for node in nodes:
-        node_ips.update(address.get("address") for address in (node.get("status", {}) or {}).get("addresses", []) or []
-                        if address.get("type") in ("InternalIP", "ExternalIP") and address.get("address"))
+        for address in (node.get("status", {}) or {}).get("addresses", []) or []:
+            if address.get("type") in ("InternalIP", "ExternalIP") and address.get("address"):
+                node_ips.add(address["address"])
+                node_names[address["address"]] = (node.get("metadata") or {}).get("name", "")
 
     raw_rows = []
     for service in services:
@@ -385,7 +387,7 @@ def inventory():
                                                      for l in v["listeners"]})) for row in own],
             "vip_labels": {row["ip"]: row.get("label", "") for row in own},
             "available_vips": candidates[:128], "available_vip_count": len(candidates),
-            "node_ips": sorted(node_ips), "controller": controller,
+            "node_ips": sorted(node_ips), "node_names": node_names, "controller": controller,
             "workloads": sorted(deployment_rows, key=lambda row: (row["namespace"], row["name"])),
             "ingresses": _ingress_inventory(ingresses),
             "summary": {"services": len(raw_rows), "app_services": sum(not row["system"] for row in raw_rows),

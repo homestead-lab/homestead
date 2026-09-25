@@ -272,9 +272,40 @@ def _pool_ranges(facts):
     return out
 
 
+AUTO_NOTE = "Added by Homestead: the cluster's nodes are on it"
+
+
+def _cover_nodes(data, facts):
+    """The subnets the cluster's own nodes are on, added when no subnet
+    covers them, so its addresses are listed from the start - a /24 each,
+    which the person can widen, name, or give its DHCP range."""
+    nets = [ipaddress.ip_network(s["cidr"]) for s in data["subnets"]]
+    missing = sorted({str(ipaddress.ip_network(f"{ip}/24", strict=False)) for ip in facts.get("node_ips") or []
+                      if _is_v4(ip) and not any(ipaddress.ip_address(ip) in net for net in nets)})
+    missing = [cidr for cidr in missing if not any(ipaddress.ip_network(cidr).overlaps(net) for net in nets)]
+    if not missing:
+        return data
+
+    def change(current):
+        have = [ipaddress.ip_network(s["cidr"]) for s in current["subnets"]]
+        for cidr in missing:
+            if not any(ipaddress.ip_network(cidr).overlaps(net) for net in have):
+                current["subnets"].append(_clean_subnet({"cidr": cidr, "name": "Cluster LAN", "note": AUTO_NOTE}))
+        return {"ok": True}
+    try:
+        update(change)
+        data, _ = load()
+    except Exception:
+        pass
+    return data
+
+
 def view():
     data, _ = load()
     facts = cluster_facts() or {}
+    data = _cover_nodes(data, facts)
+    node_names = facts.get("node_names") or {}
+    platform = facts.get("platform_addresses") or {}
     vips = {row["ip"]: sorted({f"{l.get('namespace')}/{l.get('service')}" for l in row.get("listeners") or []})
             for row in facts.get("vips") or [] if row.get("ip")}
     nodes = set(facts.get("node_ips") or [])
@@ -298,12 +329,25 @@ def view():
                 row.update({k: v for k, v in record.items() if k in row or k in ("updated", "last_seen")})
         for ip in nodes:
             if _is_v4(ip) and ipaddress.ip_address(ip) in network:
-                row_for(ip)["cluster"] = "node"
+                row = row_for(ip)
+                row["cluster"] = "node"
+                if not row["name"] and node_names.get(ip):
+                    row["name"] = node_names[ip]
+        # The cluster's own addresses - Harvester's management VIP, an
+        # ingress controller's - named for what holds them.
+        for ip, owner in platform.items():
+            if _is_v4(ip) and ipaddress.ip_address(ip) in network:
+                row = row_for(ip)
+                row["cluster"] = row["cluster"] or "vip"
+                if not row["name"]:
+                    row["name"] = owner
         for ip, services in vips.items():
             if _is_v4(ip) and ipaddress.ip_address(ip) in network:
                 row = row_for(ip)
                 row["cluster"] = row["cluster"] or "vip"
                 row["services"] = services
+                if not row["name"] and services and row["cluster"] == "vip":
+                    row["name"] = ", ".join(s.split("/", 1)[-1] for s in services[:3])
         # Reserved for Homestead's Services, used yet or not.
         for reserved in facts.get("registered_vips") or []:
             ip = reserved.get("ip", "")

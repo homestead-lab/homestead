@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.152")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.153")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -59,7 +59,14 @@ SYS_NS = {
     "cattle-fleet-local-system", "cattle-fleet-clusters-system", "cattle-monitoring-system",
     "cattle-logging-system", "cattle-provisioning-capi-system", "cattle-ui-plugin-system",
     "cattle-capi-system", "cattle-turtles-system", "fleet-local", "local", "cdi", "kube-ovn",
+    "kubevirt", "system-upgrade",
 }
+# Namespaces of the platform Homestead's add-ons install on k3s and RKE2, and
+# what each belongs to. Their containers are listed with Homestead's own,
+# hidden until asked for, and are upgraded with the part they belong to: an
+# operator owns them and puts back any image changed by hand. (On Harvester
+# the same parts run in harvester-system, which is not listed at all.)
+PLATFORM_NS = {"kubevirt": "KubeVirt", "cdi": "CDI", "system-upgrade": "system-upgrade-controller"}
 
 _cache = {}
 _lock = threading.Lock()
@@ -1017,7 +1024,7 @@ def own_group(ns, name):
     backup store moves go through - sit together, apart from your apps,
     unless someone put them in a group of their own."""
     own = {(SELF.NS, NAMES.BRAND), (SMB_NAMESPACE, "samba"), (DEFAULT_NS, OBJECTS.NAME)}
-    return OWN_GROUP if (ns, name) in own else ""
+    return OWN_GROUP if (ns, name) in own or ns in PLATFORM_NS else ""
 
 
 def get_workloads():
@@ -1036,7 +1043,7 @@ def get_workloads():
     out = []
     for d in deps:
         ns, name = d["metadata"]["namespace"], d["metadata"]["name"]
-        if ns in SYS_NS:
+        if ns in SYS_NS and ns not in PLATFORM_NS:
             continue
         sel = d["spec"].get("selector", {}).get("matchLabels", {})
         mine = [p for p in pods if p["metadata"]["namespace"] == ns and
@@ -1159,6 +1166,7 @@ def get_workloads():
             "icon": display_icon(annotations),
             "group": NAMES.read(annotations, "group") or own_group(ns, name),
             "self": is_self(ns, name),
+            "platform": PLATFORM_NS.get(ns, ""),
             "failover": FAILOVER.mode_of(pspec),
             "lan": (LAN.read(d) or {}).get("address", ""),
         })
@@ -6009,7 +6017,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.152 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.153 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

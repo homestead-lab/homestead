@@ -75,8 +75,24 @@ class IpamTests(unittest.TestCase):
         self.assertEqual("192.0.2.2", s["next_free"][0])
         self.assertNotIn("192.0.2.150", s["next_free"])
         self.assertEqual(100, s["dhcp_size"])
-        # a node outside every documented subnet suggests its /24
-        self.assertEqual(["10.52.0.0/24"], IPAM.view()["suggested"])
+        # a node outside every documented subnet has its /24 added for it, so
+        # the cluster's addresses are listed without setting anything up
+        view = IPAM.view()
+        added = next(sub for sub in view["subnets"] if sub["cidr"] == "10.52.0.0/24")
+        self.assertEqual(IPAM.AUTO_NOTE, added["note"])
+        self.assertEqual("node", next(r for r in added["rows"] if r["ip"] == "10.52.0.1")["cluster"])
+        self.assertEqual([], view["suggested"])
+
+    def test_the_clusters_addresses_are_named_for_what_holds_them(self):
+        facts = dict(FACTS, node_names={"192.0.2.21": "node-1"},
+                     platform_addresses={"192.0.2.240": "Harvester's management address"})
+        IPAM.bind(self.store.get, self.store.send, "lab", lambda: facts)
+        self.assertEqual("node-1", self.row("192.0.2.21")["name"])
+        self.assertEqual("plex", self.row("192.0.2.120")["name"])
+        self.assertEqual(("vip", "Harvester's management address"),
+                         (self.row("192.0.2.240")["cluster"], self.row("192.0.2.240")["name"]))
+        IPAM.save_record({"ip": "192.0.2.21", "name": "rack server", "kind": "static"})
+        self.assertEqual("rack server", self.row("192.0.2.21")["name"], "a name someone gave is kept")
 
     def test_documenting_and_bulk_changes(self):
         IPAM.save_record({"ip": "192.0.2.10", "name": "  Tower  ", "mac": "AA-BB-CC-DD-EE-FF", "kind": "static",
