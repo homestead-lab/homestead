@@ -56,6 +56,15 @@ One trap worth knowing: a **migratable** class (Harvester's default,
 (RWX) volume on it can still only be mounted by one host. Homestead refuses RWX
 on such a class and offers ones that work.
 
+### Classes for some disks - SSDs, say
+
+Tag the disks first (below), then choose **Only on disks tagged** - `ssd`, say -
+when making a class, and Longhorn puts that class's replicas only on disks with
+every tag chosen. **Only on nodes tagged** narrows it to nodes with a tag too.
+The form says which nodes can hold its replicas as you choose, and warns when
+they are fewer than its replicas (volumes would run a copy short) or none (they
+would not start). The class table shows each class's tags.
+
 ## Disks
 
 Each node's card lists every disk on the host: the system disk, the disks
@@ -71,6 +80,11 @@ Settings → Cluster) opens them all.
 - A Longhorn disk can stop taking new copies, have them moved elsewhere
   (**Move replicas off**), and be taken away once empty (**Remove from
   Longhorn**). Its files stay on the disk.
+- **Add tags** on a Longhorn disk labels it - `ssd`, `nvme`, `hdd`, anything -
+  for storage classes to choose by, and **Node tags** does the same for a
+  whole node. On Harvester, a disk Harvester added keeps its tags on its block
+  device, as Harvester's dashboard does, because Harvester writes the Longhorn
+  disk from it and would undo tags set on Longhorn alone.
 
 ## When a drive fails
 

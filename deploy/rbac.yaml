@@ -144,6 +144,12 @@ rules:
   - apiGroups: ["harvesterhci.io"]
     resources: [virtualmachineimages]
     verbs: [get, list, create, delete]
+  # Harvester's disks: listed on each node, added to Longhorn as Harvester's
+  # own dashboard adds them, and tagged - Harvester writes a disk's tags into
+  # Longhorn from the block device, so that is where they are set.
+  - apiGroups: ["harvesterhci.io"]
+    resources: [blockdevices]
+    verbs: [get, list, watch, patch]
   # Cluster health reads certificate request state only; certificate/key bodies
   # are never returned to the UI and Homestead cannot approve CSRs.
   # Helm: releases are read from Helm's own Secrets (secrets are listed

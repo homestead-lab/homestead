@@ -81,7 +81,31 @@ def _lh_disks(node):
                     "size_gb": _gb(maximum - (d.get("storageReserved") or 0)), "used_gb": _gb(maximum - available),
                     "allocated_gb": _gb(st.get("storageScheduled")), "free_gb": _gb(available),
                     "replicas": len(st.get("scheduledReplica") or {}),
+                    "tags": [t for t in d.get("tags") or [] if not str(t).startswith(INTERNAL_TAG)],
                     "ready": ready.get("status", "True") == "True", "problem": ready.get("message", "") if ready.get("status") == "False" else ""})
+    return out
+
+
+# Harvester marks a disk it is taking out of Longhorn with a tag of its own;
+# that is its business, not one of the disk's tags.
+INTERNAL_TAG = "harvester-ndm-"
+TAG = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?$")
+
+
+def clean_tags(tags):
+    """Tags as Longhorn takes them: letters, numbers, dots, dashes and
+    underscores, each once, in the order given."""
+    if isinstance(tags, str):
+        tags = re.split(r"[\s,]+", tags)
+    out = []
+    for tag in tags or []:
+        tag = str(tag).strip()
+        if not tag:
+            continue
+        if not TAG.match(tag):
+            raise ValueError(f"{tag} is not a tag Longhorn takes: letters, numbers, dots, dashes and underscores")
+        if tag not in out:
+            out.append(tag)
     return out
 
 
@@ -179,7 +203,57 @@ def inventory():
                           "kind": "", "serial": "", "longhorn": unplaced, "blockdevice": None, "mounts": [],
                           "system": False, "role": "longhorn", "can_add": False, "needs_wipe": False})
         out[name] = sorted(disks, key=lambda r: (not r["system"], r["device"] or "~"))
-    return {"harvester": harvester, "nodes": out}
+    node_tags = {name: list(((lh.get(name) or {}).get("spec") or {}).get("tags") or []) for name in lh}
+    disk_tags = sorted({t for disks in out.values() for d in disks for x in d["longhorn"] for t in x["tags"]})
+    return {"harvester": harvester, "nodes": out, "node_tags": node_tags, "disk_tags": disk_tags,
+            "all_node_tags": sorted({t for tags in node_tags.values() for t in tags})}
+
+
+def set_disk_tags(node, disk_id, tags):
+    """Tag a Longhorn disk - "ssd", "nvme", "fast" - for storage classes to
+    choose by.
+
+    A disk Harvester added is Harvester's: its node-disk-manager writes the
+    Longhorn disk from the block device's own tags, and would put back any
+    set on Longhorn alone. So the block device is tagged too, where there is
+    one, and Longhorn at once so the change shows without waiting for it."""
+    tags = clean_tags(tags)
+    disk, _ = _lh_disk(node, disk_id)
+    kept = [t for t in disk.get("tags") or [] if str(t).startswith(INTERNAL_TAG)]
+    bd = next((b for b in _blockdevices() or [] if b["metadata"]["name"] == disk_id), None)
+    if bd is not None:
+        _patch(f"{BD}/{disk_id}", {"spec": {"tags": tags}}, "tagging the disk in Harvester")
+    _patch(f"{LH}/nodes/{node}", {"spec": {"disks": {disk_id: {"tags": tags + kept}}}}, "tagging the disk")
+    return {"ok": True, "tags": tags,
+            "detail": f"{disk_id} on {node} " + (f"is tagged {', '.join(tags)}" if tags else "has no tags now")}
+
+
+def set_node_tags(node, tags):
+    """Tag a node, for storage classes that keep their replicas on some."""
+    tags = clean_tags(tags)
+    try:
+        kget(f"{LH}/nodes/{node}")
+    except urllib.error.HTTPError:
+        raise ValueError(f"Longhorn does not know node {node}")
+    _patch(f"{LH}/nodes/{node}", {"spec": {"tags": tags}}, "tagging the node")
+    return {"ok": True, "tags": tags,
+            "detail": f"{node} " + (f"is tagged {', '.join(tags)}" if tags else "has no tags now")}
+
+
+def tag_reach(disk_tags=(), node_tags=()):
+    """Which nodes could hold a replica for a class that asks for these tags:
+    a node with every node tag and a disk, taking replicas, with every disk
+    tag."""
+    disk_tags, node_tags = set(disk_tags or ()), set(node_tags or ())
+    reach = []
+    for name, node in _lh_nodes().items():
+        spec = node.get("spec") or {}
+        if not node_tags <= set(spec.get("tags") or []):
+            continue
+        if any(disk_tags <= set(d.get("tags") or []) and d.get("allowScheduling", True) is not False
+               for d in (spec.get("disks") or {}).values()):
+            reach.append(name)
+    return sorted(reach)
 
 
 def summary():

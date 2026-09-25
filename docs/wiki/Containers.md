@@ -185,6 +185,10 @@ Changing a container's choice restarts it.
 
 **Architecture** draws, for every app, the path from its address through its
 Service to its pods, claims, Longhorn volumes and the replicas on each disk -
-the quickest way to see what a failed disk or host would touch.
+the quickest way to see what a failed disk or host would touch. Virtual
+machines are drawn the same way: the ports of any Service that selects them
+(such as Harvester's load balancers), their disks and those disks' replicas,
+with their host and address. A stopped VM is shown faded, since its disks are
+still there.
 
 ![Architecture](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-architecture.png)

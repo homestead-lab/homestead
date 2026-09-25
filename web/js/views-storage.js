@@ -23,7 +23,9 @@ async function viewFlow() {
   f.nodes.forEach(n => n.copies.forEach(c => links.push([c.vid, `${n.id}|${c.vid}`, "copy"])));
   STATE.data.alinks = links;
   const used = new Set(links.flat());
-  const kind = w => w.kind === "vm" ? "virtual machine" : (w.node || "").replace(/^harvester-/, "");
+  const host = w => (w.node || "").replace(/^harvester-/, "");
+  const kind = w => w.kind === "vm" ? (w.running ? `VM · ${host(w) || w.state || "starting"}` : `VM · ${(w.state || "stopped").toLowerCase()}`) : host(w);
+  const vmCount = f.workloads.filter(w => w.kind === "vm").length;
 
   paint(`<div class="phead">
       <div><h2>Architecture</h2><p>How each app is reached, where its data lives, and which hosts hold the copies · hover anything to trace it</p></div>
@@ -43,13 +45,14 @@ async function viewFlow() {
         || '<div class="dim xs">No load-balancer addresses</div>'}
       </section>
 
-      <section class="a2col"><h4>Containers <span class="dim">${f.workloads.length}</span></h4>
-      ${f.workloads.map(w => `<div class="a2item a2wl ${used.has(w.id) ? "" : "a2alone"}" id="${esc(w.id)}" data-kind="workload" data-id="${esc(w.id)}"
-          title="${esc(w.name)} · ${esc(kind(w))} · ${workloadCpuPercent(w.cpu)} CPU · ${w.mem_mb || 0} MB">
+      <section class="a2col"><h4>${vmCount ? "Containers &amp; VMs" : "Containers"} <span class="dim">${f.workloads.length}</span></h4>
+      ${f.workloads.map(w => `<div class="a2item a2wl ${used.has(w.id) ? "" : "a2alone"} ${w.kind === "vm" && !w.running ? "a2stopped" : ""}"
+          id="${esc(w.id)}" data-kind="workload" data-id="${esc(w.id)}"
+          title="${esc(w.name)} · ${esc(kind(w))}${w.ip ? ` · ${esc(w.ip)}` : ""}${w.kind !== "vm" || w.running ? ` · ${workloadCpuPercent(w.cpu)} CPU · ${w.mem_mb || 0} MB` : ""}">
           ${appAvatar(w.name, w.icon)}<span class="a2name">${esc(w.name)}</span>
           <span class="a2meta">${esc(kind(w))}</span>
-          <button class="a2act" data-need="operator" title="${w.kind === "vm" ? "Migrate" : "Move to another host"}"
-            onclick="event.stopPropagation();${w.kind === "vm" ? `vmMove('${esc(w.ns || "lab")}','${esc(w.name)}')` : `moveWorkload('${esc(w.name)}','${esc(w.ns || "lab")}')`}">⇄</button>
+          ${w.kind === "vm" && !w.running ? "" : `<button class="a2act" data-need="operator" title="${w.kind === "vm" ? "Migrate" : "Move to another host"}"
+            onclick="event.stopPropagation();${w.kind === "vm" ? `vmMove('${esc(w.ns || "lab")}','${esc(w.name)}')` : `moveWorkload('${esc(w.name)}','${esc(w.ns || "lab")}')`}">⇄</button>`}
         </div>`).join("") || '<div class="dim xs">Nothing running</div>'}
       </section>
 
@@ -477,7 +480,10 @@ function storageClassCard(classes, v2 = null) {
       <th>Class</th><th>Engine</th><th>Replicas</th><th>Shared (RWX)</th><th>Encryption</th><th>Expansion</th><th>Volumes</th><th></th>
     </tr></thead><tbody>${rows.map(row => `<tr>
       <td><b>${esc(row.name)}</b>${row.default ? '<span class="tag ok">default</span>' : ""}${row.internal ? '<span class="tag">Harvester internal</span>' : ""}${row.made_for === "image" ? '<span class="tag" data-tip="Harvester made it for one image: disks from that image are made on it">image</span>' : row.made_for === "restore" ? '<span class="tag warn" data-tip="Made to read one backup into a new volume; not needed once that volume exists">restore</span>' : ""}
-        <div class="dim xs mono">${esc(row.provisioner || "")}</div></td>
+        <div class="dim xs mono">${esc(row.provisioner || "")}</div>
+        ${(row.disk_tags || []).length || (row.node_tags || []).length ? `<div class="row" style="gap:4px;margin-top:4px">
+          ${(row.disk_tags || []).map(t => `<span class="tag info" data-tip="Only on disks tagged ${esc(t)}">disk: ${esc(t)}</span>`).join("")}
+          ${(row.node_tags || []).map(t => `<span class="tag" data-tip="Only on nodes tagged ${esc(t)}">node: ${esc(t)}</span>`).join("")}</div>` : ""}</td>
       <td data-label="Engine">${row.engine === "v2" ? '<span class="tag info" data-tip="Longhorn V2 (SPDK)">V2</span>' : row.engine ? '<span class="tag">V1</span>' : '<span class="dim">—</span>'}</td>
       <td class="mono" data-label="Replicas">${esc(row.replicas || "—")}</td>
       <td data-label="Shared (RWX)">${row.migratable
@@ -505,18 +511,54 @@ window.storageClassCreate = () => {
     <div class="f" style="margin-top:14px"><label>Name</label>
       <input type="text" id="sc_name" placeholder="longhorn-r3" autocomplete="off"></div>
     <div class="f2"><div class="f"><label>Replicas ${tip("Copies Longhorn keeps on separate disks. Two survives one disk or node loss; one has no redundancy.")}</label>
-      <input type="number" id="sc_reps" min="1" max="5" value="2"></div>
+      <input type="number" id="sc_reps" min="1" max="5" value="2" oninput="storageClassReach()"></div>
       <div class="f"><label>Reclaim policy ${tip("Delete removes the Longhorn volume with its claim. Retain keeps the data behind after the claim is gone.")}</label>
         <select id="sc_reclaim"><option>Delete</option><option>Retain</option></select></div></div>
     <div class="f"><label>Data engine ${tip("V1 is Longhorn's long-standing engine. V2 (SPDK) is faster and needs the engine switched on, a V2 disk and hugepages on the nodes.")}</label>
       <select id="sc_engine" onchange="storageClassEngine()"><option value="v1">V1 · the default</option><option value="v2">V2 · SPDK</option></select>
       <div class="note" id="sc_engine_note" hidden></div></div>
+    <div class="f"><label>Only on disks tagged ${tip("Longhorn puts this class's replicas only on disks with every tag chosen - tag your SSDs ssd and pick it here. Tag disks under Nodes, or Volumes → Disks.")}</label>
+      <div class="row sc-tags" id="sc_disktags"><span class="dim xs">loading tags…</span></div></div>
+    <div class="f"><label>Only on nodes tagged ${tip("And only on nodes with every tag chosen here.")}</label>
+      <div class="row sc-tags" id="sc_nodetags"></div>
+      <div class="dim xs" id="sc_reach" style="margin-top:6px"></div></div>
     <label class="switch"><input type="checkbox" id="sc_expand" checked> Allow volumes to grow later</label>
     <label class="switch"><input type="checkbox" id="sc_migratable" onchange="storageClassHint()"> Live-migratable · for VM disks</label>
     <div class="note" id="sc_hint">Leave migratable off for container storage: a migratable volume gets a second controller so a VM can move between hosts, and Longhorn refuses to mount that kind into a pod — which is what breaks ReadWriteMany.</div>
     <label class="switch"><input type="checkbox" id="sc_default"> Make this the default class</label>
     <div class="row" style="margin-top:18px"><button class="btn pri" id="sc_go" data-need="admin" onclick="storageClassSave(this)">Create class</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+  storageClassTags();
+};
+/* The tags disks and nodes have, to choose from, and which nodes a choice
+   leaves - a class needs one node per replica. */
+async function storageClassTags() {
+  const inv = await loadDisks().catch(() => null);
+  const box = (id, tags, empty) => {
+    const host = $(id);
+    if (!host) return;
+    host.innerHTML = tags.length ? tags.map(t => `<label class="daychip"><input type="checkbox" value="${esc(t)}" onchange="storageClassReach()"><span>${esc(t)}</span></label>`).join("")
+      : `<span class="dim xs">${empty}</span>`;
+  };
+  if (!inv) { box("#sc_disktags", [], "Could not read the disks' tags."); return; }
+  STATE.data.scInv = inv;
+  box("#sc_disktags", inv.disk_tags || [], "No disk has a tag yet: add them to disks under Nodes, or Volumes → Disks.");
+  box("#sc_nodetags", inv.all_node_tags || [], "No node has a tag yet.");
+  storageClassReach();
+}
+window.storageClassReach = () => {
+  const inv = STATE.data.scInv, out = $("#sc_reach");
+  if (!inv || !out) return;
+  const disk = $$("#sc_disktags input:checked").map(b => b.value), node = $$("#sc_nodetags input:checked").map(b => b.value);
+  if (!disk.length && !node.length) { out.textContent = "No tags chosen: replicas go on any disk."; out.className = "dim xs"; return; }
+  const reach = Object.entries(inv.nodes || {}).filter(([name, disks]) =>
+    node.every(t => ((inv.node_tags || {})[name] || []).includes(t))
+    && disks.some(d => d.longhorn.some(x => x.scheduling && disk.every(t => (x.tags || []).includes(t))))).map(([name]) => name);
+  const reps = +($("#sc_reps").value || 1);
+  out.className = reach.length >= reps ? "dim xs" : "xs badtext";
+  out.textContent = reach.length
+    ? `${reach.length} node${reach.length === 1 ? "" : "s"} can hold its replicas: ${reach.join(", ")}${reach.length < reps ? ` - fewer than ${reps} replicas, so volumes would run degraded` : ""}.`
+    : "No node has a disk with those tags, so its volumes would not schedule.";
 };
 window.storageClassEngine = async () => {
   const note = $("#sc_engine_note");
@@ -547,7 +589,9 @@ window.storageClassSave = async button => {
     const result = await api("/api/storage/classes", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, replicas: +$("#sc_reps").value, reclaim_policy: $("#sc_reclaim").value,
         expandable: $("#sc_expand").checked, migratable: $("#sc_migratable").checked,
-        engine: $("#sc_engine").value, default: $("#sc_default").checked }) });
+        engine: $("#sc_engine").value, default: $("#sc_default").checked,
+        disk_tags: $$("#sc_disktags input:checked").map(b => b.value),
+        node_tags: $$("#sc_nodetags input:checked").map(b => b.value) }) });
     toast(result.message || `storage class "${name}" created`, "ok"); closeModal(); resetPaint(); viewStorage();
   } catch (e) { if (button) { button.disabled = false; button.textContent = "Create class"; } toast(e.message, "bad"); }
 };
@@ -1142,6 +1186,10 @@ function diskRowsHtml(node, disks, harvester) {
           <span class="mono xs">${esc(sizePair(x.used_gb, x.size_gb))} used · ${esc(sizeText(x.allocated_gb))} allocated · ${x.replicas} replica${x.replicas === 1 ? "" : "s"}</span></div>
         ${meter(pct, "", "disk")}
         ${!x.ready ? `<div class="badtext xs disk-why">${esc(x.missing || x.problem || "Longhorn reports this disk not ready")}</div>` : ""}
+        <div class="row disk-tags">${(x.tags || []).map(t => `<span class="tag info">${esc(t)}</span>`).join("")
+          || '<span class="dim xs">no tags</span>'}
+          <button class="linkish xs" data-need="admin" data-tags="${esc(JSON.stringify(x.tags || []))}"
+            onclick="diskTags('${esc(node)}','${esc(x.id)}',JSON.parse(this.dataset.tags))">${(x.tags || []).length ? "Edit tags" : "Add tags"}</button></div>
         <div class="row disk-lh-acts">
           ${!x.ready ? `<span class="tag bad" data-tip="${esc(x.problem)}">${x.missing ? "drive missing" : "failed"}</span>
             <button class="btn sm pri" data-need="admin" onclick="diskRetire('${esc(node)}','${esc(x.id)}')"
@@ -1163,6 +1211,57 @@ function diskRowsHtml(node, disks, harvester) {
     + (harvester && !disks.some(d => d.can_add) ? '<div class="dim xs" style="margin-top:8px">Every disk Harvester found here is in use. A new disk shows up once it is plugged in and Harvester has scanned it.</div>' : "");
 }
 
+/* A node's own tags, for classes that keep replicas on some nodes. */
+function nodeTagsLine(node, inv) {
+  const tags = (inv.node_tags || {})[node];
+  if (!tags) return "";
+  return `<div class="row disk-tags node-tags"><span class="dim xs">Node tags</span>
+    ${tags.map(t => `<span class="tag">${esc(t)}</span>`).join("") || '<span class="dim xs">none</span>'}
+    <button class="linkish xs" data-need="admin" data-tags="${esc(JSON.stringify(tags))}"
+      onclick="nodeTags('${esc(node)}',JSON.parse(this.dataset.tags))">${tags.length ? "Edit" : "Add"}</button></div>`;
+}
+
+/* Tags are words Longhorn matches a storage class against: a class that
+   asks for "ssd" puts its replicas only on disks tagged ssd. */
+const TAG_IDEAS = ["ssd", "nvme", "hdd", "fast", "bulk"];
+function tagEditor(title, about, current, known, save) {
+  const ideas = [...new Set([...known, ...TAG_IDEAS])].filter(t => !current.includes(t));
+  modal(title, `<p class="muted small" style="margin-top:0">${about}</p>
+    <div class="f"><label>Tags</label>
+      <input type="text" id="tg_text" value="${esc(current.join(", "))}" placeholder="ssd, fast" autocomplete="off"></div>
+    ${ideas.length ? `<div class="row" style="gap:6px;flex-wrap:wrap;margin:-4px 0 14px"><span class="dim xs">Add</span>${ideas.map(t =>
+      `<button class="tag linkish" onclick="tagAdd('${esc(t)}')">＋ ${esc(t)}</button>`).join("")}</div>` : ""}
+    <div class="row"><button class="btn pri" id="tg_save">Save tags</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+  $("#tg_save").onclick = () => save($("#tg_text").value.split(/[\s,]+/).filter(Boolean));
+  $("#tg_text").focus();
+}
+window.tagAdd = tag => {
+  const input = $("#tg_text"), tags = input.value.split(/[\s,]+/).filter(Boolean);
+  if (!tags.includes(tag)) tags.push(tag);
+  input.value = tags.join(", ");
+};
+async function tagsSave(path, body, node, reopen) {
+  try {
+    const r = await api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    toast(r.detail, "ok"); closeModal(); STATE.data.disks = null;
+    if (reopen) lhDisks(); else setTimeout(() => disksRepaint(node), 500);
+  } catch (e) { toast(e.message, "bad"); }
+}
+window.diskTags = async (node, disk, current) => {
+  const inv = await loadDisks().catch(() => ({}));
+  // Opened from the Disks list (a dialog), it goes back there; from a node's page, it stays.
+  const reopen = !$("#modal").classList.contains("hidden");
+  tagEditor(`Tags · ${disk}`, `A storage class can keep its replicas on disks with a tag: tag the fast disks
+      <b>ssd</b>, say, and make a class that asks for ssd.${inv.harvester ? " Harvester keeps a disk's tags with the disk, as its own dashboard does." : ""}`,
+    current, inv.disk_tags || [], tags => tagsSave("/api/disks/tags", { node, disk, tags }, node, reopen));
+};
+window.nodeTags = async (node, current) => {
+  const inv = await loadDisks().catch(() => ({}));
+  const reopen = !$("#modal").classList.contains("hidden");
+  tagEditor(`Node tags · ${node}`, "A storage class can keep its replicas on nodes with a tag as well as, or instead of, disks with one.",
+    current, inv.all_node_tags || [], tags => tagsSave("/api/disks/node-tags", { node, tags }, node, reopen));
+};
+
 async function loadDisks(force = false) {
   if (!force && STATE.data.disks && Date.now() - STATE.data.disksAt < 8000) return STATE.data.disks;
   STATE.data.disks = await api("/api/disks");
@@ -1177,8 +1276,8 @@ window.nodeDisksPaint = async node => {
   try {
     const inv = await loadDisks(true);
     const disks = inv.nodes[node] || [];
-    host.innerHTML = disks.length ? diskRowsHtml(node, disks, inv.harvester)
-      : '<div class="dim small">No disks reported yet: the node probe tells Homestead which disks this host has.</div>';
+    host.innerHTML = nodeTagsLine(node, inv) + (disks.length ? diskRowsHtml(node, disks, inv.harvester)
+      : '<div class="dim small">No disks reported yet: the node probe tells Homestead which disks this host has.</div>');
     if (window.applyRole) applyRole();
   } catch (e) { host.innerHTML = `<div class="dim small">${esc(e.message)}</div>`; }
 };
@@ -1191,7 +1290,7 @@ window.lhDisks = async () => {
     $("#mbody").innerHTML = `<p class="dim small" style="margin-top:0">${inv.harvester
       ? "Harvester lists each host's disks. Adding one lets Harvester format it and hand it to Longhorn, as its own UI does."
       : "Longhorn stores data in folders where a disk is mounted, or - for the V2 engine - on a raw device."}</p>
-      ${Object.entries(inv.nodes).map(([node, disks]) => `<div class="sec">${esc(node)}</div>${diskRowsHtml(node, disks, inv.harvester)}`).join("")
+      ${Object.entries(inv.nodes).map(([node, disks]) => `<div class="sec">${esc(node)}</div>${nodeTagsLine(node, inv)}${diskRowsHtml(node, disks, inv.harvester)}`).join("")
         || '<div class="empty small">No node has reported its disks yet.</div>'}`;
     window.__disksModal = true;
     if (window.applyRole) applyRole();

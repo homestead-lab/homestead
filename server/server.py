@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.143")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.144")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1330,6 +1330,10 @@ def get_flow2():
     except Exception:
         vmis = []
     try:
+        vms = kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
+    except Exception:
+        vms = []
+    try:
         dep_meta = {(d["metadata"]["namespace"], d["metadata"]["name"]):
                     d["metadata"].get("annotations", {}) or {}
                     for d in kget("/apis/apps/v1/deployments").get("items", [])}
@@ -1387,6 +1391,24 @@ def get_flow2():
             if vip:
                 vips.setdefault(vip, []).append({"port": prt.get("port"), "app": app})
 
+    def vm_ports(ns, name, labels):
+        """A VM's ports: those of each Service in its namespace that selects
+        it - by the labels on its pods, such as Harvester's vmName - and not
+        by app, which is how a container's are found."""
+        out = []
+        for s in svcs:
+            selector = s["spec"].get("selector") or {}
+            if (s["metadata"]["namespace"] != ns or not selector or "app" in selector
+                    or any(labels.get(k) != v for k, v in selector.items())):
+                continue
+            ing = s.get("status", {}).get("loadBalancer", {}).get("ingress", []) or []
+            vip = ing[0].get("ip") if ing else None
+            for prt in s["spec"].get("ports", []) or []:
+                out.append({"port": prt.get("port"), "name": prt.get("name") or "tcp", "vip": vip})
+                if vip:
+                    vips.setdefault(vip, []).append({"port": prt.get("port"), "app": name})
+        return out
+
     # --- per-pod live metrics for the architecture cards
     try:
         pmet = {}
@@ -1398,9 +1420,17 @@ def get_flow2():
         pmet = {}
 
     # --- workloads
-    seen, wls = set(), []
+    seen, wls, launchers = set(), [], {}
     for p in pods:
-        app = p["metadata"].get("labels", {}).get("app") or p["metadata"]["name"].rsplit("-", 2)[0]
+        labels = p["metadata"].get("labels", {}) or {}
+        # A VM runs in a virt-launcher pod; it is shown as the VM, below, not
+        # as a container - and every VM's launcher is not one app.
+        if labels.get("kubevirt.io") or labels.get("vm.kubevirt.io/name"):
+            if labels.get("kubevirt.io") == "virt-launcher" and p["status"].get("phase") == "Running":
+                launchers[(p["metadata"]["namespace"], labels.get("vm.kubevirt.io/name")
+                           or labels.get("kubevirt.io/domain", ""))] = p
+            continue
+        app = labels.get("app") or p["metadata"]["name"].rsplit("-", 2)[0]
         if app in seen:
             continue
         seen.add(app)
@@ -1424,12 +1454,43 @@ def get_flow2():
                        for c in p["spec"].get("containers", []) for m in (c.get("volumeMounts") or [])),
             "claims": claims, "ports": ports_by_app.get(app, []),
         })
-    for v in vmis:
-        nm = v["metadata"]["name"]
-        wls.append({"id": "w:vm-" + nm, "name": nm, "kind": "vm", "ns": v["metadata"]["namespace"],
-                    "node": v.get("status", {}).get("nodeName", ""), "phase": v.get("status", {}).get("phase", ""),
-                    "uptime": 0, "cpu": 0, "mem_mb": 0,
-                    "image": "", "gpu": False, "hardware": [], "claims": [], "ports": []})
+    # --- virtual machines, running or not: a stopped VM's disks are still here
+    vmi_by = {(v["metadata"]["namespace"], v["metadata"]["name"]): v for v in vmis}
+    known = [(v, vmi_by.get((v["metadata"]["namespace"], v["metadata"]["name"]), {})) for v in vms]
+    named = {(v["metadata"]["namespace"], v["metadata"]["name"]) for v in vms}
+    # An instance made without a VirtualMachine is shown by itself.
+    known += [({"metadata": v["metadata"], "spec": {"template": {"metadata": {"labels": (v["metadata"].get("labels") or {})},
+                                                                "spec": v.get("spec") or {}}}}, v)
+              for key, v in vmi_by.items() if key not in named]
+    for vm, vmi in known:
+        ns, nm = vm["metadata"]["namespace"], vm["metadata"]["name"]
+        if ns in SYS_NS:
+            continue
+        # Its disks as it runs now (hot-plugged ones too), else as defined.
+        volumes = ((vmi.get("spec") or {}).get("volumes")
+                   or (((vm.get("spec") or {}).get("template") or {}).get("spec") or {}).get("volumes") or [])
+        addresses = [a for i in (vmi.get("status") or {}).get("interfaces") or []
+                     for a in (i.get("ipAddresses") or [i.get("ipAddress")]) if a and ":" not in a]
+        row = {"disks": [{"claim": VMS._volume_claim(v)} for v in volumes], "ip": addresses[0] if addresses else "",
+               "status": VMS._status(vm, vmi), "node": (vmi.get("status") or {}).get("nodeName", ""),
+               "running": (vmi.get("status") or {}).get("phase") == "Running"}
+        launcher = launchers.get((ns, nm))
+        cu, mu = pmet.get((ns, launcher["metadata"]["name"]), (0, 0)) if launcher else (0, 0)
+        pod_labels = dict((launcher or {}).get("metadata", {}).get("labels") or {})
+        pod_labels.update(((vm.get("spec") or {}).get("template") or {}).get("metadata", {}).get("labels") or {})
+        wls.append({
+            "id": "w:vm-" + nm, "name": nm, "kind": "vm", "ns": ns,
+            "node": row.get("node") or (vmi.get("status") or {}).get("nodeName", ""),
+            "phase": (vmi.get("status") or {}).get("phase", "") or "Stopped",
+            "state": str(row.get("status") or ""),
+            "running": bool(row.get("running")), "ip": row.get("ip", ""),
+            "uptime": age_secs((launcher or {}).get("status", {}).get("startTime")) if launcher else 0,
+            "cpu": round(cu, 3), "mem_mb": round(mu / 1048576, 1),
+            "image": "", "icon": "", "gpu": False, "hardware": [],
+            "claims": [{"pvc": d["claim"], "vid": vol_by_pvc[d["claim"]]["id"] if d["claim"] in vol_by_pvc else ""}
+                       for d in row.get("disks") or [] if d.get("claim")],
+            "ports": vm_ports(ns, nm, pod_labels),
+        })
 
     return {
         "nodes": [{"id": "n:" + k, "name": k, "copies": sorted(v, key=lambda x: x["vol"])}
@@ -2203,6 +2264,9 @@ def storage_classes():
             "migratable": str(parameters.get("migratable", "")).lower() == "true",
             "encrypted": str(parameters.get("encrypted", "")).lower() == "true",
             "data_locality": parameters.get("dataLocality", ""),
+            # Longhorn places replicas only on disks and nodes with every tag.
+            "disk_tags": [t for t in str(parameters.get("diskSelector") or "").split(",") if t],
+            "node_tags": [t for t in str(parameters.get("nodeSelector") or "").split(",") if t],
             "expandable": bool(item.get("allowVolumeExpansion")),
             "reclaim": item.get("reclaimPolicy", "Delete"),
             "default": annotations.get("storageclass.kubernetes.io/is-default-class") == "true",
@@ -2330,6 +2394,22 @@ def create_storage_class(cfg):
     if engine not in ("v1", "v2"):
         raise ValueError("the data engine is v1 or v2")
     warning = ""
+    disk_tags, node_tags = DISKS.clean_tags(cfg.get("disk_tags")), DISKS.clean_tags(cfg.get("node_tags"))
+    if disk_tags:
+        parameters["diskSelector"] = ",".join(disk_tags)
+    if node_tags:
+        parameters["nodeSelector"] = ",".join(node_tags)
+    if disk_tags or node_tags:
+        # Every replica needs a node of its own with a disk that fits; fewer
+        # than that and a volume runs a copy short, or does not start at all.
+        reach = DISKS.tag_reach(disk_tags, node_tags)
+        wanted = " and ".join(x for x in (f"a disk tagged {', '.join(disk_tags)}" if disk_tags else "",
+                                          f"the node tags {', '.join(node_tags)}" if node_tags else "") if x)
+        if not reach:
+            warning += f"; no node has {wanted} yet, so its volumes will not schedule until one does"
+        elif len(reach) < replicas:
+            warning += (f"; only {', '.join(reach)} ha{'s' if len(reach) == 1 else 've'} {wanted}, fewer than "
+                        f"its {replicas} replicas, so its volumes will run degraded")
     if engine == "v2":
         parameters["dataEngine"] = "v2"
         v2 = v2_engine_status()
@@ -4400,6 +4480,7 @@ def needed_role(path, method):
     # a secret's values are for admins only.
     if path in ("/api/helm/install", "/api/helm/upgrade", "/api/helm/uninstall", "/api/resources/save", "/api/vm/delete",
                 "/api/longhorn/settings", "/api/disks/add", "/api/disks/scheduling", "/api/disks/evict", "/api/disks/remove",
+                "/api/disks/tags", "/api/disks/node-tags",
                 # Replacing a failed disk deletes replicas and takes the disk out.
                 "/api/disks/retire", "/api/disks/retire/plan",
                 "/api/resources/delete", "/api/resources/create", "/api/resources/reveal"):
@@ -5465,6 +5546,12 @@ class H(BaseHTTPRequestHandler):
                 for key in ("disks", "lhcap", "nodes", "ov"):
                     _cache.pop(key, None)
                 return self._send(200, result)
+            if p in ("/api/disks/tags", "/api/disks/node-tags"):
+                result = (DISKS.set_disk_tags(b.get("node", ""), b.get("disk", ""), b.get("tags") or [])
+                          if p.endswith("/tags") and not p.endswith("node-tags")
+                          else DISKS.set_node_tags(b.get("node", ""), b.get("tags") or []))
+                _cache.pop("disks", None)
+                return self._send(200, result)
             if p == "/api/longhorn/settings":
                 _cache.pop("lhcap", None)
                 return self._send(200, LHCAP.save(b))
@@ -5787,7 +5874,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.143 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.144 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()
