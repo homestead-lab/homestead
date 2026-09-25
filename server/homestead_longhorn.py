@@ -38,6 +38,7 @@ TASKS = {
     "backup-force-create": "Backup (force) — always upload",
     "filesystem-trim": "Trim — reclaim space the guest has freed",
 }
+KEEPING = ("snapshot", "snapshot-force-create", "snapshot-delete", "backup", "backup-force-create")
 JOB_LABEL = "recurring-job.longhorn.io/"
 GROUP_LABEL = "recurring-job-group.longhorn.io/"
 SAFE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$")
@@ -152,9 +153,12 @@ def save_job(cfg):
         raise ValueError("name must be lowercase letters, numbers and dashes")
     if cfg.get("task") not in TASKS:
         raise ValueError(f"task must be one of: {', '.join(TASKS)}")
-    retain = int(cfg.get("retain", 7))
-    if cfg["task"].startswith(("snapshot", "backup")) and retain < 1:
+    retain = int(cfg.get("retain", 7) or 0)
+    # A cleanup or a trim keeps nothing, so it has nothing to count.
+    if cfg["task"] in KEEPING and retain < 1:
         raise ValueError("retain must be at least 1 for snapshot and backup jobs")
+    if cfg["task"] not in KEEPING:
+        retain = 0
     body = {
         "apiVersion": "longhorn.io/v1beta2", "kind": "RecurringJob",
         "metadata": {"name": name, "namespace": LHNS,
@@ -223,12 +227,35 @@ def groups():
     return sorted(g)
 
 
+SOURCE_LABEL = "recurring-job.longhorn.io/source"
+
+
+def _patch_labels(volume, changes):
+    """Set or clear recurring-job labels on a volume - and on its PVC, when
+    the PVC is where Longhorn reads them from.
+
+    A PVC labelled recurring-job.longhorn.io/source=enabled has its own
+    labels copied onto the volume, so a change made to the volume alone was
+    undone on Longhorn's next sync."""
+    patch = {"metadata": {"labels": changes}}
+    ksend("PATCH", f"{API}/namespaces/{LHNS}/volumes/{volume}", patch,
+          ctype="application/merge-patch+json")
+    try:
+        status = kget(f"{API}/namespaces/{LHNS}/volumes/{volume}").get("status", {}) or {}
+        ks = status.get("kubernetesStatus", {}) or {}
+        if ks.get("pvcName") and ks.get("namespace"):
+            path = f"/api/v1/namespaces/{ks['namespace']}/persistentvolumeclaims/{ks['pvcName']}"
+            if ((kget(path).get("metadata", {}) or {}).get("labels", {}) or {}).get(SOURCE_LABEL) == "enabled":
+                ksend("PATCH", path, patch, ctype="application/merge-patch+json")
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+
+
 def assign(volume, name, kind="group", enabled=True):
     """Add or remove a job/group label on one volume."""
     key = (GROUP_LABEL if kind == "group" else JOB_LABEL) + name
-    patch = {"metadata": {"labels": {key: "enabled" if enabled else None}}}
-    ksend("PATCH", f"{API}/namespaces/{LHNS}/volumes/{volume}", patch,
-          ctype="application/merge-patch+json")
+    _patch_labels(volume, {key: "enabled" if enabled else None})
     _bust("lhvols", "lhjobs")
     return {"ok": True, "volume": volume, "label": key, "enabled": enabled}
 
@@ -242,6 +269,130 @@ def bulk_assign(volumes_list, name, kind="group", enabled=True):
         except Exception as e:
             failed.append(f"{v}: {e}")
     return {"ok": True, "updated": done, "failed": failed}
+
+
+def _job_objects():
+    try:
+        return kget(f"{API}/namespaces/{LHNS}/recurringjobs").get("items", [])
+    except Exception:
+        return []
+
+
+def _set_job_groups(job, wanted):
+    """Save a recurring job with a new list of groups, the rest unchanged."""
+    job = json.loads(json.dumps(job))
+    job["spec"]["groups"] = wanted
+    job["metadata"].pop("managedFields", None)
+    ksend("PUT", f"{API}/namespaces/{LHNS}/recurringjobs/{job['metadata']['name']}", job)
+
+
+def _only_default(labels):
+    keys = [k for k in labels if k.startswith((JOB_LABEL, GROUP_LABEL)) and labels[k] == "enabled"]
+    return keys == [GROUP_LABEL + "default"]
+
+
+def save_group(cfg):
+    """Make or change a group: its name, the volumes in it and the jobs that
+    cover it, in one go.
+
+    A group is nothing but a label on volumes and a name in jobs' lists, so
+    one with neither is kept nowhere; it needs a volume or a job. Longhorn
+    puts every volume without a job or group label in default, and leaves it
+    there when it joins another group - so it would get both groups' plans.
+    Joining here takes it out of default unless asked not to."""
+    name = str(cfg.get("name") or "").strip()
+    original = str(cfg.get("original") or "").strip() or name
+    if not SAFE.match(name):
+        raise ValueError("a group name is lowercase letters, numbers and dashes, up to 40")
+    if "default" in (original, name) and original != name:
+        raise ValueError("default is Longhorn's own group and keeps its name")
+    wanted_volumes = set(cfg.get("volumes") or [])
+    wanted_jobs = set(cfg.get("jobs") or [])
+    if name != "default" and not wanted_volumes and not wanted_jobs:
+        raise ValueError("choose a volume or a job: a group with neither is not kept anywhere")
+    vols = {v["name"]: v for v in _volumes()}
+    unknown = wanted_volumes - set(vols)
+    if unknown:
+        raise ValueError("no such volume: " + ", ".join(sorted(unknown)))
+    jobs = {j["metadata"]["name"]: j for j in _job_objects()}
+    unknown = wanted_jobs - set(jobs)
+    if unknown:
+        raise ValueError("no such job: " + ", ".join(sorted(unknown)))
+    if original != name and name in groups():
+        raise ValueError(f"there is already a group called {name}")
+    old_key, key, default_key = GROUP_LABEL + original, GROUP_LABEL + name, GROUP_LABEL + "default"
+    added, removed, left_default, back_to_default, kept = [], [], [], [], []
+    for vol, v in vols.items():
+        labels = v["labels"]
+        has = labels.get(old_key) == "enabled"
+        want = vol in wanted_volumes
+        changes = {}
+        if original != name and has:
+            changes[old_key] = None
+        if want and (not has or original != name):
+            changes[key] = "enabled"
+        if want and not has:
+            added.append(vol)
+            if name != "default" and cfg.get("leave_default", True) and labels.get(default_key) == "enabled":
+                changes[default_key] = None
+                left_default.append(vol)
+        elif has and not want:
+            if name == "default" and _only_default(labels):
+                # Longhorn would put it straight back.
+                kept.append(vol)
+                continue
+            changes[old_key] = None
+            removed.append(vol)
+            rest = {k for k, value in labels.items() if value == "enabled"
+                    and k.startswith((JOB_LABEL, GROUP_LABEL)) and k != old_key}
+            if not rest:
+                back_to_default.append(vol)
+        if changes:
+            _patch_labels(vol, changes)
+    for job_name, job in jobs.items():
+        current = list((job.get("spec") or {}).get("groups") or [])
+        has = original in current
+        want = job_name in wanted_jobs
+        if has and (not want or original != name):
+            current = [g for g in current if g != original]
+        if want and name not in current:
+            current.append(name)
+        if current != list((job.get("spec") or {}).get("groups") or []):
+            _set_job_groups(job, current)
+    _bust("lhvols", "lhjobs", "lhov")
+    return {"ok": True, "name": name, "added": added, "removed": removed, "left_default": left_default,
+            "back_to_default": back_to_default, "kept_in_default": kept}
+
+
+def delete_group(name):
+    """Take a group off every volume and out of every job.
+
+    Snapshots and backups already taken are kept. A volume left with no
+    group or job goes back to default, as Longhorn does; a job left with no
+    group protects nothing until it is given one - both are said by name."""
+    if name == "default":
+        raise ValueError("default is Longhorn's own group; every volume without another comes back to it")
+    if not SAFE.match(str(name or "")):
+        raise ValueError("unknown group")
+    key = GROUP_LABEL + name
+    back, idle = [], []
+    for v in _volumes():
+        if v["labels"].get(key) != "enabled":
+            continue
+        rest = [k for k, value in v["labels"].items() if value == "enabled"
+                and k.startswith((JOB_LABEL, GROUP_LABEL)) and k != key]
+        _patch_labels(v["name"], {key: None})
+        if not rest:
+            back.append(v["pvc"] or v["name"])
+    for job in _job_objects():
+        current = list((job.get("spec") or {}).get("groups") or [])
+        if name in current:
+            left = [g for g in current if g != name]
+            _set_job_groups(job, left)
+            if not left:
+                idle.append(job["metadata"]["name"])
+    _bust("lhvols", "lhjobs", "lhov")
+    return {"ok": True, "back_to_default": back, "idle_jobs": idle}
 
 
 # ------------------------------------------------------------------ snapshots
@@ -307,10 +458,48 @@ def backup_target():
         "interval": sp.get("pollInterval", ""),
         "available": avail.get("status") != "True",
         "reason": avail.get("message", "") or avail.get("reason", ""),
+        "secret_missing": bool(sp.get("credentialSecret")) and _get_or_none(
+            f"/api/v1/namespaces/{LHNS}/secrets/{sp.get('credentialSecret')}") is None,
     }
 
 
-def set_backup_target(url, secret="", poll="5m"):
+TARGET_SECRET = "homestead-backup-target"
+SCHEMES = ("s3://", "nfs://", "cifs://", "azblob://")
+
+
+def _target_secret(name, keys):
+    """The Secret Longhorn reads S3 keys from, made from what was typed."""
+    data = {"AWS_ACCESS_KEY_ID": keys["access_key"], "AWS_SECRET_ACCESS_KEY": keys["secret_key"]}
+    if keys.get("endpoint"):
+        data["AWS_ENDPOINTS"] = keys["endpoint"]
+    body = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+            "metadata": {"name": name, "namespace": LHNS, "labels": {NAMES.key("managed"): "true"}},
+            "stringData": data}
+    path = f"/api/v1/namespaces/{LHNS}/secrets"
+    current = _get_or_none(f"{path}/{name}")
+    if current:
+        body["metadata"]["resourceVersion"] = current["metadata"]["resourceVersion"]
+        ksend("PUT", f"{path}/{name}", body)
+    else:
+        ksend("POST", path, body)
+
+
+def set_backup_target(url, secret="", poll="5m", keys=None):
+    url, secret = str(url or "").strip(), str(secret or "").strip()
+    if url and not url.startswith(SCHEMES):
+        raise ValueError("a backup target starts with s3://, nfs://, cifs:// or azblob://")
+    keys = {k: str(v or "").strip() for k, v in (keys or {}).items()}
+    if keys.get("access_key") or keys.get("secret_key"):
+        if not (keys.get("access_key") and keys.get("secret_key")):
+            raise ValueError("an S3 target needs both the access key and the secret key")
+        if keys.get("endpoint") and not re.match(r"^https?://", keys["endpoint"]):
+            raise ValueError("the endpoint is a URL, such as http://192.0.2.20:9000")
+        secret = secret or TARGET_SECRET
+        if not _valid_k8s_name(secret):
+            raise ValueError("the secret name is lowercase letters, numbers, dots and dashes")
+        _target_secret(secret, keys)
+    elif url.startswith("s3://") and not secret:
+        raise ValueError("an S3 target needs its keys, or the name of a Secret that holds them")
     name = "default"
     body = {"apiVersion": "longhorn.io/v1beta2", "kind": "BackupTarget",
             "metadata": {"name": name, "namespace": LHNS},
@@ -540,14 +729,79 @@ def restore_backup(cfg):
             "message": f"Restore of {backup} into {namespace}/{pvc_name} started"}
 
 
+# Tasks that keep a copy of a volume; trims and cleanups tidy, and protect nothing.
+PROTECTING = ("snapshot", "snapshot-force-create", "backup", "backup-force-create")
+
+
 def overview():
     jobs, vols, tgt = list_jobs(), _volumes(), backup_target()
-    protected = {v for j in jobs for v in j["volumes"]}
+    by_volume = {}
+    for j in jobs:
+        if j["task"] in PROTECTING:
+            for name in j["volumes"]:
+                by_volume.setdefault(name, []).append(j)
+    for v in vols:
+        mine = by_volume.get(v["name"], [])
+        v["protected_by"] = [j["name"] for j in mine]
+        v["snapshotted"] = any(j["task"].startswith("snapshot") for j in mine)
+        v["backed_up"] = any(j["task"].startswith("backup") for j in mine)
+    names = groups()
     return {
-        "jobs": jobs, "volumes": vols, "groups": groups(), "target": tgt,
+        "jobs": jobs, "volumes": vols, "groups": names, "target": tgt,
         "tasks": TASKS,
-        "protected": len(protected),
-        "unprotected": [v["pvc"] or v["name"] for v in vols
-                        if (v["pvc"] or v["name"]) not in protected and v["name"] not in protected],
+        "group_rows": [{"name": g,
+                        "volumes": [v["name"] for v in vols if g in v["groups"]],
+                        "jobs": [j["name"] for j in jobs if g in j["groups"]]} for g in names],
+        "protected": sum(1 for v in vols if v["protected_by"]),
+        "backed_up": sum(1 for v in vols if v["backed_up"]),
+        "unprotected": [v["pvc"] or v["name"] for v in vols if not v["protected_by"]],
         "total": len(vols),
     }
+
+
+def backup_volumes():
+    """Every volume that has backups, the deleted ones included.
+
+    A backup outlives its volume - that is its point - so this lists what
+    the backup target holds, not what the cluster still has."""
+    try:
+        items = kget(f"{API}/namespaces/{LHNS}/backupvolumes").get("items", [])
+    except Exception:
+        return []
+    live = {v["name"]: v for v in _volumes()}
+    counts = {}
+    for b in backups():
+        counts[b["volume"]] = counts.get(b["volume"], 0) + 1
+    out = []
+    for item in items:
+        meta, status = item.get("metadata", {}) or {}, item.get("status", {}) or {}
+        name = ((meta.get("labels") or {}).get("backup-volume") or (item.get("spec") or {}).get("volumeName")
+                or status.get("volumeName") or meta.get("name", ""))
+        volume = live.get(name)
+        out.append({
+            "name": name, "id": meta.get("name", ""),
+            "pvc": (volume or {}).get("pvc", "") or _pvc_of_backup(status),
+            "exists": volume is not None,
+            "last_backup": status.get("lastBackupName", ""),
+            "last_backup_at": status.get("lastBackupAt", ""),
+            "size_mb": round(int(status.get("size", 0) or 0) / 1048576, 1),
+            "count": counts.get(name, 0),
+            "target": status.get("backupTargetName", "") or (item.get("spec") or {}).get("backupTargetName", "") or "default",
+        })
+    return sorted(out, key=lambda x: (x["exists"], x["name"]))
+
+
+def _pvc_of_backup(status):
+    """The claim a backed-up volume belonged to, as Longhorn wrote it down."""
+    try:
+        return (json.loads((status.get("labels") or {}).get("KubernetesStatus") or "{}") or {}).get("pvcName", "")
+    except (TypeError, ValueError):
+        return ""
+
+
+def delete_backup(name):
+    """Delete one backup - from the backup target too, which Longhorn does."""
+    _backup(name)
+    ksend("DELETE", f"{API}/namespaces/{LHNS}/backups/{name}")
+    _bust("lhbackups", "lhbackupvols", "lhov")
+    return {"ok": True, "backup": name}

@@ -1557,6 +1557,11 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .plan-list{display:grid;gap:10px;margin:12px 0}
 .plan-card{display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:start;padding:12px 14px;cursor:pointer;margin:0}
 .plan-card:has(input:checked){border-color:var(--vio)}
+.lg-list{max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:10px;margin-top:8px}
+.lg-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 12px;margin:0;cursor:pointer;border-bottom:1px solid var(--line)}
+.lg-row:last-child{border-bottom:0}.lg-row[hidden]{display:none}
+.lg-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.lg-sub{display:block;overflow:hidden;text-overflow:ellipsis}.lg-tags{text-align:right}
+@media (max-width:560px){.lg-row{grid-template-columns:auto minmax(0,1fr)}.lg-tags{grid-column:2;text-align:left}}
 .plan-jobs{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
 .v2line{margin-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 
@@ -1632,6 +1637,7 @@ html[data-theme="light"] .compose-editor{background:#fff}
 /* VM console: the screen fills the dialog's width at the VM's aspect. */
 .vmc-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
 .vmc-tools{display:flex;gap:6px;margin-left:auto;flex-wrap:wrap}
+.vmc-paste{margin-bottom:8px}.vmc-paste textarea{width:100%;min-height:64px;resize:vertical;font-family:"JetBrains Mono",monospace}
 .vmc-screen{width:100%;height:max(240px,min(calc(88vh - 300px),720px));background:#000;border-radius:10px;overflow:hidden;border:1px solid var(--line)}
 .vmc-screen:fullscreen{height:100vh;border-radius:0;border:0}
 

@@ -1020,6 +1020,15 @@ window.consoleConnect = (attempt = 0) => {
   window.__consoleResize.observe($("#consoleView"));
 };
 
+/* Text selected in the console's input or its output, if any. */
+function consoleSelection() {
+  const input = $("#consoleInput");
+  if (input && document.activeElement === input && input.selectionStart !== input.selectionEnd) {
+    return input.value.slice(input.selectionStart, input.selectionEnd);
+  }
+  const selection = window.getSelection(), view = $("#consoleView");
+  return selection && view && !selection.isCollapsed && view.contains(selection.anchorNode) ? selection.toString() : "";
+}
 window.consoleSend = () => {
   const input = $("#consoleInput"), socket = window.__consoleSocket;
   if (!input || !socket || socket.readyState !== WebSocket.OPEN) return toast("Connect the console first", "bad");
@@ -1029,7 +1038,10 @@ window.consoleSend = () => {
 document.addEventListener("keydown", event => {
   if (event.target?.id !== "consoleInput") return;
   if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); consoleSend(); }
-  else if (event.key.toLowerCase() === "c" && event.ctrlKey && window.__consoleSocket?.readyState === WebSocket.OPEN) {
+  // Ctrl+C with text selected copies it, as in a terminal; only without a
+  // selection does it interrupt.
+  else if (event.key.toLowerCase() === "c" && event.ctrlKey && !event.shiftKey && !consoleSelection()
+      && window.__consoleSocket?.readyState === WebSocket.OPEN) {
     event.preventDefault(); window.__consoleSocket.send(JSON.stringify({ type: "input", data: "\u0003" }));
   }
 });

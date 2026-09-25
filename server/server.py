@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.142")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.143")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -4374,7 +4374,7 @@ ADMIN_ROUTES = {
     "/api/move/plan", "/api/move/start", "/api/move/moves/retry",
     "/api/move/moves/abandon", "/api/move/moves/finish", "/api/move/moves/dismiss",
     "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete",
-    "/api/lh/restore",
+    "/api/lh/restore", "/api/lh/backup/delete", "/api/lh/group/delete",
     # Homestead's own permissions, and the namespaces apps live in.
     "/api/self/permissions", "/api/namespaces/create", "/api/namespaces/delete",
 }
@@ -4826,6 +4826,8 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/lh/backups":
                 vol = (q.get("volume") or [None])[0]
                 return self._send(200, LH.backups(vol))
+            if p == "/api/lh/backupvolumes":
+                return self._send(200, cached("lhbackupvols", 15, LH.backup_volumes))
             if p == "/api/lh/restore/plan":
                 return self._send(200, LH.restore_plan(
                     (q.get("backup") or [""])[0],
@@ -5612,7 +5614,13 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, result)
             if p == "/api/lh/target":
                 return self._send(200, LH.set_backup_target(
-                    b["url"], b.get("secret", ""), b.get("poll", "5m")))
+                    b["url"], b.get("secret", ""), b.get("poll", "5m"), b.get("keys")))
+            if p == "/api/lh/group":
+                return self._send(200, LH.save_group(b))
+            if p == "/api/lh/group/delete":
+                return self._send(200, LH.delete_group(b.get("name", "")))
+            if p == "/api/lh/backup/delete":
+                return self._send(200, LH.delete_backup(b.get("name", "")))
             if p == "/api/schedules":
                 IMP.save_job(b); return self._send(200, {"ok": True})
             if p == "/api/schedules/delete":
@@ -5779,7 +5787,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.142 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.143 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

@@ -122,6 +122,16 @@ function go(v, options = {}) {
   // Anything still loading belongs to the page being left behind.
   window.NAV_TOKEN++;
   STATE.view = v;
+  // A search narrows the page it was typed on. Going somewhere else starts
+  // unfiltered - unless a search result was what led here, or the address
+  // (back, forward, a link) says what to show.
+  if (!options.keepSearch && !options.fromLocation && STATE.q) {
+    STATE.q = "";
+    $("#globalSearch").value = "";
+    $("#searchResults")?.classList.add("hidden");
+    document.body.classList.remove("searching");
+    $("#searchbtn")?.classList.remove("filtering");
+  }
   const locationParams = options.fromLocation ? HomesteadRouter.queryParams(window.location.search) : null;
   if (locationParams) {
     STATE.q = typeof locationParams.q === "string" ? locationParams.q.trim() : "";
@@ -234,7 +244,7 @@ async function globalSearch(q) {
       ${x.icon ? `<img src="${esc(x.icon)}" alt="" onerror="this.remove()">` : '<span class="smark">⌕</span>'}
       <span><b>${esc(x.name)}</b><small>${esc(x.kind)} · ${esc(x.sub)}</small></span></button>`).join("")
       : `<div class="searchloading">No containers, nodes or volumes match “${esc(q)}”.</div>`;
-    $$(".sresult", out).forEach(b => b.onclick = () => { out.classList.add("hidden"); go(b.dataset.view); });
+    $$(".sresult", out).forEach(b => b.onclick = () => { out.classList.add("hidden"); go(b.dataset.view, { keepSearch: true }); });
   } catch (e) { out.innerHTML = `<div class="searchloading">Search unavailable · ${esc(e.message)}</div>`; }
 }
 $("#globalSearch").addEventListener("input", e => {

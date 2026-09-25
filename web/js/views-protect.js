@@ -121,12 +121,14 @@ window.objectStoreRemove = async () => {
 
 async function viewProtect() {
   if (platformLacks("longhorn", "Data protection")) return;
-  const [d, objects] = await Promise.all([
+  const [d, objects, backupVolumes] = await Promise.all([
     api("/api/lh/overview"),
     api("/api/objectstore").catch(() => ({ deployed: false })),
+    api("/api/lh/backupvolumes").catch(() => []),
   ]);
   STATE.data.lh = d;
   STATE.data.objectStore = objects;
+  STATE.data.lhBackupVolumes = backupVolumes;
   const tgt = d.target || {};
   const cover = d.total ? Math.round(d.protected / d.total * 100) : 0;
 
@@ -143,10 +145,11 @@ async function viewProtect() {
 
   <div class="grid g3" style="margin-bottom:18px">
     <div class="card glow ${cover === 100 ? "g-ok" : cover ? "g-warn" : "g-bad"}">
-      <div class="ctitle">Coverage</div><div class="csub">Volumes touched by at least one job</div>
+      <div class="ctitle">Coverage</div><div class="csub">Volumes a snapshot or backup job keeps copies of</div>
       <div class="row" style="margin-top:12px;gap:18px;align-items:flex-end">
         <div class="bignum">${cover}<span class="unit">%</span></div>
-        <div class="csub" style="padding-bottom:6px">${d.protected} of ${d.total} protected</div>
+        <div class="csub" style="padding-bottom:6px">${d.protected} of ${d.total} protected ·
+          ${d.backed_up ?? 0} backed up off the cluster</div>
       </div>
       ${meter(cover, 'style="margin-top:12px"')}
       ${d.unprotected.length ? `<div style="margin-top:12px">
@@ -161,21 +164,25 @@ async function viewProtect() {
         <div class="drow"><div class="dl">URL</div><div class="dv mono small">${esc(tgt.url)}</div></div>
         <div class="drow"><div class="dl">Status</div><div class="dv">
           <span class="pill ${tgt.available ? "ok" : "crit"}">${tgt.available ? "reachable" : "unavailable"}</span></div></div>
-        ${tgt.reason ? `<div class="dim xs" style="margin-top:8px">${esc(tgt.reason)}</div>` : ""}`
+        ${tgt.reason ? `<div class="dim xs" style="margin-top:8px">${esc(tgt.reason)}</div>` : ""}
+        ${tgt.secret_missing ? `<div class="note warn" style="margin-top:10px"><b>Its keys are missing.</b>
+          The Secret ${esc(tgt.secret)} is not in longhorn-system, so backups cannot sign in.
+          <button class="btn sm" data-need="admin" onclick="lhTarget()">Enter the keys</button></div>` : ""}`
       : `<div class="note" style="margin-top:12px"><b>No backup target.</b> Snapshots work without one —
          they live on the volume. <b>Backups need somewhere to go</b>: an NFS share or S3 bucket.
          Until you set one, backup jobs will fail.</div>`}
     </div>
 
     <div class="card flat">
-      <div class="ctitle">Groups</div><div class="csub">A job protects every volume in its groups</div>
+      <div class="between"><div><div class="ctitle">Groups</div><div class="csub">A job protects every volume in its groups</div></div>
+        <button class="btn sm" data-need="operator" onclick="lhGroup()">＋ Group</button></div>
       <div style="margin-top:12px">${d.groups.map(g => {
         const n = d.volumes.filter(v => v.groups.includes(g)).length;
-        return `<span class="tag ${g === "default" ? "info" : ""}">${esc(g)} · ${n}</span>`;
+        return `<span class="tag ${g === "default" ? "info" : ""}" role="button" tabindex="0" style="cursor:pointer"
+          data-tip="Edit ${esc(g)}" onclick="lhGroup('${esc(g)}')">${esc(g)} · ${n}</span>`;
       }).join("")}</div>
-      <div class="dim xs" style="margin-top:12px">Longhorn puts every new volume in
-        <span class="mono">default</span>, so a job targeting <span class="mono">default</span>
-        covers everything automatically.</div>
+      <div class="dim xs" style="margin-top:12px">Longhorn puts every volume without a group in
+        <span class="mono">default</span>. Give some volumes a plan of their own with a group.</div>
     </div>
   </div>
 
@@ -193,7 +200,7 @@ async function viewProtect() {
       <div><div class="dim xs">SCHEDULE</div><div class="small" data-tip="cron ${esc(j.cron)} on the cluster's clock (UTC)">${esc(CRON.describe(j.cron))}</div></div>
       <div><div class="dim xs">NEXT</div><div>${nextRun(j.cron)}</div></div>
       <div><div class="dim xs">LAST</div><div>${lastRunText(j)}</div></div>
-      <div><div class="dim xs">KEEPS</div><div class="mono small">${j.task.startsWith("snapshot") || j.task.startsWith("backup") ? j.retain : "—"}</div></div>
+      <div><div class="dim xs">KEEPS</div><div class="mono small">${KEEPS(j.task) ? j.retain : "—"}</div></div>
     </div>
     <div class="dim xs">${esc(j.desc)} · ${j.groups.length ? `groups ${j.groups.map(g => `<span class="tag">${esc(g)}</span>`).join("")}` : "no groups"} · ${j.concurrency} at a time</div>
     <div class="row wacts">
@@ -206,22 +213,59 @@ async function viewProtect() {
      <a onclick="lhPlans()" style="cursor:pointer;text-decoration:underline">choose one</a> - or a daily snapshot of the <span class="mono">default</span>
      group is the usual starting point: <a onclick="lhQuickStart()" style="cursor:pointer;text-decoration:underline">set that up</a>.</div>`}
 
+  <div class="sec between"><span>Groups</span>
+    <button class="btn sm" data-need="operator" onclick="lhGroup()">＋ New group</button></div>
+  <div class="cardlist">${(d.group_rows || []).map(groupCard).join("")}</div>
+
   <div class="sec">Volumes</div>
   <div class="card flat pad0"><div class="tblwrap"><table data-sort="protect" class="tbl stack"><thead><tr>
-    <th>Volume</th><th>Size</th><th>Health</th><th>Groups</th><th>Direct jobs</th><th data-nosort>Last backup</th><th></th>
+    <th>Volume</th><th>Size</th><th>Health</th><th>Groups</th><th>Protected by</th><th data-nosort>Last backup</th><th></th>
   </tr></thead><tbody>
   ${d.volumes.map(v => `<tr>
     <td><b>${esc(v.pvc || v.name.slice(0, 16))}</b><div class="dim xs mono">${esc(v.namespace)}</div></td>
     <td class="mono">${v.size_gb} GB</td>
     <td><span class="pill ${v.robustness === "healthy" ? "ok" : v.robustness === "degraded" ? "med" : "crit"}">${esc(v.robustness || "?")}</span></td>
     <td>${v.groups.map(g => `<span class="tag ${g === "default" ? "info" : ""}">${esc(g)}</span>`).join("") || '<span class="dim">—</span>'}</td>
-    <td>${v.jobs.map(j => `<span class="tag ok">${esc(j)}</span>`).join("") || '<span class="dim">—</span>'}</td>
+    <td>${(v.protected_by || []).map(j => `<span class="tag ok">${esc(j)}</span>`).join("")
+      || '<span class="tag warn" data-tip="No snapshot or backup job covers it">nothing</span>'}</td>
     <td class="small dim">${v.last_backup_at ? esc(v.last_backup_at.replace("T", " ").replace("Z", "")) : "never"}</td>
     <td><div class="row" style="gap:6px">
       <button class="btn sm" onclick="lhSnaps('${esc(v.name)}','${esc(v.pvc || v.name)}')">Snapshots</button>
       <button class="btn sm" data-need="operator" onclick="lhAssign('${esc(v.name)}','${esc(v.pvc || v.name)}')">Protect</button>
     </div></td></tr>`).join("")}
-  </tbody></table></div></div>`);
+  </tbody></table></div></div>
+
+  <div class="sec">Backups</div>
+  ${backupVolumes.length ? `<div class="card flat pad0"><div class="tblwrap"><table data-sort="backupvols" class="tbl stack"><thead><tr>
+    <th>Volume</th><th>Backups</th><th data-nosort>Last backup</th><th>Size</th><th></th></tr></thead><tbody>
+    ${backupVolumes.map(b => `<tr>
+      <td><b>${esc(b.pvc || b.name)}</b>${b.exists ? "" : ' <span class="tag warn" data-tip="The volume is gone; its backups are all that is left of it">volume deleted</span>'}
+        <div class="dim xs mono">${esc(b.name)}</div></td>
+      <td class="mono">${b.count}</td>
+      <td class="small dim">${b.last_backup_at ? esc(b.last_backup_at.replace("T", " ").replace("Z", "")) : "—"}</td>
+      <td class="mono">${b.size_mb ? (b.size_mb >= 1024 ? `${(b.size_mb / 1024).toFixed(1)} GB` : `${b.size_mb} MB`) : "—"}</td>
+      <td><button class="btn sm" onclick="lhBackupList('${esc(b.name)}','${esc(b.pvc || b.name)}')">Backups</button></td></tr>`).join("")}
+  </tbody></table></div></div>`
+  : `<div class="empty">${tgt.configured ? "No backups on the target yet." : "No backup target, so no backups."}</div>`}`);
+}
+
+/* A group, what is in it and what protects it. */
+function groupCard(g) {
+  const d = STATE.data.lh || {}, jobs = (d.jobs || []).filter(j => g.jobs.includes(j.name));
+  const vols = (d.volumes || []).filter(v => g.volumes.includes(v.name));
+  const guards = jobs.filter(j => /^(snapshot|backup)(-force-create)?$/.test(j.task));
+  return `<div class="card flat wcard">
+    <div class="between"><div style="min-width:0"><div style="font-weight:680">${esc(g.name)}
+      ${g.name === "default" ? '<span class="tag info">volumes with no other group</span>' : ""}</div>
+      <div class="dim xs">${vols.length} volume${vols.length === 1 ? "" : "s"} · ${jobs.length} job${jobs.length === 1 ? "" : "s"}</div></div>
+      <span class="pill ${guards.length ? "ok" : vols.length ? "warn" : ""}">${guards.length ? "protected" : vols.length ? "no snapshots" : "empty"}</span></div>
+    <div class="small" style="margin-top:10px">${jobs.map(j => `<span class="tag" data-tip="${esc(CRON.describe(j.cron))}">${TASK_ICON[j.task] || "◷"} ${esc(j.name)}</span>`).join("")
+      || '<span class="dim">no jobs cover it</span>'}</div>
+    <div class="dim xs" style="margin-top:8px">${vols.slice(0, 8).map(v => esc(v.pvc || v.name)).join(", ")}${vols.length > 8 ? ` +${vols.length - 8}` : ""}</div>
+    <div class="row wacts">
+      <button class="btn sm" data-need="operator" onclick="lhGroup('${esc(g.name)}')">Edit</button>
+      ${g.name === "default" ? "" : `<button class="btn sm danger" data-need="admin" onclick="lhGroupDel('${esc(g.name)}')">Delete</button>`}
+    </div></div>`;
 }
 
 /* ---------------- job editor ---------------- */
@@ -232,14 +276,14 @@ window.lhJob = (j) => {
     <div class="f2">
       <div class="f"><label>Name</label><input type="text" id="lj_name" value="${esc(j.name)}"
         ${j.name ? "readonly" : ""} placeholder="daily-snapshot"></div>
-      <div class="f"><label>Task</label><select id="lj_task">
+      <div class="f"><label>Task</label><select id="lj_task" onchange="lhTaskChanged()">
         ${Object.entries(d.tasks || {}).map(([k, v]) =>
           `<option value="${esc(k)}" ${j.task === k ? "selected" : ""}>${esc(v)}</option>`).join("")}
       </select></div>
     </div>
     ${scheduleBuilder(j.cron)}
     <div class="f2">
-      <div class="f"><label>Retain</label><input type="number" id="lj_retain" value="${j.retain}" min="1" max="250">
+      <div class="f" id="lj_retain_f"><label>Retain</label><input type="number" id="lj_retain" value="${j.retain || 7}" min="1" max="250">
         <div class="dim xs" style="margin-top:6px">How many to keep before the oldest is removed</div></div>
       <div class="f"><label>Run in parallel</label><input type="number" id="lj_conc" value="${j.concurrency}" min="1" max="10"></div>
     </div>
@@ -256,7 +300,11 @@ window.lhJob = (j) => {
     near-instant. Backups upload to the backup target and need one configured — without it a
     backup job fails on every run.</div>`, true);
   scheduleChanged();
+  lhTaskChanged();
 };
+/* Trims and cleanups keep nothing, so they have nothing to count. */
+const KEEPS = task => /^(snapshot|backup)(-force-create|-delete)?$/.test(task);
+window.lhTaskChanged = () => { $("#lj_retain_f").hidden = !KEEPS($("#lj_task").value); };
 /* ---------------- schedule builder ----------------
    Shapes people use - every few minutes or hours, daily, some weekdays,
    monthly - written to cron for Longhorn, with the next runs shown in the
@@ -303,36 +351,137 @@ window.lhRun = async name => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
-window.lhPlans = () => {
-  const d = STATE.data.lh || { groups: ["default"], jobs: [] };
+/* A plan's jobs for one group. Those for default keep their plain names;
+   another group's are named after it, so a plan for it never takes over the
+   jobs protecting everything else. */
+function planJobName(group, job) {
+  return group === "default" ? job.name : `${group}-${job.name}`.slice(0, 40).replace(/-+$/, "");
+}
+function planList(group, chosen) {
+  const d = STATE.data.lh || { jobs: [] };
   const existing = new Set((d.jobs || []).map(j => j.name));
-  modal("Protection plans", `<p class="muted small">A plan makes the jobs a sensible policy needs. They are ordinary jobs afterwards: edit or delete any of them. A job of the same name is replaced.</p>
-    <div class="plan-list">${PROTECT_PLANS.map(plan => `<label class="plan-card card flat"><input type="radio" name="lp_plan" value="${plan.id}" ${plan.id === "snapshots" ? "checked" : ""}>
+  return PROTECT_PLANS.map(plan => `<label class="plan-card card flat"><input type="radio" name="lp_plan" value="${plan.id}" ${plan.id === chosen ? "checked" : ""}>
       <div><b>${esc(plan.title)}</b>${plan.needsTarget && !(d.target || {}).configured ? ' <span class="pill slim warn">needs a backup target</span>' : ""}
         <div class="dim small">${esc(plan.blurb)}</div>
-        <div class="plan-jobs">${plan.jobs.map(j => `<span class="tag${existing.has(j.name) ? " warn" : ""}" data-tip="${existing.has(j.name) ? "replaces the job of this name" : "new job"}">${esc(j.name)} · ${esc(CRON.describe(j.cron))}${j.retain ? ` · keeps ${j.retain}` : ""}</span>`).join("")}</div></div></label>`).join("")}</div>
-    <div class="f"><label>Volumes it protects</label><select id="lp_group">${(d.groups || ["default"]).map(g =>
-      `<option value="${esc(g)}">${esc(g)}${g === "default" ? " - every volume" : ""}</option>`).join("")}</select></div>
+        <div class="plan-jobs">${plan.jobs.map(j => { const name = planJobName(group, j); return `<span class="tag${existing.has(name) ? " warn" : ""}" data-tip="${existing.has(name) ? "replaces the job of this name" : "new job"}">${esc(name)} · ${esc(CRON.describe(j.cron))}${j.retain ? ` · keeps ${j.retain}` : ""}</span>`; }).join("")}</div></div></label>`).join("");
+}
+window.lhPlans = (group = "default") => {
+  const d = STATE.data.lh || { groups: ["default"], jobs: [] };
+  modal("Protection plans", `<p class="muted small">A plan makes the jobs a sensible policy needs. They are ordinary jobs afterwards: edit or delete any of them.</p>
+    <div class="f"><label>Volumes it protects</label><select id="lp_group" onchange="lhPlanGroup()">${(d.groups || ["default"]).map(g =>
+      `<option value="${esc(g)}" ${g === group ? "selected" : ""}>${esc(g)}${g === "default" ? " - volumes with no other group" : ""}</option>`).join("")}</select>
+      <div class="dim xs" style="margin-top:6px">A plan for a group of its own needs the group first:
+        <a class="linkish" onclick="lhGroup()">make one</a>.</div></div>
+    <div class="plan-list" id="lp_list">${planList(group, "snapshots")}</div>
     <div class="row" style="margin-top:14px"><button class="btn pri" onclick="lhPlanApply()">Set up plan</button><button class="btn" onclick="closeModal()">Cancel</button></div>`, true);
 };
+window.lhPlanGroup = () => {
+  const chosen = $("input[name=lp_plan]:checked")?.value || "snapshots";
+  $("#lp_list").innerHTML = planList($("#lp_group").value || "default", chosen);
+};
+async function planApply(plan, group) {
+  const names = [];
+  for (const job of plan.jobs) {
+    const name = planJobName(group, job);
+    await api("/api/lh/job", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...job, name, groups: [group] }) });
+    names.push(name);
+  }
+  return names;
+}
 window.lhPlanApply = async () => {
   const plan = PROTECT_PLANS.find(p => p.id === $("input[name=lp_plan]:checked")?.value);
   if (!plan) return;
   const group = $("#lp_group").value || "default";
   try {
-    for (const job of plan.jobs) {
-      await api("/api/lh/job", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...job, groups: [group] }) });
-    }
+    await planApply(plan, group);
     toast(`${plan.title}: ${plan.jobs.length} jobs set up for ${group}`, "ok"); closeModal(); resetPaint(); viewProtect();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+/* ---------------- groups ----------------
+   A group is a label on volumes and a name in jobs, so it is made, renamed
+   and emptied by changing both at once. */
+window.lhGroup = (name = "") => {
+  const d = STATE.data.lh || { volumes: [], jobs: [], group_rows: [] };
+  const row = (d.group_rows || []).find(g => g.name === name) || { name: "", volumes: [], jobs: [] };
+  const isDefault = name === "default";
+  modal(name ? `Group · ${name}` : "New group", `
+    <div class="f"><label>Name</label><input type="text" id="lg_name" value="${esc(name)}" ${isDefault ? "readonly" : ""}
+      placeholder="media" autocomplete="off"></div>
+    <div class="f"><label>Volumes in it</label>
+      <input type="text" id="lg_filter" placeholder="Filter by name or namespace" oninput="lhGroupFilter()" autocomplete="off">
+      <div class="lg-list" id="lg_vols">${(d.volumes || []).map(v => `<label class="lg-row" data-q="${esc(`${v.pvc} ${v.namespace} ${v.name}`.toLowerCase())}">
+        <input type="checkbox" value="${esc(v.name)}" ${row.volumes.includes(v.name) ? "checked" : ""}>
+        <span class="lg-name"><b>${esc(v.pvc || v.name)}</b> <span class="dim xs">${esc(v.namespace || "no claim")} · ${v.size_gb} GB</span></span>
+        <span class="lg-tags">${v.groups.filter(g => g !== name).map(g => `<span class="tag ${g === "default" ? "info" : ""}">${esc(g)}</span>`).join("")}</span></label>`).join("")
+        || '<div class="dim xs">No volumes.</div>'}</div>
+      <div class="row" style="gap:10px;margin-top:6px"><button class="linkish xs" onclick="lhGroupAll(true)">Tick all shown</button>
+        <button class="linkish xs" onclick="lhGroupAll(false)">Untick all shown</button></div></div>
+    ${isDefault ? `<div class="note">A volume taken out of <span class="mono">default</span> has to be in another group,
+        or Longhorn puts it straight back. Those are left in it.</div>`
+      : `<label class="switch" style="margin:0 0 14px"><input type="checkbox" id="lg_leave" checked>
+        <span>Take volumes out of default as they join
+        ${tip("Longhorn leaves a volume in default when it joins another group, so it would get default's jobs as well as this group's. Untick to keep both.")}</span></label>`}
+    <div class="f"><label>Jobs that protect it</label>${(d.jobs || []).length ? `<div class="lg-list" id="lg_jobs">${d.jobs.map(j => `<label class="lg-row">
+        <input type="checkbox" value="${esc(j.name)}" ${row.jobs.includes(j.name) ? "checked" : ""}>
+        <span class="lg-name"><b>${TASK_ICON[j.task] || "◷"} ${esc(j.name)}</b>
+          <span class="dim xs lg-sub">${esc(j.task)} · ${esc(CRON.describe(j.cron))}</span></span></label>`).join("")}</div>`
+        : '<div class="dim xs" id="lg_jobs">No jobs yet; a plan below makes them.</div>'}</div>
+    <div class="f"><label>Also set up a plan for it</label><select id="lg_plan"><option value="">No plan</option>
+      ${PROTECT_PLANS.map(plan => `<option value="${plan.id}">${esc(plan.title)}</option>`).join("")}</select>
+      <div class="dim xs" style="margin-top:6px">Its jobs are named after the group, so they protect only these volumes.</div></div>
+    <div class="row" style="margin-top:16px">
+      <button class="btn pri" data-original="${esc(name)}" onclick="lhGroupSave(this.dataset.original)">Save group</button>
+      <button class="btn" onclick="closeModal()">Cancel</button></div>`, true);
+};
+window.lhGroupFilter = () => {
+  const q = ($("#lg_filter").value || "").trim().toLowerCase();
+  $$("#lg_vols .lg-row").forEach(row => { row.hidden = !!q && !row.dataset.q.includes(q); });
+};
+window.lhGroupAll = on => $$("#lg_vols .lg-row").forEach(row => {
+  if (!row.hidden) row.querySelector("input").checked = on;
+});
+window.lhGroupSave = async original => {
+  const name = $("#lg_name").value.trim().toLowerCase();
+  const body = { original, name,
+    volumes: $$("#lg_vols input:checked").map(box => box.value),
+    jobs: $$("#lg_jobs input:checked").map(box => box.value),
+    leave_default: $("#lg_leave") ? $("#lg_leave").checked : false };
+  const plan = PROTECT_PLANS.find(p => p.id === $("#lg_plan").value);
+  if (!name) return toast("give the group a name", "bad");
+  try {
+    if (plan) body.jobs.push(...await planApply(plan, name));
+    const result = await api("/api/lh/group", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body) });
+    const said = [`group ${name} saved`];
+    if (result.left_default?.length) said.push(`${result.left_default.length} left default`);
+    if (result.back_to_default?.length) said.push(`${result.back_to_default.length} back in default`);
+    if (result.kept_in_default?.length) said.push(`${result.kept_in_default.length} kept in default: they have no other group`);
+    toast(said.join(" · "), result.kept_in_default?.length ? "warn" : "ok"); closeModal(); resetPaint(); viewProtect();
+  } catch (e) { toast(e.message, "bad"); }
+};
+window.lhGroupDel = async name => {
+  const row = ((STATE.data.lh || {}).group_rows || []).find(g => g.name === name) || { volumes: [], jobs: [] };
+  if (!confirm(`Delete group "${name}"?` + String.fromCharCode(10, 10)
+      + `${row.volumes.length} volume(s) leave it; any with no other group go back to default and its jobs.`
+      + ` ${row.jobs.length} job(s) stop covering it. Snapshots and backups already taken are kept.`)) return;
+  try {
+    const result = await api("/api/lh/group/delete", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }) });
+    toast([`group ${name} deleted`, result.back_to_default?.length ? `${result.back_to_default.length} back in default` : "",
+      result.idle_jobs?.length ? `${result.idle_jobs.join(", ")} now protect${result.idle_jobs.length === 1 ? "s" : ""} nothing` : ""]
+      .filter(Boolean).join(" · "), result.idle_jobs?.length ? "warn" : "ok");
+    resetPaint(); viewProtect();
   } catch (e) { toast(e.message, "bad"); }
 };
 window.lhJobSave = async () => {
   const groups = $$("#lj_groups .gk").filter(c => c.checked).map(c => c.value);
   const extra = $("#lj_newgroup").value.trim();
   if (extra) groups.push(extra);
-  const body = { name: $("#lj_name").value.trim(), task: $("#lj_task").value,
-    cron: $("#lj_cron").value.trim(), retain: +$("#lj_retain").value,
+  const task = $("#lj_task").value;
+  const body = { name: $("#lj_name").value.trim(), task,
+    cron: $("#lj_cron").value.trim(), retain: KEEPS(task) ? +$("#lj_retain").value : 0,
     concurrency: +$("#lj_conc").value, groups };
   if (!body.name) return toast("name is required", "bad");
   if (!groups.length) return toast("pick at least one group, or the job protects nothing", "bad");
@@ -382,6 +531,8 @@ window.lhAssign = (vol, label) => {
     <div id="pa_groups">${(d.groups || []).map(g => `<label class="switch" style="margin:0 0 8px">
       <input type="checkbox" class="pg" value="${esc(g)}" ${v.groups.includes(g) ? "checked" : ""}>
       ${esc(g)}</label>`).join("")}</div>
+    <input type="text" id="pa_newgroup" placeholder="…or a new group" autocomplete="off">
+    <div class="dim xs" style="margin-top:6px">A volume in <span class="mono">default</span> and another group gets both groups' jobs.</div>
     <div class="sec">Individual jobs</div>
     <div id="pa_jobs">${(d.jobs || []).map(j => `<label class="switch" style="margin:0 0 8px">
       <input type="checkbox" class="pj" value="${esc(j.name)}" ${v.jobs.includes(j.name) ? "checked" : ""}>
@@ -405,6 +556,8 @@ window.lhAssignSave = async vol => {
     const has = v.jobs.includes(j.name), want = wantJ.includes(j.name);
     if (has !== want) calls.push({ volumes: [vol], name: j.name, kind: "job", enabled: want });
   });
+  const extra = ($("#pa_newgroup").value || "").trim().toLowerCase();
+  if (extra && !(d.groups || []).includes(extra)) calls.push({ volumes: [vol], name: extra, kind: "group", enabled: true });
   if (!calls.length) { closeModal(); return toast("nothing changed"); }
   try {
     for (const c of calls) {
@@ -441,20 +594,47 @@ window.lhSnaps = async (vol, label) => {
         </tr>`).join("") || `<tr><td colspan=5 class="empty">no snapshots yet</td></tr>`}
       </tbody></table></div></div>
       <div class="sec">Backups (${bks.length})</div>
-      <div class="card flat pad0"><div class="tblwrap"><table data-sort="backups" class="tbl stack">
-        <thead><tr><th>Name</th><th>State</th><th>Size</th><th data-nosort>Created</th><th></th></tr></thead><tbody>
-        ${bks.map(b => `<tr><td class="mono small">${esc(b.name.slice(0, 28))}</td>
-          <td><span class="pill ${b.state === "Completed" ? "ok" : b.state === "Error" ? "crit" : "med"}">${esc(b.state || "?")}</span>
-              ${b.error ? `<div class="dim xs">${esc(b.error.slice(0, 80))}</div>` : ""}</td>
-          <td class="mono">${b.size_mb} MB</td>
-          <td class="small dim">${esc((b.created || "").replace("T", " ").replace("Z", ""))}</td>
-          <td>${b.restorable ? `<button class="btn sm" data-need="admin"
-            onclick="lhRestore('${esc(b.name)}')">${icon("rollback")}Restore</button>`
-            : '<span class="dim xs">not ready</span>'}</td></tr>`).join("")
-          || `<tr><td colspan=5 class="empty">no backups — needs a backup target</td></tr>`}
-      </tbody></table></div></div>`;
+      ${backupTable(bks, vol, label)}`;
     if (window.applyRole) window.applyRole();
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+};
+function backupTable(bks, vol, label) {
+  return `<div class="card flat pad0"><div class="tblwrap"><table data-sort="backups" class="tbl stack">
+    <thead><tr><th>Name</th><th>State</th><th>Size</th><th data-nosort>Created</th><th></th></tr></thead><tbody>
+    ${bks.map(b => `<tr><td class="mono small">${esc(b.name.slice(0, 28))}</td>
+      <td><span class="pill ${b.state === "Completed" ? "ok" : b.state === "Error" ? "crit" : "med"}">${esc(b.state || "?")}</span>
+          ${b.error ? `<div class="dim xs">${esc(b.error.slice(0, 80))}</div>` : ""}</td>
+      <td class="mono">${b.size_mb} MB</td>
+      <td class="small dim">${esc((b.created || "").replace("T", " ").replace("Z", ""))}</td>
+      <td><div class="row" style="gap:6px">${b.restorable ? `<button class="btn sm" data-need="admin"
+        onclick="lhRestore('${esc(b.name)}')">${icon("rollback")}Restore</button>`
+        : '<span class="dim xs">not ready</span>'}
+        <button class="btn sm danger" data-need="admin" data-tip="Delete it from the backup target"
+          onclick="lhBackupDel('${esc(b.name)}','${esc(vol)}','${esc(label)}')">✕</button></div></td></tr>`).join("")
+      || `<tr><td colspan=5 class="empty">no backups — needs a backup target</td></tr>`}
+  </tbody></table></div></div>`;
+}
+/* The backups of a volume, whether or not the volume is still here. */
+window.lhBackupList = async (vol, label) => {
+  modal("Backups · " + label, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
+  try {
+    const bks = await api("/api/lh/backups?volume=" + encodeURIComponent(vol));
+    const live = ((STATE.data.lh || {}).volumes || []).some(v => v.name === vol);
+    $("#mbody").innerHTML = `${live ? "" : `<div class="note warn">The volume is gone. Restore makes a new volume from
+      one of these; point the app at it, or restore it under the old claim's name.</div>`}
+      ${backupTable(bks, vol, label)}`;
+    if (window.applyRole) window.applyRole();
+  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+};
+window.lhBackupDel = async (name, vol, label) => {
+  if (!confirm(`Delete backup "${name}"?` + String.fromCharCode(10, 10)
+      + "It is removed from the backup target too, and cannot be restored afterwards.")) return;
+  try {
+    await api("/api/lh/backup/delete", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }) });
+    toast("backup deleted", "ok");
+    if ($("#mbody")) lhBackupList(vol, label);
+  } catch (e) { toast(e.message, "bad"); }
 };
 window.lhSnapNow = async (vol, label) => {
   try {
@@ -560,10 +740,20 @@ window.lhTarget = () => {
         placeholder="nfs://192.0.2.177:/mnt/user/backups">
       <div class="dim xs" style="margin-top:6px">
         NFS: <span class="mono">nfs://host:/export/path</span><br>
-        S3: <span class="mono">s3://bucket@region/path</span> (needs a credential secret)</div></div>
+        S3: <span class="mono">s3://bucket@region/path</span> - a NAS's MinIO or Garage uses any region, such as us-east-1</div></div>
+    <div id="bt_s3">
+      <div class="f2">
+        <div class="f"><label>Access key</label><input type="text" id="bt_access" autocomplete="off"
+          placeholder="${t.secret && !t.secret_missing ? "kept as it is" : ""}"></div>
+        <div class="f"><label>Secret key</label><input type="password" id="bt_secretkey" autocomplete="new-password"
+          placeholder="${t.secret && !t.secret_missing ? "kept as it is" : ""}"></div></div>
+      <div class="f"><label>Endpoint ${tip("Only for S3 that is not AWS: the NAS or service's URL, such as http://192.0.2.20:9000.")}</label>
+        <input type="text" id="bt_endpoint" placeholder="http://192.0.2.20:9000"></div>
+      <div class="dim xs" style="margin-bottom:12px">The keys are kept in a Secret in longhorn-system${t.secret ? ` (now ${esc(t.secret)})` : ""};
+        leave them empty to keep the one it has.</div></div>
     <div class="f2">
-      <div class="f"><label>Credential secret (S3 only)</label>
-        <input type="text" id="bt_secret" value="${esc(t.secret || "")}" placeholder="longhorn-s3-creds"></div>
+      <div class="f"><label>Credential secret ${tip("The Secret holding the keys. Filled in for you when you type the keys above.")}</label>
+        <input type="text" id="bt_secret" value="${esc(t.secret || "")}" placeholder="homestead-backup-target"></div>
       <div class="f"><label>Poll interval</label>
         <input type="text" id="bt_poll" value="${esc(t.interval || "5m")}"></div>
     </div>
@@ -573,12 +763,16 @@ window.lhTarget = () => {
     <div class="note" style="margin-top:14px">For NFS the export must be reachable from every node
     and allow root writes, otherwise backups fail with a permission error that only shows up on the
     first scheduled run.</div>`);
+  const s3 = () => { $("#bt_s3").hidden = !$("#bt_url").value.trim().startsWith("s3://"); };
+  $("#bt_url").addEventListener("input", s3); s3();
 };
 window.lhTargetSave = async () => {
+  const keys = { access_key: $("#bt_access").value.trim(), secret_key: $("#bt_secretkey").value,
+    endpoint: $("#bt_endpoint").value.trim() };
   try {
     await api("/api/lh/target", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url: $("#bt_url").value.trim(), secret: $("#bt_secret").value.trim(),
-        poll: $("#bt_poll").value.trim() || "5m" }) });
+        poll: $("#bt_poll").value.trim() || "5m", ...(keys.access_key || keys.secret_key ? { keys } : {}) }) });
     toast("backup target saved", "ok"); closeModal(); resetPaint(); viewProtect();
   } catch (e) { toast(e.message, "bad"); }
 };

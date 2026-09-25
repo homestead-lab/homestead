@@ -24,10 +24,19 @@ download has not started after three minutes says why.
 **Console** has two views:
 
 - **Screen** - the VM's display (VNC) in the page, scaled to fit, with
-  Ctrl+Alt+Del, full screen, and **Type text** to type a password or a long
-  command for you, since a VM has no shared clipboard.
+  Ctrl+Alt+Del and full screen. **Paste** (or Ctrl+Shift+V on the screen)
+  types the clipboard into the VM key by key - a VM's display has no clipboard
+  of its own - with Enter for each new line. Over HTTPS it types straight
+  away; on a plain `http://` address the browser does not let the page read
+  the clipboard, so a box opens to paste into first, with **Press Enter
+  after** for a command. Plain Ctrl+V and Ctrl+C still go to the VM. When the
+  VM shares what it copies (a guest with a clipboard agent), **Copy from VM**
+  (Ctrl+Shift+C) puts it on yours.
 - **Serial** - the first serial port, as a terminal, for VMs that boot without
-  a display (most cloud images).
+  a display (most cloud images). Its output is plain text: select it and press
+  Ctrl+C, or **Copy** (Ctrl+Shift+C) for the selection or everything.
+  **Paste** (Ctrl+Shift+V) sends the clipboard to the port as typed, a line at
+  a time. Ctrl+C with nothing selected interrupts, as in a terminal.
 
 ## New VM
 

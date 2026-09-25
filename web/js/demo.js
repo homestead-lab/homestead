@@ -218,8 +218,8 @@
     // Homestead itself: its Stop asks first, since it takes this page with it.
     { name: "homestead", ns: "lab", kind: "Deployment", group: "Homestead", self: true, desired: 1, ready: 1, uptime: 86400,
       cpu: 0.04, mem_mb: 88, nodes: ["harvester-node1"], hardware: [],
-      images: ["ghcr.io/wjcloudy/homestead:2.8.142"], ports: [{ port: 8088, ip: "192.0.2.242" }],
-      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/wjcloudy/homestead:2.8.142")] },
+      images: ["ghcr.io/wjcloudy/homestead:2.8.143"], ports: [{ port: 8088, ip: "192.0.2.242" }],
+      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/wjcloudy/homestead:2.8.143")] },
   ];
   const storage = { cap_gb: 1392, avail_gb: 906, used_gb: 486, used_pct: 34.9,
     provisioned_gb: 670, actual_gb: 224, volumes: 8, healthy: 6, degraded: 1,
@@ -307,28 +307,46 @@
       access_modes: ["ReadWriteOnce"], message: "", in_use: false, used_by: [] },
   ];
   const lhOverview = {
-    total: 2, protected: 2, unprotected: [], groups: ["default", "critical"],
+    total: 3, protected: 2, backed_up: 2, unprotected: ["homeassistant-config"], groups: ["critical", "default", "media"],
+    group_rows: [{ name: "critical", volumes: ["pvc-demo-frigate"], jobs: ["hourly-snapshot"] },
+      { name: "default", volumes: ["pvc-demo-frigate", "pvc-demo-scratch"], jobs: ["nightly-backup"] },
+      { name: "media", volumes: ["pvc-demo-hass"], jobs: ["media-weekly-trim"] }],
     target: { configured: true, available: true, name: "default",
       url: "s3://homestead-backups@us-east-1/", reason: "", interval: "5m",
       secret: "homestead-backup-credentials" },
     tasks: { snapshot: "Snapshot — point-in-time, stored on the volume",
-      backup: "Backup — snapshot then upload to the backup target" },
+      backup: "Backup — snapshot then upload to the backup target",
+      "snapshot-cleanup": "Cleanup — purge system snapshots",
+      "filesystem-trim": "Trim — reclaim space the guest has freed" },
     jobs: [{ name: "nightly-backup", task: "backup", cron: "0 2 * * *", retain: 7,
       concurrency: 1, groups: ["default"], covers: 2,
       volumes: ["pvc-demo-frigate", "pvc-demo-scratch"], desc: "Nightly external backup",
       last_run: "2026-05-11T02:00:00Z", last_success: "2026-05-11T02:04:12Z", running: 0, last_failed: false },
       { name: "hourly-snapshot", task: "snapshot", cron: "0 * * * *", retain: 24,
       concurrency: 2, groups: ["critical"], covers: 1, volumes: ["pvc-demo-frigate"],
-      desc: "Snapshot — point-in-time, stored on the volume", last_run: "", last_success: "", running: 0, last_failed: false }],
+      desc: "Snapshot — point-in-time, stored on the volume", last_run: "", last_success: "", running: 0, last_failed: false },
+      { name: "media-weekly-trim", task: "filesystem-trim", cron: "0 4 * * 6", retain: 0,
+      concurrency: 1, groups: ["media"], covers: 1, volumes: ["pvc-demo-hass"],
+      desc: "Trim — reclaim space the guest has freed", last_run: "", last_success: "", running: 0, last_failed: false }],
     volumes: [
       { name: "pvc-demo-frigate", pvc: "frigate-config", namespace: "lab", size_gb: 20,
-        robustness: "healthy", state: "attached", labels: {}, jobs: [], groups: ["default", "critical"],
-        last_backup: lhBackups[0].name, last_backup_at: lhBackups[0].created },
+        robustness: "healthy", state: "attached", labels: {}, jobs: [], groups: ["critical", "default"],
+        last_backup: lhBackups[0].name, last_backup_at: lhBackups[0].created,
+        protected_by: ["hourly-snapshot", "nightly-backup"], snapshotted: true, backed_up: true },
       { name: "pvc-demo-scratch", pvc: "scratch-test", namespace: "lab", size_gb: 5,
         robustness: "healthy", state: "detached", labels: {}, jobs: [], groups: ["default"],
-        last_backup: "", last_backup_at: "" },
+        last_backup: "", last_backup_at: "", protected_by: ["nightly-backup"], snapshotted: false, backed_up: true },
+      { name: "pvc-demo-hass", pvc: "homeassistant-config", namespace: "lab", size_gb: 2,
+        robustness: "healthy", state: "attached", labels: {}, jobs: [], groups: ["media"],
+        last_backup: "", last_backup_at: "", protected_by: [], snapshotted: false, backed_up: false },
     ],
   };
+  const lhBackupVolumes = [
+    { name: "pvc-demo-frigate", id: "pvc-demo-frigate", pvc: "frigate-config", exists: true,
+      last_backup: lhBackups[0].name, last_backup_at: lhBackups[0].created, size_mb: 1842.6, count: 1, target: "default" },
+    { name: "pvc-demo-paperless", id: "pvc-demo-paperless", pvc: "paperless-data", exists: false,
+      last_backup: "backup-demo-paperless-20260901", last_backup_at: "2026-09-01T02:31:07Z", size_mb: 3420.2, count: 6, target: "default" },
+  ];
   const network = {
     controller: { name: "kube-vip", installed: true, desired: 3, ready: 3, healthy: true,
       mode: "ARP Service controller · explicit VIP allocation" },
@@ -466,7 +484,7 @@
       detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.142", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.143", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
@@ -573,15 +591,15 @@
       user: "admin", added: "2026-09-22 17:02" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "garage") return { name, version: "2.8.142", protocol: 1, local_version: "2.8.142",
+      if (name === "garage") return { name, version: "2.8.143", protocol: 1, local_version: "2.8.143",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "garage runs 2.8.142 and this one 2.8.142. Moves work between them; garage is the newer of the two." };
+        message: "garage runs 2.8.143 and this one 2.8.143. Moves work between them; garage is the newer of the two." };
       return name === "attic"
-        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.142", local_protocol: 1,
+        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.143", local_protocol: 1,
             state: "behind", compatible: false,
-            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.142). Update attic first." }
-        : { name, version: "2.8.142", protocol: 1, local_version: "2.8.142", local_protocol: 1,
-            state: "same", compatible: true, message: "Both run Homestead 2.8.142." };
+            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.143). Update attic first." }
+        : { name, version: "2.8.143", protocol: 1, local_version: "2.8.143", local_protocol: 1,
+            state: "same", compatible: true, message: "Both run Homestead 2.8.143." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     // shed is ready to move from; garage has no backup storage yet.
@@ -592,7 +610,7 @@
     "/api/move/clusters/storage": { ok: true, detail: "backup storage is starting on garage at http://192.0.2.244:9000" },
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "shed", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.142", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.143", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -852,7 +870,11 @@ ssh_pwauth: true
     ],
     "/api/lh/overview": lhOverview,
     "/api/lh/job/run": (url, init) => ({ ok: true, job: `${JSON.parse(init?.body || "{}").name}-now-000001`, namespace: "longhorn-system" }),
-    "/api/lh/snapshots": [], "/api/lh/backups": lhBackups,
+    "/api/lh/snapshots": [], "/api/lh/backups": lhBackups, "/api/lh/backupvolumes": lhBackupVolumes,
+    "/api/lh/group": (url, init) => ({ ok: true, name: JSON.parse(init?.body || "{}").name, added: [], removed: [],
+      left_default: [], back_to_default: [], kept_in_default: [] }),
+    "/api/lh/group/delete": { ok: true, back_to_default: ["homeassistant-config"], idle_jobs: ["media-weekly-trim"] },
+    "/api/lh/backup/delete": { ok: true },
     "/api/lh/restore/plan": restorePlan,
     "/api/lh/restore": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
@@ -968,7 +990,7 @@ ssh_pwauth: true
     "/api/volumes/reclass/start": { ok: true, operation: { id: "op4" } },
     "/api/self/health": () => {
       const now = Date.now() / 1000;
-      return { version: "2.8.142", leader: true, identity: "homestead-6d9f-abcde",
+      return { version: "2.8.143", leader: true, identity: "homestead-6d9f-abcde",
         api: { ok: true, ms: 38 },
         replicas: { desired: 1, pods: [{ name: "homestead-6d9f-abcde", node: "harvester-node1", ready: true, leader: true, this: true }] },
         loops: [{ name: "sampler", label: "Live charts", state: "ok", last_ok: now - 12, error: "", every: 30 },
@@ -1288,7 +1310,7 @@ ssh_pwauth: true
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.142", candidate_tag: "2.8.142", remote_digest: "sha256:ghi", available: true }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.143", candidate_tag: "2.8.143", remote_digest: "sha256:ghi", available: true }] },
       { ns: "lab", name: "paperless", available: false, can_rollback: false,
         images: [{ container: "paperless", deployed: "registry.lan/paperless-ngx:2.11", candidate: "registry.lan/paperless-ngx:2.11", available: false, error: "registry authentication required" }] }] },
     "/api/flow": {
