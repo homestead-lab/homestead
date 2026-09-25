@@ -1,4 +1,5 @@
 import copy, sys, unittest
+from unittest import mock
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
@@ -138,6 +139,20 @@ class LonghornV2Tests(unittest.TestCase):
         self.assertEqual((1, 2), (status["ready_nodes"], status["total_nodes"]))
         n2 = next(n for n in status["nodes"] if n["name"] == "n2")
         self.assertEqual(2, len(n2["missing"]))
+
+    def test_the_checklist_reads_cpu_and_kernel_modules_from_the_node_probe(self):
+        """V2 needs vfio_pci, uio_pci_generic and nvme_tcp on each host, which
+        the checklist said nothing about."""
+        probes = {"n1": {"v2": {"arch": "x86_64", "sse4_2": True,
+                                "modules": {"vfio_pci": True, "uio_pci_generic": False, "nvme_tcp": True}}},
+                  "n2": {"v2": {"arch": "aarch64", "sse4_2": None, "modules": {}}}}
+        with mock.patch.object(server, "node_temps", return_value=probes):
+            status = server.v2_engine_status()
+        n1, n2 = (next(n for n in status["nodes"] if n["name"] == name) for name in ("n1", "n2"))
+        self.assertEqual({"cpu": True, "modules": False, "hugepages": True, "disk": True}, n1["checks"])
+        self.assertFalse(n1["ready"], "a missing module keeps a host from V2")
+        self.assertEqual(["uio_pci_generic"], n1["missing_modules"])
+        self.assertEqual((True, None), (n2["checks"]["cpu"], n2["checks"]["modules"]), "arm64 needs no SSE4.2; no probe, no verdict")
 
     def test_a_v2_class_carries_the_engine_and_warns_when_it_cannot_schedule(self):
         result = server.create_storage_class({"name": "longhorn-v2", "replicas": 1, "engine": "v2"})

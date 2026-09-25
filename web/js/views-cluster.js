@@ -44,7 +44,8 @@ async function viewCluster() {
   const marginCopy = margin === null || margin === undefined ? "Unknown" : margin === 0 ? "No failure margin" : `${margin} member${margin === 1 ? "" : "s"}`;
   const serviceRows = (report.services || []).filter(service => service.pods || service.required);
   paint(`<div class="phead"><div><h2>Cluster</h2><p>Harvester and Kubernetes platform health, separate from application health</p></div>
-    <button class="btn pri" data-need="admin" onclick="clusterOnboarding()">${icon("plus")}Add a host</button></div>
+    <div class="row"><button class="btn" data-need="admin" onclick="clusterRemovePick()">${icon("trash")}Remove a host</button>
+      <button class="btn pri" data-need="admin" onclick="clusterOnboarding()">${icon("plus")}Add a host</button></div></div>
 
   <section class="cluster-hero ${esc(report.state)}">
     <div><span class="cluster-kicker">PLATFORM STATUS</span><h3>${esc(report.state === "healthy" ? "Platform healthy" : report.state === "critical" ? "Platform action required" : "Platform online · review items")}</h3>
@@ -87,7 +88,8 @@ async function viewCluster() {
     <section class="card flat cluster-wide cluster-onboard-preview"><div><span class="cluster-kicker">NEXT NODE</span>
       <div class="ctitle">Recommended role: ${esc(report.onboarding?.recommended_role || "Review required")}</div>
       <div class="csub">${esc(report.onboarding?.reason || "Review the current control-plane layout before joining another host.")}</div></div>
-      <button class="btn" data-need="admin" onclick="clusterOnboarding()">Add a host</button></section>
+      <div class="row"><button class="btn" data-need="admin" onclick="clusterRemovePick()">Remove a host</button>
+        <button class="btn" data-need="admin" onclick="clusterOnboarding()">Add a host</button></div></section>
   </div>
   <div id="clusterComponents">${STATE.data.componentsHtml || ""}</div>
   <div id="clusterUpgrades">${STATE.data.upgradeHtml || ""}</div>

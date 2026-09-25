@@ -444,17 +444,59 @@ function v2Summary(v2, rows) {
   return `<div class="dim xs v2line"><span class="tag ${v2.enabled && v2.ready_nodes ? "info" : "warn"}">Longhorn V2</span> ${esc(text)}
     <a onclick="v2Details()" style="cursor:pointer;text-decoration:underline">details</a></div>`;
 }
-window.v2Details = () => {
-  const v2 = STATE.data.v2 || { nodes: [] };
-  modal("Longhorn V2 data engine", `<p class="muted small">V2 is Longhorn's SPDK engine: lower latency and less CPU per I/O than V1. A V2 volume needs the engine switched on, and every node that holds one of its replicas needs a disk given to Longhorn as a block device and 2 GiB of hugepages.</p>
-    <div class="drow"><div class="dl">Engine</div><div class="dv">${v2.enabled ? '<span class="pill ok">on</span>' : '<span class="pill low">off</span>'}</div></div>
-    ${v2.harvester_setting !== null && v2.harvester_setting !== undefined ? `<div class="drow"><div class="dl">Harvester setting</div><div class="dv mono small">longhorn-v2-data-engine-enabled = ${v2.harvester_setting}</div></div>` : ""}
-    <div class="card flat pad0" style="margin-top:12px"><table class="tbl stack"><thead><tr><th>Node</th><th>V2 disks</th><th>Hugepages</th><th>Ready</th></tr></thead><tbody>
-      ${(v2.nodes || []).map(n => `<tr><td><b>${esc(n.name)}</b></td><td class="mono" data-label="V2 disks">${n.block_disks}</td>
-        <td class="mono" data-label="Hugepages">${n.hugepages_mb} MiB</td>
-        <td data-label="Ready">${n.ready ? '<span class="pill ok">ready</span>' : `<span class="dim xs">needs ${esc(n.missing.join(" and "))}</span>`}</td></tr>`).join("")
-        || '<tr><td colspan="4" class="empty">Longhorn reported no nodes</td></tr>'}</tbody></table></div>
-    <div class="note" style="margin-top:12px"><b>Turning it on, on Harvester:</b> Advanced → Settings → <span class="mono">longhorn-v2-data-engine-enabled</span>, which reserves the hugepages on every node. Then, per host, Hosts → Edit Config → Storage → Add Disk with the <b>Longhorn V2</b> provisioner, on a disk holding nothing you need. Harvester owns Longhorn's settings, so Homestead reads them rather than changing them.</div>`, true);
+/* Longhorn's V2 engine as a checklist: what the cluster needs, then what
+   each host needs, each ticked, crossed or unknown - with how to do it, for
+   this distribution, under its tooltip. */
+const V2_HOW = {
+  longhorn: h => h ? "Harvester brings its own Longhorn and upgrades it with itself: upgrade Harvester (System → Cluster)."
+    : "V2 is Longhorn's to run from 1.8; earlier it is an experiment. Upgrade Longhorn under System → Cluster → Platform versions, one minor version at a time.",
+  engine: h => h ? "Settings → Cluster → V2 data engine switches Harvester's own longhorn-v2-data-engine-enabled setting. Harvester then reserves 2 GiB of hugepages and loads the kernel modules on every host, which restart to take them."
+    : "Settings → Cluster → V2 data engine - once the hosts have hugepages and the kernel modules, as Longhorn's V2 instance managers cannot start without them.",
+  cpu: () => "An x86 CPU with SSE4.2 - any from about 2008 on - or an arm64 one. Nothing to do unless this is crossed: V2 cannot run on that host.",
+  modules: h => h ? "Harvester loads vfio_pci, uio_pci_generic and nvme_tcp once longhorn-v2-data-engine-enabled is on."
+    : "On the host: sudo modprobe vfio_pci uio_pci_generic nvme_tcp - and to keep them after a reboot: printf 'vfio_pci\\nuio_pci_generic\\nnvme_tcp\\n' | sudo tee /etc/modules-load.d/longhorn-v2.conf",
+  hugepages: (h, d) => h ? "Harvester reserves them once longhorn-v2-data-engine-enabled is on; the host restarts to take them."
+    : `On the host: echo 'vm.nr_hugepages=1024' | sudo tee /etc/sysctl.d/90-longhorn-v2.conf && sudo sysctl --system - then restart ${d === "rke2" ? "rke2-server (or rke2-agent)" : "k3s (sudo systemctl restart k3s, or k3s-agent)"} so Kubernetes counts them. 1024 pages of 2 MiB is 2 GiB, taken from the host's memory.`,
+  disk: h => h ? "Hosts → Edit Config → Storage → Add Disk, provisioner Longhorn V2, on a disk holding nothing you need - or Homestead's Nodes → the host → Disks."
+    : "Nodes → the host → Disks → an unused disk → Give to Longhorn → V2. It takes the whole disk as a raw block device, so it must hold nothing you need.",
+  nvme: h => h ? "Harvester's OS includes it." : "On each host: sudo apt-get install -y nvme-cli (or sudo dnf install -y nvme-cli). Homestead cannot see the host's packages, so this one is yours to check: nvme version.",
+  cpu_core: () => "Longhorn's V2 engine polls rather than waiting: on every node running it, one CPU core stays busy. Longhorn's v2-data-engine-cpu-mask setting chooses which.",
+};
+const v2Mark = ok => ok === true ? '<span class="v2mark ok" aria-label="done">✓</span>'
+  : ok === false ? '<span class="v2mark bad" aria-label="missing">✗</span>' : '<span class="v2mark unknown" aria-label="not known">?</span>';
+function v2Item(ok, label, how, detail = "") {
+  return `<div class="v2item">${v2Mark(ok)}<div><b>${esc(label)}</b> ${tip(how)}${detail ? `<div class="dim xs">${esc(detail)}</div>` : ""}</div></div>`;
+}
+window.v2Details = async (fresh = false) => {
+  let v2 = STATE.data.v2;
+  if (fresh || !v2?.nodes?.[0]?.checks) v2 = STATE.data.v2 = await api("/api/storage/v2").catch(() => v2 || { nodes: [] });
+  const h = v2.harvester_setting !== null && v2.harvester_setting !== undefined, d = v2.distribution;
+  const nodes = v2.nodes || [];
+  const count = key => nodes.filter(n => n.checks?.[key] === true).length;
+  const col = (key, label) => `<th>${esc(label)} ${tip(V2_HOW[key](h, d))}</th>`;
+  const cell = (n, key, label, extra = "") => `<td data-label="${esc(label)}">${v2Mark(n.checks?.[key])}${extra ? ` <span class="dim xs">${esc(extra)}</span>` : ""}</td>`;
+  modal("Longhorn V2 data engine", `<p class="muted small" style="margin-top:0">V2 is Longhorn's SPDK engine: lower latency and less CPU per I/O than V1.
+      A V2 volume schedules only on hosts where everything below is ticked. Hover the <b>?</b> beside any line for how to do it${h ? " on Harvester" : ` on ${d === "rke2" ? "RKE2" : d === "k3s" ? "k3s" : "this cluster"}`}.</p>
+    <div class="sec">The cluster</div>
+    <div class="v2list">
+      ${v2Item(v2.longhorn_ok ?? null, "Longhorn 1.8 or newer", V2_HOW.longhorn(h), v2.longhorn_version ? `runs ${v2.longhorn_version}` : "version not reported")}
+      ${v2Item(v2.enabled, "V2 engine switched on", V2_HOW.engine(h), h ? `Harvester's setting is ${v2.harvester_setting ? "on" : "off"}` : "")}
+      ${v2Item(h ? true : null, "nvme-cli on every host", V2_HOW.nvme(h), h ? "" : "check on each host: nvme version")}
+      ${v2Item(true, "A CPU core for it on each V2 host", V2_HOW.cpu_core(), "not a setup step - worth knowing")}
+    </div>
+    ${!v2.enabled ? `<div class="row" style="margin-top:10px"><button class="btn sm pri" data-need="admin" onclick="closeModal(); go('settings'); setTimeout(() => settingsTab('cluster'), 300)">Open the V2 switch</button>
+      <span class="dim xs">${h || count("hugepages") ? "" : "No host has hugepages yet - do those first."}</span></div>` : ""}
+    <div class="sec">Each host</div>
+    <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack"><thead><tr><th>Host</th>
+      ${col("cpu", "CPU")}${col("modules", "Kernel modules")}${col("hugepages", "2 GiB hugepages")}${col("disk", "V2 disk")}<th>Ready</th></tr></thead><tbody>
+      ${nodes.map(n => `<tr><td><b>${esc(n.name)}</b></td>${cell(n, "cpu", "CPU")}
+        ${cell(n, "modules", "Kernel modules", n.missing_modules?.length ? `needs ${n.missing_modules.join(", ")}` : n.checks?.modules == null ? "probe has not said" : "")}
+        ${cell(n, "hugepages", "Hugepages", `${n.hugepages_mb} MiB`)}${cell(n, "disk", "V2 disk", n.block_disks ? `${n.block_disks}` : "")}
+        <td data-label="Ready">${n.ready ? '<span class="pill ok">ready</span>' : '<span class="pill">not yet</span>'}</td></tr>`).join("")
+        || '<tr><td colspan="6" class="empty">Longhorn reported no nodes</td></tr>'}</tbody></table></div></div>
+    <div class="row" style="margin-top:12px"><button class="btn sm" onclick="v2Details(true)">${icon("refresh")}Check again</button>
+      <span class="dim xs">${v2.ready_nodes ?? 0} of ${v2.total_nodes ?? 0} host${v2.total_nodes === 1 ? "" : "s"} ready. A volume keeping 2 copies needs 2 ready hosts.</span></div>`, true);
+  if (window.applyRole) applyRole();
 };
 
 function storageClassCard(classes, v2 = null) {
@@ -1136,7 +1178,7 @@ async function lhSettingsPaint() {
       <label class="switch"><input type="checkbox" id="lh_v2" ${v2.enabled ? "checked" : ""} ${admin ? "" : "disabled"}> <b>V2 data engine</b> (SPDK)</label>
       <div class="dim xs">Faster volumes for a price: each host needs a disk given to Longhorn as a block device and 2 GiB of hugepages, and V2 volumes are a separate storage class.
         ${v2.harvester_setting !== null && v2.harvester_setting !== undefined ? "On Harvester this switches Harvester's own setting, which sets up hugepages and the kernel modules on each host." : ""}
-        It cannot be switched off while V2 volumes exist.</div>
+        It cannot be switched off while V2 volumes exist. <a class="linkish" onclick="v2Details(true)">What each host needs</a></div>
       ${(v2.nodes || []).length ? `<div class="lh-v2-nodes">${v2.nodes.map(n => `<span class="tag ${n.ready ? "ok" : ""}" ${n.missing.length ? `data-tip="Needs ${esc(n.missing.join(" and "))}"` : ""}>${esc(lhShort(n.name))} · ${n.ready ? "ready" : "not ready"}</span>`).join("")}</div>` : ""}</div>`;
 }
 window.lhSettingsPaint = lhSettingsPaint;

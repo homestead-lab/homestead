@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.151")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.152")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2507,19 +2507,42 @@ def v2_engine_status():
         longhorn_nodes = kget("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/nodes").get("items", [])
     except Exception:
         longhorn_nodes = []
+    try:
+        probes = node_temps()
+    except Exception:
+        probes = {}
     for node in longhorn_nodes:
         name = node["metadata"]["name"]
         disks = ((node.get("spec", {}) or {}).get("disks", {}) or {}).values()
         block = [disk for disk in disks if str(disk.get("diskType", "")).lower() == "block"
                  and disk.get("allowScheduling", True)]
         pages = hugepages.get(name, 0)
+        facts = (probes.get(name) or {}).get("v2") or {}
+        modules = facts.get("modules") or {}
+        cpu = True if facts.get("arch") in ("aarch64", "arm64") else facts.get("sse4_2")
+        # Each check: True, False, or None where the node probe has not said.
+        checks = {"cpu": cpu,
+                  "modules": all(modules.values()) if modules else None,
+                  "hugepages": pages >= V2_HUGEPAGES_MB,
+                  "disk": bool(block)}
         missing = ([] if block else ["a V2 (block) disk"]) + (
-            [] if pages >= V2_HUGEPAGES_MB else [f"{V2_HUGEPAGES_MB // 1024} GiB of hugepages (has {pages} MiB)"])
+            [] if pages >= V2_HUGEPAGES_MB else [f"{V2_HUGEPAGES_MB // 1024} GiB of hugepages (has {pages} MiB)"]) + (
+            [f"kernel modules {', '.join(m for m, ok in modules.items() if not ok)}"] if checks["modules"] is False else []) + (
+            ["a CPU with SSE4.2"] if cpu is False else [])
         nodes.append({"name": name, "block_disks": len(block), "hugepages_mb": pages,
-                      "ready": not missing, "missing": missing})
+                      "ready": not missing, "missing": missing, "checks": checks,
+                      "missing_modules": [m for m, ok in modules.items() if not ok]})
     ready = sum(1 for node in nodes if node["ready"])
+    platform = PLATFORM.detect()
+    try:
+        longhorn = COMPONENTS.longhorn_version()
+    except Exception:
+        longhorn = ""
     return {"enabled": bool(enabled), "harvester_setting": harvester, "nodes": nodes,
-            "ready_nodes": ready, "total_nodes": len(nodes)}
+            "ready_nodes": ready, "total_nodes": len(nodes),
+            "distribution": platform.get("distribution", ""), "longhorn_version": longhorn,
+            # V2 is Longhorn's to run from 1.8; before that it is an experiment.
+            "longhorn_ok": bool(COMPONENTS.parse(longhorn)) and COMPONENTS.parse(longhorn)[:2] >= (1, 8)}
 
 
 def _clear_default_class(keep):
@@ -5986,7 +6009,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.151 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.152 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

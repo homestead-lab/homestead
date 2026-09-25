@@ -144,6 +144,25 @@ node past 80%, and a notification goes out.
 **Settings → Cluster** sets over-provisioning and the minimum free space, with a
 preview of each node's new limit, and turns the V2 engine on or off.
 
+### What the V2 engine needs
+
+**What each host needs** (beside the V2 switch, or **details** on the storage
+classes card) is a checklist. Each line is ticked, crossed or marked unknown,
+and hovering its **?** shows how to do it on Harvester, k3s or RKE2:
+
+- **The cluster:** Longhorn 1.8 or newer, and the V2 engine switched on.
+- **Each host:**
+  - a CPU with SSE4.2 (any x86 from about 2008, or arm64);
+  - the kernel modules `vfio_pci`, `uio_pci_generic` and `nvme_tcp`;
+  - 2 GiB of hugepages;
+  - a whole empty disk given to Longhorn as a V2 (block) disk.
+- **Yours to check:** `nvme-cli` on each host, which Homestead cannot see.
+- **Worth knowing:** V2 keeps one CPU core busy on every node that runs it.
+
+On Harvester, switching V2 on reserves the hugepages and loads the modules
+itself; on k3s and RKE2 those are two commands on each host, given in the
+tooltips. A V2 volume schedules only on hosts where everything is ticked.
+
 ![Settings - Cluster](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-settings-cluster.png)
 
 To make room: add a disk, delete old copies and volumes you no longer need, or

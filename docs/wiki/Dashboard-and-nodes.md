@@ -107,9 +107,18 @@ pressure, core services, and platform warnings from the last day.
 - **Add a host** walks through adding a machine, for the cluster you have:
   Harvester's installer screens, or k3s/RKE2's join command, and shows the new
   host arriving.
-- **Remove from cluster** takes out a host that is gone - including one that
-  died for good - after checking that etcd keeps quorum and that no volume
-  loses its last copy.
+- **Remove a host** (beside **Add a host**) takes out a host that has failed
+  or is being retired - on Harvester, k3s, RKE2 or plain Kubernetes. It lists
+  the hosts, failed ones first, and checks before anything changes: etcd
+  quorum, volumes whose only copy it held (named by claim and the apps using
+  them), volumes kept on the host itself (k3s's `local-path`), and apps pinned
+  to it. Anything lost must be ticked as accepted. **It is gone for good**
+  also force-stops what it held, lets pinned apps run elsewhere, and makes
+  its local volumes again empty, so their apps can start on another host.
+  It also deletes the k3s/RKE2 node password, so a rebuilt host of the same
+  name can join. Afterwards it lists anything still left over, each with a
+  button. On plain Kubernetes, remove its etcd member yourself with
+  `etcdctl member remove`, as the check says.
 - On Harvester, the newest Harvester releases are listed. A version Harvester
   offers can be upgraded to from here (type the version to confirm), as its
   own dashboard's Upgrade button does. Either way, the upgrade is followed

@@ -11,7 +11,10 @@ token never passes through Homestead: the guide says where to read it.
 The second half removes a node that is gone - following Harvester's own order:
 Longhorn stops scheduling to it, the Kubernetes node goes, then the leftover
 Cluster API machine and Longhorn node - after checking it will not cost etcd
-quorum or the last copy of a volume.
+quorum or the last copy of a volume. The same works on k3s, RKE2 and plain
+Kubernetes, each with what it leaves behind: k3s and RKE2 keep a node-password
+Secret that stops a rebuilt host of the same name joining; volumes kept on the
+host itself (k3s's local-path) die with it; apps pinned to it wait for it.
 """
 import calendar
 import json
@@ -201,6 +204,155 @@ def _stuck_on(name):
     return pods, vmis, attachments, replicas
 
 
+PASSWORD_SECRET = re.compile(r"^(.+)\.node-password\.(k3s|rke2)$")
+HOSTNAME = "kubernetes.io/hostname"
+
+
+def _distribution(node):
+    kubelet = ((node.get("status") or {}).get("nodeInfo") or {}).get("kubeletVersion", "")
+    try:
+        harvester = any(g.get("name") == "harvesterhci.io" for g in (_get("/apis") or {}).get("groups", []))
+    except Exception:
+        harvester = False
+    return ("harvester" if harvester else "k3s" if "+k3s" in kubelet
+            else "rke2" if "+rke2" in kubelet else "kubernetes")
+
+
+def _workloads():
+    """Deployments and StatefulSets everywhere, with their pod specs."""
+    out = []
+    for kind, path in (("Deployment", "/apis/apps/v1/deployments"), ("StatefulSet", "/apis/apps/v1/statefulsets")):
+        for item in _list(path):
+            out.append((kind, item))
+    return out
+
+
+def _claim_users(namespace, claim, workloads):
+    users = []
+    for kind, item in workloads:
+        if item["metadata"].get("namespace") != namespace:
+            continue
+        volumes = ((((item.get("spec") or {}).get("template") or {}).get("spec") or {}).get("volumes") or [])
+        if any((v.get("persistentVolumeClaim") or {}).get("claimName") == claim for v in volumes):
+            users.append(item["metadata"]["name"])
+    return users
+
+
+def _lost_detail(volumes, workloads):
+    """Longhorn volumes by the claim and apps a person knows them by."""
+    by_name = {v["metadata"]["name"]: v for v in _list("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes")}
+    rows = []
+    for volume in volumes:
+        k8s = ((by_name.get(volume) or {}).get("status") or {}).get("kubernetesStatus") or {}
+        ns, claim = k8s.get("namespace", ""), k8s.get("pvcName", "")
+        rows.append({"volume": volume, "namespace": ns, "claim": claim,
+                     "users": _claim_users(ns, claim, workloads) if claim else []})
+    return rows
+
+
+def _pins_to(affinity, name):
+    """A required node affinity that allows only this host."""
+    terms = ((((affinity or {}).get("nodeAffinity") or {}).get("requiredDuringSchedulingIgnoredDuringExecution") or {})
+             .get("nodeSelectorTerms") or [])
+    if not terms:
+        return False
+    for term in terms:
+        hosts = [e for e in term.get("matchExpressions") or [] if e.get("key") == HOSTNAME and e.get("operator") == "In"]
+        if not hosts or hosts[0].get("values") != [name]:
+            return False
+    return True
+
+
+def _pinned_volumes(name, workloads):
+    """Volumes kept on the host itself - k3s's local-path, local volumes -
+    whose data went with it."""
+    rows = []
+    for pv in _list("/api/v1/persistentvolumes"):
+        spec = pv.get("spec") or {}
+        claim = spec.get("claimRef") or {}
+        # A volume's affinity is "required"; a pod's is the long name.
+        required = (spec.get("nodeAffinity") or {}).get("required")
+        if not claim or not _pins_to({"nodeAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": required}}, name):
+            continue
+        rows.append({"pv": pv["metadata"]["name"], "namespace": claim.get("namespace", ""), "claim": claim.get("name", ""),
+                     "class": spec.get("storageClassName", ""), "size": (spec.get("capacity") or {}).get("storage", ""),
+                     "users": _claim_users(claim.get("namespace", ""), claim.get("name", ""), workloads)})
+    return rows
+
+
+def _pinned_workloads(name, workloads):
+    """Apps that may run only on this host, so wait for it."""
+    rows = []
+    for kind, item in workloads:
+        pod = (((item.get("spec") or {}).get("template") or {}).get("spec") or {})
+        if (pod.get("nodeSelector") or {}).get(HOSTNAME) == name or _pins_to(pod.get("affinity"), name):
+            rows.append({"kind": kind, "namespace": item["metadata"]["namespace"], "name": item["metadata"]["name"]})
+    return rows
+
+
+def _unpin(row):
+    plural = "deployments" if row["kind"] == "Deployment" else "statefulsets"
+    path = f"/apis/apps/v1/namespaces/{row['namespace']}/{plural}/{row['name']}"
+    item = _get(path)
+    if not item:
+        return False
+    pod = item["spec"]["template"]["spec"]
+    (pod.get("nodeSelector") or {}).pop(HOSTNAME, None)
+    if not pod.get("nodeSelector"):
+        pod.pop("nodeSelector", None)
+    node_affinity = (pod.get("affinity") or {}).get("nodeAffinity") or {}
+    required = node_affinity.get("requiredDuringSchedulingIgnoredDuringExecution") or {}
+    for term in required.get("nodeSelectorTerms") or []:
+        term["matchExpressions"] = [e for e in term.get("matchExpressions") or [] if e.get("key") != HOSTNAME]
+    if required:
+        required["nodeSelectorTerms"] = [t for t in required.get("nodeSelectorTerms") or []
+                                         if t.get("matchExpressions") or t.get("matchFields")]
+        if not required["nodeSelectorTerms"]:
+            node_affinity.pop("requiredDuringSchedulingIgnoredDuringExecution", None)
+    item["metadata"].pop("managedFields", None)
+    ksend("PUT", path, item)
+    return True
+
+
+def _recreate_empty(row):
+    """A claim whose data was on a dead host, made again empty under its own
+    name, so its app starts somewhere else - with no data, which was lost."""
+    ns, claim = row["namespace"], row["claim"]
+    path = f"/api/v1/namespaces/{ns}/persistentvolumeclaims"
+    old = _get(f"{path}/{claim}")
+    if old:
+        _force_delete(f"{path}/{claim}")
+        ksend("PATCH", f"{path}/{claim}", {"metadata": {"finalizers": None}}, "application/merge-patch+json") \
+            if _get(f"{path}/{claim}") else None
+    if _get(f"/api/v1/persistentvolumes/{row['pv']}"):
+        _force_delete(f"/api/v1/persistentvolumes/{row['pv']}")
+        if _get(f"/api/v1/persistentvolumes/{row['pv']}"):
+            ksend("PATCH", f"/api/v1/persistentvolumes/{row['pv']}", {"metadata": {"finalizers": None}},
+                  "application/merge-patch+json")
+    if not old:
+        return False
+    for _ in range(15):
+        if not _get(f"{path}/{claim}"):
+            break
+        time.sleep(1)
+    spec = {key: value for key, value in (old.get("spec") or {}).items()
+            if key in ("accessModes", "resources", "storageClassName", "volumeMode")}
+    annotations = {k: v for k, v in (old["metadata"].get("annotations") or {}).items()
+                   if not k.startswith(("pv.kubernetes.io/", "volume.kubernetes.io/", "volume.beta.kubernetes.io/"))}
+    ksend("POST", path, {"apiVersion": "v1", "kind": "PersistentVolumeClaim",
+                         "metadata": {"name": claim, "namespace": ns, "labels": old["metadata"].get("labels") or {},
+                                      "annotations": annotations}, "spec": spec})
+    return True
+
+
+def _password_secret(name):
+    for suffix in ("k3s", "rke2"):
+        path = f"/api/v1/namespaces/kube-system/secrets/{name}.node-password.{suffix}"
+        if _get(path):
+            return path
+    return ""
+
+
 def _stop_steps(node):
     """How to take a node out of service on the host, for what runs it."""
     kubelet = ((node.get("status") or {}).get("nodeInfo") or {}).get("kubeletVersion", "")
@@ -236,6 +388,8 @@ def removal_plan(name):
         if down is not None and down < 600:
             warnings.append(f"{name} stopped reporting {_plural(max(1, int(down // 60)), 'minute')} ago. "
                             f"It may only be rebooting; give it a few minutes.")
+    distribution = _distribution(node)
+    workloads = _workloads()
     if "etcd" in roles or {"control-plane", "master"} & set(roles):
         others_ready = sum(1 for n in etcd if n["metadata"]["name"] != name and _ready(n))
         remaining = len(etcd) - 1
@@ -247,8 +401,12 @@ def removal_plan(name):
         elif remaining < 3:
             warnings.append(f"The cluster keeps {_plural(remaining, 'etcd member')}; "
                             f"one more failure would stop it. Add a node soon.")
-        else:
+        elif distribution == "harvester":
             warnings.append("Harvester promotes a worker to take its control-plane place, when one is available.")
+        if distribution == "kubernetes" and "etcd" in roles:
+            warnings.append(f"Plain Kubernetes keeps {name}'s etcd member after the node goes, and still counts it "
+                            f"toward quorum: remove it on another control-plane host with "
+                            f"etcdctl member list, then etcdctl member remove <its id>.")
     by_volume, by_node = _replicas_by_node()
     lost, degraded = [], []
     for volume in sorted(by_node.get(name, ())):
@@ -261,14 +419,32 @@ def removal_plan(name):
     if degraded:
         warnings.append(f"{_plural(len(degraded), 'volume')} will rebuild the copy {name} held, "
                         f"on the remaining nodes.")
+    pinned_volumes = _pinned_volumes(name, workloads)
+    if pinned_volumes:
+        warnings.append(f"{_plural(len(pinned_volumes), 'volume')} kept on {name} itself "
+                        f"({', '.join(v['namespace'] + '/' + v['claim'] for v in pinned_volumes[:4])}"
+                        f"{' …' if len(pinned_volumes) > 4 else ''}): their data went with the host. Gone for good makes "
+                        f"each again, empty, so its app can start elsewhere.")
+    pinned_workloads = _pinned_workloads(name, workloads)
+    if pinned_workloads:
+        warnings.append(f"{_plural(len(pinned_workloads), 'app')} may run only on {name} "
+                        f"({', '.join(w['name'] for w in pinned_workloads[:4])}{' …' if len(pinned_workloads) > 4 else ''}) "
+                        f"and wait for it. Gone for good lets them run anywhere.")
     pods, vmis, attachments, replicas = _stuck_on(name) if not ready else ([], [], [], [])
     annotations = node["metadata"].get("annotations") or {}
     machine = annotations.get("cluster.x-k8s.io/machine", "")
     machine_ns = annotations.get("cluster.x-k8s.io/cluster-namespace", "fleet-local")
     steps.append(f"Stop Longhorn scheduling new replicas to {name}")
-    steps.append(f"Delete the Kubernetes node {name} (RKE2 removes its etcd membership)")
-    steps.append(f"Delete its Cluster API machine {machine}" if machine
-                 else "Delete any Cluster API machine left pointing at it")
+    server = "etcd" in roles or bool({"control-plane", "master"} & set(roles))
+    steps.append(f"Delete the Kubernetes node {name}" + (
+        " (RKE2 removes its etcd membership)" if server and distribution in ("harvester", "rke2")
+        else " (k3s removes its etcd membership)" if server and distribution == "k3s" else ""))
+    if distribution == "harvester":
+        steps.append(f"Delete its Cluster API machine {machine}" if machine
+                     else "Delete any Cluster API machine left pointing at it")
+    else:
+        steps.append(f"Delete its node-password Secret, so a rebuilt host called {name} can join again"
+                     if distribution in ("k3s", "rke2") else f"Nothing else of {name}'s is kept outside the node")
     steps.append(f"Delete Longhorn's record of {name} once it holds no replicas")
     vm_names = sorted({(v.get("metadata") or {}).get("name", "") for v in vmis})
     gone_steps = [
@@ -278,13 +454,20 @@ def removal_plan(name):
         f"Release {_plural(len(attachments), 'volume attachment')}, so those volumes can attach on another node",
         f"Delete the {_plural(len(replicas), 'replica record')} Longhorn keeps for it, "
         f"so it rebuilds them from the remaining copies",
-        "Finish its Cluster API machine's deletion if finalizers hold it",
+        "Finish its Cluster API machine's deletion if finalizers hold it" if distribution == "harvester"
+        else f"Delete its node-password Secret" if distribution in ("k3s", "rke2") else "Nothing more to let go of",
+        f"Let {_plural(len(pinned_workloads), 'app')} pinned to it run on any host" if pinned_workloads
+        else "No apps are pinned to it",
+        f"Make {_plural(len(pinned_volumes), 'volume')} kept on it again, empty, so their apps can start elsewhere"
+        if pinned_volumes else "No volumes were kept on the host itself",
     ]
     return {"node": name, "ready": ready, "roles": roles, "since": since,
             "blockers": blockers, "warnings": warnings, "steps": steps, "gone_steps": gone_steps,
             "stuck": {"pods": len(pods), "vms": vm_names, "attachments": len(attachments),
                       "replicas": len(replicas)},
             "lost_volumes": lost, "rebuilt_volumes": degraded,
+            "lost_detail": _lost_detail(lost, workloads) if lost else [],
+            "pinned_volumes": pinned_volumes, "pinned_workloads": pinned_workloads, "distribution": distribution,
             "machine": {"name": machine, "namespace": machine_ns}, "ok": not blockers}
 
 
@@ -310,6 +493,9 @@ def remove_node(name, accept_loss=False, gone=False):
         raise ValueError(plan["blockers"][0])
     if plan["lost_volumes"] and not accept_loss:
         raise ValueError(f"{_plural(len(plan['lost_volumes']), 'volume')} would lose the only copy; confirm that first")
+    if gone and plan["pinned_volumes"] and not accept_loss:
+        raise ValueError(f"{_plural(len(plan['pinned_volumes']), 'volume')} kept on {name} would be made again empty; "
+                         f"confirm that first")
     log = []
     lh = f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/nodes/{name}"
     if _get(lh):
@@ -331,6 +517,17 @@ def remove_node(name, accept_loss=False, gone=False):
             log.append(f"Released {_plural(released, 'volume attachment')}")
     ksend("DELETE", f"/api/v1/nodes/{name}")
     log.append(f"Deleted node {name}")
+    secret = _password_secret(name)
+    if secret:
+        _force_delete(secret)
+        log.append(f"Deleted {name}'s node-password Secret, so a rebuilt {name} can join")
+    if gone:
+        unpinned = [row["name"] for row in plan["pinned_workloads"] if _unpin(row)]
+        if unpinned:
+            log.append(f"{', '.join(unpinned)} may run on any host now")
+        remade = [f"{row['namespace']}/{row['claim']}" for row in plan["pinned_volumes"] if _recreate_empty(row)]
+        if remade:
+            log.append(f"Made {', '.join(remade)} again, empty: {'its' if len(remade) == 1 else 'their'} data was on {name}")
     removed = _delete_machines_for(name, plan["machine"])
     log.extend(f"Deleted Cluster API machine {m}" for m in removed)
     if gone:
@@ -402,11 +599,70 @@ def cleanup_report():
     _, by_node = _replicas_by_node()
     stale_longhorn = [{"name": n["metadata"]["name"], "replicas": len(by_node.get(n["metadata"]["name"], ()))}
                       for n in lh_nodes if n["metadata"]["name"] not in names]
-    return {"dead_nodes": dead, "stale_machines": stale_machines, "stale_longhorn": stale_longhorn}
+    passwords = []
+    for secret in _list("/api/v1/namespaces/kube-system/secrets"):
+        match = PASSWORD_SECRET.match(secret["metadata"]["name"])
+        if match and match.group(1) not in names:
+            passwords.append({"name": secret["metadata"]["name"], "node": match.group(1)})
+    workloads = _workloads()
+    gone_nodes = set()
+    pinned_volumes, pinned_workloads = [], []
+    for pv in _list("/api/v1/persistentvolumes"):
+        terms = ((((pv.get("spec") or {}).get("nodeAffinity") or {}).get("required") or {}).get("nodeSelectorTerms") or [])
+        for term in terms:
+            for expression in term.get("matchExpressions") or []:
+                if expression.get("key") == HOSTNAME and len(expression.get("values") or []) == 1 \
+                        and expression["values"][0] not in names:
+                    gone_nodes.add(expression["values"][0])
+    for gone_node in sorted(gone_nodes):
+        pinned_volumes += [dict(row, node=gone_node) for row in _pinned_volumes(gone_node, workloads)]
+    for kind, item in workloads:
+        pod = (((item.get("spec") or {}).get("template") or {}).get("spec") or {})
+        host = (pod.get("nodeSelector") or {}).get(HOSTNAME)
+        if host and host not in names:
+            pinned_workloads.append({"kind": kind, "namespace": item["metadata"]["namespace"],
+                                     "name": item["metadata"]["name"], "node": host})
+    attachments = [{"name": a["metadata"]["name"], "node": (a.get("spec") or {}).get("nodeName", "")}
+                   for a in _list("/apis/storage.k8s.io/v1/volumeattachments")
+                   if (a.get("spec") or {}).get("nodeName") and a["spec"]["nodeName"] not in names]
+    return {"dead_nodes": dead, "stale_machines": stale_machines, "stale_longhorn": stale_longhorn,
+            "passwords": passwords, "pinned_volumes": pinned_volumes, "pinned_workloads": pinned_workloads,
+            "attachments": attachments}
 
 
 def cleanup(kind, name, force=False):
     """Removes one leftover record the report found. `force` is for a host that is gone for good."""
+    if kind in ("password", "pinned-volume", "pin", "attachment"):
+        report = cleanup_report()
+        if kind == "password":
+            if name not in {row["name"] for row in report["passwords"]}:
+                raise ValueError("that Secret belongs to a node that is still here")
+            _force_delete(f"/api/v1/namespaces/kube-system/secrets/{name}")
+            return {"ok": True, "message": f"Deleted {name}"}
+        if kind == "attachment":
+            if name not in {row["name"] for row in report["attachments"]}:
+                raise ValueError("that attachment is on a node that is still here")
+            _force_delete(f"/apis/storage.k8s.io/v1/volumeattachments/{name}")
+            ksend("PATCH", f"/apis/storage.k8s.io/v1/volumeattachments/{name}", {"metadata": {"finalizers": None}},
+                  "application/merge-patch+json") if _get(f"/apis/storage.k8s.io/v1/volumeattachments/{name}") else None
+            return {"ok": True, "message": f"Released attachment {name}"}
+        if kind == "pin":
+            row = next((r for r in report["pinned_workloads"] if f"{r['namespace']}/{r['name']}" == name), None)
+            if not row:
+                raise ValueError("that app is not pinned to a host that is gone")
+            _unpin(row)
+            return {"ok": True, "message": f"{row['name']} may run on any host now"}
+        row = next((r for r in report["pinned_volumes"] if f"{r['namespace']}/{r['claim']}" == name), None)
+        if not row:
+            raise ValueError("that volume is not kept on a host that is gone")
+        if not force:
+            raise ValueError(f"{name}'s data was on {row['node']}; confirm making it again empty")
+        for pod in _list(f"/api/v1/namespaces/{row['namespace']}/pods"):
+            volumes = (pod.get("spec") or {}).get("volumes") or []
+            if any((v.get("persistentVolumeClaim") or {}).get("claimName") == row["claim"] for v in volumes):
+                _force_delete(f"/api/v1/namespaces/{row['namespace']}/pods/{pod['metadata']['name']}")
+        _recreate_empty(row)
+        return {"ok": True, "message": f"Made {name} again, empty; its app can start on another host"}
     if kind == "machine":
         stale = {m["name"]: m for m in cleanup_report()["stale_machines"]}
         if name not in stale:

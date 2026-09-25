@@ -300,6 +300,12 @@ b.uptime-ok{color:var(--ok)}b.uptime-warn{color:var(--med)}b.uptime-bad{color:va
 .uptime-strip i.uptime-ok{background:var(--ok)}.uptime-strip i.uptime-warn{background:var(--med)}.uptime-strip i.uptime-bad{background:var(--crit)}
 .uptime-events{display:grid;gap:5px;margin-top:6px;max-height:200px;overflow:auto}
 .uptime-events>div{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.v2list{display:grid;gap:8px;margin:6px 0}
+.v2item{display:flex;gap:10px;align-items:flex-start}
+.v2mark{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;font-size:12px;font-weight:700;flex:0 0 auto}
+.v2mark.ok{background:color-mix(in srgb,var(--ok) 20%,transparent);color:var(--ok)}
+.v2mark.bad{background:color-mix(in srgb,var(--crit) 20%,transparent);color:var(--crit)}
+.v2mark.unknown{background:var(--line2);color:var(--mut)}
 .pullbar{display:grid;gap:3px;margin:6px 0 2px}.pullbar .meter{height:5px}
 .tree-container{padding:3px 0}.tree-branch{font-size:9px;letter-spacing:.06em;text-transform:uppercase;flex:0 0 58px}.tree-branch.init{color:var(--vio)}
 .tree-image{margin-left:auto;max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

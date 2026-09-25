@@ -36,5 +36,22 @@ class ProbeInterfaceTests(unittest.TestCase):
         self.assertTrue(rows["eth0"]["up"])
 
 
+class ProbeV2Tests(unittest.TestCase):
+    def test_cpu_flags_and_kernel_modules(self):
+        with tempfile.TemporaryDirectory() as root:
+            Path(root, "proc").mkdir()
+            Path(root, "proc", "cpuinfo").write_text("processor : 0" + chr(10) + "flags : fpu sse4_1 sse4_2 avx" + chr(10))
+            for name in ("vfio_pci", "nvme_tcp"):
+                Path(root, "sys", "module", name).mkdir(parents=True)
+            old = probe.SYS, probe.PROC
+            probe.SYS, probe.PROC = str(Path(root, "sys")), str(Path(root, "proc"))
+            try:
+                facts = probe.v2_facts()
+            finally:
+                probe.SYS, probe.PROC = old
+        self.assertTrue(facts["sse4_2"])
+        self.assertEqual({"vfio_pci": True, "uio_pci_generic": False, "nvme_tcp": True}, facts["modules"])
+
+
 if __name__ == "__main__":
     unittest.main()

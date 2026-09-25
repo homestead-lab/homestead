@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Read host sensors, devices and disk counters and serve them as JSON."""
-import json, os, socket, stat, threading, time
+import json, os, platform, socket, stat, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SYS = "/host/sys"
@@ -291,6 +291,21 @@ def interfaces():
                     "master": master})
     return out
 
+# Kernel modules Longhorn's V2 (SPDK) engine needs on a host.
+V2_MODULES = ("vfio_pci", "uio_pci_generic", "nvme_tcp")
+
+def v2_facts():
+    """What Longhorn's V2 engine asks of a host that the host's /proc and
+    /sys can say: an x86 CPU with SSE4.2 (arm64 needs none), and its kernel
+    modules - loaded, or built in, both show under /sys/module."""
+    flags = None
+    for line in (_read(f"{PROC}/cpuinfo") or "").splitlines():
+        if line.startswith("flags"):
+            flags = line.split(":", 1)[-1].split()
+            break
+    return {"arch": platform.machine(), "sse4_2": ("sse4_2" in flags) if flags is not None else None,
+            "modules": {name: os.path.isdir(f"{SYS}/module/{name}") for name in V2_MODULES}}
+
 def default_interface():
     """The interface the host's default route leaves by - where it meets the
     LAN - from the route table of the host's first process."""
@@ -324,7 +339,8 @@ def payload():
             # it KubeVirt can only emulate, many times slower.
             "kvm": os.path.exists(f"{DEV}/kvm"),
             "interfaces": interfaces(),
-            "default_interface": default_interface()}
+            "default_interface": default_interface(),
+            "v2": v2_facts()}
 
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
