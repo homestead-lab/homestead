@@ -30,12 +30,19 @@ async function viewNetworking() {
       <div class="card flat"><div class="ctitle">Attention</div><div class="bignum" style="margin-top:8px">${data.summary.unhealthy}</div>
         <div class="csub">${data.conflicts.length ? `${data.conflicts.length} listener conflict(s)` : "no VIP/port conflicts"}</div></div>
     </div>
+    ${(data.platform_clashes || []).length ? `<div class="note bad" style="margin-bottom:14px"><b>${data.platform_clashes.length === 1 ? "An app is" : `${data.platform_clashes.length} apps are`} on the cluster's own address.</b>
+      ${esc(data.platform_clashes.map(c => `${c.namespace}/${c.service}`).join(", "))} ${data.platform_clashes.length === 1 ? "uses" : "use"}
+      <span class="mono">${esc(data.platform_clashes[0].ip)}</span>, which ${esc(data.platform_clashes[0].owner)} holds: the dashboard answers there and new hosts join
+      through it, so sharing it can stop hosts joining. Give ${data.platform_clashes.length === 1 ? "it an address" : "each an address"} of its own (Edit → Network).</div>` : ""}
+    ${(data.shared_vip || {}).problem ? `<div class="note bad" style="margin-bottom:14px"><b>Homestead's shared address is the cluster's own.</b> ${esc(data.shared_vip.problem)}.
+      New apps are refused the shared address until <span class="mono">LB_IP</span> is changed on Homestead's Deployment.</div>` : ""}
     <div class="between"><div class="sec">Your VIPs ${tip("Addresses kept for Homestead to give to Services. kube-vip announces whichever address a Service asks for, so these need nothing else - just keep them out of your router's DHCP range. Automatic VIPs come from here first.")}</div>
       <button class="btn sm pri" data-need="admin" onclick="vipAdd()">＋ Add VIPs</button></div>
-    ${(data.registered_vips || []).length ? `<div class="vip-own">${data.registered_vips.map(v => `<div class="vip-chip ${v.free ? "free" : "used"}">
+    ${(data.registered_vips || []).length ? `<div class="vip-own">${data.registered_vips.map(v => `<div class="vip-chip ${v.blocked ? "used" : v.free ? "free" : "used"}">
         <div class="vip-name"><b class="mono">${esc(v.ip)}</b><span class="dim xs" onclick="vipLabel('${esc(v.ip)}')" data-tip="Rename">${esc(v.label || "no label")}</span></div>
-        <span class="tag ${v.free ? "ok" : "info"}">${v.free ? "free" : esc(v.used_by.join(", ") || "in use")}</span>
-        ${v.free ? `<button class="iconbtn" data-need="admin" data-tip="No longer keep this address for Homestead" onclick="vipRemove('${esc(v.ip)}')">×</button>` : ""}</div>`).join("")}</div>`
+        ${v.blocked ? `<span class="tag bad" data-tip="${esc(v.blocked)}">not usable</span>`
+          : `<span class="tag ${v.free ? "ok" : "info"}">${v.free ? "free" : esc(v.used_by.join(", ") || "in use")}</span>`}
+        ${v.free || v.blocked ? `<button class="iconbtn" data-need="admin" data-tip="No longer keep this address for Homestead" onclick="vipRemove('${esc(v.ip)}')">×</button>` : ""}</div>`).join("")}</div>`
       : `<div class="card flat empty small">No VIPs of your own yet. Add the addresses Homestead may give to apps and shares - ${data.available_vip_count
           ? `${data.available_vip_count} more are free in Harvester IP pools.` : "there are no Harvester IP pools to take them from either."}</div>`}
     <div class="between"><div class="sec">Virtual IPs &amp; port ownership</div><div class="row">${data.available_vips.filter(ip => !(data.vip_labels || {}).hasOwnProperty(ip)).slice(0, 6).map(ip => `<span class="tag ok" title="Unused address in a ready Harvester IP pool">${esc(ip)} available</span>`).join("")}</div></div>

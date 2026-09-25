@@ -34,6 +34,7 @@ LHNS = "longhorn-system"
 LH_API = "/apis/longhorn.io/v1beta2"
 JOIN_SECRET = "homestead-move-credentials"
 VIP_ANNOTATION = "kube-vip.io/loadbalancerIPs"
+HARVESTER_IMAGE_CLASS = "harvesterhci.io/storageClassName"
 import homestead_platform as PLATFORM
 MOVE_ID = "move-id"
 MOVED_FROM = "moved-from"
@@ -479,6 +480,29 @@ def _image_ready(name):
     return any(str(f.get("state", "")).lower() == "ready" for f in files)
 
 
+def _image_class():
+    """A Longhorn storage class for a restored image to take its settings from.
+
+    Homestead's own class for new volumes when it has one here; otherwise the
+    cluster's default, Harvester's stock class, or any Longhorn class that is
+    not itself an image's (those carry a backingImage of their own).
+    """
+    try:
+        classes = kget("/apis/storage.k8s.io/v1/storageclasses").get("items", [])
+    except Exception:
+        classes = []
+    longhorn = [c for c in classes if c.get("provisioner") == "driver.longhorn.io"
+                and not (c.get("parameters") or {}).get("backingImage")]
+    names = [c["metadata"]["name"] for c in longhorn]
+    default = [c["metadata"]["name"] for c in longhorn
+               if ((c["metadata"].get("annotations") or {})
+                   .get("storageclass.kubernetes.io/is-default-class") == "true")]
+    for choice in [LH.STORAGE_CLASS] + default + ["harvester-longhorn", "longhorn"] + names:
+        if choice and choice in names:
+            return choice
+    raise ValueError("this cluster has no Longhorn storage class to restore the image with")
+
+
 def _ensure_image(move, name):
     """Restore a Harvester image from its backup before the disks built on it."""
     if _get(f"{LH_API}/namespaces/{LHNS}/backingimages/{name}"):
@@ -487,10 +511,14 @@ def _ensure_image(move, name):
     url = ((backup or {}).get("status", {}) or {}).get("url", "")
     if not url:
         raise CLIENT.Unreachable(f"the {name} image backup is not visible here yet")
+    # Harvester's admission webhook sets an image's copies and disks from a
+    # storage class: the one named here, or else the cluster's default - and
+    # refuses the image outright when there is no default.
     ksend("POST", f"{LH_API}/namespaces/{LHNS}/backingimages", {
         "apiVersion": "longhorn.io/v1beta2", "kind": "BackingImage",
         "metadata": {"name": name, "namespace": LHNS,
-                     "annotations": {NAMES.key(MOVE_ID): move["id"]}},
+                     "annotations": {NAMES.key(MOVE_ID): move["id"],
+                                     HARVESTER_IMAGE_CLASS: _image_class()}},
         "spec": {"sourceType": "restore",
                  "sourceParameters": {"backup-url": url, "concurrent-limit": "2"}}})
 

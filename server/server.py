@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.121")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.122")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -3326,7 +3326,16 @@ def self_health():
         mqtt = dict(MQTT.STATUS)
     except Exception:
         pass
-    return {"version": HOMESTEAD_VERSION, "api": api, "leader": leading, "identity": LEADER.IDENTITY,
+    # Homestead's shared address, and any app, on the cluster's own address:
+    # host joining (RKE2's 9345) and the dashboard answer there.
+    try:
+        network = cached("network", 5, NETWORK.inventory)
+        addresses = {"lb_ip": LB_IP, "problem": (network.get("shared_vip") or {}).get("problem", ""),
+                     "clashes": network.get("platform_clashes") or [],
+                     "platform": sorted(network.get("platform_addresses") or {})}
+    except Exception as error:
+        addresses = {"lb_ip": LB_IP, "error": str(error)[:160]}
+    return {"version": HOMESTEAD_VERSION, "addresses": addresses, "api": api, "leader": leading, "identity": LEADER.IDENTITY,
             "replicas": replicas, "loops": loops, "probe": probe, "samba": samba,
             "permissions": dict(SELF.LAST), "backups": {k: backups.get(k) for k in ("deployed", "ready", "endpoint")},
             "mqtt": {k: mqtt.get(k) for k in ("state", "detail", "error", "last_publish")}}
@@ -5049,7 +5058,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.121 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.122 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

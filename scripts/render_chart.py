@@ -318,6 +318,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "homestead.labels" . | nindent 4 }}
+    homestead.io/managed: "true"
   {{- $annotations := deepCopy .Values.service.annotations }}
   {{- if and .Values.service.loadBalancerIP .Values.service.kubeVip }}
   {{- $_ := set $annotations "kube-vip.io/loadbalancerIPs" .Values.service.loadBalancerIP }}

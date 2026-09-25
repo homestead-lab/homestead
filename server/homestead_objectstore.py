@@ -45,6 +45,7 @@ UID = 10001                      # RustFS runs as this user, and needs its volum
 _bucket = {"ok": False}
 VIP_ANNOTATION = "kube-vip.io/loadbalancerIPs"
 import homestead_platform as PLATFORM
+import homestead_networking as NETWORK
 import homestead_longhorn as LH
 
 
@@ -212,6 +213,8 @@ def deploy(cfg=None):
     if not 5 <= size_gb <= 16384:
         raise ValueError("object storage size must be between 5 and 16384 GiB")
     address = str(cfg.get("lb_ip") or "").strip()
+    if address:
+        NETWORK.check_address(address)
     keys = credentials()
 
     _apply(f"/api/v1/namespaces/{NS}/secrets", SECRET,

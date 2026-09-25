@@ -62,6 +62,14 @@ cannot be placed because too few hosts have room.
 handing out addresses: add some under **Networking → Your VIPs**. See
 [Networking](Networking#your-vips).
 
+**New hosts cannot join, though the dashboard works.** Something else is on the
+cluster's own address - the VIP hosts join through on port 9345. Homestead
+names any app sitting there on **Networking** and in **Settings → About →
+Addresses**; give each an address of its own (**Edit → Network**). If
+Homestead's own shared address (`LB_IP` on its Deployment) is the cluster's
+address, change it to a free one. Homestead no longer offers the cluster's
+address, or one another program owns, anywhere it asks for one.
+
 **An app's address does not answer.** **Networking** shows each address's
 Service and whether its pods are ready. On Harvester, check the address is not
 also given out by your router's DHCP.
@@ -78,6 +86,12 @@ disk a new source.
 **The backup storage card says "no LAN address".** The S3 server on the source
 needs an address on your LAN - one of the source cluster's VIPs. Pick one on the
 card, and Homestead checks that the destination can reach it.
+
+**A VM move fails with "no default storageClass found for backingImage".**
+Harvester sets up a restored image from a storage class, and releases before
+2.8.122 left it to use the cluster's default - which this cluster did not
+have. Update Homestead here and **Retry**; it now names a Longhorn class
+itself.
 
 **A move failed at "backup".** Update the source cluster's Homestead, then
 **Retry** - a failed step picks up where it stopped.

@@ -1175,10 +1175,14 @@ window.confirmDeploy = async () => {
    "Type an address" is there for one outside the pools. */
 async function vipChoices() {
   const net = await api("/api/network", { keep: true }).catch(() => null);
-  const own = net?.registered_vips || [];
+  // The cluster's own address (Harvester's management VIP, an ingress
+  // controller's) and addresses other software owns are never offered: an app
+  // sharing the management VIP is how host joining breaks.
+  const closed = { ...(net?.platform_addresses || {}), ...(net?.foreign_addresses || {}) };
+  const own = (net?.registered_vips || []).filter(v => !v.blocked);
   const mine = new Set(own.map(v => v.ip));
   return { free: (net?.available_vips || []).filter(ip => !mine.has(ip)), freeCount: net?.available_vip_count || 0,
-    used: net?.vips || [], own, labels: net?.vip_labels || {} };
+    used: (net?.vips || []).filter(v => !closed[v.ip]), own, labels: net?.vip_labels || {} };
 }
 window.vipChoices = vipChoices;
 

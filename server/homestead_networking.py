@@ -169,6 +169,74 @@ def _ingress_inventory(ingresses):
     return sorted(out, key=lambda row: (row["namespace"], row["name"]))
 
 
+# Harvester keeps its management address - the one its dashboard and host
+# joining (RKE2's 9345) answer on - in this ConfigMap, whichever Service
+# currently carries it.
+HARVESTER_VIP = "/api/v1/namespaces/harvester-system/configmaps/vip"
+
+
+def _ours(row):
+    """A Service Homestead made, or may share an address with.
+
+    The label is what Homestead writes now. Its own Service, and anything in
+    the namespace apps are deployed to, count too: releases before the label
+    made those.
+    """
+    return (row["managed"] or (row.get("selector") or {}).get("app") == "homestead"
+            or row["namespace"] == DEFAULT_NAMESPACE)
+
+
+def _address_owners(raw_rows, node_ips):
+    """Addresses that are not Homestead's to hand out, and whose they are.
+
+    The platform's first: a load-balanced address a system namespace holds is
+    the cluster's own - Harvester's management VIP, an ingress controller's.
+    Putting an app there shares it with the thing hosts join through. Node
+    addresses are left out: k3s's ServiceLB publishes every Service on them by
+    design, and they are refused for a Service's own VIP separately.
+    """
+    platform, foreign = {}, {}
+    for row in raw_rows:
+        for ip in row["external_ips"]:
+            if ip in node_ips:
+                continue
+            if row["system"] and row["type"] == "LoadBalancer":
+                platform.setdefault(ip, f"{row['namespace']}/{row['name']}")
+            elif not row["system"] and not _ours(row):
+                foreign.setdefault(ip, f"{row['namespace']}/{row['name']}")
+    try:
+        vip = str(((kget(HARVESTER_VIP) or {}).get("data") or {}).get("ip") or "").strip()
+    except Exception:
+        vip = ""
+    if vip and vip not in node_ips:
+        platform.setdefault(vip, "Harvester's management address")
+    for ip in platform:
+        foreign.pop(ip, None)
+    return platform, foreign
+
+
+def address_problem(ip, state=None):
+    """Why an address cannot be given to a Service here, or "" if it can."""
+    state = state or inventory()
+    ip = str(ip or "").strip()
+    owner = state.get("platform_addresses", {}).get(ip)
+    if owner:
+        return (f"{ip} is the cluster's own address ({owner}): hosts join and the dashboard "
+                "answers on it, and a Service there would share it with them. Give it an "
+                "address of its own")
+    owner = state.get("foreign_addresses", {}).get(ip)
+    if owner:
+        return f"{ip} belongs to {owner}, which Homestead did not create; choose another address"
+    return ""
+
+
+def check_address(ip, state=None):
+    problem = address_problem(ip, state)
+    if problem:
+        raise ValueError(problem)
+    return ip
+
+
 def inventory():
     services = _items("/api/v1/services")
     slices = _items("/apis/discovery.k8s.io/v1/endpointslices")
@@ -264,11 +332,17 @@ def inventory():
                for vip in row["external_ips"] for port in row["ports"]):
             row["health"], row["reason"] = "conflict", "Another Service claims the same VIP, protocol and port"
 
-    reserved = set(node_ips)
+    platform, foreign = _address_owners(raw_rows, node_ips)
+    reserved = set(node_ips) | set(platform)
     for row in raw_rows:
         reserved.update(row["external_ips"])
         if row["cluster_ip"] and row["cluster_ip"] != "None":
             reserved.add(row["cluster_ip"])
+    # Apps already sitting on the cluster's own address - the setting that
+    # sends host joining to the wrong place - said out loud.
+    clashes = [{"namespace": row["namespace"], "service": row["name"], "ip": ip, "owner": platform[ip]}
+               for row in raw_rows if not row["system"]
+               for ip in row["external_ips"] if ip in platform]
     pools, candidates = _pool_inventory(pools_raw, reserved)
     # Addresses reserved here come first: they are the ones someone chose.
     own = registered()
@@ -295,7 +369,14 @@ def inventory():
 
     return {"services": sorted(raw_rows, key=lambda row: (row["system"], row["namespace"], row["name"])),
             "vips": vip_rows, "conflicts": conflicts, "pools": pools,
+            "platform_addresses": platform, "foreign_addresses": foreign,
+            "platform_clashes": clashes,
+            "shared_vip": {"ip": SHARED_VIP,
+                           "problem": address_problem(SHARED_VIP, {"platform_addresses": platform})
+                           if SHARED_VIP else ""},
             "registered_vips": [dict(row, free=row["ip"] not in reserved,
+                                     blocked=address_problem(row["ip"], {"platform_addresses": platform,
+                                                                         "foreign_addresses": foreign}),
                                      used_by=sorted({f"{l['namespace']}/{l['service']}" for v in vip_rows if v["ip"] == row["ip"]
                                                      for l in v["listeners"]})) for row in own],
             "vip_labels": {row["ip"]: row.get("label", "") for row in own},
@@ -388,6 +469,10 @@ def service_plan(cfg, require_workload=True):
         if not SHARED_VIP:
             raise ValueError("the shared Homestead VIP is not configured")
         vip = _ipv4(SHARED_VIP, "shared VIP")
+        if vip in state["platform_addresses"]:
+            raise ValueError(f"Homestead's shared address (LB_IP, {vip}) is the cluster's own address "
+                             f"({state['platform_addresses'][vip]}). Set LB_IP to an address of "
+                             "Homestead's own, or give this app an address of its own")
     elif mode == "automatic":
         if not state["available_vips"]:
             raise ValueError("there is no free address to give it: add some under Networking › Virtual IPs "
@@ -397,6 +482,7 @@ def service_plan(cfg, require_workload=True):
         vip = _ipv4(cfg.get("vip"), "specific VIP")
         if vip in state["node_ips"]:
             raise ValueError(f"{vip} is a cluster node address and cannot be used as a Service VIP")
+        check_address(vip, state)
         in_pool = vip in state["available_vips"] or any(vip == row["ip"] for row in state["vips"])
         if not in_pool:
             warnings.append("This address is outside the visible Harvester IP pools; verify DHCP and static reservations before creating it.")
@@ -664,6 +750,10 @@ def add_vips(cfg, ipam_records=None):
             skipped.append(f"{ip} is already on the list")
         elif ip in nodes:
             skipped.append(f"{ip} is a node's own address")
+        elif ip in state["platform_addresses"]:
+            skipped.append(f"{ip} is the cluster's own address ({state['platform_addresses'][ip]})")
+        elif ip in state["foreign_addresses"]:
+            skipped.append(f"{ip} belongs to {state['foreign_addresses'][ip]}")
         elif (records.get(ip) or {}).get("category") not in (None, "", "vip"):
             record = records[ip]
             skipped.append(f"{ip} is {record.get('name') or 'a device'} in IP addresses")

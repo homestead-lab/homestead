@@ -451,6 +451,14 @@ async function selfHealthPaint() {
         admin ? `<label class="switch"><input type="checkbox" ${samba.enabled ? "checked" : ""} onchange="sambaToggle(this)"> ${samba.enabled ? "On" : "Off"}</label>` : "")}
       ${row("Permissions", h.permissions?.state === "error" ? "bad" : h.permissions?.state === "current" || h.permissions?.state === "updated" ? "ok" : "neutral",
         h.permissions?.state || "unknown", esc(h.permissions?.detail || ""))}
+      ${h.addresses ? row("Addresses", h.addresses.error ? "neutral" : h.addresses.problem || (h.addresses.clashes || []).length ? "bad" : "ok",
+        h.addresses.error ? "unknown" : h.addresses.problem || (h.addresses.clashes || []).length ? "on the cluster's address" : "separate",
+        h.addresses.error ? esc(h.addresses.error)
+          : h.addresses.problem ? `<span class="badtext">${esc(h.addresses.problem)}</span>`
+          : (h.addresses.clashes || []).length ? `<span class="badtext">${esc(h.addresses.clashes.map(c => `${c.namespace}/${c.service}`).join(", "))}
+              ${h.addresses.clashes.length === 1 ? "is" : "are"} on ${esc(h.addresses.clashes[0].ip)}, the cluster's own address (${esc(h.addresses.clashes[0].owner)}).
+              Hosts join through it, so give ${h.addresses.clashes.length === 1 ? "it an address" : "them addresses"} of their own: Edit → Network.</span>`
+          : `Apps are kept off the cluster's own address${(h.addresses.platform || []).length ? ` (<span class="mono">${esc(h.addresses.platform.join(", "))}</span>)` : ""}.`) : ""}
       ${row("Backup storage", h.backups?.ready ? "ok" : h.backups?.deployed ? "warn" : "neutral",
         h.backups?.ready ? "ready" : h.backups?.deployed ? "starting" : "none", h.backups?.endpoint ? `<span class="mono">${esc(h.backups.endpoint)}</span>` : "Set up under Data protection.")}
       ${h.mqtt?.state && h.mqtt.state !== "off" ? row("MQTT", h.mqtt.state === "publishing" ? "ok" : "warn", h.mqtt.state,
