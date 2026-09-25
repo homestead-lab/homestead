@@ -685,7 +685,7 @@ def edit_workload(cfg, hold=False):
     held = RESTRUCTURE.hold(dep) if hold else None
     if workload_name != name:
         return rename_workload(ns, name, workload_name, dep)
-    out = ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
+    ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
     _bust("wl", "ov", "flow", "impact:")
     return {"ok": True, "name": name, **({"held_replicas": held} if hold else {})}
 

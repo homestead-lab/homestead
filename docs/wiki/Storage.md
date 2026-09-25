@@ -15,6 +15,18 @@ what Longhorn thinks of it.
 | **V1** / **V2** | Longhorn's data engine - V1 is the standard one; V2 (SPDK) is faster, with more to set up |
 | healthy / degraded / faulted | degraded usually means a copy is being rebuilt, and the volume still works meanwhile; the row says why |
 
+When nothing is using a volume right now, **Attached to** says why - which is
+what tells you whether its data is wanted:
+
+| Shows | Means |
+|---|---|
+| **nextcloud · stopped** | a container, VM or job is set up to use it and is stopped; its data waits for the next start |
+| **orphaned** | nothing refers to it at all - no container, VM or job. If its data is not wanted, it can be deleted |
+| **no claim** | its claim is gone and the volume was kept: an old copy from a storage class change, or a claim deleted with its data retained |
+
+**Show N unused** at the top lists just the orphaned and unclaimed ones - the
+place to look when freeing space.
+
 A volume opens to its usage over time, snapshots and backups, and what mounts
 it. From the row:
 

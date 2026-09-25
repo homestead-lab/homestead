@@ -166,11 +166,11 @@ def save_job(cfg):
     try:
         cur = kget(f"{API}/namespaces/{LHNS}/recurringjobs/{name}")
         body["metadata"]["resourceVersion"] = cur["metadata"]["resourceVersion"]
-        out = ksend("PUT", f"{API}/namespaces/{LHNS}/recurringjobs/{name}", body)
+        ksend("PUT", f"{API}/namespaces/{LHNS}/recurringjobs/{name}", body)
     except urllib.error.HTTPError as e:
         if e.code != 404:
             raise
-        out = ksend("POST", f"{API}/namespaces/{LHNS}/recurringjobs", body)
+        ksend("POST", f"{API}/namespaces/{LHNS}/recurringjobs", body)
     _bust("lhjobs", "lhvols")
     return {"ok": True, "name": name}
 
@@ -275,7 +275,7 @@ def create_snapshot(volume, name=None):
             "metadata": {"name": name, "namespace": LHNS,
                          "labels": {NAMES.key("managed"): "true"}},
             "spec": {"volume": volume, "createSnapshot": True}}
-    out = ksend("POST", f"{API}/namespaces/{LHNS}/snapshots", body)
+    ksend("POST", f"{API}/namespaces/{LHNS}/snapshots", body)
     _bust("lhsnaps")
     return {"ok": True, "snapshot": name, "volume": volume}
 

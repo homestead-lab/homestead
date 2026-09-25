@@ -1339,7 +1339,7 @@ window.clusterReady = async name => {
         ? step(false, `Backup storage on ${esc(name)} has no LAN address, so this cluster cannot read it${target.endpoint ? ` - it is at <span class="mono">${esc(target.endpoint)}</span>, inside that cluster` : ""}`,
             `<div><button class="btn sm" data-need="admin" onclick="clusterStorage('${esc(name)}',true)">Give it an address</button></div>`)
         : store.deployed && !store.ready
-          ? step(false, `Backup storage on ${esc(name)} is starting`, '<div class="dim xs">Its first start downloads MinIO; this checks again every 15 seconds.</div>')
+          ? step(false, `Backup storage on ${esc(name)} is starting`, '<div class="dim xs">Its first start downloads the S3 server; this checks again every 15 seconds.</div>')
         : store.deployed
           ? step(false, `Backup storage is running on ${esc(name)}, but its Longhorn is not pointed at it yet`,
               `<div><button class="btn sm pri" data-need="admin" onclick="clusterStorage('${esc(name)}')">Finish setting it up</button></div>`)

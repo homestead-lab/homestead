@@ -154,6 +154,28 @@ function drawArch(keep = STATE.data.archKeep) {
 const volumeReason = v => (v.health_reason && v.state === "attached"
   && v.robustness !== "healthy") ? v.health_reason : "";
 
+/* What a volume is for, when nothing is using it right now. Detached alone
+   said nothing about whether the data is wanted: a stopped container's
+   volume keeps its data for the next start; one nothing refers to is the
+   kind to think about deleting. */
+function volumeUse(x) {
+  if (attachedWorkloads(x).length || x.state === "attached") return { kind: "in-use" };
+  if (x.unclaimed) return { kind: "unclaimed" };
+  if (x.used_by == null) return { kind: "detached" };
+  return x.used_by.length ? { kind: "stopped", by: x.used_by } : { kind: "orphaned" };
+}
+
+function volumeUseCell(x) {
+  const use = volumeUse(x);
+  if (use.kind === "in-use") return attachedWorkloads(x).length
+    ? `<div class="attachlist">${attachedWorkloads(x).map(w => `<span class="tag info">${esc(w)}</span>`).join("")}</div>`
+    : '<span class="dim">attached</span>';
+  if (use.kind === "stopped") return `<div class="attachlist">${use.by.map(w => `<span class="tag" data-tip="${esc(w)} is defined to use this volume and is stopped; the data waits for it to start">${esc(w.split("/").pop())} · stopped</span>`).join("")}</div>`;
+  if (use.kind === "orphaned") return `<span class="tag warn" data-tip="No container, VM or job refers to this volume. If its data is not wanted, it can be deleted; otherwise attach it to something from its editor">orphaned</span>`;
+  if (use.kind === "unclaimed") return `<span class="tag warn" data-tip="Its claim is gone and the volume was kept - an old copy from a storage class change, or a claim deleted with its data retained. Nothing can mount it as it is">no claim</span>`;
+  return '<span class="dim">detached</span>';
+}
+
 /* A replica rebuild or a backup restore in flight, as Longhorn's engine reports
    it: the slowest replica's progress, since that is what the volume waits on. */
 const volumeBusy = v => v.restore || v.rebuild || null;
@@ -222,11 +244,16 @@ async function viewStorage() {
   STATE.data.v2 = v2;
   STATE.data.vols = v;
   const q = STATE.q.toLowerCase();
-  const rows = v.filter(x => !q || x.name.includes(q) || (x.node || "").includes(q) ||
-    (x.pvc_name || "").includes(q) || (x.attached_to || "").toLowerCase().includes(q));
+  const spare = v.filter(x => ["orphaned", "unclaimed"].includes(volumeUse(x).kind));
+  const onlySpare = STATE.volSpare && spare.length;
+  const rows = v.filter(x => (!q || x.name.includes(q) || (x.node || "").includes(q) ||
+    (x.pvc_name || "").includes(q) || (x.attached_to || "").toLowerCase().includes(q))
+    && (!onlySpare || spare.includes(x)));
   paint(`<div class="phead"><div><h2>Volumes</h2>
       <p>${v.length} Longhorn volume${v.length === 1 ? "" : "s"} · replicated block storage</p></div>
-      <button class="btn pri" data-need="operator" onclick="volumeCreate()">＋ Create volume</button></div>
+      <div class="row">${spare.length ? `<button class="btn ${onlySpare ? "pri" : ""}" onclick="STATE.volSpare=!STATE.volSpare;viewStorage()"
+          data-tip="Volumes nothing is defined to use - no container, VM or job - and ones kept after their claim went: the ones to look at when freeing space">${onlySpare ? "Showing" : "Show"} ${spare.length} unused</button>` : ""}
+      <button class="btn pri" data-need="operator" onclick="volumeCreate()">＋ Create volume</button></div></div>
   ${st ? `<div class="grid g4 statgrid" style="margin-bottom:18px">
     <div class="card glow g-info"><div class="ctitle">Free space</div>
       <div class="bignum" style="margin-top:8px">${st.avail_gb}<span class="unit">GB</span></div>
@@ -249,9 +276,7 @@ async function viewStorage() {
    </tr></thead><tbody>${rows.map(x => `<tr data-vol="${esc(x.name)}">
      <td class="volname"><b>${esc(x.pvc_name || x.name.slice(0, 18))}</b>
        <span class="dim xs mono">${esc(x.namespace || "")}${x.node ? ` · ${esc(x.node.replace("harvester-", ""))}` : ""}</span></td>
-     <td data-label="Attached to">${attachedWorkloads(x).length
-       ? `<div class="attachlist">${attachedWorkloads(x).map(w => `<span class="tag info">${esc(w)}</span>`).join("")}</div>`
-       : '<span class="dim">detached</span>'}${x.pod_status ? `<span class="dim xs"> · ${esc(x.pod_status)}</span>` : ""}</td>
+     <td data-label="Attached to">${volumeUseCell(x)}${x.pod_status ? `<span class="dim xs"> · ${esc(x.pod_status)}</span>` : ""}</td>
      <td data-label="Health" class="volhealth${volumeReason(x) || volumeBusy(x) ? " hasreason" : ""}">${volumeHealthCell(x)}</td>
      <td data-label="Mode"><span class="tag">${esc((x.access_modes || ["?"]).map(m => m === "ReadWriteMany" ? "RWX" : m === "ReadWriteOnce" ? "RWO" : m).join(", "))}</span>
        <span class="tag ${+x.replicas === 1 ? "warn" : ""}" data-tip="${+x.replicas === 1 ? "One copy: if its node or disk fails, this volume is gone until they come back" : `${esc(x.replicas)} copies, each on a different node`}">×${esc(x.replicas)}</span><span class="tag ${x.engine === "v2" ? "info" : ""}" data-tip="${x.engine === "v2" ? "Longhorn's V2 data engine (SPDK)" : "Longhorn's V1 data engine - the default"}">${x.engine === "v2" ? "V2" : "V1"}</span></td>

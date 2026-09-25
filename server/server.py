@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.128")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.129")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -381,7 +381,7 @@ def node_temps():
             for disk in payload.get("disks", []):
                 disk["smart"] = rows.get(disk.get("name"))
             payload["smart_helper"] = {"available": True, "disks": len(rows)}
-        except Exception as error:
+        except Exception:
             payload["smart_helper"] = {"available": False,
                 "reason": "SMART helper unavailable; install or update deploy/nodeprobe.yaml"}
         out[node] = payload
@@ -690,11 +690,75 @@ def _engine_progress(engines):
     return {name: entry for name, entry in out.items() if entry}
 
 
+def claim_references():
+    """Every claim something is defined to use, running or not: (namespace,
+    claim) -> ["Deployment/plex", ...].
+
+    Longhorn knows only the pods using a volume now, so a stopped container's
+    volume looked the same as one nothing uses at all - and only the second
+    is safe to think about deleting.
+    """
+    refs = {}
+
+    def note(ns, claims, what):
+        for claim in claims:
+            if claim:
+                refs.setdefault((ns, claim), []).append(what)
+
+    def claims_of(podspec):
+        return [(v.get("persistentVolumeClaim") or {}).get("claimName") for v in (podspec or {}).get("volumes") or []]
+
+    for kind, path, spec_of in (
+            ("Deployment", "/apis/apps/v1/deployments", lambda o: o["spec"]["template"]["spec"]),
+            ("StatefulSet", "/apis/apps/v1/statefulsets", lambda o: o["spec"]["template"]["spec"]),
+            ("DaemonSet", "/apis/apps/v1/daemonsets", lambda o: o["spec"]["template"]["spec"]),
+            ("CronJob", "/apis/batch/v1/cronjobs", lambda o: o["spec"]["jobTemplate"]["spec"]["template"]["spec"])):
+        try:
+            items = kget(path).get("items", [])
+        except Exception:
+            continue
+        for obj in items:
+            try:
+                note(obj["metadata"]["namespace"], claims_of(spec_of(obj)), f"{kind}/{obj['metadata']['name']}")
+            except (KeyError, TypeError):
+                continue
+        if kind == "StatefulSet":
+            # A StatefulSet's own claims are made from its template, named
+            # <template>-<set>-<n>; they belong to it too.
+            for obj in items:
+                name, ns = obj["metadata"]["name"], obj["metadata"]["namespace"]
+                for template in (obj.get("spec") or {}).get("volumeClaimTemplates") or []:
+                    prefix = f"{(template.get('metadata') or {}).get('name', '')}-{name}-"
+                    refs.setdefault(("__prefix__", ns, prefix), []).append(f"StatefulSet/{name}")
+    try:
+        vms = kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
+    except Exception:
+        vms = []
+    for vm in vms:
+        volumes = ((((vm.get("spec") or {}).get("template") or {}).get("spec") or {}).get("volumes") or [])
+        claims = [(v.get("persistentVolumeClaim") or {}).get("claimName") or (v.get("dataVolume") or {}).get("name")
+                  for v in volumes]
+        note(vm["metadata"]["namespace"], claims, f"VM/{vm['metadata']['name']}")
+    return refs
+
+
+def _references_for(refs, ns, claim):
+    found = list(refs.get((ns, claim)) or [])
+    for key, owners in refs.items():
+        if key[0] == "__prefix__" and key[1] == ns and claim.startswith(key[2]):
+            found.extend(owners)
+    return sorted(set(found))
+
+
 def get_volumes():
     try:
         vols = kget("/apis/longhorn.io/v1beta2/volumes").get("items", [])
     except Exception:
         return []
+    try:
+        refs = claim_references()
+    except Exception:
+        refs = None
     try:
         progress = _engine_progress(
             kget("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/engines").get("items", []))
@@ -714,6 +778,12 @@ def get_volumes():
         pvc_obj = pvcs.get((ks.get("namespace", ""), ks.get("pvcName", "")), {})
         pvc_spec = pvc_obj.get("spec", {}) or {}
         health_reason, conditions, scheduling_error = _volume_health_reason(v)
+        # Kept after its claim went - an old copy from a storage class change,
+        # or a claim deleted with its data retained. Longhorn still names the
+        # claim it had, which may now be another volume's.
+        unclaimed = str(ks.get("pvStatus") or "") == "Released" or bool(
+            ks.get("pvcName") and not pvc_obj and pvcs) or bool(
+            pvc_obj and (pvc_obj.get("spec") or {}).get("volumeName") not in ("", None, v["metadata"]["name"]))
         out.append({
             "name": v["metadata"]["name"],
             "pvc_name": ks.get("pvcName", ""),
@@ -739,6 +809,11 @@ def get_volumes():
             "health_reason": health_reason,
             "conditions": [row for row in conditions if row["status"] == "False"],
             "scheduling_error": scheduling_error,
+            # What is defined to use it, running or not; None when that could
+            # not be read, so nothing is called orphaned on a guess.
+            "used_by": (_references_for(refs, ks.get("namespace", ""), ks.get("pvcName", ""))
+                        if refs is not None and ks.get("pvcName") and pvc_obj and not unclaimed else None),
+            "unclaimed": unclaimed,
             "rebuild": progress.get(v["metadata"]["name"], {}).get("rebuild"),
             # A restored volume keeps restoreRequired until its data is all
             # in, even between engine updates that carry no restore rows. A
@@ -5180,7 +5255,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.128 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.129 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

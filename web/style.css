@@ -506,6 +506,9 @@ select option{background:#151517}
 /* full settings workspace */
 .settings-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:15px}
 .settings-wide{grid-column:1/-1}.settings-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px}
+/* A card head's buttons stay one row: squeezed beside a long title they stacked
+   one above another; with the head wrapping, the row moves under the title. */
+.settings-card-head>.row{flex-wrap:nowrap;flex-shrink:0}
 .threshold-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:14px}
 .threshold-card{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:14px;border:1px solid var(--line);border-radius:13px;background:rgba(255,255,255,.025)}
 .threshold-card>div:first-child{min-width:0}.threshold-values{display:flex;gap:10px;flex:0 0 auto}.threshold-values label{display:grid;grid-template-columns:auto auto auto;align-items:center;gap:5px;margin:0;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.05em}

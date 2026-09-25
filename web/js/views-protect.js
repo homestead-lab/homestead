@@ -54,7 +54,7 @@ function objectStoreCard(store, target) {
   const pointed = (target.url || "") === store.backup_url;
   return `<div class="card flat" style="margin-bottom:18px">
     <div class="between node-section-head"><div><div class="ctitle">Backup storage</div>
-      <div class="csub">MinIO on a Longhorn volume, holding every backup this cluster writes</div></div>
+      <div class="csub">An S3 server (RustFS) on a Longhorn volume, holding every backup this cluster writes</div></div>
       <div class="row"><span class="pill ${store.ready ? "ok" : "med"}">${store.ready ? "serving" : "starting"}</span>
         <button class="btn sm danger" data-need="admin" onclick="objectStoreRemove()">Remove</button></div></div>
     <div class="about-grid" style="margin-top:12px">
@@ -76,7 +76,7 @@ function objectStoreCard(store, target) {
 }
 
 window.objectStoreSetup = () => modal("Set up backup storage", `
-  <p>Runs MinIO on a Longhorn volume and points Longhorn's backups at it. Volume backups,
+  <p>Runs an S3 server (RustFS) on a Longhorn volume and points Longhorn's backups at it. Volume backups,
     and moving a workload to another cluster, both read and write here.</p>
   <div class="f2"><div class="f"><label>Size (GB) ${tip("Holds every volume backup this cluster keeps. Longhorn backups are incremental, so this is usually far smaller than the volumes themselves.")}</label>
     <input id="os_size" type="number" min="5" max="16384" value="100"></div>

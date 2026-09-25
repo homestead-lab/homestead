@@ -609,7 +609,6 @@ def import_mappings(cfg):
                       "mount_path": cfg.get("mount_path", "/config"), "folder": ""}]
     if not requested:
         return []
-    single = len(requested) == 1
     for item in requested:
         remote = str(item.get("remote_path") or "").strip().rstrip("/")
         mount = str(item.get("mount_path") or "").strip().rstrip("/") or "/config"
