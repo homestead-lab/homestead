@@ -85,7 +85,7 @@ class HostInterfaceNetworkTests(VmNetworkTests):
 
     def test_without_multus_it_says_how_to_install_it(self):
         self.multus = False
-        with self.assertRaisesRegex(ValueError, "rke2-multus"):
+        with self.assertRaisesRegex(ValueError, "Settings > Cluster > Add-ons"):
             self.make(interface="eth0")
         self.assertEqual([], self.sent)
 

@@ -4,7 +4,7 @@
 |---|---|
 | **Health** | when bars and node cards turn yellow or red; the drive health policy |
 | **Updates** | the image update policy: notify only, approve each, or a maintenance window |
-| **Cluster** | Add-ons - Longhorn and KubeVirt installed where the cluster lacks them; Longhorn over-provisioning, minimum free space and the V2 engine; every node's disks |
+| **Cluster** | Add-ons - Longhorn, KubeVirt and Multus installed where the cluster lacks them; Longhorn over-provisioning, minimum free space and the V2 engine; every node's disks |
 | **Hardware** | hardware features (a Coral, an iGPU, a Zigbee stick) and **Rescan hosts** |
 | **Access** | your password, **Manage users**, sign out everywhere |
 | **Apps** | the App Store catalogue, Portal links, UniFi, namespaces |
@@ -26,9 +26,14 @@ ordinary HelmChart afterwards, on the Helm page:
 - **KubeVirt** - virtual machines, with CDI to fill their disks from images:
   the newest release of each. The card says which nodes have hardware
   virtualisation; with none, KubeVirt emulates, and VMs run slowly.
+- **Multus** - second networks for pods, which
+  [LAN networks](Networking#lan-networks) need, so a container or VM can
+  have an address of its own on your LAN. It comes from the `rke2-multus`
+  chart RKE2 uses, set up with k3s's own CNI folders on k3s. Apps already
+  running are left as they are.
 
-A page that needs one offers the same install. Harvester has both built in,
-so the card does not show there.
+A page or form that needs one offers the same install. Harvester has them
+all built in, so the card does not show there.
 
 ## Homestead's own health
 

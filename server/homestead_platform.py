@@ -75,6 +75,8 @@ def detect(force=False):
         # CDI fills VM disks from images; without it a VM starts from a blank one.
         "cdi": "cdi.kubevirt.io" in groups,
         "helm_controller": "helm.cattle.io" in groups,
+        # Second networks for pods, which LAN networks need.
+        "multus": "k8s.cni.cncf.io" in groups,
         "metrics": "metrics.k8s.io" in groups,
         "load_balancer": load_balancer,
         "control_plane": sorted(control),

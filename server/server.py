@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.149")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.150")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -4515,7 +4515,7 @@ ADMIN_ROUTES = {
     "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete", "/api/lh/snapshot/revert",
     "/api/lh/restore", "/api/lh/backup/delete", "/api/lh/group/delete",
     # Installing Longhorn or KubeVirt changes the cluster itself.
-    "/api/addons/longhorn", "/api/addons/kubevirt",
+    "/api/addons/longhorn", "/api/addons/kubevirt", "/api/addons/multus",
     # Upgrading the platform: the cluster, Longhorn, KubeVirt, CDI.
     "/api/cluster/components/upgrade", "/api/cluster/upgrades/start",
     # Homestead's own permissions, and the namespaces apps live in.
@@ -5235,12 +5235,13 @@ class H(BaseHTTPRequestHandler):
                                       "Harvester checks the cluster, then prepares each node")
                 return self._send(200, {"ok": True, "upgrade": name, "operation": operation,
                                         "detail": f"Harvester is upgrading to {version}"})
-            if p in ("/api/addons/longhorn", "/api/addons/kubevirt"):
+            if p in ("/api/addons/longhorn", "/api/addons/kubevirt", "/api/addons/multus"):
                 what = p.rsplit("/", 1)[1]
-                result = ADDONS.install_longhorn(b) if what == "longhorn" else ADDONS.install_kubevirt(b)
+                result = {"longhorn": ADDONS.install_longhorn, "kubevirt": ADDONS.install_kubevirt,
+                          "multus": ADDONS.install_multus}[what](b)
                 for key in ("helm", "platform"):
                     _cache.pop(key, None)
-                result["operation"] = OPS.start("helm", f"Install {'Longhorn' if what == 'longhorn' else 'KubeVirt'}",
+                result["operation"] = OPS.start("helm", f"Install {({'longhorn': 'Longhorn', 'kubevirt': 'KubeVirt'}).get(what, 'Multus')}",
                                                 {"kind": "HelmChart", "name": result["name"], "namespace": ADDONS.CONTROLLER_NS},
                                                 "/settings", {"namespace": ADDONS.CONTROLLER_NS, "name": result["job"],
                                                               "action": "install"},
@@ -5984,7 +5985,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.149 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.150 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

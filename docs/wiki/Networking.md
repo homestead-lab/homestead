@@ -57,7 +57,8 @@ LAN like any other machine. **＋ LAN network** makes one:
   (`eth0`) carries containers only, through macvlan, each with a MAC address of
   its own. A VM needs a bridge. On a VLAN, a NIC needs the host's VLAN
   interface (`eth0.20`) first. These networks need Multus, which k3s and RKE2
-  leave out. The form says how to add it when it is missing.
+  leave out: install it from **Settings → Cluster → Add-ons**, or from the
+  form, which offers it when it is missing.
 
 ## IP addresses
 

@@ -52,6 +52,8 @@ window.platformName = platformName;
 const ADDONS = {
   longhorn: { name: "Longhorn", what: "Replicated volumes, snapshots and backups - the Volumes and Data protection pages",
     needs: "Each node needs open-iscsi and an NFS client (nfs-common) installed and iscsid running; the k3s script does that. Volumes keep one copy per node, up to three." },
+  multus: { name: "Multus", what: "Second networks for pods - what LAN networks need, so a container or VM can have an address of its own on your LAN",
+    needs: "Installed on every node from the chart RKE2 uses for it; apps already running are left as they are." },
   kubevirt: { name: "KubeVirt", what: "Virtual machines, with CDI to fill their disks from images",
     needs: "The newest KubeVirt and CDI releases are installed. VMs run at full speed where a node has hardware virtualisation (/dev/kvm); without it KubeVirt emulates, many times slower." },
 };
@@ -80,8 +82,8 @@ window.addonsPaint = async () => {
       <div class="row">${button}</div></div>`;
   };
   card.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">Add-ons</div>
-      <div class="csub">What this ${esc(platformName(STATE.platform || { distribution: s.distribution }))} cluster can add: Harvester has both built in</div></div></div>
-    ${row("longhorn", s.longhorn)}${row("kubevirt", s.kubevirt)}`;
+      <div class="csub">What this ${esc(platformName(STATE.platform || { distribution: s.distribution }))} cluster can add: Harvester has them all built in</div></div></div>
+    ${row("longhorn", s.longhorn)}${row("kubevirt", s.kubevirt)}${s.multus ? row("multus", s.multus) : ""}`;
   if (window.applyRole) applyRole();
 };
 
@@ -101,7 +103,11 @@ window.addonInstall = async key => {
     // The pages that need it appear once it is there.
     const watch = setInterval(async () => {
       await loadPlatform(true);
-      if (STATE.platform?.[key]) { clearInterval(watch); toast(`${a.name} is ready - its pages are in the sidebar`, "ok"); addonsPaint(); }
+      if (STATE.platform?.[key]) {
+        clearInterval(watch);
+        toast(key === "multus" ? "Multus is ready - LAN networks can be made now" : `${a.name} is ready - its pages are in the sidebar`, "ok");
+        addonsPaint();
+      }
     }, 20000);
     setTimeout(() => clearInterval(watch), 20 * 60000);
   } catch (e) { toast(e.message, "bad"); }

@@ -168,5 +168,37 @@ class ClusterCreatorTests(unittest.TestCase):
             K3S.plan(dict(self.CFG, setup="k3s", kubevirt=True))
 
 
+class MultusTests(unittest.TestCase):
+    """A LAN network needs Multus, which k3s leaves out: an add-on now."""
+
+    def test_k3s_gets_the_chart_with_its_own_cni_folders(self):
+        fake = Fake()
+        result = ADDONS.install_multus()
+        method, path, body = fake.sent[0]
+        self.assertEqual(("multus", "rke2-multus", "https://rke2-charts.rancher.io"),
+                         (body["metadata"]["name"], body["spec"]["chart"], body["spec"]["repo"]))
+        values = body["spec"]["valuesContent"]
+        self.assertIn("confDir: /var/lib/rancher/k3s/agent/etc/cni/net.d", values)
+        self.assertIn("binDir: /var/lib/rancher/k3s/data/cni/", values)
+        self.assertEqual("helm-install-multus", result["job"])
+
+    def test_rke2_keeps_the_charts_own_folders(self):
+        fake = Fake({"distribution": "rke2"})
+        ADDONS.install_multus()
+        self.assertNotIn("k3s", fake.sent[0][2]["spec"]["valuesContent"])
+
+    def test_it_is_refused_where_it_is_there_or_cannot_go(self):
+        with self.assertRaisesRegex(ValueError, "includes Multus"):
+            Fake({"harvester": True}) and ADDONS.install_multus()
+        with self.assertRaisesRegex(ValueError, "on k3s and RKE2"):
+            Fake({"distribution": "kubernetes"}) and ADDONS.install_multus()
+        fake = Fake()
+        fake.get = lambda path: {} if path == ADDONS.NAD_API else Fake.get(fake, path)
+        ADDONS.bind(fake.get, fake.send, lambda force=False: dict(fake.platform), lambda: {}, fake.fetch)
+        with self.assertRaisesRegex(ValueError, "installed already"):
+            ADDONS.install_multus()
+        self.assertEqual({"installed": True, "installing": False}, ADDONS.status()["multus"])
+
+
 if __name__ == "__main__":
     unittest.main()

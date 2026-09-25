@@ -33,7 +33,9 @@ KUBEVIRT = "https://github.com/kubevirt/kubevirt/releases"
 CDI = "https://github.com/kubevirt/containerized-data-importer/releases"
 CDI_API = "https://api.github.com/repos/kubevirt/containerized-data-importer/releases/latest"
 LONGHORN_REPO = "https://charts.longhorn.io"
-CHARTS = {"longhorn": "longhorn", "kubevirt": "homestead-kubevirt", "cdi": "homestead-cdi"}
+RKE2_CHARTS = "https://rke2-charts.rancher.io"
+CHARTS = {"longhorn": "longhorn", "kubevirt": "homestead-kubevirt", "cdi": "homestead-cdi", "multus": "multus"}
+NAD_API = "/apis/k8s.cni.cncf.io/v1"
 
 
 def _fetch(url):
@@ -66,10 +68,21 @@ def _kvm():
     return {node: data.get("kvm") for node, data in found.items() if "kvm" in data}
 
 
+def _multus():
+    """Multus is there when its network attachments are: the definition
+    appears with it."""
+    try:
+        kget(NAD_API)
+        return True
+    except Exception:
+        return False
+
+
 def status():
     p = platform(True)
     charts = _helmcharts()
     kvm = _kvm()
+    multus = bool(p.get("harvester")) or _multus()
     return {
         "distribution": p.get("distribution", ""),
         "harvester": bool(p.get("harvester")),
@@ -78,6 +91,7 @@ def status():
                      and not p.get("longhorn")},
         "kubevirt": {"installed": bool(p.get("kubevirt")), "installing": CHARTS["kubevirt"] in charts
                      and not p.get("kubevirt"), "cdi": bool(p.get("cdi"))},
+        "multus": {"installed": multus, "installing": CHARTS["multus"] in charts and not multus},
         # Each node's /dev/kvm, where its probe reports it.
         "kvm": kvm,
         "kvm_known": bool(kvm),
@@ -124,6 +138,36 @@ def install_longhorn(cfg=None):
     return {"ok": True, "name": CHARTS["longhorn"], "job": f"helm-install-{CHARTS['longhorn']}", "copies": copies,
             "detail": f"Longhorn is being installed, keeping {copies} cop{'y' if copies == 1 else 'ies'} of each volume. "
                       "Each node needs open-iscsi and an NFS client for it to mount volumes."}
+
+
+# ------------------------------------------------------------------ Multus
+# Where k3s keeps its CNI configuration and plugins, as its documentation
+# gives them for Multus. RKE2 keeps them where the chart looks by default.
+K3S_MULTUS_VALUES = "\n".join([
+    "config:",
+    "  fullnameOverride: multus",
+    "  cni_conf:",
+    "    confDir: /var/lib/rancher/k3s/agent/etc/cni/net.d",
+    "    binDir: /var/lib/rancher/k3s/data/cni/",
+    "    kubeconfig: /var/lib/rancher/k3s/agent/etc/cni/net.d/multus.d/multus.kubeconfig",
+    ""])
+RKE2_MULTUS_VALUES = "\n".join(["config:", "  fullnameOverride: multus", ""])
+
+
+def install_multus(cfg=None):
+    """Multus, which lets a pod join a second network - what a LAN network
+    needs - from the chart RKE2 uses for it, set up for this distribution."""
+    p = _can_install("Multus")
+    if _multus():
+        raise ValueError("Multus is installed already")
+    distribution = p.get("distribution", "")
+    if distribution not in ("k3s", "rke2"):
+        raise ValueError("Homestead installs Multus on k3s and RKE2; elsewhere install it with its own instructions")
+    _post_chart(CHARTS["multus"], {"repo": RKE2_CHARTS, "chart": "rke2-multus", "targetNamespace": CONTROLLER_NS,
+                                   "valuesContent": K3S_MULTUS_VALUES if distribution == "k3s" else RKE2_MULTUS_VALUES})
+    return {"ok": True, "name": CHARTS["multus"], "job": f"helm-install-{CHARTS['multus']}",
+            "detail": "Multus is being installed on every node; pods already running are left as they are. "
+                      "LAN networks can be made once it is up"}
 
 
 # ------------------------------------------------------------------ KubeVirt

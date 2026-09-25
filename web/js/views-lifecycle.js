@@ -500,7 +500,9 @@ window.vmNetworkAdd = async (reopen = null) => {
     open("New LAN network", `<div class="note"><b>Multus is needed first.</b> A container or VM joins the LAN as a second network,
         which Kubernetes does through Multus - k3s and RKE2 leave it out unless asked.</div>
       <p class="small">${esc(o.multus_help || "Install Multus, then come back here.")}</p>
-      <div class="row" style="margin-top:14px"><button class="btn" onclick="modalBack()">Close</button></div>`);
+      <div class="row" style="margin-top:14px">${STATE.platform?.helm_controller && ["k3s", "rke2"].includes(STATE.platform?.distribution)
+        ? `<button class="btn pri" data-need="admin" onclick="closeModal(); addonInstall('multus')">Install Multus</button>` : ""}
+        <button class="btn" onclick="modalBack()">Close</button></div>`);
     window.__vmNetworkReopen = back;
     return;
   }

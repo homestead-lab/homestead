@@ -848,12 +848,8 @@ def set_vip_label(ip, label):
 # (KubeVirt bridges the VM's own MAC behind it), so VMs need a bridge.
 CLUSTER_NETWORKS = "/apis/network.harvesterhci.io/v1beta1/clusternetworks"
 NAD_API = "/apis/k8s.cni.cncf.io/v1"
-MULTUS_HELP = ("Multus is not installed, so pods cannot join a second network. On k3s: "
-               "helm repo add rke2-charts https://rke2-charts.rancher.io, then helm install multus rke2-charts/rke2-multus "
-               "-n kube-system --set config.cni_conf.confDir=/var/lib/rancher/k3s/agent/etc/cni/net.d "
-               "--set config.cni_conf.binDir=/var/lib/rancher/k3s/data/cni/ "
-               "--set config.cni_conf.kubeconfig=/var/lib/rancher/k3s/agent/etc/cni/net.d/multus.d/multus.kubeconfig. "
-               "On RKE2: set cni: [multus, canal] in /etc/rancher/rke2/config.yaml and restart rke2-server")
+MULTUS_HELP = ("Multus is not installed, so pods cannot join a second network. On k3s and RKE2, "
+               "install it from Settings > Cluster > Add-ons. Elsewhere, install Multus with its own instructions")
 
 
 def _multus():
