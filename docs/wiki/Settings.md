@@ -4,7 +4,7 @@
 |---|---|
 | **Health** | when bars and node cards turn yellow or red; the drive health policy |
 | **Updates** | the image update policy: notify only, approve each, or a maintenance window |
-| **Cluster** | Add-ons - Longhorn, KubeVirt and Multus installed where the cluster lacks them; Longhorn over-provisioning, minimum free space and the V2 engine; every node's disks |
+| **Cluster** | Add-ons - Longhorn, KubeVirt, Multus and kube-vip installed where the cluster lacks them; Longhorn over-provisioning, minimum free space and the V2 engine; every node's disks |
 | **Hardware** | hardware features (a Coral, an iGPU, a Zigbee stick) and **Rescan hosts** |
 | **Access** | your password, **Manage users**, sign out everywhere |
 | **Apps** | the App Store catalogue, Portal links, UniFi, namespaces |
@@ -31,6 +31,11 @@ ordinary HelmChart afterwards, on the Helm page:
   have an address of its own on your LAN. It comes from the `rke2-multus`
   chart RKE2 uses, set up with k3s's own CNI folders on k3s. Apps already
   running are left as they are.
+
+- **kube-vip** - VIPs for apps, as Harvester has: a container can have a LAN
+  address of its own from **Networking → Your VIPs**. On k3s it runs beside
+  ServiceLB and takes only the Services given a VIP. It announces addresses
+  on the interface each node's default route uses.
 
 A page or form that needs one offers the same install. Harvester has them
 all built in, so the card does not show there.

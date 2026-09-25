@@ -42,6 +42,26 @@ def _items(path):
         return []
 
 
+# Where kube-vip runs outside Harvester: its own manifests' name, and the
+# name its Helm chart - Homestead's add-on - gives it.
+KUBE_VIP_DAEMONSETS = ("/apis/apps/v1/namespaces/kube-system/daemonsets/kube-vip-ds",
+                       "/apis/apps/v1/namespaces/kube-system/daemonsets/kube-vip")
+VIP_CLASS = "kube-vip.io/kube-vip-class"
+
+
+def _vip_class(daemonset):
+    """The load balancer class a Service needs for kube-vip to take it: set
+    when kube-vip takes only Services of its class, as it does beside k3s's
+    ServiceLB. Empty when it takes every Service, as on Harvester."""
+    if not daemonset:
+        return ""
+    containers = (((daemonset.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []
+    env = {e.get("name"): str(e.get("value") or "") for c in containers for e in c.get("env") or []}
+    if env.get("lb_class_only", "").lower() != "true":
+        return ""
+    return env.get("lb_class_name") or VIP_CLASS
+
+
 def detect(force=False):
     if not force and _cached["value"] is not None and time.time() - _cached["at"] < TTL:
         return _cached["value"]
@@ -59,7 +79,14 @@ def detect(force=False):
                        if a.get("type") == "InternalIP"), "")
             if ip:
                 control.append(ip)
-    kube_vip = harvester or _exists("/apis/apps/v1/namespaces/kube-system/daemonsets/kube-vip-ds")
+    kube_vip_ds = None
+    for path in KUBE_VIP_DAEMONSETS:
+        try:
+            kube_vip_ds = kget(path)
+            break
+        except Exception:
+            continue
+    kube_vip = harvester or kube_vip_ds is not None
     metallb = "metallb.io" in groups
     # k3s's own load balancer, unless something else is doing the job. Its
     # svclb- DaemonSets only appear with the first LoadBalancer Service, so
@@ -79,6 +106,10 @@ def detect(force=False):
         "multus": "k8s.cni.cncf.io" in groups,
         "metrics": "metrics.k8s.io" in groups,
         "load_balancer": load_balancer,
+        # k3s's own node-address load balancer, which stays beside kube-vip
+        # when kube-vip only takes the Services that ask for it by class.
+        "servicelb": servicelb,
+        "vip_class": "" if harvester else _vip_class(kube_vip_ds),
         "control_plane": sorted(control),
         "arch": sorted({((n.get("status") or {}).get("nodeInfo") or {}).get("architecture", "") for n in nodes} - {""}),
     }
@@ -126,6 +157,19 @@ def vip_annotations(vip):
     if metallb:
         return {"metallb.universe.tf/loadBalancerIPs": vip, "metallb.universe.tf/allow-shared-ip": "homestead"}
     return {"kube-vip.io/loadbalancerIPs": vip}
+
+
+def vip_spec(vip):
+    """What a Service's spec needs for its VIP: kube-vip's class, where
+    kube-vip takes only that class. k3s's ServiceLB leaves a Service with a
+    class alone, so the two never claim the same one."""
+    if not vip:
+        return {}
+    try:
+        cls = detect().get("vip_class") or ""
+    except Exception:
+        cls = ""
+    return {"loadBalancerClass": cls} if cls else {}
 
 
 def metallb_pools():

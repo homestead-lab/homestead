@@ -25,6 +25,13 @@ const NODE_ADDRESS_TIP = "k3s's ServiceLB puts every Service on every node's own
 function nodeAddressOption() {
   return `<option value="shared" selected>Every node's own address · k3s ServiceLB</option>`;
 }
+/* With kube-vip beside it, ServiceLB still puts a Service on the nodes' own
+   addresses: offered as well as a VIP of its own. */
+const nodeAddressBeside = () => !!STATE.platform?.servicelb && STATE.platform?.load_balancer === "kube-vip";
+function nodeAddressChoice(selected = false) {
+  return nodeAddressBeside() ? `<option value="nodes" ${selected ? "selected" : ""}>Every node's own address · ServiceLB</option>` : "";
+}
+window.nodeAddressBeside = nodeAddressBeside;
 window.nodeAddressesOnly = nodeAddressesOnly;
 
 /* true (and the page says why) when this cluster lacks what a page needs. */
@@ -52,6 +59,8 @@ window.platformName = platformName;
 const ADDONS = {
   longhorn: { name: "Longhorn", what: "Replicated volumes, snapshots and backups - the Volumes and Data protection pages",
     needs: "Each node needs open-iscsi and an NFS client (nfs-common) installed and iscsid running; the k3s script does that. Volumes keep one copy per node, up to three." },
+  "kube-vip": { name: "kube-vip", what: "VIPs for apps: a container can have a LAN address of its own, handed out from Networking > Your VIPs, as on Harvester",
+    needs: "Announces each VIP from one node with ARP. Beside k3s's ServiceLB it takes only the Services given a VIP; the rest stay on the nodes' own addresses." },
   multus: { name: "Multus", what: "Second networks for pods - what LAN networks need, so a container or VM can have an address of its own on your LAN",
     needs: "Installed on every node from the chart RKE2 uses for it; apps already running are left as they are." },
   kubevirt: { name: "KubeVirt", what: "Virtual machines, with CDI to fill their disks from images",
@@ -83,7 +92,7 @@ window.addonsPaint = async () => {
   };
   card.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">Add-ons</div>
       <div class="csub">What this ${esc(platformName(STATE.platform || { distribution: s.distribution }))} cluster can add: Harvester has them all built in</div></div></div>
-    ${row("longhorn", s.longhorn)}${row("kubevirt", s.kubevirt)}${s.multus ? row("multus", s.multus) : ""}`;
+    ${row("longhorn", s.longhorn)}${row("kubevirt", s.kubevirt)}${s.multus ? row("multus", s.multus) : ""}${s.kube_vip ? row("kube-vip", s.kube_vip) : ""}`;
   if (window.applyRole) applyRole();
 };
 
@@ -94,6 +103,11 @@ window.addonInstall = async key => {
     const s = await api("/api/addons").catch(() => ({}));
     if (s.kvm_nowhere && !confirm("No node has hardware virtualisation (/dev/kvm), so KubeVirt will emulate: VMs work, but many times slower. Install anyway?")) return;
     body = s.kvm_known ? {} : { emulation: false };
+  } else if (key === "kube-vip") {
+    const s = await api("/api/addons").catch(() => ({}));
+    const where = s.kube_vip?.interface ? `It announces VIPs on ${s.kube_vip.interface}, the interface each node's default route uses.`
+      : "The nodes did not agree on one network interface (or the node probe has not said), so kube-vip finds it itself.";
+    if (!confirm(`Install kube-vip? ${a.needs} ${where}`)) return;
   } else if (!confirm(`Install ${a.name}? ${a.needs}`)) return;
   try {
     const r = await api(`/api/addons/${key}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -103,9 +117,10 @@ window.addonInstall = async key => {
     // The pages that need it appear once it is there.
     const watch = setInterval(async () => {
       await loadPlatform(true);
-      if (STATE.platform?.[key]) {
+      if (key === "kube-vip" ? STATE.platform?.load_balancer === "kube-vip" : STATE.platform?.[key]) {
         clearInterval(watch);
-        toast(key === "multus" ? "Multus is ready - LAN networks can be made now" : `${a.name} is ready - its pages are in the sidebar`, "ok");
+        toast(key === "multus" ? "Multus is ready - LAN networks can be made now"
+          : key === "kube-vip" ? "kube-vip is ready - apps can be given VIPs now" : `${a.name} is ready - its pages are in the sidebar`, "ok");
         addonsPaint();
       }
     }, 20000);

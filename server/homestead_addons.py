@@ -34,7 +34,10 @@ CDI = "https://github.com/kubevirt/containerized-data-importer/releases"
 CDI_API = "https://api.github.com/repos/kubevirt/containerized-data-importer/releases/latest"
 LONGHORN_REPO = "https://charts.longhorn.io"
 RKE2_CHARTS = "https://rke2-charts.rancher.io"
-CHARTS = {"longhorn": "longhorn", "kubevirt": "homestead-kubevirt", "cdi": "homestead-cdi", "multus": "multus"}
+CHARTS = {"longhorn": "longhorn", "kubevirt": "homestead-kubevirt", "cdi": "homestead-cdi", "multus": "multus",
+          "kube-vip": "kube-vip"}
+KUBE_VIP_REPO = "https://kube-vip.github.io/helm-charts"
+VIP_CLASS = "kube-vip.io/kube-vip-class"
 NAD_API = "/apis/k8s.cni.cncf.io/v1"
 
 
@@ -92,6 +95,9 @@ def status():
         "kubevirt": {"installed": bool(p.get("kubevirt")), "installing": CHARTS["kubevirt"] in charts
                      and not p.get("kubevirt"), "cdi": bool(p.get("cdi"))},
         "multus": {"installed": multus, "installing": CHARTS["multus"] in charts and not multus},
+        "kube_vip": {"installed": p.get("load_balancer") == "kube-vip",
+                     "installing": CHARTS["kube-vip"] in charts and p.get("load_balancer") != "kube-vip",
+                     "interface": vip_interface(), "beside_servicelb": bool(p.get("servicelb"))},
         # Each node's /dev/kvm, where its probe reports it.
         "kvm": kvm,
         "kvm_known": bool(kvm),
@@ -168,6 +174,53 @@ def install_multus(cfg=None):
     return {"ok": True, "name": CHARTS["multus"], "job": f"helm-install-{CHARTS['multus']}",
             "detail": "Multus is being installed on every node; pods already running are left as they are. "
                       "LAN networks can be made once it is up"}
+
+
+# ------------------------------------------------------------------ kube-vip
+def vip_interface():
+    """The interface every node's default route leaves by, where kube-vip
+    announces VIPs; empty when the probes do not agree or have not said,
+    and kube-vip then finds it itself."""
+    try:
+        found = {data.get("default_interface") for data in (probes() or {}).values()}
+    except Exception:
+        return ""
+    found.discard(None)
+    return found.pop() if len(found) == 1 and "" not in found else ""
+
+
+def kube_vip_values(interface, class_only):
+    """kube-vip for apps' Services only - not the Kubernetes API - with ARP,
+    each VIP led by one node. Beside k3s's ServiceLB it takes only Services
+    of its class, so the two never claim the same one."""
+    env = {"vip_arp": "true", "cp_enable": "false", "lb_enable": "false", "svc_enable": "true",
+           "svc_election": "true", "vip_leaderelection": "false"}
+    if interface:
+        env["vip_interface"] = interface
+    if class_only:
+        env.update(lb_class_only="true", lb_class_name=VIP_CLASS)
+    return "env:\n" + "".join(f"  {key}: {json.dumps(value)}\n" for key, value in env.items())
+
+
+def install_kube_vip(cfg=None):
+    """VIPs for apps on k3s or RKE2, as Harvester gives them: kube-vip, from
+    its own chart, announcing the addresses Homestead hands out."""
+    cfg = cfg or {}
+    p = _can_install("kube-vip")
+    if p.get("load_balancer") in ("kube-vip", "metallb"):
+        raise ValueError(f"this cluster has {'kube-vip' if p['load_balancer'] == 'kube-vip' else 'MetalLB'} already")
+    if p.get("distribution") not in ("k3s", "rke2"):
+        raise ValueError("Homestead installs kube-vip on k3s and RKE2; elsewhere install it with its own instructions")
+    interface = str(cfg.get("interface") or vip_interface() or "").strip()
+    if interface and not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", interface):
+        raise ValueError(f"{interface} is not a network interface name")
+    class_only = bool(p.get("servicelb"))
+    _post_chart(CHARTS["kube-vip"], {"repo": KUBE_VIP_REPO, "chart": "kube-vip", "targetNamespace": CONTROLLER_NS,
+                                     "valuesContent": kube_vip_values(interface, class_only)})
+    return {"ok": True, "name": CHARTS["kube-vip"], "job": f"helm-install-{CHARTS['kube-vip']}",
+            "interface": interface, "class_only": class_only,
+            "detail": (f"kube-vip is being installed{f', announcing on {interface}' if interface else ''}. "
+                       "Add the addresses it may hand out under Networking > Your VIPs")}
 
 
 # ------------------------------------------------------------------ KubeVirt

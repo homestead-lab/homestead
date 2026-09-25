@@ -299,7 +299,8 @@ def inventory():
             health, reason = "unavailable", "No ready endpoints match the Service selector"
         elif service_type == "LoadBalancer" and not assigned:
             health, reason = "pending", ("Waiting for ServiceLB to publish it on the nodes - another Service on "
-                                         "the same port holds it back" if node_addresses_only()
+                                         "the same port holds it back"
+                                         if servicelb_present() and not spec.get("loadBalancerClass")
                                          else "Waiting for kube-vip to advertise the requested address")
         elif not_ready_count:
             health, reason = "degraded", f"{not_ready_count} endpoint(s) are not ready"
@@ -308,6 +309,7 @@ def inventory():
         raw_rows.append({"namespace": ns, "name": name, "type": service_type,
                          "system": ns in SYSTEM_NAMESPACES, "managed": NAMES.read(labels, "managed") == "true",
                          "cluster_ip": spec.get("clusterIP") or "", "external_ips": external,
+                         "lb_class": spec.get("loadBalancerClass") or "",
                          "assigned_ips": assigned, "requested_ips": requested,
                          "vip_host": annotations.get("kube-vip.io/vipHost") or "",
                          "selector": selector, "targets": targets,
@@ -399,6 +401,7 @@ def _controller():
     candidates = (
         ("kube-vip", "/apis/apps/v1/namespaces/harvester-system/daemonsets/kube-vip", "ARP Service controller · explicit VIP allocation"),
         ("kube-vip", "/apis/apps/v1/namespaces/kube-system/daemonsets/kube-vip-ds", "ARP Service controller · explicit VIP allocation"),
+        ("kube-vip", "/apis/apps/v1/namespaces/kube-system/daemonsets/kube-vip", "ARP Service controller · VIPs beside the nodes' own addresses"),
         ("MetalLB", "/apis/apps/v1/namespaces/metallb-system/daemonsets/speaker", "MetalLB speakers · addresses from its pools"),
     )
     for name, path, mode in candidates:
@@ -430,6 +433,16 @@ def node_addresses_only():
         return False
 
 
+def servicelb_present():
+    """ServiceLB is there to put a Service on the nodes' own addresses -
+    alone, or beside kube-vip, which then gives VIPs to the Services that
+    ask for one."""
+    try:
+        return bool(PLATFORM.detect().get("servicelb"))
+    except Exception:
+        return False
+
+
 def _node_port_owner(state, namespace, service_name, ports):
     """Another LoadBalancer Service already on one of these ports - system
     ones too, like Traefik on 80 and 443 - when every Service shares the
@@ -437,6 +450,8 @@ def _node_port_owner(state, namespace, service_name, ports):
     for row in state["services"]:
         if row.get("type") != "LoadBalancer" or (row["namespace"], row["name"]) == (namespace, service_name):
             continue
+        if row.get("lb_class"):
+            continue  # kube-vip's, on a VIP of its own: not on the nodes' addresses
         for existing in row["ports"]:
             for port in ports:
                 if int(existing["port"]) == int(port["port"]) and str(existing["protocol"]).upper() == port["protocol"]:
@@ -494,11 +509,16 @@ def service_plan(cfg, require_workload=True):
     mode = "cluster" if service_type == "ClusterIP" else str(cfg.get("vip_mode") or "automatic")
     if mode == "auto":
         mode = "automatic"
-    if mode not in ("cluster", "shared", "automatic", "manual"):
-        raise ValueError("VIP mode must be shared, automatic or manual")
+    if mode not in ("cluster", "shared", "automatic", "manual", "nodes"):
+        raise ValueError("VIP mode must be shared, automatic, manual or nodes")
+    if mode == "shared" and not SHARED_VIP and servicelb_present():
+        # k3s has no shared Homestead VIP: shared means the nodes' addresses.
+        mode = "nodes"
+    if mode == "nodes" and not servicelb_present():
+        raise ValueError("this cluster has no ServiceLB to put a Service on the nodes' own addresses; give it a VIP")
     warnings = []
     vip = ""
-    if mode != "cluster" and node_addresses_only():
+    if mode == "nodes" or (mode != "cluster" and node_addresses_only()):
         # Whatever was asked for, ServiceLB publishes it on the nodes' own
         # addresses: the shared VIP (none is set on k3s) is not needed.
         mode = "nodes"
@@ -573,7 +593,8 @@ def create_service(cfg):
     body = {"apiVersion": "v1", "kind": "Service",
             "metadata": {"name": plan["name"], "namespace": plan["namespace"],
                          "labels": {"homestead.io/managed": "true"}, "annotations": annotations},
-            "spec": {"type": plan["type"], "selector": selector, "ports": plan["ports"]}}
+            "spec": {"type": plan["type"], "selector": selector, "ports": plan["ports"],
+                     **(PLATFORM.vip_spec(plan["vip"]) if plan["type"] == "LoadBalancer" else {})}}
     ksend("POST", f"/api/v1/namespaces/{plan['namespace']}/services", body)
     return {"ok": True, **plan,
             "message": (f"Service {plan['namespace']}/{plan['name']} created" +
@@ -623,7 +644,8 @@ def _listener_owner(service, ports):
     """Another Service already answering on one of these VIP listeners."""
     state = inventory()
     mine = (service["metadata"]["namespace"], service["metadata"]["name"])
-    if node_addresses_only() and (service.get("spec") or {}).get("type") == "LoadBalancer":
+    spec = service.get("spec") or {}
+    if servicelb_present() and spec.get("type") == "LoadBalancer" and not spec.get("loadBalancerClass"):
         return _node_port_owner(state, mine[0], mine[1], ports)
     addresses = set()
     for row in state["services"]:
@@ -689,7 +711,7 @@ def sync_workload_ports(namespace, workload, ports, network_mode=None, vip_mode=
         return ""
     owner = _listener_owner(service, desired)
     if owner:
-        if node_addresses_only():
+        if servicelb_present() and not (service.get("spec") or {}).get("loadBalancerClass"):
             raise ValueError(_node_port_problem(owner))
         raise ValueError(f"port {owner['port']}/{owner['protocol']} is already answered by "
                          f"{owner['namespace']}/{owner['service']} on this address")

@@ -38,11 +38,12 @@ they are for - "media apps", "DNS".
 - Node addresses and addresses recorded as a device under IP addresses are
   refused. A VIP can be removed only while nothing uses it.
 
-On k3s with ServiceLB, every Service uses the hosts' own addresses, so VIPs do
-not apply; see [Installing on k3s](Installing-on-k3s#4-addresses-for-apps).
-The forms there offer just **Every node's own address**. What must be free is
-the port: two Services cannot share one, and Traefik already has 80 and 443.
-Homestead refuses a port that is taken before it changes anything.
+On k3s, ServiceLB puts every Service on the hosts' own addresses, so the forms
+offer **Every node's own address**. What must be free there is the port: two
+Services cannot share one, and Traefik already has 80 and 443. Homestead
+refuses a port that is taken before it changes anything. For VIPs as well,
+add **kube-vip** under Settings → Cluster → Add-ons; see
+[Installing on k3s](Installing-on-k3s#4-addresses-for-apps).
 
 ## LAN networks
 

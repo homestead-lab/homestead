@@ -291,6 +291,16 @@ def interfaces():
                     "master": master})
     return out
 
+def default_interface():
+    """The interface the host's default route leaves by - where it meets the
+    LAN - from the route table of the host's first process."""
+    raw = _read(f"{PROC}/1/net/route") or ""
+    for line in raw.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) > 7 and parts[1] == "00000000" and parts[7] == "00000000":
+            return parts[0]
+    return ""
+
 def payload():
     t, hw = thermal(), hwmon()
     allt = [x["celsius"] for x in t] + [x["celsius"] for x in hw]
@@ -313,7 +323,8 @@ def payload():
             # Hardware virtualisation, which KubeVirt runs VMs with; without
             # it KubeVirt can only emulate, many times slower.
             "kvm": os.path.exists(f"{DEV}/kvm"),
-            "interfaces": interfaces()}
+            "interfaces": interfaces(),
+            "default_interface": default_interface()}
 
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"

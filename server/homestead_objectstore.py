@@ -272,7 +272,7 @@ def deploy(cfg=None):
         "apiVersion": "v1", "kind": "Service",
         "metadata": {"name": NAME, "namespace": NS, "labels": labels,
                      "annotations": PLATFORM.vip_annotations(address)},
-        "spec": {"type": "LoadBalancer", "selector": {"app": NAME},
+        "spec": {"type": "LoadBalancer", "selector": {"app": NAME}, **PLATFORM.vip_spec(address),
                  "ports": [{"name": "s3", "port": PORT, "targetPort": "s3"},
                            {"name": "console", "port": CONSOLE_PORT,
                             "targetPort": "console"}]},

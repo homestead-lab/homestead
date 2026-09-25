@@ -648,7 +648,11 @@ def _creating(move):
                                 move.get("address_mode") or "shared", move.get("address", ""),
                                 chosen)
         meta = _stamp(service["metadata"], move, namespace)
+        # The class the source cluster's load balancer wanted means nothing
+        # here: this cluster's own is set below when the Service gets a VIP.
+        (service.get("spec") or {}).pop("loadBalancerClass", None)
         if planned.get("vip"):
+            service.setdefault("spec", {}).update(PLATFORM.vip_spec(planned["vip"]))
             meta["annotations"].update(PLATFORM.vip_annotations(planned["vip"]))
             meta["annotations"][NAMES.key("vip-mode")] = planned["vip_mode"]
             chosen = chosen or planned["vip"]

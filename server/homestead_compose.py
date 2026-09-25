@@ -736,7 +736,7 @@ def _check_together(rows, configs, ctx):
                                           f"so it is created as shared (RWX) storage"})
 
     # The same port on the shared address cannot be two services.
-    if ctx.vip_mode == "shared":
+    if ctx.vip_mode in ("shared", "nodes"):
         taken = {}
         for row in rows:
             cfg = configs[row["name"]]

@@ -128,13 +128,22 @@ k3s's built-in load balancer, ServiceLB, publishes a LoadBalancer service on
 port. Two apps cannot both take port 80. The script does not install MetalLB,
 and nothing in Homestead needs it.
 
-When you want an address per app, [MetalLB](https://metallb.io) replaces
-ServiceLB: install k3s with `disable: [servicelb]` in
-`/etc/rancher/k3s/config.yaml`, then install MetalLB (from **Helm** in
-Homestead, or MetalLB's own instructions) and give it an address pool.
-Homestead then asks MetalLB for addresses, and the **Specific VIP** picker offers
-the addresses you keep under **Networking → Your VIPs**. This is easiest to
-decide before you have many apps.
+When you want an address per app, add **kube-vip** from **Settings →
+Cluster → Add-ons**, as Harvester uses. It runs beside ServiceLB rather than
+replacing it: kube-vip takes only the Services given a VIP, and everything
+else - Homestead and Traefik included - stays on the machines' own
+addresses. Then:
+
+1. Add the addresses apps may have under **Networking → Your VIPs**, outside
+   your router's DHCP range.
+2. When deploying, editing, importing or exposing an app, choose **Every
+   node's own address**, **New automatic VIP** (the next free one from your
+   list) or **Specific VIP**.
+
+kube-vip announces each VIP with ARP from one machine, on the interface the
+machines' default route uses; if another machine takes over, the address
+follows. To move an existing app to a VIP, remove its Service under
+**Networking** and **Expose workload** again with a VIP.
 
 ## 5. Without the script
 

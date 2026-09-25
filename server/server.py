@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.150")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.151")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1805,6 +1805,7 @@ def build_deployment(cfg):
             "metadata": {"name": name, "namespace": ns, "labels": {"app": name, NAMES.key("managed"): "true"},
                          "annotations": PLATFORM.vip_annotations(vip) if svc_type == "LoadBalancer" else {}},
             "spec": {"type": svc_type, "selector": {"app": name},
+                     **(PLATFORM.vip_spec(vip) if svc_type == "LoadBalancer" else {}),
                       "ports": [{"name": (p.get("name") or f"p{p['container']}-{str(p.get('protocol', 'TCP')).lower()}")[:15],
                                  "port": int(p.get("host") or p["container"]),
                                  "targetPort": int(p["container"]),
@@ -2043,7 +2044,7 @@ def compose_report(b):
                   kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims").get("items", [])}
     except Exception:
         claims = set()
-    vip_mode = b.get("vip_mode") if b.get("vip_mode") in ("shared", "auto") else "shared"
+    vip_mode = b.get("vip_mode") if b.get("vip_mode") in ("shared", "auto", "nodes") else "shared"
     if NETWORK.node_addresses_only():
         # On k3s every service shares the nodes' addresses, so ports must differ.
         vip_mode = "shared"
@@ -4515,7 +4516,7 @@ ADMIN_ROUTES = {
     "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete", "/api/lh/snapshot/revert",
     "/api/lh/restore", "/api/lh/backup/delete", "/api/lh/group/delete",
     # Installing Longhorn or KubeVirt changes the cluster itself.
-    "/api/addons/longhorn", "/api/addons/kubevirt", "/api/addons/multus",
+    "/api/addons/longhorn", "/api/addons/kubevirt", "/api/addons/multus", "/api/addons/kube-vip",
     # Upgrading the platform: the cluster, Longhorn, KubeVirt, CDI.
     "/api/cluster/components/upgrade", "/api/cluster/upgrades/start",
     # Homestead's own permissions, and the namespaces apps live in.
@@ -5235,13 +5236,13 @@ class H(BaseHTTPRequestHandler):
                                       "Harvester checks the cluster, then prepares each node")
                 return self._send(200, {"ok": True, "upgrade": name, "operation": operation,
                                         "detail": f"Harvester is upgrading to {version}"})
-            if p in ("/api/addons/longhorn", "/api/addons/kubevirt", "/api/addons/multus"):
+            if p in ("/api/addons/longhorn", "/api/addons/kubevirt", "/api/addons/multus", "/api/addons/kube-vip"):
                 what = p.rsplit("/", 1)[1]
                 result = {"longhorn": ADDONS.install_longhorn, "kubevirt": ADDONS.install_kubevirt,
-                          "multus": ADDONS.install_multus}[what](b)
+                          "multus": ADDONS.install_multus, "kube-vip": ADDONS.install_kube_vip}[what](b)
                 for key in ("helm", "platform"):
                     _cache.pop(key, None)
-                result["operation"] = OPS.start("helm", f"Install {({'longhorn': 'Longhorn', 'kubevirt': 'KubeVirt'}).get(what, 'Multus')}",
+                result["operation"] = OPS.start("helm", f"Install {({'longhorn': 'Longhorn', 'kubevirt': 'KubeVirt', 'kube-vip': 'kube-vip'}).get(what, 'Multus')}",
                                                 {"kind": "HelmChart", "name": result["name"], "namespace": ADDONS.CONTROLLER_NS},
                                                 "/settings", {"namespace": ADDONS.CONTROLLER_NS, "name": result["job"],
                                                               "action": "install"},
@@ -5985,7 +5986,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.150 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.151 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()
