@@ -100,9 +100,12 @@ function ipamFiltered(rows) {
 function renderIpam() {
   const data = STATE.data.ipam || { subnets: [], suggested: [], unifi: {} };
   const head = `<div class="phead"><div><h2>Networking</h2><p>Every address on your subnets: documented, used by the cluster${(data.unifi || {}).configured ? ", answering, or known to UniFi" : " or answering a scan"}</p></div>
-    <div class="row"><button class="btn" data-need="operator" onclick="ipamSubnets()">Subnets</button>
-      ${data.subnets.length ? `<button class="btn" data-need="operator" onclick="ipamImport()">Import CSV</button>
-      <button class="btn" onclick="ipamExport()">Export CSV</button>
+    <div class="row ipam-head-acts"><button class="btn" data-need="operator" onclick="ipamSubnets()">Subnets</button>
+      ${data.subnets.length ? `<button class="btn ipam-wide" data-need="operator" onclick="ipamImport()">Import CSV</button>
+      <button class="btn ipam-wide" onclick="ipamExport()">Export CSV</button>
+      <details class="actionmenu ipam-narrow"><summary class="btn" title="Import or export">⋯</summary><div class="actionmenu-pop">
+        <button data-need="operator" onclick="this.closest('details').open=false;ipamImport()">${icon("import")}Import CSV</button>
+        <button onclick="this.closest('details').open=false;ipamExport()">${icon("ext")}Export CSV</button></div></details>
       <button class="btn pri" data-need="operator" onclick="ipamEdit()">＋ Address</button>` : ""}</div></div>
     ${networkTabs("ip")}`;
   if (!data.subnets.length) {
@@ -118,7 +121,7 @@ function renderIpam() {
   const u = data.unifi || {};
   paint(`${head}
     ${data.subnets.length > 1 ? `<div class="seg ipam-subnets">${data.subnets.map(s => `<button class="${s.id === subnet.id ? "on" : ""}" onclick="ipamPickSubnet('${esc(s.id)}')">${esc(s.name || s.cidr)} <span class="dim">${s.used}</span></button>`).join("")}</div>` : ""}
-    <div class="grid g4 statgrid" style="margin:12px 0 16px">
+    <div class="grid g4 statgrid ipam-stats" style="margin:12px 0 16px">
       <div class="card flat"><div class="ctitle">${esc(subnet.name || "Subnet")}</div><div class="bignum" style="margin-top:8px">${subnet.used}<span class="unit">/${subnet.usable}</span></div>
         <div class="csub mono">${esc(subnet.cidr)}${subnet.vlan ? ` · VLAN ${subnet.vlan}` : ""}${subnet.gateway ? ` · gw ${esc(subnet.gateway)}` : ""}</div></div>
       <div class="card flat"><div class="ctitle">DHCP range</div><div class="bignum" style="margin-top:8px">${subnet.dhcp_size || "—"}</div>
@@ -169,16 +172,19 @@ function ipamRow(row) {
   const name = row.name ? `<b>${esc(row.name)}</b>`
     : row.unifi?.name ? `<span class="ipam-unifi-name" data-tip="UniFi's name; give it your own to replace it here">${esc(row.unifi.name)}</span>` : "";
   const note = [row.note, row.owner ? `owner: ${row.owner}` : ""].filter(Boolean).join(" · ");
-  return `<tr class="${row.flags.some(f => f.level === "warn") ? "ipam-warn" : ""}">
-    <td>${row.cluster ? "" : `<input type="checkbox" class="ipam-pick" value="${esc(row.ip)}" onchange="ipamPicked(this)" ${ipamPicks().has(row.ip) ? "checked" : ""}>`}</td>
-    <td class="mono nowrap" data-sort="${ipNum(row.ip)}"><a style="cursor:pointer" onclick="ipamEdit('${esc(row.ip)}')">${esc(row.ip)}</a>${row.in_dhcp ? ' <span class="dim xs" data-tip="Inside the DHCP range">dhcp</span>' : ""}</td>
-    <td data-label="Name" class="ipam-name"><div class="ipam-line">${ipamCategoryIcon(row.category)}${name}</div>
-      ${second ? `<div class="ipam-line dim xs mono" title="${esc(second)}">${esc(second)}</div>` : ""}</td>
-    <td data-label="MAC" class="mono xs nowrap">${esc(row.mac || "")}</td>
-    <td data-label="Kind" class="nowrap">${ipamKind(row)}</td>
-    <td data-label="Seen" class="nowrap">${ipamSeen(row)}</td>
-    <td data-label="Notes" class="ipam-notes"><div class="ipam-line">${row.flags.map(f => `<span class="ipam-flag ${f.level}" data-tip="${esc(f.text)}">${f.level === "warn" ? "⚠" : "ℹ"}</span>`).join("")}
-      ${(row.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join("")}${note ? `<span class="ipam-note" data-tip="${esc(note)}">${esc(note)}</span>` : ""}</div></td></tr>`;
+  const notes = row.flags.map(f => `<span class="ipam-flag ${f.level}" data-tip="${esc(f.text)}">${f.level === "warn" ? "⚠" : "ℹ"}</span>`).join("")
+    + (row.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join("") + (note ? `<span class="ipam-note" data-tip="${esc(note)}">${esc(note)}</span>` : "");
+  // Cells with nothing in them are left empty, so on a phone - where each
+  // row is a short card - they take no room.
+  return `<tr class="ipam-row ${row.flags.some(f => f.level === "warn") ? "ipam-warn" : ""}">
+    <td class="ip-pick">${row.cluster ? "" : `<input type="checkbox" class="ipam-pick" value="${esc(row.ip)}" aria-label="Select ${esc(row.ip)}" onchange="ipamPicked(this)" ${ipamPicks().has(row.ip) ? "checked" : ""}>`}</td>
+    <td class="ip-addr mono nowrap" data-sort="${ipNum(row.ip)}"><a style="cursor:pointer" onclick="ipamEdit('${esc(row.ip)}')">${esc(row.ip)}</a>${row.in_dhcp ? ' <span class="dim xs" data-tip="Inside the DHCP range">dhcp</span>' : ""}</td>
+    <td data-label="Name" class="ip-name ipam-name">${name || row.category || second ? `<div class="ipam-line">${ipamCategoryIcon(row.category)}${name}</div>
+      ${second ? `<div class="ipam-line dim xs mono" title="${esc(second)}">${esc(second)}</div>` : ""}` : ""}</td>
+    <td data-label="MAC" class="ip-mac mono xs nowrap">${esc(row.mac || "")}</td>
+    <td data-label="Kind" class="ip-kind nowrap">${ipamKind(row)}</td>
+    <td data-label="Seen" class="ip-seen nowrap">${ipamSeen(row)}</td>
+    <td data-label="Notes" class="ip-notes ipam-notes">${notes ? `<div class="ipam-line">${notes}</div>` : ""}</td></tr>`;
 }
 
 /* Rows in address order, with the free runs between them as dividers that

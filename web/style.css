@@ -1426,6 +1426,42 @@ html[data-theme="light"] .compose-editor{background:#fff}
   .sharetable td[data-label="UNC path"]{overflow-wrap:anywhere}.sharetable .shareactions{padding-top:6px}.sharetable .shareactions .row{width:100%}.sharetable .shareactions .btn{flex:1}
 }
 
+/* IP addresses on a phone: each address a short card - the address and its
+   kind, its name, then its MAC and what has seen it - with the tick at the
+   side, instead of six labelled lines, most of them empty, per address. */
+.ipam-narrow{display:none}
+@media(max-width:560px){
+  .ipam-wide{display:none}.ipam-narrow{display:inline-block}
+  .ipam-head-acts{flex-wrap:nowrap}
+  .ipam-stats{gap:8px!important;margin:10px 0 12px!important}
+  .ipam-stats>.card{padding:11px 12px}
+  .ipam-stats .ctitle{font-size:12px}
+  .ipam-stats .bignum{font-size:24px!important;margin-top:4px!important}
+  .ipam-stats .csub{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ipam-stats .csub:has(.btn){white-space:normal;display:flex;flex-wrap:wrap;gap:4px}
+  .ipam-stats .csub .btn{margin-top:4px;padding:4px 8px;font-size:11.5px}
+  .tbl.stack.ipam-table tr.ipam-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;
+    grid-template-areas:"pick addr kind" "pick name seen" "pick mac mac" "pick notes notes";align-items:center;column-gap:10px;row-gap:3px;padding:9px 12px}
+  .tbl.stack.ipam-table tr.ipam-row>td{display:block;padding:0;min-width:0;width:auto;text-align:left}
+  .tbl.stack.ipam-table tr.ipam-row>td::before{content:none}
+  .tbl.stack.ipam-table tr.ipam-row>td:empty{display:none}
+  .ipam-table .ip-pick{grid-area:pick;align-self:start;padding-top:2px!important}
+  .ipam-table .ip-pick input{width:20px;height:20px}
+  .ipam-table .ip-addr{grid-area:addr;font-size:14px;font-weight:650}
+  .ipam-table .ip-kind{grid-area:kind;justify-self:end}
+  .ipam-table .ip-name{grid-area:name}
+  .ipam-table .ip-name .ipam-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ipam-table .ip-seen{grid-area:seen;justify-self:end}
+  .ipam-table .ip-mac{grid-area:mac;color:var(--mut)}
+  .ipam-table .ip-notes{grid-area:notes;max-width:100%;overflow:hidden}
+  .ipam-table .ip-notes .ipam-line{flex-wrap:nowrap;gap:4px;min-width:0;max-width:100%;width:100%}
+  .ipam-table .ip-notes .ipam-note{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--mut)}
+  .ipam-table .ip-seen .tag,.ipam-table .ip-kind .tag{font-size:10.5px;padding:2px 7px}
+  .tbl.stack.ipam-table tbody.ipam-gap tr{padding:3px 12px}
+  .tbl.stack.ipam-table tbody.ipam-gap td{padding:0}
+  .ipam-bulk select,.ipam-bulk input{flex:1 1 40%;min-width:0}
+}
+
 /* Containers as rows on a phone: two lines each - name and status, then usage
    and the actions - instead of the generic stacked card, which made "rows"
    taller than the cards they were meant to condense. The image and ports are
