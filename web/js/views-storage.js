@@ -1064,6 +1064,10 @@ async function lhSettingsPaint() {
         <div class="row" style="flex-wrap:nowrap"><input id="lh_over" type="number" min="100" max="1000" step="10" value="${cap.over_provisioning}" ${admin ? "" : "disabled"} oninput="lhPreview()"><span class="dim">%</span></div></div>
       <div class="f"><label>Minimal free space ${tip("A disk with less than this share physically free takes no new replica, whatever is allocated. Longhorn's default is 25%.")}</label>
         <div class="row" style="flex-wrap:nowrap"><input id="lh_min" type="number" min="0" max="100" value="${cap.minimal_available}" ${admin ? "" : "disabled"}><span class="dim">%</span></div></div></div>
+    <div class="f" style="margin-top:10px"><label>Pods on a failed node ${tip("What Longhorn does with the pods of a node that stops answering. Left at do-nothing, such a pod keeps its volume attached to the dead node, so a container moving to another node cannot mount it there until the node is back. Containers > If a node fails chooses which containers move.")}</label>
+      <select id="lh_nodedown" ${admin ? "" : "disabled"}>${[["do-nothing", "keep them - their volumes wait for the node"], ["delete-deployment-pod", "delete containers' pods, so their volumes can move"],
+        ["delete-statefulset-pod", "delete stateful sets' pods only"], ["delete-both-statefulset-and-deployment-pod", "delete both, so every volume can move"]]
+        .map(([v, l]) => `<option value="${v}" ${v === cap.node_down ? "selected" : ""}>${l}</option>`).join("")}</select></div>
     <div id="lh_nodes" class="lh-nodes">${lhNodeRows(cap)}</div>
     <div class="dim xs" style="margin-top:10px">Largest new volume</div><div class="row lh-largest" id="lh_largest">${lhLargest(cap)}</div>
     <div class="note" style="margin-top:12px">Past a node's limit, new volumes come up a copy short, replica rebuilds wait and expansions are refused;
@@ -1094,7 +1098,8 @@ window.lhPreview = () => {
 
 window.lhSettingsSave = async () => {
   const cap = STATE.data.lhcap || {};
-  const body = { over_provisioning: +$("#lh_over").value, minimal_available: +$("#lh_min").value, v2: $("#lh_v2").checked };
+  const body = { over_provisioning: +$("#lh_over").value, minimal_available: +$("#lh_min").value, v2: $("#lh_v2").checked,
+    node_down: $("#lh_nodedown")?.value || "" };
   if (body.v2 !== !!cap.v2?.enabled && !confirm(body.v2
     ? "Enable Longhorn's V2 data engine? Longhorn starts V2 instance managers on every node, which reserve CPU and hugepages even before any V2 volume exists."
     : "Disable the V2 data engine? Longhorn refuses while V2 volumes exist.")) return;

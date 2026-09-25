@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.130")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.131")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1023,6 +1023,7 @@ def get_workloads():
             "icon": display_icon(annotations),
             "group": NAMES.read(annotations, "group") or own_group(ns, name),
             "self": is_self(ns, name),
+            "failover": FAILOVER.mode_of(pspec),
         })
     return sorted(out, key=lambda x: (x["ns"], x["name"]))
 
@@ -1549,10 +1550,7 @@ def build_deployment(cfg):
         podspec["dnsPolicy"] = "ClusterFirstWithHostNet"
     if cfg.get("node"):
         podspec.setdefault("nodeSelector", {})["kubernetes.io/hostname"] = cfg["node"]
-    podspec["tolerations"] = [
-        {"key": "node.kubernetes.io/unreachable", "operator": "Exists", "effect": "NoExecute", "tolerationSeconds": 15},
-        {"key": "node.kubernetes.io/not-ready", "operator": "Exists", "effect": "NoExecute", "tolerationSeconds": 15},
-    ]
+    FAILOVER.apply(podspec, cfg.get("failover") or "move")
     dep = {
         "apiVersion": "apps/v1", "kind": "Deployment",
         "metadata": {"name": name, "namespace": ns, "labels": {"app": name, NAMES.key("managed"): "true"},
@@ -2952,6 +2950,7 @@ import homestead_self as SELF
 import homestead_namespaces as NSMOD
 import homestead_restructure as RESTRUCTURE
 import homestead_affinity as AFFINITY
+import homestead_failover as FAILOVER
 import homestead_portal as PORTAL
 import homestead_upgrades as UPGRADES
 import homestead_vmconsole as VMCONSOLE
@@ -2995,6 +2994,7 @@ SMART.bind(kget, DEFAULT_NS, AUTH.internal_signing_key)
 OPS.bind(kget, DATA_DIR, UPDATES.progress, SMART.progress)
 RESTRUCTURE.bind(kget, ksend, raw_get)
 AFFINITY.bind(kget)
+FAILOVER.bind(kget, ksend)
 UPGRADES.bind(kget)
 PORTAL.bind(kget, ksend, DEFAULT_NS, lambda: cached("wl", 5, get_workloads),
             lambda source: ICONS.persist(source, DATA_DIR), lambda reference: ICONS.data_url(reference, DATA_DIR))
@@ -3770,6 +3770,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         "hardware": detected, "icon": NAMES.read(annotations, "icon-source") or NAMES.read(annotations, "icon"),
         "node": pspec.get("nodeSelector", {}).get("kubernetes.io/hostname", ""),
         "placement": AFFINITY.public(deployment),
+        "failover": FAILOVER.mode_of(pspec),
         "network_mode": "host" if pspec.get("hostNetwork") else "",
         "has_service": bool(listeners),
         "seed_configs": LC.seed_configs(ns, deployment),
@@ -5012,6 +5013,10 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/network/vips/label":
                 _cache.pop("network", None)
                 return self._send(200, NETWORK.set_vip_label(b.get("ip", ""), b.get("label", "")))
+            if p == "/api/workloads/failover":
+                result = FAILOVER.set_many(b.get("items") or [])
+                _cache.pop("wl", None)
+                return self._send(200, result)
             if p == "/api/workload/primary-port":
                 ns, name = b.get("ns") or DEFAULT_NS, _dns_name(b.get("name"), "workload name")
                 port = int(b.get("port") or 0)
@@ -5262,7 +5267,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.130 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.131 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

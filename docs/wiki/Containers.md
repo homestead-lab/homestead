@@ -116,6 +116,24 @@ that has it. Features are named under **Settings → Hardware**; see
 Each is a preference (steer, but start anyway) or a requirement (wait rather
 than break it). The editor warns when a rule cannot be met.
 
+## If a node fails
+
+When a node stops answering, each container does one of three things -
+**If a node fails** on Containers sets them all in one list, and each
+container's editor has it under *Where it runs*:
+
+| Choice | What happens |
+|---|---|
+| **Move to another node** | about 15 seconds later it starts on another node - for apps that should come back quickly wherever there is room. New containers start with this |
+| **Wait for its node** | it stays with that node and starts again when the node is back - for apps tied to that host's hardware (a Coral, a Zigbee stick), or better restarted where they were |
+| **Kubernetes default** | Kubernetes moves it after five minutes - what anything Homestead did not deploy has |
+
+A container whose volume one node mounts at a time only really moves if
+Longhorn lets go of the volume on the dead node. The dialog says whether it
+will, and **Let Longhorn release them** sets Longhorn's *Pod Deletion Policy
+When Node is Down* so it does; it is also under **Settings → Cluster**.
+Changing a container's choice restarts it.
+
 ## Architecture
 
 **Architecture** draws, for every app, the path from its address through its

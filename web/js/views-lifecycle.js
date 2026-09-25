@@ -93,6 +93,20 @@ function placementRow(kind, row = {}) {
     <select class="aff-mode">${PLACEMENT_MODES.map(([value, label]) => `<option value="${value}" ${row.mode === value ? "selected" : ""}>${label}</option>`).join("")}</select>
     <button class="iconbtn row-remove" type="button" title="Remove this rule" onclick="this.closest('.aff-row').remove();placementChanged()">×</button></div>`;
 }
+/* What a container does when the node it runs on stops answering. */
+const FAILOVER_WORDS = { move: "Move to another node", wait: "Wait for its node", default: "Kubernetes default (5 min)" };
+const FAILOVER_HELP = {
+  move: "About 15 seconds after its node stops answering, it starts on another node - for apps that should come back quickly wherever there is room.",
+  wait: "It stays with its node and starts again when that node is back - for apps tied to that host's hardware, or better restarted where they were.",
+  default: "Kubernetes moves it after five minutes, the default for anything Homestead did not deploy.",
+};
+function failoverSelect(id, current, extra = "") {
+  return `<select id="${id}" ${extra}>${Object.entries(FAILOVER_WORDS).map(([value, label]) =>
+    `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join("")}</select>`;
+}
+window.FAILOVER_WORDS = FAILOVER_WORDS;
+window.failoverSelect = failoverSelect;
+
 /* Where it runs, at the three levels there are: the containers in one pod
    (always together - that is what a pod is), the copies of this workload,
    and other workloads. */
@@ -123,6 +137,9 @@ function placementSection(p, w, nodes, containers) {
         <div class="f"><label>Keep off the node of ${tip("For pairs that should never share a host: two DNS servers, or two apps that would compete for one disk.")}</label>
           <div id="e_apart">${(p.apart || []).map(row => placementRow("apart", row)).join("")}</div>
           <button class="btn sm" type="button" onclick="placementAdd('apart')">＋ Add</button></div></div></div>
+    <div class="place-level"><div class="place-title">If its node fails</div>
+      <div class="place-grid"><div class="f">${failoverSelect("e_failover", w.failover || "default")}</div>
+        <div class="dim small">${esc(FAILOVER_HELP[w.failover || "default"])}</div></div></div>
     <div class="note" id="e_place_note" hidden></div></section>`;
 }
 /* From a container's menu: the editor, opened at its placement. */
@@ -272,7 +289,7 @@ window.editSave = async (ns, name) => {
   const body = { ns, name, workload_name: workloadName, pod_hostname: $("#e_pod_name").value.trim(),
     icon: $("#e_icon").value.trim(), replicas: Math.max(1, +$("#e_rep").value || 1),
     autostart: $("#e_autostart").checked, manage_ports: true, containers, seed_configs,
-    placement: readPlacement() };
+    placement: readPlacement(), failover: $("#e_failover")?.value || "" };
   const moves = containers.flatMap(container => container.volumes.filter(volume => volume.copy_from));
   if (moves.length && renaming) return toast("Rename the workload and move its data in separate saves", "bad");
   if ((STATE.data.wl || []).some(x => x.self && x.ns === ns && x.name === name) && !body.autostart) {

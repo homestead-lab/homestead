@@ -24,6 +24,12 @@ HARVESTER_V2 = "/apis/harvesterhci.io/v1beta1/settings/longhorn-v2-data-engine-e
 OVER = "storage-over-provisioning-percentage"
 MINIMAL = "storage-minimal-available-percentage"
 V2 = "v2-data-engine"
+# What Longhorn does with the pods of a node that stops answering. Left at
+# do-nothing, a pod on a dead node stays Terminating and holds its volume, so
+# a container told to move to another node cannot mount it there.
+NODE_DOWN = "node-down-pod-deletion-policy"
+NODE_DOWN_VALUES = ("do-nothing", "delete-statefulset-pod", "delete-deployment-pod",
+                    "delete-both-statefulset-and-deployment-pod")
 WARN_PCT, CRIT_PCT = 80, 95
 GiB = 1024 ** 3
 
@@ -51,6 +57,7 @@ def _int(text, default):
 def settings():
     return {"over_provisioning": _int(_setting(OVER, 100), 100),
             "minimal_available": _int(_setting(MINIMAL, 25), 25),
+            "node_down": _setting(NODE_DOWN, "do-nothing"),
             "v2": v2_status()}
 
 
@@ -103,6 +110,7 @@ def status():
     cfg = settings()
     out = capacity(cfg)
     out["v2"] = cfg["v2"]
+    out["node_down"] = cfg["node_down"]
     return out
 
 
@@ -135,6 +143,11 @@ def save(cfg):
         if minimal != current["minimal_available"]:
             _patch_setting(MINIMAL, minimal)
             done.append(f"minimal available {minimal}%")
+    if cfg.get("node_down") and cfg["node_down"] != current["node_down"]:
+        if cfg["node_down"] not in NODE_DOWN_VALUES:
+            raise ValueError("pod deletion when a node is down is one of " + ", ".join(NODE_DOWN_VALUES))
+        _patch_setting(NODE_DOWN, cfg["node_down"])
+        done.append("pods on a failed node: " + cfg["node_down"])
     if "v2" in cfg and bool(cfg["v2"]) != bool(current["v2"].get("enabled")):
         value = "true" if cfg["v2"] else "false"
         if current["v2"].get("harvester_setting") is not None:

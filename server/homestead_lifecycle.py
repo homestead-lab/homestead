@@ -15,6 +15,7 @@ import urllib.error
 import homestead_names as NAMES
 import homestead_restructure as RESTRUCTURE
 import homestead_affinity as AFFINITY
+import homestead_failover as FAILOVER
 
 # Rebooting a host needs a privileged pod that enters the host namespaces.
 # That is a real escape hatch, so it is off unless the operator opts in on the
@@ -640,6 +641,9 @@ def edit_workload(cfg, hold=False):
 
     if "seed_configs" in cfg:
         _save_seed_configs(ns, dep, cfg.get("seed_configs") or [])
+
+    if cfg.get("failover"):
+        FAILOVER.apply(spec, cfg["failover"])
 
     if "replicas" in cfg or "autostart" in cfg:
         requested = int(cfg.get("replicas", dep["spec"].get("replicas", 1)) or 0)

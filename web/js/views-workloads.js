@@ -267,7 +267,8 @@ function workloadGroupBar(all, pick) {
   return `<div class="wgroup-bar">
     ${names.length ? `<div class="seg wgroup-chips" role="group" aria-label="Show group">${chip("", "All", all.length)}${names.map(name =>
       chip(name, name, all.filter(w => w.group === name).length)).join("")}${loose ? chip(NO_GROUP, "Ungrouped", loose) : ""}</div>` : ""}
-    <button class="btn sm" data-need="operator" onclick="manageWorkloadGroups()">${icon("list")}${names.length ? "Groups" : "Group workloads"}</button></div>`;
+    <button class="btn sm" data-need="operator" onclick="manageWorkloadGroups()">${icon("list")}${names.length ? "Groups" : "Group workloads"}</button>
+    <button class="btn sm" onclick="wlFailover()" title="What each container does when its node fails: move, or wait for the node">${icon("node")}If a node fails</button></div>`;
 }
 
 /* Put one workload in a group: pick one it could join, or name a new one. */
@@ -479,6 +480,54 @@ window.wlStopSelfGo = async (ns, name) => {
     await api("/api/scale", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ns, name, replicas: 0, confirm_self: true }) });
     closeModal(); toast("Homestead is stopping", "ok");
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+/* Every container's behaviour when its node fails, in one list. Longhorn
+   decides whether a moved container's single-node volume can follow it, so
+   its policy is shown here too. */
+window.wlFailover = async () => {
+  modal("If a node fails", '<div class="empty"><span class="spin2"></span></div>', true);
+  const [rows, lh] = await Promise.all([api("/api/workloads").catch(() => STATE.data.wl || []),
+    api("/api/longhorn/capacity").catch(() => null)]);
+  const policy = lh?.node_down || "";
+  const moving = policy && policy !== "do-nothing";
+  $("#mbody").innerHTML = `
+    <p class="small" style="margin-top:0">When a node stops answering, each container either moves to another node, waits for its node to
+      come back, or follows Kubernetes' default of five minutes. Changing a container restarts it.</p>
+    ${lh ? `<div class="note ${moving ? "good" : "warn"}">${moving
+      ? `Longhorn lets go of a failed node's volumes (<span class="mono">${esc(policy)}</span>), so a container moving to another node takes its volume with it.`
+      : `<b>A container with a single-node volume cannot really move yet.</b> Longhorn keeps its volume attached to the dead node, so on the
+         new node it waits until the old one is back. <button class="btn sm pri" data-need="admin" onclick="wlFailoverPolicy()" style="margin-top:6px">Let Longhorn release them</button>`}</div>` : ""}
+    <div class="row" style="margin:12px 0;gap:6px;flex-wrap:wrap"><span class="small dim">Set all to</span>
+      ${Object.entries(FAILOVER_WORDS).map(([v, l]) => `<button class="btn sm" onclick="$$('#mbody select[data-fo]').forEach(s => s.value='${v}')">${esc(l)}</button>`).join("")}</div>
+    <table class="tbl dense stack"><thead><tr><th>Container</th><th>If its node fails</th></tr></thead><tbody>
+      ${rows.map(w => `<tr><td><b>${esc(w.name)}</b> <span class="dim xs">${esc(w.ns)}${w.group ? ` · ${esc(w.group)}` : ""}</span>
+          ${(w.hardware || []).length ? `<span class="tag hw" data-tip="Tied to hardware on its host">${esc(w.hardware.join(", "))}</span>` : ""}</td>
+        <td data-label="If its node fails">${failoverSelect(`fo_${w.ns}_${w.name}`, w.failover || "default", `data-fo data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" data-was="${esc(w.failover || "default")}"`)}</td></tr>`).join("")}
+    </tbody></table>
+    <div class="row" style="margin-top:14px"><button class="btn pri" data-need="operator" onclick="wlFailoverSave()">Save changes</button>
+      <button class="btn" onclick="closeModal()">Cancel</button></div>`;
+  if (window.applyRole) applyRole();
+};
+window.wlFailoverSave = async () => {
+  const items = $$("#mbody select[data-fo]").filter(s => s.value !== s.dataset.was)
+    .map(s => ({ ns: s.dataset.ns, name: s.dataset.name, mode: s.value }));
+  if (!items.length) return closeModal();
+  if (items.some(i => (STATE.data.wl || []).some(w => w.self && w.ns === i.ns && w.name === i.name))
+      && !confirm("Homestead itself is among them: it restarts, and this page reconnects when it is back.")) return;
+  try {
+    const r = await api("/api/workloads/failover", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items }) });
+    toast(r.detail, "ok"); closeModal(); setTimeout(() => refresh(true), 900);
+  } catch (e) { toast(e.message, "bad"); }
+};
+window.wlFailoverPolicy = async () => {
+  if (!confirm("Let Longhorn delete the pods of a node that stops answering, so their volumes can attach elsewhere?\n\nThis is Longhorn's \"Pod Deletion Policy When Node is Down\" set to delete-both-statefulset-and-deployment-pod.")) return;
+  try {
+    await api("/api/longhorn/settings", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node_down: "delete-both-statefulset-and-deployment-pod" }) });
+    toast("Longhorn now lets go of a failed node's volumes", "ok"); wlFailover();
   } catch (e) { toast(e.message, "bad"); }
 };
 

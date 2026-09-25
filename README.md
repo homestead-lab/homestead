@@ -78,10 +78,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.130`, the workflow publishes:
+For a release such as `v2.8.131`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.130
+ghcr.io/wjcloudy/homestead:2.8.131
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -92,8 +92,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.130
-git push origin v2.8.130
+git tag v2.8.131
+git push origin v2.8.131
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
@@ -692,7 +692,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.130/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.131/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -703,7 +703,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.130 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.131 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1222,6 +1222,18 @@ import.
 
 A container listening on several ports can pick its **Main port** from its ⋯
 menu - usually its web UI - and its card links to that one first.
+
+## When a node fails
+
+Each container chooses what happens when its node stops answering: move to
+another node after about 15 seconds (new containers' default), wait for its
+node to come back (for hardware-bound apps), or Kubernetes' five-minute
+default. **If a node fails** on Containers sets every container in one list;
+each editor has it under *Where it runs*. The choice is the pod's tolerations
+for the unreachable and not-ready taints, so it shows for containers made
+elsewhere too. A moved container's single-node volume follows it only if
+Longhorn's *Pod Deletion Policy When Node is Down* lets go of the dead node's
+pods; the dialog says whether it does and sets it, as does Settings > Cluster.
 
 ## Container groups
 
