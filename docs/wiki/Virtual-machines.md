@@ -83,7 +83,10 @@ or k3s alone. The nodes' login is `ubuntu` with the password you chose.
 **Cancel** on the job, while the cluster is still coming up, deletes its VMs
 with their disks and frees their addresses in IP addresses, after the cluster's
 name is typed. Only VMs carrying the cluster's label are deleted. A build that
-fails part-way, one VM not made, removes the ones it had made already.
+fails part-way, one VM not made, removes the ones it had made already. A build
+that failed later - the cluster never came up - keeps its VMs so you can read
+their logs; **Clean up** on the failed job removes them, their disks and their
+addresses, and the job stays in the list as failed.
 
 ## Edit
 

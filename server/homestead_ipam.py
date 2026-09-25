@@ -231,7 +231,12 @@ def bulk(ips, changes):
     def change(data):
         for ip in targets:
             if changes.get("forget"):
+                # The last scan's answer goes too: it kept the row on the
+                # page, so removing an address looked as though it did
+                # nothing. Something still there is found by the next scan.
                 data["records"].pop(ip, None)
+                for scan in data["scans"].values():
+                    (scan.get("hosts") or {}).pop(ip, None)
                 continue
             current = data["records"].get(ip, {})
             row = {key: changes[key] for key in ("kind", "category", "owner", "note") if key in changes}
@@ -243,7 +248,7 @@ def bulk(ips, changes):
                 sources.append("manual")
         return {"ok": True, "count": len(targets),
                 "detail": f"{len(targets)} address{'es' if len(targets) != 1 else ''} " +
-                          ("forgotten" if changes.get("forget") else "updated")}
+                          ("removed" if changes.get("forget") else "updated")}
     return update(change)
 
 

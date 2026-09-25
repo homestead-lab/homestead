@@ -709,3 +709,6 @@ def register(ops):
             (("move",), move_plan, move_cancel)):
         for kind in kinds:
             ops.CANCELLERS[kind] = (plan, run or (lambda _item, _options: ""))
+    # A k3s build that fails leaves its VMs running, their disks and their
+    # addresses taken; the same cancel removes them afterwards.
+    ops.CLEANUPS.add("k3s-cluster")

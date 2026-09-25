@@ -106,6 +106,15 @@ class IpamTests(unittest.TestCase):
         self.assertTrue(any("not documented" in f["text"] for f in self.row("192.0.2.60")["flags"]))
         self.assertFalse(self.row("192.0.2.10")["flags"])
 
+    def test_removing_an_address_a_scan_found_takes_it_off_the_list(self):
+        answering = {"192.0.2.60": {"up": True, "ports": [80]}, "192.0.2.61": {"up": True, "ports": [22]}}
+        IPAM.save_record({"ip": "192.0.2.60", "name": "old camera"})
+        IPAM.scan("192.0.2.0/24", probe=lambda ip: answering.get(ip, {"up": False, "ports": []}), workers=8)
+        IPAM._threads["192.0.2.0/24"].join(30)
+        result = IPAM.bulk(["192.0.2.60", "192.0.2.61"], {"forget": True})
+        self.assertFalse({"192.0.2.60", "192.0.2.61"} & {r["ip"] for r in self.subnet()["rows"]})
+        self.assertEqual("2 addresses removed", result["detail"])
+
     def test_a_refused_connection_still_means_someone_is_home(self):
         server = socket.socket()
         server.bind(("127.0.0.1", 0))

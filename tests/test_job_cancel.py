@@ -57,7 +57,7 @@ class Cluster:
 class Store(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.saved = OPS.DATA_DIR, dict(OPS.RESOLVERS), dict(OPS.CANCELLERS)
+        self.saved = OPS.DATA_DIR, dict(OPS.RESOLVERS), dict(OPS.CANCELLERS), set(OPS.CLEANUPS)
         OPS.DATA_DIR = self.tmp.name
         self.cluster = Cluster()
         CANCEL.bind(self.cluster.get, self.cluster.send)
@@ -66,6 +66,7 @@ class Store(unittest.TestCase):
         OPS.DATA_DIR = self.saved[0]
         OPS.RESOLVERS.clear(); OPS.RESOLVERS.update(self.saved[1])
         OPS.CANCELLERS.clear(); OPS.CANCELLERS.update(self.saved[2])
+        OPS.CLEANUPS.clear(); OPS.CLEANUPS.update(self.saved[3])
         self.tmp.cleanup()
 
     def job(self, kind, ref, title="A job", resource=None):
@@ -233,6 +234,32 @@ class K3sClusterTests(Store):
         with a, b:
             OPS.cancel(self.op(), confirm="k3s-lab")
         self.assertEqual([("lab", "k3s-lab-server-1", True)], self.deleted)
+
+    def test_a_failed_build_can_be_cleaned_up_and_stays_failed(self):
+        op = self.op()
+        items = OPS._read()
+        items[-1].update(status="failed", finished_at=OPS._now(), message="After 45 minutes the cluster is not up")
+        OPS._write(items)
+        listed = next(o for o in OPS.list_operations() if o["id"] == op)
+        self.assertEqual((False, True), (listed["cancellable"], listed["cleanable"]))
+        self.assertTrue(OPS.cancel_plan(op)["cleanup"])
+        a, b = self.patches()
+        with a, b:
+            OPS.cancel(op, confirm="k3s-lab")
+        item = self.stored(op)
+        self.assertEqual(("failed", True), (item["status"], item["cleaned"]))
+        self.assertIn("Cleaned up after failing", item["message"])
+        self.assertEqual(2, len(self.deleted))
+        self.assertNotIn("192.0.2.60", self.records)
+        with self.assertRaisesRegex(ValueError, "failed already"):
+            OPS.cancel(op, confirm="k3s-lab")
+
+    def test_other_failed_jobs_are_not_offered_a_clean_up(self):
+        op = self.job("image-pull", {"namespace": "lab", "name": "x"})
+        items = OPS._read(); items[-1]["status"] = "failed"; OPS._write(items)
+        self.assertFalse(next(o for o in OPS.list_operations() if o["id"] == op)["cleanable"])
+        with self.assertRaisesRegex(ValueError, "failed already"):
+            OPS.cancel(op)
 
     def test_a_build_that_fails_part_way_removes_the_vms_it_made(self):
         removed, made = [], []

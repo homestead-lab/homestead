@@ -94,6 +94,7 @@ def _public(item):
     # separately, as it reads Kubernetes and the tray is polled often.
     out["cancellable"] = item.get("status") not in TERMINAL and (
         item.get("status") != CANCELLING or _cancel_stale(item))
+    out["cleanable"] = _cleanable(item)
     check = RESUMABLE.get(item.get("kind"))
     if item.get("status") == "failed" and check:
         try:
@@ -530,6 +531,13 @@ def dismiss(operation_id):
 #     change item["ref"], which is kept. Each step must be safe to run again:
 #     a cancel interrupted part-way is asked again from the start.
 CANCELLERS = {}
+# Kinds whose cancel also tidies up after the job has failed: what a failed
+# k3s build made - VMs, disks, addresses - stays until something removes it.
+CLEANUPS = set()
+
+
+def _cleanable(item):
+    return item.get("status") == "failed" and item.get("kind") in CLEANUPS and not item.get("cleaned")
 MODES = {"rollback": "Cancel and put back", "stop": "Cancel it", "forget": "Stop tracking it"}
 
 
@@ -560,7 +568,7 @@ def _active(operation_id):
     match = next((item for item in _read() if item.get("id") == operation_id), None)
     if not match:
         raise ValueError("operation not found")
-    if match.get("status") in TERMINAL:
+    if match.get("status") in TERMINAL and not _cleanable(match):
         raise ValueError(f"it has {match['status']} already, so there is nothing left to cancel")
     return match
 
@@ -572,7 +580,8 @@ def cancel_plan(operation_id):
     plan = _plan_for(item)
     return {"id": item["id"], "kind": item.get("kind", ""), "title": item.get("title", ""),
             "status": item.get("status", ""), "progress": item.get("progress", 0),
-            "message": item.get("message", ""), "resource": item.get("resource") or {}, **plan}
+            "message": item.get("message", ""), "resource": item.get("resource") or {},
+            "cleanup": item.get("status") == "failed", **plan}
 
 
 def cancel(operation_id, options=None, confirm="", allowed=None, by=""):
@@ -589,7 +598,7 @@ def cancel(operation_id, options=None, confirm="", allowed=None, by=""):
         if not match:
             raise ValueError("operation not found")
         status = match.get("status")
-        if status in TERMINAL:
+        if status in TERMINAL and not _cleanable(match):
             raise ValueError(f"it has {status} already, so there is nothing left to cancel")
         if status == CANCELLING and not _cancel_stale(match):
             raise ValueError("it is being cancelled already")
@@ -632,7 +641,12 @@ def cancel(operation_id, options=None, confirm="", allowed=None, by=""):
             match.pop("previous_status", None)
             if by:
                 match["cancelled_by"] = str(by)[:120]
-            _finish(match, "cancelled", match.get("progress", 0), message)
+            if before == "failed":
+                # It failed; that stays its outcome. Only what it left is gone.
+                match.update(status="failed", cleaned=True, updated_at=_now(),
+                             message=f"Cleaned up after failing: {message}"[:500])
+            else:
+                _finish(match, "cancelled", match.get("progress", 0), message)
             _write(items)
     return {"ok": True, "id": operation_id, "detail": message,
             "operation": _public(match) if match else None}

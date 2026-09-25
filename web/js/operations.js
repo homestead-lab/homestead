@@ -51,6 +51,7 @@ function renderOperations() {
     <div class="jobactions">
       <button class="btn sm" onclick="openOperation('${esc(operation.href || "/")}','${esc(operation.id || "")}')">Open</button>
       ${operation.resumable ? `<button class="btn sm pri" data-need="admin" data-tip="Run the steps that are left, from the one it stopped at" onclick="resumeOperation('${esc(operation.id)}')">Carry on</button>` : ""}
+      ${operation.cleanable ? `<button class="btn sm danger" data-need="admin" data-tip="Says what it left behind - its VMs, disks and addresses - and removes it" onclick="cancelOperation('${esc(operation.id)}')">Clean up</button>` : ""}
       ${operation.cancellable ? `<button class="btn sm danger" data-need="operator" data-tip="Says what stopping it would undo and what it cannot, before anything changes" onclick="cancelOperation('${esc(operation.id)}')">${operation.status === "cancelling" ? "Cancel again" : "Cancel"}</button>` : ""}
       ${operationActive(operation) ? "" : `<button class="btn sm" data-need="operator" onclick="dismissOperation('${esc(operation.id)}')">Dismiss</button>`}
     </div>
@@ -167,9 +168,10 @@ window.cancelOperation = async id => {
   const body = !plan.can
     ? `<div class="note warn"><b>It cannot be cancelled at this step.</b><div>${esc(plan.why_not || "")}</div></div>
        <div class="row" style="margin-top:12px"><button class="btn" onclick="closeModal()">Close</button></div>`
-    : `<p>${esc(CANCEL_LEAD[plan.mode] || CANCEL_LEAD.stop)}</p>
+    : `<p>${esc(plan.cleanup ? "This job failed part-way. Cleaning up removes what it left behind; the job stays in the list as failed."
+        : CANCEL_LEAD[plan.mode] || CANCEL_LEAD.stop)}</p>
       <div class="dim xs">${esc(plan.message || "")} · ${Math.round(plan.progress || 0)}% done</div>
-      ${plan.undo.length ? `<div class="note ${high ? "warn" : ""}" style="margin-top:12px"><b>${plan.mode === "rollback" ? "What cancelling puts back" : "What cancelling does"}</b>${list(plan.undo)}</div>` : ""}
+      ${plan.undo.length ? `<div class="note ${high ? "warn" : ""}" style="margin-top:12px"><b>${plan.cleanup ? "What cleaning up removes" : plan.mode === "rollback" ? "What cancelling puts back" : "What cancelling does"}</b>${list(plan.undo)}</div>` : ""}
       ${plan.keeps.length ? `<div class="note" style="margin-top:10px"><b>${plan.mode === "forget" ? "What carries on" : "What stays as it is"}</b>${list(plan.keeps)}</div>` : ""}
       ${plan.options.map(option => `<label class="switch" style="margin-top:12px"><input type="checkbox" data-cancel-option="${esc(option.id)}" ${option.default ? "checked" : ""}> ${esc(option.label)}</label>
         ${option.detail ? `<div class="dim xs">${esc(option.detail)}</div>` : ""}`).join("")}
@@ -178,9 +180,9 @@ window.cancelOperation = async id => {
       ${plan.needs === "admin" && !can("admin") ? `<div class="note warn" style="margin-top:12px">Cancelling this job needs an admin.</div>` : ""}
       <div class="row" style="margin-top:12px">
         <button class="btn ${high ? "danger" : "pri"}" id="oc_go" data-need="${esc(plan.needs || "operator")}" ${plan.confirm ? "disabled" : ""}
-          onclick="cancelOperationGo('${esc(plan.id)}')">${esc(plan.action)}</button>
-        <button class="btn" onclick="closeModal()">Keep it running</button></div>`;
-  modal(`Cancel · ${plan.title}`, body);
+          onclick="cancelOperationGo('${esc(plan.id)}')">${esc(plan.cleanup ? "Remove what it made" : plan.action)}</button>
+        <button class="btn" onclick="closeModal()">${plan.cleanup ? "Leave it" : "Keep it running"}</button></div>`;
+  modal(`${plan.cleanup ? "Clean up" : "Cancel"} · ${plan.title}`, body);
   window.__cancelPlan = plan;
   if (window.applyRole) window.applyRole();
 };
