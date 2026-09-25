@@ -656,8 +656,9 @@ const IMAGE_REASONS = {
   scheduled: { tone: "info", tip: "a scheduled job that runs this image" },
 };
 async function viewImages() {
-  const d = await api("/api/images");
+  const [d, vm] = await Promise.all([api("/api/images"), api("/api/images/vm").catch(() => null)]);
   STATE.data.imageCache = d;
+  STATE.data.vmImages = vm;
   // Kubernetes lists only each node's largest images; the full list is
   // containerd's. Homestead asks for it itself when its last answer is old,
   // so this only waits for a scan that is running to finish.
@@ -704,8 +705,59 @@ async function viewImages() {
         <td><div class="row" style="gap:6px">${missing.length ? `<button class="btn sm" onclick="prepull('${esc(i.name)}')">Pre-pull</button>` : '<span class="dim xs">everywhere</span>'}
           ${!i.protected && !i.system && i.digest ? `<button class="btn sm danger" data-need="admin" onclick="imageCleanupReview('${esc(i.digest)}')">Clean up</button>` : ""}</div></td></tr>`;
       }).join("") || `<tr><td colspan=5 class="empty">none</td></tr>`}
-    </tbody></table></div></div>`);
+    </tbody></table></div></div>
+    ${vmImagesSection(vm, d.node_names)}`);
 }
+
+/* VM images: on Harvester each is downloaded once and kept as a Longhorn
+   backing image. A disk made from it starts as a copy, and every node its
+   disks run on holds a copy of the image - a cache as much as the container
+   one above, and as easy to lose track of. */
+function vmImagesSection(vm, nodeNames) {
+  if (!vm) return "";
+  if (!vm.harvester) return `<div class="ctitle" style="margin-top:24px">VM images</div><div class="note">${esc(vm.note)}</div>`;
+  const size = mb => mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`;
+  const q = STATE.q.toLowerCase();
+  const rows = vm.images.filter(i => !q || i.display.toLowerCase().includes(q));
+  const total = vm.images.reduce((sum, i) => sum + i.size_mb * Math.max(1, i.copies), 0);
+  return `<div class="between" style="margin:24px 0 10px"><div><div class="ctitle" style="margin:0">VM images</div>
+      <p class="dim small" style="margin:4px 0 0">${vm.images.length} image${vm.images.length === 1 ? "" : "s"} · ${size(Math.round(total))} across their copies on nodes ·
+        a disk made from one keeps reading from it, so an image a disk came from stays</p></div></div>
+    <div class="card flat pad0"><div class="tblwrap"><table data-sort="vmimages" class="tbl stack imgtable"><thead><tr>
+      <th>Image</th><th>Size</th><th>Copies on</th><th>Disks made from it</th><th></th></tr></thead><tbody>
+      ${rows.map(i => {
+        const missing = (nodeNames || []).filter(n => !i.nodes.includes(n));
+        const state = i.deleting ? '<span class="tag">deleting</span>'
+          : i.state === "failed" ? `<span class="tag bad" data-tip="${esc(i.message)}">download failed</span>`
+          : i.state === "downloading" ? `<span class="tag warn">downloading ${i.progress}%</span>` : "";
+        const used = i.used_by.length ? i.used_by.map(v => `<span class="tag ok">${esc(v.split("/").pop())}</span>`).join("")
+          : i.disks.length ? `<span class="tag" data-tip="${esc(i.disks.join(", "))}">${i.disks.length} disk${i.disks.length === 1 ? "" : "s"}, no VM</span>`
+          : '<span class="tag">unused</span>';
+        return `<tr><td class="imgname"><b>${esc(i.display)}</b> ${state}
+            <div class="dim xs mono">${esc(i.namespace)}${i.source ? ` · from ${esc(i.source)}` : ""}${i.virtual_size_gb ? ` · ${i.virtual_size_gb} GB disk` : ""}</div></td>
+          <td class="mono nowrap" data-sort="${i.size_mb}">${i.size_mb ? size(i.size_mb) : '<span class="dim">—</span>'}</td>
+          <td>${i.nodes.map(n => `<span class="tag ok">${esc(n.replace("harvester-", ""))}</span>`).join("")}
+            ${missing.map(n => `<span class="tag">${esc(n.replace("harvester-", ""))} ✕</span>`).join("")}</td>
+          <td><div class="row" style="gap:5px">${used}</div></td>
+          <td>${!i.disks.length && !i.deleting ? `<button class="btn sm danger" data-need="admin" onclick="vmImageDelete('${esc(i.namespace)}','${esc(i.name)}')">Delete</button>` : ""}</td></tr>`;
+      }).join("") || `<tr><td colspan=5 class="empty">No VM images: an image is kept here when a VM is made from a download address.</td></tr>`}
+    </tbody></table></div></div>`;
+}
+window.vmImageDelete = (namespace, name) => {
+  const i = (STATE.data.vmImages?.images || []).find(x => x.namespace === namespace && x.name === name);
+  if (!i) return;
+  modal(`Delete · ${i.display}`, `<p>The image is deleted, with its copies on ${i.nodes.length} node${i.nodes.length === 1 ? "" : "s"}
+      (${esc(i.nodes.join(", ") || "none")}). No disk was made from it. A VM made from the same download address later downloads it again.</p>
+    <div class="f" style="margin-top:12px"><label>Type <b class="mono">${esc(i.display)}</b> to confirm</label><input id="vmi_confirm" autocomplete="off"></div>
+    <div class="row"><button class="btn danger" onclick="vmImageDeleteGo('${esc(namespace)}','${esc(name)}')">Delete</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+};
+window.vmImageDeleteGo = async (namespace, name) => {
+  try {
+    const r = await api("/api/images/vm/delete", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ namespace, name, confirm: $("#vmi_confirm").value.trim() }) });
+    toast(r.detail, "ok"); closeModal(); resetPaint(); viewImages();
+  } catch (e) { toast(e.message, "bad"); }
+};
 window.imageScan = async () => {
   try {
     const r = await api("/api/images/scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });

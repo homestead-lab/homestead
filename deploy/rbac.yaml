@@ -84,6 +84,10 @@ rules:
   - apiGroups: ["longhorn.io"]
     resources: [engines, settings, backupvolumes]
     verbs: [get, list, watch]
+  # Image cache: which nodes hold a copy of each VM image.
+  - apiGroups: ["longhorn.io"]
+    resources: [backingimages]
+    verbs: [get, list]
   # Replica records on a host that is gone for good are deleted so Longhorn
   # rebuilds them elsewhere; only on a node that no longer exists.
   - apiGroups: ["longhorn.io"]
@@ -133,8 +137,13 @@ rules:
   # upgrades and versions: the Cluster page shows what Harvester offers and
   # follows an upgrade started in Harvester's dashboard; it never starts one.
   - apiGroups: ["harvesterhci.io"]
-    resources: [virtualmachineimages, settings, upgrades, versions]
+    resources: [settings, upgrades, versions]
     verbs: [get, list]
+  # VM images: downloaded for a VM from a URL, listed in Image cache, and
+  # deleted there once no disk was made from one.
+  - apiGroups: ["harvesterhci.io"]
+    resources: [virtualmachineimages]
+    verbs: [get, list, create, delete]
   # Cluster health reads certificate request state only; certificate/key bodies
   # are never returned to the UI and Homestead cannot approve CSRs.
   # Helm: releases are read from Helm's own Secrets (secrets are listed

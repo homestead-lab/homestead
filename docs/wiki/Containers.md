@@ -84,6 +84,13 @@ so neither reads as unused. *Rollback* copies are
 the image a container had before its last update, kept so **Roll back** can
 return to it; **Forget** one and it becomes unused, to clean up like the rest.
 
+On Harvester the page also lists **VM images** - the cloud images VMs are
+made from. Each is downloaded once and kept as a Longhorn backing image, with
+a copy on every node whose disks were made from it; the table says how big
+each is, which nodes hold a copy, and which VMs' disks came from it. An image
+nothing was made from can be deleted there; one a disk came from stays, since
+the disk keeps reading from it.
+
 ## Groups
 
 Groups gather containers under a heading - Media, Home, Monitoring - that folds

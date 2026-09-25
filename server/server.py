@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.138")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.139")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -4328,7 +4328,7 @@ ADMIN_ROUTES = {
     "/api/shares", "/api/shares/edit", "/api/shares/delete", "/api/shares/options",
     "/api/storage/classes/default", "/api/storage/classes/delete", "/api/storage/classes/cleanup",
     "/api/network/service/delete",
-    "/api/images/cleanup", "/api/images/scan", "/api/images/forget-rollback",
+    "/api/images/cleanup", "/api/images/scan", "/api/images/forget-rollback", "/api/images/vm/delete",
     "/api/volumes/delete", "/api/volumes/chown",
     # A class change stops workloads and swaps their volume underneath them.
     "/api/volumes/reclass/start", "/api/volumes/old-copies/remove", "/api/self/samba",
@@ -4645,6 +4645,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, homestead_replicas())
             if p == "/api/ipam":
                 return self._send(200, IPAM.view())
+            if p == "/api/images/vm":
+                return self._send(200, cached("vmimages", 15, IMP.vm_image_cache))
             if p in ("/api/resources/list", "/api/resources/object", "/api/resources/reveal"):
                 arg = lambda key: (q.get(key) or [""])[0]
                 if p == "/api/resources/list":
@@ -5467,6 +5469,9 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, result)
             if p == "/api/images/scan":
                 return self._send(200, IMP.start_image_scan())
+            if p == "/api/images/vm/delete":
+                _cache.pop("vmimages", None)
+                return self._send(200, IMP.delete_vm_image(b.get("namespace", ""), b.get("name", ""), b.get("confirm", "")))
             if p == "/api/images/forget-rollback":
                 return self._send(200, IMP.forget_rollback(b.get("namespace") or DEFAULT_NS, b.get("name", "")))
             if p == "/api/images/cleanup":
@@ -5751,7 +5756,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.138 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.139 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

@@ -206,8 +206,8 @@
     // Homestead itself: its Stop asks first, since it takes this page with it.
     { name: "homestead", ns: "lab", kind: "Deployment", group: "Homestead", self: true, desired: 1, ready: 1, uptime: 86400,
       cpu: 0.04, mem_mb: 88, nodes: ["harvester-node1"], hardware: [],
-      images: ["ghcr.io/wjcloudy/homestead:2.8.138"], ports: [{ port: 8088, ip: "192.0.2.242" }],
-      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/wjcloudy/homestead:2.8.138")] },
+      images: ["ghcr.io/wjcloudy/homestead:2.8.139"], ports: [{ port: 8088, ip: "192.0.2.242" }],
+      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/wjcloudy/homestead:2.8.139")] },
   ];
   const storage = { cap_gb: 1392, avail_gb: 906, used_gb: 486, used_pct: 34.9,
     provisioned_gb: 670, actual_gb: 224, volumes: 8, healthy: 6, degraded: 1,
@@ -454,7 +454,7 @@
       detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.138", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.139", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
@@ -535,6 +535,19 @@
         { name: "docker.io/library/redis:7.2", names: [], digest: "sha256:" + "c".repeat(64),
           size_mb: 41, nodes: ["harvester-node1", "harvester-node2", "harvester-node3"],
           system: false, protected: false, retained_by: [] }] }),
+    // Harvester's VM images: kept once, copied to the nodes their disks run on.
+    "/api/images/vm": { harvester: true, note: "", images: [
+      { name: "image-4f2a1c", namespace: "lab", display: "noble-server-cloudimg-amd64.img", source: "cloud-images.ubuntu.com",
+        size_mb: 598.2, virtual_size_gb: 3.5, state: "ready", progress: 100, message: "", storage_class: "longhorn-image-4f2a1c",
+        nodes: ["harvester-node1", "harvester-node2"], copies: 2, disks: ["lab/pihole-disk", "lab/k3s-lab-server-1-disk"],
+        used_by: ["lab/pihole", "lab/k3s-lab-server-1"], deleting: false },
+      { name: "image-9b07e3", namespace: "lab", display: "debian-12-genericcloud-amd64.qcow2", source: "cloud.debian.org",
+        size_mb: 412.7, virtual_size_gb: 2, state: "ready", progress: 100, message: "", storage_class: "longhorn-image-9b07e3",
+        nodes: ["harvester-node3"], copies: 1, disks: [], used_by: [], deleting: false },
+      { name: "image-c1d8e0", namespace: "lab", display: "haos_ova-16.2.qcow2", source: "github.com",
+        size_mb: 0, virtual_size_gb: 0, state: "downloading", progress: 42, message: "", storage_class: "",
+        nodes: [], copies: 0, disks: [], used_by: [], deleting: false }] },
+    "/api/images/vm/delete": { ok: true, detail: "debian-12-genericcloud-amd64.qcow2 is being deleted, with its copies on 1 node" },
     "/api/images/prepull": { ok: true, daemonset: "homestead-pull-redis",
       nodes: ["harvester-node1", "harvester-node3"], skipped: ["harvester-node2"],
       message: "Pulling onto 2 nodes; skipped harvester-node2 (cordoned or not ready)" },
@@ -548,15 +561,15 @@
       user: "admin", added: "2026-09-22 17:02" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "garage") return { name, version: "2.8.138", protocol: 1, local_version: "2.8.138",
+      if (name === "garage") return { name, version: "2.8.139", protocol: 1, local_version: "2.8.139",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "garage runs 2.8.138 and this one 2.8.138. Moves work between them; garage is the newer of the two." };
+        message: "garage runs 2.8.139 and this one 2.8.139. Moves work between them; garage is the newer of the two." };
       return name === "attic"
-        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.138", local_protocol: 1,
+        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.139", local_protocol: 1,
             state: "behind", compatible: false,
-            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.138). Update attic first." }
-        : { name, version: "2.8.138", protocol: 1, local_version: "2.8.138", local_protocol: 1,
-            state: "same", compatible: true, message: "Both run Homestead 2.8.138." };
+            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.139). Update attic first." }
+        : { name, version: "2.8.139", protocol: 1, local_version: "2.8.139", local_protocol: 1,
+            state: "same", compatible: true, message: "Both run Homestead 2.8.139." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     // shed is ready to move from; garage has no backup storage yet.
@@ -567,7 +580,7 @@
     "/api/move/clusters/storage": { ok: true, detail: "backup storage is starting on garage at http://192.0.2.244:9000" },
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "shed", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.138", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.139", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -927,7 +940,7 @@ ssh_pwauth: true
     "/api/volumes/reclass/start": { ok: true, operation: { id: "op4" } },
     "/api/self/health": () => {
       const now = Date.now() / 1000;
-      return { version: "2.8.138", leader: true, identity: "homestead-6d9f-abcde",
+      return { version: "2.8.139", leader: true, identity: "homestead-6d9f-abcde",
         api: { ok: true, ms: 38 },
         replicas: { desired: 1, pods: [{ name: "homestead-6d9f-abcde", node: "harvester-node1", ready: true, leader: true, this: true }] },
         loops: [{ name: "sampler", label: "Live charts", state: "ok", last_ok: now - 12, error: "", every: 30 },
@@ -1247,7 +1260,7 @@ ssh_pwauth: true
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.138", candidate_tag: "2.8.138", remote_digest: "sha256:ghi", available: true }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.139", candidate_tag: "2.8.139", remote_digest: "sha256:ghi", available: true }] },
       { ns: "lab", name: "paperless", available: false, can_rollback: false,
         images: [{ container: "paperless", deployed: "registry.lan/paperless-ngx:2.11", candidate: "registry.lan/paperless-ngx:2.11", available: false, error: "registry authentication required" }] }] },
     "/api/flow": {

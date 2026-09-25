@@ -1937,6 +1937,108 @@ def list_vm_images():
         return []
 
 
+LH_API = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
+
+
+def _items_or_empty(path):
+    try:
+        return kget(path).get("items", [])
+    except Exception:
+        return []
+
+
+def vm_image_cache():
+    """The VM images this cluster keeps, the way the image cache lists
+    container ones: how big each is, which nodes hold a copy, and which VMs'
+    disks were made from it.
+
+    On Harvester an image is downloaded once and kept as a Longhorn backing
+    image; every disk made from it starts as a copy, and each node its disks
+    run on holds a copy of the image. Elsewhere CDI downloads a VM's disk for
+    that VM alone - there is no cache to show, and this says so.
+
+    The address an image came from is shown by its host only: a download
+    link can carry a token."""
+    images = _items_or_empty("/apis/harvesterhci.io/v1beta1/virtualmachineimages")
+    if not images:
+        try:
+            kget("/apis/harvesterhci.io/v1beta1/virtualmachineimages")
+            harvester = True
+        except Exception:
+            harvester = False
+        return {"harvester": harvester, "images": [],
+                "note": "" if harvester else
+                "On this cluster CDI downloads each VM's disk for that VM alone, so there is no VM image cache: "
+                "a disk imported under Import can be attached to one VM instead."}
+    classes = {c["metadata"]["name"]: c for c in _items_or_empty("/apis/storage.k8s.io/v1/storageclasses")}
+    backing = {b["metadata"]["name"]: b for b in _items_or_empty(f"{LH_API}/backingimages")}
+    disk_node = {}
+    for node in _items_or_empty(f"{LH_API}/nodes"):
+        for disk in ((node.get("status") or {}).get("diskStatus") or {}).values():
+            if disk.get("diskUUID"):
+                disk_node[disk["diskUUID"]] = node["metadata"]["name"]
+    claims = _items_or_empty("/api/v1/persistentvolumeclaims")
+    mounted = {}
+    for vm in _items_or_empty("/apis/kubevirt.io/v1/virtualmachines"):
+        meta = vm.get("metadata") or {}
+        for volume in (((vm.get("spec") or {}).get("template") or {}).get("spec") or {}).get("volumes") or []:
+            claim = (volume.get("persistentVolumeClaim") or {}).get("claimName") or (volume.get("dataVolume") or {}).get("name")
+            if claim:
+                mounted.setdefault((meta.get("namespace", ""), claim), []).append(meta.get("name", ""))
+    rows = []
+    for image in images:
+        meta, spec, status = image.get("metadata") or {}, image.get("spec") or {}, image.get("status") or {}
+        ns, name = meta.get("namespace", ""), meta.get("name", "")
+        ref, klass = f"{ns}/{name}", status.get("storageClassName", "")
+        imported = next((c for c in status.get("conditions") or [] if c.get("type") == "Imported"), {})
+        state = ("ready" if imported.get("status") == "True"
+                 else "failed" if imported.get("status") == "False" and imported.get("reason") == "ImportFailed"
+                 else "downloading")
+        lh = backing.get(((classes.get(klass) or {}).get("parameters") or {}).get("backingImage", "")) or {}
+        files = (lh.get("status") or {}).get("diskFileStatusMap") or {}
+        nodes = sorted({disk_node.get(uuid, "") for uuid, row in files.items()
+                        if (row or {}).get("state") == "ready"} - {""})
+        disks, used_by = [], set()
+        for claim in claims:
+            cmeta, cspec = claim.get("metadata") or {}, claim.get("spec") or {}
+            if ((cmeta.get("annotations") or {}).get("harvesterhci.io/imageId") == ref
+                    or (klass and cspec.get("storageClassName") == klass)):
+                disks.append(f"{cmeta.get('namespace')}/{cmeta.get('name')}")
+                used_by.update(f"{cmeta.get('namespace')}/{vm}" for vm in mounted.get((cmeta.get("namespace"), cmeta.get("name")), []))
+        size = int(status.get("size", 0) or 0)
+        rows.append({"name": name, "namespace": ns, "display": spec.get("displayName") or name,
+                     "source": urllib.parse.urlparse(str(spec.get("url") or "")).netloc
+                               or str(spec.get("sourceType") or ""),
+                     "size_mb": round(size / 1024 ** 2, 1),
+                     "virtual_size_gb": round(int(status.get("virtualSize", 0) or 0) / 1024 ** 3, 1),
+                     "state": state, "progress": int(status.get("progress", 0) or 0),
+                     "message": " ".join(str(imported.get("message") or "").split())[:240],
+                     "storage_class": klass, "nodes": nodes, "copies": len(nodes),
+                     "disks": sorted(disks), "used_by": sorted(used_by),
+                     "deleting": bool(meta.get("deletionTimestamp"))})
+    rows.sort(key=lambda r: -r["size_mb"])
+    return {"harvester": True, "images": rows, "note": ""}
+
+
+def delete_vm_image(namespace, name, confirm=""):
+    """Delete a VM image no disk was made from. A disk made from one keeps
+    reading its blocks from it, so one still in use is refused by name."""
+    namespace, name = _required_name(namespace, "namespace"), _required_name(name, "image")
+    row = next((r for r in vm_image_cache()["images"] if (r["namespace"], r["name"]) == (namespace, name)), None)
+    if not row:
+        raise ValueError(f"there is no VM image {namespace}/{name}")
+    if row["disks"]:
+        raise PermissionError(f"{row['display']} is what {', '.join(row['disks'][:3])}"
+                              f"{' and more' if len(row['disks']) > 3 else ''} started from; delete "
+                              f"{'that disk' if len(row['disks']) == 1 else 'those disks'} first")
+    if str(confirm or "").strip() != row["display"]:
+        raise ValueError(f"type {row['display']} to confirm")
+    ksend("DELETE", f"/apis/harvesterhci.io/v1beta1/namespaces/{namespace}/virtualmachineimages/{name}")
+    _bust("imgcache", "vms")
+    return {"ok": True, "detail": f"{row['display']} is being deleted, with its copies on "
+                                  f"{len(row['nodes'])} node{'s' if len(row['nodes']) != 1 else ''}"}
+
+
 def _harvester_image(ref):
     """namespace/name of a Harvester image -> the image, or a clear refusal."""
     ns, _, image = str(ref).rpartition("/")
