@@ -112,6 +112,33 @@ def image_cleanup(item):
     return out
 
 
+def _version(text):
+    parts = [int(p) for p in __import__("re").findall(r"\d+", str(text or ""))[:2]]
+    return tuple(parts + [0, 0])[:2]
+
+
+def _no_console_log(ns, name):
+    """Why a VM's console output is not kept, and where to look instead."""
+    instead = f"open {name}'s console, or read {K3SC.LOG} inside it"
+    try:
+        kv = next(iter(kget("/apis/kubevirt.io/v1/kubevirts").get("items", [])), {})
+    except Exception:
+        kv = {}
+    version = (kv.get("status") or {}).get("observedKubeVirtVersion", "")
+    if version and _version(version) < (1, 1):
+        return f"KubeVirt {version} keeps no console output - 1.1 and later can: {instead}"
+    try:
+        vm = kget(f"/apis/kubevirt.io/v1/namespaces/{_q(ns)}/virtualmachines/{_q(name)}")
+        asked = ((((vm.get("spec") or {}).get("template") or {}).get("spec") or {}).get("domain") or {}
+                 ).get("devices", {}).get("logSerialConsole")
+    except Exception:
+        asked = None
+    if asked:
+        return f"{name} asks for its console to be kept, but it started before that took effect: {instead}"
+    return (f"this cluster's KubeVirt keeps no console output unless a VM asks for it, and {name} was made "
+            f"before Homestead asked; clusters made from now on do. For this one, {instead}")
+
+
 def k3s_cluster(item):
     """Each node's serial console: cloud-init, then the install as it runs."""
     ref = item["ref"]
@@ -125,9 +152,7 @@ def k3s_cluster(item):
             continue
         containers = [c.get("name") for c in (pods[0].get("spec") or {}).get("containers") or []]
         if "guest-console-log" not in containers:
-            out.append({"title": title, "text": "", "note": (
-                f"this KubeVirt does not keep what the VM prints: open {node['name']}'s console, "
-                f"or read {K3SC.LOG} inside it")})
+            out.append({"title": title, "text": "", "note": _no_console_log(ref["namespace"], node["name"])})
             continue
         out.append(_pod_source(ref["namespace"], pods[0], title, "guest-console-log"))
     return out

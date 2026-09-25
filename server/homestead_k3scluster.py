@@ -147,6 +147,8 @@ def start(cfg, ops):
               "cloud_init": user_data(node, built["first"], token, str(cfg["password"]), built["setup"],
                                       str(cfg.get("k3s_version") or "")),
               "labels": {LABEL: built["name"], ROLE: node["role"]},
+              # Its console kept as a log, so the job's Log shows the install.
+              "log_console": True,
               "ipam_note": f"k3s cluster {built['name']}, {node['role']}"}
         try:
             create(vm)

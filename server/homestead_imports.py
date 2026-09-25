@@ -2250,6 +2250,12 @@ def create_vm(cfg, platform=None, default_class=""):
         "networks": [net],
         "volumes": volumes,
     }
+    if cfg.get("log_console"):
+        # KubeVirt 1.1 and later keep what the VM prints on its serial
+        # console as a log of its launcher pod, which is how a job shows a
+        # VM installing itself. Harvester turns that off for every VM; this
+        # turns it back on for this one. Older KubeVirt drops the field.
+        template_spec["domain"]["devices"]["logSerialConsole"] = True
     if harvester:
         # Harvester's disks are shared block volumes, so a node drain can move
         # the VM. Elsewhere the cluster's own default applies: asking to

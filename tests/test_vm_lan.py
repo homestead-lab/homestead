@@ -112,6 +112,8 @@ class K3sClusterTests(unittest.TestCase):
                          self.made[1]["static_ip"])
         self.assertEqual({"homestead.io/k3s-cluster": "k3s-demo", "homestead.io/k3s-role": "agent"},
                          self.made[1]["labels"])
+        # Their consoles are kept, so the job's Log shows each one installing.
+        self.assertTrue(all(vm["log_console"] for vm in self.made))
         self.assertIn('password: "a-long-password"', server)
 
     def test_a_bare_cluster_uses_k3s_own_installer(self):

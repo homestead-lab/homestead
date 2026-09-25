@@ -84,6 +84,26 @@ class ReaderTests(unittest.TestCase):
             {"name": "c-server-1", "role": "server", "address": "192.0.2.60"}]}})
         self.assertIn("open c-server-1's console", out[0]["note"])
 
+    def test_an_old_kubevirt_is_named_as_the_reason(self):
+        self.objects[("/api/v1/namespaces/lab/pods", JL._q("vm.kubevirt.io/name=c-server-1"))] = {"items": [
+            self.pod("virt-launcher-c-server-1-abcde")]}
+        self.objects[("/apis/kubevirt.io/v1/kubevirts", "")] = {"items": [
+            {"status": {"observedKubeVirtVersion": "v1.0.1-150500.8.6.1"}}]}
+        out = JL.k3s_cluster({"ref": {"namespace": "lab", "nodes": [
+            {"name": "c-server-1", "role": "server", "address": "192.0.2.60"}]}})
+        self.assertIn("KubeVirt v1.0.1-150500.8.6.1 keeps no console output", out[0]["note"])
+
+    def test_a_vm_made_before_it_asked_says_new_clusters_will(self):
+        self.objects[("/api/v1/namespaces/lab/pods", JL._q("vm.kubevirt.io/name=c-server-1"))] = {"items": [
+            self.pod("virt-launcher-c-server-1-abcde")]}
+        self.objects[("/apis/kubevirt.io/v1/kubevirts", "")] = {"items": [
+            {"status": {"observedKubeVirtVersion": "v1.4.0"}}]}
+        self.objects[("/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/c-server-1", "")] = {
+            "spec": {"template": {"spec": {"domain": {"devices": {}}}}}}
+        out = JL.k3s_cluster({"ref": {"namespace": "lab", "nodes": [
+            {"name": "c-server-1", "role": "server", "address": "192.0.2.60"}]}})
+        self.assertIn("clusters made from now on do", out[0]["note"])
+
     def test_a_job_shows_its_newest_pods_output(self):
         self.objects[("/api/v1/namespaces/lab/pods", JL._q("job-name=homestead-import-frigate"))] = {"items": [
             self.pod("homestead-import-frigate-x1")]}

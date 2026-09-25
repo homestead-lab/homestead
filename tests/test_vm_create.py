@@ -39,6 +39,13 @@ class VmCreateTests(unittest.TestCase):
         cfg = {"name": "web", "password": "a-long-password", **cfg}
         return imports.create_vm(cfg, platform, sc)
 
+    def test_a_vm_can_ask_for_its_console_to_be_kept_and_others_do_not(self):
+        self.create(HARVESTER, "harvester-longhorn", log_console=True)
+        self.assertTrue(self.vm()["spec"]["template"]["spec"]["domain"]["devices"]["logSerialConsole"])
+        self.sent.clear()
+        self.create(HARVESTER, "harvester-longhorn", name="plain")
+        self.assertNotIn("logSerialConsole", self.vm()["spec"]["template"]["spec"]["domain"]["devices"])
+
     def test_harvester_blank_disk_is_a_claim_template_on_the_chosen_class(self):
         self.create(HARVESTER, "longhorn-r2")
         vm = self.vm()

@@ -92,8 +92,10 @@ Homestead (what a new install gets), k3s and Homestead on local-path storage,
 or k3s alone. The nodes' login is `ubuntu` with the password you chose.
 
 **Log** on the job shows each step it has taken, and each node's console as it
-installs - cloud-init, then k3s and what comes with it - where KubeVirt keeps
-a VM's console output (1.1 and later); elsewhere, open the node's console.
+installs - cloud-init, then k3s and what comes with it. The nodes ask KubeVirt
+to keep their console output, which it does from 1.1 even where Harvester
+turns that off for other VMs; with an older KubeVirt, the log says so and
+where to look instead.
 
 **Cancel** on the job, while the cluster is still coming up, deletes its VMs
 with their disks and frees their addresses in IP addresses, after the cluster's
