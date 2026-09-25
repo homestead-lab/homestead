@@ -327,6 +327,40 @@ class NotFoundPartWayTests(unittest.TestCase):
         self.assertNotEqual("", RC.resumable(item))
         self.assertEqual(1, c.deps["frigate"]["spec"]["replicas"])
 
+    def test_a_workload_started_again_mid_swap_is_stopped_again(self):
+        """Kubernetes keeps a deleted claim while a pod mounts it, and the
+        swap sat at "Letting go of the original" with no word of why."""
+        c = Cluster()
+        real_send, real_get = c.send, c.get
+
+        def send(method, path, body=None, **kw):
+            if method == "DELETE" and path.endswith("/persistentvolumeclaims/frigate-config")                     and c.deps["frigate"]["spec"]["replicas"]:
+                c.pvcs["frigate-config"]["metadata"]["deletionTimestamp"] = "now"
+                c.pvcs["frigate-config"]["metadata"]["finalizers"] = ["kubernetes.io/pvc-protection"]
+                return body
+            return real_send(method, path, body, **kw)
+
+        def get(path):
+            claim = c.pvcs.get("frigate-config") or {}
+            if (claim.get("metadata") or {}).get("deletionTimestamp") and not c.deps["frigate"]["spec"]["replicas"]:
+                real_send("DELETE", "/api/v1/namespaces/lab/persistentvolumeclaims/frigate-config")
+            return real_get(path)
+        RC.ksend, RC.kget = send, get
+
+        item = RC.start("lab", "frigate-config", "longhorn-r3", OPS())
+        self.advance_to(item, "swap")
+        c.deps["frigate"]["spec"]["replicas"] = 1          # started again by hand
+        messages = []
+        for _ in range(30):
+            item.update(zip(("status", "progress", "message"), RC.resolve(item)))
+            messages.append(item["message"])
+            if item["status"] != "running":
+                break
+        self.assertEqual("succeeded", item["status"], item["message"])
+        self.assertTrue(any("frigate had started again" in m for m in messages), messages)
+        self.assertEqual("pv-new", c.pvcs["frigate-config"]["spec"]["volumeName"])
+        self.assertEqual(1, c.deps["frigate"]["spec"]["replicas"])
+
     def test_each_attempt_has_a_copy_job_of_its_own(self):
         Cluster()
         first = RC.start("lab", "frigate-config", "longhorn-r3", OPS())["ref"]["job_name"]

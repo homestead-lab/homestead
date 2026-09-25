@@ -615,7 +615,8 @@ def _swap(item, ns, ref):
     if current and (current.get("spec") or {}).get("volumeName") == old_pv:
         if not (current.get("metadata") or {}).get("deletionTimestamp"):
             ksend("DELETE", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}")
-        return "running", 86, f"Letting go of the original {claim}"
+            return "running", 86, f"Letting go of the original {claim}"
+        return "running", 86, _held(ns, ref, current)
     # 4. A claim of the original name, bound to the new volume.
     if not current:
         body = {"apiVersion": "v1", "kind": "PersistentVolumeClaim",
@@ -633,6 +634,39 @@ def _swap(item, ns, ref):
           ctype="application/merge-patch+json")
     ref["phase"] = "start"
     return "running", 90, f"{claim} is on {ref['target']}"
+
+
+def _held(ns, ref, claim_obj):
+    """Why a deleted claim is still there, and anything done about it.
+
+    Kubernetes keeps a claim that any pod still mounts. What was stopped for
+    the move can have been started again meanwhile - by hand, or by whatever
+    manages it - so that is stopped again; anything else is named.
+    """
+    claim = ref["claim"]
+    again = []
+    for c in ref["consumers"]:
+        if c["kind"] not in ("Deployment", "StatefulSet"):
+            continue
+        plural = "deployments" if c["kind"] == "Deployment" else "statefulsets"
+        obj = _get(f"/apis/apps/v1/namespaces/{ns}/{plural}/{c['name']}")
+        if obj and int((obj.get("spec") or {}).get("replicas") or 0) > 0:
+            c["stopped"] = False
+            again.append(c["name"])
+    if again:
+        _stop(ns, ref)
+        return (f"{', '.join(again)} had started again and was holding the original {claim}; "
+                "stopped it again")
+    pods = [p["metadata"]["name"] for p in _using_pods(ns, claim)]
+    if pods:
+        return (f"Waiting for {', '.join(pods[:3])}{' and more' if len(pods) > 3 else ''} to stop using "
+                f"{claim}: Kubernetes keeps a claim while a pod mounts it. Stop "
+                f"{'it' if len(pods) == 1 else 'them'} and this carries on")
+    others = [f for f in (claim_obj.get("metadata") or {}).get("finalizers") or []
+              if f != "kubernetes.io/pvc-protection"]
+    if others:
+        return f"Waiting for {', '.join(others)} to release the original {claim}"
+    return f"Letting go of the original {claim}"
 
 
 # ---- the old copies --------------------------------------------------------------
