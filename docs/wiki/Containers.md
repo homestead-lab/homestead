@@ -48,7 +48,9 @@ logs, console, edit - and:
 Storage can be restructured there: two volumes combined into folders of one, a
 folder split out to its own volume. When a path moves, Homestead offers to bring
 its data along - it stops the container, copies, and starts it again - and the
-old volume is kept until you remove it.
+old volume is kept until you remove it. A new volume is given the old
+location's owner and permissions, whether its data comes along or it starts
+empty, so an app that runs as its own user can still write to it.
 
 ## Updates
 

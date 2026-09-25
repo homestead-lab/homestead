@@ -874,7 +874,9 @@ The container editor can also restructure storage after the fact — combine two
 volumes into folders of one, split a folder out to a volume of its own, or
 rename a folder. When a path moves, the editor offers to bring its data: the
 save is applied with the container stopped, a job copies each old location to
-its new one (keeping owners and times), and the container starts again. The old
+its new one (keeping owners and times), and the container starts again. A new
+volume, copied into or started empty, is owned as the old location was: a new
+volume is root's, and an app that runs as its own user could not write to it. The old
 volumes are only read, never deleted, so pointing the paths back undoes it;
 remove them from Volumes once you are happy. Progress is in the job tray, and
 the steps carry on from where they were if Homestead restarts part-way.

@@ -333,8 +333,12 @@ function readVolumeRow(row) {
     required: row.dataset.required === "true", template_source: row.dataset.templateSource || "",
     template_origin: row.dataset.templateOrigin || "",
     role: row.dataset.role || "", volume_name: row.dataset.volumeName || "",
-    ...(volumeMove(row) && $(".vcopy-on", row).checked
-      ? { copy_from: { claim: row.dataset.originClaim, sub_path: row.dataset.originFolder || "" } } : {}) };
+    // Unticked, a new volume still says where the path was: it starts empty,
+    // but owned as the old location was, or an app that runs as its own user
+    // cannot write to it.
+    ...(volumeMove(row) && ($(".vcopy-on", row).checked || kind.startsWith("new-"))
+      ? { copy_from: { claim: row.dataset.originClaim, sub_path: row.dataset.originFolder || "",
+          ...($(".vcopy-on", row).checked ? {} : { data: false }) } } : {}) };
 }
 
 function readVolumeRows(host) { return host ? $$(".deploy-volume", host).map(readVolumeRow) : []; }

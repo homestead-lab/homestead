@@ -53,7 +53,12 @@ def copies(cfg):
 
     A row asks by carrying copy_from, the claim and folder it was mounted from
     when the editor opened. Only claims are copied: a host path or scratch
-    volume has nothing Homestead should carry."""
+    volume has nothing Homestead should carry.
+
+    With "data": false the person chose to start empty. A volume the edit
+    makes is still prepared - owned as the old location was - since a new
+    volume is root's, and an app that runs as its own user could not write
+    to it and would not start. An existing volume is left as it is."""
     out, seen = [], set()
     for change in cfg.get("containers") or []:
         for row in change.get("volumes") or []:
@@ -63,6 +68,10 @@ def copies(cfg):
                 continue
             path = str(row.get("path") or "").strip()
             kind = str(row.get("kind") or "")
+            data = origin.get("data", True) is not False
+            fresh = kind in ("new-rwo", "new-rwx")
+            if not data and not fresh:
+                continue
             if kind not in ("existing", "new-rwo", "new-rwx"):
                 raise ValueError(f"{path}: only a volume can receive copied data")
             target = str(row.get("source") or "").strip()
@@ -73,11 +82,11 @@ def copies(cfg):
             dst = _folder(row.get("sub_path"), path)
             if (source, src) == (target, dst):
                 continue
-            key = (source, src, target, dst)
+            key = (source, src, target, dst, data)
             if key not in seen:
                 seen.add(key)
                 out.append({"path": path, "from": source, "from_folder": src,
-                            "to": target, "to_folder": dst})
+                            "to": target, "to_folder": dst, "data": data, "fresh": fresh})
     targets = {}
     for move in out:
         spot = (move["to"], move["to_folder"])
@@ -91,15 +100,35 @@ def script(moves, mount_of):
     """The copy: each old location into its new one, keeping owners and times.
 
     cp -a as root keeps the numeric owner, so an app finds its files as it
-    left them. A location that was never written has nothing to bring."""
-    lines = ["set -e"]
+    left them. A location that was never written has nothing to bring.
+
+    The new location itself - the folder the app's path is mounted on - is
+    then given the old one's owner and permissions, or those of the nearest
+    folder above it that exists. A new volume's root belongs to root, and an
+    app running as its own user found it could not write there and would not
+    start. Only a location this made is changed: a volume or folder that was
+    already there keeps its own."""
+    lines = ["set -e",
+             # The owner and mode of a path, or of the nearest folder above it
+             # that exists, no higher than the volume it is in.
+             'owner_of() { r="$1"; while [ ! -e "$r" ] && [ "$r" != "$2" ]; do r=$(dirname "$r"); done; '
+             'stat -c "%u:%g %a" "$r"; }',
+             'take_owner() { set -- $(owner_of "$1" "$2") "$3"; chown "$1" "$3"; chmod "$2" "$3"; }']
     for index, move in enumerate(moves, 1):
         src = mount_of[move["from"]] + ("/" + move["from_folder"] if move["from_folder"] else "")
         dst = mount_of[move["to"]] + ("/" + move["to_folder"] if move["to_folder"] else "")
         label = (f"{move['from']}/{move['from_folder']}".rstrip("/") + " -> " +
                  f"{move['to']}/{move['to_folder']}".rstrip("/"))
         s, d = shlex.quote(src), shlex.quote(dst)
+        root = shlex.quote(mount_of[move["from"]])
         lines.append(f"echo {shlex.quote(f'[{index}/{len(moves)}] {label}')}")
+        # Whether the new location is this job's to shape, decided before
+        # anything is written to it.
+        lines.append(f"made={'1' if move.get('fresh') else ''}; [ -e {d} ] || made=1")
+        own = f'if [ -n "$made" ] && [ -d {d} ]; then take_owner {s} {root} {d}; fi'
+        if move.get("data") is False:
+            lines += [f"mkdir -p {d}; echo 'starting empty, owned as before'", own]
+            continue
         if move["from"] == move["to"] and _inside(move["to_folder"], move["from_folder"]):
             # Into a folder of itself, as when a whole volume becomes one
             # folder of it: everything but the folder being filled.
@@ -107,11 +136,13 @@ def script(moves, mount_of):
             skip = shlex.quote(src + "/" + rest.split("/")[0])
             lines.append(f"mkdir -p {d} && for f in {s}/* {s}/.[!.]* {s}/..?*; do "
                          f"[ -e \"$f\" ] || continue; [ \"$f\" = {skip} ] && continue; cp -a \"$f\" {d}/; done")
+            lines.append(own)
             continue
         lines += [
             f"if [ -d {s} ]; then mkdir -p {d} && cp -a {s}/. {d}/; "
             f"elif [ -e {s} ]; then mkdir -p \"$(dirname {d})\" && cp -a {s} {d}; "
-            f"else echo 'nothing there yet; skipped'; fi",
+            f"else echo 'nothing there yet; skipped'; mkdir -p {d}; fi",
+            own,
         ]
     lines.append("sync; echo done")
     return "\n".join(lines)

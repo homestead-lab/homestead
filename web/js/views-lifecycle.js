@@ -315,9 +315,12 @@ window.editSave = async (ns, name) => {
     body.confirm_self = true;
   }
   const where = (claim, folder) => folder ? `${claim}/${folder}` : claim;
-  if (moves.length && !confirm(`Copy ${moves.length} location${moves.length === 1 ? "" : "s"} to new storage?\n\n` +
-      moves.map(volume => `${volume.path}: ${where(volume.copy_from.claim, volume.copy_from.sub_path)} → ${where(volume.source, volume.sub_path)}`).join("\n") +
-      `\n\n${name} stops, the data is copied, and it starts again. The old volumes are kept; delete them from Volumes once you have checked.`)) return;
+  const copying = moves.filter(volume => volume.copy_from.data !== false);
+  if (moves.length && !confirm((copying.length ? `Copy ${copying.length} location${copying.length === 1 ? "" : "s"} to new storage?`
+        : `Start ${moves.length} path${moves.length === 1 ? "" : "s"} on a new, empty volume?`) + "\n\n" +
+      moves.map(volume => `${volume.path}: ${volume.copy_from.data === false ? "empty, owned like " : ""}${where(volume.copy_from.claim, volume.copy_from.sub_path)} → ${where(volume.source, volume.sub_path)}`).join("\n") +
+      `\n\n${name} stops, ${copying.length ? "the data is copied" : "the new volume is made writable for it"}, and it starts again. ` +
+      "The old volumes are kept; delete them from Volumes once you have checked.")) return;
   const button = $("#e_save");
   button.disabled = true;
   button.textContent = renaming ? "Renaming & checking readiness…"

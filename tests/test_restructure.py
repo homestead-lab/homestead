@@ -49,6 +49,15 @@ class CopiesTests(unittest.TestCase):
         self.assertEqual(("app", "", "app", "config"),
                          (moves[0]["from"], moves[0]["from_folder"], moves[0]["to"], moves[0]["to_folder"]))
 
+    def test_starting_empty_on_a_new_volume_is_still_prepared(self):
+        moves = RESTRUCTURE.copies(edit(dict(row("/data", "app-data", kind="new-rwo", claim="app-appdata"),
+                                             copy_from={"claim": "app-appdata", "sub_path": "", "data": False})))
+        self.assertEqual([(False, True)], [(m["data"], m["fresh"]) for m in moves])
+
+    def test_starting_empty_on_an_existing_volume_asks_for_nothing(self):
+        self.assertEqual([], RESTRUCTURE.copies(edit(dict(row("/data", "other"),
+                                                          copy_from={"claim": "app-appdata", "data": False}))))
+
     def test_two_sources_cannot_land_in_one_place(self):
         with self.assertRaisesRegex(ValueError, "two paths"):
             RESTRUCTURE.copies(edit(row("/a", "new", "x", claim="one"), row("/b", "new", "x", claim="two")))
@@ -99,6 +108,66 @@ class ScriptTests(unittest.TestCase):
             self.assertEqual("x", (base / "app" / "config" / "app" / "db" / "x").read_text())
             self.assertEqual("e", (base / "app" / "config" / "app" / ".env").read_text())
             self.assertFalse((base / "app" / "config" / "app" / "config").exists())
+
+    def run_script(self, moves, mount_of):
+        try:
+            return subprocess.run(["sh", "-c", RESTRUCTURE.script(moves, mount_of)],
+                                  capture_output=True, text=True, timeout=30)
+        except FileNotFoundError:
+            self.skipTest("no sh here")
+
+    def test_a_new_volume_is_owned_as_the_old_location_was_so_the_app_can_write(self):
+        import os
+        if not hasattr(os, "geteuid") or os.geteuid() != 0:
+            self.skipTest("giving files to another user needs root, as the copy job has")
+        moves = [{"path": "/app/data", "from": "old", "from_folder": "data", "to": "new", "to_folder": "",
+                  "data": True, "fresh": True},
+                 {"path": "/app/logs", "from": "old", "from_folder": "never", "to": "logs", "to_folder": "",
+                  "data": True, "fresh": True}]
+        with __import__("tempfile").TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "old" / "data").mkdir(parents=True)
+            os.chown(base / "old", 1000, 1000)
+            os.chown(base / "old" / "data", 1000, 1000)
+            os.chmod(base / "old" / "data", 0o750)
+            for name in ("new", "logs"):
+                (base / name).mkdir()          # a new volume: root's, 755
+            result = self.run_script(moves, {name: (base / name).as_posix() for name in ("old", "new", "logs")})
+            self.assertEqual(0, result.returncode, result.stderr)
+            new = (base / "new").stat()
+            self.assertEqual((1000, 1000, 0o750), (new.st_uid, new.st_gid, new.st_mode & 0o777))
+            # Nothing was there to copy: the nearest folder that was says who owns it.
+            self.assertEqual(1000, (base / "logs").stat().st_uid)
+
+    def test_starting_empty_still_readies_a_new_volume_and_copies_nothing(self):
+        import os
+        moves = [{"path": "/data", "from": "old", "from_folder": "", "to": "new", "to_folder": "",
+                  "data": False, "fresh": True}]
+        with __import__("tempfile").TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "old").mkdir()
+            (base / "old" / "keep.txt").write_text("x")
+            os.chmod(base / "old", 0o770)
+            (base / "new").mkdir()
+            result = self.run_script(moves, {name: (base / name).as_posix() for name in ("old", "new")})
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual([], list((base / "new").iterdir()))
+            self.assertEqual(0o770, (base / "new").stat().st_mode & 0o777)
+
+    def test_an_existing_volume_keeps_its_own_owner(self):
+        import os
+        # Nothing to copy, so only this step could change it.
+        moves = [{"path": "/data", "from": "old", "from_folder": "never", "to": "shared", "to_folder": "",
+                  "data": True, "fresh": False}]
+        with __import__("tempfile").TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "old").mkdir()
+            os.chmod(base / "old", 0o700)
+            (base / "shared").mkdir()
+            os.chmod(base / "shared", 0o755)
+            result = self.run_script(moves, {name: (base / name).as_posix() for name in ("old", "shared")})
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(0o755, (base / "shared").stat().st_mode & 0o777)
 
     def test_the_job_mounts_each_volume_once(self):
         name, body = RESTRUCTURE.job("lab", "app", [
