@@ -590,7 +590,9 @@ window.lhSnaps = async (vol, label) => {
           <td class="mono">${s.size_mb} MB</td>
           <td>${s.user_created ? '<span class="tag">manual</span>' : '<span class="tag info">scheduled</span>'}
               ${s.ready ? "" : '<span class="tag warn">not ready</span>'}</td>
-          <td><button class="btn sm danger" data-need="admin" onclick="lhSnapDel('${esc(s.name)}','${esc(vol)}','${esc(label)}')">✕</button></td>
+          <td><div class="row" style="gap:6px">${s.ready ? `<button class="btn sm" data-need="admin" data-tip="Put the volume back as it was then"
+              onclick="lhRevert('${esc(vol)}','${esc(s.name)}','${esc(label)}')">${icon("rollback")}Roll back</button>` : ""}
+            <button class="btn sm danger" data-need="admin" onclick="lhSnapDel('${esc(s.name)}','${esc(vol)}','${esc(label)}')">✕</button></div></td>
         </tr>`).join("") || `<tr><td colspan=5 class="empty">no snapshots yet</td></tr>`}
       </tbody></table></div></div>
       <div class="sec">Backups (${bks.length})</div>
@@ -720,6 +722,35 @@ window.lhRestoreStart = async backup => {
     if (window.refreshOperations) window.refreshOperations(true);
   } catch (e) { toast(e.message, "bad"); button.disabled = false; button.innerHTML = `${icon("rollback")}Start restore`; }
 };
+/* Rolling a volume back to a snapshot: what uses it stops, the volume is
+   reverted with the state before kept as a snapshot, and it all starts again. */
+window.lhRevert = async (vol, snap, label) => {
+  childModal(`Roll ${label} back`, '<div class="empty"><span class="spin2"></span>checking what uses it</div>');
+  try {
+    const p = await api(`/api/lh/snapshot/revert/plan?volume=${encodeURIComponent(vol)}&snapshot=${encodeURIComponent(snap)}`);
+    const when = p.created ? localTime(new Date(p.created)) : "the snapshot";
+    const users = p.consumers || [];
+    $("#mbody").innerHTML = `
+      <p>${esc(label)} goes back to how it was at <b>${esc(when)}</b>. Everything written since is set aside:
+        it is kept first as a snapshot of its own, so rolling forward again is one more rollback.</p>
+      ${users.length ? `<div class="note"><b>Stopped while it is done, then started again:</b>
+        ${users.map(u => `<span class="tag">${esc(u.kind === "VirtualMachine" ? "VM" : u.kind)} ${esc(u.name)}</span>`).join(" ")}</div>`
+        : '<div class="dim small">Nothing uses it now, so nothing needs stopping.</div>'}
+      ${(p.blockers || []).map(b => `<div class="note bad">${esc(b)}</div>`).join("")}
+      <div class="modalactions"><button class="btn" onclick="modalBack()">Cancel</button>
+        <button class="btn pri" ${p.ready ? "" : "disabled"} onclick="lhRevertGo('${esc(vol)}','${esc(snap)}')">${icon("rollback")}Roll back</button></div>`;
+  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+};
+window.lhRevertGo = async (vol, snap) => {
+  try {
+    const r = await api("/api/lh/snapshot/revert", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ volume: vol, snapshot: snap }) });
+    closeModal();
+    toast(r.detail, "ok");
+    if (window.noteOperation) noteOperation(r.operation);
+  } catch (e) { toast(e.message, "bad"); }
+};
+
 window.lhSnapDel = async (name, vol, label) => {
   if (!confirm(`Delete snapshot "${name}"?`)) return;
   try {
@@ -735,12 +766,14 @@ window.lhTarget = () => {
   modal("Backup target", `
     <p class="muted small">Where Longhorn uploads backups. Snapshots do not need this —
     they live on the volume. Backups do.</p>
+    ${t.harvester ? `<div class="note">On Harvester this is saved as Harvester's own <span class="mono">backup-target</span> setting,
+      which it passes to Longhorn and uses for VM backups too. Harvester takes NFS or S3, and writes to the top of an S3 bucket.</div>` : ""}
     <div class="f" style="margin-top:14px"><label>Target URL</label>
       <input type="text" id="bt_url" value="${esc(t.url || "")}"
         placeholder="nfs://192.0.2.177:/mnt/user/backups">
       <div class="dim xs" style="margin-top:6px">
         NFS: <span class="mono">nfs://host:/export/path</span><br>
-        S3: <span class="mono">s3://bucket@region/path</span> - a NAS's MinIO or Garage uses any region, such as us-east-1</div></div>
+        S3: <span class="mono">s3://bucket@region${t.harvester ? "" : "/path"}</span> - a NAS's MinIO or Garage uses any region, such as us-east-1</div></div>
     <div id="bt_s3">
       <div class="f2">
         <div class="f"><label>Access key</label><input type="text" id="bt_access" autocomplete="off"
@@ -752,7 +785,7 @@ window.lhTarget = () => {
       <div class="dim xs" style="margin-bottom:12px">The keys are kept in a Secret in longhorn-system${t.secret ? ` (now ${esc(t.secret)})` : ""};
         leave them empty to keep the one it has.</div></div>
     <div class="f2">
-      <div class="f"><label>Credential secret ${tip("The Secret holding the keys. Filled in for you when you type the keys above.")}</label>
+      <div class="f" ${t.harvester ? "hidden" : ""}><label>Credential secret ${tip("The Secret holding the keys. Filled in for you when you type the keys above.")}</label>
         <input type="text" id="bt_secret" value="${esc(t.secret || "")}" placeholder="homestead-backup-target"></div>
       <div class="f"><label>Poll interval</label>
         <input type="text" id="bt_poll" value="${esc(t.interval || "5m")}"></div>

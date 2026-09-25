@@ -445,7 +445,8 @@ def backup_target():
         return {"configured": False, "url": "", "available": False,
                 "reason": "backuptargets CRD unreadable"}
     if not items:
-        return {"configured": False, "url": "", "available": False, "reason": "none defined"}
+        return {"configured": False, "url": "", "available": False, "reason": "none defined",
+                "harvester": _harvester_setting() is not None}
     t = items[0]
     sp, st = t.get("spec", {}), t.get("status", {}) or {}
     conds = {c["type"]: c for c in st.get("conditions", []) or []}
@@ -460,6 +461,8 @@ def backup_target():
         "reason": avail.get("message", "") or avail.get("reason", ""),
         "secret_missing": bool(sp.get("credentialSecret")) and _get_or_none(
             f"/api/v1/namespaces/{LHNS}/secrets/{sp.get('credentialSecret')}") is None,
+        # Set through Harvester's own setting there, which VM backups use too.
+        "harvester": _harvester_setting() is not None,
     }
 
 
@@ -484,11 +487,75 @@ def _target_secret(name, keys):
         ksend("POST", path, body)
 
 
+# On Harvester the backup target is Harvester's own setting: it writes
+# Longhorn's from it, and VM backups use it too. Set in Longhorn alone, it is
+# overwritten the next time Harvester applies its setting - blank, if that
+# was never set.
+HARVESTER_TARGET = "/apis/harvesterhci.io/v1beta1/settings/backup-target"
+
+
+def _harvester_setting():
+    try:
+        return kget(HARVESTER_TARGET)
+    except Exception:
+        return None
+
+
+def _seconds(poll):
+    match = re.fullmatch(r"(\d+)\s*([smh]?)", str(poll or "5m").strip())
+    if not match:
+        return 300
+    return int(match.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[match.group(2)]
+
+
+def harvester_target_value(url, keys, poll, current=None):
+    """Harvester's backup-target setting for a Longhorn-style URL: nfs://host:/path,
+    or s3://bucket@region with the keys (kept from before when none are typed)."""
+    current = current or {}
+    value = {"refreshIntervalInSeconds": _seconds(poll)}
+    if not url:
+        return {}
+    if url.startswith("nfs://"):
+        return dict(value, type="nfs", endpoint=url)
+    match = re.fullmatch(r"s3://([^@/]+)@([^/]+)/?", url)
+    if not url.startswith("s3://"):
+        raise ValueError("Harvester writes backups to NFS or S3: nfs://host:/path or s3://bucket@region")
+    if not match:
+        raise ValueError("on Harvester an S3 target is s3://bucket@region - Harvester writes to the top of the bucket, "
+                         "so leave any path off")
+    access = keys.get("access_key") or current.get("accessKeyId", "")
+    secret = keys.get("secret_key") or current.get("secretAccessKey", "")
+    if not (access and secret):
+        raise ValueError("an S3 target needs its access key and secret key")
+    return dict(value, type="s3", bucketName=match.group(1), bucketRegion=match.group(2),
+                endpoint=keys.get("endpoint") if "endpoint" in keys else current.get("endpoint", ""),
+                accessKeyId=access, secretAccessKey=secret,
+                virtualHostedStyle=bool(current.get("virtualHostedStyle", False)))
+
+
+def _set_harvester_target(setting, url, poll, keys):
+    try:
+        current = json.loads(setting.get("value") or "{}")
+    except ValueError:
+        current = {}
+    if keys.get("endpoint") and not re.match(r"^https?://", keys["endpoint"]):
+        raise ValueError("the endpoint is a URL, such as http://192.0.2.20:9000")
+    value = harvester_target_value(url, keys, poll, current)
+    setting["value"] = json.dumps(value) if value else ""
+    setting.get("metadata", {}).pop("managedFields", None)
+    ksend("PUT", f"{HARVESTER_TARGET}", setting)
+    _bust("lhtarget")
+    return {"ok": True, "url": url, "harvester": True}
+
+
 def set_backup_target(url, secret="", poll="5m", keys=None):
     url, secret = str(url or "").strip(), str(secret or "").strip()
     if url and not url.startswith(SCHEMES):
         raise ValueError("a backup target starts with s3://, nfs://, cifs:// or azblob://")
     keys = {k: str(v or "").strip() for k, v in (keys or {}).items()}
+    setting = _harvester_setting()
+    if setting is not None:
+        return _set_harvester_target(setting, url, poll, keys)
     if keys.get("access_key") or keys.get("secret_key"):
         if not (keys.get("access_key") and keys.get("secret_key")):
             raise ValueError("an S3 target needs both the access key and the secret key")

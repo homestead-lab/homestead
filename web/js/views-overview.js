@@ -68,7 +68,7 @@ async function viewDash() {
     <div><b>${o.health === "critical" ? "Cluster needs attention" : "Cluster is degraded"}</b>
       <span>${esc(o.health_summary)}</span></div>
     <button class="btn sm" onclick="go('${o.health_issues.some(x => ["Node", "Disk"].includes(x.kind)) ? "nodes" :
-      o.health_issues.some(x => x.kind === "Volume") ? "storage" : "workloads"}')">Review</button>
+      o.health_issues.some(x => x.kind === "Volume") ? "storage" : o.health_issues.every(x => x.kind === "Backup") ? "protect" : "workloads"}')">Review</button>
   </div>` : ""}
 
   <div class="grid g3 stagger">

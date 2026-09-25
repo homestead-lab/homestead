@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.148")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.149")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1195,9 +1195,32 @@ def set_workload_groups(b):
             "detail": f"{count} workload{'s' if count != 1 else ''} " + (f"moved to {group}" if group else "ungrouped")}
 
 
-def classify_cluster_health(nodes, workloads, volumes, startup_grace=300):
+def protection_issues(jobs, target):
+    """Protection that has quietly stopped working: a snapshot or backup job
+    whose last run failed, or backup jobs with nowhere they can write to.
+    Nothing else says so until the copy is needed."""
+    issues = []
+    guarding = [j for j in jobs or [] if str(j.get("task", "")).split("-")[0] in ("snapshot", "backup")
+                and j.get("task") not in ("snapshot-cleanup", "snapshot-delete") and j.get("covers")]
+    for job in guarding:
+        if job.get("last_failed"):
+            issues.append({"severity": "degraded", "kind": "Backup", "name": job["name"],
+                           "reason": f"its last {job['task'].split('-')[0]} run failed; its pod's log in longhorn-system says why"})
+    if any(j["task"].startswith("backup") for j in guarding):
+        target = target or {}
+        if not target.get("configured"):
+            issues.append({"severity": "degraded", "kind": "Backup", "name": "backup target",
+                           "reason": "backup jobs are set up but there is no backup target, so every backup fails"})
+        elif not target.get("available"):
+            issues.append({"severity": "degraded", "kind": "Backup", "name": "backup target",
+                           "reason": f"{target.get('url', 'the backup target')} cannot be reached"
+                                     + (f": {target['reason']}" if target.get("reason") else "")})
+    return issues
+
+
+def classify_cluster_health(nodes, workloads, volumes, startup_grace=300, protection=None):
     """Separate real availability faults from normal workload transitions."""
-    issues, activities = [], []
+    issues, activities = list(protection or []), []
     for node in nodes:
         if node.get("status") != "Ready":
             issues.append({"severity": "critical", "kind": "Node",
@@ -1268,7 +1291,12 @@ def get_overview():
     usrp = [p for p in pods if p["metadata"]["namespace"] not in SYS_NS]
     deg = [v for v in vols if v["robustness"] == "degraded"]
     flt = [v for v in vols if v["robustness"] == "faulted"]
-    health = classify_cluster_health(nodes, wl, vols)
+    try:
+        protection = protection_issues(cached("lhjobs-health", 60, LH.list_jobs),
+                                       cached("lhtarget-health", 60, LH.backup_target))
+    except Exception:
+        protection = []
+    health = classify_cluster_health(nodes, wl, vols, protection=protection)
     tcap = sum(n["cpu_cap"] for n in nodes) or 1
     tuse = sum(n["cpu_used"] for n in nodes)
     mcap = sum(n["mem_cap_gb"] for n in nodes) or 1
@@ -3522,6 +3550,7 @@ PORTAL.bind(kget, ksend, DEFAULT_NS, lambda: cached("wl", 5, get_workloads),
             lambda source: ICONS.persist(source, DATA_DIR), lambda reference: ICONS.data_url(reference, DATA_DIR))
 OPS.RESOLVERS["restructure"] = RESTRUCTURE.resolve
 import homestead_reclass as RECLASS
+import homestead_revert as REVERT
 OPS.RESOLVERS["reclass"] = RECLASS.resolve
 OPS.RESUMABLE["reclass"] = RECLASS.resumable
 OPS.RESOLVERS["protect-run"] = LH.run_status
@@ -3589,6 +3618,9 @@ VMUSAGE.bind(kget)
 VMS.platform, VMS.images = PLATFORM.detect, IMP.list_vm_images
 LHCAP.bind(kget, ksend, v2_engine_status)
 RECLASS.bind(kget, ksend, raw_get, storage_classes, LHCAP.status, _own_namespace())
+REVERT.bind(kget, ksend, RECLASS, is_self)
+OPS.RESOLVERS["snapshot-revert"] = REVERT.resolve
+OPS.CANCELLERS["snapshot-revert"] = (REVERT.cancel_plan, REVERT.cancel_run)
 DISKS.bind(kget, ksend, node_temps)
 OPS.RESOLVERS["disk-retire"] = DISKS.retire_step
 OPS.RESUMABLE["disk-retire"] = DISKS.retire_resumable
@@ -4480,7 +4512,7 @@ ADMIN_ROUTES = {
     # The destination side creates, restores and removes.
     "/api/move/plan", "/api/move/start", "/api/move/moves/retry",
     "/api/move/moves/abandon", "/api/move/moves/finish", "/api/move/moves/dismiss",
-    "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete",
+    "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete", "/api/lh/snapshot/revert",
     "/api/lh/restore", "/api/lh/backup/delete", "/api/lh/group/delete",
     # Installing Longhorn or KubeVirt changes the cluster itself.
     "/api/addons/longhorn", "/api/addons/kubevirt",
@@ -4939,6 +4971,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("cron", 8, IMP.list_jobs))
             if p == "/api/lh/overview":
                 return self._send(200, cached("lhov", 8, LH.overview))
+            if p == "/api/lh/snapshot/revert/plan":
+                return self._send(200, REVERT.plan((q.get("volume") or [""])[0], (q.get("snapshot") or [""])[0]))
             if p == "/api/lh/snapshots":
                 vol = (q.get("volume") or [None])[0]
                 return self._send(200, LH.snapshots(vol))
@@ -5748,6 +5782,10 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, LH.create_snapshot(b["volume"], b.get("name")))
             if p == "/api/lh/snapshot/delete":
                 return self._send(200, LH.delete_snapshot(b["name"]))
+            if p == "/api/lh/snapshot/revert":
+                operation = REVERT.start(str(b.get("volume") or ""), str(b.get("snapshot") or ""), OPS)
+                return self._send(200, {"ok": True, "operation": operation,
+                                        "detail": "Rolling back: what uses it stops first, then starts again"})
             if p == "/api/lh/backup":
                 result = LH.create_backup(b["volume"], b.get("name"))
                 if result.get("backup"):
@@ -5946,7 +5984,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.148 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.149 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

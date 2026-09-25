@@ -19,11 +19,13 @@ Have both.
 
 1. **Backup storage.** Point Longhorn at somewhere to keep backups - an S3
    bucket (a NAS running MinIO, RustFS or Garage; Backblaze B2; AWS) or an NFS
-   share. On Harvester this is **Settings → backup-target** in Harvester's
-   dashboard; elsewhere **Backup target** here. For S3, type the access key,
-   secret key and - for anything but AWS - the endpoint, and Homestead keeps
-   them in a Secret for Longhorn. If that Secret goes missing, the target card
-   says so.
+   share, with **Backup target** here. For S3, type the access key, secret key
+   and - for anything but AWS - the endpoint, and Homestead keeps them in a
+   Secret for Longhorn. If that Secret goes missing, the target card says so.
+   On Harvester it is saved as Harvester's own **backup-target** setting, the
+   same one its dashboard sets. Harvester passes it to Longhorn and uses it
+   for VM backups, and would reset one set in Longhorn alone. Harvester takes
+   NFS or S3, and writes to the top of an S3 bucket (`s3://bucket@region`).
 
    **Set up storage** here instead runs an S3 server in the cluster, on a
    Longhorn volume, and points Longhorn at it. That is meant for
@@ -75,6 +77,11 @@ Schedules are picked as shapes - every few hours, daily, weekdays, monthly -
 and written to cron for you. Longhorn keeps time in UTC; the editor shows the
 next three runs in your own time. **Run now** starts one at once.
 
+A snapshot or backup job whose last run failed, or backup jobs with no
+backup target (or one that cannot be reached), make the cluster
+**degraded** on the Dashboard and raise an alert. Its **Review** button leads
+here.
+
 ## Restoring
 
 **Backups** lists every volume the backup target holds backups of, including
@@ -87,5 +94,18 @@ it never overwrites one - at least as big as the backup, with the copies you
 choose. Point the app at the restored volume (**Edit** on its container), or
 restore under the original name once the old volume is deleted.
 
-To go back to a snapshot, use Longhorn's own UI (the volume must be detached
-first); Homestead lists snapshots but does not roll a volume back.
+### Rolling back to a snapshot
+
+**Snapshots** on a volume lists them, each with **Roll back**, which puts the
+volume back as it was then. Longhorn only reverts a volume nothing is using,
+so Homestead:
+
+1. stops what uses it (containers, VMs, scheduled jobs), noting how each ran;
+2. waits for the volume to detach, then attaches it in maintenance mode;
+3. keeps the present state as a snapshot of its own (`before-rollback-…`),
+   so rolling forward again is one more **Roll back**;
+4. reverts to the snapshot, detaches, and starts everything again as it was.
+
+The job tray follows each step. If the volume will not let go, nothing is
+changed and everything starts again. Homestead's own data cannot be rolled
+back from Homestead, as that would stop it part-way.
