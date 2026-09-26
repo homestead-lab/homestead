@@ -18,6 +18,7 @@ Two things this gets right that a plain nodeSelector does not:
 import json
 import homestead_names as NAMES
 import homestead_pod_resources as RESOURCES
+import homestead_dependencies as DEPENDENCIES
 import time
 import urllib.error
 
@@ -331,9 +332,9 @@ def _reservation_snapshot():
             warnings.append("in-place resizing uses the higher observed resource reservation")
         if dra:
             warnings.append("existing dynamic resource allocations are not fully modelled")
-        return booked, True, warnings
+        return booked, True, warnings, result["items"]
     except Exception:
-        return {}, False, ["existing pod reservations are unavailable; free scheduler capacity is unknown"]
+        return {}, False, ["existing pod reservations are unavailable; free scheduler capacity is unknown"], None
 
 
 def _resource_fit(spec, node, booked, known, additional):
@@ -376,13 +377,20 @@ def start_plan(ns, name, replicas=1, warning_percent=88):
     reqs = requirements(dep)
     pod_spec = dep["spec"]["template"]["spec"]
     memory, unbounded = _pod_memory(pod_spec)
-    reservations, reservations_known, snapshot_warnings = _reservation_snapshot() if additional else ({}, False, [])
+    reservations, reservations_known, snapshot_warnings, pods = _reservation_snapshot() if additional else ({}, False, [], None)
+    dependencies = DEPENDENCIES.Snapshot(pod_spec, ns, kget, pods) if additional else None
     candidates = []
     for node in get_nodes():
         ok, reasons = satisfies(node, reqs)
         scheduler_reasons, scheduler_cautions = _start_scheduler_check(pod_spec, node)
         booked = reservations.get(node["name"], {})
         slots, fit_reasons, fit_warnings = _resource_fit(pod_spec, node, booked, reservations_known, additional)
+        if dependencies:
+            dependency_reasons, dependency_warnings, dependency_slots = dependencies.check(node, _required_affinity_matches)
+            fit_reasons.extend(dependency_reasons)
+            fit_warnings.extend(dependency_warnings)
+            if dependency_slots is not None:
+                slots = min(slots, dependency_slots)
         scheduler_reasons.extend(fit_reasons)
         scheduler_cautions.extend(fit_warnings + snapshot_warnings)
         reasons.extend(scheduler_reasons)
@@ -419,15 +427,23 @@ def start_plan(ns, name, replicas=1, warning_percent=88):
                            "allocatable_gb": round(_memory_bytes((node.get("allocatable") or {}).get("memory")) / 1024**3, 2),
                            "reserved_cpu_percent": round(booked.get("cpu", 0) / 10, 1) if reservations_known else None,
                            "request_slots": slots if reservations_known else None,
+                           "max_additional_pods": slots,
                            "projected_pods": proposed_here})
     eligible = [node for node in candidates if node["eligible"]]
     warnings = sorted({message for node in eligible for message in node["warnings"]})
     if additional and not eligible:
         warnings.append("no ready host satisfies this workload's placement requirements")
-    total_slots = sum(node["request_slots"] or 0 for node in eligible) if reservations_known else None
-    insufficient = bool(additional and total_slots is not None and total_slots < additional)
+    total_bound = sum(node["max_additional_pods"] for node in eligible)
+    if dependencies and dependencies.same_node:
+        total_bound = max((node["max_additional_pods"] for node in eligible), default=0)
+        if additional > 1:
+            warnings.append("replicas sharing a ReadWriteOnce claim must fit together on one host")
+    if dependencies and dependencies.single_pod:
+        total_bound = min(1, total_bound)
+    total_slots = total_bound if reservations_known else None
+    insufficient = bool(additional and total_bound < additional)
     if insufficient and eligible:
-        warnings.append(f"the requested {additional} additional replicas exceed the {total_slots} resource slots across eligible hosts")
+        warnings.append(f"the requested {additional} additional replicas exceed the {total_bound} slots allowed by checked resources, ports and storage")
     return {"namespace": ns, "name": name, "current": current, "requested": wanted,
             "additional": additional, "pod_memory_gb": round(memory / 1024**3, 2),
             "pod_request_gb": round(_pod_request(pod_spec, "memory") / 1024**3, 2),

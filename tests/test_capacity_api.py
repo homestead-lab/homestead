@@ -44,6 +44,14 @@ class CapacityApiTests(unittest.TestCase):
         check.assert_not_called()
         self.assertEqual({"spec": {"replicas": 0}}, send.call_args.args[2])
 
+    def test_invalid_replica_count_never_deletes_pending_pods(self):
+        for count in (-1, 101):
+            result, check, send, cleanup = self.post({}, replicas=count)
+            self.assertEqual(400, result[0])
+            check.assert_not_called()
+            send.assert_not_called()
+            cleanup.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

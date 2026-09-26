@@ -23,7 +23,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.160")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.161")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -5817,6 +5817,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, set_workload_groups(b))
             if p == "/api/scale":
                 ns, name, n = b["ns"], b["name"], int(b["replicas"])
+                if n < 0 or n > 100:
+                    raise ValueError("replicas must be between 0 and 100")
                 guard_managed_smb(ns, name)
                 guard_self(ns, name, stopping=n == 0, confirmed=b.get("confirm_self") is True)
                 if n > 0:
@@ -6602,7 +6604,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.160 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.161 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

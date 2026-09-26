@@ -90,12 +90,33 @@ Missing reservations or metrics, unbounded memory, competing unscheduled pods,
 and unverified placement constraints require review; unknown data is never a
 green safety result. The API recalculates immediately before scaling. This is
 a snapshot, **not a capacity reservation or OOM guarantee**. It does not yet
-fully simulate pod affinity, storage topology, host-port conflicts, dynamic
-resource allocation or concurrent admissions. Deploy/import, moves, updates
+fully simulate pod affinity, dynamic resource allocation or concurrent admissions.
+Deploy/import, moves, updates
 and VM launches are separate paths; expanding this guard to those is planned.
 
 The arithmetic follows Kubernetes' [resource request model](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/)
 and [init-sidecar accounting](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/).
+
+The same preview also checks declared host ports (including restartable init
+sidecars), bound PV node affinity, and PVC access modes. Occupied ports identify
+the consuming pod. Host ports limit identical new replicas to one per host;
+RWO shares must fit their replicas together on one host, and RWOP permits only
+one pod. Existing consumers are checked in the claim's namespace. Missing,
+Lost, deleting or incorrectly bound claims/PVs are blockers, not reasons to
+create an empty replacement.
+
+Pending `WaitForFirstConsumer` claims are allowed to reach the scheduler, with
+storage-class topology checks and an explicit provisioning warning. A direct
+`nodeName` assignment is refused for these claims because it bypasses the
+scheduling decision needed for binding. API errors are reported as unknown,
+not confused with a verified 404. These are read-only checks: they do not edit
+affinity, move data, detach volumes, stop consumers, or change access modes.
+See Kubernetes' [volume access modes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes)
+and [delayed volume binding](https://kubernetes.io/docs/concepts/storage/storage-classes/#volume-binding-mode).
+
+Storage-driver attachment/health, CSI capacity and attachment limits, undeclared
+host-network listeners, and arbitrary hostPath contents still need operator
+review; a matching topology does not prove the data is available.
 
 ## Updates
 
