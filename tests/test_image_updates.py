@@ -5,6 +5,7 @@ import tempfile
 import time
 import threading
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -13,7 +14,7 @@ import homestead_updates as updates
 
 
 DEPLOYMENT = {
-    "metadata": {"name": "demo", "namespace": "lab", "generation": 2, "annotations": {}},
+    "metadata": {"name": "demo", "namespace": "lab", "generation": 2, "annotations": {}, "uid": "dep-demo", "resourceVersion": "10"},
     "spec": {
         "replicas": 1,
         "selector": {"matchLabels": {"app": "demo"}},
@@ -31,13 +32,17 @@ class ImageUpdateTests(unittest.TestCase):
     def setUp(self):
         self.dep = copy.deepcopy(DEPLOYMENT)
         self.sent = []
+        self.pods = []
         self.tmp = tempfile.TemporaryDirectory()
 
         def get(path):
             if path.endswith("/deployments/demo"):
                 return self.dep
             if path == "/api/v1/pods":
-                return {"items": []}
+                return {"items": self.pods}
+            if path.endswith("/replicasets"):
+                return {"items": [{"metadata": {"namespace": "lab", "uid": "rs-demo",
+                    "ownerReferences": [{"kind": "Deployment", "uid": "dep-demo", "controller": True}]}}]}
             if "/serviceaccounts/" in path:
                 return {"imagePullSecrets": []}
             raise AssertionError(path)
@@ -52,6 +57,18 @@ class ImageUpdateTests(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_review_discovery_does_not_persist_running_digest(self):
+        pod = {"metadata": {"namespace": "lab", "labels": {"app": "demo"}},
+               "status": {"containerStatuses": [{"name": "demo", "imageID": "nginx@sha256:" + "a" * 64}]}}
+        before = copy.deepcopy(self.dep)
+        with mock.patch.object(updates, "_secret_credentials", return_value={}), \
+                mock.patch.object(updates, "registry_tags", return_value=["1.28.0"]), \
+                mock.patch.object(updates, "manifest_info", return_value={"digest": "sha256:" + "b" * 64, "children": []}):
+            check = updates._check_deployment(self.dep, [pod], True, persist=False)
+        self.assertTrue(check["available"])
+        self.assertEqual(before, self.dep)
+        self.assertEqual([], self.sent)
 
     def test_an_image_without_a_tag_is_given_latest(self):
         self.assertEqual("n8nio/n8n:latest", updates.with_tag("n8nio/n8n"))
@@ -215,6 +232,11 @@ class ImageUpdateTests(unittest.TestCase):
                                   {"name": "wait", "image": "busybox:1.36"}]
         new_digest = "sha256:" + "e" * 64
         old_digest = "sha256:" + "f" * 64
+        self.pods = [{"metadata": {"name": "demo-pod", "namespace": "lab", "labels": {"app": "demo"},
+                     "ownerReferences": [{"kind": "ReplicaSet", "uid": "rs-demo", "controller": True}]},
+                     "spec": copy.deepcopy(spec), "status": {"phase": "Running",
+                     "initContainerStatuses": [{"name": "data-permissions",
+                       "imageID": "ghcr.io/wjcloudy/homestead@" + old_digest}]}}]
         original = updates._check_deployment
         try:
             updates._check_deployment = lambda *args, **kwargs: {
@@ -241,8 +263,8 @@ class ImageUpdateTests(unittest.TestCase):
         spec = self.dep["spec"]["template"]["spec"]
         was = "ghcr.io/wjcloudy/homestead@" + old_digest
         self.assertEqual(was, spec["containers"][0]["image"])
-        self.assertEqual("ghcr.io/wjcloudy/homestead:2.8.2", spec["initContainers"][0]["image"],
-                         "rollback takes the init container back with it")
+        self.assertEqual(was, spec["initContainers"][0]["image"],
+                         "rollback pins the init container to the exact previous digest")
         self.assertEqual("busybox:1.36", spec["initContainers"][1]["image"])
 
     def test_a_digest_with_no_recorded_tag_says_so_rather_than_up_to_date(self):

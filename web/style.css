@@ -887,6 +887,7 @@ html[data-motion="off"] .uptime .ld{animation:none}
 .netpath i{font-style:normal;color:var(--low)}.netpath.big{font-size:12px;margin:10px 0}
 .net-intro,.net-help{color:var(--mut);line-height:1.6;margin:0 0 16px}
 html[data-theme="light"] .modalbox:has(#net_editor){background:var(--surf);color:var(--tx)}
+html[data-theme="light"] .modalbox:has(.update-review),html[data-theme="light"] .modalbox:has(#imageQueue){background:var(--surf);color:var(--tx)}
 html[data-theme="light"] #net_editor .net-access-choice:has(input:checked),html[data-theme="light"] #net_editor .net-address-choice:has(input:checked){background:#edf5ff}
 .net-current-access{display:flex;flex-direction:column;gap:7px;background:var(--surf2);border:1px solid var(--line);border-radius:12px;padding:16px;margin:0 0 20px;overflow-wrap:anywhere}
 .net-current-access small,.net-address-choice small,.net-access-choice small{color:var(--mut);font-size:12px;line-height:1.5}

@@ -236,15 +236,16 @@ def image_plan(item):
         return {"mode": "forget", "keeps": [f"{ref['name']} keeps no earlier image to go back to; "
                                             "the new one stays"]}
     return {"mode": "rollback", "severity": "high",
+            "can": False, "why_not": "Image rollback requires a fresh image and capacity review",
+            "image_review": {"ns": ref["namespace"], "name": ref["name"]},
             "undo": [f"{ref['name']}'s {container} goes back to {image}" for container, image in sorted(previous.items())],
             "keeps": [f"{ref['name']}'s pods restart once more, onto that image"]}
 
 
 def image_cancel(item, _options):
-    ref = item["ref"]
-    UPDATES.rollback(ref["namespace"], ref["name"])
-    UPDATES.invalidate()
-    return f"{ref['name']} is going back to the image it ran before"
+    if image_plan(item).get("image_review"):
+        raise ValueError("Image rollback requires a fresh image and capacity review")
+    return "Stopped tracking; no earlier recovery image exists and the workload is unchanged"
 
 
 # ------------------------------------------------------------- image cache
