@@ -25,7 +25,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.165")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.166")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2231,6 +2231,35 @@ def deploy_capacity_plan(config, existing=None):
                                      threshold, planned_claims=claims)
     return PLACE.manifest_plan(dep, ns, dep["metadata"]["name"], dep["spec"]["replicas"],
                                threshold, planned_claims=claims)
+
+
+def edit_capacity_plan(config):
+    """Build the exact edit before seed/PVC/icon or workload writes."""
+    ns, name = LC.dns_label(config["ns"], "namespace"), LC.dns_label(config["name"], "workload name")
+    current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    prepared = LC.prepare_edit(config, current=current)
+    context = {"action": "edit", **rollout_review_context(current),
+               "seeds": [(path, cm.get("metadata", {}).get("resourceVersion")) for path, cm in prepared["seeds"]]}
+    proposed = copy.deepcopy(prepared["deployment"])
+    if proposed["spec"].get("paused") and proposed["spec"].get("replicas", 1) > current["spec"].get("replicas", 1):
+        raise ValueError("Increasing replicas of a paused Deployment needs a separate capacity review; resume it before editing replicas")
+    if prepared["name"] != name:
+        count = proposed["spec"].get("replicas", 1)
+        proposed = LC._renamed_deployment(proposed, ns, prepared["name"])
+        proposed["spec"].update(replicas=count, strategy={"type": "Recreate"})
+    moves = RESTRUCTURE.copies(config)
+    if moves:
+        if prepared["name"] != name:
+            raise ValueError("rename the workload and move its data in separate saves")
+        proposed["spec"]["strategy"] = {"type": "Recreate"}
+    threshold = get_app_settings()["thresholds"]["memory"]["critical"]
+    plan = ROLLOUT_CAPACITY.plan(current, proposed, ns, kget, PLACE.get_nodes, PLACE.manifest_plan,
+                                 threshold, planned_claims={row["name"]: row for row in prepared["claims"]})
+    if moves:
+        plan["warnings"].append("data-copy helper placement is not simulated; final workload capacity must be rechecked if the cluster changes during copying")
+    if config.get("lan"):
+        plan["warnings"].append("LAN network attachment availability is not guaranteed by the memory and placement review")
+    return prepared, context, plan
 
 
 def reviewed_deploy(b):
@@ -6073,9 +6102,22 @@ class H(BaseHTTPRequestHandler):
                 if reused:
                     result["detail"] = f"kept the existing {', '.join(reused)} - its data carries on"
                 return self._send(200, result)
+            if p == "/api/edit/preview":
+                guard_managed_smb(b.get("ns", ""), b.get("name", ""))
+                _, context, plan = edit_capacity_plan(b)
+                return self._send(200, {"capacity": plan, "capacity_token": CAPACITY_REVIEW.issue(b, context)})
             if p == "/api/edit":
                 guard_managed_smb(b.get("ns", ""), b.get("name", ""))
+                prepared, context, plan = edit_capacity_plan(b)
+                CAPACITY_REVIEW.enforce(b, plan, context)
                 persist_icon_config(b)
+                if "icon" in b:
+                    ann = prepared["deployment"]["metadata"].setdefault("annotations", {})
+                    for key in ("icon", "icon-source"):
+                        ann.pop(NAMES.key(key), None)
+                    if b["icon"]:
+                        ann[NAMES.key("icon")] = b["icon"]
+                        ann[NAMES.key("icon-source")] = b.get("icon_source", b["icon"])
                 # Paths moved to other storage bring their data: the edit is
                 # saved stopped and a job copies before it starts again.
                 moves = RESTRUCTURE.copies(b)
@@ -6085,7 +6127,7 @@ class H(BaseHTTPRequestHandler):
                            confirmed=b.get("confirm_self") is True,
                            renaming=bool(b.get("workload_name")) and b.get("workload_name") != b.get("name"),
                            moving=bool(moves))
-                result = LC.edit_workload(b, hold=bool(moves))
+                result = LC.edit_workload(b, hold=bool(moves), prepared=prepared)
                 if moves:
                     result["operation"] = OPS.start(
                         "restructure", f"Move {b['name']}'s data",
@@ -6223,18 +6265,30 @@ class H(BaseHTTPRequestHandler):
                 if power_plan["requires_data_ack"] and not b.get("allow_data_risk"):
                     return self._send(409, {"error": "acknowledge the volume risk before host power control",
                                             "plan": power_plan})
+                operation = OPS.start(
+                    "node-power", f"{b['action']} {b['node']}", {"kind": "Node", "name": b["node"]},
+                    "/nodes?node=" + urllib.parse.quote(b["node"]),
+                    {"node": b["node"], "action": b["action"], "boot_id": power_plan["boot_id"],
+                     "volumes": [v["name"] for v in power_plan["volumes"]],
+                     "phase": "reviewed", "phase_at": time.time(), "started_epoch": time.time()},
+                    "Host impact reviewed; preparing cordon and drain")
+                phase_state = {"phase": "reviewed"}
+                def power_progress(phase, percent, message, **details):
+                    updated = OPS.record_phase(operation["id"], phase, percent, message, **details)
+                    phase_state["phase"] = phase
+                    return updated
                 try:
-                    result = LC.node_power(b["node"], b["action"], True)
-                    result["operation"] = OPS.start(
-                        "node-power", f"{b['action']} {b['node']}", {"kind": "Node", "name": b["node"]},
-                        "/nodes?node=" + urllib.parse.quote(b["node"]),
-                        {"node": b["node"], "action": b["action"], "boot_id": power_plan["boot_id"],
-                         "volumes": [v["name"] for v in power_plan["volumes"]],
-                         "helper_pod": result.get("helper_pod", ""), "started_epoch": time.time()},
-                        "Host cordoned and drained; waiting for its power transition")
+                    result = LC.node_power(b["node"], b["action"], True,
+                                           before_send=lambda: POWER.recheck_after_drain(power_plan),
+                                           reviewed_pods=power_plan["drain_pods"], progress=power_progress)
+                    result["operation"] = operation
                     return self._send(200, result)
-                except PermissionError as e:
-                    return self._send(409, {"error": str(e)})
+                except Exception as e:
+                    uncertain = phase_state["phase"] in ("sending", "observing")
+                    message = ("Power submission outcome is uncertain; inspect the existing job/helper before retrying" if uncertain else
+                               "Power was not sent. Inspect the host's cordon state: " + str(e))
+                    power_progress("observing" if uncertain else "failed", 20 if uncertain else 10, message)
+                    return self._send(409, {"error": message, "operation": operation})
             if p == "/api/vm/migrate":
                 ns = b.get("ns", DEFAULT_NS)
                 result = LC.vm_migrate(ns, b["name"], b.get("target"))
@@ -6656,7 +6710,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.165 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.166 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

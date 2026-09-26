@@ -280,6 +280,7 @@ window.editAutostartToggle = () => {
     ? "Runs continuously and comes back after a reboot."
     : "Stays stopped until you switch autostart back on.";
 };
+let EDIT_REVIEW = null, EDIT_REVIEW_SEQUENCE = 0;
 window.editSave = async (ns, name) => {
   const containers = $$("#e_containers .edit-container").map(panel => {
     const index = panel.dataset.index;
@@ -310,6 +311,8 @@ window.editSave = async (ns, name) => {
     autostart: $("#e_autostart").checked, manage_ports: true, containers, seed_configs,
     placement: readPlacement(), failover: $("#e_failover")?.value || "" };
   if ($("#e_lan_on")) body.lan = $("#e_lan_on").checked && $("#el_ip") ? containerLanRead("el") : null;
+  const nodeSelect = $("#e_node");
+  if (nodeSelect.value !== (nodeSelect.dataset.current || "")) body.node = nodeSelect.value || null;
   const moves = containers.flatMap(container => container.volumes.filter(volume => volume.copy_from));
   if (moves.length && renaming) return toast("Rename the workload and move its data in separate saves", "bad");
   if ((STATE.data.wl || []).some(x => x.self && x.ns === ns && x.name === name) && !body.autostart) {
@@ -323,26 +326,46 @@ window.editSave = async (ns, name) => {
       moves.map(volume => `${volume.path}: ${volume.copy_from.data === false ? "empty, owned like " : ""}${where(volume.copy_from.claim, volume.copy_from.sub_path)} → ${where(volume.source, volume.sub_path)}`).join("\n") +
       `\n\n${name} stops, ${copying.length ? "the data is copied" : "the new volume is made writable for it"}, and it starts again. ` +
       "The old volumes are kept; delete them from Volumes once you have checked.")) return;
-  const button = $("#e_save");
+  await window.editReview(body);
+};
+window.editReview = async body => {
+  EDIT_REVIEW = null;
+  const sequence = ++EDIT_REVIEW_SEQUENCE;
+  const config = JSON.parse(JSON.stringify(body));
+  try {
+    const review = await api("/api/edit/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(config) });
+    if (sequence !== EDIT_REVIEW_SEQUENCE) return;
+    if (!review.capacity || !review.capacity_token) throw new Error("Capacity review unavailable; refresh before saving.");
+    EDIT_REVIEW = { config, ...review, submitting: false };
+    childModal("Review workload changes", `${deployCapacityHtml(review.capacity)}
+      ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="editCapacityConfirm"> I understand the restart, placement, memory and storage warnings</label>` : ""}
+      <div class="modalactions"><button class="btn" onclick="modalBack()">Back to edit</button><button id="editGo" class="btn pri" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmEdit()">Save reviewed changes</button></div>`, true);
+  } catch (e) { toast(e.message, "bad"); }
+};
+window.confirmEdit = async () => {
+  const review = EDIT_REVIEW;
+  if (!review || review.submitting || review.capacity.blocked || !$("#editCapacityConfirm")?.checked)
+    return toast("Review the changes and acknowledge their warnings first", "bad");
+  const body = { ...review.config, capacity_token: review.capacity_token, confirm_capacity: true };
+  const { ns, name, workload_name: workloadName } = body;
+  const renaming = workloadName && workloadName !== name;
+  review.submitting = true;
+  const button = $("#editGo");
   button.disabled = true;
-  button.textContent = renaming ? "Renaming & checking readiness…"
-    : body.autostart ? "Saving & restarting…" : "Saving & stopping…";
+  button.textContent = "Saving reviewed changes…";
   try {
     const result = await api("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const activeName = result.name || workloadName || name;
-    const nodeSelect = $("#e_node");
-    const node = nodeSelect.value;
-    if (node !== (nodeSelect.dataset.current || "")) {
-      await api("/api/move", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ns, name: activeName, node: node || null }) });
-    }
     toast(result.operation ? `${activeName} saved; copying its data in the job tray` :
       result.network || (renaming ? `${name} renamed to ${activeName}` : `${activeName} updated`), "ok");
+    EDIT_REVIEW = null;
     closeModal(); setTimeout(() => refresh(true), 1200);
   } catch (e) {
+    EDIT_REVIEW = null;
     toast(e.message, "bad");
     button.disabled = false;
-    button.textContent = "Save & restart";
+    button.textContent = "Review again";
+    button.onclick = () => window.editReview(review.config);
   }
 };
 
@@ -446,6 +469,8 @@ window.nodePowerReview = async (node, action) => {
     <p class="small">${plan.pods} pod${plan.pods === 1 ? "" : "s"} and ${plan.vms?.length || 0} VM${plan.vms?.length === 1 ? "" : "s"} currently run on this host. Draining may move them, but live migration and restart are not guaranteed.</p>
     ${(plan.workloads || []).length ? `<div class="dependency-list">${(plan.workloads || []).map(w => `<div class="drow"><div class="dl mono">${esc(w.ns)}/${esc(w.name)}</div><div class="dv">${w.stranded ? '<span class="pill crit">no other eligible host</span>' : `<span class="pill med">may move to ${esc((w.eligible || []).join(", "))}</span>`}</div></div>`).join("")}</div>` : `<div class="dim small">No user Deployments are mapped to this host.</div>`}
     ${plan.vms?.length ? `<div class="note warn">VMs to check: ${plan.vms.map(esc).join(", ")}. Their migration or shutdown must be verified separately.</div>` : ""}
+    ${plan.maintenance?.budgets?.length ? `<div class="sec">Disruption budgets</div><div class="dependency-list">${plan.maintenance.budgets.map(b => `<div class="drow"><div class="dl mono">${esc(b.pod)}</div><div class="dv">${esc(b.budget)} · ${b.allowed == null ? "status unknown" : `${b.allowed} disruption(s) allowed`}${b.unhealthy_allowed ? " · unhealthy eviction allowed" : ""}</div></div>`).join("")}</div>` : ""}
+    ${plan.maintenance?.local_storage?.length ? `<div class="sec">Local and external storage</div><div class="note warn">Drain deletes emptyDir data. Host-local paths do not move with pods. External storage may depend on this host; verify availability before proceeding.</div><div class="dependency-list">${plan.maintenance.local_storage.map(v => `<div class="drow"><div class="dl mono">${esc(v.pod)}</div><div class="dv">${esc(v.kind)} · ${esc(v.source)}</div></div>`).join("")}</div>` : ""}
     <div class="sec">Volume copies during the outage</div>
     ${volumes.length ? `<div class="dependency-list">${volumes.map(v => `<div class="drow"><div class="dl mono">${esc(v.claim)}</div><div class="dv"><span class="pill ${v.risk === "unavailable" ? "crit" : v.risk === "single-copy" ? "med" : "low"}">${v.risk === "unavailable" ? "no healthy copy elsewhere" : v.risk === "single-copy" ? "one copy left · unprotected" : "replica resync needed"}</span></div></div>`).join("")}</div>` : `<div class="dim small">No Longhorn replica on this host was found.</div>`}
     ${(plan.warnings || []).length ? `<div class="note warn" style="margin-top:12px">${plan.warnings.map(esc).join(" · ")}</div>` : ""}

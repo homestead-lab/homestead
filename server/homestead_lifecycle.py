@@ -17,6 +17,8 @@ import homestead_restructure as RESTRUCTURE
 import homestead_affinity as AFFINITY
 import homestead_failover as FAILOVER
 import homestead_memory as MEMORY
+import homestead_maintenance as MAINTENANCE
+import homestead_place as PLACE
 
 # Rebooting a host needs a privileged pod that enters the host namespaces.
 # That is a real escape hatch, so it is off unless the operator opts in on the
@@ -98,10 +100,10 @@ def seed_configs(ns, dep):
     return found
 
 
-def _save_seed_configs(ns, dep, requested):
-    """Update only ConfigMap keys already wired to this Deployment's init containers."""
+def _prepare_seed_configs(ns, dep, requested):
+    """Validate and copy wired ConfigMaps without changing the cluster."""
     if not requested:
-        return
+        return []
     allowed = {
         (x["init_container"], x["config_map"], x["key"])
         for x in seed_configs(ns, dep)
@@ -117,14 +119,16 @@ def _save_seed_configs(ns, dep, requested):
         if len(value.encode("utf-8")) > 512 * 1024:
             raise ValueError("seed config value is too large (maximum 512 KiB)")
         updates.setdefault(item["config_map"], {})[item["key"]] = value
+    prepared = []
     for cm_name, values in updates.items():
-        cm = kget(f"/api/v1/namespaces/{ns}/configmaps/{cm_name}")
+        cm = copy.deepcopy(kget(f"/api/v1/namespaces/{ns}/configmaps/{cm_name}"))
         data = cm.setdefault("data", {})
         for key, value in values.items():
             if key not in data:
                 raise ValueError("seed config key no longer exists")
             data[key] = value
-        ksend("PUT", f"/api/v1/namespaces/{ns}/configmaps/{cm_name}", cm)
+        prepared.append((f"/api/v1/namespaces/{ns}/configmaps/{cm_name}", cm))
+    return prepared
 
 
 # --------------------------------------------------------------- edit / rename
@@ -588,13 +592,10 @@ def _apply_container_hardware(spec, dep, requested):
         annotations.pop(NAMES.key("hardware"), None)
 
 
-def edit_workload(cfg, hold=False):
-    """Edit pod settings and one or more containers in an existing Deployment.
-
-    hold saves the edit with the workload stopped and its replica count
-    parked, for a restructure that copies data before it starts again."""
+def prepare_edit(cfg, current=None):
+    """Read-only edit construction; all validation precedes side effects."""
     ns, name = cfg["ns"], cfg["name"]
-    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    dep = copy.deepcopy(current if current is not None else kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"))
     spec = dep["spec"]["template"]["spec"]
     containers = spec.get("containers", [])
     if not containers:
@@ -650,8 +651,7 @@ def edit_workload(cfg, hold=False):
         else:
             spec.pop("hostname", None)
 
-    if "seed_configs" in cfg:
-        _save_seed_configs(ns, dep, cfg.get("seed_configs") or [])
+    seeds = _prepare_seed_configs(ns, dep, cfg.get("seed_configs") or [])
 
     if cfg.get("failover"):
         FAILOVER.apply(spec, cfg["failover"])
@@ -692,11 +692,22 @@ def edit_workload(cfg, hold=False):
     if "placement" in cfg:
         dep["metadata"].setdefault("namespace", ns)
         AFFINITY.apply(dep, cfg.get("placement") or {})
-    # Every container is validated by now, so new claims can be created safely.
-    _create_pending_pvcs(ns, pending_claims)
+    if "node" in cfg:
+        PLACE.apply_node_placement(dep, cfg["node"], pin=False)
     workload_name = dns_label(cfg.get("workload_name") or name, "workload name")
+    return {"deployment": dep, "claims": pending_claims, "seeds": seeds, "name": workload_name}
+
+
+def edit_workload(cfg, hold=False, prepared=None):
+    """Commit a validated edit; hold keeps a storage restructure stopped."""
+    ns, name = cfg["ns"], cfg["name"]
+    prepared = prepared if prepared is not None else prepare_edit(cfg)
+    dep, workload_name = prepared["deployment"], prepared["name"]
     if workload_name != name and hold:
         raise ValueError("rename the workload and move its data in separate saves")
+    for path, cm in prepared["seeds"]:
+        ksend("PUT", path, cm)
+    _create_pending_pvcs(ns, prepared["claims"])
     held = RESTRUCTURE.hold(dep) if hold else None
     if workload_name != name:
         return rename_workload(ns, name, workload_name, dep)
@@ -773,17 +784,23 @@ def set_cordon(node, unschedulable):
     return {"ok": True, "node": node, "cordoned": bool(unschedulable)}
 
 
-def drain(node, grace=30, include_system=False):
+def drain(node, grace=30, include_system=False, reviewed_pods=None):
     """Evict workload pods off a node. DaemonSets and mirror pods are skipped
     because the scheduler will simply recreate them on the same node."""
-    pods = kget("/api/v1/pods").get("items", [])
+    pods = MAINTENANCE.items(kget, "/api/v1/pods")
+    if reviewed_pods is not None:
+        here = [p for p in pods if (p.get("spec") or {}).get("nodeName") == node]
+        if MAINTENANCE.pod_snapshot(here) != reviewed_pods or any(not row[2] for row in reviewed_pods):
+            raise ValueError("Host pods changed after review; power was not sent. Review the host again")
     evicted, skipped = [], []
     for p in pods:
         if p["spec"].get("nodeName") != node:
             continue
         ns, name = p["metadata"]["namespace"], p["metadata"]["name"]
+        if p.get("status", {}).get("phase") in ("Succeeded", "Failed"):
+            continue
         owners = p["metadata"].get("ownerReferences") or []
-        if any(o.get("kind") == "DaemonSet" for o in owners):
+        if any(o.get("kind") == "DaemonSet" and o.get("controller") is True for o in owners):
             skipped.append(f"{ns}/{name} (daemonset)")
             continue
         if p["metadata"].get("annotations", {}).get("kubernetes.io/config.mirror"):
@@ -796,7 +813,8 @@ def drain(node, grace=30, include_system=False):
             ksend("POST", f"/api/v1/namespaces/{ns}/pods/{name}/eviction",
                   {"apiVersion": "policy/v1", "kind": "Eviction",
                    "metadata": {"name": name, "namespace": ns},
-                   "deleteOptions": {"gracePeriodSeconds": int(grace)}})
+                   "deleteOptions": {"gracePeriodSeconds": int(grace),
+                                     **({"preconditions": {"uid": p["metadata"]["uid"]}} if p["metadata"].get("uid") else {})}})
             evicted.append(f"{ns}/{name}")
         except urllib.error.HTTPError as e:
             skipped.append(f"{ns}/{name} (HTTP {e.code})")
@@ -804,7 +822,7 @@ def drain(node, grace=30, include_system=False):
     return {"ok": True, "node": node, "evicted": evicted, "skipped": skipped}
 
 
-def node_power(node, action, drain_first=True):
+def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=None, progress=None):
     """Reboot or shut down a host.
 
     Kubernetes cannot do this. We schedule a one-shot privileged pod pinned to
@@ -818,15 +836,20 @@ def node_power(node, action, drain_first=True):
             "Deployment to turn it on. Cordon and drain work regardless.")
     if action not in ("reboot", "poweroff"):
         raise ValueError("action must be reboot or poweroff")
+    if before_send is None or reviewed_pods is None or not drain_first:
+        raise ValueError("A reviewed drain and fresh pre-power check are required; power was not sent")
+    report = progress or (lambda *args, **kwargs: None)
     ok, why, rep = node_action_check(node, action)
     if not ok:
         raise PermissionError(why)
 
     steps = []
+    report("cordoning", 5, "Cordoning host; power has not been sent")
     set_cordon(node, True)
     steps.append("cordoned")
     if drain_first:
-        d = drain(node)
+        report("draining", 10, "Evicting workload and system pods through disruption budgets; power has not been sent")
+        d = drain(node, include_system=True, reviewed_pods=reviewed_pods)
         steps.append(f"drained {len(d['evicted'])} pod(s)")
         refused = [item for item in d["skipped"] if "(HTTP " in item]
         if refused:
@@ -835,7 +858,7 @@ def node_power(node, action, drain_first=True):
         pending = set(d["evicted"])
         deadline = time.time() + 120
         while pending and time.time() < deadline:
-            live = kget("/api/v1/pods").get("items", [])
+            live = MAINTENANCE.items(kget, "/api/v1/pods")
             pending &= {(p.get("metadata") or {}).get("namespace", "") + "/" +
                         (p.get("metadata") or {}).get("name", "") for p in live
                         if (p.get("spec") or {}).get("nodeName") == node}
@@ -845,6 +868,12 @@ def node_power(node, action, drain_first=True):
             raise ValueError("Host remains cordoned; these pods have not left it: " +
                              ", ".join(sorted(pending)[:6]) + ". Power was not sent")
 
+    # A long drain can outlive the reviewed quorum, VM and replica state.
+    report("verifying", 15, "Drain completed; rechecking quorum, VMs, pods and volume replicas before power")
+    ok, why, rep = node_action_check(node, action)
+    if not ok:
+        raise PermissionError("Host remains cordoned; power was not sent: " + why)
+    before_send()
     cmd = "systemctl reboot" if action == "reboot" else "systemctl poweroff"
     pod_name = f"homestead-{action}-{node.split('.')[0][-12:]}-{int(time.time()) % 100000}"
     body = {
@@ -864,7 +893,12 @@ def node_power(node, action, drain_first=True):
             }],
         },
     }
+    # Persist the helper identity BEFORE submitting. A restart observes it;
+    # it never guesses whether POST succeeded and sends a second command.
+    report("sending", 20, "Submitting power helper; command outcome must be observed",
+           helper_pod=pod_name, started_epoch=time.time())
     ksend("POST", "/api/v1/namespaces/lab/pods", body)
+    report("observing", 20, "Power helper submitted; observing host transition")
     steps.append(f"scheduled {action} helper ({pod_name})")
     _bust()
     return {"ok": True, "node": node, "action": action, "steps": steps,

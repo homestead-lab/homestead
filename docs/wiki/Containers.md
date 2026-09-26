@@ -96,8 +96,19 @@ The legacy `/api/appstore/install` endpoint also uses this guard. API clients
 review the resolved template plus overrides via `/api/preview` and, when warnings
 require acknowledgement, pass its `capacity_token` and `confirm_capacity: true`
 with installation. Catalogue/override changes require a new review.
-Editing shared pods, Compose batches, Unraid migration, moves, image updates
-and VM launches remain separate paths; expanding this guard to those is planned.
+**Edit** also reviews the full replacement pod before saving. The review includes
+all containers, planned PVCs, memory limits and any host selection changed in the
+editor. A fresh review is required if the Deployment or edited seed ConfigMaps
+change. Rejected capacity checks do not save seed configs, create PVCs, persist
+icons or restart the workload. The final Deployment PUT retains its reviewed
+resource version. Multi-object saves are not atomic: a later API failure can
+still leave a partially applied edit.
+
+Renames and data-copy edits review conditional post-stop workload capacity;
+copy-helper placement and capacity changes during a long copy are not simulated.
+Paused Deployments cannot increase replicas through Edit until resumed and
+reviewed again. Compose batches, Unraid migration, standalone moves, image
+updates and VM launches remain separate paths; extending the guard is planned.
 
 The arithmetic follows Kubernetes' [resource request model](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/)
 and [init-sidecar accounting](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/).

@@ -70,7 +70,8 @@ class SeedConfigTests(unittest.TestCase):
                 "value": "detectors:\n  coral:\n    type: edgetpu\n",
             }],
         })
-        self.assertEqual("detectors:\n  coral:\n    type: edgetpu\n", self.configmap["data"]["config.yml"])
+        self.assertEqual("detectors:\n  coral:\n    type: edgetpu\n", self.sent[0][2]["data"]["config.yml"])
+        self.assertIn("openvino", self.configmap["data"]["config.yml"])
         self.assertEqual(["PUT", "PUT"], [x[0] for x in self.sent])
         self.assertTrue(self.sent[0][1].endswith("/configmaps/frigate-config"))
         self.assertTrue(self.sent[1][1].endswith("/deployments/frigate"))

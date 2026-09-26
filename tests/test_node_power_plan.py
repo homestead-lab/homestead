@@ -12,9 +12,13 @@ import homestead_power as power
 class PowerPlanTests(unittest.TestCase):
     def setUp(self):
         self.objects = {
+            "/api/v1/nodes": {"items": [{"metadata": {"name": "node2"}, "status": {
+                "conditions": [{"type": "Ready", "status": "True"}]}}]},
             "/api/v1/nodes/node1": {"status": {"conditions": [{"type": "Ready", "status": "True"}],
                                                  "nodeInfo": {"bootID": "old"}}},
-            "/api/v1/pods": {"items": [{"metadata": {"namespace": "lab", "name": "app-a"},
+            "/apis/policy/v1/poddisruptionbudgets": {"items": []},
+            "/api/v1/pods": {"items": [{"metadata": {"namespace": "lab", "name": "app-a",
+                                         "ownerReferences": [{"kind": "ReplicaSet", "controller": True, "uid": "rs"}]},
                                          "spec": {"nodeName": "node1"}}]},
             f"{power.LH}/replicas": {"items": [
                 {"spec": {"nodeID": "node1", "volumeName": "vol-a"}, "status": {"currentState": "running"}},

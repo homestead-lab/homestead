@@ -536,15 +536,14 @@ def impact(node):
 
 
 # ------------------------------------------------------------------ move
-def move(ns, name, node, pin=False):
-    """Move a workload.
+def apply_node_placement(dep, node, pin=False):
+    """Apply placement to a supplied manifest without API writes.
 
     pin=False (default) uses a weighted nodeAffinity preference, so the pod
     lands where asked but can still be rescheduled if the host dies. pin=True
     uses a hard nodeSelector, which guarantees placement and disables failover.
     node=None clears both.
     """
-    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     spec = dep["spec"]["template"]["spec"]
 
     sel = dict(spec.get("nodeSelector") or {})
@@ -583,9 +582,15 @@ def move(ns, name, node, pin=False):
         else:
             spec.pop("affinity", None)
 
-    dep["spec"].setdefault("strategy", {})["type"] = "Recreate"
+    dep["spec"]["strategy"] = {"type": "Recreate"}
     dep["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[
         NAMES.key("movedAt")] = time.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return mode
+
+
+def move(ns, name, node, pin=False):
+    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    mode = apply_node_placement(dep, node, pin)
     ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
     _bust("wl", "ov", "flow", "nodes", "impact:")
     return {"ok": True, "moved": name, "to": node or "any node", "mode": mode}

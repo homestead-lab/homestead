@@ -60,6 +60,45 @@ From a node you can:
   tray;
 - reboot or shut it down, if `ENABLE_NODE_POWER` is set on Homestead.
 
+### Reviewed host maintenance
+
+Reboot and shutdown first show quorum, affected workloads, VMs, Longhorn copies,
+disruption budgets and local/external storage used by pods being drained.
+Unmanaged pods, unavailable inventories and blocking or stale disruption budgets
+stop the action. The eviction API is authoritative; a positive budget is not a
+promise that every eviction will succeed. Homestead never force-deletes pods to
+bypass it. See Kubernetes' [disruption-budget reference](https://kubernetes.io/docs/reference/kubernetes-api/policy/pod-disruption-budget-v1/).
+
+Drain deletes `emptyDir` data. Host-local PVCs and paths do not follow a pod to
+another host. External NFS/CSI availability is not proven by the replica check.
+These risks require explicit acknowledgement. Longhorn surviving copies are
+counted on distinct Ready hosts, not duplicate replicas on one host. Remaining
+host capacity, static pods/DaemonSets and all external dependencies are not fully
+simulated; this is not a complete failover guarantee.
+
+The job is recorded **before cordon**, with phases for cordoning, draining,
+post-drain verification, helper submission and observation. System workload pods
+are drained too; static pods and DaemonSets remain. Pod UID preconditions prevent
+evicting a replacement under a reused name. Before power, Homestead rechecks
+quorum, VMs, replicas and remaining pods. A changed risk or incomplete drain
+leaves the host cordoned, with no power command sent.
+
+Interrupted pre-power work times out without automatically resuming. The helper
+identity is saved before submission; an uncertain submission is observed, never
+automatically resent. An existing active helper blocks another request. A new
+boot ID verifies a reboot even if polling missed NotReady. A reboot that stays
+down times out after ten minutes; volume recovery has a separate thirty-minute
+wait. NotReady alone cannot prove physical shutdown. No automatic uncordon is
+performed: inspect the node, workloads and storage before using **Uncordon**.
+
+If this host runs Homestead itself, draining can interrupt the request. Inspect
+the persisted job after Homestead returns before retrying. Disposable-host
+rehearsal remains necessary before relying on unattended maintenance.
+
+Upgrading from older installations requires the updated ClusterRole's read-only
+`policy/poddisruptionbudgets` permission (`deploy/rbac.yaml` or a Helm upgrade).
+An image-only update without this permission blocks power review safely.
+
 ## The node probe
 
 Kubernetes knows nothing of temperatures, USB devices, which physical disk is

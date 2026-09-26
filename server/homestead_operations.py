@@ -84,9 +84,25 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
     }
     with _lock:
         items = _read()
+        if kind == "node-power" and any(i.get("kind") == kind and i.get("status") not in TERMINAL and
+                                        i.get("ref", {}).get("node") == ref.get("node") for i in items):
+            raise ValueError("Host maintenance is already active; inspect its job before retrying")
         items.append(item)
         _write(items)
     return _public(item)
+
+
+def record_phase(operation_id, phase, progress, message, **ref_updates):
+    """Persist synchronous maintenance progress before irreversible steps."""
+    with _lock:
+        items = _read()
+        item = next(i for i in items if i["id"] == operation_id)
+        if item.get("status") in TERMINAL:
+            raise ValueError("Maintenance job has ended; refusing further actions")
+        item["ref"].update(ref_updates, phase=phase, phase_at=time.time())
+        _finish(item, "failed" if phase == "failed" else "running", progress, message)
+        _write(items)
+        return _public(item)
 
 
 def _public(item):
