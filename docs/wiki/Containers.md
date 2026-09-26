@@ -91,8 +91,9 @@ and unverified placement constraints require review; unknown data is never a
 green safety result. The API recalculates immediately before scaling. This is
 a snapshot, **not a capacity reservation or OOM guarantee**. It does not yet
 fully simulate dynamic resource allocation or concurrent admissions.
-Deploy/import, moves, updates
-and VM launches are separate paths; expanding this guard to those is planned.
+New workloads from **Deploy and App Store** use the same planner (see below).
+Joining/editing shared pods, Compose batches, Unraid migration, moves, updates
+and VM launches remain separate paths; expanding this guard to those is planned.
 
 The arithmetic follows Kubernetes' [resource request model](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/)
 and [init-sidecar accounting](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/).
@@ -136,6 +137,38 @@ scheduler profiles/default constraints, admission-injected labels and concurrent
 controllers are not simulated. No pods are actually placed during this check.
 See Kubernetes' [pod affinity](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#inter-pod-affinity-and-anti-affinity)
 and [topology spread](https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/).
+
+### New deployment review
+
+Deploy and App Store show per-host placement reasons, live/projected RAM and
+existing reservations before creating a new workload. A proven capacity or
+placement shortfall disables deployment and cannot be overridden through the
+API. Missing data or other warnings require an explicit acknowledgement.
+
+The server rechecks the proposed manifest before the Deploy endpoint calls any
+creation helpers: no icons, volumes, secrets, network attachments or workloads
+are written on a capacity rejection. The preview is read-only. It includes a
+conservative allowance for the volume-ownership init stage without downloading
+image layers during review. This is still a snapshot, not an atomic reservation
+against other users or controllers deploying concurrently.
+
+Claims marked **Create new** are evaluated as planned only when the API confirms
+that they do not already exist. Their access mode and delayed-binding class
+topology constrain placement; storage provisioning/capacity is still unverified.
+Existing claims keep their real access mode and PV restrictions, regardless of
+the proposed settings. An API permission error is unknown, not a missing claim.
+
+Acknowledgements expire after ten minutes and are bound to the exact reviewed
+configuration. The confirmation submits that configuration, not subsequent form
+edits. A changed input, expired review, or rotated account signing key requires
+reviewing again. A domain-separated key from the existing account Secret lets
+reviews work across Homestead replicas and restarts without writing a new Secret.
+Tokens contain no passwords or manifest contents. If capacity worsens to a hard blocker
+after review, the fresh server check rejects deployment even with a valid token.
+
+Joining a running pod still uses its existing restart confirmation and explicitly
+states that replacement-rollout capacity is not yet checked. Do not interpret
+the new-workload guard as covering shared-pod rollouts or Compose batches.
 
 ## Updates
 

@@ -144,6 +144,18 @@ def internal_signing_key():
     return _signing_key()
 
 
+def review_signing_key():
+    """Read-only, domain-separated key for expiring capacity acknowledgements.
+
+    Login/setup must have initialized the account Secret already. A preview
+    must never create/repair credentials, and all Homestead replicas must agree.
+    """
+    key = _load().get("signing_key")
+    if not key:
+        raise StoreUnavailable("The deployment review key is unavailable; sign in again before reviewing.")
+    return hmac.new(key.encode(), b"homestead-capacity-review-v1", hashlib.sha256).digest()
+
+
 def needs_setup():
     return not _load(force=True).get("users")
 

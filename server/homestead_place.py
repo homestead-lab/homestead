@@ -367,6 +367,15 @@ def start_plan(ns, name, replicas=1, warning_percent=88):
     """
     dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     current = int((dep.get("spec") or {}).get("replicas", 1) or 0)
+    return manifest_plan(dep, ns, name, replicas, warning_percent, current=current)
+
+
+def manifest_plan(dep, ns, name, replicas=1, warning_percent=88, *, current=0, planned_claims=None):
+    """Read-only capacity check for a proposed Deployment, including new claims.
+
+    Existing start/scale callers provide current replicas. New deployments use
+    zero; replacement rollouts must not masquerade as new deployments here.
+    """
     wanted = int(replicas)
     if wanted < 0 or wanted > 100:
         raise ValueError("replicas must be between 0 and 100")
@@ -375,7 +384,7 @@ def start_plan(ns, name, replicas=1, warning_percent=88):
     pod_spec = dep["spec"]["template"]["spec"]
     memory, unbounded = _pod_memory(pod_spec)
     reservations, reservations_known, snapshot_warnings, pods = _reservation_snapshot() if additional else ({}, False, [], None)
-    dependencies = DEPENDENCIES.Snapshot(pod_spec, ns, kget, pods) if additional else None
+    dependencies = DEPENDENCIES.Snapshot(pod_spec, ns, kget, pods, planned_claims=planned_claims) if additional else None
     nodes = get_nodes()
     topology = TOPOLOGY.Snapshot(dep["spec"]["template"], ns, nodes, pods, kget,
                                  _required_affinity_matches, _tolerates) if additional else None

@@ -1373,7 +1373,32 @@ window.previewYaml = async () => {
   try { const r = await api("/api/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(collect()) });
     modal("Manifest preview", `<pre>${esc(JSON.stringify(r, null, 2))}</pre>`, true); } catch (e) { toast(e.message, "bad"); }
 };
+let DEPLOY_REVIEW = null;
+let DEPLOY_REVIEW_SEQUENCE = 0;
+let DEPLOY_SUBMITTING = false;
+function deployCapacityHtml(plan) {
+  if (!plan) return "";
+  return `<div class="reviewbox deploy-capacity"><b>Placement and memory</b>
+    <p class="small muted">${esc(plan.additional)} pod(s), each requesting ${esc(plan.pod_request_gb)} GiB RAM and ${esc(plan.pod_cpu_request_percent)}% CPU (100% = one core). Memory estimate: ${esc(plan.pod_memory_gb)} GiB per pod, including init stages.</p>
+    ${plan.blocked ? `<div class="note bad">This deployment cannot fit the checked placement constraints. Change its resources, volumes or host selection before deploying.</div>` : ""}
+    ${plan.warnings?.length ? `<div class="note warn">${plan.warnings.map(esc).join(" · ")}</div>` : ""}
+    <details${plan.blocked ? " open" : ""}><summary>Host capacity and placement</summary><div class="dependency-list">${(plan.candidates || []).map(host => `<div class="drow"><div class="dl mono">${esc(host.name)}</div><div class="dv">${host.eligible ? "Eligible for the next pod" : esc((host.reasons || []).join(" · ") || "Not eligible")}
+      <div class="dim xs">${host.metrics_available && host.projected_percent != null ? `Live RAM ${esc(host.used_gb)} GiB · projected ${esc(host.projected_gb)} / ${esc(host.capacity_gb)} GiB (${esc(host.projected_percent)}%)` : "Live RAM unavailable"}</div>
+      <div class="dim xs">${host.reservations_known ? `Reserved RAM ${esc(host.reserved_gb)} GiB; resource/port/storage upper bound ${esc(host.request_slots)} more pod(s).` : "Scheduler reservations unavailable."}</div></div></div>`).join("")}</div></details>
+    <p class="dim xs">This is a snapshot, not a reservation or an OOM guarantee. The server checks again before creating anything. Planned volumes have not been provisioned.</p></div>`;
+}
+window.deployReviewReady = () => {
+  const review = DEPLOY_REVIEW;
+  const ready = !DEPLOY_SUBMITTING && review && !review.plan?.blocked &&
+    (review.config.target_mode !== "existing" || $("#deployConfirm")?.checked) &&
+    (!review.plan?.requires_confirmation || $("#deployCapacityConfirm")?.checked);
+  if ($("#deployGo")) $("#deployGo").disabled = !ready;
+  return !!ready;
+};
 window.doDeploy = async () => {
+  if (DEPLOY_SUBMITTING) return;
+  const sequence = ++DEPLOY_REVIEW_SEQUENCE;
+  DEPLOY_REVIEW = null;
   const c = collect();
   if (c.app_profile?.blocked) return toast(c.app_profile.label || "this template is not directly compatible", "bad");
   if (!c.container_name || !c.image) return toast("container name and image are required", "bad");
@@ -1383,8 +1408,11 @@ window.doDeploy = async () => {
   if (storageIssue) return toast(storageIssue, "bad");
   try {
     const plan = await api("/api/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
+    if (sequence !== DEPLOY_REVIEW_SEQUENCE) return;
     if (plan.app_profile?.blocked) return toast(plan.app_profile.label || "this workload needs a Kubernetes-specific design", "bad");
     const joining = c.target_mode === "existing";
+    if (!joining && !plan.capacity) throw new Error("Capacity preview unavailable; refresh Homestead before deploying.");
+    DEPLOY_REVIEW = { config: JSON.parse(JSON.stringify(c)), plan: plan.capacity, token: plan.capacity_token };
     modal(joining ? "Review shared-pod change" : "Review deployment", `<div class="update-review">
       <div class="reviewbox"><b>${joining ? `Add ${esc(c.container_name)} to ${esc(c.target_workload)}` : `Create ${esc(c.workload_name)} with container ${esc(c.container_name)}`}</b>
         <p class="dim">${esc(plan.impact?.message || "Review the Kubernetes objects before continuing.")}</p>
@@ -1392,17 +1420,28 @@ window.doDeploy = async () => {
         <div class="dependency-list"><div class="dependency-row"><span>Image</span><b class="mono">${esc(c.image)}</b></div>
           <div class="dependency-row"><span>Ports</span><b>${c.ports.length}</b></div><div class="dependency-row"><span>Storage mappings</span><b>${c.volumes.length}</b></div></div>
       </div>
-      ${joining ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployConfirm" onchange="document.getElementById('deployGo').disabled=!this.checked"> I understand every container in ${esc(c.target_workload)} will restart together</label>` : ""}
+      ${deployCapacityHtml(plan.capacity)}
+      ${joining ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployConfirm" onchange="deployReviewReady()"> I understand every container in ${esc(c.target_workload)} will restart together. Replacement-rollout capacity has not yet been checked.</label>` : ""}
+      ${plan.capacity?.requires_confirmation && !plan.capacity.blocked ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployCapacityConfirm" onchange="deployReviewReady()"> I understand the placement, memory and provisioning warnings above</label>` : ""}
       <details><summary>Manifest preview</summary><pre>${esc(JSON.stringify({ deployment: plan.deployment, service: plan.service }, null, 2))}</pre></details>
-      <div class="modalactions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" id="deployGo" ${joining ? "disabled" : ""} onclick="confirmDeploy()">${joining ? "Add container & restart pod" : "Deploy workload"}</button></div></div>`, true);
+      <div class="modalactions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" id="deployGo" ${joining || plan.capacity?.requires_confirmation || plan.capacity?.blocked ? "disabled" : ""} onclick="confirmDeploy()">${joining ? "Add container & restart pod" : "Deploy workload"}</button></div></div>`, true);
   } catch (e) { toast(e.message, "bad"); }
 };
 window.confirmDeploy = async () => {
-  const c = collect();
+  if (!window.deployReviewReady()) return toast("Review the deployment and acknowledge its warnings first", "bad");
+  const c = { ...DEPLOY_REVIEW.config, capacity_token: DEPLOY_REVIEW.token,
+    confirm_capacity: !!$("#deployCapacityConfirm")?.checked };
+  DEPLOY_SUBMITTING = true;
   try { $("#deployGo").disabled = true; const r = await api("/api/deploy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
     const kept = (r.reused_volumes || []).length ? ` - kept the existing ${r.reused_volumes.join(", ")}, which nothing was using` : "";
+    DEPLOY_REVIEW = null;
     closeModal(); toast((c.target_mode === "existing" ? `${c.container_name} added to ${c.target_workload}` : `${c.workload_name} deployed`) + kept, "ok"); go("workloads");
-  } catch (e) { if ($("#deployGo")) $("#deployGo").disabled = false; toast(e.message, "bad"); }
+  } catch (e) {
+    DEPLOY_REVIEW = null;
+    const button = $("#deployGo");
+    if (button) { button.disabled = false; button.textContent = "Review again"; button.onclick = () => window.doDeploy(); }
+    toast(e.message, "bad");
+  } finally { DEPLOY_SUBMITTING = false; }
 };
 
 /* ---------------- choosing a VIP ----------------

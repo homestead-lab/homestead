@@ -28,7 +28,7 @@ def claims_used(pod, namespace, claim):
 
 
 class Snapshot:
-    def __init__(self, spec, namespace, get, pods):
+    def __init__(self, spec, namespace, get, pods, planned_claims=None):
         self.spec, self.namespace, self.pods = spec, namespace, pods
         self.ports = host_ports(spec)
         self.claims = []
@@ -46,6 +46,13 @@ class Snapshot:
             return cache[path]
         for claim in sorted({(v.get("persistentVolumeClaim") or {}).get("claimName") for v in spec.get("volumes") or []} - {None, ""}):
             pvc = read(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{claim}")
+            proposed = (planned_claims or {}).get(claim)
+            # Only a verified 404 may become a planned PVC. An API outage must
+            # never hide a real volume or manufacture its access mode/topology.
+            if pvc.get("_missing") and proposed:
+                pvc = {"metadata": {"name": claim}, "_planned": True,
+                       "spec": {"accessModes": [proposed["access_mode"]],
+                                "storageClassName": proposed["storage_class"]}}
             modes = (pvc.get("spec") or {}).get("accessModes") or []
             self.same_node |= "ReadWriteOnce" in modes and "ReadWriteMany" not in modes
             self.single_pod |= "ReadWriteOncePod" in modes
@@ -95,6 +102,10 @@ class Snapshot:
                 warnings.append(f"PVC {name} consumers could not be checked")
             if not modes:
                 warnings.append(f"PVC {name} access mode is unknown")
+            if pvc.get("_planned"):
+                warnings.append(f"PVC {name} is planned, not provisioned; storage capacity and attachment remain unverified")
+                if sc and sc.get("provisioner") == "driver.longhorn.io" and str((sc.get("parameters") or {}).get("migratable", "")).lower() == "true":
+                    reasons.append(f"PVC {name}'s storage class is for migratable VM disks, not container filesystems")
             if pv:
                 if pv.get("_missing"):
                     reasons.append(f"PVC {name}'s bound PV is missing")

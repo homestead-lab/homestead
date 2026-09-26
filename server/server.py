@@ -9,6 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 # Imported ahead of the feature modules because settings are read during start.
 import homestead_names as NAMES
 import homestead_memory as MEMORY
+import homestead_capacity_review as CAPACITY_REVIEW
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
 API = "https://kubernetes.default.svc"
@@ -23,7 +24,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.162")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.163")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2189,8 +2190,46 @@ def install_samba(address=""):
     return created
 
 
+def deploy_capacity_plan(config):
+    """Read-only new-workload preview, before any deployment side effects."""
+    cfg = analyze_deploy_intent(copy.deepcopy(config))
+    if cfg.get("target_mode", "new") != "new":
+        raise ValueError("shared-pod capacity requires a replacement-rollout plan")
+    ns = _dns_name(cfg.get("namespace") or DEFAULT_NS, "namespace")
+    cfg["namespace"] = ns
+    dep, _ = build_deployment(cfg)
+    claims = {row["name"]: row for row in new_claims(cfg.get("volumes") or [])}
+    for row in claims.values():
+        if row["access_mode"] not in ("ReadWriteOnce", "ReadWriteMany", "ReadOnlyMany", "ReadWriteOncePod"):
+            raise ValueError("invalid volume access mode")
+        # StorageClass names may contain dots, unlike our workload names.
+        if not re.fullmatch(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?", row["storage_class"]):
+            raise ValueError("invalid storage class name")
+    pspec = dep["spec"]["template"]["spec"]
+    if claims and not pspec.get("initContainers"):
+        # Owner discovery reads the image later and may add this init stage.
+        # Include its request now without fetching layers or writing a helper.
+        pspec["initContainers"] = [VOLOWNER.init_container([])]
+    threshold = get_app_settings()["thresholds"]["memory"]["critical"]
+    return PLACE.manifest_plan(dep, ns, dep["metadata"]["name"], dep["spec"]["replicas"],
+                               threshold, planned_claims=claims)
+
+
+def reviewed_deploy(b):
+    """Deploy/App Store endpoint guard; Compose needs a whole-batch review."""
+    b = ensure_profile_compatible(analyze_deploy_intent(copy.deepcopy(b)))
+    if b.get("target_mode", "new") not in ("new", "existing"):
+        raise ValueError("deployment target must be new or existing")
+    if b.get("target_mode", "new") == "new":
+        # The token binds the original reviewed input, not generated passwords,
+        # image-owner discoveries or a newly selected automatic VIP.
+        plan = deploy_capacity_plan(b)
+        CAPACITY_REVIEW.enforce(b, plan)
+    return run_deploy(b)
+
+
 def run_deploy(b):
-    """Create (or join) a workload from a deploy config, as the Deploy page does."""
+    """Create (or join) a workload. HTTP Deploy uses reviewed_deploy first."""
     b = analyze_deploy_intent(b)
     ns = b.get("namespace") or DEFAULT_NS
     target = b.get("target_workload") if b.get("target_mode") == "existing" else b.get("workload_name") or b.get("name")
@@ -3750,6 +3789,7 @@ LC.bind(kget, ksend, SYS_NS, _cache, HW.features, create_pvc, STORAGE_CLASS)
 IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.features)
 IMP.SCAN_DIR = DATA_DIR       # each node's full image list, kept for every replica
 AUTH.bind(kget, ksend, DEFAULT_NS)
+CAPACITY_REVIEW.bind(AUTH.review_signing_key)
 LH.bind(kget, ksend, _cache, STORAGE_CLASS)
 PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.features)
 POWER.bind(kget, PLACE.impact, LC.quorum_report, lambda: LC.NODE_POWER_ENABLED)
@@ -5717,7 +5757,7 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/settings":
                 return self._send(200, {"ok": True, **save_app_settings(b)})
             if p == "/api/deploy":
-                return self._send(200, run_deploy(b))
+                return self._send(200, reviewed_deploy(b))
             if p == "/api/compose/parse":
                 return self._send(200, compose_report(b))
             if p == "/api/compose/apply":
@@ -6471,6 +6511,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, result)
             if p == "/api/preview":
                 b = analyze_deploy_intent(b)
+                capacity = deploy_capacity_plan(b) if b.get("target_mode", "new") == "new" else None
+                capacity_token = CAPACITY_REVIEW.issue(b) if capacity is not None else None
                 b = NETWORK.prepare_deploy(b)
                 b = apply_deploy_bindings(b)
                 b = apply_generated_secrets(b)
@@ -6486,10 +6528,13 @@ class H(BaseHTTPRequestHandler):
                                                        "message": "Saving updates the Deployment template and restarts every container in its pods."}})
                 dep, svc = build_deployment(b)
                 return self._send(200, {"deployment": redact_deployment_preview(dep, b), "service": svc,
+                                        "capacity": capacity, "capacity_token": capacity_token,
                                         "app_profile": b.get("app_profile"),
                                         "impact": {"mode": "new", "workload": dep["metadata"]["name"],
                                                    "message": "Creates a new independently managed Deployment."}})
             return self._send(404, {"error": "no route"})
+        except CAPACITY_REVIEW.Rejected as e:
+            return self._send(409, {"error": str(e), "capacity": e.plan, "review_required": True})
         except PermissionError as e:
             return self._send(403, {"error": str(e)})
         except ValueError as e:
@@ -6604,7 +6649,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.162 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.163 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()
