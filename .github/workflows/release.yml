@@ -104,6 +104,15 @@ jobs:
           trap 'kill "$server_pid"' EXIT
           node scripts/check_volume_layout.mjs
           node scripts/capture_screenshots.mjs
+      - name: Capture the installer's screens
+        # The installer and node doctor, run with --dry-run in tmux; a screen
+        # that does not capture only means one picture fewer.
+        continue-on-error: true
+        shell: bash
+        run: |
+          sudo apt-get install -y -qq tmux whiptail >/dev/null
+          bash scripts/capture_tui.sh
+          node scripts/render_tui.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: homestead-screenshots-${{ steps.version.outputs.version }}
