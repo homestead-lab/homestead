@@ -57,6 +57,7 @@ const editContainerPanel = (container, index) => {
         <div class="f"><label>CPU reserved ${tip("Guaranteed scheduling capacity. 1000m = one core; it is not a hard usage limit.")}</label><input id="e_cpu_${index}" type="text" value="${esc(container.cpu || "")}" placeholder="50m"></div>
         <div class="f"><label>Memory reserved ${tip("Guaranteed scheduling capacity in Mi or Gi; it is not a hard usage limit.")}</label><input id="e_mem_${index}" type="text" value="${esc(container.memory || "")}" placeholder="128Mi"></div>
       </div>
+      <div class="f"><label>Memory max (optional) ${tip("The container's memory ceiling. Exceeding it can cause an OOM kill and restart. Leave blank for no limit; it must be at least Memory reserved.")}</label><input id="e_mem_limit_${index}" type="text" value="${esc(container.memory_limit || "")}" placeholder="No limit · e.g. 1Gi"></div>
       <div class="subsec">Hardware passed to this container</div>
       <div class="hwchoices">${hardwareChoices(`e_hw_${index}`, container.hardware || [])}</div>
       <div class="subsec">Privileges</div>
@@ -290,7 +291,8 @@ window.editSave = async (ns, name) => {
       expose: $(".ep-expose", row).checked })).filter(port => port.container);
     return { original_name: panel.dataset.originalName, name: $("#e_container_name_" + index).value.trim(),
       image: $("#e_image_" + index).value.trim(), cpu: $("#e_cpu_" + index).value.trim(),
-      memory: $("#e_mem_" + index).value.trim(), hardware: selectedHardware("e_hw_" + index), env, ports,
+      memory: $("#e_mem_" + index).value.trim(), memory_limit: $("#e_mem_limit_" + index).value.trim(),
+      hardware: selectedHardware("e_hw_" + index), env, ports,
       privileges: readPrivileges("e_pv_" + index) || undefined,
       volumes: readVolumeRows($("#e_vols_" + index)) };
   });

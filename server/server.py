@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Imported ahead of the feature modules because settings are read during start.
 import homestead_names as NAMES
+import homestead_memory as MEMORY
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
 API = "https://kubernetes.default.svc"
@@ -22,7 +23,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.155")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.156")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1770,7 +1771,11 @@ def build_deployment(cfg):
     if mounts: c["volumeMounts"] = mounts
     res = {}
     if cfg.get("cpu"): res.setdefault("requests", {})["cpu"] = cfg["cpu"]
-    if cfg.get("memory"): res.setdefault("requests", {})["memory"] = cfg["memory"]
+    memory_request = str(cfg.get("memory") or "").strip()
+    memory_limit = str(cfg.get("memory_limit") or "").strip()
+    MEMORY.validate(memory_request, memory_limit, container_name)
+    if memory_request: res.setdefault("requests", {})["memory"] = memory_request
+    if memory_limit: res.setdefault("limits", {})["memory"] = memory_limit
     if res: c["resources"] = res
     if cfg.get("privileged"): c["securityContext"] = {"privileged": True}
     apply_container_settings(c, cfg)
@@ -2206,8 +2211,13 @@ def build_sidecar_deployment(cfg, current):
     resources = {}
     if cfg.get("cpu"):
         resources.setdefault("requests", {})["cpu"] = cfg["cpu"]
-    if cfg.get("memory"):
-        resources.setdefault("requests", {})["memory"] = cfg["memory"]
+    memory_request = str(cfg.get("memory") or "").strip()
+    memory_limit = str(cfg.get("memory_limit") or "").strip()
+    MEMORY.validate(memory_request, memory_limit, container_name)
+    if memory_request:
+        resources.setdefault("requests", {})["memory"] = memory_request
+    if memory_limit:
+        resources.setdefault("limits", {})["memory"] = memory_limit
     if resources:
         container["resources"] = resources
     if cfg.get("privileged"):
@@ -4383,9 +4393,11 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         refs = [{"name": item["name"], "source": env_reference(item)}
                 for item in container.get("env", []) or [] if item.get("name") and item.get("valueFrom")]
         requests = (container.get("resources", {}) or {}).get("requests", {}) or {}
+        limits = (container.get("resources", {}) or {}).get("limits", {}) or {}
         containers.append({
             "original_name": container.get("name", ""), "name": container.get("name", ""),
             "image": container.get("image", ""), "cpu": requests.get("cpu", ""), "memory": requests.get("memory", ""),
+            "memory_limit": limits.get("memory", ""),
             "env": literals, "env_refs": refs,
             "ports": [{"container": port.get("containerPort"), "name": port.get("name", ""),
                        "protocol": port.get("protocol", "TCP"),
@@ -4402,7 +4414,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
     assigned = {feature for container in containers for feature in container["hardware"]}
     if containers:
         containers[0]["hardware"].extend(feature for feature in detected if feature not in assigned)
-    first = containers[0] if containers else {"name": "", "image": "", "cpu": "", "memory": "", "env": {}, "ports": [], "volumes": []}
+    first = containers[0] if containers else {"name": "", "image": "", "cpu": "", "memory": "", "memory_limit": "", "env": {}, "ports": [], "volumes": []}
     reusable = []
     device_paths = {feature["host_path"].rstrip("/") for feature in definitions}
     for volume in pspec.get("volumes", []) or []:
@@ -4434,6 +4446,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         "has_service": bool(listeners),
         "seed_configs": LC.seed_configs(ns, deployment),
         "container_name": first["name"], "image": first["image"], "cpu": first["cpu"], "memory": first["memory"],
+        "memory_limit": first["memory_limit"],
         "env": first["env"], "ports": first["ports"], "volumes": first["volumes"], "gpu": "igpu" in detected,
     }
 
@@ -6040,7 +6053,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.155 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.156 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

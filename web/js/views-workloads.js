@@ -1108,7 +1108,7 @@ document.addEventListener("keydown", event => {
 
 /* ---------------- deploy ---------------- */
 const deployDefaults = () => ({ name: "", workload_name: "", container_name: "", image: "", icon: "", namespace: "lab", replicas: 1,
-  cpu: "50m", memory: "128Mi", ports: [], env: {}, env_meta: [], volumes: [], hardware: [],
+  cpu: "50m", memory: "128Mi", memory_limit: "", ports: [], env: {}, env_meta: [], volumes: [], hardware: [],
   template_devices: [], target_mode: "new", target_workload: "", network_mode: "loadbalancer",
   vip_mode: "shared", lb_ip: "", env_bindings: {}, app_profile: null });
 let DCFG = deployDefaults(), DOPT = { deployments: [], pvcs: [], storage_classes: [], shared_storage_classes: [] }, DRENDERING = false;
@@ -1173,6 +1173,7 @@ async function viewDeploy(pre) {
         <div class="f"><label>CPU reserved ${tip("The scheduler guarantees this much CPU capacity. 1000m = one CPU core; 50m = 5% of one core. This is not a hard limit.")}</label><input type="text" id="d_cpu" value="${esc(DCFG.cpu)}" placeholder="50m"></div>
         <div class="f"><label>Memory reserved ${tip("The scheduler keeps this much RAM available for the container. Mi means mebibytes and Gi means gibibytes. This is not a hard limit.")}</label><input type="text" id="d_mem" value="${esc(DCFG.memory)}" placeholder="128Mi"></div>
       </div>
+      <div class="f"><label>Memory max (optional) ${tip("The most memory this container may use. Exceeding it can cause an OOM kill and restart. Leave blank for no container memory limit; set it at least as high as Memory reserved. Use Mi or Gi, for example 1Gi.")}</label><input type="text" id="d_mem_limit" value="${esc(DCFG.memory_limit || "")}" placeholder="No limit · e.g. 1Gi"><span class="dim xs">A limit protects the host, but setting it too low can repeatedly restart the app.</span></div>
       <div class="sec">Hardware ${tip("Homestead adds the device path and schedules only onto nodes marked as having that hardware.")}</div>
       <div class="hwchoices">
         ${hardwareChoices("d_hw", (DCFG.hardware || []).concat(DCFG.gpu && !(DCFG.hardware || []).includes("igpu") ? ["igpu"] : []))}
@@ -1214,7 +1215,7 @@ async function viewDeploy(pre) {
   DRENDERING = true;
   renderDeployTargets(); renderPorts(); renderVols(); renderEnv(); applyDeployMode();
   DRENDERING = false; syncSummary();
-  ["d_workload_name", "d_container_name", "d_image", "d_icon", "d_rep", "d_cpu", "d_mem", "d_net", "d_vip_mode", "d_lb_ip", "d_target_workload"].forEach(id => {
+  ["d_workload_name", "d_container_name", "d_image", "d_icon", "d_rep", "d_cpu", "d_mem", "d_mem_limit", "d_net", "d_vip_mode", "d_lb_ip", "d_target_workload"].forEach(id => {
     const el = $("#" + id); if (!el) return;
     el.addEventListener("input", syncSummary); el.addEventListener("change", syncSummary);
   });
@@ -1264,7 +1265,8 @@ function collect() {
   DCFG.image = $("#d_image").value.trim();
   DCFG.namespace = $("#d_ns").value; DCFG.replicas = +$("#d_rep").value;
   DCFG.target_mode = $("#d_target_mode").value; DCFG.target_workload = $("#d_target_workload").value;
-  DCFG.cpu = $("#d_cpu").value.trim(); DCFG.memory = $("#d_mem").value.trim(); DCFG.icon = $("#d_icon").value.trim();
+  DCFG.cpu = $("#d_cpu").value.trim(); DCFG.memory = $("#d_mem").value.trim();
+  DCFG.memory_limit = $("#d_mem_limit").value.trim(); DCFG.icon = $("#d_icon").value.trim();
   DCFG.hardware = selectedHardware("d_hw");
   Object.assign(DCFG, readPrivileges("d_pv") || {});
   DCFG.gpu = DCFG.hardware.includes("igpu"); DCFG.network_mode = $("#d_net").value;
@@ -1287,6 +1289,7 @@ function syncSummary() {
     row("❏", "Image", c.image ? `<span class="small mono">${esc(c.image)}</span>` : '<span class="dim">—</span>') +
     row("⌗", "Namespace", esc(c.namespace)) + row("⧉", c.target_mode === "existing" ? "Joins workload" : "Instances", c.target_mode === "existing" ? esc(c.target_workload || "—") : c.replicas) +
     row("◴", "Requests", `<span class="small mono">${esc(c.cpu)} · ${esc(c.memory)}</span>`) +
+    row("▣", "Memory max", c.memory_limit ? `<span class="small mono">${esc(c.memory_limit)}</span>` : '<span class="dim">no limit</span>') +
     ((c.command || []).length || (c.args || []).length ? row("›", "Runs", `<span class="small mono">${esc([...(c.command || []), ...(c.args || [])].join(" "))}</span>`) : "") +
     row("▤", "Hardware", c.hardware.length ? hardwareTags(c.hardware) : '<span class="dim">none</span>') +
     row("◎", "Network", `<span class="small">${esc(c.network_mode)}${c.network_mode === "loadbalancer" ? ` · ${esc(c.vip_mode)} VIP` : ""}</span>`) +

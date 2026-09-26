@@ -24,6 +24,12 @@ The form asks, in order:
 
 - **Name and namespace.** Apps go in `lab` unless you make others under
   **Settings → Apps → Namespaces**.
+- **Memory reserved and Memory max.** Reserved memory is the scheduler's
+  request; optional Memory max is the container's enforced limit and must be
+  at least the request. Leave max blank for no container memory limit. A limit
+  set too low can OOM-kill and restart the app. Edit shows each container's
+  current values, including sidecars. Compose imports carry `mem_limit` and
+  `deploy.resources.limits.memory` into Memory max.
 - **Network.** Which ports are reachable from your LAN, and on which address:
   automatic (the next free VIP), a **Specific VIP** you picked out under
   [Networking](Networking#your-vips), or shared with other apps on one address.

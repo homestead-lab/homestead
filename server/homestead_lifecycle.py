@@ -16,6 +16,7 @@ import homestead_names as NAMES
 import homestead_restructure as RESTRUCTURE
 import homestead_affinity as AFFINITY
 import homestead_failover as FAILOVER
+import homestead_memory as MEMORY
 
 # Rebooting a host needs a privileged pod that enters the host namespaces.
 # That is a real escape hatch, so it is off unless the operator opts in on the
@@ -296,7 +297,7 @@ def _apply_container_edit(container, change, workload_name):
             container["env"] = env
         else:
             container.pop("env", None)
-    if "cpu" in change or "memory" in change:
+    if "cpu" in change or "memory" in change or "memory_limit" in change:
         resources = container.setdefault("resources", {})
         requests = resources.setdefault("requests", {})
         for key in ("cpu", "memory"):
@@ -307,6 +308,16 @@ def _apply_container_edit(container, change, workload_name):
                 requests[key] = value
             else:
                 requests.pop(key, None)
+        if "memory_limit" in change:
+            maximum = str(change.get("memory_limit") or "").strip()
+            limits = resources.setdefault("limits", {})
+            if maximum:
+                limits["memory"] = maximum
+            else:
+                limits.pop("memory", None)
+            if not limits:
+                resources.pop("limits", None)
+        MEMORY.validate(requests.get("memory"), (resources.get("limits") or {}).get("memory"), container["name"])
         if not requests:
             resources.pop("requests", None)
         if not resources:
@@ -613,7 +624,7 @@ def edit_workload(cfg, hold=False):
             _apply_container_edit(container, change, name)
     else:
         # Backward-compatible single-container request used by older clients.
-        legacy = {key: cfg[key] for key in ("image", "env", "cpu", "memory", "ports") if key in cfg}
+        legacy = {key: cfg[key] for key in ("image", "env", "cpu", "memory", "memory_limit", "ports") if key in cfg}
         if "container_name" in cfg:
             legacy["name"] = cfg["container_name"]
         if legacy:

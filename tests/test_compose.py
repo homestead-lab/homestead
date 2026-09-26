@@ -237,7 +237,7 @@ volumes:
         self.assertEqual((1000, 1000, "/app"), (cfg["run_as_user"], cfg["run_as_group"], cfg["working_dir"]))
         self.assertEqual(["NET_ADMIN", "SYS_TIME"], cfg["cap_add"])
 
-    def test_resources_become_reservations(self):
+    def test_resources_keep_reservations_and_enforce_memory_limit(self):
         text = """services:
   app:
     image: app
@@ -250,7 +250,8 @@ volumes:
         row = service(convert(text), "app")
 
         self.assertEqual(("500m", "512Mi", 2), (row["config"]["cpu"], row["config"]["memory"], row["config"]["replicas"]))
-        self.assertTrue(any("not enforced" in n["message"] for n in row["notes"]))
+        self.assertEqual("2048Mi", row["config"]["memory_limit"])
+        self.assertTrue(any("enforced maximum" in n["message"] for n in row["notes"]))
 
     def test_ram_disks_and_shared_memory(self):
         text = "services:\n  app:\n    image: app\n    shm_size: 2gb\n    tmpfs:\n      - /run:size=64m\n"
