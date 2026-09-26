@@ -22,7 +22,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.154")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.155")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1363,7 +1363,13 @@ def get_events():
 def get_flow2():
     """Architecture view: node(replica copies) -> volume -> workload(+ports) -> VIP."""
     pods = [p for p in kget("/api/v1/pods").get("items", [])
-            if p["metadata"]["namespace"] not in SYS_NS]
+            if p["metadata"]["namespace"] not in SYS_NS
+            # File browsers, import/copy jobs and the other short-lived pods
+            # Homestead creates are implementation details, not architecture.
+            # The task label is shared by all of those helpers and survives a
+            # rename, unlike matching one current name such as
+            # homestead-files-*.
+            and not NAMES.label_of(p.get("metadata") or {}, "task")]
     svcs = [s for s in kget("/api/v1/services").get("items", [])
             if s["metadata"]["namespace"] not in SYS_NS]
     try:
@@ -4560,7 +4566,8 @@ ADMIN_ROUTES = {
     "/api/lh/target", "/api/lh/job/delete", "/api/lh/snapshot/delete", "/api/lh/snapshot/revert",
     "/api/lh/restore", "/api/lh/backup/delete", "/api/lh/group/delete",
     # Installing Longhorn or KubeVirt changes the cluster itself.
-    "/api/addons/longhorn", "/api/addons/kubevirt", "/api/addons/multus", "/api/addons/kube-vip",
+    "/api/addons/longhorn", "/api/addons/kubevirt", "/api/addons/kubevirt/emulation",
+    "/api/addons/multus", "/api/addons/kube-vip",
     # Upgrading the platform: the cluster, Longhorn, KubeVirt, CDI.
     "/api/cluster/components/upgrade", "/api/cluster/upgrades/start",
     # Homestead's own permissions, and the namespaces apps live in.
@@ -5292,6 +5299,9 @@ class H(BaseHTTPRequestHandler):
                                                               "action": "install"},
                                                 "Waiting for the Helm controller")
                 return self._send(200, result)
+            if p == "/api/addons/kubevirt/emulation":
+                _cache.pop("platform", None)
+                return self._send(200, ADDONS.set_kubevirt_emulation(bool(b.get("enabled"))))
             if p in ("/api/helm/install", "/api/helm/upgrade", "/api/helm/uninstall"):
                 action = p.rsplit("/", 1)[1]
                 result = (HELM.install(b) if action == "install" else HELM.upgrade(b) if action == "upgrade"
@@ -6030,7 +6040,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.154 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.155 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

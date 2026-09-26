@@ -97,6 +97,22 @@ class VmTests(unittest.TestCase):
         self.assertEqual(["force-stop"], VMS.actions_for("Stopping"))
         self.assertEqual(["stop", "force-stop"], VMS.actions_for("ErrorUnschedulable"))
 
+    def test_normal_starting_does_not_look_like_a_failure(self):
+        vm = copy.deepcopy(VM)
+        vm["status"] = {"printableStatus": "Starting", "conditions": [{
+            "type": "Ready", "status": "False", "message": "Guest VM is not reported as running",
+        }]}
+        self.assertEqual("", VMS._problem(vm, {}))
+
+    def test_real_scheduler_reason_wins_over_generic_ready_message(self):
+        vm = copy.deepcopy(VM)
+        vm["status"] = {"printableStatus": "ErrorUnschedulable", "conditions": [
+            {"type": "Ready", "status": "False", "message": "Guest VM is not reported as running"},
+            {"type": "PodScheduled", "status": "False",
+             "message": "0/2 nodes are available: 2 Insufficient memory."},
+        ]}
+        self.assertEqual("0/2 nodes are available: 2 Insufficient memory.", VMS._problem(vm, {}))
+
     def test_power_uses_the_subresources_and_falls_back_to_the_strategy(self):
         c = self.use()
         VMS.power("default", "win11", "start")

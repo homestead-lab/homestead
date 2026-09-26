@@ -738,6 +738,13 @@ svg use,#nav a svg,.iconbtn svg,.sicon svg{stroke:currentColor;fill:none;stroke-
 .a2col{display:flex;flex-direction:column;gap:5px;min-width:0}
 .a2col h4{margin:0 0 6px;font:700 10px "JetBrains Mono",monospace;letter-spacing:.11em;text-transform:uppercase;color:var(--dim)}
 .a2col h4 .dim{margin-left:4px}
+.a2group{display:flex;flex-direction:column;gap:5px;min-width:0}
+.a2group+.a2group{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+.a2subhead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 2px 2px;
+  color:var(--mut);font:650 9.5px "JetBrains Mono",monospace;letter-spacing:.08em;text-transform:uppercase}
+.a2subhead span{font-weight:500;letter-spacing:0;color:var(--dim)}
+.a2disconnected{border-color:rgba(255,77,79,.3);background:rgba(255,77,79,.035)}
+.arch-head-actions{flex-wrap:wrap;justify-content:flex-end}
 .a2item{position:relative;border:1px solid var(--line);border-radius:10px;background:var(--surf2);transition:opacity .2s var(--e),border-color .2s,box-shadow .2s}
 .a2wl,.a2vol{display:flex;align-items:center;gap:8px;min-height:32px;padding:4px 9px;font-size:12px}
 .a2wl .av{width:20px;height:20px;border-radius:6px;font-size:8px;flex:0 0 auto}

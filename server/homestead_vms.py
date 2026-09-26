@@ -110,10 +110,24 @@ def _problem(vm, vmi):
             if "DataVolume" in message:
                 message += " — the disk was never made, so the VM cannot start. Edit its disk source, or delete the VM."
             return message
-    for condition in conditions:
-        if condition.get("type") in ("Ready", "PodScheduled", "Synchronized") and condition.get("status") == "False" \
-                and condition.get("message") and "VMI does not exist" not in condition["message"]:
-            return text(condition)
+    # A detailed placement or controller refusal is more useful than the
+    # generic Ready=False condition KubeVirt also writes.  During every normal
+    # boot that Ready condition briefly says "Guest VM is not reported as
+    # running"; presenting it as a failure made a VM which was successfully
+    # scheduling look broken.
+    for condition_type in ("PodScheduled", "Synchronized", "Ready"):
+        for condition in conditions:
+            if condition.get("type") != condition_type or condition.get("status") != "False" \
+                    or not condition.get("message"):
+                continue
+            message = text(condition)
+            if "VMI does not exist" in message:
+                continue
+            status = _status(vm, vmi)
+            if condition_type == "Ready" and status in ("Starting", "Provisioning", "WaitingForVolumeBinding") \
+                    and "not reported as running" in message.lower():
+                continue
+            return message
     return ""
 
 

@@ -94,6 +94,21 @@ class AppStoreTemplateTests(unittest.TestCase):
         self.assertEqual("Claim token · optional", meta["label"])
         self.assertEqual("Container Variable: PLEX_CLAIM_TOKEN · Example: claim-abc", meta["description"])
 
+    def test_openspeedtest_repository_named_latest_is_not_rewritten(self):
+        """`latest` is this publisher's repository name as well as its default tag."""
+        cfg = server.template_to_cfg({
+            "name": "SpeedTest-By-OpenSpeedTest",
+            "repo": "openspeedtest/latest",
+            "config": [],
+        })
+        self.assertEqual("openspeedtest/latest", cfg["image"])
+        with mock.patch.object(server.HW, "features", return_value=[]):
+            deployment, _ = server.build_deployment(cfg)
+        self.assertEqual(
+            "openspeedtest/latest:latest",
+            deployment["spec"]["template"]["spec"]["containers"][0]["image"],
+        )
+
     def test_template_preserves_ports_environment_storage_and_devices(self):
         app = {
             "name": "Demo App", "repo": "example/demo:latest", "icon": "https://example.com/icon.png",
@@ -409,6 +424,7 @@ class HomesteadManifestTests(unittest.TestCase):
         for rule in ("resources: [nodes]\n    verbs: [get, list, watch, patch, update, delete]",
                      "resources: [nodes]\n    verbs: [get, list, watch, patch, delete]",
                      "resources: [replicas]\n    verbs: [get, list, watch, delete]",
+                     "resources: [kubevirts]\n    verbs: [get, list, watch, patch]",
                      'apiGroups: ["cluster.x-k8s.io"]\n    resources: [machines]\n    verbs: [get, list, patch, delete]',
                      "resources: [volumeattachments]\n    verbs: [get, list, delete]"):
             with self.subTest(rule=rule.split("\n")[-1]):
@@ -417,7 +433,7 @@ class HomesteadManifestTests(unittest.TestCase):
     def test_runtime_workload_uses_homestead_names_and_image(self):
         manifest = (ROOT / "deploy" / "deploy.yaml").read_text()
         self.assertIn("kind: Deployment\nmetadata:\n  name: homestead", manifest)
-        self.assertIn("- name: homestead\n          image: ghcr.io/wjcloudy/homestead:2.8.154",
+        self.assertIn("- name: homestead\n          image: ghcr.io/wjcloudy/homestead:2.8.155",
                       manifest)
         self.assertIn("homestead.io/update-sources: '{\"homestead\":", manifest)
 

@@ -112,6 +112,12 @@ rules:
   - apiGroups: ["kubevirt.io"]
     resources: [virtualmachines, virtualmachineinstances, virtualmachineinstancemigrations]
     verbs: [get, list, watch, create, update, patch, delete]
+  # KubeVirt's one operator-owned configuration object. Homestead reads its
+  # software-emulation fallback and can enable it on an explicitly requested
+  # k3s/RKE2 installation whose hosts do not expose /dev/kvm.
+  - apiGroups: ["kubevirt.io"]
+    resources: [kubevirts]
+    verbs: [get, list, watch, patch]
   - apiGroups: ["subresources.kubevirt.io"]
     resources:
       - virtualmachines/start
@@ -250,7 +256,7 @@ metadata:
   labels:
     app: homestead
   annotations:
-    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.154"}'
+    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.155"}'
 spec:
   replicas: 1
   strategy:
@@ -285,7 +291,7 @@ spec:
           tolerationSeconds: 15
       initContainers:
         - name: data-permissions
-          image: ghcr.io/wjcloudy/homestead:2.8.154
+          image: ghcr.io/wjcloudy/homestead:2.8.155
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "chown 10001:10001 /data && chmod 0770 /data"]
           securityContext:
@@ -302,7 +308,7 @@ spec:
               mountPath: /data
       containers:
         - name: homestead
-          image: ghcr.io/wjcloudy/homestead:2.8.154
+          image: ghcr.io/wjcloudy/homestead:2.8.155
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT

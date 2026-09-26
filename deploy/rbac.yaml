@@ -118,6 +118,12 @@ rules:
   - apiGroups: ["kubevirt.io"]
     resources: [virtualmachines, virtualmachineinstances, virtualmachineinstancemigrations]
     verbs: [get, list, watch, create, update, patch, delete]
+  # KubeVirt's one operator-owned configuration object. Homestead reads its
+  # software-emulation fallback and can enable it on an explicitly requested
+  # k3s/RKE2 installation whose hosts do not expose /dev/kvm.
+  - apiGroups: ["kubevirt.io"]
+    resources: [kubevirts]
+    verbs: [get, list, watch, patch]
   - apiGroups: ["subresources.kubevirt.io"]
     resources:
       - virtualmachines/start

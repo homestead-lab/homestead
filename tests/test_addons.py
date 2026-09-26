@@ -98,6 +98,14 @@ class KubeVirtTests(unittest.TestCase):
         self.assertTrue(json.loads(files["kubevirt/templates/switch-on.yaml"])["spec"]["configuration"]
                         ["developerConfiguration"]["useEmulation"])
 
+    def test_unknown_hardware_virtualisation_uses_safe_fallback(self):
+        fake = Fake(kvm={})
+        result = ADDONS.install_kubevirt()
+        files = unpack(fake.sent[0][2]["spec"]["chartContent"])
+        self.assertTrue(result["emulation"])
+        self.assertTrue(json.loads(files["kubevirt/templates/switch-on.yaml"])["spec"]["configuration"]
+                        ["developerConfiguration"]["useEmulation"])
+
     def test_cdi_falls_back_to_githubs_api(self):
         fake = Fake()
 
@@ -120,6 +128,16 @@ class KubeVirtTests(unittest.TestCase):
         Fake(platform={"kubevirt": True})
         with self.assertRaisesRegex(ValueError, "installed already"):
             ADDONS.install_kubevirt()
+
+    def test_software_fallback_can_be_enabled_after_install(self):
+        fake = Fake(platform={"kubevirt": True})
+        result = ADDONS.set_kubevirt_emulation(True)
+        self.assertTrue(result["emulation"])
+        self.assertEqual(
+            ("PATCH", ADDONS.KUBEVIRT_CR,
+             {"spec": {"configuration": {"developerConfiguration": {"useEmulation": True}}}}),
+            fake.sent[-1],
+        )
 
 
 class LonghornTests(unittest.TestCase):
@@ -182,6 +200,18 @@ class MultusTests(unittest.TestCase):
         self.assertIn("binDir: /var/lib/rancher/k3s/data/cni/", values)
         self.assertEqual("helm-install-multus", result["job"])
 
+    def test_status_gives_a_pasteable_k3s_log_command(self):
+        Fake()
+        status = ADDONS.status()["multus"]
+        command = status["diagnostic_command"]
+        self.assertIn("sudo k3s kubectl -n kube-system", command)
+        self.assertIn("logs job/helm-install-multus --all-containers --tail=200", command)
+
+    def test_rke2_log_command_uses_its_real_kubeconfig(self):
+        command = ADDONS.diagnostic_command("rke2")
+        self.assertIn("KUBECONFIG=/etc/rancher/rke2/rke2.yaml", command)
+        self.assertIn("/var/lib/rancher/rke2/bin/kubectl", command)
+
     def test_rke2_keeps_the_charts_own_folders(self):
         fake = Fake({"distribution": "rke2"})
         ADDONS.install_multus()
@@ -197,7 +227,9 @@ class MultusTests(unittest.TestCase):
         ADDONS.bind(fake.get, fake.send, lambda force=False: dict(fake.platform), lambda: {}, fake.fetch)
         with self.assertRaisesRegex(ValueError, "installed already"):
             ADDONS.install_multus()
-        self.assertEqual({"installed": True, "installing": False}, ADDONS.status()["multus"])
+        status = ADDONS.status()["multus"]
+        self.assertTrue(status["installed"])
+        self.assertFalse(status["installing"])
 
 
 if __name__ == "__main__":

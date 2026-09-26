@@ -4,13 +4,13 @@
 |---|---|
 | **Health** | when bars and node cards turn yellow or red; the drive health policy |
 | **Updates** | the image update policy: notify only, approve each, or a maintenance window |
-| **Cluster** | Add-ons - Longhorn, KubeVirt, Multus and kube-vip installed where the cluster lacks them; Longhorn over-provisioning, minimum free space and the V2 engine; every node's disks |
+| **Cluster** | Add-ons - the node probe on every cluster, plus Longhorn, KubeVirt, Multus and kube-vip where the cluster lacks them; Longhorn over-provisioning, minimum free space and the V2 engine; every node's disks |
 | **Hardware** | hardware features (a Coral, an iGPU, a Zigbee stick) and **Rescan hosts** |
 | **Access** | your password, **Manage users**, sign out everywhere |
 | **Apps** | the App Store catalogue, Portal links, UniFi, namespaces |
 | **MQTT** | cluster and node stats to an MQTT broker, with Home Assistant discovery |
 | **This device** | notifications on this phone or computer, installing the app |
-| **About** | Homestead's own health, Samba, redundancy, permissions, the node probe |
+| **About** | Homestead's own health, Samba, redundancy, permissions, and node-probe status |
 
 ![Settings - Cluster](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-settings-cluster.png)
 
@@ -18,27 +18,35 @@
 
 On k3s and RKE2, **Settings → Cluster → Add-ons** installs what the cluster
 lacks, through the Helm controller both distributions run - so each is an
-ordinary HelmChart afterwards, on the Helm page:
+ordinary HelmChart afterwards, on the Helm page. The node probe is offered here
+on Harvester too:
 
+- **Node probe** - host hardware inventory, `/dev/kvm`, temperatures, physical
+  disks, SMART health and per-disk throughput. Its row also removes the probe
+  when it is no longer wanted.
 - **Longhorn** - volumes, snapshots and backups. It keeps one copy of each
   volume per node, up to three. Each node needs open-iscsi and an NFS client
   first (the k3s script installs them).
 - **KubeVirt** - virtual machines, with CDI to fill their disks from images:
   the newest release of each. The card says which nodes have hardware
-  virtualisation; with none, KubeVirt emulates, and VMs run slowly.
+  virtualisation. A new install allows software fallback unless every probed
+  node exposes `/dev/kvm`; an existing install offers **Allow software
+  fallback** when VMs otherwise cannot be scheduled. Emulated VMs run slowly.
 - **Multus** - second networks for pods, which
   [LAN networks](Networking#lan-networks) need, so a container or VM can
   have an address of its own on your LAN. It comes from the `rke2-multus`
   chart RKE2 uses, set up with k3s's own CNI folders on k3s. Apps already
-  running are left as they are.
+  running are left as they are. While installation is still pending, its row
+  shows one pasteable SSH command for the HelmChart, installer pod and job log,
+  using the correct kubectl and kubeconfig paths for k3s or RKE2.
 
 - **kube-vip** - VIPs for apps, as Harvester has: a container can have a LAN
   address of its own from **Networking → Your VIPs**. On k3s it runs beside
   ServiceLB and takes only the Services given a VIP. It announces addresses
   on the interface each node's default route uses.
 
-A page or form that needs one offers the same install. Harvester has them
-all built in, so the card does not show there.
+A page or form that needs one offers the same install. Harvester has the
+storage, VM and network add-ons built in, so its card shows only the node probe.
 
 ## Homestead's own health
 

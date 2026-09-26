@@ -85,7 +85,7 @@ RKE2 run, and the pages that need one offer the same install.
 | **App Store** | The Community Applications catalogue laid out as Unraid shows it - monthly spotlights, recently added, trending and top performing - with a full page per app, from the public feed or one you set |
 | **Virtual machines** | Create from a Harvester image, a download or an imported disk - on Harvester, or on k3s and RKE2 with KubeVirt installed from Settings - power actions, live migration between hosts, a console (the VM's screen or its serial port), and a k3s cluster made of VMs, with KubeVirt inside if asked |
 | **Portal** | A page of tiles for every web interface - containers picked from their exposed ports with their logos, and the router, switches, access points and NAS around them - in sections, with a live reachability dot |
-| **Architecture** | VIP → workload → claim → Longhorn volume → replica dependency view |
+| **Architecture** | VIP → workload → Longhorn volume → replica dependency view, with containers and VMs separated, Homestead helper pods hidden, and unreferenced volumes behind a disconnected-data switch |
 | **Networking** | Service, ClusterIP, VIP, ingress, listener ownership, orphaned-listener release, endpoint health and guided collision-free exposure; IP address management per subnet with scanning, device categories, bulk edits, CSV export and UniFi sync |
 | **Cluster** | k3s, RKE2 or Harvester version, control-plane and etcd quorum, node pressure, critical services, certificate requests, adding a host (k3s and RKE2 join commands, or a guide to Harvester's installer), and removing hosts - including ones that are dead for good |
 | **Between clusters** | Browse another Homestead cluster, check the two releases can talk, and move its containers and VMs here through shared backup storage |
@@ -273,7 +273,10 @@ Public catalogue password defaults are discarded and regenerated locally.
 Secret values are masked in manifest previews. Template option lists become
 select controls, and the same storage, network, dependency, and hardware review
 is used whether deployment begins in App Store or directly from Deploy. An image
-given without a tag is deployed as `:latest`, which is what Docker would pull.
+given without a tag is deployed as `:latest`, which is what Docker would pull;
+the form shows the fully resolved registry, repository and tag without rewriting
+the template. This also disambiguates legitimate names such as the
+`openspeedtest/latest` repository, whose default pull ends in `latest:latest`.
 Plex, Pi-hole, and Nextcloud are release validation examples, not special-case
 profiles.
 
@@ -692,7 +695,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.154/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.155/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -703,7 +706,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.154 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.155 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1352,8 +1355,8 @@ they differ, restarting the DaemonSet — so upgrading Homestead upgrades the
 probe, with no manifest to re-apply. It updates whichever name the probe already
 has, and never installs one that is not there: the SMART sidecar is privileged,
 so installing one is asked for: **Install node probe** on a node with no
-thermal data, or from **Settings → About this installation**, which also shows
-what the last check decided and offers to remove it again. `kubectl apply -f
+thermal data, or from **Settings → Cluster → Add-ons**. **Settings → About**
+still shows what the last check decided. `kubectl apply -f
 deploy/nodeprobe.yaml` still works for anyone who prefers it.
 
 `deploy/nodeprobe.yaml` is generated from `server/homestead_probe.py` and the
@@ -1445,10 +1448,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.154`, the workflow publishes:
+For a release such as `v2.8.155`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.154
+ghcr.io/wjcloudy/homestead:2.8.155
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -1459,8 +1462,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.154
-git push origin v2.8.154
+git tag v2.8.155
+git push origin v2.8.155
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.

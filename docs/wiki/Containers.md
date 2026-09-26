@@ -15,6 +15,11 @@ people start from the [App Store](App-Store) instead, which fills all of that in
 from the app's template, or [import](Importing) one from Unraid or a Compose
 file.
 
+Below the image field, **Will pull** shows the fully resolved registry,
+repository and tag. It does not rewrite the image: for example,
+`openspeedtest/latest` is a repository actually named `latest`, so its default
+tag correctly resolves to `docker.io/openspeedtest/latest:latest`.
+
 The form asks, in order:
 
 - **Name and namespace.** Apps go in `lab` unless you make others under
@@ -194,9 +199,14 @@ Changing a container's choice restarts it.
 **Architecture** draws, for every app, the path from its address through its
 Service to its pods, claims, Longhorn volumes and the replicas on each disk -
 the quickest way to see what a failed disk or host would touch. Virtual
-machines are drawn the same way: the ports of any Service that selects them
+machines are grouped below containers rather than mixed into them, but drawn
+the same way: the ports of any Service that selects them
 (such as Harvester's load balancers), their disks and those disks' replicas,
 with their host and address. A stopped VM is shown faded, since its disks are
-still there.
+still there. Homestead's temporary browser, copy and import pods are hidden.
+
+A volume no container or VM definition references is **disconnected**. Those
+retained and old volumes are hidden by default; **Show disconnected** reveals a
+red group beneath the live volumes without letting it obscure the active paths.
 
 ![Architecture](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-architecture.png)

@@ -64,8 +64,9 @@ From a node you can:
 
 Kubernetes knows nothing of temperatures, USB devices, which physical disk is
 which, or drive health. The node probe - a small DaemonSet, one pod per host -
-reads them. The Helm chart installs it; otherwise **Settings → About → Install
-node probe**, or **Install node probe** on a node with no temperature.
+reads them. The Helm chart installs it; otherwise **Settings → Cluster →
+Add-ons → Install node probe**, or **Install node probe** on a node with no
+temperature. **Settings → About** reports its health after it is installed.
 
 It has two parts:
 

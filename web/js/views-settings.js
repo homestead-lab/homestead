@@ -180,11 +180,8 @@ async function viewSettings() {
           <div><span>Storage class</span><b class="mono">${esc(info.storage_class || "—")}</b></div>
           <div><span>Cluster VIP</span><b class="mono">${esc(overview?.lb_ip || info.vip || "—")}</b></div>
           <div><span>Nodes ready</span><b>${overview ? `${overview.nodes_ready}/${overview.nodes_total}` : "—"}</b></div>
-          <div><span>Node probe ${tip("Homestead keeps the probe's scripts in step with its own release, so an upgrade needs no kubectl. It never installs the probe itself: the SMART sidecar is privileged.")}</span>
-            <b>${esc(probeWord(info.node_probe?.state))}</b><small>${esc(info.node_probe?.detail || "")}</small>
-            ${can("admin") ? `<div class="row" style="margin-top:6px">${info.node_probe?.state === "absent"
-              ? '<button class="btn sm" onclick="probeInstallConfirm()">Install</button>'
-              : '<button class="btn sm" onclick="probeRemove()">Remove</button>'}</div>` : ""}</div>
+          <div><span>Node probe ${tip("Homestead keeps the probe's scripts in step with its own release, so an upgrade needs no kubectl. Installation and removal live under Cluster → Add-ons because the SMART sidecar is privileged.")}</span>
+            <b>${esc(probeWord(info.node_probe?.state))}</b><small>${esc(info.node_probe?.detail || "")}</small></div>
           ${permissionsCell(info.permissions)}
         </div>
       </section>
@@ -451,7 +448,7 @@ async function selfHealthPaint() {
         !probe.installed ? "not installed" : `${probe.ready}/${probe.desired} nodes`,
         !probe.installed ? "Temperatures, host devices, every disk and drive health come from it."
           : `${probe.reporting} reporting · drive health on ${probe.smart} · ${esc(probe.detail || "")}`,
-        admin ? (!probe.installed ? '<button class="btn sm" onclick="probeInstallConfirm()">Install</button>' : '<button class="btn sm" onclick="probeRemove()">Remove</button>') : "")}
+        "")}
       ${row("Samba (network shares)", !samba.installed || !samba.enabled ? "neutral" : samba.ready < samba.desired ? "warn" : "ok",
         !samba.installed ? "not installed" : !samba.enabled ? "off" : samba.ready < samba.desired ? "starting" : "serving",
         (samba.installed ? `${samba.shares} share${samba.shares === 1 ? "" : "s"}${samba.address ? ` at <span class="mono">\\\\${esc(samba.address)}</span>` : ""} · ${esc(samba.image || "")}`

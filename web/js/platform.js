@@ -70,10 +70,11 @@ const ADDONS = {
 window.addonsPaint = async () => {
   const card = $("#addonsCard");
   if (!card) return;
-  let s;
-  try { s = await api("/api/addons"); } catch (e) { card.hidden = true; return; }
-  if (s.harvester) { card.hidden = true; return; }
+  let s, health;
+  try { [s, health] = await Promise.all([api("/api/addons"), api("/api/self/health").catch(() => ({}))]); }
+  catch (e) { card.hidden = true; return; }
   card.hidden = false;
+  const probe = health.probe || {};
   const kvmLine = !s.kvm_known ? '<span class="dim">The node probe has not said whether the nodes have hardware virtualisation.</span>'
     : s.kvm_everywhere ? "Every node has hardware virtualisation."
     : s.kvm_nowhere ? '<b>No node has hardware virtualisation</b>: KubeVirt will emulate, and VMs run slowly.'
@@ -85,15 +86,47 @@ window.addonsPaint = async () => {
     const button = state.installed || state.installing ? ""
       : s.helm_controller ? `<button class="btn sm pri" data-need="admin" onclick="addonInstall('${key}')">Install ${esc(a.name)}</button>`
       : '<span class="dim xs">needs the Helm controller k3s and RKE2 run</span>';
+    const diagnostic = key === "multus" && state.installing && state.diagnostic_command
+      ? `<div class="note warn addon-diagnostic"><b>Taking longer than expected?</b> SSH to a server node and gather the Helm job log:</div>
+         ${guideCopy(state.diagnostic_command)}` : "";
+    const emulation = key === "kubevirt" && state.installed && state.emulation != null
+      ? `<div class="dim xs" style="margin-top:4px">${state.emulation
+          ? "Software fallback is allowed when /dev/kvm is missing."
+          : "Hardware virtualisation (/dev/kvm) is required."}</div>` : "";
+    const emulationButton = key === "kubevirt" && state.installed && !state.emulation && !s.kvm_everywhere && can("admin")
+      ? '<button class="btn sm" onclick="kubevirtEmulation(true)">Allow software fallback</button>' : "";
     return `<div class="addon-row"><div><b>${esc(a.name)}</b> ${pill}<div class="dim small">${esc(a.what)}</div>
         ${state.installed ? "" : `<div class="dim xs" style="margin-top:4px">${esc(a.needs)}</div>`}
-        ${key === "kubevirt" && !state.installed ? `<div class="xs" style="margin-top:4px">${kvmLine}</div>` : ""}</div>
-      <div class="row">${button}</div></div>`;
+        ${key === "kubevirt" ? `<div class="xs" style="margin-top:4px">${kvmLine}</div>${emulation}` : ""}
+        ${diagnostic}</div>
+      <div class="row">${button}${emulationButton}</div></div>`;
   };
+  const probePill = !probe.installed ? '<span class="pill">not installed</span>'
+    : probe.ready < probe.desired || probe.reporting < probe.desired ? `<span class="pill med">${probe.ready || 0}/${probe.desired || 0} ready</span>`
+    : '<span class="pill ok">installed</span>';
+  const probeButton = !can("admin") ? "" : !probe.installed
+    ? '<button class="btn sm pri" onclick="probeInstallConfirm()">Install node probe</button>'
+    : '<button class="btn sm" onclick="probeRemove()">Remove</button>';
+  const probeRow = `<div class="addon-row"><div><b>Node probe</b> ${probePill}
+      <div class="dim small">Host hardware, /dev/kvm, temperatures, physical disks, SMART health and per-disk throughput</div>
+      <div class="dim xs" style="margin-top:4px">A lightweight read-only probe runs on every node; SMART tests use its separate privileged sidecar.</div></div>
+    <div class="row">${probeButton}</div></div>`;
+  const clusterRows = s.harvester ? "" : `${row("longhorn", s.longhorn)}${row("kubevirt", s.kubevirt)}${s.multus ? row("multus", s.multus) : ""}${s.kube_vip ? row("kube-vip", s.kube_vip) : ""}`;
   card.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">Add-ons</div>
-      <div class="csub">What this ${esc(platformName(STATE.platform || { distribution: s.distribution }))} cluster can add: Harvester has them all built in</div></div></div>
-    ${row("longhorn", s.longhorn)}${row("kubevirt", s.kubevirt)}${s.multus ? row("multus", s.multus) : ""}${s.kube_vip ? row("kube-vip", s.kube_vip) : ""}`;
+      <div class="csub">${s.harvester ? "Optional Homestead services; Harvester already provides storage, VM and network add-ons"
+        : `What this ${esc(platformName(STATE.platform || { distribution: s.distribution }))} cluster can add`}</div></div></div>
+    ${probeRow}${clusterRows}`;
   if (window.applyRole) applyRole();
+};
+
+window.kubevirtEmulation = async enabled => {
+  if (enabled && !confirm("Allow KubeVirt's software fallback? VMs can then start on nodes without /dev/kvm, but run much more slowly there. Running VMs are not restarted.")) return;
+  try {
+    const result = await api("/api/addons/kubevirt/emulation", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }) });
+    toast(result.detail, "ok");
+    addonsPaint();
+  } catch (e) { toast(e.message, "bad"); }
 };
 
 window.addonInstall = async key => {
@@ -102,7 +135,7 @@ window.addonInstall = async key => {
   if (key === "kubevirt") {
     const s = await api("/api/addons").catch(() => ({}));
     if (s.kvm_nowhere && !confirm("No node has hardware virtualisation (/dev/kvm), so KubeVirt will emulate: VMs work, but many times slower. Install anyway?")) return;
-    body = s.kvm_known ? {} : { emulation: false };
+    body = {};
   } else if (key === "kube-vip") {
     const s = await api("/api/addons").catch(() => ({}));
     const where = s.kube_vip?.interface ? `It announces VIPs on ${s.kube_vip.interface}, the interface each node's default route uses.`

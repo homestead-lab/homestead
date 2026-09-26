@@ -131,7 +131,7 @@ what to do next.
 - **Give Longhorn your other disks.** Each node's card on **Nodes** lists disks
   nothing uses yet, with **Add to Longhorn**. See [Storage](Storage).
 - **Turn on drive health.** The Helm chart installs the node probe; with the
-  manifest, **Settings → About → Install node probe** does. See
+  manifest, **Settings → Cluster → Add-ons → Install node probe** does. See
   [Dashboard and nodes](Dashboard-and-nodes).
 - **Plan backups.** [Data protection](Data-protection) sets up snapshots and
   backups in one go.

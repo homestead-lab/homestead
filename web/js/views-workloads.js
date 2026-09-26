@@ -383,6 +383,27 @@ function imageLabel(ref) {
   return ref.split("/").pop().includes(":") ? ref : `${ref}:latest`;
 }
 
+/* Show what containerd will resolve without changing what the user entered. */
+function imagePullRef(ref) {
+  const tagged = imageLabel((ref || "").trim());
+  if (!tagged) return "";
+  const first = tagged.split("/")[0];
+  const hasRegistry = tagged.includes("/") && (first.includes(".") || first.includes(":") || first === "localhost");
+  if (hasRegistry) return tagged;
+  return `docker.io/${tagged.includes("/") ? tagged : `library/${tagged}`}`;
+}
+function imagePullNote(ref) {
+  const pull = imagePullRef(ref);
+  if (!pull) return "";
+  const leaf = pull.split("/").pop();
+  const split = leaf.lastIndexOf(":");
+  const repositoryLeaf = split >= 0 ? leaf.slice(0, split) : leaf;
+  const tag = split >= 0 ? leaf.slice(split + 1) : "";
+  const repeated = repositoryLeaf && repositoryLeaf === tag
+    ? ` The repository is named <b>${esc(repositoryLeaf)}</b>; the final <b>:${esc(tag)}</b> is its tag.` : "";
+  return `Will pull <span class="mono">${esc(pull)}</span>.${repeated}`;
+}
+
 /* What a platform container belongs to, and where that is upgraded. */
 function platformTag(w) {
   return `<span class="pill slim info" data-tip="Part of ${esc(w.platform)}, run by its operator, which puts back anything changed here. It is upgraded with ${esc(w.platform)} under System → Cluster → Platform versions." onclick="go('cluster')" style="cursor:pointer">${esc(w.platform)}</span>`;
@@ -1142,7 +1163,7 @@ async function viewDeploy(pre) {
       </div>
       <div class="f" id="d_workload_name_wrap"><label>Workload / pod prefix ${tip("The stable name for this workload. Kubernetes adds a generated suffix to each running pod, such as my-app-7d9f8c6b5-x2abc.")}</label><input type="text" id="d_workload_name" value="${esc(DCFG.workload_name)}" placeholder="my-app"></div>
       <div class="f"><label>Container name ${tip("The name of the container inside the pod. It can differ from the workload name and must use lowercase letters, numbers, and dashes.")}</label><input type="text" id="d_container_name" value="${esc(DCFG.container_name)}" placeholder="my-app"></div>
-      <div class="f"><label>Docker image ${tip("The registry image and tag Kubernetes will pull, for example ghcr.io/home-assistant/home-assistant:stable")}</label><input type="text" id="d_image" value="${esc(DCFG.image)}" placeholder="nginx:alpine · ghcr.io/user/app:tag"></div>
+      <div class="f"><label>Docker image ${tip("The registry image and tag Kubernetes will pull, for example ghcr.io/home-assistant/home-assistant:stable")}</label><input type="text" id="d_image" value="${esc(DCFG.image)}" placeholder="nginx:alpine · ghcr.io/user/app:tag"><span class="dim xs" id="d_image_note">${imagePullNote(DCFG.image)}</span></div>
       <div class="f"><label>Container logo ${tip("Optional public HTTPS image URL. Homestead validates and saves a private copy on its persistent volume, so the logo survives source outages and upgrades.")}</label><input type="url" id="d_icon" value="${esc(DCFG.icon || "")}" placeholder="https://…/icon.png"></div>
       <div class="f2">
         <div class="f"><label>Namespace</label><select id="d_ns">${nss.map(n => `<option ${n === DCFG.namespace ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
@@ -1258,6 +1279,7 @@ function collect() {
 function syncSummary() {
   const c = collect();
   const vipWrap = $("#d_vip_wrap"); if (vipWrap) vipWrap.style.display = c.network_mode === "loadbalancer" && c.vip_mode === "manual" ? "block" : "none";
+  const imageNote = $("#d_image_note"); if (imageNote) imageNote.innerHTML = imagePullNote(c.image);
   const row = (i, l, v) => `<div class="drow"><div class="di">${i}</div><div class="dl">${l}</div><div class="dv">${v}</div></div>`;
   $("#d_summary").innerHTML =
     (c.target_mode === "existing" ? "" : row("◈", "Workload / pod", c.workload_name ? `<b>${esc(c.workload_name)}</b>` : '<span class="dim">—</span>')) +

@@ -23,16 +23,36 @@ async function viewFlow() {
   f.nodes.forEach(n => n.copies.forEach(c => links.push([c.vid, `${n.id}|${c.vid}`, "copy"])));
   STATE.data.alinks = links;
   const used = new Set(links.flat());
+  const mountedVolumes = new Set(links.filter(([, , type]) => type === "mount").map(([, id]) => id));
   const host = w => (w.node || "").replace(/^harvester-/, "");
   const kind = w => w.kind === "vm" ? (w.running ? `VM · ${host(w) || w.state || "starting"}` : `VM · ${(w.state || "stopped").toLowerCase()}`) : host(w);
-  const vmCount = f.workloads.filter(w => w.kind === "vm").length;
+  const containers = f.workloads.filter(w => w.kind !== "vm");
+  const vms = f.workloads.filter(w => w.kind === "vm");
+  const connectedVolumes = f.volumes.filter(v => mountedVolumes.has(v.id));
+  const disconnectedVolumes = f.volumes.filter(v => !mountedVolumes.has(v.id));
+  const workloadCard = w => `<div class="a2item a2wl ${used.has(w.id) ? "" : "a2alone"} ${w.kind === "vm" && !w.running ? "a2stopped" : ""}"
+          id="${esc(w.id)}" data-kind="workload" data-id="${esc(w.id)}"
+          title="${esc(w.name)} · ${esc(kind(w))}${w.ip ? ` · ${esc(w.ip)}` : ""}${w.kind !== "vm" || w.running ? ` · ${workloadCpuPercent(w.cpu)} CPU · ${w.mem_mb || 0} MB` : ""}">
+          ${appAvatar(w.name, w.icon)}<span class="a2name">${esc(w.name)}</span>
+          <span class="a2meta">${esc(kind(w))}</span>
+          ${w.kind === "vm" && !w.running ? "" : `<button class="a2act" data-need="operator" title="${w.kind === "vm" ? "Migrate" : "Move to another host"}"
+            onclick="event.stopPropagation();${w.kind === "vm" ? `vmMove('${esc(w.ns || "lab")}','${esc(w.name)}')` : `moveWorkload('${esc(w.name)}','${esc(w.ns || "lab")}')`}">⇄</button>`}
+        </div>`;
+  const volumeCard = (v, disconnected = false) => `<div class="a2item a2vol ${used.has(v.id) ? "" : "a2alone"} ${disconnected ? "a2disconnected" : ""}" id="${esc(v.id)}" data-kind="volume" data-id="${esc(v.id)}"
+          title="${esc(v.name)} · ${v.size_gb} GB · ${v.replicas} replicas · ${esc(v.robustness)}${v.attached ? ` · attached on ${esc(v.attached)}` : ""}">
+          <span class="a2dot" style="background:${ROB(v.robustness)}"></span><span class="a2name">${esc(v.name)}</span>
+          <span class="a2meta mono">${v.size_gb}G · ${v.replicas}×</span></div>`;
 
   paint(`<div class="phead">
       <div><h2>Architecture</h2><p>How each app is reached, where its data lives, and which hosts hold the copies · hover anything to trace it</p></div>
-      <div class="row hide-sm arch-legend">
-        <span><i style="background:var(--arch-access)"></i>port</span>
-        <span><i style="background:var(--arch-mount)"></i>mount</span>
-        <span><i style="background:var(--arch-copy)"></i>replica</span>
+      <div class="row arch-head-actions">
+        ${disconnectedVolumes.length ? `<button class="btn sm ${STATE.archDisconnected ? "pri" : ""}" onclick="STATE.archDisconnected=!STATE.archDisconnected;viewFlow()"
+          data-tip="Volumes no container or VM is defined to mount. They stay hidden so old and retained data does not obscure the live paths.">${STATE.archDisconnected ? "Hide" : "Show"} ${disconnectedVolumes.length} disconnected</button>` : ""}
+        <div class="row hide-sm arch-legend">
+          <span><i style="background:var(--arch-access)"></i>port</span>
+          <span><i style="background:var(--arch-mount)"></i>mount</span>
+          <span><i style="background:var(--arch-copy)"></i>replica</span>
+        </div>
       </div></div>
     <div class="arch2wrap"><svg id="archsvg" aria-hidden="true"></svg><div class="arch2">
 
@@ -45,23 +65,18 @@ async function viewFlow() {
         || '<div class="dim xs">No load-balancer addresses</div>'}
       </section>
 
-      <section class="a2col"><h4>${vmCount ? "Containers &amp; VMs" : "Containers"} <span class="dim">${f.workloads.length}</span></h4>
-      ${f.workloads.map(w => `<div class="a2item a2wl ${used.has(w.id) ? "" : "a2alone"} ${w.kind === "vm" && !w.running ? "a2stopped" : ""}"
-          id="${esc(w.id)}" data-kind="workload" data-id="${esc(w.id)}"
-          title="${esc(w.name)} · ${esc(kind(w))}${w.ip ? ` · ${esc(w.ip)}` : ""}${w.kind !== "vm" || w.running ? ` · ${workloadCpuPercent(w.cpu)} CPU · ${w.mem_mb || 0} MB` : ""}">
-          ${appAvatar(w.name, w.icon)}<span class="a2name">${esc(w.name)}</span>
-          <span class="a2meta">${esc(kind(w))}</span>
-          ${w.kind === "vm" && !w.running ? "" : `<button class="a2act" data-need="operator" title="${w.kind === "vm" ? "Migrate" : "Move to another host"}"
-            onclick="event.stopPropagation();${w.kind === "vm" ? `vmMove('${esc(w.ns || "lab")}','${esc(w.name)}')` : `moveWorkload('${esc(w.name)}','${esc(w.ns || "lab")}')`}">⇄</button>`}
-        </div>`).join("") || '<div class="dim xs">Nothing running</div>'}
+      <section class="a2col"><h4>Workloads <span class="dim">${f.workloads.length}</span></h4>
+        <div class="a2group"><div class="a2subhead">Containers <span>${containers.length}</span></div>
+          ${containers.map(workloadCard).join("") || '<div class="dim xs">No containers</div>'}</div>
+        ${vms.length ? `<div class="a2group a2vmgroup"><div class="a2subhead">Virtual machines <span>${vms.length}</span></div>
+          ${vms.map(workloadCard).join("")}</div>` : ""}
       </section>
 
       <section class="a2col"><h4>Volumes <span class="dim">${f.volumes.length}</span></h4>
-      ${f.volumes.map(v => `<div class="a2item a2vol ${used.has(v.id) ? "" : "a2alone"}" id="${esc(v.id)}" data-kind="volume" data-id="${esc(v.id)}"
-          title="${esc(v.name)} · ${v.size_gb} GB · ${v.replicas} replicas · ${esc(v.robustness)}${v.attached ? ` · attached on ${esc(v.attached)}` : ""}">
-          <span class="a2dot" style="background:${ROB(v.robustness)}"></span><span class="a2name">${esc(v.name)}</span>
-          <span class="a2meta mono">${v.size_gb}G · ${v.replicas}×</span></div>`).join("")
-        || '<div class="dim xs">No volumes</div>'}
+        ${connectedVolumes.map(v => volumeCard(v)).join("") || '<div class="dim xs">No connected volumes</div>'}
+        ${STATE.archDisconnected && disconnectedVolumes.length ? `<div class="a2group a2disconnected-group">
+          <div class="a2subhead badtext">Disconnected <span>${disconnectedVolumes.length}</span></div>
+          ${disconnectedVolumes.map(v => volumeCard(v, true)).join("")}</div>` : ""}
       </section>
 
       <section class="a2col"><h4>Nodes &amp; replica copies</h4>

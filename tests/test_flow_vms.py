@@ -26,6 +26,8 @@ def vm(name, claim, labels=None):
 API = {
     "/api/v1/pods": {"items": [
         pod("web-5d9c-abcde", {"app": "web"}, claims=["web-data"]),
+        pod("homestead-files-web-data", {"homestead.io/task": "files", "homestead.io/app": "web-data"},
+            claims=["web-data"]),
         pod("virt-launcher-ubuntu-x1y2z", {"kubevirt.io": "virt-launcher", "vm.kubevirt.io/name": "ubuntu",
                                            "harvesterhci.io/vmName": "ubuntu"}, node="node2", claims=["ubuntu-disk"]),
         pod("virt-launcher-other-q9w8e", {"kubevirt.io": "virt-launcher", "vm.kubevirt.io/name": "other"}),
@@ -68,6 +70,9 @@ class FlowVmTests(unittest.TestCase):
 
     def test_launcher_pods_are_not_containers(self):
         self.assertEqual({"w:web", "w:vm-ubuntu", "w:vm-router"}, set(self.by))
+
+    def test_homestead_helper_pods_are_not_workloads(self):
+        self.assertNotIn("w:homestead-files-web-data", self.by)
 
     def test_a_running_vm_has_its_disk_ports_address_and_use(self):
         ubuntu = self.by["w:vm-ubuntu"]

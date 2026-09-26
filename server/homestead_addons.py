@@ -39,6 +39,7 @@ CHARTS = {"longhorn": "longhorn", "kubevirt": "homestead-kubevirt", "cdi": "home
 KUBE_VIP_REPO = "https://kube-vip.github.io/helm-charts"
 VIP_CLASS = "kube-vip.io/kube-vip-class"
 NAD_API = "/apis/k8s.cni.cncf.io/v1"
+KUBEVIRT_CR = "/apis/kubevirt.io/v1/namespaces/kubevirt/kubevirts/kubevirt"
 
 
 def _fetch(url):
@@ -81,6 +82,42 @@ def _multus():
         return False
 
 
+def _kubevirt_emulation():
+    """Whether this installation lets VMs fall back to QEMU emulation.
+
+    None means the KubeVirt CR is not present/readable.  Keeping that distinct
+    from False matters: an unknown cluster must not be presented as having
+    deliberately required /dev/kvm.
+    """
+    try:
+        kv = kget(KUBEVIRT_CR)
+    except Exception:
+        return None
+    developer = ((((kv.get("spec") or {}).get("configuration") or {})
+                  .get("developerConfiguration") or {}))
+    return bool(developer.get("useEmulation"))
+
+
+def diagnostic_command(distribution, chart="multus"):
+    """A pasteable, read-only command for a Helm-controller install.
+
+    k3s and RKE2 put kubectl and its kubeconfig in different places.  These
+    commands deliberately keep going when one object is absent, so the user
+    still gets the chart, pod and job evidence that does exist.
+    """
+    if distribution == "k3s":
+        kubectl = "sudo k3s kubectl"
+    elif distribution == "rke2":
+        kubectl = ("sudo env KUBECONFIG=/etc/rancher/rke2/rke2.yaml "
+                   "/var/lib/rancher/rke2/bin/kubectl")
+    else:
+        kubectl = "sudo kubectl"
+    job = f"helm-install-{chart}"
+    return (f"{kubectl} -n {CONTROLLER_NS} get helmchart {chart} -o yaml; "
+            f"{kubectl} -n {CONTROLLER_NS} get pods -l job-name={job} -o wide; "
+            f"{kubectl} -n {CONTROLLER_NS} logs job/{job} --all-containers --tail=200")
+
+
 def status():
     p = platform(True)
     charts = _helmcharts()
@@ -93,8 +130,10 @@ def status():
         "longhorn": {"installed": bool(p.get("longhorn")), "installing": CHARTS["longhorn"] in charts
                      and not p.get("longhorn")},
         "kubevirt": {"installed": bool(p.get("kubevirt")), "installing": CHARTS["kubevirt"] in charts
-                     and not p.get("kubevirt"), "cdi": bool(p.get("cdi"))},
-        "multus": {"installed": multus, "installing": CHARTS["multus"] in charts and not multus},
+                     and not p.get("kubevirt"), "cdi": bool(p.get("cdi")),
+                     "emulation": _kubevirt_emulation() if p.get("kubevirt") and not p.get("harvester") else None},
+        "multus": {"installed": multus, "installing": CHARTS["multus"] in charts and not multus,
+                   "diagnostic_command": diagnostic_command(p.get("distribution", ""), CHARTS["multus"])},
         "kube_vip": {"installed": p.get("load_balancer") == "kube-vip",
                      "installing": CHARTS["kube-vip"] in charts and p.get("load_balancer") != "kube-vip",
                      "interface": vip_interface(), "beside_servicelb": bool(p.get("servicelb"))},
@@ -303,7 +342,12 @@ def install_kubevirt(cfg=None):
     if p.get("kubevirt"):
         raise ValueError("KubeVirt is installed already")
     known = status()
-    emulation = bool(cfg.get("emulation")) if "emulation" in cfg else known["kvm_nowhere"]
+    # A missing probe is uncertainty, not proof that every node exposes KVM.
+    # Software fallback removes KubeVirt's hard KVM scheduling resource while
+    # still allowing hardware acceleration where it is available.  Requiring
+    # KVM is therefore safe only when every probed node has it, or when the
+    # administrator explicitly chooses it.
+    emulation = bool(cfg.get("emulation")) if "emulation" in cfg else not known["kvm_everywhere"]
     kubevirt, cdi = latest_versions()
     operator = fetch(f"{KUBEVIRT}/download/{kubevirt}/kubevirt-operator.yaml")[0]
     cdi_operator = fetch(f"{CDI}/download/{cdi}/cdi-operator.yaml")[0]
@@ -317,4 +361,20 @@ def install_kubevirt(cfg=None):
     return {"ok": True, "name": CHARTS["kubevirt"], "job": f"helm-install-{CHARTS['kubevirt']}",
             "kubevirt": kubevirt, "cdi": cdi, "emulation": emulation,
             "detail": f"KubeVirt {kubevirt} and CDI {cdi} are being installed"
-                      + ("; with no hardware virtualisation found, VMs are emulated and run slowly" if emulation else "")}
+                      + ("; software fallback is allowed where /dev/kvm is unavailable" if emulation else "")}
+
+
+def set_kubevirt_emulation(on):
+    """Allow or require KVM on an existing non-Harvester installation."""
+    p = platform(True)
+    if p.get("harvester"):
+        raise ValueError("Harvester manages KubeVirt's virtualisation mode")
+    if not p.get("kubevirt"):
+        raise ValueError("KubeVirt is not installed")
+    enabled = bool(on)
+    ksend("PATCH", KUBEVIRT_CR,
+          {"spec": {"configuration": {"developerConfiguration": {"useEmulation": enabled}}}},
+          ctype="application/merge-patch+json")
+    return {"ok": True, "emulation": enabled,
+            "detail": ("Software virtualisation fallback is enabled; VMs can run on nodes without /dev/kvm"
+                       if enabled else "KVM is now required; VMs can run only on hardware-virtualisation nodes")}

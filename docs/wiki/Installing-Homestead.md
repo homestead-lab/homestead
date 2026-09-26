@@ -54,8 +54,8 @@ everywhere.
 
 1. **Settings → About** - check Homestead's own health: every background task,
    the node probe, Samba, backup storage. See [Settings](Settings).
-2. **Install the node probe**, if the Helm chart did not: **Settings → About →
-   Install node probe**. It adds temperatures, host devices (a Coral, a Zigbee
+2. **Install the node probe**, if the Helm chart did not: **Settings → Cluster
+   → Add-ons → Install node probe**. It adds temperatures, host devices (a Coral, a Zigbee
    stick, an iGPU), every disk and SMART drive health.
 3. **Networking → Your VIPs** - keep a few addresses for apps (Harvester, or
    MetalLB). See [Networking](Networking).

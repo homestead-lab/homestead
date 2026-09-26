@@ -126,7 +126,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertNotIn("initContainers", dep["spec"]["template"]["spec"])
 
 
-@unittest.skipUnless(os.geteuid() == 0, "chown needs root")
+@unittest.skipUnless(hasattr(os, "geteuid") and os.geteuid() == 0, "chown needs root")
 class ScriptTests(unittest.TestCase):
     def run_script(self, root, sub_path=""):
         script = VOLOWNER.init_container([("vol0", sub_path, 1000, 1000, 0o750)])["command"][2]
