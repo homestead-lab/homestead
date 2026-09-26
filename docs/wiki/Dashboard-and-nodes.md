@@ -60,6 +60,18 @@ From a node you can:
   tray;
 - reboot or shut it down, with an administrator's reviewed confirmation.
 
+### Terminal
+
+**Terminal** on a node's page opens a root shell on that host, as SSH would
+give it: its own files, tools and login shell. It needs the **admin** role.
+Full-screen tools work (`top`, `vi`, `less`), and copy and paste work as in any
+terminal. Homestead starts a small helper pod on the node (busybox, with the
+host's process and network namespaces) and enters the host from it; it
+serves every open session on that node and is deleted when the last one
+closes, or after eight hours at most. Each session's start and end are written
+to the console audit log with the node's name; what is typed is not recorded.
+A node that is not Ready cannot run the helper, so it has no terminal.
+
 ### Reviewed host maintenance
 
 Host power control is enabled by default from v2.8.167. Set

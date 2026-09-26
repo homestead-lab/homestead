@@ -24,7 +24,7 @@ async function copyText(text) {
 async function readClipboard() {
   try { return navigator.clipboard?.readText ? await navigator.clipboard.readText() : null; } catch (_) { return null; }
 }
-const HOMESTEAD_VERSION = "2.8.175";
+const HOMESTEAD_VERSION = "2.8.176";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -335,6 +335,10 @@ function closeModal(updateRoute = true) {
   if (window.__updateTimer) { clearInterval(window.__updateTimer); window.__updateTimer = null; }
   if (window.__consoleSocket) { window.__consoleSocket.close(); window.__consoleSocket = null; }
   if (window.__consoleResize) { window.__consoleResize.disconnect(); window.__consoleResize = null; }
+  // A node's terminal: closing it ends the session, and its helper goes.
+  if (window.__nodeSocket) { window.__nodeSocket.close(); window.__nodeSocket = null; }
+  if (window.__nodeTermResize) { window.__nodeTermResize.disconnect(); window.__nodeTermResize = null; }
+  if (window.__nodeTerm) { try { window.__nodeTerm.dispose(); } catch (_) { /* already gone */ } window.__nodeTerm = null; }
   if (updateRoute && window.clearModalRoute) window.clearModalRoute();
 }
 

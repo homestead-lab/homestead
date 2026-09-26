@@ -402,7 +402,8 @@ window.nodeDetail = async (name, fromRoute = false) => {
         ${n.workloads.length ? '<div class="dim xs" style="margin-top:10px">Click a workload to move it to another host.</div>' : ""}
       </div>
       <div class="row" style="margin-top:16px">
-        <button class="btn" onclick="nodeActions('${esc(n.name)}')">Host actions…</button></div>
+        <button class="btn" onclick="nodeActions('${esc(n.name)}')">Host actions…</button>
+        <button class="btn" data-need="admin" onclick="nodeShell('${esc(n.name)}')" title="A root shell on the host itself, as SSH would give">${icon("console")}Terminal</button></div>
       </div>`;
     window.__disksModal = false;
     nodeDisksPaint(n.name);
@@ -657,3 +658,74 @@ async function viewNodes() {
         : '<span class="dim xs">—</span>'}</td></tr>`).join("")}
    </tbody></table></div></div>`}`);
 }
+
+/* ---------------- a node's own terminal ----------------
+   A root shell on the host, as SSH would give it: a small helper pod on the
+   node enters the host's namespaces, and xterm.js draws the terminal, so
+   full-screen tools - top, vi, less - work. Admin only; each session is
+   written to the console audit log with the node's name. */
+let xtermLoading = null;
+function loadXterm() {
+  if (window.Terminal && window.FitAddon) return Promise.resolve();
+  if (xtermLoading) return xtermLoading;
+  const load = (tag, attrs) => new Promise((resolve, reject) => {
+    const el = Object.assign(document.createElement(tag), attrs);
+    el.onload = resolve;
+    el.onerror = () => { xtermLoading = null; reject(new Error("the terminal could not be loaded")); };
+    document.head.appendChild(el);
+  });
+  const v = `?v=${HOMESTEAD_VERSION}`;
+  xtermLoading = Promise.all([
+    load("link", { rel: "stylesheet", href: `/vendor/xterm/xterm.css${v}` }),
+    load("script", { src: `/vendor/xterm/xterm.js${v}` }).then(() => load("script", { src: `/vendor/xterm/addon-fit.js${v}` })),
+  ]);
+  return xtermLoading;
+}
+
+window.nodeShell = async name => {
+  modal(`Terminal · ${name}`, `<div class="console-security">Admin only · a root shell on ${esc(name)} itself. Session start and stop are
+      audited; commands and output are not recorded.</div>
+    <div class="consolestate" id="nodeShellState"><span class="spin2"></span> starting a helper on ${esc(name)}…</div>
+    <div class="nodeterm" id="nodeTerm"></div>
+    <div class="row" style="margin-top:8px"><button class="btn sm" id="nodeShellAgain" onclick="nodeShell('${esc(name)}')" hidden>${icon("restart")}Reconnect</button></div>`, true);
+  const state = text => { const el = $("#nodeShellState"); if (el) el.innerHTML = text; };
+  try {
+    await Promise.all([loadXterm(), api("/api/node/shell/prepare", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node: name }) })]);
+  } catch (e) { state(`<span class="badtext">${esc(e.message)}</span>`); $("#nodeShellAgain").hidden = false; return; }
+  if (!$("#nodeTerm")) return;
+  if (window.__nodeTerm) { try { window.__nodeTerm.dispose(); } catch (_) {} }
+  if (window.__nodeSocket) window.__nodeSocket.close();
+  const css = getComputedStyle(document.documentElement);
+  const term = new Terminal({ cursorBlink: true, fontSize: 13, scrollback: 5000, convertEol: false,
+    fontFamily: css.getPropertyValue("--mono").trim() || "ui-monospace, Menlo, Consolas, monospace",
+    theme: { background: "#0b0b0d", foreground: "#e8e8ea" } });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open($("#nodeTerm"));
+  fit.fit();
+  window.__nodeTerm = term;
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  const socket = new WebSocket(`${protocol}//${location.host}/api/node/shell?node=${encodeURIComponent(name)}`);
+  window.__nodeSocket = socket;
+  const send = value => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(value)); };
+  const resize = () => { try { fit.fit(); } catch (_) {} send({ type: "resize", cols: term.cols, rows: term.rows }); };
+  socket.onopen = () => { state(`connected · root on ${esc(name)}`); resize(); term.focus(); };
+  socket.onmessage = event => {
+    let message;
+    try { message = JSON.parse(event.data); } catch (_) { return; }
+    if (message.type === "output") term.write(message.data);
+    else if (message.type === "error") term.write(`\r\n\x1b[31m${message.data || "error"}\x1b[0m\r\n`);
+    else if (message.type === "disconnected") state(`disconnected · ${esc(message.reason || "session ended")}`);
+  };
+  socket.onclose = () => {
+    if (window.__nodeSocket !== socket) return;
+    state("disconnected");
+    const again = $("#nodeShellAgain");
+    if (again) again.hidden = false;
+  };
+  term.onData(data => send({ type: "input", data }));
+  if (window.__nodeTermResize) window.__nodeTermResize.disconnect();
+  window.__nodeTermResize = new ResizeObserver(resize);
+  window.__nodeTermResize.observe($("#nodeTerm"));
+};

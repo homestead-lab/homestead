@@ -18,9 +18,12 @@ there is nothing to keep: a new VM always starts from the newest build.
 What is kept, and which Harvester image holds each build, is in the
 homestead-vm-store ConfigMap.
 """
+import calendar
+import concurrent.futures
 import json
 import re
 import threading
+import urllib.parse
 import time
 import urllib.error
 import urllib.request
@@ -40,55 +43,85 @@ CHECK_EVERY = 12 * 3600
 HEAD_TTL = 3600
 _heads, _lock = {}, threading.Lock()
 
-# Each publisher's own address for its newest cloud image. Fedora has no
-# fixed "latest" address, so its newest release is looked up.
+# Each publisher's own address for its newest cloud image, per variant. Fedora
+# and Alpine have no fixed "latest" address, so their newest is looked up.
+UBUNTU = "https://cloud-images.ubuntu.com"
+DEBIAN = "https://cloud.debian.org/images/cloud"
+ROCKY = "https://dl.rockylinux.org/pub/rocky"
+ALMA = "https://repo.almalinux.org/almalinux"
+CENTOS = "https://cloud.centos.org/centos"
+SUSE = "https://download.opensuse.org"
+MINIMAL = "Smaller: fewer packages and no manuals, for a server you set up yourself"
+DEBIAN_CLOUD = "A kernel slimmed for VMs - the usual choice"
+DEBIAN_GENERIC = "The full kernel with every driver - for hardware passed through to the VM"
+STANDARD = "The standard cloud image"
+SUSE_MINIMAL = "openSUSE's minimal cloud VM"
+LVM = "Its disk under LVM, to grow or split later"
+
+
+def _entry(id_, distro, name, variant, about, user, urls=None, resolve=""):
+    return {"id": id_, "distro": distro, "name": name, "variant": variant, "about": about, "user": user,
+            "min_gb": 10, "urls": urls or {}, "resolve": resolve}
+
+
 CATALOG = [
-    {"id": "ubuntu-24.04", "name": "Ubuntu 24.04 LTS", "publisher": "Canonical", "user": "ubuntu", "min_gb": 10,
-     "urls": {"amd64": "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img",
-              "arm64": "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img"}},
-    {"id": "ubuntu-22.04", "name": "Ubuntu 22.04 LTS", "publisher": "Canonical", "user": "ubuntu", "min_gb": 10,
-     "urls": {"amd64": "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img",
-              "arm64": "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-arm64.img"}},
-    {"id": "debian-13", "name": "Debian 13 (trixie)", "publisher": "Debian", "user": "debian", "min_gb": 10,
-     "urls": {"amd64": "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2",
-              "arm64": "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-arm64.qcow2"}},
-    {"id": "debian-12", "name": "Debian 12 (bookworm)", "publisher": "Debian", "user": "debian", "min_gb": 10,
-     "urls": {"amd64": "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2",
-              "arm64": "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-arm64.qcow2"}},
-    {"id": "fedora", "name": "Fedora Cloud", "publisher": "Fedora Project", "user": "fedora", "min_gb": 10,
-     "resolve": "fedora"},
-    {"id": "rocky-10", "name": "Rocky Linux 10", "publisher": "Rocky Enterprise Software Foundation", "user": "rocky",
-     "min_gb": 10,
-     "urls": {"amd64": "https://dl.rockylinux.org/pub/rocky/10/images/x86_64/Rocky-10-GenericCloud-Base.latest.x86_64.qcow2",
-              "arm64": "https://dl.rockylinux.org/pub/rocky/10/images/aarch64/Rocky-10-GenericCloud-Base.latest.aarch64.qcow2"}},
-    {"id": "rocky-9", "name": "Rocky Linux 9", "publisher": "Rocky Enterprise Software Foundation", "user": "rocky",
-     "min_gb": 10,
-     "urls": {"amd64": "https://dl.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base.latest.x86_64.qcow2",
-              "arm64": "https://dl.rockylinux.org/pub/rocky/9/images/aarch64/Rocky-9-GenericCloud-Base.latest.aarch64.qcow2"}},
-    {"id": "almalinux-10", "name": "AlmaLinux 10", "publisher": "AlmaLinux OS Foundation", "user": "almalinux",
-     "min_gb": 10,
-     "urls": {"amd64": "https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/AlmaLinux-10-GenericCloud-latest.x86_64.qcow2",
-              "arm64": "https://repo.almalinux.org/almalinux/10/cloud/aarch64/images/AlmaLinux-10-GenericCloud-latest.aarch64.qcow2"}},
-    {"id": "almalinux-9", "name": "AlmaLinux 9", "publisher": "AlmaLinux OS Foundation", "user": "almalinux",
-     "min_gb": 10,
-     "urls": {"amd64": "https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2",
-              "arm64": "https://repo.almalinux.org/almalinux/9/cloud/aarch64/images/AlmaLinux-9-GenericCloud-latest.aarch64.qcow2"}},
-    {"id": "centos-stream-10", "name": "CentOS Stream 10", "publisher": "CentOS Project", "user": "cloud-user",
-     "min_gb": 10,
-     "urls": {"amd64": "https://cloud.centos.org/centos/10-stream/x86_64/images/CentOS-Stream-GenericCloud-10-latest.x86_64.qcow2"}},
-    {"id": "centos-stream-9", "name": "CentOS Stream 9", "publisher": "CentOS Project", "user": "cloud-user",
-     "min_gb": 10,
-     "urls": {"amd64": "https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2",
-              "arm64": "https://cloud.centos.org/centos/9-stream/aarch64/images/CentOS-Stream-GenericCloud-9-latest.aarch64.qcow2"}},
-    {"id": "opensuse-leap-15.6", "name": "openSUSE Leap 15.6", "publisher": "openSUSE", "user": "opensuse",
-     "min_gb": 10,
-     "urls": {"amd64": "https://download.opensuse.org/distribution/leap/15.6/appliances/openSUSE-Leap-15.6-Minimal-VM.x86_64-Cloud.qcow2",
-              "arm64": "https://download.opensuse.org/distribution/leap/15.6/appliances/openSUSE-Leap-15.6-Minimal-VM.aarch64-Cloud.qcow2"}},
-    {"id": "opensuse-tumbleweed", "name": "openSUSE Tumbleweed", "publisher": "openSUSE", "user": "opensuse",
-     "min_gb": 10,
-     "urls": {"amd64": "https://download.opensuse.org/tumbleweed/appliances/openSUSE-Tumbleweed-Minimal-VM.x86_64-Cloud.qcow2"}},
-    {"id": "arch", "name": "Arch Linux", "publisher": "Arch Linux", "user": "arch", "min_gb": 10,
-     "urls": {"amd64": "https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2"}},
+    _entry("ubuntu-24.04", "Ubuntu", "Ubuntu 24.04 LTS", "Server", "The standard server image", "ubuntu",
+           {"amd64": f"{UBUNTU}/noble/current/noble-server-cloudimg-amd64.img",
+            "arm64": f"{UBUNTU}/noble/current/noble-server-cloudimg-arm64.img"}),
+    _entry("ubuntu-24.04-minimal", "Ubuntu", "Ubuntu 24.04 LTS", "Minimal", MINIMAL, "ubuntu",
+           {"amd64": f"{UBUNTU}/minimal/releases/noble/release/ubuntu-24.04-minimal-cloudimg-amd64.img",
+            "arm64": f"{UBUNTU}/minimal/releases/noble/release/ubuntu-24.04-minimal-cloudimg-arm64.img"}),
+    _entry("ubuntu-22.04", "Ubuntu", "Ubuntu 22.04 LTS", "Server", "The standard server image", "ubuntu",
+           {"amd64": f"{UBUNTU}/jammy/current/jammy-server-cloudimg-amd64.img",
+            "arm64": f"{UBUNTU}/jammy/current/jammy-server-cloudimg-arm64.img"}),
+    _entry("ubuntu-22.04-minimal", "Ubuntu", "Ubuntu 22.04 LTS", "Minimal", MINIMAL, "ubuntu",
+           {"amd64": f"{UBUNTU}/minimal/releases/jammy/release/ubuntu-22.04-minimal-cloudimg-amd64.img"}),
+    _entry("debian-13", "Debian", "Debian 13 (trixie)", "Cloud", DEBIAN_CLOUD, "debian",
+           {"amd64": f"{DEBIAN}/trixie/latest/debian-13-genericcloud-amd64.qcow2",
+            "arm64": f"{DEBIAN}/trixie/latest/debian-13-genericcloud-arm64.qcow2"}),
+    _entry("debian-13-generic", "Debian", "Debian 13 (trixie)", "Generic", DEBIAN_GENERIC, "debian",
+           {"amd64": f"{DEBIAN}/trixie/latest/debian-13-generic-amd64.qcow2"}),
+    _entry("debian-12", "Debian", "Debian 12 (bookworm)", "Cloud", DEBIAN_CLOUD, "debian",
+           {"amd64": f"{DEBIAN}/bookworm/latest/debian-12-genericcloud-amd64.qcow2",
+            "arm64": f"{DEBIAN}/bookworm/latest/debian-12-genericcloud-arm64.qcow2"}),
+    _entry("debian-12-generic", "Debian", "Debian 12 (bookworm)", "Generic", DEBIAN_GENERIC, "debian",
+           {"amd64": f"{DEBIAN}/bookworm/latest/debian-12-generic-amd64.qcow2"}),
+    _entry("fedora", "Fedora", "Fedora Cloud", "Base", "The newest Fedora release's cloud image", "fedora",
+           resolve="fedora"),
+    _entry("rocky-10", "Rocky Linux", "Rocky Linux 10", "Base", STANDARD, "rocky",
+           {"amd64": f"{ROCKY}/10/images/x86_64/Rocky-10-GenericCloud-Base.latest.x86_64.qcow2",
+            "arm64": f"{ROCKY}/10/images/aarch64/Rocky-10-GenericCloud-Base.latest.aarch64.qcow2"}),
+    _entry("rocky-10-lvm", "Rocky Linux", "Rocky Linux 10", "LVM", LVM, "rocky",
+           {"amd64": f"{ROCKY}/10/images/x86_64/Rocky-10-GenericCloud-LVM.latest.x86_64.qcow2"}),
+    _entry("rocky-9", "Rocky Linux", "Rocky Linux 9", "Base", STANDARD, "rocky",
+           {"amd64": f"{ROCKY}/9/images/x86_64/Rocky-9-GenericCloud-Base.latest.x86_64.qcow2",
+            "arm64": f"{ROCKY}/9/images/aarch64/Rocky-9-GenericCloud-Base.latest.aarch64.qcow2"}),
+    _entry("rocky-9-lvm", "Rocky Linux", "Rocky Linux 9", "LVM", LVM, "rocky",
+           {"amd64": f"{ROCKY}/9/images/x86_64/Rocky-9-GenericCloud-LVM.latest.x86_64.qcow2"}),
+    _entry("almalinux-10", "AlmaLinux", "AlmaLinux 10", "Base", STANDARD, "almalinux",
+           {"amd64": f"{ALMA}/10/cloud/x86_64/images/AlmaLinux-10-GenericCloud-latest.x86_64.qcow2",
+            "arm64": f"{ALMA}/10/cloud/aarch64/images/AlmaLinux-10-GenericCloud-latest.aarch64.qcow2"}),
+    _entry("almalinux-9", "AlmaLinux", "AlmaLinux 9", "Base", STANDARD, "almalinux",
+           {"amd64": f"{ALMA}/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2",
+            "arm64": f"{ALMA}/9/cloud/aarch64/images/AlmaLinux-9-GenericCloud-latest.aarch64.qcow2"}),
+    _entry("centos-stream-10", "CentOS Stream", "CentOS Stream 10", "Base", STANDARD, "cloud-user",
+           {"amd64": f"{CENTOS}/10-stream/x86_64/images/CentOS-Stream-GenericCloud-10-latest.x86_64.qcow2"}),
+    _entry("centos-stream-9", "CentOS Stream", "CentOS Stream 9", "Base", STANDARD, "cloud-user",
+           {"amd64": f"{CENTOS}/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2",
+            "arm64": f"{CENTOS}/9-stream/aarch64/images/CentOS-Stream-GenericCloud-9-latest.aarch64.qcow2"}),
+    _entry("opensuse-leap-16.0", "openSUSE", "openSUSE Leap 16.0", "Minimal", SUSE_MINIMAL, "opensuse",
+           {"amd64": f"{SUSE}/distribution/leap/16.0/appliances/Leap-16.0-Minimal-VM.x86_64-Cloud.qcow2"}),
+    _entry("opensuse-leap-15.6", "openSUSE", "openSUSE Leap 15.6", "Minimal", SUSE_MINIMAL, "opensuse",
+           {"amd64": f"{SUSE}/distribution/leap/15.6/appliances/openSUSE-Leap-15.6-Minimal-VM.x86_64-Cloud.qcow2",
+            "arm64": f"{SUSE}/distribution/leap/15.6/appliances/openSUSE-Leap-15.6-Minimal-VM.aarch64-Cloud.qcow2"}),
+    _entry("opensuse-tumbleweed", "openSUSE", "openSUSE Tumbleweed", "Minimal", "Rolling release, minimal cloud VM",
+           "opensuse",
+           {"amd64": f"{SUSE}/tumbleweed/appliances/openSUSE-Tumbleweed-Minimal-VM.x86_64-Cloud.qcow2",
+            "arm64": f"{SUSE}/ports/aarch64/tumbleweed/appliances/openSUSE-Tumbleweed-Minimal-VM.aarch64-Cloud.qcow2"}),
+    _entry("arch", "Arch Linux", "Arch Linux", "Cloud", "Rolling release", "arch",
+           {"amd64": "https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2"}),
+    _entry("alpine", "Alpine", "Alpine Linux", "Cloud-init",
+           "Tiny - musl and OpenRC rather than glibc and systemd", "alpine", resolve="alpine"),
 ]
 BY_ID = {entry["id"]: entry for entry in CATALOG}
 FEDORA = "https://fedoraproject.org/releases.json"
@@ -96,8 +129,9 @@ _fedora = {"at": 0.0, "value": {}}
 
 
 def bind(_kget, _ksend, namespace, _platform, _hv_download, _images, _image_disks, _delete_image,
-         _fetch_json=None, _head=None):
-    global kget, ksend, NS, platform, hv_download, images, image_disks, delete_image, fetch_json, head
+         _fetch_json=None, _head=None, _fetch_text=None):
+    global kget, ksend, NS, platform, hv_download, images, image_disks, delete_image, fetch_json, head, fetch_text
+    fetch_text = _fetch_text or _get_text
     kget, ksend, NS, platform = _kget, _ksend, namespace, _platform
     hv_download, images, image_disks, delete_image = _hv_download, _images, _image_disks, _delete_image
     fetch_json = _fetch_json or _get_json
@@ -139,14 +173,42 @@ def _fedora_urls():
     return _fedora["value"]
 
 
+ALPINE = "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/cloud/"
+ALPINE_FILE = re.compile(r'href="(alpine-([0-9.]+)-(x86_64|aarch64)-cloudinit-r([0-9]+)[.]qcow2)"')
+_alpine = {"at": 0.0, "value": {}}
+fetch_text = None        # url -> text
+
+
+def _get_text(url):
+    request = urllib.request.Request(url, headers={"User-Agent": "Homestead"})
+    with urllib.request.urlopen(request, timeout=20) as response:
+        return response.read().decode("utf-8", "replace")
+
+
+def _alpine_urls():
+    """The newest Alpine release's cloud-init image, from its listing."""
+    if time.time() - _alpine["at"] < CHECK_EVERY and _alpine["value"]:
+        return _alpine["value"]
+    found = {}
+    for file, version, machine, release in ALPINE_FILE.findall(fetch_text(ALPINE)):
+        on = "amd64" if machine == "x86_64" else "arm64"
+        key = (tuple(int(x) for x in version.split(".")), int(release))
+        if on not in found or key > found[on][0]:
+            found[on] = (key, ALPINE + file)
+    _alpine.update(at=time.time(), value={on: url for on, (_, url) in found.items()})
+    return _alpine["value"]
+
+
 def url_for(entry, on=None):
     """The publisher's address for this entry's newest build, or ""."""
     on = on or arch()
-    if entry.get("resolve") == "fedora":
-        try:
+    try:
+        if entry.get("resolve") == "fedora":
             return _fedora_urls()["urls"].get(on, "")
-        except Exception:
-            return ""
+        if entry.get("resolve") == "alpine":
+            return _alpine_urls().get(on, "")
+    except Exception:
+        return ""
     return (entry.get("urls") or {}).get(on, "")
 
 
@@ -211,33 +273,59 @@ def _harvester():
     return bool((platform(False) or {}).get("harvester"))
 
 
+def _versions(entry, url, kept, have):
+    """The builds of an entry on this cluster: those the store downloaded,
+    and any Harvester image made from the same address some other way - by
+    Harvester's own dashboard, or before the store - which it takes as its own."""
+    known, versions = set(), []
+    for version in (kept or {}).get("versions") or []:
+        image = have.get(version.get("image", ""))
+        if not image:
+            continue  # deleted outside the store
+        known.add(version["image"])
+        versions.append(dict(version, ready=bool(image.get("ready")), failed=bool(image.get("failed")),
+                             progress=image.get("progress", 0), display=image.get("display", "")))
+    urls = {u for u in (entry.get("urls") or {}).values()} | ({url} if url else set())
+    for ref, image in sorted(have.items(), key=lambda kv: kv[1].get("created", 0)):
+        if ref not in known and image.get("url") and image.get("url") in urls:
+            versions.append({"image": ref, "added": image.get("created", 0), "found": True,
+                             "ready": bool(image.get("ready")), "failed": bool(image.get("failed")),
+                             "progress": image.get("progress", 0), "display": image.get("display", "")})
+    return sorted(versions, key=lambda v: v.get("added", 0))
+
+
 def view(check=False):
-    """The catalogue, each entry with what is kept of it and whether a newer
-    build is out."""
+    """The catalogue by distribution, each variant with its download size,
+    what this cluster has of it and whether a newer build is out; and the VM
+    images here that did not come from the catalogue."""
     data, _ = load()
     harvester, on = _harvester(), arch()
     have = {f"{i['namespace']}/{i['name']}": i for i in (images() if harvester else [])}
-    rows = []
+    urls = {entry["id"]: url_for(entry, on) for entry in CATALOG}
+    # Sizes and newest builds, asked of every publisher at once, at most hourly.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        heads = dict(zip(urls, pool.map(lambda url: upstream(url) if url else {}, urls.values())))
+    rows, claimed = [], set()
     for entry in CATALOG:
-        url = url_for(entry, on)
-        kept = data["kept"].get(entry["id"])
-        versions = []
-        for version in (kept or {}).get("versions") or []:
-            image = have.get(version.get("image", ""))
-            if harvester and not image:
-                continue  # deleted outside the store
-            versions.append(dict(version, ready=bool(image and image.get("ready")),
-                                 failed=bool(image and image.get("failed")),
-                                 progress=(image or {}).get("progress", 0)))
+        url, kept = urls[entry["id"]], data["kept"].get(entry["id"])
+        versions = _versions(entry, url, kept, have) if harvester else []
+        claimed.update(v["image"] for v in versions)
         newest = versions[-1] if versions else None
-        now = upstream(url) if (kept and url and (check or harvester)) else {}
-        rows.append({"id": entry["id"], "name": entry["name"], "publisher": entry["publisher"], "user": entry["user"],
-                     "min_gb": entry["min_gb"], "url": url, "available": bool(url), "arch": on,
-                     "kept": bool(kept), "auto": bool((kept or {}).get("auto")), "versions": versions,
-                     "ready": bool(newest and newest["ready"]) if harvester else bool(kept),
-                     "update": bool(harvester and newest and now and not _same_build(newest, now)),
+        now = heads.get(entry["id"]) or {}
+        rows.append({"id": entry["id"], "distro": entry["distro"], "name": entry["name"], "variant": entry["variant"],
+                     "about": entry["about"], "user": entry["user"], "min_gb": entry["min_gb"],
+                     "url": url, "available": bool(url), "arch": on, "size": now.get("size", 0),
+                     "kept": bool(kept or versions), "auto": bool((kept or {}).get("auto")), "versions": versions,
+                     "ready": bool(newest and newest["ready"]) if harvester else True,
+                     "update": bool(harvester and newest and now and not now.get("error")
+                                    and newest.get("etag") is not None and not _same_build(newest, now)),
                      "checked": (kept or {}).get("checked", 0), "error": now.get("error", "")})
-    return {"harvester": harvester, "arch": on, "images": rows,
+    own = [{"image": ref, "display": image.get("display", ""), "ready": bool(image.get("ready")),
+            "failed": bool(image.get("failed")), "progress": image.get("progress", 0),
+            "size_gb": image.get("size_gb", 0), "created": image.get("created", 0),
+            "from": urllib.parse.urlparse(image.get("url") or "").netloc or (image.get("source") or "upload")}
+           for ref, image in sorted(have.items(), key=lambda kv: kv[1].get("display", "").lower()) if ref not in claimed]
+    return {"harvester": harvester, "arch": on, "images": rows, "own": own,
             "note": "" if harvester else "CDI fills each VM's disk straight from the publisher, so a new VM always "
                                          "starts from the newest build and there is nothing to keep."}
 
@@ -267,7 +355,21 @@ def keep(image_id, auto=True):
     kept = data["kept"].setdefault(image_id, {"versions": []})
     kept["auto"] = bool(auto)
     detail = f"{entry['name']} is kept"
-    if _harvester() and not kept["versions"]:
+    have = {f"{i['namespace']}/{i['name']}": i for i in images()} if _harvester() else {}
+    found = [v for v in _versions(entry, url, kept, have) if v.get("found")]
+    if found:
+        kept["versions"] = [{k: v[k] for k in ("image", "added")} for v in found]
+        # Downloaded after the publisher's current build came out, the newest
+        # one found is that build: no need to fetch it again.
+        now = upstream(url)
+        try:
+            built = calendar.timegm(time.strptime(now.get("modified", ""), "%a, %d %b %Y %H:%M:%S GMT"))
+        except (TypeError, ValueError, OverflowError):
+            built = None
+        if built is not None and kept["versions"][-1]["added"] >= built:
+            kept["versions"][-1].update(etag=now.get("etag", ""), modified=now.get("modified", ""), size=now.get("size", 0))
+        detail = f"{entry['name']} {entry['variant']} was here already"
+    elif _harvester() and not kept["versions"]:
         now = upstream(url)
         made = hv_download(url, _display(entry, now), True)
         kept["versions"].append({"image": f"{made['namespace']}/{made['name']}", "etag": now.get("etag", ""),
@@ -364,16 +466,17 @@ def choices():
     except Exception:
         data = {"kept": {}}
     harvester, on = _harvester(), arch()
-    ready = {f"{i['namespace']}/{i['name']}" for i in (images() if harvester else []) if i.get("ready")}
+    have = {f"{i['namespace']}/{i['name']}": i for i in (images() if harvester else [])}
     out = []
     for entry in CATALOG:
         kept = data["kept"].get(entry["id"]) or {}
-        has = bool(entry.get("resolve")) or bool((entry.get("urls") or {}).get(on))
-        if not has:
+        url = (entry.get("urls") or {}).get(on, "")
+        if not (entry.get("resolve") or url):
             continue
-        out.append({"id": entry["id"], "name": entry["name"], "publisher": entry["publisher"],
-                    "user": entry["user"], "min_gb": entry["min_gb"], "kept": bool(kept),
-                    "ready": any(v.get("image") in ready for v in kept.get("versions") or []) if harvester else True})
+        versions = _versions(entry, url, kept, have) if harvester else []
+        out.append({"id": entry["id"], "distro": entry["distro"], "name": entry["name"], "variant": entry["variant"],
+                    "user": entry["user"], "min_gb": entry["min_gb"], "kept": bool(kept or versions),
+                    "ready": any(v["ready"] for v in versions) if harvester else True})
     return out
 
 
@@ -383,14 +486,13 @@ def source_for(image_id):
     entry = BY_ID.get(image_id)
     if not entry:
         raise ValueError(f"the store has no image {image_id}")
+    url = url_for(entry)
     if _harvester():
         data, _ = load()
         have = {f"{i['namespace']}/{i['name']}": i for i in images()}
-        for version in reversed((data["kept"].get(image_id) or {}).get("versions") or []):
-            image = have.get(version.get("image"))
-            if image and image.get("ready"):
+        for version in reversed(_versions(entry, url, data["kept"].get(image_id), have)):
+            if version["ready"]:
                 return {"image_id": version["image"], "min_gb": entry["min_gb"], "user": entry["user"]}
-    url = url_for(entry)
     if not url:
         raise ValueError(f"{entry['name']} has no {arch()} image")
     return {"image_url": url, "min_gb": entry["min_gb"], "user": entry["user"]}

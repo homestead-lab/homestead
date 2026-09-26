@@ -81,25 +81,36 @@ Networks*, so it shows there too.
 
 ## Image store
 
-**Image store** on the VMs page lists the cloud images their publishers keep
-current, for your nodes' architecture (amd64 or arm64):
+**Image store** on the VMs page lists cloud images from their publishers, for
+your nodes' architecture (amd64 or arm64), grouped by distribution. Each
+variant shows its download size, and a tooltip says what it is for:
 
-- Ubuntu 24.04 and 22.04 LTS
-- Debian 13 and 12
-- Fedora Cloud
-- Rocky Linux 10 and 9
-- AlmaLinux 10 and 9
-- CentOS Stream 10 and 9
-- openSUSE Leap 15.6 and Tumbleweed
-- Arch Linux
+| Distribution | Variants |
+|---|---|
+| Ubuntu 24.04 and 22.04 LTS | **Server**, and **Minimal**: smaller, fewer packages, no manuals |
+| Debian 13 and 12 | **Cloud**: a kernel slimmed for VMs; **Generic**: every driver, for passed-through hardware |
+| Fedora Cloud | the newest release |
+| Rocky Linux 10 and 9 | **Base**, and **LVM**: the disk under LVM |
+| AlmaLinux 10 and 9, CentOS Stream 10 and 9 | the standard cloud image |
+| openSUSE Leap 16.0, 15.6 and Tumbleweed | minimal cloud VM |
+| Arch Linux | cloud image |
+| Alpine Linux | cloud-init image: tiny, musl and OpenRC |
 
 Each comes from the publisher's own "latest" address, has cloud-init, and
 grows to fill its disk. The table shows which user to sign in as (`ubuntu`,
-`debian`, `fedora`...), with the root password set on **New VM**.
-**New VM** on a row opens the form with that image chosen.
+`debian`, `alpine`...), with the password set on **New VM**. **Filter** narrows
+the list, for example to "minimal". **New VM** on a row opens the form with
+that image chosen.
 
-On Harvester, **Keep** downloads an image as a Harvester image, so every VM
-copies a local image instead of downloading it again. A kept image with
+**Your images on this cluster** lists the VM images already here that did not
+come from the catalogue: uploads, other downloads, anything made in
+Harvester's dashboard. Each has **New VM**. An image downloaded from a
+catalogue address, even outside the store, shows on that catalogue row as
+**here**.
+
+On Harvester, **Keep** makes an image a local Harvester image. It uses one
+already downloaded from the same address, or downloads it. Every VM then
+copies the local image instead of downloading it again. A kept image with
 **current** ticked checks for a newer build twice a day, by asking the
 publisher (nothing is downloaded until there is one). A new build downloads
 beside the old; once it is ready, new VMs use it, and older builds that no
