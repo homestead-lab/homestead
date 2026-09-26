@@ -963,8 +963,12 @@ async function viewShares() {
   <div class="card" style="margin-bottom:14px"><div class="between"><div><div class="ctitle">SMB server · ${esc(smb.name || "homestead-smb")}</div>
     <div class="dim small">${smb.error ? `Status unavailable: ${esc(smb.error)}` : !smb.installed ? "Not installed · your first share can install it" :
       `${smb.enabled ? `${smb.ready || 0}/${smb.desired || 1} ready` : "Stopped"}${smb.address ? ` · \\\\${esc(smb.address)}` : " · waiting for an address"} · ${smb.served_shares?.length ?? 0}/${sh.length} share mappings${smb.in_sync ? "" : " · out of sync"}`}</div></div>
-    ${can("admin") && !smb.error ? `<div class="row">${smb.installed && !smb.in_sync ? '<button class="btn sm" onclick="repairSamba(this)">Repair mapping</button>' : ""}<button class="btn sm" onclick="settingsTab('cluster');go('settings')">Manage add-on</button></div>` : ""}</div>
-    <div class="dim xs" style="margin-top:9px">Homestead manages this container, its image and its volume mounts from the share list. Enable, stop or remove the server in Settings → Cluster → Add-ons; volumes are kept.</div></div>
+    ${can("admin") && !smb.error ? `<div class="row">${smb.installed && (!smb.in_sync || Object.keys(smb.recovery_failures || {}).length) ? '<button class="btn sm" onclick="repairSamba(this)">Repair / retry recovery</button>' : ""}<button class="btn sm" onclick="settingsTab('cluster');go('settings')">Manage add-on</button></div>` : ""}</div>
+    ${smb.partial ? `<div class="note warn"><b>Partial service · ${smb.offline_shares.length} share(s) offline</b><br>Unavailable storage is temporarily excluded so other shares can start. No volumes, credentials or share definitions were deleted.<ul>${smb.offline_shares.map(s => `<li><b>${esc(s.name)}</b> · ${esc(s.pvc)}: ${esc(s.reason)}</li>`).join("")}</ul>After storage is confirmed recoverable for two minutes, Homestead re-adds the shares. This restarts SMB and briefly interrupts connections.</div>` : ""}
+    ${smb.recovery_warning ? `<div class="note warn">${esc(smb.recovery_warning)}</div>` : ""}
+    ${Object.keys(smb.recovery_failures || {}).length ? `<div class="note bad">Automatic restore paused: ${Object.entries(smb.recovery_failures).map(([pvc, reason]) => `${esc(pvc)}: ${esc(reason)}`).join(" ")} The working subset was restored; use Repair / retry recovery after resolving the problem.</div>` : ""}
+    ${Object.keys(smb.recovery_pending || {}).length ? `<div class="note warn">Checking storage stability: ${Object.entries(smb.recovery_pending).map(([pvc, p]) => `${esc(pvc)} (${p.action === "restore" ? "waiting to restore" : "waiting to exclude unavailable storage"})`).join(", ")}.</div>` : ""}
+    <div class="dim xs" style="margin-top:9px">Homestead manages this container, its image and its volume mounts from the share list. Enable, stop or remove the server in Settings → Cluster → Add-ons; volumes are kept. Confirmed unavailable volumes are temporarily excluded after one minute; recovered volumes return after a two-minute stability check. Either change restarts SMB. Storage recovery and a working cluster control plane are still required.</div></div>
   <div class="card" style="margin-bottom:14px"><div class="between"><div><div class="ctitle">NFSv4 server · ${esc(nfs.name || "homestead-nfs")}</div>
     <div class="dim small">${nfs.error ? `Status unavailable: ${esc(nfs.error)}` : !nfs.installed ? "Not installed" :
       `${nfs.enabled ? `${nfs.ready || 0}/${nfs.desired || 1} ready` : "Stopped"}${nfs.address ? ` · ${esc(nfs.address)}:/<share>` : " · waiting for an address"}`} · ${(nfs.exports || []).length} configured exports</div></div>
@@ -973,7 +977,7 @@ async function viewShares() {
   <div class="card flat pad0"><div class="tblwrap sharetable"><table data-sort="shares" class="tbl">
     <thead><tr><th>Share</th><th>Storage</th><th>Size</th><th>Access</th><th>UNC path</th><th></th></tr></thead><tbody>
     ${sh.map(s => `<tr><td class="shareidentity"><div class="row" style="gap:9px"><div class="av n2">${esc(s.name.slice(0, 2).toUpperCase())}</div>
-      <div><b>${esc(s.name)}</b><div class="dim xs">${esc(s.created || "")}</div></div></div></td>
+      <div><b>${esc(s.name)}</b>${(smb.offline_shares || []).some(row => row.name === s.name) ? ' <span class="pill crit">SMB offline · storage unavailable</span>' : ""}<div class="dim xs">${esc(s.created || "")}</div></div></div></td>
       <td class="small mono" data-label="Storage"><span class="sharevol">${esc(s.pvc || "—")}${s.sub_path ? `<span class="dim">/${esc(s.sub_path)}</span>` : ""}</span>
         ${s.owned === false ? '<span class="tag">shared volume</span>' : ""}</td>
       <td class="mono" data-label="Size">${s.size_gb ? s.size_gb + " GB" : "—"}</td>

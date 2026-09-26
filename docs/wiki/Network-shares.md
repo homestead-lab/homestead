@@ -61,6 +61,44 @@ saved settings are restored so a failed share cannot reappear on the next edit.
 The **Repair mapping** button reapplies the saved shares, and Homestead also
 checks for drift in the background.
 
+### Partial SMB service after a storage or node failure
+
+One SMB pod normally mounts every configured share. If a host holding the only
+usable replica goes offline, that mount can prevent *all* shares from starting.
+The leader's reconciliation loop now checks actual Longhorn data replicas and
+node readiness, not just the desired replica count. After an unavailable volume
+is observed consistently for at least one minute, its mounts **and SMB exports**
+are temporarily omitted. The other shares can then start on a surviving host.
+
+Network Shares lists each offline share and its reason; Add-ons shows partial
+service rather than healthy full service. Definitions, credentials, PVCs, files,
+the Service and VIP are kept. No empty directory or replacement volume is served
+in place of missing data. Multiple shares on one unavailable claim are all omitted.
+The exclusions are stored on the Deployment, separately from saved share settings,
+so restarting Homestead, editing another share or repairing mappings cannot silently
+re-add missing storage.
+
+When Longhorn reports recoverable storage on a Ready node for at least two minutes,
+the shares are re-added automatically. Removing or re-adding mounts **restarts SMB
+and briefly interrupts all client connections**. If restoring a share fails the
+rollout check while SMB was serving, the working subset is restored and automatic
+retries stop. Resolve the storage/mount problem, then use **Repair / retry recovery**.
+This starts a new stability check instead of bypassing it. Polling is normally once
+a minute, so these are minimum stability windows, not outage-time guarantees.
+
+Unknown health, API errors, new/rebuilding replicas, and non-Longhorn storage do
+not trigger automatic exclusions or restoration. Detached/stopped replicas are
+not assumed lost. A missing PVC or a faulted Longhorn volume is explicitly unavailable.
+Homestead never force-deletes pods, detaches storage, salvages replicas, changes
+replica counts, or recreates a missing claim as part of this recovery.
+
+This requires a functioning control plane, a running Homestead leader, schedulable
+replacement capacity, and storage that can safely attach. Kubernetes/Longhorn
+may still wait for failed-node fencing or attachment cleanup. It does not make a
+single-copy volume available while its only data host is down, resolve conflicting
+RWO attachments, or provide seamless SMB session failover. This partial-service
+policy currently applies to SMB, not the separate NFS gateway.
+
 ## Optional NFSv4 server
 
 NFS is a **separate container** (`homestead-nfs`), not a service inside Samba.

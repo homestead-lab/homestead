@@ -7,6 +7,7 @@ without losing access the next time a share is changed.
 """
 import base64
 import homestead_names as NAMES
+import homestead_smb_recovery as RECOVERY
 import copy
 import hashlib
 import json
@@ -474,9 +475,16 @@ def configured_deployment(deployment, rows, credentials):
     """Build the whole dedicated SMB pod from the authoritative share list."""
     users = _validate_access(rows, credentials)
     deployment = copy.deepcopy(deployment)
+    suspended = RECOVERY.read(deployment).get("suspended", {})
     spec = deployment["spec"]["template"]["spec"]
+    deployment["spec"]["strategy"] = {"type": "Recreate"}
     container = next((row for row in spec["containers"] if row.get("name") in (SAMBA_NAME, LEGACY_NAME)),
                      spec["containers"][0])
+    # Include API-defaulted nonzero values so reconciliation is idempotent.
+    container["startupProbe"] = {"tcpSocket": {"port": 445}, "periodSeconds": 5, "timeoutSeconds": 1,
+                                 "successThreshold": 1, "failureThreshold": 60}
+    container["readinessProbe"] = {"tcpSocket": {"port": 445}, "periodSeconds": 5, "timeoutSeconds": 2,
+                                   "successThreshold": 1, "failureThreshold": 2}
     # This is a dedicated Homestead workload. Every mount and share argument
     # comes from the share inventory; a hand-edited mount must not survive or
     # collide with the one Homestead generates for the same path.
@@ -484,7 +492,7 @@ def configured_deployment(deployment, rows, credentials):
     args = ["-p"]
     attached, paths = {}, set()
     for row in sorted(rows, key=lambda item: item["name"]):
-        if not row.get("pvc"):
+        if not row.get("pvc") or row["pvc"] in suspended:
             continue
         path = row.get("path") or f"/shares/{row['name']}"
         if path in paths:
@@ -535,7 +543,7 @@ def apply_samba(rows, credentials, deployment=None):
 
 
 @serialized
-def reconcile_samba(image=""):
+def reconcile_samba(image="", retry_recovery=False):
     """Repair drift without restarting a pod whose share spec already matches."""
     rows, credentials, config_obj, secret_obj, deployment = _state()
     if not deployment or deployment["metadata"]["name"] != SAMBA_NAME:
@@ -543,22 +551,42 @@ def reconcile_samba(image=""):
     if config_obj is None:
         _save_config(rows)
         _save_credentials(credentials, secret_obj)
-    desired = configured_deployment(deployment, rows, credentials)
+    previous_recovery = RECOVERY.read(deployment)
+    if retry_recovery:
+        previous_recovery = {**previous_recovery, "restore_failures": {}, "pending": {}}
+    observed, warning = RECOVERY.observe(rows, kget, NAMESPACE)
+    recovery = RECOVERY.plan(previous_recovery, rows, observed, warning, time.time())
+    planned = copy.deepcopy(deployment)
+    RECOVERY.write(planned, recovery)
+    desired = configured_deployment(planned, rows, credentials)
     actual_spec = deployment["spec"]["template"]["spec"]
     desired_spec = desired["spec"]["template"]["spec"]
     actual_container = actual_spec["containers"][0]
     desired_container = desired_spec["containers"][0]
     if image:
         desired_container["image"] = image
-    fields = ("args", "volumeMounts", "image")
+    fields = ("args", "volumeMounts", "image", "startupProbe", "readinessProbe")
     changed = any(actual_container.get(field) != desired_container.get(field) for field in fields)
     changed |= actual_spec.get("volumes", []) != desired_spec.get("volumes", [])
+    changed |= deployment["spec"].get("strategy") != desired["spec"].get("strategy")
     if not changed:
+        if RECOVERY.read(deployment) != recovery:
+            # Top-level annotation only: observations must not restart SMB.
+            ksend("PUT", f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/{SAMBA_NAME}", desired)
         return {"state": "current", "shares": len(rows)}
     desired["spec"]["template"].setdefault("metadata", {}).setdefault(
         "annotations", {})[NAMES.key("share-update-at")] = time.strftime(
             "%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     previous, was_serving = copy.deepcopy(deployment), _samba_ready()
+    restored = set(previous_recovery.get("suspended", {})) - set(recovery["suspended"])
+    if restored:
+        # If a seemingly recovered mount still cannot start, roll back to the
+        # working subset and stop retrying it every minute (disconnect storm).
+        rollback = copy.deepcopy(previous_recovery)
+        for claim in restored:
+            rollback.setdefault("pending", {}).pop(claim, None)
+            rollback.setdefault("restore_failures", {})[claim] = "The recovered volume could not start SMB. Check its mounts, then retry recovery."
+        RECOVERY.write(previous, rollback)
     ksend("PUT", f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/{SAMBA_NAME}", desired)
     _guard_rollout(previous, was_serving, SAMBA_NAME)
     return {"state": "repaired", "shares": len(rows)}

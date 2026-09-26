@@ -124,7 +124,8 @@ window.addonsPaint = async () => {
     <div class="row">${probeButton}</div></div>`;
   const smbPill = !smb.installed ? '<span class="pill">not installed</span>'
     : !smb.enabled ? '<span class="pill med">off</span>'
-    : smb.ready < smb.desired ? '<span class="pill med">starting</span>' : '<span class="pill ok">serving</span>';
+    : smb.ready < smb.desired ? '<span class="pill med">starting</span>'
+    : smb.partial ? '<span class="pill med">partial service</span>' : '<span class="pill ok">serving</span>';
   const smbRow = `<div class="addon-row"><div><b>SMB network shares</b> ${smbPill}
       <div class="dim small">Windows, macOS and Linux file shares from the saved Network Shares inventory</div>
       <div class="dim xs" style="margin-top:4px">${smb.shares || 0} configured · ${smb.address ? esc(smb.address) : "address not assigned"} · stopping or removing SMB keeps all PVCs and share settings</div></div>

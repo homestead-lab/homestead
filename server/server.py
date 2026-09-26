@@ -23,7 +23,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.158")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.159")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -4278,7 +4278,14 @@ def samba_state():
     args = container.get("args") or []
     served = {arg.split(";", 1)[0] for index, flag in enumerate(args[:-1]) if flag == "-s"
               for arg in [args[index + 1]] if ";" in arg and arg.split(";", 2)[1] in paths}
-    in_sync = served == configured and not config_error and name == SMB_NAME
+    try:
+        recovery = SHARES.RECOVERY.read(dep)
+        offline = SHARES.RECOVERY.offline_shares(dep, rows)
+    except Exception as error:
+        recovery, offline = {}, []
+        config_error = str(error)[:160]
+    expected_names = configured - {item["name"] for item in offline}
+    in_sync = served == expected_names and not config_error and name == SMB_NAME
     if in_sync:
         try:
             expected = SHARES.configured_deployment(dep, rows, credentials)
@@ -4296,6 +4303,9 @@ def samba_state():
     return {"installed": True, "enabled": desired > 0, "desired": desired, "name": name,
             "ready": int(status.get("readyReplicas", 0) or 0), "address": address,
             "shares": len(configured), "served_shares": sorted(served), "in_sync": in_sync,
+            "offline_shares": offline, "partial": bool(offline),
+            "recovery_pending": recovery.get("pending", {}), "recovery_warning": recovery.get("warning", ""),
+            "recovery_failures": recovery.get("restore_failures", {}),
             "image": container.get("image", ""), **({"error": config_error} if config_error else {})}
 
 
@@ -4347,9 +4357,9 @@ def repair_samba(address=""):
     """Apply the saved inventory now, with the same rollout guard as edits."""
     with SHARES.LOCK:
         install_samba(address)
-        result = SHARES.reconcile_samba(SAMBA_IMAGE)
+        result = SHARES.reconcile_samba(SAMBA_IMAGE, retry_recovery=True)
     _cache.pop("wl", None)
-    return {"ok": True, "detail": "SMB settings match the saved shares" if result["state"] == "current"
+    return {"ok": True, "detail": "SMB mappings checked; recovered storage must pass the stability check before shares return" if result["state"] == "current"
             else "SMB is being repaired from the saved shares", "server": samba_state()}
 
 
@@ -6592,7 +6602,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.158 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.159 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()
