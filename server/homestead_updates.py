@@ -653,6 +653,40 @@ STUCK_REASONS = {"FailedAttachVolume", "FailedMount", "FailedScheduling"}
 STUCK_AFTER = 180
 
 
+# What a failed pull's last words mean. containerd nests its errors - "failed
+# to pull and unpack image ...: failed to resolve reference ...: failed to do
+# request: Head ...: <the cause>" - and the cause is the part that was cut
+# off when only the start was kept.
+PULL_CAUSES = (
+    ("toomanyrequests", "Docker Hub's pull limit for this address is used up; it resets within a few hours"),
+    ("pull access denied", "the registry refused it: the image does not exist under that name, or is private and needs credentials"),
+    ("not found", "the registry has no such image or tag"),
+    ("unauthorized", "the registry wants credentials for it"),
+    ("no such host", "the node cannot look up the registry's name: its DNS is not answering for it"),
+    ("server misbehaving", "the node cannot look up the registry's name: its DNS server is failing"),
+    ("lookup ", "the node cannot look up the registry's name (DNS)"),
+    ("network is unreachable", "the node has no route to the registry - often an IPv6 address with no IPv6 route"),
+    ("no route to host", "the node has no route to the registry"),
+    ("connection refused", "the registry refused the connection - a proxy or firewall in the way"),
+    ("i/o timeout", "the node could not reach the registry in time - no internet from the node, or a firewall"),
+    ("TLS handshake timeout", "the node could not reach the registry in time - no internet from the node, or a firewall"),
+    ("context deadline exceeded", "the registry did not answer in time"),
+    ("x509", "the registry's certificate is not trusted - a proxy intercepting HTTPS"),
+    ("no space left", "the node's disk is full, so the image cannot be unpacked"),
+)
+
+
+def explain_pull(message):
+    """A pull failure in a sentence, cause first; empty when it is not one."""
+    text = " ".join(str(message or "").split())
+    if not text or not any(word in text for word in ("pull", "image", "registry", "reference")):
+        return ""
+    for needle, meaning in PULL_CAUSES:
+        if needle.lower() in text.lower():
+            return meaning
+    return ""
+
+
 def explain_unplaced(message, own_service_ports=()):
     """What the scheduler's refusal means, and what to do about it. The
     message counts nodes by reason ("0/1 nodes are available: 1 node(s)
@@ -740,10 +774,11 @@ def progress(ns, name, dep=None):
         for cs in pod.get("status", {}).get("containerStatuses", []) or []:
             waiting = (cs.get("state", {}).get("waiting") or {})
             if waiting:
+                why = explain_pull(waiting.get("message"))
                 waits.append({"container": cs.get("name", ""), "reason": waiting.get("reason", "Waiting"),
-                              "message": waiting.get("message", "")[:220]})
+                              "message": (why or waiting.get("message", ""))[:400]})
                 if waiting.get("reason") in fatal:
-                    problems.append(f"{pod['metadata']['name']}: {waiting.get('reason')}")
+                    problems.append(f"{pod['metadata']['name']}: {waiting.get('reason')}" + (f" - {why}" if why else ""))
         row = {"name": pod["metadata"]["name"], "phase": pod.get("status", {}).get("phase", ""),
                "node": pod.get("spec", {}).get("nodeName", ""), "waiting": waits}
         running = all(cs.get("ready") for cs in

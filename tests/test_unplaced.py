@@ -17,6 +17,20 @@ class ExplainTests(unittest.TestCase):
         self.assertIn("pinned", UPDATES.explain_unplaced("0/2 nodes are available: 2 node(s) didn't match Pod's node affinity/selector."))
 
 
+class PullTests(unittest.TestCase):
+    """openspeedtest's pull error was cut at its start, before the cause."""
+    HEAD = ('failed to pull and unpack image "docker.io/openspeedtest/latest:latest": failed to resolve reference '
+            '"docker.io/openspeedtest/latest:latest": failed to do request: Head '
+            '"https://registry-1.docker.io/v2/openspeedtest/latest/manifests/latest": ')
+
+    def test_the_cause_comes_first(self):
+        self.assertIn("DNS", UPDATES.explain_pull(self.HEAD + "dial tcp: lookup registry-1.docker.io on 10.43.0.10:53: server misbehaving"))
+        self.assertIn("IPv6", UPDATES.explain_pull(self.HEAD + "dial tcp [2600:1f18::1]:443: connect: network is unreachable"))
+        self.assertIn("pull limit", UPDATES.explain_pull("toomanyrequests: You have reached your pull rate limit"))
+        self.assertIn("in time", UPDATES.explain_pull(self.HEAD + "dial tcp 54.1.2.3:443: i/o timeout"))
+        self.assertEqual("", UPDATES.explain_pull("Back-off restarting failed container"))
+
+
 class PlexOnK3sTests(unittest.TestCase):
     """Plex, moved to k3s on the host network, kept its LoadBalancer Service:
     ServiceLB held 32400 on the node for it, so Plex itself never fitted."""
