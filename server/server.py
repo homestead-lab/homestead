@@ -25,7 +25,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.164")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.165")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -6064,39 +6064,15 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/appstore/install":
                 cfg = template_to_cfg(b["app"])
                 cfg.update(b.get("overrides") or {})
-                cfg = analyze_deploy_intent(cfg)
-                guard_managed_smb(cfg.get("namespace") or DEFAULT_NS,
-                                  cfg.get("workload_name") or cfg.get("name"))
-                cfg = ensure_profile_compatible(cfg)
-                persist_icon_config(cfg)
-                cfg = NETWORK.prepare_deploy(cfg)
-                cfg = apply_deploy_bindings(cfg)
-                cfg = apply_generated_secrets(cfg)
-                cfg = prepare_lan(cfg)
-                cfg = VOLOWNER.prepare(cfg)
-                dep, svc = build_deployment(cfg)
-                ns = dep["metadata"]["namespace"]
-                if cfg.get("network_mode") == "lan":
-                    LAN.ensure_nad(ns, dep["metadata"]["name"], cfg["lan"])
-                reused = []
-                for volume in cfg.get("volumes") or []:
-                    if volume.get("type") == "pvc" and volume.get("create"):
-                        if ensure_claim(ns, _dns_name(volume.get("source"), "volume name"),
-                                        volume.get("size_gb", 5),
-                                        volume.get("storage_class") or STORAGE_CLASS,
-                                        volume.get("access_mode") or "ReadWriteOnce"):
-                            reused.append(volume.get("source"))
-                ksend("POST", f"/apis/apps/v1/namespaces/{ns}/deployments", dep)
-                if svc:
-                    ksend("POST", f"/api/v1/namespaces/{ns}/services", svc)
-                _cache.pop("wl", None)
-                op = OPS.start("deployment", f"Install {cfg['name']}",
-                               {"kind": "Deployment", "name": cfg["name"], "namespace": ns},
-                               "/containers", {"namespace": ns, "name": cfg["name"], "undo": "delete"})
-                return self._send(200, {"ok": True, "name": cfg["name"], "operation": op, "reused_volumes": reused,
-                                        **({"detail": f"kept the existing {', '.join(reused)} - nothing was using "
-                                                      f"{'it' if len(reused) == 1 else 'them'}, so its data carries on"}
-                                           if reused else {})})
+                # Older API clients must use the same review as the current UI.
+                # The token is issued by /api/preview for the resolved template
+                # plus overrides, not for the catalogue identifier alone.
+                cfg.update(capacity_token=b.get("capacity_token"), confirm_capacity=b.get("confirm_capacity") is True)
+                result = reviewed_deploy(cfg)
+                reused = result.get("reused_volumes") or []
+                if reused:
+                    result["detail"] = f"kept the existing {', '.join(reused)} - its data carries on"
+                return self._send(200, result)
             if p == "/api/edit":
                 guard_managed_smb(b.get("ns", ""), b.get("name", ""))
                 persist_icon_config(b)
@@ -6680,7 +6656,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.164 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.165 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

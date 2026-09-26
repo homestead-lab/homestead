@@ -207,6 +207,46 @@ class DeployCapacityTests(unittest.TestCase):
             self.assertTrue(server.reviewed_deploy(cfg)["ok"])
         deploy.assert_called_once()
 
+    def legacy_install(self, body):
+        handler = object.__new__(server.H)
+        handler.path, handler.headers = "/api/appstore/install", {}
+        handler._guard = lambda path: False
+        handler._body = lambda: {"app": "example-template", **body}
+        handler._client_ip = lambda: "127.0.0.1"
+        handler._send = mock.Mock()
+        with mock.patch.object(server, "template_to_cfg", return_value=copy.deepcopy(self.cfg)), \
+                mock.patch.object(server, "run_deploy", return_value={"ok": True, "name": "demo", "reused_volumes": ["data"]}) as deploy:
+            handler.do_POST()
+        self.send.assert_not_called()
+        return handler._send.call_args.args, deploy
+
+    def test_legacy_appstore_install_cannot_bypass_capacity_block(self):
+        result, deploy = self.legacy_install({"overrides": {"memory": "9Gi", "memory_limit": "10Gi"}, "confirm_capacity": True})
+        self.assertEqual(409, result[0])
+        deploy.assert_not_called()
+
+    def test_legacy_appstore_install_needs_token_for_warnings(self):
+        self.nodes[0]["mem_metrics_available"] = False
+        result, deploy = self.legacy_install({"confirm_capacity": True})
+        self.assertEqual(409, result[0])
+        deploy.assert_not_called()
+
+    def test_legacy_appstore_accepts_reviewed_resolved_template(self):
+        self.nodes[0]["mem_metrics_available"] = False
+        token = review.issue(server.analyze_deploy_intent(self.cfg))
+        result, deploy = self.legacy_install({"confirm_capacity": True, "capacity_token": token})
+        self.assertEqual(200, result[0])
+        self.assertEqual(["data"], result[1]["reused_volumes"])
+        deploy.assert_called_once()
+
+    def test_legacy_appstore_changed_override_invalidates_review(self):
+        self.nodes[0]["mem_metrics_available"] = False
+        token = review.issue(server.analyze_deploy_intent(self.cfg))
+        result, deploy = self.legacy_install({"confirm_capacity": True, "capacity_token": token,
+                                               "overrides": {"image": "different:2"}})
+        self.assertEqual(409, result[0])
+        deploy.assert_not_called()
+
 
 class ReviewTokenTests(unittest.TestCase):
     def setUp(self):

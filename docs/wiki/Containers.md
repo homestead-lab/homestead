@@ -92,6 +92,10 @@ green safety result. The API recalculates immediately before scaling. This is
 a snapshot, **not a capacity reservation or OOM guarantee**. It does not yet
 fully simulate dynamic resource allocation or concurrent admissions.
 New workloads from **Deploy and App Store** use the same planner (see below).
+The legacy `/api/appstore/install` endpoint also uses this guard. API clients
+review the resolved template plus overrides via `/api/preview` and, when warnings
+require acknowledgement, pass its `capacity_token` and `confirm_capacity: true`
+with installation. Catalogue/override changes require a new review.
 Editing shared pods, Compose batches, Unraid migration, moves, image updates
 and VM launches remain separate paths; expanding this guard to those is planned.
 
