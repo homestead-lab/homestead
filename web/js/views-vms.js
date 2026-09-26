@@ -47,44 +47,69 @@ async function viewVMs() {
    Harvester image and can keep itself current; elsewhere a VM always starts
    from the publisher's newest build. */
 window.vmStore = async (check = false) => {
-  if (!$("#mbody") || $("#modal").classList.contains("hidden")) modal("Image store", '<div class="empty"><span class="spin2"></span>reading the catalogue</div>', true);
+  if (!$("#mbody") || $("#modal").classList.contains("hidden")) modal("Image store", '<div class="empty"><span class="spin2"></span>asking the publishers</div>', true);
   let s;
   try { s = await api("/api/vm/store" + (check ? "?check=1" : "")); } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   STATE.data.vmStore = s;
+  const mb = bytes => bytes ? (bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`) : "—";
+  const day = t => t ? new Date(t * 1000).toLocaleDateString() : "";
   const state = r => {
     if (!s.harvester) return "";
-    if (!r.kept) return '<span class="pill slim">not kept</span>';
+    if (!r.kept) return '<span class="dim xs">not here</span>';
     const v = r.versions[r.versions.length - 1];
     if (!v) return '<span class="pill slim med">starting</span>';
     if (v.failed) return '<span class="pill slim crit">download failed</span>';
     if (!v.ready) return `<span class="pill slim med">downloading ${Math.round(v.progress || 0)}%</span>`;
-    return `<span class="pill slim ok" data-tip="${esc(v.image)}">kept · ${esc(new Date((v.added || 0) * 1000).toLocaleDateString())}</span>`
+    return `<span class="pill slim ok" data-tip="${esc(v.display || v.image)}">here · ${esc(day(v.added))}</span>`
+      + (r.versions.length > 1 ? ` <span class="dim xs" data-tip="Older builds stay while a disk was made from them">+${r.versions.length - 1} older</span>` : "")
       + (r.update ? ' <span class="pill slim warn" data-tip="The publisher has a newer build; it downloads on the next check if this keeps itself current">newer build out</span>' : "");
   };
-  const actions = r => `<div class="row" style="gap:6px;justify-content:flex-end">
+  const actions = r => `<div class="row nowrap" style="gap:6px;justify-content:flex-end">
       ${s.harvester && !r.kept ? `<button class="btn sm" data-need="admin" onclick="vmStoreKeep('${esc(r.id)}')" data-tip="Download it now as a Harvester image, so VMs start from a local copy">Keep</button>` : ""}
-      ${s.harvester && r.kept ? `<label class="switch xs" data-tip="Download each new build twice a day, and let go of older builds no disk came from"><input type="checkbox" ${r.auto ? "checked" : ""} data-need="admin" onchange="vmStoreAuto('${esc(r.id)}', this.checked)"> current</label>` : ""}
-      <button class="btn sm pri" data-need="operator" onclick="vmStoreNew('${esc(r.id)}')">New VM</button>
+      ${s.harvester && r.kept ? `<label class="switch xs" data-tip="Check twice a day for a newer build, download it, and let go of older builds no disk came from"><input type="checkbox" ${r.auto ? "checked" : ""} data-need="admin" onchange="vmStoreAuto('${esc(r.id)}', this.checked)"> current</label>` : ""}
+      <button class="btn sm pri" data-need="operator" onclick="vmStoreNew('store:${esc(r.id)}')">New VM</button>
       ${s.harvester && r.kept ? `<button class="btn sm danger" data-need="admin" title="Stop keeping it; builds a disk came from stay" onclick="vmStoreForget('${esc(r.id)}')">${icon("trash")}</button>` : ""}</div>`;
   const rows = s.images.filter(r => r.available);
+  const distros = [...new Set(rows.map(r => r.distro))];
+  const filter = (STATE.vmStoreFilter || "").toLowerCase();
+  const shown = rows.filter(r => !filter || `${r.distro} ${r.name} ${r.variant} ${r.about}`.toLowerCase().includes(filter));
   $("#mbody").innerHTML = `
     <p class="small" style="margin-top:0">Cloud images from their publishers, for this cluster's <b>${esc(s.arch)}</b> nodes. Each has cloud-init:
-      the VM's password is set for its usual user (shown below), and it grows to fill its disk.</p>
+      the VM's password is set for the user shown, and the image grows to fill its disk.</p>
     ${s.harvester ? `<div class="note">Kept images are Harvester images - downloaded once, copied for each VM. One that keeps itself <b>current</b> is
       checked twice a day; a new build downloads beside the old, and older builds no disk came from are deleted.</div>` : `<div class="note">${esc(s.note)}</div>`}
-    <div class="card flat pad0" style="margin-top:12px"><div class="tblwrap"><table class="tbl stack dense"><thead><tr>
-      <th>Image</th><th>Sign in as</th>${s.harvester ? "<th>Here</th>" : ""}<th></th></tr></thead><tbody>
-      ${rows.map(r => `<tr><td><b>${esc(r.name)}</b><div class="dim xs">${esc(r.publisher)}${r.error ? ` · <span class="badtext">${esc(r.error)}</span>` : ""}</div></td>
-        <td class="mono small" data-label="Sign in as">${esc(r.user)}</td>
-        ${s.harvester ? `<td data-label="Here">${state(r)}</td>` : ""}<td>${actions(r)}</td></tr>`).join("")}</tbody></table></div></div>
+    ${(s.own || []).length ? `<div class="sec">Your images on this cluster</div>
+      <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Image</th><th>From</th><th>Size</th><th></th></tr></thead><tbody>
+      ${s.own.map(o => `<tr><td><b>${esc(o.display)}</b><div class="dim xs mono">${esc(o.image)}</div></td>
+        <td class="small" data-label="From">${esc(o.from)}${o.created ? `<div class="dim xs">${esc(day(o.created))}</div>` : ""}</td>
+        <td class="mono small" data-label="Size">${o.ready ? `${o.size_gb} GB` : o.failed ? '<span class="pill slim crit">failed</span>' : `<span class="pill slim med">${Math.round(o.progress || 0)}%</span>`}</td>
+        <td><div class="row nowrap" style="gap:6px;justify-content:flex-end">${o.ready ? `<button class="btn sm pri" data-need="operator" onclick="vmStoreNew('image:${esc(o.image)}')">New VM</button>` : ""}
+          <button class="btn sm" onclick="closeModal();go('images')" title="Sizes, copies and deleting are on the Image cache page">Image cache</button></div></td></tr>`).join("")}
+      </tbody></table></div></div>` : ""}
+    <div class="between" style="margin-top:14px;gap:10px;flex-wrap:wrap"><div class="sec" style="margin:0">From their publishers</div>
+      <input id="vmStoreFilter" type="search" placeholder="Filter: minimal, debian, lvm..." value="${esc(STATE.vmStoreFilter || "")}"
+        oninput="STATE.vmStoreFilter=this.value; clearTimeout(window.__vsf); window.__vsf=setTimeout(() => vmStore(), 250)" style="max-width:260px"></div>
+    <div class="card flat pad0" style="margin-top:8px"><div class="tblwrap"><table class="tbl stack dense vmstore"><thead><tr>
+      <th>Image</th><th>Variant</th><th>Download</th><th>Sign in as</th>${s.harvester ? "<th>Here</th>" : ""}<th></th></tr></thead>
+      ${distros.map(d => {
+        const group = shown.filter(r => r.distro === d);
+        return group.length ? `<tbody><tr class="vmstore-distro"><td colspan="${s.harvester ? 6 : 5}">${esc(d)}</td></tr>
+          ${group.map(r => `<tr><td><b>${esc(r.name)}</b>${r.error ? `<div class="dim xs badtext">${esc(r.error)}</div>` : ""}</td>
+            <td data-label="Variant"><span class="tag" data-tip="${esc(r.about)}">${esc(r.variant)}</span></td>
+            <td class="mono small" data-label="Download">${mb(r.size)}</td>
+            <td class="mono small" data-label="Sign in as">${esc(r.user)}</td>
+            ${s.harvester ? `<td data-label="Here">${state(r)}</td>` : ""}<td>${actions(r)}</td></tr>`).join("")}</tbody>` : "";
+      }).join("") || `<tbody><tr><td colspan="6" class="empty">Nothing matches that filter.</td></tr></tbody>`}</table></div></div>
     <div class="row between" style="margin-top:12px;flex-wrap:wrap;gap:8px">
       <span class="dim xs">Your own disk image - qcow2, vmdk, raw, vdi, vhd or vhdx, from a web address - is imported under <a class="linkish" onclick="closeModal();go('import')">Import</a>.</span>
       ${s.harvester ? `<button class="btn sm" data-need="admin" onclick="vmStoreRefresh()">${icon("refresh")}Check for newer builds</button>` : ""}</div>`;
   if (window.applyRole) applyRole();
+  const box = $("#vmStoreFilter");
+  if (box && filter) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
   // Downloads under way: follow them.
-  if (s.images.some(r => r.kept && r.versions.some(v => !v.ready && !v.failed))) {
+  if ([...s.images.flatMap(r => r.versions), ...(s.own || [])].some(v => !v.ready && !v.failed)) {
     clearTimeout(window.__vmStoreTimer);
-    window.__vmStoreTimer = setTimeout(() => { if (STATE.data.vmStore && $("#mtitle")?.textContent === "Image store") vmStore(); }, 5000);
+    window.__vmStoreTimer = setTimeout(() => { if ($("#mtitle")?.textContent === "Image store") vmStore(); }, 5000);
   }
 };
 const vmStorePost = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -109,8 +134,8 @@ window.vmStoreRefresh = async () => {
     vmStore(true);
   } catch (e) { toast(e.message, "bad"); }
 };
-window.vmStoreNew = id => {
-  window.__vmPreset = `store:${id}`;
+window.vmStoreNew = value => {
+  window.__vmPreset = value;
   closeModal();
   vmNew();
 };

@@ -28,7 +28,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.175")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.176")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -4081,6 +4081,7 @@ PORTAL.bind(kget, ksend, DEFAULT_NS, lambda: cached("wl", 5, get_workloads),
 OPS.RESOLVERS["restructure"] = RESTRUCTURE.resolve
 import homestead_reclass as RECLASS
 import homestead_vmstore as VMSTORE
+import homestead_nodeshell as NODESHELL
 import homestead_hvimage as HVIMAGE
 import homestead_revert as REVERT
 OPS.RESOLVERS["reclass"] = RECLASS.resolve
@@ -4151,6 +4152,7 @@ VMS.platform, VMS.images = PLATFORM.detect, IMP.list_vm_images
 LHCAP.bind(kget, ksend, v2_engine_status)
 RECLASS.bind(kget, ksend, raw_get, storage_classes, LHCAP.status, _own_namespace())
 REVERT.bind(kget, ksend, RECLASS, is_self)
+NODESHELL.bind(kget, ksend, DEFAULT_NS)
 
 
 def _vm_image_disks():
@@ -5369,6 +5371,9 @@ def needed_role(path, method):
                 "/api/disks/retire", "/api/disks/retire/plan",
                 "/api/resources/delete", "/api/resources/create", "/api/resources/reveal"):
         return "admin"
+    # A shell on a node is root on that host.
+    if path in ("/api/node/shell", "/api/node/shell/prepare"):
+        return "admin"
     if path in ("/api/console", "/api/vm/console"):
         return "operator"
     if path in ADMIN_ROUTES:
@@ -5557,6 +5562,21 @@ class H(BaseHTTPRequestHandler):
                 return
             if p == "/api/console":
                 return CONSOLE_PROXY.handle(self, self.user, q)
+            if p == "/api/node/shell":
+                node = (q.get("node") or [""])[0]
+                target = NODESHELL.open_shell(node)
+                ended = {"done": False}
+
+                def close_shell():
+                    ended["done"] = True
+                    NODESHELL.session_ended(node)
+                NODESHELL.session_started(node)
+                try:
+                    return CONSOLE_PROXY.handle(self, self.user, q, node=target, on_close=close_shell)
+                finally:
+                    # Refused before it began (origin, upgrade): no session to count.
+                    if not ended["done"]:
+                        NODESHELL.session_ended(node)
             if p == "/api/vm/console":
                 return VM_CONSOLE.handle(self, self.user, q)
             if p.startswith("/api/icons/"):
@@ -6571,6 +6591,11 @@ class H(BaseHTTPRequestHandler):
                     b["image_id"], b["image_url"] = source.get("image_id", ""), source.get("image_url", "")
                     b["disk_gb"] = max(int(b.get("disk_gb") or 0), source["min_gb"])
                 return self._send(200, create_vm_with_address(b))
+            if p == "/api/node/shell/prepare":
+                # Starts the node's helper and says plainly if it cannot,
+                # before the terminal connects - a refused WebSocket says nothing.
+                target = NODESHELL.open_shell(str(b.get("node") or ""))
+                return self._send(200, {"ok": True, "node": target["node"]})
             if p == "/api/vm/store/keep":
                 _cache.pop("vmimages", None)
                 return self._send(200, VMSTORE.keep(str(b.get("id") or ""), b.get("auto", True) is not False))
