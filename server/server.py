@@ -28,7 +28,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.178")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.179")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -5832,6 +5832,8 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/lh/snapshots":
                 vol = (q.get("volume") or [None])[0]
                 return self._send(200, LH.snapshots(vol))
+            if p == "/api/lh/snapshot-progress":
+                return self._send(200, SNAPSHOT_DELETE.progress((q.get("volume") or [""])[0]))
             if p == "/api/lh/backups":
                 vol = (q.get("volume") or [None])[0]
                 return self._send(200, LH.backups(vol))

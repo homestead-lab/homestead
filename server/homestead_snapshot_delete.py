@@ -42,6 +42,28 @@ def source(snapshot):
     return "scheduled" if any("recurring-job" in key for key in labels) else "user"
 
 
+def progress(volume):
+    """Read-only, volume-wide Longhorn purge status, including externally initiated cleanup."""
+    volume = identity(volume)
+    listing = kget(f"{API}/engines")
+    if not isinstance(listing.get("items"), list) or listing.get("metadata", {}).get("continue"):
+        raise ValueError("engine inventory incomplete")
+    engines = [e for e in listing["items"] if (e.get("spec") or {}).get("volumeName") == volume]
+    replicas = []
+    for engine in engines:
+        for name, row in ((engine.get("status") or {}).get("purgeStatus") or {}).items():
+            try:
+                pct = max(0, min(100, int(row["progress"])))
+            except (ValueError, TypeError, KeyError):
+                pct = None
+            replicas.append({"replica": name, "active": bool(row.get("isPurging")),
+                             "percent": pct, "error": str(row.get("error") or "")})
+    active = [r for r in replicas if r["active"]]
+    return {"volume": volume, "known": bool(engines), "active": bool(active),
+            "percent": min(r["percent"] for r in active) if active and all(r["percent"] is not None for r in active) else None,
+            "replicas": replicas, "errors": [r["error"] for r in replicas if r["error"]]}
+
+
 def plan(volume, name):
     volume, name = identity(volume), identity(name)
     if name == "volume-head":

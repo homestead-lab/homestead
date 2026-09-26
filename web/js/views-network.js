@@ -114,37 +114,88 @@ window.networkServiceDelete = async (namespace, name) => {
 
 function networkModalPort(port = {}, first = false) {
   return `<div class="f4 net-port"><div><label>LAN port</label><input class="np-port" type="number" min="1" max="65535" value="${esc(port.port || port.container || "")}"></div>
-    <div><label>Container port</label><input class="np-target" type="number" min="1" max="65535" value="${esc(port.port || port.container || "")}"></div>
+    <div><label>Target port</label><input class="np-target" type="text" value="${esc(port.target_port || port.port || port.container || "")}"></div>
     <div><label>Protocol</label><select class="np-protocol"><option>TCP</option><option ${port.protocol === "UDP" ? "selected" : ""}>UDP</option></select></div>
-    <div><label>&nbsp;</label><button class="btn sm" type="button" onclick="this.closest('.net-port').remove()" ${first ? "disabled" : ""}>Remove</button></div></div>`;
+    <div><label>&nbsp;</label><button class="btn sm" type="button" onclick="this.closest('.net-port').remove();networkInvalidateReview()" ${first ? "disabled" : ""}>Remove</button></div></div>`;
 }
 
-window.networkExpose = async (namespace = "", name = "", kind = "Deployment", selectedVip = "") => {
+window.networkExpose = async (namespace = "", name = "", kind = "Deployment", selectedVip = "", editing = false) => {
   const data = STATE.data.network = await api("/api/network");
   if (!data?.workloads?.length) return toast("No Deployments or pod-network VMs are available to expose", "bad");
-  if (name && !data.workloads.some(row => row.namespace === namespace && row.name === name && row.kind === kind)) return toast("This VM needs a masquerade pod interface and template labels to expose a Service; bridged VMs use their guest LAN address", "bad");
-  if (name) data.workloads.sort((a, b) => Number(b.namespace === namespace && b.name === name && b.kind === kind) - Number(a.namespace === namespace && a.name === name && a.kind === kind));
+  if (name && !data.workloads.some(row => row.namespace === namespace && row.name === name && (row.kind || "Deployment") === kind)) return toast(kind === "VirtualMachine" ? "VM exists but is not eligible for Service exposure yet. It needs a masquerade pod interface and unique template labels; bridged VMs use their guest LAN address. Try Edit → Network after saving." : "This workload is not available for Service exposure. Save it first, then retry.", "bad");
+  if (name) data.workloads.sort((a, b) => Number(b.namespace === namespace && b.name === name && (b.kind || "Deployment") === kind) - Number(a.namespace === namespace && a.name === name && (a.kind || "Deployment") === kind));
   const options = data.workloads.map(row => `<option value="${esc(row.namespace + "/" + row.name + "/" + (row.kind || "Deployment"))}">${esc(row.kind || "Deployment")} · ${esc(row.namespace)}/${esc(row.name)}</option>`).join("");
   const first = data.workloads[0];
   const choices = await vipChoices(data);
-  modal("Expose workload", `<p class="dim">Create a Kubernetes Service with a collision-checked address and listener. Nothing changes until you review the plan.</p>
+  window.__networkChoices = choices;
+  const open = editing && modalIsOpen() ? childModal : modal;
+  open(editing ? "Service VIP / ports" : "Expose workload", `<div id="net_editor" data-nested="${editing ? "1" : "0"}"><p class="dim">${editing ? "Manage the Service address separately from the guest/interface address. Saving here applies immediately; unsaved workload edits are kept in the previous dialog." : "Create a Kubernetes Service with a collision-checked address and listener."} Nothing changes until you review the plan.</p>
     <div class="f2"><div class="f"><label>Workload</label><select id="net_workload" onchange="networkWorkloadChanged()">${options}</select></div>
       <div class="f"><label>Service name</label><input id="net_name" type="text" value="${esc(first.name)}"></div></div>
+    <div class="f"><label for="net_existing">Service to configure</label><select id="net_existing" onchange="networkServicePicked()"></select><span class="dim xs">Update an existing listener in place, or create an additional Service. A VIP is not assigned to the guest NIC; the guest must listen on its target ports.</span></div>
     <div class="f2"><div class="f"><label>Reachability ${tip("Cluster only is reachable inside Kubernetes. LAN access asks the cluster's load balancer to advertise a Service address.")}</label><select id="net_type" onchange="networkModeChanged()"><option value="LoadBalancer">LAN access</option><option value="ClusterIP">Cluster only</option></select></div>
       <div class="f" id="net_mode_wrap"><label>VIP allocation ${tip("Default shares your configured workload address on free ports. Automatic chooses another reserved address. Specific uses the address you choose. No VM guest address is changed.")}</label><select id="net_mode" onchange="networkModeChanged()">${nodeAddressesOnly() ? nodeAddressOption() : `${data.shared_vip?.ip && !(data.node_ips || []).includes(data.shared_vip.ip) ? `<option value="shared">Default workload VIP · ${esc(data.shared_vip.ip)}</option>` : ""}<option value="automatic">New automatic VIP</option>${nodeAddressChoice()}<option value="manual">Specific VIP</option>`}</select></div></div>
     <div class="f hidden" id="net_vip_wrap"><label for="net_lb_pick">Specific VIP</label>${vipPicker("net", selectedVip, choices)}<p class="dim xs">Choose a saved address or a pool address. Sharing an in-use VIP requires a free LAN port; Review plan checks for conflicts.</p></div>
     <div class="sec">Listeners</div><div id="net_ports">${networkModalPort(first.ports[0] || {}, true)}</div>
-    <button class="btn sm" type="button" onclick="$('#net_ports').insertAdjacentHTML('beforeend',networkModalPort())">＋ Add listener</button>
-    <div id="net_review"></div><div class="modalactions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" onclick="networkReview()">Review plan</button></div>`, true);
+    <button class="btn sm" type="button" onclick="$('#net_ports').insertAdjacentHTML('beforeend',networkModalPort());networkInvalidateReview()">＋ Add listener</button>
+    <div id="net_review"></div><div class="modalactions"><button class="btn" onclick="modalBack()">Cancel</button><button class="btn pri" onclick="networkReview()">Review plan</button></div></div>`, true);
+  networkServiceOptions(editing);
+  $("#net_workload").disabled = editing;
   if (selectedVip && !nodeAddressesOnly()) $("#net_mode").value = "manual";
   networkModeChanged();
+  // A changed form always requires a fresh review.
+  $("#net_editor").addEventListener("input", networkInvalidateReview);
+  $("#net_editor").addEventListener("change", networkInvalidateReview);
+  $(".modalbox").scrollTop = 0;
 };
+
+window.networkManage = (ns, name, kind = "Deployment") => {
+  if ($("#e_containers") && editPortSignature() !== window.__editPortBaseline) return toast("Save your changed container ports first, then configure its VIP. Other unsaved fields can be kept.", "bad");
+  return networkExpose(ns, name, kind, "", true);
+};
+function networkServiceOptions(selectExisting = false) {
+  const [ns, name, kind] = $("#net_workload").value.split("/");
+  const target = kind === "VirtualMachine" ? `VirtualMachine/${name}` : name;
+  const rows = (STATE.data.network.services || []).filter(s => s.namespace === ns && (s.targets || []).includes(target) && !s.system);
+  $("#net_existing").innerHTML = '<option value="">Create an additional Service</option>' + rows.map(s => `<option value="${esc(s.name)}" data-uid="${esc(s.uid || "")}" data-rv="${esc(s.resource_version || "")}">${esc(s.name)} · ${esc(s.external_ips.join(", ") || "cluster only")}</option>`).join("");
+  if (selectExisting && rows.length) { $("#net_existing").value = rows[0].name; networkServicePicked(); }
+  else if (rows.length) $("#net_name").value = `${name}-vip`;
+}
+window.networkServicePicked = () => {
+  const [ns, name] = $("#net_workload").value.split("/");
+  const existing = $("#net_existing").value;
+  const row = STATE.data.network.services.find(s => s.namespace === ns && s.name === existing);
+  $("#net_name").value = row ? row.name : `${name}-vip`;
+  $("#net_name").disabled = !!row;
+  $("#net_type").disabled = !!row;
+  if (row) {
+    $("#net_type").value = row.type;
+    $("#net_ports").innerHTML = row.ports.map((p, i) => networkModalPort(p, i === 0)).join("");
+    const ip = row.requested_ips?.[0] || row.external_ips?.[0] || "";
+    // Preserve the selected address on open, even if today's default has changed.
+    $("#net_mode").value = ip && !nodeAddressesOnly() ? (row.vip_mode === "shared" && ip === STATE.data.network.shared_vip?.ip ? "shared" : "manual") : "nodes";
+    $("#net_vip_wrap").innerHTML = `<label>Specific VIP</label>${vipPicker("net", ip, window.__networkChoices)}`;
+  } else {
+    $("#net_type").value = "LoadBalancer";
+    $("#net_mode").value = $("#net_mode option[value=shared]") ? "shared" : nodeAddressesOnly() ? "nodes" : "automatic";
+  }
+  networkModeChanged(); networkInvalidateReview();
+};
+let NETWORK_REVIEW = null;
+function networkInvalidateReview() {
+  NETWORK_REVIEW = null;
+  if ($("#net_review")) $("#net_review").innerHTML = "";
+  const actions = $("#net_editor .modalactions");
+  if (actions) actions.innerHTML = '<button class="btn" onclick="modalBack()">Cancel</button><button class="btn pri" onclick="networkReview()">Review plan</button>';
+}
 
 window.networkWorkloadChanged = () => {
   const [namespace, name, kind] = $("#net_workload").value.split("/");
   $("#net_name").value = name;
   const workload = STATE.data.network.workloads.find(row => row.namespace === namespace && row.name === name && (row.kind || "Deployment") === kind);
   $("#net_ports").innerHTML = networkModalPort(workload?.ports?.[0] || {}, true);
+  $("#net_name").disabled = false; $("#net_type").disabled = false;
+  networkServiceOptions();
 };
 
 window.networkModeChanged = () => {
@@ -157,27 +208,48 @@ function networkConfig() {
   const [namespace, workload, workload_kind] = $("#net_workload").value.split("/");
   return { namespace, workload, workload_kind, name: $("#net_name").value.trim(), type: $("#net_type").value,
     vip_mode: $("#net_type").value === "ClusterIP" ? "cluster" : $("#net_mode").value,
+    update: !!$("#net_existing").value, uid: $("#net_existing").selectedOptions[0]?.dataset.uid || "",
+    resource_version: $("#net_existing").selectedOptions[0]?.dataset.rv || "",
     vip: $("#net_lb_ip").value.trim(), ports: $$(".net-port").map((row, index) => ({
       name: `port-${index + 1}`, port: $(".np-port", row).value, target_port: $(".np-target", row).value,
       protocol: $(".np-protocol", row).value })) };
 }
 
 window.networkReview = async () => {
+  NETWORK_REVIEW = null;
   try {
     const cfg = networkConfig();
     const plan = await api("/api/network/plan", {method: "POST", headers: {"Content-Type": "application/json", "X-Homestead-Auth": "1"}, body: JSON.stringify(cfg)});
+    if (!$("#net_editor") || JSON.stringify(networkConfig()) !== JSON.stringify(cfg)) return;
+    NETWORK_REVIEW = { ...cfg, reviewed_vip: plan.vip || "" };
     $("#net_review").innerHTML = `<div class="reviewbox"><b>Traffic path</b><div class="netpath big"><span>${esc(plan.path.vip)}</span><i>→</i><span>${esc(plan.path.service)}</span><i>→</i><span>${esc(plan.path.workload)}</span></div>
       <div class="dim xs">${plan.ports.map(p => `${p.port}/${p.protocol} → ${p.targetPort}`).join(" · ")}</div>${plan.warnings.map(w => `<div class="tag warn" style="margin-top:8px">${esc(w)}</div>`).join("")}</div>`;
     const actions = $("#mbody .modalactions");
-    actions.innerHTML = `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" onclick="networkCreate()">Create service</button>`;
+    actions.innerHTML = `<button class="btn" onclick="modalBack()">Cancel</button><button class="btn pri" onclick="networkCreate()">${cfg.update ? "Update" : "Create"} service</button>`;
   } catch (error) { toast(error.message, "bad"); }
 };
 
 window.networkCreate = async () => {
+  if (!NETWORK_REVIEW) return toast("Review the current VIP and ports before saving", "bad");
+  const cfg = NETWORK_REVIEW; NETWORK_REVIEW = null;
   try {
-    const result = await api("/api/network/services", {method: "POST", headers: {"Content-Type": "application/json", "X-Homestead-Auth": "1"}, body: JSON.stringify(networkConfig())});
-    closeModal(); toast(result.message, "ok"); await viewNetworking();
-  } catch (error) { toast(error.message, "bad"); }
+    const result = await api("/api/network/services", {method: "POST", headers: {"Content-Type": "application/json", "X-Homestead-Auth": "1"}, body: JSON.stringify(cfg)});
+    const nested = $("#net_editor")?.dataset.nested === "1";
+    if (nested) modalBack(); else closeModal();
+    if (nested && cfg.workload_kind === "Deployment" && $("#e_containers")) {
+      // Reflect separately saved listeners so a later workload save cannot restore stale ports.
+      $$("#e_containers .edit-port-row").forEach(row => {
+        const port = cfg.ports.find(p => p.protocol === $(".ep-protocol", row).value &&
+          (String(p.target_port) === $(".ep-number", row).value || String(p.target_port) === $(".ep-name", row).value));
+        $(".ep-expose", row).checked = !!port;
+        if (port) $(".ep-host", row).value = port.port;
+      });
+      window.__editHadService = true;
+      editPortsChanged(); window.__editPortBaseline = editPortSignature();
+    }
+    toast(result.message, "ok");
+    if (STATE.view === "network") await viewNetworking();
+  } catch (error) { toast(error.message, "bad"); networkInvalidateReview(); }
 };
 
 /* ---------------- your VIPs ----------------
