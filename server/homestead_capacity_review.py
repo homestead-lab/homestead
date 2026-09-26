@@ -18,23 +18,23 @@ def bind(key_provider):
     _key = key_provider
 
 
-def _signature(config, expires):
+def _signature(config, expires, context=None):
     body = {key: value for key, value in config.items() if key not in CONTROL_FIELDS}
-    payload = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    payload = json.dumps({"config": body, "context": context}, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hmac.new(_key(), (str(expires) + ":" + payload).encode(), hashlib.sha256).hexdigest()
 
 
-def issue(config):
+def issue(config, context=None):
     expires = int(time.time()) + TTL
-    return f"{expires}.{_signature(config, expires)}"
+    return f"{expires}.{_signature(config, expires, context)}"
 
 
-def valid(config):
+def valid(config, context=None):
     try:
         expires, signature = str(config.get("capacity_token") or "").split(".", 1)
         expires = int(expires)
         now = time.time()
-        return now <= expires <= now + TTL and hmac.compare_digest(signature, _signature(config, expires))
+        return now <= expires <= now + TTL and hmac.compare_digest(signature, _signature(config, expires, context))
     except (TypeError, ValueError):
         return False
 
@@ -45,8 +45,8 @@ class Rejected(ValueError):
         self.plan = plan
 
 
-def enforce(config, plan):
+def enforce(config, plan, context=None):
     if plan.get("blocked"):
         raise Rejected("Deployment cannot fit the checked placement constraints. Review capacity before deploying.", plan)
-    if plan.get("requires_confirmation") and (config.get("confirm_capacity") is not True or not valid(config)):
+    if plan.get("requires_confirmation") and (config.get("confirm_capacity") is not True or not valid(config, context)):
         raise Rejected("Placement or memory needs a fresh review and explicit acknowledgement before deploying.", plan)

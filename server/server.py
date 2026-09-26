@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import homestead_names as NAMES
 import homestead_memory as MEMORY
 import homestead_capacity_review as CAPACITY_REVIEW
+import homestead_rollout_capacity as ROLLOUT_CAPACITY
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
 API = "https://kubernetes.default.svc"
@@ -24,7 +25,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.163")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.164")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2190,14 +2191,28 @@ def install_samba(address=""):
     return created
 
 
-def deploy_capacity_plan(config):
-    """Read-only new-workload preview, before any deployment side effects."""
+def rollout_review_context(current):
+    meta = current.get("metadata") or {}
+    if not meta.get("uid") or not meta.get("resourceVersion"):
+        raise ValueError("workload identity/version is unavailable; refresh before changing its pod")
+    return {"uid": meta["uid"], "resourceVersion": meta["resourceVersion"]}
+
+
+def deploy_capacity_plan(config, existing=None):
+    """Read-only new-workload or shared-pod rollout preview."""
     cfg = analyze_deploy_intent(copy.deepcopy(config))
-    if cfg.get("target_mode", "new") != "new":
-        raise ValueError("shared-pod capacity requires a replacement-rollout plan")
     ns = _dns_name(cfg.get("namespace") or DEFAULT_NS, "namespace")
     cfg["namespace"] = ns
-    dep, _ = build_deployment(cfg)
+    joining = cfg.get("target_mode") == "existing"
+    if joining:
+        target = _dns_name(cfg.get("target_workload"), "existing workload")
+        if existing is None:
+            existing = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
+        dep, _ = build_sidecar_deployment(cfg, existing)
+    elif cfg.get("target_mode", "new") == "new":
+        dep, _ = build_deployment(cfg)
+    else:
+        raise ValueError("deployment target must be new or existing")
     claims = {row["name"]: row for row in new_claims(cfg.get("volumes") or [])}
     for row in claims.values():
         if row["access_mode"] not in ("ReadWriteOnce", "ReadWriteMany", "ReadOnlyMany", "ReadWriteOncePod"):
@@ -2206,11 +2221,14 @@ def deploy_capacity_plan(config):
         if not re.fullmatch(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?", row["storage_class"]):
             raise ValueError("invalid storage class name")
     pspec = dep["spec"]["template"]["spec"]
-    if claims and not pspec.get("initContainers"):
+    if not joining and claims and not pspec.get("initContainers"):
         # Owner discovery reads the image later and may add this init stage.
         # Include its request now without fetching layers or writing a helper.
         pspec["initContainers"] = [VOLOWNER.init_container([])]
     threshold = get_app_settings()["thresholds"]["memory"]["critical"]
+    if joining:
+        return ROLLOUT_CAPACITY.plan(existing, dep, ns, kget, PLACE.get_nodes, PLACE.manifest_plan,
+                                     threshold, planned_claims=claims)
     return PLACE.manifest_plan(dep, ns, dep["metadata"]["name"], dep["spec"]["replicas"],
                                threshold, planned_claims=claims)
 
@@ -2220,15 +2238,21 @@ def reviewed_deploy(b):
     b = ensure_profile_compatible(analyze_deploy_intent(copy.deepcopy(b)))
     if b.get("target_mode", "new") not in ("new", "existing"):
         raise ValueError("deployment target must be new or existing")
-    if b.get("target_mode", "new") == "new":
-        # The token binds the original reviewed input, not generated passwords,
-        # image-owner discoveries or a newly selected automatic VIP.
-        plan = deploy_capacity_plan(b)
-        CAPACITY_REVIEW.enforce(b, plan)
-    return run_deploy(b)
+    current = None
+    context = None
+    if b.get("target_mode") == "existing":
+        ns = _dns_name(b.get("namespace") or DEFAULT_NS, "namespace")
+        target = _dns_name(b.get("target_workload"), "existing workload")
+        current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
+        context = rollout_review_context(current)
+    # Bind the original input and, for a shared pod, the fresh controller
+    # version. The final PUT keeps this resourceVersion for optimistic locking.
+    plan = deploy_capacity_plan(b, existing=current)
+    CAPACITY_REVIEW.enforce(b, plan, context)
+    return run_deploy(b, reviewed_current=current) if current is not None else run_deploy(b)
 
 
-def run_deploy(b):
+def run_deploy(b, *, reviewed_current=None):
     """Create (or join) a workload. HTTP Deploy uses reviewed_deploy first."""
     b = analyze_deploy_intent(b)
     ns = b.get("namespace") or DEFAULT_NS
@@ -2246,7 +2270,7 @@ def run_deploy(b):
         b = VOLOWNER.prepare(b)
     if target_mode == "existing":
         target = _dns_name(b.get("target_workload"), "existing workload")
-        current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
+        current = copy.deepcopy(reviewed_current) if reviewed_current is not None else kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
         dep, svc = build_sidecar_deployment(b, current)
     elif target_mode == "new":
         dep, svc = build_deployment(b)
@@ -6511,17 +6535,24 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, result)
             if p == "/api/preview":
                 b = analyze_deploy_intent(b)
-                capacity = deploy_capacity_plan(b) if b.get("target_mode", "new") == "new" else None
-                capacity_token = CAPACITY_REVIEW.issue(b) if capacity is not None else None
+                current = None
+                context = None
+                if b.get("target_mode") == "existing":
+                    ns = _dns_name(b.get("namespace") or DEFAULT_NS, "namespace")
+                    target = _dns_name(b.get("target_workload"), "existing workload")
+                    current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
+                    context = rollout_review_context(current)
+                capacity = deploy_capacity_plan(b, existing=current)
+                capacity_token = CAPACITY_REVIEW.issue(b, context)
                 b = NETWORK.prepare_deploy(b)
                 b = apply_deploy_bindings(b)
                 b = apply_generated_secrets(b)
                 if b.get("target_mode") == "existing":
                     ns = b.get("namespace") or DEFAULT_NS
                     target = _dns_name(b.get("target_workload"), "existing workload")
-                    current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
                     dep, svc = build_sidecar_deployment(b, current)
                     return self._send(200, {"deployment": redact_deployment_preview(dep, b), "service": svc,
+                                            "capacity": capacity, "capacity_token": capacity_token,
                                             "app_profile": b.get("app_profile"),
                                             "impact": {"mode": "existing", "workload": target,
                                                        "containers": [c.get("name") for c in current.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])],
@@ -6649,7 +6680,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.163 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.164 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

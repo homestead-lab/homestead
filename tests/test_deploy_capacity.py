@@ -170,9 +170,9 @@ class DeployCapacityTests(unittest.TestCase):
                     server.reviewed_deploy(self.cfg)
             deploy.assert_not_called()
 
-    def test_shared_pod_is_not_misrepresented_as_new_capacity(self):
+    def test_shared_pod_requires_existing_workload_selection(self):
         self.cfg["target_mode"] = "existing"
-        with self.assertRaisesRegex(ValueError, "replacement-rollout"):
+        with self.assertRaisesRegex(ValueError, "existing workload"):
             self.plan()
 
     def test_api_409_for_capacity_block_precedes_all_writes(self):

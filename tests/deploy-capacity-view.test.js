@@ -69,14 +69,17 @@ test("missing capacity response fails closed", async () => {
   assert.equal(t.sent.length, 0);
 });
 
-test("shared-pod review explicitly does not claim rollout coverage", async () => {
-  const t = setup(null);
+test("shared-pod review distinguishes conditional released RAM and restart consent", async () => {
+  const t = setup({ ...warning, rollout: { strategy: "Recreate", replicas: 1, ownership_known: true,
+    owned_pods: ["demo-pod"], release_request_gb: 1 } });
   t.setConfig({ target_mode: "existing", target_workload: "shared" });
   await t.context.window.doDeploy();
-  assert.match(t.html(), /Replacement-rollout capacity has not yet been checked/);
+  assert.match(t.html(), /capacity after old pods stop/);
+  assert.match(t.html(), /released only after termination/);
   await t.context.window.confirmDeploy();
   assert.equal(t.sent.length, 0);
   t.fields["#deployConfirm"].checked = true;
+  t.fields["#deployCapacityConfirm"].checked = true;
   await t.context.window.confirmDeploy();
   assert.equal(t.sent.length, 1);
 });
@@ -91,4 +94,23 @@ test("server rejection requires a fresh review rather than a blind retry", async
   assert.equal(t.fields["#deployGo"].textContent, "Review again");
   assert.equal(typeof t.fields["#deployGo"].onclick, "function");
   assert.equal(t.context.window.deployReviewReady(), false);
+});
+
+test("rolling overlap shortage is distinct from a hard rollout blocker", async () => {
+  const t = setup({ ...warning, rollout: { strategy: "RollingUpdate", replicas: 1, ownership_known: true,
+    owned_pods: ["demo-pod"], release_request_gb: 1, max_surge: 1, max_unavailable: 1,
+    overlap: { ...warning, blocked: true } } });
+  t.setConfig({ target_mode: "existing", target_workload: "shared" });
+  await t.context.window.doDeploy();
+  assert.match(t.html(), /This overlap does not fit while old pods remain/);
+  assert.doesNotMatch(t.html(), /This deployment cannot fit/);
+  assert.match(t.html(), /Intermediate rollout steps remain unverified/);
+});
+
+test("shared pod cannot submit without a rollout capacity response", async () => {
+  const t = setup(null);
+  t.setConfig({ target_mode: "existing", target_workload: "shared" });
+  await t.context.window.doDeploy();
+  assert.match(t.notices.join(" "), /Capacity preview unavailable/);
+  assert.equal(t.sent.length, 0);
 });

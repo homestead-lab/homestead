@@ -92,7 +92,7 @@ green safety result. The API recalculates immediately before scaling. This is
 a snapshot, **not a capacity reservation or OOM guarantee**. It does not yet
 fully simulate dynamic resource allocation or concurrent admissions.
 New workloads from **Deploy and App Store** use the same planner (see below).
-Joining/editing shared pods, Compose batches, Unraid migration, moves, updates
+Editing shared pods, Compose batches, Unraid migration, moves, image updates
 and VM launches remain separate paths; expanding this guard to those is planned.
 
 The arithmetic follows Kubernetes' [resource request model](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/)
@@ -166,9 +166,43 @@ reviews work across Homestead replicas and restarts without writing a new Secret
 Tokens contain no passwords or manifest contents. If capacity worsens to a hard blocker
 after review, the fresh server check rejects deployment even with a valid token.
 
-Joining a running pod still uses its existing restart confirmation and explicitly
-states that replacement-rollout capacity is not yet checked. Do not interpret
-the new-workload guard as covering shared-pod rollouts or Compose batches.
+### Joining a shared pod
+
+Adding a container to an existing workload checks the **complete updated pod**,
+not just the added container. The review keeps the controller's existing rollout
+strategy; it does not silently switch to Recreate or stop anything during preview.
+
+The post-stop view conditionally removes only pods proven to belong to this
+Deployment through ReplicaSet controller UIDs. Same-name or same-label pods are
+not sufficient evidence. Other consumers still reserve resources, host ports
+and exclusive PVCs. Failed/incomplete inventory is reported as unknown; it is
+not assumed to free capacity. The projected RAM remains conservative because
+observed live usage still includes the old pods.
+
+**Recreate** warns that all old pods must terminate before replacements start,
+with downtime for every container. Releasing requests in the preview is not
+proof that termination, volume detach or reattachment will succeed.
+
+**RollingUpdate** separately shows replacement overlap while old pods still
+reserve capacity. Surge percentages round up; unavailable percentages round
+down. For a verified stable, healthy workload with `maxUnavailable=0`, a first
+replacement that cannot fit is a blocker. If old-pod removal is permitted or
+the workload is already changing, a current overlap shortage is a warning—not
+a claim that no valid rollout order exists. Intermediate steps, readiness and
+termination timing are not fully simulated. See Kubernetes'
+[Deployment strategies](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#strategy).
+
+Both the restart and capacity warnings must be acknowledged. The signed review
+also binds the current Deployment UID and resourceVersion. Changes since review
+require another review; the final update uses that version so a concurrent edit
+cannot be silently overwritten. A stopped workload remains stopped.
+A paused workload only saves its template; prospective resume blockers remain
+visible and capacity must be reviewed again before resuming it.
+
+This coverage is for **Deploy/App Store → join existing workload**. The separate
+container Edit dialog, Compose batches, image updates and migrations still need
+their own guarded review paths. These are read-only preflight checks, not live
+failover validation or a guarantee that a rollout will complete.
 
 ## Updates
 

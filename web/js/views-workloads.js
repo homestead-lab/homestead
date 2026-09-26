@@ -1376,15 +1376,18 @@ window.previewYaml = async () => {
 let DEPLOY_REVIEW = null;
 let DEPLOY_REVIEW_SEQUENCE = 0;
 let DEPLOY_SUBMITTING = false;
-function deployCapacityHtml(plan) {
+function deployCapacityHtml(plan, overlap = false) {
   if (!plan) return "";
-  return `<div class="reviewbox deploy-capacity"><b>Placement and memory</b>
+  return `<div class="reviewbox deploy-capacity"><b>${overlap ? "New pods alongside current pods" : plan.rollout ? "Updated pod: capacity after old pods stop" : "Placement and memory"}</b>
+    ${plan.rollout ? `<p class="small muted">${esc(plan.rollout.strategy)} · ${esc(plan.rollout.replicas)} desired replica(s) · ${plan.rollout.ownership_known ? `${esc(plan.rollout.owned_pods.length)} existing pod(s) identified by controller ownership; ${esc(plan.rollout.release_request_gb)} GiB of requests would be released only after termination.` : "Pod ownership is unverified; released capacity is unknown."}</p>
+      ${plan.rollout.strategy === "RollingUpdate" ? `<p class="small muted">Up to ${esc(plan.rollout.max_surge)} extra pod(s), ${esc(plan.rollout.max_unavailable)} unavailable replica(s). Intermediate rollout steps remain unverified.</p>` : ""}` : ""}
     <p class="small muted">${esc(plan.additional)} pod(s), each requesting ${esc(plan.pod_request_gb)} GiB RAM and ${esc(plan.pod_cpu_request_percent)}% CPU (100% = one core). Memory estimate: ${esc(plan.pod_memory_gb)} GiB per pod, including init stages.</p>
-    ${plan.blocked ? `<div class="note bad">This deployment cannot fit the checked placement constraints. Change its resources, volumes or host selection before deploying.</div>` : ""}
+    ${plan.blocked ? `<div class="note bad">${overlap ? "This overlap does not fit while old pods remain. Progress may depend on old-pod removal within the rollout policy." : plan.rollout?.start_blocked ? "The rollout cannot start within its current availability policy. Review the overlap blockers below." : "This deployment cannot fit the checked placement constraints. Change its resources, volumes or host selection before deploying."}</div>` : ""}
     ${plan.warnings?.length ? `<div class="note warn">${plan.warnings.map(esc).join(" · ")}</div>` : ""}
     <details${plan.blocked ? " open" : ""}><summary>Host capacity and placement</summary><div class="dependency-list">${(plan.candidates || []).map(host => `<div class="drow"><div class="dl mono">${esc(host.name)}</div><div class="dv">${host.eligible ? "Eligible for the next pod" : esc((host.reasons || []).join(" · ") || "Not eligible")}
       <div class="dim xs">${host.metrics_available && host.projected_percent != null ? `Live RAM ${esc(host.used_gb)} GiB · projected ${esc(host.projected_gb)} / ${esc(host.capacity_gb)} GiB (${esc(host.projected_percent)}%)` : "Live RAM unavailable"}</div>
-      <div class="dim xs">${host.reservations_known ? `Reserved RAM ${esc(host.reserved_gb)} GiB; resource/port/storage upper bound ${esc(host.request_slots)} more pod(s).` : "Scheduler reservations unavailable."}</div></div></div>`).join("")}</div></details>
+      <div class="dim xs">${host.reservations_known ? `${plan.rollout ? "Reserved RAM after planned termination" : "Reserved RAM"} ${esc(host.reserved_gb)} GiB; resource/port/storage upper bound ${esc(host.request_slots)} more pod(s).` : "Scheduler reservations unavailable."}</div></div></div>`).join("")}</div></details>
+    ${plan.rollout?.overlap ? `<details${plan.rollout.start_blocked ? " open" : ""}><summary>Overlap while old pods remain${plan.rollout.start_blocked ? " — rollout cannot start" : ""}</summary>${deployCapacityHtml(plan.rollout.overlap, true)}</details>` : ""}
     <p class="dim xs">This is a snapshot, not a reservation or an OOM guarantee. The server checks again before creating anything. Planned volumes have not been provisioned.</p></div>`;
 }
 window.deployReviewReady = () => {
@@ -1411,7 +1414,7 @@ window.doDeploy = async () => {
     if (sequence !== DEPLOY_REVIEW_SEQUENCE) return;
     if (plan.app_profile?.blocked) return toast(plan.app_profile.label || "this workload needs a Kubernetes-specific design", "bad");
     const joining = c.target_mode === "existing";
-    if (!joining && !plan.capacity) throw new Error("Capacity preview unavailable; refresh Homestead before deploying.");
+    if (!plan.capacity) throw new Error("Capacity preview unavailable; refresh Homestead before deploying.");
     DEPLOY_REVIEW = { config: JSON.parse(JSON.stringify(c)), plan: plan.capacity, token: plan.capacity_token };
     modal(joining ? "Review shared-pod change" : "Review deployment", `<div class="update-review">
       <div class="reviewbox"><b>${joining ? `Add ${esc(c.container_name)} to ${esc(c.target_workload)}` : `Create ${esc(c.workload_name)} with container ${esc(c.container_name)}`}</b>
@@ -1421,7 +1424,7 @@ window.doDeploy = async () => {
           <div class="dependency-row"><span>Ports</span><b>${c.ports.length}</b></div><div class="dependency-row"><span>Storage mappings</span><b>${c.volumes.length}</b></div></div>
       </div>
       ${deployCapacityHtml(plan.capacity)}
-      ${joining ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployConfirm" onchange="deployReviewReady()"> I understand every container in ${esc(c.target_workload)} will restart together. Replacement-rollout capacity has not yet been checked.</label>` : ""}
+      ${joining ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployConfirm" onchange="deployReviewReady()"> ${plan.capacity.rollout?.paused ? "I understand this saves a paused template; capacity must be reviewed again before resuming" : plan.capacity.rollout?.replicas === 0 ? "I understand this changes the stopped workload's pod template without starting it" : `I understand every container in ${esc(c.target_workload)} restarts as its pods roll out, with the downtime or overlap shown above`}</label>` : ""}
       ${plan.capacity?.requires_confirmation && !plan.capacity.blocked ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployCapacityConfirm" onchange="deployReviewReady()"> I understand the placement, memory and provisioning warnings above</label>` : ""}
       <details><summary>Manifest preview</summary><pre>${esc(JSON.stringify({ deployment: plan.deployment, service: plan.service }, null, 2))}</pre></details>
       <div class="modalactions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" id="deployGo" ${joining || plan.capacity?.requires_confirmation || plan.capacity?.blocked ? "disabled" : ""} onclick="confirmDeploy()">${joining ? "Add container & restart pod" : "Deploy workload"}</button></div></div>`, true);
