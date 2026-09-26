@@ -17,7 +17,7 @@ Everything Homestead does, with nothing Harvester-specific needed:
   script installs. With `--no-longhorn` apps still get volumes from k3s's
   `local-path`, but the Volumes and Data protection pages need Longhorn.
 - **Addresses** - k3s's built-in load balancer (ServiceLB) puts every app on the
-  machines' own addresses, so nothing else is needed; MetalLB, if you want an
+  machines' own addresses, so nothing else is needed; kube-vip or MetalLB, if you want an
   address per app, is [below](#4-addresses-for-apps).
 - **Helm** - charts install through the Helm controller k3s already runs.
 - **Adding and removing machines** - **Cluster → Add a host** gives this
@@ -30,6 +30,24 @@ Everything Homestead does, with nothing Harvester-specific needed:
   Add-ons** installs it once the machines have open-iscsi.
 
 ## 1. What you need
+
+### Multus installation and upgrade diagnostics
+
+Homestead installs both the Multus agents and the separate `rke2-multus-crd` chart,
+with version-pinned releases and k3s-specific CNI paths. Add-on readiness requires
+the network-attachment API **and** the current DaemonSet available on its scheduled
+nodes. A completed Helm job alone is not enough.
+
+For older Homestead installs, **Settings → Cluster → Add-ons → Repair configuration**
+corrects the known missing `multusAutoconfigDir` and installs a missing CRD dependency.
+It only handles Homestead's recognised configuration, not arbitrary customised CNIs.
+The diagnostic command collects both Helm logs and Multus agent errors.
+
+If Homestead's own upgrade waits on `data-permissions`, inspect its init-container
+error. `lookup ghcr.io` means host DNS, not a missing app configuration. Check
+`resolvectl status`, `resolvectl query ghcr.io`, the host route and outbound HTTPS.
+Fix the host's persistent DNS/network configuration before retrying; do not remove
+the old serving pod or its volume just to clear an image-pull error.
 
 - **One or more Linux machines** with a 64-bit OS (Ubuntu Server 24.04 LTS,
   Debian 12, Rocky/Alma 9 or openSUSE Leap are all fine), `curl`, and root

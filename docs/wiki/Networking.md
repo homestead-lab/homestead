@@ -9,7 +9,7 @@ behind it, the pods it leads to, and whether they answer.
 
 Every LAN address in use, with the ports on it and the app behind each. A VIP
 is an address a load balancer announces on your network - kube-vip on
-Harvester, MetalLB elsewhere - rather than a host's own address.
+Harvester, or kube-vip/MetalLB on k3s - rather than a host's own address.
 
 **Expose workload** publishes an app's port, either inside the cluster only or
 on the LAN. On the LAN it takes an address:
@@ -17,9 +17,38 @@ on the LAN. On the LAN it takes an address:
 - **Automatic** - the next free one from your VIPs, then from Harvester's IP
   pools;
 - **Specific VIP** - one you choose from your list, by label;
-- **Shared** - an address another app uses, on a port it does not.
+- **Default workload VIP** - the address selected under **Your VIPs → Use as default**,
+  shared on free ports. This is separate from the cluster API and can differ from
+  Homestead's access address. Changing the default does not move existing Services.
 
 Every change shows its plan and checks for clashes before anything is made.
+
+Pod-network VMs also appear in **Expose workload**. From a VM, open **Network →
+Configure VIP / ports**. The guest must use masquerade networking and permit the
+target ports through its firewall; a bridged VM instead uses DHCP/static addressing.
+The Service follows the VM's persistent template labels when its launcher pod changes.
+
+With per-service kube-vip elections, sharing an IP requires a common lease. Homestead
+adds a per-address lease annotation on supported kube-vip releases (1.2.3+), and refuses
+unsafe sharing with older/unmigrated Services or across namespaces. Use separate VIPs
+for independently placed Local-traffic Services such as NFS.
+
+## Availability is more than a VIP
+
+Multus adds interfaces; it does not allocate or fail over Service VIPs. ServiceLB uses
+node addresses; kube-vip or MetalLB advertises reserved workload addresses. Do not
+assign a node IP or the control-plane VIP as a workload VIP.
+
+A movable IP alone does not make a cluster fault tolerant. Production recovery needs
+a surviving control-plane quorum (normally three k3s servers for embedded etcd),
+multiple eligible workload hosts with spare capacity and matching hardware/network
+interfaces, healthy replicated portable storage, and appropriate restart policies.
+Single-node clusters cannot survive host failure. Test host loss and recovery before
+relying on the setup; existing connections may be interrupted during failover.
+
+See the upstream [k3s network guide](https://docs.k3s.io/networking/networking-services),
+[kube-vip Service leases](https://kube-vip.io/docs/usage/services/), and
+[KubeVirt Service networking](https://kubevirt.io/user-guide/network/service_objects/).
 
 ## Your VIPs
 

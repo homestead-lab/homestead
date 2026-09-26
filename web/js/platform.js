@@ -92,13 +92,14 @@ window.addonsPaint = async () => {
     : `Only ${Object.entries(s.kvm).filter(([, on]) => on).map(([n]) => esc(n)).join(", ")} ha${Object.values(s.kvm).filter(Boolean).length === 1 ? "s" : "ve"} hardware virtualisation; VMs run there.`;
   const row = (key, state) => {
     const a = ADDONS[key];
-    const pill = state.installed ? '<span class="pill ok">installed</span>'
+    const runtime = key === "multus" && state.state;
+    const pill = runtime ? `<span class="pill ${state.ready ? "ok" : "med"}">${esc(state.state)}</span>` : state.installed ? '<span class="pill ok">installed</span>'
       : state.installing ? '<span class="pill med">installing</span>' : '<span class="pill">not installed</span>';
-    const button = state.installed || state.installing ? ""
+    const button = state.repairable ? '<button class="btn sm pri" data-need="admin" onclick="multusRepair()">Repair configuration</button>' : state.installed || state.installing ? ""
       : s.helm_controller ? `<button class="btn sm pri" data-need="admin" onclick="addonInstall('${key}')">Install ${esc(a.name)}</button>`
       : '<span class="dim xs">needs the Helm controller k3s and RKE2 run</span>';
-    const diagnostic = key === "multus" && state.installing && state.diagnostic_command
-      ? `<div class="note warn addon-diagnostic"><b>Taking longer than expected?</b> SSH to a server node and gather the Helm job log:</div>
+    const diagnostic = key === "multus" && !state.ready && state.diagnostic_command
+      ? `<div class="note warn addon-diagnostic"><b>${esc(state.detail || "Multus is not ready")}</b> ${esc((state.issues || []).join("; "))} SSH to a server node to gather Helm, node-agent status and logs:</div>
          ${guideCopy(state.diagnostic_command)}` : "";
     const emulation = key === "kubevirt" && state.installed && state.emulation != null
       ? `<div class="dim xs" style="margin-top:4px">${state.emulation
@@ -109,6 +110,7 @@ window.addonsPaint = async () => {
     return `<div class="addon-row"><div><b>${esc(a.name)}</b> ${pill}<div class="dim small">${esc(a.what)}</div>
         ${state.installed ? "" : `<div class="dim xs" style="margin-top:4px">${esc(a.needs)}</div>`}
         ${key === "kubevirt" ? `<div class="xs" style="margin-top:4px">${kvmLine}</div>${emulation}` : ""}
+        ${key === "multus" && state.ready ? `<div class="dim xs">${esc(state.detail)}</div>` : ""}
         ${diagnostic}</div>
       <div class="row">${button}${emulationButton}</div></div>`;
   };
@@ -157,6 +159,15 @@ window.kubevirtEmulation = async enabled => {
       body: JSON.stringify({ enabled }) });
     toast(result.detail, "ok");
     addonsPaint();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+window.multusRepair = async () => {
+  if (!confirm("Correct Multus's k3s CNI directory? This rolls its node agents. Existing workloads are not restarted; new pod networking may briefly pause during the rollout.")) return;
+  try {
+    const r = await api("/api/addons/multus/repair", { method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
+    toast(r.detail, "ok");
+    refreshOperations(true); addonsPaint();
   } catch (e) { toast(e.message, "bad"); }
 };
 

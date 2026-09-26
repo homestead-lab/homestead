@@ -28,7 +28,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.174")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.175")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -1411,7 +1411,7 @@ def get_overview():
         "mem_used_gb": round(muse, 1), "mem_cap_gb": round(mcap, 1),
         "top_cpu": sorted(wl, key=lambda x: -x["cpu"])[:6],
         "top_mem": sorted(wl, key=lambda x: -x["mem_mb"])[:6],
-        "lb_ip": LB_IP,
+        "lb_ip": NETWORK.shared_vip(),
     }
 
 
@@ -1903,7 +1903,7 @@ def build_deployment(cfg):
     exposed = [p for p in cfg.get("ports") or [] if p.get("expose")]
     if exposed and cfg.get("network_mode") not in ("host", "lan"):
         mode = cfg.get("vip_mode", "shared")
-        vip = cfg.get("lb_ip") if mode in ("manual", "automatic") else (LB_IP if mode == "shared" else "")
+        vip = cfg.get("lb_ip") if mode in ("manual", "automatic") else ((cfg.get("lb_ip") or NETWORK.shared_vip()) if mode == "shared" else "")
         svc_type = "ClusterIP" if cfg.get("network_mode") == "internal" else "LoadBalancer"
         svc = {
             "apiVersion": "v1", "kind": "Service",
@@ -4187,6 +4187,7 @@ DISKS.bind(kget, ksend, node_temps)
 OPS.RESOLVERS["disk-retire"] = DISKS.retire_step
 OPS.RESUMABLE["disk-retire"] = DISKS.retire_resumable
 OPS.RESOLVERS["helm"] = HELM.job_status
+OPS.RESOLVERS["multus"] = ADDONS.multus_progress
 
 
 def delete_workload(ns, name):
@@ -5310,7 +5311,7 @@ ADMIN_ROUTES = {
     "/api/shares/repair",
     # Carrying a stopped job on runs its remaining steps - a swap, for one.
     "/api/operations/resume",
-    "/api/network/vips/add", "/api/network/vips/remove", "/api/network/vips/label", "/api/network/vm-networks",
+    "/api/network/vips/add", "/api/network/vips/remove", "/api/network/vips/label", "/api/network/vips/default", "/api/network/vm-networks",
     "/api/files/list", "/api/files/read", "/api/files/write", "/api/files/close",
     "/api/node/smart/test",
     # Installing the probe stands a privileged container on every node.
@@ -5333,7 +5334,7 @@ ADMIN_ROUTES = {
     "/api/lh/restore", "/api/lh/backup/delete", "/api/lh/group/delete",
     # Installing Longhorn or KubeVirt changes the cluster itself.
     "/api/addons/longhorn", "/api/addons/kubevirt", "/api/addons/kubevirt/emulation",
-    "/api/addons/multus", "/api/addons/kube-vip",
+    "/api/addons/multus", "/api/addons/multus/repair", "/api/addons/kube-vip",
     # Upgrading the platform: the cluster, Longhorn, KubeVirt, CDI.
     "/api/cluster/components/upgrade", "/api/cluster/upgrades/start",
     # The VM image store downloads gigabytes into the cluster.
@@ -6072,13 +6073,14 @@ class H(BaseHTTPRequestHandler):
                                       "Harvester checks the cluster, then prepares each node")
                 return self._send(200, {"ok": True, "upgrade": name, "operation": operation,
                                         "detail": f"Harvester is upgrading to {version}"})
-            if p in ("/api/addons/longhorn", "/api/addons/kubevirt", "/api/addons/multus", "/api/addons/kube-vip"):
-                what = p.rsplit("/", 1)[1]
+            if p in ("/api/addons/longhorn", "/api/addons/kubevirt", "/api/addons/multus", "/api/addons/multus/repair", "/api/addons/kube-vip"):
+                what = "multus" if p.endswith("/repair") else p.rsplit("/", 1)[1]
                 result = {"longhorn": ADDONS.install_longhorn, "kubevirt": ADDONS.install_kubevirt,
-                          "multus": ADDONS.install_multus, "kube-vip": ADDONS.install_kube_vip}[what](b)
+                          "multus": ADDONS.repair_multus if p.endswith("/repair") else ADDONS.install_multus,
+                          "kube-vip": ADDONS.install_kube_vip}[what](b)
                 for key in ("helm", "platform"):
                     _cache.pop(key, None)
-                result["operation"] = OPS.start("helm", f"Install {({'longhorn': 'Longhorn', 'kubevirt': 'KubeVirt', 'kube-vip': 'kube-vip'}).get(what, 'Multus')}",
+                result["operation"] = OPS.start("multus" if what == "multus" else "helm", f"{'Repair' if p.endswith('/repair') else 'Install'} {({'longhorn': 'Longhorn', 'kubevirt': 'KubeVirt', 'kube-vip': 'kube-vip'}).get(what, 'Multus')}",
                                                 {"kind": "HelmChart", "name": result["name"], "namespace": ADDONS.CONTROLLER_NS},
                                                 "/settings", {"namespace": ADDONS.CONTROLLER_NS, "name": result["job"],
                                                               "action": "install"},
@@ -6632,6 +6634,11 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/network/vips/add":
                 _cache.pop("network", None)
                 return self._send(200, NETWORK.add_vips(b, IPAM.load()[0].get("records") or {}))
+            if p == "/api/network/vips/default":
+                result = NETWORK.set_default_vip(b.get("ip", ""))
+                for key in ("network", "ov"):
+                    _cache.pop(key, None)
+                return self._send(200, result)
             if p == "/api/network/vips/remove":
                 _cache.pop("network", None)
                 return self._send(200, NETWORK.remove_vip(b.get("ip", "")))

@@ -771,14 +771,17 @@ def progress(ns, name, dep=None):
     fatal = {"ImagePullBackOff", "ErrImagePull", "CrashLoopBackOff", "CreateContainerConfigError"}
     for pod in pods:
         waits = []
-        for cs in pod.get("status", {}).get("containerStatuses", []) or []:
+        pod_status = pod.get("status") or {}
+        init_names = {cs.get("name") for cs in pod_status.get("initContainerStatuses") or []}
+        for cs in (pod_status.get("initContainerStatuses") or []) + (pod_status.get("containerStatuses") or []):
             waiting = (cs.get("state", {}).get("waiting") or {})
             if waiting:
                 why = explain_pull(waiting.get("message"))
-                waits.append({"container": cs.get("name", ""), "reason": waiting.get("reason", "Waiting"),
+                waits.append({"container": cs.get("name", ""), "init": cs.get("name") in init_names,
+                              "reason": waiting.get("reason", "Waiting"),
                               "message": (why or waiting.get("message", ""))[:400]})
                 if waiting.get("reason") in fatal:
-                    problems.append(f"{pod['metadata']['name']}: {waiting.get('reason')}" + (f" - {why}" if why else ""))
+                    problems.append(f"{pod['metadata']['name']}: {'init ' if cs.get('name') in init_names else ''}{cs.get('name', '')}: {waiting.get('reason')}" + (f" - {why}" if why else ""))
         row = {"name": pod["metadata"]["name"], "phase": pod.get("status", {}).get("phase", ""),
                "node": pod.get("spec", {}).get("nodeName", ""), "waiting": waits}
         running = all(cs.get("ready") for cs in

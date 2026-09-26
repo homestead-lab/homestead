@@ -126,7 +126,11 @@ class ClusterAddressTests(unittest.TestCase):
         Cluster([service(NODE, "traefik", "kube-system", 443)], shared=NODE)
         state = NET.inventory()
         self.assertEqual({}, state["platform_addresses"])
-        self.assertEqual(NODE, plan("shared")["vip"])
+        from unittest.mock import patch
+        with patch.object(NET, "servicelb_present", return_value=True):
+            result = plan("shared")
+        self.assertEqual("nodes", result["vip_mode"])
+        self.assertEqual("", result["vip"])
 
 
 if __name__ == "__main__":
