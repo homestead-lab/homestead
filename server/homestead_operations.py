@@ -87,6 +87,10 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
         if kind == "node-power" and any(i.get("kind") == kind and i.get("status") not in TERMINAL and
                                         i.get("ref", {}).get("node") == ref.get("node") for i in items):
             raise ValueError("Host maintenance is already active; inspect its job before retrying")
+        if kind in ("snapshot-delete", "snapshot-revert") and any(
+                i.get("kind") in ("snapshot-delete", "snapshot-revert") and i.get("status") not in TERMINAL
+                and i.get("ref", {}).get("volume") == ref.get("volume") for i in items):
+            raise ValueError("A snapshot operation is already active on this volume; inspect its job first")
         items.append(item)
         _write(items)
     return _public(item)
@@ -113,6 +117,8 @@ def _public(item):
     out["cancellable"] = item.get("status") not in TERMINAL and (
         item.get("status") != CANCELLING or _cancel_stale(item))
     out["cleanable"] = _cleanable(item)
+    if item.get("kind") == "snapshot-delete":
+        out["cancellable"] = False  # Longhorn merging cannot be undone or safely interrupted.
     check = RESUMABLE.get(item.get("kind"))
     if item.get("status") == "failed" and check:
         try:
@@ -382,7 +388,7 @@ def _get_or_none(path):
 
 def _volume_delete(item):
     ref = item["ref"]
-    pvc = _get_or_none(
+    pvc = None if ref.get("orphan") else _get_or_none(
         f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['name']}")
     if pvc is not None:
         deleting = bool((pvc.get("metadata", {}) or {}).get("deletionTimestamp"))
@@ -588,6 +594,9 @@ def _plan_for(item):
                       "and only stops showing here."],
             "confirm": "", "needs": "operator", "options": []}
     entry = CANCELLERS.get(item.get("kind"))
+    if item.get("kind") == "snapshot-delete":
+        plan.update(can=False, why_not="Longhorn snapshot removal cannot be undone or safely cancelled")
+        return plan
     if entry:
         plan.update(entry[0](item) or {})
     plan["mode"] = plan["mode"] if plan["mode"] in MODES else "stop"

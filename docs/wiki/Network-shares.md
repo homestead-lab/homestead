@@ -1,5 +1,13 @@
 # Network shares
 
+Removing a share keeps its PVC and data. Homestead rebuilds SMB's volume and
+mount lists from the saved share inventory, and the removal job waits for old
+SMB pods to release their mounts before reporting completion. If another share
+uses the same PVC (including a different subfolder), the PVC stays mounted and
+the result names those remaining shares. Other workloads can also keep a volume
+attached. Retrying removal repairs a stale mapping even when the saved share
+was already removed; it does not delete the underlying volume.
+
 **Shares** serves volumes to Windows, macOS and Linux over SMB (Samba), the way
 an Unraid share does - `\\192.168.1.245\media`.
 

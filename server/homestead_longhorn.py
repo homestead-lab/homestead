@@ -16,6 +16,7 @@ label patch, not a controller.
 """
 import json
 import homestead_names as NAMES
+import homestead_snapshot_delete as SNAPSHOT_DELETE
 import hashlib
 import math
 import re
@@ -397,10 +398,10 @@ def delete_group(name):
 
 # ------------------------------------------------------------------ snapshots
 def snapshots(volume=None):
-    try:
-        items = kget(f"{API}/namespaces/{LHNS}/snapshots").get("items", [])
-    except Exception:
-        return []
+    listing = kget(f"{API}/namespaces/{LHNS}/snapshots")
+    if not isinstance(listing.get("items"), list) or listing.get("metadata", {}).get("continue"):
+        raise ValueError("snapshot inventory is incomplete; refresh before changing recovery points")
+    items = listing["items"]
     out = []
     for s in items:
         sp, st = s.get("spec", {}), s.get("status", {}) or {}
@@ -409,10 +410,15 @@ def snapshots(volume=None):
             continue
         out.append({
             "name": s["metadata"]["name"], "volume": vol,
+            "uid": s["metadata"].get("uid", ""),
             "created": st.get("creationTime", ""),
             "size_mb": round(int(st.get("size", 0) or 0) / 1048576, 1),
             "ready": bool(st.get("readyToUse")),
             "user_created": bool(st.get("userCreated")),
+            "source": SNAPSHOT_DELETE.source(s),
+            "removed": bool(st.get("markRemoved")),
+            "deleting": bool(s["metadata"].get("deletionTimestamp")),
+            "parent": st.get("parent", ""), "error": st.get("error", ""),
             "children": list((st.get("children") or {}).keys()),
         })
     return sorted(out, key=lambda x: x["created"], reverse=True)
@@ -429,12 +435,6 @@ def create_snapshot(volume, name=None):
     ksend("POST", f"{API}/namespaces/{LHNS}/snapshots", body)
     _bust("lhsnaps")
     return {"ok": True, "snapshot": name, "volume": volume}
-
-
-def delete_snapshot(name):
-    ksend("DELETE", f"{API}/namespaces/{LHNS}/snapshots/{name}")
-    _bust("lhsnaps")
-    return {"ok": True}
 
 
 # ------------------------------------------------------------------ backups

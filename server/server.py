@@ -12,6 +12,7 @@ import homestead_memory as MEMORY
 import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_batch_capacity as BATCH_CAPACITY
 import homestead_volume_usage as VOLUME_USAGE
+import homestead_snapshot_delete as SNAPSHOT_DELETE
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -27,7 +28,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.171")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.172")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -4144,6 +4145,10 @@ LHCAP.bind(kget, ksend, v2_engine_status)
 RECLASS.bind(kget, ksend, raw_get, storage_classes, LHCAP.status, _own_namespace())
 REVERT.bind(kget, ksend, RECLASS, is_self)
 OPS.RESOLVERS["snapshot-revert"] = REVERT.resolve
+SNAPSHOT_DELETE.bind(kget, ksend)
+OPS.RESOLVERS["snapshot-delete"] = SNAPSHOT_DELETE.resume_resolve
+OPS.RESUMABLE["snapshot-delete"] = SNAPSHOT_DELETE.resumable
+OPS.RESOLVERS["share-remove"] = SHARES.removal_progress
 OPS.CANCELLERS["snapshot-revert"] = (REVERT.cancel_plan, REVERT.cancel_run)
 DISKS.bind(kget, ksend, node_temps)
 OPS.RESOLVERS["disk-retire"] = DISKS.retire_step
@@ -5676,7 +5681,7 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("vol", 8, get_volumes))
             if p == "/api/volumes/delete-plan":
                 return self._send(200, VOLUMES.deletion_plan(
-                    (q.get("ns") or [DEFAULT_NS])[0], (q.get("name") or [""])[0]))
+                    (q.get("ns") or [DEFAULT_NS])[0], (q.get("name") or [""])[0], (q.get("volume") or [""])[0]))
             if p == "/api/events":
                 return self._send(200, cached("ev", 10, get_events))
             if p == "/api/storage":
@@ -5764,6 +5769,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("lhov", 8, LH.overview))
             if p == "/api/lh/snapshot/revert/plan":
                 return self._send(200, REVERT.plan((q.get("volume") or [""])[0], (q.get("snapshot") or [""])[0]))
+            if p == "/api/lh/snapshot/delete-plan":
+                return self._send(200, SNAPSHOT_DELETE.plan((q.get("volume") or [""])[0], (q.get("name") or [""])[0]))
             if p == "/api/lh/snapshots":
                 vol = (q.get("volume") or [None])[0]
                 return self._send(200, LH.snapshots(vol))
@@ -6265,9 +6272,11 @@ class H(BaseHTTPRequestHandler):
                 deployment = result.pop("deployment", None)
                 if deployment:
                     result["operation"] = OPS.start(
-                        "deployment", f"Remove share {b['name']}",
+                        "share-remove", f"Remove share {b['name']}",
                         {"kind": "Deployment", "name": SMB_NAME, "namespace": SMB_NAMESPACE},
-                        "/shares", {"namespace": SMB_NAMESPACE, "name": SMB_NAME, "undo": "keep"},
+                        "/shares", {"namespace": SMB_NAMESPACE, "name": SMB_NAME, "undo": "keep",
+                                    "uid": deployment.get("metadata", {}).get("uid"), "since": time.time(),
+                                    "removed_claims": result.get("removed_claims", [])},
                         "Restarting Samba without the removed share")
                 return self._send(200, {"ok": True, **result})
             if p == "/api/shares/nfs":
@@ -6626,6 +6635,7 @@ class H(BaseHTTPRequestHandler):
                      "namespace": result["namespace"]},
                     "/volumes", {"namespace": result["namespace"], "name": result["name"],
                                   "action": result["action"], "pv": result["pv"],
+                                  "orphan": result.get("orphan", False),
                                   "volume": result["longhorn_volume"]}, result["message"])
                 return self._send(200, result)
             if p == "/api/lh/job":
@@ -6645,7 +6655,7 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/lh/snapshot":
                 return self._send(200, LH.create_snapshot(b["volume"], b.get("name")))
             if p == "/api/lh/snapshot/delete":
-                return self._send(200, LH.delete_snapshot(b["name"]))
+                return self._send(200, {"ok": True, "operation": SNAPSHOT_DELETE.start(b, OPS)})
             if p == "/api/lh/snapshot/revert":
                 operation = REVERT.start(str(b.get("volume") or ""), str(b.get("snapshot") or ""), OPS)
                 return self._send(200, {"ok": True, "operation": operation,

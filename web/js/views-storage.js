@@ -378,7 +378,7 @@ window.volumeDelete = async x => {
     '<div class="empty"><span class="spin2"></span> checking mounts, snapshots, backups and reclaim policy…</div>', true);
   let p;
   try {
-    p = await api(`/api/volumes/delete-plan?ns=${encodeURIComponent(namespace)}&name=${encodeURIComponent(name)}`);
+    p = await api(`/api/volumes/delete-plan?ns=${encodeURIComponent(namespace)}&name=${encodeURIComponent(name)}&volume=${encodeURIComponent(x.name)}`);
   } catch (e) {
     return void ($("#mbody").innerHTML = `<div class="note dependency-danger"><b>Impact check failed.</b> ${esc(e.message)}</div>
       <div class="row" style="margin-top:16px"><button class="btn" onclick="closeModal()">Close</button></div>`);
@@ -395,12 +395,12 @@ window.volumeDelete = async x => {
   const warningRows = (p.warnings || []).map(w => `<li>${esc(w)}</li>`).join("");
   $("#mbody").innerHTML = `
     ${blocked ? `<div class="note dependency-danger"><b>Deletion is blocked.</b><ul>${p.blocking_reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>`
-      : `<div class="note"><b>Impact check passed.</b> This claim is detached and has no active workload references. Choose what should happen to its backing data.</div>`}
+      : `<div class="note"><b>Impact check passed.</b> ${p.orphan ? "The PVC is already gone. This retained backing volume is detached; deleting it permanently removes its remaining data." : "This claim is detached and has no active workload references. Choose what should happen to its backing data."}</div>`}
     ${(p.removable_jobs || []).length ? `<div class="note"><b>Finished ${(p.removable_jobs || []).length === 1 ? "job" : "jobs"} still referencing this claim.</b>
       <span class="mono">${(p.removable_jobs || []).map(esc).join(", ")}</span> already completed — typically the copy job from an import.
       Homestead removes ${(p.removable_jobs || []).length === 1 ? "it" : "them"} first, because Kubernetes can otherwise hold the claim in Terminating.</div>` : ""}
     <div class="volume-impact-grid">
-      ${volumeImpactCount(lh.actual_gb ?? "?", "GB written", "GB written")}
+      ${volumeImpactCount(lh.actual_gb ?? "?", "GiB Longhorn footprint", "GiB Longhorn footprint")}
       ${volumeImpactCount(lh.replicas ?? "?", "replica", "replicas")}
       ${volumeImpactCount(p.snapshots?.count ?? "?", "snapshot on volume", "snapshots on volume")}
       ${volumeImpactCount(p.backups?.count ?? "?", "external backup", "external backups")}
@@ -419,10 +419,10 @@ window.volumeDelete = async x => {
     ${mounts ? `<div class="dependency-list" style="margin-top:10px">${mounts}</div>` : '<div class="empty small">No pods, controllers, jobs or virtual machines reference this claim.</div>'}
     <div class="sec">2 · Choose deletion result</div>
     <div class="volume-delete-grid">
-      <label class="volume-delete-option ${blocked ? "disabled" : ""}"><input type="radio" name="vd_action" value="delete_claim" onchange="volumeDeleteGate()" ${blocked ? "disabled" : ""}>
+      <label class="volume-delete-option ${blocked || p.orphan ? "disabled" : ""}"><input type="radio" name="vd_action" value="delete_claim" onchange="volumeDeleteGate()" ${blocked || p.orphan ? "disabled" : ""}>
         <span><b>Delete claim, keep data</b><small>Homestead changes the PV policy to Retain, then deletes the PVC. The released data needs Kubernetes/Longhorn administration to recover or remove later.</small></span></label>
       <label class="volume-delete-option danger ${permanentBlocked ? "disabled" : ""}"><input type="radio" name="vd_action" value="delete_data" onchange="volumeDeleteGate()" ${permanentBlocked ? "disabled" : ""}>
-        <span><b>Permanently delete data</b><small>Homestead changes the PV policy to Delete. The PVC, PV, Longhorn volume, replicas and ${p.snapshots?.count || 0} on-volume snapshot(s) are removed. ${p.backups?.count || 0} external backup(s) remain.</small></span></label>
+        <span><b>Permanently delete data</b><small>${p.orphan ? "The PVC is already absent. Longhorn/CSI removes the retained backing objects through their normal controllers; finalizers are never forced." : "Homestead changes the PV policy to Delete. The PVC and backing PV are removed."} The Longhorn volume, replicas and ${p.snapshots?.count || 0} on-volume snapshot(s) are removed. ${p.backups?.count || 0} external backup(s) remain.</small></span></label>
     </div>
     ${warningRows ? `<div class="note dependency-danger"><b>Incomplete impact inventory</b><ul>${warningRows}</ul></div>` : ""}
     <div class="sec">3 · Confirm</div>
@@ -438,7 +438,7 @@ window.volumeDeleteGate = () => {
   const action = document.querySelector('input[name="vd_action"]:checked')?.value || "";
   const input = $("#vd_confirm"), button = $("#vd_go");
   if (!p || !input || !button) return;
-  const allowed = action && !p.blocked && (action !== "delete_data" || p.actions?.delete_data?.enabled);
+  const allowed = action && !p.blocked && p.actions?.[action]?.enabled;
   button.disabled = !allowed || !volumeDeleteConfirmationValid(p.name, input.value);
   button.textContent = action === "delete_claim" ? "Delete claim · keep data" : action === "delete_data" ? "Permanently delete data" : "Delete selected";
 };
@@ -451,8 +451,11 @@ window.volumeDeleteNow = async (namespace, name, uid) => {
   const button = $("#vd_go"); button.disabled = true; button.textContent = "Requesting deletion…";
   try {
     const result = await api("/api/volumes/delete", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ namespace, name, uid, action, confirmation }) });
-    toast(result.message || `${name} deletion started`, "ok"); closeModal(); resetPaint(); viewStorage();
+      body: JSON.stringify({ namespace, name, uid, action, confirmation,
+        volume: window.__volumeDeletePlan?.longhorn?.name || "", pv_uid: window.__volumeDeletePlan?.pv?.uid || "" }) });
+    toast(result.message || `${name} deletion started`, "ok"); closeModal();
+    if (window.noteOperation) noteOperation(result.operation);
+    resetPaint(); viewStorage();
   } catch (e) {
     button.disabled = false; volumeDeleteGate(); toast(e.message, "bad");
   }
@@ -1162,11 +1165,13 @@ window.saveShareEdit = async (name, button) => {
   } catch (e) { if (button) { button.disabled = false; button.innerHTML = `${icon("edit")}Save changes`; } toast(e.message, "bad"); }
 };
 window.rmShare = async name => {
-  if (!confirm(`Remove share "${name}" from samba?\n\nThe Longhorn volume and its data are kept.`)) return;
+  if (!confirm(`Remove share "${name}" from SMB?\n\nThe volume and data are kept. Its mount is removed after the SMB restart unless another configured share uses the same PVC. Other workloads may also keep the volume attached.`)) return;
   try {
-    await api("/api/shares/delete", { method: "POST", headers: { "Content-Type": "application/json" },
+    const result = await api("/api/shares/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }) });
-    toast(`share "${name}" removed`, "ok"); resetPaint(); viewShares();
+    toast(result.message || `share "${name}" removed`, "ok");
+    if (window.noteOperation) noteOperation(result.operation);
+    resetPaint(); viewShares();
   } catch (e) { toast(e.message, "bad"); }
 };
 

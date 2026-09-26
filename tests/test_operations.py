@@ -37,6 +37,23 @@ class OperationTests(unittest.TestCase):
         stored = json.loads((Path(self.tmp.name) / operations.STORE).read_text())
         self.assertEqual("homestead-pull-example", stored[0]["ref"]["name"])
 
+    def test_snapshot_cleanup_is_durable_exclusive_and_not_cancellable(self):
+        item = operations.start("snapshot-delete", "Remove checkpoint", {}, "/data-protection",
+                                {"volume": "vol", "uid": "snapshot-id", "phase": "request"})
+        self.assertFalse(item["cancellable"])
+        stored = json.loads((Path(self.tmp.name) / operations.STORE).read_text())
+        self.assertEqual("request", stored[0]["ref"]["phase"])
+        self.assertFalse(operations._plan_for(stored[0])["can"])
+        for kind in ("snapshot-delete", "snapshot-revert"):
+            with self.assertRaisesRegex(ValueError, "already active"):
+                operations.start(kind, "second", {}, "/", {"volume": "vol"})
+
+    def test_orphan_deletion_does_not_wait_on_a_recreated_same_name_claim(self):
+        self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/old"] = {"metadata": {"uid": "replacement"}}
+        result = operations._volume_delete({"ref": {"orphan": True, "namespace": "lab", "name": "old",
+            "action": "delete_data", "pv": "gone-pv", "volume": "gone-volume"}})
+        self.assertEqual("succeeded", result[0])
+
     def test_image_pull_survives_reload_and_completes_from_daemonset(self):
         item = operations.start(
             "image-pull", "Pull image", {"kind": "Image", "name": "image"}, "/image-cache",

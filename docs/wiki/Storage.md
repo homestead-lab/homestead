@@ -60,6 +60,13 @@ it. From the row:
   (the volume is released but its disk kept) or delete it for good, after
   typing its name.
 
+If the PVC is already gone, **Delete** inspects the exact retained Longhorn
+volume instead of failing on the missing claim. It checks PV ownership,
+workload references, CSI attachments and Longhorn attachment tickets. Only
+detached, unclaimed backing data can be removed, with a fresh identity check
+and exact-name confirmation. A Released PV is handed to CSI's normal Delete
+reclaim policy; finalizers are never forced. External backups are kept.
+
 ## Storage classes
 
 A storage class is the recipe for new volumes: how many copies, which engine,

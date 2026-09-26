@@ -1,5 +1,28 @@
 # Data protection
 
+## Snapshot timeline and cleanup
+
+The snapshot dialog shows local creation times, relative ages, and separate
+**User**, **Scheduled** (identified by recurring-job labels), and **System**
+checkpoints. Unknown sources stay unknown. The timeline is chronological, not
+a claim that snapshots form a single dependency chain after rollback.
+**Volume Head** is live data and has no snapshot-delete action.
+
+Deleting a recovery point or cleaning up a system checkpoint requires an impact
+review and exact-name confirmation. A persistent job follows the request,
+Longhorn merge/purge progress and verified disappearance from the snapshot and
+engine inventories. It survives refresh/restart, reports errors and offers
+**Carry on** after a timeout; removal cannot be cancelled or undone. Reported
+purge percentages are Longhorn's, not estimates of bytes reclaimed.
+
+Longhorn can retain a removed snapshot while it is the direct parent of Volume
+Head. The job explains this wait: taking a fresh snapshot creates a boundary
+that can allow merging to finish. Homestead never creates one automatically,
+force-detaches the volume, or strips finalizers. Purge may clean other already
+removed/eligible system checkpoints on the same volume. Shared blocks can remain,
+so snapshot size is not a guarantee of space freed. See the
+[Longhorn snapshot controller](https://github.com/longhorn/longhorn-manager/blob/v1.12.1/controller/snapshot_controller.go).
+
 **Data protection** runs Longhorn's own recurring jobs - snapshots, backups,
 trims and cleanups - so they keep running whether or not Homestead is.
 
