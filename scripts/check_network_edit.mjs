@@ -32,21 +32,21 @@ try {
   await page.getByRole("button", {name: "Configure default / selected VIP", exact: true}).click();
   assert.equal(await page.locator("#net_existing").inputValue(), "frigate");
   assert.equal(await page.locator(".np-target").inputValue(), "5001");
-  await page.locator("#net_mode").selectOption("shared");
-  await page.getByRole("button", {name: "Review plan", exact: true}).click();
-  await page.getByRole("button", {name: "Update service", exact: true}).waitFor();
+  await page.locator("input[name=net_access][value=shared]").check();
+  await page.getByRole("button", {name: "Review changes", exact: true}).click();
+  await page.getByRole("button", {name: "Apply changes", exact: true}).waitFor();
   // Changed choices cannot submit the old review.
-  await page.locator("#net_mode").selectOption("manual");
-  assert.equal(await page.getByRole("button", {name: "Update service", exact: true}).count(), 0);
-  await page.locator("#net_lb_pick").selectOption("192.0.2.108");
+  await page.locator("input[name=net_access][value=manual]").check();
+  assert.equal(await page.getByRole("button", {name: "Apply changes", exact: true}).count(), 0);
+  await page.locator('input[name=net_address][value="192.0.2.108"]').check();
   for (const width of [1280, 390, 320]) {
     await page.setViewportSize({width, height: 1000});
     const bounds = await page.locator("#mbody").evaluate(e => ({w: e.clientWidth, s: e.scrollWidth}));
     assert.ok(bounds.s <= bounds.w + 1, `VIP editor ${width}: overflow`);
     await page.screenshot({path: `release-assets/network-edit-checks/service-${width}.png`});
   }
-  await page.getByRole("button", {name: "Review plan", exact: true}).click();
-  await page.getByRole("button", {name: "Update service", exact: true}).click();
+  await page.getByRole("button", {name: "Review changes", exact: true}).click();
+  await page.getByRole("button", {name: "Apply changes", exact: true}).click();
   await page.locator("#e_workload_name").waitFor();
   assert.equal(await page.locator("#e_workload_name").inputValue(), "unsaved-name");
   const saved = await page.evaluate(() => window.__sent[0]);
@@ -60,7 +60,7 @@ try {
   await page.locator("#v_name").fill("new-vm");
   await page.locator("#v_pass").fill("demo-only-password");
   await page.getByRole("button", {name: "Create VM", exact: true}).click();
-  await page.locator("#net_workload").waitFor();
+  await page.locator("#net_workload").waitFor({state: "attached"});
   assert.equal(await page.locator("#net_workload").inputValue(), "lab/new-vm/VirtualMachine");
   assert.equal(await page.locator("#net_lb_ip").inputValue(), "192.0.2.109");
   await page.evaluate(() => {closeModal(); return vmEdit("lab", "new-vm");});
