@@ -23,7 +23,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.159")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.160")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -5822,7 +5822,7 @@ class H(BaseHTTPRequestHandler):
                 if n > 0:
                     plan = workload_start_plan(ns, name, n)
                     if plan["blocked"]:
-                        return self._send(409, {"error": "no eligible host can start this workload", "plan": plan})
+                        return self._send(409, {"error": "not enough eligible capacity for the requested replicas", "plan": plan})
                     if plan["requires_confirmation"] and b.get("confirm_capacity") is not True:
                         return self._send(409, {"error": "review node memory before starting", "plan": plan})
                 if n:
@@ -6602,7 +6602,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.159 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.160 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

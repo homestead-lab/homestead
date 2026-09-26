@@ -68,6 +68,35 @@ old volume is kept until you remove it. A new volume is given the old
 location's owner and permissions, whether its data comes along or it starts
 empty, so an app that runs as its own user can still write to it.
 
+### Start and scale capacity checks
+
+Before increasing a Deployment's replica count, Homestead reads reservations
+from assigned pods across all namespaces, including system, pending-on-a-host
+and terminating pods. Completed pods do not reserve capacity. CPU, memory,
+pod slots, declared device resources and ephemeral-storage requests are compared
+against each eligible node's remaining allocatable resources. If the checked
+resources cannot fit the requested number of additional pods, the API refuses
+the start even when memory warnings were acknowledged.
+
+The review separates **live RAM**, **already reserved RAM**, **per-pod requests**
+and **estimated memory usage from limits**. Resource calculations include init
+stages, restartable init sidecars, pod overhead and pod-level budgets. During an
+in-place resize, higher observed allocations are conservatively retained.
+Projection starts with the greater of live RAM and booked requests, then adds
+the estimated new pods that could fit on that host. CPU is shown as a percentage
+of one core (100% = one core).
+
+Missing reservations or metrics, unbounded memory, competing unscheduled pods,
+and unverified placement constraints require review; unknown data is never a
+green safety result. The API recalculates immediately before scaling. This is
+a snapshot, **not a capacity reservation or OOM guarantee**. It does not yet
+fully simulate pod affinity, storage topology, host-port conflicts, dynamic
+resource allocation or concurrent admissions. Deploy/import, moves, updates
+and VM launches are separate paths; expanding this guard to those is planned.
+
+The arithmetic follows Kubernetes' [resource request model](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/)
+and [init-sidecar accounting](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/).
+
 ## Updates
 
 Twice a day - or whenever you press **Check images** - Homestead checks each container's image against its registry - by digest for

@@ -17,7 +17,7 @@ Two things this gets right that a plain nodeSelector does not:
 """
 import json
 import homestead_names as NAMES
-import re
+import homestead_pod_resources as RESOURCES
 import time
 import urllib.error
 
@@ -211,57 +211,19 @@ def plan(ns, name, wl_cpu=0.0, wl_mem_mb=0.0):
 
 
 def _memory_bytes(value):
-    """Kubernetes memory quantity, including decimal and binary suffixes."""
-    match = re.fullmatch(r"(\d+(?:\.\d+)?)([KMGTPE]i?|)", str(value or "").strip())
-    if not match:
-        return 0
-    unit = match.group(2)
-    power = {"K": 1, "M": 2, "G": 3, "T": 4, "P": 5, "E": 6}
-    if not unit:
-        return int(float(match.group(1)))
-    base = 1024 if unit.endswith("i") else 1000
-    return int(float(match.group(1)) * base ** power[unit[0]])
+    return RESOURCES.quantity(value)
 
 
 def _pod_memory(spec):
-    """Use the upper bound when set; unbounded containers require a warning."""
-    total = 0
-    unbounded = []
-    for container in spec.get("containers", []) or []:
-        resources = container.get("resources") or {}
-        limit = _memory_bytes((resources.get("limits") or {}).get("memory"))
-        request = _memory_bytes((resources.get("requests") or {}).get("memory"))
-        total += max(limit, request)
-        if not limit:
-            unbounded.append(container.get("name") or "container")
-    init_memory = []
-    for container in spec.get("initContainers", []) or []:
-        resources = container.get("resources") or {}
-        limit = _memory_bytes((resources.get("limits") or {}).get("memory"))
-        request = _memory_bytes((resources.get("requests") or {}).get("memory"))
-        init_memory.append(max(limit, request))
-        if not limit:
-            unbounded.append(container.get("name") or "init container")
-    init_max = max(init_memory, default=0)
-    return max(total, init_max) + _memory_bytes((spec.get("overhead") or {}).get("memory")), unbounded
+    return RESOURCES.memory_estimate(spec)
 
 
 def _cpu_millicores(value):
-    value = str(value or "").strip()
-    match = re.fullmatch(r"(\d+(?:\.\d+)?)([num]?)", value)
-    if not match:
-        return 0
-    return float(match.group(1)) * {"": 1000, "m": 1, "u": 0.001, "n": 0.000001}[match.group(2)]
+    return RESOURCES.quantity(value, "cpu")
 
 
 def _pod_request(spec, resource):
-    """Effective request for ordinary pods; scheduler uses max(app sum, init max)."""
-    parser = _memory_bytes if resource == "memory" else _cpu_millicores
-    regular = sum(parser(((c.get("resources") or {}).get("requests") or {}).get(resource))
-                  for c in spec.get("containers", []) or [])
-    init = max((parser(((c.get("resources") or {}).get("requests") or {}).get(resource))
-                for c in spec.get("initContainers", []) or []), default=0)
-    return max(regular, init) + parser((spec.get("overhead") or {}).get(resource))
+    return RESOURCES.pod_request(spec, resource)
 
 
 def _selector_match(requirement, value, present):
@@ -347,13 +309,55 @@ def _start_scheduler_check(spec, node):
             reasons.append(f"{label} request exceeds node allocatable")
         elif request and not capacity:
             cautions.append(f"node allocatable {label} is unavailable")
-    if any(c.get("restartPolicy") == "Always" for c in spec.get("initContainers") or []):
-        cautions.append("restartable init sidecar resource use needs review")
+    if spec.get("resourceClaims"):
+        cautions.append("dynamic resource claims need scheduler review")
     if ((spec.get("affinity") or {}).get("podAffinity") or
             (spec.get("affinity") or {}).get("podAntiAffinity") or
             any(c.get("whenUnsatisfiable") == "DoNotSchedule" for c in spec.get("topologySpreadConstraints") or [])):
         cautions.append("pod affinity or topology spread may narrow placement")
     return reasons, cautions
+
+
+def _reservation_snapshot():
+    try:
+        result = kget("/api/v1/pods")
+        if not isinstance(result.get("items"), list) or (result.get("metadata") or {}).get("continue"):
+            raise ValueError("incomplete pod list")
+        booked, pending, resize, dra = RESOURCES.reservations(result["items"])
+        warnings = []
+        if pending:
+            warnings.append(f"{pending} unscheduled pod(s) also compete for capacity")
+        if resize:
+            warnings.append("in-place resizing uses the higher observed resource reservation")
+        if dra:
+            warnings.append("existing dynamic resource allocations are not fully modelled")
+        return booked, True, warnings
+    except Exception:
+        return {}, False, ["existing pod reservations are unavailable; free scheduler capacity is unknown"]
+
+
+def _resource_fit(spec, node, booked, known, additional):
+    reasons, warnings, limits = [], [], [additional]
+    resources = RESOURCES.resource_names(spec) | {"pods"}
+    for resource in sorted(resources):
+        request = 1 if resource == "pods" else _pod_request(spec, resource)
+        if not request:
+            continue
+        allocatable = node.get("allocatable") or {}
+        if resource not in allocatable:
+            if "/" in resource or resource.startswith("hugepages-"):
+                reasons.append(f"node does not advertise requested {resource}")
+                limits.append(0)
+            else:
+                warnings.append(f"node allocatable {resource} is unavailable")
+            continue
+        available = RESOURCES.quantity(allocatable[resource], resource)
+        free = max(0, available - booked.get(resource, 0))
+        limits.append(free // request)
+        if request > free:
+            reasons.append(f"{resource} request exceeds {'remaining scheduler capacity' if known else 'node allocatable'}")
+    # This is an upper bound under checked requests, not a scheduler guarantee.
+    return min(limits), reasons, warnings
 
 
 def start_plan(ns, name, replicas=1, warning_percent=88):
@@ -372,10 +376,15 @@ def start_plan(ns, name, replicas=1, warning_percent=88):
     reqs = requirements(dep)
     pod_spec = dep["spec"]["template"]["spec"]
     memory, unbounded = _pod_memory(pod_spec)
+    reservations, reservations_known, snapshot_warnings = _reservation_snapshot() if additional else ({}, False, [])
     candidates = []
     for node in get_nodes():
         ok, reasons = satisfies(node, reqs)
         scheduler_reasons, scheduler_cautions = _start_scheduler_check(pod_spec, node)
+        booked = reservations.get(node["name"], {})
+        slots, fit_reasons, fit_warnings = _resource_fit(pod_spec, node, booked, reservations_known, additional)
+        scheduler_reasons.extend(fit_reasons)
+        scheduler_cautions.extend(fit_warnings + snapshot_warnings)
         reasons.extend(scheduler_reasons)
         ok = ok and not scheduler_reasons
         if reqs["pinned"] and node["name"] != reqs["pinned"]:
@@ -383,7 +392,9 @@ def start_plan(ns, name, replicas=1, warning_percent=88):
             reasons.append(f"pinned to {reqs['pinned']}")
         capacity = float(node.get("mem_cap_gb") or 0)
         used = float(node.get("mem_used_gb") or 0)
-        projected = used + additional * memory / 1024**3
+        reserved_gb = booked.get("memory", 0) / 1024**3
+        proposed_here = min(additional, slots) if ok else 0
+        projected = max(used, reserved_gb) + proposed_here * memory / 1024**3
         percent = round(projected / capacity * 100, 1) if capacity else None
         metrics = bool(node.get("mem_metrics_available", True))
         warnings = []
@@ -403,17 +414,29 @@ def start_plan(ns, name, replicas=1, warning_percent=88):
         candidates.append({"name": node["name"], "eligible": ok, "reasons": reasons,
                            "used_gb": round(used, 1), "capacity_gb": capacity,
                            "projected_gb": round(projected, 1), "projected_percent": percent,
-                           "metrics_available": metrics, "warnings": warnings})
+                           "metrics_available": metrics, "warnings": warnings,
+                           "reservations_known": reservations_known, "reserved_gb": round(reserved_gb, 2) if reservations_known else None,
+                           "allocatable_gb": round(_memory_bytes((node.get("allocatable") or {}).get("memory")) / 1024**3, 2),
+                           "reserved_cpu_percent": round(booked.get("cpu", 0) / 10, 1) if reservations_known else None,
+                           "request_slots": slots if reservations_known else None,
+                           "projected_pods": proposed_here})
     eligible = [node for node in candidates if node["eligible"]]
     warnings = sorted({message for node in eligible for message in node["warnings"]})
     if additional and not eligible:
         warnings.append("no ready host satisfies this workload's placement requirements")
+    total_slots = sum(node["request_slots"] or 0 for node in eligible) if reservations_known else None
+    insufficient = bool(additional and total_slots is not None and total_slots < additional)
+    if insufficient and eligible:
+        warnings.append(f"the requested {additional} additional replicas exceed the {total_slots} resource slots across eligible hosts")
     return {"namespace": ns, "name": name, "current": current, "requested": wanted,
             "additional": additional, "pod_memory_gb": round(memory / 1024**3, 2),
+            "pod_request_gb": round(_pod_request(pod_spec, "memory") / 1024**3, 2),
+            "pod_cpu_request_percent": round(_pod_request(pod_spec, "cpu") / 10, 1),
+            "reservations_known": reservations_known, "resource_slots": total_slots,
             "unbounded": unbounded, "warning_percent": warning_percent,
             "candidates": candidates, "warnings": warnings,
             "requires_confirmation": bool(additional and warnings),
-            "blocked": bool(additional and not eligible)}
+            "blocked": bool(additional and (not eligible or insufficient))}
 
 
 def impact(node):
