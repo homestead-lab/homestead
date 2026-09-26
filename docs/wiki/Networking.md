@@ -132,6 +132,19 @@ LAN like any other machine. **＋ LAN network** makes one:
 
 ## IP addresses
 
+### Choosing an app or VM address
+
+The **Network access** editor separates the current connection from the address
+you want to use. Choose **Use the default VIP**, **Choose a VIP**, or automatic
+allocation, then review the address and ports before applying. Kubernetes
+Service names and connection selection are under **Advanced**.
+
+On k3s, ServiceLB can report a host's own address for a LoadBalancer Service.
+The editor labels this **Node address — not a VIP** and never offers that host
+address as a selectable VIP. Moving from this connection to a VIP adds a separate
+Service, leaving the working node connection intact. It does not remove the old
+connection automatically. A single-node cluster cannot provide host failover.
+
 **IP addresses** documents your network, a subnet at a time: what lives at each
 address, its MAC, how it gets it (static, DHCP reservation, DHCP), a category
 (router, switch, access point, NAS, camera...) and notes. What the cluster uses -

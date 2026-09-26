@@ -28,6 +28,33 @@ function setup() {
   return { ctx, elements, requests, notices };
 }
 
+test("node addresses are excluded from every VIP source and stale selections", async () => {
+  const { ctx } = setup();
+  ctx.document = {addEventListener() {}};
+  vm.runInContext(fs.readFileSync("web/js/views-workloads.js", "utf8"), ctx);
+  const ip = "192.0.2.109";
+  const choices = await ctx.vipChoices({
+    node_ips: [ip], registered_vips: [{ip, free:true}], available_vips:[ip],
+    shared_vip:{ip}, vips:[{ip, services:3, listeners:[]}],
+  });
+  assert.equal(choices.shared, "");
+  assert.equal(choices.free.length, 0);
+  assert.equal(choices.own.length, 0);
+  assert.equal(choices.used.length, 0);
+  assert.doesNotMatch(ctx.vipPicker("test", ip, choices), /192\.0\.2\.109/);
+  assert.doesNotMatch(ctx.networkVipCards(ip, choices), /192\.0\.2\.109/);
+});
+
+test("only unclassed node-address Services are treated as node access", () => {
+  const {ctx} = setup();
+  const data={node_ips:["192.0.2.109"], services:[{namespace:"lab",name:"speedtest-vip"}]};
+  const row={type:"LoadBalancer",external_ips:["192.0.2.109"]};
+  assert.equal(ctx.networkIsNodeAccess(row,data),true);
+  assert.equal(ctx.networkIsNodeAccess({...row,lb_class:"kube-vip.io/kube-vip-class"},data),false);
+  assert.equal(ctx.networkIsNodeAccess({...row,external_ips:[]},data),false);
+  assert.equal(ctx.networkAdditionalName(data,"lab","speedtest"),"speedtest-vip-2");
+});
+
 test("VIP cards separate identity, usage and actions; default cannot be removed", () => {
   const { ctx } = setup();
   const html = ctx.networkVipCard({ ip: "192.0.2.108", free: false, label: "<media>", used_by: ["lab/media"] }, { shared_vip: { ip: "192.0.2.108" } });

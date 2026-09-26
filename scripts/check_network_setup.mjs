@@ -59,15 +59,16 @@ try {
   await page.evaluate(() => closeModal());
   await page.locator(".vip-card").nth(1).getByRole("button", { name: "Use this VIP" }).click();
   assert.equal(await page.locator("#net_mode").inputValue(), "manual");
-  assert.equal(await page.locator("#net_lb_pick").inputValue(), "192.0.2.109");
+  assert.equal(await page.locator("#net_lb_ip").inputValue(), "192.0.2.109");
   assert.equal(await page.evaluate(() => networkConfig().vip), "192.0.2.109");
   await page.evaluate(() => closeModal());
   await page.getByRole("button", { name: "Expose workload" }).click();
-  await page.locator("#net_workload").waitFor();
+  await page.getByText("Connect a workload to your network", {exact:true}).waitFor();
+  await page.locator("#net_workload").waitFor({state: "attached"});
   assert.equal(await page.locator("#net_workload").inputValue(), "lab/guest/VirtualMachine");
   assert.equal(await page.locator("#net_mode").inputValue(), "shared");
-  await page.locator("#net_mode").selectOption("manual");
-  await page.locator("#net_lb_pick").selectOption("192.0.2.109");
+  await page.locator("input[name=net_access][value=manual]").check();
+  await page.locator('input[name=net_address][value="192.0.2.109"]').check();
   assert.equal(await page.evaluate(() => networkConfig().workload_kind), "VirtualMachine");
   for (const width of [1280, 390, 320]) {
     await page.setViewportSize({ width, height: 1000 });
