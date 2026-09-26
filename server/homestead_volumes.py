@@ -35,7 +35,10 @@ def _identity(namespace, name):
 
 def _items(path, label, warnings, optional=False):
     try:
-        return kget(path).get("items", []) or []
+        listing = kget(path)
+        if not isinstance(listing.get("items"), list) or listing.get("metadata", {}).get("continue"):
+            raise ValueError("incomplete inventory")
+        return listing["items"]
     except urllib.error.HTTPError as error:
         if optional and error.code == 404:
             return []
@@ -142,9 +145,14 @@ def _consumers(namespace, claim, warnings):
     return result
 
 
-def deletion_plan(namespace, name):
+def deletion_plan(namespace, name, volume=""):
     namespace, name = _identity(namespace, name)
-    pvc = kget(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{name}")
+    try:
+        pvc = kget(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{name}")
+    except urllib.error.HTTPError as error:
+        if error.code == 404 and volume:
+            return orphan_plan(namespace, name, volume)
+        raise
     meta, spec, status = pvc.get("metadata", {}) or {}, pvc.get("spec", {}) or {}, pvc.get("status", {}) or {}
     warnings = []
     consumers = _consumers(namespace, name, warnings)
@@ -168,6 +176,8 @@ def deletion_plan(namespace, name):
     csi = pv_spec.get("csi", {}) or {}
     longhorn_name = csi.get("volumeHandle") or pv_name
     driver = csi.get("driver", "")
+    if volume and longhorn_name != volume:
+        raise ValueError("This name now belongs to a different backing volume; its claim will not be deleted")
 
     longhorn = {}
     longhorn_inventory_complete = True
@@ -283,7 +293,7 @@ def delete(cfg):
     action = cfg.get("action")
     if action not in ("delete_claim", "delete_data"):
         raise ValueError("action must be delete_claim or delete_data")
-    plan = deletion_plan(namespace, name)
+    plan = deletion_plan(namespace, name, cfg.get("volume", ""))
     if not cfg.get("uid") or cfg.get("uid") != plan["uid"]:
         raise ValueError("the volume changed after preview; review its impact again")
     if cfg.get("confirmation") != name:
@@ -292,6 +302,8 @@ def delete(cfg):
         raise PermissionError("volume deletion blocked: " + "; ".join(plan["blocking_reasons"]))
     if action == "delete_data" and not plan["inventory_complete"]:
         raise PermissionError("permanent deletion is blocked until snapshot and backup impact can be checked")
+    if plan.get("orphan"):
+        return delete_orphan(plan, cfg)
 
     # Clear Homestead's own finished Jobs first: while one exists, Kubernetes
     # can hold the PVC in Terminating even though the Job stopped long ago.
@@ -322,3 +334,96 @@ def delete(cfg):
         "message": "PVC deletion requested; backing data is retained" if action == "delete_claim"
                    else "PVC and backing-data deletion requested",
     }
+
+
+def orphan_plan(namespace, name, volume):
+    """Explicit retained backing volume, never guess a PVC from a stale name."""
+    _, volume = _identity(namespace, volume)
+    path = f"/apis/longhorn.io/v1beta2/namespaces/{LONGHORN_NAMESPACE}"
+    lh = kget(f"{path}/volumes/{volume}")
+    meta, spec, status = lh.get("metadata") or {}, lh.get("spec") or {}, lh.get("status") or {}
+    ks = status.get("kubernetesStatus") or {}
+    if ks.get("namespace") not in (None, "", namespace) or ks.get("pvcName") not in (None, "", name):
+        raise ValueError("Backing volume identity does not match the selected former claim")
+    warnings, blockers = [], []
+    consumers = _consumers(namespace, name, warnings)
+    # Include stopped CronJobs too; an old claim name must not be broken by cleanup.
+    for job in _items(f"/apis/batch/v1/namespaces/{namespace}/cronjobs", "cronjob", warnings):
+        template = ((job.get("spec") or {}).get("jobTemplate") or {}).get("spec") or {}
+        row = _consumer("CronJob", job, (template.get("template") or {}).get("spec") or {}, name, False)
+        if row:
+            consumers.append(row)
+    if consumers:
+        blockers.append("Remove remaining workload references to the former claim first")
+    if namespace in SYSTEM_NAMESPACES:
+        blockers.append("System namespace backing data requires Kubernetes administration tools")
+    if status.get("state") != "detached" or status.get("currentNodeID") or spec.get("nodeID") or spec.get("migrationNodeID"):
+        blockers.append("Longhorn must be fully detached with no requested attachment")
+    pvs = [p for p in _items("/api/v1/persistentvolumes", "persistent volume", warnings)
+           if ((p.get("spec") or {}).get("csi") or {}).get("driver") == "driver.longhorn.io"
+           and ((p.get("spec") or {}).get("csi") or {}).get("volumeHandle") == volume]
+    if len(pvs) > 1:
+        blockers.append("Multiple PVs refer to this Longhorn volume; resolve ownership first")
+    pv = pvs[0] if len(pvs) == 1 else {}
+    pm, ps = pv.get("metadata") or {}, pv.get("spec") or {}
+    if pv and (pv.get("status") or {}).get("phase") != "Released":
+        blockers.append("The backing PV is not Released; it may be bound or available for reuse")
+    claim_ref = ps.get("claimRef") or {}
+    if pv and (claim_ref.get("name") != name or claim_ref.get("namespace") != namespace):
+        blockers.append("The PV claim reference differs from the selected former claim")
+    for claim in _items("/api/v1/persistentvolumeclaims", "claim", warnings):
+        cm, cs = claim.get("metadata") or {}, claim.get("spec") or {}
+        if (cm.get("namespace"), cm.get("name")) == (namespace, name) or cs.get("volumeName") in {p["metadata"]["name"] for p in pvs}:
+            blockers.append("A PVC now references this name or backing PV; refresh before deleting")
+    for attachment in _items("/apis/storage.k8s.io/v1/volumeattachments", "CSI attachment", warnings):
+        if ((attachment.get("spec") or {}).get("source") or {}).get("persistentVolumeName") in {p["metadata"]["name"] for p in pvs}:
+            blockers.append("A CSI attachment still references this backing PV")
+    for attachment in _items(f"{path}/volumeattachments", "Longhorn attachment", warnings):
+        a = attachment.get("spec") or {}
+        if a.get("volume") == volume and a.get("attachmentTickets"):
+            blockers.append("Longhorn attachment tickets still request this volume")
+    snaps = [s for s in _items(f"{path}/snapshots", "snapshot", warnings) if (s.get("spec") or {}).get("volume") == volume]
+    bks = [b for b in _items(f"{path}/backups", "backup", warnings)
+           if ((b.get("metadata") or {}).get("labels") or {}).get("backup-volume", (b.get("status") or {}).get("volumeName")) == volume]
+    if warnings:
+        blockers.append("Impact inventory is incomplete")
+    if not meta.get("uid") or not meta.get("resourceVersion") or (pv and (not pm.get("uid") or not pm.get("resourceVersion"))):
+        blockers.append("Backing object identity/version is unavailable")
+    return {"orphan": True, "namespace": namespace, "name": name, "uid": meta.get("uid", ""),
+            "resource_version": meta.get("resourceVersion", ""), "phase": "PVC already absent",
+            "requested_storage": "", "consumers": consumers, "warnings": warnings,
+            "snapshots": {"count": len(snaps)}, "backups": {"count": len(bks)},
+            "inventory_complete": not warnings, "blocked": bool(blockers), "blocking_reasons": blockers,
+            "pv": {"name": pm.get("name", ""), "uid": pm.get("uid", ""), "resource_version": pm.get("resourceVersion", ""),
+                   "reclaim_policy": ps.get("persistentVolumeReclaimPolicy", "No PV")},
+            "longhorn": {"name": volume, "state": status.get("state"), "attached_node": status.get("currentNodeID", ""),
+                         "replicas": spec.get("numberOfReplicas", 0), "actual_gb": round(int(status.get("actualSize") or 0) / 1024**3, 2)},
+            "actions": {"detach": {"complete": not blockers}, "delete_claim": {"enabled": False},
+                        "delete_data": {"enabled": not blockers}}}
+
+
+def delete_orphan(plan, cfg):
+    if cfg.get("action") != "delete_data":
+        raise ValueError("The PVC is already absent; only explicit backing-data deletion applies")
+    pv = plan["pv"]
+    if cfg.get("pv_uid", "") != pv.get("uid", ""):
+        raise ValueError("Backing PV changed after preview; review again")
+    if pv["name"]:
+        # A Released PV with Delete policy is reclaimed by CSI, with its own
+        # finalizers. Test the complete observed revision before changing policy.
+        ksend("PATCH", f"/api/v1/persistentvolumes/{pv['name']}", [
+            {"op": "test", "path": "/metadata/uid", "value": pv["uid"]},
+            {"op": "test", "path": "/metadata/resourceVersion", "value": pv["resource_version"]},
+            {"op": "test", "path": "/status/phase", "value": "Released"},
+            {"op": "add", "path": "/spec/persistentVolumeReclaimPolicy", "value": "Delete"}],
+              ctype="application/json-patch+json")
+    else:
+        ksend("DELETE", f"/apis/longhorn.io/v1beta2/namespaces/{LONGHORN_NAMESPACE}/volumes/{plan['longhorn']['name']}",
+              {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {
+                  "uid": plan["uid"], "resourceVersion": plan["resource_version"]}})
+    for key in list(cache or {}):
+        if key.startswith(("vol", "stor", "flow", "lhov")):
+            cache.pop(key, None)
+    return {"ok": True, "orphan": True, "namespace": plan["namespace"], "name": plan["name"],
+            "action": "delete_data", "pv": pv["name"], "longhorn_volume": plan["longhorn"]["name"],
+            "message": "Retained backing-data deletion requested; external backups are kept"}

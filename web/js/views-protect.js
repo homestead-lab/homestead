@@ -569,6 +569,29 @@ window.lhAssignSave = async vol => {
 };
 
 /* ---------------- snapshots & backups ---------------- */
+function snapshotTimeline(snaps, vol, label) {
+  const sorted = [...snaps].sort((a, b) => (Date.parse(a.created) || 0) - (Date.parse(b.created) || 0));
+  return `<div class="snapshot-timeline" aria-label="Snapshot creation timeline">${sorted.map(s => {
+    const source = s.source || (s.user_created ? "user" : "unknown");
+    const title = {system: "System", user: "User", scheduled: "Scheduled", unknown: "Unknown source"}[source] || "Unknown source";
+    const date = new Date(s.created), valid = Number.isFinite(date.getTime());
+    const age = valid ? Math.max(0, Math.floor((Date.now() - date.getTime()) / 60000)) : 0;
+    const ago = age >= 1440 ? `${Math.floor(age / 1440)}d ago` : age >= 60 ? `${Math.floor(age / 60)}h ago` : `${age}m ago`;
+    return `<article class="snapshot-point ${source === "system" ? "system" : ""}">
+      <div class="snapshot-marker">${icon("snapshot")}</div><div class="snapshot-content">
+      <div class="between"><b class="mono small">${esc(s.name)}</b><span class="tag ${source === "system" ? "info" : ""}">${title}</span></div>
+      <div class="snapshot-date">${valid ? `<time datetime="${esc(s.created)}" data-tip="${esc(s.created)}">${esc(date.toLocaleString(undefined, {day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit"}))}</time><span class="dim xs">${ago}</span>` : '<span class="dim small">Snapshot time unavailable</span>'}</div>
+      <div class="row small"><span class="dim">${esc(s.size_mb)} MiB</span>${s.deleting || s.removed ? '<span class="tag warn">cleanup pending</span>' : !s.ready ? '<span class="tag warn">not ready</span>' : ""}
+      ${(s.children || []).includes("volume-head") ? `<span class="tag" data-tip="This snapshot is the parent of live data. After marking it removed, Longhorn may need a fresh snapshot boundary before it can reclaim blocks.">parent of Volume Head</span>` : ""}</div>
+      ${source === "system" ? '<p class="dim xs">Longhorn-created checkpoint (for example expansion or rebuild), not a user recovery point.</p>' : ""}
+      ${s.error ? `<p class="warntext small">${esc(s.error)}</p>` : ""}
+      <div class="row snapshot-actions">${source !== "system" && source !== "unknown" && s.ready && !s.deleting && !s.removed ? `<button class="btn sm" data-need="admin" onclick="lhRevert('${esc(vol)}','${esc(s.name)}','${esc(label)}')">${icon("rollback")}Roll back</button>` : ""}
+      <button class="btn sm danger" data-need="admin" ${source === "unknown" ? "disabled" : ""} onclick="lhSnapDel('${esc(s.name)}','${esc(vol)}','${esc(label)}')">${icon("trash")}${s.deleting ? "Track cleanup" : source === "system" ? "Clean up" : "Delete"}</button></div>
+      </div></article>`;
+  }).join("") || '<div class="empty small">No snapshots yet</div>'}
+    <article class="snapshot-point head"><div class="snapshot-marker">${icon("play")}</div><div class="snapshot-content"><b>Volume Head</b><span class="dim small">Live data · now · never deleted as a snapshot</span></div></article></div>`;
+}
+
 window.lhSnaps = async (vol, label) => {
   modal("Snapshots · " + label, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
   try {
@@ -580,21 +603,11 @@ window.lhSnaps = async (vol, label) => {
       <div class="row" style="margin-bottom:16px">
         <button class="btn pri" data-need="operator" onclick="lhSnapNow('${esc(vol)}','${esc(label)}')">Take snapshot now</button>
         <button class="btn" data-need="operator" onclick="lhBackupNow('${esc(vol)}','${esc(label)}')">Back up now</button>
+        <button class="btn" onclick="lhSnaps('${esc(vol)}','${esc(label)}')">${icon("refresh")}Refresh</button>
       </div>
       <div class="sec">Snapshots (${snaps.length})</div>
-      <div class="card flat pad0"><div class="tblwrap"><table data-sort="snapshots" class="tbl stack">
-        <thead><tr><th>Name</th><th data-nosort>Created</th><th>Size</th><th>Source</th><th></th></tr></thead><tbody>
-        ${snaps.map(s => `<tr>
-          <td class="mono small">${esc(s.name.slice(0, 28))}</td>
-          <td class="small dim">${esc((s.created || "").replace("T", " ").replace("Z", ""))}</td>
-          <td class="mono">${s.size_mb} MB</td>
-          <td>${s.user_created ? '<span class="tag">manual</span>' : '<span class="tag info">scheduled</span>'}
-              ${s.ready ? "" : '<span class="tag warn">not ready</span>'}</td>
-          <td><div class="row" style="gap:6px">${s.ready ? `<button class="btn sm" data-need="admin" data-tip="Put the volume back as it was then"
-              onclick="lhRevert('${esc(vol)}','${esc(s.name)}','${esc(label)}')">${icon("rollback")}Roll back</button>` : ""}
-            <button class="btn sm danger" data-need="admin" onclick="lhSnapDel('${esc(s.name)}','${esc(vol)}','${esc(label)}')">✕</button></div></td>
-        </tr>`).join("") || `<tr><td colspan=5 class="empty">no snapshots yet</td></tr>`}
-      </tbody></table></div></div>
+      <p class="dim small">Creation timeline, oldest first. Checkpoint ancestry can branch after rollback; this is not a dependency graph.</p>
+      ${snapshotTimeline(snaps, vol, label)}
       <div class="sec">Backups (${bks.length})</div>
       ${backupTable(bks, vol, label)}`;
     if (window.applyRole) window.applyRole();
@@ -752,12 +765,33 @@ window.lhRevertGo = async (vol, snap) => {
 };
 
 window.lhSnapDel = async (name, vol, label) => {
-  if (!confirm(`Delete snapshot "${name}"?`)) return;
+  childModal("Remove snapshot", '<div class="empty"><span class="spin2"></span>Checking Longhorn checkpoint</div>');
   try {
-    await api("/api/lh/snapshot/delete", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }) });
-    toast("deleted", "ok"); lhSnaps(vol, label);
-  } catch (e) { toast(e.message, "bad"); }
+    const p = await api(`/api/lh/snapshot/delete-plan?volume=${encodeURIComponent(vol)}&name=${encodeURIComponent(name)}`);
+    window.__snapshotDeletePlan = p;
+    $("#mbody").innerHTML = `<div class="note"><b>${p.source === "system" ? "System checkpoint cleanup" : "Remove recovery point"}</b><p>${p.source === "system" ? "Longhorn created this checkpoint. Homestead requests cleanup through Longhorn's controller; it never removes active Volume Head or forces finalizers." : "This recovery point will no longer be usable for rollback. Current files and external backups are not deleted."}</p>
+      Longhorn merges shared blocks and may also purge other already-removed or eligible system checkpoints on this volume. The displayed snapshot size is not a promise of space recovered.</div>
+      ${p.head_parent ? '<div class="note warn">This is the parent of Volume Head. Cleanup can wait until you take a fresh snapshot. Homestead will show that dependency in the job; it will not create snapshots automatically.</div>' : ""}
+      ${(p.blockers || []).map(b => `<div class="note bad">${esc(b)}</div>`).join("")}
+      <p class="dim small">A persistent job tracks request, merge/purge and verified removal. Closing this dialog does not stop it. Removal cannot be undone or cancelled.</p>
+      <div class="f"><label>Type <b class="mono">${esc(p.name)}</b> to confirm</label><input id="sd_confirm" autocomplete="off" oninput="lhSnapDeleteGate()"></div>
+      <div class="modalactions"><button class="btn" onclick="modalBack()">Back</button><button id="sd_go" class="btn danger" data-need="admin" disabled onclick="lhSnapDeleteGo()">Start cleanup job</button></div>`;
+  } catch (e) { $("#mbody").innerHTML = `<div class="note bad">${esc(e.message)}</div>`; }
+};
+window.lhSnapDeleteGate = () => {
+  const p = window.__snapshotDeletePlan;
+  $("#sd_go").disabled = !p?.ready || $("#sd_confirm").value.trim() !== p.name;
+};
+window.lhSnapDeleteGo = async () => {
+  const p = window.__snapshotDeletePlan, confirmation = $("#sd_confirm").value.trim();
+  if (!p?.ready || confirmation !== p.name) return;
+  $("#sd_go").disabled = true;
+  try {
+    const r = await api("/api/lh/snapshot/delete", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({name: p.name, volume: p.volume, uid: p.uid, volume_uid: p.volume_uid, confirmation})});
+    closeModal(); if (window.noteOperation) noteOperation(r.operation);
+    toast("Snapshot cleanup job queued", "ok");
+  } catch (e) { toast(e.message, "bad"); lhSnapDeleteGate(); }
 };
 
 /* ---------------- backup target ---------------- */

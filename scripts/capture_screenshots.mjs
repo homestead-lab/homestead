@@ -76,6 +76,7 @@ await capture("settings", "settings-health", () => settingsTab("about"));
 
 await dialog("nodes", "node-detail", () => nodeDetail("harvester-node1"));
 await dialog("storage", "disks", () => lhDisks());
+await dialog("storage", "snapshots", () => lhSnaps("pvc-demo-frigate", "frigate-config"));
 await dialog("storage", "storage-class-change",
   () => volumeReclass(STATE.data.vols.find(v => v.pvc_name === "frigate-config") || STATE.data.vols[0]));
 await dialog("storage", "storage-class-progress", () => reclassWatch("op4"));

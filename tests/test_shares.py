@@ -75,6 +75,50 @@ class ShareTests(unittest.TestCase):
         obj = self.objects["/api/v1/namespaces/lab/secrets/homestead-share-credentials"]
         return json.loads(base64.b64decode(obj["data"]["credentials.json"]).decode())
 
+    def test_removed_share_clears_every_smb_mapping_but_never_deletes_pvc(self):
+        shares.CACHE.update(wl=[1, {}], **{"node:host": [1, {}]})
+        result = shares.delete_share("secure")
+        spec = self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-smb"]["spec"]["template"]["spec"]
+        self.assertEqual([], spec["volumes"])
+        self.assertEqual([], spec["containers"][0]["volumeMounts"])
+        self.assertEqual(["share-secure"], result["removed_claims"])
+        self.assertIn("/api/v1/namespaces/lab/persistentvolumeclaims/share-secure", self.objects)
+        self.assertFalse(any(method == "DELETE" and "persistentvolume" in path for method, path, _ in self.sent))
+        self.assertNotIn("wl", shares.CACHE)
+        self.assertNotIn("node:host", shares.CACHE)
+
+    def test_second_share_on_same_claim_keeps_mount_with_explanation(self):
+        shares.create_share("other", 0, "lab", "", False, pvc="share-secure", sub_path="other")
+        result = shares.delete_share("secure")
+        self.assertEqual([], result["removed_claims"])
+        self.assertEqual(["other"], result["remaining_shares"])
+        self.assertIn("remains mounted for other", result["message"])
+        spec = self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-smb"]["spec"]["template"]["spec"]
+        self.assertEqual(1, len(spec["volumes"]))
+        self.assertEqual("/shares/other", spec["containers"][0]["volumeMounts"][0]["mountPath"])
+
+    def test_repeat_remove_repairs_stale_deployment_when_config_already_empty(self):
+        self.objects["/api/v1/namespaces/lab/configmaps/homestead-shares"]["data"]["shares.json"] = "[]"
+        result = shares.delete_share("secure")
+        self.assertIsNotNone(result["deployment"])
+        self.assertEqual(["share-secure"], result["removed_claims"])
+        spec = self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-smb"]["spec"]["template"]["spec"]
+        self.assertEqual([], spec["volumes"])
+
+    def test_removal_job_waits_for_old_pods_even_when_new_deployment_is_ready(self):
+        import time
+        from unittest.mock import patch
+        shares.delete_share("secure")
+        pods_path = "/api/v1/namespaces/lab/pods?labelSelector=app%3Dhomestead-smb"
+        self.objects[pods_path] = {"items": [{"metadata": {"name": "old", "deletionTimestamp": "now"},
+            "spec": {"volumes": [{"persistentVolumeClaim": {"claimName": "share-secure"}}]}}]}
+        item = {"ref": {"since": time.time(), "removed_claims": ["share-secure"]}}
+        with patch.object(shares, "_samba_ready", return_value=True):
+            self.assertEqual(("running", 45), shares.removal_progress(item)[:2])
+            self.objects[pods_path] = {"items": []}
+            self.assertEqual("succeeded", shares.removal_progress(item)[0])
+        self.assertIn("/api/v1/namespaces/lab/persistentvolumeclaims/share-secure", self.objects)
+
     def test_a_new_volume_is_created_under_the_name_given(self):
         shares.create_share("nas", 50, "lab", "a-password", False, new_name="nas-data",
                             storage_class="longhorn-r2")

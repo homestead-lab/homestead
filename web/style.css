@@ -922,6 +922,19 @@ html[data-motion="off"] .uptime .ld{animation:none}
 .voltable .iconbtn{width:28px;height:28px}
 .voltable .iconbtn.danger{color:var(--red);border-color:rgba(255,95,115,.28)}
 .voltable .iconbtn.danger:hover{background:rgba(255,95,115,.1)}
+.snapshot-timeline{position:relative;display:flex;flex-direction:column;gap:14px;padding:12px 0}
+.snapshot-timeline::before{content:"";position:absolute;top:30px;bottom:40px;left:19px;width:2px;background:var(--line)}
+.snapshot-point{position:relative;display:flex;gap:14px;align-items:flex-start;min-width:0}
+.snapshot-marker{width:40px;height:40px;flex:0 0 40px;border-radius:13px;display:grid;place-items:center;background:var(--card);border:1px solid var(--line);color:var(--blue)}
+.snapshot-marker svg{width:19px;height:19px}
+.snapshot-content{flex:1;min-width:0;padding:12px 16px;border:1px solid var(--line);border-radius:16px;background:linear-gradient(135deg,rgba(100,140,240,.08),transparent)}
+.snapshot-content .between{gap:8px;flex-wrap:wrap}.snapshot-content b{overflow-wrap:anywhere;min-width:0}
+.snapshot-date{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:7px 0;font-size:12px}
+.snapshot-actions{margin-top:10px;gap:6px;flex-wrap:wrap}
+.snapshot-point.system .snapshot-marker{color:var(--dim)}
+.snapshot-point.head .snapshot-marker{color:var(--green)}
+.snapshot-point.head .snapshot-content{display:flex;gap:6px;flex-direction:column;border-color:rgba(45,210,150,.3)}
+@media(max-width:560px){.snapshot-point{gap:8px}.snapshot-content{padding:10px}.snapshot-marker{width:32px;height:32px;flex-basis:32px}.snapshot-timeline::before{left:15px}}
 /* volume file browser */
 .filecrumbs{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:12px;font-size:12px}
 .linkish{background:none;border:0;color:var(--low);cursor:pointer;font:inherit;padding:2px 4px;border-radius:6px}

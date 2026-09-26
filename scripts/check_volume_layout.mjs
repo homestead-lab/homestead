@@ -43,6 +43,40 @@ try {
   }
   assert.equal(await page.locator(".volusage").filter({ hasText: "27.8 GiB Longhorn footprint" }).count(), 1);
   assert.ok(await page.locator(".volusage").filter({ hasText: "Filesystem usage unavailable" }).count() > 0);
+  await page.evaluate(() => lhSnaps("pvc-demo-frigate", "frigate-config"));
+  await page.locator(".snapshot-timeline").waitFor();
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
+    const timeline = await page.locator(".snapshot-timeline").boundingBox();
+    assert.ok(timeline.x >= 0 && timeline.x + timeline.width <= width + 1);
+    assert.equal(await page.locator(".snapshot-point.head button").count(), 0);
+    if (width !== 320) await page.screenshot({path: `release-assets/layout-checks/snapshots-${width}.png`});
+    console.log(`Snapshot timeline ${width}px: contained and live head protected`);
+  }
+  await page.evaluate(async () => {
+    closeModal();
+    const original = api;
+    api = async path => path.startsWith("/api/volumes/delete-plan") ? {
+      orphan: true, namespace: "lab", name: "retained-disk", uid: "demo-lh-uid", phase: "PVC already absent",
+      blocked: false, blocking_reasons: [], consumers: [], warnings: [],
+      pv: {name: "retained-pv", uid: "demo-pv-uid", reclaim_policy: "Retain"},
+      longhorn: {name: "retained-vol", state: "detached", actual_gb: 12, replicas: 2},
+      snapshots: {count: 1}, backups: {count: 2},
+      actions: {detach: {complete: true}, delete_claim: {enabled: false}, delete_data: {enabled: true}}
+    } : original(path);
+    try { await volumeDelete({name: "retained-vol", pvc_name: "retained-disk", namespace: "lab"}); }
+    finally { api = original; }
+  });
+  assert.equal(await page.locator('input[value="delete_claim"]').isDisabled(), true);
+  assert.equal(await page.locator("#vd_go").isDisabled(), true);
+  await page.locator('input[value="delete_data"]').check();
+  await page.locator("#vd_confirm").fill("wrong");
+  assert.equal(await page.locator("#vd_go").isDisabled(), true);
+  await page.locator("#vd_confirm").fill("retained-disk");
+  assert.equal(await page.locator("#vd_go").isDisabled(), false);
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
+  console.log("Orphan-volume review: no claim-only action, exact-name confirmation required, mobile contained");
   assert.deepEqual(errors, []);
 } finally {
   await browser.close();

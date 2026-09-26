@@ -620,7 +620,7 @@ def _guard_rollout(previous, was_serving, name):
 
 def _clear_cache():
     for key in list(CACHE):
-        if key.startswith(("vol", "stor", "flow", "work")):
+        if key.startswith(("vol", "stor", "flow", "work", "wl", "node")):
             CACHE.pop(key, None)
 
 
@@ -740,11 +740,53 @@ def delete_share(name):
     name = _name(name)
     rows, credentials, config_obj, secret_obj, deployment = _state()
     keep = [row for row in rows if row.get("name") != name]
+    podspec = (((deployment or {}).get("spec") or {}).get("template") or {}).get("spec") or {}
+    before_claims = {(v.get("persistentVolumeClaim") or {}).get("claimName") for v in podspec.get("volumes") or []}
+    after_claims = {row.get("pvc") for row in keep}
+    removed_claims = sorted(c for c in before_claims - after_claims if c)
     if len(keep) == len(rows):
+        # A prior request may have saved its config while an old mount survived.
+        # Repeating removal repairs drift without recreating a missing add-on.
+        result = None
+        if deployment:
+            desired = configured_deployment(deployment, keep, credentials)["spec"]["template"]["spec"]
+            if desired != podspec:
+                result = apply_samba(keep, credentials, deployment)
+        _clear_cache()
         return {"shares": [_public(item, credentials) for item in keep],
-                "deployment": None, "message": "Share was already absent"}
+                "deployment": result, "removed_claims": removed_claims,
+                "message": "Share was already absent; SMB mappings checked and reconciled"}
+    old_claim = next(row.get("pvc") for row in rows if row.get("name") == name)
+    remaining = [row["name"] for row in keep if row.get("pvc") == old_claim]
     credentials.pop(name, None)
     result = _commit(keep, credentials, config_obj, secret_obj, deployment)
     _clear_cache()
     return {"shares": [_public(item, credentials) for item in keep],
-            "deployment": result, "message": f"Share {name} removed; its volume was kept"}
+            "deployment": result, "removed_claims": removed_claims, "remaining_shares": remaining,
+            "message": f"Share {name} removed; its volume was kept" +
+                       (f" and remains mounted for {', '.join(remaining)}" if remaining else "; waiting for the old SMB pod to release its mount")}
+
+
+def removal_progress(item):
+    """Ready replicas alone do not prove that an old pod released its mounts."""
+    ref = item["ref"]
+    if time.time() - ref["since"] > 1200:
+        return "failed", 50, "SMB mount release has not completed after 20 minutes; inspect terminating pods and node health. No volumes were deleted."
+    deployment = _deployment_state()[2]
+    if deployment and ref.get("uid") and deployment["metadata"].get("uid") != ref["uid"]:
+        return "failed", 20, "SMB deployment was replaced; review its current shares"
+    claims = set(ref.get("removed_claims") or [])
+    spec = (((deployment or {}).get("spec") or {}).get("template") or {}).get("spec") or {}
+    if any((v.get("persistentVolumeClaim") or {}).get("claimName") in claims for v in spec.get("volumes") or []):
+        return "failed", 20, "The SMB configuration references a removed claim again; review shares before retrying"
+    pods = kget(f"/api/v1/namespaces/{NAMESPACE}/pods?labelSelector=app%3D{SAMBA_NAME}")
+    if not isinstance(pods.get("items"), list) or pods.get("metadata", {}).get("continue"):
+        raise ValueError("SMB pod inventory incomplete")
+    holding = [p["metadata"]["name"] for p in pods["items"] if any(
+        (v.get("persistentVolumeClaim") or {}).get("claimName") in claims for v in (p.get("spec") or {}).get("volumes") or [])]
+    if holding:
+        return "running", 45, "Waiting for old SMB pod mount release: " + ", ".join(holding)
+    if deployment and not _samba_ready():
+        return "running", 75, "Removed mounts released; waiting for the remaining SMB shares to be ready"
+    _clear_cache()
+    return "succeeded", 100, "SMB mappings removed and old pods released them; PVCs and data kept" if claims else "Share removed; its PVC remains mounted for other configured shares"
