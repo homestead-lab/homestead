@@ -279,7 +279,7 @@ window.vmOpen = async (ns, name) => {
         <td class="mono small">${esc(d.claim || "—")}${d.storage_class ? `<div class="dim xs">${esc(d.storage_class)}</div>` : ""}</td>
         <td class="mono">${esc(d.size || "—")}</td><td>${d.boot ? `#${d.boot}` : ""}</td></tr>`).join("")}</tbody></table></div>
     <div class="vm-pane" data-pane="network" hidden><div class="note small">Pod-network VMs can use a default or custom Service VIP with port mappings. Bridged interfaces use DHCP or a static guest address.
-      <button class="btn sm" data-need="operator" onclick="networkExpose('${esc(v.namespace)}','${esc(v.name)}','VirtualMachine')">Configure VIP / ports</button></div>
+      <button class="btn sm" data-need="operator" onclick="networkManage('${esc(v.namespace)}','${esc(v.name)}','VirtualMachine')">Configure VIP / ports</button></div>
       <table class="tbl dense stack"><thead><tr><th>Interface</th><th>Network</th><th>MAC</th><th>Addresses</th></tr></thead><tbody>
       ${v.nics.map(n => `<tr><td><b>${esc(n.name)}</b><div class="dim xs">${esc(n.model)}</div></td><td>${esc(n.network || "—")}</td>
         <td class="mono xs">${esc(n.mac || "—")}</td><td class="mono small">${esc(n.ips.join(", ") || "—")}</td></tr>`).join("")}</tbody></table></div>
@@ -364,10 +364,12 @@ window.vmEdit = async (ns, name) => {
       <div class="row" style="margin-top:10px"><button class="btn sm" onclick="vmAddDisk('disk')">＋ Disk</button><button class="btn sm" onclick="vmAddDisk('cd-rom')">＋ CD-ROM</button></div>
       <div class="dim xs" style="margin-top:8px">Boot order: the lowest number boots first. Detached disks are kept as volumes.</div></div>
     <div class="ve-pane" data-pane="network" hidden style="margin-top:12px">
+      <div class="note small"><b>Service VIP (default or selected address)</b><p>Uses a masquerade pod-network interface and forwards the ports you select. It is not the guest's own IP or MAC. Configure this separately from NIC changes; save those first if you are adding a pod interface.</p>
+        <button class="btn" data-need="operator" onclick="networkManage('${esc(ns)}','${esc(name)}','VirtualMachine')">Configure default / selected VIP</button></div>
       <div class="tblwrap"><table class="tbl dense stack ve-table"><thead><tr><th>Interface</th><th>Model</th><th>Network</th><th>MAC</th><th></th></tr></thead>
         <tbody id="ve_nics">${v.nics.map(n => vmNicRow(n, o)).join("")}</tbody></table></div>
       <div class="row" style="margin-top:10px"><button class="btn sm" onclick="vmAddNic()">＋ Interface</button></div>
-      <div class="dim xs" style="margin-top:8px">The pod network reaches out through NAT; a network attachment puts the VM on that VLAN or bridge with its own address.</div></div>
+      <div class="note small" style="margin-top:8px"><b>Direct LAN interface</b><p>A bridge/VLAN interface gets its IP from the LAN's DHCP server or the guest OS. The MAC field only identifies the NIC: it does not set an IP. For a stable guest IP, reserve the MAC in your DHCP server or configure networking inside the guest. Cloud-init network data is for initial provisioning and may not rerun on an existing VM.</p></div></div>
     <div class="ve-pane" data-pane="cloud" hidden style="margin-top:12px">
       ${ci.source === "unreadable" ? `<div class="note bad">This VM's cloud-init is in a secret Homestead cannot read, so it is left as it is.</div>` : `
       ${ci.source === "secret" ? '<div class="dim xs" style="margin-bottom:8px">Kept in the VM\'s own secret, as Harvester does.</div>' : ""}

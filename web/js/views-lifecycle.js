@@ -227,6 +227,9 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       <div class="sec">Containers <span class="pill">${containers.length}</span></div>
       <div id="e_containers">${containers.map(editContainerPanel).join("")}</div>
       <div class="note" id="e_ports_note" hidden></div>
+      <div class="sec">Service VIP</div><div class="note small">A Service VIP exposes ports on the default workload address or a VIP you select. It is separate from the direct LAN interface above.
+        <p>Save container/port changes first, then configure its Service. VIP changes are applied separately and do not restart the pod.</p>
+        <button class="btn" data-need="operator" onclick="networkManage('${esc(ns)}','${esc(name)}')">Configure default / selected VIP</button></div>
       ${seeds.length ? `<div class="sec">Startup seed config ${tip("This ConfigMap is copied into the container's persistent storage by an init container before every start. It is authoritative: editing only the mounted file will be overwritten on restart.")}</div>
         <div class="note seed-note"><b>Authoritative startup configuration.</b> Saving here updates the ConfigMap and restarts the workload so the init container copies the new value into appdata.</div>
         ${seeds.map((s, i) => `<div class="seed-editor card flat">
@@ -245,6 +248,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       (container.volumes || []).filter(volume => !volume.managed).map(editVolumeRow)));
     window.__editHadService = !!w.has_service;
     editPortsChanged();
+    window.__editPortBaseline = editPortSignature();
     placementChanged();
     if ($("#e_lan_on")?.checked) editLanToggle();
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
@@ -255,6 +259,9 @@ window.editAddPort = (index, port = {}) => {
   editPortsChanged();
 };
 window.editAddVol = (index, volume = {}) => addVolumeRow(editVolumePicker(index), volume);
+function editPortSignature() {
+  return JSON.stringify($$("#e_containers .edit-port-row").map(row => $$("input,select", row).map(e => e.type === "checkbox" ? e.checked : e.value)));
+}
 window.editPortsChanged = () => {
   const note = $("#e_ports_note");
   if (!note) return;
@@ -623,13 +630,16 @@ window.vmNetChanged = () => {
   const lan = vmLanNetworks(window.__vmCreateOptions || {}, true).some(n => n.name === net);
   $("#v_addr_wrap").hidden = !lan;
   $("#v_static").hidden = !lan || $("#v_addr_mode").value !== "static";
+  if ($("#v_service_wrap")) $("#v_service_wrap").hidden = net !== "pod";
+  if ($("#v_service_pick")) $("#v_service_pick").hidden = $("#v_service").value !== "manual";
 };
 
 window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
   window.__vmNetworkReopen = "vm";
-  const [opts, disks] = await Promise.all([
+  const [opts, disks, vipOptions] = await Promise.all([
     api("/api/vm/create-options").catch(() => ({ harvester: !!STATE.platform?.harvester, cdi: true, storage_classes: [], images: [] })),
     api("/api/vm-disks").catch(() => []),
+    vipChoices(),
   ]);
   // Imports are CDI DataVolumes, so without CDI there are none to attach.
   const readyDisks = opts.cdi ? disks.filter(d => d.phase === "Succeeded" && !d.in_use) : [];
@@ -660,11 +670,15 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
         ${opts.cdi || opts.harvester ? `<option value="url">${opts.harvester ? "Download from a URL (as a Harvester image)" : "Download from HTTP(S) URL"}</option>` : ""}
       </select></div>
     <div class="f" id="v_url_row" hidden><label>Image URL</label><input type="url" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img"></div>
-    <div class="note small">For a movable Service VIP, use the pod network. After creation, open the VM's Network tab → Configure VIP / ports to choose the default or a custom VIP. A bridged VM uses its own guest address instead.</div>
+    <div class="note small">A <b>Service VIP</b> forwards selected ports to a VM on the pod network. A <b>direct LAN interface</b> gets its address from DHCP or guest configuration; a MAC address only identifies that interface.</div>
     <div class="f"><label>Network ${tip("The pod network: reached through a Service, like a container. A LAN network (bridged): a machine there like any other, with an address from DHCP or one of its own.")}</label>
       <select id="v_net" onchange="vmNetChanged()"><option value="pod">Pod network - reached through a Service</option>
         ${(opts.network_details || []).filter(n => n.vms !== false).map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.lan ? ` · LAN${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}` : ""}</option>`).join("")}</select>
       ${vmNetworkNote(opts, true)}</div>
+    <div id="v_service_wrap"><div class="f"><label>Service VIP</label><select id="v_service" onchange="vmNetChanged()"><option value="">Cluster only / configure later</option>${nodeAddressesOnly() ? "" : `${vipOptions.shared ? `<option value="shared">Default workload VIP · ${esc(vipOptions.shared)}</option>` : ""}<option value="manual">Selected VIP</option>`}</select></div>
+      ${nodeAddressesOnly() ? '<p class="note small">ServiceLB uses node addresses, not movable VIPs. Install kube-vip or MetalLB before choosing a Service VIP.</p>' : ""}
+      <div id="v_service_pick" class="f" hidden><label>Selected VIP</label>${vipPicker("vsvc", "", vipOptions)}</div>
+      <p class="dim small">Two steps: create the VM, then review its VIP and port mappings before publishing them. If VIP setup is cancelled or fails, the VM remains created and can be configured from Edit → Network.</p></div>
     <div id="v_addr_wrap" hidden>
       <div class="f"><label>Address</label><select id="v_addr_mode" onchange="vmNetChanged();vmSubnetPicked('v')">
         <option value="dhcp">From the network's DHCP</option><option value="static">One of its own</option></select></div>
@@ -709,6 +723,9 @@ window.doVmCreate = async () => {
     if (!body.static_ip.address) return toast("give the VM its address", "bad");
   }
   if (!body.name) return toast("name is required", "bad");
+  const serviceMode = body.network === "pod" ? $("#v_service")?.value || "" : "";
+  const selectedVip = serviceMode === "manual" ? $("#vsvc_lb_ip").value.trim() : "";
+  if (serviceMode === "manual" && !selectedVip) return toast("Choose the VM's Service VIP", "bad");
   if (!body.disk_import && body.password.length < 10) return toast("root password must be at least 10 characters", "bad");
   if (boot === "url" && !body.image_url) return toast("image URL is required", "bad");
   if (boot === "url" && !/^https?:\/\/[^/\s]+/i.test(body.image_url)) {
@@ -720,6 +737,10 @@ window.doVmCreate = async () => {
   try {
     const r = await api("/api/vm/create", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(r.address ? `${body.name} created at ${r.address}, recorded in IP addresses` : `${body.name} created`, "ok"); closeModal(); go("vms");
+    if (serviceMode) {
+      try { await networkExpose(body.namespace, body.name, "VirtualMachine", selectedVip); }
+      catch (error) { toast(`VM created, but VIP setup could not open: ${error.message}. Use Edit → Network → Configure VIP / ports.`, "bad"); }
+    }
   } catch (e) { toast(e.message, "bad"); }
 };
 

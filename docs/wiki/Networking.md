@@ -23,6 +23,27 @@ on the LAN. On the LAN it takes an address:
 
 Every change shows its plan and checks for clashes before anything is made.
 
+### Container and VM editors
+
+Container **Edit → Service VIP → Configure default / selected VIP** opens the same
+labelled address picker. Save changed container ports first. Other unsaved fields
+are kept when you return; Service changes apply separately and do not restart the pod.
+Select an existing Service to change its VIP in place, or create an additional one.
+The review checks collisions and resource identity; changes to a Service's immutable
+load-balancer class are refused rather than deleting/recreating it. Unrelated settings
+and its ClusterIP are retained. Existing connections may reconnect when the VIP changes.
+
+For a **new VM**, choose the pod network, then **Default workload VIP** or
+**Selected VIP**. This is a two-step flow: create the VM, then review and publish its
+port mappings. Cancelling or failing the second step leaves the created VM in place;
+continue from **Edit → Network → Configure default / selected VIP** without recreating it.
+The same control is available when editing an existing VM with a masquerade pod interface.
+
+A bridged **direct LAN interface** is different: its MAC identifies the NIC, not
+an IP address. Its guest address comes from DHCP (optionally a router reservation)
+or configuration inside the guest. New VMs can receive static settings through cloud-init;
+editing cloud-init on an existing guest does not guarantee that it will run again.
+
 Pod-network VMs also appear in **Expose workload**. From a VM, open **Network →
 Configure VIP / ports**. The guest must use masquerade networking and permit the
 target ports through its firewall; a bridged VM instead uses DHCP/static addressing.

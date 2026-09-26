@@ -592,25 +592,58 @@ function snapshotTimeline(snaps, vol, label) {
     <article class="snapshot-point head"><div class="snapshot-marker">${icon("play")}</div><div class="snapshot-content"><b>Volume Head</b><span class="dim small">Live data · now · never deleted as a snapshot</span></div></article></div>`;
 }
 
+let SNAPSHOT_REFRESH = 0, SNAPSHOT_TIMER = null;
+function snapshotCleanupHtml(p) {
+  if (!p || p.error) return `<div class="note warn">Cleanup progress unavailable${p?.error ? `: ${esc(p.error)}` : ""}. Retrying; no completion is assumed.</div>`;
+  if (p.errors?.length) return `<div class="note bad"><b>Longhorn cleanup error</b><p>${p.errors.map(esc).join("; ")}</p></div>`;
+  if (!p.active) return `<div class="dim small">${p.known ? "No active Longhorn purge reported. Marked snapshots may still be waiting for a new boundary or controller cleanup." : "No engine status available; the volume may be detached. Cleanup progress is unknown."}</div>`;
+  const pct = p.percent;
+  return `<div class="note"><div class="between"><b>Longhorn cleanup ${pct == null ? "in progress" : `${+pct}%`}</b><span class="tag warn">Merging / purging</span></div>
+    ${pct == null ? '<span class="spin2"></span>' : `<div class="meter" role="progressbar" aria-label="Longhorn volume cleanup" aria-valuenow="${+pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${Math.max(0, Math.min(100, +pct))}%"></span></div>`}
+    <p class="small">Slowest active replica. This is volume-wide cleanup, not a separate percentage for each snapshot. Includes cleanup started in Longhorn or by recurring jobs.</p></div>`;
+}
+async function refreshSnapshotDialog(token, vol, label) {
+  const host = $("#snapshot_live");
+  if (!host || +host.dataset.token !== token || $("#modal").classList.contains("hidden")) return;
+  clearTimeout(SNAPSHOT_TIMER);
+  try {
+    const [snaps, progress] = await Promise.all([
+      api("/api/lh/snapshots?volume=" + encodeURIComponent(vol)),
+      api("/api/lh/snapshot-progress?volume=" + encodeURIComponent(vol)).catch(e => ({error: e.message})),
+    ]);
+    if ($("#snapshot_live") !== host || token !== SNAPSHOT_REFRESH) return;
+    host.innerHTML = snapshotCleanupHtml(progress) + `<div class="sec">Snapshots (${snaps.length})</div>` + snapshotTimeline(snaps, vol, label);
+    if (window.applyRole) applyRole();
+  } catch (e) {
+    if ($("#snapshot_live") === host) host.innerHTML = `<div class="note warn">Snapshot refresh failed: ${esc(e.message)}. Retrying; previous cleanup may still be running.</div>`;
+  }
+  if ($("#snapshot_live") === host) {
+    clearTimeout(SNAPSHOT_TIMER);
+    SNAPSHOT_TIMER = setTimeout(() => refreshSnapshotDialog(token, vol, label), 4000);
+  }
+}
 window.lhSnaps = async (vol, label) => {
+  const token = ++SNAPSHOT_REFRESH;
   modal("Snapshots · " + label, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
+  $(".modalbox").scrollTop = 0;
   try {
     const [snaps, bks] = await Promise.all([
       api("/api/lh/snapshots?volume=" + encodeURIComponent(vol)),
       api("/api/lh/backups?volume=" + encodeURIComponent(vol)).catch(() => []),
     ]);
+    if (token !== SNAPSHOT_REFRESH || $("#mtitle").textContent !== "Snapshots · " + label || $("#modal").classList.contains("hidden")) return;
     $("#mbody").innerHTML = `
       <div class="row" style="margin-bottom:16px">
         <button class="btn pri" data-need="operator" onclick="lhSnapNow('${esc(vol)}','${esc(label)}')">Take snapshot now</button>
         <button class="btn" data-need="operator" onclick="lhBackupNow('${esc(vol)}','${esc(label)}')">Back up now</button>
         <button class="btn" onclick="lhSnaps('${esc(vol)}','${esc(label)}')">${icon("refresh")}Refresh</button>
       </div>
-      <div class="sec">Snapshots (${snaps.length})</div>
       <p class="dim small">Creation timeline, oldest first. Checkpoint ancestry can branch after rollback; this is not a dependency graph.</p>
-      ${snapshotTimeline(snaps, vol, label)}
+      <div id="snapshot_live" data-token="${token}"><div class="sec">Snapshots (${snaps.length})</div>${snapshotTimeline(snaps, vol, label)}</div>
       <div class="sec">Backups (${bks.length})</div>
       ${backupTable(bks, vol, label)}`;
     if (window.applyRole) window.applyRole();
+    refreshSnapshotDialog(token, vol, label);
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
 function backupTable(bks, vol, label) {
@@ -765,7 +798,10 @@ window.lhRevertGo = async (vol, snap) => {
 };
 
 window.lhSnapDel = async (name, vol, label) => {
-  childModal("Remove snapshot", '<div class="empty"><span class="spin2"></span>Checking Longhorn checkpoint</div>');
+  const token = +($("#snapshot_live")?.dataset.token || 0);
+  if (token) pushModal(() => refreshSnapshotDialog(token, vol, label));
+  const open = token ? modal : childModal;
+  open("Remove snapshot", '<div class="empty"><span class="spin2"></span>Checking Longhorn checkpoint</div>');
   try {
     const p = await api(`/api/lh/snapshot/delete-plan?volume=${encodeURIComponent(vol)}&name=${encodeURIComponent(name)}`);
     window.__snapshotDeletePlan = p;
