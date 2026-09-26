@@ -17,7 +17,7 @@ on the LAN. On the LAN it takes an address:
 - **Automatic** - the next free one from your VIPs, then from Harvester's IP
   pools;
 - **Specific VIP** - one you choose from your list, by label;
-- **Default workload VIP** - the address selected under **Your VIPs → Use as default**,
+- **Default workload VIP** - the address selected under **Workload VIPs → Make default**,
   shared on free ports. This is separate from the cluster API and can differ from
   Homestead's access address. Changing the default does not move existing Services.
 
@@ -50,12 +50,30 @@ See the upstream [k3s network guide](https://docs.k3s.io/networking/networking-s
 [kube-vip Service leases](https://kube-vip.io/docs/usage/services/), and
 [KubeVirt Service networking](https://kubevirt.io/user-guide/network/service_objects/).
 
-## Your VIPs
+## Add, default and choose workload VIPs
 
 Harvester announces whatever address a Service asks for, but nothing hands
 addresses out. So Homestead keeps a list for itself: **Services & VIPs →
-＋ Add VIPs** takes one address or a range (up to 64), with a label saying what
+＋ Add VIP** takes one address or a range (up to 64), with a label saying what
 they are for - "media apps", "DNS".
+
+1. Choose **One VIP** or **A range of VIPs**, enter the address(es), and add an
+   optional label. Check the router's DHCP range and verify that no other LAN
+   device uses these addresses; Homestead only knows about cluster/IP inventory conflicts.
+2. Optionally check **Make this the default workload VIP**. For a range, this
+   means the first address you entered. You can also choose **Make default** on a
+   saved address's card later. Existing Services do not move.
+3. Choose **Use this VIP** on its card to open the workload/port form with that
+   address selected. Or choose **Default workload VIP** or **Specific VIP** in
+   Deploy's networking section. Specific VIP offers a labelled dropdown, including
+   in **Expose workload** and VM port exposure. Review the plan before creating the Service.
+
+Saving a VIP does not alter the router or announce the address immediately. A
+workload Service must request it. MetalLB addresses must also be included in its
+configured pools; adding them here does not change those pools. Multiple workloads
+may share a VIP on different ports, subject to the provider's sharing constraints.
+Partial range additions and default-setting errors are reported separately; addresses
+already saved are retained if setting the default fails.
 
 ![Add VIPs](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-vip-add.png)
 
@@ -65,7 +83,8 @@ they are for - "media apps", "DNS".
   in Deploy, Edit, Import, Shares and moves - lists them by label, free ones
   first.
 - Node addresses and addresses recorded as a device under IP addresses are
-  refused. A VIP can be removed only while nothing uses it.
+  refused. A VIP can be removed only while nothing uses it; choose another default
+  before removing the current default.
 
 On k3s, ServiceLB puts every Service on the hosts' own addresses, so the forms
 offer **Every node's own address**. What must be free there is the port: two
