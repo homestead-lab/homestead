@@ -20,6 +20,7 @@ import homestead_names as NAMES
 import homestead_pod_resources as RESOURCES
 import homestead_dependencies as DEPENDENCIES
 import homestead_topology as TOPOLOGY
+import homestead_import_guard as IMPORT_GUARD
 import time
 import urllib.error
 
@@ -385,6 +386,7 @@ def manifest_plan(dep, ns, name, replicas=1, warning_percent=88, *, current=0, p
     if wanted < 0 or wanted > 100:
         raise ValueError("replicas must be between 0 and 100")
     additional = max(0, wanted - current)
+    import_blocker = IMPORT_GUARD.pending(dep, ns, read) if wanted else ""
     reqs = requirements(dep)
     pod_spec = dep["spec"]["template"]["spec"]
     memory, unbounded = _pod_memory(pod_spec)
@@ -453,6 +455,8 @@ def manifest_plan(dep, ns, name, replicas=1, warning_percent=88, *, current=0, p
                            "projected_pods": proposed_here})
     eligible = [node for node in candidates if node["eligible"]]
     warnings = sorted({message for node in candidates if node["projected_pods"] for message in node["warnings"]})
+    if import_blocker:
+        warnings.append(import_blocker)
     if additional and not eligible:
         warnings.append("no ready host satisfies this workload's placement requirements")
     total_bound = sum(base_slots.values())
@@ -485,7 +489,7 @@ def manifest_plan(dep, ns, name, replicas=1, warning_percent=88, *, current=0, p
             "unbounded": unbounded, "warning_percent": warning_percent,
             "candidates": candidates, "warnings": warnings,
             "requires_confirmation": bool(additional and warnings),
-            "blocked": bool(additional and (not eligible or insufficient))}
+            "blocked": bool(import_blocker or (additional and (not eligible or insufficient)))}
 
 
 def impact(node):

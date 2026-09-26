@@ -1545,9 +1545,12 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <div class="sec">Environment variables ${tip("Copied from Docker inspect. Review secrets and host-specific paths before starting the imported app.")}</div>
     <div id="im_env">${Object.entries(cfg.env || {}).map(([k,v]) => `<div class="f2 im-env"><div class="f"><label>Variable</label><input class="iek" value="${esc(k)}"></div><div class="f"><label>Value</label><input class="iev" value="${esc(v)}"></div></div>`).join("")}</div>
     <button class="btn sm" onclick="imAddEnv()">＋ add variable</button>
-    <label class="switch"><input type="checkbox" id="im_start" checked> Leave stopped until the copy finishes</label>
+    <div class="sec">Memory</div>
+    <div class="f2"><div class="f"><label>Memory reserved ${tip("The scheduler reserves this much RAM for the application. This is not its maximum usage.")}</label><input id="im_memory" value="${esc(cfg.memory || '256Mi')}" placeholder="256Mi"></div>
+      <div class="f"><label>Memory max ${tip("Optional hard ceiling. Exceeding it can cause an OOM kill. Must be at least the reserved memory; blank means unlimited.")}</label><input id="im_memory_limit" value="${esc(cfg.memory_limit || '')}" placeholder="No limit · e.g. 1Gi"></div></div>
+    <div class="note">The application is created stopped. After copying, use Start in Containers for a fresh capacity review. The copy helper reserves 128 MiB and is limited to 512 MiB.</div>
     <div class="row" style="margin-top:16px">
-      <button class="btn pri" onclick="doImport('${esc(source)}')">Start import</button>
+      <button class="btn pri" onclick="doImport('${esc(source)}')">Review import</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div>
     <div class="note" style="margin-top:14px">The copy runs as a Job — you can close this and watch it
     on the Import page, folder by folder. Large appdata directories can take a while.</div>`, true);
@@ -1940,7 +1943,7 @@ window.doImport = async source => {
     mappings, volumes: keepsNothing ? [] : volumes,
     pvc_name: first?.name || "", size_gb: first?.size_gb || 0, reuse_existing: existing,
     storage_class: first?.storage_class || "", access_mode: first?.access_mode || "",
-    start_after_copy: $("#im_start").checked,
+    start_after_copy: true, memory: $("#im_memory").value.trim(), memory_limit: $("#im_memory_limit").value.trim(),
     ports: $$(".im-port").map(r => ({ container: +$(".ipc", r).value, host: +$(".iph", r).value || +$(".ipc", r).value, protocol: $(".ipp", r).value, expose: $(".ipe", r).checked })).filter(p => p.container),
     env, hardware: selectedHardware("im_hw"), ...(readPrivileges("im_pv") || {}), network_mode: $("#im_net").value, vip_mode: $("#im_vip").value, lb_ip: ($("#im_lb_ip")?.value || "").trim(),
     uid: $("#im_uid").value.trim(), gid: $("#im_gid").value.trim() };
@@ -1951,11 +1954,11 @@ window.doImport = async source => {
     if (!measured) continue;
     const claim = volume.create ? null : (STATE.data.vols || []).find(vol => vol.pvc_name === volume.name);
     const capacityGb = volume.create ? volume.size_gb : (claim?.size_gb || 0);
-    const usedGb = volume.create ? 0 : (claim?.actual_gb || 0);
+    // Longhorn actual_gb includes snapshot/replica allocation, not filesystem
+    // usage. Never subtract it to invent the free space of an existing claim.
     const neededGb = measured / 1024 ** 3;
-    if (capacityGb && neededGb > capacityGb - usedGb) {
-      return toast(`${volume.name}: ${neededGb.toFixed(1)} GiB to copy but only ${Math.max(0, capacityGb - usedGb).toFixed(1)} GiB free`
-        + (usedGb ? ` (${usedGb.toFixed(1)} GiB already written)` : "") + " — grow it or raise its size", "bad");
+    if (capacityGb && neededGb > capacityGb) {
+      return toast(`${volume.name}: ${neededGb.toFixed(1)} GiB to copy exceeds its ${capacityGb.toFixed(1)} GiB total capacity — grow it or raise its size`, "bad");
     }
   }
   // A RAM scratch mapping has no source by design, so only copied folders are
@@ -1976,10 +1979,47 @@ window.doImport = async source => {
   body.mount_path = copied[0]?.mount_path || "/config";
   if (reused.length && !confirm(`Import into existing volume${reused.length === 1 ? "" : "s"} ${reused.join(", ")}?` +
       "\n\nThe current data is kept, but imported files with the same names may be replaced.")) return;
+  await importReview(body);
+};
+
+let IMPORT_REVIEW = null, IMPORT_REVIEW_SEQUENCE = 0;
+window.importReview = async body => {
+  IMPORT_REVIEW = null;
+  const sequence = ++IMPORT_REVIEW_SEQUENCE;
+  const config = JSON.parse(JSON.stringify(body));
   try {
-    const r = await api("/api/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    toast(`import started (${r.job})`, "ok"); closeModal(); resetPaint(); viewImport();
+    const result = await api("/api/import/preview", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(config)});
+    if (sequence !== IMPORT_REVIEW_SEQUENCE) return;
+    if (!result.capacity || !result.capacity_token || !Array.isArray(result.phases)) throw new Error("Import review unavailable; refresh before continuing.");
+    IMPORT_REVIEW = {config, ...result, submitting:false};
+    childModal("Review import", `<div class="update-review">
+      <div class="reviewbox"><b>${esc(config.name)}</b><p>${esc(config.image)}</p>
+        ${(result.volumes || []).map(v => `<div class="dependency-row"><span>${v.create ? 'Create' : 'Reuse'} volume</span><b>${esc(v.name)} · ${esc(v.access_mode)} · ${esc(v.storage_class)}</b></div>`).join('')}
+      </div><div class="note warn">${result.capacity.warnings.map(esc).join('<br>')}</div>
+      ${result.phases.map(p => `<h3>${esc(p.title)}</h3>${deployCapacityHtml(p.capacity)}`).join('')}
+      ${!result.capacity.blocked ? '<label class="switch"><input type="checkbox" id="importConfirm"> I approve this import, including file replacement and any capacity warnings.</label>' : ''}
+      <div class="modalactions"><button class="btn" onclick="modalBack()">Back to import</button><button class="btn pri" id="importGo" ${result.capacity.blocked ? 'disabled' : ''} onclick="confirmImport()">Create reviewed import</button></div></div>`, true);
   } catch (e) { toast(e.message, "bad"); }
+};
+window.confirmImport = async () => {
+  const review = IMPORT_REVIEW;
+  if (!review || review.submitting || review.capacity.blocked || !$("#importConfirm")?.checked)
+    return toast("Review and approve the import first", "bad");
+  review.submitting = true;
+  $("#importGo").disabled = true;
+  try {
+    const result = await api("/api/import", {method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({...review.config, capacity_token:review.capacity_token, confirm_capacity:true})});
+    IMPORT_REVIEW = null;
+    toast(result.job ? "Copy started; the application stays stopped" : "Imported application created stopped", "ok");
+    closeModal(); resetPaint(); viewImport();
+  } catch (e) {
+    IMPORT_REVIEW = null; // An unknown outcome is never an automatic retry.
+    toast(e.message + " — check Import and Containers before trying again; any created volumes are kept.", "bad");
+    $("#importGo").textContent = "Review again";
+    $("#importGo").disabled = false;
+    $("#importGo").onclick = () => importReview(review.config);
+  }
 };
 
 /* Finished moves off the list, leaving the source's stopped copy where it is. */
