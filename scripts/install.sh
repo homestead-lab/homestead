@@ -97,7 +97,7 @@ box_menu() { # title text tag item...
   title="$1"; text="$2"; shift 2
   items=$(( $# / 2 ))
   rows=$(stty size < "$TTY" 2>/dev/null | cut -d' ' -f1); rows=${rows:-24}
-  lines=$(printf '%s\n' "$text" | wc -l | tr -d ' ')
+  lines=$(printf '%s\n' "$text" | awk '{ n += int((length($0) + 83) / 84); if (!length($0)) n++ } END { print n }')
   list=$items; [ "$list" -gt $((rows - lines - 9)) ] && list=$((rows - lines - 9)); [ "$list" -lt 3 ] && list=3
   height=$((lines + list + 8)); [ "$height" -gt "$rows" ] && height=$rows
   "$BOX" --title "$title" --cancel-button "Back" --menu "$text" "$height" 90 "$list" "$@" 3>&1 1>"$TTY" 2>&3 < "$TTY"
