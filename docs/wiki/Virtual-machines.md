@@ -45,9 +45,10 @@ download has not started after three minutes says why.
 **＋ New VM** asks for a name, CPU cores, memory, a disk size, a root password
 and a boot disk:
 
-- **Boot disk** - a Harvester image, an image downloaded from a URL (an Ubuntu
-  or Debian cloud image, say), a disk you [imported](Importing#a-vm-disk), or
-  blank, to install from an ISO added later as a CD-ROM.
+- **Boot disk** - an image from the [image store](#image-store), a Harvester
+  image, an image downloaded from a URL, a disk you
+  [imported](Importing#a-vm-disk), or blank, to install from an ISO added
+  later as a CD-ROM.
 - **Root password** - set through cloud-init, so a cloud image has a login
   from its first boot. Optional for an imported disk that already has one.
 - **Storage class** - on Harvester, a disk from an image lives on that image's
@@ -77,6 +78,38 @@ untagged, on the same LAN as the hosts, or on a VLAN your switch carries to
 them. Any form that needs one offers to make it, and comes back once it is
 made. It is the same network Harvester's dashboard makes under *Networks → VM
 Networks*, so it shows there too.
+
+## Image store
+
+**Image store** on the VMs page lists the cloud images their publishers keep
+current, for your nodes' architecture (amd64 or arm64):
+
+- Ubuntu 24.04 and 22.04 LTS
+- Debian 13 and 12
+- Fedora Cloud
+- Rocky Linux 10 and 9
+- AlmaLinux 10 and 9
+- CentOS Stream 10 and 9
+- openSUSE Leap 15.6 and Tumbleweed
+- Arch Linux
+
+Each comes from the publisher's own "latest" address, has cloud-init, and
+grows to fill its disk. The table shows which user to sign in as (`ubuntu`,
+`debian`, `fedora`...), with the root password set on **New VM**.
+**New VM** on a row opens the form with that image chosen.
+
+On Harvester, **Keep** downloads an image as a Harvester image, so every VM
+copies a local image instead of downloading it again. A kept image with
+**current** ticked checks for a newer build twice a day, by asking the
+publisher (nothing is downloaded until there is one). A new build downloads
+beside the old; once it is ready, new VMs use it, and older builds that no
+disk was made from are deleted. **Check for newer builds** asks now.
+
+On k3s and RKE2, CDI fills each VM's disk straight from the publisher, so a
+new VM always starts from the newest build and there is nothing to keep.
+
+Your own disk image (qcow2, vmdk, raw, vdi, vhd or vhdx) is
+[imported](Importing#a-vm-disk) from a web address.
 
 ## The list
 
