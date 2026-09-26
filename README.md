@@ -33,7 +33,7 @@ is Harvester-only unless Harvester is what it is about.
 
 | | k3s | Harvester | RKE2 or other Kubernetes |
 |---|---|---|---|
-| **Install** | [one command](#k3s-in-one-command) from bare Linux | [Helm or the manifest](#installing-with-the-manifest) | [Helm or the manifest](#installing-with-the-manifest) |
+| **Install** | [one line](#one-line-install-and-node-doctor) from bare Linux | [one line](#one-line-install-and-node-doctor) on a host, or Helm or the manifest | [Helm or the manifest](#installing-with-the-manifest) |
 | **Containers, App Store, Compose, Portal, Networking, IP addresses, Resources, dashboard** | yes | yes | yes |
 | **Volumes, data protection, disks** | yes, with Longhorn - the k3s script installs it, or Settings → Cluster → Add-ons | yes, Longhorn is built in | yes, with Longhorn - Settings → Cluster → Add-ons installs it on RKE2 |
 | **Virtual machines** | yes, with [KubeVirt](https://kubevirt.io) - the k3s script's `--kubevirt`, or Add-ons | built in | yes, with KubeVirt - Add-ons installs it on RKE2 |
@@ -42,32 +42,61 @@ is Harvester-only unless Harvester is what it is about.
 | **Adding a host** | the join command for a worker or a server | a guide to Harvester's installer | RKE2's join commands |
 | **Platform upgrades** | - | followed on the Cluster page | - |
 
-### k3s in one command
+### One line: install and node doctor
 
-On a bare Linux machine (x86-64 or 64-bit ARM - old PCs, mini PCs, VMs), this
-makes a k3s cluster with Longhorn and Homestead:
+On a bare Linux machine (x86-64 or 64-bit ARM - old PCs, mini PCs, VMs), or on
+a Harvester host, or on any node of a cluster:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - server
+curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
 ```
 
-It installs what Longhorn needs on the host, installs k3s with an embedded etcd
-(so more servers can join), and drops a HelmChart for Longhorn and Homestead's
-own manifest into k3s's manifests folder, which k3s applies itself; then it
-prints Homestead's address. `--kubevirt` adds KubeVirt and CDI for virtual
-machines, and `--no-longhorn` uses k3s's local-path storage instead. Further machines join with `agent <server-url> <token>` (a worker) or
-`join <server-url> <token>` (another server); Homestead's **Cluster → Add a
-host** shows the exact lines. The
+It says what it found on the machine and offers what fits, as menus (plain
+prompts where the machine has no `whiptail` or `dialog`):
+
+![The installer's menu](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-menu.png)
+
+- **Install Homestead.** It checks the machine first: memory, disk, the
+  internet, ports, the hostname, the clock, the firewall, hardware
+  virtualisation, and whether the address is from DHCP. Then it asks:
+  - on a **bare machine**, whether to start a new k3s cluster or join one as
+    a server or a worker, which address the others reach this machine on,
+    and whether to add Longhorn and KubeVirt;
+  - on a **Harvester host**, which address Homestead answers on and which
+    storage class holds its data;
+  - on a **k3s server**, whether to add Longhorn and Homestead to it.
+
+  It shows what it will do before anything changes, follows the install with
+  a progress bar (the full log goes to `/var/log/homestead-install.log`), and
+  ends with Homestead's address and the line for the next machine.
+- **Check this node and fix what is wrong.** The node doctor looks at the host:
+  - the Kubernetes service, disk and inodes, memory, the clock;
+  - iSCSI and multipath, which Longhorn needs;
+  - certificates, and containerd.
+
+  Where kubectl reaches the cluster, it looks there too: the API, etcd, this
+  node and the others, failing or stuck pods, Longhorn volumes, DNS,
+  Homestead, and the age of the newest etcd snapshot. It lists what it found,
+  worst first; choosing one says what is wrong and offers its fix, asking
+  before every change.
+- **Clean up** unused images, the journal, failed pods and old snapshots;
+  **take an etcd snapshot**; **restore the cluster from one** (on a k3s
+  server, after typing RESTORE).
+
+For scripts and cron: `--report` prints the health check and exits 0, 1 or 2;
+`--fix-safe` applies the fixes marked safe; `--dry-run` shows the commands and
+changes nothing. An install can be unattended with its answers given ahead
+(`HS_ROLE=new HS_NODE_IP=... HS_YES=1`); `--help` lists them. Underneath, k3s
+installs come from [`scripts/bootstrap-k3s.sh`](scripts/bootstrap-k3s.sh),
+which can also be run directly. The
 [k3s guide](https://github.com/wjcloudy/homestead/wiki/Installing-on-k3s) walks
 through all of it.
 
 **Addresses on k3s.** k3s's built-in ServiceLB publishes each app on every
-node's own address, so Homestead and every app work without anything else -
-each on its own port. For an address per app, as Harvester gives, install
-MetalLB in place of ServiceLB (the guide says how); Homestead notices and asks
-it for addresses. A Service asks for its address the way the cluster's load
-balancer reads it: kube-vip's annotation, MetalLB's, or none on ServiceLB -
-never two at once.
+node's own address, so Homestead and every app work without anything else,
+each on its own port. For an address per app, as Harvester gives, add
+**kube-vip** from **Settings → Cluster → Add-ons**. It runs beside ServiceLB
+and takes only the Services given a VIP.
 
 **On a cluster you already run** - k3s, RKE2, kubeadm - use Helm or the
 manifest below. **Settings → Cluster → Add-ons** then installs Longhorn and
@@ -125,7 +154,7 @@ install the same thing; there is one Homestead per cluster.
 
 ## Installing with the manifest
 
-On k3s the [one-command install](#k3s-in-one-command) does all of this for
+On k3s the [one-line install](#one-line-install-and-node-doctor) does all of this for
 you. This is applying `deploy/deploy.yaml` yourself - on Harvester, RKE2, or a
 k3s or other cluster you already run.
 
@@ -695,7 +724,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.177/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.178/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -706,7 +735,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.177 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.178 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1480,10 +1509,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.177`, the workflow publishes:
+For a release such as `v2.8.178`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.177
+ghcr.io/wjcloudy/homestead:2.8.178
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -1494,8 +1523,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.177
-git push origin v2.8.177
+git tag v2.8.178
+git push origin v2.8.178
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
