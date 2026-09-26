@@ -8,7 +8,7 @@
    browser storage: Compose files routinely carry passwords. */
 
 const COMPOSE = { text: "", variables: "", namespace: "lab", vip_mode: "shared", report: null,
-  editor: null, timer: null, asked: 0, busy: false };
+  editor: null, timer: null, asked: 0, busy: false, review: null, reviewSequence: 0 };
 
 window.composeImport = async () => {
   const namespaces = await api("/api/namespaces").catch(() => ["lab"]);
@@ -75,6 +75,10 @@ function composeText() {
 }
 
 function composeChanged(delay = 700) {
+  ++COMPOSE.asked;
+  ++COMPOSE.reviewSequence;
+  COMPOSE.review = null;
+  if ($("#composeCreate")) $("#composeCreate").disabled = true;
   COMPOSE.text = composeText();
   const hint = $("#composeHint");
   if (hint) hint.hidden = !!COMPOSE.text;
@@ -232,7 +236,9 @@ window.composeToForm = name => {
 
 window.composeClear = () => {
   if (COMPOSE.text && !confirm("Clear the Compose file and variables?")) return;
-  Object.assign(COMPOSE, { text: "", variables: "", report: null });
+  ++COMPOSE.asked;
+  ++COMPOSE.reviewSequence;
+  Object.assign(COMPOSE, { text: "", variables: "", report: null, review: null });
   if (COMPOSE.editor) COMPOSE.editor.setValue("");
   else if ($("#composeText")) $("#composeText").value = "";
   if ($("#composeVars")) $("#composeVars").value = "";
@@ -240,24 +246,54 @@ window.composeClear = () => {
 };
 
 window.composeCreate = async () => {
-  const report = COMPOSE.report;
-  if (!report?.ok || COMPOSE.busy) return;
-  const names = report.order || [];
-  const claims = new Set();
-  (report.services || []).forEach(s => (s.config?.volumes || []).forEach(v => { if (v.create) claims.add(v.source); }));
-  if (!confirm(`Create ${names.length} workload${names.length === 1 ? "" : "s"} in ${COMPOSE.namespace}: ${names.join(", ")}?`
-      + (claims.size ? `\n\nNew volumes: ${[...claims].join(", ")}.` : ""))) return;
+  if (!COMPOSE.report?.ok || COMPOSE.busy) return;
+  const body = { text: composeText(), variables: $("#composeVars")?.value ?? COMPOSE.variables,
+    namespace: $("#composeNs")?.value || COMPOSE.namespace, vip_mode: $("#composeVip")?.value || COMPOSE.vip_mode };
+  await window.composeReview(body);
+};
+
+function composeCapacityHtml(plan) {
+  return `<div class="note ${plan.blocked ? "bad" : "warn"}"><b>${plan.status === "fits" ? "A joint placement example fits" : plan.status === "unknown" ? "Complete placement could not be verified" : "Batch cannot fit the checked constraints"}</b>
+    <p>${plan.pods} planned pod(s). This is not a scheduler reservation or an OOM guarantee.</p></div>
+    <div class="dependency-list">${(plan.services || []).map(s => `<div class="drow"><div class="dl mono">${esc(s.name)} · ${s.replicas} pod(s)</div><div class="dv">Each pod: ${s.pod_request_gb} GiB requested / ${s.pod_memory_gb} GiB estimated · ${s.pod_cpu_request_percent}% CPU</div></div>`).join("")}</div>
+    <div class="sec">Conservative RAM upper estimates</div><p class="dim small">Each host's upper estimate includes every batch pod that could individually fit there. The estimates can exceed a possible joint placement; they are not assigned memory.</p>
+    <div class="dependency-list">${(plan.nodes || []).map(n => `<div class="drow"><div class="dl mono">${esc(n.name)}</div><div class="dv">${n.metrics_available ? `${n.baseline_gb} → up to ${n.upper_gb} GiB (${n.upper_percent}%)` : "Live RAM unavailable"}</div></div>`).join("")}</div>
+    ${(plan.warnings || []).map(w => `<div class="note warn">${esc(w)}</div>`).join("")}
+    ${(plan.reasons || []).length ? `<details><summary>Checked conflicts</summary>${plan.reasons.map(r => `<div class="small">${esc(r)}</div>`).join("")}</details>` : ""}
+    ${(plan.example || []).length ? `<details><summary>Example only — Kubernetes is not pinned to these hosts</summary>${plan.example.map(p => `<div class="small mono">${esc(p.service)} → ${esc(p.host)}</div>`).join("")}</details>` : ""}`;
+}
+
+window.composeReview = async body => {
+  if (COMPOSE.busy) return;
+  COMPOSE.review = null;
+  const sequence = ++COMPOSE.reviewSequence;
+  const config = JSON.parse(JSON.stringify(body));
+  try {
+    const response = await api("/api/compose/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(config) });
+    if (sequence !== COMPOSE.reviewSequence) return;
+    if (!response.capacity || !response.capacity_token) throw new Error("Batch capacity preview unavailable; refresh before creating workloads.");
+    COMPOSE.review = { config, ...response };
+    childModal("Review Compose batch", `${composeCapacityHtml(response.capacity)}
+      <div class="note">Each service is rechecked against the remaining batch before creation. A later failure stops the batch without deleting created workloads or volumes. Copy the Compose file somewhere safe if you need to recover it after a page refresh.</div>
+      ${!response.capacity.blocked ? `<label class="switch"><input type="checkbox" id="composeCapacityConfirm"> I understand the batch capacity, storage and partial-creation warnings</label>` : ""}
+      <div id="composeApplyResult"></div><div class="modalactions"><button class="btn" onclick="modalBack()">Back</button><button class="btn pri" id="composeApply" ${response.capacity.blocked ? "disabled" : ""} onclick="composeConfirm()">Create reviewed workloads</button></div>`, true);
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+window.composeConfirm = async () => {
+  const review = COMPOSE.review;
+  if (!review || review.capacity.blocked || COMPOSE.busy || !$("#composeCapacityConfirm")?.checked)
+    return toast("Review the batch and acknowledge its warnings first", "bad");
   COMPOSE.busy = true;
-  const button = $("#composeCreate");
+  const button = $("#composeApply");
   if (button) { button.disabled = true; button.innerHTML = '<span class="spin2"></span> creating'; }
   try {
     const result = await api("/api/compose/apply", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: COMPOSE.text, variables: COMPOSE.variables,
-        namespace: COMPOSE.namespace, vip_mode: COMPOSE.vip_mode, services: names }) });
+      body: JSON.stringify({ ...review.config, capacity_token: review.capacity_token, confirm_capacity: true }) });
     if (!result.ok) {
       toast(`${result.failed} could not be created: ${result.error}`, "bad");
-      $("#composeResult").insertAdjacentHTML("afterbegin", `<div class="note bad"><b>${esc(result.failed)} was not created.</b>
-        ${esc(result.error)}${result.created.length ? `<br>Already created: ${result.created.map(esc).join(", ")}. Remove them from the file, or delete them, before trying again.` : ""}</div>`);
+      $("#composeApplyResult").innerHTML = `<div class="note bad"><b>Batch stopped at ${esc(result.failed)}.</b>
+        ${esc(result.error)}${result.created.length ? `<br>Already created: ${result.created.map(esc).join(", ")}. Keep them; remove their definitions and satisfied depends_on references from the next batch, or deploy the remaining services individually.` : ""}<br>Volumes created before an error are retained; inspect them before retrying.</div>`;
       return;
     }
     Object.assign(COMPOSE, { text: "", variables: "", report: null });
@@ -268,7 +304,8 @@ window.composeCreate = async () => {
     toast(e.message, "bad");
   } finally {
     COMPOSE.busy = false;
-    const again = $("#composeCreate");
-    if (again && COMPOSE.report) composeShow(COMPOSE.report);
+    COMPOSE.review = null;
+    const again = $("#composeApply");
+    if (again) { again.disabled = true; again.textContent = "Return to the editor and review again"; }
   }
 };

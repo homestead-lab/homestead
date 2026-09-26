@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import homestead_names as NAMES
 import homestead_memory as MEMORY
 import homestead_capacity_review as CAPACITY_REVIEW
+import homestead_batch_capacity as BATCH_CAPACITY
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -25,7 +26,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.167")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.168")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2198,8 +2199,8 @@ def rollout_review_context(current):
     return {"uid": meta["uid"], "resourceVersion": meta["resourceVersion"]}
 
 
-def deploy_capacity_plan(config, existing=None):
-    """Read-only new-workload or shared-pod rollout preview."""
+def capacity_manifest(config, existing=None):
+    """Construct a read-only manifest and planned claims without provisioning."""
     cfg = analyze_deploy_intent(copy.deepcopy(config))
     ns = _dns_name(cfg.get("namespace") or DEFAULT_NS, "namespace")
     cfg["namespace"] = ns
@@ -2225,8 +2226,15 @@ def deploy_capacity_plan(config, existing=None):
         # Owner discovery reads the image later and may add this init stage.
         # Include its request now without fetching layers or writing a helper.
         pspec["initContainers"] = [VOLOWNER.init_container([])]
+    return cfg, dep, claims, existing
+
+
+def deploy_capacity_plan(config, existing=None):
+    """Read-only new-workload or shared-pod rollout preview."""
+    cfg, dep, claims, existing = capacity_manifest(config, existing)
+    ns = cfg["namespace"]
     threshold = get_app_settings()["thresholds"]["memory"]["critical"]
-    if joining:
+    if cfg.get("target_mode") == "existing":
         return ROLLOUT_CAPACITY.plan(existing, dep, ns, kget, PLACE.get_nodes, PLACE.manifest_plan,
                                      threshold, planned_claims=claims)
     return PLACE.manifest_plan(dep, ns, dep["metadata"]["name"], dep["spec"]["replicas"],
@@ -2341,16 +2349,10 @@ def compose_report(b):
     text = str(b.get("text") or "")
     if len(text) > 256 * 1024:
         raise ValueError("a Compose file over 256 KB is more than Homestead will read")
-    try:
-        workloads = {d["metadata"]["name"] for d in
-                     kget(f"/apis/apps/v1/namespaces/{ns}/deployments").get("items", [])}
-    except Exception:
-        workloads = set()
-    try:
-        claims = {c["metadata"]["name"] for c in
-                  kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims").get("items", [])}
-    except Exception:
-        claims = set()
+    workloads = {d["metadata"]["name"] for d in
+                 ROLLOUT_CAPACITY.items(kget, f"/apis/apps/v1/namespaces/{ns}/deployments")}
+    claims = {c["metadata"]["name"] for c in
+              ROLLOUT_CAPACITY.items(kget, f"/api/v1/namespaces/{ns}/persistentvolumeclaims")}
     vip_mode = b.get("vip_mode") if b.get("vip_mode") in ("shared", "auto", "nodes") else "shared"
     if NETWORK.node_addresses_only():
         # On k3s every service shares the nodes' addresses, so ports must differ.
@@ -2359,14 +2361,12 @@ def compose_report(b):
                            HW.features(), vip_mode)
 
 
-def compose_apply(b):
-    """Create every chosen service of a Compose file, dependencies first.
-
-    Read again here rather than trusted from the page, so what is created is
-    what was checked. It stops at the first failure and says what was made.
-    """
+def compose_preparation(b):
+    """Resolve the selected batch without provisioning or persisting inputs."""
     report = compose_report(b)
     chosen = set(b.get("services") or [row["name"] for row in report["services"]])
+    if chosen - {row["name"] for row in report["services"]}:
+        raise ValueError("selected Compose service no longer exists; review again")
     rows = {row["name"]: row for row in report["services"] if row["name"] in chosen}
     if not rows:
         raise ValueError("choose at least one service to create")
@@ -2376,18 +2376,106 @@ def compose_apply(b):
         where = f"{first['service']}: " if first.get("service") else ""
         raise ValueError(f"fix the file first: {where}{first['message']}"
                          + (f" (line {first['line']})" if first.get("line") else ""))
-    created = []
+    configs, entries, claims = [], [], {}
     for name in report["order"]:
         if name not in rows:
             continue
+        cfg = ensure_profile_compatible(analyze_deploy_intent(copy.deepcopy(rows[name]["config"])))
+        guard_managed_smb(cfg.get("namespace") or DEFAULT_NS, cfg.get("workload_name") or cfg.get("name"))
+        cfg, dep, pending, _ = capacity_manifest(cfg)
+        for claim, descriptor in pending.items():
+            if claim in claims and claims[claim] != descriptor:
+                raise ValueError("inconsistent shared PVC settings: " + claim)
+            claims[claim] = descriptor
+        configs.append(cfg)
+        entries.append({"name": name, "deployment": dep, "replicas": dep["spec"]["replicas"]})
+    return configs, entries, claims
+
+
+def compose_capacity(entries, claims, created=None):
+    """Fresh joint review, including created controllers whose pods lag behind."""
+    created = created or {}
+    ns = entries[0]["deployment"]["metadata"]["namespace"]
+    cache = {}
+    def read(path):
+        if path not in cache:
+            try:
+                cache[path] = kget(path)
+            except urllib.error.HTTPError as error:
+                if error.code != 404:
+                    raise
+                cache[path] = error
+        value = cache[path]
+        if isinstance(value, Exception):
+            raise value
+        return copy.deepcopy(value)
+    pods = ROLLOUT_CAPACITY.items(read, "/api/v1/pods")
+    planned = copy.deepcopy(entries)
+    starting_headroom = {}
+    for entry in planned:
+        previous = created.get(entry["name"])
+        if previous is None:
+            continue
+        current = read(f"/apis/apps/v1/namespaces/{ns}/deployments/{entry['name']}")
+        if current.get("metadata", {}).get("uid") != previous.get("metadata", {}).get("uid") or current.get("spec") != previous.get("spec"):
+            raise ValueError(entry["name"] + " changed during batch creation; review the remaining services again")
+        owned, known = ROLLOUT_CAPACITY.owned_pods(current, pods, read, ns)
+        if not known:
+            raise ValueError(entry["name"] + " pod ownership is unavailable; remaining services were not created")
+        scheduled = [p for p in owned if p.get("spec", {}).get("nodeName") and not p.get("metadata", {}).get("deletionTimestamp")]
+        for pod in scheduled:
+            spec = pod["spec"]
+            host = spec["nodeName"]
+            starting_headroom[host] = starting_headroom.get(host, 0) + max(0,
+                PLACE._pod_memory(spec)[0] - PLACE._pod_request(spec, "memory")) / 1024**3
+        # Keep all scheduled/terminating consumers reserved. Replace only this
+        # controller's unassigned pods with synthetic placements of its deficit.
+        pending_ids = {id(p) for p in owned if not p.get("spec", {}).get("nodeName") and not p.get("metadata", {}).get("deletionTimestamp")}
+        pods = [p for p in pods if id(p) not in pending_ids]
+        entry["deployment"] = current
+        entry["replicas"] = max(0, int(current["spec"].get("replicas", 1)) - len(scheduled))
+    nodes = copy.deepcopy(PLACE.get_nodes())
+    for node in nodes:
+        node["batch_starting_headroom_gb"] = starting_headroom.get(node["name"], 0)
+    return BATCH_CAPACITY.plan(planned, ns, pods, nodes, claims,
+                               get_app_settings()["thresholds"]["memory"]["critical"], read=read)
+
+
+def compose_preview(b):
+    configs, entries, claims = compose_preparation(b)
+    return {"capacity": compose_capacity(entries, claims),
+            "capacity_token": CAPACITY_REVIEW.issue(b, {"action": "compose", "configs": configs})}
+
+
+def compose_apply(b):
+    """Guard the entire batch before any writes, then recheck its remainder."""
+    configs, entries, claims = compose_preparation(b)
+    plan = compose_capacity(entries, claims)
+    if plan["status"] == "unknown":
+        raise CAPACITY_REVIEW.Rejected("Complete batch placement could not be verified; split the batch and review again", plan)
+    CAPACITY_REVIEW.enforce(b, plan, {"action": "compose", "configs": configs})
+    created, controllers = [], {}
+    for cfg, entry in zip(configs, entries):
+        name = entry["name"]
         try:
-            result = run_deploy(copy.deepcopy(rows[name]["config"]))
+            if created:
+                fresh = compose_capacity(entries, claims, controllers)
+                if fresh["blocked"]:
+                    return {"ok": False, "created": created, "failed": name,
+                            "error": "Remaining batch no longer fits the checked capacity; review again", "capacity": fresh}
+            result = run_deploy(copy.deepcopy(cfg))
+            created.append(result["name"])
+            # Never assume the Deployment has pods just because POST returned.
+            ns = cfg["namespace"]
+            controller = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{result['name']}")
+            if not controller.get("metadata", {}).get("uid"):
+                raise ValueError("created workload identity is unavailable; stopped before the next service")
+            controllers[name] = controller
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", "replace")[:300]
             return {"ok": False, "created": created, "failed": name, "error": f"HTTP {error.code}: {detail}"}
         except Exception as error:
             return {"ok": False, "created": created, "failed": name, "error": str(error)}
-        created.append(result["name"])
     return {"ok": True, "created": created}
 
 
@@ -5813,6 +5901,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, reviewed_deploy(b))
             if p == "/api/compose/parse":
                 return self._send(200, compose_report(b))
+            if p == "/api/compose/preview":
+                return self._send(200, compose_preview(b))
             if p == "/api/compose/apply":
                 return self._send(200, compose_apply(b))
             if p == "/api/portal":
@@ -6710,7 +6800,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.167 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.168 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

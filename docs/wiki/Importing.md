@@ -57,6 +57,42 @@ created in `depends_on` order:
 `build:` without an image, the Docker socket, and Compose `secrets`/`configs`
 are refused. **Edit in form** opens one service in the Deploy form first.
 
+### Batch capacity review
+
+**Create workloads** first reviews the selected services together, not against
+separate copies of the same free capacity. The bounded joint-placement search
+accounts for every replica's requests, declared host ports, hardware, PVC
+consumer restrictions and checked pod-affinity/topology rules. It tries host
+and pod-order alternatives. A known shortfall blocks creation; a search that
+cannot finish within its bounds also blocks and asks you to split the batch.
+The current bounds are 32 services and 64 new pod placements, with a limited
+search budget. Missing/incomplete required inventory cannot become an empty
+cluster with invented free capacity.
+
+The modal shows per-service requests/estimates, conservative per-host RAM upper
+estimates, unknown metrics and an example placement. The upper estimates sum
+pods that could individually fit on each host; they may exceed any achievable
+joint placement. The example is **not** sent as a hard pin to Kubernetes.
+Missing metrics and unbounded memory remain explicit warnings requiring consent.
+
+The signed, ten-minute review binds the exact Compose file, variables, namespace,
+selection and resolved configs. Editing any input requires another review.
+The API rereads the file and recomputes the joint plan before its first write.
+Before each later service, it refreshes the inventory and includes earlier
+created Deployments even if their pods have not appeared yet. Owned pods are
+resolved by controller UID; scheduled pods keep their reservations, while only
+the missing replicas are simulated. Ambiguous ownership stops the remainder.
+
+This is not an atomic admission reservation or OOM guarantee. Other controllers'
+uncreated replicas, concurrent callers, admission webhooks, storage provisioning
+and app readiness remain limitations. `depends_on` controls creation order, not
+application startup readiness. A later failure stops the batch and names what
+was created; **no workload or volume is automatically deleted**. Inspect any new
+claims, keep the created services, and remove their definitions and already
+satisfied `depends_on` references before reviewing the remainder (or deploy the
+remaining services individually). Drafts and `.env` values stay in browser
+memory only; save your original file somewhere safe before refreshing.
+
 ## A VM disk
 
 **Import → VM disk** downloads a disk image from a URL - qcow2, vmdk, raw, vdi,

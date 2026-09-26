@@ -107,8 +107,9 @@ still leave a partially applied edit.
 Renames and data-copy edits review conditional post-stop workload capacity;
 copy-helper placement and capacity changes during a long copy are not simulated.
 Paused Deployments cannot increase replicas through Edit until resumed and
-reviewed again. Compose batches, Unraid migration, standalone moves, image
-updates and VM launches remain separate paths; extending the guard is planned.
+reviewed again. [Compose batches](Importing#batch-capacity-review) have a joint
+preflight and before-each-service recheck. Unraid migration, standalone moves,
+image updates and VM launches remain separate paths; extending the guard is planned.
 
 The arithmetic follows Kubernetes' [resource request model](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/)
 and [init-sidecar accounting](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/).
@@ -214,10 +215,10 @@ cannot be silently overwritten. A stopped workload remains stopped.
 A paused workload only saves its template; prospective resume blockers remain
 visible and capacity must be reviewed again before resuming it.
 
-This coverage is for **Deploy/App Store → join existing workload**. The separate
-container Edit dialog, Compose batches, image updates and migrations still need
-their own guarded review paths. These are read-only preflight checks, not live
-failover validation or a guarantee that a rollout will complete.
+These rollout details apply to **Deploy/App Store → join existing workload**
+and the Edit dialog. Compose has a separate whole-batch review; image updates
+and migrations still need their own guarded review paths. These are read-only
+preflight checks, not live failover validation or a guarantee that a rollout completes.
 
 ## Updates
 

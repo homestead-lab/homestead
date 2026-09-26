@@ -695,7 +695,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.167/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.168/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -706,7 +706,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.167 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.168 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -918,14 +918,20 @@ Each service becomes its own workload, created in `depends_on` order:
 - a service other services reach by name, such as a database, gets an address
   inside the cluster so that name keeps working;
 - `entrypoint`, `command`, `working_dir`, a numeric `user` and `cap_add` carry
-  across. Reservations become requests; limits are not enforced.
+  across. Reservations become requests; memory limits are carried across.
 
 Some things are refused outright: `build` without an `image`, the Docker socket,
 `secrets`/`configs`, and a device no hardware feature covers. Docker-only
 settings such as `labels` and `logging` are listed as left out. **Edit in form**
 opens one service in the Deploy form to change anything first; **Create
-workloads** reads the file again on the server and creates every service,
-stopping at the first failure and saying what was already made.
+workloads** reviews all services together against shared capacity, declared host
+ports and checked storage/placement constraints. The API checks again before
+creating anything and before each later service, including earlier Deployments
+whose pods have not appeared yet. A later failure stops the batch and names what
+was already made, without deleting workloads or volumes. The example placement
+is not a scheduler reservation; unknown metrics and conservative RAM estimates
+require acknowledgement. An incomplete bounded search requires splitting the
+batch. See the [batch review and recovery guide](https://github.com/wjcloudy/homestead/wiki/Importing#batch-capacity-review).
 
 ## Editing files on a volume
 
@@ -1474,10 +1480,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.167`, the workflow publishes:
+For a release such as `v2.8.168`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.167
+ghcr.io/wjcloudy/homestead:2.8.168
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -1488,8 +1494,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.167
-git push origin v2.8.167
+git tag v2.8.168
+git push origin v2.8.168
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
