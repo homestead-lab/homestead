@@ -28,10 +28,39 @@ This moves a running container across - its settings *and* its appdata.
    A container that keeps nothing on disk is recognised as such: it imports
    with its image, ports and environment alone, and no volume is made.
    **Add storage anyway** is there if you want one.
-4. **Measure sizes.** Homestead runs `du` on the source and sizes each volume
-   from what is really there, and checks each fits on Longhorn.
-5. **Import.** The copy keeps owners and permissions by number, so the app
-   finds its files as it left them. Progress is in bytes, in the job tray.
+4. **Measure sizes and set memory.** Homestead runs `du` on the source and
+   compares the copied size with each claim's logical capacity. Existing free
+   filesystem space remains unverified: Longhorn's snapshot allocation is not
+   filesystem usage. Review memory reserved and the optional hard memory maximum;
+   Docker's reservation and limit are carried over when available.
+5. **Review import.** Review two sequential phases: the copy helper and the
+   application. The helper reserves 100m CPU / 128 MiB RAM and has a 512 MiB
+   memory limit. Confirm new/reused claims, possible file replacement and any
+   capacity warnings. Hard placement blockers cannot be overridden. The server
+   repeats admission before creating resources; review tokens expire after ten minutes.
+6. **Copy, then start.** The copy preserves numeric owners and permissions.
+   Progress is in bytes in the job tray. The application is created **stopped**;
+   Start in Containers makes a fresh capacity check after the copy completes.
+   A failed, missing or mismatched copy Job blocks starting, including through
+   workload edits. Imports with nothing to copy create no phantom Job.
+
+An existing Job or workload is never silently replaced. Existing claims must be
+explicitly selected, Bound and not deleting. Stop their consumers before copying,
+including consumers of RWX claims: shared access does not make overwriting live
+application data safe. The review is not a distributed scheduler reservation;
+external writers and concurrent starts can still race it.
+
+Successful copy Jobs are retained until cleanup so a later start can verify the
+result. Cleanup records successful completion on the matching workload before
+removing the Job. Failed copies leave the application stopped. If a copy cannot
+be recovered, inspect the retained data, remove its stopped workload/Job using
+the cleanup dialog, keep any volumes you need, and explicitly reuse those claims
+in a new import. Do not remove a copy Job manually to bypass this interlock.
+
+If creation fails partway through or the browser loses contact, check Import,
+Containers and Volumes before retrying. Already-created resources and copied data
+are retained, not automatically deleted; a repeated request cannot replace them.
+Borrowed claims are never offered for deletion by import cleanup.
 
 A tmpfs RAM disk on Unraid (Frigate's `/tmp/cache`, for example) becomes a RAM
 disk here, not a volume full of old cache.

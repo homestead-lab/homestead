@@ -28,7 +28,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.182")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.183")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2222,6 +2222,58 @@ def rollout_review_context(current):
     return {"uid": meta["uid"], "resourceVersion": meta["resourceVersion"]}
 
 
+def import_capacity_plan(body):
+    """Review both sequential phases before an import creates any resources."""
+    cfg = copy.deepcopy(body)
+    cfg["namespace"] = DEFAULT_NS
+    guard_managed_smb(DEFAULT_NS, cfg.get("name"))
+    cfg = NETWORK.prepare_deploy(cfg)  # read-only VIP selection and validation
+    prepared = IMP.prepare_import(cfg)
+    inventory, pods = IMP.import_inventory(prepared, kget)
+    threshold = get_app_settings()["thresholds"]["memory"]["critical"]
+    claims = {row["name"]: row for row in prepared["volumes"] if row["create"]}
+    nodes = PLACE.get_nodes()
+    phases = []
+    for kind, title in (("job", "Copy files"), ("deployment", "Imported application")):
+        manifest = prepared[kind]
+        if manifest:
+            plan = PLACE.manifest_plan(manifest, DEFAULT_NS, manifest["metadata"]["name"], 1,
+                                       threshold, planned_claims=claims, pod_snapshot=pods,
+                                       nodes_snapshot=nodes)
+            phases.append({"title": title, "capacity": plan})
+    warnings = ["No resources are created until you confirm. Copy and application are reviewed separately, not as concurrent workloads.",
+                "Imported files can replace files with the same names in existing volumes. Source consistency is not guaranteed; stop the source app or use a consistent backup.",
+                "Storage provisioning, actual free filesystem space and future placement are not guaranteed by this review.",
+                "The application stays stopped while copying. Starting it later requires a fresh capacity check."]
+    capacity = {"blocked": any(row["capacity"]["blocked"] for row in phases),
+                "requires_confirmation": True, "warnings": warnings}
+    context = {"action": "import", **inventory, "prepared": prepared}
+    return cfg, prepared, phases, capacity, context
+
+
+def preview_import(body):
+    _, prepared, phases, capacity, context = import_capacity_plan(body)
+    return {"phases": phases, "capacity": capacity, "volumes": prepared["volumes"],
+            "capacity_token": CAPACITY_REVIEW.issue(body, context)}
+
+
+def reviewed_import(body):
+    cfg, prepared, _, capacity, context = import_capacity_plan(body)
+    CAPACITY_REVIEW.enforce(body, capacity, context)
+    # Logo persistence cannot change scheduling, but must follow admission.
+    persist_icon_config(cfg)
+    # Re-admit after the potentially slow logo fetch, not merely against the
+    # inventory from before it. Registry/network/claim drift needs new review.
+    _, prepared, _, capacity, context = import_capacity_plan(body)
+    CAPACITY_REVIEW.enforce(body, capacity, context)
+    if prepared["deployment"]:
+        annotations = prepared["deployment"]["metadata"].setdefault("annotations", {})
+        if cfg.get("icon"):
+            annotations[NAMES.key("icon")] = cfg["icon"]
+            annotations[NAMES.key("icon-source")] = cfg.get("icon_source", "")
+    return IMP.commit_import(prepared)
+
+
 def image_update_capacity_plan(body, action):
     """Resolve immutable images and review the whole rollout without writes."""
     if action not in ("update", "rollback"):
@@ -2419,6 +2471,11 @@ def edit_capacity_plan(config):
                                  threshold, planned_claims={row["name"]: row for row in prepared["claims"]})
     if moves:
         plan["warnings"].append("data-copy helper placement is not simulated; final workload capacity must be rechecked if the cluster changes during copying")
+    if moves or prepared["name"] != name or proposed["spec"].get("replicas", 1):
+        import_blocker = PLACE.IMPORT_GUARD.pending(current, ns, kget)
+        if import_blocker:
+            plan["blocked"] = True
+            plan["warnings"].append(import_blocker)
     if config.get("lan"):
         plan["warnings"].append("LAN network attachment availability is not guaranteed by the memory and placement review")
     return prepared, context, plan
@@ -5354,7 +5411,7 @@ ADMIN_ROUTES = {
     "/api/node/power", "/api/node/drain", "/api/node/cordon", "/api/node/hardware",
     "/api/sources", "/api/sources/delete", "/api/sources/browse",
     "/api/sources/containers", "/api/sources/inspect", "/api/sources/measure",
-    "/api/import", "/api/imports/delete", "/api/imports/cleanup-plan",
+    "/api/import", "/api/import/preview", "/api/imports/delete", "/api/imports/cleanup-plan",
     "/api/vm-disks/import",
     "/api/shares", "/api/shares/edit", "/api/shares/delete", "/api/shares/options",
     "/api/shares/nfs", "/api/self/nfs", "/api/addons/nfs/remove",
@@ -6855,15 +6912,15 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"containers": IMP.source_containers(b["name"])})
             if p == "/api/sources/inspect":
                 return self._send(200, IMP.inspect_source_container(b["name"], b["container"]))
+            if p == "/api/import/preview":
+                return self._send(200, preview_import(b))
             if p == "/api/import":
-                guard_managed_smb(DEFAULT_NS, b.get("name"))
-                persist_icon_config(b)
-                b = NETWORK.prepare_deploy(b)
-                result = IMP.import_container(b)
-                result["operation"] = OPS.start(
-                    "import", f"Import {b['name']}",
-                    {"kind": "Job", "name": result["job"], "namespace": DEFAULT_NS},
-                    "/import", {"namespace": DEFAULT_NS, "name": result["job"]})
+                result = reviewed_import(b)
+                if result["job"]:
+                    result["operation"] = OPS.start(
+                        "import", f"Import {b['name']}",
+                        {"kind": "Job", "name": result["job"], "namespace": DEFAULT_NS},
+                        "/import", {"namespace": DEFAULT_NS, "name": result["job"]})
                 return self._send(200, result)
             if p == "/api/operations/resume":
                 return self._send(200, OPS.resume(b.get("id", "")))
