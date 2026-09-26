@@ -671,8 +671,14 @@ def create_service(cfg):
         annotations["homestead.io/vip-mode"] = plan["vip_mode"]
         spec = service["spec"]
         old_ports = {(p["port"], p.get("protocol", "TCP")): p for p in spec.get("ports", [])}
-        spec["ports"] = [{**p, **({"nodePort": old_ports[(p["port"], p["protocol"])]["nodePort"]}
-                                  if old_ports.get((p["port"], p["protocol"]), {}).get("nodePort") else {})} for p in plan["ports"]]
+        old_names = {(p.get("name"), p.get("protocol", "TCP")): p for p in spec.get("ports", []) if p.get("name")}
+        updated_ports = []
+        for requested, p in zip(cfg["ports"], plan["ports"]):
+            old = old_ports.get((p["port"], p["protocol"])) or old_names.get((requested.get("name"), p["protocol"])) or {}
+            # Ingress backends may refer to a Service port by name. Preserve it,
+            # appProtocol and nodePort even when only the VIP/listener changes.
+            updated_ports.append({**old, **p, **({"name": old["name"]} if old.get("name") else {})})
+        spec["ports"] = updated_ports
         if "loadBalancerIP" in spec:
             if plan["vip"]:
                 spec["loadBalancerIP"] = plan["vip"]

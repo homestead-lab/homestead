@@ -113,7 +113,7 @@ window.networkServiceDelete = async (namespace, name) => {
 };
 
 function networkModalPort(port = {}, first = false) {
-  return `<div class="f4 net-port"><div><label>LAN port</label><input class="np-port" type="number" min="1" max="65535" value="${esc(port.port || port.container || "")}"></div>
+  return `<div class="f4 net-port" data-port-name="${esc(port.name || "")}"><div><label>LAN port</label><input class="np-port" type="number" min="1" max="65535" value="${esc(port.port || port.container || "")}"></div>
     <div><label>Target port</label><input class="np-target" type="text" value="${esc(port.target_port || port.port || port.container || "")}"></div>
     <div><label>Protocol</label><select class="np-protocol"><option>TCP</option><option ${port.protocol === "UDP" ? "selected" : ""}>UDP</option></select></div>
     <div><label>&nbsp;</label><button class="btn sm" type="button" onclick="this.closest('.net-port').remove();networkInvalidateReview()" ${first ? "disabled" : ""}>Remove</button></div></div>`;
@@ -211,7 +211,7 @@ function networkConfig() {
     update: !!$("#net_existing").value, uid: $("#net_existing").selectedOptions[0]?.dataset.uid || "",
     resource_version: $("#net_existing").selectedOptions[0]?.dataset.rv || "",
     vip: $("#net_lb_ip").value.trim(), ports: $$(".net-port").map((row, index) => ({
-      name: `port-${index + 1}`, port: $(".np-port", row).value, target_port: $(".np-target", row).value,
+      name: row.dataset.portName || `port-${index + 1}`, port: $(".np-port", row).value, target_port: $(".np-target", row).value,
       protocol: $(".np-protocol", row).value })) };
 }
 
