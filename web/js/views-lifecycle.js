@@ -435,7 +435,7 @@ window.nodeActions = async name => {
       <button class="btn danger" data-need="admin" onclick="nodeRemoval('${esc(name)}')">Remove from cluster…</button></div>
     <div class="sec">Power</div>
     ${off ? `<div class="note"><b>Host power control is disabled.</b> Rebooting needs a privileged
-        helper pod that enters the host namespaces, so it ships off. Set
+        helper pod that enters the host namespaces. This installation has disabled it. Set
         <span class="mono">ENABLE_NODE_POWER=true</span> on the Homestead Deployment to enable it.
         Cordon and drain above work regardless.</div>`
       : risky ? `<div class="note" style="border-color:rgba(255,77,79,.35);background:rgba(255,77,79,.08);color:#ffb4b8">

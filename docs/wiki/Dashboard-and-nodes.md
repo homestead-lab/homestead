@@ -58,9 +58,14 @@ From a node you can:
 - open its **Disks** and give a new disk to Longhorn - see [Storage](Storage#disks);
 - run a **SMART self-test** on a drive (short or extended), followed in the job
   tray;
-- reboot or shut it down, if `ENABLE_NODE_POWER` is set on Homestead.
+- reboot or shut it down, with an administrator's reviewed confirmation.
 
 ### Reviewed host maintenance
+
+Host power control is enabled by default from v2.8.167. Set
+`ENABLE_NODE_POWER=false` on Homestead to disable it; an existing explicit
+opt-out is preserved on image updates. Enabling the feature does not reboot
+anything or bypass its admin-only access, confirmations or safety blockers.
 
 Reboot and shutdown first show quorum, affected workloads, VMs, Longhorn copies,
 disruption budgets and local/external storage used by pods being drained.
@@ -95,9 +100,11 @@ If this host runs Homestead itself, draining can interrupt the request. Inspect
 the persisted job after Homestead returns before retrying. Disposable-host
 rehearsal remains necessary before relying on unattended maintenance.
 
-Upgrading from older installations requires the updated ClusterRole's read-only
-`policy/poddisruptionbudgets` permission (`deploy/rbac.yaml` or a Helm upgrade).
-An image-only update without this permission blocks power review safely.
+The updated ClusterRole includes read-only `policy/poddisruptionbudgets` access.
+Homestead normally reconciles this automatically on startup. If **Settings →
+About this installation → Permissions** reports that it cannot update its role,
+apply the release's `deploy/rbac.yaml` or perform a Helm upgrade. Power review
+blocks safely until the permission is available; see [updating](Installing-Homestead#updating-homestead).
 
 ## The node probe
 

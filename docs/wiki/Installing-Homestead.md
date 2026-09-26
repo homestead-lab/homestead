@@ -80,8 +80,27 @@ kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/main/deplo
 ```
 
 Settings shows this line whenever Homestead finds it cannot update its role.
-With Helm, `helm upgrade homestead oci://ghcr.io/wjcloudy/charts/homestead -n homestead --reuse-values`
-works too.
+Use the version-pinned command shown there. The RBAC-only manifest does not
+replace your Deployment, Service address, configuration or volumes. Avoid
+reapplying the full install manifest over a customised installation just to
+gain a new permission.
+
+For a Helm-managed installation, update the existing release using its actual
+release name and namespace (shown by `helm list -A`). For example:
+
+```bash
+helm upgrade homestead oci://ghcr.io/wjcloudy/charts/homestead -n homestead --version 2.8.167 --reuse-values --set-string image.tag=2.8.167 --wait --timeout 5m
+```
+
+This preserves saved values while explicitly updating the image even if an older
+tag was pinned. If a HelmChart controller or GitOps manages the release, update
+its desired version/values there instead of competing with the controller.
+
+After updating, check the installed version, **Permissions**, and Homestead's
+ready status. From v2.8.167, host power control defaults on but still requires an
+administrator's impact review and passes no safety blocker automatically. An
+explicit `ENABLE_NODE_POWER=false` stays disabled; changing an environment
+setting restarts Homestead, not the host.
 
 ## Reaching it from outside
 

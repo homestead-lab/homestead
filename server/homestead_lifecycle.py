@@ -21,9 +21,9 @@ import homestead_maintenance as MAINTENANCE
 import homestead_place as PLACE
 
 # Rebooting a host needs a privileged pod that enters the host namespaces.
-# That is a real escape hatch, so it is off unless the operator opts in on the
-# Deployment with ENABLE_NODE_POWER=true.
-NODE_POWER_ENABLED = os.environ.get("ENABLE_NODE_POWER", "").lower() in ("1", "true", "yes")
+# Enabled by default, but still admin-only and guarded by impact review,
+# quorum, drain and post-drain checks. An explicit false disables the helper.
+NODE_POWER_ENABLED = os.environ.get("ENABLE_NODE_POWER", "true").strip().lower() in ("1", "true", "yes")
 
 # Remembers the replica count a workload should return to when autostart is
 # switched back on, because scaling to zero forgets it.
@@ -832,7 +832,7 @@ def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=N
     if not NODE_POWER_ENABLED:
         raise PermissionError(
             "Host power control is disabled. It needs a privileged helper pod that enters the "
-            "host namespaces, so it ships off. Set ENABLE_NODE_POWER=true on the Homestead "
+            "host namespaces. This installation has disabled it. Set ENABLE_NODE_POWER=true on the Homestead "
             "Deployment to turn it on. Cordon and drain work regardless.")
     if action not in ("reboot", "poweroff"):
         raise ValueError("action must be reboot or poweroff")
