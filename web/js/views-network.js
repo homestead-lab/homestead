@@ -113,10 +113,51 @@ window.networkServiceDelete = async (namespace, name) => {
 };
 
 function networkModalPort(port = {}, first = false) {
-  return `<div class="f4 net-port" data-port-name="${esc(port.name || "")}"><div><label>LAN port</label><input class="np-port" type="number" min="1" max="65535" value="${esc(port.port || port.container || "")}"></div>
-    <div><label>Target port</label><input class="np-target" type="text" value="${esc(port.target_port || port.port || port.container || "")}"></div>
+  return `<div class="f4 net-port" data-port-name="${esc(port.name || "")}"><div><label>Port on your LAN</label><input class="np-port" type="number" min="1" max="65535" value="${esc(port.port || port.container || "")}"></div>
+    <div><label>Port inside the app / VM</label><input class="np-target" type="text" value="${esc(port.target_port || port.port || port.container || "")}"></div>
     <div><label>Protocol</label><select class="np-protocol"><option>TCP</option><option ${port.protocol === "UDP" ? "selected" : ""}>UDP</option></select></div>
     <div><label>&nbsp;</label><button class="btn sm" type="button" onclick="this.closest('.net-port').remove();networkInvalidateReview()" ${first ? "disabled" : ""}>Remove</button></div></div>`;
+}
+
+function networkIsNodeAccess(row, data) {
+  const ips = row?.external_ips || [];
+  return row?.type === "LoadBalancer" && !row.lb_class && ips.length > 0 && ips.every(ip => (data.node_ips || []).includes(ip));
+}
+function networkAdditionalName(data, ns, workload) {
+  const base = workload.slice(0, 55) + "-vip";
+  let name = base, suffix = 2;
+  while (data.services.some(s => s.namespace === ns && s.name === name)) name = `${base}-${suffix++}`;
+  return name;
+}
+function networkVipCards(current, choices) {
+  if (choices.blocked?.[current]) current = "";
+  const addresses = [...new Set([...(choices.own || []).map(v => v.ip), ...choices.free, ...choices.used.map(v => v.ip)])];
+  const typed = !!current && !addresses.includes(current);
+  return `<input id="net_lb_ip" type="hidden" value="${esc(current)}"><div class="net-address-list" role="group" aria-label="Available VIPs">${addresses.map(ip => {
+    const used = choices.used.find(v => v.ip === ip);
+    const label = choices.labels[ip] || choices.own.find(v => v.ip === ip)?.label || "";
+    return `<label class="net-address-choice"><input type="radio" name="net_address" value="${esc(ip)}" ${current === ip ? "checked" : ""} onchange="networkAddressPicked(this.value)"><span><b class="mono">${esc(ip)}</b>${label ? `<span>${esc(label)}</span>` : ""}<small>${used ? `In use · ${used.services} service(s) · ports ${esc(used.listeners.map(p => `${p.port}/${p.protocol || "TCP"}`).slice(0, 6).join(", "))}` : "Not assigned to a Service"}</small></span>${ip === choices.shared ? '<span class="tag ok">Default</span>' : ""}</label>`;
+  }).join("") || '<p class="small">No saved VIPs yet. Add reserved addresses in Networking → Workload VIPs.</p>'}</div>
+  <details class="net-custom-address" ${typed ? "open" : ""}><summary>Use another reserved address</summary><p class="small">Only use an unused LAN address reserved outside DHCP. Node and cluster-management addresses are not VIP choices.</p><label for="net_custom_ip">Reserved IPv4 address</label><input id="net_custom_ip" value="${typed ? esc(current) : ""}" placeholder="e.g. 192.168.1.230" oninput="networkAddressPicked(this.value,true)"></details>`;
+}
+window.networkAddressPicked = (ip, typed = false) => {
+  $("#net_lb_ip").value = ip.trim();
+  if (typed) $$("input[name=net_address]").forEach(e => {e.checked = false;});
+  else if ($("#net_custom_ip")) $("#net_custom_ip").value = "";
+  networkInvalidateReview(); networkModeChanged();
+};
+window.networkAccessPicked = mode => {
+  $("#net_mode").value = mode;
+  networkModeChanged(); networkInvalidateReview();
+};
+function networkAccessChoices(data, choices) {
+  const option = (mode, title, detail, disabled = false) => `<label class="net-access-choice${disabled ? " disabled" : ""}"><input type="radio" name="net_access" value="${mode}" ${disabled ? "disabled" : ""} onchange="networkAccessPicked(this.value)"><span><b>${title}</b><small>${detail}</small></span></label>`;
+  return `<fieldset class="net-access-options"><legend>How should this app be reached?</legend>
+    ${option("shared", "Use the default VIP", choices.shared ? `<span class="mono">${esc(choices.shared)}</span> · Share this address using different ports.` : "No usable default set. Choose one in Networking → Workload VIPs.", !choices.shared || nodeAddressesOnly())}
+    ${option("manual", "Choose a VIP", "Select a reserved address below. Host addresses are excluded.", nodeAddressesOnly())}
+    ${STATE.platform?.servicelb ? option("nodes", "Use node addresses", "Keep access through the hosts' own IPs. This is not a movable VIP.") : ""}
+    <label class="net-access-choice net-auto-choice"><input type="radio" name="net_access" value="automatic" onchange="networkAccessPicked(this.value)" ${nodeAddressesOnly() ? "disabled" : ""}><span><b>Pick an unused VIP for me</b><small>The review will show the address before anything changes.</small></span></label>
+    </fieldset>`;
 }
 
 window.networkExpose = async (namespace = "", name = "", kind = "Deployment", selectedVip = "", editing = false) => {
@@ -129,19 +170,29 @@ window.networkExpose = async (namespace = "", name = "", kind = "Deployment", se
   const choices = await vipChoices(data);
   window.__networkChoices = choices;
   const open = editing && modalIsOpen() ? childModal : modal;
-  open(editing ? "Service VIP / ports" : "Expose workload", `<div id="net_editor" data-nested="${editing ? "1" : "0"}"><p class="dim">${editing ? "Manage the Service address separately from the guest/interface address. Saving here applies immediately; unsaved workload edits are kept in the previous dialog." : "Create a Kubernetes Service with a collision-checked address and listener."} Nothing changes until you review the plan.</p>
-    <div class="f2"><div class="f"><label>Workload</label><select id="net_workload" onchange="networkWorkloadChanged()">${options}</select></div>
-      <div class="f"><label>Service name</label><input id="net_name" type="text" value="${esc(first.name)}"></div></div>
-    <div class="f"><label for="net_existing">Service to configure</label><select id="net_existing" onchange="networkServicePicked()"></select><span class="dim xs">Update an existing listener in place, or create an additional Service. A VIP is not assigned to the guest NIC; the guest must listen on its target ports.</span></div>
-    <div class="f2"><div class="f"><label>Reachability ${tip("Cluster only is reachable inside Kubernetes. LAN access asks the cluster's load balancer to advertise a Service address.")}</label><select id="net_type" onchange="networkModeChanged()"><option value="LoadBalancer">LAN access</option><option value="ClusterIP">Cluster only</option></select></div>
-      <div class="f" id="net_mode_wrap"><label>VIP allocation ${tip("Default shares your configured workload address on free ports. Automatic chooses another reserved address. Specific uses the address you choose. No VM guest address is changed.")}</label><select id="net_mode" onchange="networkModeChanged()">${nodeAddressesOnly() ? nodeAddressOption() : `${data.shared_vip?.ip && !(data.node_ips || []).includes(data.shared_vip.ip) ? `<option value="shared">Default workload VIP · ${esc(data.shared_vip.ip)}</option>` : ""}<option value="automatic">New automatic VIP</option>${nodeAddressChoice()}<option value="manual">Specific VIP</option>`}</select></div></div>
-    <div class="f hidden" id="net_vip_wrap"><label for="net_lb_pick">Specific VIP</label>${vipPicker("net", selectedVip, choices)}<p class="dim xs">Choose a saved address or a pool address. Sharing an in-use VIP requires a free LAN port; Review plan checks for conflicts.</p></div>
-    <div class="sec">Listeners</div><div id="net_ports">${networkModalPort(first.ports[0] || {}, true)}</div>
-    <button class="btn sm" type="button" onclick="$('#net_ports').insertAdjacentHTML('beforeend',networkModalPort());networkInvalidateReview()">＋ Add listener</button>
-    <div id="net_review"></div><div class="modalactions"><button class="btn" onclick="modalBack()">Cancel</button><button class="btn pri" onclick="networkReview()">Review plan</button></div></div>`, true);
+  open(editing ? `Network access · ${name}` : "Connect a workload to your network", `<div id="net_editor" data-nested="${editing ? "1" : "0"}">
+    <p class="net-intro">Choose the address and ports devices on your LAN use to reach this app. Nothing changes until you review and apply.</p>
+    <div class="f" ${editing ? "hidden" : ""}><label for="net_workload">App or VM</label><select id="net_workload" onchange="networkWorkloadChanged()">${options}</select></div>
+    <div id="net_current_access" class="net-current-access"></div>
+    <div id="net_mode_wrap">${networkAccessChoices(data, choices)}</div>
+    <select id="net_mode" hidden><option value="shared">Default VIP</option><option value="manual">Selected VIP</option><option value="nodes">Node addresses</option><option value="automatic">Unused VIP</option></select>
+    <div class="f hidden" id="net_vip_wrap">${networkVipCards(selectedVip, choices)}</div>
+    <div id="net_change_note" class="net-change-note" role="status"></div>
+    <div class="sec">Ports</div><p class="net-help">Devices connect to the LAN port; traffic is forwarded to the port inside the app or VM.</p>
+    <div id="net_ports">${networkModalPort(first.ports[0] || {}, true)}</div>
+    <button class="btn sm" type="button" onclick="$('#net_ports').insertAdjacentHTML('beforeend',networkModalPort());networkInvalidateReview()">＋ Add port</button>
+    <details class="net-advanced"><summary>Advanced · Kubernetes Service</summary>
+      <p class="net-help">A Service is the Kubernetes object holding this connection. Its name is not an IP address.</p>
+      <div class="f"><label for="net_existing">Connection to edit</label><select id="net_existing" onchange="networkServicePicked()"></select></div>
+      <div class="f2"><div class="f"><label for="net_name">Kubernetes Service name</label><input id="net_name" type="text" value="${esc(first.name)}"></div>
+      <div class="f"><label for="net_type">Reachability</label><select id="net_type" onchange="networkModeChanged()"><option value="LoadBalancer">LAN access</option><option value="ClusterIP">Cluster only</option></select></div></div></details>
+    <div id="net_review"></div><div class="modalactions"><button class="btn" onclick="modalBack()">Cancel</button><button class="btn pri" onclick="networkReview()">Review changes</button></div></div>`, true);
   networkServiceOptions(editing);
   $("#net_workload").disabled = editing;
-  if (selectedVip && !nodeAddressesOnly()) $("#net_mode").value = "manual";
+  if (selectedVip && !nodeAddressesOnly()) {
+    $("#net_mode").value = "manual";
+    $("#net_vip_wrap").innerHTML = networkVipCards(selectedVip, choices);
+  }
   networkModeChanged();
   // A changed form always requires a fresh review.
   $("#net_editor").addEventListener("input", networkInvalidateReview);
@@ -156,29 +207,33 @@ window.networkManage = (ns, name, kind = "Deployment") => {
 function networkServiceOptions(selectExisting = false) {
   const [ns, name, kind] = $("#net_workload").value.split("/");
   const target = kind === "VirtualMachine" ? `VirtualMachine/${name}` : name;
-  const rows = (STATE.data.network.services || []).filter(s => s.namespace === ns && (s.targets || []).includes(target) && !s.system);
-  $("#net_existing").innerHTML = '<option value="">Create an additional Service</option>' + rows.map(s => `<option value="${esc(s.name)}" data-uid="${esc(s.uid || "")}" data-rv="${esc(s.resource_version || "")}">${esc(s.name)} · ${esc(s.external_ips.join(", ") || "cluster only")}</option>`).join("");
+  const rows = (STATE.data.network.services || []).filter(s => s.namespace === ns && (s.targets || []).includes(target) && !s.system)
+    .sort((a, b) => Number(networkIsNodeAccess(a, STATE.data.network)) - Number(networkIsNodeAccess(b, STATE.data.network)));
+  $("#net_existing").innerHTML = '<option value="">Create another connection</option>' + rows.map(s => `<option value="${esc(s.name)}" data-uid="${esc(s.uid || "")}" data-rv="${esc(s.resource_version || "")}">${esc(s.name)} · ${networkIsNodeAccess(s, STATE.data.network) ? "Node access" : s.type === "ClusterIP" ? "Cluster only" : "VIP access"}</option>`).join("");
   if (selectExisting && rows.length) { $("#net_existing").value = rows[0].name; networkServicePicked(); }
-  else if (rows.length) $("#net_name").value = `${name}-vip`;
+  else networkServicePicked();
 }
 window.networkServicePicked = () => {
   const [ns, name] = $("#net_workload").value.split("/");
   const existing = $("#net_existing").value;
   const row = STATE.data.network.services.find(s => s.namespace === ns && s.name === existing);
-  $("#net_name").value = row ? row.name : `${name}-vip`;
+  $("#net_name").value = row ? row.name : networkAdditionalName(STATE.data.network, ns, name);
   $("#net_name").disabled = !!row;
   $("#net_type").disabled = !!row;
   if (row) {
     $("#net_type").value = row.type;
     $("#net_ports").innerHTML = row.ports.map((p, i) => networkModalPort(p, i === 0)).join("");
-    const ip = row.requested_ips?.[0] || row.external_ips?.[0] || "";
+    const ip = networkIsNodeAccess(row, STATE.data.network) ? "" : row.requested_ips?.[0] || row.external_ips?.[0] || "";
     // Preserve the selected address on open, even if today's default has changed.
     $("#net_mode").value = ip && !nodeAddressesOnly() ? (row.vip_mode === "shared" && ip === STATE.data.network.shared_vip?.ip ? "shared" : "manual") : "nodes";
-    $("#net_vip_wrap").innerHTML = `<label>Specific VIP</label>${vipPicker("net", ip, window.__networkChoices)}`;
+    $("#net_vip_wrap").innerHTML = networkVipCards(ip, window.__networkChoices);
   } else {
     $("#net_type").value = "LoadBalancer";
-    $("#net_mode").value = $("#net_mode option[value=shared]") ? "shared" : nodeAddressesOnly() ? "nodes" : "automatic";
+    $("#net_mode").value = window.__networkChoices.shared ? "shared" : nodeAddressesOnly() ? "nodes" : "automatic";
+    $("#net_vip_wrap").innerHTML = networkVipCards("", window.__networkChoices);
   }
+  const node = networkIsNodeAccess(row, STATE.data.network);
+  $("#net_current_access").innerHTML = row ? `<span class="net-eyebrow">Current connection</span><b>${node ? "Node address — not a VIP" : row.type === "ClusterIP" ? "Cluster only" : "VIP access"}</b><span class="mono">${esc((row.external_ips || []).map(ip => row.ports.map(p => `${ip}:${p.port} (${p.protocol})`).join(" · ")).join(" · ") || "No LAN address")}</span>${node ? '<small>k3s exposes these ports on the host itself. This address does not move to another host if it goes offline.</small>' : ""}` : '<span class="net-eyebrow">New connection</span><b>Choose how to reach this app or VM</b>';
   networkModeChanged(); networkInvalidateReview();
 };
 let NETWORK_REVIEW = null;
@@ -186,7 +241,7 @@ function networkInvalidateReview() {
   NETWORK_REVIEW = null;
   if ($("#net_review")) $("#net_review").innerHTML = "";
   const actions = $("#net_editor .modalactions");
-  if (actions) actions.innerHTML = '<button class="btn" onclick="modalBack()">Cancel</button><button class="btn pri" onclick="networkReview()">Review plan</button>';
+  if (actions) actions.innerHTML = '<button class="btn" onclick="modalBack()">Cancel</button><button class="btn pri" onclick="networkReview()">Review changes</button>';
 }
 
 window.networkWorkloadChanged = () => {
@@ -202,14 +257,26 @@ window.networkModeChanged = () => {
   const external = $("#net_type").value === "LoadBalancer";
   $("#net_mode_wrap").classList.toggle("hidden", !external);
   $("#net_vip_wrap").classList.toggle("hidden", !external || $("#net_mode").value !== "manual");
+  const mode = $("#net_mode").value;
+  $$("input[name=net_access]").forEach(e => {e.checked = e.value === mode;});
+  const [ns] = $("#net_workload").value.split("/");
+  const row = STATE.data.network.services.find(s => s.namespace === ns && s.name === $("#net_existing").value);
+  const adding = external && networkIsNodeAccess(row, STATE.data.network) && mode !== "nodes";
+  $("#net_change_note").textContent = !external ? "Only reachable inside the cluster." : adding
+    ? "Adds VIP access alongside the current node connection. The existing node address keeps working; nothing is removed."
+    : mode === "shared" ? `Uses ${window.__networkChoices.shared || "the default VIP"}. Apps can share this address when their LAN ports are different.`
+    : mode === "nodes" ? "Uses the host address, not a movable VIP. A single-node cluster cannot provide failover."
+    : "Review the address and ports below before applying. Changing an existing VIP may interrupt open connections.";
 };
 
 function networkConfig() {
   const [namespace, workload, workload_kind] = $("#net_workload").value.split("/");
-  return { namespace, workload, workload_kind, name: $("#net_name").value.trim(), type: $("#net_type").value,
+  const existing = STATE.data.network.services.find(s => s.namespace === namespace && s.name === $("#net_existing").value);
+  const additional = $("#net_type").value === "LoadBalancer" && networkIsNodeAccess(existing, STATE.data.network) && $("#net_mode").value !== "nodes";
+  return { namespace, workload, workload_kind, name: additional ? networkAdditionalName(STATE.data.network, namespace, workload) : $("#net_name").value.trim(), type: $("#net_type").value,
     vip_mode: $("#net_type").value === "ClusterIP" ? "cluster" : $("#net_mode").value,
-    update: !!$("#net_existing").value, uid: $("#net_existing").selectedOptions[0]?.dataset.uid || "",
-    resource_version: $("#net_existing").selectedOptions[0]?.dataset.rv || "",
+    update: !!existing && !additional, uid: additional ? "" : $("#net_existing").selectedOptions[0]?.dataset.uid || "",
+    resource_version: additional ? "" : $("#net_existing").selectedOptions[0]?.dataset.rv || "",
     vip: $("#net_lb_ip").value.trim(), ports: $$(".net-port").map((row, index) => ({
       name: row.dataset.portName || `port-${index + 1}`, port: $(".np-port", row).value, target_port: $(".np-target", row).value,
       protocol: $(".np-protocol", row).value })) };
@@ -222,10 +289,10 @@ window.networkReview = async () => {
     const plan = await api("/api/network/plan", {method: "POST", headers: {"Content-Type": "application/json", "X-Homestead-Auth": "1"}, body: JSON.stringify(cfg)});
     if (!$("#net_editor") || JSON.stringify(networkConfig()) !== JSON.stringify(cfg)) return;
     NETWORK_REVIEW = { ...cfg, reviewed_vip: plan.vip || "" };
-    $("#net_review").innerHTML = `<div class="reviewbox"><b>Traffic path</b><div class="netpath big"><span>${esc(plan.path.vip)}</span><i>→</i><span>${esc(plan.path.service)}</span><i>→</i><span>${esc(plan.path.workload)}</span></div>
+    $("#net_review").innerHTML = `<div class="reviewbox"><b>After applying</b><div class="netpath big"><span>${esc(plan.path.vip)}</span><i>→</i><span>${esc(cfg.workload)}</span></div>
       <div class="dim xs">${plan.ports.map(p => `${p.port}/${p.protocol} → ${p.targetPort}`).join(" · ")}</div>${plan.warnings.map(w => `<div class="tag warn" style="margin-top:8px">${esc(w)}</div>`).join("")}</div>`;
     const actions = $("#mbody .modalactions");
-    actions.innerHTML = `<button class="btn" onclick="modalBack()">Cancel</button><button class="btn pri" onclick="networkCreate()">${cfg.update ? "Update" : "Create"} service</button>`;
+    actions.innerHTML = '<button class="btn" onclick="modalBack()">Cancel</button><button class="btn pri" onclick="networkCreate()">Apply changes</button>';
   } catch (error) { toast(error.message, "bad"); }
 };
 
