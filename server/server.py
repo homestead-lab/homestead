@@ -28,7 +28,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.181")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.182")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2220,6 +2220,61 @@ def rollout_review_context(current):
     if not meta.get("uid") or not meta.get("resourceVersion"):
         raise ValueError("workload identity/version is unavailable; refresh before changing its pod")
     return {"uid": meta["uid"], "resourceVersion": meta["resourceVersion"]}
+
+
+def image_update_capacity_plan(body, action):
+    """Resolve immutable images and review the whole rollout without writes."""
+    if action not in ("update", "rollback"):
+        raise ValueError("image action must be update or rollback")
+    ns = _dns_name(body.get("ns"), "namespace")
+    name = _dns_name(body.get("name"), "workload name")
+    guard_managed_smb(ns, name)
+    if action == "update":
+        enforce_update_policy(body)
+    prepared = (UPDATES.prepare_update if action == "update" else UPDATES.prepare_rollback)(ns, name)
+    current, proposed = prepared["current"], prepared["proposed"]
+    if current["spec"].get("paused"):
+        raise ValueError("resume this paused workload before reviewing an image rollout")
+    context = {"action": "image-" + action, **rollout_review_context(current),
+               "proposed_spec": proposed["spec"], "before": prepared["before"],
+               "annotations": proposed["metadata"].get("annotations", {})}
+    cache = {f"/apis/apps/v1/namespaces/{ns}/deployments/{name}": current}
+    def read(path):
+        if path not in cache:
+            cache[path] = kget(path)
+        return copy.deepcopy(cache[path])
+    def planner(*args, **kwargs):
+        return PLACE.manifest_plan(*args, **kwargs, read=read)
+    capacity = ROLLOUT_CAPACITY.plan(
+        current, proposed, ns, read, PLACE.get_nodes, planner,
+        get_app_settings()["thresholds"]["memory"]["critical"])
+    # Every image change needs a fresh review, even when it comfortably fits.
+    capacity["requires_confirmation"] = True
+    if int(current["spec"].get("replicas", 1) or 0) == 0:
+        capacity["warnings"].append("Stopped workloads have no current running image. Recovery uses a recorded digest where known; otherwise the old template tag is resolved now, not claimed to be a previously running image.")
+    return prepared, capacity, context
+
+
+def preview_image_update(body):
+    action = body.get("action", "update")
+    prepared, capacity, context = image_update_capacity_plan(body, action)
+    old = {c["name"]: c.get("image", "") for c in UPDATES._pod_containers(prepared["current"])}
+    images = [{"container": c["name"], "before": old.get(c["name"], ""), "after": c.get("image", ""),
+               "rollback": prepared["before"].get(c["name"], "")}
+              for c in UPDATES._pod_containers(prepared["proposed"])
+              if c.get("image", "") != old.get(c["name"], "")]
+    return {"capacity": capacity, "capacity_token": CAPACITY_REVIEW.issue(body, context),
+            "images": images, "action": action}
+
+
+def reviewed_image_update(body, action):
+    if body.get("action", "update") != action:
+        raise ValueError("image action changed; review again")
+    prepared, capacity, context = image_update_capacity_plan(body, action)
+    CAPACITY_REVIEW.enforce(body, capacity, context)
+    if action == "update":
+        enforce_update_policy(body)  # Registry/preflight reads may cross a window boundary.
+    return UPDATES.commit_prepared(prepared)
 
 
 def move_capacity_plan(body):
@@ -6189,10 +6244,12 @@ class H(BaseHTTPRequestHandler):
                       ctype="application/merge-patch+json")
                 _cache.pop("wl", None)
                 return self._send(200, {"ok": True})
+            if p == "/api/image-updates/preview":
+                return self._send(200, preview_image_update(b))
             if p == "/api/image-updates/apply":
                 guard_managed_smb(b.get("ns"), b.get("name"))
                 enforce_update_policy(b)
-                result = UPDATES.apply_update(b["ns"], b["name"])
+                result = reviewed_image_update(b, "update")
                 result["operation"] = OPS.start(
                     "image-update", f"Update {b['name']}",
                     {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
@@ -6202,7 +6259,7 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, result)
             if p == "/api/image-updates/rollback":
                 guard_managed_smb(b.get("ns"), b.get("name"))
-                result = UPDATES.rollback(b["ns"], b["name"])
+                result = reviewed_image_update(b, "rollback")
                 result["operation"] = OPS.start(
                     "image-rollback", f"Roll back {b['name']}",
                     {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
