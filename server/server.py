@@ -23,7 +23,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.157")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.158")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -414,6 +414,12 @@ def reconcile_hardware(fresh=False):
     found = {}
     for n in kget("/api/v1/nodes").get("items", []):
         name = n["metadata"]["name"]
+        nfs_facts = (temps.get(name) or {}).get("nfs") or {}
+        if isinstance(nfs_facts.get("server"), bool):
+            wanted = "true" if nfs_facts["server"] else None
+            if (n["metadata"].get("labels") or {}).get(NFS.HOST_LABEL) != wanted:
+                ksend("PATCH", f"/api/v1/nodes/{name}", {"metadata": {"labels": {NFS.HOST_LABEL: wanted}}},
+                      ctype="application/merge-patch+json")
         devices = (temps.get(name) or {}).get("devices")
         if devices is None:
             continue                 # no probe here: nothing to say either way
@@ -4362,7 +4368,41 @@ def nfs_state():
     return {"installed": bool(dep), "enabled": bool(dep) and desired > 0,
             "name": NFS.NAME, "image": NFS.IMAGE, "exports": names, "address": address,
             "ready": int(((dep or {}).get("status") or {}).get("readyReplicas", 0) or 0),
-            "desired": desired}
+            "desired": desired, "recovery": nfs_recovery(rows, dep)}
+
+
+def nfs_recovery(rows, deployment=None):
+    errors, volumes = [], []
+    def read(path, default, label):
+        try:
+            return kget(path)
+        except Exception:
+            errors.append(f"{label} could not be checked.")
+            return default
+    nodes = read("/api/v1/nodes", {}, "Node availability").get("items", [])
+    lh = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
+    replicas = read(f"{lh}/replicas", {}, "Storage replicas").get("items")
+    policy = read(f"{lh}/settings/node-down-pod-deletion-policy", {}, "Longhorn node recovery").get("value")
+    for pvc in sorted({row["pvc"] for row in rows if row.get("nfs_clients") and row.get("pvc")}):
+        claim = read(f"/api/v1/namespaces/{SMB_NAMESPACE}/persistentvolumeclaims/{pvc}", {}, pvc)
+        name = (claim.get("spec") or {}).get("volumeName")
+        volume = read(f"{lh}/volumes/{name}", None, f"{pvc} replication") if name else None
+        volumes.append({"pvc": pvc, "volume": volume})
+    try:
+        platform = PLATFORM.detect()
+    except Exception:
+        platform = {}
+        errors.append("Load balancer availability could not be checked.")
+    podspec = (((deployment or {}).get("spec") or {}).get("template") or {}).get("spec") or {}
+    return NFS.recovery_report(nodes, volumes, replicas, platform, policy, errors, podspec)
+
+
+def _nfs_inventory(current=None):
+    rows, _, config, _, _ = SHARES._state()
+    identified = NFS.export_ids(rows, current)
+    if identified != rows:
+        SHARES._save_config(identified, config)
+    return identified
 
 
 def _nfs_exports(rows):
@@ -4378,16 +4418,18 @@ def _nfs_deployment(rows, address=""):
     cfg = {"name": NFS.NAME, "container_name": NFS.NAME, "namespace": SMB_NAMESPACE,
            "image": NFS.IMAGE, "cpu": "50m", "memory": "128Mi",
            "ports": [{"container": 2049, "name": "nfs", "protocol": "TCP", "expose": True}],
-           "vip_mode": "manual" if address else "automatic", "lb_ip": address}
+           "vip_mode": "manual" if address else "automatic", "lb_ip": address, "exclusive_vip": True}
     cfg = NETWORK.prepare_deploy(cfg)
     dep, svc = build_deployment(cfg)
     dep = NFS.configure(dep, selected)
     if svc:
         # NFS's CIDR rules must see the real client address, not a node SNAT.
         svc["spec"]["externalTrafficPolicy"] = "Local"
+        svc["metadata"].setdefault("annotations", {})[NAMES.key("exclusive-vip")] = "true"
     return dep, svc
 
 
+@SHARES.serialized
 def reconcile_nfs(rows=None):
     """Keep a running NFS gateway's exports aligned with the saved inventory."""
     dep_path = _smb_path("deployments", NFS.NAME)
@@ -4395,7 +4437,7 @@ def reconcile_nfs(rows=None):
     if not current:
         return {"state": "absent"}
     if rows is None:
-        rows, *_ = SHARES._state()
+        rows = _nfs_inventory(current)
     selected = _nfs_exports(rows)
     if not selected:
         if int((current.get("spec") or {}).get("replicas", 0) or 0):
@@ -4420,7 +4462,7 @@ def set_nfs(enabled, address=""):
                       ctype="application/merge-patch+json")
             _cache.pop("wl", None)
             return {"ok": True, "detail": "NFS stopped; exports, shares and every PVC were kept"}
-        rows, *_ = SHARES._state()
+        rows = _nfs_inventory(current)
         _nfs_exports(rows)
         if not any(row.get("nfs_clients") for row in rows):
             raise ValueError("choose at least one NFS export in Network Shares first")
@@ -4446,6 +4488,9 @@ def set_nfs(enabled, address=""):
 def remove_nfs():
     """Remove only the NFS address and daemon, never a claim or share record."""
     with SHARES.LOCK:
+        current = _optional_smb(_smb_path("deployments", NFS.NAME))
+        if current:
+            _nfs_inventory(current)
         removed = []
         for kind in ("deployments", "services"):
             path = _smb_path(kind, NFS.NAME)
@@ -4462,6 +4507,7 @@ def set_nfs_export(name, clients, read_only=True):
     """Save one explicit export; an empty client network removes that export."""
     with SHARES.LOCK:
         rows, _, config_obj, _, _ = SHARES._state()
+        rows = NFS.export_ids(rows, _optional_smb(_smb_path("deployments", NFS.NAME)))
         row = next((item for item in rows if item.get("name") == name), None)
         if row is None:
             raise ValueError("share not found")
@@ -6546,7 +6592,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.157 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.158 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

@@ -80,6 +80,22 @@ class VipTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "in use by lab/plex"):
             NET.remove_vip("192.0.2.214")
 
+    def test_local_nfs_cannot_share_an_independently_routed_smb_address(self):
+        Cluster(services=[service("192.0.2.245", "homestead-smb", 445)])
+        with self.assertRaisesRegex(ValueError, "independently placed pods"):
+            NET.service_plan({"namespace": "lab", "name": "homestead-nfs", "vip_mode": "manual",
+                              "vip": "192.0.2.245", "exclusive_vip": True,
+                              "ports": [{"port": 2049, "target_port": 2049}]}, require_workload=False)
+
+    def test_other_services_cannot_take_a_port_on_the_nfs_vip(self):
+        nfs = service("192.0.2.245", "homestead-nfs", 2049)
+        nfs["spec"]["externalTrafficPolicy"] = "Local"
+        Cluster(services=[nfs])
+        with self.assertRaisesRegex(ValueError, "independently placed pods"):
+            NET.service_plan({"namespace": "lab", "name": "homestead-smb", "vip_mode": "manual",
+                              "vip": "192.0.2.245", "ports": [{"port": 445, "target_port": 445}]},
+                             require_workload=False)
+
 
 if __name__ == "__main__":
     unittest.main()

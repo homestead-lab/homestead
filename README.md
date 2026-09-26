@@ -695,7 +695,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.157/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.158/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -706,7 +706,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.157 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.158 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1149,6 +1149,13 @@ allowlist, and clients mount `<VIP>:/<share>` over TCP 2049. NFS needs host
 claims are NFS-backed, so serving them adds a re-export layer. Removing or
 stopping `homestead-nfs` never removes the SMB server or any PVC. Test a
 disposable RWX share and client mount before using it for important data.
+Recovery checks show standby hosts, control-plane quorum and actual healthy
+replica hosts. Stable export IDs and a readiness check protect ordinary file
+access during server replacement. Linux NFS re-export does not provide normal
+lock recovery: do not use this gateway for VM disks or databases that need it.
+The independent SMB and NFS pods keep separate VIPs for correct Local traffic
+routing after a host failure; the protocols themselves can share one address
+when served by a combined pod. See [NFS recovery](docs/wiki/Network-shares.md#recovery-when-a-host-fails).
 
 ## Namespaces
 
@@ -1467,10 +1474,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.157`, the workflow publishes:
+For a release such as `v2.8.158`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.157
+ghcr.io/wjcloudy/homestead:2.8.158
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -1481,8 +1488,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.157
-git push origin v2.8.157
+git tag v2.8.158
+git push origin v2.8.158
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.

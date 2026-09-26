@@ -531,9 +531,13 @@ window.nfsToggle = async box => {
     if (nodeAddressesOnly()) return modal("NFS needs a VIP", `<p>k3s ServiceLB cannot provide the dedicated address and preserved client IPs needed for this NFSv4 server. Install kube-vip under Cluster Add-ons, then try again.</p>
       <div class="modalactions"><button class="btn pri" onclick="closeModal();addonsPaint()">OK</button></div>`);
     const choices = await vipChoices();
+    choices.used = [];
+    choices.own = (choices.own || []).filter(v => v.free);
     const own = (choices.own || []).find(v => v.free);
-    return modal("Install NFSv4 server", `<p>A separate NFS container will serve ${(nfs.exports || []).length} selected RWX share(s) on TCP port 2049. Its image needs SYS_ADMIN and working NFS kernel support on the host; Longhorn RWX data is re-exported, which can add overhead.</p>
+    return modal("Install NFSv4 server", `<p>A separate NFS container will serve ${(nfs.exports || []).length} selected RWX share(s) on TCP port 2049. File access pauses if its host fails, until the replacement server and storage are available.</p>
+      ${nfsRecovery(nfs, true)}
       <div class="note warn">Only the client networks configured for each share can mount it. Removing this server later leaves every share definition and PVC in place.</div>
+      <p class="small">SMB and NFS use different ports, but their separately placed servers need separate VIPs to keep client IP restrictions and routing correct after a host failure. Sharing one VIP would require a combined file-server pod.</p>
       <div class="f">${vipPicker("nfs", own ? own.ip : (choices.free[0] || ""), choices)}</div>
       <div class="modalactions"><button class="btn pri" onclick="nfsInstallGo()">Install NFS server</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
   }

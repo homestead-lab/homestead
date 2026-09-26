@@ -312,6 +312,8 @@ def inventory():
                          "system": ns in SYSTEM_NAMESPACES, "managed": NAMES.read(labels, "managed") == "true",
                          "cluster_ip": spec.get("clusterIP") or "", "external_ips": external,
                          "lb_class": spec.get("loadBalancerClass") or "",
+                         "exclusive_vip": NAMES.read(annotations, "exclusive-vip") == "true" or
+                             (name == NAMES.object_name("nfs") and spec.get("externalTrafficPolicy") == "Local"),
                          "assigned_ips": assigned, "requested_ips": requested,
                          "vip_host": annotations.get("kube-vip.io/vipHost") or "",
                          "selector": selector, "targets": targets,
@@ -554,6 +556,9 @@ def service_plan(cfg, require_workload=True):
         for row in state["services"]:
             if vip not in row["external_ips"]:
                 continue
+            if cfg.get("exclusive_vip") or row.get("exclusive_vip"):
+                raise ValueError(f"{vip} is used by {row['namespace']}/{row['name']}; NFS needs its own VIP "
+                                 "while SMB and NFS run on independently placed pods with Local traffic routing")
             for existing in row["ports"]:
                 if any(int(port["port"]) == int(existing["port"]) and
                        port["protocol"] == str(existing["protocol"]).upper() for port in ports):
@@ -614,6 +619,7 @@ def prepare_deploy(cfg):
                             "type": "ClusterIP" if internal else "LoadBalancer",
                             "vip_mode": "cluster" if internal else (cfg.get("vip_mode") or "shared"),
                             "vip": cfg.get("lb_ip"),
+                            "exclusive_vip": bool(cfg.get("exclusive_vip")),
                             "ports": [{"name": port.get("name"),
                                        "port": port.get("host") or port.get("container"),
                                        "target_port": port.get("container"),

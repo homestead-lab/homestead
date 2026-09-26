@@ -969,7 +969,7 @@ async function viewShares() {
     <div class="dim small">${nfs.error ? `Status unavailable: ${esc(nfs.error)}` : !nfs.installed ? "Not installed" :
       `${nfs.enabled ? `${nfs.ready || 0}/${nfs.desired || 1} ready` : "Stopped"}${nfs.address ? ` · ${esc(nfs.address)}:/<share>` : " · waiting for an address"}`} · ${(nfs.exports || []).length} configured exports</div></div>
     <button class="btn sm" onclick="settingsTab('cluster');go('settings')">Manage add-on</button></div>
-    <div class="dim xs" style="margin-top:9px">NFS is a separate opt-in container. Only selected RWX shares are exported to their allowed client networks; SMB and all PVCs remain independent.</div></div>
+    <div class="dim xs" style="margin-top:9px">NFS is a separate opt-in container. Only selected RWX shares are exported to their allowed client networks; SMB and all PVCs remain independent.</div>${nfsRecovery(nfs)}</div>
   <div class="card flat pad0"><div class="tblwrap sharetable"><table data-sort="shares" class="tbl">
     <thead><tr><th>Share</th><th>Storage</th><th>Size</th><th>Access</th><th>UNC path</th><th></th></tr></thead><tbody>
     ${sh.map(s => `<tr><td class="shareidentity"><div class="row" style="gap:9px"><div class="av n2">${esc(s.name.slice(0, 2).toUpperCase())}</div>

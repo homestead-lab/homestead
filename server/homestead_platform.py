@@ -62,6 +62,16 @@ def _vip_class(daemonset):
     return env.get("lb_class_name") or VIP_CLASS
 
 
+def _vip_service_election(daemonset):
+    if not daemonset:
+        return None
+    containers = (((daemonset.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []
+    env = {e.get("name"): str(e.get("value") or "") for c in containers for e in c.get("env") or []}
+    if "svc_election" in env:
+        return env["svc_election"].lower() == "true"
+    return None
+
+
 def detect(force=False):
     if not force and _cached["value"] is not None and time.time() - _cached["at"] < TTL:
         return _cached["value"]
@@ -110,6 +120,7 @@ def detect(force=False):
         # when kube-vip only takes the Services that ask for it by class.
         "servicelb": servicelb,
         "vip_class": "" if harvester else _vip_class(kube_vip_ds),
+        "vip_service_election": _vip_service_election(kube_vip_ds),
         "control_plane": sorted(control),
         "arch": sorted({((n.get("status") or {}).get("nodeInfo") or {}).get("architecture", "") for n in nodes} - {""}),
     }

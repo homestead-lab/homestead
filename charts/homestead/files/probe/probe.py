@@ -306,6 +306,13 @@ def v2_facts():
     return {"arch": platform.machine(), "sse4_2": ("sse4_2" in flags) if flags is not None else None,
             "modules": {name: os.path.isdir(f"{SYS}/module/{name}") for name in V2_MODULES}}
 
+def nfs_facts():
+    filesystems = _read(f"{PROC}/filesystems")
+    if filesystems is None:
+        return {"server": None, "client": None}
+    names = {line.split()[-1] for line in filesystems.splitlines() if line.split()}
+    return {"server": "nfsd" in names, "client": bool(names & {"nfs", "nfs4"})}
+
 def default_interface():
     """The interface the host's default route leaves by - where it meets the
     LAN - from the route table of the host's first process."""
@@ -340,7 +347,7 @@ def payload():
             "kvm": os.path.exists(f"{DEV}/kvm"),
             "interfaces": interfaces(),
             "default_interface": default_interface(),
-            "v2": v2_facts()}
+            "v2": v2_facts(), "nfs": nfs_facts()}
 
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"

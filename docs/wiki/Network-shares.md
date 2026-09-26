@@ -72,11 +72,51 @@ write access per share only when needed. Clients mount `<VIP>:/<share>` over
 NFSv4/TCP port 2049.
 
 The NFS image needs the host's `nfs` and `nfsd` kernel support and `SYS_ADMIN`
-inside its container. A dedicated VIP is required so the export sees the real
-client address for its allowlist; k3s ServiceLB alone is not suitable, but
-kube-vip or MetalLB can provide one. Longhorn RWX volumes already use NFS, so
-serving them again is an NFS re-export and may add overhead. Check the server's
-pod logs and mount a noncritical test share before relying on it for workloads.
+inside its container. The node probe checks NFS server support and Homestead
+labels eligible nodes automatically; the scheduler places NFS only on those
+nodes. Enable `nfsd` on the intended Linux hosts and update/install the node
+probe before enabling the add-on. Homestead does not load host kernel modules.
+
+SMB uses port 445 and NFS uses 2049, so the protocols can share one IP. This
+implementation uses independently placed pods, however. NFS's client allowlist
+needs the real source IP and therefore Local traffic routing. Its VIP must
+follow the NFS pod; a separately placed SMB pod cannot safely use that same
+VIP across all supported load balancers. Homestead reserves the NFS VIP against
+sharing in both directions. A combined file-server pod would allow a shared
+IP in a future implementation. k3s ServiceLB alone is not suitable for this
+gateway; use kube-vip with per-Service election or MetalLB.
+
+### Recovery when a host fails
+
+Homestead keeps a single NFS server with a stable hostname and stable export
+identities. Existing numeric export identities from v2.8.157 are saved before
+upgrading them, so adding or removing a preceding share does not change file
+handles for the remaining exports. Disabling/reinstalling the server keeps
+these identities with the share settings. Startup and readiness checks wait
+for the NFS TCP listener; the VIP only serves Ready endpoints. The Deployment
+requests replacement after 15 seconds of a NotReady/unreachable taint, **in
+addition to** Kubernetes' node-failure detection and storage recovery time.
+
+**Recovery checks** in Network Shares and Add-ons list eligible replacement
+hosts, control-plane/etcd quorum, actual healthy replica hosts and load-balancer
+prerequisites. A replica count configured as two is not sufficient: two
+healthy copies on different Ready nodes are required. One control-plane host
+cannot reschedule work after its own failure. Longhorn's pod deletion policy
+may also make a failed-node recovery wait for intervention. The checker never
+claims a tested recovery time or uninterrupted availability.
+
+Longhorn RWX volumes already use NFS. Linux NFS re-export does **not** support
+normal file-lock/delegation recovery. This gateway is for ordinary file access,
+not VM disks or databases that require those guarantees. Client access can
+pause during recovery and a remount may be needed. See the upstream
+[NFS re-export limitations](https://docs.kernel.org/filesystems/nfs/reexport.html)
+and [load-balancer sharing rules](https://metallb.io/usage/#ip-address-sharing).
+
+Before production use, test with a disposable RWX volume and a client mounted
+to its share path: verify read/write checksums, restart the gateway, move it
+to a different eligible node, and check access and export identity again.
+A real host-loss test must also verify the storage server and VIP move while
+the API and etcd retain quorum; a pod restart alone does not prove that.
 
 Stopping or removing `homestead-nfs` deletes neither the SMB server nor share
 definitions, credentials, claims or files. Removing a share itself first drops

@@ -12,6 +12,24 @@ import server
 
 
 class NfsExportTests(unittest.TestCase):
+    def test_existing_export_handles_survive_reordering_removal_and_reinstall(self):
+        rows = [{"name": "media", "pvc": "media", "nfs_clients": "192.0.2.0/24"},
+                {"name": "photos", "pvc": "photos", "nfs_clients": "192.0.2.0/24"}]
+        old = {"spec": {"template": {"spec": {"containers": [{"env": [
+            {"name": "NFS_EXPORT_1", "value": "/exports/media 192.0.2.0/24(ro,fsid=1,root_squash)"},
+            {"name": "NFS_EXPORT_2", "value": "/exports/photos 192.0.2.0/24(ro,fsid=2,root_squash)"}]}]}}}}
+        saved = NFS.export_ids(rows, old)
+        self.assertEqual(["1", "2"], [r["nfs_fsid"] for r in saved])
+        saved = [saved[1], {"name": "archive", "pvc": "archive", "nfs_clients": "192.0.2.0/24"}]
+        saved = NFS.export_ids(saved)
+        self.assertEqual("2", saved[0]["nfs_fsid"])
+        self.assertNotIn(saved[1]["nfs_fsid"], ("0", "1", "2"))
+        self.assertEqual(saved, NFS.export_ids(saved))
+        pvc = {"spec": {"accessModes": ["ReadWriteMany"]}, "status": {"phase": "Bound"}}
+        rebuilt = NFS.configure(old, NFS.exports(saved, lambda _: pvc))
+        env = rebuilt["spec"]["template"]["spec"]["containers"][0]["env"]
+        self.assertTrue(any("/exports/photos " in item["value"] and "fsid=2," in item["value"] for item in env))
+
     def test_client_network_is_explicit(self):
         self.assertEqual("192.0.2.0/24", NFS.client_network("192.0.2.52/24"))
         self.assertEqual("192.0.2.52/32", NFS.client_network("192.0.2.52"))
@@ -44,6 +62,10 @@ class NfsExportTests(unittest.TestCase):
         self.assertIn("root_squash", container["env"][2]["value"])
         self.assertIn("192.0.2.0/24(ro", container["env"][2]["value"])
         self.assertEqual("NFS_DISABLE_VERSION_3", container["env"][0]["name"])
+        self.assertEqual({"port": 2049}, container["readinessProbe"]["tcpSocket"])
+        self.assertEqual("true", pod["nodeSelector"][NFS.HOST_LABEL])
+        self.assertEqual("move", server.FAILOVER.mode_of(pod))
+        self.assertEqual("Recreate", result["spec"]["strategy"]["type"])
 
 
 class NfsLifecycleTests(unittest.TestCase):
@@ -80,7 +102,8 @@ class NfsLifecycleTests(unittest.TestCase):
         return copy.deepcopy(body)
 
     def test_disabling_and_removing_nfs_never_delete_claims_or_smb_config(self):
-        with mock.patch.object(server, "kget", self.get), mock.patch.object(server, "ksend", self.send):
+        with mock.patch.object(server, "kget", self.get), mock.patch.object(server, "ksend", self.send), \
+                mock.patch.object(server.SHARES, "_state", return_value=([], {}, None, None, None)):
             server.set_nfs(False)
             self.assertEqual(0, self.objects[self.dep]["spec"]["replicas"])
             server.remove_nfs()
@@ -106,6 +129,7 @@ class NfsLifecycleTests(unittest.TestCase):
             dep, svc = server._nfs_deployment(rows, "192.0.2.246")
         self.assertEqual(NFS.NAME, dep["metadata"]["name"])
         self.assertEqual("Local", svc["spec"]["externalTrafficPolicy"])
+        self.assertEqual("true", svc["metadata"]["annotations"]["homestead.io/exclusive-vip"])
         self.assertEqual("192.0.2.246", svc["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
         self.assertEqual([2049], [port["port"] for port in svc["spec"]["ports"]])
         self.assertEqual("share-media", dep["spec"]["template"]["spec"]["volumes"][1]["persistentVolumeClaim"]["claimName"])
@@ -117,6 +141,53 @@ class NfsLifecycleTests(unittest.TestCase):
                 mock.patch.object(server.PLATFORM, "detect", return_value={"load_balancer": "servicelb"}):
             with self.assertRaisesRegex(ValueError, "dedicated VIP"):
                 server._nfs_deployment(rows, "")
+
+
+class NfsRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.nodes = [{"metadata": {"name": f"node{i}", "labels": {
+            "node-role.kubernetes.io/control-plane": "true", "node-role.kubernetes.io/etcd": "true",
+            NFS.HOST_LABEL: "true"}}, "status": {"conditions": [{"type": "Ready", "status": "True"}]}}
+            for i in range(1, 4)]
+        self.volumes = [{"pvc": "media", "volume": {"metadata": {"name": "v1"},
+                          "spec": {"numberOfReplicas": 2}}}]
+        self.replicas = [{"spec": {"volumeName": "v1", "nodeID": f"node{i}", "healthyAt": "2026-09-26"},
+                          "status": {"currentState": "running"}} for i in (1, 2)]
+        self.platform = {"load_balancer": "kube-vip", "vip_service_election": True}
+
+    def report(self):
+        return NFS.recovery_report(self.nodes, self.volumes, self.replicas, self.platform, "delete-deployment-pod")
+
+    def test_two_real_replica_hosts_and_quorum_still_do_not_claim_lock_recovery(self):
+        report = self.report()
+        self.assertEqual([], report["blockers"])
+        self.assertEqual("limited", report["level"])
+        self.assertFalse(report["lock_recovery"])
+
+    def test_desired_two_replicas_are_not_evidence_of_two_healthy_copies(self):
+        self.replicas.pop()
+        self.assertTrue(any("healthy replicas are on 1 host" in b for b in self.report()["blockers"]))
+
+    def test_down_host_is_not_counted_as_a_healthy_replica_or_standby(self):
+        self.nodes[0]["status"]["conditions"][0]["status"] = "False"
+        report = self.report()
+        self.assertNotIn("node1", report["eligible_hosts"])
+        self.assertEqual(["node2"], report["volumes"][0]["healthy_replica_nodes"])
+        self.assertTrue(any("quorum" in issue for issue in report["blockers"]))
+
+    def test_single_control_plane_cannot_be_reported_as_failover_ready(self):
+        for node in self.nodes[1:]:
+            node["metadata"]["labels"] = {NFS.HOST_LABEL: "true"}
+        report = self.report()
+        self.assertTrue(any("control-plane" in issue for issue in report["blockers"]))
+        self.assertTrue(any("quorum" in issue for issue in report["blockers"]))
+
+    def test_kernel_support_and_taints_are_required_on_replacement_hosts(self):
+        self.nodes[1]["metadata"]["labels"].pop(NFS.HOST_LABEL)
+        self.nodes[2]["spec"] = {"taints": [{"key": "dedicated", "effect": "NoSchedule"}]}
+        report = self.report()
+        self.assertEqual(["node1"], report["eligible_hosts"])
+        self.assertTrue(any("replacement host" in issue for issue in report["blockers"]))
 
 
 if __name__ == "__main__":

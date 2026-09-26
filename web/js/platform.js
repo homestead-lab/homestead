@@ -67,6 +67,15 @@ const ADDONS = {
     needs: "The newest KubeVirt and CDI releases are installed. VMs run at full speed where a node has hardware virtualisation (/dev/kvm); without it KubeVirt emulates, many times slower." },
 };
 
+window.nfsRecovery = (state, expanded = false) => {
+  const recovery = state?.recovery;
+  if (!recovery) return '<div class="dim xs">Node-failure recovery has not been checked.</div>';
+  const issues = [...(recovery.blockers || []), ...(recovery.warnings || [])];
+  return `<details class="small" ${expanded ? "open" : ""} style="margin-top:8px"><summary>Recovery: ${esc(recovery.detail || "not checked")}</summary>
+    <div class="dim xs" style="margin-top:6px">${(recovery.eligible_hosts || []).length} eligible NFS hosts${recovery.eligible_hosts?.length ? ` · ${esc(recovery.eligible_hosts.join(", "))}` : " · enable NFS server support on the hosts and update the node probe"}. Access pauses while the server, VIP and storage recover.</div>
+    ${issues.length ? `<ul>${issues.map(issue => `<li>${esc(issue)}</li>`).join("")}</ul>` : ""}</details>`;
+};
+
 window.addonsPaint = async () => {
   const card = $("#addonsCard");
   if (!card) return;
@@ -128,7 +137,7 @@ window.addonsPaint = async () => {
     : nfs.ready < nfs.desired ? '<span class="pill med">starting</span>' : '<span class="pill ok">serving</span>';
   const nfsRow = `<div class="addon-row"><div><b>NFSv4 network shares</b> ${nfsPill}
       <div class="dim small">A separate, opt-in NFS container serving selected RWX shares to allowed client networks</div>
-      <div class="dim xs" style="margin-top:4px">${(nfs.exports || []).length} exports · ${nfs.address ? esc(nfs.address) : "address not assigned"} · removing the server keeps the shares and volumes</div></div>
+      <div class="dim xs" style="margin-top:4px">${(nfs.exports || []).length} exports · ${nfs.address ? esc(nfs.address) : "address not assigned"} · removing the server keeps the shares and volumes</div>${nfsRecovery(nfs)}</div>
     <div class="row"><button class="btn sm" onclick="go('shares')">Exports</button>
       ${can("admin") && !nfs.error ? `<label class="switch"><input type="checkbox" ${nfs.enabled ? "checked" : ""} onchange="nfsToggle(this)"> ${nfs.enabled ? "On" : "Off"}</label>
         ${nfs.installed ? '<button class="btn sm danger" onclick="nfsRemove()">Remove server</button>' : ""}` : ""}</div></div>`;
