@@ -12,6 +12,7 @@ cd "$(dirname "$0")/.."
 OUT=release-assets
 mkdir -p "$OUT"
 BIN=$(mktemp -d)
+MISSED=0
 trap 'tmux kill-server 2>/dev/null; rm -rf "$BIN"' EXIT
 
 stub() { printf '#!/bin/sh\n%s\n' "$2" > "$BIN/$1"; chmod +x "$BIN/$1"; }
@@ -36,7 +37,7 @@ shot() { # name text-the-screen-shows
   if tmux capture-pane -p -t tui | grep -q "$2"; then
     tmux capture-pane -p -e -t tui > "$OUT/tui-$1.ans"; echo "captured tui-$1"
   else
-    echo "skipped tui-$1: the screen never showed \"$2\""; tmux capture-pane -p -t tui | tail -n 8
+    echo "skipped tui-$1: the screen never showed \"$2\""; tmux capture-pane -p -t tui; MISSED=1
   fi
 }
 key() { tmux send-keys -t tui "$@"; }
@@ -79,3 +80,6 @@ shot node-menu "Check this node"                 # a node: check, clean up, snap
 key Enter; shot doctor "worth a look"            # what it found, worst first
 key Enter; shot doctor-fix "Fix it now"          # one finding, and its fix
 key Escape
+
+# A screen that never showed is a menu that broke: say so.
+exit "$MISSED"

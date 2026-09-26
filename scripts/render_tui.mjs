@@ -16,17 +16,20 @@ const cube = n => {
 };
 const escape = text => text.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
-/* Terminal text with SGR colour codes -> HTML spans. */
+/* Terminal text with SGR colour codes -> HTML: a row per line, each run of
+   one colour a cell as tall as the row, so backgrounds meet with no gaps. */
 function toHtml(ans) {
   const state = { fg: null, bg: null, bold: false, reverse: false };
-  let html = "";
+  let html = "<div class=row>";
   for (const part of ans.split(/(\x1b\[[0-9;]*m)/)) {
     const sgr = part.match(/^\x1b\[([0-9;]*)m$/);
     if (!sgr) {
       if (!part) continue;
       let fg = state.fg || "#c8c8c8", bg = state.bg || "transparent";
       if (state.reverse) [fg, bg] = [bg === "transparent" ? "#101014" : bg, fg];
-      html += `<span style="color:${fg};background:${bg};${state.bold ? "font-weight:700;" : ""}">${escape(part.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ""))}</span>`;
+      const style = `color:${fg};background:${bg};${state.bold ? "font-weight:700;" : ""}`;
+      const lines = part.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").split("\n");
+      html += lines.map(line => line ? `<span style="${style}">${escape(line)}</span>` : "").join("</div><div class=row>");
       continue;
     }
     const codes = (sgr[1] || "0").split(";").map(Number);
@@ -49,7 +52,7 @@ function toHtml(ans) {
       }
     }
   }
-  return html;
+  return html + "</div>";
 }
 
 const files = (await readdir(dir).catch(() => [])).filter(f => /^tui-.+\.ans$/.test(f));
@@ -58,9 +61,13 @@ const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1000, height: 700 }, deviceScaleFactor: 2 });
 for (const file of files) {
   const ans = await readFile(`${dir}/${file}`, "utf8");
-  await page.setContent(`<html><body style="margin:0;background:#101014">
-    <div id="term" style="display:inline-block;padding:18px 20px;background:#101014;border-radius:10px">
-      <pre style="margin:0;font:14px/1.25 'DejaVu Sans Mono',Menlo,Consolas,monospace;color:#c8c8c8">${toHtml(ans)}</pre></div></body></html>`);
+  await page.setContent(`<html><head><style>
+      body{margin:0;background:#101014}
+      #term{display:inline-block;padding:18px 20px;background:#101014;border-radius:10px;
+        font:14px 'DejaVu Sans Mono',Menlo,Consolas,monospace;color:#c8c8c8}
+      .row{height:18px;line-height:18px;white-space:pre}
+      .row span{display:inline-block;height:18px;vertical-align:top}
+    </style></head><body><div id="term">${toHtml(ans)}</div></body></html>`);
   const name = `homestead-${file.replace(/\.ans$/, "")}.png`;
   await page.locator("#term").screenshot({ path: `${dir}/${name}` });
   console.log(`rendered ${name}`);

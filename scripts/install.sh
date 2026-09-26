@@ -82,6 +82,8 @@ run() {
 have() { command -v "$1" >/dev/null 2>&1; }
 interactive() { [ -r "$TTY" ] && [ -w "$TTY" ] && (: < "$TTY") 2>/dev/null; }
 
+# HS_UI=whiptail|dialog|text picks the look; otherwise the best there is.
+[ -z "$UI" ] && [ -n "${HS_UI:-}" ] && UI="$HS_UI"
 if [ -z "$UI" ]; then
   if ! interactive || [ "${TERM:-dumb}" = dumb ]; then UI=text
   elif have whiptail; then UI=whiptail
@@ -89,6 +91,17 @@ if [ -z "$UI" ]; then
   else UI=text; fi
 fi
 BOX="$UI"
+
+# A menu box as tall as its text and list need, within the terminal.
+box_menu() { # title text tag item...
+  title="$1"; text="$2"; shift 2
+  items=$(( $# / 2 ))
+  rows=$(stty size < "$TTY" 2>/dev/null | cut -d' ' -f1); rows=${rows:-24}
+  lines=$(printf '%s\n' "$text" | wc -l | tr -d ' ')
+  list=$items; [ "$list" -gt $((rows - lines - 9)) ] && list=$((rows - lines - 9)); [ "$list" -lt 3 ] && list=3
+  height=$((lines + list + 8)); [ "$height" -gt "$rows" ] && height=$rows
+  "$BOX" --title "$title" --cancel-button "Back" --menu "$text" "$height" 90 "$list" "$@" 3>&1 1>"$TTY" 2>&3 < "$TTY"
+}
 
 # The answer given ahead in the environment, if there is one.
 given() { eval "printf '%s' \"\${$1:-}\""; }
@@ -144,8 +157,7 @@ choose() { # var title text tag item [tag item...] -> the tag on stdout
     i=0; for word in "$@"; do i=$((i+1)); if [ $((i % 2)) = 1 ] && [ $(( (i + 1) / 2 )) = "$reply" ]; then printf '%s' "$word"; return; fi; done
     fail "no choice $reply"
   fi
-  count=$(( $# / 2 ))
-  "$BOX" --title "$title" --menu "$text" 20 76 "$count" "$@" 3>&1 1>"$TTY" 2>&3 < "$TTY" || exit 1
+  box_menu "$title" "$text" "$@" || exit 1
 }
 
 # ------------------------------------------------------------------ the machine
@@ -454,7 +466,7 @@ menu() { # title text tag item... -> tag, or 1 when cancelled
     i=0; for word in "$@"; do i=$((i+1)); if [ $((i % 2)) = 1 ] && [ $(( (i + 1) / 2 )) = "$reply" ]; then printf '%s' "$word"; return 0; fi; done
     return 1
   fi
-  "$BOX" --title "$title" --cancel-button "Back" --menu "$text" 24 90 16 "$@" 3>&1 1>"$TTY" 2>&3 < "$TTY"
+  box_menu "$title" "$text" "$@"
 }
 
 # ------------------------------------------------------------------ the node

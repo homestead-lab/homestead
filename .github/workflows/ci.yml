@@ -13,6 +13,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  installer-screens:
+    # The installer's and node doctor's menus, driven in tmux as a person
+    # would: a menu that stops appearing fails here, before a release.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Drive the installer's menus
+        run: |
+          sudo apt-get install -y -qq tmux whiptail >/dev/null
+          bash scripts/capture_tui.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: installer-screens
+          path: release-assets/*.ans
   test-and-build:
     runs-on: ubuntu-latest
     steps:
