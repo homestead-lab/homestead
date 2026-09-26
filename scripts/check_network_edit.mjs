@@ -51,6 +51,7 @@ try {
   assert.equal(await page.locator("#e_workload_name").inputValue(), "unsaved-name");
   const saved = await page.evaluate(() => window.__sent[0]);
   assert.equal(saved.update, true); assert.equal(saved.uid, "svc-uid");
+  assert.equal(saved.ports[0].name, "web", "VIP-only updates preserve named Ingress port references");
   assert.equal(saved.ports[0].target_port, "5001"); assert.equal(saved.vip, "192.0.2.108");
   await page.evaluate(() => { closeModal(); return vmNew(); });
   await page.locator("#v_service").selectOption("manual");
