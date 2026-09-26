@@ -291,9 +291,10 @@ class ImportCapacityTests(unittest.TestCase):
             self._import()
         self.assertEqual([], self.sent, "no job is created for a copy that must fail")
 
-    def test_the_refusal_names_what_is_already_written(self):
-        with self.assertRaisesRegex(ValueError, "9.9 GiB already written"):
-            self._import()
+    def test_snapshot_allocation_is_not_treated_as_filesystem_usage(self):
+        self.written = 20 * 1024 ** 3  # snapshots can exceed logical capacity
+        self._import(mappings=[{"remote_path": "/data", "mount_path": "/config", "bytes": 1024 ** 3}])
+        self.assertTrue(any("jobs" in path for _, path in self.sent))
 
     def test_a_claim_with_room_proceeds(self):
         self.claim_capacity = "50Gi"
@@ -316,7 +317,8 @@ class MountEmptyTests(unittest.TestCase):
     def setUp(self):
         self.bodies, self.built = [], []
         imports.bind(lambda path: {"items": []},
-                     lambda method, path, body=None, **kw: self.bodies.append(body) or body or {},
+                     lambda method, path, body=None, **kw: self.bodies.append(body) or
+                     {**(body or {}), "metadata": {**(body or {}).get("metadata", {}), "uid": "created-object"}},
                      lambda *a, **k: {},
                      lambda cfg: self.built.append(cfg) or ({"metadata": {"name": "frigate"}}, None), "lab", {})
         imports._source = lambda name: dict(SOURCE)

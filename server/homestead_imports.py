@@ -9,6 +9,7 @@ ConfigMap, with credentials in a Secret. Importing a container means:
 Step 2 is the part that takes real time, so it runs as a Job we can poll.
 """
 import base64
+import copy
 import json
 import hashlib
 import os
@@ -22,6 +23,7 @@ import homestead_names as NAMES
 import homestead_shared as SHARED
 import homestead_hvimage as HVIMAGE
 import homestead_runtime as RUNTIME
+import homestead_pod_resources as RESOURCES
 
 kget = ksend = create_pvc = build_deployment = None
 NS = "lab"
@@ -264,6 +266,9 @@ def inspect_source_container(name, container):
         # import must not pretend: a guessed path is one rsync cannot find.
         "guessed_path": not app_mount,
         "network_mode": host.get("NetworkMode", "bridge"), "hardware": hardware,
+        "memory": str(host.get("MemoryReservation")) if int(host.get("MemoryReservation") or 0) > 0 else
+                  str(min(256 * 1024 ** 2, int(host.get("Memory") or 256 * 1024 ** 2))),
+        "memory_limit": str(host.get("Memory")) if int(host.get("Memory") or 0) > 0 else "",
         # Docker's --shm-size has no Kubernetes equivalent: a pod gets 64 MiB of
         # /dev/shm whatever it asks for. Frigate keeps every camera's frames
         # there, so a container given more on the source has to be given it
@@ -689,19 +694,6 @@ def _excludes(remote, requested, asked):
     return sorted(nested)
 
 
-def _claim_used_gb(pvc):
-    """How much a Longhorn volume has already written into this claim."""
-    try:
-        volumes = kget("/apis/longhorn.io/v1beta2/volumes").get("items", [])
-    except Exception:
-        return 0.0
-    for volume in volumes:
-        kubernetes = (volume.get("status", {}) or {}).get("kubernetesStatus", {}) or {}
-        if kubernetes.get("namespace") == NS and kubernetes.get("pvcName") == pvc:
-            return int((volume.get("status", {}) or {}).get("actualSize", 0) or 0) / 1024 ** 3
-    return 0.0
-
-
 def _claim_capacity_gb(pvc):
     """What an existing claim actually offers, or 0 when it cannot be read."""
     try:
@@ -709,16 +701,14 @@ def _claim_capacity_gb(pvc):
     except Exception:
         return 0.0
     quantity = ((claim.get("status", {}) or {}).get("capacity", {}) or {}).get("storage", "")
-    match = re.fullmatch(r"([0-9.]+)([KMGTP]i?)?", str(quantity).strip())
-    if not match:
+    try:
+        return RESOURCES.quantity(quantity) / 1024 ** 3
+    except ValueError:
         return 0.0
-    scale = {"Ki": 1 / 1024 ** 2, "Mi": 1 / 1024, "Gi": 1, "Ti": 1024,
-             "K": 1 / 1000 ** 2, "M": 1 / 1000, "G": 1, "T": 1000}
-    return float(match.group(1)) * scale.get(match.group(2) or "Gi", 1)
 
 
-def import_container(cfg):
-    """Create the volumes, launch the copy Job, then create the Deployment.
+def prepare_import(cfg):
+    """Build an import without creating claims, jobs, services or workloads.
 
     cfg: {source, name, image, ports, env, volumes[], mappings[], hardware,
           network_mode, start_after_copy, uid, gid}
@@ -735,28 +725,25 @@ def import_container(cfg):
 
     # Each volume is judged on what is going into it, not on the import total:
     # a 500 GiB recordings claim says nothing about whether appdata fits.
-    if not cfg.get("ignore_capacity"):
+    if volumes:
         for volume in volumes:
             needed = sum(row.get("bytes") or 0 for row in mappings if row["pvc"] == volume["name"])
             if not needed:
                 continue
             capacity_gb = float(volume["size_gb"])
-            used_gb = 0.0
             if not volume["create"]:
                 capacity_gb = _claim_capacity_gb(volume["name"])
-                used_gb = _claim_used_gb(volume["name"])
+                # Longhorn actualSize is physical snapshot allocation, not
+                # guest filesystem usage. Free space is unknown here.
             needed_gb = needed / 1024 ** 3
-            if capacity_gb and needed_gb > capacity_gb - used_gb:
+            if capacity_gb and needed_gb > capacity_gb:
                 raise ValueError(
                     f"the measured source needs {needed_gb:.1f} GiB but {volume['name']} has "
-                    f"{max(0.0, capacity_gb - used_gb):.1f} GiB free of {capacity_gb:.0f} GiB"
-                    + (f" ({used_gb:.1f} GiB already written)" if used_gb else "")
+                    f"{capacity_gb:.1f} GiB total logical capacity"
                     + ". Grow the volume or choose a larger size, then import again.")
 
     for volume in volumes:
         if volume["create"]:
-            create_pvc(NS, volume["name"], volume["size_gb"], volume["storage_class"],
-                       volume["access_mode"])
             continue
         try:
             existing = kget(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{volume['name']}")
@@ -772,14 +759,6 @@ def import_container(cfg):
     access_mode = volumes[0]["access_mode"] if volumes else ""
 
     job = f"homestead-import-{name}"
-    for previous in (job,):
-        # A rerun clears the job from before.
-        try:
-            ksend("DELETE", f"/apis/batch/v1/namespaces/{NS}/jobs/{previous}"
-                            "?propagationPolicy=Background")
-        except urllib.error.HTTPError:
-            pass
-    time.sleep(1)
 
     # Every interpolated value arrives from the UI, so all of it is quoted.
     # Each step announces itself on its own line before rsync's own progress,
@@ -861,11 +840,15 @@ def import_container(cfg):
                                          ",".join(v["name"] for v in volumes if v["create"]),
                                      "homestead.io/import-volumes":
                                          ",".join(v["name"] for v in volumes)}},
-        "spec": {"backoffLimit": 1, "ttlSecondsAfterFinished": 3600,
+        # Retain the result until deliberate cleanup: a later start review
+        # must distinguish a completed copy from a failed or missing Job.
+        "spec": {"backoffLimit": 0,
                  "template": {"metadata": {"labels": NAMES.labels("import")},
                               "spec": {"restartPolicy": "Never",
                                        "containers": [{
                                            "name": "copy", "image": "alpine:3.20",
+                                           "resources": {"requests": {"cpu": "100m", "memory": "128Mi"},
+                                                         "limits": {"memory": "512Mi"}},
                                            "command": ["sh", "-c", script],
                                            "env": [{"name": "SRC_PASS", "valueFrom": {"secretKeyRef": {
                                                "name": source_secret(src["name"]), "key": "password"}}}],
@@ -880,15 +863,16 @@ def import_container(cfg):
     }
     # A container with nothing to copy needs no copy job; the workload below
     # is the whole import.
-    if copied:
-        ksend("POST", f"/apis/batch/v1/namespaces/{NS}/jobs", body)
-
+    dep = svc = None
     created = None
     if cfg.get("create_workload", True):
         dcfg = {
             "name": name, "namespace": NS, "image": cfg["image"],
-            "replicas": 0 if cfg.get("start_after_copy", True) else 1,
+            # An application must never write into a claim while rsync is
+            # importing it. Starting later goes through a fresh start review.
+            "replicas": 0 if copied or cfg.get("start_after_copy", True) else 1,
             "cpu": cfg.get("cpu", "50m"), "memory": cfg.get("memory", "256Mi"),
+            "memory_limit": cfg.get("memory_limit", ""),
             "ports": cfg.get("ports") or [], "env": cfg.get("env") or {},
             "volumes": [
                 {"path": mapping["mount_path"], "type": "emptyDir", "medium": "memory",
@@ -907,24 +891,99 @@ def import_container(cfg):
             "tun": bool(cfg.get("tun")),
         }
         dep, svc = build_deployment(dcfg)
-        try:
-            ksend("POST", f"/apis/apps/v1/namespaces/{NS}/deployments", dep)
-        except urllib.error.HTTPError as e:
-            if e.code != 409:
-                raise
-        if svc:
-            try:
-                ksend("POST", f"/api/v1/namespaces/{NS}/services", svc)
-            except urllib.error.HTTPError as e:
-                if e.code != 409:
-                    raise
+        if copied:
+            dep.setdefault("metadata", {}).setdefault("annotations", {})["homestead.io/import-job"] = job
         created = name
-    _bust("wl", "ov", "flow")
-    return {"ok": True, "job": job, "pvc": pvc, "deployment": created,
+    result = {"ok": True, "job": job if copied else "", "pvc": pvc, "deployment": created,
             "mappings": mappings, "volumes": volumes,
             "storage_class": storage_class, "access_mode": access_mode,
-            "note": "Deployment created stopped; start it once the copy job finishes."
-                    if cfg.get("start_after_copy", True) else ""}
+            "note": "Workload created stopped. After copying, review capacity again before starting."
+                    if copied or cfg.get("start_after_copy", True) else ""}
+    return {"job": body if copied else None, "deployment": dep, "service": svc,
+            "volumes": volumes, "result": result}
+
+
+def commit_import(prepared):
+    """Commit a reviewed import; never replace an existing Job or Deployment.
+
+    Partial resources are deliberately retained on failure, especially PVCs.
+    The stopped workload is created before a copy can start writing data.
+    """
+    prepared = copy.deepcopy(prepared)
+    for volume in prepared["volumes"]:
+        if volume["create"]:
+            create_pvc(NS, volume["name"], volume["size_gb"], volume["storage_class"],
+                       volume["access_mode"])
+    if prepared["deployment"]:
+        created = ksend("POST", f"/apis/apps/v1/namespaces/{NS}/deployments", prepared["deployment"])
+        uid = (created.get("metadata") or {}).get("uid")
+        if prepared["job"] and not uid:
+            raise ValueError("Created workload identity is unavailable; copy was not started. Keep its volumes and inspect the workload before retrying.")
+        if prepared["job"] and uid:
+            prepared["job"]["metadata"]["ownerReferences"] = [{"apiVersion": "apps/v1", "kind": "Deployment",
+                "name": created["metadata"]["name"], "uid": uid}]
+    if prepared["service"]:
+        ksend("POST", f"/api/v1/namespaces/{NS}/services", prepared["service"])
+    if prepared["job"]:
+        ksend("POST", f"/apis/batch/v1/namespaces/{NS}/jobs", prepared["job"])
+    _bust("wl", "ov", "flow")
+    return prepared["result"]
+
+
+def import_container(cfg):
+    """Internal compatibility wrapper; HTTP imports must use signed admission."""
+    return commit_import(prepare_import(cfg))
+
+
+def import_inventory(prepared, read):
+    """Fail closed on collisions and active writers; return identities to sign."""
+    def optional(path):
+        try:
+            obj = read(path)
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                return None
+            raise
+        if not isinstance(obj, dict) or not (obj.get("metadata") or {}).get("uid"):
+            raise ValueError("Import inventory is incomplete; refresh before importing")
+        return obj
+
+    for kind, resource in (("deployment", "deployments"), ("service", "services"), ("job", "jobs")):
+        obj = prepared[kind]
+        if obj:
+            prefix = "/apis/apps/v1" if kind == "deployment" else "/apis/batch/v1" if kind == "job" else "/api/v1"
+            name = obj["metadata"]["name"]
+            if optional(f"{prefix}/namespaces/{NS}/{resource}/{name}") is not None:
+                raise ValueError(f"{kind} {name} already exists. Review or clean up that import first; it will not be replaced.")
+    claims = {}
+    for volume in prepared["volumes"]:
+        name = volume["name"]
+        obj = optional(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{name}")
+        if volume["create"]:
+            if obj is not None:
+                raise ValueError(f"PVC {name} already exists. Explicitly select an existing volume or choose a new name.")
+            claims[name] = None
+        else:
+            if obj is None:
+                raise ValueError(f"existing PVC {name} was not found")
+            if obj["metadata"].get("deletionTimestamp") or (obj.get("status") or {}).get("phase") != "Bound":
+                raise ValueError(f"existing PVC {name} must be Bound and not deleting before import")
+            if (obj.get("spec") or {}).get("volumeMode", "Filesystem") != "Filesystem":
+                raise ValueError(f"PVC {name} is not a filesystem volume")
+            claims[name] = {"uid": obj["metadata"]["uid"], "spec": obj.get("spec")}
+    pods = read("/api/v1/pods")
+    if not isinstance(pods.get("items"), list) or (pods.get("metadata") or {}).get("continue"):
+        raise ValueError("Pod inventory is incomplete; volume consumers cannot be verified")
+    if prepared["job"]:
+        for pod in pods["items"]:
+            if (pod.get("metadata") or {}).get("namespace") != NS or (pod.get("status") or {}).get("phase") in ("Succeeded", "Failed"):
+                continue
+            mounted = {(row.get("persistentVolumeClaim") or {}).get("claimName") for row in (pod.get("spec") or {}).get("volumes") or []}
+            conflicts = mounted & claims.keys()
+            if conflicts:
+                raise ValueError("Stop volume consumers before importing: " + ", ".join(sorted(conflicts)) +
+                                 f" is mounted by {pod['metadata'].get('name', '?')}. RWX does not make concurrent data replacement safe.")
+    return {"claims": claims}, pods["items"]
 
 
 STEP = re.compile(r"==> step (\d+)/(\d+) (\S+)(?: \((\d+)B\))?\s*(.*)$")
@@ -1065,6 +1124,36 @@ def delete_import(name):
     """
     if not re.fullmatch(r"homestead-import-[a-z0-9][a-z0-9-]{0,60}", str(name or "")):
         raise ValueError("unknown import job")
+    # Preserve successful completion before removing its proof. Failed copies
+    # deliberately leave the workload interlocked, never silently startable.
+    try:
+        job = kget(f"/apis/batch/v1/namespaces/{NS}/jobs/{name}")
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        job = {}
+    except ValueError:
+        job = {}  # legacy client reports a missing Job this way
+    complete = any(c.get("type") == "Complete" and c.get("status") == "True"
+                   for c in (job.get("status") or {}).get("conditions") or [])
+    for owner in (job.get("metadata") or {}).get("ownerReferences") or []:
+        if not complete or owner.get("kind") != "Deployment":
+            continue
+        path = f"/apis/apps/v1/namespaces/{NS}/deployments/{owner['name']}"
+        try:
+            dep = kget(path)
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                continue
+            raise
+        if dep["metadata"].get("uid") != owner.get("uid"):
+            raise ValueError("Import workload identity changed; review cleanup again")
+        annotations = dep["metadata"].get("annotations") or {}
+        if annotations.get("homestead.io/import-job") == name:
+            annotations.pop("homestead.io/import-job")
+            annotations["homestead.io/import-completed-job"] = job["metadata"]["uid"]
+            dep["metadata"]["annotations"] = annotations
+            ksend("PUT", path, dep)  # resourceVersion protects concurrent edits
     try:
         ksend("DELETE", f"/apis/batch/v1/namespaces/{NS}/jobs/{name}"
                         "?propagationPolicy=Background")
