@@ -1869,6 +1869,7 @@ div.ipam-line.dim{display:block}
 .vip-section .dim,.vip-steps li>span,.vip-card-label,.vip-add-form .dim{color:var(--mut)}
 .vip-check{display:flex;align-items:flex-start;gap:10px;margin:16px 0;line-height:1.6;font-size:12px;font-weight:400;color:var(--tx)}.vip-check input[type=checkbox]{flex:none;width:16px;height:16px;margin:3px 0;accent-color:var(--ok)}.vip-check>span{min-width:0}.vip-check>span>span{display:block;margin-top:4px}
 #va_result:not(:empty){padding:12px;border:1px solid var(--line);border-radius:10px;line-height:1.6;overflow-wrap:anywhere}
+#net_editor .dim,#snapshot_live .dim{color:var(--mut)}
 @media(max-width:650px){.vip-steps{grid-template-columns:1fr}.vip-card{padding:12px}}
 .primary-ports{display:grid;gap:8px}
 .priv-fields{display:grid;gap:8px;margin-bottom:6px}

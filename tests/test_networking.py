@@ -1,6 +1,7 @@
 import sys
 import unittest
 import urllib.error
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -9,6 +10,67 @@ import homestead_networking as networking
 
 
 class NetworkingTests(unittest.TestCase):
+    def edit_service_config(self):
+        service = self.objects["/api/v1/services"]["items"][0]
+        service["metadata"].update(uid="service-uid", resourceVersion="7")
+        self.objects["/api/v1/namespaces/lab/services/homestead"] = service
+        return {"namespace": "lab", "workload": "homestead", "name": "homestead",
+                "update": True, "uid": "service-uid", "resource_version": "7", "type": "LoadBalancer",
+                "vip_mode": "manual", "vip": "192.168.1.243",
+                "ports": [{"port": 8088, "target_port": 8088}]}
+
+    def test_vip_edit_preserves_service_identity_and_cluster_address(self):
+        cfg = self.edit_service_config()
+        with patch.object(networking.PLATFORM, "vip_spec", return_value={}):
+            result = networking.create_service(cfg)
+        method, path, service = self.sent[-1]
+        self.assertEqual("PUT", method)
+        self.assertEqual("10.43.0.20", service["spec"]["clusterIP"])
+        self.assertEqual("service-uid", service["metadata"]["uid"])
+        self.assertEqual("7", service["metadata"]["resourceVersion"])
+        self.assertEqual("192.168.1.243", service["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
+        self.assertIn("updated", result["message"])
+
+    def test_vip_edit_same_address_does_not_conflict_with_itself(self):
+        cfg = self.edit_service_config()
+        cfg.update(vip_mode="shared", vip="")
+        with patch.object(networking.PLATFORM, "vip_spec", return_value={}):
+            self.assertEqual("192.168.1.242", networking.service_plan(cfg)["vip"])
+
+    def test_vip_edit_rejects_stale_identity_and_foreign_workload(self):
+        cfg = self.edit_service_config()
+        for change in ({"uid": "replacement"}, {"resource_version": "6"}, {"workload": "pihole"}):
+            with self.assertRaises(ValueError):
+                networking.service_plan({**cfg, **change})
+        self.assertFalse(self.sent)
+
+    def test_vip_edit_never_recreates_to_change_class(self):
+        cfg = self.edit_service_config()
+        with patch.object(networking.PLATFORM, "vip_spec", return_value={"loadBalancerClass": "new-class"}):
+            with self.assertRaisesRegex(ValueError, "replacement"):
+                networking.create_service(cfg)
+        self.assertFalse(self.sent)
+
+    def test_vip_edit_checks_other_services_ports(self):
+        import copy
+        cfg = self.edit_service_config()
+        other = copy.deepcopy(self.objects["/api/v1/services"]["items"][0])
+        other["metadata"].update(name="another", uid="another-uid")
+        other["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"] = cfg["vip"]
+        other["status"] = {}
+        self.objects["/api/v1/services"]["items"].append(other)
+        with patch.object(networking.PLATFORM, "vip_spec", return_value={}):
+            with self.assertRaisesRegex(ValueError, "already used"):
+                networking.create_service(cfg)
+        self.assertFalse(self.sent)
+
+    def test_named_target_ports_survive_vip_only_edit(self):
+        cfg = self.edit_service_config()
+        cfg["ports"][0]["target_port"] = "web"
+        with patch.object(networking.PLATFORM, "vip_spec", return_value={}):
+            networking.create_service(cfg)
+        self.assertEqual("web", self.sent[-1][2]["spec"]["ports"][0]["targetPort"])
+
     def setUp(self):
         self.sent = []
         self.objects = {

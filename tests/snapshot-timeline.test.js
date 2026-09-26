@@ -7,6 +7,16 @@ const context = { window: {}, console, document: {addEventListener() {}}, esc: x
 vm.createContext(context);
 vm.runInContext(fs.readFileSync("web/js/views-protect.js", "utf8"), context);
 
+test("cleanup shows live volume-wide percentage and never invents completion", () => {
+  const html = context.snapshotCleanupHtml({known: true, active: true, percent: 51, errors: []});
+  assert.match(html, /cleanup 51%/);
+  assert.match(html, /aria-valuenow="51"/);
+  assert.match(html, /volume-wide/);
+  assert.match(context.snapshotCleanupHtml({error: "<offline>"}), /&lt;offline>/);
+  assert.doesNotMatch(context.snapshotCleanupHtml({known: false, active: false}), /100%|complete/);
+  assert.match(context.snapshotCleanupHtml({known: true, active: true, percent: null}), /in progress/);
+});
+
 test("timeline distinguishes system and user points and protects live head", () => {
   const html = context.snapshotTimeline([
     {name: "manual", source: "user", ready: true, created: "2026-09-26T12:00:00Z", size_mb: 10},

@@ -5832,6 +5832,8 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/lh/snapshots":
                 vol = (q.get("volume") or [None])[0]
                 return self._send(200, LH.snapshots(vol))
+            if p == "/api/lh/snapshot-progress":
+                return self._send(200, SNAPSHOT_DELETE.progress((q.get("volume") or [""])[0]))
             if p == "/api/lh/backups":
                 vol = (q.get("volume") or [None])[0]
                 return self._send(200, LH.backups(vol))

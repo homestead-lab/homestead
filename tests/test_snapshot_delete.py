@@ -11,6 +11,24 @@ import homestead_snapshot_delete as sd
 
 
 class SnapshotDeleteTests(unittest.TestCase):
+    def test_external_cleanup_progress_is_read_only_and_volume_scoped(self):
+        self.engine["status"]["purgeStatus"] = {"a": {"isPurging": True, "progress": 81}, "b": {"isPurging": True, "progress": 51}}
+        self.objects[f"{sd.API}/engines"]["items"].append({"spec": {"volumeName": "other"}, "status": {"purgeStatus": {"x": {"isPurging": True, "progress": 1}}}})
+        p = sd.progress("vol")
+        self.assertTrue(p["active"])
+        self.assertEqual(51, p["percent"])
+        self.assertFalse(self.sent)
+
+    def test_cleanup_unknown_is_not_reported_as_zero_or_complete(self):
+        self.engine["status"]["purgeStatus"] = {"a": {"isPurging": True, "progress": "unknown"}}
+        self.assertIsNone(sd.progress("vol")["percent"])
+        self.assertFalse(sd.progress("detached")["known"])
+        self.engine["status"]["purgeStatus"]["a"]["error"] = "replica failed"
+        self.assertEqual(["replica failed"], sd.progress("vol")["errors"])
+        self.objects[f"{sd.API}/engines"]["metadata"] = {"continue": "next-page"}
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            sd.progress("vol")
+
     def setUp(self):
         self.snap = {"metadata": {"name": "expand-200", "uid": "snap-uid"}, "spec": {"volume": "vol"},
                      "status": {"userCreated": False, "readyToUse": True, "children": {"volume-head": True}}}

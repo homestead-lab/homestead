@@ -119,6 +119,16 @@ restore under the original name once the old volume is deleted.
 
 ### Rolling back to a snapshot
 
+The snapshot dialog refreshes the timeline and Longhorn cleanup status every four
+seconds while open. During purge it shows the slowest active replica's percentage.
+This is volume-wide merge/purge work, not a percentage for an individual snapshot,
+and includes cleanup started outside Homestead. Missing status is shown as unknown,
+not completed. A snapshot marked for removal may still await a new head boundary.
+
+Deletion started in Homestead also creates a persistent cleanup job in Recent jobs.
+An external deletion does not retroactively create a Homestead job; its live Longhorn
+progress is still visible in the snapshot dialog.
+
 **Snapshots** on a volume lists them, each with **Roll back**, which puts the
 volume back as it was then. Longhorn only reverts a volume nothing is using,
 so Homestead:
