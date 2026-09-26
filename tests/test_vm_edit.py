@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_vms as VMS
 
 # A VM whose DataVolume CDI refused: its URL was a file name.
-VM = {"metadata": {"name": "web", "namespace": "lab", "uid": "u1"},
+VM = {"metadata": {"name": "web", "namespace": "lab", "uid": "u1", "resourceVersion": "10"},
       "spec": {"runStrategy": "RerunOnFailure",
                "dataVolumeTemplates": [{"metadata": {"name": "web-disk"},
                                         "spec": {"source": {"http": {"url": "ubuntu.img"}},
@@ -47,7 +47,10 @@ class Cluster:
         if path.endswith("/persistentvolumeclaims"):
             return {"items": [MADE]}
         if path.endswith("/secrets/web-ci"):
-            return {"data": dict(self.secret)}
+            return {"metadata": {"uid": "secret-uid", "resourceVersion": "20"}, "data": dict(self.secret)}
+        if path.endswith("/datavolumes/web-disk"):
+            return {"metadata": {"name": "web-disk", "uid": "dv-uid", "resourceVersion": "30"},
+                    "status": {"phase": "ImportInProgress"}}
         if path.endswith("/namespaces/lab/datavolumes"):
             return {"items": [{"metadata": {"name": "web-disk", "namespace": "lab"},
                                "status": {"phase": "ImportInProgress", "progress": "47.5%"}}]}
@@ -79,7 +82,8 @@ class VmEditTests(unittest.TestCase):
         self.assertEqual("https://example.test/u.img", template["spec"]["source"]["http"]["url"])
         self.assertEqual({"resources": {"requests": {"storage": "20Gi"}}, "storageClassName": "longhorn-r2"},
                          template["spec"]["storage"])
-        self.assertIn(("DELETE", "/apis/cdi.kubevirt.io/v1beta1/namespaces/lab/datavolumes/web-disk", None), c.sent)
+        deletion = next(body for method, path, body in c.sent if method == "DELETE" and path.endswith("/datavolumes/web-disk"))
+        self.assertEqual({"uid": "dv-uid", "resourceVersion": "30"}, deletion["preconditions"])
 
     def test_on_harvester_an_unmade_disk_can_become_an_image(self):
         c = Cluster({"harvester": True, "cdi": True})
