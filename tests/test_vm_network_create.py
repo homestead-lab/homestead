@@ -16,8 +16,11 @@ class VmNetworkTests(unittest.TestCase):
                 if not self.harvester:
                     raise urllib.error.HTTPError(path, 404, "missing", {}, None)
                 return {"items": [{"metadata": {"name": "mgmt"}}]}
-            if path == NET.NAD_API and self.multus:
+            if path == NET.NAD_API + "/network-attachment-definitions" and self.multus:
                 return {"resources": []}
+            if path == "/apis/apps/v1/namespaces/kube-system/daemonsets" and self.multus:
+                return {"items": [{"metadata": {"name": "multus", "generation": 1}, "status": {
+                    "observedGeneration": 1, "desiredNumberScheduled": 2, "updatedNumberScheduled": 2, "numberAvailable": 2}}]}
             raise urllib.error.HTTPError(path, 404, "missing", {}, None)
         NET.bind(get, lambda m, p, b=None, **k: self.sent.append((m, p, b)), {"kube-system"}, "lab", "")
 

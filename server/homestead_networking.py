@@ -259,7 +259,28 @@ def inventory():
                               "port": port.get("containerPort"), "protocol": port.get("protocol") or "TCP"})
         if ns not in SYSTEM_NAMESPACES:
             deployment_rows.append({"namespace": ns, "name": name, "ports": ports,
+                                    "kind": "Deployment", "selector": labels,
                                     "replicas": int(spec.get("replicas", 0) or 0)})
+
+    # A stable KubeVirt name label follows the guest when its launcher pod moves.
+    for vm in _items("/apis/kubevirt.io/v1/virtualmachines"):
+        meta = vm.get("metadata") or {}
+        ns, name = meta.get("namespace", ""), meta.get("name", "")
+        template = (vm.get("spec") or {}).get("template") or {}
+        spec = template.get("spec") or {}
+        pod_names = {n["name"] for n in spec.get("networks", []) if "pod" in n}
+        interfaces = ((spec.get("domain") or {}).get("devices") or {}).get("interfaces") or []
+        if ns in SYSTEM_NAMESPACES or not any(i.get("name") in pod_names and "masquerade" in i for i in interfaces):
+            continue
+        labels = (template.get("metadata") or {}).get("labels") or {}
+        if not labels:
+            continue
+        deployment_labels[(ns, "VirtualMachine/" + name)] = labels
+        forwarded = [port for iface in interfaces if iface.get("name") in pod_names
+                     for port in iface.get("ports") or []]
+        deployment_rows.append({"namespace": ns, "name": name, "kind": "VirtualMachine", "selector": labels,
+                                "ports": forwarded,
+                                "replicas": 1 if (vm.get("status") or {}).get("ready") else 0})
 
     node_ips, node_names = set(), {}
     for node in nodes:
@@ -316,6 +337,7 @@ def inventory():
                              (name == NAMES.object_name("nfs") and spec.get("externalTrafficPolicy") == "Local"),
                          "assigned_ips": assigned, "requested_ips": requested,
                          "vip_host": annotations.get("kube-vip.io/vipHost") or "",
+                         "vip_lease": annotations.get("kube-vip.io/leaseName") or "",
                          "selector": selector, "targets": targets,
                          # A Service whose selector matches no Deployment still owns
                          # its VIP and port: that is how a deleted workload leaves a
@@ -354,6 +376,7 @@ def inventory():
     pools, candidates = _pool_inventory(pools_raw, reserved)
     # Addresses reserved here come first: they are the ones someone chose.
     own = registered()
+    default_vip = next((row["ip"] for row in own if row.get("default")), SHARED_VIP)
     own_free = [row["ip"] for row in own if row["ip"] not in reserved]
     candidates = own_free + [ip for ip in candidates if ip not in set(own_free)]
 
@@ -379,9 +402,9 @@ def inventory():
             "vips": vip_rows, "conflicts": conflicts, "pools": pools,
             "platform_addresses": platform, "foreign_addresses": foreign,
             "platform_clashes": clashes,
-            "shared_vip": {"ip": SHARED_VIP,
-                           "problem": address_problem(SHARED_VIP, {"platform_addresses": platform})
-                           if SHARED_VIP else ""},
+            "shared_vip": {"ip": default_vip,
+                           "problem": address_problem(default_vip, {"platform_addresses": platform})
+                           if default_vip else ""},
             "registered_vips": [dict(row, free=row["ip"] not in reserved,
                                      blocked=address_problem(row["ip"], {"platform_addresses": platform,
                                                                          "foreign_addresses": foreign}),
@@ -495,15 +518,25 @@ def _ports(cfg):
 
 def service_plan(cfg, require_workload=True):
     state = inventory()
+    shared = state["shared_vip"]["ip"]
     namespace = _name(cfg.get("namespace") or DEFAULT_NAMESPACE, "namespace")
     if namespace in SYSTEM_NAMESPACES:
         raise PermissionError("Homestead does not create Services in system namespaces")
     service_name = _name(cfg.get("name") or cfg.get("service_name"), "service name")
     workload_name = _name(cfg.get("workload") or service_name, "workload name")
+    kind = cfg.get("workload_kind") or "Deployment"
+    if kind not in ("Deployment", "VirtualMachine"):
+        raise ValueError("Workload must be a Deployment or VirtualMachine")
     workload = next((row for row in state["workloads"]
-                     if row["namespace"] == namespace and row["name"] == workload_name), None)
+                     if row["namespace"] == namespace and row["name"] == workload_name and row.get("kind", "Deployment") == kind), None)
     if require_workload and not workload:
-        raise ValueError(f"Deployment {namespace}/{workload_name} does not exist")
+        raise ValueError(f"{kind} {namespace}/{workload_name} does not exist or has no supported pod network")
+    if kind == "VirtualMachine" and workload:
+        selector = workload.get("selector") or {}
+        if not selector or any(row is not workload and row["namespace"] == namespace and
+                               all(row.get("selector", {}).get(k) == v for k, v in selector.items())
+                               for row in state["workloads"]):
+            raise ValueError("VM template labels do not uniquely identify this workload; give it a unique label before exposing it")
     if any(row["namespace"] == namespace and row["name"] == service_name for row in state["services"]):
         raise ValueError(f"Service {namespace}/{service_name} already exists")
     ports = _ports(cfg)
@@ -515,12 +548,18 @@ def service_plan(cfg, require_workload=True):
         mode = "automatic"
     if mode not in ("cluster", "shared", "automatic", "manual", "nodes"):
         raise ValueError("VIP mode must be shared, automatic, manual or nodes")
-    if mode == "shared" and not SHARED_VIP and servicelb_present():
+    if mode == "shared" and (not shared or shared in state["node_ips"]) and servicelb_present():
         # k3s has no shared Homestead VIP: shared means the nodes' addresses.
         mode = "nodes"
     if mode == "nodes" and not servicelb_present():
         raise ValueError("this cluster has no ServiceLB to put a Service on the nodes' own addresses; give it a VIP")
     warnings = []
+    if kind == "VirtualMachine":
+        warnings.append("Guest must listen on the target ports and allow them through its firewall. A VIP does not provide VM or storage failover.")
+        if workload and workload.get("ports") and any(
+                not any(p.get("port") == requested["targetPort"] and (p.get("protocol") or "TCP") == requested["protocol"]
+                        for p in workload["ports"]) for requested in ports):
+            raise ValueError("The VM interface does not forward these ports; edit its interface ports first")
     vip = ""
     if mode == "nodes" or (mode != "cluster" and node_addresses_only()):
         # Whatever was asked for, ServiceLB publishes it on the nodes' own
@@ -530,9 +569,11 @@ def service_plan(cfg, require_workload=True):
         if owner:
             raise ValueError(_node_port_problem(owner))
     elif mode == "shared":
-        if not SHARED_VIP:
+        if not shared:
             raise ValueError("the shared Homestead VIP is not configured")
-        vip = _ipv4(SHARED_VIP, "shared VIP")
+        vip = _ipv4(shared, "shared VIP")
+        if vip in state["node_ips"]:
+            raise ValueError("The default workload VIP is a node address; choose a separate VIP in Networking")
         if vip in state["platform_addresses"]:
             raise ValueError(f"Homestead's shared address (LB_IP, {vip}) is the cluster's own address "
                              f"({state['platform_addresses'][vip]}). Set LB_IP to an address of "
@@ -556,6 +597,11 @@ def service_plan(cfg, require_workload=True):
         for row in state["services"]:
             if vip not in row["external_ips"]:
                 continue
+            p = PLATFORM.detect()
+            if p.get("load_balancer") == "kube-vip" and p.get("vip_service_election") is True:
+                expected = PLATFORM.vip_annotations(vip).get("kube-vip.io/leaseName")
+                if not expected or row.get("vip_lease") != expected or row["namespace"] != namespace:
+                    raise ValueError("Sharing this VIP requires a common kube-vip lease in the same namespace; use a dedicated VIP or migrate existing Services to a common lease first")
             if cfg.get("exclusive_vip") or row.get("exclusive_vip"):
                 raise ValueError(f"{vip} is used by {row['namespace']}/{row['name']}; NFS needs its own VIP "
                                  "while SMB and NFS run on independently placed pods with Local traffic routing")
@@ -573,28 +619,33 @@ def service_plan(cfg, require_workload=True):
     declared = {(str(port.get("protocol") or "TCP").upper(), int(port.get("port") or 0))
                 for port in (workload or {}).get("ports", [])}
     undeclared = [port for port in ports if (port["protocol"], int(port["targetPort"])) not in declared]
-    if workload and undeclared:
+    if workload and undeclared and kind == "Deployment":
         warnings.append("One or more target ports are not declared by the Deployment. Kubernetes permits this, but verify the application is listening there.")
     return {"ready": True, "namespace": namespace, "name": service_name,
-            "workload": workload_name, "type": service_type, "vip_mode": mode, "vip": vip,
+            "workload": workload_name, "workload_kind": kind, "type": service_type, "vip_mode": mode, "vip": vip,
+            "selector": (workload or {}).get("selector", {}),
             "ports": ports, "warnings": warnings,
             "path": {"vip": vip or ("each node's own address" if mode == "nodes" else "cluster only"),
                      "service": f"{namespace}/{service_name}",
-                     "workload": f"Deployment/{workload_name}",
+                     "workload": f"{kind}/{workload_name}",
                      "endpoints": (workload or {}).get("replicas", 0)},
             "available_vips": state["available_vips"][:16]}
 
 
 def create_service(cfg):
     plan = service_plan(cfg)
-    deployments = _items("/apis/apps/v1/deployments")
-    deployment = next(item for item in deployments
-                      if item.get("metadata", {}).get("namespace") == plan["namespace"] and
-                      item.get("metadata", {}).get("name") == plan["workload"])
-    selector = ((deployment.get("spec", {}) or {}).get("selector", {}) or {}).get("matchLabels", {}) or {}
+    if plan["workload_kind"] == "VirtualMachine":
+        selector = plan["selector"]
+    else:
+        deployments = _items("/apis/apps/v1/deployments")
+        deployment = next(item for item in deployments
+                          if item.get("metadata", {}).get("namespace") == plan["namespace"] and
+                          item.get("metadata", {}).get("name") == plan["workload"])
+        selector = ((deployment.get("spec", {}) or {}).get("selector", {}) or {}).get("matchLabels", {}) or {}
     if not selector:
         raise ValueError("the selected Deployment has no matchLabels selector")
     annotations = {"homestead.io/vip-mode": plan["vip_mode"],
+                   "homestead.io/workload-kind": plan["workload_kind"],
                    "homestead.io/workload": plan["workload"]}
     annotations.update(PLATFORM.vip_annotations(plan["vip"]))
     body = {"apiVersion": "v1", "kind": "Service",
@@ -791,12 +842,36 @@ def registered():
     return [row for row in rows if isinstance(row, dict) and row.get("ip")]
 
 
+def shared_vip():
+    """A workload default, independent of Homestead's own access address."""
+    return next((row["ip"] for row in registered() if row.get("default")), SHARED_VIP)
+
+
+def set_default_vip(ip):
+    ip = _ipv4(ip, "default workload VIP")
+    state = inventory()
+    if ip in state["node_ips"]:
+        raise ValueError("A node address cannot be the default workload VIP")
+    check_address(ip, state)
+    if PLATFORM.detect().get("load_balancer") not in ("kube-vip", "metallb"):
+        raise ValueError("Install kube-vip or MetalLB before choosing a workload VIP; ServiceLB uses node addresses")
+    rows = registered()
+    if not any(row["ip"] == ip for row in rows):
+        raise ValueError("Add this reserved address to Your VIPs first")
+    for row in rows:
+        row["default"] = row["ip"] == ip
+    _save_registered(rows)
+    return {"ok": True, "ip": ip, "detail": "Default workload VIP saved; existing Services are unchanged"}
+
+
 def _save_registered(rows):
     body = {"apiVersion": "v1", "kind": "ConfigMap",
             "metadata": {"name": VIP_MAP, "namespace": DEFAULT_NAMESPACE, "labels": {"homestead.io/managed": "true"}},
             "data": {"vips.json": json.dumps(sorted(rows, key=lambda r: int(ipaddress.ip_address(r["ip"]))), indent=1)}}
     try:
-        kget(_vip_map_path())
+        current = kget(_vip_map_path())
+        body["metadata"] = current.get("metadata", body["metadata"])
+        body["data"] = dict(current.get("data") or {}, **body["data"])
         ksend("PUT", _vip_map_path(), body)
     except urllib.error.HTTPError as error:
         if error.code != 404:
@@ -845,6 +920,8 @@ def add_vips(cfg, ipam_records=None):
 
 def remove_vip(ip):
     ip = _ipv4(ip, "address")
+    if any(row["ip"] == ip and row.get("default") for row in registered()):
+        raise ValueError("Choose another default workload VIP before removing this address")
     state = inventory()
     users = next((row for row in state["vips"] if row["ip"] == ip), None)
     if users:
@@ -883,11 +960,8 @@ MULTUS_HELP = ("Multus is not installed, so pods cannot join a second network. O
 
 
 def _multus():
-    try:
-        kget(NAD_API)
-        return True
-    except Exception:
-        return False
+    import homestead_multus as MULTUS
+    return MULTUS.inspect(kget)["ready"]
 
 
 def host_interfaces(probes):
