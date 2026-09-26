@@ -1453,8 +1453,8 @@ window.confirmDeploy = async () => {
    A specific VIP is picked from what the cluster has: the free addresses in
    Harvester's IP pools, or a VIP already in use, whose ports are then shared.
    "Type an address" is there for one outside the pools. */
-async function vipChoices() {
-  const net = await api("/api/network", { keep: true }).catch(() => null);
+async function vipChoices(networkData) {
+  const net = networkData || await api("/api/network", { keep: true }).catch(() => null);
   // The cluster's own address (Harvester's management VIP, an ingress
   // controller's) and addresses other software owns are never offered: an app
   // sharing the management VIP is how host joining breaks.
