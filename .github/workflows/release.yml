@@ -102,6 +102,7 @@ jobs:
           PORT=4173 WEBROOT=web DATA_DIR=/tmp/homestead-demo-data python server/server.py >/tmp/homestead-demo.log 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid"' EXIT
+          node scripts/check_volume_layout.mjs
           node scripts/capture_screenshots.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

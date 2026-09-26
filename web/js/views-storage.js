@@ -221,8 +221,17 @@ function volumeHealthCell(x) {
     ${volumeReason(x) ? `<span class="dim xs volume-reason">${esc(x.health_reason)}</span>` : ""}`;
 }
 
-const volumeUsageCell = x => `<div>${meter(x.used_pct || 0)}
-  <span class="dim xs mono">${x.actual_gb} / ${x.size_gb} GB</span></div>`;
+function volumeUsageCell(x) {
+  const fs = x.filesystem;
+  const known = fs && Number.isFinite(fs.used_gb) && Number.isFinite(fs.capacity_gb)
+    && Number.isFinite(fs.used_pct) && fs.used_pct >= 0 && fs.used_pct <= 100
+    && fs.capacity_gb > 0 && fs.used_gb >= 0 && fs.used_gb <= fs.capacity_gb;
+  return `<div class="volusage-body">${known
+    ? `<div class="volusage-line" data-tip="Filesystem usage reported by kubelet; filesystem capacity can be slightly smaller than the provisioned block device.">${meter(fs.used_pct)}<span class="mono">${esc(fs.used_gb)} / ${esc(fs.capacity_gb)} GiB files</span></div>`
+    : `<span class="dim xs" data-tip="No fresh filesystem measurement is available. Detached volumes and some shared/raw-block mounts do not report filesystem usage.">Filesystem usage unavailable</span>`}
+    <span class="dim xs mono" data-tip="Provisioned logical volume size; this is not physical storage consumed.">${esc(x.size_gb)} GiB provisioned</span>
+    <span class="dim xs mono" data-tip="Longhorn block footprint, including snapshots and untrimmed blocks. Not filesystem usage, and not a sum across replicas; it can exceed the provisioned size.">${esc(x.actual_gb ?? "—")} GiB Longhorn footprint ${tip("Longhorn includes snapshots and allocated blocks, not just current files. Inspect snapshots before choosing any cleanup; deleting them removes recovery points.")}</span></div>`;
+}
 
 /* While anything rebuilds or restores, re-read the volumes every few seconds
    and repaint only their Health and Usage cells, so the percentages move
@@ -278,7 +287,7 @@ async function viewStorage() {
       <div class="csub">of ${st.cap_gb} GB raw</div>${meter(st.used_pct, 'style="margin-top:10px"')}</div>
     <div class="card flat"><div class="ctitle">Provisioned</div>
       <div class="bignum" style="margin-top:8px">${st.provisioned_gb}<span class="unit">GB</span></div>
-      <div class="csub">${st.actual_gb} GB actually written</div></div>
+      <div class="csub" data-tip="Sum of Longhorn volume block footprints, including snapshots; not filesystem usage or total storage across all replica copies.">${st.actual_gb} GiB Longhorn footprint</div></div>
     <div class="card flat statwide"><div class="ctitle">Replica health</div>${(st.reasons || []).length
       ? `<div class="dim xs volume-reason" style="margin-top:8px">${esc(st.reasons[0].name)}: ${esc(st.reasons[0].reason)}${st.reasons.length > 1 ? ` · and ${st.reasons.length - 1} more` : ""}</div>` : ""}
       <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap">
@@ -292,8 +301,8 @@ async function viewStorage() {
   <div class="card flat pad0"><div class="tblwrap voltable"><table data-sort="volumes" class="tbl dense"><thead><tr>
    <th>Volume</th><th>Attached to</th><th>Health</th><th>Mode</th><th>Usage</th><th data-nosort>Last used</th><th></th>
    </tr></thead><tbody>${rows.map(x => `<tr data-vol="${esc(x.name)}">
-     <td class="volname"><b>${esc(x.pvc_name || x.name.slice(0, 18))}</b>
-       <span class="dim xs mono">${esc(x.namespace || "")}${x.node ? ` · ${esc(x.node.replace("harvester-", ""))}` : ""}</span></td>
+     <td class="volname"><div class="volname-content"><b>${esc(x.pvc_name || x.name.slice(0, 18))}</b>
+       <span class="dim xs mono">${esc(x.namespace || "")}${x.node ? ` · ${esc(x.node.replace("harvester-", ""))}` : ""}</span></div></td>
      <td data-label="Attached to">${volumeUseCell(x)}${x.pod_status ? `<span class="dim xs"> · ${esc(x.pod_status)}</span>` : ""}</td>
      <td data-label="Health" class="volhealth${volumeReason(x) || volumeBusy(x) ? " hasreason" : ""}">${volumeHealthCell(x)}</td>
      <td data-label="Mode"><span class="tag">${esc((x.access_modes || ["?"]).map(m => m === "ReadWriteMany" ? "RWX" : m === "ReadWriteOnce" ? "RWO" : m).join(", "))}</span>
@@ -1192,13 +1201,14 @@ function lhNodeRows(cap) {
     <div class="between"><b>${esc(lhShort(n.name))}</b>
       <span class="mono xs ${n.level === "ok" ? "dim" : n.level === "warn" ? "warntext" : "badtext"}">${esc(sizePair(n.allocated_gb, n.limit_gb))} allocated</span></div>
     <div class="meter ${lhLevel(n.level)}" data-tip="${esc(`${n.pct}% of what Longhorn may place here (${n.size_gb} GB × ${cap.over_provisioning}%)`)}"><span style="width:${Math.min(100, n.pct)}%"></span></div>
-    <div class="dim xs">${n.blocked ? `<span class="badtext">${esc(n.blocked)}</span>` : `room for a ${esc(sizeText(n.room_gb))} replica`} · ${esc(sizeText(n.used_gb))} actually used</div></div>`).join("");
+    <div class="dim xs">${n.blocked ? `<span class="badtext">${esc(n.blocked)}</span>` : `${esc(sizeText(n.room_gb))} allocation headroom`} · ${esc(sizeText(n.used_gb))} physically used</div>
+    <div class="dim xs" data-tip="Free bytes above Longhorn's minimum-free-space reserve on the best eligible disk. A rebuild must fit its block/snapshot footprint below this budget as well as its logical allocation; tags, anti-affinity and other placement rules still apply.">Physical rebuild budget: ${Number.isFinite(n.physical_room_gb) ? `${esc(n.physical_room_gb)} GiB` : "unknown"}</div></div>`).join("");
 }
 
 function lhLargest(cap) {
   const count = (cap.nodes || []).length;
   return [1, 2, 3].filter(c => c <= count).map(c => `<span class="tag ${cap.largest[c] < 10 ? "bad" : cap.largest[c] < 50 ? "warn" : ""}"
-    data-tip="The biggest new volume with ${c} cop${c === 1 ? "y" : "ies"} that Longhorn can still place, each copy on a different node">${c} cop${c === 1 ? "y" : "ies"} · ${esc(sizeText(cap.largest[c]))}</span>`).join("");
+    data-tip="Logical allocation upper bound for ${c} empty cop${c === 1 ? "y" : "ies"} on different nodes. Not rebuild capacity or a placement guarantee: existing data and snapshots also need physical space.">${c} cop${c === 1 ? "y" : "ies"} · ${esc(sizeText(cap.largest[c]))}</span>`).join("");
 }
 
 /* The Volumes page's per-node card. */
@@ -1210,7 +1220,7 @@ function lhCapacityCard(cap, st) {
       <span class="row" style="gap:10px"><a class="dim xs" data-need="admin" onclick="lhDisks()" data-tip="Every disk on every node; add one to Longhorn">Disks</a>
         <a class="dim xs" onclick="go('settings');settingsTab('cluster')" data-tip="Over-provisioning is ${cap.over_provisioning}%">Longhorn settings</a></span></div>
     ${lhNodeRows(cap) || '<div class="csub" style="margin-top:8px">Longhorn has not reported any node disks yet.</div>'}
-    <div class="dim xs" style="margin-top:8px">Largest new volume</div><div class="row lh-largest">${lhLargest(cap)}</div></div>`;
+    <div class="dim xs" style="margin-top:8px">Empty-volume allocation limit</div><div class="row lh-largest">${lhLargest(cap)}</div></div>`;
 }
 window.lhCapacityCard = lhCapacityCard;
 

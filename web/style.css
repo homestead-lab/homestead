@@ -906,15 +906,16 @@ html[data-motion="off"] .uptime .ld{animation:none}
 .volume-reason{display:block;margin-top:2px;max-width:30ch;line-height:1.35;overflow-wrap:anywhere}
 .volprogress{margin-top:6px;max-width:16ch}
 .volprogress span{transition:width .6s ease}
-/* The volume list is long and mostly skim-read, so a row is one line of text
-   with its secondary facts beside the primary ones rather than under them. */
-.voltable .volname{display:flex;align-items:baseline;flex-wrap:wrap;gap:3px 7px}
+/* Keep desktop td elements in table layout. Flex only their contents, so
+   multi-line names, usage and health reasons share the same row boundaries. */
+.voltable .volname-content{display:flex;flex-direction:column;gap:3px;min-width:0}
 .voltable .volname b{line-height:1.3;overflow-wrap:anywhere}
 .voltable .volname .mono{font-size:9.5px;line-height:1.3}
 .voltable .volusage{min-width:150px}
-.voltable .volusage>*{display:flex;align-items:center;gap:8px;flex:1;min-width:0}
+.voltable .volusage-body{display:flex;flex-direction:column;align-items:stretch;gap:3px;flex:1;min-width:0}
+.voltable .volusage-line{display:flex;align-items:center;gap:8px;min-width:0}
 .voltable .volusage .meter{flex:1}
-.voltable .volusage .mono{font-size:9.5px;white-space:nowrap}
+.voltable .volusage .mono{font-size:9.5px;white-space:normal;overflow-wrap:anywhere}
 .voltable td{vertical-align:middle}
 .voltable .volactions{width:1%;white-space:nowrap}
 .voltable .volactions .row{gap:4px;flex-wrap:nowrap;justify-content:flex-end}

@@ -8,6 +8,22 @@ what Longhorn thinks of it.
 
 ## Reading the table
 
+The **Usage** column separates three different measurements (GiB = 1,024³ bytes):
+
+- **Files** and its bar: fresh filesystem usage from kubelet, against the
+  filesystem's capacity. Formatting can make that capacity slightly smaller
+  than the provisioned device. Missing or stale readings say **Filesystem usage
+  unavailable**, not zero. Detached volumes, raw block devices and some shared
+  mounts do not report this measurement; shared observations are never summed.
+- **Provisioned**: the logical size requested for the volume.
+- **Longhorn footprint**: allocated blocks including snapshots and untrimmed
+  blocks, not a sum across replicas. It can legitimately exceed the provisioned
+  size, for example after an expansion snapshot. It is not used for the files bar.
+
+Review snapshots and recovery needs before choosing cleanup; Homestead does not
+automatically delete recovery points to bring the footprint below the volume size.
+See Longhorn's [space consumption guide](https://longhorn.io/kb/space-consumption-guideline/).
+
 | Badge | Means |
 |---|---|
 | **RWO** / **RWX** | one host can mount it (ReadWriteOnce), or many at once (ReadWriteMany, served by Longhorn over NFS) |
@@ -137,9 +153,15 @@ the **over-provisioning** percentage, or once too little of it is actually
 free. After that, new volumes come up a copy short, rebuilds wait and growing a
 volume is refused - nothing already placed moves.
 
-**Volumes** shows each node's allocation against that limit, and the largest
-new volume that still fits with one, two or three copies. The dashboard names a
-node past 80%, and a notification goes out.
+**Volumes** shows each node's allocation against that limit, and an
+**empty-volume allocation limit** for one, two or three copies. This is a logical
+upper bound, not a guarantee that an existing volume's replica can rebuild there.
+The separate **physical rebuild budget** is free space above Longhorn's
+minimum-free-space reserve on the best eligible disk, not the sum of spare space
+across disks. A rebuild's existing block/snapshot footprint must fit below that
+budget as well as meeting the logical allocation, tags and placement rules.
+Over-provisioning increases allocation headroom, not physical free space.
+The dashboard names a node past 80%, and a notification goes out.
 
 **Settings → Cluster** sets over-provisioning and the minimum free space, with a
 preview of each node's new limit, and turns the V2 engine on or off.

@@ -52,6 +52,26 @@ class CapacityTests(unittest.TestCase):
         one = LHCAP.status()["nodes"][0]
         self.assertEqual((234.0, 135.0), (one["limit_gb"], one["room_gb"]))
 
+    def test_physical_rebuild_budget_is_not_logical_overprovisioning(self):
+        c = Cluster(over="200")
+        c.nodes = [node("node1", 458, 193, 219)]
+        n = LHCAP.status()["nodes"][0]
+        self.assertEqual(723, n["room_gb"])
+        self.assertEqual(104.5, n["physical_room_gb"])
+        self.assertLess(n["physical_room_gb"], 191)  # existing replica footprint cannot rebuild here
+
+    def test_rebuild_budget_is_best_eligible_disk_not_sum_of_disks(self):
+        c = Cluster()
+        n = node("node1", 100, 10, 80)
+        n["spec"]["disks"]["other"] = {}
+        n["status"]["diskStatus"]["other"] = node("other", 100, 10, 90)["status"]["diskStatus"]["d"]
+        c.nodes = [n]
+        self.assertEqual(65, LHCAP.status()["nodes"][0]["physical_room_gb"])
+        n["spec"]["disks"]["other"]["allowScheduling"] = False
+        self.assertEqual(55, LHCAP.status()["nodes"][0]["physical_room_gb"])
+        n["spec"]["allowScheduling"] = False
+        self.assertEqual(0, LHCAP.status()["nodes"][0]["physical_room_gb"])
+
     def test_a_disk_short_of_free_space_or_switched_off_takes_nothing(self):
         c = Cluster()
         c.nodes = [node("node1", 100, 10, 20), node("node2", 100, 10, 90, allow=False)]

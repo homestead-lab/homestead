@@ -218,8 +218,8 @@
     // Homestead itself: its Stop asks first, since it takes this page with it.
     { name: "homestead", ns: "lab", kind: "Deployment", group: "Homestead", self: true, desired: 1, ready: 1, uptime: 86400,
       cpu: 0.04, mem_mb: 88, nodes: ["harvester-node1"], hardware: [],
-      images: ["ghcr.io/wjcloudy/homestead:2.8.170"], ports: [{ port: 8088, ip: "192.0.2.242" }],
-      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/wjcloudy/homestead:2.8.170")] },
+      images: ["ghcr.io/wjcloudy/homestead:2.8.171"], ports: [{ port: 8088, ip: "192.0.2.242" }],
+      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/wjcloudy/homestead:2.8.171")] },
     { name: "homestead-smb", ns: "lab", kind: "Deployment", group: "Homestead", managed_smb: true,
       desired: 1, ready: 1, uptime: 86400, cpu: 0.01, mem_mb: 40, nodes: ["harvester-node2"], hardware: [],
       images: ["dperson/samba:latest"], ports: [{ port: 445, ip: "192.0.2.245" }],
@@ -247,11 +247,13 @@
     { name: "pvc-demo-frigate", pvc_name: "frigate-config", namespace: "lab", attached_to: "frigate, homestead-smb",
       attached: ["frigate", "homestead-smb"],
       pod_status: "Running", state: "attached", robustness: "healthy", node: "harvester-node2",
-      size_gb: 20, actual_gb: 3.8, used_pct: 19, replicas: 2,
+      size_gb: 20, actual_gb: 27.8, used_pct: 19, replicas: 2,
+      filesystem: { used_gb: 3.8, capacity_gb: 19.6, used_pct: 19.4, source: "kubelet" },
       access_modes: ["ReadWriteOnce"], storage_class: "longhorn-r2", last_used_secs: 0 },
     { name: "pvc-demo-degraded", pvc_name: "arr-dashboard-data", namespace: "lab", attached_to: "arr-dashboard",
       attached: ["arr-dashboard"], node: "harvester-node1", state: "attached", robustness: "degraded",
       size_gb: 5, actual_gb: 3.1, used_pct: 62, replicas: 2, access_modes: ["ReadWriteOnce"],
+      filesystem: { used_gb: 2.8, capacity_gb: 4.8, used_pct: 58.3, source: "kubelet" },
       storage_class: "longhorn-r2", last_used_secs: 0, created: "2026-09-19T08:00:00Z",
       health_reason: "no disk space to create the replicas required: 1 of 2 replicas scheduled",
       conditions: [{ type: "Scheduled", status: "False", reason: "ReplicaSchedulingFailure",
@@ -262,6 +264,7 @@
     { name: "pvc-demo-rebuild", pvc_name: "jellyfin-config", namespace: "lab", attached_to: "jellyfin",
       attached: ["jellyfin"], node: "harvester-node3", state: "attached", robustness: "degraded",
       size_gb: 10, actual_gb: 4.6, used_pct: 46, replicas: 3, access_modes: ["ReadWriteOnce"],
+      filesystem: { used_gb: 4.2, capacity_gb: 9.8, used_pct: 42.9, source: "kubelet" },
       storage_class: "longhorn-r3", last_used_secs: 0, pod_status: "Running",
       health_reason: "a replica is rebuilding; the volume is readable and writable meanwhile",
       rebuild: { pct: 63, replicas: 1, error: "" } },
@@ -489,7 +492,7 @@
       detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.170", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.171", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
@@ -602,15 +605,15 @@
       user: "admin", added: "2026-09-22 17:02" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "garage") return { name, version: "2.8.170", protocol: 1, local_version: "2.8.170",
+      if (name === "garage") return { name, version: "2.8.171", protocol: 1, local_version: "2.8.171",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "garage runs 2.8.170 and this one 2.8.170. Moves work between them; garage is the newer of the two." };
+        message: "garage runs 2.8.171 and this one 2.8.171. Moves work between them; garage is the newer of the two." };
       return name === "attic"
-        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.170", local_protocol: 1,
+        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.171", local_protocol: 1,
             state: "behind", compatible: false,
-            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.170). Update attic first." }
-        : { name, version: "2.8.170", protocol: 1, local_version: "2.8.170", local_protocol: 1,
-            state: "same", compatible: true, message: "Both run Homestead 2.8.170." };
+            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.171). Update attic first." }
+        : { name, version: "2.8.171", protocol: 1, local_version: "2.8.171", local_protocol: 1,
+            state: "same", compatible: true, message: "Both run Homestead 2.8.171." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     // shed is ready to move from; garage has no backup storage yet.
@@ -621,7 +624,7 @@
     "/api/move/clusters/storage": { ok: true, detail: "backup storage is starting on garage at http://192.0.2.244:9000" },
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "shed", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.170", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.171", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -1034,7 +1037,7 @@ ssh_pwauth: true
     "/api/volumes/reclass/start": { ok: true, operation: { id: "op4" } },
     "/api/self/health": () => {
       const now = Date.now() / 1000;
-      return { version: "2.8.170", leader: true, identity: "homestead-6d9f-abcde",
+      return { version: "2.8.171", leader: true, identity: "homestead-6d9f-abcde",
         api: { ok: true, ms: 38 },
         replicas: { desired: 1, pods: [{ name: "homestead-6d9f-abcde", node: "harvester-node1", ready: true, leader: true, this: true }] },
         loops: [{ name: "sampler", label: "Live charts", state: "ok", last_ok: now - 12, error: "", every: 30 },
@@ -1282,11 +1285,11 @@ ssh_pwauth: true
     "/api/longhorn/capacity": { node_down: "do-nothing", over_provisioning: 100, minimal_available: 25, warn_pct: 80, crit_pct: 95,
       largest: { 1: 236.3, 2: 36.8, 3: 17.8 },
       nodes: [
-        { name: "harvester-node1", size_gb: 116.8, allocated_gb: 99, limit_gb: 116.8, used_gb: 26.3, pct: 84.8, room_gb: 17.8, level: "warn", blocked: "",
+        { name: "harvester-node1", size_gb: 116.8, allocated_gb: 99, limit_gb: 116.8, used_gb: 26.3, pct: 84.8, room_gb: 17.8, physical_room_gb: 61.3, level: "warn", blocked: "",
           disks: [{ id: "d1", size_gb: 116.8, allocated_gb: 99, limit_gb: 116.8, used_gb: 26.3, room_gb: 17.8, pct: 84.8, blocked: "" }] },
-        { name: "harvester-node2", size_gb: 396.5, allocated_gb: 160.2, limit_gb: 396.5, used_gb: 14.8, pct: 40.4, room_gb: 236.3, level: "ok", blocked: "",
+        { name: "harvester-node2", size_gb: 396.5, allocated_gb: 160.2, limit_gb: 396.5, used_gb: 14.8, pct: 40.4, room_gb: 236.3, physical_room_gb: 282.6, level: "ok", blocked: "",
           disks: [{ id: "d1", size_gb: 396.5, allocated_gb: 160.2, limit_gb: 396.5, used_gb: 14.8, room_gb: 236.3, pct: 40.4, blocked: "" }] },
-        { name: "harvester-node3", size_gb: 116.8, allocated_gb: 80, limit_gb: 116.8, used_gb: 21.1, pct: 68.5, room_gb: 36.8, level: "ok", blocked: "",
+        { name: "harvester-node3", size_gb: 116.8, allocated_gb: 80, limit_gb: 116.8, used_gb: 21.1, pct: 68.5, room_gb: 36.8, physical_room_gb: 66.5, level: "ok", blocked: "",
           disks: [{ id: "d1", size_gb: 116.8, allocated_gb: 80, limit_gb: 116.8, used_gb: 21.1, room_gb: 36.8, pct: 68.5, blocked: "" }] }],
       v2: { enabled: false, harvester_setting: false, ready_nodes: 0, total_nodes: 3,
         nodes: ["harvester-node1", "harvester-node2", "harvester-node3"].map(name => ({ name, ready: false, block_disks: 0, hugepages_mb: 0,
@@ -1415,7 +1418,7 @@ ssh_pwauth: true
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.170", candidate_tag: "2.8.170", remote_digest: "sha256:ghi", available: true }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.171", candidate_tag: "2.8.171", remote_digest: "sha256:ghi", available: true }] },
       { ns: "lab", name: "paperless", available: false, can_rollback: false,
         images: [{ container: "paperless", deployed: "registry.lan/paperless-ngx:2.11", candidate: "registry.lan/paperless-ngx:2.11", available: false, error: "registry authentication required" }] }] },
     "/api/flow": {

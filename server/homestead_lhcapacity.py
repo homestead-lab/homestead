@@ -80,6 +80,7 @@ def capacity(cfg=None):
             maximum, available = d.get("storageMaximum") or 0, d.get("storageAvailable") or 0
             scheduled, reserved = d.get("storageScheduled") or 0, disk_spec.get("storageReserved") or 0
             limit = max(0, (maximum - reserved)) * over / 100
+            physical_room = max(0, available - maximum * minimal / 100)
             condition = next((c for c in d.get("conditions") or [] if c.get("type") == "Schedulable"), {})
             reason = ("" if node_ok else "scheduling is off on this node") or \
                      ("" if disk_spec.get("allowScheduling", True) is not False else "scheduling is off on this disk") or \
@@ -89,15 +90,18 @@ def capacity(cfg=None):
                           "size_gb": _gb(maximum - reserved), "allocated_gb": _gb(scheduled), "limit_gb": _gb(limit),
                           "used_gb": _gb(maximum - available), "free_gb": _gb(available),
                           "room_gb": 0.0 if reason else _gb(max(0, limit - scheduled)),
+                          "physical_room_gb": 0.0 if reason else _gb(physical_room),
                           "pct": round(scheduled / limit * 100, 1) if limit else 0.0, "blocked": reason})
         usable = [d for d in disks if not d["blocked"]]
         allocated = sum(d["allocated_gb"] for d in disks)
         limit = sum(d["limit_gb"] for d in disks)
         pct = round(allocated / limit * 100, 1) if limit else 0.0
         room = max((d["room_gb"] for d in usable), default=0.0)
+        physical_room = max((d["physical_room_gb"] for d in usable), default=0.0)
         nodes.append({"name": node["metadata"]["name"], "disks": disks, "allocated_gb": round(allocated, 1),
                       "limit_gb": round(limit, 1), "size_gb": round(sum(d["size_gb"] for d in disks), 1),
                       "used_gb": round(sum(d["used_gb"] for d in disks), 1), "pct": pct, "room_gb": room,
+                      "physical_room_gb": physical_room,
                       "level": "crit" if not usable or pct >= CRIT_PCT else "warn" if pct >= WARN_PCT else "ok",
                       "blocked": "" if usable else (disks[0]["blocked"] if disks else "no disks")})
     rooms = sorted((n["room_gb"] for n in nodes), reverse=True)

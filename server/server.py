@@ -11,6 +11,7 @@ import homestead_names as NAMES
 import homestead_memory as MEMORY
 import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_batch_capacity as BATCH_CAPACITY
+import homestead_volume_usage as VOLUME_USAGE
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -26,7 +27,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.170")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.171")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -863,6 +864,21 @@ def get_volumes():
                 for p in kget("/api/v1/persistentvolumeclaims").get("items", [])}
     except Exception:
         pvcs = {}
+    active_claims = {}
+    for volume in vols:
+        status = volume.get("status", {})
+        ks = status.get("kubernetesStatus", {}) or {}
+        key = (ks.get("namespace", ""), ks.get("pvcName", ""))
+        claim = pvcs.get(key)
+        if status.get("state") == "attached" and claim and claim.get("spec", {}).get("volumeName") == volume["metadata"]["name"]:
+            active_claims[key] = claim
+    # Cache only telemetry, keyed by claim identities/bindings; never re-label
+    # an old retained copy with the replacement claim's filesystem usage.
+    usage_key = "volume-filesystems:" + repr(sorted((k, p.get("metadata", {}).get("uid"), p.get("spec", {}).get("volumeName")) for k, p in active_claims.items()))
+    filesystems = cached(usage_key, 20, lambda: VOLUME_USAGE.collect(kget, active_claims)) if active_claims else {}
+    # A cached observation must also expire if telemetry stops arriving.
+    filesystems = {key: sample for key, sample in filesystems.items()
+                   if -5 <= time.time() - sample["sample_at"] <= 120}
     out = []
     for v in vols:
         st = v.get("status", {})
@@ -878,6 +894,7 @@ def get_volumes():
         unclaimed = str(ks.get("pvStatus") or "") == "Released" or bool(
             ks.get("pvcName") and not pvc_obj and pvcs) or bool(
             pvc_obj and (pvc_obj.get("spec") or {}).get("volumeName") not in ("", None, v["metadata"]["name"]))
+        filesystem = filesystems.get((ks.get("namespace", ""), ks.get("pvcName", ""))) if not unclaimed and st.get("state") == "attached" else None
         out.append({
             "name": v["metadata"]["name"],
             "pvc_name": ks.get("pvcName", ""),
@@ -897,7 +914,8 @@ def get_volumes():
             "replicas": sp.get("numberOfReplicas", 0),
             "engine": str(sp.get("dataEngine") or "v1").lower(),
             "actual_gb": round(int(st.get("actualSize", 0) or 0) / 1024**3, 2),
-            "used_pct": round((int(st.get("actualSize", 0) or 0) / max(int(sp.get("size", 0) or 0), 1)) * 100, 1),
+            "filesystem": filesystem,
+            "used_pct": (filesystem or {}).get("used_pct"),
             "access_modes": pvc_spec.get("accessModes", []) or [],
             "storage_class": pvc_spec.get("storageClassName", ""),
             "health_reason": health_reason,
@@ -6870,7 +6888,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.170 each kept a join token in a Secret.
+    # Older join plans each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()
