@@ -173,7 +173,7 @@ window.networkServicePicked = () => {
     $("#net_ports").innerHTML = row.ports.map((p, i) => networkModalPort(p, i === 0)).join("");
     const ip = row.requested_ips?.[0] || row.external_ips?.[0] || "";
     // Preserve the selected address on open, even if today's default has changed.
-    $("#net_mode").value = ip && !nodeAddressesOnly() ? "manual" : "nodes";
+    $("#net_mode").value = ip && !nodeAddressesOnly() ? (row.vip_mode === "shared" && ip === STATE.data.network.shared_vip?.ip ? "shared" : "manual") : "nodes";
     $("#net_vip_wrap").innerHTML = `<label>Specific VIP</label>${vipPicker("net", ip, window.__networkChoices)}`;
   } else {
     $("#net_type").value = "LoadBalancer";
@@ -221,7 +221,7 @@ window.networkReview = async () => {
     const cfg = networkConfig();
     const plan = await api("/api/network/plan", {method: "POST", headers: {"Content-Type": "application/json", "X-Homestead-Auth": "1"}, body: JSON.stringify(cfg)});
     if (!$("#net_editor") || JSON.stringify(networkConfig()) !== JSON.stringify(cfg)) return;
-    NETWORK_REVIEW = { ...cfg, vip_mode: plan.vip ? "manual" : cfg.vip_mode, vip: plan.vip || cfg.vip };
+    NETWORK_REVIEW = { ...cfg, reviewed_vip: plan.vip || "" };
     $("#net_review").innerHTML = `<div class="reviewbox"><b>Traffic path</b><div class="netpath big"><span>${esc(plan.path.vip)}</span><i>→</i><span>${esc(plan.path.service)}</span><i>→</i><span>${esc(plan.path.workload)}</span></div>
       <div class="dim xs">${plan.ports.map(p => `${p.port}/${p.protocol} → ${p.targetPort}`).join(" · ")}</div>${plan.warnings.map(w => `<div class="tag warn" style="margin-top:8px">${esc(w)}</div>`).join("")}</div>`;
     const actions = $("#mbody .modalactions");

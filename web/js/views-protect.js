@@ -592,7 +592,7 @@ function snapshotTimeline(snaps, vol, label) {
     <article class="snapshot-point head"><div class="snapshot-marker">${icon("play")}</div><div class="snapshot-content"><b>Volume Head</b><span class="dim small">Live data · now · never deleted as a snapshot</span></div></article></div>`;
 }
 
-let SNAPSHOT_REFRESH = 0;
+let SNAPSHOT_REFRESH = 0, SNAPSHOT_TIMER = null;
 function snapshotCleanupHtml(p) {
   if (!p || p.error) return `<div class="note warn">Cleanup progress unavailable${p?.error ? `: ${esc(p.error)}` : ""}. Retrying; no completion is assumed.</div>`;
   if (p.errors?.length) return `<div class="note bad"><b>Longhorn cleanup error</b><p>${p.errors.map(esc).join("; ")}</p></div>`;
@@ -605,6 +605,7 @@ function snapshotCleanupHtml(p) {
 async function refreshSnapshotDialog(token, vol, label) {
   const host = $("#snapshot_live");
   if (!host || +host.dataset.token !== token || $("#modal").classList.contains("hidden")) return;
+  clearTimeout(SNAPSHOT_TIMER);
   try {
     const [snaps, progress] = await Promise.all([
       api("/api/lh/snapshots?volume=" + encodeURIComponent(vol)),
@@ -616,7 +617,10 @@ async function refreshSnapshotDialog(token, vol, label) {
   } catch (e) {
     if ($("#snapshot_live") === host) host.innerHTML = `<div class="note warn">Snapshot refresh failed: ${esc(e.message)}. Retrying; previous cleanup may still be running.</div>`;
   }
-  if ($("#snapshot_live") === host) setTimeout(() => refreshSnapshotDialog(token, vol, label), 4000);
+  if ($("#snapshot_live") === host) {
+    clearTimeout(SNAPSHOT_TIMER);
+    SNAPSHOT_TIMER = setTimeout(() => refreshSnapshotDialog(token, vol, label), 4000);
+  }
 }
 window.lhSnaps = async (vol, label) => {
   const token = ++SNAPSHOT_REFRESH;
