@@ -609,6 +609,8 @@ def service_plan(cfg, require_workload=True):
         if not in_pool:
             warnings.append("This address is outside the visible Harvester IP pools; verify DHCP and static reservations before creating it.")
 
+    if "reviewed_vip" in cfg and cfg["reviewed_vip"] != vip:
+        raise ValueError("VIP allocation changed since review; review the address and ports again")
     if cfg.get("update") and (existing.get("lb_class") or "") != (PLATFORM.vip_spec(vip).get("loadBalancerClass") or ""):
         raise ValueError("Changing this Service's load-balancer class requires replacement. Create an additional VIP Service first; the original listener is left untouched.")
     owners = []

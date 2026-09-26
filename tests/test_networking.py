@@ -37,6 +37,13 @@ class NetworkingTests(unittest.TestCase):
         with patch.object(networking.PLATFORM, "vip_spec", return_value={}):
             self.assertEqual("192.0.2.242", networking.service_plan(cfg)["vip"])
 
+    def test_changed_default_cannot_silently_replace_reviewed_address(self):
+        cfg = self.edit_service_config()
+        cfg.update(vip_mode="shared", reviewed_vip="192.0.2.243")
+        with self.assertRaisesRegex(ValueError, "changed since review"):
+            networking.create_service(cfg)
+        self.assertFalse(self.sent)
+
     def test_vip_edit_rejects_stale_identity_and_foreign_workload(self):
         cfg = self.edit_service_config()
         for change in ({"uid": "replacement"}, {"resource_version": "6"}, {"workload": "pihole"}):
