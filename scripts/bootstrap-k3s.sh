@@ -11,6 +11,12 @@
 #   Another machine, as a second or third server (control plane and etcd):
 #     curl -sfL .../bootstrap-k3s.sh | sudo sh -s - join https://<first-machine>:6443 <token>
 #
+#   A k3s server that is already running, to add Longhorn and Homestead to it:
+#     curl -sfL .../bootstrap-k3s.sh | sudo sh -s - addons
+#
+# For a guided install that asks these questions and checks the machine
+# first, use install.sh instead.
+#
 # Options for "server", after the word:
 #   --no-longhorn        use k3s's local-path storage instead of Longhorn: no
 #                        replicas, and Homestead's data lives on this machine
@@ -18,6 +24,9 @@
 #                        (emulated, and slow, if this machine has no /dev/kvm)
 #   --k3s-version v1.31.4+k3s1   pin k3s (default: k3s's stable channel)
 #   --homestead-version 2.8.95   pin Homestead (default: the newest release)
+# Options for every mode:
+#   --node-ip 192.0.2.50   the address k3s registers this machine by, when
+#                            it has more than one
 #
 # What "server" does:
 #   1. installs what Longhorn needs on the host (open-iscsi, NFS client);
@@ -33,6 +42,7 @@ LONGHORN=1
 KUBEVIRT=0
 K3S_VERSION=""
 HOMESTEAD_VERSION=""
+NODE_IP=""
 MANIFESTS=/var/lib/rancher/k3s/server/manifests
 RAW=https://raw.githubusercontent.com/wjcloudy/homestead
 
@@ -122,6 +132,7 @@ wait_crd() {
 install_k3s() {
   say "Installing k3s ($*)"
   if [ -n "$K3S_VERSION" ]; then export INSTALL_K3S_VERSION="$K3S_VERSION"; fi
+  if [ -n "$NODE_IP" ]; then set -- "$@" --node-ip "$NODE_IP"; fi
   curl -sfL https://get.k3s.io | sh -s - "$@"
 }
 
@@ -131,6 +142,7 @@ case "$MODE" in
     URL="$1"; TOKEN="$2"; shift 2
     while [ $# -gt 0 ]; do case "$1" in
       --k3s-version) K3S_VERSION="$2"; shift 2 ;;
+      --node-ip) NODE_IP="$2"; shift 2 ;;
       *) fail "unknown option $1" ;; esac; done
     host_packages
     export K3S_URL="$URL" K3S_TOKEN="$TOKEN"
@@ -138,8 +150,8 @@ case "$MODE" in
     else unset K3S_URL; install_k3s server --server "$URL"; fi
     say "Joined. The machine appears on Homestead's Nodes page within a minute or two."
     exit 0 ;;
-  server) ;;
-  *) sed -n '2,30p' "$0" 2>/dev/null || true; fail "say server, agent or join" ;;
+  server|addons) ;;
+  *) sed -n '2,40p' "$0" 2>/dev/null || true; fail "say server, agent, join or addons" ;;
 esac
 
 while [ $# -gt 0 ]; do case "$1" in
@@ -147,16 +159,23 @@ while [ $# -gt 0 ]; do case "$1" in
   --kubevirt) KUBEVIRT=1; shift ;;
   --k3s-version) K3S_VERSION="$2"; shift 2 ;;
   --homestead-version) HOMESTEAD_VERSION="$2"; shift 2 ;;
+  --node-ip) NODE_IP="$2"; shift 2 ;;
   *) fail "unknown option $1" ;; esac; done
 
 [ "$LONGHORN" = 1 ] && host_packages
-install_k3s server --cluster-init
+if [ "$MODE" = addons ]; then
+  # k3s is running already: only what goes on top of it.
+  k3s kubectl get nodes >/dev/null 2>&1 || fail "no k3s server is running here; use server to make one"
+else
+  install_k3s server --cluster-init
+fi
 
 KUBECTL="k3s kubectl"
 say "Waiting for this node to be Ready"
 i=0; until $KUBECTL get nodes 2>/dev/null | grep -q " Ready"; do
   i=$((i+1)); [ $i -gt 90 ] && fail "the node did not become Ready; see: journalctl -u k3s"; sleep 2; done
-IP=$($KUBECTL get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+IP=$($KUBECTL get node "$(hostname)" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || true)
+[ -n "$IP" ] || IP=$($KUBECTL get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
 mkdir -p "$MANIFESTS"
 
 if [ "$LONGHORN" = 1 ]; then

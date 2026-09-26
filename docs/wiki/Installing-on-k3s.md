@@ -70,10 +70,24 @@ TCP 9500-9504.
 On the first machine:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - server
+curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
 ```
 
-It takes 5-10 minutes, and:
+![The installer's menu](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-menu.png)
+
+Choose **Install Homestead**, then **Start a new cluster here**. The installer
+checks the machine first (memory, disk, the internet, ports, the hostname, the
+clock, the firewall, `/dev/kvm`, an address from DHCP) and stops on anything
+that would make the install fail, saying what to put right.
+
+![The checks](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-checks.png)
+ It asks which
+address the other machines reach this one on, when it has more than one, and
+whether to install Longhorn and KubeVirt. It shows what it will do, and once
+you say yes it takes 5-10 minutes, with a progress bar:
+
+![What it will do](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-ready.png)
+
 
 1. installs what Longhorn needs on the host (`open-iscsi` and an NFS client);
 2. installs k3s with an embedded etcd, so more servers can join later;
@@ -83,6 +97,13 @@ It takes 5-10 minutes, and:
 
 Open that address and create the first administrator.
 
+The installer runs [`bootstrap-k3s.sh`](https://github.com/wjcloudy/homestead/blob/main/scripts/bootstrap-k3s.sh)
+to do this. You can run it yourself instead, with no questions:
+
+```bash
+curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - server
+```
+
 Options go after `server`:
 
 | Option | Does |
@@ -91,13 +112,25 @@ Options go after `server`:
 | `--kubevirt` | also installs KubeVirt and CDI, so Homestead can run virtual machines - emulated, and slow, if the machine has no hardware virtualisation (`/dev/kvm`) |
 | `--k3s-version v1.33.4+k3s1` | pins k3s instead of its stable channel |
 | `--homestead-version 2.8.118` | pins Homestead instead of the newest release |
+| `--node-ip 192.0.2.10` | the address k3s registers this machine by, when it has more than one |
 
 The script is safe to run again: each step finds what the last run left.
 
 ## 3. More machines
 
-Each further machine joins with the first machine's address and its token. The
-token is on the first machine:
+On each further machine, run the same line:
+
+```bash
+curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
+```
+
+Choose **Install Homestead**, then **Join a cluster as a worker** (runs apps)
+or **as another server** (control plane and etcd as well). It asks for the
+first machine's address and the cluster's token, checks it can reach the
+cluster before changing anything, and joins.
+
+Or, with no questions, each joins with the first machine's address and its
+token. The token is on the first machine:
 
 ```bash
 sudo cat /var/lib/rancher/k3s/server/node-token
@@ -176,6 +209,17 @@ hand, install k3s your way, install Longhorn (or use `local-path`), and follow
 first sign-in, updates and the node probe.
 
 ## If something is stuck
+
+Run the node doctor on the machine: the same line, then **Check this node and
+fix what is wrong**.
+
+```bash
+curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
+```
+
+It checks the host and the cluster, lists what it found worst first, and
+offers a fix for each - see [Troubleshooting](Troubleshooting#node-doctor). By
+hand:
 
 - `sudo k3s kubectl get pods -A` - is anything not Running?
 - `sudo journalctl -u k3s -e` - k3s's own log.
