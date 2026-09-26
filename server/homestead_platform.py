@@ -9,6 +9,7 @@ missing is said, with how to add it, rather than failing.
 """
 import re
 import time
+import homestead_multus as MULTUS
 
 kget = None
 _cached = {"at": 0.0, "value": None}
@@ -72,6 +73,16 @@ def _vip_service_election(daemonset):
     return None
 
 
+def _vip_shared_lease(daemonset):
+    """Conservatively enable the shared-lease API on verified newer kube-vip releases."""
+    containers = (((daemonset or {}).get("spec") or {}).get("template") or {}).get("spec", {}).get("containers", [])
+    for c in containers:
+        version = re.search(r":v?(\d+)\.(\d+)\.(\d+)(?:@|$)", c.get("image", ""))
+        if version and tuple(map(int, version.groups())) >= (1, 2, 3):
+            return True
+    return False
+
+
 def detect(force=False):
     if not force and _cached["value"] is not None and time.time() - _cached["at"] < TTL:
         return _cached["value"]
@@ -113,7 +124,7 @@ def detect(force=False):
         "cdi": "cdi.kubevirt.io" in groups,
         "helm_controller": "helm.cattle.io" in groups,
         # Second networks for pods, which LAN networks need.
-        "multus": "k8s.cni.cncf.io" in groups,
+        "multus": harvester or ("k8s.cni.cncf.io" in groups and MULTUS.inspect(kget)["ready"]),
         "metrics": "metrics.k8s.io" in groups,
         "load_balancer": load_balancer,
         # k3s's own node-address load balancer, which stays beside kube-vip
@@ -121,6 +132,7 @@ def detect(force=False):
         "servicelb": servicelb,
         "vip_class": "" if harvester else _vip_class(kube_vip_ds),
         "vip_service_election": _vip_service_election(kube_vip_ds),
+        "vip_shared_lease": _vip_shared_lease(kube_vip_ds),
         "control_plane": sorted(control),
         "arch": sorted({((n.get("status") or {}).get("nodeInfo") or {}).get("architecture", "") for n in nodes} - {""}),
     }
@@ -162,12 +174,15 @@ def vip_annotations(vip):
     if not vip:
         return {}
     try:
-        metallb = detect().get("load_balancer") == "metallb"
+        p = detect()
     except Exception:
-        metallb = False
-    if metallb:
+        p = {}
+    if p.get("load_balancer") == "metallb":
         return {"metallb.universe.tf/loadBalancerIPs": vip, "metallb.universe.tf/allow-shared-ip": "homestead"}
-    return {"kube-vip.io/loadbalancerIPs": vip}
+    annotations = {"kube-vip.io/loadbalancerIPs": vip}
+    if p.get("vip_shared_lease"):
+        annotations["kube-vip.io/leaseName"] = "homestead-vip-" + vip.replace(".", "-").replace(":", "-")
+    return annotations
 
 
 def vip_spec(vip):

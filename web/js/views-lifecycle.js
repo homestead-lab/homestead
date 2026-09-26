@@ -660,6 +660,7 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
         ${opts.cdi || opts.harvester ? `<option value="url">${opts.harvester ? "Download from a URL (as a Harvester image)" : "Download from HTTP(S) URL"}</option>` : ""}
       </select></div>
     <div class="f" id="v_url_row" hidden><label>Image URL</label><input type="url" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img"></div>
+    <div class="note small">For a movable Service VIP, use the pod network. After creation, open the VM's Network tab → Configure VIP / ports to choose the default or a custom VIP. A bridged VM uses its own guest address instead.</div>
     <div class="f"><label>Network ${tip("The pod network: reached through a Service, like a container. A LAN network (bridged): a machine there like any other, with an address from DHCP or one of its own.")}</label>
       <select id="v_net" onchange="vmNetChanged()"><option value="pod">Pod network - reached through a Service</option>
         ${(opts.network_details || []).filter(n => n.vms !== false).map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.lan ? ` · LAN${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}` : ""}</option>`).join("")}</select>
@@ -1462,6 +1463,7 @@ window.importMappings = () => {
 };
 
 window.importSetup = async (source, dir, cfg = {}) => {
+  const importVips = await vipChoices();
   const src = (STATE.data.srcs || []).find(s => s.name === source) || {};
   const name = (cfg.name || dir).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 38);
   STATE.data.importCfg = cfg;
@@ -1514,7 +1516,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <button class="btn sm" onclick="imAddVolume()">＋ add volume</button>
     </div>
     <div class="sec">Network</div><div class="f2"><div class="f"><label>Docker network → Kubernetes</label><select id="im_net"><option value="loadbalancer">LAN access (VIP)</option><option value="internal">Cluster only</option><option value="host" ${cfg.network_mode === "host" ? "selected" : ""}>Host network (advanced)</option></select></div>
-      <div class="f"><label>VIP allocation ${tip("Choose a new automatic or specific VIP for apps such as Pi-hole that need port 53 on their own address.")}</label><select id="im_vip" onchange="$('#im_vip_wrap').style.display = this.value === 'manual' ? '' : 'none'">${nodeAddressesOnly() ? nodeAddressOption() : `${nodeAddressChoice(true)}${nodeAddressBeside() ? "" : '<option value="shared">Shared Homestead VIP</option>'}<option value="auto">New automatic VIP</option><option value="manual">Specific VIP</option>`}</select></div></div>
+      <div class="f"><label>VIP allocation ${tip("Use the default workload VIP configured in Networking, another reserved address, or a specific VIP. Shared ports must be unique.")}</label><select id="im_vip" onchange="$('#im_vip_wrap').style.display = this.value === 'manual' ? '' : 'none'">${nodeAddressesOnly() ? nodeAddressOption() : `${importVips.shared ? `<option value="shared">Default workload VIP · ${esc(importVips.shared)}</option>` : ""}${nodeAddressChoice(!importVips.shared)}<option value="auto">New automatic VIP</option><option value="manual">Specific VIP</option>`}</select></div></div>
     <div class="f" id="im_vip_wrap" style="display:none"><label>Specific VIP</label><div id="im_vip_pick"><span class="dim xs"><span class="spin2"></span></span></div></div>
     <div class="sec">Port mappings ${tip("Container port is what the app listens on. LAN port is what you open from another device. TCP and UDP mappings are kept separately.")}</div>
     <div id="im_ports">${(cfg.ports || []).map(p => `<div class="f4 im-port"><div><label>Container</label><input class="ipc" type="number" value="${p.container}"></div><div><label>LAN</label><input class="iph" type="number" value="${p.host}"></div><div><label>Protocol</label><select class="ipp"><option ${p.protocol === "TCP" ? "selected" : ""}>TCP</option><option ${p.protocol === "UDP" ? "selected" : ""}>UDP</option></select></div><label class="switch"><input class="ipe" type="checkbox" ${p.expose !== false ? "checked" : ""}>Expose</label></div>`).join("")}</div>

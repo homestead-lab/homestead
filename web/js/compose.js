@@ -11,6 +11,7 @@ const COMPOSE = { text: "", variables: "", namespace: "lab", vip_mode: "shared",
   editor: null, timer: null, asked: 0, busy: false, review: null, reviewSequence: 0 };
 
 window.composeImport = async () => {
+  const composeVips = await vipChoices();
   const namespaces = await api("/api/namespaces").catch(() => ["lab"]);
   if (!namespaces.includes(COMPOSE.namespace)) COMPOSE.namespace = namespaces.includes("lab") ? "lab" : namespaces[0];
   modal("Import Docker Compose", `<div class="compose">
@@ -25,8 +26,8 @@ window.composeImport = async () => {
       <div class="f2 compose-opts">
         <div class="f"><label>Namespace</label><select id="composeNs">${namespaces.map(n =>
           `<option ${n === COMPOSE.namespace ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
-        <div class="f"><label>LAN address ${tip("Where published ports are reachable. The shared address is Homestead's own; with it, two services cannot publish the same port. A new address gives each service its own from the pool.")}</label>
-          <select id="composeVip">${nodeAddressesOnly() ? nodeAddressOption() : `${nodeAddressChoice(COMPOSE.vip_mode !== "auto")}${nodeAddressBeside() ? "" : `<option value="shared" ${COMPOSE.vip_mode === "shared" ? "selected" : ""}>Shared Homestead address</option>`}
+        <div class="f"><label>LAN address ${tip("The default workload VIP is configured in Networking; its published ports must be unique. A new address gives each service its own reserved VIP.")}</label>
+          <select id="composeVip">${nodeAddressesOnly() ? nodeAddressOption() : `${composeVips.shared ? `<option value="shared" ${COMPOSE.vip_mode === "shared" ? "selected" : ""}>Default workload VIP · ${esc(composeVips.shared)}</option>` : ""}${nodeAddressChoice(!composeVips.shared && COMPOSE.vip_mode !== "auto")}
             <option value="auto" ${COMPOSE.vip_mode === "auto" ? "selected" : ""}>A new address per service</option>`}</select></div>
       </div>
     </div>

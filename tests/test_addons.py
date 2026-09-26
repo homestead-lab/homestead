@@ -5,6 +5,7 @@ import json
 import sys
 import tarfile
 import unittest
+import urllib.error
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -50,6 +51,8 @@ class Fake:
             return {"items": [body for _, _, body in self.sent]}
         if path == "/api/v1/nodes":
             return {"items": [{}] * self.nodes}
+        if path == ADDONS.MULTUS.NAD_LIST:
+            raise urllib.error.HTTPError(path, 404, "missing", {}, None)
         raise AssertionError(path)
 
     def send(self, method, path, body=None, **kw):
@@ -192,7 +195,8 @@ class MultusTests(unittest.TestCase):
     def test_k3s_gets_the_chart_with_its_own_cni_folders(self):
         fake = Fake()
         result = ADDONS.install_multus()
-        method, path, body = fake.sent[0]
+        method, path, body = fake.sent[-1]
+        self.assertEqual("rke2-multus-crd", fake.sent[0][2]["spec"]["chart"])
         self.assertEqual(("multus", "rke2-multus", "https://rke2-charts.rancher.io"),
                          (body["metadata"]["name"], body["spec"]["chart"], body["spec"]["repo"]))
         values = body["spec"]["valuesContent"]
@@ -215,7 +219,7 @@ class MultusTests(unittest.TestCase):
     def test_rke2_keeps_the_charts_own_folders(self):
         fake = Fake({"distribution": "rke2"})
         ADDONS.install_multus()
-        self.assertNotIn("k3s", fake.sent[0][2]["spec"]["valuesContent"])
+        self.assertNotIn("k3s", fake.sent[-1][2]["spec"]["valuesContent"])
 
     def test_it_is_refused_where_it_is_there_or_cannot_go(self):
         with self.assertRaisesRegex(ValueError, "includes Multus"):
@@ -223,13 +227,15 @@ class MultusTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "on k3s and RKE2"):
             Fake({"distribution": "kubernetes"}) and ADDONS.install_multus()
         fake = Fake()
-        fake.get = lambda path: {} if path == ADDONS.NAD_API else Fake.get(fake, path)
+        fake.get = lambda path: ({} if path == ADDONS.MULTUS.NAD_LIST else
+                                {"items": [{"metadata": {"name": "multus"}}]} if path == ADDONS.MULTUS.DAEMONSETS else Fake.get(fake, path))
         ADDONS.bind(fake.get, fake.send, lambda force=False: dict(fake.platform), lambda: {}, fake.fetch)
         with self.assertRaisesRegex(ValueError, "installed already"):
             ADDONS.install_multus()
         status = ADDONS.status()["multus"]
         self.assertTrue(status["installed"])
         self.assertFalse(status["installing"])
+        self.assertFalse(status["ready"])
 
 
 if __name__ == "__main__":

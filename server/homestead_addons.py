@@ -19,9 +19,12 @@ import json
 import re
 import tarfile
 import time
+import calendar
 import urllib.request
+import urllib.error
 
 import homestead_names as NAMES
+import homestead_multus as MULTUS
 
 kget = ksend = None
 platform = None          # what the cluster has, from homestead_platform
@@ -38,6 +41,8 @@ CHARTS = {"longhorn": "longhorn", "kubevirt": "homestead-kubevirt", "cdi": "home
           "kube-vip": "kube-vip"}
 KUBE_VIP_REPO = "https://kube-vip.github.io/helm-charts"
 VIP_CLASS = "kube-vip.io/kube-vip-class"
+MULTUS_VERSION = "v4.3.102"
+MULTUS_CRD_VERSION = "4.3.102"
 NAD_API = "/apis/k8s.cni.cncf.io/v1"
 KUBEVIRT_CR = "/apis/kubevirt.io/v1/namespaces/kubevirt/kubevirts/kubevirt"
 
@@ -73,13 +78,7 @@ def _kvm():
 
 
 def _multus():
-    """Multus is there when its network attachments are: the definition
-    appears with it."""
-    try:
-        kget(NAD_API)
-        return True
-    except Exception:
-        return False
+    return MULTUS.inspect(kget).get("agents_present", False)
 
 
 def _kubevirt_emulation():
@@ -113,16 +112,35 @@ def diagnostic_command(distribution, chart="multus"):
     else:
         kubectl = "sudo kubectl"
     job = f"helm-install-{chart}"
-    return (f"{kubectl} -n {CONTROLLER_NS} get helmchart {chart} -o yaml; "
+    command = (f"{kubectl} -n {CONTROLLER_NS} get helmchart {chart} -o yaml; "
             f"{kubectl} -n {CONTROLLER_NS} get pods -l job-name={job} -o wide; "
             f"{kubectl} -n {CONTROLLER_NS} logs job/{job} --all-containers --tail=200")
+    if chart == "multus":
+        command += (f"; {kubectl} -n kube-system get ds multus -o yaml"
+                    f"; {kubectl} get crd network-attachment-definitions.k8s.cni.cncf.io"
+                    f"; {kubectl} -n kube-system logs job/helm-install-multus-crd --all-containers --tail=100"
+                    f"; {kubectl} -n kube-system get pods -l app=rke2-multus -o wide"
+                    f"; {kubectl} -n kube-system describe pods -l app=rke2-multus"
+                    f"; {kubectl} -n kube-system logs -l app=rke2-multus --all-containers --tail=100 --prefix"
+                    f"; {kubectl} -n kube-system logs -l app=rke2-multus --all-containers --previous --tail=100 --prefix")
+    return command
 
 
 def status():
     p = platform(True)
     charts = _helmcharts()
     kvm = _kvm()
-    multus = bool(p.get("harvester")) or _multus()
+    multus = MULTUS.inspect(kget)
+    chart = charts.get(CHARTS["multus"])
+    multus["installing"] = bool(chart) and not multus["ready"]
+    try:
+        multus["repairable"] = _repairable_multus(chart, p)
+    except Exception:
+        multus["repairable"] = False
+    if multus["repairable"]:
+        multus.update(state="configuration-error", installing=False,
+                      detail="Multus needs its network-attachment API and correct CNI directory; repair the managed installation")
+    multus["diagnostic_command"] = diagnostic_command(p.get("distribution", ""), CHARTS["multus"])
     return {
         "distribution": p.get("distribution", ""),
         "harvester": bool(p.get("harvester")),
@@ -132,8 +150,7 @@ def status():
         "kubevirt": {"installed": bool(p.get("kubevirt")), "installing": CHARTS["kubevirt"] in charts
                      and not p.get("kubevirt"), "cdi": bool(p.get("cdi")),
                      "emulation": _kubevirt_emulation() if p.get("kubevirt") and not p.get("harvester") else None},
-        "multus": {"installed": multus, "installing": CHARTS["multus"] in charts and not multus,
-                   "diagnostic_command": diagnostic_command(p.get("distribution", ""), CHARTS["multus"])},
+        "multus": multus,
         "kube_vip": {"installed": p.get("load_balancer") == "kube-vip",
                      "installing": CHARTS["kube-vip"] in charts and p.get("load_balancer") != "kube-vip",
                      "interface": vip_interface(), "beside_servicelb": bool(p.get("servicelb"))},
@@ -195,8 +212,89 @@ K3S_MULTUS_VALUES = "\n".join([
     "    confDir: /var/lib/rancher/k3s/agent/etc/cni/net.d",
     "    binDir: /var/lib/rancher/k3s/data/cni/",
     "    kubeconfig: /var/lib/rancher/k3s/agent/etc/cni/net.d/multus.d/multus.kubeconfig",
+    "    multusAutoconfigDir: /var/lib/rancher/k3s/agent/etc/cni/net.d",
     ""])
 RKE2_MULTUS_VALUES = "\n".join(["config:", "  fullnameOverride: multus", ""])
+
+
+def _repairable_multus(chart, p):
+    """Only touch the exact old Homestead values, never someone else's CNI configuration."""
+    if not chart or p.get("distribution") != "k3s" or p.get("harvester"):
+        return False
+    spec = chart.get("spec") or {}
+    old = K3S_MULTUS_VALUES.replace("    multusAutoconfigDir: /var/lib/rancher/k3s/agent/etc/cni/net.d\n", "")
+    return (NAMES.label_of(chart.get("metadata"), "managed") == "true" and
+            spec.get("repo") == RKE2_CHARTS and spec.get("chart") == "rke2-multus" and
+            spec.get("targetNamespace") == CONTROLLER_NS and
+            (str(spec.get("valuesContent") or "").strip() == old.strip() or
+             (str(spec.get("valuesContent") or "").strip() == K3S_MULTUS_VALUES.strip() and
+              "multus-crd" not in _helmcharts() and _nad_missing())))
+
+
+def _nad_missing():
+    try:
+        kget(MULTUS.NAD_LIST)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return True
+        raise
+    return False
+
+
+def _ensure_multus_crd():
+    """Recent RKE2 charts ship the NAD API separately. Never replace an existing CRD."""
+    if not _nad_missing():
+        return
+    if "multus-crd" not in _helmcharts():
+        _post_chart("multus-crd", {"repo": RKE2_CHARTS, "chart": "rke2-multus-crd",
+                                 "version": MULTUS_CRD_VERSION, "targetNamespace": CONTROLLER_NS})
+
+
+def repair_multus(cfg=None):
+    p = _can_install("Multus")
+    chart = _helmcharts().get(CHARTS["multus"])
+    if not _repairable_multus(chart, p):
+        raise ValueError("Only the original Homestead k3s Multus configuration can be repaired here; review custom values on the Helm page")
+    # Keep all fields, including the version and resourceVersion concurrency check.
+    if not chart["spec"].get("version"):
+        ds = kget(f"{MULTUS.DAEMONSETS}/multus")
+        volumes = ds.get("spec", {}).get("template", {}).get("spec", {}).get("volumes", [])
+        versions = [m.group(1) for v in volumes
+                    if (m := re.fullmatch(r"multus-(v?\d+\.\d+\.\d+)-config", v.get("configMap", {}).get("name", "")))]
+        if len(set(versions)) != 1:
+            raise ValueError("Cannot identify the installed Multus chart version safely; pin it on the Helm page before repair")
+        chart["spec"]["version"] = versions[0]
+    _ensure_multus_crd()
+    chart["spec"]["valuesContent"] = K3S_MULTUS_VALUES
+    chart.get("metadata", {}).pop("managedFields", None)
+    ksend("PUT", f"/apis/helm.cattle.io/v1/namespaces/{CONTROLLER_NS}/helmcharts/multus", chart)
+    return {"ok": True, "name": "multus", "job": "helm-install-multus",
+            "detail": "Multus CNI directory corrected; waiting for its node agents to become available"}
+
+
+def multus_progress(item):
+    s = status()["multus"]
+    if s["ready"]:
+        return "succeeded", 100, s["detail"]
+    if s.get("repairable"):
+        return "failed", 100, s["detail"]
+    try:
+        for name in ("multus", "multus-crd"):
+            job = kget(f"/apis/batch/v1/namespaces/{CONTROLLER_NS}/jobs/helm-install-{name}")
+            conditions = (job.get("status") or {}).get("conditions") or []
+            if any(c.get("type") == "Failed" and c.get("status") == "True" for c in conditions):
+                return "failed", 100, f"{name} Helm job failed; open Settings > Cluster > Add-ons for diagnostics"
+    except Exception:
+        pass
+    try:
+        age = time.time() - calendar.timegm(time.strptime(item["started_at"], "%Y-%m-%dT%H:%M:%SZ"))
+    except (KeyError, ValueError):
+        age = 0
+    if age > 1200:
+        return "failed", 100, "Multus did not become ready within 20 minutes: " + s["detail"]
+    if s["issues"]:
+        return "running", 65, s["detail"] + "; " + "; ".join(s["issues"][:3])
+    return "running", 60 if s["installed"] else 15, s["detail"]
 
 
 def install_multus(cfg=None):
@@ -204,11 +302,13 @@ def install_multus(cfg=None):
     needs - from the chart RKE2 uses for it, set up for this distribution."""
     p = _can_install("Multus")
     if _multus():
-        raise ValueError("Multus is installed already")
+        raise ValueError("Multus is installed already; use Repair configuration or inspect its node diagnostics")
     distribution = p.get("distribution", "")
     if distribution not in ("k3s", "rke2"):
         raise ValueError("Homestead installs Multus on k3s and RKE2; elsewhere install it with its own instructions")
+    _ensure_multus_crd()
     _post_chart(CHARTS["multus"], {"repo": RKE2_CHARTS, "chart": "rke2-multus", "targetNamespace": CONTROLLER_NS,
+                                   "version": MULTUS_VERSION,
                                    "valuesContent": K3S_MULTUS_VALUES if distribution == "k3s" else RKE2_MULTUS_VALUES})
     return {"ok": True, "name": CHARTS["multus"], "job": f"helm-install-{CHARTS['multus']}",
             "detail": "Multus is being installed on every node; pods already running are left as they are. "

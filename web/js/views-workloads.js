@@ -1171,7 +1171,7 @@ async function viewDeploy(pre) {
   if (!nss.includes(DCFG.namespace)) DCFG.namespace = nss.includes("lab") ? "lab" : nss[0];
   DOPT = await api("/api/deploy/options?ns=" + encodeURIComponent(DCFG.namespace)).catch(() => DOPT);
   const vips = await vipChoices();
-  const sharedVip = (STATE.data.ov && STATE.data.ov.lb_ip) || "";
+  const sharedVip = vips.shared || "";
   resetPaint();
   paint(`<div class="phead"><div><h2>Deploy a container</h2>
       <p>Run an independent workload or add a sidecar container to an existing pod</p></div>
@@ -1220,14 +1220,14 @@ async function viewDeploy(pre) {
         <option value="lan" ${DCFG.network_mode === "lan" ? "selected" : ""}>Its own LAN address (bridged)</option></select></div>
         <div class="f"><label>${nodeAddressesOnly() ? `LAN address ${tip(NODE_ADDRESS_TIP)}` : "VIP allocation"}</label><select id="d_vip_mode">
           ${nodeAddressesOnly() ? nodeAddressOption() : `${nodeAddressChoice(DCFG.vip_mode === "nodes" || (DCFG.vip_mode === "shared" && !sharedVip))}
-          ${nodeAddressBeside() && !sharedVip ? "" : `<option value="shared" ${DCFG.vip_mode === "shared" ? "selected" : ""}>Shared Homestead VIP${sharedVip ? ` · ${esc(sharedVip)}` : ""}</option>`}
+          ${nodeAddressBeside() && !sharedVip ? "" : `<option value="shared" ${DCFG.vip_mode === "shared" ? "selected" : ""}>Default workload VIP${sharedVip ? ` · ${esc(sharedVip)}` : " · configure in Networking"}</option>`}
           <option value="auto" ${DCFG.vip_mode === "auto" ? "selected" : ""}>New automatic VIP${vips.freeCount ? ` · ${vips.freeCount} free` : ""}</option>
           <option value="manual" ${DCFG.vip_mode === "manual" ? "selected" : ""}>Specific VIP</option>`}</select></div></div>
       <div class="f" id="d_vip_wrap"><label>Specific VIP</label>${vipPicker("d", DCFG.lb_ip || "", vips)}</div>
       <div id="d_lan_box" hidden></div>
       ${nodeAddressesOnly() ? `<div class="note"><b>Docker bridge → Kubernetes Service.</b> On k3s it answers on every node's own address at its LAN port.
         Each port can be used by one Service only; a DNS server wanting port 53 needs it free there. Host network binds directly on one node and reduces failover safety.
-        For an address of its own, add <b>kube-vip</b> under Settings → Cluster → Add-ons.</div>` : `<div class="note"><b>Docker bridge → Kubernetes Service.</b> Shared VIP reuses ${esc((STATE.data.ov && STATE.data.ov.lb_ip) || "the cluster VIP")} on a unique LAN port. New automatic VIP asks kube-vip IPAM for another address. A dedicated VIP is ideal for DNS when port 53 must live on its own address. Host network binds directly on one node and reduces failover safety.</div>`}
+        For an address of its own, add <b>kube-vip</b> under Settings → Cluster → Add-ons.</div>` : `<div class="note"><b>Docker bridge → Kubernetes Service.</b> Default workload VIP shares the address configured in Networking on unique LAN ports. New automatic VIP selects another reserved address; Specific VIP lets you choose. Neither uses the control-plane address. Multus is only needed for a separate bridged LAN interface. Host network binds directly on one node and reduces failover safety.</div>`}
       <div class="sec">Ports ${tip("Container port is where the process listens. LAN port is what clients use through the Kubernetes Service. TCP and UDP on the same number are separate listeners.")}</div><div id="d_ports"></div><button class="btn sm" onclick="addPort()">＋ add port</button>
       <div class="sec">Storage ${tip("The mount path is inside the container. Choose whether its backing storage is a new Longhorn claim, an existing claim, an existing volume in a shared pod, or a path on one host.")}</div>
       <div class="note storage-guide"><b>Choose deliberately:</b> RWO is best for one workload; RWX permits multi-node sharing; an existing PVC keeps its current data; a pod volume shares the exact backing volume with a sidecar. Host paths reduce failover portability.</div>
@@ -1465,6 +1465,7 @@ async function vipChoices() {
   const own = (net?.registered_vips || []).filter(v => !v.blocked && !closed[v.ip]);
   const mine = new Set(own.map(v => v.ip));
   return { free: (net?.available_vips || []).filter(ip => !mine.has(ip)), freeCount: net?.available_vip_count || 0,
+    shared: (net?.node_ips || []).includes(net?.shared_vip?.ip) ? "" : net?.shared_vip?.ip || "",
     used: (net?.vips || []).filter(v => !closed[v.ip]), own, labels: net?.vip_labels || {} };
 }
 window.vipChoices = vipChoices;
