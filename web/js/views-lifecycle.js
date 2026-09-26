@@ -338,7 +338,7 @@ window.editReview = async body => {
     if (!review.capacity || !review.capacity_token) throw new Error("Capacity review unavailable; refresh before saving.");
     EDIT_REVIEW = { config, ...review, submitting: false };
     childModal("Review workload changes", `${deployCapacityHtml(review.capacity)}
-      ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="editCapacityConfirm"> I understand the restart, placement, memory and storage warnings</label>` : ""}
+      ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="editCapacityConfirm"> Proceed despite capacity warnings — I accept the restart, placement, memory and storage risks</label>` : ""}
       <div class="modalactions"><button class="btn" onclick="modalBack()">Back to edit</button><button id="editGo" class="btn pri" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmEdit()">Save reviewed changes</button></div>`, true);
   } catch (e) { toast(e.message, "bad"); }
 };

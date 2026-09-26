@@ -35,6 +35,8 @@ test("deploy review shows unknown capacity and escapes warnings", async () => {
   assert.match(t.html(), /Scheduler reservations unavailable/);
   assert.match(t.html(), /snapshot, not a reservation/);
   assert.match(t.html(), /deployCapacityConfirm/);
+  assert.match(t.html(), /Proceed despite capacity warnings/);
+  assert.match(t.html(), /Capacity warnings can be overridden/);
   await t.context.window.confirmDeploy();
   assert.equal(t.sent.length, 0);
 });
@@ -59,6 +61,7 @@ test("blocked placement cannot be submitted even with checkbox", async () => {
   assert.equal(t.sent.length, 0);
   assert.match(t.html(), /cannot fit/);
   assert.doesNotMatch(t.html(), /id="deployCapacityConfirm"/);
+  assert.match(t.html(), /placement blocker, not just a capacity warning/);
 });
 
 test("missing capacity response fails closed", async () => {

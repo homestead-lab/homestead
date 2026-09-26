@@ -139,7 +139,7 @@ window.hostMoveReview = async body => {
       <div class="note warn">This saves a Recreate strategy: all containers in this workload restart after the old pods stop. Clearing a preference can also restart them. Volumes must detach and reattach; this is not live migration.</div>
       ${deployCapacityHtml(review.capacity)}
       ${review.capacity.move.target ? `<details${review.capacity.move.target.blocked ? " open" : ""}><summary>Selected host: full desired replica count</summary><p class="small muted">The selected host must fit the desired replicas even for a preference. This check does not turn a preference into a hard pin.</p>${deployCapacityHtml(review.capacity.move.target)}</details>` : ""}
-      ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="hostMoveConfirm"> I understand the downtime, data, placement and memory warnings</label>` : ""}
+      ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="hostMoveConfirm"> Proceed despite capacity warnings — I accept the downtime, data, placement and memory risks</label>` : ""}
       <div class="modalactions"><button class="btn" onclick="invalidateHostMove();modalBack()">Back</button><button class="btn pri" id="hostMoveGo" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmHostMove()">Apply reviewed placement</button></div>`, true);
   } catch (e) { toast(e.message, "bad"); }
 };

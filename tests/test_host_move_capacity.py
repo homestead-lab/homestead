@@ -134,6 +134,22 @@ class HostMoveCapacityTests(unittest.TestCase):
         self.assertIn("unavailable", " ".join(plan["move"]["target"]["warnings"]))
         self.assertTrue(plan["requires_confirmation"])
 
+    def test_projection_over_100_percent_can_be_overridden_with_review(self):
+        self.nodes[1]["mem_used_gb"] = 7
+        plan = server.preview_host_move(self.config)["capacity"]
+        target = next(n for n in plan["move"]["target"]["candidates"] if n["name"] == "b")
+        self.assertEqual(150, target["projected_percent"])
+        self.assertFalse(plan["blocked"])
+        self.assertTrue(plan["requires_confirmation"])
+        unconfirmed, send, job = self.call("/api/move", self.config)
+        self.assertEqual(409, unconfirmed[0])
+        send.assert_not_called()
+        job.assert_not_called()
+        result, send, job = self.call("/api/move", self.reviewed())
+        self.assertEqual(200, result[0], result)
+        send.assert_called_once()
+        job.assert_called_once()
+
     def test_stopped_workload_stays_stopped(self):
         self.current["spec"]["replicas"] = 0
         self.pods = []

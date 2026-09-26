@@ -34,6 +34,7 @@ test("unknown reservations are presented as unknown with explicit review", async
   assert.match(html, /live RAM unavailable/);
   assert.match(html, /unknown &lt;state&gt;/);
   assert.match(html, /wl_capacity_ok/);
+  assert.match(html, /Proceed despite capacity warnings/);
 });
 
 test("topology conflicts identify the next pod without claiming all resource slots fit", async () => {

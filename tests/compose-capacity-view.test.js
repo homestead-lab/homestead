@@ -28,6 +28,8 @@ test("Compose review shows unknowns and requires checked acknowledgement", async
   assert.match(t.html(), /unknown &lt;data&gt;/);
   assert.match(t.html(), /&lt;one&gt;/);
   assert.match(t.html(), /Live RAM unavailable/);
+  assert.match(t.html(), /Proceed despite capacity warnings/);
+  assert.match(t.html(), /estimates over 100%/);
   assert.doesNotMatch(t.html(), /private=value/);
   await t.c.window.composeConfirm();
   assert.equal(t.sent.length, 0);

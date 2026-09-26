@@ -223,6 +223,20 @@ Compose has a separate whole-batch review. Image updates and cross-cluster/data
 migrations still need their own guarded review paths. These are read-only
 preflight checks, not live failover validation or a guarantee that a rollout completes.
 
+## Overriding capacity warnings
+
+High projected RAM, low headroom, unbounded memory and missing live usage metrics
+are warnings, not automatic vetoes. In Start/Scale, Deploy, Edit, Compose and
+manual host-move reviews, tick **Proceed despite capacity warnings**, then
+confirm the action. Estimates above 100% can also be acknowledged. This accepts
+the risk of memory pressure, OOM restarts and downtime; it does not lower resource
+requests, remove memory limits or reserve capacity.
+
+Placement blockers are separate: insufficient schedulable resource requests,
+incompatible hardware/topology, exclusive-volume conflicts and stale or incomplete
+required reviews still need resolving. An acknowledgement cannot make Kubernetes
+schedule a pod that violates those constraints. The API rechecks before writing.
+
 ## Updates
 
 Twice a day - or whenever you press **Check images** - Homestead checks each container's image against its registry - by digest for

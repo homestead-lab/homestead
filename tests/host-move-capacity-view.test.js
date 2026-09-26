@@ -27,6 +27,7 @@ test("Move review explains downtime and escapes the destination; consent require
   assert.match(t.html(), /&lt;host&gt;/);
   assert.match(t.html(), /Clearing a preference can also restart/);
   assert.match(t.html(), /full desired replica count/);
+  assert.match(t.html(), /Proceed despite capacity warnings/);
   await t.c.window.confirmHostMove();
   assert.equal(t.sent.length, 0);
 });
