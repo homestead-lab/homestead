@@ -19,6 +19,7 @@ import json
 import homestead_names as NAMES
 import homestead_pod_resources as RESOURCES
 import homestead_dependencies as DEPENDENCIES
+import homestead_topology as TOPOLOGY
 import time
 import urllib.error
 
@@ -312,10 +313,6 @@ def _start_scheduler_check(spec, node):
             cautions.append(f"node allocatable {label} is unavailable")
     if spec.get("resourceClaims"):
         cautions.append("dynamic resource claims need scheduler review")
-    if ((spec.get("affinity") or {}).get("podAffinity") or
-            (spec.get("affinity") or {}).get("podAntiAffinity") or
-            any(c.get("whenUnsatisfiable") == "DoNotSchedule" for c in spec.get("topologySpreadConstraints") or [])):
-        cautions.append("pod affinity or topology spread may narrow placement")
     return reasons, cautions
 
 
@@ -379,8 +376,12 @@ def start_plan(ns, name, replicas=1, warning_percent=88):
     memory, unbounded = _pod_memory(pod_spec)
     reservations, reservations_known, snapshot_warnings, pods = _reservation_snapshot() if additional else ({}, False, [], None)
     dependencies = DEPENDENCIES.Snapshot(pod_spec, ns, kget, pods) if additional else None
+    nodes = get_nodes()
+    topology = TOPOLOGY.Snapshot(dep["spec"]["template"], ns, nodes, pods, kget,
+                                 _required_affinity_matches, _tolerates) if additional else None
+    base_slots = {}
     candidates = []
-    for node in get_nodes():
+    for node in nodes:
         ok, reasons = satisfies(node, reqs)
         scheduler_reasons, scheduler_cautions = _start_scheduler_check(pod_spec, node)
         booked = reservations.get(node["name"], {})
@@ -398,15 +399,22 @@ def start_plan(ns, name, replicas=1, warning_percent=88):
         if reqs["pinned"] and node["name"] != reqs["pinned"]:
             ok = False
             reasons.append(f"pinned to {reqs['pinned']}")
+        base_slots[node["name"]] = slots if ok else 0
+        if topology:
+            topology_reasons, topology_warnings = topology.check(node)
+            reasons.extend(topology_reasons)
+            scheduler_cautions.extend(topology_warnings)
+            ok = ok and not topology_reasons
         capacity = float(node.get("mem_cap_gb") or 0)
         used = float(node.get("mem_used_gb") or 0)
         reserved_gb = booked.get("memory", 0) / 1024**3
-        proposed_here = min(additional, slots) if ok else 0
+        # A spread-blocked host may become eligible after another replica starts.
+        proposed_here = min(additional, base_slots[node["name"]])
         projected = max(used, reserved_gb) + proposed_here * memory / 1024**3
         percent = round(projected / capacity * 100, 1) if capacity else None
         metrics = bool(node.get("mem_metrics_available", True))
         warnings = []
-        if ok and additional:
+        if base_slots[node["name"]] and additional:
             warnings.extend(scheduler_cautions)
             if not capacity or not metrics:
                 warnings.append("live memory usage is unavailable")
@@ -430,25 +438,36 @@ def start_plan(ns, name, replicas=1, warning_percent=88):
                            "max_additional_pods": slots,
                            "projected_pods": proposed_here})
     eligible = [node for node in candidates if node["eligible"]]
-    warnings = sorted({message for node in eligible for message in node["warnings"]})
+    warnings = sorted({message for node in candidates if node["projected_pods"] for message in node["warnings"]})
     if additional and not eligible:
         warnings.append("no ready host satisfies this workload's placement requirements")
-    total_bound = sum(node["max_additional_pods"] for node in eligible)
+    total_bound = sum(base_slots.values())
     if dependencies and dependencies.same_node:
-        total_bound = max((node["max_additional_pods"] for node in eligible), default=0)
+        total_bound = max(base_slots.values(), default=0)
         if additional > 1:
             warnings.append("replicas sharing a ReadWriteOnce claim must fit together on one host")
     if dependencies and dependencies.single_pod:
         total_bound = min(1, total_bound)
+    topology_status = "not-needed"
+    if topology and topology.active and additional:
+        batch = topology.batch(base_slots, additional, bool(dependencies and dependencies.same_node))
+        topology_status = batch["status"]
+        if batch["status"] == "blocked":
+            total_bound = min(total_bound, batch["slots"])
+            warnings.append("no scheduling order fits all requested replicas under the observed pod affinity and topology spread rules")
+        elif batch["status"] == "unknown":
+            warnings.append("multi-replica topology search reached its limit; a complete scheduling order is unknown" if batch["search_exhausted"] else
+                            "pod topology placement could not be fully verified; review the unknown scheduler constraints")
     total_slots = total_bound if reservations_known else None
     insufficient = bool(additional and total_bound < additional)
     if insufficient and eligible:
-        warnings.append(f"the requested {additional} additional replicas exceed the {total_bound} slots allowed by checked resources, ports and storage")
+        warnings.append(f"the requested {additional} additional replicas exceed the {total_bound} slots allowed by checked resources, ports, storage and topology")
     return {"namespace": ns, "name": name, "current": current, "requested": wanted,
             "additional": additional, "pod_memory_gb": round(memory / 1024**3, 2),
             "pod_request_gb": round(_pod_request(pod_spec, "memory") / 1024**3, 2),
             "pod_cpu_request_percent": round(_pod_request(pod_spec, "cpu") / 10, 1),
             "reservations_known": reservations_known, "resource_slots": total_slots,
+            "topology_status": topology_status,
             "unbounded": unbounded, "warning_percent": warning_percent,
             "candidates": candidates, "warnings": warnings,
             "requires_confirmation": bool(additional and warnings),

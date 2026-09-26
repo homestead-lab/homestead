@@ -97,7 +97,10 @@ class StartCapacityTests(unittest.TestCase):
     def test_unknown_pod_affinity_requires_acknowledgement(self):
         self.nodes[0]["mem_used_gb"] = 2
         self.dep["spec"]["template"]["spec"]["affinity"] = {"podAntiAffinity": {
-            "requiredDuringSchedulingIgnoredDuringExecution": [{"topologyKey": "kubernetes.io/hostname"}]}}
+            "requiredDuringSchedulingIgnoredDuringExecution": [{"topologyKey": "kubernetes.io/hostname",
+                "labelSelector": {}, "namespaceSelector": {"matchLabels": {"team": "test"}}}]}}
+        self.reserve(memory="1Gi", namespace="peer")
+        self.nodes[0]["labels"] = {"kubernetes.io/hostname": "node1"}
         plan = self.plan()
         self.assertTrue(plan["requires_confirmation"])
         self.assertIn("pod affinity or topology spread", " ".join(plan["warnings"]))

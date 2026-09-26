@@ -90,7 +90,7 @@ Missing reservations or metrics, unbounded memory, competing unscheduled pods,
 and unverified placement constraints require review; unknown data is never a
 green safety result. The API recalculates immediately before scaling. This is
 a snapshot, **not a capacity reservation or OOM guarantee**. It does not yet
-fully simulate pod affinity, dynamic resource allocation or concurrent admissions.
+fully simulate dynamic resource allocation or concurrent admissions.
 Deploy/import, moves, updates
 and VM launches are separate paths; expanding this guard to those is planned.
 
@@ -117,6 +117,25 @@ and [delayed volume binding](https://kubernetes.io/docs/concepts/storage/storage
 Storage-driver attachment/health, CSI capacity and attachment limits, undeclared
 host-network listeners, and arbitrary hostPath contents still need operator
 review; a matching topology does not prove the data is available.
+
+Required pod affinity, incoming and existing-pod anti-affinity, and explicit
+`DoNotSchedule` topology spread constraints are checked against the pod/node
+snapshot. Namespace selectors, self-affinity bootstrap, label-key matching,
+`minDomains`, and node-affinity/taint inclusion policies are considered. Soft
+preferences are not hard blockers. Direct node assignment bypasses these
+scheduler checks; custom schedulers, unavailable namespace labels, and missing
+controller-generated revision labels are unverified, not reported as safe.
+
+For multiple replicas a bounded search re-evaluates topology after each proposed
+pod, including replicas that need the same RWO host. If all orders are ruled out,
+the start is blocked. If the search budget expires, placement is unknown and
+needs acknowledgement. Per-host resource counts remain upper bounds, not a
+promise that every replica can use that host. The rejected-host list describes
+the **next pod**; a host may become eligible as spread counts change. Preemption,
+scheduler profiles/default constraints, admission-injected labels and concurrent
+controllers are not simulated. No pods are actually placed during this check.
+See Kubernetes' [pod affinity](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#inter-pod-affinity-and-anti-affinity)
+and [topology spread](https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/).
 
 ## Updates
 

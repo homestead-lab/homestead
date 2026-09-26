@@ -35,3 +35,18 @@ test("unknown reservations are presented as unknown with explicit review", async
   assert.match(html, /unknown &lt;state&gt;/);
   assert.match(html, /wl_capacity_ok/);
 });
+
+test("topology conflicts identify the next pod without claiming all resource slots fit", async () => {
+  const html = await review({ blocked: true, additional: 3, topology_status: "blocked", warnings: [],
+    candidates: [{ name: "host<1>", eligible: false, reasons: ["required pod anti-affinity conflicts in zone=<west>"] }] });
+  assert.match(html, /cannot fit all requested replicas/);
+  assert.match(html, /Unavailable for the next pod/);
+  assert.match(html, /zone=&lt;west&gt;/);
+  assert.doesNotMatch(html, /Start anyway/);
+});
+
+test("inconclusive topology remains an explicit warning", async () => {
+  const html = await review({ requires_confirmation: true, additional: 2, topology_status: "unknown", candidates: [] });
+  assert.match(html, /placement remains unverified/);
+  assert.match(html, /wl_capacity_ok/);
+});
