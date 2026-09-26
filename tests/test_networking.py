@@ -78,6 +78,24 @@ class NetworkingTests(unittest.TestCase):
             networking.create_service(cfg)
         self.assertEqual("web", self.sent[-1][2]["spec"]["ports"][0]["targetPort"])
 
+    def test_vip_edit_preserves_ingress_port_name_and_protocol_metadata(self):
+        cfg = self.edit_service_config()
+        port = self.objects["/api/v1/services"]["items"][0]["spec"]["ports"][0]
+        port.update(name="application-web-listener", nodePort=31080, appProtocol="http")
+        with patch.object(networking.PLATFORM, "vip_spec", return_value={}):
+            networking.create_service(cfg)
+        updated = self.sent[-1][2]["spec"]["ports"][0]
+        self.assertEqual("application-web-listener", updated["name"])
+        self.assertEqual(31080, updated["nodePort"])
+        self.assertEqual("http", updated["appProtocol"])
+
+    def test_changed_listener_keeps_its_named_ingress_target(self):
+        cfg = self.edit_service_config()
+        cfg["ports"][0].update(name="web", port=9090)
+        with patch.object(networking.PLATFORM, "vip_spec", return_value={}):
+            networking.create_service(cfg)
+        self.assertEqual("web", self.sent[-1][2]["spec"]["ports"][0]["name"])
+
     def setUp(self):
         self.sent = []
         self.objects = {
