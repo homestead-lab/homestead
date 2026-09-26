@@ -12,6 +12,7 @@ are listed here with their terms.
 | [Monaco Editor](https://github.com/microsoft/monaco-editor) 0.52.2 (a trimmed subset) | `web/vendor/monaco/` | MIT - © Microsoft Corporation; the full text is in [`web/vendor/monaco/LICENSE`](web/vendor/monaco/LICENSE) |
 | Codicon icon font, shipped with Monaco | `web/vendor/monaco/vs/base/browser/ui/codicons/codicon/codicon.ttf` | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) - © Microsoft Corporation, from [vscode-codicons](https://github.com/microsoft/vscode-codicons) |
 | [noVNC](https://github.com/novnc/noVNC) 1.7.0 (`core` and `vendor` from the npm package) | `web/vendor/novnc/` | MPL-2.0 - © the noVNC authors (see [`AUTHORS`](web/vendor/novnc/AUTHORS)); the full text is in [`web/vendor/novnc/LICENSE.txt`](web/vendor/novnc/LICENSE.txt). The files are unmodified, so their source is the upstream release. |
+| [xterm.js](https://github.com/xtermjs/xterm.js) 6.0.0 and its fit add-on 0.11.0 (`lib` and `css` from the npm packages) | `web/vendor/xterm/` | MIT - © The xterm.js authors; the full text is in [`web/vendor/xterm/LICENSE`](web/vendor/xterm/LICENSE). Unmodified. |
 | pako, shipped with noVNC | `web/vendor/novnc/vendor/pako/` | MIT - © Vitaly Puzrin; see [`web/vendor/novnc/vendor/pako/LICENSE`](web/vendor/novnc/vendor/pako/LICENSE) |
 
 ## In the Homestead container image
@@ -33,7 +34,7 @@ bundled or modified.
 |---|---|---|
 | `alpine:3.20` | file browsing, import copies, ownership changes | MIT (Alpine base) and package licences |
 | `python:3.12-alpine` | the node probe, image cache cleanup | PSF License and package licences |
-| `busybox` | the node power helper | GPL-2.0 |
+| `busybox` | the node power helper, and a node's terminal | GPL-2.0 |
 | `registry.k8s.io/pause:3.9` | image pre-pulls | Apache-2.0 |
 | `quay.io/minio/minio` | optional backup storage | AGPL-3.0 - run unmodified as a separate service |
 

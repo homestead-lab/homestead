@@ -47,7 +47,38 @@ class Cluster:
         self.images = [i for i in self.images if i["name"] != name]
 
 
+ALPINE_INDEX = ('<a href="alpine-3.24.1-x86_64-cloudinit-r0.qcow2">x</a><a href="alpine-3.24.2-x86_64-cloudinit-r0.qcow2">x</a>'
+                '<a href="alpine-3.24.2-x86_64-tiny-r0.qcow2">x</a><a href="generic_alpine-3.24.1-x86_64-bios-cloudinit-r0.qcow2">x</a>')
+
+
 class StoreTests(unittest.TestCase):
+    def test_variants_minimal_among_them_and_alpine_resolved(self):
+        c = Cluster()
+        STORE.fetch_text = lambda url: ALPINE_INDEX
+        STORE._alpine.update(at=0.0, value={})
+        ids = [e["id"] for e in STORE.CATALOG]
+        self.assertIn("ubuntu-24.04-minimal", ids)
+        self.assertIn("debian-13-generic", ids)
+        self.assertTrue(STORE.url_for(STORE.BY_ID["alpine"]).endswith("alpine-3.24.2-x86_64-cloudinit-r0.qcow2"))
+
+    def test_images_already_here_are_in_the_store(self):
+        """Images made before the store, or in Harvester's dashboard, did not show."""
+        c = Cluster()
+        c.images = [{"namespace": "default", "name": "image-old", "display": "noble-server-cloudimg-amd64.img",
+                     "url": UBUNTU, "ready": True, "created": 1758800000},
+                    {"namespace": "default", "name": "image-win", "display": "win2022.qcow2",
+                     "url": "https://nas.local/win2022.qcow2", "ready": True, "created": 1758700000}]
+        view = STORE.view()
+        ubuntu = next(r for r in view["images"] if r["id"] == "ubuntu-24.04")
+        self.assertTrue(ubuntu["kept"])
+        self.assertEqual("default/image-old", ubuntu["versions"][0]["image"])
+        self.assertEqual(600, ubuntu["size"], "each variant says how big its download is")
+        self.assertEqual(["default/image-win"], [o["image"] for o in view["own"]])
+        self.assertEqual("default/image-old", STORE.source_for("ubuntu-24.04")["image_id"])
+        # Keeping it takes the one here rather than downloading again.
+        STORE.keep("ubuntu-24.04")
+        self.assertEqual([], c.downloads)
+
     def test_fedora_is_its_newest_release_not_a_beta_or_uki(self):
         Cluster()
         self.assertIn("Fedora-Cloud-Base-Generic-44-1.7.x86_64", STORE.url_for(STORE.BY_ID["fedora"]))

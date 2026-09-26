@@ -1916,6 +1916,13 @@ def list_vm_disks():
     return sorted(out, key=lambda row: (row["namespace"], row["name"]))
 
 
+def _epoch(stamp):
+    try:
+        return int(__import__("calendar").timegm(time.strptime(str(stamp), "%Y-%m-%dT%H:%M:%SZ")))
+    except (TypeError, ValueError):
+        return 0
+
+
 def list_vm_images():
     """Harvester's images. Each is a Longhorn backing image with a storage
     class of its own; a disk made on that class starts as a copy of it."""
@@ -1931,7 +1938,11 @@ def list_vm_images():
                          "progress": status.get("progress", 0),
                          "ready": imported.get("status") == "True",
                          "failed": imported.get("status") == "False" and imported.get("reason") == "ImportFailed",
-                         "message": " ".join(str(imported.get("message") or "").split())[:240]})
+                         "message": " ".join(str(imported.get("message") or "").split())[:240],
+                         # Where it came from and when, so the image store
+                         # knows one of its own when it finds it.
+                         "url": str(i["spec"].get("url") or ""), "source": i["spec"].get("sourceType", ""),
+                         "created": _epoch(i["metadata"].get("creationTimestamp"))})
         return rows
     except Exception:
         return []

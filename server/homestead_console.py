@@ -89,10 +89,11 @@ def validate_target(namespace, pod, container, shell, system_namespaces, allowed
 
 
 def exec_path(namespace, pod, container, shell):
-    query = urllib.parse.urlencode([
-        ("container", container), ("command", shell), ("stdin", "true"),
-        ("stdout", "true"), ("stderr", "true"), ("tty", "true"),
-    ])
+    """The exec URL: shell is one program, or - for a node's own shell, which
+    Homestead builds itself - a whole command, one argument at a time."""
+    command = [("command", part) for part in (shell if isinstance(shell, (list, tuple)) else [shell])]
+    query = urllib.parse.urlencode([("container", container), *command, ("stdin", "true"),
+                                    ("stdout", "true"), ("stderr", "true"), ("tty", "true")])
     return f"/api/v1/namespaces/{urllib.parse.quote(namespace)}/pods/{urllib.parse.quote(pod)}/exec?{query}"
 
 
@@ -172,11 +173,18 @@ class ConsoleProxy:
         sock.settimeout(None)
         return sock
 
-    def handle(self, handler, user, query):
+    def handle(self, handler, user, query, node=None, on_close=None):
+        """A console session. node is set by Homestead itself for a node's
+        own shell - {"node", "namespace", "pod", "container", "command"} - and
+        is never read from the browser's query."""
         get = lambda key, default="": (query.get(key) or [default])[0]
-        namespace, pod, container = get("ns"), get("pod"), get("container")
-        shell = get("shell", "/bin/sh")
-        validate_target(namespace, pod, container, shell, self.system_namespaces, self.allowed_namespaces)
+        if node:
+            namespace, pod, container = node["namespace"], node["pod"], node["container"]
+            shell = list(node["command"])
+        else:
+            namespace, pod, container = get("ns"), get("pod"), get("container")
+            shell = get("shell", "/bin/sh")
+            validate_target(namespace, pod, container, shell, self.system_namespaces, self.allowed_namespaces)
         self.validate_pod(namespace, pod, container)
 
         if (handler.headers.get("Upgrade") or "").lower() != "websocket":
@@ -199,7 +207,9 @@ class ConsoleProxy:
 
         session = secrets.token_hex(8)
         base = {"session": session, "user": user, "namespace": namespace,
-                "pod": pod, "container": container, "shell": shell}
+                "pod": pod, "container": container, "shell": "host shell" if node else shell}
+        if node:
+            base["node"] = node["node"]
         audit(self.data_dir, {**base, "event": "start"})
         stopped = threading.Event()
         browser_lock = threading.Lock()
@@ -245,7 +255,7 @@ class ConsoleProxy:
         thread = threading.Thread(target=browser_reader, daemon=True)
         thread.start()
         try:
-            send_browser({"type": "connected", "session": session, "shell": shell})
+            send_browser({"type": "connected", "session": session, "shell": "host shell" if node else shell})
             while not stopped.is_set():
                 _, opcode, payload = read_frame(upstream, require_mask=False)
                 if opcode == 8:
@@ -277,3 +287,8 @@ class ConsoleProxy:
             except OSError:
                 pass
             audit(self.data_dir, {**base, "event": "stop", "reason": reason})
+            if on_close:
+                try:
+                    on_close()
+                except Exception:
+                    pass
