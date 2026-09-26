@@ -164,6 +164,7 @@ window.cancelOperation = async id => {
   } catch (e) { toast(e.message, "bad"); refreshOperations(true); return; }
   operationPanelOpen = false;
   renderOperations();
+  if (plan.image_review) return imageRollback(plan.image_review.ns, plan.image_review.name);
   const list = rows => `<ul>${rows.map(row => `<li>${esc(row)}</li>`).join("")}</ul>`;
   const high = plan.severity === "high";
   const body = !plan.can

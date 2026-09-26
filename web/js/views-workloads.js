@@ -181,33 +181,10 @@ window.toggleImageUpdateSelection = checked => {
   syncImageUpdateSelection();
 };
 window.imageUpdateBatchReview = () => {
-  const keys = new Set([...document.querySelectorAll("#mbody .update-select:checked")]
-    .map(box => updateKey(box.dataset.ns, box.dataset.name)));
-  const selected = HomesteadUpdateState.availableWorkloads(STATE.data.imageUpdates)
-    .filter(item => keys.has(updateKey(item.ns, item.name)));
-  if (!selected.length) return toast("Select at least one update to stage", "bad");
-  window.__imageUpdateBatch = selected.map(item => ({ ns: item.ns, name: item.name }));
-  const policy = STATE.data.imageUpdates?.policy || {};
-  const blocked = policy.allows_install === false;
-  const imageCount = selected.reduce((total, item) => total + item.images.filter(image => image.available).length, 0);
-  modal(`Stage ${selected.length} update${selected.length === 1 ? "" : "s"}`, `<div class="update-review">
-    <div class="note"><b>Managed batch update.</b> Homestead will pin ${imageCount} selected image${imageCount === 1 ? "" : "s"} by digest,
-      start each rollout, monitor Kubernetes readiness, and preserve every previous digest for rollback.</div>
-    ${selected.map(item => `<section class="update-workload-review"><div class="between"><div><b>${esc(item.name)}</b><div class="dim xs mono">${esc(item.ns)}</div></div>
-      <span class="pill warn">${item.images.filter(image => image.available).length} image${item.images.filter(image => image.available).length === 1 ? "" : "s"}</span></div>
-      ${item.images.filter(image => image.available).map(image => `<div class="update-image">
-        <div class="between"><b>${esc(image.container)}</b><span class="tag warn">${esc(image.candidate_tag || "new digest")}</span></div>
-        <div><span>Running</span><code>${esc(image.deployed)}</code></div>
-        <div><span>Install</span><code>${esc(image.candidate)}@${esc((image.remote_digest || "").slice(0, 19))}…</code></div>
-      </div>`).join("")}</section>`).join("")}
-    <div class="note ${blocked ? "dependency-danger" : ""}"><b>Cluster policy · ${esc(policy.policy === "notify_only" ? "notify only" : policy.policy === "maintenance_window" ? "maintenance window" : "approval required")}</b>
-      ${esc(policy.reason || "Review and approve these digest-pinned rollouts.")}</div>
-    <label class="switch update-approval ${blocked ? "hidden" : ""}"><input type="checkbox" id="updateBatchApprove"
-      onchange="document.getElementById('updateBatchInstall').disabled=!this.checked"> I reviewed every selected image change and approve these rollouts</label>
-    <div class="row" style="margin-top:18px"><button class="btn pri" id="updateBatchInstall" data-need="operator" disabled
-      onclick="imageUpdateBatchApply()">Install ${selected.length} update${selected.length === 1 ? "" : "s"}</button>
-      <button class="btn" onclick="imageUpdateCenter()">Back</button></div></div>`, true);
-  if (window.applyRole) window.applyRole();
+  const keys = new Set($$(".update-select:checked").map(box => updateKey(box.dataset.ns, box.dataset.name)));
+  const items = HomesteadUpdateState.availableWorkloads(STATE.data.imageUpdates).filter(item => keys.has(updateKey(item.ns, item.name)));
+  if (!items.length) return toast("Select at least one update to stage", "bad");
+  return reviewImageActions(items.map(item => ({ns: item.ns, name: item.name})));
 };
 window.openUpdateWorkload = name => {
   closeModal();
@@ -826,79 +803,114 @@ window.checkImageUpdates = async () => {
   }
 };
 
-window.imageUpdateReview = (ns, name) => {
-  const update = workloadUpdate(ns, name);
-  if (!update) return toast("Run an image check first", "bad");
-  const changes = update.images.filter(x => x.available);
-  const policy = STATE.data.imageUpdates?.policy || {};
-  const blocked = policy.allows_install === false;
-  childModal("Update · " + name, `<div class="update-review">
-    <div class="note"><b>Managed update.</b> Homestead will pin the selected registry manifest by digest,
-      monitor Kubernetes readiness, and keep the current immutable image ready for rollback.</div>
-    ${changes.map(x => `<div class="update-image">
-      <div class="between"><b>${esc(x.container)}</b><span class="tag warn">${esc(x.candidate_tag || "new digest")}</span></div>
-      <div><span>Running</span><code>${esc(x.deployed)}</code></div>
-      <div><span>Install</span><code>${esc(x.candidate)}@${esc((x.remote_digest || "").slice(0, 19))}…</code></div>
-    </div>`).join("")}
-    <div class="note ${blocked ? "dependency-danger" : ""}"><b>Cluster policy · ${esc(policy.policy === "notify_only" ? "notify only" : policy.policy === "maintenance_window" ? "maintenance window" : "approval required")}</b>
-      ${esc(policy.reason || "Review and approve this digest-pinned rollout.")}</div>
-    <label class="switch update-approval ${blocked ? "hidden" : ""}"><input type="checkbox" id="updateApprove"
-      onchange="document.getElementById('updateInstall').disabled=!this.checked"> I reviewed the image change and approve this rollout</label>
-    <div class="row" style="margin-top:18px"><button class="btn pri" id="updateInstall" data-need="operator" ${blocked ? "disabled" : "disabled"}
-      onclick="imageUpdateApply('${esc(ns)}','${esc(name)}')">Install update</button>
-      <button class="btn" onclick="modalBack()">Cancel</button></div></div>`, true);
-  if (window.applyRole) window.applyRole();
-};
-
-window.imageUpdateApply = async (ns, name) => {
+let IMAGE_REVIEW = null, IMAGE_REVIEW_SEQUENCE = 0;
+async function reviewImageActions(items, action = "update") {
+  const sequence = ++IMAGE_REVIEW_SEQUENCE;
+  IMAGE_REVIEW = null;
+  modal(action === "rollback" ? "Review rollback" : "Review image updates",
+    '<div id="imageReviewLoading" class="empty"><span class="spin2"></span> Checking exact images and rollout capacity…</div>', true);
   try {
-    modal("Updating · " + name, '<div class="empty"><span class="spin2"></span> preparing managed rollout…</div>', true);
-    await api("/api/image-updates/apply", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ns, name, approved: true }) });
-    monitorImageRollout(ns, name);
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty"><b>Update could not start</b><br><span class="dim">${esc(e.message)}</span></div>`; }
+    const rows = [];
+    for (const item of HomesteadUpdateState.orderApply(items)) {
+      const config = {ns: item.ns, name: item.name, action, approved: true};
+      const preview = await api("/api/image-updates/preview", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(config)});
+      if (sequence !== IMAGE_REVIEW_SEQUENCE || !$("#imageReviewLoading")) return;
+      if (!preview.capacity || !preview.capacity_token || !Array.isArray(preview.images)) throw new Error("Image capacity review unavailable; no update was started");
+      rows.push({config, preview});
+    }
+    if (!rows.length) throw new Error("Select at least one image change");
+    IMAGE_REVIEW = rows;
+    const blocked = rows.some(row => row.preview.capacity.blocked);
+    $("#mbody").innerHTML = `<div class="update-review">
+      <div class="note">Exact image digests and full-pod capacity are checked again before each change.
+      Updates run one at a time, Homestead last. Failure, lost contact or an expired review stops the remaining queue.
+      Closing this dialog stops unstarted updates; a rollout already submitted continues.</div>
+      ${rows.map(({config, preview}) => `<section class="update-workload-review"><b>${esc(config.ns)} / ${esc(config.name)}</b>
+        ${preview.images.map(image => `<div class="update-image"><b>${esc(image.container)}</b>
+          <div><span>Current</span><code>${esc(image.before)}</code></div>
+          <div><span>Apply</span><code>${esc(image.after)}</code></div>
+          <div><span>Recovery</span><code>${esc(image.rollback)}</code></div></div>`).join("")}
+        ${deployCapacityHtml(preview.capacity, false, true)}</section>`).join("")}
+      ${blocked ? '<div class="note bad">Resolve the placement blockers before starting this selection.</div>' :
+        '<label class="switch update-approval"><input type="checkbox" id="imageCapacityApprove" onchange="imageReviewReady()"> I approve these image changes, downtime and any listed capacity risks (including high or unknown RAM).</label>'}
+      <div class="row" style="margin-top:18px"><button class="btn pri" id="imageCapacityApply" disabled onclick="imageReviewedApply()">${action === "rollback" ? "Start rollback" : "Install reviewed updates"}</button>
+      <button class="btn" onclick="closeModal()">Cancel</button></div></div>`;
+  } catch (error) {
+    IMAGE_REVIEW = null;
+    if (sequence === IMAGE_REVIEW_SEQUENCE && $("#imageReviewLoading")) $("#mbody").innerHTML = `<div class="note bad">Review could not finish: ${esc(error.message)}. Nothing was changed. Close this dialog and review again.</div>`;
+  }
+}
+window.imageReviewReady = () => {
+  const ready = !!IMAGE_REVIEW?.length && !IMAGE_REVIEW.some(r => r.preview.capacity.blocked) && $("#imageCapacityApprove")?.checked;
+  if ($("#imageCapacityApply")) $("#imageCapacityApply").disabled = !ready;
+  return !!ready;
+};
+window.imageUpdateReview = (ns, name) => reviewImageActions([{ns, name}]);
+window.imageUpdateApply = () => imageReviewedApply();
+window.imageReviewedApply = async () => {
+  if (!imageReviewReady()) return toast("Review and acknowledge the image and capacity changes first", "bad");
+  const rows = IMAGE_REVIEW; IMAGE_REVIEW = null;
+  const sequence = ++IMAGE_REVIEW_SEQUENCE;
+  const items = rows.map(r => r.config);
+  const states = Object.fromEntries(items.map(item => [updateKey(item.ns, item.name), {phase: "queued", ready: 0, desired: 1}]));
+  const failures = [];
+  modal("Reviewed image rollouts", '<div id="imageQueue"></div>', true);
+  const active = () => sequence === IMAGE_REVIEW_SEQUENCE && $("#imageQueue") && !$("#modal").classList.contains("hidden");
+  const paint = () => {if (active()) $("#imageQueue").innerHTML = batchUpdateMarkup(items, states, failures, false, true);};
+  paint();
+  for (let index = 0; index < rows.length; index++) {
+    const {config, preview} = rows[index], key = updateKey(config.ns, config.name);
+    if (!active()) break;
+    try {
+      const result = await api(config.action === "rollback" ? "/api/image-updates/rollback" : "/api/image-updates/apply",
+        {method: "POST", headers: {"Content-Type": "application/json"},
+         body: JSON.stringify({...config, capacity_token: preview.capacity_token, confirm_capacity: true})});
+      states[key] = result; paint();
+      // Never start the next workload until this exact accepted generation is ready.
+      if (!result.uid || !Number.isInteger(result.generation)) throw new Error("Rollout identity unavailable; check Jobs before continuing");
+      const deadline = Date.now() + 15 * 60 * 1000;
+      while (true) {
+        if (!active()) return;
+        const state = await api(`/api/image-updates/progress?ns=${encodeURIComponent(config.ns)}&name=${encodeURIComponent(config.name)}`);
+        states[key] = state; paint();
+        if (state.uid !== result.uid || state.generation !== result.generation) throw new Error("Workload changed during monitoring; review remaining updates again");
+        if (state.phase === "failed") throw new Error("Rollout failed; remaining updates were not started");
+        if (state.phase === "ready") break;
+        if (Date.now() > deadline) throw new Error("Monitoring timed out; check Jobs before continuing");
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    } catch (error) {
+      failures.push({...config, error: error.message + " No automatic retry: check Jobs for this rollout before reviewing again."});
+      for (const remaining of rows.slice(index + 1)) states[updateKey(remaining.config.ns, remaining.config.name)] = {phase: "not started", ready: 0, desired: 1};
+      paint();
+      return;
+    }
+  }
+  paint();
 };
 
-function batchUpdateMarkup(items, states, startFailures = [], reconnecting = false) {
+function batchUpdateMarkup(items, states, startFailures = [], reconnecting = false, queueMode = false) {
   const failureMap = Object.fromEntries(startFailures.map(item => [updateKey(item.ns, item.name), item.error]));
   const complete = items.filter(item => failureMap[updateKey(item.ns, item.name)] ||
     ["ready", "failed"].includes(states[updateKey(item.ns, item.name)]?.phase)).length;
   return `<div class="batch-rollout">
     <div class="between"><div><b>${complete}/${items.length} rollouts complete</b>
       <div class="dim xs">Each workload is tracked independently and keeps its own rollback image.</div></div>
-      ${reconnecting ? '<span class="pill warn">reconnecting</span>' : '<span class="pill ok">monitoring</span>'}</div>
+      ${queueMode && startFailures.length ? '<span class="pill warn">queue stopped</span>' : complete === items.length ? '<span class="pill ok">finished</span>' : reconnecting ? '<span class="pill warn">reconnecting</span>' : '<span class="pill ok">monitoring</span>'}</div>
     <div class="rollout-meter"><span style="width:${items.length ? Math.round(complete / items.length * 100) : 100}%"></span></div>
     <div class="batch-rollout-list">${items.map(item => {
       const key = updateKey(item.ns, item.name), state = states[key], startError = failureMap[key];
-      const phase = startError ? "failed to start" : state?.phase || "starting";
+      const phase = startError ? "needs attention" : state?.phase || "starting";
       const tone = phase === "ready" ? "ok" : phase === "failed" || startError ? "crit" : "warn";
       return `<div><span><b>${esc(item.name)}</b><small>${esc(item.ns)}${state ? ` · ${state.ready}/${state.desired} ready` : ""}</small></span>
         <span class="pill ${tone}">${esc(phase)}</span>${startError ? `<div class="updateerror">${esc(startError)}</div>` : ""}</div>`;
     }).join("")}</div>
-    <div class="row" style="margin-top:18px"><button class="btn" onclick="closeModal()">Monitor in background</button></div>
+    ${queueMode ? '<p class="small dim">Closing stops unstarted updates. Submitted rollouts continue and can be monitored in Jobs. A stopped queue always needs a new review.</p>' : ""}
+    <div class="row" style="margin-top:18px"><button class="btn" onclick="closeModal()">${queueMode ? complete === items.length ? "Done" : "Close / stop queue" : "Monitor in background"}</button></div>
   </div>`;
 }
 
-window.imageUpdateBatchApply = async () => {
-  const selected = window.__imageUpdateBatch || [];
-  if (!selected.length) return toast("The staged update list is empty", "bad");
-  const ordered = HomesteadUpdateState.orderApply(selected);
-  const started = [], startFailures = [], states = Object.fromEntries(ordered.map(item =>
-    [updateKey(item.ns, item.name), { phase: "queued", ready: 0, desired: 1 }]));
-  modal(`Starting ${ordered.length} updates`, batchUpdateMarkup(ordered, states), true);
-  for (const item of ordered) {
-    try {
-      await api("/api/image-updates/apply", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ns: item.ns, name: item.name, approved: true }) });
-      started.push(item);
-      states[updateKey(item.ns, item.name)] = { phase: "starting", ready: 0, desired: 1 };
-    } catch (error) {
-      startFailures.push({ ...item, error: error.message });
-    }
-    if ($("#mbody")) $("#mbody").innerHTML = batchUpdateMarkup(ordered, states, startFailures);
-  }
-  if (started.length) monitorImageRollouts(started, startFailures, states, ordered);
-};
+window.imageUpdateBatchApply = () => imageReviewedApply();
 
 window.monitorImageRollouts = (items, startFailures = [], initialStates = {}, allItems = items) => {
   if (window.__updateTimer) clearInterval(window.__updateTimer);
@@ -996,19 +1008,8 @@ window.monitorImageRollout = (ns, name) => {
   poll(); window.__updateTimer = setInterval(poll, 2000);
 };
 
-window.imageRollback = async (ns, name) => {
-  modal("Rollback · " + name, `<div class="note"><b>Restore the image saved before the last managed update?</b>
-    The previous digest is immutable, so this does not depend on the registry tag still pointing at it.</div>
-    <div class="row" style="margin-top:18px"><button class="btn danger" data-need="operator" onclick="imageRollbackApply('${esc(ns)}','${esc(name)}')">Start rollback</button>
-    <button class="btn" onclick="closeModal()">Cancel</button></div>`);
-  if (window.applyRole) window.applyRole();
-};
-window.imageRollbackApply = async (ns, name) => {
-  try {
-    await api("/api/image-updates/rollback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ns, name }) });
-    monitorImageRollout(ns, name);
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty"><b>Rollback could not start</b><br><span class="dim">${esc(e.message)}</span></div>`; }
-};
+window.imageRollback = (ns, name) => reviewImageActions([{ns, name}], "rollback");
+window.imageRollbackApply = () => imageReviewedApply();
 window.wlLogs = (ns, pod, workload = "", fromRoute = false) => {
   if (!fromRoute && window.setModalRoute) setModalRoute({ panel: "logs", ns, workload: workload || pod }, (workload || pod) + " logs");
   if (!pod) return modal("Logs unavailable", '<div class="empty"><b>No running pod</b><br><span class="dim small">Start the container and wait for Kubernetes to create a pod.</span></div>');
@@ -1377,7 +1378,7 @@ window.previewYaml = async () => {
 let DEPLOY_REVIEW = null;
 let DEPLOY_REVIEW_SEQUENCE = 0;
 let DEPLOY_SUBMITTING = false;
-function deployCapacityHtml(plan, overlap = false) {
+function deployCapacityHtml(plan, overlap = false, imageChange = false) {
   if (!plan) return "";
   return `<div class="reviewbox deploy-capacity"><b>${overlap ? "New pods alongside current pods" : plan.rollout ? "Updated pod: capacity after old pods stop" : "Placement and memory"}</b>
     ${plan.rollout ? `<p class="small muted">${esc(plan.rollout.strategy)} · ${esc(plan.rollout.replicas)} desired replica(s) · ${plan.rollout.ownership_known ? `${esc(plan.rollout.owned_pods.length)} existing pod(s) identified by controller ownership; ${esc(plan.rollout.release_request_gb)} GiB of requests would be released only after termination.` : "Pod ownership is unverified; released capacity is unknown."}</p>
@@ -1390,7 +1391,7 @@ function deployCapacityHtml(plan, overlap = false) {
       <div class="dim xs">${host.metrics_available && host.projected_percent != null ? `Live RAM ${esc(host.used_gb)} GiB · projected ${esc(host.projected_gb)} / ${esc(host.capacity_gb)} GiB (${esc(host.projected_percent)}%)` : "Live RAM unavailable"}</div>
       <div class="dim xs">${host.reservations_known ? `${plan.rollout ? "Reserved RAM after planned termination" : "Reserved RAM"} ${esc(host.reserved_gb)} GiB; resource/port/storage upper bound ${esc(host.request_slots)} more pod(s).` : "Scheduler reservations unavailable."}</div></div></div>`).join("")}</div></details>
     ${plan.rollout?.overlap ? `<details${plan.rollout.start_blocked ? " open" : ""}><summary>Overlap while old pods remain${plan.rollout.start_blocked ? " — rollout cannot start" : ""}</summary>${deployCapacityHtml(plan.rollout.overlap, true)}</details>` : ""}
-    <p class="dim xs">This is a snapshot, not a reservation or an OOM guarantee. The server checks again before creating anything. Planned volumes have not been provisioned.</p></div>`;
+    <p class="dim xs">This is a snapshot, not a reservation or an OOM guarantee. ${imageChange ? "The server checks again before changing the workload or its recovery metadata." : "The server checks again before creating anything. Planned volumes have not been provisioned."}</p></div>`;
 }
 window.deployReviewReady = () => {
   const review = DEPLOY_REVIEW;
