@@ -16,7 +16,11 @@ try {
       const result = await original(url, ...args);
       if (url === "/api/network") {
         result.shared_vip = { ip: "192.0.2.108" };
-        result.registered_vips = [{ ip: "192.0.2.108", label: "Workload VIP", default: true, free: true, used_by: [] }];
+        result.registered_vips = [
+          { ip: "192.0.2.108", label: "Shared applications", default: true, free: false, used_by: ["lab/homestead-vip", "lab/a-very-long-service-name-that-must-wrap-without-hiding-the-address"] },
+          { ip: "192.0.2.109", label: "Spare address for a new workload", free: true, used_by: [] },
+          { ip: "192.0.2.110", label: "Unavailable", blocked: "Reserved by the cluster management service", free: false, used_by: [] },
+        ];
         result.workloads.unshift({ namespace: "lab", name: "guest", kind: "VirtualMachine", ports: [] });
       }
       return result;
@@ -25,12 +29,45 @@ try {
     go("network");
   });
   await page.getByText("Networking roles", { exact: true }).waitFor();
+  for (const width of [1280, 768, 390, 320]) {
+    await page.setViewportSize({ width, height: 1200 });
+    const cards = await page.locator(".vip-card").evaluateAll(cards => cards.map(card => {
+      const heading = card.querySelector(".vip-card-heading");
+      const ip = heading.querySelector("b").getBoundingClientRect(), badge = heading.querySelector(".tag").getBoundingClientRect();
+      return { width: card.clientWidth, scroll: card.scrollWidth, overlap: ip.left < badge.right && ip.right > badge.left && ip.top < badge.bottom && ip.bottom > badge.top };
+    }));
+    for (const card of cards) {
+      assert.ok(card.scroll <= card.width + 1, `${width}: VIP card overflow`);
+      assert.equal(card.overlap, false, `${width}: address overlaps status`);
+    }
+    await page.locator(".vip-section").screenshot({ path: `release-assets/network-checks/vip-cards-${width}.png` });
+  }
+  await page.getByRole("button", { name: "Add VIP", exact: false }).click();
+  await page.locator("#va_start").fill("192.0.2.120");
+  assert.equal(await page.locator("#va_end_wrap").isVisible(), false);
+  await page.locator("#va_kind").selectOption("range");
+  assert.equal(await page.locator("#va_end_wrap").isVisible(), true);
+  await page.locator("#va_end").fill("192.0.2.122");
+  await page.locator("#va_default").check();
+  for (const width of [1280, 390, 320]) {
+    await page.setViewportSize({ width, height: 1000 });
+    const box = await page.locator("#mbody").evaluate(el => ({ width: el.clientWidth, scroll: el.scrollWidth }));
+    assert.ok(box.scroll <= box.width + 1, `${width}: add VIP overflow ${JSON.stringify(box)}`);
+    await page.locator("#va_save").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `release-assets/network-checks/vip-add-${width}.png` });
+  }
+  await page.evaluate(() => closeModal());
+  await page.locator(".vip-card").nth(1).getByRole("button", { name: "Use this VIP" }).click();
+  assert.equal(await page.locator("#net_mode").inputValue(), "manual");
+  assert.equal(await page.locator("#net_lb_pick").inputValue(), "192.0.2.109");
+  assert.equal(await page.evaluate(() => networkConfig().vip), "192.0.2.109");
+  await page.evaluate(() => closeModal());
   await page.getByRole("button", { name: "Expose workload" }).click();
   await page.locator("#net_workload").waitFor();
   assert.equal(await page.locator("#net_workload").inputValue(), "lab/guest/VirtualMachine");
   assert.equal(await page.locator("#net_mode").inputValue(), "shared");
   await page.locator("#net_mode").selectOption("manual");
-  await page.locator("#net_vip").fill("192.0.2.109");
+  await page.locator("#net_lb_pick").selectOption("192.0.2.109");
   assert.equal(await page.evaluate(() => networkConfig().workload_kind), "VirtualMachine");
   for (const width of [1280, 390, 320]) {
     await page.setViewportSize({ width, height: 1000 });

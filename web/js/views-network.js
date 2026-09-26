@@ -3,6 +3,23 @@
 const networkPill = health => health === "healthy" ? "ok" : health === "pending" ? "med" : "crit";
 const networkPortText = row => (row.ports || []).map(p => `${p.port}/${p.protocol}`).join(", ");
 
+function networkVipCard(v, data) {
+  const isDefault = v.ip === data.shared_vip?.ip;
+  const blocked = v.blocked || ((data.node_ips || []).includes(v.ip) ? "This is a node address, not a workload VIP." : "");
+  const canUse = !blocked && !nodeAddressesOnly();
+  return `<article class="vip-card${isDefault ? " is-default" : ""}">
+    <div class="vip-card-heading"><b class="mono">${esc(v.ip)}</b><span class="tag ${blocked ? "bad" : v.free ? "" : "info"}">${blocked ? "Unavailable" : v.free ? "Not assigned" : "In use"}</span></div>
+    <div class="vip-card-label">${esc(v.label || "No label")}</div>
+    ${isDefault ? '<div class="vip-card-default"><span class="tag ok">Default workload VIP</span><span class="dim xs">Suggested for new workloads; existing services stay where they are.</span></div>' : ""}
+    <div class="vip-card-usage small">${blocked ? esc(blocked) : (v.used_by || []).length ? `<span class="dim">Used by</span> ${(v.used_by || []).map(n => `<span class="mono">${esc(n)}</span>`).join("")}` : 'Saved for use. It is advertised when a workload Service requests it.'}</div>
+    <div class="vip-card-actions">
+      ${canUse ? `<button class="btn sm" data-need="operator" onclick="networkExpose('','','Deployment','${esc(v.ip)}')">Use this VIP</button>` : ""}
+      ${canUse && !isDefault ? `<button class="btn sm" data-need="admin" onclick="vipDefault('${esc(v.ip)}')">Make default</button>` : ""}
+      <button class="btn sm" data-need="admin" onclick="vipLabel('${esc(v.ip)}')">Edit label</button>
+      ${!isDefault && (v.free || blocked) ? `<button class="btn sm" data-need="admin" onclick="vipRemove('${esc(v.ip)}')">Remove</button>` : ""}
+    </div></article>`;
+}
+
 async function viewNetworking() {
   if (networkTab() === "ip") return viewIpam();
   const data = await api("/api/network");
@@ -43,16 +60,16 @@ async function viewNetworking() {
       through it, so sharing it can stop hosts joining. Give ${data.platform_clashes.length === 1 ? "it an address" : "each an address"} of its own (Edit → Network).</div>` : ""}
     ${(data.shared_vip || {}).problem ? `<div class="note bad" style="margin-bottom:14px"><b>Homestead's shared address is the cluster's own.</b> ${esc(data.shared_vip.problem)}.
       Choose a separate default workload VIP below; do not use the control-plane address.</div>` : ""}
-    <div class="between"><div class="sec">Your VIPs ${tip("Reserved LAN addresses for Services, outside DHCP. kube-vip advertises requested addresses; MetalLB also requires them in its configured pool. Automatic allocation uses this list first. A default VIP shares free ports between workloads; changing it does not move existing Services.")}</div>
-      <button class="btn sm pri" data-need="admin" onclick="vipAdd()">＋ Add VIPs</button></div>
-    ${(data.registered_vips || []).length ? `<div class="vip-own">${data.registered_vips.map(v => `<div class="vip-chip ${v.blocked ? "used" : v.free ? "free" : "used"}">
-        <div class="vip-name"><b class="mono">${esc(v.ip)}</b><span class="dim xs" onclick="vipLabel('${esc(v.ip)}')" data-tip="Rename">${esc(v.label || "no label")}</span></div>
-        ${v.default ? '<span class="tag ok">default workload VIP</span>' : !v.blocked ? `<button class="btn sm" data-need="admin" onclick="vipDefault('${esc(v.ip)}')">Use as default</button>` : ""}
-        ${v.blocked ? `<span class="tag bad" data-tip="${esc(v.blocked)}">not usable</span>`
-          : `<span class="tag ${v.free ? "ok" : "info"}">${v.free ? "free" : esc(v.used_by.join(", ") || "in use")}</span>`}
-        ${v.free || v.blocked ? `<button class="iconbtn" data-need="admin" data-tip="No longer keep this address for Homestead" onclick="vipRemove('${esc(v.ip)}')">×</button>` : ""}</div>`).join("")}</div>`
-      : `<div class="card flat empty small">No VIPs of your own yet. Add the addresses Homestead may give to apps and shares - ${data.available_vip_count
-          ? `${data.available_vip_count} more are free in Harvester IP pools.` : "there are no Harvester IP pools to take them from either."}</div>`}
+    <section class="vip-section" aria-label="Workload VIPs">
+    <div class="vip-section-heading"><div><h3>Workload VIPs</h3><p class="dim small">Stable LAN addresses for containers and pod-network VMs, separate from your hosts' addresses.</p></div>
+      <button class="btn sm pri" data-need="admin" onclick="vipAdd()">＋ Add VIP</button></div>
+    <ol class="vip-steps"><li><b>1 · Add an address</b><span>Reserve an unused address outside DHCP, then save it here.</span></li>
+      <li><b>2 · Choose a default</b><span>Use <b>Make default</b> for the address suggested to new workloads.</span></li>
+      <li><b>3 · Connect a workload</b><span>Use a card below, or choose <b>Default workload VIP</b> / <b>Specific VIP</b> in Deploy → Networking.</span></li></ol>
+    <p class="small vip-default-summary"><b>Current default:</b> <span class="mono">${esc(data.shared_vip?.ip || "Not configured")}</span> · Multiple workloads can share it on different ports. Changing it does not move existing services.</p>
+    ${(data.registered_vips || []).length ? `<div class="vip-cards">${data.registered_vips.map(v => networkVipCard(v, data)).join("")}</div>`
+      : '<div class="card flat empty small">No saved VIPs. Start with <b>Add VIP</b> above. Adding an address does not change your router or start a workload.</div>'}
+    </section>
     <div class="between"><div class="sec">LAN networks ${tip("Networks bridged to the LAN - Harvester calls them VM networks. A VM, or a container given an address of its own, joins one to be on the LAN like any machine there.")}</div>
       <button class="btn sm" data-need="admin" onclick="vmNetworkAdd()">＋ LAN network</button></div>
     <div id="netVmNets">${window.__vmCreateOptions ? networkVmNetsHtml(window.__vmCreateOptions) : '<div class="dim small">reading LAN networks…</div>'}</div>
@@ -102,22 +119,24 @@ function networkModalPort(port = {}, first = false) {
     <div><label>&nbsp;</label><button class="btn sm" type="button" onclick="this.closest('.net-port').remove()" ${first ? "disabled" : ""}>Remove</button></div></div>`;
 }
 
-window.networkExpose = async (namespace = "", name = "", kind = "Deployment") => {
+window.networkExpose = async (namespace = "", name = "", kind = "Deployment", selectedVip = "") => {
   const data = STATE.data.network = await api("/api/network");
   if (!data?.workloads?.length) return toast("No Deployments or pod-network VMs are available to expose", "bad");
   if (name && !data.workloads.some(row => row.namespace === namespace && row.name === name && row.kind === kind)) return toast("This VM needs a masquerade pod interface and template labels to expose a Service; bridged VMs use their guest LAN address", "bad");
   if (name) data.workloads.sort((a, b) => Number(b.namespace === namespace && b.name === name && b.kind === kind) - Number(a.namespace === namespace && a.name === name && a.kind === kind));
   const options = data.workloads.map(row => `<option value="${esc(row.namespace + "/" + row.name + "/" + (row.kind || "Deployment"))}">${esc(row.kind || "Deployment")} · ${esc(row.namespace)}/${esc(row.name)}</option>`).join("");
   const first = data.workloads[0];
+  const choices = await vipChoices(data);
   modal("Expose workload", `<p class="dim">Create a Kubernetes Service with a collision-checked address and listener. Nothing changes until you review the plan.</p>
     <div class="f2"><div class="f"><label>Workload</label><select id="net_workload" onchange="networkWorkloadChanged()">${options}</select></div>
       <div class="f"><label>Service name</label><input id="net_name" type="text" value="${esc(first.name)}"></div></div>
     <div class="f2"><div class="f"><label>Reachability ${tip("Cluster only is reachable inside Kubernetes. LAN access asks the cluster's load balancer to advertise a Service address.")}</label><select id="net_type" onchange="networkModeChanged()"><option value="LoadBalancer">LAN access</option><option value="ClusterIP">Cluster only</option></select></div>
       <div class="f" id="net_mode_wrap"><label>VIP allocation ${tip("Default shares your configured workload address on free ports. Automatic chooses another reserved address. Specific uses the address you choose. No VM guest address is changed.")}</label><select id="net_mode" onchange="networkModeChanged()">${nodeAddressesOnly() ? nodeAddressOption() : `${data.shared_vip?.ip && !(data.node_ips || []).includes(data.shared_vip.ip) ? `<option value="shared">Default workload VIP · ${esc(data.shared_vip.ip)}</option>` : ""}<option value="automatic">New automatic VIP</option>${nodeAddressChoice()}<option value="manual">Specific VIP</option>`}</select></div></div>
-    <div class="f hidden" id="net_vip_wrap"><label>Specific VIP</label><input id="net_vip" type="text" class="mono" placeholder="192.168.1.243"></div>
+    <div class="f hidden" id="net_vip_wrap"><label for="net_lb_pick">Specific VIP</label>${vipPicker("net", selectedVip, choices)}<p class="dim xs">Choose a saved address or a pool address. Sharing an in-use VIP requires a free LAN port; Review plan checks for conflicts.</p></div>
     <div class="sec">Listeners</div><div id="net_ports">${networkModalPort(first.ports[0] || {}, true)}</div>
     <button class="btn sm" type="button" onclick="$('#net_ports').insertAdjacentHTML('beforeend',networkModalPort())">＋ Add listener</button>
     <div id="net_review"></div><div class="modalactions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" onclick="networkReview()">Review plan</button></div>`, true);
+  if (selectedVip && !nodeAddressesOnly()) $("#net_mode").value = "manual";
   networkModeChanged();
 };
 
@@ -138,7 +157,7 @@ function networkConfig() {
   const [namespace, workload, workload_kind] = $("#net_workload").value.split("/");
   return { namespace, workload, workload_kind, name: $("#net_name").value.trim(), type: $("#net_type").value,
     vip_mode: $("#net_type").value === "ClusterIP" ? "cluster" : $("#net_mode").value,
-    vip: $("#net_vip").value.trim(), ports: $$(".net-port").map((row, index) => ({
+    vip: $("#net_lb_ip").value.trim(), ports: $$(".net-port").map((row, index) => ({
       name: `port-${index + 1}`, port: $(".np-port", row).value, target_port: $(".np-target", row).value,
       protocol: $(".np-protocol", row).value })) };
 }
@@ -171,19 +190,58 @@ window.vipDefault = async ip => {
     toast(r.detail, "ok"); viewNetworking();
   } catch (e) { toast(e.message, "bad"); }
 };
-window.vipAdd = () => modal("Add VIPs", `
-  <p class="small">Addresses Homestead may give to apps and shares. Choose ones outside your router's DHCP range, so nothing else takes them.</p>
-  <div class="f2"><div class="f"><label>Address</label><input id="va_start" class="mono" placeholder="192.168.1.230"></div>
-    <div class="f"><label>Up to (optional)</label><input id="va_end" class="mono" placeholder="192.168.1.239"></div></div>
-  <div class="f"><label>Label</label><input id="va_label" maxlength="60" placeholder="e.g. Media apps, Pi-hole, Shares"></div>
-  <div class="row" style="margin-top:14px"><button class="btn pri" onclick="vipAddGo()">Add</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+window.vipAdd = () => {
+  const provider = STATE.platform?.load_balancer;
+  const supported = ["kube-vip", "metallb"].includes(provider);
+  modal("Add workload VIP", `<div class="vip-add-form">
+    <p class="small">A VIP is a stable LAN address for reaching apps, such as <span class="mono">http://VIP:port</span>. Save one address for shared ports, or a range so workloads can have separate addresses.</p>
+    <div class="note small"><b>Before you add an address</b><br>Choose an unused IPv4 address on the LAN your load balancer serves, outside your router's DHCP allocation range. Do not use a host, router or cluster-management address. Homestead checks known cluster conflicts, but cannot confirm that another LAN device is not using it.</div>
+    <div class="f"><label for="va_kind">What would you like to add?</label><select id="va_kind" onchange="vipAddKindChanged()"><option value="single">One VIP</option><option value="range">A range of VIPs</option></select></div>
+    <div class="f2"><div class="f"><label for="va_start" id="va_start_label">VIP address</label><input id="va_start" class="mono" placeholder="e.g. 192.168.1.230" autocomplete="off"></div>
+      <div class="f hidden" id="va_end_wrap"><label for="va_end">Last address (inclusive)</label><input id="va_end" class="mono" placeholder="e.g. 192.168.1.239" autocomplete="off"><span class="dim xs">Up to 64 addresses per range.</span></div></div>
+    <div class="f"><label for="va_label">Label (optional)</label><input id="va_label" maxlength="60" placeholder="e.g. Shared apps or Media"><span class="dim xs">Shown in the VIP list and workload address picker.</span></div>
+    <label class="vip-check"><input id="va_default" type="checkbox" ${supported ? "" : "disabled"}><span><b>Make this the default workload VIP</b><span class="dim small" id="va_default_hint">New workloads can share this address on different ports. Existing services and Homestead's access address will not move.</span></span></label>
+    <p class="small dim">${provider === "kube-vip" ? "kube-vip advertises the address when a workload Service requests it; saving it alone does not make it respond." : provider === "metallb" ? "MetalLB must also have these addresses in a configured address pool. Saving them here does not configure MetalLB's pools." : "You can save addresses now. Install kube-vip or MetalLB in Settings → Cluster → Add-ons before using a movable workload VIP; ServiceLB uses node addresses."}</p>
+    <label class="vip-check"><input id="va_confirm" type="checkbox"><span>I have checked that these addresses are reserved outside DHCP and are not used by another device.</span></label>
+    <div id="va_result" class="small" role="status" aria-live="polite"></div>
+    <div class="modalactions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" id="va_save" onclick="vipAddGo()">Add VIP</button></div></div>`);
+};
+window.vipAddKindChanged = () => {
+  const range = $("#va_kind").value === "range";
+  $("#va_end_wrap").classList.toggle("hidden", !range);
+  $("#va_start_label").textContent = range ? "First address" : "VIP address";
+  $("#va_save").textContent = range ? "Add VIP range" : "Add VIP";
+  $("#va_default_hint").textContent = `${range ? "The first address in the range will be the default. " : ""}New workloads can share this address on different ports. Existing services and Homestead's access address will not move.`;
+};
 window.vipAddGo = async () => {
-  const body = { start: $("#va_start").value.trim(), end: $("#va_end").value.trim(), label: $("#va_label").value };
+  const result = $("#va_result"), save = $("#va_save");
+  if (save.disabled) return;
+  if (!$("#va_confirm").checked) { result.textContent = "Check your DHCP settings and confirm the addresses are unused before adding them."; return; }
+  const body = { start: $("#va_start").value.trim(), end: $("#va_kind").value === "range" ? $("#va_end").value.trim() : "", label: $("#va_label").value };
+  if (!body.start || ($("#va_kind").value === "range" && !body.end)) { result.textContent = "Enter the VIP address (and last address for a range)."; return; }
+  const makeDefault = $("#va_default").checked;
+  save.disabled = true;
+  result.textContent = "Saving addresses…";
   try {
     const r = await api("/api/network/vips/add", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    toast(r.detail, r.added.length ? "ok" : "warn");
-    if (r.added.length) { closeModal(); viewNetworking(); }
-  } catch (e) { toast(e.message, "bad"); }
+    // A range may partially succeed. Never silently default to a different address.
+    if (makeDefault) {
+      try {
+        await api("/api/network/vips/default", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ip: body.start }) });
+        if (STATE.data.ov) STATE.data.ov.lb_ip = body.start;
+      } catch (e) {
+        result.textContent = `${r.detail}. Default was not changed: ${e.message}. Saved addresses remain available; you can use Make default on their cards.`;
+        await viewNetworking(); return;
+      }
+    }
+    if ((r.skipped || []).length || !r.added.length) {
+      result.textContent = `${r.detail}${makeDefault ? ` · Default workload VIP: ${body.start}` : ""}`;
+      await viewNetworking(); return;
+    }
+    closeModal(); toast(makeDefault ? `${r.detail} · ${body.start} is the default workload VIP` : `${r.detail} · Choose Use this VIP to connect a workload`, "ok");
+    await viewNetworking();
+  } catch (e) { result.textContent = e.message; }
+  finally { save.disabled = false; }
 };
 window.vipRemove = async ip => {
   if (!confirm(`Stop keeping ${ip} for Homestead?`)) return;
