@@ -895,6 +895,7 @@ ssh_pwauth: true
     ],
     "/api/lh/overview": lhOverview,
     "/api/lh/job/run": (url, init) => ({ ok: true, job: `${JSON.parse(init?.body || "{}").name}-now-000001`, namespace: "longhorn-system" }),
+    "/api/lh/snapshot-progress": {known: true, active: false, percent: null, replicas: [], errors: []},
     "/api/lh/snapshots": [{ name: "homestead-1758765600-a1b2c3", volume: "pvc-demo", created: new Date(Date.now() - 86400000).toISOString(),
         size_mb: 212.4, ready: true, user_created: false, source: "system", children: ["volume-head"] },
       { name: "homestead-1758679200-d4e5f6", volume: "pvc-demo", created: new Date(Date.now() - 2 * 86400000).toISOString(),

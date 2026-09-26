@@ -330,6 +330,8 @@ def inventory():
         else:
             health, reason = "healthy", f"{ready_count} ready endpoint(s)" if selector else "Selectorless Service"
         raw_rows.append({"namespace": ns, "name": name, "type": service_type,
+                         "uid": meta.get("uid", ""), "resource_version": meta.get("resourceVersion", ""),
+                         "vip_mode": annotations.get("homestead.io/vip-mode", ""),
                          "system": ns in SYSTEM_NAMESPACES, "managed": NAMES.read(labels, "managed") == "true",
                          "cluster_ip": spec.get("clusterIP") or "", "external_ips": external,
                          "lb_class": spec.get("loadBalancerClass") or "",
@@ -497,12 +499,17 @@ def _ports(cfg):
     rows, seen = [], set()
     for raw in cfg.get("ports") or []:
         try:
-            port, target = int(raw.get("port")), int(raw.get("target_port") or raw.get("target") or raw.get("port"))
+            port = int(raw.get("port"))
+            target = raw.get("target_port") or raw.get("target") or raw.get("port")
+            if not isinstance(target, str) or target.isdigit():
+                target = int(target)
         except (TypeError, ValueError) as error:
             raise ValueError("every listener needs a numeric LAN port and container target port") from error
         protocol = str(raw.get("protocol") or "TCP").upper()
-        if not 1 <= port <= 65535 or not 1 <= target <= 65535:
+        if not 1 <= port <= 65535 or (isinstance(target, int) and not 1 <= target <= 65535):
             raise ValueError("ports must be between 1 and 65535")
+        if isinstance(target, str) and (not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,13}[a-z0-9])?", target) or not re.search(r"[a-z]", target)):
+            raise ValueError("target port must be a number or a valid named container port")
         if protocol not in ("TCP", "UDP"):
             raise ValueError("protocol must be TCP or UDP")
         if (protocol, port) in seen:
@@ -537,7 +544,17 @@ def service_plan(cfg, require_workload=True):
                                all(row.get("selector", {}).get(k) == v for k, v in selector.items())
                                for row in state["workloads"]):
             raise ValueError("VM template labels do not uniquely identify this workload; give it a unique label before exposing it")
-    if any(row["namespace"] == namespace and row["name"] == service_name for row in state["services"]):
+    existing = next((row for row in state["services"] if row["namespace"] == namespace and row["name"] == service_name), None)
+    if cfg.get("update"):
+        target = "VirtualMachine/" + workload_name if kind == "VirtualMachine" else workload_name
+        if not existing or not existing.get("uid") or existing["uid"] != cfg.get("uid") or existing.get("resource_version") != cfg.get("resource_version"):
+            raise ValueError("Service changed or disappeared; reopen VIP settings and review again")
+        if existing.get("targets") != [target] or existing.get("exclusive_vip") or service_name in (NAMES.object_name("smb"), NAMES.object_name("nfs")):
+            raise ValueError("This Service is shared across workloads or managed by an add-on; change it in its owning settings")
+        if existing["type"] != cfg.get("type", "LoadBalancer"):
+            raise ValueError("Keep the existing Service type; create a separate Service to change reachability")
+        state["services"] = [row for row in state["services"] if row is not existing]
+    elif existing:
         raise ValueError(f"Service {namespace}/{service_name} already exists")
     ports = _ports(cfg)
     service_type = str(cfg.get("type") or "LoadBalancer")
@@ -553,7 +570,7 @@ def service_plan(cfg, require_workload=True):
         mode = "nodes"
     if mode == "nodes" and not servicelb_present():
         raise ValueError("this cluster has no ServiceLB to put a Service on the nodes' own addresses; give it a VIP")
-    warnings = []
+    warnings = ["Updating this Service can interrupt existing connections; its ClusterIP and unrelated settings are preserved."] if cfg.get("update") else []
     if kind == "VirtualMachine":
         warnings.append("Guest must listen on the target ports and allow them through its firewall. A VIP does not provide VM or storage failover.")
         if workload and workload.get("ports") and any(
@@ -592,6 +609,8 @@ def service_plan(cfg, require_workload=True):
         if not in_pool:
             warnings.append("This address is outside the visible Harvester IP pools; verify DHCP and static reservations before creating it.")
 
+    if cfg.get("update") and (existing.get("lb_class") or "") != (PLATFORM.vip_spec(vip).get("loadBalancerClass") or ""):
+        raise ValueError("Changing this Service's load-balancer class requires replacement. Create an additional VIP Service first; the original listener is left untouched.")
     owners = []
     if vip:
         for row in state["services"]:
@@ -618,7 +637,9 @@ def service_plan(cfg, require_workload=True):
 
     declared = {(str(port.get("protocol") or "TCP").upper(), int(port.get("port") or 0))
                 for port in (workload or {}).get("ports", [])}
-    undeclared = [port for port in ports if (port["protocol"], int(port["targetPort"])) not in declared]
+    declared.update((str(port.get("protocol") or "TCP").upper(), port["name"])
+                    for port in (workload or {}).get("ports", []) if port.get("name"))
+    undeclared = [port for port in ports if (port["protocol"], port["targetPort"]) not in declared]
     if workload and undeclared and kind == "Deployment":
         warnings.append("One or more target ports are not declared by the Deployment. Kubernetes permits this, but verify the application is listening there.")
     return {"ready": True, "namespace": namespace, "name": service_name,
@@ -634,6 +655,31 @@ def service_plan(cfg, require_workload=True):
 
 def create_service(cfg):
     plan = service_plan(cfg)
+    if cfg.get("update"):
+        path = f"/api/v1/namespaces/{plan['namespace']}/services/{plan['name']}"
+        service = kget(path)
+        meta = service.get("metadata") or {}
+        if meta.get("uid") != cfg.get("uid") or meta.get("resourceVersion") != cfg.get("resource_version"):
+            raise ValueError("Service changed after review; reopen VIP settings")
+        # Preserve selector, ClusterIP, node ports and all unrelated metadata. Never delete/recreate.
+        annotations = meta.setdefault("annotations", {})
+        for key in ("kube-vip.io/loadbalancerIPs", "kube-vip.io/leaseName", "metallb.universe.tf/loadBalancerIPs", "metallb.universe.tf/allow-shared-ip"):
+            annotations.pop(key, None)
+        annotations.update(PLATFORM.vip_annotations(plan["vip"]))
+        annotations["homestead.io/vip-mode"] = plan["vip_mode"]
+        spec = service["spec"]
+        old_ports = {(p["port"], p.get("protocol", "TCP")): p for p in spec.get("ports", [])}
+        spec["ports"] = [{**p, **({"nodePort": old_ports[(p["port"], p["protocol"])]["nodePort"]}
+                                  if old_ports.get((p["port"], p["protocol"]), {}).get("nodePort") else {})} for p in plan["ports"]]
+        if "loadBalancerIP" in spec:
+            if plan["vip"]:
+                spec["loadBalancerIP"] = plan["vip"]
+            else:
+                spec.pop("loadBalancerIP", None)
+        if spec.get("externalIPs"):
+            raise ValueError("This Service also has externalIPs; use its YAML editor to review those addresses explicitly")
+        ksend("PUT", path, service)
+        return {"ok": True, **plan, "message": f"Service {plan['namespace']}/{plan['name']} updated; existing connections may reconnect"}
     if plan["workload_kind"] == "VirtualMachine":
         selector = plan["selector"]
     else:
