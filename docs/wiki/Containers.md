@@ -110,8 +110,8 @@ Paused Deployments cannot increase replicas through Edit until resumed and
 reviewed again. [Compose batches](Importing#batch-capacity-review) have a joint
 preflight and before-each-service recheck. [Manual host moves](#moving-between-hosts)
 also review the whole replacement pod and chosen destination before restarting.
-Unraid and cross-cluster migration, image updates and VM launches remain separate
-paths; extending the guard is planned.
+Image updates and rollback also review the complete rollout. Unraid/cross-cluster
+migration and VM launches remain separate paths; extending the guard is planned.
 
 The arithmetic follows Kubernetes' [resource request model](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/)
 and [init-sidecar accounting](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/).
@@ -219,8 +219,8 @@ visible and capacity must be reviewed again before resuming it.
 
 These rollout details apply to **Deploy/App Store → join existing workload**
 and the Edit dialog. Manual host moves review the explicit Recreate change;
-Compose has a separate whole-batch review. Image updates and cross-cluster/data
-migrations still need their own guarded review paths. These are read-only
+Compose has a separate whole-batch review. Image updates and rollback use the same
+full-pod planner; cross-cluster/data migrations still need guarded review paths. These are read-only
 preflight checks, not live failover validation or a guarantee that a rollout completes.
 
 ## Overriding capacity warnings
@@ -366,6 +366,37 @@ API clients first POST the move input to `/api/move/preview`, then send that
 same input plus `capacity_token` and `confirm_capacity: true` to `/api/move`.
 Unreviewed calls are refused. Legacy `auto` calls must select and review an
 explicit suggested destination; it cannot change silently at execution time.
+
+## Reviewed image updates and rollback
+
+Image updates and rollback show the exact immutable target images and a full-pod
+capacity review before changing anything. This includes matching init containers,
+rollout downtime, overlapping pods and storage restrictions. High or unknown RAM
+can be acknowledged; hard placement blockers cannot.
+
+Each approval lasts ten minutes and is bound to the workload identity/version,
+action, target images and recovery images. Changed registry results, an edited
+workload, expired approval or newly insufficient capacity requires another review.
+The server rechecks capacity and update policy before applying the change.
+
+Staged updates run one at a time and wait for readiness, with Homestead last.
+Failure, lost contact or changed rollout identity stops the remaining queue.
+Closing the dialog also stops unstarted updates; submitted rollouts continue and
+can be followed in Jobs. After reconnecting or self-updating, check the active job
+before reviewing the remaining selection. The browser does not replay the queue.
+
+Recovery images use each container's own observed digest, including init containers.
+A stopped workload with no recorded digest resolves its old template tag at review
+time; that is not claimed to be a previously running image. Legacy mutable rollback
+records are refused instead of silently following a tag that may have changed.
+Image rollback does not undo application data/schema changes; keep suitable backups.
+
+API clients POST `ns`, `name`, `action` (`update` or `rollback`) and
+`approved: true` to `/api/image-updates/preview`. Send the same input with
+`capacity_token` and `confirm_capacity: true` to `/api/image-updates/apply`
+or `/api/image-updates/rollback`. Unreviewed calls are refused.
+Cancelling an image rollout from Jobs opens this same reviewed rollback flow;
+it cannot bypass admission through the generic cancellation endpoint.
 
 ## Its own LAN address
 

@@ -8,6 +8,7 @@ rollback cannot accidentally re-pull a broken mutable tag.
 import base64
 import homestead_names as NAMES
 import calendar
+import copy
 import concurrent.futures
 import hashlib
 import json
@@ -19,6 +20,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import homestead_rollout_capacity as ROLLOUT
 
 
 kget = ksend = None
@@ -283,7 +285,7 @@ def _matching_pods(dep, pods):
             all(p["metadata"].get("labels", {}).get(k) == v for k, v in labels.items())]
 
 
-def _check_deployment(dep, pods, force=False):
+def _check_deployment(dep, pods, force=False, persist=True):
     ns, name = dep["metadata"]["namespace"], dep["metadata"]["name"]
     tracked = _annotation_json(dep, TRACKED)
     ran = _annotation_json(dep, RAN)
@@ -346,7 +348,7 @@ def _check_deployment(dep, pods, force=False):
         except Exception as error:
             item["error"] = str(error)[:180]
         images.append(item)
-    if ran_now != ran:
+    if persist and ran_now != ran:
         try:
             ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
                   {"metadata": {"annotations": {RAN: json.dumps(ran_now, sort_keys=True)}}},
@@ -522,32 +524,66 @@ def _history(event):
         pass
 
 
-def apply_update(ns, name):
+def _review_pods(dep):
+    inventory = kget("/api/v1/pods")
+    if not isinstance(inventory.get("items"), list) or (inventory.get("metadata") or {}).get("continue"):
+        raise ValueError("complete pod inventory is required before reviewing an image change")
+    if not _matching_pods(dep, inventory["items"]):
+        return []
+    owned, known = ROLLOUT.owned_pods(dep, inventory["items"], kget, dep["metadata"]["namespace"])
+    if not known:
+        raise ValueError("pod ownership is unknown; refresh before reviewing image recovery")
+    return owned
+
+
+def _previous_image(dep, container, pods, fallback_digest=""):
+    """Pin recovery from this container's observation, never another container."""
+    ref, name = container.get("image", ""), container["name"]
+    digest = parse_image(ref).get("digest", "")
+    if not digest:
+        observed = set()
+        for pod in pods:
+            spec = pod.get("spec") or {}
+            actual = next((c for c in list(spec.get("containers") or []) +
+                           list(spec.get("initContainers") or []) if c.get("name") == name), {})
+            if actual.get("image") != ref:
+                continue
+            status = pod.get("status") or {}
+            for row in list(status.get("containerStatuses") or []) + list(status.get("initContainerStatuses") or []):
+                if row.get("name") == name:
+                    match = re.search(r"(sha256:[0-9a-f]{64})", row.get("imageID", ""))
+                    if match:
+                        observed.add(match.group(1))
+        if len(observed) > 1:
+            raise ValueError(f"{name} has multiple running digests; no single immutable rollback target is known")
+        digest = next(iter(observed), "") or fallback_digest
+        if not digest and int(dep["spec"].get("replicas", 1) or 0) == 0:
+            digest = manifest_info(ref, _secret_credentials(dep["metadata"]["namespace"], dep), True)["digest"]
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest or ""):
+        raise ValueError(f"immutable recovery image is unavailable for {name}; no image change was applied")
+    return _immutable(ref, digest)
+
+
+def prepare_update(ns, name):
+    """Build the exact rollout without writing workload metadata or history."""
     if _managed_smb(ns, name):
         raise ValueError("SMB is managed from Network Shares")
-    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    pods = kget("/api/v1/pods").get("items", [])
-    check = _check_deployment(dep, pods, True)
+    current = copy.deepcopy(kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"))
+    dep = copy.deepcopy(current)
+    pods = _review_pods(current)
+    check = _check_deployment(dep, pods, True, persist=False)
     chosen = {x["container"]: x for x in check["images"] if x["available"]}
     if not chosen:
         raise ValueError("no image update is currently available")
     annotations = dep["metadata"].setdefault("annotations", {})
     tracked = _annotation_json(dep, TRACKED)
     before = {c["name"]: c.get("image", "") for c in _pod_containers(dep)}
-    # Make the rollback target immutable too. On a first managed update the
-    # Deployment may still contain a mutable tag even though the pod status
-    # tells us the exact manifest that is running.
-    for image in check["images"]:
-        if image.get("current_digest"):
-            before[image["container"]] = _immutable(image["source"], image["current_digest"])
-    _write(annotations, PREVIOUS, json.dumps({"images": before, "sources": tracked,
-                                        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
-                                       separators=(",", ":")))
     for container in dep["spec"]["template"]["spec"].get("containers", []):
         update = chosen.get(container["name"])
         if not update:
             continue
         tracked[container["name"]] = update["candidate"]
+        before[container["name"]] = _previous_image(current, container, pods, update.get("current_digest", ""))
         container["image"] = _immutable(update["candidate"], update["remote_digest"])
         container["imagePullPolicy"] = "IfNotPresent"
         _drop_pinned_version(container)
@@ -555,52 +591,93 @@ def apply_update(ns, name):
     # follows the container it belongs to rather than staying on the tag the
     # workload was first installed with.
     for init in dep["spec"]["template"]["spec"].get("initContainers", []) or []:
-        update = next((chosen[name] for name, item in chosen.items()
-                       if _same_repository(init.get("image", ""), before.get(name, ""))), None)
-        if not update:
+        matches = [item for name, item in chosen.items()
+                   if _same_repository(init.get("image", ""), before.get(name, ""))]
+        if not matches:
             continue
+        if len({(item["candidate"], item["remote_digest"]) for item in matches}) > 1:
+            raise ValueError(f"init container {init['name']} matches conflicting image updates; update its mapping explicitly")
+        update = matches[0]
+        before[init["name"]] = _previous_image(current, init, pods)
         tracked[init["name"]] = update["candidate"]
         init["image"] = _immutable(update["candidate"], update["remote_digest"])
         init["imagePullPolicy"] = "IfNotPresent"
         _drop_pinned_version(init)
-    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    # Immutable targets are checked before the prepared object can be committed.
+    for container in _pod_containers(dep):
+        original = next(c for c in _pod_containers(current) if c["name"] == container["name"])
+        if container.get("image") != original.get("image"):
+            old = before[container["name"]]
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}", parse_image(old).get("digest", "")):
+                raise ValueError(f"immutable rollback image is unavailable for {container['name']}; no update was applied")
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}", parse_image(container["image"]).get("digest", "")):
+                raise ValueError("registry returned an invalid image digest")
+    # Init rollback references were resolved after the initial app mapping.
+    _write(annotations, PREVIOUS, json.dumps({"images": before, "sources": _annotation_json(current, TRACKED)},
+                                           separators=(",", ":")))
     _write(annotations, TRACKED, json.dumps(tracked, separators=(",", ":")))
-    _write(annotations, LAST_ACTION, "update " + now)
-    dep["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[ROLLOUT_AT] = now
-    result = ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
-    _history({"at": now, "action": "update", "namespace": ns, "deployment": name,
-              "before": before,
-              "after": {c["name"]: c["image"] for c in _pod_containers(result)}})
-    return progress(ns, name, result)
+    return {"current": current, "proposed": dep, "before": before, "action": "update"}
 
 
-def rollback(ns, name):
+def prepare_rollback(ns, name):
     if _managed_smb(ns, name):
         raise ValueError("SMB is managed from Network Shares")
-    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    original = copy.deepcopy(kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"))
+    dep = copy.deepcopy(original)
     previous = _annotation_json(dep, PREVIOUS)
     restore = previous.get("images") or {}
     if not restore:
         raise ValueError("no managed update is available to roll back")
     current = {c["name"]: c.get("image", "") for c in _pod_containers(dep)}
+    pods = None
+    changed = False
     for container in _pod_containers(dep):
         if container["name"] in restore:
+            if container.get("image") == restore[container["name"]]:
+                continue
+            changed = True
+            if container.get("image") != restore[container["name"]] and not re.fullmatch(
+                    r"sha256:[0-9a-f]{64}", parse_image(restore[container["name"]]).get("digest", "")):
+                raise ValueError(f"saved rollback image for {container['name']} is mutable; review and pin an exact digest first")
+            if pods is None:
+                pods = _review_pods(original)
+            current[container["name"]] = _previous_image(original, container, pods)
             container["image"] = restore[container["name"]]
             container["imagePullPolicy"] = "IfNotPresent"
     annotations = dep["metadata"].setdefault("annotations", {})
+    if not changed:
+        raise ValueError("saved rollback does not change any current container image")
     _write(annotations, PREVIOUS, json.dumps({"images": current,
-                                        "sources": _annotation_json(dep, TRACKED),
-                                        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+                                        "sources": _annotation_json(dep, TRACKED)},
                                        separators=(",", ":")))
     if isinstance(previous.get("sources"), dict):
         _write(annotations, TRACKED, json.dumps(previous["sources"], separators=(",", ":")))
+    return {"current": original, "proposed": dep, "before": current, "action": "rollback"}
+
+
+def commit_prepared(prepared):
+    """Write only the prepared manifest; its resourceVersion is the concurrency fence."""
+    dep = copy.deepcopy(prepared["proposed"])
+    ns, name = dep["metadata"]["namespace"], dep["metadata"]["name"]
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    _write(annotations, LAST_ACTION, "rollback " + now)
+    annotations = dep["metadata"].setdefault("annotations", {})
+    previous = _annotation_json(dep, PREVIOUS)
+    previous["at"] = now
+    _write(annotations, PREVIOUS, json.dumps(previous, separators=(",", ":")))
+    _write(annotations, LAST_ACTION, prepared["action"] + " " + now)
     dep["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[ROLLOUT_AT] = now
     result = ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
-    _history({"at": now, "action": "rollback", "namespace": ns, "deployment": name,
-              "before": current, "after": restore})
+    _history({"at": now, "action": prepared["action"], "namespace": ns, "deployment": name,
+              "before": prepared["before"], "after": {c["name"]: c["image"] for c in _pod_containers(result)}})
     return progress(ns, name, result)
+
+
+def apply_update(ns, name):
+    return commit_prepared(prepare_update(ns, name))
+
+
+def rollback(ns, name):
+    return commit_prepared(prepare_rollback(ns, name))
 
 
 PULL_IMAGE = re.compile(r'image\s+"([^"]+)"')
@@ -819,7 +896,7 @@ def progress(ns, name, dep=None):
             pull.update(pull_progress(pull.get("node", ""), pull.get("image", "")))
         except Exception:
             pass
-    return {"ns": ns, "name": name, "phase": phase, "desired": desired, "pull": pull,
+    return {"ns": ns, "name": name, "uid": dep["metadata"].get("uid", ""), "phase": phase, "desired": desired, "pull": pull,
             "replicas": replicas, "updated": updated, "ready": ready,
             "available": available, "unavailable": unavailable, "generation": generation,
             "observed_generation": observed, "pods": pod_rows, "problems": problems,
