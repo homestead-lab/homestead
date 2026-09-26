@@ -28,7 +28,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.172")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.173")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -971,7 +971,10 @@ def pod_container_rows(pod):
                 "image": container.get("image", ""),
                 "ready": bool(cs.get("ready", False)),
                 "state": state,
-                "message": str(message)[:220],
+                # Why, in a sentence, where it is a pull that failed; the
+                # whole message beside it - its cause is at the end.
+                "message": (UPDATES.explain_pull(message) or str(message))[:220],
+                "detail": str(message)[:1200],
                 "restarts": int(cs.get("restartCount", 0) or 0),
             })
     return rows
@@ -1169,9 +1172,10 @@ def get_workloads():
                 if waiting:
                     reason = waiting.get("reason", "Waiting")
                     waits.append({"container": cs.get("name", ""), "reason": reason,
-                                  "message": (waiting.get("message") or "")[:220]})
+                                  "message": (UPDATES.explain_pull(waiting.get("message")) or waiting.get("message") or "")[:400]})
                     if reason in fatal_reasons:
-                        fatal_waits.append(f"{p['metadata']['name']}: {reason}")
+                        why = UPDATES.explain_pull(waiting.get("message"))
+                        fatal_waits.append(f"{p['metadata']['name']}: {reason}" + (f" - {why}" if why else ""))
             if not ready:
                 transition_ages.append(age_secs(p["metadata"].get("creationTimestamp")))
             # Pending and unscheduled says nothing; the scheduler said why.
