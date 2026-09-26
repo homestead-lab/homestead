@@ -757,11 +757,12 @@ $(grep "|$level|" "$FOUND")
 EOF
     done
     bad=$(grep -c '|bad|' "$FOUND"); warn=$(grep -c '|warn|' "$FOUND")
-    set -- "$@" "---" "------------" \
+    # A tag starting with "-" reads to whiptail as an option, and it quits.
+    set -- "$@" "~" "" \
       "@fix" "Fix everything marked safe" "@again" "Check again" "@save" "Save this report"
     pick=$(menu "Health - $NODE" "$KIND · $bad wrong, $warn worth a look. Choose one to see it and fix it:" "$@") || return 0
     case "$pick" in
-      ---) ;;
+      "~") ;;
       @fix)
         if confirm "Fix everything safe" "Apply every fix marked safe - restarting a stopped service, turning on time sync and iscsid, uncordoning this node, clearing failed pods, cleaning up a full disk, restarting CoreDNS or Homestead?"; then
           grep -E '\|(bad|warn)\|' "$FOUND" | while IFS='|' read -r id lvl title detail fix safe; do [ -n "$fix" ] && [ "$safe" = yes ] && $fix; done
