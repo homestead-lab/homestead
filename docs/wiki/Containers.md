@@ -108,8 +108,10 @@ Renames and data-copy edits review conditional post-stop workload capacity;
 copy-helper placement and capacity changes during a long copy are not simulated.
 Paused Deployments cannot increase replicas through Edit until resumed and
 reviewed again. [Compose batches](Importing#batch-capacity-review) have a joint
-preflight and before-each-service recheck. Unraid migration, standalone moves,
-image updates and VM launches remain separate paths; extending the guard is planned.
+preflight and before-each-service recheck. [Manual host moves](#moving-between-hosts)
+also review the whole replacement pod and chosen destination before restarting.
+Unraid and cross-cluster migration, image updates and VM launches remain separate
+paths; extending the guard is planned.
 
 The arithmetic follows Kubernetes' [resource request model](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/)
 and [init-sidecar accounting](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/).
@@ -216,8 +218,9 @@ A paused workload only saves its template; prospective resume blockers remain
 visible and capacity must be reviewed again before resuming it.
 
 These rollout details apply to **Deploy/App Store → join existing workload**
-and the Edit dialog. Compose has a separate whole-batch review; image updates
-and migrations still need their own guarded review paths. These are read-only
+and the Edit dialog. Manual host moves review the explicit Recreate change;
+Compose has a separate whole-batch review. Image updates and cross-cluster/data
+migrations still need their own guarded review paths. These are read-only
 preflight checks, not live failover validation or a guarantee that a rollout completes.
 
 ## Updates
@@ -317,6 +320,38 @@ that has it. Features are named under **Settings → Hardware**; see
 
 Each is a preference (steer, but start anyway) or a requirement (wait rather
 than break it). The editor warns when a rule cannot be met.
+
+### Moving between hosts
+
+The host picker is a preliminary hardware/usage comparison. **Review move**
+checks the full Deployment, including sidecars, init stages, replicas, resource
+requests, host ports, PVC restrictions and checked topology rules. A selected
+host must fit the whole desired replica count, even for a soft preference.
+This is conservative for spread workloads: use the placement editor to change
+their multi-host rules instead. Soft preferences remain soft; Kubernetes may
+choose another eligible host, including the current one. Hard pins prevent failover.
+
+Moves save the **Recreate** strategy: old pods stop before replacements start,
+so every container in the workload has downtime. Clearing a host preference
+can also restart pods. A stopped workload stays stopped; paused workloads and
+templates with a direct `nodeName` binding must be resolved before moving.
+Other required node selectors and affinity rules are preserved, not cleared.
+Host-path files are not copied and pod-local `emptyDir` contents are lost.
+
+The signed ten-minute review binds the destination, pin mode and controller
+UID/resourceVersion. The server checks fresh capacity before its PUT and keeps
+that resourceVersion, so a concurrent edit conflicts instead of being overwritten.
+Missing/incomplete pod or ReplicaSet ownership inventory blocks a move. Missing
+live RAM and other unknown scheduling constraints remain explicit warnings.
+The review conditionally releases only UID-owned old pods' reservations; it
+cannot guarantee termination, storage detach/reattachment or readiness. It is
+not an atomic reservation against concurrent starts or a live failover rehearsal.
+Follow the rollout in **Recent jobs**; a saved placement is not a completed move.
+
+API clients first POST the move input to `/api/move/preview`, then send that
+same input plus `capacity_token` and `confirm_capacity: true` to `/api/move`.
+Unreviewed calls are refused. Legacy `auto` calls must select and review an
+explicit suggested destination; it cannot change silently at execution time.
 
 ## Its own LAN address
 

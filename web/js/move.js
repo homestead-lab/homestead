@@ -27,22 +27,29 @@ function fitAfter(node, wl) {
   return { cpuPct: Math.round(cpuPct), memPct: Math.round(memPct) };
 }
 
+let HOST_MOVE_REVIEW = null;
+let HOST_MOVE_SEQUENCE = 0;
+function invalidateHostMove() { HOST_MOVE_REVIEW = null; ++HOST_MOVE_SEQUENCE; }
+
 window.moveWorkload = async (name, ns) => {
+  invalidateHostMove();
+  const sequence = HOST_MOVE_SEQUENCE;
   const wl = Object.assign(findWl(name), ns ? { ns } : {});
   childModal("Move · " + name, '<div class="empty"><span class="spin2"></span>checking capacity and hardware constraints…</div>', true);
   let plan;
   try {
     await loadHardwareFeatures();
     plan = await api(`/api/move/plan?ns=${encodeURIComponent(wl.ns)}&name=${encodeURIComponent(name)}&cpu=${wl.cpu || 0}&mem=${wl.mem_mb || 0}`);
+    if (sequence !== HOST_MOVE_SEQUENCE) return;
     // An answer with no hosts in it is an error to show, not a spinner to leave running.
     if (!Array.isArray(plan?.candidates)) throw new Error("the plan came back without any hosts to compare");
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty"><b>Could not build a placement plan</b><br><span class="dim small">${esc(e.message)}</span></div>`; return; }
+  } catch (e) { if (sequence === HOST_MOVE_SEQUENCE) $("#mbody").innerHTML = `<div class="empty"><b>Could not build a placement plan</b><br><span class="dim small">${esc(e.message)}</span></div>`; return; }
   const here = plan.current || wl.node || (wl.nodes && wl.nodes[0]) || "";
   const req = plan.requirements || { devices: [], resources: {}, labels: {} };
   const viable = (plan.candidates || []).filter(n => n.ok && !n.current);
   window.__moveStranded = !viable.length;
   $("#mbody").innerHTML = `
-    <div class="between"><p class="muted small">Currently on <b>${esc(here || "no node")}</b>. Pick an eligible host or let Homestead choose the best fit.</p>
+    <div class="between"><p class="muted small">Currently on <b>${esc(here || "no node")}</b>. Pick a host for a full capacity review. These initial estimates are not an admission check.</p>
       ${plan.recommended ? `<button class="btn pri sm" onclick="pickMove('${esc(plan.recommended)}')">Best fit · ${esc(plan.recommended.replace("harvester-", ""))}</button>` : ""}</div>
     ${(req.devices || []).length || (req.features || []).length || Object.keys(req.labels || {}).length ? `<div class="constraintbar"><b>Required</b>
       ${(req.devices || []).map(d => `<span class="tag hw">${esc(d.label)}</span>`).join("")}
@@ -63,13 +70,13 @@ window.moveWorkload = async (name, ns) => {
             </div>
             ${cur ? '<span class="pill low">current</span>'
               : blocked ? '<span class="pill crit">blocked</span>'
-              : '<span class="pill ok">available</span>'}
+              : '<span class="pill low">review needed</span>'}
           </div>
           <div style="margin-top:12px">
-            <div class="between"><span class="dim xs">CPU after move</span>
+            <div class="between"><span class="dim xs">Preliminary CPU estimate</span>
               <span class="mono small">${n.cpu_after}%</span></div>
             ${meter(n.cpu_after, 'style="margin:5px 0 10px"')}
-            <div class="between"><span class="dim xs">RAM after move</span>
+            <div class="between"><span class="dim xs">Preliminary RAM estimate</span>
               <span class="mono small">${n.mem_after}%</span></div>
             ${meter(n.mem_after, 'style="margin:5px 0 0"')}
           </div>
@@ -87,22 +94,25 @@ window.moveWorkload = async (name, ns) => {
       <label class="switch"><input type="checkbox" id="mv_pin"> Hard pin ${tip("A hard pin guarantees this host but prevents automatic failover. The default is a preference so the scheduler may recover elsewhere if the node fails.")}</label></div>
 
     <div class="row" style="margin-top:6px">
-      <button class="btn pri" id="mv_go" onclick="doMoveNow('${esc(wl.ns)}','${esc(name)}')" disabled>Move</button>
+      <button class="btn pri" id="mv_go" onclick="doMoveNow('${esc(wl.ns)}','${esc(name)}')" disabled>Review move</button>
       <button class="btn" onclick="modalBack()">Cancel</button>
     </div>
     <div class="note" style="margin-top:14px">Eligible hosts already account for every configured hardware feature, passthrough path, USB ID, node label, advertised device resource, readiness and cordon. This is a stop-then-start, not a live move. A
     ReadWriteOnce volume can only attach to one node at a time, so the old pod must fully
-    terminate before the new one starts — expect a short outage.</div>`;
+    terminate before the new one starts. Expect downtime; termination and storage reattachment can take longer or fail.</div>`;
 
   const un = $("#mv_unpin");
   un.onchange = () => {
+    invalidateHostMove();
     $("#mv_go").disabled = !un.checked && !window.__moveTarget;
     if (un.checked) $$(".movecard").forEach(c => c.classList.remove("sel"));
   };
+  $("#mv_pin").onchange = invalidateHostMove;
   window.__moveTarget = null;
 };
 
 window.pickMove = node => {
+  invalidateHostMove();
   window.__moveTarget = node;
   $("#mv_unpin").checked = false;
   $$(".movecard").forEach(c => c.classList.toggle("sel", c.dataset.node === node));
@@ -113,15 +123,46 @@ window.doMoveNow = async (ns, name) => {
   const unpin = $("#mv_unpin").checked;
   const node = unpin ? null : window.__moveTarget;
   if (!unpin && !node) return toast("pick a host first", "bad");
-  if (unpin && window.__moveStranded && !confirm(`${name} has no compatible failover host.\n\nIt will keep running on its current host, but will stay Pending if that host stops. Clear its host preference anyway?`)) return;
-  $("#mv_go").disabled = true; $("#mv_go").textContent = "Moving…";
+  await window.hostMoveReview({ ns, name, node, pin: !unpin && $("#mv_pin").checked });
+};
+
+window.hostMoveReview = async body => {
+  if (HOST_MOVE_REVIEW?.submitting) return;
+  invalidateHostMove();
+  const sequence = HOST_MOVE_SEQUENCE, config = JSON.parse(JSON.stringify(body));
+  try {
+    const review = await api("/api/move/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(config) });
+    if (sequence !== HOST_MOVE_SEQUENCE) return;
+    if (!review.capacity || !review.capacity_token || !review.capacity.move) throw new Error("Move review unavailable; refresh before moving.");
+    HOST_MOVE_REVIEW = { config, ...review, submitting: false };
+    childModal("Review move · " + config.name, `<p>Destination: <b>${esc(review.capacity.move.node || "scheduler chooses")}</b> · ${esc(review.capacity.move.mode)}.</p>
+      <div class="note warn">This saves a Recreate strategy: all containers in this workload restart after the old pods stop. Clearing a preference can also restart them. Volumes must detach and reattach; this is not live migration.</div>
+      ${deployCapacityHtml(review.capacity)}
+      ${review.capacity.move.target ? `<details${review.capacity.move.target.blocked ? " open" : ""}><summary>Selected host: full desired replica count</summary><p class="small muted">The selected host must fit the desired replicas even for a preference. This check does not turn a preference into a hard pin.</p>${deployCapacityHtml(review.capacity.move.target)}</details>` : ""}
+      ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="hostMoveConfirm"> I understand the downtime, data, placement and memory warnings</label>` : ""}
+      <div class="modalactions"><button class="btn" onclick="invalidateHostMove();modalBack()">Back</button><button class="btn pri" id="hostMoveGo" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmHostMove()">Apply reviewed placement</button></div>`, true);
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+window.confirmHostMove = async () => {
+  const review = HOST_MOVE_REVIEW;
+  if (!review || review.submitting || review.capacity.blocked || !$("#hostMoveConfirm")?.checked)
+    return toast("Review the move and acknowledge its warnings first", "bad");
+  review.submitting = true;
+  const button = $("#hostMoveGo");
+  button.disabled = true; button.textContent = "Applying placement…";
   try {
     await api("/api/move", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ns, name, node, pin: !unpin && $("#mv_pin").checked }) });
-    toast(`${name} → ${node || "any node"}`, "ok");
+      body: JSON.stringify({ ...review.config, capacity_token: review.capacity_token, confirm_capacity: true }) });
+    invalidateHostMove();
+    toast(`${review.config.name}: placement saved; watch rollout progress in Recent jobs`, "ok");
     closeModal();
     setTimeout(() => refresh(true), 1500);
-  } catch (e) { toast(e.message, "bad"); $("#mv_go").disabled = false; $("#mv_go").textContent = "Move"; }
+  } catch (e) {
+    invalidateHostMove();
+    toast(e.message, "bad"); button.disabled = false; button.textContent = "Review again";
+    button.onclick = () => window.hostMoveReview(review.config);
+  }
 };
 
 /* "get everything off this host" — drain without the reboot */

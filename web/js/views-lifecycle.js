@@ -386,12 +386,7 @@ window.wlMoveLegacy = async (ns, name) => {
     a ReadWriteOnce volume can only attach to one node at a time.</div>`);
 };
 window.doMove = async (ns, name) => {
-  try {
-    const node = $("#mv_node").value;
-    await api("/api/move", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ns, name, node: node || null }) });
-    toast(`${name} → ${node || "any node"}`, "ok"); closeModal(); setTimeout(() => refresh(true), 1400);
-  } catch (e) { toast(e.message, "bad"); }
+  await window.hostMoveReview({ ns, name, node: $("#mv_node").value || null, pin: true });
 };
 
 /* ---------------- node power ---------------- */

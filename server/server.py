@@ -26,7 +26,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.168")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.169")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2197,6 +2197,82 @@ def rollout_review_context(current):
     if not meta.get("uid") or not meta.get("resourceVersion"):
         raise ValueError("workload identity/version is unavailable; refresh before changing its pod")
     return {"uid": meta["uid"], "resourceVersion": meta["resourceVersion"]}
+
+
+def move_capacity_plan(body):
+    """Review the exact host-placement edit without stopping or writing anything."""
+    ns, name = _dns_name(body.get("ns"), "namespace"), _dns_name(body.get("name"), "workload name")
+    guard_managed_smb(ns, name)
+    if body.get("auto"):
+        raise ValueError("select an explicit suggested host and review it before moving")
+    node = body.get("node") or None
+    if node and (not isinstance(node, str) or len(node) > 253 or
+                 not all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in node.split("."))):
+        raise ValueError("host must be a valid Kubernetes node name")
+    if not isinstance(body.get("pin", False), bool):
+        raise ValueError("pin must be true or false")
+    cache = {}
+    def read(path):
+        if path not in cache:
+            cache[path] = kget(path)
+        return copy.deepcopy(cache[path])
+    current = read(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    context = {"action": "host-move", **rollout_review_context(current)}
+    if current["spec"].get("paused"):
+        raise ValueError("paused workloads cannot be moved; resume and review placement again")
+    if current["spec"]["template"]["spec"].get("nodeName"):
+        raise ValueError("this pod template uses a direct nodeName binding; remove it before using reviewed host placement")
+    # A move stops the old pods. Never interpret incomplete ownership as free
+    # capacity, nor invite consent to stopping a workload on that assumption.
+    pods = ROLLOUT_CAPACITY.items(read, "/api/v1/pods")
+    _, known = ROLLOUT_CAPACITY.owned_pods(current, pods, read, ns)
+    if not known:
+        raise ValueError("pod ownership is unavailable; no move can be reviewed until inventory is complete")
+    nodes = copy.deepcopy(PLACE.get_nodes())
+    if node and not any(n["name"] == node for n in nodes):
+        raise ValueError("selected host no longer exists; review placement again")
+    proposed = copy.deepcopy(current)
+    mode = PLACE.apply_node_placement(proposed, node, body.get("pin", False))
+    threshold = get_app_settings()["thresholds"]["memory"]["critical"]
+    def planner(*args, **kwargs):
+        return PLACE.manifest_plan(*args, **kwargs, read=read)
+    def review(dep):
+        return ROLLOUT_CAPACITY.plan(current, dep, ns, read, lambda: nodes, planner, threshold)
+    capacity = review(proposed)
+    # Check the chosen destination even for a soft preference, where Kubernetes
+    # might otherwise hide its shortage by finding room on the current host.
+    target = None
+    if node:
+        pinned = copy.deepcopy(proposed)
+        pinned["spec"]["template"]["spec"].setdefault("nodeSelector", {})["kubernetes.io/hostname"] = node
+        target = review(pinned)
+        capacity["blocked"] = capacity["blocked"] or target["blocked"]
+    capacity["move"] = {"node": node, "mode": mode, "target": target}
+    capacity["warnings"].append("A preferred host is not guaranteed; Kubernetes may choose another eligible host, including the current host. Hard pinning prevents failover.")
+    spec = proposed["spec"]["template"]["spec"]
+    if any("hostPath" in v for v in spec.get("volumes", [])):
+        capacity["warnings"].append("Host paths are not copied: files and devices may differ on the destination. Verify required host-local data before moving.")
+    if any("emptyDir" in v for v in spec.get("volumes", [])):
+        capacity["warnings"].append("Pod-local emptyDir data is lost when old pods are replaced.")
+    capacity["requires_confirmation"] = True
+    return proposed, capacity, context
+
+
+def preview_host_move(body):
+    _, capacity, context = move_capacity_plan(body)
+    return {"capacity": capacity, "capacity_token": CAPACITY_REVIEW.issue(body, context)}
+
+
+def reviewed_host_move(body):
+    proposed, capacity, context = move_capacity_plan(body)
+    CAPACITY_REVIEW.enforce(body, capacity, context)
+    meta = proposed["metadata"]
+    # Preserve resourceVersion: a concurrent controller edit must conflict,
+    # never be silently overwritten by a second, unreviewed fetch-and-move.
+    ksend("PUT", f"/apis/apps/v1/namespaces/{meta['namespace']}/deployments/{meta['name']}", proposed)
+    PLACE._bust("wl", "ov", "flow", "nodes", "impact:")
+    return {"ok": True, "moved": meta["name"], "to": capacity["move"]["node"] or "any node",
+            "mode": capacity["move"]["mode"]}
 
 
 def capacity_manifest(config, existing=None):
@@ -6245,16 +6321,10 @@ class H(BaseHTTPRequestHandler):
                         result["network"] = message
                         _cache.pop("network", None)
                 return self._send(200, result)
+            if p == "/api/move/preview":
+                return self._send(200, preview_host_move(b))
             if p == "/api/move":
-                guard_managed_smb(b.get("ns"), b.get("name"))
-                node = b.get("node")
-                if b.get("auto"):
-                    pl = PLACE.plan(b["ns"], b["name"], b.get("cpu", 0), b.get("mem_mb", 0))
-                    node = pl["recommended"]
-                    if not node:
-                        return self._send(409, {"error": "no host can take this workload — "
-                                                "check hardware requirements", "plan": pl})
-                result = PLACE.move(b["ns"], b["name"], node, b.get("pin", False))
+                result = reviewed_host_move(b)
                 result["operation"] = OPS.start(
                     "deployment", f"Move {b['name']}",
                     {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
@@ -6800,7 +6870,7 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.168 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.169 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()
