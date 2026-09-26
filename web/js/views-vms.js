@@ -35,11 +35,85 @@ async function viewVMs() {
   paint(`<div class="phead"><div><h2>Virtual machines</h2>
       <p>${vms.length} VM${vms.length === 1 ? "" : "s"} · ${running} running · ${STATE.platform?.harvester === false ? `KubeVirt on ${esc(platformName(STATE.platform))}${STATE.platform.cdi ? "" : " · no CDI"}` : "KubeVirt on Harvester"}</p></div>
       <div class="row">${layoutSwitch("vms", "viewVMs")}
+      <button class="btn" onclick="vmStore()" title="Cloud images from their publishers - Ubuntu, Debian, Fedora, Rocky and more - to start VMs from">${icon("store")}Image store</button>
       <button class="btn" data-need="operator" onclick="k3sCluster()" title="A k3s cluster made of VMs here, each with an address of its own">＋ k3s cluster</button>
       <button class="btn pri" data-need="operator" onclick="vmNew()">＋ New VM</button></div></div>
     ${!rows.length ? `<div class="empty">${q ? "Nothing matches that search." : "No virtual machines yet — create one to get started."}</div>`
       : layout === "rows" ? vmTable(rows) : `<div class="vm-grid">${rows.map(vmCard).join("")}</div>`}`);
 }
+
+/* ---------------- the image store ----------------
+   Cloud images from the people who make them. On Harvester one is kept as a
+   Harvester image and can keep itself current; elsewhere a VM always starts
+   from the publisher's newest build. */
+window.vmStore = async (check = false) => {
+  if (!$("#mbody") || $("#modal").classList.contains("hidden")) modal("Image store", '<div class="empty"><span class="spin2"></span>reading the catalogue</div>', true);
+  let s;
+  try { s = await api("/api/vm/store" + (check ? "?check=1" : "")); } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  STATE.data.vmStore = s;
+  const state = r => {
+    if (!s.harvester) return "";
+    if (!r.kept) return '<span class="pill slim">not kept</span>';
+    const v = r.versions[r.versions.length - 1];
+    if (!v) return '<span class="pill slim med">starting</span>';
+    if (v.failed) return '<span class="pill slim crit">download failed</span>';
+    if (!v.ready) return `<span class="pill slim med">downloading ${Math.round(v.progress || 0)}%</span>`;
+    return `<span class="pill slim ok" data-tip="${esc(v.image)}">kept · ${esc(new Date((v.added || 0) * 1000).toLocaleDateString())}</span>`
+      + (r.update ? ' <span class="pill slim warn" data-tip="The publisher has a newer build; it downloads on the next check if this keeps itself current">newer build out</span>' : "");
+  };
+  const actions = r => `<div class="row" style="gap:6px;justify-content:flex-end">
+      ${s.harvester && !r.kept ? `<button class="btn sm" data-need="admin" onclick="vmStoreKeep('${esc(r.id)}')" data-tip="Download it now as a Harvester image, so VMs start from a local copy">Keep</button>` : ""}
+      ${s.harvester && r.kept ? `<label class="switch xs" data-tip="Download each new build twice a day, and let go of older builds no disk came from"><input type="checkbox" ${r.auto ? "checked" : ""} data-need="admin" onchange="vmStoreAuto('${esc(r.id)}', this.checked)"> current</label>` : ""}
+      <button class="btn sm pri" data-need="operator" onclick="vmStoreNew('${esc(r.id)}')">New VM</button>
+      ${s.harvester && r.kept ? `<button class="btn sm danger" data-need="admin" title="Stop keeping it; builds a disk came from stay" onclick="vmStoreForget('${esc(r.id)}')">${icon("trash")}</button>` : ""}</div>`;
+  const rows = s.images.filter(r => r.available);
+  $("#mbody").innerHTML = `
+    <p class="small" style="margin-top:0">Cloud images from their publishers, for this cluster's <b>${esc(s.arch)}</b> nodes. Each has cloud-init:
+      the VM's password is set for its usual user (shown below), and it grows to fill its disk.</p>
+    ${s.harvester ? `<div class="note">Kept images are Harvester images - downloaded once, copied for each VM. One that keeps itself <b>current</b> is
+      checked twice a day; a new build downloads beside the old, and older builds no disk came from are deleted.</div>` : `<div class="note">${esc(s.note)}</div>`}
+    <div class="card flat pad0" style="margin-top:12px"><div class="tblwrap"><table class="tbl stack dense"><thead><tr>
+      <th>Image</th><th>Sign in as</th>${s.harvester ? "<th>Here</th>" : ""}<th></th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td><b>${esc(r.name)}</b><div class="dim xs">${esc(r.publisher)}${r.error ? ` · <span class="badtext">${esc(r.error)}</span>` : ""}</div></td>
+        <td class="mono small" data-label="Sign in as">${esc(r.user)}</td>
+        ${s.harvester ? `<td data-label="Here">${state(r)}</td>` : ""}<td>${actions(r)}</td></tr>`).join("")}</tbody></table></div></div>
+    <div class="row between" style="margin-top:12px;flex-wrap:wrap;gap:8px">
+      <span class="dim xs">Your own disk image - qcow2, vmdk, raw, vdi, vhd or vhdx, from a web address - is imported under <a class="linkish" onclick="closeModal();go('import')">Import</a>.</span>
+      ${s.harvester ? `<button class="btn sm" data-need="admin" onclick="vmStoreRefresh()">${icon("refresh")}Check for newer builds</button>` : ""}</div>`;
+  if (window.applyRole) applyRole();
+  // Downloads under way: follow them.
+  if (s.images.some(r => r.kept && r.versions.some(v => !v.ready && !v.failed))) {
+    clearTimeout(window.__vmStoreTimer);
+    window.__vmStoreTimer = setTimeout(() => { if (STATE.data.vmStore && $("#mtitle")?.textContent === "Image store") vmStore(); }, 5000);
+  }
+};
+const vmStorePost = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+window.vmStoreKeep = async id => {
+  try { toast((await vmStorePost("/api/vm/store/keep", { id, auto: true })).detail, "ok"); vmStore(); }
+  catch (e) { toast(e.message, "bad"); }
+};
+window.vmStoreAuto = async (id, auto) => {
+  try { await vmStorePost("/api/vm/store/auto", { id, auto }); toast(auto ? "keeps itself current" : "stays on the build it has", "ok"); }
+  catch (e) { toast(e.message, "bad"); vmStore(); }
+};
+window.vmStoreForget = async id => {
+  const row = (STATE.data.vmStore?.images || []).find(r => r.id === id);
+  if (!confirm(`Stop keeping ${row?.name || id}?\n\nIts builds no disk was made from are deleted; the ones a disk came from stay until that disk is gone.`)) return;
+  try { toast((await vmStorePost("/api/vm/store/forget", { id })).detail, "ok"); vmStore(); }
+  catch (e) { toast(e.message, "bad"); }
+};
+window.vmStoreRefresh = async () => {
+  try {
+    const r = await vmStorePost("/api/vm/store/refresh", {});
+    toast(r.updated.length ? `downloading newer builds of ${r.updated.join(", ")}` : "every kept image is the newest build", "ok");
+    vmStore(true);
+  } catch (e) { toast(e.message, "bad"); }
+};
+window.vmStoreNew = id => {
+  window.__vmPreset = `store:${id}`;
+  closeModal();
+  vmNew();
+};
 
 /* What a VM is, in one line: its size, its disk and where it runs. */
 function vmSpecs(v) {

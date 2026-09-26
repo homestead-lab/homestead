@@ -28,7 +28,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.173")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.174")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -3106,6 +3106,7 @@ def vm_create_options():
             "storage_class_facts": storage_class_facts(rows),
             "default_class": vm_default_class(rows),
             "images": IMP.list_vm_images() if platform.get("harvester") else [],
+            "store": VMSTORE.choices() if (platform.get("harvester") or platform.get("cdi")) else [],
             "networks": vm_networks(),
             "network_details": vm_network_details(),
             "vm_network_options": NETWORK.vm_network_options(node_temps()),
@@ -4079,6 +4080,8 @@ PORTAL.bind(kget, ksend, DEFAULT_NS, lambda: cached("wl", 5, get_workloads),
             lambda source: ICONS.persist(source, DATA_DIR), lambda reference: ICONS.data_url(reference, DATA_DIR))
 OPS.RESOLVERS["restructure"] = RESTRUCTURE.resolve
 import homestead_reclass as RECLASS
+import homestead_vmstore as VMSTORE
+import homestead_hvimage as HVIMAGE
 import homestead_revert as REVERT
 OPS.RESOLVERS["reclass"] = RECLASS.resolve
 OPS.RESUMABLE["reclass"] = RECLASS.resumable
@@ -4148,6 +4151,32 @@ VMS.platform, VMS.images = PLATFORM.detect, IMP.list_vm_images
 LHCAP.bind(kget, ksend, v2_engine_status)
 RECLASS.bind(kget, ksend, raw_get, storage_classes, LHCAP.status, _own_namespace())
 REVERT.bind(kget, ksend, RECLASS, is_self)
+
+
+def _vm_image_disks():
+    try:
+        return {f"{row['namespace']}/{row['name']}": row.get("disks") or [] for row in IMP.vm_image_cache()["images"]}
+    except Exception:
+        return {}
+
+
+VMSTORE.bind(kget, ksend, DEFAULT_NS, PLATFORM.detect,
+             lambda url, display, reuse: HVIMAGE.download(kget, ksend, DEFAULT_NS, url, "", None, display, reuse),
+             IMP.list_vm_images, _vm_image_disks,
+             lambda ns, name: ksend("DELETE", f"/apis/harvesterhci.io/v1beta1/namespaces/{ns}/virtualmachineimages/{name}"))
+
+
+def _vmstore_loop():
+    """Kept VM images brought up to date, on the leader only; each image is
+    asked about at most twice a day."""
+    while True:
+        if LEADER.is_leader():
+            try:
+                VMSTORE.refresh()
+                beat("vmstore", 3600, leader_only=True)
+            except Exception as error:
+                beat("vmstore", 3600, error, leader_only=True)
+        time.sleep(3600)
 OPS.RESOLVERS["snapshot-revert"] = REVERT.resolve
 SNAPSHOT_DELETE.bind(kget, ksend)
 OPS.RESOLVERS["snapshot-delete"] = SNAPSHOT_DELETE.resume_resolve
@@ -5307,6 +5336,8 @@ ADMIN_ROUTES = {
     "/api/addons/multus", "/api/addons/kube-vip",
     # Upgrading the platform: the cluster, Longhorn, KubeVirt, CDI.
     "/api/cluster/components/upgrade", "/api/cluster/upgrades/start",
+    # The VM image store downloads gigabytes into the cluster.
+    "/api/vm/store/keep", "/api/vm/store/auto", "/api/vm/store/forget", "/api/vm/store/refresh",
     # Homestead's own permissions, and the namespaces apps live in.
     "/api/self/permissions", "/api/namespaces/create", "/api/namespaces/delete",
 }
@@ -5598,6 +5629,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, homestead_replicas())
             if p == "/api/ipam":
                 return self._send(200, IPAM.view())
+            if p == "/api/vm/store":
+                return self._send(200, VMSTORE.view(check=(q.get("check") or [""])[0] == "1"))
             if p == "/api/images/vm":
                 return self._send(200, cached("vmimages", 15, IMP.vm_image_cache))
             if p in ("/api/resources/list", "/api/resources/object", "/api/resources/reveal"):
@@ -6529,7 +6562,24 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "operation": K3SC.start(b, OPS)})
             if p == "/api/vm/create":
                 _cache.pop("vms", None)
+                if b.get("store_id"):
+                    # From the image store: its newest kept build, else the
+                    # publisher's address.
+                    source = VMSTORE.source_for(str(b["store_id"]))
+                    b["image_id"], b["image_url"] = source.get("image_id", ""), source.get("image_url", "")
+                    b["disk_gb"] = max(int(b.get("disk_gb") or 0), source["min_gb"])
                 return self._send(200, create_vm_with_address(b))
+            if p == "/api/vm/store/keep":
+                _cache.pop("vmimages", None)
+                return self._send(200, VMSTORE.keep(str(b.get("id") or ""), b.get("auto", True) is not False))
+            if p == "/api/vm/store/auto":
+                return self._send(200, VMSTORE.set_auto(str(b.get("id") or ""), bool(b.get("auto"))))
+            if p == "/api/vm/store/forget":
+                _cache.pop("vmimages", None)
+                return self._send(200, VMSTORE.forget(str(b.get("id") or "")))
+            if p == "/api/vm/store/refresh":
+                _cache.pop("vmimages", None)
+                return self._send(200, VMSTORE.refresh(force=True))
             if p == "/api/vm-disks/import":
                 result = IMP.import_vm_disk(b)
                 result["operation"] = OPS.start(
@@ -6910,6 +6960,7 @@ if __name__ == "__main__":
     threading.Thread(target=fit_own_strategy, daemon=True).start()
     threading.Thread(target=_hardware_loop, daemon=True).start()
     threading.Thread(target=_samba_loop, daemon=True).start()
+    threading.Thread(target=_vmstore_loop, daemon=True).start()
     # On a rolling update or a drain, hand the lease over now rather than
     # leaving the others to wait out its expiry.
     signal.signal(signal.SIGTERM, lambda *_: (LEADER.release(), os._exit(0)))

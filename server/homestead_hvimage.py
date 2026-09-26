@@ -75,10 +75,11 @@ def _parameters(kget, klass):
     return params
 
 
-def download(kget, ksend, ns, url, klass="", sleep=None):
+def download(kget, ksend, ns, url, klass="", sleep=None, display="", reuse=True):
     """An image downloading (or downloaded) from url, in ns. One already made
-    from the same address is used again rather than fetched twice."""
-    for item in (kget(_images(ns)).get("items") or []):
+    from the same address is used again rather than fetched twice - unless
+    reuse is off: the image store keeping a newer build of the same address."""
+    for item in (kget(_images(ns)).get("items") or []) if reuse else []:
         spec = item.get("spec") or {}
         failed = any(c.get("type") == "Imported" and c.get("status") == "False" and c.get("reason") == "ImportFailed"
                      for c in (item.get("status") or {}).get("conditions") or [])
@@ -89,7 +90,7 @@ def download(kget, ksend, ns, url, klass="", sleep=None):
     name = "image-" + secrets.token_hex(3)
     body = {"apiVersion": "harvesterhci.io/v1beta1", "kind": "VirtualMachineImage",
             "metadata": {"name": name, "namespace": ns, "labels": {NAMES.key("managed"): "true"}},
-            "spec": {"displayName": display_name(url), "sourceType": "download", "url": url, "retry": 3,
+            "spec": {"displayName": display or display_name(url), "sourceType": "download", "url": url, "retry": 3,
                      "storageClassParameters": _parameters(kget, klass)}}
     ksend("POST", _images(ns), body)
     return {"name": name, "namespace": ns, "display": body["spec"]["displayName"],

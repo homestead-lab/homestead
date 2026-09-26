@@ -655,6 +655,8 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
         <option value="">blank disk</option>
         ${readyDisks.map(d => `<option value="disk:${esc(d.namespace)}/${esc(d.name)}" ${selected === `disk:${d.namespace}/${d.name}` ? "selected" : ""}>Imported · ${esc(d.namespace)}/${esc(d.name)} (${esc(d.capacity || "size unknown")})</option>`).join("")}
         ${images.map(i => `<option value="image:${esc(i.namespace)}/${esc(i.name)}" data-size="${i.size_gb}">Harvester image · ${esc(i.display)} (${i.size_gb}G)</option>`).join("")}
+        ${(opts.store || []).length ? `<optgroup label="Image store - the publisher's newest build">${opts.store.map(s => `<option value="store:${esc(s.id)}" data-size="${s.min_gb}"
+          ${window.__vmPreset === `store:${s.id}` ? "selected" : ""}>${esc(s.name)} · ${esc(s.publisher)}${opts.harvester ? (s.kept ? (s.ready ? " · kept" : " · downloading") : " · downloads now") : ""}</option>`).join("")}</optgroup>` : ""}
         ${opts.cdi || opts.harvester ? `<option value="url">${opts.harvester ? "Download from a URL (as a Harvester image)" : "Download from HTTP(S) URL"}</option>` : ""}
       </select></div>
     <div class="f" id="v_url_row" hidden><label>Image URL</label><input type="url" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img"></div>
@@ -680,6 +682,7 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
       : `<b>CDI is not installed</b>, so a VM here starts from a blank disk that KubeVirt formats itself.
         To download or import disk images, install CDI (the containerized data importer) from kubevirt.io.`}
     ${readyDisks.length ? " Imported disks are attached directly and remain visible on the Import page." : ""}</div>`, true);
+  window.__vmPreset = "";
   vmBootChanged();
 };
 window.vmBootChanged = () => {
@@ -698,6 +701,7 @@ window.doVmCreate = async () => {
     namespace: imported[0] || "lab", disk_import: imported[1] || "",
     image_id: boot.startsWith("image:") ? boot.slice(6) : "",
     image_url: boot === "url" ? $("#v_url").value.trim() : "",
+    store_id: boot.startsWith("store:") ? boot.slice(6) : "",
     storage_class: $("#v_sc")?.value || "", network: $("#v_net")?.value || "pod" };
   if (body.network !== "pod" && $("#v_addr_mode")?.value === "static") {
     body.static_ip = Object.assign(vmReadAddress("v"), { address: $("#v_ip").value.trim() });
