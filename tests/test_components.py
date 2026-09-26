@@ -106,6 +106,8 @@ class K3sTests(unittest.TestCase):
         item = {"ref": {"component": "cluster", "to": "v1.32.8+k3s1", "phase": "controller", "started": time.time()}}
         self.assertEqual("running", C.status(item)[0])
         self.c.objects["/apis/upgrade.cattle.io/v1"] = {}
+        self.c.objects[f"/apis/helm.cattle.io/v1/namespaces/{C.HELM_NS}/helmcharts/{C.SUC_CHART}"] = {
+            "metadata": {"name": C.SUC_CHART}}
         status, _, message = C.status(item)
         plans = [body for m, p, body in self.c.sent if p == C.PLANS]
         self.assertEqual(["homestead-server", "homestead-agent"], [p["metadata"]["name"] for p in plans])
@@ -113,6 +115,8 @@ class K3sTests(unittest.TestCase):
         self.assertEqual(["prepare", "homestead-server"], plans[1]["spec"]["prepare"]["args"])
         self.assertEqual(("running", "nodes"), (status, item["ref"]["phase"]))
         self.assertIn("0 of 2 nodes", message)
+        for body in plans:
+            self.c.objects[f"{C.PLANS}/{body['metadata']['name']}"] = body
         for node in NODES["items"]:
             node["status"]["nodeInfo"]["kubeletVersion"] = "v1.32.8+k3s1"
         try:
@@ -131,6 +135,23 @@ class K3sTests(unittest.TestCase):
         status, _, message = C.status({"ref": {"component": "cluster", "to": "v1.32.8+k3s1", "phase": "nodes"}})
         self.assertEqual("failed", status)
         self.assertIn("node-1 failed", message)
+
+    def test_external_upgrade_controller_is_not_taken_over(self):
+        self.c.objects["/apis/upgrade.cattle.io/v1"] = {}
+        with self.assertRaisesRegex(ValueError, "managed outside Homestead"):
+            C.upgrade("cluster", "v1.32.8+k3s1")
+        self.assertFalse(self.c.sent)
+
+    def test_external_plan_is_neither_overwritten_nor_deleted(self):
+        self.c.objects["/apis/upgrade.cattle.io/v1"] = {}
+        self.c.objects[f"/apis/helm.cattle.io/v1/namespaces/{C.HELM_NS}/helmcharts/{C.SUC_CHART}"] = {
+            "metadata": {"name": C.SUC_CHART}}
+        self.c.objects[f"{C.PLANS}/{C.PLAN_NAMES[1]}"] = {"metadata": {"name": C.PLAN_NAMES[1]}}
+        with self.assertRaisesRegex(ValueError, "not owned by Homestead"):
+            C.upgrade("cluster", "v1.32.8+k3s1")
+        self.assertFalse(self.c.sent, "ownership of both Plans must be checked before writing either")
+        C.remove_plans()
+        self.assertFalse(self.c.sent)
 
 
 class HarvesterTests(unittest.TestCase):

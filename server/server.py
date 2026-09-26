@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Imported ahead of the feature modules because settings are read during start.
 import homestead_names as NAMES
+import homestead_memory as MEMORY
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
 API = "https://kubernetes.default.svc"
@@ -22,7 +23,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.155")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.157")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -665,6 +666,7 @@ def get_nodes():
             "cpu_used": round(ucpu, 2), "cpu_cap": ccpu,
             "mem_pct": round(umem / cmem * 100, 1) if cmem else 0,
             "mem_used_gb": round(umem / 1024**3, 1), "mem_cap_gb": round(cmem / 1024**3, 1),
+            "mem_metrics_available": bool((m.get("usage") or {}).get("memory")),
             "pods": len(npods),
             "pods_sys": len([p for p in npods if p["metadata"]["namespace"] in SYS_NS]),
             "pods_wl": len([p for p in npods if p["metadata"]["namespace"] not in SYS_NS]),
@@ -679,6 +681,7 @@ def get_nodes():
             "schedulable": not n.get("spec", {}).get("unschedulable", False),
             "addresses": {a["type"]: a["address"] for a in n["status"].get("addresses", [])},
             "allocatable": n["status"].get("allocatable", {}),
+            "taints": n.get("spec", {}).get("taints", []),
             "labels": labels,
             "info": n["status"].get("nodeInfo", {}),
             "conditions": [{"type": c["type"], "status": c["status"], "reason": c.get("reason", "")}
@@ -992,6 +995,40 @@ def is_self(ns, name):
     return (ns, name) == (SELF.NS, NAMES.BRAND)
 
 
+def is_managed_smb(ns, name):
+    return (ns, name) in ((SMB_NAMESPACE, NAMES.object_name("smb")), (SMB_NAMESPACE, "samba"))
+
+
+def is_managed_nfs(ns, name):
+    return (ns, name) == (SMB_NAMESPACE, NFS.NAME)
+
+
+def guard_managed_smb(ns, name):
+    if is_managed_smb(ns, name):
+        raise ValueError("Homestead manages SMB and its mounts from Network Shares. "
+                         "Change shares or SMB settings there.")
+    if is_managed_nfs(ns, name):
+        raise ValueError("Homestead manages NFS and its mounts from Network Shares and Settings > Cluster > Add-ons.")
+
+
+def guard_smb_object(kind, ns, name):
+    """Keep the general Kubernetes editor from bypassing Network Shares."""
+    if ns != SMB_NAMESPACE:
+        return
+    kind = str(kind or "").lower()
+    if kind in ("deployment", "deployments", "service", "services"):
+        guard_managed_smb(ns, name)
+    if (kind in ("configmap", "configmaps") and name == SHARES.CONFIGMAP()) or (
+            kind in ("secret", "secrets") and name == SHARES.SECRET()):
+        raise ValueError("Homestead manages SMB share settings from Network Shares.")
+
+
+def workload_start_plan(ns, name, replicas=1):
+    ns, name = _dns_name(ns, "namespace"), _dns_name(name, "workload name")
+    threshold = get_app_settings()["thresholds"]["memory"]["critical"]
+    return PLACE.start_plan(ns, name, replicas, threshold)
+
+
 def self_stop_warning():
     return (f"Stopping Homestead takes this page down with it, and nothing here can start it again: "
             f"it stays down until someone runs  kubectl -n {SELF.NS} scale deployment/{NAMES.BRAND} --replicas=1  "
@@ -1023,7 +1060,9 @@ def own_group(ns, name):
     """Homestead's own containers - itself, the Samba that serves shares, the
     backup store moves go through - sit together, apart from your apps,
     unless someone put them in a group of their own."""
-    own = {(SELF.NS, NAMES.BRAND), (SMB_NAMESPACE, "samba"), (DEFAULT_NS, OBJECTS.NAME)}
+    own = {(SELF.NS, NAMES.BRAND), (SMB_NAMESPACE, NAMES.object_name("smb")),
+           (SMB_NAMESPACE, NFS.NAME),
+           (SMB_NAMESPACE, "samba"), (DEFAULT_NS, OBJECTS.NAME)}
     return OWN_GROUP if (ns, name) in own or ns in PLATFORM_NS else ""
 
 
@@ -1179,6 +1218,8 @@ def get_workloads():
             "icon": display_icon(annotations),
             "group": NAMES.read(annotations, "group") or own_group(ns, name),
             "self": is_self(ns, name),
+            "managed_smb": is_managed_smb(ns, name),
+            "managed_nfs": is_managed_nfs(ns, name),
             "platform": PLATFORM_NS.get(ns, ""),
             "failover": FAILOVER.mode_of(pspec),
             "lan": (LAN.read(d) or {}).get("address", ""),
@@ -1208,6 +1249,7 @@ def set_workload_groups(b):
     targets = [(_dns_name(item.get("ns"), "namespace"), _dns_name(item.get("name"), "workload name"))
                for item in items]
     for ns, name in targets:
+        guard_managed_smb(ns, name)
         ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", patch,
               ctype="application/merge-patch+json")
     _cache.pop("wl", None)
@@ -1770,7 +1812,11 @@ def build_deployment(cfg):
     if mounts: c["volumeMounts"] = mounts
     res = {}
     if cfg.get("cpu"): res.setdefault("requests", {})["cpu"] = cfg["cpu"]
-    if cfg.get("memory"): res.setdefault("requests", {})["memory"] = cfg["memory"]
+    memory_request = str(cfg.get("memory") or "").strip()
+    memory_limit = str(cfg.get("memory_limit") or "").strip()
+    MEMORY.validate(memory_request, memory_limit, container_name)
+    if memory_request: res.setdefault("requests", {})["memory"] = memory_request
+    if memory_limit: res.setdefault("limits", {})["memory"] = memory_limit
     if res: c["resources"] = res
     if cfg.get("privileged"): c["securityContext"] = {"privileged": True}
     apply_container_settings(c, cfg)
@@ -1980,6 +2026,133 @@ def _pvc_rows(namespace):
 
 
 SAMBA_IMAGE = os.environ.get("SAMBA_IMAGE", "dperson/samba:latest")
+SMB_NAME = NAMES.object_name("smb")
+
+
+def _optional_smb(path):
+    try:
+        return kget(path)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
+
+
+def _smb_path(kind, name):
+    return f"/api{'/v1' if kind == 'services' else 's/apps/v1'}/namespaces/{SMB_NAMESPACE}/{kind}/{name}"
+
+
+def _smb_new_object(old, name):
+    """Prepare a copied Kubernetes object for POST under its new name."""
+    previous_address = next((item.get("ip", "") for item in
+                             ((old.get("status") or {}).get("loadBalancer") or {}).get("ingress") or []), "")
+    body = copy.deepcopy(old)
+    body.pop("status", None)
+    meta = body.setdefault("metadata", {})
+    for field in ("resourceVersion", "uid", "generation", "creationTimestamp", "managedFields",
+                  "selfLink", "deletionTimestamp", "deletionGracePeriodSeconds", "ownerReferences"):
+        meta.pop(field, None)
+    meta["name"] = name
+    meta.setdefault("labels", {})["app"] = name
+    meta["labels"][NAMES.key("managed")] = "true"
+    if body.get("kind") == "Service":
+        body["spec"]["selector"] = {"app": name}
+        annotations = meta.setdefault("annotations", {})
+        if (previous_address and body["spec"].get("type") == "LoadBalancer"
+                and not any(key in annotations for key in
+                            ("kube-vip.io/loadbalancerIPs", "metallb.universe.tf/loadBalancerIPs"))
+                and not body["spec"].get("loadBalancerIP")):
+            annotations.update(PLATFORM.vip_annotations(previous_address))
+        for field in ("clusterIP", "clusterIPs", "ipFamilies", "healthCheckNodePort"):
+            body["spec"].pop(field, None)
+        for port in body["spec"].get("ports", []) or []:
+            port.pop("nodePort", None)
+    else:
+        body["spec"]["selector"] = {"matchLabels": {"app": name}}
+        body["spec"]["template"].setdefault("metadata", {}).setdefault("labels", {})["app"] = name
+        body["spec"]["template"]["spec"]["containers"][0]["name"] = name
+    return body
+
+
+def _migrate_samba(legacy):
+    with SHARES.LOCK:
+        return _migrate_samba_locked(legacy)
+
+
+def _migrate_samba_locked(legacy):
+    """Recreate the legacy workload under Homestead's name and preserve its VIP.
+
+    The replacement starts at zero replicas so RWO claims are never mounted by
+    both pods. If cutover fails, the old Deployment and Service are restored.
+    """
+    old_dep_path = _smb_path("deployments", "samba")
+    new_dep_path = _smb_path("deployments", SMB_NAME)
+    old_svc_path = _smb_path("services", "samba")
+    new_svc_path = _smb_path("services", SMB_NAME)
+    old_service = _optional_smb(old_svc_path)
+    rows, credentials, *_ = SHARES._state()
+    new_dep = _smb_new_object(legacy, SMB_NAME)
+    replicas = int((legacy.get("spec") or {}).get("replicas", 1) or 0)
+    new_dep["spec"]["replicas"] = 0
+    new_dep = SHARES.configured_deployment(new_dep, rows, credentials)
+    if old_service:
+        new_service = _smb_new_object(old_service, SMB_NAME)
+    else:
+        cfg = {"name": SMB_NAME, "container_name": SMB_NAME, "image": SAMBA_IMAGE,
+               "namespace": SMB_NAMESPACE, "ports": [{"container": 445, "name": "smb", "expose": True}],
+               "vip_mode": "automatic"}
+        cfg = NETWORK.prepare_deploy(cfg)
+        _, new_service = build_deployment(cfg)
+    made_dep = removed_service = made_service = stopped_old = False
+    try:
+        ksend("POST", f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments", new_dep)
+        made_dep = True
+        if old_service:
+            ksend("DELETE", old_svc_path)
+            removed_service = True
+        ksend("POST", f"/api/v1/namespaces/{SMB_NAMESPACE}/services", new_service)
+        made_service = True
+        if replicas:
+            ksend("PATCH", old_dep_path, {"spec": {"replicas": 0}},
+                  ctype="application/merge-patch+json")
+            stopped_old = True
+            ksend("PATCH", new_dep_path, {"spec": {"replicas": replicas}},
+                  ctype="application/merge-patch+json")
+            deadline = time.time() + SHARES.ROLLOUT_TIMEOUT
+            while time.time() < deadline:
+                live = _optional_smb(new_dep_path) or {}
+                status = live.get("status") or {}
+                if (int(status.get("readyReplicas", 0) or 0) >= replicas and
+                        int(status.get("updatedReplicas", 0) or 0) >= replicas and
+                        int(status.get("observedGeneration", 0) or 0) >=
+                        int((live.get("metadata") or {}).get("generation", 0) or 0)):
+                    break
+                time.sleep(1.5)
+            else:
+                raise ValueError("homestead-smb did not become ready; the former Samba workload was restored")
+        ksend("DELETE", old_dep_path)
+    except Exception as error:
+        recovery = []
+        for action in (
+            lambda: ksend("PATCH", new_dep_path, {"spec": {"replicas": 0}},
+                          ctype="application/merge-patch+json") if made_dep else None,
+            lambda: ksend("DELETE", new_svc_path) if made_service else None,
+            lambda: ksend("POST", f"/api/v1/namespaces/{SMB_NAMESPACE}/services",
+                          _smb_new_object(old_service, "samba")) if removed_service else None,
+            lambda: ksend("PATCH", old_dep_path, {"spec": {"replicas": replicas}},
+                          ctype="application/merge-patch+json") if stopped_old else None,
+            lambda: ksend("DELETE", new_dep_path) if made_dep else None,
+        ):
+            try:
+                action()
+            except Exception as failure:
+                recovery.append(str(failure)[:120])
+        if recovery:
+            raise RuntimeError(f"SMB migration failed: {error}; recovery needs attention: "
+                               + "; ".join(recovery)) from error
+        raise
+    _cache.pop("wl", None); _cache.pop("network", None)
+    return kget(new_dep_path)
 
 
 def install_samba(address=""):
@@ -1987,7 +2160,13 @@ def install_samba(address=""):
     SMB on port 445 at an address of its own - the one chosen, or the next
     free one. Shares are its arguments, which Homestead writes, so it starts
     with none."""
-    cfg = {"name": "samba", "container_name": "samba", "image": SAMBA_IMAGE, "namespace": SMB_NAMESPACE,
+    existing = _optional_smb(_smb_path("deployments", SMB_NAME))
+    if existing:
+        return existing
+    legacy = _optional_smb(_smb_path("deployments", "samba"))
+    if legacy:
+        return _migrate_samba(legacy)
+    cfg = {"name": SMB_NAME, "container_name": SMB_NAME, "image": SAMBA_IMAGE, "namespace": SMB_NAMESPACE,
            "ports": [{"container": 445, "name": "smb", "protocol": "TCP", "expose": True}],
            "vip_mode": "manual" if address else "automatic", "lb_ip": address,
            "args": ["-p", "-g", "server min protocol = SMB2"]}
@@ -1997,9 +2176,9 @@ def install_samba(address=""):
     if svc:
         try:
             ksend("POST", f"/api/v1/namespaces/{SMB_NAMESPACE}/services", svc)
-        except urllib.error.HTTPError as error:
-            if error.code != 409:
-                raise
+        except Exception:
+            ksend("DELETE", _smb_path("deployments", SMB_NAME))
+            raise
     _cache.pop("wl", None); _cache.pop("network", None)
     return created
 
@@ -2007,6 +2186,9 @@ def install_samba(address=""):
 def run_deploy(b):
     """Create (or join) a workload from a deploy config, as the Deploy page does."""
     b = analyze_deploy_intent(b)
+    ns = b.get("namespace") or DEFAULT_NS
+    target = b.get("target_workload") if b.get("target_mode") == "existing" else b.get("workload_name") or b.get("name")
+    guard_managed_smb(ns, target)
     b = ensure_profile_compatible(b)
     persist_icon_config(b)
     b = NETWORK.prepare_deploy(b)
@@ -2149,12 +2331,11 @@ def share_storage_options():
     classes = storage_classes()
     node = ""
     try:
-        pods = kget(f"/api/v1/namespaces/{ns}/pods?labelSelector=app%3Dsamba").get("items", [])
-        node = next((pod["spec"].get("nodeName", "") for pod in pods if pod["spec"].get("nodeName")), "")
+        node = SHARES._samba_node()
     except Exception:
         node = ""
     try:
-        samba = bool(kget(f"/apis/apps/v1/namespaces/{ns}/deployments/samba"))
+        samba = bool(SHARES._deployment_state()[2])
     except Exception:
         samba = False
     return {"namespace": ns, "node": node, "pvcs": _pvc_rows(ns), "samba_installed": samba,
@@ -2206,8 +2387,13 @@ def build_sidecar_deployment(cfg, current):
     resources = {}
     if cfg.get("cpu"):
         resources.setdefault("requests", {})["cpu"] = cfg["cpu"]
-    if cfg.get("memory"):
-        resources.setdefault("requests", {})["memory"] = cfg["memory"]
+    memory_request = str(cfg.get("memory") or "").strip()
+    memory_limit = str(cfg.get("memory_limit") or "").strip()
+    MEMORY.validate(memory_request, memory_limit, container_name)
+    if memory_request:
+        resources.setdefault("requests", {})["memory"] = memory_request
+    if memory_limit:
+        resources.setdefault("limits", {})["memory"] = memory_limit
     if resources:
         container["resources"] = resources
     if cfg.get("privileged"):
@@ -3496,6 +3682,7 @@ import homestead_icons as ICONS
 import homestead_volumes as VOLUMES
 import homestead_smart as SMART
 import homestead_shares as SHARES
+import homestead_nfs as NFS
 import homestead_networking as NETWORK
 import homestead_cluster as CLUSTER
 import homestead_probe as PROBE
@@ -3533,6 +3720,7 @@ import homestead_resources as RESOURCES
 import homestead_vms as VMS
 import homestead_lhcapacity as LHCAP
 import homestead_disks as DISKS
+import homestead_power as POWER
 import homestead_privileges as PRIV
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
@@ -3558,7 +3746,8 @@ IMP.SCAN_DIR = DATA_DIR       # each node's full image list, kept for every repl
 AUTH.bind(kget, ksend, DEFAULT_NS)
 LH.bind(kget, ksend, _cache, STORAGE_CLASS)
 PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.features)
-UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS)
+POWER.bind(kget, PLACE.impact, LC.quorum_report, lambda: LC.NODE_POWER_ENABLED)
+UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE)
 SMART.bind(kget, DEFAULT_NS, AUTH.internal_signing_key)
 OPS.bind(kget, DATA_DIR, UPDATES.progress, SMART.progress)
 RESTRUCTURE.bind(kget, ksend, raw_get)
@@ -3583,6 +3772,9 @@ def _remove_cluster_vm(ns, node):
 
 K3SC.bind(kget, lambda cfg: create_vm_with_address(cfg), lambda ip: vm_address_problem(ip), _remove_cluster_vm)
 OPS.RESOLVERS["k3s-cluster"] = K3SC.status
+OPS.RESOLVERS["node-power"] = POWER.status
+OPS.CANCELLERS["node-power"] = (lambda item: {"can": False, "why_not":
+    "A host power command cannot be cancelled after it has been sent"}, lambda item, options: "")
 MOVE_ENGINE.after_finish = cleanup_restore_classes
 
 
@@ -3682,6 +3874,7 @@ def delete_workload(ns, name):
     """A workload deleted, with every Service that points at it and its own
     LAN network; the Services removed are returned."""
     guard_self(ns, name, deleting=True)
+    guard_managed_smb(ns, name)
     try:
         LAN.remove_nad(ns, name)       # its own LAN network, if it had one
     except Exception:
@@ -4041,36 +4234,63 @@ OPS.RESOLVERS["self-data-move"] = _data_move_status
 
 
 LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats",
-              "hardware": "Hardware detection", "moves": "Cluster moves"}
+              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares"}
 
 
 def samba_state():
     """The Samba server shares are served from: whether it runs, and where."""
-    dep = None
+    dep = _optional_smb(_smb_path("deployments", SMB_NAME)) or _optional_smb(
+        _smb_path("deployments", "samba"))
     try:
-        dep = kget(f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments/samba")
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
-    try:
-        shares = len(SHARES.list_shares())
-    except Exception:
-        shares = 0
+        rows, credentials, *_ = SHARES._state()
+        configured = {row["name"] for row in rows}
+        config_error = ""
+    except Exception as error:
+        configured = set()
+        credentials = {}
+        rows = []
+        config_error = str(error)[:160]
     if not dep:
-        return {"installed": False, "enabled": False, "shares": shares, "image": SAMBA_IMAGE}
+        return {"installed": False, "enabled": False, "shares": len(configured), "image": SAMBA_IMAGE,
+                "name": SMB_NAME, "served_shares": [], "in_sync": not configured and not config_error,
+                **({"error": config_error} if config_error else {})}
+    name = dep["metadata"]["name"]
     status = dep.get("status") or {}
     address = ""
     try:
-        svc = kget(f"/api/v1/namespaces/{SMB_NAMESPACE}/services/samba")
+        svc = _optional_smb(_smb_path("services", SMB_NAME)) or _optional_smb(
+            _smb_path("services", "samba")) or {}
         address = next((i.get("ip", "") for i in ((svc.get("status") or {}).get("loadBalancer") or {}).get("ingress") or []), "") \
-            or ((svc.get("metadata") or {}).get("annotations") or {}).get("kube-vip.io/loadbalancerIPs", "")
+            or ((svc.get("metadata") or {}).get("annotations") or {}).get("kube-vip.io/loadbalancerIPs", "") \
+            or ((svc.get("metadata") or {}).get("annotations") or {}).get("metallb.universe.tf/loadBalancerIPs", "") \
+            or ((svc.get("spec") or {}).get("loadBalancerIP") or "")
     except Exception:
         pass
     containers = ((dep.get("spec") or {}).get("template") or {}).get("spec", {}).get("containers") or [{}]
+    container = containers[0]
+    paths = {mount.get("mountPath") for mount in container.get("volumeMounts", []) or []}
+    args = container.get("args") or []
+    served = {arg.split(";", 1)[0] for index, flag in enumerate(args[:-1]) if flag == "-s"
+              for arg in [args[index + 1]] if ";" in arg and arg.split(";", 2)[1] in paths}
+    in_sync = served == configured and not config_error and name == SMB_NAME
+    if in_sync:
+        try:
+            expected = SHARES.configured_deployment(dep, rows, credentials)
+            expected_spec = expected["spec"]["template"]["spec"]
+            live_spec = dep["spec"]["template"]["spec"]
+            expected_container = expected_spec["containers"][0]
+            in_sync = (all(container.get(field) == expected_container.get(field)
+                           for field in ("args", "volumeMounts"))
+                       and live_spec.get("volumes", []) == expected_spec.get("volumes", [])
+                       and container.get("image") == SAMBA_IMAGE)
+        except Exception as error:
+            config_error = str(error)[:160]
+            in_sync = False
     desired = int((dep.get("spec") or {}).get("replicas", 1) or 0)
-    return {"installed": True, "enabled": desired > 0, "desired": desired,
-            "ready": int(status.get("readyReplicas", 0) or 0), "address": address, "shares": shares,
-            "image": containers[0].get("image", "")}
+    return {"installed": True, "enabled": desired > 0, "desired": desired, "name": name,
+            "ready": int(status.get("readyReplicas", 0) or 0), "address": address,
+            "shares": len(configured), "served_shares": sorted(served), "in_sync": in_sync,
+            "image": container.get("image", ""), **({"error": config_error} if config_error else {})}
 
 
 def set_samba(enabled, address=""):
@@ -4078,9 +4298,10 @@ def set_samba(enabled, address=""):
     password are kept for when it is switched back on. On installs it first
     if the cluster has none, with the shares already defined."""
     state = samba_state()
+    name = state["name"]
     if not enabled:
         if state["installed"]:
-            ksend("PATCH", f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments/samba", {"spec": {"replicas": 0}},
+            ksend("PATCH", _smb_path("deployments", name), {"spec": {"replicas": 0}},
                   ctype="application/merge-patch+json")
         _cache.pop("wl", None)
         return {"ok": True, "detail": "Samba is stopping; the shares, their volumes and passwords are kept"}
@@ -4091,10 +4312,180 @@ def set_samba(enabled, address=""):
             SHARES.apply_samba(rows, credentials)
         _cache.pop("wl", None)
         return {"ok": True, "detail": "Samba is being installed" + (f" with {len(rows)} share{'s' if len(rows) != 1 else ''}" if rows else "")}
-    ksend("PATCH", f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments/samba", {"spec": {"replicas": 1}},
+    if name == "samba":
+        install_samba()
+        name = SMB_NAME
+    ksend("PATCH", _smb_path("deployments", name), {"spec": {"replicas": 1}},
           ctype="application/merge-patch+json")
     _cache.pop("wl", None)
     return {"ok": True, "detail": "Samba is starting"}
+
+
+def remove_samba():
+    """Uninstall only the SMB workload and address; never touch share data."""
+    with SHARES.LOCK:
+        removed = []
+        for name in (SMB_NAME, "samba"):
+            for kind in ("deployments", "services"):
+                path = _smb_path(kind, name)
+                if _optional_smb(path) is not None:
+                    ksend("DELETE", path)
+                    removed.append(f"{kind}/{name}")
+        _cache.pop("wl", None)
+        _cache.pop("network", None)
+    return {"ok": True, "removed": removed,
+            "detail": "SMB server removed. Share definitions, passwords, PVCs and their data were kept."}
+
+
+def repair_samba(address=""):
+    """Apply the saved inventory now, with the same rollout guard as edits."""
+    with SHARES.LOCK:
+        install_samba(address)
+        result = SHARES.reconcile_samba(SAMBA_IMAGE)
+    _cache.pop("wl", None)
+    return {"ok": True, "detail": "SMB settings match the saved shares" if result["state"] == "current"
+            else "SMB is being repaired from the saved shares", "server": samba_state()}
+
+
+def nfs_state():
+    """The opt-in NFSv4 gateway is independent of the SMB server and PVCs."""
+    dep = _optional_smb(_smb_path("deployments", NFS.NAME))
+    svc = _optional_smb(_smb_path("services", NFS.NAME))
+    rows, *_ = SHARES._state()
+    names = [row["name"] for row in rows if row.get("nfs_clients")]
+    desired = int(((dep or {}).get("spec") or {}).get("replicas", 0) or 0)
+    ingress = ((((svc or {}).get("status") or {}).get("loadBalancer") or {}).get("ingress") or [])
+    address = next((item.get("ip", "") for item in ingress if item.get("ip")), "")
+    annotations = (((svc or {}).get("metadata") or {}).get("annotations") or {})
+    address = address or annotations.get("kube-vip.io/loadbalancerIPs", "") or annotations.get(
+        "metallb.universe.tf/loadBalancerIPs", "")
+    return {"installed": bool(dep), "enabled": bool(dep) and desired > 0,
+            "name": NFS.NAME, "image": NFS.IMAGE, "exports": names, "address": address,
+            "ready": int(((dep or {}).get("status") or {}).get("readyReplicas", 0) or 0),
+            "desired": desired}
+
+
+def _nfs_exports(rows):
+    return NFS.exports(rows, SHARES._pvc)
+
+
+def _nfs_deployment(rows, address=""):
+    selected = _nfs_exports(rows)
+    if not selected:
+        raise ValueError("choose at least one NFS export in Network Shares first")
+    if PLATFORM.detect().get("load_balancer") == "servicelb":
+        raise ValueError("NFS needs a dedicated VIP that preserves client IPs; install kube-vip under Cluster Add-ons first")
+    cfg = {"name": NFS.NAME, "container_name": NFS.NAME, "namespace": SMB_NAMESPACE,
+           "image": NFS.IMAGE, "cpu": "50m", "memory": "128Mi",
+           "ports": [{"container": 2049, "name": "nfs", "protocol": "TCP", "expose": True}],
+           "vip_mode": "manual" if address else "automatic", "lb_ip": address}
+    cfg = NETWORK.prepare_deploy(cfg)
+    dep, svc = build_deployment(cfg)
+    dep = NFS.configure(dep, selected)
+    if svc:
+        # NFS's CIDR rules must see the real client address, not a node SNAT.
+        svc["spec"]["externalTrafficPolicy"] = "Local"
+    return dep, svc
+
+
+def reconcile_nfs(rows=None):
+    """Keep a running NFS gateway's exports aligned with the saved inventory."""
+    dep_path = _smb_path("deployments", NFS.NAME)
+    current = _optional_smb(dep_path)
+    if not current:
+        return {"state": "absent"}
+    if rows is None:
+        rows, *_ = SHARES._state()
+    selected = _nfs_exports(rows)
+    if not selected:
+        if int((current.get("spec") or {}).get("replicas", 0) or 0):
+            ksend("PATCH", dep_path, {"spec": {"replicas": 0}},
+                  ctype="application/merge-patch+json")
+        return {"state": "off", "exports": 0}
+    wanted = NFS.configure(current, selected)
+    if NFS.same_pod_config(current, wanted):
+        return {"state": "current", "exports": len(selected)}
+    ksend("PUT", dep_path, wanted)
+    _cache.pop("wl", None)
+    return {"state": "updated", "exports": len(selected)}
+
+
+def set_nfs(enabled, address=""):
+    with SHARES.LOCK:
+        path = _smb_path("deployments", NFS.NAME)
+        current = _optional_smb(path)
+        if not enabled:
+            if current:
+                ksend("PATCH", path, {"spec": {"replicas": 0}},
+                      ctype="application/merge-patch+json")
+            _cache.pop("wl", None)
+            return {"ok": True, "detail": "NFS stopped; exports, shares and every PVC were kept"}
+        rows, *_ = SHARES._state()
+        _nfs_exports(rows)
+        if not any(row.get("nfs_clients") for row in rows):
+            raise ValueError("choose at least one NFS export in Network Shares first")
+        if not current:
+            dep, svc = _nfs_deployment(rows, address)
+            ksend("POST", f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments", dep)
+            try:
+                ksend("POST", f"/api/v1/namespaces/{SMB_NAMESPACE}/services", svc)
+            except Exception:
+                ksend("DELETE", path)
+                raise
+        else:
+            reconcile_nfs(rows)
+            if _optional_smb(_smb_path("services", NFS.NAME)) is None:
+                _, svc = _nfs_deployment(rows, address)
+                ksend("POST", f"/api/v1/namespaces/{SMB_NAMESPACE}/services", svc)
+            ksend("PATCH", path, {"spec": {"replicas": 1}},
+                  ctype="application/merge-patch+json")
+        _cache.pop("wl", None)
+        return {"ok": True, "detail": "NFS is starting; exports use NFSv4/TCP on port 2049"}
+
+
+def remove_nfs():
+    """Remove only the NFS address and daemon, never a claim or share record."""
+    with SHARES.LOCK:
+        removed = []
+        for kind in ("deployments", "services"):
+            path = _smb_path(kind, NFS.NAME)
+            if _optional_smb(path) is not None:
+                ksend("DELETE", path)
+                removed.append(f"{kind}/{NFS.NAME}")
+        _cache.pop("wl", None)
+        _cache.pop("network", None)
+    return {"ok": True, "removed": removed,
+            "detail": "NFS server removed. Export settings, SMB shares, PVCs and data were kept."}
+
+
+def set_nfs_export(name, clients, read_only=True):
+    """Save one explicit export; an empty client network removes that export."""
+    with SHARES.LOCK:
+        rows, _, config_obj, _, _ = SHARES._state()
+        row = next((item for item in rows if item.get("name") == name), None)
+        if row is None:
+            raise ValueError("share not found")
+        previous = copy.deepcopy(rows)
+        if clients:
+            row["nfs_clients"] = NFS.client_network(clients)
+            row["nfs_read_only"] = bool(read_only)
+        else:
+            row.pop("nfs_clients", None)
+            row.pop("nfs_read_only", None)
+        _nfs_exports(rows)
+        config_path = f"/api/v1/namespaces/{SMB_NAMESPACE}/configmaps/{SHARES.CONFIGMAP()}"
+        written = SHARES._save_config(rows, config_obj)
+        try:
+            reconcile_nfs(rows)
+        except Exception:
+            SHARES._restore_object(config_path, config_obj, written)
+            try:
+                reconcile_nfs(previous)
+            except Exception:
+                pass
+            raise
+        return {"ok": True, "exports": nfs_state()["exports"],
+                "detail": f"NFS export for {name} {'set' if clients else 'removed'}; its PVC was kept"}
 
 
 def self_health():
@@ -4383,9 +4774,11 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         refs = [{"name": item["name"], "source": env_reference(item)}
                 for item in container.get("env", []) or [] if item.get("name") and item.get("valueFrom")]
         requests = (container.get("resources", {}) or {}).get("requests", {}) or {}
+        limits = (container.get("resources", {}) or {}).get("limits", {}) or {}
         containers.append({
             "original_name": container.get("name", ""), "name": container.get("name", ""),
             "image": container.get("image", ""), "cpu": requests.get("cpu", ""), "memory": requests.get("memory", ""),
+            "memory_limit": limits.get("memory", ""),
             "env": literals, "env_refs": refs,
             "ports": [{"container": port.get("containerPort"), "name": port.get("name", ""),
                        "protocol": port.get("protocol", "TCP"),
@@ -4402,7 +4795,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
     assigned = {feature for container in containers for feature in container["hardware"]}
     if containers:
         containers[0]["hardware"].extend(feature for feature in detected if feature not in assigned)
-    first = containers[0] if containers else {"name": "", "image": "", "cpu": "", "memory": "", "env": {}, "ports": [], "volumes": []}
+    first = containers[0] if containers else {"name": "", "image": "", "cpu": "", "memory": "", "memory_limit": "", "env": {}, "ports": [], "volumes": []}
     reusable = []
     device_paths = {feature["host_path"].rstrip("/") for feature in definitions}
     for volume in pspec.get("volumes", []) or []:
@@ -4434,6 +4827,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         "has_service": bool(listeners),
         "seed_configs": LC.seed_configs(ns, deployment),
         "container_name": first["name"], "image": first["image"], "cpu": first["cpu"], "memory": first["memory"],
+        "memory_limit": first["memory_limit"],
         "env": first["env"], "ports": first["ports"], "volumes": first["volumes"], "gpu": "igpu" in detected,
     }
 
@@ -4536,12 +4930,15 @@ ADMIN_ROUTES = {
     "/api/import", "/api/imports/delete", "/api/imports/cleanup-plan",
     "/api/vm-disks/import",
     "/api/shares", "/api/shares/edit", "/api/shares/delete", "/api/shares/options",
+    "/api/shares/nfs", "/api/self/nfs", "/api/addons/nfs/remove",
     "/api/storage/classes/default", "/api/storage/classes/delete", "/api/storage/classes/cleanup",
     "/api/network/service/delete",
     "/api/images/cleanup", "/api/images/scan", "/api/images/forget-rollback", "/api/images/vm/delete",
     "/api/volumes/delete", "/api/volumes/chown",
     # A class change stops workloads and swaps their volume underneath them.
     "/api/volumes/reclass/start", "/api/volumes/old-copies/remove", "/api/self/samba",
+    "/api/addons/smb/remove",
+    "/api/shares/repair",
     # Carrying a stopped job on runs its remaining steps - a swap, for one.
     "/api/operations/resume",
     "/api/network/vips/add", "/api/network/vips/remove", "/api/network/vips/label", "/api/network/vm-networks",
@@ -4977,6 +5374,10 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("flow2", 8, get_flow2))
             if p == "/api/shares":
                 return self._send(200, SHARES.list_shares())
+            if p == "/api/shares/server":
+                return self._send(200, samba_state())
+            if p == "/api/shares/nfs/server":
+                return self._send(200, nfs_state())
             if p == "/api/files/list":
                 return self._send(200, FILES.list_files(
                     (q.get("namespace") or [DEFAULT_NS])[0], (q.get("pvc") or [""])[0],
@@ -4999,6 +5400,13 @@ class H(BaseHTTPRequestHandler):
                 if not node:
                     return self._send(400, {"error": "node is required"})
                 return self._send(200, cached("impact:" + node, 5, lambda: PLACE.impact(node)))
+            if p == "/api/node/power/plan":
+                return self._send(200, POWER.plan((q.get("node") or [""])[0],
+                                                  (q.get("action") or [""])[0]))
+            if p == "/api/workloads/start-plan":
+                return self._send(200, workload_start_plan(
+                    (q.get("ns") or [""])[0], (q.get("name") or [""])[0],
+                    int((q.get("replicas") or [1])[0])))
             if p == "/api/quorum":
                 r = LC.quorum_report(); r["power_enabled"] = LC.NODE_POWER_ENABLED
                 return self._send(200, r)
@@ -5316,12 +5724,20 @@ class H(BaseHTTPRequestHandler):
                                                 "Waiting for the Helm controller")
                 return self._send(200, result)
             if p == "/api/resources/save":
+                guard_smb_object(b.get("resource"), b.get("ns"), b.get("name"))
                 return self._send(200, RESOURCES.save_object(b.get("group", ""), b.get("version", ""), b.get("resource", ""),
                                                              b.get("ns", ""), b.get("name", ""), b.get("yaml", "")))
             if p == "/api/resources/delete":
+                guard_smb_object(b.get("resource"), b.get("ns"), b.get("name"))
                 return self._send(200, RESOURCES.delete_object(b.get("group", ""), b.get("version", ""), b.get("resource", ""),
                                                                b.get("ns", ""), b.get("name", "")))
             if p == "/api/resources/create":
+                for document in re.split(r"^---[ \t]*$", b.get("yaml", ""), flags=re.M):
+                    if document.strip():
+                        obj = RESOURCES._parse(document)
+                        meta = obj.get("metadata") or {}
+                        guard_smb_object(obj.get("kind"), meta.get("namespace") or b.get("ns") or DEFAULT_NS,
+                                         meta.get("name"))
                 return self._send(200, RESOURCES.create_objects(b.get("yaml", ""), b.get("ns") or DEFAULT_NS))
             if p == "/api/mqtt":
                 return self._send(200, MQTT.save(b))
@@ -5345,7 +5761,14 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, set_workload_groups(b))
             if p == "/api/scale":
                 ns, name, n = b["ns"], b["name"], int(b["replicas"])
+                guard_managed_smb(ns, name)
                 guard_self(ns, name, stopping=n == 0, confirmed=b.get("confirm_self") is True)
+                if n > 0:
+                    plan = workload_start_plan(ns, name, n)
+                    if plan["blocked"]:
+                        return self._send(409, {"error": "no eligible host can start this workload", "plan": plan})
+                    if plan["requires_confirmation"] and b.get("confirm_capacity") is not True:
+                        return self._send(409, {"error": "review node memory before starting", "plan": plan})
                 if n:
                     clear_unstarted_pods(ns, name, stopping=False)
                 ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}/scale",
@@ -5356,6 +5779,7 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if p == "/api/restart":
                 ns, name = b["ns"], b["name"]
+                guard_managed_smb(ns, name)
                 ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
                       {"spec": {"template": {"metadata": {"annotations":
                        {NAMES.key("restartedAt"): time.strftime("%Y-%m-%dT%H:%M:%SZ")}}}}},
@@ -5363,6 +5787,7 @@ class H(BaseHTTPRequestHandler):
                 _cache.pop("wl", None)
                 return self._send(200, {"ok": True})
             if p == "/api/image-updates/apply":
+                guard_managed_smb(b.get("ns"), b.get("name"))
                 enforce_update_policy(b)
                 result = UPDATES.apply_update(b["ns"], b["name"])
                 result["operation"] = OPS.start(
@@ -5373,6 +5798,7 @@ class H(BaseHTTPRequestHandler):
                 _cache.pop("wl", None); _cache.pop("ov", None); UPDATES.invalidate()
                 return self._send(200, result)
             if p == "/api/image-updates/rollback":
+                guard_managed_smb(b.get("ns"), b.get("name"))
                 result = UPDATES.rollback(b["ns"], b["name"])
                 result["operation"] = OPS.start(
                     "image-rollback", f"Roll back {b['name']}",
@@ -5408,6 +5834,8 @@ class H(BaseHTTPRequestHandler):
                 if borrowed:
                     raise ValueError(f"this import copied into {', '.join(sorted(borrowed))} "
                                      "without creating it, so it will not delete it")
+                if b.get("remove_workload") and plan["workload"]:
+                    guard_managed_smb(plan["namespace"], plan["workload"])
                 result = IMP.delete_import(b.get("name"))
                 removed = []
                 if b.get("remove_workload") and plan["workload"]:
@@ -5452,6 +5880,7 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/imports/cleanup-plan":
                 return self._send(200, IMP.import_cleanup_plan(b.get("name")))
             if p == "/api/network/service/delete":
+                guard_managed_smb(b.get("namespace"), b.get("name"))
                 result = NETWORK.delete_service(b.get("namespace"), b.get("name"), b.get("force"))
                 _cache.pop("network", None)
                 return self._send(200, result)
@@ -5471,8 +5900,8 @@ class H(BaseHTTPRequestHandler):
                 if deployment:
                     result["operation"] = OPS.start(
                         "deployment", f"Create share {b['name']}",
-                        {"kind": "Deployment", "name": "samba", "namespace": SMB_NAMESPACE},
-                        "/shares", {"namespace": SMB_NAMESPACE, "name": "samba", "undo": "keep"},
+                        {"kind": "Deployment", "name": SMB_NAME, "namespace": SMB_NAMESPACE},
+                        "/shares", {"namespace": SMB_NAMESPACE, "name": SMB_NAME, "undo": "keep"},
                         "Restarting Samba with the new share")
                 return self._send(200, {"ok": True, **result})
             if p == "/api/shares/edit":
@@ -5483,24 +5912,39 @@ class H(BaseHTTPRequestHandler):
                 if deployment:
                     result["operation"] = OPS.start(
                         "deployment", f"Update share {b['name']}",
-                        {"kind": "Deployment", "name": "samba", "namespace": SMB_NAMESPACE},
-                        "/shares", {"namespace": SMB_NAMESPACE, "name": "samba", "undo": "keep"},
+                        {"kind": "Deployment", "name": SMB_NAME, "namespace": SMB_NAMESPACE},
+                        "/shares", {"namespace": SMB_NAMESPACE, "name": SMB_NAME, "undo": "keep"},
                         "Restarting Samba with updated access")
                 return self._send(200, {"ok": True, **result})
             if p == "/api/shares/delete":
-                result = SHARES.delete_share(b["name"])
+                share = next((row for row in SHARES.list_shares() if row.get("name") == b["name"]), None)
+                old_export = (share or {}).get("nfs_clients", "")
+                if old_export:
+                    set_nfs_export(b["name"], "")
+                try:
+                    result = SHARES.delete_share(b["name"])
+                except Exception:
+                    if old_export:
+                        set_nfs_export(b["name"], old_export, share.get("nfs_read_only", True))
+                    raise
                 deployment = result.pop("deployment", None)
                 if deployment:
                     result["operation"] = OPS.start(
                         "deployment", f"Remove share {b['name']}",
-                        {"kind": "Deployment", "name": "samba", "namespace": SMB_NAMESPACE},
-                        "/shares", {"namespace": SMB_NAMESPACE, "name": "samba", "undo": "keep"},
+                        {"kind": "Deployment", "name": SMB_NAME, "namespace": SMB_NAMESPACE},
+                        "/shares", {"namespace": SMB_NAMESPACE, "name": SMB_NAME, "undo": "keep"},
                         "Restarting Samba without the removed share")
                 return self._send(200, {"ok": True, **result})
+            if p == "/api/shares/nfs":
+                return self._send(200, set_nfs_export(
+                    b.get("name", ""), str(b.get("clients") or "").strip(),
+                    b.get("read_only") is not False))
             if p == "/api/appstore/install":
                 cfg = template_to_cfg(b["app"])
                 cfg.update(b.get("overrides") or {})
                 cfg = analyze_deploy_intent(cfg)
+                guard_managed_smb(cfg.get("namespace") or DEFAULT_NS,
+                                  cfg.get("workload_name") or cfg.get("name"))
                 cfg = ensure_profile_compatible(cfg)
                 persist_icon_config(cfg)
                 cfg = NETWORK.prepare_deploy(cfg)
@@ -5532,6 +5976,7 @@ class H(BaseHTTPRequestHandler):
                                                       f"{'it' if len(reused) == 1 else 'them'}, so its data carries on"}
                                            if reused else {})})
             if p == "/api/edit":
+                guard_managed_smb(b.get("ns", ""), b.get("name", ""))
                 persist_icon_config(b)
                 # Paths moved to other storage bring their data: the edit is
                 # saved stopped and a job copies before it starts again.
@@ -5571,6 +6016,7 @@ class H(BaseHTTPRequestHandler):
                         _cache.pop("network", None)
                 return self._send(200, result)
             if p == "/api/move":
+                guard_managed_smb(b.get("ns"), b.get("name"))
                 node = b.get("node")
                 if b.get("auto"):
                     pl = PLACE.plan(b["ns"], b["name"], b.get("cpu", 0), b.get("mem_mb", 0))
@@ -5617,6 +6063,8 @@ class H(BaseHTTPRequestHandler):
                     return self._send(400, {"error": "unknown move action"})
                 return self._move(actions[action])
             if p in ("/api/move/plan", "/api/move/start"):
+                if p.endswith("/start") and (b.get("kind") or "container") == "container":
+                    guard_managed_smb(b.get("namespace") or DEFAULT_NS, b.get("name"))
                 call = MOVE_ENGINE.plan if p.endswith("plan") else MOVE_ENGINE.start
                 return self._move(lambda: call(
                     b.get("cluster"), b.get("kind") or "container", b.get("name"),
@@ -5666,12 +6114,27 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/node/power":
                 if b.get("confirm") != b.get("node"):
                     return self._send(400, {"error": "confirmation must repeat the node name"})
-                impact = PLACE.impact(b["node"])
-                if impact["stranded"] and not b.get("allow_stranded"):
+                power_plan = POWER.plan(b["node"], b["action"])
+                if not power_plan["ready"]:
+                    return self._send(409, {"error": "; ".join(power_plan["blockers"]), "plan": power_plan})
+                if b.get("review_token") != power_plan["review_token"]:
+                    return self._send(409, {"error": "host impact changed; review the plan again", "plan": power_plan})
+                if power_plan["stranded"] and not b.get("allow_stranded"):
                     return self._send(409, {"error": "some workloads have no eligible failover host",
-                                            "impact": impact})
+                                            "plan": power_plan})
+                if power_plan["requires_data_ack"] and not b.get("allow_data_risk"):
+                    return self._send(409, {"error": "acknowledge the volume risk before host power control",
+                                            "plan": power_plan})
                 try:
-                    return self._send(200, LC.node_power(b["node"], b["action"], b.get("drain", True)))
+                    result = LC.node_power(b["node"], b["action"], True)
+                    result["operation"] = OPS.start(
+                        "node-power", f"{b['action']} {b['node']}", {"kind": "Node", "name": b["node"]},
+                        "/nodes?node=" + urllib.parse.quote(b["node"]),
+                        {"node": b["node"], "action": b["action"], "boot_id": power_plan["boot_id"],
+                         "volumes": [v["name"] for v in power_plan["volumes"]],
+                         "helper_pod": result.get("helper_pod", ""), "started_epoch": time.time()},
+                        "Host cordoned and drained; waiting for its power transition")
+                    return self._send(200, result)
                 except PermissionError as e:
                     return self._send(409, {"error": str(e)})
             if p == "/api/vm/migrate":
@@ -5761,6 +6224,18 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, edit_volume(b))
             if p == "/api/self/samba":
                 return self._send(200, set_samba(bool(b.get("enabled")), str(b.get("address") or "").strip()))
+            if p == "/api/self/nfs":
+                return self._send(200, set_nfs(bool(b.get("enabled")), str(b.get("address") or "").strip()))
+            if p == "/api/addons/smb/remove":
+                if b.get("confirm") != SMB_NAME:
+                    raise ValueError(f"type {SMB_NAME} to remove the SMB server")
+                return self._send(200, remove_samba())
+            if p == "/api/addons/nfs/remove":
+                if b.get("confirm") != NFS.NAME:
+                    raise ValueError(f"type {NFS.NAME} to remove the NFS server")
+                return self._send(200, remove_nfs())
+            if p == "/api/shares/repair":
+                return self._send(200, repair_samba(str(b.get("address") or "").strip()))
             if p == "/api/network/vips/add":
                 _cache.pop("network", None)
                 return self._send(200, NETWORK.add_vips(b, IPAM.load()[0].get("records") or {}))
@@ -5779,11 +6254,14 @@ class H(BaseHTTPRequestHandler):
                                         "detail": f"removed {len(removed)} class{'es' if len(removed) != 1 else ''} left by restores"
                                                   if removed else "nothing to remove: every restore class is still in use"})
             if p == "/api/workloads/failover":
+                for item in b.get("items") or []:
+                    guard_managed_smb(item.get("ns"), item.get("name"))
                 result = FAILOVER.set_many(b.get("items") or [])
                 _cache.pop("wl", None)
                 return self._send(200, result)
             if p == "/api/workload/primary-port":
                 ns, name = b.get("ns") or DEFAULT_NS, _dns_name(b.get("name"), "workload name")
+                guard_managed_smb(ns, name)
                 port = int(b.get("port") or 0)
                 ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
                       {"metadata": {"annotations": {NAMES.key("primary-port"): str(port) if port else None}}},
@@ -5893,6 +6371,7 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/sources/inspect":
                 return self._send(200, IMP.inspect_source_container(b["name"], b["container"]))
             if p == "/api/import":
+                guard_managed_smb(DEFAULT_NS, b.get("name"))
                 persist_icon_config(b)
                 b = NETWORK.prepare_deploy(b)
                 result = IMP.import_container(b)
@@ -5923,6 +6402,7 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/network/plan":
                 return self._send(200, NETWORK.service_plan(b))
             if p == "/api/network/services":
+                guard_managed_smb(b.get("namespace") or DEFAULT_NS, b.get("name"))
                 result = NETWORK.create_service(b)
                 _cache.pop("network", None); _cache.pop("flow2", None)
                 result["operation"] = OPS.start(
@@ -5977,6 +6457,8 @@ class H(BaseHTTPRequestHandler):
         except AUTH.StoreUnavailable as e:
             # Not an empty account store: the cluster did not answer.
             return self._send(503, {"error": str(e), "unavailable": True})
+        except ValueError as e:
+            return self._send(400, {"error": str(e)})
         except urllib.error.HTTPError as e:
             return self._send(e.code, {"error": e.read().decode("utf-8", "replace")[:500]})
         except Exception as e:
@@ -6031,6 +6513,30 @@ def _upgrade_node_probe():
         print(f"node probe: {result['detail']}", flush=True)
 
 
+def _samba_loop():
+    """One leader keeps SMB's mounts and image aligned with saved settings."""
+    while True:
+        if LEADER.is_leader():
+            try:
+                state = samba_state()
+                if state.get("name") == "samba" and state.get("installed"):
+                    install_samba()
+                result = SHARES.reconcile_samba(SAMBA_IMAGE)
+                beat("samba", 60, leader_only=True)
+                if result.get("state") == "repaired":
+                    print("network shares: restored SMB settings from the share inventory", flush=True)
+            except Exception as error:
+                beat("samba", 60, error, leader_only=True)
+                print(f"network shares: {str(error)[:180]}", flush=True)
+            try:
+                nfs_result = reconcile_nfs()
+                if nfs_result.get("state") == "updated":
+                    print("network shares: restored NFS exports from the share inventory", flush=True)
+            except Exception as error:
+                print(f"NFS exports: {str(error)[:180]}", flush=True)
+        time.sleep(60)
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8080"))
     threading.Thread(target=_sampler, daemon=True).start()
@@ -6040,13 +6546,14 @@ if __name__ == "__main__":
     threading.Thread(target=LEADER.run, daemon=True).start()
     # Moves carry on across restarts: their state is on disk, and this resumes it.
     threading.Thread(target=_moves_loop, daemon=True).start()
-    # Join plans from 2.8.68-2.8.155 each kept a join token in a Secret.
+    # Join plans from 2.8.68-2.8.157 each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()
     threading.Thread(target=_history_loop, daemon=True).start()
     threading.Thread(target=fit_own_strategy, daemon=True).start()
     threading.Thread(target=_hardware_loop, daemon=True).start()
+    threading.Thread(target=_samba_loop, daemon=True).start()
     # On a rolling update or a drain, hand the lease over now rather than
     # leaving the others to wait out its expiry.
     signal.signal(signal.SIGTERM, lambda *_: (LEADER.release(), os._exit(0)))

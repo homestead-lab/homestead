@@ -17,6 +17,7 @@ Two things this gets right that a plain nodeSelector does not:
 """
 import json
 import homestead_names as NAMES
+import re
 import time
 import urllib.error
 
@@ -207,6 +208,212 @@ def plan(ns, name, wl_cpu=0.0, wl_mem_mb=0.0):
         "recommended": best,
         "probe": any(_node_devices(n) for n in nodes),
     }
+
+
+def _memory_bytes(value):
+    """Kubernetes memory quantity, including decimal and binary suffixes."""
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)([KMGTPE]i?|)", str(value or "").strip())
+    if not match:
+        return 0
+    unit = match.group(2)
+    power = {"K": 1, "M": 2, "G": 3, "T": 4, "P": 5, "E": 6}
+    if not unit:
+        return int(float(match.group(1)))
+    base = 1024 if unit.endswith("i") else 1000
+    return int(float(match.group(1)) * base ** power[unit[0]])
+
+
+def _pod_memory(spec):
+    """Use the upper bound when set; unbounded containers require a warning."""
+    total = 0
+    unbounded = []
+    for container in spec.get("containers", []) or []:
+        resources = container.get("resources") or {}
+        limit = _memory_bytes((resources.get("limits") or {}).get("memory"))
+        request = _memory_bytes((resources.get("requests") or {}).get("memory"))
+        total += max(limit, request)
+        if not limit:
+            unbounded.append(container.get("name") or "container")
+    init_memory = []
+    for container in spec.get("initContainers", []) or []:
+        resources = container.get("resources") or {}
+        limit = _memory_bytes((resources.get("limits") or {}).get("memory"))
+        request = _memory_bytes((resources.get("requests") or {}).get("memory"))
+        init_memory.append(max(limit, request))
+        if not limit:
+            unbounded.append(container.get("name") or "init container")
+    init_max = max(init_memory, default=0)
+    return max(total, init_max) + _memory_bytes((spec.get("overhead") or {}).get("memory")), unbounded
+
+
+def _cpu_millicores(value):
+    value = str(value or "").strip()
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)([num]?)", value)
+    if not match:
+        return 0
+    return float(match.group(1)) * {"": 1000, "m": 1, "u": 0.001, "n": 0.000001}[match.group(2)]
+
+
+def _pod_request(spec, resource):
+    """Effective request for ordinary pods; scheduler uses max(app sum, init max)."""
+    parser = _memory_bytes if resource == "memory" else _cpu_millicores
+    regular = sum(parser(((c.get("resources") or {}).get("requests") or {}).get(resource))
+                  for c in spec.get("containers", []) or [])
+    init = max((parser(((c.get("resources") or {}).get("requests") or {}).get(resource))
+                for c in spec.get("initContainers", []) or []), default=0)
+    return max(regular, init) + parser((spec.get("overhead") or {}).get(resource))
+
+
+def _selector_match(requirement, value, present):
+    operator = requirement.get("operator")
+    choices = requirement.get("values") or []
+    if operator == "In":
+        return present and value in choices
+    if operator == "NotIn":
+        return not present or value not in choices
+    if operator == "Exists":
+        return present
+    if operator == "DoesNotExist":
+        return not present
+    if operator in ("Gt", "Lt"):
+        try:
+            number, target = int(value), int(choices[0])
+        except (ValueError, TypeError, IndexError):
+            return False
+        return present and (number > target if operator == "Gt" else number < target)
+    return False
+
+
+def _required_affinity_matches(spec, node):
+    required = (((spec.get("affinity") or {}).get("nodeAffinity") or {})
+                .get("requiredDuringSchedulingIgnoredDuringExecution") or {})
+    if not required:
+        return True
+    terms = required.get("nodeSelectorTerms") or []
+    labels = node.get("labels") or {}
+    fields = {"metadata.name": node.get("name", "")}
+    for term in terms:
+        expressions = term.get("matchExpressions") or []
+        field_expressions = term.get("matchFields") or []
+        if not expressions and not field_expressions:
+            continue  # Kubernetes treats an empty term as matching no nodes.
+        if (all(_selector_match(expr, labels.get(expr.get("key")), expr.get("key") in labels)
+                for expr in expressions) and
+                all(_selector_match(expr, fields.get(expr.get("key")), expr.get("key") in fields)
+                    for expr in field_expressions)):
+            return True
+    return False
+
+
+def _tolerates(taint, tolerations):
+    for toleration in tolerations:
+        if toleration.get("effect") and toleration["effect"] != taint.get("effect"):
+            continue
+        operator = toleration.get("operator") or "Equal"
+        if operator == "Exists" and (not toleration.get("key") or toleration["key"] == taint.get("key")):
+            return True
+        if (operator == "Equal" and toleration.get("key") == taint.get("key") and
+                (toleration.get("value") or "") == (taint.get("value") or "")):
+            return True
+        if operator in ("Gt", "Lt") and toleration.get("key") == taint.get("key"):
+            try:
+                taint_value, wanted = int(taint.get("value")), int(toleration.get("value"))
+            except (ValueError, TypeError):
+                continue
+            if (taint_value > wanted if operator == "Gt" else taint_value < wanted):
+                return True
+    return False
+
+
+def _start_scheduler_check(spec, node):
+    """Hard scheduling constraints relevant to a proposed pod start."""
+    reasons, cautions = [], []
+    if spec.get("nodeName") and spec["nodeName"] != node.get("name"):
+        reasons.append(f"assigned to {spec['nodeName']}")
+    if not _required_affinity_matches(spec, node):
+        reasons.append("required node affinity does not match")
+    for taint in node.get("taints") or []:
+        # .spec.nodeName bypasses the scheduler's NoSchedule check, but not
+        # NoExecute eviction. It is rare in a Deployment, yet can be present.
+        if spec.get("nodeName") and taint.get("effect") == "NoSchedule":
+            continue
+        if taint.get("effect") in ("NoSchedule", "NoExecute") and not _tolerates(taint, spec.get("tolerations") or []):
+            reasons.append(f"untolerated {taint.get('key', 'unknown')} taint")
+    allocatable = node.get("allocatable") or {}
+    for resource, label in (("memory", "memory"), ("cpu", "CPU")):
+        request = _pod_request(spec, resource)
+        capacity = (_memory_bytes if resource == "memory" else _cpu_millicores)(allocatable.get(resource))
+        if request and capacity and request > capacity:
+            reasons.append(f"{label} request exceeds node allocatable")
+        elif request and not capacity:
+            cautions.append(f"node allocatable {label} is unavailable")
+    if any(c.get("restartPolicy") == "Always" for c in spec.get("initContainers") or []):
+        cautions.append("restartable init sidecar resource use needs review")
+    if ((spec.get("affinity") or {}).get("podAffinity") or
+            (spec.get("affinity") or {}).get("podAntiAffinity") or
+            any(c.get("whenUnsatisfiable") == "DoNotSchedule" for c in spec.get("topologySpreadConstraints") or [])):
+        cautions.append("pod affinity or topology spread may narrow placement")
+    return reasons, cautions
+
+
+def start_plan(ns, name, replicas=1, warning_percent=88):
+    """Preview RAM pressure before increasing a Deployment's replica count.
+
+    A soft node preference is not a placement guarantee. Every eligible host
+    is assessed; the UI must never label the start safe based on only the best
+    candidate. Unknown metrics or an unbounded container require acknowledgement.
+    """
+    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    current = int((dep.get("spec") or {}).get("replicas", 1) or 0)
+    wanted = int(replicas)
+    if wanted < 0 or wanted > 100:
+        raise ValueError("replicas must be between 0 and 100")
+    additional = max(0, wanted - current)
+    reqs = requirements(dep)
+    pod_spec = dep["spec"]["template"]["spec"]
+    memory, unbounded = _pod_memory(pod_spec)
+    candidates = []
+    for node in get_nodes():
+        ok, reasons = satisfies(node, reqs)
+        scheduler_reasons, scheduler_cautions = _start_scheduler_check(pod_spec, node)
+        reasons.extend(scheduler_reasons)
+        ok = ok and not scheduler_reasons
+        if reqs["pinned"] and node["name"] != reqs["pinned"]:
+            ok = False
+            reasons.append(f"pinned to {reqs['pinned']}")
+        capacity = float(node.get("mem_cap_gb") or 0)
+        used = float(node.get("mem_used_gb") or 0)
+        projected = used + additional * memory / 1024**3
+        percent = round(projected / capacity * 100, 1) if capacity else None
+        metrics = bool(node.get("mem_metrics_available", True))
+        warnings = []
+        if ok and additional:
+            warnings.extend(scheduler_cautions)
+            if not capacity or not metrics:
+                warnings.append("live memory usage is unavailable")
+            if unbounded:
+                warnings.append("memory is not limited for " + ", ".join(unbounded))
+            if not memory:
+                warnings.append("no memory estimate is configured")
+            if percent is not None and metrics and memory and percent >= warning_percent:
+                warnings.append(f"projected RAM reaches {percent}% (warning at {warning_percent}%)")
+            reserve = max(1.0, capacity * 0.1)
+            if capacity and metrics and memory and capacity - projected < reserve:
+                warnings.append(f"less than {round(reserve, 1)} GiB host reserve remains")
+        candidates.append({"name": node["name"], "eligible": ok, "reasons": reasons,
+                           "used_gb": round(used, 1), "capacity_gb": capacity,
+                           "projected_gb": round(projected, 1), "projected_percent": percent,
+                           "metrics_available": metrics, "warnings": warnings})
+    eligible = [node for node in candidates if node["eligible"]]
+    warnings = sorted({message for node in eligible for message in node["warnings"]})
+    if additional and not eligible:
+        warnings.append("no ready host satisfies this workload's placement requirements")
+    return {"namespace": ns, "name": name, "current": current, "requested": wanted,
+            "additional": additional, "pod_memory_gb": round(memory / 1024**3, 2),
+            "unbounded": unbounded, "warning_percent": warning_percent,
+            "candidates": candidates, "warnings": warnings,
+            "requires_confirmation": bool(additional and warnings),
+            "blocked": bool(additional and not eligible)}
 
 
 def impact(node):

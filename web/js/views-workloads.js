@@ -413,6 +413,10 @@ function platformTag(w) {
 function workloadActions(w, update, off, compact = false) {
   const label = (text, iconName) => compact ? icon(iconName) : `${icon(iconName)}${text}`;
   const cls = compact ? "btn sm iconic" : "btn sm";
+  if (w.managed_smb || w.managed_nfs) {
+    return `<button class="${cls}" title="View managed share server logs" aria-label="Logs for ${esc(w.name)}" onclick="wlLogs('${w.ns}','${w.pods[0] ? w.pods[0].name : ""}','${w.name}')">${label("Logs", "log")}</button>
+      <button class="${cls}" title="Manage shares and server settings" aria-label="Manage ${esc(w.name)} in Network Shares" onclick="go('shares')">${label("Network Shares", "edit")}</button>`;
+  }
   // A platform container's operator owns it: logs and a fresh start only.
   if (w.platform) {
     return `<button class="${cls}" title="View live container logs" aria-label="Logs for ${esc(w.name)}" onclick="wlLogs('${w.ns}','${w.pods[0] ? w.pods[0].name : ""}','${w.name}')">${label("Logs", "log")}</button>
@@ -441,17 +445,17 @@ function workloadActions(w, update, off, compact = false) {
 
 function workloadCard(w) {
       const ok = w.ready === w.desired && w.desired > 0, off = w.desired === 0;
-      const update = w.platform ? null : workloadUpdate(w.ns, w.name);
+      const update = w.platform || w.managed_smb || w.managed_nfs ? null : workloadUpdate(w.ns, w.name);
       const updateError = update?.images?.find(x => x.error);
   return `<div class="wcard card flat">
         <div class="between whead">
           <div class="row" style="gap:10px;min-width:0">
             ${appAvatar(w.name, w.icon)}
             <div class="wtitle"><div style="font-weight:680">${esc(w.name)}</div>
-              <div class="dim xs">${esc(w.ns)} · <span class="nodelink"
-                onclick="moveWorkload('${w.name}','${w.ns}')">${esc(w.nodes.join(", ") || "unscheduled")}</span></div></div>
+              <div class="dim xs">${esc(w.ns)} · ${w.managed_smb || w.managed_nfs ? esc(w.nodes.join(", ") || "unscheduled") : `<span class="nodelink"
+                onclick="moveWorkload('${w.name}','${w.ns}')">${esc(w.nodes.join(", ") || "unscheduled")}</span>`}</div></div>
           </div>
-          <div class="row">${w.platform ? platformTag(w) : ""}${update?.available ? '<span class="pill warn">update available</span>' : ""}${update?.unchecked ? `<span class="pill slim neutral" data-tip="${update.images?.some(i => i.starting) ? "Still starting: its image is compared with the registry once it runs." : "Stopped, and not seen running here yet, so its image has not been compared with the registry. It is checked once it has run."}">${update.images?.some(i => i.starting) ? "starting" : "not checked"}</span>` : ""}
+          <div class="row">${w.platform ? platformTag(w) : ""}${w.managed_smb || w.managed_nfs ? `<span class="pill slim info" data-tip="Managed by Homestead under Network Shares">managed ${w.managed_nfs ? "NFS" : "SMB"}</span>` : ""}${update?.available ? '<span class="pill warn">update available</span>' : ""}${update?.unchecked ? `<span class="pill slim neutral" data-tip="${update.images?.some(i => i.starting) ? "Still starting: its image is compared with the registry once it runs." : "Stopped, and not seen running here yet, so its image has not been compared with the registry. It is checked once it has run."}">${update.images?.some(i => i.starting) ? "starting" : "not checked"}</span>` : ""}
           ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}
           <span class="pill ${ok ? "ok" : off ? "low" : "crit"}">${w.ready}/${w.desired}</span></div>
         </div>
@@ -490,12 +494,12 @@ function workloadTable(rows, sections = null, folded = new Set()) {
 function workloadTableRows(rows) {
   return `${rows.map(w => {
       const ok = w.ready === w.desired && w.desired > 0, off = w.desired === 0;
-      const update = w.platform ? null : workloadUpdate(w.ns, w.name);
+      const update = w.platform || w.managed_smb || w.managed_nfs ? null : workloadUpdate(w.ns, w.name);
       const updateError = update?.images?.find(x => x.error);
       return `<tr>
         <td class="wl-name" data-sort="${esc(w.name)}"><div class="row nowrap" style="gap:9px">${appAvatar(w.name, w.icon)}
           <div class="wtitle"><div><b>${esc(w.name)}</b></div>
-            <div class="dim xs">${w.platform ? `${platformTag(w)} ` : ""}${esc(w.ns)} · ${off ? "stopped" : `<span class="nodelink" onclick="moveWorkload('${w.name}','${w.ns}')">${esc(w.nodes.join(", ") || "unscheduled")}</span>${w.uptime ? ` · up ${esc(fmtUp(w.uptime))}` : " · starting"}`}</div></div></div></td>
+            <div class="dim xs">${w.platform ? `${platformTag(w)} ` : ""}${w.managed_smb || w.managed_nfs ? `<span class="pill slim info">managed ${w.managed_nfs ? "NFS" : "SMB"}</span> ` : ""}${esc(w.ns)} · ${off ? "stopped" : `${w.managed_smb || w.managed_nfs ? esc(w.nodes.join(", ") || "unscheduled") : `<span class="nodelink" onclick="moveWorkload('${w.name}','${w.ns}')">${esc(w.nodes.join(", ") || "unscheduled")}</span>`}${w.uptime ? ` · up ${esc(fmtUp(w.uptime))}` : " · starting"}`}</div></div></div></td>
         <td class="wl-status" data-sort="${off ? -1 : w.desired ? w.ready / w.desired : 0}"><div class="row nowrap" style="gap:5px"><span class="pill slim ${ok ? "ok" : off ? "low" : "crit"}" title="${w.ready} of ${w.desired} ready">${w.ready}/${w.desired}</span>${update?.unchecked ? `<span class="pill slim neutral" data-tip="${update.images?.some(i => i.starting) ? "Still starting: its image is compared with the registry once it runs." : "Stopped, and not seen running here yet, so its image has not been compared with the registry. It is checked once it has run."}">${update.images?.some(i => i.starting) ? "starting" : "not checked"}</span>` : ""}
           ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}</div>${workloadPull(w) ? pullBar(workloadPull(w)) : ""}
           ${workloadBlocked(w) ? `<div class="wblocked" title="${esc(workloadBlocked(w))}">${esc(workloadBlocked(w))}</div>` : ""}</td>
@@ -525,9 +529,31 @@ function accessPorts(ports) {
 }
 
 window.wlScale = async (ns, name, n) => {
+  if (n > 0) {
+    try {
+      const plan = await api(`/api/workloads/start-plan?${new URLSearchParams({ ns, name, replicas: n })}`);
+      if (plan.requires_confirmation || plan.blocked) {
+        const hosts = (plan.candidates || []).filter(x => x.eligible);
+        const rejected = (plan.candidates || []).filter(x => !x.eligible);
+        modal(`Start ${name}?`, `<div class="note ${plan.blocked ? "bad" : "warn"}"><b>${plan.blocked ? "No eligible host can start this workload." : "Placement and memory need review."}</b>
+          ${plan.unbounded?.length ? ` ${esc(plan.unbounded.join(", "))} ${plan.unbounded.length === 1 ? "has" : "have"} no memory limit, so actual use could exceed this estimate.` : ""}</div>
+          <p class="small muted">Starting ${plan.additional} more pod${plan.additional === 1 ? "" : "s"}; estimated memory per pod: ${plan.pod_memory_gb ? `${esc(plan.pod_memory_gb)} GiB` : "unknown"}. Kubernetes may choose any eligible host unless this workload is pinned.</p>
+          ${hosts.length ? `<div class="dependency-list">${hosts.map(host => `<div class="drow"><div class="dl mono">${esc(host.name)}</div><div class="dv">${host.metrics_available && host.projected_percent !== null ? `${esc(host.used_gb)} → ${esc(host.projected_gb)} / ${esc(host.capacity_gb)} GiB · ${esc(host.projected_percent)}%` : "live RAM unavailable"}${host.warnings?.length ? `<div class="dim xs">${host.warnings.map(esc).join(" · ")}</div>` : ""}</div></div>`).join("")}</div>` : `<div class="note bad">${esc((plan.warnings || []).join(" · "))}</div>`}
+          ${rejected.length ? `<div class="sec">Unavailable hosts</div><div class="dependency-list">${rejected.map(host => `<div class="drow"><div class="dl mono">${esc(host.name)}</div><div class="dv">${esc((host.reasons || []).join(" · ") || "not eligible")}</div></div>`).join("")}</div>` : ""}
+          ${!plan.blocked ? `<label class="switch" style="margin-top:14px"><input type="checkbox" id="wl_capacity_ok"> I understand the placement and memory risks and want to start it</label>
+            <div class="row" style="margin-top:14px"><button class="btn danger" onclick="wlScaleGo('${esc(ns)}','${esc(name)}',${n},true)">Start anyway</button><button class="btn" onclick="closeModal()">Cancel</button></div>` : `<div class="row" style="margin-top:14px"><button class="btn" onclick="closeModal()">Close</button></div>`}`);
+        return;
+      }
+    } catch (e) { return toast(`Could not check node memory: ${e.message}`, "bad"); }
+  }
+  return wlScaleGo(ns, name, n, false);
+};
+window.wlScaleGo = async (ns, name, n, confirmed = false) => {
+  if (confirmed && !$("#wl_capacity_ok")?.checked) return toast("confirm the memory warning first", "bad");
   try {
     await api("/api/scale", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ns, name, replicas: n }) });
+      body: JSON.stringify({ ns, name, replicas: n, confirm_capacity: confirmed }) });
+    if (confirmed) closeModal();
     toast(`${name} ${n ? "started" : "stopped"}`, "ok"); setTimeout(() => refresh(true), 900);
   } catch (e) { toast(e.message, "bad"); }
 };
@@ -1108,7 +1134,7 @@ document.addEventListener("keydown", event => {
 
 /* ---------------- deploy ---------------- */
 const deployDefaults = () => ({ name: "", workload_name: "", container_name: "", image: "", icon: "", namespace: "lab", replicas: 1,
-  cpu: "50m", memory: "128Mi", ports: [], env: {}, env_meta: [], volumes: [], hardware: [],
+  cpu: "50m", memory: "128Mi", memory_limit: "", ports: [], env: {}, env_meta: [], volumes: [], hardware: [],
   template_devices: [], target_mode: "new", target_workload: "", network_mode: "loadbalancer",
   vip_mode: "shared", lb_ip: "", env_bindings: {}, app_profile: null });
 let DCFG = deployDefaults(), DOPT = { deployments: [], pvcs: [], storage_classes: [], shared_storage_classes: [] }, DRENDERING = false;
@@ -1173,6 +1199,7 @@ async function viewDeploy(pre) {
         <div class="f"><label>CPU reserved ${tip("The scheduler guarantees this much CPU capacity. 1000m = one CPU core; 50m = 5% of one core. This is not a hard limit.")}</label><input type="text" id="d_cpu" value="${esc(DCFG.cpu)}" placeholder="50m"></div>
         <div class="f"><label>Memory reserved ${tip("The scheduler keeps this much RAM available for the container. Mi means mebibytes and Gi means gibibytes. This is not a hard limit.")}</label><input type="text" id="d_mem" value="${esc(DCFG.memory)}" placeholder="128Mi"></div>
       </div>
+      <div class="f"><label>Memory max (optional) ${tip("The most memory this container may use. Exceeding it can cause an OOM kill and restart. Leave blank for no container memory limit; set it at least as high as Memory reserved. Use Mi or Gi, for example 1Gi.")}</label><input type="text" id="d_mem_limit" value="${esc(DCFG.memory_limit || "")}" placeholder="No limit · e.g. 1Gi"><span class="dim xs">A limit protects the host, but setting it too low can repeatedly restart the app.</span></div>
       <div class="sec">Hardware ${tip("Homestead adds the device path and schedules only onto nodes marked as having that hardware.")}</div>
       <div class="hwchoices">
         ${hardwareChoices("d_hw", (DCFG.hardware || []).concat(DCFG.gpu && !(DCFG.hardware || []).includes("igpu") ? ["igpu"] : []))}
@@ -1214,7 +1241,7 @@ async function viewDeploy(pre) {
   DRENDERING = true;
   renderDeployTargets(); renderPorts(); renderVols(); renderEnv(); applyDeployMode();
   DRENDERING = false; syncSummary();
-  ["d_workload_name", "d_container_name", "d_image", "d_icon", "d_rep", "d_cpu", "d_mem", "d_net", "d_vip_mode", "d_lb_ip", "d_target_workload"].forEach(id => {
+  ["d_workload_name", "d_container_name", "d_image", "d_icon", "d_rep", "d_cpu", "d_mem", "d_mem_limit", "d_net", "d_vip_mode", "d_lb_ip", "d_target_workload"].forEach(id => {
     const el = $("#" + id); if (!el) return;
     el.addEventListener("input", syncSummary); el.addEventListener("change", syncSummary);
   });
@@ -1264,7 +1291,8 @@ function collect() {
   DCFG.image = $("#d_image").value.trim();
   DCFG.namespace = $("#d_ns").value; DCFG.replicas = +$("#d_rep").value;
   DCFG.target_mode = $("#d_target_mode").value; DCFG.target_workload = $("#d_target_workload").value;
-  DCFG.cpu = $("#d_cpu").value.trim(); DCFG.memory = $("#d_mem").value.trim(); DCFG.icon = $("#d_icon").value.trim();
+  DCFG.cpu = $("#d_cpu").value.trim(); DCFG.memory = $("#d_mem").value.trim();
+  DCFG.memory_limit = $("#d_mem_limit").value.trim(); DCFG.icon = $("#d_icon").value.trim();
   DCFG.hardware = selectedHardware("d_hw");
   Object.assign(DCFG, readPrivileges("d_pv") || {});
   DCFG.gpu = DCFG.hardware.includes("igpu"); DCFG.network_mode = $("#d_net").value;
@@ -1287,6 +1315,7 @@ function syncSummary() {
     row("❏", "Image", c.image ? `<span class="small mono">${esc(c.image)}</span>` : '<span class="dim">—</span>') +
     row("⌗", "Namespace", esc(c.namespace)) + row("⧉", c.target_mode === "existing" ? "Joins workload" : "Instances", c.target_mode === "existing" ? esc(c.target_workload || "—") : c.replicas) +
     row("◴", "Requests", `<span class="small mono">${esc(c.cpu)} · ${esc(c.memory)}</span>`) +
+    row("▣", "Memory max", c.memory_limit ? `<span class="small mono">${esc(c.memory_limit)}</span>` : '<span class="dim">no limit</span>') +
     ((c.command || []).length || (c.args || []).length ? row("›", "Runs", `<span class="small mono">${esc([...(c.command || []), ...(c.args || [])].join(" "))}</span>`) : "") +
     row("▤", "Hardware", c.hardware.length ? hardwareTags(c.hardware) : '<span class="dim">none</span>') +
     row("◎", "Network", `<span class="small">${esc(c.network_mode)}${c.network_mode === "loadbalancer" ? ` · ${esc(c.vip_mode)} VIP` : ""}</span>`) +

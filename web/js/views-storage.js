@@ -943,13 +943,33 @@ const attachedWorkloads = volume => volume.attached
 
 /* ---------------- shares ---------------- */
 async function viewShares() {
-  const sh = await api("/api/shares").catch(() => []);
+  let sh;
+  try { sh = await api("/api/shares"); }
+  catch (e) {
+    paint(`<div class="phead"><div><h2>Network shares</h2></div></div>
+      <div class="note bad">Could not load shares: ${esc(e.message)} <button class="btn sm" onclick="viewShares()">Retry</button></div>`);
+    return;
+  }
   STATE.data.shares = sh;
-  if (!STATE.data.ov) STATE.data.ov = await api("/api/overview").catch(() => ({}));
-  const ip = STATE.data.ov.lb_ip || "server";
+  const smb = await api("/api/shares/server").catch(error => ({ error: error.message }));
+  const nfs = await api("/api/shares/nfs/server").catch(error => ({ error: error.message }));
+  STATE.data.samba = smb;
+  STATE.data.nfs = nfs;
+  STATE.data.sambaInstalled = !!smb.installed;
+  const ip = smb.address || "address pending";
   paint(`<div class="phead"><div><h2>Network shares</h2>
-    <p>SMB shares backed by replicated Longhorn volumes — mount them straight from Windows</p></div>
+    <p>SMB shares and optional NFSv4 exports backed by Longhorn volumes</p></div>
     <div class="row"><button class="btn pri" data-need="admin" onclick="newShare()">＋ New share</button></div></div>
+  <div class="card" style="margin-bottom:14px"><div class="between"><div><div class="ctitle">SMB server · ${esc(smb.name || "homestead-smb")}</div>
+    <div class="dim small">${smb.error ? `Status unavailable: ${esc(smb.error)}` : !smb.installed ? "Not installed · your first share can install it" :
+      `${smb.enabled ? `${smb.ready || 0}/${smb.desired || 1} ready` : "Stopped"}${smb.address ? ` · \\\\${esc(smb.address)}` : " · waiting for an address"} · ${smb.served_shares?.length ?? 0}/${sh.length} share mappings${smb.in_sync ? "" : " · out of sync"}`}</div></div>
+    ${can("admin") && !smb.error ? `<div class="row">${smb.installed && !smb.in_sync ? '<button class="btn sm" onclick="repairSamba(this)">Repair mapping</button>' : ""}<button class="btn sm" onclick="settingsTab('cluster');go('settings')">Manage add-on</button></div>` : ""}</div>
+    <div class="dim xs" style="margin-top:9px">Homestead manages this container, its image and its volume mounts from the share list. Enable, stop or remove the server in Settings → Cluster → Add-ons; volumes are kept.</div></div>
+  <div class="card" style="margin-bottom:14px"><div class="between"><div><div class="ctitle">NFSv4 server · ${esc(nfs.name || "homestead-nfs")}</div>
+    <div class="dim small">${nfs.error ? `Status unavailable: ${esc(nfs.error)}` : !nfs.installed ? "Not installed" :
+      `${nfs.enabled ? `${nfs.ready || 0}/${nfs.desired || 1} ready` : "Stopped"}${nfs.address ? ` · ${esc(nfs.address)}:/<share>` : " · waiting for an address"}`} · ${(nfs.exports || []).length} configured exports</div></div>
+    <button class="btn sm" onclick="settingsTab('cluster');go('settings')">Manage add-on</button></div>
+    <div class="dim xs" style="margin-top:9px">NFS is a separate opt-in container. Only selected RWX shares are exported to their allowed client networks; SMB and all PVCs remain independent.</div></div>
   <div class="card flat pad0"><div class="tblwrap sharetable"><table data-sort="shares" class="tbl">
     <thead><tr><th>Share</th><th>Storage</th><th>Size</th><th>Access</th><th>UNC path</th><th></th></tr></thead><tbody>
     ${sh.map(s => `<tr><td class="shareidentity"><div class="row" style="gap:9px"><div class="av n2">${esc(s.name.slice(0, 2).toUpperCase())}</div>
@@ -958,12 +978,43 @@ async function viewShares() {
         ${s.owned === false ? '<span class="tag">shared volume</span>' : ""}</td>
       <td class="mono" data-label="Size">${s.size_gb ? s.size_gb + " GB" : "—"}</td>
       <td data-label="Access"><span>${s.public ? '<span class="pill med">guest</span>' : `<span class="pill low">${esc(s.user)}</span>`}
-        ${s.read_only ? '<span class="tag">read only</span>' : '<span class="tag">read/write</span>'}</span></td>
-      <td class="small muted mono" data-label="UNC path">\\\\${esc(ip)}\\${esc(s.name)}</td>
-      <td class="shareactions"><div class="row"><button class="btn sm" data-need="admin" title="Grow this share or change its access policy" onclick="editShare('${esc(s.name)}')">${icon("edit")}Edit</button>
+        ${s.read_only ? '<span class="tag">read only</span>' : '<span class="tag">read/write</span>'}
+        ${s.nfs_clients ? `<span class="pill slim info" data-tip="NFS ${s.nfs_read_only === false ? "read/write" : "read only"} for ${esc(s.nfs_clients)}">NFS</span>` : ""}</span></td>
+      <td class="small muted mono" data-label="UNC path">${smb.address ? `\\\\${esc(ip)}\\${esc(s.name)}` : "Waiting for SMB address"}</td>
+      <td class="shareactions"><div class="row"><button class="btn sm" data-need="admin" title="Configure this share's NFSv4 export and allowed clients" onclick="nfsExport('${esc(s.name)}')">NFS</button>
+        <button class="btn sm" data-need="admin" title="Grow this share or change its access policy" onclick="editShare('${esc(s.name)}')">${icon("edit")}Edit</button>
         <button class="btn sm danger" data-need="admin" onclick="rmShare('${esc(s.name)}')">${icon("trash")}Remove</button></div></td></tr>`).join("")
       || `<tr><td colspan=6 class="empty">no shares yet — create one with ＋ New share</td></tr>`}</tbody></table></div></div>`);
 }
+window.nfsExport = name => {
+  const share = (STATE.data.shares || []).find(row => row.name === name);
+  if (!share) return toast("share details are no longer available; refresh and try again", "bad");
+  const rwx = (share.access_modes || []).includes("ReadWriteMany");
+  modal(`NFS export · ${esc(name)}`, `<p>Export this share from the optional NFSv4 container to a specific client address or network. Leave the field blank to remove its NFS export. SMB access is unchanged.</p>
+    ${rwx ? "" : `<div class="note warn">This share may not be RWX. NFS requires a Bound ReadWriteMany volume so its separate container can mount the data; the server checks this before saving.</div>`}
+    <div class="f"><label>Allowed IPv4 client or CIDR ${tip("For example, 192.0.2.42 or 192.0.2.0/24. An everyone-accessible export is not allowed.")}</label>
+      <input id="nfs_clients" value="${esc(share.nfs_clients || "")}" placeholder="192.0.2.0/24" autocomplete="off"></div>
+    <label class="switch"><input type="checkbox" id="nfs_ro" ${share.nfs_read_only !== false ? "checked" : ""}> Read only</label>
+    <div class="dim xs" style="margin-top:8px">NFSv4 clients mount ${esc(STATE.data.nfs?.address || "<server-ip>")}:/${esc(name)} on TCP port 2049. The server and its VIP are enabled in Settings → Cluster → Add-ons. Longhorn RWX re-export adds an extra NFS layer.</div>
+    <div class="modalactions"><button class="btn pri" onclick="nfsExportSave('${esc(name)}',this)">Save export</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+};
+window.nfsExportSave = async (name, button) => {
+  const clients = $("#nfs_clients")?.value.trim() || "";
+  if (button) button.disabled = true;
+  try {
+    const result = await api("/api/shares/nfs", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, clients, read_only: !!$("#nfs_ro")?.checked }) });
+    closeModal(); toast(result.detail, "ok"); viewShares();
+  } catch (e) { toast(e.message, "bad"); if (button) button.disabled = false; }
+};
+window.repairSamba = async button => {
+  if (button) { button.disabled = true; button.textContent = "Repairing…"; }
+  try {
+    const result = await api("/api/shares/repair", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: "{}" });
+    toast(result.detail, "ok"); viewShares();
+  } catch (e) { toast(e.message, "bad"); if (button) { button.disabled = false; button.textContent = "Repair mapping"; } }
+};
 window.newShare = async () => {
   modal("New share", `<div class="empty"><span class="spin2"></span>loading volumes</div>`, true);
   const options = await api("/api/shares/options").catch(() => ({ pvcs: [], storage_classes: [] }));
@@ -1061,7 +1112,7 @@ window.editShare = name => {
   const s = (STATE.data.shares || []).find(row => row.name === name);
   if (!s) return toast("share details are no longer available; refresh and try again", "bad");
   modal(`Edit share · ${s.name}`, `
-    <div class="callout"><b>\\\\${esc((STATE.data.ov && STATE.data.ov.lb_ip) || "server")}\\${esc(s.name)}</b><br>
+    <div class="callout"><b>\\\\${esc(STATE.data.samba?.address || "address pending")}\\${esc(s.name)}</b><br>
       ${s.owned === false ? `Files come from <span class="mono">${esc(s.pvc || "")}${s.sub_path ? "/" + esc(s.sub_path) : ""}</span>, a volume this share only mounts.` : "The claim can grow but cannot shrink."}
       Size-only changes keep Samba running; access changes briefly disconnect open SMB sessions.</div>
     <div class="f2" style="margin-top:14px"><div class="f"><label>Requested size (GB) ${tip("Longhorn volumes can grow online. Kubernetes and Longhorn do not support shrinking a populated claim.")}</label>

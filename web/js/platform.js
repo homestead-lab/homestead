@@ -70,11 +70,13 @@ const ADDONS = {
 window.addonsPaint = async () => {
   const card = $("#addonsCard");
   if (!card) return;
-  let s, health;
-  try { [s, health] = await Promise.all([api("/api/addons"), api("/api/self/health").catch(() => ({}))]); }
+  let s, health, nfs;
+  try { [s, health, nfs] = await Promise.all([api("/api/addons"), api("/api/self/health").catch(() => ({})),
+    api("/api/shares/nfs/server").catch(error => ({ error: error.message }))]); }
   catch (e) { card.hidden = true; return; }
   card.hidden = false;
-  const probe = health.probe || {};
+  const probe = health.probe || {}, smb = health.samba || {};
+  STATE.data.sambaInstalled = !!smb.installed;
   const kvmLine = !s.kvm_known ? '<span class="dim">The node probe has not said whether the nodes have hardware virtualisation.</span>'
     : s.kvm_everywhere ? "Every node has hardware virtualisation."
     : s.kvm_nowhere ? '<b>No node has hardware virtualisation</b>: KubeVirt will emulate, and VMs run slowly.'
@@ -111,11 +113,30 @@ window.addonsPaint = async () => {
       <div class="dim small">Host hardware, /dev/kvm, temperatures, physical disks, SMART health and per-disk throughput</div>
       <div class="dim xs" style="margin-top:4px">A lightweight read-only probe runs on every node; SMART tests use its separate privileged sidecar.</div></div>
     <div class="row">${probeButton}</div></div>`;
+  const smbPill = !smb.installed ? '<span class="pill">not installed</span>'
+    : !smb.enabled ? '<span class="pill med">off</span>'
+    : smb.ready < smb.desired ? '<span class="pill med">starting</span>' : '<span class="pill ok">serving</span>';
+  const smbRow = `<div class="addon-row"><div><b>SMB network shares</b> ${smbPill}
+      <div class="dim small">Windows, macOS and Linux file shares from the saved Network Shares inventory</div>
+      <div class="dim xs" style="margin-top:4px">${smb.shares || 0} configured · ${smb.address ? esc(smb.address) : "address not assigned"} · stopping or removing SMB keeps all PVCs and share settings</div></div>
+    <div class="row"><button class="btn sm" onclick="go('shares')">Shares</button>
+      ${can("admin") ? `<label class="switch"><input type="checkbox" ${smb.enabled ? "checked" : ""} onchange="sambaToggle(this)"> ${smb.enabled ? "On" : "Off"}</label>
+        ${smb.installed ? '<button class="btn sm danger" onclick="sambaRemove()">Remove server</button>' : ""}` : ""}</div></div>`;
+  STATE.data.nfs = nfs;
+  const nfsPill = nfs.error ? '<span class="pill crit">status unavailable</span>' : !nfs.installed ? '<span class="pill">not installed</span>'
+    : !nfs.enabled ? '<span class="pill med">off</span>'
+    : nfs.ready < nfs.desired ? '<span class="pill med">starting</span>' : '<span class="pill ok">serving</span>';
+  const nfsRow = `<div class="addon-row"><div><b>NFSv4 network shares</b> ${nfsPill}
+      <div class="dim small">A separate, opt-in NFS container serving selected RWX shares to allowed client networks</div>
+      <div class="dim xs" style="margin-top:4px">${(nfs.exports || []).length} exports · ${nfs.address ? esc(nfs.address) : "address not assigned"} · removing the server keeps the shares and volumes</div></div>
+    <div class="row"><button class="btn sm" onclick="go('shares')">Exports</button>
+      ${can("admin") && !nfs.error ? `<label class="switch"><input type="checkbox" ${nfs.enabled ? "checked" : ""} onchange="nfsToggle(this)"> ${nfs.enabled ? "On" : "Off"}</label>
+        ${nfs.installed ? '<button class="btn sm danger" onclick="nfsRemove()">Remove server</button>' : ""}` : ""}</div></div>`;
   const clusterRows = s.harvester ? "" : `${row("longhorn", s.longhorn)}${row("kubevirt", s.kubevirt)}${s.multus ? row("multus", s.multus) : ""}${s.kube_vip ? row("kube-vip", s.kube_vip) : ""}`;
   card.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">Add-ons</div>
       <div class="csub">${s.harvester ? "Optional Homestead services; Harvester already provides storage, VM and network add-ons"
         : `What this ${esc(platformName(STATE.platform || { distribution: s.distribution }))} cluster can add`}</div></div></div>
-    ${probeRow}${clusterRows}`;
+    ${probeRow}${smbRow}${nfsRow}${clusterRows}`;
   if (window.applyRole) applyRole();
 };
 

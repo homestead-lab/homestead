@@ -442,7 +442,8 @@ def _service(key, svc, ctx, variables):
         report.warn("network_mode: none is not carried over; the workload gets the cluster network",
                     at("network_mode"))
 
-    # Resources: Homestead reserves, it does not cap.
+    # Requests guide scheduling; a Compose memory limit becomes a real
+    # container limit. CPU limits remain a separate, unsupported setting.
     try:
         reservations = _nested(svc, "deploy", "resources", "reservations") or {}
         limits = _nested(svc, "deploy", "resources", "limits") or {}
@@ -452,9 +453,19 @@ def _service(key, svc, ctx, variables):
             cfg["cpu"] = cpu_millis(cpus)
         if memory not in (None, ""):
             cfg["memory"] = f"{memory_mib(memory)}Mi"
-        if limits or svc.get("mem_limit") or svc.get("cpus"):
-            report.note("limits are not enforced: Homestead reserves CPU and memory for a workload "
-                        "but does not cap it", at("deploy") if limits else at("mem_limit" if "mem_limit" in svc else "cpus"))
+        memory_max = limits.get("memory") or svc.get("mem_limit")
+        if memory_max not in (None, ""):
+            limit_mib = memory_mib(memory_max)
+            cfg["memory_limit"] = f"{limit_mib}Mi"
+            if memory in (None, "") and limit_mib < memory_mib(cfg["memory"]):
+                # The editor's default 128Mi request must not exceed an
+                # imported smaller limit. This remains editable before apply.
+                cfg["memory"] = cfg["memory_limit"]
+            report.note("memory limit becomes the container's enforced maximum; review it against normal usage",
+                        at("deploy") if limits.get("memory") else at("mem_limit"))
+        if limits.get("cpus") or svc.get("cpus"):
+            report.note("CPU limits are not enforced; Homestead imports CPU reservations only",
+                        at("deploy") if limits.get("cpus") else at("cpus"))
         replicas = _nested(svc, "deploy", "replicas")
         if replicas is None:
             replicas = svc.get("scale")

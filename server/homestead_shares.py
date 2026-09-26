@@ -11,6 +11,7 @@ import copy
 import hashlib
 import json
 import re
+import threading
 import time
 import urllib.error
 
@@ -20,6 +21,16 @@ kget = ksend = create_pvc = None
 install = None
 NAMESPACE = "lab"
 CACHE = {}
+SAMBA_NAME = NAMES.object_name("smb")
+LEGACY_NAME = "samba"
+LOCK = threading.RLock()
+
+
+def serialized(fn):
+    def run(*args, **kwargs):
+        with LOCK:
+            return fn(*args, **kwargs)
+    return run
 def CONFIGMAP():
     """Where share definitions live."""
     return NAMES.object_name("shares", NAMESPACE)
@@ -116,15 +127,17 @@ def _quantity_gb(value):
 
 
 def _deployment_state():
-    """Read legacy share definitions and user passwords from the deployment."""
-    dep = _get_optional(f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/samba")
+    """Read legacy share definitions only when there is no saved inventory."""
+    dep = _get_optional(f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/{SAMBA_NAME}")
+    if not dep:
+        dep = _get_optional(f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/{LEGACY_NAME}")
     if not dep:
         return [], {}, None
     spec = ((dep.get("spec") or {}).get("template") or {}).get("spec") or {}
     containers = spec.get("containers") or []
     if not containers:
         return [], {}, dep
-    container = next((row for row in containers if row.get("name") == "samba"), containers[0])
+    container = next((row for row in containers if row.get("name") in (SAMBA_NAME, LEGACY_NAME)), containers[0])
     claim_by_path = {}
     volumes = {row.get("name"): row for row in spec.get("volumes", []) or []}
     for mount in container.get("volumeMounts", []) or []:
@@ -163,9 +176,11 @@ def _config_rows():
         return [], None
     try:
         rows = json.loads((obj.get("data") or {}).get("shares.json", "[]"))
-    except (TypeError, ValueError):
-        rows = []
-    return rows if isinstance(rows, list) else [], obj
+    except (TypeError, ValueError) as error:
+        raise ValueError("saved share settings are invalid; Samba was left unchanged") from error
+    if not isinstance(rows, list):
+        raise ValueError("saved share settings are not a list; Samba was left unchanged")
+    return rows, obj
 
 
 def _credentials():
@@ -184,9 +199,11 @@ def _state():
     configured, config_obj = _config_rows()
     discovered, deployment_users, deployment = _deployment_state()
     credentials, secret_obj = _credentials()
-    rows = [dict(row) for row in configured if isinstance(row, dict)]
-    names = {row.get("name") for row in rows}
-    rows.extend(row for row in discovered if row.get("name") not in names)
+    # Once Homestead has saved a ConfigMap it is authoritative, including an
+    # empty list. Merging old deployment arguments back in resurrected a share
+    # after deletion and made the next create produce duplicate mount paths.
+    rows = [dict(row) for row in (configured if config_obj is not None else discovered)
+            if isinstance(row, dict)]
     for row in rows:
         name = str(row.get("name") or "")
         user = str(row.get("user") or "lab")
@@ -215,6 +232,7 @@ def _public(row, credentials, pvc=None):
     clean = {key: value for key, value in row.items()
              if key not in ("password", "has_password")}
     if pvc:
+        clean["access_modes"] = list(((pvc.get("spec") or {}).get("accessModes") or []))
         actual, requested = _pvc_size(pvc)
         clean["size_gb"] = requested or clean.get("size_gb", 0)
         clean["actual_size_gb"] = actual or clean["size_gb"]
@@ -267,6 +285,56 @@ def _save_credentials(credentials, current=None):
     if current:
         return ksend("PUT", f"/api/v1/namespaces/{NAMESPACE}/secrets/{SECRET()}", body)
     return ksend("POST", f"/api/v1/namespaces/{NAMESPACE}/secrets", body)
+
+
+def _restore_object(path, previous, written):
+    """Restore the exact pre-change object, including an absent object."""
+    live = _get_optional(path)
+    written_version = ((written or {}).get("metadata") or {}).get("resourceVersion")
+    live_version = ((live or {}).get("metadata") or {}).get("resourceVersion")
+    if written_version and live_version != written_version:
+        raise RuntimeError("share settings changed concurrently and were not overwritten")
+    if previous is None:
+        if live is not None:
+            ksend("DELETE", path)
+        return
+    restored = copy.deepcopy(previous)
+    if live is not None:
+        version = (live.get("metadata") or {}).get("resourceVersion")
+        if version:
+            restored.setdefault("metadata", {})["resourceVersion"] = version
+        ksend("PUT", path, restored)
+    else:
+        plural = path.rsplit("/", 1)[0]
+        restored.setdefault("metadata", {}).pop("resourceVersion", None)
+        ksend("POST", plural, restored)
+
+
+def _commit(rows, credentials, config_obj, secret_obj, deployment):
+    """Save settings and apply them as one user-visible share operation."""
+    config_path = f"/api/v1/namespaces/{NAMESPACE}/configmaps/{CONFIGMAP()}"
+    secret_path = f"/api/v1/namespaces/{NAMESPACE}/secrets/{SECRET()}"
+    saved_config = saved_secret = None
+    try:
+        saved_secret = _save_credentials(credentials, secret_obj)
+        saved_config = _save_config(rows, config_obj)
+        return apply_samba(rows, credentials, deployment)
+    except Exception as error:
+        # A Kubernetes 422 (or failed rollout) must not leave a phantom share
+        # in the ConfigMap. The next request must see the same state as before.
+        recovery = []
+        for path, previous, written in ((config_path, config_obj, saved_config),
+                                        (secret_path, secret_obj, saved_secret)):
+            if written is None:
+                continue
+            try:
+                _restore_object(path, previous, written)
+            except Exception as failure:
+                recovery.append(str(failure))
+        if recovery:
+            raise RuntimeError(f"{error}; share settings could not be restored: "
+                               + "; ".join(recovery)) from error
+        raise
 
 
 def account_password(credentials, user):
@@ -324,12 +392,13 @@ def _longhorn_volume(pvc):
 
 
 def _samba_node():
-    pods = _get_optional(
-        f"/api/v1/namespaces/{NAMESPACE}/pods?labelSelector=app%3Dsamba") or {}
-    for pod in pods.get("items", []) or []:
-        node = (pod.get("spec") or {}).get("nodeName")
-        if node:
-            return node
+    for name in (SAMBA_NAME, LEGACY_NAME):
+        pods = _get_optional(
+            f"/api/v1/namespaces/{NAMESPACE}/pods?labelSelector=app%3D{name}") or {}
+        for pod in pods.get("items", []) or []:
+            node = (pod.get("spec") or {}).get("nodeName")
+            if node:
+                return node
     return ""
 
 
@@ -374,7 +443,7 @@ def claim_warnings(pvc_name):
 
 
 def _samba_ready():
-    deployment = _get_optional(f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/samba")
+    deployment = _deployment_state()[2]
     if not deployment:
         return False
     desired = int((deployment.get("spec") or {}).get("replicas", 1) or 0)
@@ -391,7 +460,8 @@ def _samba_blocker():
     """Whatever Kubernetes last complained about, so the error names the cause."""
     events = _get_optional(f"/api/v1/namespaces/{NAMESPACE}/events") or {}
     messages = [item.get("message", "") for item in events.get("items", []) or []
-                if str((item.get("involvedObject") or {}).get("name", "")).startswith("samba-")
+                if str((item.get("involvedObject") or {}).get("name", "")).startswith(
+                    (SAMBA_NAME + "-", LEGACY_NAME + "-"))
                 and item.get("type") == "Warning"]
     return messages[-1][:220] if messages else ""
 
@@ -400,30 +470,26 @@ def _volume_name(name):
     return "hs-" + hashlib.sha1(name.encode()).hexdigest()[:12]
 
 
-def apply_samba(rows, credentials, deployment=None):
-    deployment = deployment or _deployment_state()[2]
-    if not deployment and install:
-        # The first share brings Samba with it rather than asking for it.
-        deployment = install()
-    if not deployment:
-        raise ValueError("the samba deployment is not installed")
+def configured_deployment(deployment, rows, credentials):
+    """Build the whole dedicated SMB pod from the authoritative share list."""
     users = _validate_access(rows, credentials)
-    previous, was_serving = copy.deepcopy(deployment), _samba_ready()
+    deployment = copy.deepcopy(deployment)
     spec = deployment["spec"]["template"]["spec"]
-    container = next((row for row in spec["containers"] if row.get("name") == "samba"),
+    container = next((row for row in spec["containers"] if row.get("name") in (SAMBA_NAME, LEGACY_NAME)),
                      spec["containers"][0])
-    managed = {mount.get("name") for mount in container.get("volumeMounts", []) or []
-               if re.fullmatch(r"(?:sh\d+|hs-[a-f0-9]{12})", str(mount.get("name") or ""))}
-    mounts = [mount for mount in container.get("volumeMounts", []) or []
-              if mount.get("name") not in managed]
-    volumes = [volume for volume in spec.get("volumes", []) or []
-               if volume.get("name") not in managed]
+    # This is a dedicated Homestead workload. Every mount and share argument
+    # comes from the share inventory; a hand-edited mount must not survive or
+    # collide with the one Homestead generates for the same path.
+    mounts, volumes = [], []
     args = ["-p"]
-    attached = {}
+    attached, paths = {}, set()
     for row in sorted(rows, key=lambda item: item["name"]):
         if not row.get("pvc"):
             continue
         path = row.get("path") or f"/shares/{row['name']}"
+        if path in paths:
+            raise ValueError(f"two shares cannot mount at {path}")
+        paths.add(path)
         # Two shares can live in different folders of one claim, so the volume
         # is keyed by claim and the folder becomes the mount's subPath.
         volume_name = attached.get(row["pvc"]) or _volume_name("claim:" + row["pvc"])
@@ -442,15 +508,63 @@ def apply_samba(rows, credentials, deployment=None):
         args += ["-u", f"{user};{password}"]
     args += ["-g", "server min protocol = SMB2"]
     container["args"], container["volumeMounts"], spec["volumes"] = args, mounts, volumes
+    return deployment
+
+
+@serialized
+def apply_samba(rows, credentials, deployment=None):
+    deployment = deployment or _deployment_state()[2]
+    if not deployment and install:
+        # The first share brings SMB with it rather than asking for it.
+        deployment = install()
+    if not deployment:
+        raise ValueError("the SMB deployment is not installed")
+    if deployment["metadata"]["name"] == LEGACY_NAME and install:
+        # The installer adopts and renames a legacy deployment using the
+        # ConfigMap that _commit just saved. Its creation is already a rollout.
+        return install()
+    name = deployment["metadata"]["name"]
+    previous, was_serving = copy.deepcopy(deployment), _samba_ready()
+    deployment = configured_deployment(deployment, rows, credentials)
     deployment["spec"]["template"].setdefault("metadata", {}).setdefault(
         "annotations", {})[NAMES.key("share-update-at")] = time.strftime(
             "%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    result = ksend("PUT", f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/samba", deployment)
-    _guard_rollout(previous, was_serving)
+    result = ksend("PUT", f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/{name}", deployment)
+    _guard_rollout(previous, was_serving, name)
     return result
 
 
-def _guard_rollout(previous, was_serving):
+@serialized
+def reconcile_samba(image=""):
+    """Repair drift without restarting a pod whose share spec already matches."""
+    rows, credentials, config_obj, secret_obj, deployment = _state()
+    if not deployment or deployment["metadata"]["name"] != SAMBA_NAME:
+        return {"state": "absent" if not deployment else "legacy"}
+    if config_obj is None:
+        _save_config(rows)
+        _save_credentials(credentials, secret_obj)
+    desired = configured_deployment(deployment, rows, credentials)
+    actual_spec = deployment["spec"]["template"]["spec"]
+    desired_spec = desired["spec"]["template"]["spec"]
+    actual_container = actual_spec["containers"][0]
+    desired_container = desired_spec["containers"][0]
+    if image:
+        desired_container["image"] = image
+    fields = ("args", "volumeMounts", "image")
+    changed = any(actual_container.get(field) != desired_container.get(field) for field in fields)
+    changed |= actual_spec.get("volumes", []) != desired_spec.get("volumes", [])
+    if not changed:
+        return {"state": "current", "shares": len(rows)}
+    desired["spec"]["template"].setdefault("metadata", {}).setdefault(
+        "annotations", {})[NAMES.key("share-update-at")] = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    previous, was_serving = copy.deepcopy(deployment), _samba_ready()
+    ksend("PUT", f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/{SAMBA_NAME}", desired)
+    _guard_rollout(previous, was_serving, SAMBA_NAME)
+    return {"state": "repaired", "shares": len(rows)}
+
+
+def _guard_rollout(previous, was_serving, name):
     """Put the old shares back if the new spec cannot start.
 
     Samba uses the Recreate strategy because its claims are mostly
@@ -467,11 +581,11 @@ def _guard_rollout(previous, was_serving):
             return ""
         time.sleep(1.5)
     blocker = _samba_blocker()
-    live = _get_optional(f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/samba")
+    live = _get_optional(f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/{name}")
     if live and previous:
         restored = copy.deepcopy(previous)
         restored["metadata"]["resourceVersion"] = live["metadata"].get("resourceVersion", "")
-        ksend("PUT", f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/samba", restored)
+        ksend("PUT", f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/{name}", restored)
     raise ValueError("Samba could not start with this change, so the previous shares were "
                      "restored" + (f": {blocker}" if blocker else "."))
 
@@ -482,6 +596,7 @@ def _clear_cache():
             CACHE.pop(key, None)
 
 
+@serialized
 def create_share(name, size_gb, user, password, public, read_only=False,
                  pvc=None, sub_path="", storage_class=None, access_mode=None, new_name="", samba_ip=""):
     """Create a share on a new Longhorn claim, or on a folder of an existing one.
@@ -535,15 +650,14 @@ def create_share(name, size_gb, user, password, public, read_only=False,
                 warnings.append(f"{user} is also used by {', '.join(shared_with)}; Samba keeps one "
                                 "password per account, so those shares now use this password too.")
     _validate_access(rows, credentials)
-    _save_credentials(credentials, secret_obj)
-    _save_config(rows, config_obj)
-    result = apply_samba(rows, credentials, deployment)
+    result = _commit(rows, credentials, config_obj, secret_obj, deployment)
     _clear_cache()
     return {"shares": [_public(item, credentials) for item in rows], "warnings": warnings,
             "deployment": result,
             "message": f"Share {name} created" + (f" using the existing {user} password" if reused else "")}
 
 
+@serialized
 def edit_share(name, size_gb, user, password, public, read_only=False):
     name, user = _name(name), _user(user)
     rows, credentials, config_obj, secret_obj, deployment = _state()
@@ -580,9 +694,12 @@ def edit_share(name, size_gb, user, password, public, read_only=False):
     if owned and (not old_size or size_gb > old_size):
         pvc["spec"]["resources"]["requests"]["storage"] = f"{size_gb}Gi"
         ksend("PUT", f"/api/v1/namespaces/{NAMESPACE}/persistentvolumeclaims/{row['pvc']}", pvc)
-    _save_credentials(credentials, secret_obj)
-    _save_config(rows, config_obj)
-    result = apply_samba(rows, credentials, deployment) if access_changed else None
+    if access_changed:
+        result = _commit(rows, credentials, config_obj, secret_obj, deployment)
+    else:
+        _save_credentials(credentials, secret_obj)
+        _save_config(rows, config_obj)
+        result = None
     _clear_cache()
     return {"shares": [_public(item, credentials) for item in rows],
             "deployment": result, "deployment_updated": access_changed,
@@ -590,6 +707,7 @@ def edit_share(name, size_gb, user, password, public, read_only=False):
                         else f"Share {name} size updated")}
 
 
+@serialized
 def delete_share(name):
     name = _name(name)
     rows, credentials, config_obj, secret_obj, deployment = _state()
@@ -598,9 +716,7 @@ def delete_share(name):
         return {"shares": [_public(item, credentials) for item in keep],
                 "deployment": None, "message": "Share was already absent"}
     credentials.pop(name, None)
-    _save_credentials(credentials, secret_obj)
-    _save_config(keep, config_obj)
-    result = apply_samba(keep, credentials, deployment)
+    result = _commit(keep, credentials, config_obj, secret_obj, deployment)
     _clear_cache()
     return {"shares": [_public(item, credentials) for item in keep],
             "deployment": result, "message": f"Share {name} removed; its volume was kept"}

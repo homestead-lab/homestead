@@ -299,6 +299,9 @@ def _start_cluster(target):
         _install_controller()
         return (f"Installing Rancher's system-upgrade-controller first; then the servers move to {target} "
                 "one at a time, and the agents after them")
+    if not _helmchart(SUC_CHART):
+        raise ValueError("system-upgrade-controller is managed outside Homestead; use its owner to upgrade "
+                         "k3s or RKE2 instead of creating competing Plans")
     _write_plans(target)
     return f"The servers move to {target} one at a time, then the agents"
 
@@ -338,9 +341,17 @@ def plan_bodies(distribution, target):
 
 
 def _write_plans(target):
+    if not _helmchart(SUC_CHART):
+        raise ValueError("system-upgrade-controller is no longer managed by Homestead; no upgrade Plans were changed")
     distribution = (platform(False) or {}).get("distribution", "")
-    for body in plan_bodies(distribution, target):
-        current = _get(f"{PLANS}/{body['metadata']['name']}")
+    bodies = plan_bodies(distribution, target)
+    current_plans = {body["metadata"]["name"]: _get(f"{PLANS}/{body['metadata']['name']}") for body in bodies}
+    for name, current in current_plans.items():
+        if current:
+            if ((current.get("metadata") or {}).get("labels") or {}).get("homestead.io/managed") != "true":
+                raise ValueError(f"upgrade Plan {name} exists but is not owned by Homestead")
+    for body in bodies:
+        current = current_plans[body["metadata"]["name"]]
         if current:
             current["spec"] = body["spec"]
             current["metadata"].pop("managedFields", None)
@@ -352,7 +363,9 @@ def _write_plans(target):
 def remove_plans():
     for name in PLAN_NAMES:
         try:
-            ksend("DELETE", f"{PLANS}/{name}")
+            current = kget(f"{PLANS}/{name}")
+            if ((current.get("metadata") or {}).get("labels") or {}).get("homestead.io/managed") == "true":
+                ksend("DELETE", f"{PLANS}/{name}")
         except urllib.error.HTTPError as error:
             if error.code != 404:
                 raise
@@ -385,7 +398,10 @@ def status(item):
                 if _elapsed(item) > CONTROLLER_WAIT:
                     return "failed", 5, "the system-upgrade-controller did not start; its Helm job in kube-system says why"
                 return "running", 3, "Installing the system-upgrade-controller"
-            _write_plans(target)
+            try:
+                _write_plans(target)
+            except ValueError as error:
+                return "failed", 5, str(error)
             ref["phase"] = "nodes"
         versions = node_versions()
         done = sum(1 for v in versions.values() if v == target)

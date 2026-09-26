@@ -25,6 +25,7 @@ kget = ksend = None
 DEFAULT_NS = "lab"
 DATA_DIR = "/data"
 SYSTEM_NAMESPACES = set()
+SMB_NAMESPACE = "lab"
 TRACKED = NAMES.key("update-sources")
 PREVIOUS = NAMES.key("update-previous")
 LAST_ACTION = NAMES.key("update-action")
@@ -42,10 +43,15 @@ _CACHE = {}
 _CACHE_LOCK = threading.Lock()
 
 
-def bind(_kget, _ksend, default_ns="lab", data_dir="/data", system_namespaces=None):
-    global kget, ksend, DEFAULT_NS, DATA_DIR, SYSTEM_NAMESPACES
+def bind(_kget, _ksend, default_ns="lab", data_dir="/data", system_namespaces=None, smb_namespace="lab"):
+    global kget, ksend, DEFAULT_NS, DATA_DIR, SYSTEM_NAMESPACES, SMB_NAMESPACE
     kget, ksend, DEFAULT_NS, DATA_DIR = _kget, _ksend, default_ns, data_dir
     SYSTEM_NAMESPACES = set(system_namespaces or ())
+    SMB_NAMESPACE = smb_namespace
+
+
+def _managed_smb(ns, name):
+    return ns == SMB_NAMESPACE and name in (NAMES.object_name("smb"), "samba")
 
 
 def parse_image(ref):
@@ -379,7 +385,8 @@ def _scan_note(**fields):
 
 def scan(force=False):
     deps = [d for d in kget("/apis/apps/v1/deployments").get("items", [])
-            if d["metadata"]["namespace"] not in SYSTEM_NAMESPACES]
+            if d["metadata"]["namespace"] not in SYSTEM_NAMESPACES
+            and not _managed_smb(d["metadata"]["namespace"], d["metadata"]["name"])]
     pods = kget("/api/v1/pods").get("items", [])
     _scan_note(running=True, done=0, total=len(deps), current="", updates=0,
                started_at=time.time(), finished_at=0.0)
@@ -516,6 +523,8 @@ def _history(event):
 
 
 def apply_update(ns, name):
+    if _managed_smb(ns, name):
+        raise ValueError("SMB is managed from Network Shares")
     dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     pods = kget("/api/v1/pods").get("items", [])
     check = _check_deployment(dep, pods, True)
@@ -566,6 +575,8 @@ def apply_update(ns, name):
 
 
 def rollback(ns, name):
+    if _managed_smb(ns, name):
+        raise ValueError("SMB is managed from Network Shares")
     dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     previous = _annotation_json(dep, PREVIOUS)
     restore = previous.get("images") or {}

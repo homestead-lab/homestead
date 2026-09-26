@@ -16,6 +16,7 @@ import homestead_names as NAMES
 import homestead_restructure as RESTRUCTURE
 import homestead_affinity as AFFINITY
 import homestead_failover as FAILOVER
+import homestead_memory as MEMORY
 
 # Rebooting a host needs a privileged pod that enters the host namespaces.
 # That is a real escape hatch, so it is off unless the operator opts in on the
@@ -296,7 +297,7 @@ def _apply_container_edit(container, change, workload_name):
             container["env"] = env
         else:
             container.pop("env", None)
-    if "cpu" in change or "memory" in change:
+    if "cpu" in change or "memory" in change or "memory_limit" in change:
         resources = container.setdefault("resources", {})
         requests = resources.setdefault("requests", {})
         for key in ("cpu", "memory"):
@@ -307,6 +308,16 @@ def _apply_container_edit(container, change, workload_name):
                 requests[key] = value
             else:
                 requests.pop(key, None)
+        if "memory_limit" in change:
+            maximum = str(change.get("memory_limit") or "").strip()
+            limits = resources.setdefault("limits", {})
+            if maximum:
+                limits["memory"] = maximum
+            else:
+                limits.pop("memory", None)
+            if not limits:
+                resources.pop("limits", None)
+        MEMORY.validate(requests.get("memory"), (resources.get("limits") or {}).get("memory"), container["name"])
         if not requests:
             resources.pop("requests", None)
         if not resources:
@@ -613,7 +624,7 @@ def edit_workload(cfg, hold=False):
             _apply_container_edit(container, change, name)
     else:
         # Backward-compatible single-container request used by older clients.
-        legacy = {key: cfg[key] for key in ("image", "env", "cpu", "memory", "ports") if key in cfg}
+        legacy = {key: cfg[key] for key in ("image", "env", "cpu", "memory", "memory_limit", "ports") if key in cfg}
         if "container_name" in cfg:
             legacy["name"] = cfg["container_name"]
         if legacy:
@@ -817,6 +828,22 @@ def node_power(node, action, drain_first=True):
     if drain_first:
         d = drain(node)
         steps.append(f"drained {len(d['evicted'])} pod(s)")
+        refused = [item for item in d["skipped"] if "(HTTP " in item]
+        if refused:
+            raise ValueError("Host remains cordoned; drain was refused for " + ", ".join(refused[:6]) +
+                             ". Resolve the pod or disruption budget before retrying power control")
+        pending = set(d["evicted"])
+        deadline = time.time() + 120
+        while pending and time.time() < deadline:
+            live = kget("/api/v1/pods").get("items", [])
+            pending &= {(p.get("metadata") or {}).get("namespace", "") + "/" +
+                        (p.get("metadata") or {}).get("name", "") for p in live
+                        if (p.get("spec") or {}).get("nodeName") == node}
+            if pending:
+                time.sleep(2)
+        if pending:
+            raise ValueError("Host remains cordoned; these pods have not left it: " +
+                             ", ".join(sorted(pending)[:6]) + ". Power was not sent")
 
     cmd = "systemctl reboot" if action == "reboot" else "systemctl poweroff"
     pod_name = f"homestead-{action}-{node.split('.')[0][-12:]}-{int(time.time()) % 100000}"
@@ -840,7 +867,8 @@ def node_power(node, action, drain_first=True):
     ksend("POST", "/api/v1/namespaces/lab/pods", body)
     steps.append(f"scheduled {action} helper ({pod_name})")
     _bust()
-    return {"ok": True, "node": node, "action": action, "steps": steps, "quorum": rep}
+    return {"ok": True, "node": node, "action": action, "steps": steps,
+            "helper_pod": pod_name, "quorum": rep}
 
 
 # --------------------------------------------------------------- VM actions

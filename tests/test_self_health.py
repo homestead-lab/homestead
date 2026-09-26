@@ -12,12 +12,12 @@ import server
 class SambaSwitchTests(unittest.TestCase):
     def test_off_stops_serving_and_keeps_everything(self):
         sent = []
-        dep = {"spec": {"replicas": 1, "template": {"spec": {"containers": [{"image": "dperson/samba"}]}}}, "status": {"readyReplicas": 1}}
-        with mock.patch.object(server, "kget", lambda path, **k: dep if path.endswith("/deployments/samba") else {}), \
+        dep = {"metadata": {"name": server.SMB_NAME}, "spec": {"replicas": 1, "template": {"spec": {"containers": [{"image": "dperson/samba"}]}}}, "status": {"readyReplicas": 1}}
+        with mock.patch.object(server, "kget", lambda path, **k: dep if path.endswith(f"/deployments/{server.SMB_NAME}") else {}), \
                 mock.patch.object(server, "ksend", lambda *a, **k: sent.append(a)), \
                 mock.patch.object(server.SHARES, "list_shares", lambda: [1, 2]):
             result = server.set_samba(False)
-        self.assertEqual(("PATCH", f"/apis/apps/v1/namespaces/{server.SMB_NAMESPACE}/deployments/samba",
+        self.assertEqual(("PATCH", f"/apis/apps/v1/namespaces/{server.SMB_NAMESPACE}/deployments/{server.SMB_NAME}",
                           {"spec": {"replicas": 0}}), sent[0])
         self.assertIn("kept", result["detail"])
 
@@ -26,7 +26,7 @@ class SambaSwitchTests(unittest.TestCase):
             raise urllib.error.HTTPError(path, 404, "missing", None, None)
         applied = []
         with mock.patch.object(server, "kget", missing), \
-                mock.patch.object(server, "install_samba", lambda address="": {"metadata": {"name": "samba"}}), \
+                mock.patch.object(server, "install_samba", lambda address="": {"metadata": {"name": server.SMB_NAME}}), \
                 mock.patch.object(server.SHARES, "list_shares", lambda: []), \
                 mock.patch.object(server.SHARES, "_state", lambda: ([{"name": "media"}], {"media": {}}, None, None, None)), \
                 mock.patch.object(server.SHARES, "apply_samba", lambda rows, creds, dep=None: applied.append(rows)):
@@ -57,7 +57,7 @@ class HeartbeatTests(unittest.TestCase):
                 mock.patch.object(server.OBJECTS, "status", lambda: {}):
             health = server.self_health()
         states = {row["name"]: row["state"] for row in health["loops"]}
-        self.assertEqual({"sampler": "ok", "alerts": "ok", "hardware": "failing", "history": "late", "moves": "starting"}, states)
+        self.assertEqual({"sampler": "ok", "alerts": "ok", "hardware": "failing", "history": "late", "moves": "starting", "samba": "starting"}, states)
         self.assertEqual("probe timed out", next(r for r in health["loops"] if r["name"] == "hardware")["error"])
         with mock.patch.object(server, "kget", lambda path, **k: {}), \
                 mock.patch.object(server.LEADER, "is_leader", lambda: False), \

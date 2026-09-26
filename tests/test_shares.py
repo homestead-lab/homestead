@@ -27,10 +27,10 @@ class ShareTests(unittest.TestCase):
                 "spec": {"resources": {"requests": {"storage": "10Gi"}}},
                 "status": {"phase": "Bound", "capacity": {"storage": "10Gi"}},
             },
-            "/apis/apps/v1/namespaces/lab/deployments/samba": {
-                "metadata": {"name": "samba", "namespace": "lab", "resourceVersion": "12"},
+            "/apis/apps/v1/namespaces/lab/deployments/homestead-smb": {
+                "metadata": {"name": "homestead-smb", "namespace": "lab", "resourceVersion": "12"},
                 "spec": {"replicas": 1, "template": {"metadata": {}, "spec": {
-                    "containers": [{"name": "samba", "args": [
+                    "containers": [{"name": "homestead-smb", "args": [
                         "-p", "-s", "secure;/shares/secure;yes;no;no;lab",
                         "-u", "lab;legacy-password",
                     ], "volumeMounts": [{"name": "sh0", "mountPath": "/shares/secure"}]}],
@@ -48,11 +48,14 @@ class ShareTests(unittest.TestCase):
                 raise HTTPError(path, 404, "missing", {}, None)
             return copy.deepcopy(self.objects[path])
 
-        def send(method, path, body, **_kwargs):
+        def send(method, path, body=None, **_kwargs):
             self.sent.append((method, path, copy.deepcopy(body)))
             if method == "POST":
                 plural = "configmaps" if body["kind"] == "ConfigMap" else "secrets"
                 path = f"/api/v1/namespaces/lab/{plural}/{body['metadata']['name']}"
+            if method == "DELETE":
+                self.objects.pop(path, None)
+                return {}
             self.objects[path] = copy.deepcopy(body)
             return copy.deepcopy(body)
 
@@ -78,7 +81,7 @@ class ShareTests(unittest.TestCase):
         self.assertEqual(("nas-data", 50, "longhorn-r2"), self.created[-1][:3])
 
     def test_the_first_share_installs_samba(self):
-        dep = self.objects.pop("/apis/apps/v1/namespaces/lab/deployments/samba")
+        dep = self.objects.pop("/apis/apps/v1/namespaces/lab/deployments/homestead-smb")
         installed = []
 
         def install(address=""):
@@ -86,7 +89,7 @@ class ShareTests(unittest.TestCase):
             fresh = copy.deepcopy(dep)
             fresh["spec"]["template"]["spec"]["containers"][0].update(args=["-p"], volumeMounts=[])
             fresh["spec"]["template"]["spec"]["volumes"] = []
-            self.objects["/apis/apps/v1/namespaces/lab/deployments/samba"] = fresh
+            self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-smb"] = fresh
             return copy.deepcopy(fresh)
         shares.install = install
         try:
@@ -94,11 +97,73 @@ class ShareTests(unittest.TestCase):
         finally:
             shares.install = None
         self.assertEqual(["192.0.2.245"], installed)
-        args = self.objects["/apis/apps/v1/namespaces/lab/deployments/samba"]["spec"]["template"]["spec"]["containers"][0]["args"]
+        args = self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-smb"]["spec"]["template"]["spec"]["containers"][0]["args"]
         self.assertIn("media;/shares/media;yes;no;no;lab", args)
 
+    def test_deleted_share_is_not_resurrected_and_can_be_readded(self):
+        shares.delete_share("secure")
+        configured = json.loads(self.objects[
+            "/api/v1/namespaces/lab/configmaps/homestead-shares"]["data"]["shares.json"])
+        self.assertEqual([], configured)
+        self.assertEqual([], shares.list_shares())
+        shares.create_share("secure", 0, "lab", "new-password", False, pvc="share-secure")
+        dep = self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-smb"]
+        mounts = dep["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]
+        self.assertEqual(["/shares/secure"], [mount["mountPath"] for mount in mounts])
+
+    def test_manual_duplicate_mount_is_removed_on_create(self):
+        dep = self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-smb"]
+        spec = dep["spec"]["template"]["spec"]
+        spec["containers"][0]["volumeMounts"].append(
+            {"name": "manual", "mountPath": "/shares/plex-media"})
+        spec["volumes"].append({"name": "manual", "persistentVolumeClaim": {
+            "claimName": "share-secure"}})
+        shares.create_share("plex-media", 0, "lab", "pw", False, pvc="share-secure")
+        # Read the saved Deployment, not the old in-memory fixture object.
+        saved = self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-smb"]
+        paths = [mount["mountPath"] for mount in saved["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]]
+        self.assertEqual(1, paths.count("/shares/plex-media"))
+        self.assertNotIn("manual", [mount["name"] for mount in
+                                   saved["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]])
+
+    def test_rejected_mount_update_restores_saved_share_state(self):
+        before = copy.deepcopy(self.objects[
+            "/api/v1/namespaces/lab/configmaps/homestead-shares"])
+        original_send = shares.ksend
+        rejected = [False]
+
+        def send(method, path, body=None, **kwargs):
+            if (method == "PUT" and path.endswith("/deployments/homestead-smb")
+                    and not rejected[0]):
+                rejected[0] = True
+                from urllib.error import HTTPError
+                raise HTTPError(path, 422, "duplicate mountPath", {}, None)
+            return original_send(method, path, body, **kwargs)
+
+        shares.ksend = send
+        try:
+            with self.assertRaisesRegex(Exception, "duplicate mountPath"):
+                shares.create_share("plex-media", 0, "lab", "pw", False, pvc="share-secure")
+        finally:
+            shares.ksend = original_send
+        self.assertEqual(before["data"], self.objects[
+            "/api/v1/namespaces/lab/configmaps/homestead-shares"]["data"])
+        self.assertEqual(["secure"], [row["name"] for row in shares.list_shares()])
+        shares.create_share("plex-media", 0, "lab", "pw", False, pvc="share-secure")
+        self.assertEqual(["plex-media", "secure"], [row["name"] for row in shares.list_shares()])
+
+    def test_rollback_does_not_overwrite_a_newer_config(self):
+        path = "/api/v1/namespaces/lab/configmaps/homestead-shares"
+        previous = copy.deepcopy(self.objects[path])
+        written = copy.deepcopy(previous)
+        self.objects[path]["metadata"]["resourceVersion"] = "5"
+        self.objects[path]["data"]["shares.json"] = "[]"
+        with self.assertRaisesRegex(RuntimeError, "changed concurrently"):
+            shares._restore_object(path, previous, written)
+        self.assertEqual("[]", self.objects[path]["data"]["shares.json"])
+
     def test_samba_that_cannot_be_installed_leaves_no_share_behind(self):
-        self.objects.pop("/apis/apps/v1/namespaces/lab/deployments/samba")
+        self.objects.pop("/apis/apps/v1/namespaces/lab/deployments/homestead-smb")
 
         def install(address=""):
             raise ValueError("there is no free address to give it")
@@ -129,7 +194,7 @@ class ShareTests(unittest.TestCase):
         self.assertNotIn("password", stored[0])
         self.assertEqual({"user": "media", "password": "new-password"},
                          self.decoded_secret()["secure"])
-        dep = self.objects["/apis/apps/v1/namespaces/lab/deployments/samba"]
+        dep = self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-smb"]
         container = dep["spec"]["template"]["spec"]["containers"][0]
         self.assertIn("secure;/shares/secure;yes;yes;no;media", container["args"])
         self.assertIn("media;new-password", container["args"])
@@ -144,7 +209,7 @@ class ShareTests(unittest.TestCase):
         result = shares.edit_share("secure", 10, "lab", "", True, False)
         self.assertEqual({}, self.decoded_secret())
         self.assertFalse(result["shares"][0]["has_password"])
-        dep = self.objects["/apis/apps/v1/namespaces/lab/deployments/samba"]
+        dep = self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-smb"]
         args = dep["spec"]["template"]["spec"]["containers"][0]["args"]
         self.assertIn("secure;/shares/secure;yes;no;yes;lab", args)
         self.assertNotIn("-u", args)
@@ -162,7 +227,7 @@ class ShareTests(unittest.TestCase):
         row = next(item for item in result["shares"] if item["name"] == "clips")
         self.assertFalse(row["owned"])
         self.assertEqual(10, row["size_gb"], "size comes from the borrowed claim")
-        dep = self.objects["/apis/apps/v1/namespaces/lab/deployments/samba"]
+        dep = self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-smb"]
         container = dep["spec"]["template"]["spec"]["containers"][0]
         mount = next(m for m in container["volumeMounts"] if m["mountPath"] == "/shares/clips")
         self.assertEqual("cameras/front", mount["subPath"],
@@ -199,7 +264,7 @@ class ShareTests(unittest.TestCase):
             "spec": {"migratable": status.pop("migratable", False)},
             "status": {"currentNodeID": status.pop("node", ""),
                        "robustness": status.pop("robustness", "healthy")}}
-        self.objects["/api/v1/namespaces/lab/pods?labelSelector=app%3Dsamba"] = {
+        self.objects["/api/v1/namespaces/lab/pods?labelSelector=app%3Dhomestead-smb"] = {
             "items": [{"spec": {"nodeName": "harvester-node2"}}]}
 
     def test_a_migratable_volume_attached_elsewhere_warns_about_live_migration(self):
@@ -213,7 +278,7 @@ class ShareTests(unittest.TestCase):
         self.assertIn("live-migrate", warning)
         self.assertIn("harvester-node2", warning)
         self.assertIn("rolled back", warning)
-        self.assertTrue(any("deployments/samba" in path for _, path, _ in self.sent))
+        self.assertTrue(any("deployments/homestead-smb" in path for _, path, _ in self.sent))
 
     def test_a_migratable_volume_nobody_holds_is_not_nagged_about(self):
         self._volume("spare", migratable=True, node="")
@@ -256,9 +321,10 @@ class ShareTests(unittest.TestCase):
         finally:
             shares._samba_ready, shares.ROLLOUT_TIMEOUT = ready, timeout
 
-        method, path, body = self.sent[-1]
+        method, path, body = next((sent for sent in reversed(self.sent)
+                                   if "/deployments/homestead-smb" in sent[1]))
         self.assertEqual("PUT", method)
-        self.assertTrue(path.endswith("/deployments/samba"))
+        self.assertTrue(path.endswith("/deployments/homestead-smb"))
         args = body["spec"]["template"]["spec"]["containers"][0]["args"]
         self.assertNotIn("clips;/shares/clips;yes;no;no;clips", args)
         self.assertIn("secure;/shares/secure;yes;no;no;lab", args)

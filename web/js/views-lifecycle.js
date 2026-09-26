@@ -57,6 +57,7 @@ const editContainerPanel = (container, index) => {
         <div class="f"><label>CPU reserved ${tip("Guaranteed scheduling capacity. 1000m = one core; it is not a hard usage limit.")}</label><input id="e_cpu_${index}" type="text" value="${esc(container.cpu || "")}" placeholder="50m"></div>
         <div class="f"><label>Memory reserved ${tip("Guaranteed scheduling capacity in Mi or Gi; it is not a hard usage limit.")}</label><input id="e_mem_${index}" type="text" value="${esc(container.memory || "")}" placeholder="128Mi"></div>
       </div>
+      <div class="f"><label>Memory max (optional) ${tip("The container's memory ceiling. Exceeding it can cause an OOM kill and restart. Leave blank for no limit; it must be at least Memory reserved.")}</label><input id="e_mem_limit_${index}" type="text" value="${esc(container.memory_limit || "")}" placeholder="No limit · e.g. 1Gi"></div>
       <div class="subsec">Hardware passed to this container</div>
       <div class="hwchoices">${hardwareChoices(`e_hw_${index}`, container.hardware || [])}</div>
       <div class="subsec">Privileges</div>
@@ -290,7 +291,8 @@ window.editSave = async (ns, name) => {
       expose: $(".ep-expose", row).checked })).filter(port => port.container);
     return { original_name: panel.dataset.originalName, name: $("#e_container_name_" + index).value.trim(),
       image: $("#e_image_" + index).value.trim(), cpu: $("#e_cpu_" + index).value.trim(),
-      memory: $("#e_mem_" + index).value.trim(), hardware: selectedHardware("e_hw_" + index), env, ports,
+      memory: $("#e_mem_" + index).value.trim(), memory_limit: $("#e_mem_limit_" + index).value.trim(),
+      hardware: selectedHardware("e_hw_" + index), env, ports,
       privileges: readPrivileges("e_pv_" + index) || undefined,
       volumes: readVolumeRows($("#e_vols_" + index)) };
   });
@@ -372,7 +374,11 @@ window.doMove = async (ns, name) => {
 /* ---------------- node power ---------------- */
 window.nodeActions = async name => {
   let qr = {}, impact = { workloads: [], stranded: [] };
-  try { [qr, impact] = await Promise.all([api("/api/quorum"), api(`/api/node/impact?node=${encodeURIComponent(name)}`)]); } catch (e) { }
+  try { [qr, impact] = await Promise.all([api("/api/quorum"), api(`/api/node/impact?node=${encodeURIComponent(name)}`)]); }
+  catch (e) {
+    return childModal("Host actions unavailable", `<div class="note bad">The host-impact checks could not be completed: ${esc(e.message)}. No power action is available until they work.</div>
+      <button class="btn" onclick="closeModal()">Close</button>`);
+  }
   window.__nodeImpact = impact;
   const isEtcd = (qr.members || []).includes(name);
   const risky = isEtcd && qr.can_lose < 1;
@@ -412,15 +418,10 @@ window.nodeActions = async name => {
       : risky ? `<div class="note" style="border-color:rgba(255,77,79,.35);background:rgba(255,77,79,.08);color:#ffb4b8">
         <b>Blocked.</b> ${(qr.ready || []).length} of ${qr.total} etcd members are ready and quorum needs
         ${qr.quorum_needs}. Taking this host down would lose the cluster. Bring the other members back first.</div>`
-      : `<p class="muted small">The host is cordoned and drained first, then a privileged helper pod
-         asks systemd. Type the host name to confirm.</p>
-      <div class="f" style="margin-top:12px"><label>Type <b class="mono">${esc(name)}</b> to confirm</label>
-        <input type="text" id="pw_confirm" placeholder="${esc(name)}" autocomplete="off"></div>
-      <label class="switch"><input type="checkbox" id="pw_drain" checked> Drain workloads first (recommended)</label>
-      ${(impact.stranded || []).length ? `<label class="switch dependency-confirm"><input type="checkbox" id="pw_allow"> I understand ${impact.stranded.map(w => esc(w.name)).join(", ")} will remain down until compatible hardware is available</label>` : ""}
+      : `<p class="muted small">Review fresh workload, VM, quorum and Longhorn replica impacts before either action. Homestead will cordon and wait for drained pods to leave before sending host power.</p>
       <div class="row">
-        <button class="btn danger" onclick="nodePower('${esc(name)}','reboot')">Reboot host</button>
-        <button class="btn danger" onclick="nodePower('${esc(name)}','poweroff')">Shut down host</button>
+        <button class="btn danger" onclick="nodePowerReview('${esc(name)}','reboot')">Review reboot…</button>
+        <button class="btn danger" onclick="nodePowerReview('${esc(name)}','poweroff')">Review shutdown…</button>
       </div>`}`, true);
 };
 window.nodeCordon = async (node, cordon) => {
@@ -433,19 +434,45 @@ window.nodeCordon = async (node, cordon) => {
 window.nodeDrain = async node => {
   evacuateNode(node);
 };
+window.nodePowerReview = async (node, action) => {
+  let plan;
+  try { plan = await api(`/api/node/power/plan?${new URLSearchParams({ node, action })}`); }
+  catch (e) { return toast(`Could not assess this host: ${e.message}`, "bad"); }
+  window.__nodePowerPlan = plan;
+  const volumes = plan.volumes || [];
+  childModal(`${action === "reboot" ? "Reboot" : "Shut down"} · ${node}`, `
+    ${plan.blockers?.length ? `<div class="note bad"><b>Blocked:</b> ${plan.blockers.map(esc).join(" · ")}</div>` : ""}
+    <div class="sec">What goes down</div>
+    <p class="small">${plan.pods} pod${plan.pods === 1 ? "" : "s"} and ${plan.vms?.length || 0} VM${plan.vms?.length === 1 ? "" : "s"} currently run on this host. Draining may move them, but live migration and restart are not guaranteed.</p>
+    ${(plan.workloads || []).length ? `<div class="dependency-list">${(plan.workloads || []).map(w => `<div class="drow"><div class="dl mono">${esc(w.ns)}/${esc(w.name)}</div><div class="dv">${w.stranded ? '<span class="pill crit">no other eligible host</span>' : `<span class="pill med">may move to ${esc((w.eligible || []).join(", "))}</span>`}</div></div>`).join("")}</div>` : `<div class="dim small">No user Deployments are mapped to this host.</div>`}
+    ${plan.vms?.length ? `<div class="note warn">VMs to check: ${plan.vms.map(esc).join(", ")}. Their migration or shutdown must be verified separately.</div>` : ""}
+    <div class="sec">Volume copies during the outage</div>
+    ${volumes.length ? `<div class="dependency-list">${volumes.map(v => `<div class="drow"><div class="dl mono">${esc(v.claim)}</div><div class="dv"><span class="pill ${v.risk === "unavailable" ? "crit" : v.risk === "single-copy" ? "med" : "low"}">${v.risk === "unavailable" ? "no healthy copy elsewhere" : v.risk === "single-copy" ? "one copy left · unprotected" : "replica resync needed"}</span></div></div>`).join("")}</div>` : `<div class="dim small">No Longhorn replica on this host was found.</div>`}
+    ${(plan.warnings || []).length ? `<div class="note warn" style="margin-top:12px">${plan.warnings.map(esc).join(" · ")}</div>` : ""}
+    ${!plan.ready ? `<div class="row" style="margin-top:14px"><button class="btn" onclick="closeModal()">Close</button></div>` : `
+      <div class="f" style="margin-top:14px"><label>Type <b class="mono">${esc(node)}</b> to confirm</label><input type="text" id="pw_confirm" autocomplete="off"></div>
+      ${plan.stranded?.length ? `<label class="switch"><input type="checkbox" id="pw_allow"> I understand ${plan.stranded.length} workload${plan.stranded.length === 1 ? "" : "s"} may remain down</label>` : ""}
+      ${plan.requires_data_ack ? `<label class="switch"><input type="checkbox" id="pw_data"> I understand the volume copies or storage visibility risk</label>` : ""}
+      <div class="row" style="margin-top:14px"><button class="btn danger" id="pw_execute" onclick="nodePower('${esc(node)}','${esc(action)}')">${action === "reboot" ? "Reboot" : "Shut down"} host</button><button class="btn" onclick="closeModal()">Cancel</button></div>`}`, true);
+};
 window.nodePower = async (node, action) => {
+  const plan = window.__nodePowerPlan;
+  if (!plan || plan.node !== node || plan.action !== action) return toast("review the host impact again", "bad");
   const c = $("#pw_confirm").value.trim();
   if (c !== node) return toast("type the host name exactly to confirm", "bad");
-  if ((window.__nodeImpact?.stranded || []).length && !$("#pw_allow")?.checked)
+  if (plan.stranded?.length && !$("#pw_allow")?.checked)
     return toast("confirm the workloads that will remain down", "bad");
+  if (plan.requires_data_ack && !$("#pw_data")?.checked)
+    return toast("confirm the volume risk", "bad");
+  const button = $("#pw_execute");
+  if (button) { button.disabled = true; button.textContent = "Draining host…"; }
   try {
     const r = await api("/api/node/power", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ node, action, drain: $("#pw_drain").checked, confirm: c,
-        allow_stranded: !!$("#pw_allow")?.checked }) });
+      body: JSON.stringify({ node, action, confirm: c, review_token: plan.review_token,
+        allow_stranded: !!$("#pw_allow")?.checked, allow_data_risk: !!$("#pw_data")?.checked }) });
     modal("Host " + action, `<pre>${esc(r.steps.join("\n"))}</pre>
-      <div class="note" style="margin-top:12px">The host will go down shortly. It stays cordoned —
-      uncordon it from this dialog once it is back.</div>`);
-  } catch (e) { toast(e.message, "bad"); }
+      <div class="note" style="margin-top:12px">The Recent Jobs tray follows the host going down, returning after a reboot, and affected Longhorn volumes becoming healthy. The host remains cordoned; review it before uncordoning.</div>`);
+  } catch (e) { toast(e.message, "bad"); if (button) { button.disabled = false; button.textContent = "Retry power action"; } }
 };
 
 /* ---------------- VMs: the page is views-vms.js; moving and creating stay here ---------------- */

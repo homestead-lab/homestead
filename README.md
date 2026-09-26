@@ -382,7 +382,7 @@ as a device under IP addresses are refused, and a VIP can be let go only while
 nothing uses it. They appear under IP addresses as VIPs too.
 
 The first network share installs Samba, and asks which address it answers on;
-switching Samba on in Settings → About asks the same. Samba is put in place
+Settings → Cluster → Add-ons manages the SMB server afterwards. Samba is put in place
 before anything of the share is made, so a share that cannot be served leaves
 nothing behind.
 
@@ -607,8 +607,8 @@ working, refreshed every 15 seconds while it is open: how quickly the
 Kubernetes API answers, each copy of Homestead and which one leads, every
 background task (live charts, alerts, long-term stats, hardware detection,
 cluster moves) with when it last did its work and its last error, the node
-probe (nodes running it, reporting, and with drive health), Samba, the
-permissions check, backup storage and MQTT. Samba can be switched off there -
+probe (nodes running it, reporting, and with drive health), SMB status, the
+permissions check, backup storage and MQTT. SMB can be switched off from Settings → Cluster → Add-ons -
 shares stop being served, and their volumes, settings and passwords are kept -
 and on again, which installs it if the cluster has none.
 
@@ -695,7 +695,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.155/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.157/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -706,7 +706,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.155 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.157 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1096,7 +1096,7 @@ Homestead reads Longhorn's settings rather than changing them.
 
 ## Network shares
 
-Network Shares manages the `samba` Deployment and Longhorn-backed claims
+Network Shares manages the `homestead-smb` Deployment and Longhorn-backed claims
 without replacing their data; the first share installs Samba if the cluster
 has none, at an address of its own on port 445. A new share either creates its own
 Longhorn claim or publishes a volume that already exists — including one a
@@ -1130,7 +1130,25 @@ Share metadata is stored in the `homestead-shares` ConfigMap. Passwords are stor
 separately in the `homestead-share-credentials` Kubernetes Secret and are never
 returned by the Homestead API. The first successful share edit transparently
 migrates credentials from older Homestead ConfigMaps and the existing Samba
-arguments. Removing a share keeps its PVC and data.
+arguments. Removing a share keeps its PVC and data. An older `samba` Deployment
+and Service are migrated to `homestead-smb`, retaining the SMB address when
+possible. Its container, mounts, image and on/off state are managed from
+Settings → Cluster → Add-ons and Network Shares; ordinary workload edit,
+update and delete actions are blocked. Removing the SMB server leaves the
+share inventory, credentials, every PVC and their data intact.
+Homestead compares its live mappings with the saved share list and repairs drift.
+Rejected Kubernetes updates restore the prior share settings, so a failed share
+cannot linger in the inventory and collide with the next attempt.
+
+NFSv4 is an optional **separate container**, `homestead-nfs`, under Settings →
+Cluster → Add-ons. Choose exports per share in Network Shares; each requires a
+Bound RWX claim and an explicit allowed IPv4 client or CIDR. Exports default
+to read-only with root squashing. A dedicated VIP preserves client IPs for the
+allowlist, and clients mount `<VIP>:/<share>` over TCP 2049. NFS needs host
+`nfs`/`nfsd` kernel support and `SYS_ADMIN` in its container. Longhorn RWX
+claims are NFS-backed, so serving them adds a re-export layer. Removing or
+stopping `homestead-nfs` never removes the SMB server or any PVC. Test a
+disposable RWX share and client mount before using it for important data.
 
 ## Namespaces
 
@@ -1305,6 +1323,7 @@ authenticated.
 | `DEFAULT_NS` | `lab` | namespace for new workloads |
 | `SMB_NAMESPACE` | `lab` | namespace containing the managed Samba deployment |
 | `SAMBA_IMAGE` | `dperson/samba:latest` | image Samba is installed from when the first share is created |
+| `NFS_IMAGE` | `pedroetb/nfs-server:v2.4.0` | image used by the optional NFSv4 server |
 | `STORAGE_CLASS` | `longhorn-r2` | default StorageClass for new volumes |
 | `LB_IP` | empty | shared kube-vip address |
 | `SESSION_TTL_HOURS` | `12` | idle window for an ordinary session |
@@ -1448,10 +1467,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.155`, the workflow publishes:
+For a release such as `v2.8.157`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.155
+ghcr.io/wjcloudy/homestead:2.8.157
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -1462,8 +1481,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.155
-git push origin v2.8.155
+git tag v2.8.157
+git push origin v2.8.157
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.

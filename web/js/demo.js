@@ -53,7 +53,7 @@
     { name: "harvester-node1", status: "Ready", roles: ["control-plane", "etcd"], schedulable: true,
       cpu_pct: 22.4, cpu_used: 1.79, cpu_cap: 8, mem_pct: 61.7, mem_used_gb: 9.6, mem_cap_gb: 15.6,
       fs_pct: 36.2, fs_used_gb: 168, fs_cap_gb: 464, rx_mbps: 8.4, tx_mbps: 3.1,
-      pods: 54, pods_sys: 46, pods_wl: 8, vms: 1, workloads: ["home-assistant", "mosquitto", "samba"],
+      pods: 54, pods_sys: 46, pods_wl: 8, vms: 1, workloads: ["home-assistant", "mosquitto", "homestead-smb"],
       hardware: { igpu: true }, temps: { cpu_c: 39, max_c: 51, sensors: 4, smart_helper: { available: true },
         disks: [withHealth({ name: "nvme0n1", model: "Samsung SSD 970 EVO Plus", serial: "DEMO-NVME-01", kind: "NVMe", size_gb: 465.8,
           read_mbps: 18.42, write_mbps: 6.17, smart: smartDisk("nvme0n1", "Samsung SSD 970 EVO Plus", "DEMO-NVME-01", 41, 8421) })] } },
@@ -218,8 +218,12 @@
     // Homestead itself: its Stop asks first, since it takes this page with it.
     { name: "homestead", ns: "lab", kind: "Deployment", group: "Homestead", self: true, desired: 1, ready: 1, uptime: 86400,
       cpu: 0.04, mem_mb: 88, nodes: ["harvester-node1"], hardware: [],
-      images: ["ghcr.io/wjcloudy/homestead:2.8.155"], ports: [{ port: 8088, ip: "192.0.2.242" }],
-      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/wjcloudy/homestead:2.8.155")] },
+      images: ["ghcr.io/wjcloudy/homestead:2.8.157"], ports: [{ port: 8088, ip: "192.0.2.242" }],
+      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/wjcloudy/homestead:2.8.157")] },
+    { name: "homestead-smb", ns: "lab", kind: "Deployment", group: "Homestead", managed_smb: true,
+      desired: 1, ready: 1, uptime: 86400, cpu: 0.01, mem_mb: 40, nodes: ["harvester-node2"], hardware: [],
+      images: ["dperson/samba:latest"], ports: [{ port: 445, ip: "192.0.2.245" }],
+      pod_count: 1, container_count: 1, pods: [pod("homestead-smb", "harvester-node2", "dperson/samba:latest")] },
   ];
   const storage = { cap_gb: 1392, avail_gb: 906, used_gb: 486, used_pct: 34.9,
     provisioned_gb: 670, actual_gb: 224, volumes: 8, healthy: 6, degraded: 1,
@@ -240,8 +244,8 @@
     { id: "coral_usb", name: "Google Coral USB", host_path: "/dev/bus/usb", container_path: "/dev/bus/usb", builtin: false, usb_ids: ["18d1:9302"] },
   ];
   const volumes = [
-    { name: "pvc-demo-frigate", pvc_name: "frigate-config", namespace: "lab", attached_to: "frigate, samba",
-      attached: ["frigate", "samba"],
+    { name: "pvc-demo-frigate", pvc_name: "frigate-config", namespace: "lab", attached_to: "frigate, homestead-smb",
+      attached: ["frigate", "homestead-smb"],
       pod_status: "Running", state: "attached", robustness: "healthy", node: "harvester-node2",
       size_gb: 20, actual_gb: 3.8, used_pct: 19, replicas: 2,
       access_modes: ["ReadWriteOnce"], storage_class: "longhorn-r2", last_used_secs: 0 },
@@ -286,7 +290,8 @@
   ];
   const shares = [
     { name: "media", pvc: "share-media", path: "/shares/media", size_gb: 250,
-      actual_size_gb: 250, pvc_status: "Bound", user: "lab", public: true,
+      actual_size_gb: 250, pvc_status: "Bound", access_modes: ["ReadWriteMany"],
+      nfs_clients: "192.0.2.0/24", nfs_read_only: true, user: "lab", public: true,
       read_only: false, has_password: false, created: "2026-09-18 22:26" },
     { name: "secure", pvc: "share-secure", path: "/shares/secure", size_gb: 20,
       actual_size_gb: 20, pvc_status: "Bound", user: "lab", public: false, owned: true,
@@ -484,7 +489,7 @@
       detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.155", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.157", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
@@ -591,15 +596,15 @@
       user: "admin", added: "2026-09-22 17:02" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "garage") return { name, version: "2.8.155", protocol: 1, local_version: "2.8.155",
+      if (name === "garage") return { name, version: "2.8.157", protocol: 1, local_version: "2.8.157",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "garage runs 2.8.155 and this one 2.8.155. Moves work between them; garage is the newer of the two." };
+        message: "garage runs 2.8.157 and this one 2.8.157. Moves work between them; garage is the newer of the two." };
       return name === "attic"
-        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.155", local_protocol: 1,
+        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.157", local_protocol: 1,
             state: "behind", compatible: false,
-            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.155). Update attic first." }
-        : { name, version: "2.8.155", protocol: 1, local_version: "2.8.155", local_protocol: 1,
-            state: "same", compatible: true, message: "Both run Homestead 2.8.155." };
+            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.157). Update attic first." }
+        : { name, version: "2.8.157", protocol: 1, local_version: "2.8.157", local_protocol: 1,
+            state: "same", compatible: true, message: "Both run Homestead 2.8.157." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     // shed is ready to move from; garage has no backup storage yet.
@@ -610,7 +615,7 @@
     "/api/move/clusters/storage": { ok: true, detail: "backup storage is starting on garage at http://192.0.2.244:9000" },
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "shed", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.155", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.157", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -923,6 +928,11 @@ ssh_pwauth: true
     "/api/network/service/delete": { ok: true, freed: ["192.0.2.246:8989/TCP"],
       message: "Service lab/sonarr-old deleted, releasing 192.0.2.246:8989/TCP" },
     "/api/shares": shares,
+    "/api/shares/server": { installed: true, enabled: true, desired: 1, ready: 1,
+      name: "homestead-smb", address: "192.0.2.245", shares: 3,
+      served_shares: ["media", "photos", "secure"], in_sync: true, image: "dperson/samba:latest" },
+    "/api/shares/nfs/server": { installed: true, enabled: true, desired: 1, ready: 1,
+      name: "homestead-nfs", address: "192.0.2.246", exports: ["media"], image: "pedroetb/nfs-server:v2.4.0" },
     "/api/shares/options": { namespace: "lab", node: "harvester-node2",
       pvcs: volumes.map(v => ({ name: v.pvc_name, size: `${v.size_gb}Gi`, status: "Bound",
         access_modes: v.access_modes, storage_class: v.storage_class,
@@ -1004,13 +1014,13 @@ ssh_pwauth: true
     },
     "/api/volumes/reclass/plan": { ok: true, blockers: [], namespace: "lab", claim: "frigate-config",
       warnings: [], from_class: "longhorn-r2", to_class: "longhorn-r3", volume_mode: "Filesystem", access_modes: ["ReadWriteOnce"],
-      consumers: [{ kind: "Deployment", name: "frigate", replicas: 1, running: true }, { kind: "Deployment", name: "samba", replicas: 1, running: true }],
+      consumers: [{ kind: "Deployment", name: "frigate", replicas: 1, running: true }, { kind: "Deployment", name: "homestead-smb", replicas: 1, running: true }],
       space: { size_gb: 20, used_gb: 6.4, replicas: 3, allocated_gb: 60, written_gb: 19.2, longhorn: true, room_gb: 36.8 },
       minutes: 3, downtime: true },
     "/api/volumes/reclass/start": { ok: true, operation: { id: "op4" } },
     "/api/self/health": () => {
       const now = Date.now() / 1000;
-      return { version: "2.8.155", leader: true, identity: "homestead-6d9f-abcde",
+      return { version: "2.8.157", leader: true, identity: "homestead-6d9f-abcde",
         api: { ok: true, ms: 38 },
         replicas: { desired: 1, pods: [{ name: "homestead-6d9f-abcde", node: "harvester-node1", ready: true, leader: true, this: true }] },
         loops: [{ name: "sampler", label: "Live charts", state: "ok", last_ok: now - 12, error: "", every: 30 },
@@ -1019,7 +1029,9 @@ ssh_pwauth: true
           { name: "hardware", label: "Hardware detection", state: "ok", last_ok: now - 20, error: "", every: 30 },
           { name: "moves", label: "Cluster moves", state: "failing", last_ok: now - 900, error: "could not reach shed: timed out", every: 10 }],
         probe: { installed: true, desired: 3, ready: 3, reporting: 3, smart: 2, state: "current", detail: "homestead-nodeprobe is running this release's scripts" },
-        samba: { installed: true, enabled: true, desired: 1, ready: 1, address: "192.0.2.245", shares: 3, image: "dperson/samba:latest" },
+        samba: { installed: true, enabled: true, desired: 1, ready: 1, name: "homestead-smb",
+          address: "192.0.2.245", shares: 3, served_shares: ["media", "photos", "secure"],
+          in_sync: true, image: "dperson/samba:latest" },
         permissions: { state: "current", detail: "Homestead's permissions match this release" },
         backups: { deployed: true, ready: true, endpoint: "http://192.0.2.244:9000" },
         addresses: { lb_ip: "192.0.2.242", problem: "", clashes: [], platform: ["192.0.2.210"] },
@@ -1029,6 +1041,9 @@ ssh_pwauth: true
     "/api/network/vips/remove": { ok: true, detail: "192.0.2.231 is no longer reserved for Homestead" },
     "/api/network/vips/label": { ok: true },
     "/api/self/samba": { ok: true, detail: "Samba is stopping; the shares, their volumes and passwords are kept" },
+    "/api/self/nfs": { ok: true, detail: "NFS stopped; exports, shares and every PVC were kept" },
+    "/api/addons/nfs/remove": { ok: true, detail: "NFS server removed. Export settings and PVCs were kept." },
+    "/api/shares/nfs": { ok: true, detail: "NFS export saved" },
     "/api/volumes/old-copies": [{ pv: "pvc-7f3a9c1e-2b44-4d1b-9a55-0c1f2e3d4a5b", was: "lab/mosquitto-appdata",
       storage_class: "longhorn-r2", size: "10Gi", since: "2026-09-24T12:00:00Z" }],
     "/api/volumes/old-copies/remove": { ok: true, detail: "removing the old copy" },
@@ -1360,7 +1375,7 @@ ssh_pwauth: true
       const at = (window.__demoScan = (window.__demoScan || 0) + 1);
       const total = 8, done = Math.min(total, at * 2);
       return { running: done < total, done, total, updates: Math.floor(done / 3),
-        current: ["frigate", "home-assistant", "paperless", "samba"][at % 4],
+        current: ["frigate", "home-assistant", "paperless", "homestead-smb"][at % 4],
         started_at: 0, finished_at: 0, elapsed: at * 0.5 };
     },
     "/api/image-updates": { checked_at: new Date().toISOString(), updates: 3, errors: 1,
@@ -1370,7 +1385,7 @@ ssh_pwauth: true
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.155", candidate_tag: "2.8.155", remote_digest: "sha256:ghi", available: true }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.157", candidate_tag: "2.8.157", remote_digest: "sha256:ghi", available: true }] },
       { ns: "lab", name: "paperless", available: false, can_rollback: false,
         images: [{ container: "paperless", deployed: "registry.lan/paperless-ngx:2.11", candidate: "registry.lan/paperless-ngx:2.11", available: false, error: "registry authentication required" }] }] },
     "/api/flow": {
