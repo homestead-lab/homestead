@@ -6,8 +6,10 @@ import { chromium } from "playwright";
 import { readdir, readFile } from "node:fs/promises";
 
 const dir = "release-assets";
-const BASIC = ["#000000", "#aa0000", "#00aa00", "#aa5500", "#0000aa", "#aa00aa", "#00aaaa", "#aaaaaa",
-  "#555555", "#ff5555", "#55ff55", "#ffff55", "#5555ff", "#ff55ff", "#55ffff", "#ffffff"];
+// A soft palette (Tango's), with black as the frame's own so the screen
+// around a box blends into it.
+const BASIC = ["#101014", "#cc3e44", "#4e9a06", "#c4a000", "#3465a4", "#75507b", "#06989a", "#d3d7cf",
+  "#555753", "#ef2929", "#8ae234", "#fce94f", "#729fcf", "#ad7fa8", "#34e2e2", "#eeeeec"];
 const cube = n => {
   if (n < 16) return BASIC[n];
   if (n >= 232) { const v = 8 + (n - 232) * 10; return `rgb(${v},${v},${v})`; }
@@ -15,6 +17,20 @@ const cube = n => {
   return `rgb(${level(Math.floor(i / 36))},${level(Math.floor(i / 6) % 6)},${level(i % 6)})`;
 };
 const escape = text => text.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+/* Just the box: blank rows above and below dropped (their colour codes kept,
+   as later rows rely on them), and the margin every row shares taken off. */
+function crop(ans) {
+  const visible = line => line.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+  const lines = ans.replace(/\n+$/, "").split("\n");
+  const used = lines.map((line, i) => (visible(line).trim() ? i : -1)).filter(i => i >= 0);
+  if (!used.length) return ans;
+  const first = used[0], last = used[used.length - 1];
+  const codes = lines.slice(0, first).map(line => (line.match(/\x1b\[[0-9;]*m/g) || []).join("")).join("");
+  const kept = lines.slice(first, last + 1);
+  const margin = Math.min(...kept.filter(line => visible(line).trim()).map(line => line.match(/^ */)[0].length));
+  return codes + kept.map(line => line.slice(Math.min(margin, line.match(/^ */)[0].length))).join("\n");
+}
 
 /* Terminal text with SGR colour codes -> HTML: a row per line, each run of
    one colour a cell as tall as the row, so backgrounds meet with no gaps. */
@@ -67,7 +83,7 @@ for (const file of files) {
         font:14px 'DejaVu Sans Mono',Menlo,Consolas,monospace;color:#c8c8c8}
       .row{height:18px;line-height:18px;white-space:pre}
       .row span{display:inline-block;height:18px;vertical-align:top}
-    </style></head><body><div id="term">${toHtml(ans)}</div></body></html>`);
+    </style></head><body><div id="term">${toHtml(crop(ans))}</div></body></html>`);
   const name = `homestead-${file.replace(/\.ans$/, "")}.png`;
   await page.locator("#term").screenshot({ path: `${dir}/${name}` });
   console.log(`rendered ${name}`);

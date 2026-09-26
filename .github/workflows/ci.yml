@@ -23,11 +23,19 @@ jobs:
         run: |
           sudo apt-get install -y -qq tmux whiptail >/dev/null
           bash scripts/capture_tui.sh
+      - name: Draw them as the wiki shows them
+        if: always()
+        run: |
+          npm install --no-save --no-package-lock playwright@1.55.0 >/dev/null
+          npx playwright install --with-deps chromium >/dev/null
+          node scripts/render_tui.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: installer-screens
-          path: release-assets/*.ans
+          path: |
+            release-assets/*.ans
+            release-assets/*.png
   test-and-build:
     runs-on: ubuntu-latest
     steps:

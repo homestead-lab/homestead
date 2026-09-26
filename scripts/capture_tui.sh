@@ -44,7 +44,7 @@ key() { tmux send-keys -t tui "$@"; }
 start() { # PATH-prefix
   tmux kill-session -t tui 2>/dev/null
   tmux new-session -d -s tui -x 100 -y 32 \
-    "env PATH=$1:$PATH TERM=xterm-256color sh scripts/install.sh --dry-run; sleep 30"
+    "env PATH=$1:$PATH TERM=xterm-256color NEWT_COLORS=root=white,black sh scripts/install.sh --dry-run; sleep 30"
   sleep 2
 }
 

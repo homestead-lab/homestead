@@ -92,12 +92,21 @@ if [ -z "$UI" ]; then
 fi
 BOX="$UI"
 
-# A menu box as tall as its text and list need, within the terminal.
+# Boxes are as tall as what they hold, within the terminal: the text's lines
+# as the box wraps them, plus the box's own frame and buttons.
+term_rows() { rows=$(stty size < "$TTY" 2>/dev/null | cut -d' ' -f1); echo "${rows:-24}"; }
+text_lines() { # text width
+  printf '%s\n' "$1" | awk -v w="$2" '{ n += int((length($0) + w - 1) / w); if (!length($0)) n++ } END { print n }'
+}
+fit() { # text frame-rows -> a height for a 78-wide box
+  h=$(( $(text_lines "$1" 72) + $2 )); rows=$(term_rows)
+  [ "$h" -gt "$rows" ] && h=$rows; echo "$h"
+}
+
 box_menu() { # title text tag item...
   title="$1"; text="$2"; shift 2
   items=$(( $# / 2 ))
-  rows=$(stty size < "$TTY" 2>/dev/null | cut -d' ' -f1); rows=${rows:-24}
-  lines=$(printf '%s\n' "$text" | awk '{ n += int((length($0) + 83) / 84); if (!length($0)) n++ } END { print n }')
+  rows=$(term_rows); lines=$(text_lines "$text" 84)
   list=$items; [ "$list" -gt $((rows - lines - 9)) ] && list=$((rows - lines - 9)); [ "$list" -lt 3 ] && list=3
   height=$((lines + list + 8)); [ "$height" -gt "$rows" ] && height=$rows
   "$BOX" --title "$title" --cancel-button "Back" --menu "$text" "$height" 90 "$list" "$@" 3>&1 1>"$TTY" 2>&3 < "$TTY"
@@ -110,7 +119,7 @@ need_tty() { interactive || fail "no terminal to ask on: give the answer as $1=.
 
 msg() { # title text
   if [ "$UI" = text ]; then printf '\n-- %s --\n%s\n' "$1" "$2"
-  else "$BOX" --title "$1" --msgbox "$2" 20 76 < "$TTY" > "$TTY" 2>&1; fi
+  else "$BOX" --title "$1" --msgbox "$2" "$(fit "$2" 7)" 78 < "$TTY" > "$TTY" 2>&1; fi
 }
 
 yesno() { # var title text default(yes|no) -> 0 for yes
@@ -123,8 +132,8 @@ yesno() { # var title text default(yes|no) -> 0 for yes
     [ -z "$reply" ] && reply="$4"
     case "$reply" in y*|Y*) return 0 ;; *) return 1 ;; esac
   fi
-  if [ "$4" = no ]; then "$BOX" --title "$2" --defaultno --yesno "$3" 18 76 < "$TTY" > "$TTY" 2>&1
-  else "$BOX" --title "$2" --yesno "$3" 18 76 < "$TTY" > "$TTY" 2>&1; fi
+  if [ "$4" = no ]; then "$BOX" --title "$2" --defaultno --yesno "$3" "$(fit "$3" 7)" 78 < "$TTY" > "$TTY" 2>&1
+  else "$BOX" --title "$2" --yesno "$3" "$(fit "$3" 7)" 78 < "$TTY" > "$TTY" 2>&1; fi
 }
 
 ask() { # var title text default [secret] -> the answer on stdout
@@ -139,7 +148,7 @@ ask() { # var title text default [secret] -> the answer on stdout
     printf '%s' "${reply:-$4}"; return
   fi
   kind=--inputbox; [ "${5:-}" = secret ] && kind=--passwordbox
-  "$BOX" --title "$2" "$kind" "$3" 14 76 "$4" 3>&1 1>"$TTY" 2>&3 < "$TTY" || exit 1
+  "$BOX" --title "$2" "$kind" "$3" "$(fit "$3" 9)" 78 "$4" 3>&1 1>"$TTY" 2>&3 < "$TTY" || exit 1
 }
 
 choose() { # var title text tag item [tag item...] -> the tag on stdout
@@ -176,13 +185,15 @@ kvm() { [ -e /dev/kvm ] || grep -Eq 'vmx|svm' /proc/cpuinfo 2>/dev/null; }
 # ------------------------------------------------------------------ checks
 REPORT=""
 check() { # ok|warn|fail text
+  # Long lines wrap under their own text, not back under the ok/note column.
+  text=$(printf '%s\n' "$2" | fold -s -w 64 | sed 's/ *$//; 2,$s/^/        /')
   case "$1" in
     ok) REPORT="$REPORT
-  ok    $2" ;;
+  ok    $text" ;;
     warn) REPORT="$REPORT
-  note  $2" ;;
+  note  $text" ;;
     fail) REPORT="$REPORT
-  STOP  $2"; FAILED=1 ;;
+  STOP  $text"; FAILED=1 ;;
   esac
 }
 
@@ -444,7 +455,7 @@ confirm() { # title text -> 0 for yes
     printf '\n%s\n%s [y/N] ' "$1" "$2" > "$TTY"; read -r reply < "$TTY" || reply=""
     case "$reply" in y*|Y*) return 0 ;; *) return 1 ;; esac
   fi
-  "$BOX" --title "$1" --defaultno --yesno "$2" 20 78 < "$TTY" > "$TTY" 2>&1
+  "$BOX" --title "$1" --defaultno --yesno "$2" "$(fit "$2" 7)" 78 < "$TTY" > "$TTY" 2>&1
 }
 typed() { # title text word -> 0 when the word is typed
   if [ "$UI" = text ]; then
@@ -452,7 +463,7 @@ typed() { # title text word -> 0 when the word is typed
   else
     reply=$("$BOX" --title "$1" --inputbox "$2
 
-Type $3 to go ahead:" 20 78 "" 3>&1 1>"$TTY" 2>&3 < "$TTY") || return 1
+Type $3 to go ahead:" "$(fit "$2" 11)" 78 "" 3>&1 1>"$TTY" 2>&3 < "$TTY") || return 1
   fi
   [ "$reply" = "$3" ]
 }
