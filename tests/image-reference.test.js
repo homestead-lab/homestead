@@ -37,3 +37,17 @@ test("an explicit registry, tag, or digest is not rewritten", () => {
   assert.equal(context.imagePullRef("registry.local:5000/example/app@sha256:abc"),
     "registry.local:5000/example/app@sha256:abc");
 });
+
+test("an update review names the release it moves between", () => {
+  const digest = n => `sha256:${String(n).repeat(64).slice(0, 64)}`;
+  assert.deepEqual([...context.imageChangeWords(`ghcr.io/wjcloudy/homestead:2.8.200@${digest(1)}`,
+    `ghcr.io/wjcloudy/homestead:2.8.205@${digest(2)}`)], ["2.8.200", "2.8.205"]);
+  assert.deepEqual([...context.imageChangeWords("ghcr.io/example/app:1.0.0", "ghcr.io/example/app:1.1.0")], ["1.0.0", "1.1.0"]);
+});
+
+test("a new build under the same tag shows the start of each digest", () => {
+  assert.deepEqual([...context.imageChangeWords(`nginx:latest@sha256:${"a".repeat(64)}`, `nginx:latest@sha256:${"b".repeat(64)}`)],
+    ["latest · aaaaaaa", "latest · bbbbbbb"]);
+  assert.deepEqual([...context.imageChangeWords(`nginx@sha256:${"a".repeat(64)}`, `nginx@sha256:${"b".repeat(64)}`)],
+    ["latest · aaaaaaa", "latest · bbbbbbb"]);
+});
