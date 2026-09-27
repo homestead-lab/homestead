@@ -129,6 +129,14 @@ rules:
       - virtualmachineinstances/pause
       - virtualmachineinstances/unpause
     verbs: [update]
+  # Read-only resolution of the exact VM's instance type and preference.
+  - apiGroups: ["subresources.kubevirt.io"]
+    resources: [virtualmachines/expand-spec]
+    verbs: [get]
+  # Non-persisting expansion of proposed VM edits (not a VM update).
+  - apiGroups: ["subresources.kubevirt.io"]
+    resources: [expand-vm-spec]
+    verbs: [update]
   # The VM console: the screen (VNC) and the serial port, streamed through
   # Homestead so the browser never holds the service-account token.
   - apiGroups: ["subresources.kubevirt.io"]
@@ -259,7 +267,7 @@ metadata:
   labels:
     app: homestead
   annotations:
-    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.186"}'
+    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.187"}'
 spec:
   replicas: 1
   strategy:
@@ -294,7 +302,7 @@ spec:
           tolerationSeconds: 15
       initContainers:
         - name: data-permissions
-          image: ghcr.io/wjcloudy/homestead:2.8.186
+          image: ghcr.io/wjcloudy/homestead:2.8.187
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "chown 10001:10001 /data && chmod 0770 /data"]
           securityContext:
@@ -311,7 +319,7 @@ spec:
               mountPath: /data
       containers:
         - name: homestead
-          image: ghcr.io/wjcloudy/homestead:2.8.186
+          image: ghcr.io/wjcloudy/homestead:2.8.187
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT

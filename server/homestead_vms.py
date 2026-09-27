@@ -18,6 +18,7 @@ Deleting can take the VM's disks with it; on Harvester that is its own
 harvesterhci.io/removedPVCs annotation, which its UI uses the same way.
 """
 import base64
+import copy
 import json
 import re
 import time
@@ -26,6 +27,7 @@ import urllib.parse
 
 import homestead_hvimage as HVIMAGE
 import homestead_vmusage as VMUSAGE
+import homestead_vm_profiles as PROFILES
 
 kget = ksend = None
 events_for = lambda ns, name, uid="": []
@@ -131,10 +133,15 @@ def _problem(vm, vmi):
     return ""
 
 
-def _claims(ns):
+def _claims(ns, strict=False):
     try:
-        items = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims").get("items", [])
+        result = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims")
+        if strict and (not isinstance(result.get("items"), list) or (result.get("metadata") or {}).get("continue")):
+            raise ValueError("PVC inventory is incomplete; refresh before editing VM disks")
+        items = result.get("items", [])
     except Exception:
+        if strict:
+            raise
         return {}
     return {i["metadata"]["name"]: i for i in items}
 
@@ -370,6 +377,16 @@ def detail(ns, name):
     except urllib.error.HTTPError:
         vmi = {}
     row = _row(vm, vmi, _claims(ns), _datavolumes(ns))
+    row["resource_profile"] = copy.deepcopy(vm["spec"].get("instancetype") or {})
+    row["preference_profile"] = copy.deepcopy(vm["spec"].get("preference") or {})
+    row["profile_error"] = ""
+    if row["resource_profile"] or row["preference_profile"]:
+        try:
+            expanded = PROFILES.expand(vm, kget)
+            row["cores"], row["memory"] = _cores(expanded["domain"]), _memory(expanded["domain"])
+        except (ValueError, OSError):
+            row["cores"], row["memory"] = None, ""
+            row["profile_error"] = "Profile resources could not be resolved. They are left unchanged; check KubeVirt and Homestead RBAC before changing hardware."
     # The VM's own page always explains a disk that is still filling.
     row["filling"] = _filling(vm, _datavolumes(ns), explain=True)
     guest = (vmi.get("status") or {}).get("guestOSInfo") or {}
@@ -482,7 +499,7 @@ def _image(ref):
     raise ValueError(f"image {ref} was not found")
 
 
-def _disk_volume(vm, ns, claim, size, klass, source, to_create):
+def _disk_volume(vm, ns, claim, size, klass, source, to_create, effects):
     """A disk named claim, made the way this cluster makes disks; returns the
     VM volume that points at it. A plain claim is queued in to_create."""
     p = platform() or {}
@@ -503,10 +520,10 @@ def _disk_volume(vm, ns, claim, size, klass, source, to_create):
                     "spec": {"accessModes": ["ReadWriteMany"], "volumeMode": "Block",
                              "resources": {"requests": {"storage": size}}}}
         if url:
-            # Harvester's own download: one of its images, the disk a copy of it.
-            downloaded = HVIMAGE.download(kget, ksend, (vm.get("metadata") or {}).get("namespace") or ns, url, klass)
-            template["metadata"]["annotations"]["harvesterhci.io/imageId"] = f"{downloaded['namespace']}/{downloaded['name']}"
-            template["spec"]["storageClassName"] = downloaded["storage_class"]
+            # Resolve only at commit, after the entire form has validated.
+            # The unresolved template is internal and must never be written.
+            effects.append({"kind": "image-download", "namespace": ns, "claim": claim,
+                            "url": url, "storage_class": klass})
         elif image:
             item = _image(image)
             template["metadata"]["annotations"]["harvesterhci.io/imageId"] = f"{item['namespace']}/{item['name']}"
@@ -539,7 +556,7 @@ def _volume_claim(volume):
     return (volume.get("persistentVolumeClaim") or {}).get("claimName") or (volume.get("dataVolume") or {}).get("name") or ""
 
 
-def _edit_disks(vm, ns, edits, adds, claims, to_create, resize, dropped):
+def _edit_disks(vm, ns, edits, adds, claims, to_create, resize, dropped, effects):
     tspec = vm["spec"]["template"]["spec"]
     devices = tspec["domain"].setdefault("devices", {})
     disks, volumes = devices.get("disks") or [], tspec.get("volumes") or []
@@ -580,14 +597,14 @@ def _edit_disks(vm, ns, edits, adds, claims, to_create, resize, dropped):
         if e.get("source") is not None and claim and not made:
             size, klass = _template_size(vm, claim)
             size = _size(e.get("size") or size or "20Gi")
-            volume = _disk_volume(vm, ns, claim, size, e.get("storage_class") or klass, e["source"] or {}, to_create)
+            volume = _disk_volume(vm, ns, claim, size, e.get("storage_class") or klass, e["source"] or {}, to_create, effects)
             v.clear()
             v.update({"name": d["name"], **volume})
             # A DataVolume CDI took but could not fill is made again from the new source.
-            try:
-                ksend("DELETE", f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{urllib.parse.quote(claim)}")
-            except urllib.error.HTTPError:
-                pass
+            path = f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{urllib.parse.quote(claim)}"
+            current = _optional(path)
+            effects.append({"kind": "replace-datavolume", "path": path,
+                            "current": current, "claim": claim})
             changed = True
         elif e.get("size") and claim:
             size = _size(e["size"])
@@ -628,10 +645,12 @@ def _edit_disks(vm, ns, edits, adds, claims, to_create, resize, dropped):
         bus = a.get("bus") or ("sata" if cdrom else "virtio")
         if bus not in BUSES or (cdrom and bus == "virtio"):
             raise ValueError(f"{bus} is not a bus for a {'CD-ROM' if cdrom else 'disk'}")
-        volume = _disk_volume(vm, ns, claim, _size(a.get("size") or "20Gi"), a.get("storage_class") or "", source, to_create)
+        volume = _disk_volume(vm, ns, claim, _size(a.get("size") or "20Gi"), a.get("storage_class") or "", source, to_create, effects)
         device = {"name": disk_name, ("cdrom" if cdrom else "disk"): {"bus": bus}}
         if a.get("boot"):
             device["bootOrder"] = int(a["boot"])
+            if not 1 <= device["bootOrder"] <= 64:
+                raise ValueError("boot order is a number from 1 to 64")
         disks.append(device)
         volumes.append({"name": disk_name, **volume})
         taken.add(disk_name)
@@ -743,16 +762,39 @@ def _read_cloud_init(vm, ns):
     return {"user_data": user, "network_data": network, "source": source}
 
 
-def _write_secret(ns, name, key, text):
-    ksend("PATCH", f"/api/v1/namespaces/{ns}/secrets/{urllib.parse.quote(name)}",
-          {"data": {key: base64.b64encode(text.encode()).decode()}}, ctype="application/merge-patch+json")
+def _optional(path):
+    try:
+        return kget(path)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
 
 
-def _edit_cloud_init(vm, ns, cfg):
+def _identity(obj):
+    meta = (obj or {}).get("metadata") or {}
+    if not meta.get("uid") or not meta.get("resourceVersion"):
+        raise ValueError("Resource identity/version is unavailable; refresh before changing the VM")
+    return {key: meta[key] for key in ("uid", "resourceVersion")}
+
+
+def _queue_secret(ns, name, key, text, effects):
+    path = f"/api/v1/namespaces/{ns}/secrets/{urllib.parse.quote(name)}"
+    effect = next((row for row in effects if row.get("kind") == "secret" and row.get("path") == path), None)
+    if effect is None:
+        current = kget(path)
+        effect = {"kind": "secret", "path": path, "identity": _identity(current), "data": {}}
+        effects.append(effect)
+    effect["data"][key] = base64.b64encode(text.encode()).decode()
+
+
+def _edit_cloud_init(vm, ns, cfg, effects):
     tspec = vm["spec"]["template"]["spec"]
     user, network = str(cfg.get("user_data") or ""), str(cfg.get("network_data") or "")
     volume, key = _cloud_volume(tspec)
     current = _read_cloud_init(vm, ns)
+    if current["source"] == "unreadable":
+        raise ValueError("Cloud-init could not be read; nothing can be changed until its Secret is available")
     if user == current["user_data"] and network == current["network_data"]:
         return False
     if not volume:
@@ -766,13 +808,13 @@ def _edit_cloud_init(vm, ns, cfg):
     if user_ref:
         # Harvester keeps cloud-init in a secret of the VM's; that is what changes.
         if user != current["user_data"]:
-            _write_secret(ns, user_ref, "userdata", user)
+            _queue_secret(ns, user_ref, "userdata", user, effects)
     else:
         c["userData"] = user
     net_ref = (c.get("networkDataSecretRef") or {}).get("name")
     if net_ref:
         if network != current["network_data"]:
-            _write_secret(ns, net_ref, "networkdata", network)
+            _queue_secret(ns, net_ref, "networkdata", network, effects)
     elif network:
         c["networkData"] = network
     else:
@@ -787,14 +829,7 @@ def _refusal(error):
         return f"HTTP {error.code}"
 
 
-def _set_strategy(ns, name, strategy):
-    vm = _get(ns, name)
-    vm["spec"]["runStrategy"] = strategy
-    vm["spec"].pop("running", None)
-    ksend("PUT", f"{API}/namespaces/{ns}/virtualmachines/{name}", vm)
-
-
-def power(ns, name, action):
+def power(ns, name, action, *, raw_errors=False):
     """start, stop, force-stop, restart, pause, unpause."""
     _name(ns, "namespace"), _name(name, "VM name")
     try:
@@ -803,34 +838,36 @@ def power(ns, name, action):
         elif action == "force-stop":
             ksend("PUT", f"{SUB}/namespaces/{ns}/virtualmachines/{name}/stop", {"gracePeriod": 0})
         elif action in ("start", "stop", "restart"):
-            try:
-                ksend("PUT", f"{SUB}/namespaces/{ns}/virtualmachines/{name}/{action}", {})
-            except urllib.error.HTTPError as error:
-                # Some run strategies refuse start or stop requests ("Always does not
-                # support manual start requests"); the strategy itself then says it.
-                if error.code in (400, 409) and action in ("start", "stop"):
-                    _set_strategy(ns, name, "RerunOnFailure" if action == "start" else "Halted")
-                else:
-                    raise
+            # A validation/conflict response is not authority to rewrite the
+            # VM's restart policy. Any strategy change needs its own review.
+            ksend("PUT", f"{SUB}/namespaces/{ns}/virtualmachines/{name}/{action}", {})
         else:
             raise ValueError("the action is start, stop, force-stop, restart, pause or unpause")
     except urllib.error.HTTPError as error:
+        if raw_errors:
+            raise
         raise ValueError(f"KubeVirt refused to {action} {name}: {_refusal(error)}")
     words = {"start": "starting", "stop": "stopping", "force-stop": "being stopped at once", "restart": "restarting",
              "pause": "paused", "unpause": "resumed"}
     return {"ok": True, "detail": f"{name} is {words[action]}"}
 
 
-def edit(ns, name, cfg):
-    """Everything the VM is made of. Changes to its hardware, disks, network,
-    host or cloud-init take effect at the next boot, so restart says whether
-    to restart now."""
-    vm = _get(ns, name)
+def prepare_edit(ns, name, cfg, current=None):
+    """Validate and prepare all VM changes without writing dependent resources."""
+    _name(ns, "namespace"), _name(name, "VM name")
+    current = copy.deepcopy(current if current is not None else _get(ns, name))
+    identity = _identity(current)
+    if current["metadata"].get("deletionTimestamp"):
+        raise ValueError("The VM is deleting; wait before editing")
+    vm = copy.deepcopy(current)
     spec = vm["spec"]
+    if spec.get("instancetype") and any(key in cfg for key in ("cores", "memory")):
+        raise ValueError("CPU and memory are controlled by this VM's instance type. Leave those fields unchanged; change the profile through a separately reviewed configuration workflow.")
     tspec = spec["template"]["spec"]
     dom = tspec["domain"]
     changed_hardware = False
-    to_create, resize, dropped = [], [], []
+    to_create, resize, dropped, effects = [], [], [], []
+    claims = _claims(ns, strict=True) if cfg.get("disks") or cfg.get("add_disks") else {}
     if "node" in cfg:
         selector = dict(tspec.get("nodeSelector") or {})
         node = str(cfg.get("node") or "")
@@ -846,11 +883,11 @@ def edit(ns, name, cfg):
             changed_hardware = True
     if cfg.get("disks") or cfg.get("add_disks"):
         changed_hardware |= _edit_disks(vm, ns, cfg.get("disks") or [], cfg.get("add_disks") or [],
-                                        _claims(ns), to_create, resize, dropped)
+                                        claims, to_create, resize, dropped, effects)
     if cfg.get("nics") or cfg.get("add_nics"):
         changed_hardware |= _edit_nics(tspec, cfg.get("nics") or [], cfg.get("add_nics") or [])
     if cfg.get("cloud_init") is not None:
-        changed_hardware |= _edit_cloud_init(vm, ns, cfg["cloud_init"])
+        changed_hardware |= _edit_cloud_init(vm, ns, cfg["cloud_init"], effects)
     if "cores" in cfg:
         cores = int(cfg["cores"])
         if not 1 <= cores <= 128:
@@ -867,7 +904,7 @@ def edit(ns, name, cfg):
             limits["cpu"] = str(cores)
     if "memory" in cfg:
         memory = str(cfg["memory"]).strip()
-        if not re.fullmatch(r"\d+(\.\d+)?(Mi|Gi)", memory):
+        if not re.fullmatch(r"\d+(\.\d+)?(Mi|Gi)", memory) or _bytes(memory) <= 0:
             raise ValueError("memory is like 4Gi or 512Mi")
         if _memory(dom) != memory:
             changed_hardware = True
@@ -890,27 +927,98 @@ def edit(ns, name, cfg):
         else:
             annotations.pop(DESCRIPTION, None)
     vm["metadata"].pop("managedFields", None)
+    for effect in effects:
+        if effect["kind"] == "replace-datavolume" and effect["current"] is not None:
+            effect["identity"] = _identity(effect.pop("current"))
+    for claim, _ in resize:
+        _identity(claims[claim])
+    return {"namespace": ns, "name": name, "current": current, "identity": identity,
+            "vm": vm, "effects": effects, "to_create": to_create, "resize": resize,
+            "claims": claims, "dropped": dropped, "changed_hardware": changed_hardware,
+            "restart": bool(cfg.get("restart"))}
+
+
+def _recheck_edit(prepared):
+    ns, name = prepared["namespace"], prepared["name"]
+    if _identity(_get(ns, name)) != prepared["identity"]:
+        raise ValueError("The VM changed; review its edit again")
+    for effect in prepared["effects"]:
+        if effect["kind"] == "image-download":
+            continue
+        current = _optional(effect["path"])
+        if (None if current is None else _identity(current)) != effect.get("identity"):
+            raise ValueError("A VM dependency changed; review its edit again")
+        if effect["kind"] == "replace-datavolume":
+            path = f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(effect['claim'])}"
+            if _optional(path) is not None:
+                raise ValueError("The disk now has a PVC; its source cannot be replaced")
+    for claim, _ in prepared["resize"]:
+        current = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(claim)}")
+        if _identity(current) != _identity(prepared["claims"][claim]):
+            raise ValueError("A disk changed; review its resize again")
+    old_names = {_volume_claim(v) for v in prepared["current"]["spec"]["template"]["spec"].get("volumes") or []}
+    new_names = {_volume_claim(v) for v in prepared["vm"]["spec"]["template"]["spec"].get("volumes") or []} - old_names - {""}
+    for claim in new_names:
+        for path in (f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(claim)}",
+                     f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{urllib.parse.quote(claim)}"):
+            if _optional(path) is not None:
+                raise ValueError(f"New disk {claim} already exists; it cannot be adopted by this edit")
+
+
+def commit_edit(prepared, before_save=None, send=None):
+    """Apply a prepared edit, preserving Kubernetes optimistic concurrency.
+
+    This is not a multi-object transaction: downloads or earlier dependency
+    writes may remain if a later phase fails. Never replay an uncertain commit.
+    before_save can re-admit after image downloads, before dependent writes.
+    send is a request-local write/journal adapter; the returned vm_identity
+    comes from the actual VM PUT response, not the pre-edit observation.
+    """
+    prepared = copy.deepcopy(prepared)
+    send = send or ksend  # request-local; image and dependency writes share it
+    ns, name, vm = prepared["namespace"], prepared["name"], prepared["vm"]
+    to_create, resize, dropped = prepared["to_create"], prepared["resize"], prepared["dropped"]
+    changed_hardware = prepared["changed_hardware"]
+    _recheck_edit(prepared)
+    if any(effect["kind"] == "replace-datavolume" and effect.get("identity") for effect in prepared["effects"]):
+        raise ValueError("An existing DataVolume cannot be replaced safely in a VM edit. Add a disk with a new name/source, then detach the old disk; its data is retained.")
+    for effect in prepared["effects"]:
+        if effect["kind"] == "image-download":
+            result = HVIMAGE.download(kget, send, effect["namespace"], effect["url"], effect["storage_class"])
+            templates = _claim_templates(vm)
+            target = next(row for row in templates if row["metadata"]["name"] == effect["claim"])
+            target["metadata"].setdefault("annotations", {})["harvesterhci.io/imageId"] = f"{result['namespace']}/{result['name']}"
+            target["spec"]["storageClassName"] = result["storage_class"]
+            _set_claim_templates(vm, templates)
+    _recheck_edit(prepared)
+    if before_save:
+        before_save(prepared)
+    for effect in prepared["effects"]:
+        if effect["kind"] == "secret":
+            send("PATCH", effect["path"], {"metadata": effect["identity"], "data": effect["data"]},
+                  ctype="application/merge-patch+json")
     for claim in to_create:
         try:
-            ksend("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", claim)
+            send("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", claim)
         except urllib.error.HTTPError as error:
             raise ValueError(f"the disk {claim['metadata']['name']} could not be made: {_refusal(error)}")
     try:
-        ksend("PUT", f"{API}/namespaces/{ns}/virtualmachines/{name}", vm)
+        saved = send("PUT", f"{API}/namespaces/{ns}/virtualmachines/{name}", vm)
     except urllib.error.HTTPError as error:
         raise ValueError(f"the VM was not saved: {_refusal(error)}")
     grown = []
     for claim, size in resize:
         try:
-            ksend("PATCH", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(claim)}",
-                  {"spec": {"resources": {"requests": {"storage": size}}}}, ctype="application/merge-patch+json")
+            send("PATCH", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(claim)}",
+                  {"metadata": _identity(prepared["claims"][claim]),
+                   "spec": {"resources": {"requests": {"storage": size}}}}, ctype="application/merge-patch+json")
             grown.append(f"{claim} to {size}")
         except urllib.error.HTTPError as error:
             raise ValueError(f"the VM was saved, but {claim} could not grow: {_refusal(error)}")
     restarted = False
-    if changed_hardware and cfg.get("restart"):
+    if changed_hardware and prepared["restart"]:
         try:
-            ksend("PUT", f"{SUB}/namespaces/{ns}/virtualmachines/{name}/restart", {})
+            send("PUT", f"{SUB}/namespaces/{ns}/virtualmachines/{name}/restart", {})
             restarted = True
         except urllib.error.HTTPError:
             pass
@@ -920,8 +1028,14 @@ def edit(ns, name, cfg):
     if dropped:
         detail += f"; {', '.join(dropped)} detached and kept"
     if changed_hardware:
-        detail += "; restarting now to use the changes" if restarted else "; the changes apply when it next starts"
-    return {"ok": True, "detail": detail, "restart_needed": changed_hardware and not restarted}
+        detail += "; restarting now to use the changes" if restarted else "; template updated; KubeVirt may apply supported changes live, otherwise review a restart"
+    identity = (saved.get("metadata") or {}) if isinstance(saved, dict) else {}
+    return {"ok": True, "detail": detail, "restart_needed": changed_hardware and not restarted,
+            "vm_identity": {key: identity.get(key, "") for key in ("namespace", "name", "uid", "resourceVersion")}}
+
+
+def edit(ns, name, cfg):
+    return commit_edit(prepare_edit(ns, name, cfg))
 
 
 def _release(ns, claim, uid):

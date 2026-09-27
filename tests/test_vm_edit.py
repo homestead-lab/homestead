@@ -4,13 +4,14 @@ import json
 import sys
 import unittest
 import urllib.error
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_vms as VMS
 
 # A VM whose DataVolume CDI refused: its URL was a file name.
-VM = {"metadata": {"name": "web", "namespace": "lab", "uid": "u1"},
+VM = {"metadata": {"name": "web", "namespace": "lab", "uid": "u1", "resourceVersion": "10"},
       "spec": {"runStrategy": "RerunOnFailure",
                "dataVolumeTemplates": [{"metadata": {"name": "web-disk"},
                                         "spec": {"source": {"http": {"url": "ubuntu.img"}},
@@ -47,7 +48,10 @@ class Cluster:
         if path.endswith("/persistentvolumeclaims"):
             return {"items": [MADE]}
         if path.endswith("/secrets/web-ci"):
-            return {"data": dict(self.secret)}
+            return {"metadata": {"uid": "secret-uid", "resourceVersion": "20"}, "data": dict(self.secret)}
+        if path.endswith("/datavolumes/web-disk"):
+            return {"metadata": {"name": "web-disk", "uid": "dv-uid", "resourceVersion": "30"},
+                    "status": {"phase": "ImportInProgress"}}
         if path.endswith("/namespaces/lab/datavolumes"):
             return {"items": [{"metadata": {"name": "web-disk", "namespace": "lab"},
                                "status": {"phase": "ImportInProgress", "progress": "47.5%"}}]}
@@ -74,16 +78,29 @@ class VmEditTests(unittest.TestCase):
         c = Cluster({"harvester": False, "cdi": True})
         with self.assertRaisesRegex(ValueError, "not a download address"):
             VMS.edit("lab", "web", {"disks": [{"name": "root", "source": {"url": "ubuntu.img"}}]})
-        VMS.edit("lab", "web", {"disks": [{"name": "root", "source": {"url": "https://example.test/u.img"}}]})
+        with self.assertRaisesRegex(ValueError, "existing DataVolume"):
+            VMS.edit("lab", "web", {"disks": [{"name": "root", "source": {"url": "https://example.test/u.img"}}]})
+        self.assertEqual([], c.sent)
+        def read(path):
+            if path.endswith("/datavolumes/web-disk"):
+                raise urllib.error.HTTPError(path, 404, "not created", {}, None)
+            return c.get(path)
+        with mock.patch.object(VMS, "kget", side_effect=read):
+            VMS.edit("lab", "web", {"disks": [{"name": "root", "source": {"url": "https://example.test/u.img"}}]})
         template = c.vm["spec"]["dataVolumeTemplates"][0]
         self.assertEqual("https://example.test/u.img", template["spec"]["source"]["http"]["url"])
         self.assertEqual({"resources": {"requests": {"storage": "20Gi"}}, "storageClassName": "longhorn-r2"},
                          template["spec"]["storage"])
-        self.assertIn(("DELETE", "/apis/cdi.kubevirt.io/v1beta1/namespaces/lab/datavolumes/web-disk", None), c.sent)
+        self.assertFalse(any(method == "DELETE" for method, _, _ in c.sent))
 
     def test_on_harvester_an_unmade_disk_can_become_an_image(self):
         c = Cluster({"harvester": True, "cdi": True})
-        VMS.edit("lab", "web", {"disks": [{"name": "root", "source": {"image": "default/image-ubuntu"}}]})
+        def read(path):
+            if path.endswith("/datavolumes/web-disk"):
+                raise urllib.error.HTTPError(path, 404, "not created", {}, None)
+            return c.get(path)
+        with mock.patch.object(VMS, "kget", side_effect=read):
+            VMS.edit("lab", "web", {"disks": [{"name": "root", "source": {"image": "default/image-ubuntu"}}]})
         self.assertNotIn("dataVolumeTemplates", c.vm["spec"])
         claim = json.loads(c.vm["metadata"]["annotations"][VMS.CLAIM_TEMPLATES])[0]
         self.assertEqual(("web-disk", "longhorn-image-ubuntu"),

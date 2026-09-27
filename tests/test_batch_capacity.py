@@ -29,6 +29,18 @@ class BatchCapacityTests(unittest.TestCase):
         self.assertEqual("blocked", self.plan()["status"])
         self.send.assert_not_called()
 
+    def test_joint_numa_cells_are_not_double_booked_and_alternatives_are_searched(self):
+        self.entries = [self.entry("one", "1Gi"), self.entry("two", "1Gi")]
+        def options(entry, host, pods):
+            used = {pod["_homestead_numa"]["cell"] for pod in pods if pod.get("_homestead_numa")}
+            choices = [0, 1] if entry["name"] == "one" else [0]
+            return [{"cell": cell, "demand": {}} for cell in choices if cell not in used]
+        result = self.plan(allocation_options=options)
+        self.assertFalse(result["blocked"], result)
+        self.assertEqual({"one": 1, "two": 0}, {row["service"]: row["numa_cell"] for row in result["example"]})
+        self.entries.append(self.entry("three", "1Gi"))
+        self.assertTrue(self.plan(allocation_options=options)["blocked"])
+
     def test_search_backtracks_instead_of_blocking_on_first_greedy_host(self):
         self.nodes.append({**copy.deepcopy(self.nodes[0]), "name": "b", "labels": {"kubernetes.io/hostname": "b"}})
         self.entries[1]["deployment"]["spec"]["template"]["spec"]["nodeSelector"] = {"kubernetes.io/hostname": "a"}

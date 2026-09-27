@@ -23,6 +23,8 @@ class StaticAddressTests(unittest.TestCase):
             self.sent.append((method, path, body))
             if path.endswith("/virtualmachines"):
                 return dict(body, metadata=dict(body["metadata"], uid="uid-1"))
+            if path.endswith("/secrets"):
+                return dict(body, metadata=dict(body["metadata"], uid="secret-1", resourceVersion="10"))
             return body
         imports.kget, imports.ksend, imports.NS, imports._cache = get, send, "lab", {}
 
@@ -52,6 +54,8 @@ class StaticAddressTests(unittest.TestCase):
                           "networkDataSecretRef": {"name": "k3s-demo-server-1-cloudinit"}}, cloud)
         owner = next(b for m, p, b in self.sent if m == "PATCH" and "/secrets/" in p)
         self.assertEqual("uid-1", owner["metadata"]["ownerReferences"][0]["uid"])
+        self.assertEqual("secret-1", owner["metadata"]["uid"])
+        self.assertEqual("10", owner["metadata"]["resourceVersion"])
 
     def test_the_pod_network_cannot_have_an_address_of_its_own(self):
         with self.assertRaisesRegex(ValueError, r"LAN network \(bridged\)"):
@@ -76,7 +80,10 @@ class K3sClusterTests(unittest.TestCase):
 
     def setUp(self):
         self.made, self.taken = [], {}
-        K3S.bind(lambda path: {}, lambda cfg: self.made.append(cfg), lambda ip: self.taken.get(ip, ""))
+        def create(cfg):
+            self.made.append(cfg)
+            return {"vm_identity": {"namespace": "lab", "name": cfg["name"], "uid": cfg["name"] + "-uid", "resourceVersion": "1"}}
+        K3S.bind(lambda path: {}, create, lambda ip: self.taken.get(ip, ""))
 
     def test_the_plan_gives_each_node_a_role_and_address(self):
         plan = K3S.plan(self.CFG)
@@ -102,6 +109,8 @@ class K3sClusterTests(unittest.TestCase):
     def test_servers_start_the_cluster_and_workers_join_it_with_one_token(self):
         class Ops:
             def start(self, *args, **kw):
+                return {"id": "op"}
+            def record_phase(self, *args, **kw):
                 return {"id": "op"}
         K3S.start(self.CFG, Ops())
         server, agent = self.made[0]["cloud_init"], self.made[1]["cloud_init"]

@@ -28,7 +28,10 @@ def claims_used(pod, namespace, claim):
 
 
 class Snapshot:
-    def __init__(self, spec, namespace, get, pods, planned_claims=None):
+    def __init__(self, spec, namespace, get, pods, planned_claims=None, *, workload_kind="container"):
+        if workload_kind not in ("container", "vm"):
+            raise ValueError("unknown storage workload kind")
+        self.workload_kind = workload_kind
         self.spec, self.namespace, self.pods = spec, namespace, pods
         self.ports = host_ports(spec)
         self.claims = []
@@ -104,7 +107,7 @@ class Snapshot:
                 warnings.append(f"PVC {name} access mode is unknown")
             if pvc.get("_planned"):
                 warnings.append(f"PVC {name} is planned, not provisioned; storage capacity and attachment remain unverified")
-                if sc and sc.get("provisioner") == "driver.longhorn.io" and str((sc.get("parameters") or {}).get("migratable", "")).lower() == "true":
+                if self.workload_kind != "vm" and sc and sc.get("provisioner") == "driver.longhorn.io" and str((sc.get("parameters") or {}).get("migratable", "")).lower() == "true":
                     reasons.append(f"PVC {name}'s storage class is for migratable VM disks, not container filesystems")
             if pv:
                 if pv.get("_missing"):

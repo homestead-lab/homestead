@@ -7,6 +7,7 @@ backup. Only identifiers and status are stored; request bodies and credentials
 are deliberately excluded.
 """
 import homestead_shared as SHARED
+import homestead_vm_power_receipts as POWER_RECEIPTS
 import json
 import os
 import secrets
@@ -20,7 +21,10 @@ kget = None
 deployment_progress = None
 smart_progress = None
 DATA_DIR = "/data"
-STORE = "operations.json"
+STORE = "operations-v2.json"
+STORE_MARKER = ".operations-v2-initialized.json"
+LEGACY_STORE = "operations.json"
+LEGACY_MARKER = ".operations-initialized.json"
 MAX_OPERATIONS = 100
 TERMINAL = {"succeeded", "failed", "cancelled"}
 # A cancel that has begun and not yet finished. The poll leaves such a job
@@ -30,7 +34,7 @@ CANCELLING = "cancelling"
 # again after this long; every canceller's steps are safe to repeat.
 CANCEL_RETRY_AFTER = 120
 # Shared with any other Homestead replica on the same data volume.
-_lock = SHARED.SharedLock("operations")
+_lock = SHARED.SharedLock("operations", strict=True, directory=lambda: DATA_DIR)
 
 
 def bind(_kget, data_dir, _deployment_progress, _smart_progress=None):
@@ -47,24 +51,76 @@ def _store_path():
     return os.path.join(DATA_DIR, STORE)
 
 
-def _read():
+def _initialized(marker=STORE_MARKER):
     try:
-        with open(_store_path(), encoding="utf-8") as handle:
+        with open(os.path.join(DATA_DIR, marker), encoding="utf-8") as handle:
             value = json.load(handle)
-        return value if isinstance(value, list) else []
-    except (OSError, ValueError, TypeError):
-        return []
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError) as error:
+        raise ValueError("Job history initialization could not be verified; recover store access before changing jobs") from error
+    if value != {"version": 1}:
+        raise ValueError("Job history initialization marker is invalid; recover the store before changing jobs")
+    return True
+
+
+def _read_store(store, marker):
+    initialized = _initialized(marker)
+    try:
+        with open(os.path.join(DATA_DIR, store), encoding="utf-8") as handle:
+            value = json.load(handle)
+    except FileNotFoundError:
+        if not initialized:
+            return []
+        raise ValueError("Previously initialized job history is missing. Recover the store before changing jobs; missing history is not an empty queue.")
+    except (OSError, ValueError, TypeError) as error:
+        raise ValueError("Job history could not be read safely. Restore access or recover the store before starting or changing jobs; existing records were not replaced.") from error
+    if (not isinstance(value, list) or any(not isinstance(item, dict) or not isinstance(item.get("id"), str)
+            or not item["id"] or not isinstance(item.get("ref"), dict) or not isinstance(item.get("status"), str)
+            for item in value) or len({item["id"] for item in value}) != len(value)):
+        raise ValueError("Job history has invalid records. Recover the store before starting or changing jobs; existing records were not replaced.")
+    return value
+
+
+def _read():
+    # Never migrate active jobs out from under an older worker. Existing jobs
+    # remain in their original store; new jobs never enter the legacy store.
+    legacy = _read_store(LEGACY_STORE, LEGACY_MARKER)
+    current = _read_store(STORE, STORE_MARKER)
+    if any("_legacy_store" in item for item in current):
+        raise ValueError("Job history has invalid store ownership; recover the store before changing jobs")
+    if {item["id"] for item in legacy} & {item["id"] for item in current}:
+        raise ValueError("Job history has duplicate identities across stores; recover the stores before changing jobs")
+    return [{**item, "_legacy_store": True} for item in legacy] + current
 
 
 def _write(items):
+    initialized = _initialized()
+    # Record consumption before writing/pruning visible history. A clock jump,
+    # history clear or restart must never resurrect an already-used approval.
+    POWER_RECEIPTS.remember(DATA_DIR, items)
     os.makedirs(DATA_DIR, exist_ok=True)
     path = _store_path()
-    tmp = SHARED.temporary(path)
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(items[-MAX_OPERATIONS:], handle, separators=(",", ":"))
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(tmp, path)
+    # A busy history must not evict an in-flight dispatch intent or a failed
+    # batch's recovery record. Bound ordinary terminal history, not active work.
+    protected = {i for i, item in enumerate(items) if item.get("status") not in TERMINAL or
+                 _recovery_needed(item) or _receipt_needed(item)}
+    recent = [i for i in range(len(items)) if i not in protected][-MAX_OPERATIONS:] if MAX_OPERATIONS > 0 else []
+    kept = protected | set(recent)
+    current = [item for i, item in enumerate(items) if i in kept and not item.get("_legacy_store")]
+    legacy = [{key: value for key, value in item.items() if key != "_legacy_store"}
+              for i, item in enumerate(items) if i in kept and item.get("_legacy_store")]
+    SHARED.write_json(path, current, durable=True, separators=(",", ":"))
+    # A later missing file is not a new installation. Publish the marker before
+    # returning permission to perform the mutation the journal precedes.
+    if not initialized:
+        SHARED.write_json(os.path.join(DATA_DIR, STORE_MARKER), {"version": 1}, durable=True)
+    # Avoid rewriting old history merely because a new job progressed. This is
+    # not a cross-file transaction: each store contains disjoint job identities.
+    if legacy != _read_store(LEGACY_STORE, LEGACY_MARKER):
+        SHARED.write_json(os.path.join(DATA_DIR, LEGACY_STORE), legacy, durable=True, separators=(",", ":"))
+        if not _initialized(LEGACY_MARKER):
+            SHARED.write_json(os.path.join(DATA_DIR, LEGACY_MARKER), {"version": 1}, durable=True)
 
 
 def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
@@ -84,9 +140,30 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
     }
     with _lock:
         items = _read()
+        if POWER_RECEIPTS.protected(kind, ref):
+            consumed = POWER_RECEIPTS.find(DATA_DIR, ref.get("review_digest"))
+            if consumed:
+                raise ValueError(f"This approval already has job {consumed}; inspect history instead of repeating it. The displayed job may have been cleared.")
+            for existing in items:
+                if existing.get("kind") not in POWER_RECEIPTS.KINDS | {"k3s-cluster"}:
+                    continue
+                previous = existing.get("ref") or {}
+                if previous.get("review_digest") == ref.get("review_digest"):
+                    raise ValueError(f"This approval already has job {existing['id']}; inspect it instead of repeating the request")
+                same_batch = kind == existing.get("kind") == "k3s-cluster" and (
+                    previous.get("namespace"), previous.get("name")) == (ref.get("namespace"), ref.get("name"))
+                if (same_batch or _vm_targets(kind, ref) & _vm_targets(existing.get("kind"), previous)) and (
+                        existing.get("status") not in TERMINAL or previous.get("retain_resources")):
+                    if existing.get("tracking_stopped") and existing.get("status") in TERMINAL:
+                        continue
+                    raise ValueError(f"VM job {existing['id']} is still active or needs recovery; inspect it first")
         if kind == "node-power" and any(i.get("kind") == kind and i.get("status") not in TERMINAL and
                                         i.get("ref", {}).get("node") == ref.get("node") for i in items):
             raise ValueError("Host maintenance is already active; inspect its job before retrying")
+        if kind == "k3s-cluster" and any(i.get("kind") == kind and i.get("status") not in TERMINAL and
+                                        (i.get("ref", {}).get("namespace"), i.get("ref", {}).get("name")) ==
+                                        (ref.get("namespace"), ref.get("name")) for i in items):
+            raise ValueError("This k3s VM batch is already active; inspect its job before retrying")
         if kind in ("snapshot-delete", "snapshot-revert") and any(
                 i.get("kind") in ("snapshot-delete", "snapshot-revert") and i.get("status") not in TERMINAL
                 and i.get("ref", {}).get("volume") == ref.get("volume") for i in items):
@@ -96,12 +173,17 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
     return _public(item)
 
 
+def _vm_targets(kind, ref):
+    names = [row.get("name") for row in ref.get("nodes", [])] if kind == "k3s-cluster" else [ref.get("name")]
+    return {(ref.get("namespace"), name) for name in names if name}
+
+
 def record_phase(operation_id, phase, progress, message, **ref_updates):
     """Persist synchronous maintenance progress before irreversible steps."""
     with _lock:
         items = _read()
         item = next(i for i in items if i["id"] == operation_id)
-        if item.get("status") in TERMINAL:
+        if item.get("status") in TERMINAL or (POWER_RECEIPTS.protected(item.get("kind"), item.get("ref") or {}) and item.get("status") == CANCELLING):
             raise ValueError("Maintenance job has ended; refusing further actions")
         item["ref"].update(ref_updates, phase=phase, phase_at=time.time())
         _finish(item, "failed" if phase == "failed" else "running", progress, message)
@@ -111,14 +193,29 @@ def record_phase(operation_id, phase, progress, message, **ref_updates):
 
 def _public(item):
     out = {key: value for key, value in item.items()
-           if key not in ("ref", "cancel_started", "previous_status", "history")}
+           if key not in ("ref", "cancel_started", "previous_status", "history", "_legacy_store")}
     # Every job still going can be cancelled; what that does is asked for
     # separately, as it reads Kubernetes and the tray is polled often.
     out["cancellable"] = item.get("status") not in TERMINAL and (
         item.get("status") != CANCELLING or _cancel_stale(item))
     out["cleanable"] = _cleanable(item)
+    out["dismissible"] = item.get("status") in TERMINAL and not _receipt_needed(item) and not _recovery_needed(item)
+    if item.get("kind") == "k3s-cluster":
+        out["tracking_only"] = True
+    if item.get("kind") == "vm-power":
+        out["cancellable"] = out["cancellable"] and item.get("ref", {}).get("phase") in ("prepared", "accepted")
+        out["power_recovery"] = item.get("status") not in TERMINAL and item.get("ref", {}).get("phase") in ("uncertain", "dispatching")
+    if item.get("kind") in ("vm-create", "vm-edit"):
+        out["cancellable"] = False  # a configuration write cannot be undone by forgetting its job
+        out["mutation_recovery"] = bool(item.get("ref", {}).get("retain_resources"))
+    if item.get("kind") == "k3s-cluster" and item.get("ref", {}).get("dispatch_protocol") == 2:
+        out["cancellable"] = out["cleanable"] = False
+        out["mutation_recovery"] = bool(item.get("ref", {}).get("retain_resources"))
+        out["batch_name"] = item["ref"]["name"]
     if item.get("kind") == "snapshot-delete":
         out["cancellable"] = False  # Longhorn merging cannot be undone or safely interrupted.
+    if item.get("kind") == "k3s-cluster" and item.get("ref", {}).get("retain_resources") and item["ref"].get("phase") == "provisioning":
+        out["cancellable"] = False  # synchronous dispatch may still be in flight
     check = RESUMABLE.get(item.get("kind"))
     if item.get("status") == "failed" and check:
         try:
@@ -126,6 +223,22 @@ def _public(item):
         except Exception:
             out["resumable"] = False
     return out
+
+
+def _receipt_needed(item):
+    if not POWER_RECEIPTS.protected(item.get("kind"), item.get("ref") or {}):
+        return False
+    ref = item.get("ref") or {}
+    return bool(ref.get("retain_resources") or float(ref.get("review_expires") or 0) >= time.time())
+
+
+def _recovery_needed(item):
+    if item.get("tracking_stopped"):
+        return False
+    if item.get("cleaned") and not item.get("ref", {}).get("retain_resources"):
+        return False  # completed cleanup recorded by a previous release
+    return item.get("status") in ("failed", "cancelled") and bool(
+        item.get("ref", {}).get("retain_resources") or item.get("kind") == "k3s-cluster")
 
 
 # Each step a job has said, kept with it: what the Log view shows for any job,
@@ -503,14 +616,16 @@ def dismiss_finished():
     """
     with _lock:
         items = _read()
-        keep = [item for item in items if item.get("status") not in TERMINAL]
+        keep = [item for item in items if item.get("status") not in TERMINAL or _receipt_needed(item) or _recovery_needed(item)]
         removed = len(items) - len(keep)
         if removed:
             _write(keep)
+        protected = sum(item.get("status") in TERMINAL for item in keep)
     return {"ok": True, "dismissed": removed, "remaining": len(keep),
             "detail": (f"cleared {removed} finished job" + ("" if removed == 1 else "s")
                        if removed else "nothing finished to clear")
-                      + (f"; {len(keep)} still running" if keep else "")}
+                      + (f"; {len(keep) - protected} still running" if len(keep) > protected else "")
+                      + (f"; {protected} recovery/approval record(s) retained" if protected else "")}
 
 
 # Kinds whose steps are each safe to run again, and which say whether a
@@ -546,6 +661,10 @@ def dismiss(operation_id):
             raise ValueError("operation not found")
         if match.get("status") not in TERMINAL:
             raise ValueError("an active operation cannot be dismissed")
+        if _receipt_needed(match):
+            raise ValueError("This power receipt is still needed for recovery or replay protection; inspect its job and wait for the approval to expire")
+        if _recovery_needed(match):
+            raise ValueError("This job retains partial-resource recovery details. Review retained resources before clearing its history.")
         items = [item for item in items if item.get("id") != operation_id]
         _write(items)
     return {"ok": True, "id": operation_id}
@@ -576,7 +695,9 @@ CLEANUPS = set()
 
 
 def _cleanable(item):
-    return item.get("status") == "failed" and item.get("kind") in CLEANUPS and not item.get("cleaned")
+    return (item.get("status") == "failed" and item.get("kind") in CLEANUPS and not item.get("cleaned")
+            and not item.get("tracking_stopped")
+            and (item.get("kind") == "k3s-cluster" or not item.get("ref", {}).get("retain_resources")))
 MODES = {"rollback": "Cancel and put back", "stop": "Cancel it", "forget": "Stop tracking it"}
 
 
@@ -684,10 +805,14 @@ def cancel(operation_id, options=None, confirm="", allowed=None, by=""):
             match.pop("previous_status", None)
             if by:
                 match["cancelled_by"] = str(by)[:120]
+            if plan["mode"] == "forget":
+                match.update(tracking_stopped=True, tracking_stopped_at=_now())
             if before == "failed":
-                # It failed; that stays its outcome. Only what it left is gone.
-                match.update(status="failed", cleaned=True, updated_at=_now(),
-                             message=f"Cleaned up after failing: {message}"[:500])
+                # Tracking-only acknowledgement must not claim data was removed.
+                if plan["mode"] != "forget":
+                    match["cleaned"] = True
+                lead = "Tracking stopped after failure" if plan["mode"] == "forget" else "Cleaned up after failing"
+                match.update(status="failed", updated_at=_now(), message=f"{lead}: {message}"[:500])
                 _note(match, "failed", match.get("progress", 0), match["message"])
             else:
                 _finish(match, "cancelled", match.get("progress", 0), message)

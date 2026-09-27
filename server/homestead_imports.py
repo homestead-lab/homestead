@@ -2211,8 +2211,8 @@ def static_network(cfg, mac):
     return "\n".join(lines) + "\n", str(iface.ip)
 
 
-def create_vm(cfg, platform=None, default_class=""):
-    """Create a KubeVirt VM with its boot disk, the way this cluster makes disks.
+def prepare_vm(cfg, platform=None, default_class=""):
+    """Prepare a KubeVirt VM and dependencies without creating any resources.
 
     Harvester makes a VM's disks from its harvesterhci.io/volumeClaimTemplates
     annotation - block volumes every node can reach, so the VM can live-migrate,
@@ -2228,9 +2228,17 @@ def create_vm(cfg, platform=None, default_class=""):
     cdi = platform.get("cdi", True)
     name = _required_name(cfg.get("name"))
     ns = _required_name(cfg.get("namespace") or NS, "namespace")
+    if _get_or_none(f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}") is not None:
+        raise ValueError(f"a VM named {name} already exists in {ns}")
     cores = int(cfg.get("cores", 2))
     mem = cfg.get("memory", "2Gi")
     disk = int(cfg.get("disk_gb", 20))
+    if not 1 <= cores <= 128:
+        raise ValueError("between 1 and 128 cores")
+    if not re.fullmatch(r"\d+(?:\.\d+)?(?:Mi|Gi)", str(mem)) or RESOURCES.quantity(mem) <= 0:
+        raise ValueError("memory must be positive, like 2Gi or 512Mi")
+    if not 1 <= disk <= 16384:
+        raise ValueError("disk size must be between 1 and 16384 GiB")
     sc = str(cfg.get("storage_class") or default_class or "").strip()
     imported_dv = str(cfg.get("disk_import") or "").strip()
     image_ref = str(cfg.get("image_id") or "").strip()
@@ -2271,6 +2279,7 @@ def create_vm(cfg, platform=None, default_class=""):
         "chpasswd: {expire: false}\n"))
 
     annotations, templates = {}, []
+    claims, secrets, downloads = [], [], []
     size = f"{disk}Gi"
     if imported_dv:
         root = {"name": "root", "dataVolume": {"name": dv}}
@@ -2281,9 +2290,7 @@ def create_vm(cfg, platform=None, default_class=""):
         if image_url:
             # Harvester downloads it as one of its images, and the disk starts
             # as a copy of that - CDI's importer cannot be given its volumes.
-            image = HVIMAGE.download(kget, ksend, ns, image_url, sc)
-            claim["metadata"]["annotations"]["harvesterhci.io/imageId"] = f"{image['namespace']}/{image['name']}"
-            claim["spec"]["storageClassName"] = image["storage_class"]
+            downloads.append({"namespace": ns, "url": image_url, "storage_class": sc, "claim": dv})
         elif image_ref:
             image = _harvester_image(image_ref)
             claim["metadata"]["annotations"]["harvesterhci.io/imageId"] = f"{image['namespace']}/{image['name']}"
@@ -2315,17 +2322,19 @@ def create_vm(cfg, platform=None, default_class=""):
             claim["spec"]["storageClassName"] = sc
         if _get_or_none(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{dv}"):
             raise ValueError(f"a volume named {dv} already exists")
-        ksend("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", claim)
+        claims.append(claim)
         root = {"name": "root", "persistentVolumeClaim": {"claimName": dv}}
 
     # Which network: the pod network (reached through a Service), or a VM
     # network bridged to the LAN, where the VM has an address of its own.
     network = str(cfg.get("network") or "pod").strip()
-    mac = _vm_mac()
+    mac = str(cfg.get("mac") or _vm_mac()).lower()
+    if not re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", mac) or int(mac.split(":")[0], 16) & 1:
+        raise ValueError("MAC must be a unicast hardware address like 52:54:00:12:34:56")
     if network == "pod":
         if cfg.get("static_ip"):
             raise ValueError("an address of its own needs a LAN network (bridged), not the pod network")
-        interface, net = {"name": "default", "masquerade": {}}, {"name": "default", "pod": {}}
+        interface, net = {"name": "default", "masquerade": {}, "macAddress": mac}, {"name": "default", "pod": {}}
     else:
         if not re.fullmatch(r"[a-z0-9-]+/[a-z0-9.-]+", network):
             raise ValueError(f"{network} is not a LAN network like default/vlan1")
@@ -2354,7 +2363,7 @@ def create_vm(cfg, platform=None, default_class=""):
         data = {"userdata": base64.b64encode((cloudinit or "#cloud-config\n").encode()).decode()}
         if network_data:
             data["networkdata"] = base64.b64encode(network_data.encode()).decode()
-        ksend("POST", f"/api/v1/namespaces/{ns}/secrets", {
+        secrets.append({
             "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
             "metadata": {"name": secret_name, "namespace": ns, "labels": {NAMES.key("managed"): "true", "app": name}},
             "data": data})
@@ -2407,15 +2416,68 @@ def create_vm(cfg, platform=None, default_class=""):
             },
         },
     }
+    return {"namespace": ns, "name": name, "vm": vm, "claims": claims, "secrets": secrets,
+            "downloads": downloads, "secret_name": secret_name,
+            "result": {"ok": True, "vm": name, "datavolume": dv, "address": address,
+                       "mac": mac}}
+
+
+def _recheck_vm_creation(prepared):
+    ns, name = prepared["namespace"], prepared["name"]
+    targets = [f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}"]
+    for kind, rows in (("persistentvolumeclaims", prepared["claims"]), ("secrets", prepared["secrets"])):
+        targets.extend(f"/api/v1/namespaces/{ns}/{kind}/{row['metadata']['name']}" for row in rows)
+    # Controller-made claims need the same collision protection as claims we
+    # POST ourselves. A name in a template is not permission to adopt a disk.
+    for template in prepared["vm"]["spec"].get("dataVolumeTemplates") or []:
+        claim = _required_name(template["metadata"]["name"], "disk name")
+        targets.extend([f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}",
+                        f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{claim}"])
+    annotation = (prepared["vm"].get("metadata", {}).get("annotations") or {}).get("harvesterhci.io/volumeClaimTemplates", "[]")
+    for template in json.loads(annotation):
+        claim = _required_name(template["metadata"]["name"], "disk name")
+        targets.append(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}")
+    for path in targets:
+        if _get_or_none(path) is not None:
+            raise ValueError("A VM or planned dependency already exists; inspect it and review creation again")
+
+
+def commit_vm(prepared, before_save=None, send=None):
+    """Apply an already validated VM. Retain partial resources on any failure.
+
+    An image download may outlast the original capacity snapshot. before_save
+    receives the resolved manifest for re-admission before creating VM storage.
+    send is a request-local write/journal adapter. Its owner must check any
+    latched failure before acknowledging completion; ownership warnings can
+    otherwise leave a created VM with a partially applied Secret update.
+    """
+    prepared = copy.deepcopy(prepared)
+    send = send or ksend  # per-request journal hook; never replace global ksend
+    ns, name, vm = prepared["namespace"], prepared["name"], prepared["vm"]
+    _recheck_vm_creation(prepared)
+    for download in prepared["downloads"]:
+        image = HVIMAGE.download(kget, send, ns, download["url"], download["storage_class"])
+        templates = json.loads(vm["metadata"]["annotations"]["harvesterhci.io/volumeClaimTemplates"])
+        claim = next(row for row in templates if row["metadata"]["name"] == download["claim"])
+        claim["metadata"].setdefault("annotations", {})["harvesterhci.io/imageId"] = f"{image['namespace']}/{image['name']}"
+        claim["spec"]["storageClassName"] = image["storage_class"]
+        vm["metadata"]["annotations"]["harvesterhci.io/volumeClaimTemplates"] = json.dumps(templates)
+    _recheck_vm_creation(prepared)
+    if before_save:
+        before_save(prepared)
+    for claim in prepared["claims"]:
+        send("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", claim)
+    created_secrets = {}
+    for secret in prepared["secrets"]:
+        result = send("POST", f"/api/v1/namespaces/{ns}/secrets", secret)
+        created_secrets[secret["metadata"]["name"]] = (result or {}).get("metadata") or {}
+    secret_name = prepared["secret_name"]
     try:
-        created = ksend("POST", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines", vm)
+        created = send("POST", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines", vm)
     except urllib.error.HTTPError as error:
-        if secret_name:
-            try:
-                ksend("DELETE", f"/api/v1/namespaces/{ns}/secrets/{secret_name}")
-            except Exception:
-                pass
-        if harvester and image_url:
+        # A failed response does not prove that creation had no effect. Keep
+        # claims and Secrets for explicit inspection instead of deleting data.
+        if prepared["downloads"]:
             try:
                 why = json.loads(error.read().decode("utf-8", "replace")).get("message", "")
             except Exception:
@@ -2425,13 +2487,24 @@ def create_vm(cfg, platform=None, default_class=""):
         raise
     # The Secret goes when the VM does.
     uid = ((created or {}).get("metadata") or {}).get("uid") if isinstance(created, dict) else ""
+    created_meta = ((created or {}).get("metadata") or {}) if isinstance(created, dict) else {}
+    prepared["result"]["vm_identity"] = {key: created_meta.get(key, "")
+                                        for key in ("namespace", "name", "uid", "resourceVersion")}
     if secret_name and uid:
         try:
-            ksend("PATCH", f"/api/v1/namespaces/{ns}/secrets/{secret_name}",
-                  {"metadata": {"ownerReferences": [{"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
+            secret_identity = created_secrets.get(secret_name) or {}
+            if not secret_identity.get("uid") or not secret_identity.get("resourceVersion"):
+                raise ValueError("Created Secret identity/version is unavailable")
+            send("PATCH", f"/api/v1/namespaces/{ns}/secrets/{secret_name}",
+                  {"metadata": {"uid": secret_identity["uid"], "resourceVersion": secret_identity["resourceVersion"],
+                                "ownerReferences": [{"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
                                                      "name": name, "uid": uid}]}},
                   ctype="application/merge-patch+json")
         except Exception:
-            pass
+            prepared["result"]["warning"] = "VM created, but its login Secret ownership could not be recorded. Keep the Secret and inspect it before cleanup."
     _bust("flow", "ov")
-    return {"ok": True, "vm": name, "datavolume": dv, "address": address, "mac": mac if network != "pod" else ""}
+    return prepared["result"]
+
+
+def create_vm(cfg, platform=None, default_class=""):
+    return commit_vm(prepare_vm(cfg, platform, default_class))

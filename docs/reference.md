@@ -643,6 +643,147 @@ written through temporary files of their own. Sign-ins are signed tokens, so
 any copy accepts them. Updates roll one copy at a time, so an update no
 longer takes Homestead away either.
 
+Job-history writes require a working shared filesystem lock; lock failures do
+not fall back to a process-local lock. On Linux, Homestead flushes the file and
+its replacement directory entry before acknowledging the journal write. A corrupt,
+unreadable or unexpectedly missing job store stops job changes instead of being
+treated as an empty queue. The persistent `.operations-v2-initialized.json` marker
+distinguishes a new installation from a lost `operations-v2.json` file.
+
+New jobs use `operations-v2.json`, isolated from the `operations.json` file used
+by older releases. This stops old pollers, history pruning and **Clear finished**
+from overwriting newer recovery records during an upgrade. The current UI reads
+both stores; existing jobs stay in their original store rather than being moved
+away from a worker that may still be running. Progress on a new job does not
+rewrite unchanged legacy history. Duplicate identities across the stores fail
+closed instead of choosing one copy. These are separate job histories, not one
+cross-file transaction.
+
+Finish upgrading every Homestead replica before making VM changes. An older
+replica still has its old API behavior and cannot display or manage new jobs.
+Downgrading does not cancel newer operations: retain both stores and upgrade
+again to inspect those jobs. Do not copy newer records into the legacy file or
+delete either history to force a retry. Verify mixed-version behavior on a
+disposable deployment before relying on a rolling upgrade with active jobs.
+
+If job-history access fails, restore the data-volume connection and permissions
+first. Preserve `operations-v2.json` and `operations.json`, their initialization markers, the
+`vm-power-approvals.json` ledger and `.vm-power-approvals-initialized.json` marker,
+and any temporary files for recovery; do not delete them to make a failed action retry. Inspect the
+actual cluster resources before restoring a consistent backup of the job store.
+These checks protect the journal, but do not make Kubernetes mutations atomic or
+prove cross-node locking/failover on a particular storage backend. Validate that
+behavior on disposable resources before relying on a custom RWX backend.
+
+VM capacity reviews include launcher network devices (`tun`/`vhost-net`),
+Multus-annotated device pools and registered binding helpers. Two interfaces or
+VMs using the same finite device pool each need an allocation. Missing devices,
+unregistered bindings, unresolved SR-IOV requirements and disallowed passthrough
+resources cannot be waived with the memory-warning checkbox. Network definitions
+and hook dependencies are bound to their Kubernetes UID/version and rechecked.
+
+The estimate also includes console, container-disk, filesystem and hook helpers,
+their configured support-container requests/limits, and known probe/passthrough/
+TPM/SEV overhead. Unbounded hooks remain visible as warnings. These are planning
+estimates, not an exact renderer for every KubeVirt version or a resource
+reservation. Physical CNI/bridge/link readiness and injected helpers still require
+separate validation. NUMA locality requires the opt-in checks described below;
+dynamic resource claims and unverified NUMA device locality are blocked.
+Explicit memory-pressure overrides remain available; hardware blockers do not.
+
+High-vCPU VMs also receive a CPU/thread/process RAM allowance, including graphics
+and Guaranteed-QoS headroom; it is not written as a memory request or limit.
+Supplemental IO-thread CPU and isolated-emulator parity are included. The observed
+KubeVirt version selects the verified 1.6–1.9 CPU rule; older, vendor, unknown or
+changing versions use an explicitly labelled conservative IO-thread allowance.
+A target version alone is not evidence of the running renderer. Configuration
+identity/version changes invalidate approval. Actual launcher behavior still needs
+validation on the installed KubeVirt version; a preflight is not a reservation.
+
+Persistent TPM/EFI and active changed-block-tracking state can require a separate
+KubeVirt-managed filesystem PVC. Reviews discover legacy names and labelled
+claims, require this VM's controller UID, bind the PVC/PV identities and include
+volume topology and other writers in placement. Missing state reported by an
+existing instance, mismatched owners, ambiguous claims, lost volumes and unfinished
+migration handoffs block the action. Homestead never adopts or deletes these
+claims as part of admission. Fresh-state reviews show the observed storage-class/
+profile choice and warn that initialization is not recovery; a stopped VM's full
+history cannot be inferred from its current status. The planned claim is only a
+placement placeholder: KubeVirt provisions it, and provisioning is not guaranteed.
+Starting or editing an existing stopped VM with no state PVC requires a separate
+fresh-state acknowledgement and its exact typed name, independently of memory
+overrides. The job records that consent; it never claims the old state was
+recovered. Known missing state on a running instance and ownership/binding
+conflicts remain non-overridable. No state volume is deleted or adopted.
+
+Automatic backup-tracking selectors use the VM's outer labels OR its namespace
+labels. Namespace identity/version is bound to the review, and VM label changes
+cannot skip admission as cosmetic edits. The observed KubeVirt version and feature
+gates determine known persistent-state/backup defaults; unknown builds are called
+out. Resume checks the existing instance, not future-instance selectors. Selecting
+backup tracking does not configure a backup target or prove recoverability.
+
+Reviewed VM creation and edits record a job before creating or changing images,
+login Secrets, claims or the VM. Each resource write has a durable intent and an
+acknowledged UID/version receipt; the journal contains no cloud-init, credentials
+or request bodies. A completed save means Kubernetes acknowledged the configuration,
+not that the guest or its applications are ready. Consumed create/edit approvals
+share the permanently retained `vm-power-approvals.json` ledger despite its historical
+filename. Replaying an approval cannot send the same change again.
+
+For an interrupted or uncertain save, open **Recent jobs → Inspect save outcome**.
+An admin can compare recorded and current resource identities, then type the VM
+name and acknowledge the possible late effect to resolve tracking as **unknown**.
+This is blocked while a dispatcher is active and requires a fresh review if an
+observed identity/version changes. It does not delete partial resources, retry a
+save, adopt replacement resources, or prove an earlier request failed. Resources
+remain for inspection; Kubernetes may still apply an earlier request late. The
+old approval stays consumed, and a new change requires its own review. Until
+inspection resolves tracking, another reviewed save/start/restart/resume for that
+VM is blocked; emergency stop remains available independently.
+
+New reviewed k3s VM batches use the same journal across all their resource writes.
+**Inspect batch outcome** lists every planned VM (including ones never sent),
+plus the image, Secret and claim targets that were attempted. Confirm the batch
+name, not a single VM's name. Inspection takes the dispatcher's shared lock and
+rechecks resource identities/versions; it cannot resolve a batch while a sender
+is active. Earlier accepted writes and uncertain targets are retained without
+cleanup, automatic resume or replay. A fresh batch or individual reviewed VM
+action cannot overlap an unresolved batch target. Legacy jobs remain tracking-only
+and are not given invented receipts or automatic deletion rights.
+
+New batches install a small Python readiness probe through cloud-init. KubeVirt
+runs it through the QEMU guest agent; it is a **readiness** probe, never a liveness
+probe that restarts a guest. Every server queries its local k3s API using its own
+CA and client certificate. Credentials stay inside the guest: no exported
+kubeconfig, additional listener, SSH connection or unverified HTTP callback.
+
+The bootstrap check verifies the planned node names, firmware UUIDs, LAN addresses,
+roles, Ready conditions and fresh node leases, plus the requested Homestead,
+Longhorn and optional KubeVirt/CDI components. A config-bound completion marker
+stays in each guest. Afterwards the probe checks its own identity and active k3s
+service; servers also check their local API, own Ready condition and fresh lease.
+This avoids permanently locking the cluster to its original workers/add-ons.
+Completion means bootstrap checks passed on every guest and those local readiness
+checks pass—not that every component remains healthy forever or failover was tested.
+
+The parent verifies each created VM UID, owned instance, pinned probe/firmware
+settings and original cloud-init Secret UID/content hash through the host Kubernetes
+API. Its guest agent must be connected and the instance Running, Ready and not
+paused, with a fresh host heartbeat. Operation records contain only public settings,
+hashes and identity receipts, never the bootstrap Secret or guest credentials.
+Missing guest-agent/Python support, failed installation, unavailable observations or
+changed identities cannot become success merely because a TCP port answers. Check
+the job and guest console (`/var/log/homestead-k3s.log`) if verification times out.
+
+These checks trust the host control plane and guest root; they are not remote
+attestation or proof against a compromised guest. They verify installation and
+current local readiness, not future HA or safe simultaneous host failures. Use
+ongoing cluster health monitoring and a disposable failover rehearsal for those.
+Older reviewed batches without the probe contract remain explicitly unverified
+until inspection or timeout. Resolving tracking never proves installation succeeded,
+deletes resources or frees IP records; guest installation may continue.
+
 Copies on different nodes all mount Homestead's data claim, so more than one
 copy needs a claim every node can mount: ReadWriteMany on a class Longhorn
 serves through its share manager. A migratable class - Harvester's own and
@@ -676,17 +817,65 @@ runs: an import's or storage move's copy, a Helm or backup run, a rollout's
 newest pod (its events and log), CDI's importer, and each node's console as a
 k3s cluster installs itself.
 
-Every job still running has **Cancel**. It first says what cancelling would
+Jobs that can be cancelled offer **Cancel**. It first says what cancelling would
 do: what is put back, what stays as it is, and anything Kubernetes cannot take
 back. Where it can, a cancel rolls back - a deploy is removed, an update or
 edit returns to the version before it, a volume move starts everything again
-on its untouched original, a k3s cluster's VMs, disks and addresses are
-removed, a restore or disk import deletes its half-filled claim. Where what is
+on its untouched original, a restore or disk import deletes its half-filled claim. Where what is
 done cannot be undone, it stops the rest (an image cleanup keeps the nodes it
 already cleaned). A step that must not be interrupted, such as a volume swap,
 is refused until it has finished, and the few things Kubernetes cannot take
 back once asked, such as a volume deletion, are only no longer tracked.
 Cancelling something that deletes VMs or stops a volume move needs an admin.
+
+k3s VM-batch cancellation **only stops tracking**: VMs, disks, Secrets and IP
+records stay in place, and guest installation may continue. Older jobs have no
+creation-identity receipts; a matching name or label is not proof that a VM still
+belongs to the original job. Homestead therefore never uses that legacy shortcut
+to delete a cluster with its disks. Use each VM's separate deletion/impact review
+when you deliberately want to remove resources.
+
+Failed batches offer **Review retained resources**, not **Clean up**. An admin
+must confirm the cluster name and acknowledge that stopping tracking removes
+nothing and does not verify readiness. The job remains failed; its history records
+who stopped tracking. Until that review, **Dismiss**, **Clear finished** and
+history pruning preserve the recovery details. After acknowledgement, the record
+can be cleared, so save details you still need. Provisioning that may still be
+in flight cannot be stopped through this tracking action.
+
+Reviewed VM **Start**, **Restart** and **Resume** first record a durable power
+intent. Each approval is consumed once under the shared job-store lock; repeating
+the HTTP request does not send power again. A job records whether KubeVirt
+accepted, explicitly refused, or returned an uncertain response. Accepted jobs
+follow the reviewed VM identity and the expected VM-instance identity until it
+is Running, Ready and not paused. This is VM readiness, not a guest application
+health check or an atomic Kubernetes capacity reservation.
+
+Before dispatch, cancellation fences the dispatcher and sends no power. After
+acceptance, cancellation only stops tracking; it cannot undo the accepted request.
+An in-flight request cannot be cancelled or automatically replayed.
+Inspect **Recent jobs → Log** and the VM; **Stop** and **Force stop** remain
+available even when capacity checks or job storage are unavailable. Recovery of
+an uncertain dispatch uses **Inspect outcome** in its job, available to admins.
+The review checks the per-job shared dispatcher lock, current VM/instance
+identity and queued power changes. A live dispatcher, deleting resources,
+unverified ownership or queued changes prevents resolution. After inspecting the
+current state, an admin must type the VM name and acknowledge that Kubernetes
+could still apply the original request late. Resolving changes only the tracking
+record: the original outcome remains unknown, no retry/rollback is sent, and any
+future power action needs its own review. The inspection and admin identity are
+kept in the journal. Do not delete journal or lock files to unblock a request.
+Power receipts cannot be dismissed while needed for recovery or while
+their approval is valid, including through **Clear finished**.
+After display history expires or is cleared, a compact approval fingerprint and
+job ID remain permanently in the separate ledger. This prevents clock rollback
+or a slower replica from making a consumed approval usable again. No approval
+tokens or VM configuration are stored in that ledger. Missing or invalid
+established approval history blocks new reviewed power actions; it is not reset
+automatically. Back up both histories together. A partial write can consume an
+approval before a visible job is saved; that is not evidence power was sent and
+does not justify retrying the same approval. Inspect the VM and recover storage
+before requesting a fresh review.
 
 ### Permissions look after themselves
 
@@ -703,7 +892,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.186/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.187/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -714,7 +903,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.186 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.187 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1363,11 +1552,56 @@ The production image contains no build tools. CI performs the checks before the
 image is published:
 
 ```bash
+python -m pip install --only-binary=:all: --require-hashes -r requirements-topology.txt
 python -m unittest discover -s tests -v
 for file in web/js/*.js web/sw.js; do node --check "$file"; done
 node --test tests/*.test.js
 docker build --build-arg VERSION=dev -t homestead:dev .
 ```
+
+Use Python 3.12. The allocation collector's tests need the pinned gRPC/Protocol
+Buffers packages above; the ordinary telemetry probe still runs on the standard
+library alone. Linux CI exercises a temporary fake kubelet Unix socket without
+contacting a cluster. Those transport tests are skipped on Windows.
+
+The PodResources collector is opt-in under **Cluster → Add-ons → Node probe →
+VM placement checks** (administrator only). It adds a root sidecar with all Linux
+capabilities dropped, a read-only filesystem, the existing dedicated kubelet
+`pod-resources` directory, and the host boot-ID file. No broad kubelet tree,
+account key, or Kubernetes API token is supplied to that sidecar. Requests and
+responses use a separate authentication Secret; traffic is authenticated, not
+encrypted, and requires a trusted cluster network. The configured socket directory
+must already exist on every probe node; custom kubelet roots need their own path.
+
+Enable, disable and path changes restart probe pods, not workload containers or
+VMs. The collector requests 32 MiB and has a 96 MiB limit per node. Disabling
+removes only its sidecar and dedicated mounts; it does not delete any workload
+PVC or authentication Secret. The latter remains owned by the probe DaemonSet.
+Changing configuration requires a fresh probe UID/resource-version read and
+never overwrites an unmanaged sidecar or foreign authentication Secret.
+
+Enabling checks first reviews every current probe node's capacity. RAM warnings
+can be acknowledged separately; hard request shortfalls and incomplete rollout
+inventory cannot. Existing opted-in helpers follow Homestead image upgrades when
+capacity allows. Otherwise the settings dialog explains the pending update;
+**Save settings** performs a fresh review. **Check hosts** shows per-host evidence
+status, not just whether the helper process is running.
+
+NUMA admission authenticates fresh PodResources readings against the current probe,
+host UID/boot ID, physical topology and kubelet configuration. It accounts for
+assigned exclusive CPUs, memory-manager allocations, hugepage reservations and
+pending workloads together on each NUMA cell. Joint VM reviews debit each proposed
+placement and recheck before later writes. Policy or dependency changes invalidate
+the approval; resume of an existing UID-owned launcher is not a new allocation.
+
+Supported locality checks require Static CPU and memory managers; multi-NUMA hosts
+also need pod-scoped `single-numa-node` topology policy. Supported kubelet version
+shapes are upstream 1.28–1.36 and their k3s/RKE2 builds, with the known PodResources
+v1 schema. Unknown fields/builds, missing evidence, unsupported dynamic resource
+claims and unverified device-local NUMA placement fail closed with an explanation.
+Homestead does not change kubelet policy. An example fit does not pin the VM,
+reserve resources, prove guest readiness or guarantee failover. Concurrent starts,
+webhooks and actual vendor launchers still require disposable-cluster validation.
 
 ## Security notes
 
@@ -1489,10 +1723,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.186`, the workflow publishes:
+For a release such as `v2.8.187`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.186
+ghcr.io/wjcloudy/homestead:2.8.187
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -1503,8 +1737,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.186
-git push origin v2.8.186
+git tag v2.8.187
+git push origin v2.8.187
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.

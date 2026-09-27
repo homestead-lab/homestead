@@ -375,7 +375,8 @@ def start_plan(ns, name, replicas=1, warning_percent=88):
 
 
 def manifest_plan(dep, ns, name, replicas=1, warning_percent=88, *, current=0, planned_claims=None,
-                  pod_snapshot=_FETCH_PODS, nodes_snapshot=None, read=None):
+                  pod_snapshot=_FETCH_PODS, nodes_snapshot=None, read=None,
+                  memory_estimate_bytes=None, workload_kind="container", resident_node=None):
     """Read-only capacity check for a proposed Deployment, including new claims.
 
     Existing start/scale callers provide current replicas. New deployments use
@@ -390,8 +391,15 @@ def manifest_plan(dep, ns, name, replicas=1, warning_percent=88, *, current=0, p
     reqs = requirements(dep)
     pod_spec = dep["spec"]["template"]["spec"]
     memory, unbounded = _pod_memory(pod_spec)
+    if memory_estimate_bytes is not None:
+        if not isinstance(memory_estimate_bytes, int) or memory_estimate_bytes < 0:
+            raise ValueError("memory estimate must be nonnegative bytes")
+        memory = max(memory, memory_estimate_bytes)
+    if resident_node and (workload_kind != "vm" or wanted != 1 or current):
+        raise ValueError("resident projection requires one existing VM launcher")
     reservations, reservations_known, snapshot_warnings, pods = _reservation_snapshot(pod_snapshot) if additional else ({}, False, [], None)
-    dependencies = DEPENDENCIES.Snapshot(pod_spec, ns, read, pods, planned_claims=planned_claims) if additional else None
+    dependencies = DEPENDENCIES.Snapshot(pod_spec, ns, read, pods, planned_claims=planned_claims,
+                                         workload_kind=workload_kind) if additional else None
     nodes = get_nodes() if nodes_snapshot is None else nodes_snapshot
     topology = TOPOLOGY.Snapshot(dep["spec"]["template"], ns, nodes, pods, read,
                                  _required_affinity_matches, _tolerates) if additional else None
@@ -427,6 +435,11 @@ def manifest_plan(dep, ns, name, replicas=1, warning_percent=88, *, current=0, p
         # A spread-blocked host may become eligible after another replica starts.
         proposed_here = min(additional, base_slots[node["name"]])
         projected = max(used, reserved_gb) + proposed_here * memory / 1024**3
+        if resident_node == node["name"]:
+            # Unpause keeps this exact launcher. Its reservation was excluded
+            # from the supplied pod snapshot, but its live usage is already in
+            # the node metric. Never subtract invented per-VM usage from RAM.
+            projected = max(used, reserved_gb + proposed_here * memory / 1024**3)
         percent = round(projected / capacity * 100, 1) if capacity else None
         metrics = bool(node.get("mem_metrics_available", True))
         warnings = []

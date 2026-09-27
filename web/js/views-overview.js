@@ -505,6 +505,69 @@ window.probeRemove = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
+window.allocationProbeSettings = async () => {
+  try {
+    const current = await api("/api/node/probe/allocation");
+    window._allocationProbeReview = current;
+    const capacity = current.capacity || {blocked:true, blockers:["Capacity is unavailable. Refresh before enabling."], warnings:[]};
+    childModal("VM placement checks", `
+      <p>Checks whether dedicated CPUs and memory are available together before starting a NUMA VM.</p>
+      <div class="note">${esc(current.detail || "Status unavailable")}</div>
+      ${!current.installed ? '<p>Install the node probe first in Cluster → Add-ons.</p>' : `
+      <p>Uses an extra 32–96 MiB RAM per node. Saving briefly restarts host monitoring. Workload containers and VMs are not restarted.</p>
+      ${capacity.blockers.map(text=>`<div class="note warn">${esc(text)}</div>`).join("")}
+      ${capacity.warnings.length ? `<div class="note warn">${capacity.warnings.map(esc).join("<br>")}</div><label class="vip-check"><input id="allocationProbeCapacity" type="checkbox"><span>Continue despite these capacity warnings.</span></label>` : ""}
+      <details class="vm-placement-advanced"><summary>Advanced · host access and socket location</summary>
+      <p class="dim small">The helper runs as root with no Linux capabilities and a read-only filesystem. It reads kubelet allocations through a dedicated host socket, authenticated with a separate key. The socket mount is read-only, but permits RPC calls; this helper only implements read operations. It receives no Kubernetes API token.</p>
+      <label class="f">Kubelet socket directory ${tip("Use the kubelet root directory’s pod-resources subdirectory. It must already exist on every selected probe node and contain kubelet.sock. Custom k3s/RKE2 installations may use a different root; do not enter the whole kubelet directory.")}
+        <input id="allocationProbeDirectory" class="input mono" value="${esc(current.directory || "/var/lib/kubelet/pod-resources")}" autocomplete="off" spellcheck="false"></label>
+      <p class="dim small">This directory must exist on every probe node. Missing or unsupported data blocks new NUMA starts; it is never treated as free capacity. Multi-NUMA hosts need Static CPU/memory management and pod-scoped single-numa-node topology policy. Checks do not reserve resources.</p>
+      </details>
+      <label class="vip-check"><input id="allocationProbeConsent" type="checkbox"><span>Allow read-only host allocation checks and restart monitoring.</span></label>
+      ${current.enabled ? '<button class="btn sm" onclick="allocationProbeCheck(this)">Check hosts</button><div id="allocationProbeDiagnostics" role="status" aria-live="polite"></div>' : ""}
+      <div class="row" style="margin-top:16px">
+        <button class="btn pri" data-need="admin" ${capacity.blocked ? "disabled" : ""} onclick="allocationProbeSave(true,this)">${current.enabled ? "Save settings" : "Enable checks"}</button>
+        ${current.enabled ? '<button class="btn" data-need="admin" onclick="allocationProbeSave(false,this)">Disable checks</button>' : ""}
+        <button class="btn" onclick="modalBack()">Cancel</button>
+      </div>`}`, false, "operation-review");
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+window.allocationProbeCheck = async button => {
+  button.disabled = true;
+  const target = $("#allocationProbeDiagnostics");
+  target.textContent = "Checking hosts…";
+  try {
+    const nodes = STATE.data?.nodes || [];
+    if (!nodes.length) { target.textContent = "Open Nodes to refresh the host list, then check again."; return; }
+    target.innerHTML = "";
+    for (const node of nodes) {
+      const result = await api("/api/node/probe/allocation/check?node=" + encodeURIComponent(node.name));
+      target.innerHTML += `<p><b>${esc(node.name)}</b> · ${esc(result.detail)}</p>`;
+    }
+  } catch (_) { target.textContent = "Host checks are unavailable. Refresh and try again."; }
+  finally { button.disabled = false; }
+};
+
+window.allocationProbeSave = async (enabled, button) => {
+  const current = window._allocationProbeReview;
+  if (!current?.installed || !current.uid || !current.resource_version) return toast("Reload the probe configuration first", "bad");
+  if (enabled && !$("#allocationProbeConsent")?.checked) return toast("Confirm socket access and the probe restart first", "bad");
+  if (enabled && current.capacity?.blocked) return toast("Resolve the host checks before enabling", "bad");
+  if (enabled && current.capacity?.warnings?.length && !$("#allocationProbeCapacity")?.checked) return toast("Review and acknowledge the capacity warnings first", "bad");
+  if (!enabled && !confirm("Disable allocation collection? Probe pods restart; NUMA starts will remain blocked without verified allocation evidence. Workloads and their volumes are unchanged.")) return;
+  const body = {enabled, directory: $("#allocationProbeDirectory")?.value || "",
+    uid: current.uid, resource_version: current.resource_version, acknowledge_host_access: enabled,
+    confirm_capacity: !!$("#allocationProbeCapacity")?.checked, capacity_review: current.capacity?.fingerprint};
+  window._allocationProbeReview = null; // uncertain saves always require a fresh read
+  if (button) button.disabled = true;
+  try {
+    const result = await api("/api/node/probe/allocation", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    toast(result.detail, "ok");
+    modalBack();
+  } catch (e) { toast(`${e.message}. Reopen VM allocation to read the current configuration before another change.`, "bad"); }
+};
+
 window.smartStartConfirm = (node, disk, type) => childModal(`Start ${type} SMART test?`, `
   <p>This asks <b>${esc(node)} / ${esc(disk)}</b> to run its built-in ${esc(type)} self-test.</p>
   <div class="note">The test does not erase data, but a long test can reduce storage performance and may take hours. Progress and the final drive result remain in Activity.</div>
