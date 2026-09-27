@@ -18,6 +18,98 @@ from homestead_storage_journal import Held, identity, shape
 MARKER = ".self-data-handoff-v1.json"
 
 
+def mounted_data(directory):
+    """Verify the process actually sees a distinct, whole writable data mount.
+
+    Pod specs describe intent, not the process mount namespace. Resolve the
+    opened directory's mount ID through procfs and reject symlink/subdirectory
+    layouts. The PVC association still comes from the verified runtime Pod;
+    this is not independent CSI/device attestation.
+    """
+    if os.name != "posix" or not os.path.isabs(directory) or os.path.normpath(directory) != directory or directory == "/":
+        raise Held("Data moves require an absolute, dedicated Linux data mount")
+    descriptor = None
+    try:
+        if os.path.realpath(directory) != directory:
+            raise Held("The data directory must not be a symbolic link")
+        descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        before = os.fstat(descriptor)
+        with open(f"/proc/self/fdinfo/{descriptor}", encoding="utf-8") as handle:
+            ids = [line.split(":", 1)[1].strip() for line in handle if line.startswith("mnt_id:")]
+        if len(ids) != 1 or not ids[0].isdigit():
+            raise Held("The current data mount identity is unavailable")
+        with open("/proc/self/mountinfo", encoding="utf-8") as handle:
+            records = [line.split() for line in handle]
+        selected = [row for row in records if row and row[0] == ids[0]]
+        if len(selected) != 1:
+            raise Held("The current data mount cannot be identified")
+        row = selected[0]
+        split = row.index("-")
+        unescape = lambda value: re.sub(r"\\(040|011|012|134)", lambda m: chr(int(m[1], 8)), value)
+        if (len(row) < split + 4 or split < 6 or unescape(row[4]) != directory
+                or "rw" not in row[5].split(",") or "rw" not in row[split + 3].split(",")
+                or row[2] != f"{os.major(before.st_dev)}:{os.minor(before.st_dev)}"
+                or row[split + 1] in ("overlay", "tmpfs", "ramfs", "proc", "sysfs")):
+            raise Held("Homestead's data directory is not its writable persistent volume mount")
+        after = os.stat(directory, follow_symlinks=False)
+        if (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino):
+            raise Held("The data mount changed during verification")
+        return {"mount_id": ids[0], "device": row[2], "inode": before.st_ino,
+                "root": unescape(row[3]), "filesystem": row[split + 1]}
+    except Held:
+        raise
+    except Exception:
+        raise Held("The running process could not verify its data mount; no move was authorized") from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def pin_app_image(deployment, image):
+    """Keep the restarted app on the exact source binary, not a mutable tag."""
+    rows = [c for c in deployment["spec"]["template"]["spec"].get("containers", [])
+            if c.get("name") == deployment["metadata"]["name"]]
+    if len(rows) != 1 or not re.fullmatch(r"[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}", image or ""):
+        raise Held("The restarted Homestead image must be its reviewed source digest")
+    rows[0]["image"] = image
+    for init in deployment["spec"]["template"]["spec"].get("initContainers", []):
+        if init.get("name") == "data-permissions":
+            init["image"] = image
+
+
+def require_app_readiness(pod_spec, container_name):
+    """A Ready condition without the app's HTTP probe cannot prove app startup.
+
+    Keep the shipped command/HTTP endpoint; custom launchers/proxies need their
+    own verified protocol rather than treating a running process as readiness.
+    """
+    rows = [c for c in pod_spec.get("containers", []) if c.get("name") == container_name]
+    if len(rows) != 1:
+        raise Held("Homestead's application container cannot be identified for restart")
+    c = rows[0]
+    if c.get("command") not in (None, [], ["python3", "/srv/server.py"]) or c.get("args"):
+        raise Held("Custom Homestead startup commands need a verified data-move readiness protocol")
+    ports = [e for e in c.get("env", []) if e.get("name") == "PORT"]
+    if len(ports) > 1 or ports and (set(ports[0]) != {"name", "value"} or not isinstance(ports[0]["value"], str)):
+        raise Held("Homestead's HTTP port must be explicit for restart verification")
+    if c.get("envFrom") and not ports:
+        raise Held("Set Homestead's PORT explicitly before moving data with inherited environment settings")
+    port = ports[0]["value"] if ports else "8080"
+    if not port.isascii() or not port.isdecimal() or not 1 <= int(port) <= 65535:
+        raise Held("Homestead's HTTP port is invalid")
+    probe = c.get("readinessProbe", {})
+    http = probe.get("httpGet", {})
+    selected = http.get("port")
+    if isinstance(selected, str):
+        matches = [p for p in c.get("ports", []) if p.get("name") == selected and p.get("protocol", "TCP") == "TCP"]
+        selected = matches[0].get("containerPort") if len(matches) == 1 else None
+    if (any(k in probe for k in ("exec", "tcpSocket", "grpc")) or not http
+            or set(http) - {"path", "port", "scheme", "host"} or http.get("host")
+            or http.get("scheme", "HTTP") != "HTTP" or http.get("path") != "/healthz"
+            or type(selected) is not int or selected != int(port)):
+        raise Held("Moving data requires Homestead's HTTP readiness probe at /healthz on its application port")
+
+
 def read_marker(directory):
     path = os.path.join(directory, MARKER)
     try:

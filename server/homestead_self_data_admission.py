@@ -253,6 +253,8 @@ class Admitter:
                 raise Held("The data move has no reviewed stop and restart context")
             state, starting = self.handoff, copy.deepcopy(proposal)
             plan = state["plan"]
+            from homestead_self_data_fence import pin_app_image
+            pin_app_image(starting, plan["copy_image"])
             volumes = [v for v in starting["spec"]["template"]["spec"].get("volumes", []) if v.get("name") == plan["data_volume"]]
             if len(volumes) != 1 or volumes[0].get("persistentVolumeClaim", {}).get("claimName") != state["source"]["name"]:
                 raise Held("The source data mount changed before the capacity review")

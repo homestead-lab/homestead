@@ -11,6 +11,7 @@ import time
 
 import homestead_self_data_copy as COPY
 import homestead_self_data_anchor as A
+from homestead_self_data_fence import require_app_readiness, pin_app_image
 from homestead_storage_journal import Held, Journal, identity, shape
 
 
@@ -222,6 +223,7 @@ class Coordinator:
     def step(self):
         """One bounded phase; create a fresh instance from the anchor next poll."""
         dep = self._environment()
+        require_app_readiness(dep["spec"]["template"]["spec"], self.state["deployment"]["name"])
         phase = self.state["phase"]
         if phase == "prepare":
             if not self._entry("stop"):
@@ -294,6 +296,7 @@ class Coordinator:
                 return self._result("Waiting for volume mounts to be released before switching")
             if not self._entry("switch"):
                 proposed = copy.deepcopy(dep)
+                pin_app_image(proposed, self.plan["copy_image"])
                 volumes = [v for v in proposed["spec"]["template"]["spec"].get("volumes", []) if v.get("name") == self.plan["data_volume"]]
                 if len(volumes) != 1 or volumes[0].get("persistentVolumeClaim", {}).get("claimName") != self.state["source"]["name"]:
                     raise Held("Homestead's data mount no longer names the reviewed source")
@@ -336,6 +339,11 @@ class Coordinator:
         members = [p for p in pods if any(owner(p, "ReplicaSet", uid) for uid in own)]
         if len(members) != self.state["replicas"]:
             return False
+        for pod in members:
+            require_app_readiness(pod.get("spec", {}), self.state["deployment"]["name"])
+            app = next(c for c in pod["spec"]["containers"] if c["name"] == self.state["deployment"]["name"])
+            if app.get("image") != self.plan["copy_image"]:
+                raise Held("A restarted Homestead pod does not use the reviewed source image digest")
         for pod in pods:
             mounted = claims(pod)
             if self.state["source"]["name"] in mounted or self.state["destination"] in mounted and pod not in members:

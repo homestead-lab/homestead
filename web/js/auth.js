@@ -41,6 +41,16 @@ function clusterUnavailable(error) {
   window.__authRetry = setTimeout(boot, 5000);
 }
 
+function dataHandoffStarting() {
+  gate(`<img class="mark" src="/assets/homestead-mark.svg" alt="">
+    <h2>Checking the new data volume</h2>
+    <p class="sub">Homestead is starting after its data move.</p>
+    <p>Changes stay paused until the move coordinator confirms the restart. Both volumes are retained.</p>
+    <p class="dim small">This page will continue automatically. Do not start the old copy.</p>`);
+  clearTimeout(window.__authRetry);
+  window.__authRetry = setTimeout(boot, 3000);
+}
+
 window.sessionSummary = (state = {}) => {
   if (!state.session_expires) return "";
   const days = Math.round((state.session_expires * 1000 - Date.now()) / 86400000);
@@ -249,6 +259,7 @@ $("#whoami").onclick = () => go("settings");
 async function boot() {
   const st = await authState();
   if (st.unavailable) return clusterUnavailable(st.error);
+  if (st.data_handoff) return dataHandoffStarting();
   if (st.setup) return loginForm(null, true);
   if (!st.user) return loginForm();
   ME = st.user; ROLE = st.role || "admin"; ungate(); afterAuth();

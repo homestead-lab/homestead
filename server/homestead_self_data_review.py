@@ -16,6 +16,7 @@ import homestead_self_data_admission as D
 import homestead_self_data_copy as COPY
 import homestead_self_data_kube as K
 import homestead_self_data_launch as L
+from homestead_self_data_fence import require_app_readiness, pin_app_image
 from homestead_storage_journal import Held, digest, identity, shape
 
 
@@ -40,7 +41,7 @@ def _fact(obj):
 
 
 class Review:
-    def __init__(self, read, namespace, deployment, *, actor, image, threshold, source_pod=None, data_dir="/data", clock=time.time):
+    def __init__(self, read, namespace, deployment, *, actor, image, threshold, source_pod=None, data_dir="/data", runtime_check=None, clock=time.time):
         import homestead_self_data_anchor as A
         A._name(namespace); A._name(deployment)
         if not isinstance(actor, str) or not actor or len(actor) > 256:
@@ -48,6 +49,7 @@ class Review:
         self.read, self.namespace, self.deployment = read, namespace, deployment
         self.actor, self.image, self.threshold, self.clock = actor, image, threshold, clock
         self.source_pod, self.data_dir = copy.deepcopy(source_pod), data_dir
+        self.runtime_check = runtime_check
 
     def _snapshot(self, body):
         started = self.clock()
@@ -66,6 +68,7 @@ class Review:
                 or dep["spec"].get("paused")):
             raise Held("Homestead's Deployment cannot be reviewed while missing, deleting or paused")
         volumes = [v for v in dep["spec"]["template"]["spec"].get("volumes", []) if v.get("name") == "data"]
+        require_app_readiness(dep["spec"]["template"]["spec"], self.deployment)
         if len(volumes) != 1 or set(volumes[0]) != {"name", "persistentVolumeClaim"} or volumes[0]["persistentVolumeClaim"].get("readOnly"):
             raise Held("Homestead needs one writable data claim before it can be moved")
         source = volumes[0]["persistentVolumeClaim"]["claimName"]
@@ -132,6 +135,8 @@ class Review:
                    "pods": sorted((_fact(p) for p in owned), key=lambda p: p["uid"]),
                    "controllers": sorted((_fact(s) for s in sets if ROLLOUT.controller(s).get("uid") == identity(dep)["uid"]), key=lambda s: s["uid"]),
                    "nodes": sorted(pins, key=lambda n: n["name"]), "image": self.image, "threshold": self.threshold}
+        if self.runtime_check is not None:
+            binding["source_runtime"] = self.runtime_check(copy.deepcopy(owned), source)
         # Derive only on the server; browser gets neither this capability nor
         # the worker's raw configuration in a review response.
         secret = SIGN.derive_secret({**cfg, "cluster_uid": binding["cluster_uid"], "namespace": ns, "deployment": self.deployment}, "self-data-progress")
@@ -149,6 +154,7 @@ class Review:
             return {"items": copy.deepcopy(after)} if path == "/api/v1/pods" else read(path)
         copying = COPY.job(ns, scope.copy_name, source, cfg["destination"], self.image, cfg["operation"], cfg["copy_node"])
         restart = copy.deepcopy(dep)
+        pin_app_image(restart, self.image)
         next(v for v in restart["spec"]["template"]["spec"]["volumes"] if v["name"] == "data")["persistentVolumeClaim"]["claimName"] = cfg["destination"]
         restart["spec"]["strategy"] = {"type": "Recreate"}
         for stage, proposed in (("copy", copying), ("restart", restart)):
