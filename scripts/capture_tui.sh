@@ -49,13 +49,14 @@ start() { # PATH-prefix
 }
 
 start "$BIN"
-shot menu "What would you like to do"          # what it found, and what it can do
-key Enter; shot role "What should this machine be"   # new cluster, or join
-key Enter; shot kubernetes "Which Kubernetes"   # k3s or RKE2
-key Enter; shot checks "This machine:"          # the checks, before anything changes
-key Enter; shot longhorn "Install Longhorn"     # what the new cluster gets
-key Enter; sleep 1; key Enter; shot ready "About to:"   # what it will do, asked once
-key Escape
+shot menu "Select an option"                    # what is on the machine, and the options
+key Enter; shot role "Select how to install"     # new cluster, or join one
+key Enter; shot kubernetes "Select the Kubernetes distribution"   # k3s or RKE2
+key Enter; shot checks "Results for"             # system checks, before any change
+key Enter; shot longhorn "Install Longhorn"      # components for the new cluster
+key Enter; sleep 1; key Enter; shot ready "Review the settings"   # the installation summary
+key Down; key Enter; shot versions "Select the k3s version"       # a component's releases
+key Escape; sleep 1; key Escape
 
 # ---- a k3s server with things to fix
 stub systemctl 'case "$1" in
@@ -77,9 +78,9 @@ case "$*" in
   *) exit 0 ;;
 esac'
 start "$BIN"
-shot node-menu "Check this node"                 # a node: check, clean up, snapshots
-key Enter; shot doctor "worth a look"            # what it found, worst first
-key Enter; shot doctor-fix "Fix it now"          # one finding, and its fix
+shot node-menu "Check node health"               # a node: health, clean-up, snapshots
+key Enter; shot doctor "warnings"                # the results, most severe first
+key Enter; shot doctor-fix "Apply the fix now"   # one result, and its fix
 key Escape
 
 # A screen that never showed is a menu that broke: say so.

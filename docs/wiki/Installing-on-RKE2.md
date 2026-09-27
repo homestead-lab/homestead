@@ -87,7 +87,7 @@ curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/inst
 
 ![The installer's menu](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-menu.png)
 
-Choose **Install Homestead**, then **Start a new cluster here**, then **RKE2**:
+Select **Install Homestead**, then **Create a new cluster**, then **RKE2**:
 
 ![Which Kubernetes](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-kubernetes.png)
 
@@ -99,9 +99,16 @@ stops on anything that would make the install fail, saying what to put right.
 ![The checks](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-checks.png)
 
 It asks which address the other machines reach this one on, when it has more
-than one, and whether to install KubeVirt. It shows what it will do, and once
-you say yes it takes 10-15 minutes the first time - RKE2 fetches its images -
-with a progress bar. It:
+than one, and whether to install KubeVirt. The installation summary then
+shows the settings and the version of each component - RKE2 from its stable
+channel, Longhorn, KubeVirt, CDI and Homestead from their current releases.
+Select a component to install another version: the list comes live from
+RKE2's release channels and from GitHub.
+
+![The installation summary](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-ready.png)
+
+Select **Install**. The first installation takes 10-15 minutes while RKE2
+downloads its images, with a progress bar. It:
 
 1. installs what Longhorn needs on the host (`open-iscsi` and an NFS client);
 2. writes `/etc/rancher/rke2/config.yaml` (this machine's address, and
@@ -126,6 +133,8 @@ Options go after `server`:
 | `--rke2` | RKE2 instead of k3s |
 | `--kubevirt` | also installs KubeVirt and CDI, so Homestead can run virtual machines - emulated, and slow, if the machine has no hardware virtualisation (`/dev/kvm`) |
 | `--rke2-version v1.33.4+rke2r1` | pins RKE2 instead of its stable channel |
+| `--longhorn-version v1.9.1` | pins Longhorn instead of its newest release |
+| `--kubevirt-version v1.6.0`, `--cdi-version v1.62.0` | pin KubeVirt and CDI instead of their current releases |
 | `--homestead-version 2.8.118` | pins Homestead instead of the newest release |
 | `--node-ip 192.0.2.10` | the address RKE2 registers this machine by, when it has more than one |
 
@@ -143,9 +152,10 @@ On each further machine, run the same line:
 curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
 ```
 
-Choose **Install Homestead**, then **Join a cluster as a worker** (runs apps)
-or **as another server** (control plane and etcd as well), and give the first
-machine's address. The installer sees that the cluster runs RKE2 - its
+Select **Install Homestead**, then **Join an existing cluster as a worker
+node** (runs apps) or **as a server node** (control plane and etcd as well),
+and give the first machine's address. Install the same RKE2 version as the
+existing servers; select it on the summary if the cluster does not report it. The installer sees that the cluster runs RKE2 - its
 supervisor answers on port 9345 - and asks for the cluster's token, which is
 on the first machine:
 
@@ -201,7 +211,7 @@ export PATH=$PATH:/var/lib/rancher/rke2/bin KUBECONFIG=/etc/rancher/rke2/rke2.ya
 ## RKE2 already running?
 
 On an RKE2 server, the same one-line installer finds the cluster and offers
-**Add Homestead to this cluster**: Longhorn if it is missing, then Homestead.
+**Install Homestead on this cluster**: Longhorn if it is missing, then Homestead.
 For other Kubernetes - kubeadm, Talos, a managed cluster - see
 [Installing on an existing cluster](Installing-on-an-existing-cluster).
 
@@ -212,8 +222,8 @@ first sign-in, updates and the node probe.
 
 ## If something is stuck
 
-Run the node doctor on the machine: the same line, then **Check this node and
-fix what is wrong** - see [Troubleshooting](Troubleshooting#node-doctor). By
+Run the node doctor on the machine: the same line, then **Check node
+health** - see [Troubleshooting](Troubleshooting#node-doctor). By
 hand:
 
 - `sudo journalctl -u rke2-server -f` (or `rke2-agent`) - RKE2's own log. The
