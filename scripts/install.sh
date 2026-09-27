@@ -372,11 +372,14 @@ version_choices() { # component -> "version|label" lines, newest first
   rec=$(recommended "$1")
   if [ "$1" = k8s ]; then
     stable=$(channel_version stable); latest=$(channel_version latest)
-    [ -n "$stable" ] && echo "$stable|$stable   stable channel (recommended)"
-    [ -n "$latest" ] && [ "$latest" != "$stable" ] && echo "$latest|$latest   latest channel"
+    [ -n "$stable" ] && printf '%s|%-18s %s
+' "$stable" "$stable" "stable channel (recommended)"
+    [ -n "$latest" ] && [ "$latest" != "$stable" ] && printf '%s|%-18s %s
+' "$latest" "$latest" "latest channel"
     cached "channels-$DIST" channels "$DIST" | awk '$1 ~ /^v[0-9]+\.[0-9]+$/ {print $2}' | newest_first | head -n 6 |
       while read -r v; do
-        [ "$v" = "$stable" ] || [ "$v" = "$latest" ] || echo "$v|$v   $(printf '%s' "$v" | cut -d. -f1-2) channel"
+        [ "$v" = "$stable" ] || [ "$v" = "$latest" ] || printf '%s|%-18s %s channel
+' "$v" "$v" "$(printf '%s' "$v" | cut -d. -f1-2)"
       done
     return
   fi
@@ -388,7 +391,8 @@ version_choices() { # component -> "version|label" lines, newest first
   esac
   printf '%s\n' "$list" | head -n 8 | while read -r v; do
     [ -n "$v" ] || continue
-    if [ "$v" = "$rec" ]; then echo "$v|$v   recommended"; else echo "$v|$v"; fi
+    if [ "$v" = "$rec" ]; then printf '%s|%-18s %s
+' "$v" "$v" "recommended"; else echo "$v|$v"; fi
   done
 }
 
