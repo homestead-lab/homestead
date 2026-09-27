@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.203")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.204")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -5403,6 +5403,9 @@ def self_data_preparation(body, actor, *, start=False):
             return {**public, "capacity_token": CAPACITY_REVIEW.issue(cfg, context)}
         with OPS._lock:
             result = reviewed()
+            # Cleanup may have finished before Jobs' next refresh. Reconcile
+            # only the verified completed handoff; do not advance other jobs.
+            SELF_DATA_EXECUTE.reconcile_completed(OPS, DATA_DIR, SELF.NS, NAMES.BRAND)
             operation = SELF_DATA_PREPARE.start(body, result, OPS)
             return {"ok": True, "operation": operation, "destination": result[3]["destination"],
                     "detail": "Preparing the new volume. Homestead stays on its original data until you confirm the final move."}
@@ -8108,6 +8111,8 @@ def finish_self_data_helpers():
         try:
             with self_data_activity():
                 result = SELF_DATA_FINISH.finish(_self_data_fence, kget, ksend)
+                if result["done"]:
+                    SELF_DATA_EXECUTE.reconcile_completed(OPS, DATA_DIR, SELF.NS, NAMES.BRAND)
             if result["done"]: return
         except SELF_DATA_FENCE.Held as error:
             print("Data move helper cleanup needs review: " + str(error), flush=True)
