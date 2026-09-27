@@ -112,6 +112,15 @@ Homestead is a working tool: show more at once, pad less.
   without `data-sm-hide`.
 - **Related figures share a line**: "20 GiB provisioned · 27.8 GiB
   footprint", not a line each.
+- **Absence is a mark, not a pill.** A state that only says "nothing known
+  yet" - an image not checked, a value not measured - is a small dashed
+  `?` (`.tip.unchecked-tip`) with the reason on hover, and the page
+  subtitle gives the count. Pills are for states that matter: running,
+  failed, an update.
+- **Rows line up.** Every row's actions end at the same right edge, and its
+  second line starts under the name, not under the icon. A row with nothing
+  to report - a stopped container - is one line; `0%` and `0 MB` are not
+  figures worth a line.
 - **Menus are placed against the screen.** `…` menus open below their button,
   or above when there is no room, and are never clipped by a table's scroll
   box; one is open at a time, and Escape, a scroll or a click elsewhere
