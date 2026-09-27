@@ -7,6 +7,7 @@ backup. Only identifiers and status are stored; request bodies and credentials
 are deliberately excluded.
 """
 import homestead_shared as SHARED
+import homestead_vm_power_receipts as POWER_RECEIPTS
 import json
 import os
 import secrets
@@ -81,13 +82,16 @@ def _read():
 
 def _write(items):
     initialized = _initialized()
+    # Record consumption before writing/pruning visible history. A clock jump,
+    # history clear or restart must never resurrect an already-used approval.
+    POWER_RECEIPTS.remember(DATA_DIR, items)
     os.makedirs(DATA_DIR, exist_ok=True)
     path = _store_path()
     # A busy history must not evict an in-flight dispatch intent or a failed
     # batch's recovery record. Bound ordinary terminal history, not active work.
     protected = {i for i, item in enumerate(items) if item.get("status") not in TERMINAL or
                  (item.get("status") == "failed" and item.get("ref", {}).get("retain_resources")) or _receipt_needed(item)}
-    recent = [i for i in range(len(items)) if i not in protected][-MAX_OPERATIONS:]
+    recent = [i for i in range(len(items)) if i not in protected][-MAX_OPERATIONS:] if MAX_OPERATIONS > 0 else []
     kept = protected | set(recent)
     SHARED.write_json(path, [item for i, item in enumerate(items) if i in kept], durable=True, separators=(",", ":"))
     # A later missing file is not a new installation. Publish the marker before
@@ -114,6 +118,9 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
     with _lock:
         items = _read()
         if kind == "vm-power":
+            consumed = POWER_RECEIPTS.find(DATA_DIR, ref.get("review_digest"))
+            if consumed:
+                raise ValueError(f"This approval already has job {consumed}; inspect history instead of repeating it. The displayed job may have been cleared.")
             for existing in items:
                 if existing.get("kind") != kind:
                     continue

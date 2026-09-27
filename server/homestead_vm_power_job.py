@@ -119,7 +119,7 @@ def cancel_plan(item):
             "why_not": "An in-flight or uncertain power request cannot safely be cancelled or forgotten",
             "keeps": ["Cancel before sending power. The dispatcher is fenced by this job's state." if prepared else
                       "The accepted power request still runs in KubeVirt. Stopping tracking does not undo it.",
-                      "Its approval receipt is retained until expiry, so that approval cannot send another request."],
+                      "Its approval fingerprint is retained permanently, even when displayed history is cleared, so it cannot send another request."],
             "confirm": item["ref"]["name"], "needs": "operator"}
 
 

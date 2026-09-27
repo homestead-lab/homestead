@@ -672,8 +672,9 @@ treated as an empty queue. The persistent `.operations-initialized.json` marker
 distinguishes a new installation from a lost `operations.json` file.
 
 If job-history access fails, restore the data-volume connection and permissions
-first. Preserve `operations.json`, its initialization marker and any temporary
-files for recovery; do not delete them to make a failed action retry. Inspect the
+first. Preserve `operations.json`, its initialization marker, the
+`vm-power-approvals.json` ledger and `.vm-power-approvals-initialized.json` marker,
+and any temporary files for recovery; do not delete them to make a failed action retry. Inspect the
 actual cluster resources before restoring a consistent backup of the job store.
 These checks protect the journal, but do not make Kubernetes mutations atomic or
 prove cross-node locking/failover on a particular storage backend. Validate that
@@ -748,6 +749,15 @@ future power action needs its own review. The inspection and admin identity are
 kept in the journal. Do not delete journal or lock files to unblock a request.
 Power receipts cannot be dismissed while needed for recovery or while
 their approval is valid, including through **Clear finished**.
+After display history expires or is cleared, a compact approval fingerprint and
+job ID remain permanently in the separate ledger. This prevents clock rollback
+or a slower replica from making a consumed approval usable again. No approval
+tokens or VM configuration are stored in that ledger. Missing or invalid
+established approval history blocks new reviewed power actions; it is not reset
+automatically. Back up both histories together. A partial write can consume an
+approval before a visible job is saved; that is not evidence power was sent and
+does not justify retrying the same approval. Inspect the VM and recover storage
+before requesting a fresh review.
 
 ### Permissions look after themselves
 
