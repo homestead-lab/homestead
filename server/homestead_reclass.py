@@ -126,7 +126,12 @@ def consumers(ns, claim, fences=None):
              lambda o: o["spec"]["jobTemplate"]["spec"]["template"]["spec"])):
         for obj in _items(path):
             try:
-                if claim not in _claims_in(spec_of(obj)):
+                # StatefulSet-generated claims are absent from its Pod template.
+                # Include retained ordinal claims too, even outside current scale.
+                templated = kind == "StatefulSet" and any(re.fullmatch(
+                    re.escape(t["metadata"]["name"] + "-" + obj["metadata"]["name"]) + r"-\d+", claim)
+                    for t in obj["spec"].get("volumeClaimTemplates", []))
+                if claim not in _claims_in(spec_of(obj)) and not templated:
                     continue
             except (KeyError, TypeError):
                 raise ValueError("Workload inventory is incomplete; volume use cannot be checked") from None
@@ -135,6 +140,8 @@ def consumers(ns, claim, fences=None):
             if kind in ("Deployment", "StatefulSet"):
                 row["replicas"] = int(obj["spec"].get("replicas", 1) if obj["spec"].get("replicas") is not None else 1)
                 row["running"] = int((obj.get("status") or {}).get("readyReplicas", 0) or 0) > 0
+                if kind == "StatefulSet" and obj["spec"].get("persistentVolumeClaimRetentionPolicy", {}).get("whenScaled", "Retain") != "Retain":
+                    row["deletes_claims_on_scale_down"] = True
             elif kind == "CronJob":
                 row["suspend"] = bool(obj["spec"].get("suspend"))
                 row["running"] = False
@@ -280,6 +287,8 @@ def plan(ns, claim, target, *, capture=False):
             blockers.append(f"DaemonSet {c['name']} runs on every node and cannot be stopped for the copy")
         if c["kind"] == "Deployment" and ns == OWN_NS and c["name"] == NAMES.BRAND:
             blockers.append("this is Homestead's own data; move it from Settings › Redundancy instead")
+        if c.get("deletes_claims_on_scale_down"):
+            blockers.append(f"StatefulSet {c['name']} can delete its volumes when stopped; change its scale-down retention policy to Retain before moving storage")
     known = {(c["kind"], c["name"]) for c in used}
     claim_pods = [p for p in _items(f"/api/v1/namespaces/{ns}/pods") if claim in _claims_in(p.get("spec"))]
     for pod in claim_pods:
@@ -302,6 +311,14 @@ def plan(ns, claim, target, *, capture=False):
                         "a disk of its own, no longer tied to that image")
     if any(c.get("via") == "dv" for c in used):
         warnings.append("the VM's DataVolume is turned into a plain volume, as a moved VM's is")
+        if capture:
+            path = f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{claim}"
+            dv = kget(path)
+            _pin(fences, path, dv)
+            owners = [o for o in pvc.get("metadata", {}).get("ownerReferences", []) if o.get("kind") == "DataVolume"]
+            if any(o.get("uid") != dv["metadata"]["uid"] or o.get("name") != claim or
+                   o.get("apiVersion", "").split("/")[0] != "cdi.kubevirt.io" for o in owners):
+                raise ValueError("The claim's DataVolume ownership does not match the reviewed disk")
 
     actual = _longhorn_used(ns, claim)
     replicas = int((row.get("replicas") or "1") or 1) if row.get("provisioner") == "driver.longhorn.io" else 1
@@ -504,6 +521,13 @@ def journaled_stop(item, checkpoint):
     ref = item["ref"]
     writer = JOURNAL.Journal(item, kget, ksend, checkpoint)
     writer.check()
+    # Check every retention policy before even closing a helper. A policy change
+    # must not first be discovered after another workload has already stopped.
+    for consumer in ref["consumers"]:
+        if consumer["kind"] == "StatefulSet":
+            obj = kget(f"/apis/apps/v1/namespaces/{ref['namespace']}/statefulsets/{consumer['name']}")
+            if obj["spec"].get("persistentVolumeClaimRetentionPolicy", {}).get("whenScaled", "Retain") != "Retain":
+                raise JOURNAL.Held("A StatefulSet can delete its claims when stopped; change its retention policy and review again")
     def send(method, path, body=None, **kw):
         expected = ref.get("review_fences", {}).get(path)
         if not expected:
@@ -928,14 +952,31 @@ def old_copies():
     return out
 
 
-def remove_old_copy(pv):
+def remove_old_copy(pv, ops):
+    if not isinstance(pv, str) or len(pv) > 253 or not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", pv):
+        raise ValueError("Choose a valid backing volume")
+    # Serialize with handoff progression and job creation. A failed/cancelled
+    # move still needs its original until recovery explicitly completes; hiding
+    # its job is not permission to destroy that recovery copy.
+    with ops._lock:
+        for item in ops._read():
+            ref = item.get("ref", {})
+            if (item.get("kind") == "reclass" and pv in (ref.get("old_pv"), ref.get("cutover", {}).get("old_pv")) and
+                    (item.get("status") != "succeeded" or ref.get("retain_resources"))):
+                raise ValueError("This original volume is protected by a storage move. Finish its recovery before removing the old copy.")
+        return _remove_old_copy(pv)
+
+
+def _remove_old_copy(pv):
     obj = _get(f"/api/v1/persistentvolumes/{pv}")
     if not obj or not ((obj.get("metadata") or {}).get("annotations") or {}).get(OLD_COPY):
         raise ValueError(f"{pv} is not an old copy Homestead kept")
     if (obj.get("status") or {}).get("phase") != "Released":
         raise ValueError(f"{pv} is in use again, so it is not removed")
+    if obj.get("metadata", {}).get("deletionTimestamp"):
+        raise ValueError(f"{pv} is already deleting; inspect its progress")
     # Deleted the way its class deletes volumes: the provisioner removes the
     # data along with it.
-    ksend("PATCH", f"/api/v1/persistentvolumes/{pv}", {"spec": {"persistentVolumeReclaimPolicy": "Delete"}},
+    ksend("PATCH", f"/api/v1/persistentvolumes/{pv}", {"metadata": JOURNAL.identity(obj), "spec": {"persistentVolumeReclaimPolicy": "Delete"}},
           ctype="application/merge-patch+json")
     return {"ok": True, "detail": f"removing the old copy {pv}"}

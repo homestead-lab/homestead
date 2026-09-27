@@ -30,6 +30,9 @@ class Cluster:
         obj = {"apiVersion": version, "kind": kind,
                "metadata": {"name": name, "namespace": "lab", "uid": name + "-uid", "resourceVersion": "1"},
                "spec": spec}
+        if kind in ("Deployment", "StatefulSet", "ReplicaSet"):
+            obj["metadata"]["generation"] = 1
+            obj["status"] = {"observedGeneration": 1, "replicas": spec.get("replicas", 1)}
         self.objects[path] = obj
         self.item["ref"]["review_fences"][path] = journal.identity(obj)
         return path
@@ -38,7 +41,7 @@ class Cluster:
         self.item["ref"]["consumers"].append({"kind": kind, "name": name, **kwargs})
 
     def read(self, path):
-        if path == "/api/v1/namespaces/lab/pods":
+        if path in ("/api/v1/namespaces/lab/pods", "/api/v1/pods"):
             return {"items": [copy.deepcopy(obj) for obj in self.objects.values() if obj["kind"] == "Pod"]}
         if path not in self.objects:
             raise urllib.error.HTTPError(path, 404, "missing", {}, None)
@@ -71,6 +74,10 @@ class Cluster:
             else:
                 self.merge(current, body)
             current["metadata"]["resourceVersion"] = str(int(before["resourceVersion"]) + 1)
+            if current["kind"] in ("Deployment", "StatefulSet", "ReplicaSet"):
+                # This fake controller observes stops immediately by default.
+                # Quiescence tests override status to simulate reconciliation lag.
+                current["status"] = {"observedGeneration": current["metadata"]["generation"], "replicas": current["spec"].get("replicas", 1)}
             result = copy.deepcopy(current)
         if len(self.sent) == self.lose_reply:
             raise TimeoutError("connection lost")
@@ -106,6 +113,13 @@ class StopHandoffTests(unittest.TestCase):
         self.assertTrue(all(c["stopped"] for c in cluster.item["ref"]["consumers"]))
         cluster.stop(restored=True)
         self.assertEqual(3, len(cluster.sent))
+
+    def test_dangerous_retention_blocks_all_stops_not_only_the_statefulset(self):
+        cluster = self.fleet()
+        cluster.objects["/apis/apps/v1/namespaces/lab/statefulsets/db"]["spec"]["persistentVolumeClaimRetentionPolicy"] = {"whenScaled": "Delete"}
+        with self.assertRaisesRegex(journal.Held, "retention policy"): cluster.stop()
+        self.assertEqual([], cluster.sent)
+        self.assertEqual([], cluster.saves)
 
     def test_restart_between_receipt_and_next_controller_observes_without_replay(self):
         cluster = self.fleet(); cluster.crash_after = 2  # first API response durably saved, before stopped flag
@@ -175,7 +189,9 @@ class CopyCluster(Cluster):
         self.bind_volume("data", "pv-data")
         ref["review_fences"]["/api/v1/persistentvolumes/pv-data"] = journal.identity(self.objects["/api/v1/persistentvolumes/pv-data"])
         self.add("apps/v1", "deployments", "app", "Deployment", {"replicas": 1,
-            "template": {"spec": {"volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "data"}}]}}})
+            "template": {"spec": {"containers": [{"name": "app", "image": "example/app:1",
+                "resources": {"requests": {"memory": "1Gi"}, "limits": {"memory": "1Gi"}}}],
+                "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "data"}}]}}})
         self.consumer("Deployment", "app", replicas=1)
         self.stop()
 
@@ -190,7 +206,7 @@ class CopyCluster(Cluster):
     def read(self, path):
         if path.endswith("/pods"):
             return super().read(path)
-        if path.endswith(("/deployments", "/statefulsets", "/daemonsets", "/cronjobs", "/virtualmachines")):
+        if path.endswith(("/deployments", "/statefulsets", "/daemonsets", "/cronjobs", "/virtualmachines", "/replicasets", "/jobs")):
             return {"items": [copy.deepcopy(obj) for key, obj in self.objects.items() if key.rsplit("/", 1)[0] == path]}
         return super().read(path)
 
@@ -259,6 +275,56 @@ class CopyCluster(Cluster):
 
 
 class CopyHandoffTests(unittest.TestCase):
+    def test_scale_down_must_be_observed_even_when_no_pods_exist(self):
+        cluster = CopyCluster()
+        obj = cluster.objects["/apis/apps/v1/namespaces/lab/deployments/app"]
+        obj["status"]["observedGeneration"] = 0
+        before = len(cluster.sent)
+        self.assertEqual(8, cluster.stage()[1])
+        self.assertEqual(before, len(cluster.sent))
+        obj["status"]["observedGeneration"] = obj["metadata"]["generation"]
+        self.assertEqual(12, cluster.stage()[1])
+
+    def test_old_replicaset_must_finish_scaling_before_copy_helper(self):
+        cluster = CopyCluster()
+        path = cluster.add("apps/v1", "replicasets", "app-old", "ReplicaSet", {"replicas": 1})
+        child = cluster.objects[path]
+        child["metadata"]["ownerReferences"] = [{"kind": "Deployment", "uid": "app-uid", "controller": True}]
+        before = len(cluster.sent)
+        self.assertEqual(8, cluster.stage()[1])
+        child["spec"]["replicas"] = 0
+        self.assertEqual(8, cluster.stage()[1])
+        self.assertEqual(before, len(cluster.sent))
+        child["status"]["replicas"] = 0
+        self.assertEqual(12, cluster.stage()[1])
+
+    def test_suspended_cronjob_with_active_job_cannot_write_after_copy_starts(self):
+        cluster = CopyCluster()
+        cluster.add("batch/v1", "cronjobs", "backup", "CronJob", {"suspend": False,
+            "jobTemplate": {"spec": {"template": {"spec": {"volumes": [{"persistentVolumeClaim": {"claimName": "data"}}]}}}}})
+        cluster.consumer("CronJob", "backup", suspend=False)
+        cluster.stop()
+        path = cluster.add("batch/v1", "jobs", "backup-old", "Job", {})
+        cluster.objects[path]["metadata"]["ownerReferences"] = [{"kind": "CronJob", "uid": "backup-uid", "controller": True}]
+        before = len(cluster.sent)
+        self.assertEqual(8, cluster.stage()[1])
+        self.assertEqual(before, len(cluster.sent))
+        cluster.objects[path]["status"] = {"conditions": [{"type": "Complete", "status": "True"}]}
+        self.assertEqual(12, cluster.stage()[1])
+
+    def test_halted_vm_with_instance_still_present_is_not_quiescent(self):
+        cluster = CopyCluster()
+        cluster.add("kubevirt.io/v1", "virtualmachines", "guest", "VirtualMachine", {
+            "runStrategy": "Always", "template": {"spec": {"volumes": [{"persistentVolumeClaim": {"claimName": "data"}}]}}})
+        cluster.consumer("VirtualMachine", "guest", via="pvc", run_strategy="Always")
+        cluster.stop()
+        path = cluster.add("kubevirt.io/v1", "virtualmachineinstances", "guest", "VirtualMachineInstance", {})
+        before = len(cluster.sent)
+        self.assertEqual(8, cluster.stage()[1])
+        self.assertEqual(before, len(cluster.sent))
+        del cluster.objects[path]
+        self.assertEqual(12, cluster.stage()[1])
+
     def test_complete_copy_requires_job_receipt_bound_claims_and_verified_log(self):
         cluster = CopyCluster()
         self.assertEqual(12, cluster.stage()[1])

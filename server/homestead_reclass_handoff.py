@@ -8,6 +8,7 @@ import re
 
 import homestead_reclass as RC
 import homestead_storage_journal as JOURNAL
+import homestead_rollout_capacity as ROLLOUT
 
 
 def _receipt(item, step):
@@ -45,6 +46,47 @@ def stopped(item, writer):
     observed = {(c["kind"], c["name"]) for c in RC.consumers(ref["namespace"], ref["claim"])}
     if observed != known:
         raise JOURNAL.Held("The set of workloads using the source changed during the move")
+
+
+def quiescent(item, writer):
+    """No pod right now is not proof that a controller finished stopping.
+
+    Wait for observed scale-down, including child ReplicaSets, active CronJob
+    executions and VM instances. Never delete those controllers to force a stop.
+    Pod/claim checks remain separate and are repeated immediately before writes.
+    """
+    stopped(item, writer)
+    ns = item["ref"]["namespace"]
+    def zero_observed(obj):
+        meta, status = obj.get("metadata", {}), obj.get("status", {})
+        generation, observed = meta.get("generation"), status.get("observedGeneration")
+        return (type(generation) is int and generation > 0 and type(observed) is int and observed >= generation and
+                all(status.get(key, 0) == 0 for key in ("replicas", "readyReplicas", "availableReplicas")))
+    for consumer in item["ref"]["consumers"]:
+        kind, name = consumer["kind"], consumer["name"]
+        path = _path(ns, kind, name)
+        obj = writer.observe(_receipt(item, "stop:" + ("PUT" if kind == "VirtualMachine" else "PATCH") + ":" + path))
+        uid = JOURNAL.identity(obj)["uid"]
+        if kind in ("Deployment", "StatefulSet"):
+            if not zero_observed(obj):
+                return False
+            if kind == "Deployment":
+                sets = RC._items(f"/apis/apps/v1/namespaces/{ns}/replicasets")
+                for child in sets:
+                    owner = ROLLOUT.controller(child)
+                    if owner.get("kind") == "Deployment" and owner.get("uid") == uid:
+                        if child.get("spec", {}).get("replicas", 1) != 0 or not zero_observed(child):
+                            return False
+        elif kind == "CronJob":
+            for job in RC._items(f"/apis/batch/v1/namespaces/{ns}/jobs"):
+                owner = ROLLOUT.controller(job)
+                if owner.get("kind") == "CronJob" and owner.get("uid") == uid and not any(
+                        c.get("type") in ("Complete", "Failed") and c.get("status") == "True"
+                        for c in job.get("status", {}).get("conditions", [])):
+                    return False
+        elif RC._get(f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachineinstances/{name}") is not None:
+            return False
+    return True
 
 
 def claim(item, name, writer, *, source=False):
@@ -118,7 +160,8 @@ def copy_stage(item, checkpoint, admission):
     ref = item["ref"]
     writer = JOURNAL.Journal(item, RC.kget, RC.ksend, checkpoint)
     writer.check()
-    stopped(item, writer)
+    if not quiescent(item, writer):
+        return "running", 8, "Waiting for workload controllers to finish stopping before copying"
     claim(item, ref["claim"], writer, source=True)
     known_job = _receipt(item, "copy-job")
     job_uid = known_job.get("after", {}).get("uid") if known_job else None
@@ -149,7 +192,8 @@ def copy_stage(item, checkpoint, admission):
             raise JOURNAL.Held("The copy helper cannot fit current placement or storage constraints")
         # Admission can take time. Recheck the stopped workloads and both claims
         # afterwards, immediately before the durable create intent.
-        stopped(item, writer)
+        if not quiescent(item, writer):
+            return "running", 8, "Waiting for workload controllers to finish stopping before copying"
         claim(item, ref["claim"], writer, source=True)
         claim(item, ref["temp"], writer)
         if any(p.get("status", {}).get("phase") not in RC.FINISHED for p in pods(item)):
@@ -269,7 +313,8 @@ def cutover_stage(item, checkpoint, admission):
     ref = item["ref"]
     writer = JOURNAL.Journal(item, RC.kget, RC.ksend, checkpoint)
     writer.check()
-    stopped(item, writer)
+    if not quiescent(item, writer):
+        return "running", 75, "Waiting for workload controllers to finish stopping before cutover"
     proof = ref.get("copy_verified")
     if not proof or proof.get("claims") != ref.get("copy_claims"):
         raise JOURNAL.Held("Cutover needs verified copy and volume-identity evidence")
@@ -281,7 +326,8 @@ def cutover_stage(item, checkpoint, admission):
         if admission(restart_proposals(item, writer)).get("blocked") is not False:
             raise JOURNAL.Held("Post-copy workload placement needs review before cutover")
         # Recheck after slow admission: no writes may rely on the earlier read.
-        stopped(item, writer)
+        if not quiescent(item, writer):
+            return "running", 75, "Waiting for workload controllers to finish stopping before cutover"
         source = claim(item, ref["claim"], writer, source=True)
         copied = claim(item, ref["temp"], writer)
         if any(p.get("status", {}).get("phase") not in RC.FINISHED for p in pods(item)):

@@ -7363,7 +7363,7 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "operation": op})
             if p == "/api/volumes/old-copies/remove":
                 _cache.pop("vol", None)
-                return self._send(200, RECLASS.remove_old_copy(b.get("pv", "")))
+                return self._send(200, RECLASS.remove_old_copy(b.get("pv", ""), OPS))
             if p == "/api/volumes/delete":
                 result = VOLUMES.delete(b)
                 result["operation"] = OPS.start(
