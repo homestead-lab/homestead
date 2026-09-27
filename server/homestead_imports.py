@@ -17,6 +17,7 @@ import re
 import shlex
 import secrets
 import time
+import homestead_copy_checks as COPY_CHECKS
 import urllib.error
 import urllib.parse
 
@@ -709,6 +710,9 @@ def import_mappings(cfg):
         copy = item.get("copy") is not False
         if copy and not remote.startswith("/"):
             raise ValueError(f"remote path must be absolute, got {remote or '(blank)'}")
+        if copy and (any(part in (".", "..") for part in remote.split("/")) or
+                     any(ord(char) < 32 for char in remote)):
+            raise ValueError("remote path must not contain dot segments or control characters")
         if not mount.startswith("/"):
             raise ValueError(f"container path must be absolute, got {mount}")
         if mount in paths:
@@ -719,7 +723,7 @@ def import_mappings(cfg):
         if folder:
             if not re.fullmatch(r"[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*", folder):
                 raise ValueError(f"folder {folder} must be a plain relative path")
-            if ".." in folder.split("/"):
+            if any(part in (".", "..") for part in folder.split("/")):
                 raise ValueError("folder cannot climb out of the volume")
             used.add((target, folder))
         elif sum(1 for row in requested
@@ -739,6 +743,12 @@ def import_mappings(cfg):
         rows.append({"remote_path": remote, "mount_path": mount, "folder": folder,
                      "bytes": size if copy else 0, "pvc": claim, "medium": "", "size_mb": 0, "copy": copy,
                      "exclude": _excludes(remote, requested, item.get("exclude")) if copy else []})
+    destinations = [(row["pvc"], row["folder"]) for row in rows if not row.get("medium") and row.get("copy", True)]
+    for index, (claim, folder) in enumerate(destinations):
+        if any(claim == other and (not folder or not target or folder == target or
+               folder.startswith(target + "/") or target.startswith(folder + "/"))
+               for other, target in destinations[index + 1:]):
+            raise ValueError("copy destinations overlap; choose separate folders")
     return rows
 
 
@@ -861,6 +871,18 @@ def prepare_import(cfg):
         steps.append("echo " + shlex.quote(f"==> total {total} folders {measured}B"))
     mount_of = {volume["name"]: (f"/mnt/{volume['name']}" if len(volumes) > 1 else "/appdata")
                 for volume in volumes}
+    if copied:
+        steps.append(COPY_CHECKS.SHELL)
+        # Check every destination before the first write. Client measurements
+        # are estimates only; existing files/snapshots are not free capacity.
+        for mapping in copied:
+            base = mount_of[mapping["pvc"]]
+            target = base + ("/" + mapping["folder"] if mapping["folder"] else "")
+            steps.append(f"copy_destination {shlex.quote(target)} {shlex.quote(base)}")
+        for claim in sorted({mapping["pvc"] for mapping in copied}):
+            rows = [mapping for mapping in copied if mapping["pvc"] == claim]
+            needed = str((sum(row["bytes"] for row in rows) + 1023) // 1024) if all(row["bytes"] for row in rows) else ""
+            steps.append(f"copy_space {shlex.quote(mount_of[claim])} {shlex.quote(needed)}")
     for index, mapping in enumerate(copied, start=1):
         base = mount_of[mapping["pvc"]]
         target = (base + "/" + mapping["folder"]) if mapping["folder"] else base
@@ -899,8 +921,9 @@ def prepare_import(cfg):
         steps.append("echo " + shlex.quote(f"==> owner {owner_uid}:{owner_gid}"))
         for mount in sorted(set(mount_of.values())):
             steps.append(f"chown -R {owner_uid}:{owner_gid} {shlex.quote(mount)}")
-    steps.append("echo '==> done'; du -sh " + " ".join(
+    steps.append("sync; du -sh " + " ".join(
         shlex.quote(mount) for mount in sorted(set(mount_of.values()))))
+    steps.append("echo '==> done'")
     script = "\n".join(steps) + "\n"
 
     body = {
@@ -1115,6 +1138,10 @@ def import_progress(log):
         if line.startswith("==> missing "):
             error = "a source folder does not exist on the host"
             error_detail = line[len("==> missing "):][:220]
+            continue
+        if line.startswith("==> error: "):
+            error = "copy preflight failed"
+            error_detail = line[len("==> error: "):][:220]
             continue
         for needle, explanation in TROUBLE:
             if needle.lower() in line.lower():

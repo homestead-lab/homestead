@@ -336,6 +336,7 @@ function storageCopyReview(config, capacity) {
       'Existing destination files may be overwritten. Volumes are kept, but this is not a backup.') +
     UI.section("Storage changes", UI.table([{label:"Container path"},{label:"From"},{label:"To"}],rows)) +
     UI.lead("Placement is checked again before copying and restarting. Failed or uncertain steps stop for inspection—no automatic rollback or retry.") +
+    UI.more("Copy safety checks", "The helper checks destination paths and estimates free space before copying. Unavailable estimates appear in its log; they are not a guarantee that the data fits. A failed copy keeps both volumes and the app stays stopped. Inspect Recent jobs before retrying.") +
     UI.more("Capacity and placement details", UI.section("After the move",deployCapacityHtml(capacity)) +
       UI.section("Temporary copy helper",deployCapacityHtml(capacity.copy_helper)), capacity.blocked) +
     (!capacity.blocked ? UI.ack("editCapacityConfirm","I accept the outage, destination changes and capacity warnings") : "") +
@@ -2129,6 +2130,7 @@ window.importReview = async body => {
         ${config.source_consistency ? `<p>${config.source_consistency === "snapshot" ? "Copy from a consistent snapshot or backup. Source-container checks are skipped; verify the selected paths." : "All source writers must stay stopped." + (config.source_container_id ? " The original Docker container is checked before and after copying each folder." : " Homestead cannot verify other writers.")}</p>` : ""}
         ${(result.volumes || []).map(v => `<div class="dependency-row"><span>${v.create ? 'Create' : 'Reuse'} volume</span><b>${esc(v.name)} · ${esc(v.access_mode)} · ${esc(v.storage_class)}</b></div>`).join('')}
       </div><div class="note warn">${result.capacity.warnings.map(esc).join('<br>')}</div>
+      ${(config.mappings || []).some(m => m.copy !== false && m.medium !== 'memory') || config.remote_path ? UI.more('Copy safety checks', 'Free space is checked on the mounted destination against measured source sizes. Missing measurements are reported in the job log, not treated as zero. Estimates do not reserve space. Unsafe destination paths stop the copy; failed transfers keep both copies.') : ''}
       ${result.phases.map(p => `<h3>${esc(p.title)}</h3>${deployCapacityHtml(p.capacity)}`).join('')}
       ${!result.capacity.blocked ? '<label class="switch"><input type="checkbox" id="importConfirm"> I approve this import, including file replacement and any capacity warnings.</label>' : ''}
       <div class="modalactions"><button class="btn" onclick="modalBack()">Back to import</button><button class="btn pri" id="importGo" ${result.capacity.blocked ? 'disabled' : ''} onclick="confirmImport()">Create reviewed import</button></div></div>`, true);

@@ -8,6 +8,7 @@ function setup({blocked=false, missing=false, fail=false}={}) {
   const calls=[], fields={"#importConfirm":{checked:false}, "#importGo":{}};
   const ctx={console, URLSearchParams, Map, Set, Date, Promise, encodeURIComponent,
     document:{addEventListener(){}}, STATE:{data:{}},
+    UI:{more:(title,body)=>`<details><summary>${title}</summary>${body}</details>`},
     $:key=>fields[key], $$:()=>[], esc:value=>String(value).replaceAll("<","&lt;"),
     toast:()=>{}, closeModal:()=>{}, resetPaint:()=>{}, viewImport:()=>{},
     deployCapacityHtml:plan=>`<div>${plan.name}</div>`,
@@ -64,4 +65,12 @@ test("import submission shows its durable job and refreshes history after lost r
     await t.ctx.confirmImport();
     assert.equal(refreshed,1);assert.equal(jobs.length,fail?0:1);
   }
+});
+
+test("copy review explains unknown space estimates and retained partial copies",async()=>{
+  const t=setup();
+  await t.ctx.importReview({name:'app',mappings:[{remote_path:'/data',mount_path:'/config'}]});
+  assert.match(t.fields.html,/Copy safety checks/);
+  assert.match(t.fields.html,/Missing measurements/);
+  assert.match(t.fields.html,/failed transfers keep both copies/);
 });
