@@ -83,6 +83,11 @@ def main():
             helpers = json.loads(kube("-n", "lab", "get", "pods", "-l", "homestead.io/self-data-handoff", "-o", "json"))
             assert not helpers["items"], "Temporary move helpers must be retired"
             print("PASS: three retained PVCs; no move helper pods remain", flush=True)
+        except Exception:
+            for args in (("-n", "lab", "get", "pods", "-o", "wide"), ("-n", "lab", "logs", "deployment/homestead", "--tail=35")):
+                try: print(kube(*args), flush=True)
+                except Exception: pass
+            raise
         finally:
             # Only the exact container just created, including its disposable
             # anonymous storage. No host kubeconfig or user cluster is touched.

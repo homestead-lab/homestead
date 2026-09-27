@@ -27,7 +27,15 @@ request("/api/auth/setup", {"username": "release-test", "password": secrets.toke
 for attempt in range(2):
     operation = secrets.token_hex(12)
     cfg = {"operation": operation, "storage_class": "fixture-target" if attempt == 0 else "local-path", "node": "release-test"}
-    preview = request("/api/self/data/prepare/preview", cfg)
+    deadline = time.monotonic() + 120
+    while True:
+        try:
+            preview = request("/api/self/data/prepare/preview", cfg)
+            break
+        except RuntimeError as error:
+            if attempt == 0 or "earlier data move record exists" not in str(error) or time.monotonic() >= deadline: raise
+            print("Waiting for temporary helper cleanup", flush=True)
+            time.sleep(3)
     prepared = request("/api/self/data/prepare", {**cfg, "capacity_token": preview["capacity_token"], "confirm_capacity": True})
     print("PREPARATION", attempt + 1, prepared["destination"], flush=True)
     deadline = time.monotonic() + 240
