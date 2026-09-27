@@ -620,6 +620,10 @@ window.k3sCluster = async () => {
       <button class="btn pri" id="k_go" data-need="operator" onclick="k3sCreate()" disabled>Create cluster</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div>`;
   k3sCountChanged();
+  $$("#mbody input, #mbody select").forEach(field => {
+    field.addEventListener("input", k3sInvalidateReview);
+    field.addEventListener("change", k3sInvalidateReview);
+  });
   if (window.applyRole) applyRole();
 };
 window.k3sSetupChanged = () => {
@@ -632,8 +636,7 @@ window.k3sSetupChanged = () => {
 window.k3sCountChanged = () => {
   const count = +$("#k_servers").value + Math.max(0, +$("#k_agents").value || 0);
   vmSubnetPicked("k", count);
-  $("#k_go").disabled = true;
-  $("#k_review").innerHTML = "";
+  k3sInvalidateReview();
 };
 function k3sBody() {
   const image = $("#k_image").value;
@@ -645,28 +648,61 @@ function k3sBody() {
     image_id: image.startsWith("image:") ? image.slice(6) : "", image_url: image === "url" ? K3S_UBUNTU : "",
     addresses: $("#k_ip").value.split(",").map(x => x.trim()).filter(Boolean) });
 }
+let K3S_REVIEW = null, K3S_REVIEW_SEQUENCE = 0, K3S_CREATE_BUSY = false;
+window.k3sInvalidateReview = () => {
+  K3S_REVIEW = null; ++K3S_REVIEW_SEQUENCE;
+  if ($("#k_go")) { $("#k_go").disabled = true; $("#k_go").textContent = "Create reviewed cluster"; }
+  if ($("#k_review")) $("#k_review").innerHTML = "";
+};
+window.k3sReviewReady = () => {
+  const ready = !!(K3S_REVIEW && !K3S_CREATE_BUSY && !K3S_REVIEW.capacity.blocked && $("#k_capacity_confirm")?.checked);
+  if ($("#k_go")) $("#k_go").disabled = !ready;
+  return ready;
+};
 window.k3sReview = async () => {
+  if (K3S_CREATE_BUSY) return;
+  k3sInvalidateReview();
+  const sequence = K3S_REVIEW_SEQUENCE, input = JSON.stringify(k3sBody());
   try {
-    const plan = await api("/api/vm/k3s-cluster/plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(k3sBody()) });
+    const plan = await api("/api/vm/k3s-cluster/plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: input });
+    if (sequence !== K3S_REVIEW_SEQUENCE || !$("#k_go")) return;
+    if (!plan.config || !plan.capacity_token || typeof plan.capacity?.blocked !== "boolean" || !Array.isArray(plan.nodes))
+      throw new Error("Complete VM batch review unavailable; nothing can be created yet.");
+    K3S_REVIEW = {...plan, input};
     $("#k_review").innerHTML = `<div class="sec">What it makes</div>
       <table class="tbl dense stack"><thead><tr><th>VM</th><th>Role</th><th>Address</th></tr></thead><tbody>
-      ${plan.nodes.map(n => `<tr><td><b>${esc(n.name)}</b></td><td data-label="Role">${n.role === "server" ? '<span class="tag info">server</span>' : '<span class="tag">worker</span>'}</td>
+      ${plan.nodes.map(n => `<tr><td><b>${esc(n.name)}</b><div class="mono xs dim">${esc(plan.config.macs?.[n.name] || "")}</div></td><td data-label="Role">${n.role === "server" ? '<span class="tag info">server</span>' : '<span class="tag">worker</span>'}</td>
         <td data-label="Address" class="mono">${esc(n.address)}${n.problem ? `<div class="badtext xs">${esc(n.problem)}</div>` : ""}</td></tr>`).join("")}</tbody></table>
       <div class="note ${plan.ok ? "" : "bad"}" style="margin-top:10px">${plan.ok
         ? `Each address is recorded under its VM in IP addresses. Allow 10-15 minutes: the VMs start, install ${esc(K3S_SETUPS[plan.setup])}${plan.kubevirt ? " and KubeVirt" : ""}, and join.
            ${plan.url ? `Its own Homestead then answers at <span class="mono">${esc(plan.url)}</span>.` : ""} The job tray follows it.`
-        : "Choose other addresses for the ones marked: something already has them."}</div>`;
-    $("#k_go").disabled = !plan.ok;
-  } catch (e) { $("#k_review").innerHTML = `<div class="note bad">${esc(e.message)}</div>`; $("#k_go").disabled = true; }
+        : "The batch cannot proceed under the checked constraints. Resolve the issues below and review again."}</div>
+      <div class="reviewbox"><b>Whole-batch capacity · ${plan.capacity.vm_count ?? plan.nodes.length} VMs</b>
+        <p class="small">Each VM: ${esc(plan.config.cores || 2)} CPU cores · ${esc(plan.config.memory || "4Gi")} memory · ${esc(plan.config.disk_gb || 40)} GiB disk.</p>
+        <p class="small muted">All VMs share one capacity budget, including new VMs waiting for launcher pods. The example is not an enforced reservation.</p>
+        <div class="dependency-list">${(plan.capacity.nodes || []).map(n => `<div class="drow"><div class="dl mono">${esc(n.name)}</div><div class="dv">${n.metrics_available ? `${esc(n.baseline_gb)} → up to ${esc(n.upper_gb)} GiB (${esc(n.upper_percent)}%)` : "Live RAM unavailable"}</div></div>`).join("")}</div>
+        ${(plan.capacity.blockers || []).concat(plan.capacity.reasons || []).length ? `<div class="note bad">${(plan.capacity.blockers || []).concat(plan.capacity.reasons || []).map(esc).join(" · ")}</div>` : ""}
+        <div class="note warn">${(plan.capacity.warnings || []).map(esc).join(" ")}</div>
+        ${(plan.capacity.example || []).length ? `<p class="small muted">Example placement: ${plan.capacity.example.map(p => `${esc(p.service)} → ${esc(p.host)}`).join("; ")}</p>` : ""}</div>
+      ${!plan.capacity.blocked ? '<div class="note">Memory warnings can be overridden, even above 100%, but that may cause OOM restarts or downtime. Hardware, storage and checked scheduling blockers cannot be overridden.</div><label class="check"><input type="checkbox" id="k_capacity_confirm" onchange="k3sReviewReady()"> Create this exact batch and accept the capacity and partial-creation risks. If a step fails, keep all resources for inspection.</label>' : ""}`;
+    k3sReviewReady();
+  } catch (e) {
+    if (sequence !== K3S_REVIEW_SEQUENCE || !$("#k_go")) return;
+    K3S_REVIEW = null;
+    $("#k_review").innerHTML = `<div class="note bad">${esc(e.message)}</div>`; $("#k_go").disabled = true;
+  }
 };
-let K3S_CREATE_BUSY = false;
 window.k3sCreate = async () => {
   const button = $("#k_go");
-  if (K3S_CREATE_BUSY || !button || button.disabled) return;
+  if (K3S_CREATE_BUSY || !button || !k3sReviewReady()) return;
+  if (JSON.stringify(k3sBody()) !== K3S_REVIEW.input) { k3sInvalidateReview(); return toast("Configuration changed; review the VM batch again", "bad"); }
+  const review = K3S_REVIEW;
+  K3S_REVIEW = null;
   K3S_CREATE_BUSY = true;
   button.disabled = true; button.textContent = "Creating VMs…";
   try {
-    await api("/api/vm/k3s-cluster", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(k3sBody()) });
+    await api("/api/vm/k3s-cluster", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({...review.config, capacity_token:review.capacity_token, confirm_capacity:true}) });
     toast("Cluster VMs created - the job tray follows them coming up", "ok");
     closeModal(); if (window.refreshOperations) refreshOperations(true); go("vms");
   } catch (e) {

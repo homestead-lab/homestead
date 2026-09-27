@@ -29,6 +29,15 @@ def issue(config, context=None):
     return f"{expires}.{_signature(config, expires, context)}"
 
 
+def derive_secret(config, purpose):
+    """Reproduce internal batch secrets without putting them in preview bodies.
+
+    The config must include a fresh random review ID. Domain separation keeps
+    this value distinct from any public approval token.
+    """
+    return _signature(config, 0, {"internal_secret": purpose})
+
+
 def valid(config, context=None):
     try:
         expires, signature = str(config.get("capacity_token") or "").split(".", 1)

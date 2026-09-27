@@ -1375,10 +1375,18 @@ ssh_pwauth: true
     "/api/disks/add": { ok: true, detail: "Harvester is wiping and adding /dev/sdb on harvester-node1 to Longhorn" },
     "/api/disks/scheduling": { ok: true, detail: "done" }, "/api/disks/evict": { ok: true, detail: "moving replicas off" },
     "/api/disks/remove": { ok: true, detail: "released" },
-    "/api/vm/k3s-cluster/plan": { name: "k3s-demo", setup: "homestead", first: "192.168.1.60", url: "http://192.168.1.60:8088", ok: true,
-      nodes: [{ name: "k3s-demo-server-1", role: "server", address: "192.168.1.60", problem: "" },
-        { name: "k3s-demo-agent-1", role: "agent", address: "192.168.1.61", problem: "" },
-        { name: "k3s-demo-agent-2", role: "agent", address: "192.168.1.62", problem: "" }] },
+    "/api/vm/k3s-cluster/plan": (url, init) => {
+      const cfg = JSON.parse(init.body || "{}"), count = (+cfg.servers || 1) + (+cfg.agents || 0);
+      const memory = (parseFloat(cfg.memory) || 4) / (String(cfg.memory).endsWith("Mi") ? 1024 : 1);
+      const upper = 8 + count * (memory + Math.max(0.25, memory * 0.05));
+      const nodes = Array.from({length:count}, (_,i) => ({name:`${cfg.name}-${i < cfg.servers ? "server" : "agent"}-${i < cfg.servers ? i+1 : i-cfg.servers+1}`,
+        role:i < cfg.servers ? "server" : "agent", address:cfg.addresses?.[i] || `192.0.2.${20+i}`, problem:""}));
+      return {name:cfg.name, setup:cfg.setup, first:nodes[0].address, url:`http://${nodes[0].address}:8088`, ok:true, nodes,
+        config:{...cfg,review_id:"demo-review",macs:Object.fromEntries(nodes.map((n,i)=>[n.name,`52:54:00:11:22:${String(i+10).padStart(2,"0")}`]))}, capacity_token:"demo-batch",
+        capacity:{status:"fits",blocked:false,vm_count:count,warnings:["Snapshot only: placement is not reserved. Partial VMs, disks and Secrets are retained after failure.","Guest quorum does not guarantee independent physical hosts or storage."],
+          nodes:[{name:"harvester-node1",baseline_gb:8,upper_gb:Math.round(upper*100)/100,upper_percent:Math.round(upper/32*100),metrics_available:true}],
+          example:nodes.map(n=>({service:n.name,host:"harvester-node1"})),blockers:[],reasons:[]}};
+    },
     "/api/vm/k3s-cluster": { ok: true, operation: { id: "op-k3s" } },
     "/api/workloads/failover": { ok: true, changed: ["paperless"], detail: "1 container changed and restarting" },
     "/api/disks/retire/plan": { node: "harvester-node3", disk: "bd-node3-sdb", path: "/var/lib/harvester/extra-disks/7f2c",

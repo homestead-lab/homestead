@@ -12,6 +12,7 @@ import homestead_memory as MEMORY
 import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_vm_capacity as VM_CAPACITY
 import homestead_vm_claims as VM_CLAIMS
+import homestead_vm_batch as VM_BATCH
 import homestead_batch_capacity as BATCH_CAPACITY
 import homestead_volume_usage as VOLUME_USAGE
 import homestead_snapshot_delete as SNAPSHOT_DELETE
@@ -3627,6 +3628,121 @@ def reviewed_vm_edit(body):
     return VMS.commit_edit(prepared, before_save=before_save)
 
 
+def vm_cluster_configuration(body, *, preview=False):
+    cfg = copy.deepcopy(body)
+    cfg["namespace"] = _dns_name(cfg.get("namespace") or DEFAULT_NS, "namespace")
+    built = K3SC.plan(cfg)
+    cfg["name"] = built["name"]
+    if preview:
+        cfg["review_id"] = secrets.token_hex(16)
+        cfg["macs"] = {node["name"]: IMP._vm_mac() for node in built["nodes"]}
+    if not re.fullmatch(r"[a-f0-9]{32}", str(cfg.get("review_id") or "")):
+        raise ValueError("Review the VM cluster first to freeze its generated identifiers")
+    if not isinstance(cfg.get("macs"), dict) or set(cfg["macs"]) != {node["name"] for node in built["nodes"]}:
+        raise ValueError("VM cluster MAC addresses are incomplete; review again")
+    if len(set(cfg["macs"].values())) != len(built["nodes"]):
+        raise ValueError("VM cluster MAC addresses must be distinct")
+    cfg["storage_class"] = str(cfg.get("storage_class") or vm_default_class())
+    return cfg
+
+
+def vm_cluster_snapshot():
+    cache, external = {}, {}
+    def read(path):
+        if path not in cache:
+            try:
+                cache[path] = kget(path)
+            except urllib.error.HTTPError as error:
+                if error.code != 404:
+                    raise
+                cache[path] = error
+        value = cache[path]
+        if isinstance(value, Exception):
+            raise value
+        if any(part in path for part in ("/storageclasses", "/storageprofiles/", "/network-attachment-definitions/", "/kubevirts")):
+            external[path] = (sorted([VM_CAPACITY.VMRES.identity(row) for row in value["items"]],
+                                    key=lambda row: (row.get("namespace") or "", row.get("name") or ""))
+                              if isinstance(value.get("items"), list) else VM_CAPACITY.VMRES.identity(value))
+        return copy.deepcopy(value)
+    return read, external
+
+
+def prepare_vm_cluster(cfg):
+    token = CAPACITY_REVIEW.derive_secret(cfg, "k3s-bootstrap-join")
+    batch = K3SC.prepare(cfg, token=token)
+    read, external = vm_cluster_snapshot()
+    platform = PLATFORM.detect()
+    prepared = []
+    for config in batch["configs"]:
+        item = IMP.prepare_vm(config, platform, cfg["storage_class"])
+        IMP._recheck_vm_creation(item)
+        claims = VM_CLAIMS.plans(item["vm"], read, item["claims"], item["downloads"])
+        VM_CLAIMS.pin(item["vm"], claims, item["claims"])
+        prepared.append(item)
+    plan = VM_BATCH.plan(prepared, read, PLACE.get_nodes(), threshold=get_app_settings()["thresholds"]["memory"]["critical"])
+    context = {"action": "vm-cluster-create", "prepared": copy.deepcopy(prepared), "external": external}
+    return batch, prepared, plan, context
+
+
+def preview_vm_cluster(body):
+    cfg = vm_cluster_configuration(body, preview=True)
+    batch, _, capacity, context = prepare_vm_cluster(cfg)
+    return {**batch["plan"], "ok": not capacity["blocked"], "config": cfg, "capacity": capacity,
+            "capacity_token": CAPACITY_REVIEW.issue(cfg, context)}
+
+
+def reviewed_vm_cluster(body):
+    cfg = vm_cluster_configuration(body)
+    batch, prepared, plan, context = prepare_vm_cluster(cfg)
+    CAPACITY_REVIEW.enforce(cfg, plan, context)
+    receipts = {}
+    def admit():
+        # All remaining controllers still count, including already-created VMs
+        # whose launchers have not appeared in Kubernetes yet.
+        for item, config in zip(prepared, batch["configs"]):
+            if item["name"] not in receipts:
+                IMP._recheck_vm_creation(item)
+                problem = vm_address_problem(config["static_ip"]["address"])
+                if problem:
+                    raise ValueError(problem)
+        read, _ = vm_cluster_snapshot()
+        fresh = VM_BATCH.plan(prepared, read, PLACE.get_nodes(), created=receipts,
+                              threshold=get_app_settings()["thresholds"]["memory"]["critical"])
+        for path, expected in context["external"].items():
+            value = read(path)
+            actual = (sorted([VM_CAPACITY.VMRES.identity(row) for row in VM_CAPACITY._items(read, path)],
+                             key=lambda row: (row.get("namespace") or "", row.get("name") or ""))
+                      if isinstance(expected, list) else VM_CAPACITY.VMRES.identity(value))
+            if actual != expected:
+                raise CAPACITY_REVIEW.Rejected("VM batch dependencies changed; retain partial resources and review again", fresh)
+        CAPACITY_REVIEW.enforce(cfg, fresh, context)
+    def before_node(config, made):
+        receipts.update({row["name"]: row["identity"] for row in made})
+        admit()
+    def create_one(config):
+        index = next(i for i, item in enumerate(prepared) if item["name"] == config["name"])
+        def after_images(resolved):
+            # Image downloads can resolve a new storage class. Pin and re-admit
+            # that exact manifest before any PVC/Secret/VM mutation.
+            read, _ = vm_cluster_snapshot()
+            claims = VM_CLAIMS.plans(resolved["vm"], read, resolved["claims"], resolved["downloads"])
+            VM_CLAIMS.pin(resolved["vm"], claims, resolved["claims"])
+            prepared[index] = resolved
+            admit()
+        result = IMP.commit_vm(prepared[index], before_save=after_images)
+        if result.get("address"):
+            try:
+                IPAM.save_record({"ip": result["address"], "name": config["name"], "kind": "static",
+                                  "category": "server", "mac": result.get("mac", ""), "owner": "homestead",
+                                  "note": f"VM {config['namespace']}/{config['name']}"})
+            except Exception:
+                # A failed address record is not authority to repeat creation.
+                # Halt the batch with its pre-dispatch recovery intent retained.
+                raise ValueError("VM created but its IP-address record could not be saved; inspect it before continuing") from None
+        return result
+    return K3SC.commit(batch, OPS, create_one=create_one, before_node=before_node)
+
+
 def selectable_storage_classes(rows=None):
     """Classes a person may pick for their own workloads - the default first."""
     rows = [row for row in (rows if rows is not None else storage_classes()) if class_selectable(row)]
@@ -7001,9 +7117,9 @@ class H(BaseHTTPRequestHandler):
                 _cache.pop("lhcap", None)
                 return self._send(200, LHCAP.save(b))
             if p == "/api/vm/k3s-cluster/plan":
-                return self._send(200, K3SC.review(b))
+                return self._send(200, preview_vm_cluster(b))
             if p == "/api/vm/k3s-cluster":
-                return self._send(200, {"ok": True, "operation": K3SC.start(b, OPS)})
+                return self._send(200, {"ok": True, "operation": reviewed_vm_cluster(b)})
             if p == "/api/vm/create/preview":
                 return self._send(200, preview_vm_create(b))
             if p == "/api/vm/create":

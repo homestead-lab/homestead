@@ -25,6 +25,15 @@ class PlannedVMClaimsTests(unittest.TestCase):
         self.assertEqual("Block",result["volume_mode"])
         self.assertEqual("20Gi",result["size"])
 
+    def test_reviewed_profile_modes_are_pinned_into_the_committed_template(self):
+        result = claims.plans(self.vm, self.read)
+        claims.pin(self.vm, result)
+        self.profile["status"]["claimPropertySets"] = [{"accessModes": ["ReadWriteOnce"], "volumeMode": "Filesystem"}]
+        storage = self.vm["spec"]["dataVolumeTemplates"][0]["spec"]["storage"]
+        self.assertEqual(["ReadWriteMany"], storage["accessModes"])
+        self.assertEqual("Block", storage["volumeMode"])
+        self.assertEqual(result, claims.plans(self.vm, self.read))
+
     def test_profile_mode_matches_explicit_volume_mode(self):
         self.vm["spec"]["dataVolumeTemplates"][0]["spec"]["storage"]["volumeMode"]="Filesystem"
         with self.assertRaisesRegex(ValueError,"unresolved"):

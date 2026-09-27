@@ -19,12 +19,16 @@ def plan(entries, namespace, pods, nodes, claims, threshold, *, budget=256, seco
     initial = []
     def cautions(review):
         return [w for w in review["warnings"] if not w.startswith(("no ready host", "the requested ", "no scheduling order"))]
+    def placement(entry, count, snapshot):
+        return PLACE.manifest_plan(entry["deployment"], namespace, entry["name"], count, threshold,
+                                   planned_claims=claims, pod_snapshot=snapshot, nodes_snapshot=nodes, read=read,
+                                   workload_kind=entry.get("workload_kind", "container"),
+                                   memory_estimate_bytes=entry.get("memory_estimate_bytes"))
     for entry in entries:
         dep, count = entry["deployment"], entry["replicas"]
         if not isinstance(count, int) or not 0 <= count <= 100:
             raise ValueError("replicas must be between 0 and 100")
-        review = PLACE.manifest_plan(dep, namespace, entry["name"], count, threshold,
-                                     planned_claims=claims, pod_snapshot=pods, nodes_snapshot=nodes, read=read)
+        review = placement(entry, count, pods)
         initial.append(review)
         warnings.update(cautions(review))
         summaries.append({"name": entry["name"], "replicas": count, "pod_request_gb": review["pod_request_gb"],
@@ -41,7 +45,8 @@ def plan(entries, namespace, pods, nodes, claims, threshold, *, budget=256, seco
         for entry, review in zip(entries, initial):
             candidate = next((c for c in review["candidates"] if c["name"] == node["name"]), {})
             if candidate.get("projected_pods"):
-                estimate = PLACE._pod_memory(entry["deployment"]["spec"]["template"]["spec"])[0] / 1024**3
+                estimate = max(PLACE._pod_memory(entry["deployment"]["spec"]["template"]["spec"])[0],
+                               entry.get("memory_estimate_bytes") or 0) / 1024**3
                 added += candidate["projected_pods"] * estimate
         capacity = float(node.get("mem_cap_gb") or 0)
         percent = round((base + added) / capacity * 100, 1) if capacity else None
@@ -77,8 +82,7 @@ def plan(entries, namespace, pods, nodes, claims, threshold, *, budget=256, seco
             if steps > budget or time.monotonic() >= deadline:
                 limited = True
                 return None
-            review = PLACE.manifest_plan(entry["deployment"], namespace, entry["name"], 1, threshold,
-                                         planned_claims=claims, pod_snapshot=pods + added, nodes_snapshot=nodes, read=read)
+            review = placement(entry, 1, pods + added)
             warnings.update(cautions(review))
             for candidate in review["candidates"]:
                 if not candidate["eligible"]:

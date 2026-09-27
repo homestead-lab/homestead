@@ -51,3 +51,25 @@ def plans(vm, read, extra=(), downloads=()):
                         "volume_mode": volume_mode or "Filesystem",
                         "size": ((spec.get("resources") or {}).get("requests") or {}).get("storage", "")}
     return result
+
+
+def pin(vm, resolved, extra=()):
+    """Commit the class/mode choices used by admission, not later CDI defaults."""
+    def apply(template):
+        definition = resolved.get(template["metadata"]["name"])
+        if definition:
+            template["spec"].update(storageClassName=definition["storage_class"],
+                                    accessModes=[definition["access_mode"]], volumeMode=definition["volume_mode"])
+    for template in extra:
+        apply(template)
+    for template in vm.get("spec", {}).get("dataVolumeTemplates") or []:
+        spec = template["spec"]
+        key = "storage" if "storage" in spec else "pvc"
+        apply({"metadata": template["metadata"], "spec": spec[key]})
+    annotations = vm.get("metadata", {}).get("annotations") or {}
+    key = "harvesterhci.io/volumeClaimTemplates"
+    if key in annotations:
+        templates = json.loads(annotations[key])
+        for template in templates:
+            apply(template)
+        annotations[key] = json.dumps(templates)
