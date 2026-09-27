@@ -3,7 +3,7 @@
 **Networking** shows how everything is reached: each address, the Service
 behind it, the pods it leads to, and whether they answer.
 
-![Networking](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-networking.png)
+![Networking](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-networking.jpg)
 
 ## Services & VIPs
 
@@ -96,7 +96,7 @@ may share a VIP on different ports, subject to the provider's sharing constraint
 Partial range additions and default-setting errors are reported separately; addresses
 already saved are retained if setting the default fails.
 
-![Add VIPs](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-vip-add.png)
+![Add VIPs](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-vip-add.jpg)
 
 - Keep them **outside your router's DHCP range**, or the router may hand the
   same address to a phone.

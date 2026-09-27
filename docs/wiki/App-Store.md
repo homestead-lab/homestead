@@ -4,7 +4,7 @@ The App Store reads the Community Applications catalogue - the templates behind
 Unraid's Apps tab - and deploys them as proper Kubernetes apps: volumes on
 Longhorn, addresses on your LAN, secrets generated here.
 
-![App Store](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-app-store.png)
+![App Store](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-app-store.jpg)
 
 ## Finding an app
 

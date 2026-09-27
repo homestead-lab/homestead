@@ -26,7 +26,7 @@ so snapshot size is not a guarantee of space freed. See the
 **Data protection** runs Longhorn's own recurring jobs - snapshots, backups,
 trims and cleanups - so they keep running whether or not Homestead is.
 
-![Data protection](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-data-protection.png)
+![Data protection](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-data-protection.jpg)
 
 ## Snapshots or backups?
 

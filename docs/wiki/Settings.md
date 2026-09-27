@@ -12,7 +12,7 @@
 | **This device** | notifications on this phone or computer, installing the app |
 | **About** | Homestead's own health, Samba, redundancy, permissions, and node-probe status |
 
-![Settings - Cluster](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-settings-cluster.png)
+![Settings - Cluster](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-settings-cluster.jpg)
 
 ## Add-ons
 
@@ -53,7 +53,7 @@ storage, VM and network add-ons built in, so its card shows only the node probe.
 **About** shows whether the parts of Homestead that work in the background are
 working, refreshed every 15 seconds:
 
-![Settings - About](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-settings-health.png)
+![Settings - About](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-settings-health.jpg)
 
 - how fast the Kubernetes API answers;
 - each copy of Homestead, and which one leads;

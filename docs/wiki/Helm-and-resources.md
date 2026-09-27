@@ -11,7 +11,7 @@ opens to the values it was installed with, its notes, history and the objects it
 made. The platform's own releases (Harvester, Rancher, Longhorn) are hidden
 until you ask.
 
-![Helm](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-helm.png)
+![Helm](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-helm.jpg)
 
 **Install chart** searches [Artifact Hub](https://artifacthub.io), shows a
 chart's versions and default values beside yours, and installs it through the
@@ -31,7 +31,7 @@ cannot install.
 Harvester's, Longhorn's, KubeVirt's, any custom resource - grouped as Headlamp
 groups them, each with the columns `kubectl get` prints for it.
 
-![Resources](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-resources.png)
+![Resources](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-resources.jpg)
 
 An object opens as YAML (without the managed-fields clutter), with its recent
 events, and a pod with its logs. Admins can:

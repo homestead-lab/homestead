@@ -4,7 +4,7 @@
 Unraid (or any Docker) server, a Docker Compose file, a VM disk image, or a
 workload from another Homestead cluster.
 
-![Import](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-import.png)
+![Import](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-import.jpg)
 
 ## From Unraid or a Docker host
 
