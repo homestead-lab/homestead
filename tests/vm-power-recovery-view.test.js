@@ -16,7 +16,7 @@ function setup({blocked=false,missing=false,fail=false}={}){
       if(fail)throw new Error("lost response");
       return {ok:true,detail:"Resolved as unknown",operation:{id:"job",status:"failed"}};
     }};
-  ctx.window=ctx;vm.createContext(ctx);vm.runInContext(fs.readFileSync("web/js/operations.js","utf8"),ctx);
+  ctx.window=ctx;vm.createContext(ctx);vm.runInContext(fs.readFileSync("web/js/ui.js","utf8"),ctx);vm.runInContext(fs.readFileSync("web/js/operations.js","utf8"),ctx);
   ctx.noteOperation=job=>jobs.push(job);
   return {ctx,fields,sent,jobs};
 }
@@ -103,4 +103,23 @@ test("configuration recovery cannot be acknowledged without resource inspection 
   assert.match(t.fields['#mbody'].innerHTML,/Resource inspection is incomplete/);
   t.fields['#powerRecoveryAck'].checked=true;t.fields['#powerRecoveryName'].value='guest';
   await t.ctx.powerRecoveryResolve();assert.equal(t.sent.length,1);
+});
+
+test("import recovery has one acknowledgement, keeps identities in details and never promises a retry",async()=>{
+  const t=setup(),original=t.ctx.api;
+  t.ctx.api=async(path,options)=>{
+    const result=await original(path,options);
+    if(path.endsWith('/preview')) Object.assign(result.plan,{action:'import-create',resources:[
+      {resource:{kind:'Deployment',namespace:'lab',name:'<photos>'},last_write:'uncertain',relationship:'identity unproven',current:{uid:'observed-only'}}]});
+    return result;
+  };
+  await t.ctx.powerRecoveryReview('import','import');
+  const html=t.fields['#mbody'].innerHTML;
+  assert.match(html,/&lt;photos>/);assert.match(html,/Retained resources/);assert.match(html,/details class="ui-more"/);
+  assert.match(html,/Nothing will be retried, started or deleted/);assert.doesNotMatch(html,/id="powerRecoveryName"/);
+  assert.equal((html.match(/type="checkbox"/g)||[]).length,1);
+  await t.ctx.powerRecoveryResolve();assert.equal(t.sent.length,1);
+  t.fields['#powerRecoveryAck'].checked=true;await t.ctx.powerRecoveryResolve();await t.ctx.powerRecoveryResolve();
+  assert.equal(t.sent.length,2);assert.equal(t.sent[1].path,'/api/operations/vm-recovery/resolve');
+  assert.equal(t.sent[1].body.acknowledge_unknown,true);
 });

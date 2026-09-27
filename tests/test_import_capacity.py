@@ -1,4 +1,5 @@
 import copy
+import tempfile
 import unittest
 import urllib.error
 from unittest import mock
@@ -15,6 +16,11 @@ class ImportCapacityTests(unittest.TestCase):
 
     def setUp(self):
         fixtures.RolloutCapacityTests.setUp(self)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        journal = mock.patch.object(server.OPS, "DATA_DIR", temporary.name)
+        journal.start()
+        self.addCleanup(journal.stop)
         self.body = {"name": "imported", "source": "tower", "image": "example/app:1",
                      "memory": "256Mi", "memory_limit": "1Gi", "network_mode": "internal",
                      "volumes": [{"name": "new-data", "size_gb": 10, "storage_class": "storage"}],
@@ -40,12 +46,13 @@ class ImportCapacityTests(unittest.TestCase):
         handler._send = mock.Mock()
         def send(method, path, obj=None, **kwargs):
             result = copy.deepcopy(obj or {})
-            result.setdefault("metadata", {}).update(uid="created-uid", resourceVersion="1")
+            result.setdefault("metadata", {}).update(uid="created-uid", resourceVersion="1", namespace="lab")
+            self.objects[path + ("/" + result["metadata"]["name"] if method == "POST" else "")] = copy.deepcopy(result)
             return result
-        with mock.patch.object(imports, "ksend", side_effect=send) as writes, \
-             mock.patch.object(imports, "create_pvc") as pvc, \
+        with mock.patch.object(server, "ksend", side_effect=send) as writes, \
+             mock.patch.object(server, "create_pvc", wraps=server.create_pvc) as pvc, \
              mock.patch.object(server, "persist_icon_config") as icons, \
-             mock.patch.object(server.OPS, "start", return_value={}) as jobs:
+             mock.patch.object(server.OPS, "start", wraps=server.OPS.start) as jobs:
             handler.do_POST()
         return handler._send.call_args.args, writes, pvc, icons, jobs
 
@@ -116,7 +123,7 @@ class ImportCapacityTests(unittest.TestCase):
         response, writes, pvc, _, jobs = self.call("/api/import", self.reviewed())
         self.assertEqual(200, response[0], response)
         self.assertEqual("", response[1]["job"])
-        jobs.assert_not_called()
+        jobs.assert_called_once()  # durable setup record, not a Kubernetes copy Job
         pvc.assert_not_called()
         self.assertEqual(1, writes.call_count)
 
@@ -135,7 +142,7 @@ class ImportCapacityTests(unittest.TestCase):
     def existing(self):
         self.body["volumes"][0]["create"] = False
         self.path = "/api/v1/namespaces/lab/persistentvolumeclaims/new-data"
-        self.objects[self.path] = {"metadata": {"name": "new-data", "uid": "original-claim"},
+        self.objects[self.path] = {"apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": {"name": "new-data", "namespace": "lab", "uid": "original-claim", "resourceVersion": "1"},
             "spec": {"accessModes": ["ReadWriteMany"], "storageClassName": "storage"},
             "status": {"phase": "Bound", "capacity": {"storage": "10Gi"}}}
 
@@ -145,6 +152,9 @@ class ImportCapacityTests(unittest.TestCase):
         response, _, pvc, *_ = self.call("/api/import", body)
         self.assertEqual(200, response[0], response)
         pvc.assert_not_called()
+        for path in list(self.objects):
+            if "/deployments/imported" in path or "/jobs/homestead-import-imported" in path:
+                del self.objects[path]
         self.objects[self.path]["metadata"]["uid"] = "replacement"
         response, *mutations = self.call("/api/import", body)
         self.assertEqual(409, response[0], response)
@@ -187,12 +197,28 @@ class ImportCapacityTests(unittest.TestCase):
         writes.assert_not_called()
         pvc.assert_not_called()
 
+    def test_persisted_icon_does_not_change_the_signed_dispatch_context(self):
+        body = self.reviewed()
+        def icon(cfg):
+            cfg["icon"] = "/api/icons/persisted.svg"
+        with mock.patch.object(server, "persist_icon_config", side_effect=icon), \
+             mock.patch.object(server.IMPORT_JOB, "dispatch", return_value={"ok": True}) as dispatch:
+            server.reviewed_import(body)
+        submitted, prepared, context = dispatch.call_args.args[:3]
+        self.assertTrue(server.CAPACITY_REVIEW.valid(submitted, context))
+        self.assertEqual("/api/icons/persisted.svg", prepared["deployment"]["metadata"]["annotations"]["homestead.io/icon"])
+
     def test_preview_requires_same_admin_role_as_import(self):
         self.assertIn("/api/import/preview", server.ADMIN_ROUTES)
 
 
 class ImportInterlockTests(unittest.TestCase):
     def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        journal = mock.patch.object(server.OPS, "DATA_DIR", temporary.name)
+        journal.start()
+        self.addCleanup(journal.stop)
         self.dep = {"metadata": {"name": "app", "uid": "deployment", "annotations": {guard.JOB: "copy"}}}
         self.job = {"metadata": {"ownerReferences": [{"kind": "Deployment", "uid": "deployment"}]},
                     "status": {"conditions": [{"type": "Complete", "status": "True"}]}}

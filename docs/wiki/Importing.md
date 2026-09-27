@@ -39,7 +39,8 @@ This moves a running container across - its settings *and* its appdata.
    capacity warnings. Hard placement blockers cannot be overridden. The server
    repeats admission before creating resources; review tokens expire after ten minutes.
 6. **Copy, then start.** The copy preserves numeric owners and permissions.
-   Progress is in bytes in the job tray. The application is created **stopped**;
+   Transfers shows byte progress; Recent jobs records setup steps and the copy log.
+   Its percentage represents workflow milestones, not bytes. The application is created **stopped**;
    Start in Containers makes a fresh capacity check after the copy completes.
    A failed, missing or mismatched copy Job blocks starting, including through
    workload edits. Imports with nothing to copy create no phantom Job.
@@ -50,17 +51,40 @@ including consumers of RWX claims: shared access does not make overwriting live
 application data safe. The review is not a distributed scheduler reservation;
 external writers and concurrent starts can still race it.
 
-Successful copy Jobs are retained until cleanup so a later start can verify the
-result. Cleanup records successful completion on the matching workload before
-removing the Job. Failed copies leave the application stopped. If a copy cannot
-be recovered, inspect the retained data, remove its stopped workload/Job using
-the cleanup dialog, keep any volumes you need, and explicitly reuse those claims
-in a new import. Do not remove a copy Job manually to bypass this interlock.
+### Interrupted imports and cleanup
 
-If creation fails partway through or the browser loses contact, check Import,
-Containers and Volumes before retrying. Already-created resources and copied data
-are retained, not automatically deleted; a repeated request cannot replace them.
-Borrowed claims are never offered for deletion by import cleanup.
+New imports record their intent in **Recent jobs before creating any Kubernetes
+resources**. Each resource request records an intent followed by its confirmed
+identity or an uncertain outcome. Application manifests and credentials are not
+stored in this journal. A lost response never triggers an automatic repeat.
+
+Choose **Recent jobs → Inspect import** after interrupted setup. The dialog shows
+planned resources, acknowledged writes and current identities. **Resolve as unknown**
+acknowledges inspection only: it does not retry, delete anything, start the app or
+remove its safety hold. A fresh review is needed for any new import. An active
+dispatcher or copy blocks resolution. If copy-Job creation itself is uncertain,
+or the Job was replaced, Kubernetes-level inspection is required; Homestead will
+not adopt a same-name Job or release its volume reservation automatically.
+
+The stopped application is pinned to the confirmed copy Job's identity. A matching
+successful Job and no live pods owned by that Job are required before Start.
+Failed, missing or replacement Jobs leave the application blocked. Check copied
+files before deciding how to recover; a successful rsync does not prove application
+consistency or data integrity.
+
+For new journalled imports, **Remove completed Job** removes only the verified,
+successfully finished helper, using its UID as a deletion precondition. It first
+preserves completion on the matching workload. The application, Services and every
+volume remain, including newly created and borrowed claims. Manage unwanted resources
+separately after inspection. Incomplete imports cannot use this cleanup shortcut.
+The tracking receipt stays protected from history clearing until the helper is removed.
+Older imports retain their legacy cleanup choices; borrowed claims are never offered
+for deletion there. Do not delete Jobs or remove holds to bypass verification.
+
+This is a one-shot setup journal, not an atomic multi-resource transaction, resumable
+file transfer or distributed scheduler reservation. External writers can still race
+checks. Complete the upgrade on all Homestead replicas before importing; mixed-version
+and live host-loss rehearsals remain separate validation work.
 
 A tmpfs RAM disk on Unraid (Frigate's `/tmp/cache`, for example) becomes a RAM
 disk here, not a volume full of old cache.
