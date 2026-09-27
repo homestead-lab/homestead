@@ -220,12 +220,12 @@ function nodeCard(n) {
   const duties = nodeDutyTags(n);
   const up = nodeUpFor(n);
   const net = ratePair(n.rx_mbps, n.tx_mbps);
-  return `<div class="card glow ${bad ? "g-bad" : health} clickable nodecard"
+  return `<div class="card glow ${bad ? "g-bad" : health} clickable nodecard"${clusterAttr(n)}
        onclick="nodeDetail('${esc(n.name)}')">
     <div class="between nodehead">
       <div class="row" style="gap:10px">
         <div class="av n2">${esc(n.name.replace(/[^0-9a-z]/gi, "").slice(-2).toUpperCase())}</div>
-        <div class="nodename"><div style="font-weight:680" title="${esc(n.name)}">${esc(n.name)}</div>
+        <div class="nodename"><div style="font-weight:680" title="${esc(n.name)}">${esc(n.name)} ${clusterTag(n)}</div>
           <div class="dim xs" title="${esc(n.roles.join(" · "))}">${esc([n.roles.join(" · "), up].filter(Boolean).join(" · "))}</div></div>
       </div>
       <div class="row nodehead-acts" style="gap:7px">
@@ -705,8 +705,8 @@ async function viewNodes() {
    ${layout === "cards" ? `<div class="nodegrid stagger">${n.map(nodeCard).join("")}</div>` : `
    <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack" data-sort="nodes"><thead><tr>
      <th>Node</th><th>CPU</th><th>Memory</th><th>Network</th><th>Temp</th><th>Disk</th><th>Pods</th><th>Hardware</th><th>Workloads</th></tr></thead><tbody>
-   ${n.map(x => `<tr class="clickable" onclick="nodeDetail('${esc(x.name)}')">
-     <td class="cell-name" data-sort="${esc(x.name)}"><b title="${esc(x.name)} · kernel ${esc(x.kernel)}">${esc(x.name)}</b><div class="dim xs" title="${esc(x.roles.join(" · "))}">${esc(x.roles.join(" · "))}</div></td>
+   ${n.map(x => `<tr class="clickable"${clusterAttr(x)} onclick="nodeDetail('${esc(x.name)}')">
+     <td class="cell-name" data-sort="${esc(x.name)}"><b title="${esc(x.name)} · kernel ${esc(x.kernel)}">${esc(x.name)}</b> ${clusterTag(x)}<div class="dim xs" title="${esc(x.roles.join(" · "))}">${esc(x.roles.join(" · "))}</div></td>
       <td style="min-width:120px" data-sort="${+x.cpu_pct || 0}">${meter(x.cpu_pct, "", "cpu")}<div class="dim xs mono nowrap" style="margin-top:4px">${x.cpu_pct}% of ${x.cpu_cap}</div></td>
       <td style="min-width:120px" data-sort="${+x.mem_pct || 0}">${meter(x.mem_pct, "", "memory")}<div class="dim xs mono nowrap" style="margin-top:4px">${sizePair(x.mem_used_gb, x.mem_cap_gb)}</div></td>
      <td class="mono small nowrap" data-sort="${(+x.rx_mbps || 0) + (+x.tx_mbps || 0)}">${ratePair(x.rx_mbps, x.tx_mbps)[0]} <span class="dim xs">${ratePair(x.rx_mbps, x.tx_mbps)[1]}</span></td>
@@ -769,7 +769,7 @@ window.nodeShell = async name => {
   fit.fit();
   window.__nodeTerm = term;
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  const socket = new WebSocket(`${protocol}//${location.host}/api/node/shell?node=${encodeURIComponent(name)}`);
+  const socket = new WebSocket(fleetSocketUrl(`${protocol}//${location.host}/api/node/shell?node=${encodeURIComponent(name)}`));
   window.__nodeSocket = socket;
   const send = value => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(value)); };
   const resize = () => { try { fit.fit(); } catch (_) {} send({ type: "resize", cols: term.cols, rows: term.rows }); };

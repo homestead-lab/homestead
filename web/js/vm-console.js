@@ -9,7 +9,7 @@ const VMC = { rfb: null, socket: null, watch: 0, ns: "", name: "", kind: "vnc" }
 
 function vmConsoleUrl(kind) {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${location.host}/api/vm/console?${new URLSearchParams({ ns: VMC.ns, vm: VMC.name, kind })}`;
+  return fleetSocketUrl(`${protocol}//${location.host}/api/vm/console?${new URLSearchParams({ ns: VMC.ns, vm: VMC.name, kind })}`);
 }
 
 function vmConsoleStop() {

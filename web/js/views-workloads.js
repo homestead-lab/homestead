@@ -321,7 +321,8 @@ function platformShown() {
 
 function renderWorkloads() {
   const q = STATE.q.toLowerCase();
-  const everything = STATE.data.wl || [];
+  // Every linked cluster at once: each cluster is a group, with its chip.
+  const everything = (STATE.data.wl || []).map(w => fleetAll() && w.site ? { ...w, group: w.site.name } : w);
   const platform = everything.filter(w => w.platform);
   const all = platformShown() ? everything : everything.filter(w => !w.platform);
   // A chip for a group that has since emptied would hide everything.
@@ -412,6 +413,7 @@ function workloadActions(w, update, off, compact = false) {
               <button class="sm-only" onclick="this.closest('details').open=false;${w.self ? `wlStopSelf('${w.ns}','${w.name}')` : `wlScale('${w.ns}','${w.name}',0)`}">${icon("stop")}Stop</button>`}
               <button aria-label="Console for ${esc(w.name)}" title="Open an audited interactive shell in a running container" data-need="operator" onclick="this.closest('details').open=false;wlConsole('${w.ns}','${w.name}')">${icon("console")}Console</button>
               <button aria-label="Edit ${esc(w.name)}" title="Edit image, resources, environment, storage and hardware" onclick="this.closest('details').open=false;wlEdit('${w.ns}','${w.name}')">${icon("edit")}Edit</button>
+              ${FLEET.view?.linked && !w.self ? `<button data-need="admin" title="Move it to another linked cluster, volumes and all" onclick="this.closest('details').open=false;moveToCluster('container','${esc(w.name)}','${esc(w.site?.handle || "")}')">${icon("move")}Move to cluster</button>` : ""}
               ${(w.ports || []).length > 1 ? `<button aria-label="Main port of ${esc(w.name)}" title="Which port the card links to first - usually its web UI" onclick="this.closest('details').open=false;wlPrimaryPort('${w.ns}','${w.name}')">${icon("ext")}Main port</button>` : ""}
               <button aria-label="Placement of ${esc(w.name)}" title="Where it runs: copies, spreading, and nodes shared with or kept apart from other workloads" onclick="this.closest('details').open=false;wlPlacement('${w.ns}','${w.name}')">${icon("node")}Placement</button>
               <button aria-label="Group ${esc(w.name)}" title="Put this workload in a group on the Containers page" data-need="operator" onclick="this.closest('details').open=false;wlGroup('${w.ns}','${w.name}')">${icon("list")}Group${w.group ? ` · ${esc(w.group)}` : ""}</button>
@@ -424,9 +426,9 @@ function workloadActions(w, update, off, compact = false) {
 
 function workloadCard(w) {
       const ok = w.ready === w.desired && w.desired > 0, off = w.desired === 0;
-      const update = w.platform || w.managed_smb || w.managed_nfs ? null : workloadUpdate(w.ns, w.name);
+      const update = w.platform || w.managed_smb || w.managed_nfs || remoteRow(w) ? null : workloadUpdate(w.ns, w.name);
       const updateError = update?.images?.find(x => x.error);
-  return `<div class="wcard card flat">
+  return `<div class="wcard card flat"${clusterAttr(w)}>
         <div class="between whead">
           <div class="row" style="gap:10px;min-width:0">
             ${appAvatar(w.name, w.icon)}
@@ -483,11 +485,11 @@ function uncheckedMark(update) {
 function workloadTableRows(rows) {
   return `${rows.map(w => {
       const ok = w.ready === w.desired && w.desired > 0, off = w.desired === 0;
-      const update = w.platform || w.managed_smb || w.managed_nfs ? null : workloadUpdate(w.ns, w.name);
+      const update = w.platform || w.managed_smb || w.managed_nfs || remoteRow(w) ? null : workloadUpdate(w.ns, w.name);
       const updateError = update?.images?.find(x => x.error);
       // Stopped with nothing to report: on a phone the row is its name alone.
       const quiet = off && !update?.unchecked && !updateError && !workloadPull(w) && !workloadBlocked(w);
-      return `<tr class="${off ? "wl-off" : ""}${quiet ? " wl-quiet" : ""}">
+      return `<tr class="${off ? "wl-off" : ""}${quiet ? " wl-quiet" : ""}"${clusterAttr(w)}>
         <td class="wl-name" data-sort="${esc(w.name)}"><div class="row nowrap" style="gap:9px">${appAvatar(w.name, w.icon)}
           <div class="wtitle"><div><b>${esc(w.name)}</b></div>
             <div class="dim xs">${w.platform ? `${platformTag(w)} ` : ""}${w.managed_smb || w.managed_nfs ? `<span class="pill slim info">managed ${w.managed_nfs ? "NFS" : "SMB"}</span> ` : ""}${esc(w.ns)} · ${off ? "stopped" : `${w.managed_smb || w.managed_nfs ? esc(w.nodes.join(", ") || "unscheduled") : `<span class="nodelink" onclick="moveWorkload('${w.name}','${w.ns}')">${esc(w.nodes.join(", ") || "unscheduled")}</span>`}${w.uptime ? ` · up ${esc(fmtUp(w.uptime))}` : " · starting"}`}</div></div></div></td>
@@ -1182,7 +1184,7 @@ window.consoleConnect = (attempt = 0) => {
   const ns = window.__consoleWorkload.ns;
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   const query = new URLSearchParams({ ns, pod, container, shell });
-  const socket = new WebSocket(`${protocol}//${location.host}/api/console?${query}`);
+  const socket = new WebSocket(fleetSocketUrl(`${protocol}//${location.host}/api/console?${query}`));
   window.__consoleSocket = socket;
   window.__consoleAttempt = attempt;
   $("#consoleState").textContent = `connecting · ${shell}`;

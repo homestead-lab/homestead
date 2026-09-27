@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.204")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.205")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -483,7 +483,16 @@ def save_app_settings(value):
     # A different catalogue source is a different catalogue.
     for key in [k for k in _cache if k.startswith("appstore")]:
         _cache.pop(key, None)
+    # A renamed site is carried to the linked clusters, for their switches.
+    threading.Thread(target=_fleet_rename, daemon=True).start()
     return settings
+
+
+def _fleet_rename():
+    try:
+        FLEET.refresh_name()
+    except Exception:
+        pass            # the next change, or their next look, carries it
 
 
 def app_settings_payload():
@@ -4724,6 +4733,7 @@ import homestead_cluster as CLUSTER
 import homestead_probe as PROBE
 import homestead_objectstore as OBJECTS
 import homestead_move as MOVE
+import homestead_fleet as FLEET
 import homestead_move_source as MOVE_SOURCE
 import homestead_move_engine as MOVE_ENGINE
 import homestead_compose as COMPOSE
@@ -4771,6 +4781,12 @@ def allocation_probe_capacity(obj, template):
 ALLOCATION_PROBE.bind(kget, ksend, DEFAULT_NS, allocation_probe_capacity)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
 MOVE.bind(kget, ksend, DEFAULT_NS, HOMESTEAD_VERSION)
+# Linked clusters: each knows the others by the address they reach it at,
+# which is its own VIP unless an admin says otherwise.
+FLEET.bind(kget, ksend, DEFAULT_NS, HOMESTEAD_VERSION,
+           site=lambda: (cached("settings", 15, get_app_settings) or {}).get("site_name", ""),
+           address=lambda: f"http://{LB_IP}:8088" if LB_IP else "")
+MOVE.FLEET = FLEET
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
 def _resolve_storage_class():
     """An empty STORAGE_CLASS means the cluster's default. It cannot stay
@@ -6238,7 +6254,10 @@ CSP = "; ".join([
 
 # Paths reachable without a session. Everything else needs one.
 PUBLIC = {"/healthz", "/style.css", "/index.html", "/sw.js", "/manifest.webmanifest",
-          "/api/auth/login", "/api/auth/state", "/api/auth/setup"}
+          "/api/auth/login", "/api/auth/state", "/api/auth/setup",
+          # Back to this cluster from one that stopped answering: it only
+          # forgets which linked cluster this browser was looking at.
+          "/api/fleet/home"}
 
 
 def is_public_path(path):
@@ -6314,6 +6333,9 @@ ADMIN_ROUTES = {
     # A cluster's credentials, and what they reach.
     "/api/move/clusters/add", "/api/move/clusters/remove", "/api/move/remote",
     "/api/move/clusters/check", "/api/move/clusters/readiness", "/api/move/clusters/storage",
+    # Linking clusters hands every linked Homestead admin over this one.
+    "/api/fleet/join", "/api/fleet/accept", "/api/fleet/remove", "/api/fleet/leave",
+    "/api/fleet/address", "/api/fleet/sync",
     # Joining and removing hosts: the join token, disk wipes, a DHCP responder.
     "/api/onboard/guide", "/api/cluster/cleanup", "/api/cluster/removal",
     "/api/cluster/remove-node", "/api/cluster/cleanup/run",
@@ -6337,6 +6359,8 @@ ADMIN_ROUTES = {
 }
 # things a signed-in user may always do to their own account
 SELF_ROUTES = {"/api/auth/logout", "/api/auth/password", "/api/auth/signout-everywhere",
+               # Which linked cluster this browser is looking at.
+               "/api/fleet/switch",
                # Notifications on your own devices, and what they are shown.
                "/api/push/subscribe", "/api/push/unsubscribe", "/api/push/test",
                "/api/push/status", "/api/alerts/pending"}
@@ -6384,6 +6408,53 @@ def persist_icon_config(cfg):
     cfg["icon"] = ICONS.persist(source, DATA_DIR)
     cfg["icon_source"] = source
     return cfg
+
+
+# ---------------------------------------------------------------- linked clusters
+# The lists the view of every linked cluster at once gathers, and how this
+# cluster answers each one itself.
+FLEET_LISTS = {
+    "workloads": lambda: cached("wl", 5, get_workloads),
+    "vms": lambda: cached("vms", 5, VMS.list_vms),
+    "nodes": lambda: cached("nodes", 5, get_nodes),
+    "volumes": lambda: cached("vol", 8, get_volumes),
+}
+
+
+def fleet_all(what, user, role):
+    """One list from every linked cluster, each row saying whose it is.
+
+    Each cluster is asked as the person asking, so it shows them what their
+    role lets them see there. A cluster that does not answer is left out and
+    named, rather than holding up the rest.
+    """
+    local = FLEET_LISTS[what]
+    view = FLEET.summary()
+    tags = {m["id"]: {"id": m["id"], "name": m["name"], "handle": m["handle"], "self": m["self"]}
+            for m in view["members"]}
+    results, missing = {}, []
+
+    def ask(m):
+        try:
+            results[m["id"]] = FLEET.call(m, "GET", f"/api/{what}", timeout=12,
+                                          user=str(user or "").split("@", 1)[0], role=role)
+        except Exception as error:
+            missing.append({"id": m["id"], "name": m["name"], "error": str(error)[:200]})
+    threads = [threading.Thread(target=ask, args=(m,), daemon=True)
+               for m in view["members"] if not m["self"] and m["reachable"]]
+    missing += [{"id": m["id"], "name": m["name"], "error": m.get("error") or "not answering"}
+                for m in view["members"] if not m["self"] and not m["reachable"]]
+    for thread in threads:
+        thread.start()
+    results[view["self"]] = local()
+    for thread in threads:
+        thread.join(15)
+    rows = []
+    for m in view["members"]:
+        for row in results.get(m["id"]) or []:
+            if isinstance(row, dict):
+                rows.append({**row, "site": tags[m["id"]]})
+    return rows, missing
 
 
 # ---------------------------------------------------------------- HTTP
@@ -6501,9 +6572,25 @@ class H(BaseHTTPRequestHandler):
             return self._send(502, {"error": str(error)})
 
     def _who(self):
+        if FLEET.signed(self.headers):
+            return self._fleet_identity()
         return AUTH.verify_token(self._cookies().get(AUTH.COOKIE))
 
-    def _guard(self, path):
+    def _fleet_identity(self):
+        """A request relayed by a linked Homestead, checked once: for a person
+        signed in there, or from that Homestead itself."""
+        if self._fleet_who is False:
+            try:
+                found = FLEET.verify(self.headers, self.command, self.path, self._raw_body())
+            except PermissionError:
+                found = None
+            self._fleet_who = ({"user": found["user"], "role": found["role"], "remember": False,
+                                "started": None, "expires": None, "fleet": found["sender"]}
+                               if found and found["role"] else None)
+            self._fleet_from = (found or {}).get("sender")
+        return self._fleet_who
+
+    def _guard(self, path, enforce_role=True):
         """Returns None when the request may proceed, or sends the refusal."""
         # The app's name and icons are fetched by the browser's installer, which
         # may not send Access's cookie; they say nothing about the cluster.
@@ -6571,6 +6658,8 @@ class H(BaseHTTPRequestHandler):
                 self._send(403, {"error": "missing X-Homestead-Auth header"})
                 return True
         self.user, self.role = who["user"], who["role"]
+        if not enforce_role:
+            return None
         need = needed_role(path, self.command)
         if not AUTH.allows(self.role, need):
             self._send(403, {"error": f"your role ({self.role}) cannot do this — {need} required",
@@ -6578,15 +6667,109 @@ class H(BaseHTTPRequestHandler):
             return True
         return None
 
+    def _begin(self):
+        """Per request: a connection can carry several, and the handler stays."""
+        self._extra_headers = []
+        self._raw = None
+        self._fleet_who = False
+        self._fleet_from = None
+
+    def _raw_body(self):
+        """The request body, read once: a signature covers it before it is parsed."""
+        if self._raw is None:
+            n = int(self.headers.get("Content-Length") or 0)
+            self._raw = self.rfile.read(n) if 0 < n <= MAX_BODY else b""
+        return self._raw
+
     def _body(self):
-        n = int(self.headers.get("Content-Length") or 0)
-        return json.loads(self.rfile.read(n).decode()) if n else {}
+        raw = self._raw_body()
+        return json.loads(raw.decode()) if raw else {}
+
+    def _fleet_target(self, path):
+        """The linked cluster this request is for, when it is not this one.
+
+        A browser switched to another cluster says so with a cookie. In the
+        view of every cluster at once, an action on one row names that row's
+        cluster itself: a header, or for a console, which cannot send one, a
+        query parameter.
+        """
+        headers = getattr(self, "headers", None) or {}
+        if FLEET.signed(headers) or FLEET.local_path(path):
+            return ""
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        target = (headers.get("X-Homestead-Cluster") or (query.get("hs_cluster") or [""])[0]
+                  or (self._cookies().get(FLEET.COOKIE, "") if headers else ""))
+        return target if target and target != FLEET.self_id() else ""
+
+    def _fleet_forward(self, target, path):
+        """Relay this request to the linked cluster picked in the top bar.
+
+        This Homestead signs the person in; the one that answers decides what
+        their role lets them do there, by its own rules.
+        """
+        if self._guard(path, enforce_role=False):
+            return
+        who = self._who()
+        cookies = [value for name, value in self._extra_headers if name == "Set-Cookie"]
+        try:
+            FLEET.forward(self, target, self._raw_body(), who["user"] if who else "",
+                          who["role"] if who else "", cookies)
+        except FLEET.Unreachable as error:
+            known = FLEET.member(target) or {}
+            if self.command == "GET" and "text/html" in (self.headers.get("Accept") or ""):
+                return self._send(502, FLEET.unreachable_page(known.get("name") or "That cluster", error),
+                                  "text/html; charset=utf-8")
+            return self._send(502, {"error": str(error), "cluster": known.get("name", ""), "unreachable": True})
+
+    def _fleet_post(self, p, b):
+        """Linking clusters, and picking which one this browser looks at."""
+        try:
+            if p == "/api/fleet/switch":
+                wanted = str(b.get("id") or "")
+                if not wanted or wanted == FLEET.self_id():
+                    self._extra_headers.append(
+                        ("Set-Cookie", f"{FLEET.COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"))
+                    return self._send(200, {"ok": True, "id": FLEET.self_id()})
+                target = FLEET.member(wanted)
+                if not target:
+                    return self._send(404, {"error": "no linked cluster by that name"})
+                check = FLEET.check(target)
+                if not check.get("reachable"):
+                    return self._send(502, {"error": f"{target.get('name')} is not answering this Homestead: "
+                                                     f"{check.get('error') or 'no answer'}"})
+                secure = "; Secure" if self._over_tls() else ""
+                self._extra_headers.append(("Set-Cookie", f"{FLEET.COOKIE}={target['id']}; Path=/; HttpOnly; "
+                                                          f"SameSite=Strict{secure}; Max-Age=2592000"))
+                return self._send(200, {"ok": True, "id": target["id"], "name": target.get("name")})
+            if p == "/api/fleet/join":
+                return self._send(200, FLEET.join(b.get("url"), b.get("username"), b.get("password"),
+                                                  b.get("own_url", "")))
+            if p == "/api/fleet/accept":
+                return self._send(200, FLEET.accept(b))
+            if p == "/api/fleet/sync":
+                if not self._fleet_from:
+                    return self._send(403, {"error": "only a linked Homestead sends this"})
+                return self._send(200, FLEET.adopt(b, self._fleet_from))
+            if p == "/api/fleet/remove":
+                return self._send(200, FLEET.remove(str(b.get("id") or "")))
+            if p == "/api/fleet/leave":
+                return self._send(200, FLEET.leave())
+            if p == "/api/fleet/address":
+                return self._send(200, FLEET.set_address(b.get("url")))
+        except ValueError as error:
+            return self._send(409, {"error": str(error)})
+        except FLEET.Unreachable as error:
+            return self._send(502, {"error": str(error)})
+        return self._send(404, {"error": "not found"})
 
     @self_data_request
     def do_GET(self):
-        self._extra_headers = []
+        self._begin()
         u = urllib.parse.urlparse(self.path)
         p, q = u.path, urllib.parse.parse_qs(u.query)
+        target = self._fleet_target(p)
+        if target:
+            return self._fleet_forward(target, p)
         try:
             if self._guard(p):
                 return
@@ -6646,7 +6829,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if p == "/api/auth/state":
                 who = self._who()
-                return self._send(200, {"setup": AUTH.needs_setup(),
+                return self._send(200, {"setup": AUTH.needs_setup() and not (who and who.get("fleet")),
+                                        "via": ((who or {}).get("fleet") or {}).get("name", ""),
                                         "user": who["user"] if who else None,
                                         "role": who["role"] if who else None,
                                         "remember": bool(who and who.get("remember")),
@@ -6654,6 +6838,26 @@ class H(BaseHTTPRequestHandler):
                                         "session_started": who.get("started") if who else None,
                                         "session_max_days": AUTH.ABSOLUTE_TTL // 86400,
                                         "roles": list(AUTH.ROLES)})
+            if p == "/api/fleet":
+                self._who()
+                return self._send(200, FLEET.summary(via=self._fleet_from))
+            if p == "/api/fleet/hello":
+                return self._send(200, FLEET.hello())
+            if p == "/api/fleet/state":
+                self._who()
+                if not self._fleet_from:
+                    return self._send(403, {"error": "only a linked Homestead asks for this"})
+                return self._send(200, FLEET.shared_state())
+            if p == "/api/fleet/home":
+                self._extra_headers += [("Set-Cookie", f"{FLEET.COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"),
+                                        ("Location", "/")]
+                return self._send(302, {"ok": True})
+            if p.startswith("/api/fleet/all/") and p.rsplit("/", 1)[-1] in FLEET_LISTS:
+                rows, missing = fleet_all(p.rsplit("/", 1)[-1], self.user, self.role)
+                if missing:
+                    self._extra_headers.append(("X-Homestead-Fleet-Missing",
+                                                urllib.parse.quote(json.dumps(missing))))
+                return self._send(200, rows)
             if p == "/api/auth/users":
                 return self._send(200, AUTH.list_users())
             if p == "/api/settings":
@@ -7032,9 +7236,12 @@ class H(BaseHTTPRequestHandler):
 
     @self_data_request
     def do_POST(self):
-        self._extra_headers = []
+        self._begin()
         u = urllib.parse.urlparse(self.path)
         p = u.path
+        target = self._fleet_target(p)
+        if target:
+            return self._fleet_forward(target, p)
         try:
             if self._guard(p):
                 return
@@ -7042,6 +7249,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(413, {"error": "that request is larger than Homestead accepts"})
             b = self._body()
             addr = self._client_ip()
+            if p.startswith("/api/fleet/"):
+                return self._fleet_post(p, b)
             if p == "/api/auth/setup":
                 # Whoever finishes setup becomes the first administrator, so it is
                 # not offered to the internet, however the hostname is protected.
@@ -7973,8 +8182,11 @@ class H(BaseHTTPRequestHandler):
 
     @self_data_request
     def do_DELETE(self):
-        self._extra_headers = []
+        self._begin()
         u = urllib.parse.urlparse(self.path)
+        target = self._fleet_target(u.path)
+        if target:
+            return self._fleet_forward(target, u.path)
         if self._guard(urllib.parse.urlparse(self.path).path):
             return
         parts = [x for x in u.path.split("/") if x]

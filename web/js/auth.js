@@ -32,7 +32,7 @@ async function authState() {
 
 /* Homestead is up but its cluster is not answering: say so, and keep trying. */
 function clusterUnavailable(error) {
-  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.204" alt="">
+  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.205" alt="">
     <h2>Homestead</h2><p class="sub">Waiting for the cluster</p>
     <div class="gateerr">${esc(error || "The Kubernetes API did not answer.")}</div>
     <p class="dim small">This page tries again every few seconds.</p>
@@ -88,7 +88,7 @@ function ungate() { $("#gate").classList.add("hidden"); }
 
 function loginForm(err, setup) {
   gate(`
-    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.204" alt="">
+    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.205" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}
@@ -275,7 +275,8 @@ boot();
 
 async function afterAuth() {
   paintWho();
-  await Promise.all([loadHealthSettings(), window.loadPlatform ? loadPlatform() : null]);
+  await Promise.all([loadHealthSettings(), window.loadPlatform ? loadPlatform() : null,
+    window.fleetLoad ? fleetLoad() : null]);
   const route = HomesteadRouter.resolve(window.location.pathname);
   if (!route.known) {
     // A mistyped or outdated address: land on the dashboard, and say so.

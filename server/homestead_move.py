@@ -39,6 +39,9 @@ FIRST_SENDER = (2, 8, 58)
 # a workload carrying them is reported as such rather than moved in part.
 UNMODELLED = ("configMap", "secret", "csi", "nfs", "iscsi", "hostPath")
 _tokens = {}
+# Linked clusters (homestead_fleet), when bound: each is a cluster a move can
+# come from, reached with the shared key rather than a stored password.
+FLEET = None
 
 
 def bind(_kget, _ksend, namespace, version=""):
@@ -201,7 +204,24 @@ def _secret_name(name):
 
 
 def list_clusters():
-    """Other Homesteads this one knows about. Never includes their passwords."""
+    """Other Homesteads this one knows about. Never includes their passwords.
+
+    Every linked cluster is one of them, without being added here.
+    """
+    rows = _stored_clusters()
+    if FLEET:
+        known = {row["name"] for row in rows}
+        try:
+            linked = FLEET.others()
+        except Exception:
+            linked = []
+        rows += [{"name": m["handle"], "url": m["url"], "user": "", "fleet": True, "id": m["id"],
+                  "label": m.get("name", ""), "added": m.get("added", "")}
+                 for m in linked if m.get("handle") and m["handle"] not in known]
+    return rows
+
+
+def _stored_clusters():
     try:
         found = kget(f"/api/v1/namespaces/{NS}/configmaps/homestead-clusters")
         rows = json.loads((found.get("data") or {}).get("clusters.json", "[]"))
@@ -233,7 +253,9 @@ def add_cluster(name, url, user, password):
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise ValueError("address must be a http:// or https:// URL")
-    rows = [row for row in list_clusters() if row["name"] != name]
+    if any(row.get("fleet") and row["name"] == name for row in list_clusters()):
+        raise ValueError(f"{name} is a linked cluster already")
+    rows = [row for row in _stored_clusters() if row["name"] != name]
     rows.append({"name": name, "url": url, "user": user,
                  "added": time.strftime("%Y-%m-%d %H:%M")})
     _save_clusters(rows)
@@ -252,7 +274,9 @@ def add_cluster(name, url, user, password):
 
 
 def remove_cluster(name):
-    rows = [row for row in list_clusters() if row["name"] != name]
+    if any(row.get("fleet") and row["name"] == name for row in list_clusters()):
+        raise ValueError(f"{name} is linked; unlink it from the cluster switcher instead")
+    rows = [row for row in _stored_clusters() if row["name"] != name]
     _save_clusters(rows)
     _tokens.pop(name, None)
     try:
@@ -290,10 +314,14 @@ def _open(request):
 
 
 def _call(row, path, token="", body=None):
-    request = urllib.request.Request(
-        row["url"] + path,
-        data=json.dumps(body).encode() if body is not None else None,
-        method="POST" if body is not None else "GET")
+    data = json.dumps(body).encode() if body is not None else None
+    request = urllib.request.Request(row["url"] + path, data=data,
+                                     method="POST" if body is not None else "GET")
+    if row.get("fleet") and FLEET:
+        target = urllib.parse.urlparse(request.full_url)
+        for name, value in FLEET.sign(request.get_method(), target.path + (f"?{target.query}" if target.query else ""),
+                                      data or b"").items():
+            request.add_header(name, value)
     request.add_header("Accept", "application/json")
     if body is not None:
         request.add_header("Content-Type", "application/json")
@@ -357,7 +385,8 @@ def remote(name, path, body=None):
     row = _cluster(name)
     for attempt in (0, 1):
         try:
-            payload, _ = _call(row, path, token=_token(name, force=bool(attempt)), body=body)
+            token = "" if row.get("fleet") else _token(name, force=bool(attempt))
+            payload, _ = _call(row, path, token=token, body=body)
             return payload
         except urllib.error.HTTPError as error:
             reason = _reason(error)

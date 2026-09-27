@@ -32,7 +32,7 @@ function routeParamsForView(v, extra = {}) {
 
 function renderBreadcrumb(v, detail = "") {
   const host = $("#crumb");
-  host.innerHTML = HomesteadRouter.breadcrumbs(v, detail).map((item, index) => {
+  host.innerHTML = (window.fleetCrumb ? fleetCrumb() : "") + HomesteadRouter.breadcrumbs(v, detail).map((item, index) => {
     const sep = index ? '<span class="crumbsep" aria-hidden="true">/</span>' : "";
     if (item.current) return sep + `<span aria-current="page">${esc(item.label)}</span>`;
     // A section, or a detail with no page behind it, is text rather than a link.

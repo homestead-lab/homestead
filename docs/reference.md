@@ -96,7 +96,8 @@ RKE2 run, and the pages that need one offer the same install.
 | **Architecture** | VIP → workload → Longhorn volume → replica dependency view, with containers and VMs separated, Homestead helper pods hidden, and unreferenced volumes behind a disconnected-data switch |
 | **Networking** | Service, ClusterIP, VIP, ingress, listener ownership, orphaned-listener release, endpoint health and guided collision-free exposure; IP address management per subnet with scanning, device categories, bulk edits, CSV export and UniFi sync |
 | **Cluster** | k3s, RKE2 or Harvester version, control-plane and etcd quorum, node pressure, critical services, certificate requests, adding a host (k3s and RKE2 join commands, or a guide to Harvester's installer), and removing hosts - including ones that are dead for good |
-| **Between clusters** | Browse another Homestead cluster, check the two releases can talk, and move its containers and VMs here through shared backup storage |
+| **Linked clusters** | Link several Homesteads and manage them all from any one - only one need be reachable - with a switch in the top bar, an All clusters view of containers, VMs, nodes and volumes together, consoles and every action relayed, and roles kept across clusters; requests between clusters are signed with a shared key and no password is stored (docs/multi-cluster.md) |
+| **Between clusters** | Browse another Homestead cluster, check the two releases can talk, and move its containers and VMs here through shared backup storage - from the destination, or with Move to cluster from the workload's own menu |
 | **Storage** | RWO/RWX volume creation, growth and guarded deletion, file browsing and editing, storage-class inventory and creation, usage, health, snapshots, backups and recurring jobs |
 | **Hardware** | Host device browser and reusable mappings for iGPU, Coral, USB/PCIe and other devices |
 | **Import** | Docker Compose files checked as you type, Unraid/Docker workload and appdata import, several folders across several volumes, measured sizing with a per-volume capacity preflight, byte-weighted progress, named failures, editable seed configuration |
@@ -923,7 +924,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.204/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.205/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -934,7 +935,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.204 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.205 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1787,10 +1788,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.204`, the workflow publishes:
+For a release such as `v2.8.205`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.204
+ghcr.io/wjcloudy/homestead:2.8.205
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -1801,8 +1802,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.204
-git push origin v2.8.204
+git tag v2.8.205
+git push origin v2.8.205
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
