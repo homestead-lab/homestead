@@ -16,6 +16,7 @@ function setup(review) {
       return { ok: true, name: "demo" };
     } };
   vm.createContext(c);
+  vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), c);
   vm.runInContext(fs.readFileSync("web/js/views-workloads.js", "utf8"), c);
   vm.runInContext(fs.readFileSync("web/js/views-lifecycle.js", "utf8"), c);
   return { c, fields, sent, notices, html: () => html, fail: () => { fail = true; } };

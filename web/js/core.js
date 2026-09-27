@@ -24,7 +24,7 @@ async function copyText(text) {
 async function readClipboard() {
   try { return navigator.clipboard?.readText ? await navigator.clipboard.readText() : null; } catch (_) { return null; }
 }
-const HOMESTEAD_VERSION = "2.8.189";
+const HOMESTEAD_VERSION = "2.8.190";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -229,6 +229,7 @@ function modal(t, h, wide, contextClass = "") {
   $("#mtitle").textContent = t;
   $("#mbody").innerHTML = h;
   enhanceActions($("#mbody"));
+  if (window.normaliseDialogActions) normaliseDialogActions($("#mbody"));
   $(".modalbox").classList.toggle("wide", !!wide);
   $(".modalbox").classList.toggle("node-detail-modal", contextClass === "node-detail-modal");
   $(".modalbox").dataset.context = contextClass || "";

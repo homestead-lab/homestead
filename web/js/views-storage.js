@@ -368,10 +368,6 @@ function volumeDeleteConfirmationValid(name, value) {
 }
 window.volumeDeleteConfirmationValid = volumeDeleteConfirmationValid;
 
-function volumeImpactCount(value, singular, plural) {
-  return `<div class="volume-impact"><b>${esc(value)}</b><span>${esc(value === 1 ? singular : plural)}</span></div>`;
-}
-
 window.volumeDelete = async x => {
   const namespace = x.namespace || "lab", name = x.pvc_name || x.name;
   modal("Delete volume · " + name,
@@ -380,57 +376,56 @@ window.volumeDelete = async x => {
   try {
     p = await api(`/api/volumes/delete-plan?ns=${encodeURIComponent(namespace)}&name=${encodeURIComponent(name)}&volume=${encodeURIComponent(x.name)}`);
   } catch (e) {
-    return void ($("#mbody").innerHTML = `<div class="note dependency-danger"><b>Impact check failed.</b> ${esc(e.message)}</div>
-      <div class="row" style="margin-top:16px"><button class="btn" onclick="closeModal()">Close</button></div>`);
+    return void ($("#mbody").innerHTML = UI.callout("bad", "Impact check failed.", esc(e.message)) + UI.actions(UI.cancel("Close")));
   }
   window.__volumeDeletePlan = p;
   const stale = new Set((p.stale_consumers || []).map(c => `${c.kind}/${c.name}`));
-  const mounts = (p.consumers || []).map(c => `<div class="dependency-row ${c.active ? "stranded" : ""}">
-    <div><b>${esc(c.kind)} · ${esc(c.name)}</b>${stale.has(`${c.kind}/${c.name}`) ? '<span class="tag">finished</span>' : ""}<div class="dim xs">${esc(c.namespace)} · ${esc(c.detail || (c.active ? "active" : "inactive"))}</div></div>
-    <div class="small mono">${(c.mounts || []).map(m => `${esc(m.container)}:${esc(m.path || m.container_kind)}${m.read_only ? " · read-only" : ""}`).join("<br>") || "claim reference"}</div>
-  </div>`).join("");
   const lh = p.longhorn || {}, pv = p.pv || {};
   const blocked = p.blocked;
   const permanentBlocked = !p.actions?.delete_data?.enabled;
-  const warningRows = (p.warnings || []).map(w => `<li>${esc(w)}</li>`).join("");
-  $("#mbody").innerHTML = `
-    ${blocked ? `<div class="note dependency-danger"><b>Deletion is blocked.</b><ul>${p.blocking_reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>`
-      : `<div class="note"><b>Impact check passed.</b> ${p.orphan ? "The PVC is already gone. This retained backing volume is detached; deleting it permanently removes its remaining data." : "This claim is detached and has no active workload references. Choose what should happen to its backing data."}</div>`}
-    ${(p.removable_jobs || []).length ? `<div class="note"><b>Finished ${(p.removable_jobs || []).length === 1 ? "job" : "jobs"} still referencing this claim.</b>
-      <span class="mono">${(p.removable_jobs || []).map(esc).join(", ")}</span> already completed — typically the copy job from an import.
-      Homestead removes ${(p.removable_jobs || []).length === 1 ? "it" : "them"} first, because Kubernetes can otherwise hold the claim in Terminating.</div>` : ""}
-    <div class="volume-impact-grid">
-      ${volumeImpactCount(lh.actual_gb ?? "?", "GiB Longhorn footprint", "GiB Longhorn footprint")}
-      ${volumeImpactCount(lh.replicas ?? "?", "replica", "replicas")}
-      ${volumeImpactCount(p.snapshots?.count ?? "?", "snapshot on volume", "snapshots on volume")}
-      ${volumeImpactCount(p.backups?.count ?? "?", "external backup", "external backups")}
-    </div>
-    <div class="note"><b>Current objects</b><br>
-      Claim <span class="mono">${esc(p.namespace)}/${esc(p.name)}</span> · ${esc(p.phase)} · ${esc(p.requested_storage || "size unknown")}<br>
-      PV <span class="mono">${esc(pv.name || "not bound")}</span> · reclaim policy <b>${esc(pv.reclaim_policy || "unknown")}</b><br>
-      Longhorn <span class="mono">${esc(lh.name || "not found")}</span> · ${esc(lh.state || "unknown")}${lh.attached_node ? ` on ${esc(lh.attached_node)}` : ""}
-    </div>
-    <div class="sec">1 · Detach</div>
-    <div class="note ${p.actions?.detach?.complete ? "" : "dependency-danger"}">
-      <b>${p.actions?.detach?.complete ? "Already detached." : "Stop and unmount this claim first."}</b>
-      Detaching keeps the PVC and all data. Homestead will not silently rewrite or stop the workloads listed below.
-      ${(p.stale_consumers || []).length ? `Entries marked <i>finished</i> have stopped for good and do not hold it.` : ""}
-    </div>
-    ${mounts ? `<div class="dependency-list" style="margin-top:10px">${mounts}</div>` : '<div class="empty small">No pods, controllers, jobs or virtual machines reference this claim.</div>'}
-    <div class="sec">2 · Choose deletion result</div>
-    <div class="volume-delete-grid">
+  const detached = !!p.actions?.detach?.complete;
+  const jobs = p.removable_jobs || [];
+  const incomplete = (p.warnings || []).length
+    ? `<p><b>Incomplete impact inventory</b></p><ul class="ui-list">${p.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : "";
+  const consumers = (p.consumers || []).map(c => [
+    `${esc(c.kind)} · ${esc(c.name)}${stale.has(`${c.kind}/${c.name}`) ? ` ${UI.chip("finished")}` : c.active ? ` ${UI.chip("active", "bad")}` : ""}<span class="sub">${esc(c.namespace)} · ${esc(c.detail || (c.active ? "active" : "inactive"))}</span>`,
+    `<span class="mono small">${(c.mounts || []).map(m => `${esc(m.container)}:${esc(m.path || m.container_kind)}${m.read_only ? " · read-only" : ""}`).join("<br>") || "claim reference"}</span>`]);
+  const count = (value, one, many) => `${esc(value)} ${value === 1 ? one : many}`;
+  $("#mbody").innerHTML = [
+    blocked
+      ? UI.callout("bad", "Deletion is blocked.", `<ul class="ui-list">${p.blocking_reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>${incomplete}`)
+      : incomplete ? UI.callout("warn", "Impact check passed, with gaps.", incomplete)
+      : UI.callout("ok", "Impact check passed.", p.orphan ? "The PVC is already gone. This retained backing volume is detached; deleting it permanently removes its remaining data."
+        : "This claim is detached and has no active workload references. Choose what should happen to its backing data."),
+    UI.facts([
+      ["Longhorn footprint", `${esc(lh.actual_gb ?? "?")} GiB`],
+      ["Replicas", esc(lh.replicas ?? "?")],
+      ["Snapshots on volume", esc(p.snapshots?.count ?? "?")],
+      ["External backups", esc(p.backups?.count ?? "?")],
+    ]),
+    UI.section("1. Detach", UI.checklist([
+      { state: detached ? "ok" : "bad", title: detached ? "Already detached." : "Stop and unmount this claim first.",
+        detailHtml: `Detaching keeps the PVC and all data. Homestead will not silently rewrite or stop the workloads listed below.${(p.stale_consumers || []).length ? " Entries marked finished have stopped for good and do not hold it." : ""}` },
+      jobs.length && { state: "ok", title: `Finished ${jobs.length === 1 ? "job" : "jobs"} will be removed first`,
+        detailHtml: `<span class="mono">${jobs.map(esc).join(", ")}</span> already completed - typically the copy job from an import. Kubernetes could otherwise hold the claim in Terminating.` },
+    ]) + (consumers.length ? UI.table([{ label: "Used by" }, { label: "Mounts" }], consumers)
+      : `<div class="ui-empty">No pods, controllers, jobs or virtual machines reference this claim.</div>`)),
+    UI.section("2. Choose what happens to the data", `<div class="volume-delete-grid">
       <label class="volume-delete-option ${blocked || p.orphan ? "disabled" : ""}"><input type="radio" name="vd_action" value="delete_claim" onchange="volumeDeleteGate()" ${blocked || p.orphan ? "disabled" : ""}>
-        <span><b>Delete claim, keep data</b><small>Homestead changes the PV policy to Retain, then deletes the PVC. The released data needs Kubernetes/Longhorn administration to recover or remove later.</small></span></label>
+        <span><b>Delete claim, keep data</b><small>The PV policy becomes Retain, then the PVC is deleted. The released data needs Kubernetes or Longhorn administration to recover or remove later.</small></span></label>
       <label class="volume-delete-option danger ${permanentBlocked ? "disabled" : ""}"><input type="radio" name="vd_action" value="delete_data" onchange="volumeDeleteGate()" ${permanentBlocked ? "disabled" : ""}>
-        <span><b>Permanently delete data</b><small>${p.orphan ? "The PVC is already absent. Longhorn/CSI removes the retained backing objects through their normal controllers; finalizers are never forced." : "Homestead changes the PV policy to Delete. The PVC and backing PV are removed."} The Longhorn volume, replicas and ${p.snapshots?.count || 0} on-volume snapshot(s) are removed. ${p.backups?.count || 0} external backup(s) remain.</small></span></label>
-    </div>
-    ${warningRows ? `<div class="note dependency-danger"><b>Incomplete impact inventory</b><ul>${warningRows}</ul></div>` : ""}
-    <div class="sec">3 · Confirm</div>
-    <div class="f"><label>Type <b class="mono">${esc(name)}</b> to confirm</label>
-      <input id="vd_confirm" autocomplete="off" placeholder="${esc(name)}" oninput="volumeDeleteGate()"></div>
-    <div class="row"><button id="vd_go" class="btn danger" data-need="admin" disabled
-      onclick="volumeDeleteNow('${esc(namespace)}','${esc(name)}','${esc(p.uid)}')">Delete selected</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`;
+        <span><b>Permanently delete data</b><small>${p.orphan ? "The PVC is already absent. Longhorn and CSI remove the retained backing objects through their normal controllers; finalizers are never forced." : "The PV policy becomes Delete, and the PVC and backing PV are removed."} The Longhorn volume, replicas and ${count(p.snapshots?.count || 0, "on-volume snapshot are", "on-volume snapshots are")} removed; ${count(p.backups?.count || 0, "external backup remains", "external backups remain")}.</small></span></label>
+    </div>`),
+    UI.more("Objects affected", UI.facts([
+      ["Claim", `<span class="mono">${esc(p.namespace)}/${esc(p.name)}</span> · ${esc(p.phase)} · ${esc(p.requested_storage || "size unknown")}`],
+      ["Persistent volume", `<span class="mono">${esc(pv.name || "not bound")}</span> · reclaim policy ${esc(pv.reclaim_policy || "unknown")}`],
+      ["Longhorn volume", `<span class="mono">${esc(lh.name || "not found")}</span> · ${esc(lh.state || "unknown")}${lh.attached_node ? ` on ${esc(lh.attached_node)}` : ""}`],
+    ])),
+    UI.section("3. Confirm", UI.field(`Type ${name} to confirm`,
+      `<input id="vd_confirm" autocomplete="off" placeholder="${esc(name)}" oninput="volumeDeleteGate()">`)),
+    UI.actions(UI.cancel() + UI.button("Delete selected", `volumeDeleteNow('${esc(namespace)}','${esc(name)}','${esc(p.uid)}')`,
+      { kind: "danger", id: "vd_go", disabled: true, attrs: 'data-need="admin"' })),
+  ].join("");
 };
 
 window.volumeDeleteGate = () => {
@@ -1038,19 +1033,18 @@ window.newShare = async () => {
     <div class="f"><label>Share name ${tip("Windows sees this name after the server address, and Homestead mounts it at /shares/<name> inside Samba.")}</label>
       <input type="text" id="sh_name" placeholder="media" autocomplete="off"></div>
     <div class="sec">Storage</div>
-    <div class="note storage-guide"><b>Where the files live:</b> a new Longhorn volume is created for this share alone, or pick a volume that already exists — including one a container uses — and optionally share just a folder inside it. A ReadWriteOnce volume can only attach on one node, so Samba and the workload that owns it must run on the same host.</div>
+    <p class="ui-help">A new Longhorn volume for this share alone, or a volume that already exists - including one a container uses - optionally just a folder inside it. A ReadWriteOnce volume attaches on one node, so Samba and the workload that owns it must run on the same host.</p>
     <div id="sh_storage"></div>
     <div class="f2" style="margin-top:14px"><div class="f"><label>Username</label><input type="text" id="sh_user" value="lab" autocomplete="username" oninput="shareAccountHint()"></div>
       <div class="f"><label>Password</label><input type="password" id="sh_pass" autocomplete="new-password" placeholder="Required unless guest access is enabled">
         <span class="dim xs" id="sh_account"></span></div></div>
     ${options.samba_installed ? "" : `<div class="sec">Samba's address</div>
-      <div class="note">Samba is not installed yet; this share installs it. Choose the address Windows will find it at (\\\\address\\share).</div>
+      <p class="ui-help">Samba is not installed yet; this share installs it. Choose the address Windows will find it at (\\\\address\\share).</p>
       <div class="f" id="sh_smb"><span class="dim xs"><span class="spin2"></span></span></div>`}
     <label class="switch"><input type="checkbox" id="sh_pub"> Allow guest access</label>
     <label class="switch"><input type="checkbox" id="sh_ro"> Read only</label>
-    <div class="row" style="margin-top:18px"><button class="btn pri" id="sh_go" data-need="admin" onclick="mkShare(this)">Create share</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>
-    <div class="note" style="margin-top:14px">Creating a share restarts Samba, so open SMB sessions drop briefly.</div>`;
+    <p class="ui-help">Creating a share restarts Samba, so open SMB sessions drop briefly.</p>
+    ${UI.actions(UI.cancel() + UI.button("Create share", "mkShare(this)", { kind: "pri", id: "sh_go", attrs: 'data-need="admin"' }))}`;
   const host = createVolumePicker($("#sh_storage"), {
     pvcs: () => options.pvcs || [],
     storageClasses: () => options.storage_classes || [],
@@ -1063,6 +1057,8 @@ window.newShare = async () => {
     newSourceHelp: "Creates a Longhorn claim for this share. Leave the name blank to use share-<share name>.",
     removable: false,
     readOnlyToggle: false,
+    // The share's folder is the path field above; a second one would be ignored.
+    folders: false,
   });
   renderVolumeRows(host, [{ kind: "new-rwo", path: "", source: "", size_gb: 10,
     label: "Share storage" }]);
