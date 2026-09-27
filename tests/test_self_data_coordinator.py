@@ -177,6 +177,17 @@ class CoordinatorTests(unittest.TestCase):
     def setUp(self):
         self.c = Cluster()
 
+    def test_controller_revision_after_switch_is_not_an_external_edit(self):
+        self.c.switching(); self.c.step()
+        dep = self.c.objects[self.c.dep_path]
+        dep["metadata"].setdefault("annotations", {})["deployment.kubernetes.io/revision"] = "2"
+        dep["metadata"]["annotations"]["homestead.io/ran-digests"] = '{"homestead":"sha256:observed"}'
+        self.c.settle_stop()
+        self.assertEqual("start", self.c.step()["phase"])
+        dep = self.c.objects[self.c.dep_path]
+        dep["metadata"]["annotations"]["user.example/hold"] = "true"
+        with self.assertRaisesRegex(Held, "changed"): self.c.step()
+
     def test_ready_condition_without_app_probe_cannot_complete_move(self):
         self.c.switching(); self.c.step(); self.c.settle_stop(); self.c.step(); self.c.settle_start()
         self.c.objects["/api/v1/namespaces/lab/pods/new-0"]["spec"]["containers"][0].pop("readinessProbe")

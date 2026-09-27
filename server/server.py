@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.200")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.201")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -5316,6 +5316,10 @@ def self_data_handoff_status(operation):
                     view = SELF_DATA_WORKER.unavailable_status(operation)
                     view.update(status="preparing", can_abandon=True, requires_review=False,
                         message="Homestead is still on its original volume. You can wait for preparation or abandon it safely before the move starts.")
+                    job = next((i for i in OPS._read() if i.get("kind") == SELF_DATA_EXECUTE.KIND and i.get("ref", {}).get("operation") == operation), None)
+                    error = (job or {}).get("ref", {}).get("setup_error")
+                    if error:
+                        view.update(status="held", requires_review=True, message=error)
                     return view
             except Exception:
                 pass
