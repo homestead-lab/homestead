@@ -852,6 +852,31 @@ summary_kc() {
 summary_line() { # Keep the main menu usable on a 24-row terminal.
   printf '%s\n' "$*" | awk '{if (length > 80) print substr($0,1,77) "..."; else print}'
 }
+summary_addresses() { # label value: wrap with an aligned continuation indent.
+  printf '%s\n' "$2" | awk -v label="$1" '
+    BEGIN {prefix=sprintf("%-12s",label); line=prefix}
+    {for(i=1;i<=NF;i++) {
+      word=$i
+      if(length(line)>12 && length(line)+1+length(word)>80) {print line; line=sprintf("%12s", "")}
+      if(length(line)>12) line=line " "
+      while(length(line)+length(word)>80) {
+        take=80-length(line); print line substr(word,1,take); word=substr(word,take+1); line=sprintf("%12s", "")
+      }
+      line=line word
+    }} END {print line}'
+}
+prepare_overview() {
+  CLUSTER_ADDRESS_LINES="$(summary_addresses Members "$CLUSTER_MEMBERS")
+$(summary_addresses VIPs "$CLUSTER_VIP_SUMMARY")"
+  # Keep status and menu actions visible. Large lists continue on further
+  # menu pages rather than being silently truncated or pushing actions away.
+  CLUSTER_PAGE_SIZE=$(( $(term_rows) - 20 ))
+  [ "$CLUSTER_PAGE_SIZE" -ge 2 ] || CLUSTER_PAGE_SIZE=2
+  count=$(printf '%s\n' "$CLUSTER_ADDRESS_LINES" | wc -l | tr -d ' ')
+  CLUSTER_PAGES=$(( (count + CLUSTER_PAGE_SIZE - 1) / CLUSTER_PAGE_SIZE ))
+  CLUSTER_PAGE=${CLUSTER_PAGE:-1}
+  [ "$CLUSTER_PAGE" -le "$CLUSTER_PAGES" ] || CLUSTER_PAGE=1
+}
 component_summary() { # name|image|ready|desired, from an existing workload
   awk -F '|' '{
     image=$2; sub(/^.*\//,"",image)
@@ -908,9 +933,9 @@ main_overview() {
     summary_line "System      $(os_name), $(uname -m)"
   else
     summary_line "Kubernetes  $CLUSTER_K8S"
-    summary_line "Members     $CLUSTER_MEMBERS"
     summary_line "API         $CLUSTER_API"
-    summary_line "VIPs        $CLUSTER_VIP_SUMMARY"
+    prepare_overview
+    printf '%s\n' "$CLUSTER_ADDRESS_LINES" | awk -v page="$CLUSTER_PAGE" -v size="$CLUSTER_PAGE_SIZE" 'NR>(page-1)*size && NR<=page*size'
     summary_line "Longhorn    $CLUSTER_LONGHORN"
     summary_line "Homestead   $CLUSTER_HOMESTEAD"
   fi
@@ -1290,12 +1315,14 @@ while :; do
   here=$(what_is_here)
   if [ "$KIND" != none ] && [ "$here" = "No Kubernetes installation" ]; then here="$(kind_name) (service stopped)"; fi
   cluster_overview
+  prepare_overview
   if [ "$KIND" = none ]; then
     set -- install "Install Homestead" \
       checks "Run system checks"
   else
     set -- doctor "Check node health"
     [ "$HOMESTEAD_PRESENT" = no ] && set -- "$@" install "Install Homestead on this cluster"
+    [ "$CLUSTER_PAGES" -le 1 ] || set -- "$@" addresses "More member/VIP addresses ($CLUSTER_PAGE/$CLUSTER_PAGES)"
     set -- "$@" details "Cluster details (members, VIPs and versions)"
     set -- "$@" clean "Clean up disk space"
     case "$KIND" in k3s-server|rke2-server) set -- "$@" snapshot "Take an etcd snapshot" restore "Restore from an etcd snapshot" ;; esac
@@ -1307,6 +1334,7 @@ while :; do
 Select an option:" "$@") || exit 0
   BACK=Back
   case "$pick" in
+    addresses) CLUSTER_PAGE=$((CLUSTER_PAGE % CLUSTER_PAGES + 1)) ;;
     details) cluster_details ;;
     install) do_install ;;
     checks) ( prechecks new ) ;;
