@@ -111,6 +111,7 @@ const DIALOGS = [
   ["workload-console", "workloads", "wlConsole('lab','frigate')"],
   ["workload-main-port", "workloads", "wlPrimaryPort('lab','frigate')"],
   ["node-reboot", "nodes", "nodePowerReview('harvester-node1','reboot')"],
+  ["node-shutdown", "nodes", "nodePowerReview('harvester-node1','poweroff')", "document.querySelector('#mbody .ui-more').open=true"],
   ["app-store-app", "store", "click:storeDetails"],
   ["deploy-preview", "deploy", "click:previewYaml"],
   ["fleet-link", "workloads", "fleetLink()"],

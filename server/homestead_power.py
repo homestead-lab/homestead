@@ -69,6 +69,9 @@ def plan(node, action):
                       if (v.get("status") or {}).get("nodeName") == node})
     pods_here = [p for p in pods if (p.get("spec") or {}).get("nodeName") == node]
     blockers = []
+    node_uid = (node_obj.get("metadata") or {}).get("uid", "")
+    if not node_uid:
+        blockers.append("Host identity is unavailable; refresh before issuing power control")
     if any((p.get("metadata", {}).get("labels") or {}).get("homestead.io/task") == "node-power" and
            p.get("status", {}).get("phase") not in ("Succeeded", "Failed") for p in pods_here):
         blockers.append("An earlier power helper is still active on this host; inspect it before retrying")
@@ -102,7 +105,7 @@ def plan(node, action):
     if action == "reboot" and not boot_id:
         blockers.append("The host boot ID is unavailable; reboot completion cannot be verified")
     drain_pods = MAINTENANCE.pod_snapshot(pods_here)
-    review = {"node": node, "action": action, "boot_id": boot_id,
+    review = {"node": node, "node_uid": node_uid, "action": action, "boot_id": boot_id,
               "workloads": sorted((w.get("ns", ""), w.get("name", ""), bool(w.get("stranded")))
                                   for w in place.get("workloads", [])),
               "volumes": [(v["name"], v["risk"], v["healthy_elsewhere"], v["robustness"]) for v in affected],
@@ -113,7 +116,7 @@ def plan(node, action):
               "drain_pods": drain_pods,
               "quorum": control.get("can_lose", 0)}
     token = hashlib.sha256(json.dumps(review, sort_keys=True).encode()).hexdigest()[:20]
-    return {"node": node, "action": action, "review_token": token, "boot_id": boot_id,
+    return {"node": node, "node_uid": node_uid, "action": action, "review_token": token, "boot_id": boot_id,
             "quorum": control, "workloads": place.get("workloads", []),
             "stranded": place.get("stranded", []), "volumes": affected,
             "vms": vm_rows, "pods": len(pods_here), "storage_unknown": storage_unknown,
@@ -133,7 +136,7 @@ def recheck_after_drain(original):
         old = before.get(volume["name"])
         if not old or volume["healthy_elsewhere"] < old["healthy_elsewhere"] or volume["robustness"] != old["robustness"]:
             raise ValueError("Host remains cordoned; volume impact changed during drain. Power was not sent; review again")
-    if fresh["boot_id"] != original["boot_id"]:
+    if fresh["boot_id"] != original["boot_id"] or fresh["node_uid"] != original["node_uid"]:
         raise ValueError("Host identity changed during drain; power was not sent")
     remaining = [p for p in _items("/api/v1/pods") if (p.get("spec") or {}).get("nodeName") == original["node"] and MAINTENANCE.drainable(p)]
     if remaining:
@@ -150,13 +153,19 @@ def status(item):
             return "failed", item.get("progress", 0), "Maintenance stopped before power was sent; inspect the host and its cordon state before retrying"
         return "running", item.get("progress", 0), item.get("message", "Preparing host maintenance")
     node = kget(f"/api/v1/nodes/{ref['node']}")
+    if ref.get("node_uid") and (node.get("metadata") or {}).get("uid") != ref["node_uid"]:
+        return "failed", item.get("progress", 0), "Host identity changed; this replacement cannot confirm the power request. Inspect the original host; no command was retried"
     up = _ready(node)
     boot = ((node.get("status") or {}).get("nodeInfo") or {}).get("bootID", "")
     if not up:
         ref["saw_down"] = True
         ref.setdefault("down_at", now)
-        if ref["action"] == "poweroff" and now - ref["down_at"] >= 15:
-            return "succeeded", 100, "Host is NotReady; physical power state cannot be verified through Kubernetes"
+        if ref["action"] == "poweroff":
+            # NotReady can mean a network partition, not a powered-off host.
+            # Never turn that observation into a green shutdown success.
+            if now - ref.get("started_epoch", now) > 600:
+                return "failed", 60, "Shutdown could not be verified. Host is NotReady; check its console or physical power before retrying. It remains cordoned"
+            return "running", 60, "Host is NotReady, not confirmed powered off. Check its console or physical power; no command will be retried"
         if now - ref.get("started_epoch", now) > 600:
             return "failed", 60, "Host did not return Ready within 10 minutes; inspect the host. It remains cordoned"
         return "running", 60, "Host is NotReady; waiting to confirm shutdown or return"
@@ -166,7 +175,7 @@ def status(item):
         ref.setdefault("returned_at", now)
         volume_names = ref.get("volumes") or []
         if not volume_names:
-            return "succeeded", 100, "Host returned Ready with a new boot ID"
+            return "succeeded", 100, "Host returned Ready with a new boot ID. It remains cordoned; check workloads before allowing scheduling"
         volumes = _items(f"{LH}/volumes", absent_ok=True)
         if volumes is None:
             if now - ref["returned_at"] > 1800:
@@ -180,23 +189,29 @@ def status(item):
                 return "failed", 90, ("Host rebooted, but volumes did not become healthy within 30 minutes: " +
                                       ", ".join(pending[:4]))
             return "running", 90, f"Host is Ready; waiting for {len(pending)} volume(s) to become healthy: " + ", ".join(pending[:4])
-        return "succeeded", 100, "Host is Ready and affected Longhorn volumes are healthy"
+        return "succeeded", 100, "Host is Ready and affected Longhorn volumes are healthy. It remains cordoned; workload recovery is not yet verified"
     if now - ref.get("started_epoch", now) > 600:
-        return "failed", 30, "Host did not complete the requested power transition within 10 minutes"
+        return "failed", 30, "Power transition was not verified within 10 minutes. A helper may still run; inspect its events and logs before any new request. Host remains cordoned"
     if ref.get("saw_down"):
         return "running", 75, "Host returned, but Kubernetes has not reported a new boot ID yet"
     if ref.get("helper_pod"):
+        if not ref.get("helper_uid"):
+            return "running", 20, "Power helper receipt is unconfirmed; observing the host only. Inspect the recorded helper before retrying"
         try:
-            helper = kget(f"/api/v1/namespaces/lab/pods/{ref['helper_pod']}")
+            helper = kget(f"/api/v1/namespaces/{ref.get('helper_namespace', 'lab')}/pods/{ref['helper_pod']}")
         except urllib.error.HTTPError as error:
             if error.code != 404:
                 raise
         else:
+            if (helper.get("metadata") or {}).get("uid") != ref["helper_uid"]:
+                return "failed", 20, "Power helper was replaced; its result cannot confirm this request. Inspect the host before retrying"
             phase = (helper.get("status") or {}).get("phase", "Pending")
             conditions = (helper.get("status") or {}).get("containerStatuses") or []
             waiting = [((c.get("state") or {}).get("waiting") or {}) for c in conditions]
             reason = next((c.get("reason") for c in waiting if c.get("reason")), "")
-            if phase == "Failed" or reason in ("ErrImagePull", "ImagePullBackOff", "CreateContainerError", "CreateContainerConfigError"):
+            if phase == "Failed":
                 return "failed", 20, f"Host power helper failed ({reason or phase}); host remains cordoned"
+            if reason:
+                return "running", 20, f"Power helper waiting: {reason}. It may retry automatically; inspect Recent jobs logs, do not send another power request"
             return "running", 35 if phase == "Running" else 20, f"Power helper {phase.lower()}{': ' + reason if reason else ''}; waiting for host transition"
     return "running", 20, "Waiting for the host to leave Ready"

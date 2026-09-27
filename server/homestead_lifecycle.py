@@ -827,9 +827,12 @@ def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=N
     # Persist the helper identity BEFORE submitting. A restart observes it;
     # it never guesses whether POST succeeded and sends a second command.
     report("sending", 20, "Submitting power helper; command outcome must be observed",
-           helper_pod=pod_name, started_epoch=time.time())
-    ksend("POST", "/api/v1/namespaces/lab/pods", body)
-    report("observing", 20, "Power helper submitted; observing host transition")
+           helper_pod=pod_name, helper_namespace="lab", started_epoch=time.time())
+    receipt = ksend("POST", "/api/v1/namespaces/lab/pods", body)
+    meta = (receipt or {}).get("metadata") or {}
+    if not meta.get("uid") or meta.get("name") != pod_name or meta.get("namespace") != "lab":
+        raise ValueError("Power helper creation was not confirmed; inspect the recorded helper before retrying")
+    report("observing", 20, "Power helper submitted; observing host transition", helper_uid=meta["uid"])
     steps.append(f"scheduled {action} helper ({pod_name})")
     _bust()
     return {"ok": True, "node": node, "action": action, "steps": steps,
