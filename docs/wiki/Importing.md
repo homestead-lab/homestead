@@ -1,8 +1,9 @@
 # Importing
 
 **Import** brings things in from elsewhere: containers and their data from an
-Unraid (or any Docker) server, a Docker Compose file, a VM disk image, or a
-workload from another Homestead cluster.
+Unraid (or any Docker) server, a Docker Compose file, or a VM disk image.
+Workloads from another Homestead cluster move under **Settings → Linked
+clusters**.
 
 ![Import](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-import.jpg)
 
@@ -194,5 +195,7 @@ Harvester includes. See [Virtual machines](Virtual-machines).
 
 ## From another Homestead
 
-**Import → ＋ Homestead cluster** adds another cluster to browse and move
-workloads from. See [Moving between clusters](Moving-between-clusters).
+Link the other cluster under **Settings → Linked clusters**, then move its
+containers and VMs from there - or with **Move to cluster** in a workload's `…`
+menu. See [Linked clusters](Linked-clusters) and
+[Moving between clusters](Moving-between-clusters).

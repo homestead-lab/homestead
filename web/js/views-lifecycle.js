@@ -1060,47 +1060,17 @@ function importProgressCell(job) {
 async function viewImport() {
   const [, nodes] = await Promise.all([loadHardwareFeatures(), api("/api/nodes").catch(() => [])]);
   if (nodes.length) STATE.data.nodes = nodes;
-  const [srcs, jobs, disks, namespaces, storageClasses, clusters] = await Promise.all([
+  const [srcs, jobs, disks, namespaces, storageClasses] = await Promise.all([
     api("/api/sources"), api("/api/imports").catch(() => []), api("/api/vm-disks").catch(() => []),
     api("/api/namespaces").catch(() => ["lab"]), api("/api/storageclasses").catch(() => ["longhorn-r2"]),
-    api("/api/move/clusters").catch(() => []),
   ]);
-  STATE.data.clusters = clusters;
   STATE.data.classFacts = (await api("/api/storageclasses?facts=1").catch(() => ({}))).facts || {};
-  const moves = await api("/api/move/moves").catch(() => []);
   STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
-  // After the page is up: each check waits on the other Homestead answering.
-  setTimeout(() => clusters.forEach(c => clusterCheck(c.name)), 0);
   paint(`<div class="phead"><div><h2>Import</h2>
       <p>Bring containers, appdata and virtual-machine disks into Homestead</p></div>
       <div class="row"><button class="btn" data-need="operator" onclick="composeImport()">＋ Docker Compose</button>
       <button class="btn" data-need="admin" onclick="srcAdd()">＋ Container source</button>
       <button class="btn pri" data-need="admin" onclick="vmDiskImport()">＋ VM disk</button></div></div>
-
-    ${moves.length ? `<div class="between"><div class="sec">Moves ${tip("Workloads being brought here from another Homestead cluster. Each keeps going across restarts of either Homestead; the source is only removed when you say so.")}</div>
-      ${moves.some(m => ["succeeded", "cancelled"].includes(m.status)) ? '<button class="btn sm" data-need="admin" onclick="moveDismiss()">Clear finished</button>' : ""}</div>` : ""}
-    <div id="movesList">${movesHtml(moves)}</div>
-
-    <div class="between"><div class="sec">Other Homestead clusters ${tip("Linked clusters, and any added here for moves before linking existed. Their workloads can be listed and moved here: volume data travels through the shared Longhorn backup target, the definition comes straight from the other Homestead.")}</div>
-      <button class="btn sm" onclick="fleetOpenSettings()">Linked clusters</button></div>
-    ${clusters.length ? `<div class="grid g3">${clusters.map(c => `<div class="card flat clcard">
-      <div class="between"><div class="clhead"><div class="ctitle">${esc(c.label || c.name)}</div>
-        ${c.fleet ? `<div class="csub mono clurl" title="Linked · ${esc(c.url)}">linked · ${esc(c.url)}</div>`
-          : `<div class="csub mono clurl" title="${esc(c.user)}@${esc(c.url)}">${esc(c.user)}@${esc(c.url)}</div>`}</div>
-        ${c.fleet ? "" : `<button class="btn sm danger" data-need="admin" onclick="clusterDel('${esc(c.name)}')">✕</button>`}</div>
-      <div class="clver"><span class="dim xs">Version</span>
-        <span id="clver_${esc(c.name)}"><span class="dim xs"><span class="spin2"></span> checking…</span></span>
-        <button class="iconbtn clrecheck" data-tip="Check the version again" onclick="clusterCheck('${esc(c.name)}')">${icon("refresh")}</button></div>
-      <div id="clvermsg_${esc(c.name)}"></div>
-      <div class="clsteps" id="clready_${esc(c.name)}"></div>
-      <div class="row" style="margin-top:12px"><button class="btn sm" onclick="clusterBrowse('${esc(c.name)}')">Browse workloads</button></div>
-      <div class="dim xs" id="cluster_${esc(c.name)}" style="margin-top:10px"></div>
-    </div>`).join("")}</div>`
-    : `<div class="empty">No other clusters connected.
-       <ol class="clguide">
-         <li>Link it under <b>Settings → Linked clusters</b>: its address and an admin account there, used once.</li>
-         <li>Backup storage on that cluster, which its volumes travel through - its card offers to set it up.</li>
-         <li><b>Browse workloads</b> on its card, then <b>Move to this cluster</b>.</li></ol></div>`}
 
     <div class="sec">VM disk images ${tip("CDI downloads supported QEMU disk formats, including qcow2 and vmdk, converts them into a VM-ready disk, and writes the result into a new Longhorn PVC.")}</div>
     ${disks.length ? `<div class="card flat pad0"><div class="tblwrap"><table data-sort="vm-disks" class="tbl stack"><thead><tr>
@@ -1143,13 +1113,6 @@ async function viewImport() {
       start it once the copy finishes. Path mappings from the source host do not carry over; the appdata
       lands at the mount path you choose.
     </div>`);
-  // Sent here by "move to" on another cluster: open that review.
-  if (window.fleetPendingMove) fleetPendingMove();
-  // A running move keeps its own card current without repainting the page.
-  if (moves.some(m => m.status === "running")) {
-    clearTimeout(window.__moveTimer);
-    window.__moveTimer = setTimeout(watchMoves, 4000);
-  }
 }
 window.importRemove = async (name, state) => {
   const running = state === "running";
@@ -1706,46 +1669,28 @@ window.importSetup = async (source, dir, cfg = {}) => {
 };
 /* Another Homestead on the network. The destination pulls, so these
    credentials are this cluster reaching out, not the far one reaching in. */
-window.clusterAdd = () => modal("Add a Homestead cluster", `
-  <p class="muted small">Connects to <b>another Homestead installation</b> running on a different
-    Harvester cluster. Homestead must already be installed and reachable there. Use it to see what
-    that cluster is running, and to move workloads across.</p>
-  <div class="f"><label>Label ${tip("What you will call this cluster here. Any short name.")}</label>
-    <input id="cl_name" placeholder="loft"></div>
-  <div class="f"><label>Homestead address ${tip("The address you use to open the other Homestead in a browser, including the port.")}</label>
-    <input id="cl_url" placeholder="http://192.0.2.242:8088"></div>
-  <div class="sec">Sign in to that Homestead</div>
-  <p class="muted small">A Homestead account on the <b>other</b> cluster — the username and password you
-    would type into its own sign-in page. Not a Harvester, Rancher or SSH login.</p>
-  <div class="f2"><div class="f"><label>Homestead username</label>
-      <input id="cl_user" autocomplete="off" placeholder="admin"></div>
-    <div class="f"><label>Homestead password</label>
-      <input id="cl_pass" type="password" autocomplete="new-password"></div></div>
-  <div class="note">The password is kept in a Kubernetes Secret, never in the ConfigMap that lists
-    the clusters. Operator access there is enough to browse; moving a workload will need admin.</div>
-  <div class="row" style="margin-top:16px">
-    <button class="btn pri" data-need="admin" onclick="clusterSave()">Add cluster</button>
-    <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+/* One cluster a move can come from: whether the two releases can move
+   workloads, what a move still needs over there, and its workloads. Shown
+   under Settings → Linked clusters. */
+function clusterCardHtml(c) {
+  return `<div class="card flat clcard">
+    <div class="clhead"><div class="ctitle">${esc(c.label || c.name)}</div>
+      <div class="csub mono clurl" title="${esc(c.url)}">${c.fleet ? "linked" : "added before linking"} · ${esc(c.url)}</div></div>
+    <div class="clver"><span class="dim xs">Version</span>
+      <span id="clver_${esc(c.name)}"><span class="dim xs"><span class="spin2"></span> checking…</span></span>
+      <button class="iconbtn clrecheck" data-tip="Check the version again" onclick="clusterCheck('${esc(c.name)}')">${icon("refresh")}</button></div>
+    <div id="clvermsg_${esc(c.name)}"></div>
+    <div class="clsteps" id="clready_${esc(c.name)}"></div>
+    <div class="row" style="margin-top:12px"><button class="btn sm" onclick="clusterBrowse('${esc(c.name)}')">Browse workloads</button></div>
+    <div class="dim xs" id="cluster_${esc(c.name)}" style="margin-top:10px"></div>
+  </div>`;
+}
+window.clusterCardHtml = clusterCardHtml;
 
-window.clusterSave = async () => {
-  const body = { name: $("#cl_name").value.trim(), url: $("#cl_url").value.trim(),
-    user: $("#cl_user").value.trim(), password: $("#cl_pass").value };
-  if (!body.name || !body.url) return toast("name and address are required", "bad");
-  try {
-    await api("/api/move/clusters/add", { method: "POST",
-      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    toast(`${body.name} added`, "ok"); closeModal(); resetPaint(); viewImport();
-  } catch (e) { toast(e.message, "bad"); }
-};
-
-window.clusterDel = async name => {
-  if (!confirm(`Forget ${name}?` + String.fromCharCode(10, 10)
-      + "Its credentials are deleted. Nothing on that cluster is touched.")) return;
-  try {
-    await api("/api/move/clusters/remove", { method: "POST",
-      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
-    toast(`${name} forgotten`, "ok"); resetPaint(); viewImport();
-  } catch (e) { toast(e.message, "bad"); }
+/* Wherever the moves are shown, show them afresh. */
+window.movesRepaint = () => {
+  if ($("#fleetMovesCard") && window.fleetMovesPaint) fleetMovesPaint();
+  else watchMoves();
 };
 
 /* Whether the two Homesteads can move workloads between them, and if not,
@@ -1980,8 +1925,8 @@ window.moveStart = async (cluster, kind, name) => {
   try {
     await api("/api/move/start", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(moveBody(cluster, kind, name)) });
-    toast(`moving ${name} from ${cluster}; follow it here or in Activity`, "ok");
-    closeModal(); resetPaint(); viewImport();
+    toast(`moving ${name} from ${cluster}; follow it under Linked clusters or in Activity`, "ok");
+    closeModal(); movesRepaint();
   } catch (e) { toast(e.message, "bad"); }
 };
 
@@ -2025,7 +1970,7 @@ function movesHtml(moves) {
    elsewhere on the page is left alone. */
 async function watchMoves() {
   clearTimeout(window.__moveTimer);
-  if (STATE.view !== "imports") return;
+  if (!$("#movesList")) return;
   const moves = await api("/api/move/moves").catch(() => null);
   const host = $("#movesList");
   if (moves && host) host.innerHTML = movesHtml(moves);

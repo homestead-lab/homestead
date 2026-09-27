@@ -191,6 +191,7 @@ function fleetLegacyHtml(rows) {
 window.fleetSettingsPaint = async () => {
   const host = $("#fleetCard");
   if (!host) return;
+  fleetMovesPaint();
   const [view, legacy] = await Promise.all([api("/api/fleet").catch(() => null), api("/api/fleet/legacy").catch(() => [])]);
   if (!$("#fleetCard")) return;
   if (view) FLEET.view = view;
@@ -217,6 +218,28 @@ window.fleetSettingsPaint = async () => {
       password is kept: the admin account asked for when linking is used once. A person signed in to one cluster keeps
       their role on the others, and each cluster applies its own rules to it.</p>
       <p>Unlinking a cluster gives the rest a new key, so the one that left can no longer act for them.</p>`)}`;
+};
+
+/* Moving workloads here from another cluster: the moves under way, and for
+   each cluster whether a move can come from it - its release, and backup
+   storage over there that this cluster can reach - and its workloads. */
+window.fleetMovesPaint = async () => {
+  const host = $("#fleetMovesCard");
+  if (!host) return;
+  const [moves, clusters] = await Promise.all([api("/api/move/moves").catch(() => []), api("/api/move/clusters").catch(() => [])]);
+  if (!$("#fleetMovesCard")) return;
+  host.hidden = !moves.length && !clusters.length;
+  host.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">Moving workloads</div>
+      <div class="csub">Bring containers and VMs here from another cluster. Their volumes travel through backup storage on the cluster they leave; each cluster's card sets it up.</div></div>
+      ${moves.some(m => ["succeeded", "cancelled"].includes(m.status)) ? UI.button("Clear finished", "moveDismiss()", { attrs: 'data-need="admin"' }) : ""}</div>
+    <div id="movesList">${moves.length ? movesHtml(moves) : ""}</div>
+    ${clusters.length ? `<div class="grid g3 fleet-movegrid">${clusters.map(clusterCardHtml).join("")}</div>` : ""}`;
+  if (window.applyRole) applyRole();
+  // Each check waits on the other Homestead answering, so after the card is up.
+  clusters.forEach(c => clusterCheck(c.name));
+  clearTimeout(window.__moveTimer);
+  if (moves.some(m => m.status === "running")) window.__moveTimer = setTimeout(watchMoves, 4000);
+  fleetPendingMove();
 };
 
 window.fleetSetMode = mode => {
@@ -337,7 +360,8 @@ window.moveToClusterGo = async (id, from, kind, name) => {
   try {
     await api("/api/fleet/switch", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id }) });
-    window.location.href = `/import?${new URLSearchParams({ move: `${from}:${kind}:${name}` })}`;
+    try { localStorage.setItem("homestead.settings.tab", "fleet"); } catch (e) { /* the page still opens */ }
+    window.location.href = `/settings?${new URLSearchParams({ move: `${from}:${kind}:${name}` })}`;
   } catch (e) { toast(e.message, "bad"); }
 };
 
