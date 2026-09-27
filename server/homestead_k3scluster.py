@@ -14,12 +14,16 @@ The build is a job: the VMs start, k3s answers on the server's address,
 and - when it was asked for - the Homestead inside answers on port 8088.
 """
 import copy
+import hashlib
 import ipaddress
 import json
 import re
 import secrets
 import socket
 import time
+from contextlib import nullcontext
+import homestead_vm_power_job as VM_POWER
+import homestead_vm_write as VM_WRITE
 import urllib.parse
 
 BOOTSTRAP = "https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh"
@@ -195,7 +199,7 @@ def start(cfg, ops):
     return commit(prepare(cfg), ops)
 
 
-def commit(prepared, ops, *, create_one=None, before_node=None):
+def commit(prepared, ops, *, create_one=None, before_node=None, review=None, send=None):
     """Journal before writes; stop on uncertainty and retain every partial VM.
 
     Only public resource identities/phase information enter the operation.
@@ -208,12 +212,28 @@ def commit(prepared, ops, *, create_one=None, before_node=None):
                 for node, cfg in zip(built["nodes"], prepared["configs"]))):
         raise ValueError("Prepared VM batch is incomplete or inconsistent; nothing was created")
     create_one = create_one or create
+    journal = {}
+    if review is not None:
+        token = review.get("capacity_token")
+        if not isinstance(token, str) or not token or not callable(send):
+            raise ValueError("Reviewed VM batch requires its approval and resource writer")
+        journal = {"dispatch_protocol": 2, "writes": [], "review_digest": hashlib.sha256(token.encode()).hexdigest(),
+                   "review_expires": int(token.split(".", 1)[0])}
+    elif send is not None:
+        raise ValueError("A batch resource writer requires reviewed dispatch")
     operation = ops.start("k3s-cluster", f"k3s cluster {built['name']}",
                           {"kind": "VirtualMachine", "name": built["nodes"][0]["name"], "namespace": ns}, "/vms",
                           {"namespace": ns, "name": built["name"], "nodes": copy.deepcopy(built["nodes"]),
                            "first": built["first"], "setup": built["setup"], "started": time.time(),
                            "phase": "provisioning", "phase_at": time.time(), "retain_resources": True,
-                           "created": [], "attempted": ""}, "Checking batch before creating VMs")
+                           "created": [], "attempted": "", **journal}, "Checking batch before creating VMs")
+    with VM_POWER.worker_lock(operation["id"], ops) if journal else nullcontext():
+        writer = VM_WRITE.ResourceWriter(send, VM_WRITE.operation_recorder(ops, operation["id"])) if journal else None
+        return _commit_nodes(prepared, ops, operation, create_one, before_node, writer)
+
+
+def _commit_nodes(prepared, ops, operation, create_one, before_node, writer):
+    ns, built = prepared["namespace"], prepared["plan"]
     made = []
     for node, vm in zip(built["nodes"], prepared["configs"]):
         try:
@@ -225,11 +245,21 @@ def commit(prepared, ops, *, create_one=None, before_node=None):
             # not proof that this VM, its claims or its Secret were not made.
             ops.record_phase(operation["id"], "provisioning", int(10 * len(made) / len(built["nodes"])),
                              f"Creating {node['name']}; awaiting Kubernetes receipt", attempted=node["name"])
-            result = create_one(copy.deepcopy(vm))
+            result = create_one(copy.deepcopy(vm), send=writer) if writer else create_one(copy.deepcopy(vm))
+            if writer:
+                writer.check()  # ownership warnings cannot hide uncertain writes
             identity = (result or {}).get("vm_identity") or {}
             if (identity.get("namespace") != ns or identity.get("name") != node["name"] or
                     not identity.get("uid") or not identity.get("resourceVersion")):
                 raise ValueError("VM creation identity was not returned")
+            if writer:
+                with ops._lock:
+                    current = next(row for row in ops._read() if row["id"] == operation["id"])
+                    receipts = [entry for entry in current["ref"]["writes"] if entry["resource"] == {
+                        "apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "namespace": ns, "name": node["name"]}]
+                    if (not receipts or receipts[-1]["phase"] != "accepted" or receipts[-1]["identity"] != {
+                            key: identity[key] for key in ("uid", "resourceVersion")}):
+                        raise ValueError("VM result does not match its verified creation receipt")
             made.append({"name": node["name"], "identity": identity})
             ops.record_phase(operation["id"], "provisioning", int(10 * len(made) / len(built["nodes"])),
                              f"Created {node['name']}; retaining its resources", created=copy.deepcopy(made), attempted="")
@@ -290,6 +320,10 @@ def status(item):
         return "running", 10 + int(40 * running / len(names)), f"{running} of {len(names)} VMs running"
     if not _answers(first, 6443):
         return "running", 60, f"VMs running; installing k3s on {names[0]} ({first}) - a few minutes"
+    if ref.get("dispatch_protocol") == 2:
+        # A listener is not authenticated guest-cluster readiness. Retain the
+        # journal for explicit inspection until authenticated checks exist.
+        return "running", 80, "VMs are running and the API port answers; guest-cluster identity, readiness and quorum are not verified. Inspect the batch outcome; nothing is replayed."
     if ref.get("setup") == "k3s":
         return "succeeded", 100, (f"k3s answers at https://{first}:6443. The kubeconfig is "
                                   f"/etc/rancher/k3s/k3s.yaml on {names[0]}; the login is ubuntu with your password")

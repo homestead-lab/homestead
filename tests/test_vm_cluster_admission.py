@@ -55,6 +55,10 @@ class VMClusterAdmissionTests(unittest.TestCase):
             meta = value["metadata"]
             meta.update(uid=meta["name"] + "-uid", resourceVersion="1")
             self.objects[path + "/" + meta["name"]] = copy.deepcopy(value)
+        if method == "PATCH":
+            value = {**copy.deepcopy(self.objects[path]), **value,
+                     "metadata": {**self.objects[path]["metadata"], **value["metadata"], "resourceVersion": "2"}}
+            self.objects[path] = copy.deepcopy(value)
         self.after_write(method, path, value)
         return value
 
@@ -91,6 +95,24 @@ class VMClusterAdmissionTests(unittest.TestCase):
         self.assertEqual(400, result[0], result)
         self.assertEqual([], self.sent)
         self.assertEqual([], server.OPS._read())
+
+    def test_reviewed_api_records_every_resource_and_supports_read_only_batch_inspection(self):
+        body = self.reviewed()
+        result = self.call("/api/vm/k3s-cluster", body)
+        self.assertEqual(200, result[0], result)
+        item = server.OPS._read()[0]
+        self.assertEqual(2, item["ref"]["dispatch_protocol"])
+        self.assertEqual(len(self.sent), len(item["ref"]["writes"]))
+        self.assertTrue(all(row["phase"] == "accepted" for row in item["ref"]["writes"]))
+        self.assertTrue(result[1]["operation"]["mutation_recovery"])
+        before = len(self.sent)
+        inspection = server.VM_MUTATION_RECOVERY.preview(item["id"], server.OPS, self.read, "admin")
+        self.assertEqual("cluster", inspection["plan"]["confirm"])
+        self.assertEqual(4, len(inspection["plan"]["resources"]))
+        server.VM_MUTATION_RECOVERY.resolve({"id": item["id"], "capacity_token": inspection["capacity_token"],
+            "confirm_capacity": True, "confirm": "cluster", "acknowledge_unknown": True}, server.OPS, self.read, "admin")
+        self.assertEqual(before, len(self.sent))
+        self.assertEqual("resolved-unknown", server.OPS._read()[0]["ref"]["phase"])
 
     def test_whole_batch_cannot_double_book_individually_available_memory(self):
         self.nodes[0]["allocatable"]["memory"] = "6Gi"

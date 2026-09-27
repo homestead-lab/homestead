@@ -54,13 +54,16 @@ def operation_recorder(ops, ident):
                     raise WriteFailure("VM receipt does not match its recorded intent")
                 entries[-1] = copy.deepcopy(event)
             failed = phase in ("refused", "uncertain", "unverified")
-            item["ref"].update(writes=entries, retain_resources=True, phase="failed" if failed else "writing")
+            active_phase = "provisioning" if item["kind"] == "k3s-cluster" else "writing"
+            item["ref"].update(writes=entries, retain_resources=True, phase="failed" if failed else active_phase)
             target = event["resource"]
             message = f"Write {event['sequence']}: {event['method']} {target['kind']} {target['namespace']}/{target['name']} — {phase}"
             if failed:
                 message += "; inspect retained resources; nothing was retried"
             # These are workflow milestones, not download or guest-health %.
-            progress = max(int(item.get("progress") or 0), 10 if phase == "intent" else 20)
+            progress = int(item.get("progress") or 0)
+            if item["kind"] != "k3s-cluster":
+                progress = max(progress, 10 if phase == "intent" else 20)
             ops._finish(item, "failed" if failed else "running", progress, message)
             ops._write(items)
     return record

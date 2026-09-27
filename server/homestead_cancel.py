@@ -417,6 +417,9 @@ def migration_cancel(item, _options):
 
 def k3s_plan(item):
     ref = item["ref"]
+    if ref.get("dispatch_protocol") == 2:
+        return {"mode": "forget", "can": False, "needs": "admin", "keeps": ["All resources and receipts remain unchanged"],
+                "why_not": "Use Inspect save outcome for this reviewed batch; stopping tracking cannot cancel resource writes"}
     legacy = not ref.get("retain_resources")
     kept = ["All VMs, disks, Secrets and IP-address records remain. Guest installation may continue.",
             "This does not stop or undo installation, confirm readiness, or free any addresses.",
@@ -433,6 +436,8 @@ def k3s_plan(item):
 
 def k3s_cancel(item, _options):
     ref = item["ref"]
+    if ref.get("dispatch_protocol") == 2:
+        raise ValueError("Reviewed VM batches require signed outcome inspection; nothing was cancelled or deleted")
     if ref.get("phase") == "provisioning":
         raise ValueError("VM creation may still be in flight; nothing was cancelled or deleted")
     # Legacy names/labels cannot prove historical ownership. No cluster writes.

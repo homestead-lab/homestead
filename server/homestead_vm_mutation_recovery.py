@@ -14,13 +14,17 @@ import homestead_vm_write as WRITE
 
 def _snapshot(item, read, actor):
     ref = item.get("ref") or {}
-    if (item.get("kind") not in ("vm-create", "vm-edit") or not ref.get("retain_resources")
+    batch = item.get("kind") == "k3s-cluster"
+    if (item.get("kind") not in ("vm-create", "vm-edit", "k3s-cluster") or not ref.get("retain_resources")
             or item.get("status") in ("succeeded", "cancelled", "cancelling")
-            or ref.get("phase") not in ("prepared", "writing", "failed")):
+            or ref.get("phase") not in (("provisioning", "awaiting-ready", "failed") if batch else ("prepared", "writing", "failed"))):
         raise ValueError("This job has no unresolved VM configuration dispatch")
-    if ref.get("dispatch_protocol") != 1:
+    if ref.get("dispatch_protocol") != (2 if batch else 1):
         raise ValueError("This legacy job has no verifiable dispatcher fence; manual journal recovery is required")
-    targets = [{"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "namespace": ref["namespace"], "name": ref["name"]}]
+    names = [row["name"] for row in ref["nodes"]] if batch else [ref["name"]]
+    if not names or len(names) != len(set(names)):
+        raise ValueError("VM recovery target list is malformed")
+    targets = [{"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "namespace": ref["namespace"], "name": name} for name in names]
     entries = ref.get("writes", [])
     for entry in entries:
         if entry["resource"] not in targets:
@@ -50,6 +54,8 @@ def _snapshot(item, read, actor):
                 "The Homestead dispatcher is no longer active, but Kubernetes may still apply a previously sent request late. Current state does not prove its original outcome.",
                 "Accepted receipts prove only that individual resource writes were acknowledged, not that the full save completed or the guest is healthy.",
                 "This releases the job's block on future VM reviews. It never retries, adopts replacements or rolls back resources. The old approval remains consumed."]
+    if batch:
+        warnings.append("All planned VMs are shown, including those not dispatched. Guest installation may continue; this does not verify k3s health, free IP addresses or resume the remaining batch.")
     plan = {"id": item["id"], "blocked": bool(blockers), "blockers": blockers, "warnings": warnings,
             "requires_confirmation": True, "confirm": ref["name"], "resource": {"namespace": ref["namespace"], "name": ref["name"]},
             "action": item["kind"], "dispatch_phase": ref["phase"], "resources": observed}
@@ -76,11 +82,13 @@ def resolve(body, ops, read, actor):
             plan, context = _snapshot(item, read, actor)
             REVIEW.enforce({"id": ident, "capacity_token": body.get("capacity_token"), "confirm_capacity": body.get("confirm_capacity")}, plan, context)
             if body.get("confirm") != plan["confirm"] or body.get("acknowledge_unknown") is not True:
-                raise ValueError("Type the VM name and acknowledge retained resources, the unknown outcome and possible late effects")
+                raise ValueError("Type the reviewed VM or batch name and acknowledge retained resources, the unknown outcome and possible late effects")
             ref = item["ref"]
             ref["recovery"] = {"by": actor, "at": time.time(), "previous_phase": ref["phase"],
                                "resources": copy.deepcopy(plan["resources"]), "outcome": "unknown", "late_effect_acknowledged": True}
             ref.update(phase="resolved-unknown", retain_resources=False)
+            if item["kind"] == "k3s-cluster":
+                item.update(tracking_stopped=True, tracking_stopped_at=ops._now())
             ops._finish(item, "failed", item.get("progress", 0),
                         f"{actor} inspected the incomplete VM save; outcome remains unknown. Resources retained; no retry or rollback; a late effect remains possible.")
             ops._write(items)

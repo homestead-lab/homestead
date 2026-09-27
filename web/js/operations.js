@@ -52,7 +52,7 @@ function renderOperations() {
       <button class="btn sm" onclick="openOperation('${esc(operation.href || "/")}','${esc(operation.id || "")}')">Open</button>
       <button class="btn sm" data-tip="Every step it has taken, and the output of what does its work" onclick="operationLog('${esc(operation.id)}')">${icon("log")}Log</button>
       ${operation.power_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview('${esc(operation.id)}')">Inspect outcome</button>` : ""}
-      ${operation.mutation_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview('${esc(operation.id)}',true)">Inspect save outcome</button>` : ""}
+      ${operation.mutation_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview('${esc(operation.id)}',true)">Inspect ${operation.kind === "k3s-cluster" ? "batch" : "save"} outcome</button>` : ""}
       ${operation.resumable ? `<button class="btn sm pri" data-need="admin" data-tip="Run the steps that are left, from the one it stopped at" onclick="resumeOperation('${esc(operation.id)}')">Carry on</button>` : ""}
       ${operation.cleanable ? `<button class="btn sm ${operation.tracking_only ? "" : "danger"}" data-need="admin" data-tip="${operation.tracking_only ? "Review retained resources before stopping tracking; nothing is deleted" : "Says what it left behind and what cleanup removes"}" onclick="cancelOperation('${esc(operation.id)}')">${operation.tracking_only ? "Review retained resources" : "Clean up"}</button>` : ""}
       ${operation.cancellable ? `<button class="btn sm danger" data-need="operator" data-tip="Says what stopping it would undo and what it cannot, before anything changes" onclick="cancelOperation('${esc(operation.id)}')">${operation.status === "cancelling" ? "Cancel again" : "Cancel"}</button>` : ""}
@@ -157,12 +157,13 @@ window.powerRecoveryReview = async (id, mutation = false) => {
   POWER_RECOVERY = null;
   const sequence = ++POWER_RECOVERY_SEQ;
   const endpoint=mutation ? "/api/operations/vm-recovery" : "/api/operations/power-recovery";
-  modal(mutation ? "Inspect VM save outcome" : "Inspect VM power outcome", '<div id="powerRecoveryLoading" class="empty"><span class="spin2"></span>Checking dispatcher and current VM state…</div>', true, "operation-review");
+  modal(mutation ? "Inspect VM configuration outcome" : "Inspect VM power outcome", '<div id="powerRecoveryLoading" class="empty"><span class="spin2"></span>Checking dispatcher and current VM state…</div>', true, "operation-review");
   try {
     const review = await api(endpoint + "/preview", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
     if (sequence !== POWER_RECOVERY_SEQ || !$("#powerRecoveryLoading")) return;
     const p = review.plan;
     if (!p || typeof p.blocked !== "boolean" || (!p.blocked && !review.capacity_token)) throw new Error("Recovery review is incomplete. Nothing was resolved.");
+    if (mutation && !p.blocked && (!Array.isArray(p.resources) || !p.resources.length)) throw new Error("Resource inspection is incomplete. Nothing was resolved.");
     POWER_RECOVERY = {id,...review,endpoint};
     const observed=p.observed || {}, resource=p.resource || {};
     $("#mbody").innerHTML = `<div class="update-review">
@@ -177,7 +178,7 @@ window.powerRecoveryReview = async (id, mutation = false) => {
         <p class="small" style="overflow-wrap:anywhere">Reviewed VM UID: ${esc(resource.original_uid)}<br>Current VM UID: ${esc(observed.vm?.uid || "not found")}<br>Current instance UID: ${esc(observed.instance?.uid || "not found")}</p></div>` : ""}
       ${(p.warnings || []).map(w=>`<div class="note warn small">${esc(w)}</div>`).join("")}
       ${!p.blocked ? `<div class="f"><label>Type ${esc(p.confirm)} to confirm inspection</label><input id="powerRecoveryName" autocomplete="off" oninput="powerRecoveryReady()"></div>
-        <label class="check"><input id="powerRecoveryAck" type="checkbox" onchange="powerRecoveryReady()"> I inspected the VM${mutation ? " and retained resources" : ""}. I accept that the old request may still take effect late and that resolving this record allows a new, separately reviewed ${mutation ? "VM change" : "power action"}.</label>` : ""}
+        <label class="check"><input id="powerRecoveryAck" type="checkbox" onchange="powerRecoveryReady()"> I inspected the ${p.action === "k3s-cluster" ? "planned VMs" : "VM"}${mutation ? " and retained resources" : ""}. I accept that the old request may still take effect late and that resolving this record allows a new, separately reviewed ${mutation ? "VM change" : "power action"}.</label>` : ""}
       <div class="modalactions"><button class="btn" onclick="closeModal()">Keep tracking</button><button class="btn danger" id="powerRecoveryApply" disabled onclick="powerRecoveryResolve()">Record unknown outcome</button></div></div>`;
     if ($(".modalbox")) $(".modalbox").scrollTop=0;
   } catch(error) {

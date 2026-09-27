@@ -140,18 +140,22 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
     }
     with _lock:
         items = _read()
-        if kind in POWER_RECEIPTS.KINDS:
+        if POWER_RECEIPTS.protected(kind, ref):
             consumed = POWER_RECEIPTS.find(DATA_DIR, ref.get("review_digest"))
             if consumed:
                 raise ValueError(f"This approval already has job {consumed}; inspect history instead of repeating it. The displayed job may have been cleared.")
             for existing in items:
-                if existing.get("kind") not in POWER_RECEIPTS.KINDS:
+                if existing.get("kind") not in POWER_RECEIPTS.KINDS | {"k3s-cluster"}:
                     continue
                 previous = existing.get("ref") or {}
                 if previous.get("review_digest") == ref.get("review_digest"):
                     raise ValueError(f"This approval already has job {existing['id']}; inspect it instead of repeating the request")
-                if (previous.get("namespace"), previous.get("name")) == (ref.get("namespace"), ref.get("name")) and (
+                same_batch = kind == existing.get("kind") == "k3s-cluster" and (
+                    previous.get("namespace"), previous.get("name")) == (ref.get("namespace"), ref.get("name"))
+                if (same_batch or _vm_targets(kind, ref) & _vm_targets(existing.get("kind"), previous)) and (
                         existing.get("status") not in TERMINAL or previous.get("retain_resources")):
+                    if existing.get("tracking_stopped") and existing.get("status") in TERMINAL:
+                        continue
                     raise ValueError(f"VM job {existing['id']} is still active or needs recovery; inspect it first")
         if kind == "node-power" and any(i.get("kind") == kind and i.get("status") not in TERMINAL and
                                         i.get("ref", {}).get("node") == ref.get("node") for i in items):
@@ -169,12 +173,17 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
     return _public(item)
 
 
+def _vm_targets(kind, ref):
+    names = [row.get("name") for row in ref.get("nodes", [])] if kind == "k3s-cluster" else [ref.get("name")]
+    return {(ref.get("namespace"), name) for name in names if name}
+
+
 def record_phase(operation_id, phase, progress, message, **ref_updates):
     """Persist synchronous maintenance progress before irreversible steps."""
     with _lock:
         items = _read()
         item = next(i for i in items if i["id"] == operation_id)
-        if item.get("status") in TERMINAL or (item.get("kind") in POWER_RECEIPTS.KINDS and item.get("status") == CANCELLING):
+        if item.get("status") in TERMINAL or (POWER_RECEIPTS.protected(item.get("kind"), item.get("ref") or {}) and item.get("status") == CANCELLING):
             raise ValueError("Maintenance job has ended; refusing further actions")
         item["ref"].update(ref_updates, phase=phase, phase_at=time.time())
         _finish(item, "failed" if phase == "failed" else "running", progress, message)
@@ -199,6 +208,10 @@ def _public(item):
     if item.get("kind") in ("vm-create", "vm-edit"):
         out["cancellable"] = False  # a configuration write cannot be undone by forgetting its job
         out["mutation_recovery"] = bool(item.get("ref", {}).get("retain_resources"))
+    if item.get("kind") == "k3s-cluster" and item.get("ref", {}).get("dispatch_protocol") == 2:
+        out["cancellable"] = out["cleanable"] = False
+        out["mutation_recovery"] = bool(item.get("ref", {}).get("retain_resources"))
+        out["batch_name"] = item["ref"]["name"]
     if item.get("kind") == "snapshot-delete":
         out["cancellable"] = False  # Longhorn merging cannot be undone or safely interrupted.
     if item.get("kind") == "k3s-cluster" and item.get("ref", {}).get("retain_resources") and item["ref"].get("phase") == "provisioning":
@@ -213,7 +226,7 @@ def _public(item):
 
 
 def _receipt_needed(item):
-    if item.get("kind") not in POWER_RECEIPTS.KINDS:
+    if not POWER_RECEIPTS.protected(item.get("kind"), item.get("ref") or {}):
         return False
     ref = item.get("ref") or {}
     return bool(ref.get("retain_resources") or float(ref.get("review_expires") or 0) >= time.time())

@@ -17,6 +17,10 @@ KINDS = {"vm-power", "vm-create", "vm-edit"}
 _MISSING = object()
 
 
+def protected(kind, ref):
+    return kind in KINDS or (kind == "k3s-cluster" and ref.get("dispatch_protocol") == 2)
+
+
 def _load(path):
     try:
         with open(path, encoding="utf-8") as handle:
@@ -50,7 +54,7 @@ def find(directory, digest):
 
 
 def remember(directory, items):
-    pending = [item for item in items if item.get("kind") in KINDS]
+    pending = [item for item in items if protected(item.get("kind"), item.get("ref") or {})]
     if not pending:
         return
     receipts, initialized = _read(directory)

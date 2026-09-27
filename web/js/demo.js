@@ -1057,23 +1057,27 @@ ssh_pwauth: true
     "/api/operations/vm-recovery/preview": (url, init) => {
       const id=JSON.parse(init.body).id, op=(window.__demoOps || []).find(row=>row.id===id);
       if (!op?.mutation_recovery) throw new Error("This job has no incomplete VM save");
+      const batch=op.kind==="k3s-cluster", name=batch?op.batch_name:op.resource.name;
       return {capacity_token:op.demo_dispatching?null:"demo-vm-recovery",plan:{id,blocked:!!op.demo_dispatching,requires_confirmation:true,
         blockers:op.demo_dispatching?["The VM configuration dispatcher is active; wait before inspecting its outcome."]:[],
-        resource:op.resource,action:op.kind,dispatch_phase:"failed",confirm:op.resource.name,
+        resource:{...op.resource,name},action:op.kind,dispatch_phase:"failed",confirm:name,
         resources:[{resource:{apiVersion:"kubevirt.io/v1",kind:"VirtualMachine",namespace:op.resource.namespace,name:op.resource.name},
           current:{uid:"demo-vm-identity"},expected:{uid:"demo-vm-identity"},relationship:"same identity",last_write:"uncertain"},
           {resource:{apiVersion:"v1",kind:"Secret",namespace:op.resource.namespace,name:op.resource.name+"-login"},
-          current:{uid:"demo-secret-identity"},expected:{uid:"demo-secret-identity"},relationship:"same identity",last_write:"accepted"}],
+          current:{uid:"demo-secret-identity"},expected:{uid:"demo-secret-identity"},relationship:"same identity",last_write:"accepted"},
+          ...(batch?[{resource:{apiVersion:"kubevirt.io/v1",kind:"VirtualMachine",namespace:op.resource.namespace,name:name+"-agent-1"},
+            current:null,expected:null,relationship:"not found",last_write:"not dispatched"}]:[])],
         warnings:["All VM, disk, image and Secret resources are retained. No retry, rollback or deletion is sent.",
           "The earlier request may still take effect late. Accepted receipts do not prove a complete save or guest health.",
           "Resolving releases this tracking block, but the old approval stays consumed. A new action requires a fresh review."]}};
     },
     "/api/operations/vm-recovery/resolve": (url, init) => {
       const body=JSON.parse(init.body),op=(window.__demoOps || []).find(row=>row.id===body.id);
-      if (!op?.mutation_recovery || op.demo_dispatching || body.capacity_token!=="demo-vm-recovery" || body.confirm!==op.resource.name || !body.confirm_capacity || !body.acknowledge_unknown)
+      if (!op?.mutation_recovery || op.demo_dispatching || body.capacity_token!=="demo-vm-recovery" || body.confirm!==(op.kind==="k3s-cluster"?op.batch_name:op.resource.name) || !body.confirm_capacity || !body.acknowledge_unknown)
         throw new Error("Review the retained resources and confirm the VM name first");
       Object.assign(op,{status:"failed",mutation_recovery:false,cancellable:false,dismissible:false,
         message:"Admin inspected the incomplete save. Resources retained, outcome unknown; no retry or rollback.",finished_at:new Date().toISOString()});
+      if(op.kind==="k3s-cluster")op.tracking_stopped=true;
       return {ok:true,detail:"Tracking resolved as unknown; no cluster change was sent",operation:op};
     },
     "/api/operations/cancel-plan": (url, init) => {

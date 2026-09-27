@@ -715,6 +715,21 @@ old approval stays consumed, and a new change requires its own review. Until
 inspection resolves tracking, another reviewed save/start/restart/resume for that
 VM is blocked; emergency stop remains available independently.
 
+New reviewed k3s VM batches use the same journal across all their resource writes.
+**Inspect batch outcome** lists every planned VM (including ones never sent),
+plus the image, Secret and claim targets that were attempted. Confirm the batch
+name, not a single VM's name. Inspection takes the dispatcher's shared lock and
+rechecks resource identities/versions; it cannot resolve a batch while a sender
+is active. Earlier accepted writes and uncertain targets are retained without
+cleanup, automatic resume or replay. A fresh batch or individual reviewed VM
+action cannot overlap an unresolved batch target. Legacy jobs remain tracking-only
+and are not given invented receipts or automatic deletion rights.
+
+For these batches, an open guest API port is reported only as connectivity, not
+authenticated k3s identity, readiness or quorum. The job remains unverified until
+inspection or timeout; resolving tracking does not prove installation succeeded.
+Guest installation may continue and no IP-address records are freed.
+
 Copies on different nodes all mount Homestead's data claim, so more than one
 copy needs a claim every node can mount: ReadWriteMany on a class Longhorn
 serves through its share manager. A migratable class - Harvester's own and

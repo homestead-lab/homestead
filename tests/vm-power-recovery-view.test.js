@@ -76,3 +76,31 @@ test("VM save recovery uses its own endpoint, escaped receipts and truthful rete
   await t.ctx.powerRecoveryResolve();await t.ctx.powerRecoveryResolve();
   assert.equal(t.sent.length,2);assert.equal(t.sent[1].path,'/api/operations/vm-recovery/resolve');
 });
+
+test("batch recovery lists unsent VMs and confirms the batch name, not a single VM",async()=>{
+  const t=setup(),original=t.ctx.api;
+  t.ctx.api=async(path,options)=>{
+    const result=await original(path,options);
+    if(path.endsWith('/preview')) {
+      delete result.plan.observed;
+      Object.assign(result.plan,{action:'k3s-cluster',confirm:'cluster',resource:{namespace:'lab',name:'cluster'},
+        resources:[{resource:{kind:'VirtualMachine',namespace:'lab',name:'server-1'},last_write:'accepted',relationship:'same identity',expected:{uid:'one'},current:{uid:'one'}},
+          {resource:{kind:'VirtualMachine',namespace:'lab',name:'agent-1'},last_write:'not dispatched',relationship:'not found',expected:null,current:null}]});
+    }
+    return result;
+  };
+  await t.ctx.powerRecoveryReview('batch-job',true);
+  const html=t.fields['#mbody'].innerHTML;
+  assert.match(html,/planned VMs and retained resources/);assert.match(html,/agent-1/);assert.match(html,/not dispatched/);
+  t.fields['#powerRecoveryAck'].checked=true;t.fields['#powerRecoveryName'].value='server-1';
+  await t.ctx.powerRecoveryResolve();assert.equal(t.sent.length,1);
+  t.fields['#powerRecoveryName'].value='cluster';await t.ctx.powerRecoveryResolve();
+  assert.equal(t.sent[1].body.confirm,'cluster');assert.equal(t.sent[1].path,'/api/operations/vm-recovery/resolve');
+});
+
+test("configuration recovery cannot be acknowledged without resource inspection data",async()=>{
+  const t=setup();await t.ctx.powerRecoveryReview('job',true);
+  assert.match(t.fields['#mbody'].innerHTML,/Resource inspection is incomplete/);
+  t.fields['#powerRecoveryAck'].checked=true;t.fields['#powerRecoveryName'].value='guest';
+  await t.ctx.powerRecoveryResolve();assert.equal(t.sent.length,1);
+});

@@ -3732,7 +3732,7 @@ def reviewed_vm_cluster(body):
     def before_node(config, made):
         receipts.update({row["name"]: row["identity"] for row in made})
         admit()
-    def create_one(config):
+    def create_one(config, send=None):
         index = next(i for i, item in enumerate(prepared) if item["name"] == config["name"])
         def after_images(resolved):
             # Image downloads can resolve a new storage class. Pin and re-admit
@@ -3742,7 +3742,7 @@ def reviewed_vm_cluster(body):
             VM_CLAIMS.pin(resolved["vm"], claims, resolved["claims"])
             prepared[index] = resolved
             admit()
-        result = IMP.commit_vm(prepared[index], before_save=after_images)
+        result = IMP.commit_vm(prepared[index], before_save=after_images, send=send)
         if result.get("address"):
             try:
                 IPAM.save_record({"ip": result["address"], "name": config["name"], "kind": "static",
@@ -3753,7 +3753,7 @@ def reviewed_vm_cluster(body):
                 # Halt the batch with its pre-dispatch recovery intent retained.
                 raise ValueError("VM created but its IP-address record could not be saved; inspect it before continuing") from None
         return result
-    return K3SC.commit(batch, OPS, create_one=create_one, before_node=before_node)
+    return K3SC.commit(batch, OPS, create_one=create_one, before_node=before_node, review=cfg, send=IMP.ksend)
 
 
 def selectable_storage_classes(rows=None):
