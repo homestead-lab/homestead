@@ -92,6 +92,7 @@ const DIALOGS = [
   ["k3s-cluster", "vms", "k3sCluster()"],
   ["image-updates", "workloads", "imageUpdateCenter()"],
   ["image-update-review", "workloads", "imageUpdateReview('lab','frigate')"],
+  ["image-update-batch", "workloads", "imageUpdateCenter()", "text:Stage selected"],
   ["workload-group", "workloads", "wlGroup('lab','frigate')"],
   ["workload-groups", "workloads", "manageWorkloadGroups()"],
   ["workload-start-capacity", "workloads", "wlScale('lab','doublecommander',1)"],

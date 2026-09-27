@@ -345,7 +345,7 @@ function renderWorkloads() {
       <span class="dim xs hide-sm" title="When the registries were last asked">${checkedAgo()}</span>
       ${updateCount ? `<button class="pill warn pillbtn" title="Review and stage image updates" onclick="imageUpdateCenter()">${updateCount} update${updateCount === 1 ? "" : "s"}</button>` : ""}
       ${updateErrors ? `<button class="pill crit pillbtn" data-tip="${updateErrors} image${updateErrors === 1 ? "" : "s"} could not be compared with ${updateErrors === 1 ? "its" : "their"} registry; every other image was" onclick="imageUpdateCenter()">${updateErrors} <span class="hide-sm">check${updateErrors === 1 ? "" : "s"} </span>failed</button>` : ""}
-      <span class="hide-sm">${layoutSwitch("containers", "renderWorkloads")}</span>
+      ${layoutSwitch("containers", "renderWorkloads")}
       <button class="btn" onclick="checkImageUpdates()" title="Ask the registries for newer images">↻ Check<span class="hide-sm"> images</span></button>
       <button class="btn pri hide-sm" data-need="operator" onclick="go('deploy')">＋ Deploy</button></div></div>
 
@@ -403,11 +403,13 @@ function workloadActions(w, update, off, compact = false) {
   // has stay put whether or not an update is waiting.
   return `${update?.available ? `<button class="btn sm pri" title="Review and install the available image update" data-need="operator" onclick="imageUpdateReview('${w.ns}','${w.name}')">${icon("update")}Update</button>` : ""}
           <button class="${cls}" title="View live container logs" aria-label="Logs for ${esc(w.name)}" onclick="wlLogs('${w.ns}','${w.pods[0] ? w.pods[0].name : ""}','${w.name}')">${label("Logs", "log")}</button>
-          ${off ? "" : `<button class="${cls}" title="Restart: replace every pod in this workload with a fresh one" aria-label="Restart ${esc(w.name)}" data-need="operator" onclick="wlRestart('${w.ns}','${w.name}')">${label("Restart", "restart")}</button>`}
+          ${off ? "" : `<button class="${cls} sm-more" title="Restart: replace every pod in this workload with a fresh one" aria-label="Restart ${esc(w.name)}" data-need="operator" onclick="wlRestart('${w.ns}','${w.name}')">${label("Restart", "restart")}</button>`}
           ${off ? `<button class="${cls}" title="Start this workload" aria-label="Start ${esc(w.name)}" onclick="wlScale('${w.ns}','${w.name}',1)">${label("Start", "play")}</button>`
-                : `<button class="${cls}" title="Scale this workload to zero" aria-label="Stop ${esc(w.name)}" onclick="${w.self ? `wlStopSelf('${w.ns}','${w.name}')` : `wlScale('${w.ns}','${w.name}',0)`}">${label("Stop", "stop")}</button>`}
+                : `<button class="${cls} sm-more" title="Scale this workload to zero" aria-label="Stop ${esc(w.name)}" onclick="${w.self ? `wlStopSelf('${w.ns}','${w.name}')` : `wlScale('${w.ns}','${w.name}',0)`}">${label("Stop", "stop")}</button>`}
           <details class="actionmenu"><summary class="btn sm" title="More actions" aria-label="More actions for ${esc(w.name)}">⋯</summary>
             <div class="actionmenu-pop">
+              ${off ? "" : `<button class="sm-only" data-need="operator" onclick="this.closest('details').open=false;wlRestart('${w.ns}','${w.name}')">${icon("restart")}Restart</button>
+              <button class="sm-only" onclick="this.closest('details').open=false;${w.self ? `wlStopSelf('${w.ns}','${w.name}')` : `wlScale('${w.ns}','${w.name}',0)`}">${icon("stop")}Stop</button>`}
               <button aria-label="Console for ${esc(w.name)}" title="Open an audited interactive shell in a running container" data-need="operator" onclick="this.closest('details').open=false;wlConsole('${w.ns}','${w.name}')">${icon("console")}Console</button>
               <button aria-label="Edit ${esc(w.name)}" title="Edit image, resources, environment, storage and hardware" onclick="this.closest('details').open=false;wlEdit('${w.ns}','${w.name}')">${icon("edit")}Edit</button>
               ${(w.ports || []).length > 1 ? `<button aria-label="Main port of ${esc(w.name)}" title="Which port the card links to first - usually its web UI" onclick="this.closest('details').open=false;wlPrimaryPort('${w.ns}','${w.name}')">${icon("ext")}Main port</button>` : ""}
@@ -857,12 +859,33 @@ function shortImage(ref) {
   return digest ? `${tail} · ${digest.replace(/^sha256:/, "").slice(0, 12)}` : tail;
 }
 
+/* The part of an image that changes: a tag, or the start of a digest. */
+function imageVersion(ref) {
+  const text = String(ref || "");
+  const [name, digest] = text.split("@");
+  if (digest) return digest.replace(/^sha256:/, "").slice(0, 7);
+  const tail = name.split("/").pop() || name;
+  return tail.includes(":") ? tail.slice(tail.lastIndexOf(":") + 1) : "latest";
+}
+
+/* The same warning for several apps is said once, with the apps it is about. */
+function groupedConcerns(rows) {
+  const byText = new Map();
+  rows.forEach(({config, preview}) => (preview.capacity.warnings || []).forEach(text => {
+    if (!byText.has(text)) byText.set(text, []);
+    byText.get(text).push(config.name);
+  }));
+  return [...byText].map(([text, names]) => rows.length > 1
+    ? `${text.replace(/\.$/, "")} - ${names.length === rows.length ? `all ${rows.length} apps` : names.join(", ")}` : text);
+}
+
 let IMAGE_REVIEW = null, IMAGE_REVIEW_SEQUENCE = 0;
 async function reviewImageActions(items, action = "update") {
   const sequence = ++IMAGE_REVIEW_SEQUENCE;
   IMAGE_REVIEW = null;
   const rollback = action === "rollback";
-  modal(rollback ? "Review rollback" : "Review image updates",
+  const count = items.length;
+  modal(rollback ? "Review rollback" : count > 1 ? `Update ${count} apps` : "Review image update",
     '<div id="imageReviewLoading" class="empty"><span class="spin2"></span> Checking exact images and rollout capacity…</div>', true);
   try {
     const rows = [];
@@ -876,28 +899,29 @@ async function reviewImageActions(items, action = "update") {
     if (!rows.length) throw new Error("Select at least one image change");
     IMAGE_REVIEW = rows;
     const blocked = rows.some(row => row.preview.capacity.blocked);
-    // Every concern in one callout, named by the workload it is about.
-    const concerns = rows.flatMap(({config, preview}) => (preview.capacity.warnings || [])
-      .map(w => rows.length > 1 ? `${config.name}: ${w}` : w));
     const many = rows.length > 1;
-    const image = image => `<code title="${esc(image)}">${esc(shortImage(image))}</code>`;
+    const concerns = groupedConcerns(rows);
+    const list = concerns.length ? `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : "";
+    // One line per app: its name, and what its image moves from and to.
+    const apps = rows.map(({config, preview}) => {
+      const flagged = preview.capacity.blocked || (preview.capacity.warnings || []).length;
+      const change = preview.images.map(i => `<span class="upd-change" title="${esc(i.before)} → ${esc(i.after)}">${preview.images.length > 1 ? `${esc(i.container)} ` : ""}<code>${esc(imageVersion(i.before))}</code> → <code>${esc(imageVersion(i.after))}</code></span>`).join("");
+      return `<li><span class="upd-name">${flagged ? `<span class="upd-flag ${preview.capacity.blocked ? "bad" : "warn"}" title="See the notes above">!</span>` : ""}<b>${esc(config.name)}</b> <span class="dim">${esc(config.ns)}</span></span>${change}</li>`;
+    }).join("");
     $("#mbody").innerHTML = `<div class="update-review ui-stack">
-      ${UI.lead(`${rollback ? "Returns" : "Installs the new image for"} ${many ? `<b>${rows.length} workloads</b>, one at a time with Homestead last` : `<b>${esc(rows[0].config.ns)}/${esc(rows[0].config.name)}</b>`}${rollback ? ` to the image ${many ? "each" : "it"} ran before` : ""}. ${many ? "Each restarts" : "It restarts"} while it changes.`)}
-      ${blocked ? UI.callout("bad", "Placement blocks this change.", `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul><p>Resolve the placement blockers before starting this selection.</p>`)
-        : concerns.length ? UI.callout("warn", "Check before going ahead", `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>`) : ""}
-      ${UI.table([{ label: "Container" }, { label: "Now" }, { label: rollback ? "Back to" : "New" }],
-        rows.flatMap(({config, preview}) => preview.images.map(i => [
-          `${esc(i.container)}${many ? `<span class="sub">${esc(config.ns)}/${esc(config.name)}</span>` : ""}`, image(i.before), image(i.after)])))}
-      ${UI.more("Capacity and placement", rows.map(({config, preview}) =>
-        `${many ? `<p><b>${esc(config.ns)}/${esc(config.name)}</b></p>` : ""}${deployCapacityHtml(preview.capacity, false, true)}`).join(""), blocked)}
-      ${UI.more("Exact images and how updates run", `
-        ${UI.facts(rows.flatMap(({preview}) => preview.images.flatMap(i => [
-          [`${i.container} now`, `<code>${esc(i.before)}</code>`], [`${i.container} ${rollback ? "back to" : "new"}`, `<code>${esc(i.after)}</code>`],
-          [`${i.container} recovery`, `<code>${esc(i.rollback)}</code>`]])))}
-        <p>Exact image digests and full-pod capacity are checked again before each change. Updates run one at a time, Homestead last.
-        Failure, lost contact or an expired review stops the remaining queue. Closing this dialog stops unstarted updates; a rollout already submitted continues.</p>`)}
-      ${blocked ? "" : UI.ack("imageCapacityApprove", `I approve ${many ? "these changes" : "this change"} and the restart${concerns.length ? ", including the capacity risks above" : ""}`, { onchange: "imageReviewReady()" })}
-      ${UI.actions(UI.cancel() + UI.button(rollback ? "Start rollback" : many ? "Install updates" : "Install update", "imageReviewedApply()", { kind: "pri", id: "imageCapacityApply", disabled: true }))}
+      <p class="ui-lead">${many ? `One at a time, Homestead last. ` : ""}${many ? "Each restarts" : "It restarts"} while it changes${rollback ? `, back to the image ${many ? "each" : "it"} ran before` : ""}.</p>
+      ${blocked ? UI.callout("bad", "Placement blocks this change.", `${list}<p>Resolve the placement blockers before starting.</p>`)
+        : concerns.length ? UI.callout("warn", "", list) : ""}
+      <ul class="upd-apps">${apps}</ul>
+      ${UI.more("Details: capacity, exact images, how it runs", `
+        ${rows.map(({config, preview}) => `${many ? `<p><b>${esc(config.ns)}/${esc(config.name)}</b></p>` : ""}
+          ${UI.facts(preview.images.flatMap(i => [[`${i.container} now`, `<code>${esc(i.before)}</code>`],
+            [`${i.container} ${rollback ? "back to" : "new"}`, `<code>${esc(i.after)}</code>`], [`${i.container} recovery`, `<code>${esc(i.rollback)}</code>`]]))}
+          ${deployCapacityHtml(preview.capacity, false, true)}`).join("")}
+        <p>Exact image digests and full-pod capacity are checked again before each change. Failure, lost contact or an expired review stops the remaining queue.
+        Closing this dialog stops unstarted updates; a rollout already submitted continues.</p>`, blocked)}
+      ${UI.actions(UI.cancel() + UI.button(rollback ? "Start rollback" : many ? `Update ${rows.length}` : "Update", "imageReviewedApply()", { kind: "pri", id: "imageCapacityApply", disabled: true }),
+        blocked ? "" : `<label class="upd-ok"><input type="checkbox" id="imageCapacityApprove" onchange="imageReviewReady()"> ${concerns.length ? "Accept the restart and the notes above" : "Accept the restart"}</label>`)}
     </div>`;
   } catch (error) {
     IMAGE_REVIEW = null;
