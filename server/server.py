@@ -6294,7 +6294,7 @@ ADMIN_ROUTES = {
     # A class change stops workloads and swaps their volume underneath them.
     "/api/volumes/reclass/start", "/api/volumes/old-copies/remove", "/api/self/samba",
     "/api/addons/smb/remove",
-    "/api/shares/repair",
+    "/api/shares/repair", "/api/shares/users", "/api/shares/users/delete",
     # Carrying a stopped job on runs its remaining steps - a swap, for one.
     "/api/operations/resume",
     "/api/operations/power-recovery/preview", "/api/operations/power-recovery/resolve",
@@ -6826,6 +6826,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("flow2", 8, get_flow2))
             if p == "/api/shares":
                 return self._send(200, SHARES.list_shares())
+            if p == "/api/shares/users":
+                return self._send(200, SHARES.list_users())
             if p == "/api/shares/server":
                 return self._send(200, samba_state())
             if p == "/api/shares/nfs/server":
@@ -7384,7 +7386,7 @@ class H(BaseHTTPRequestHandler):
                     b["name"], b.get("size_gb", 10), b.get("user", "lab"),
                     b.get("password"), b.get("public", False), b.get("read_only", False),
                     b.get("pvc"), b.get("sub_path", ""), b.get("storage_class"),
-                    b.get("access_mode"), b.get("new_name", ""), str(b.get("samba_ip") or "").strip())
+                    b.get("access_mode"), b.get("new_name", ""), str(b.get("samba_ip") or "").strip(), b.get("account_mode"))
                 deployment = result.pop("deployment", None)
                 if deployment:
                     result["operation"] = OPS.start(
@@ -7393,6 +7395,17 @@ class H(BaseHTTPRequestHandler):
                         "/shares", {"namespace": SMB_NAMESPACE, "name": SMB_NAME, "undo": "keep"},
                         "Restarting Samba with the new share")
                 return self._send(200, {"ok": True, **result})
+            if p == "/api/shares/users":
+                result = SHARES.save_user(b.get("user"), b.get("password"), b.get("action", "create"))
+                if result.pop("deployment", None):
+                    result["operation"] = OPS.start(
+                        "deployment", f"Update SMB user {result['user']}",
+                        {"kind": "Deployment", "name": SMB_NAME, "namespace": SMB_NAMESPACE},
+                        "/shares", {"namespace": SMB_NAMESPACE, "name": SMB_NAME, "undo": "keep"},
+                        "Restarting Samba with updated credentials")
+                return self._send(200, {"ok": True, **result})
+            if p == "/api/shares/users/delete":
+                return self._send(200, {"ok": True, **SHARES.delete_user(b.get("user"))})
             if p == "/api/shares/edit":
                 result = SHARES.edit_share(
                     b["name"], b.get("size_gb"), b.get("user", "lab"),

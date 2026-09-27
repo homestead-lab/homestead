@@ -41,9 +41,9 @@ A share either:
 Then choose **guest** (anyone on the LAN) or **private** (a username and
 password), and **read-only** or **read/write**.
 
-Samba keeps one password per user, so a second private share for the same user
-reuses its password when the field is left blank, and a new password changes it
-for every share that user has - the editor says so first.
+Samba keeps one password per user. Select an existing SMB user in **New share**
+to reuse it, or add a new user. Use **SMB users** beside **New share** to change
+a password for all of that user's private shares.
 
 ## Connecting
 
@@ -169,3 +169,22 @@ definitions, credentials, claims or files. Removing a share itself first drops
 its NFS export; the volume still remains. Homestead owns the NFS workload's
 image and mounts, so change them from Network Shares and Add-ons rather than
 through the generic container editor.
+
+## SMB users
+
+Use **SMB users** beside **New share** to add accounts, see their private shares,
+change a password, or remove an unused user. SMB users are separate from
+Homestead sign-ins. These controls require administrator access.
+
+In **New share**, select an existing user to reuse its saved password, or choose
+**Add a new user** and enter a username and password. Selecting an existing user
+does not reveal or reset its password. Guest shares do not need an account.
+
+Samba has one password per user across all its shares. Changing it in **SMB users**
+updates every private share assigned to that user and restarts Samba, briefly
+disconnecting clients. Passwords stay in the Kubernetes Secret and are never
+returned by the user inventory. Existing share credentials appear automatically.
+
+Removing a share keeps its user available for later shares. A user can only be
+removed after its private shares have been reassigned or removed; removing the
+user deletes its saved credential, not share data.
