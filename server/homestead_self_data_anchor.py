@@ -80,7 +80,8 @@ def _journal(job, operation, namespace):
 
 
 def _validate(state, namespace):
-    _keys(state, ("protocol", "operation", "deployment", "source", "destination", "replicas", "phase", "journal"))
+    _keys(state, ("protocol", "operation", "deployment", "source", "destination", "replicas", "phase", "journal"),
+          ("plan", "copy_receipt"))
     if type(state["protocol"]) is not int or state["protocol"] != 1:
         raise Held("The data handoff protocol is unsupported")
     if not isinstance(state["operation"], str) or not re.fullmatch(r"[a-f0-9]{24}", state["operation"]):
@@ -95,6 +96,51 @@ def _validate(state, namespace):
     if state["phase"] not in PHASES:
         raise Held("The data handoff phase is invalid")
     _journal(state["journal"], state["operation"], namespace)
+    if "plan" in state:
+        plan = state["plan"]
+        _keys(plan, ("deployment_shape", "source_pvc_shape", "source_pv", "destination_pvc", "destination_pv",
+                     "worker", "nodes", "data_volume", "target_shareable"))
+        for key in ("deployment_shape", "source_pvc_shape"):
+            _hash(plan[key])
+        for key in ("source_pv", "destination_pvc", "destination_pv", "worker"):
+            fact = plan[key]
+            _keys(fact, ("name", "uid", "shape"))
+            _name(fact["name"])
+            _identity({"uid": fact["uid"], "resourceVersion": "validated-separately"})
+            _hash(fact["shape"])
+        if plan["destination_pvc"]["name"] != state["destination"]:
+            raise Held("The data handoff plan names a different destination")
+        if (plan["destination_pvc"]["uid"] == state["source"]["uid"]
+                or plan["destination_pv"]["uid"] == plan["source_pv"]["uid"]
+                or plan["destination_pv"]["name"] == plan["source_pv"]["name"]):
+            raise Held("The data handoff volumes must have distinct identities")
+        if not isinstance(plan["nodes"], list) or not plan["nodes"]:
+            raise Held("The data handoff node inventory is incomplete")
+        seen = set()
+        for node in plan["nodes"]:
+            _keys(node, ("name", "uid", "boot_id"))
+            _name(node["name"])
+            _identity({"uid": node["uid"], "resourceVersion": node["boot_id"]})
+            if node["name"] in seen:
+                raise Held("The data handoff node inventory has duplicates")
+            seen.add(node["name"])
+        _name(plan["data_volume"])
+        if type(plan["target_shareable"]) is not bool:
+            raise Held("The data handoff access-mode plan is invalid")
+    if "copy_receipt" in state:
+        receipt = state["copy_receipt"]
+        _keys(receipt, ("state", "worker_uid"), ("manifest", "files", "bytes"))
+        if not state.get("plan") or receipt["worker_uid"] != state["plan"]["worker"]["uid"]:
+            raise Held("The data copy receipt belongs to another worker")
+        if receipt["state"] not in ("intent", "verified", "uncertain"):
+            raise Held("The data copy receipt state is invalid")
+        if receipt["state"] == "verified":
+            _keys(receipt, ("state", "worker_uid", "manifest", "files", "bytes"))
+            _hash(receipt["manifest"])
+            if any(type(receipt[k]) is not int or receipt[k] < 0 for k in ("files", "bytes")):
+                raise Held("The data copy totals are invalid")
+        elif set(receipt) != {"state", "worker_uid"}:
+            raise Held("An unverified data copy cannot carry a completion receipt")
     encoded = json.dumps(state, sort_keys=True, separators=(",", ":"), allow_nan=False)
     if len(encoded.encode()) > MAX_BYTES:
         raise Held("The data handoff control record is full; nothing more was sent")
@@ -215,6 +261,37 @@ class Anchor:
         if (self.state["phase"] == "done" or phase != PHASES[PHASES.index(self.state["phase"]) + 1]
                 or any(e["state"] != "accepted" for e in self.state["journal"]["ref"]["storage_writes"])):
             raise Held("The data handoff cannot skip a phase or advance past an unresolved write")
+        if "plan" in self.state and self.state["phase"] == "copy" and self.state.get("copy_receipt", {}).get("state") != "verified":
+            raise Held("The data handoff cannot advance without a verified copy receipt")
         state = copy.deepcopy(self.state)
         state["phase"] = phase
+        self._replace(state)
+
+    def configure(self, plan):
+        """Pin reviewed, non-secret facts once, before this worker stops anything."""
+        self.handle()
+        if self.state["phase"] != "prepare" or "plan" in self.state:
+            raise Held("The data handoff plan is already pinned and cannot be replaced")
+        state = copy.deepcopy(self.state)
+        state["plan"] = copy.deepcopy(plan)
+        self._replace(state)
+
+    def copy_started(self):
+        self.handle()
+        if (self.state["phase"] != "copy" or "copy_receipt" in self.state or "plan" not in self.state
+                or any(e["state"] != "accepted" for e in self.state["journal"]["ref"]["storage_writes"])):
+            raise Held("A data copy cannot start again or outside its reviewed phase")
+        state = copy.deepcopy(self.state)
+        state["copy_receipt"] = {"state": "intent", "worker_uid": state["plan"]["worker"]["uid"]}
+        self._replace(state)
+
+    def copy_finished(self, receipt=None):
+        self.handle()
+        if self.state.get("copy_receipt", {}).get("state") != "intent":
+            raise Held("The data copy has no pending intent that this worker can finish")
+        if receipt is not None:
+            _keys(receipt, ("manifest", "files", "bytes"))
+        state = copy.deepcopy(self.state)
+        state["copy_receipt"] = {"state": "verified" if receipt is not None else "uncertain",
+                                 "worker_uid": state["plan"]["worker"]["uid"], **(receipt or {})}
         self._replace(state)
