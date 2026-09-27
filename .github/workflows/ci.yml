@@ -13,6 +13,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  source-copy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Rehearse SSH trust and interrupted copies in an isolated fixture
+        run: |
+          docker build -f tests/integration/source-copy.Dockerfile -t homestead-source-copy-fixture:ci .
+          docker run --rm --network none --mount "type=bind,source=$PWD,target=/repo,readonly" homestead-source-copy-fixture:ci
   installer-screens:
     # The installer's and node doctor's menus, driven in tmux as a person
     # would: a menu that stops appearing fails here, before a release.

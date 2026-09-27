@@ -8,10 +8,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 
 import homestead_imports as imports
 import server
+from fixtures_source import source
 
 
-SOURCE = {"name": "tower", "host": "192.0.2.10", "user": "root",
-          "kind": "unraid", "base_path": "/mnt/user/appdata"}
+SOURCE = source(host="192.0.2.10")
 
 
 class ImportMappingTests(unittest.TestCase):
@@ -660,7 +660,7 @@ class NestedFolderTests(unittest.TestCase):
                                       create_workload=False))
 
         script = sent[-1]["spec"]["template"]["spec"]["containers"][0]["command"][-1]
-        appdata, recordings = [line for line in script.splitlines() if line.startswith("sshpass -p \"$SRC_PASS\" rsync")]
+        appdata, recordings = [line for line in script.splitlines() if line.startswith("sshpass -e rsync")]
         self.assertIn("--exclude=/recordings/ ", appdata)
         self.assertNotIn("--exclude", recordings, "the recordings copy excludes nothing")
 

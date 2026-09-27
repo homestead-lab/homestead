@@ -8,12 +8,18 @@ workload from another Homestead cluster.
 
 ## From Unraid or a Docker host
 
-This moves a running container across - its settings *and* its appdata.
+This imports a container's settings and appdata. Stop its writers before copying,
+or use consistent snapshot/backup paths; this is not live application migration.
 
 1. **Add the source.** **Import → ＋ Container source** takes the server's
    address, its type (Unraid, Proxmox or any SSH host), an SSH username and
    password, and where its appdata lives (`/mnt/user/appdata` on Unraid).
-   Homestead lists its containers from Docker itself.
+   An optional SSH port defaults to 22. **Save and verify** first reads a public
+   host key without sending a password. Compare its SHA256 fingerprint with
+   `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the source's own console
+   (the dialog supplies the command for the selected key type), then explicitly
+   trust it. Use a physical console or an already trusted management session.
+   Homestead can then list its containers from Docker itself.
 2. **Pick a container.** Its image, ports, variables, devices and privileges
    become the Deploy form here.
 3. **Decide where each folder goes.** An Unraid container maps several host
@@ -38,6 +44,11 @@ This moves a running container across - its settings *and* its appdata.
    memory limit. Confirm new/reused claims, possible file replacement and any
    capacity warnings. Hard placement blockers cannot be overridden. The server
    repeats admission before creating resources; review tokens expire after ten minutes.
+   Choose **Source data safety**: all writers stopped, or consistent snapshot/backup
+   paths. For Docker-discovered imports in stopped mode, the copy checks the original
+   container ID is stopped, unpaused and not restarting before copying and after
+   each folder. It never stops the source for you. Other writers and changes between
+   checks remain your responsibility; snapshot mode skips the Docker check.
 6. **Copy, then start.** The copy preserves numeric owners and permissions.
    Transfers shows byte progress; Recent jobs records setup steps and the copy log.
    Its percentage represents workflow milestones, not bytes. The application is created **stopped**;
@@ -50,6 +61,28 @@ explicitly selected, Bound and not deleting. Stop their consumers before copying
 including consumers of RWX claims: shared access does not make overwriting live
 application data safe. The review is not a distributed scheduler reservation;
 external writers and concurrent starts can still race it.
+
+### Source identity and credentials
+
+Existing saved sources also need **Verify source** before authenticated connections.
+SSH uses only the explicitly pinned host key; changed keys are never accepted
+automatically. A scan alone is not identity verification ([OpenSSH guidance](https://man.openbsd.org/ssh-keyscan.1)).
+Trust approval expires after ten minutes and is bound to the administrator, source,
+key and source-directory version. A failed or uncertain save requires a fresh scan.
+
+New sources receive unique immutable Kubernetes credential Secrets, not passwords
+in the source ConfigMap. Restrict namespace/Secret access and enable encryption at
+rest as appropriate. Passwords reach helpers through Secret-backed environment
+variables, not command-line arguments. A source cannot overwrite an existing name.
+Changing a pinned key affects new helpers only: already-created helpers retain
+their original key and credential reference.
+
+Removing a source removes its directory entry, **not** running copy Jobs or their
+credential Secrets. This is not credential revocation. After inspecting and removing
+all helpers that still reference a Secret, an administrator can remove that unused
+Secret separately. An interrupted source save may leave an unreferenced credential
+Secret; inspect it rather than reusing it for a different source. Revoke credentials
+on the source host when required.
 
 ### Interrupted imports and cleanup
 
@@ -85,6 +118,12 @@ This is a one-shot setup journal, not an atomic multi-resource transaction, resu
 file transfer or distributed scheduler reservation. External writers can still race
 checks. Complete the upgrade on all Homestead replicas before importing; mixed-version
 and live host-loss rehearsals remain separate validation work.
+
+CI runs a disposable real SSH/rsync fixture with no external networking: it rejects
+changed keys and running/replaced Docker source identities, interrupts a copy,
+checks source/borrowed files remain, and explicitly starts a fresh copy with hash
+verification. This tests helper behavior, not live Kubernetes host loss, HA,
+filesystem free-space guarantees or application consistency.
 
 A tmpfs RAM disk on Unraid (Frigate's `/tmp/cache`, for example) becomes a RAM
 disk here, not a volume full of old cache.

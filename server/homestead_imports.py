@@ -15,6 +15,7 @@ import hashlib
 import os
 import re
 import shlex
+import secrets
 import time
 import urllib.error
 import urllib.parse
@@ -26,6 +27,8 @@ import homestead_runtime as RUNTIME
 import homestead_pod_resources as RESOURCES
 import homestead_import_job as IMPORT_JOB
 import homestead_operations as OPS
+import homestead_source_ssh as SOURCE_SSH
+import homestead_capacity_review as SOURCE_REVIEW
 
 kget = ksend = create_pvc = build_deployment = None
 NS = "lab"
@@ -58,63 +61,80 @@ def _sources_map():
     return NAMES.object_name("sources", NS)
 
 
-def list_sources():
+SOURCE_LOCK = SHARED.SharedLock("import-sources", strict=True, directory=lambda: OPS.DATA_DIR)
+
+
+def _sources_state():
     try:
         cm = kget(f"/api/v1/namespaces/{NS}/configmaps/{_sources_map()}")
-        return json.loads(cm.get("data", {}).get("sources.json", "[]"))
-    except Exception:
-        return []
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None, []
+        raise
+    rows = json.loads(cm.get("data", {}).get("sources.json", "[]"))
+    if not isinstance(rows, list) or any(not isinstance(row, dict) or not SAFE.fullmatch(str(row.get("name", ""))) for row in rows):
+        raise ValueError("Source inventory is invalid; refusing to replace it")
+    if len({row["name"] for row in rows}) != len(rows):
+        raise ValueError("Source inventory has duplicate names")
+    return cm, rows
 
 
-def save_sources(srcs):
+def list_sources():
+    return _sources_state()[1]
+
+
+def save_sources(srcs, current):
     name = _sources_map()
     body = {"apiVersion": "v1", "kind": "ConfigMap",
             "metadata": {"name": name, "namespace": NS},
             "data": {"sources.json": json.dumps(srcs, indent=2)}}
-    try:
-        kget(f"/api/v1/namespaces/{NS}/configmaps/{name}")
+    if current is not None:
+        meta = current.get("metadata", {})
+        if not meta.get("uid") or not meta.get("resourceVersion"):
+            raise ValueError("Source inventory identity is unavailable")
+        body["metadata"].update(uid=meta["uid"], resourceVersion=meta["resourceVersion"])
         return ksend("PUT", f"/api/v1/namespaces/{NS}/configmaps/{name}", body)
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return ksend("POST", f"/api/v1/namespaces/{NS}/configmaps", body)
-        raise
+    return ksend("POST", f"/api/v1/namespaces/{NS}/configmaps", body)
 
 
-def add_source(name, host, user, password, kind="unraid", base_path="/mnt/user/appdata"):
-    if not SAFE.match(name):
+def add_source(name, host, user, password, kind="unraid", base_path="/mnt/user/appdata", port=22):
+    if not SAFE.fullmatch(name):
         raise ValueError("name must be lowercase letters, numbers and dashes")
-    srcs = [s for s in list_sources() if s["name"] != name]
-    srcs.append({"name": name, "host": host, "user": user, "kind": kind,
-                 "base_path": base_path, "added": time.strftime("%Y-%m-%d %H:%M")})
-    save_sources(srcs)
-    # credentials live in a Secret, never in the ConfigMap
-    sec = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
-           "metadata": {"name": source_secret(name), "namespace": NS},
-           "stringData": {"password": password or ""}}
-    try:
-        existing = source_secret(name)
-        kget(f"/api/v1/namespaces/{NS}/secrets/{existing}")
-        ksend("PUT", f"/api/v1/namespaces/{NS}/secrets/{existing}", sec)
-    except urllib.error.HTTPError as e:
-        if e.code != 404:
-            raise
+    endpoint = SOURCE_SSH.connection({"host": host, "user": user, "port": port})
+    if kind not in ("unraid", "proxmox", "ssh") or not str(base_path).startswith("/") or any(c in str(base_path) for c in "\r\n\0"):
+        raise ValueError("Choose a source type and an absolute appdata path")
+    with SOURCE_LOCK:
+        cm, srcs = _sources_state()
+        if any(row["name"] == name for row in srcs):
+            raise ValueError("That source already exists; verify it, or use a new name for a different connection")
+        # Immutable credentials keep a partial save or later reuse of a source
+        # name from changing credentials underneath an existing copy Job.
+        secret = f"homestead-src-{name}-{secrets.token_hex(4)}"
+        sec = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque", "immutable": True,
+               "metadata": {"name": secret, "namespace": NS, "labels": {"homestead.io/import-source": name}},
+               "stringData": {"password": password or ""}}
         ksend("POST", f"/api/v1/namespaces/{NS}/secrets", sec)
-    return srcs
+        srcs.append({"name": name, **endpoint, "kind": kind, "base_path": base_path,
+                     "credential_secret": secret, "added": time.strftime("%Y-%m-%d %H:%M")})
+        save_sources(srcs, cm)  # failure retains the unused Secret, never adopts it
+        return srcs
 
 
 def del_source(name):
-    srcs = [s for s in list_sources() if s["name"] != name]
-    save_sources(srcs)
-    try:
-        ksend("DELETE", f"/api/v1/namespaces/{NS}/secrets/{source_secret(name)}")
-    except urllib.error.HTTPError:
-        pass
-    return srcs
+    with SOURCE_LOCK:
+        cm, srcs = _sources_state()
+        if not any(s["name"] == name for s in srcs):
+            raise ValueError("Source no longer exists")
+        srcs = [s for s in srcs if s["name"] != name]
+        save_sources(srcs, cm)
+        # Existing helpers retain their immutable credential reference. Removing
+        # the directory entry is not credential revocation or Job cancellation.
+        return srcs
 
 
-def source_secret(name):
+def source_secret(name, src=None):
     """This source's password secret."""
-    return f"homestead-src-{name}"
+    return (src or {}).get("credential_secret") or f"homestead-src-{name}"
 
 
 def _source(name):
@@ -122,6 +142,45 @@ def _source(name):
     if not s:
         raise ValueError(f"no import source named {name}")
     return s
+
+
+def _trust_context(cm, src, actor):
+    meta = (cm or {}).get("metadata", {})
+    if not meta.get("uid") or not meta.get("resourceVersion"):
+        raise ValueError("Source inventory identity is unavailable")
+    return {"action": "source-trust", "actor": actor, "namespace": NS,
+            "uid": meta["uid"], "version": meta["resourceVersion"], "source": src}
+
+
+def scan_source(name, actor):
+    cm, srcs = _sources_state()
+    src = next((s for s in srcs if s["name"] == name), None)
+    if src is None:
+        raise ValueError("Source no longer exists")
+    context = _trust_context(cm, src, actor)
+    found = SOURCE_SSH.candidate(run_probe("key-" + name, SOURCE_SSH.scan_script(src), src, authenticated=False))
+    config = {"name": name, "key": found["key"]}
+    previous = (src.get("ssh_trust") or {}).get("fingerprint", "")
+    return {**config, **found, "connection": SOURCE_SSH.connection(src), "previous": previous,
+            "changed": bool(previous and previous != found["fingerprint"]),
+            "capacity_token": SOURCE_REVIEW.issue(config, context)}
+
+
+def trust_source(body, actor):
+    with SOURCE_LOCK:
+        cm, srcs = _sources_state()
+        src = next((s for s in srcs if s["name"] == body.get("name")), None)
+        if src is None:
+            raise ValueError("Source no longer exists")
+        context = _trust_context(cm, src, actor)
+        found = SOURCE_SSH.key(body.get("key"))
+        config = {"name": src["name"], "key": found["key"], "capacity_token": body.get("capacity_token")}
+        if body.get("confirm_fingerprint") is not True or not SOURCE_REVIEW.valid(config, context):
+            raise ValueError("Scan again and confirm the fingerprint from the source host's console")
+        src["ssh_trust"] = {**found, "connection": SOURCE_SSH.connection(src), "by": actor,
+                            "verified_at": time.strftime("%Y-%m-%d %H:%M")}
+        save_sources(srcs, cm)
+        return {"ok": True, "sources": srcs}
 
 
 # --------------------------------------------------------------- discovery
@@ -134,21 +193,13 @@ def browse_source(name, path=None):
     """
     s = _source(name)
     p = path or s.get("base_path", "/mnt/user/appdata")
-    remote_cmd = f"ls -1 {shlex.quote(p)} 2>/dev/null | head -200"
-    script = ("sshpass -p \"$SRC_PASS\" ssh -o StrictHostKeyChecking=no "
-              "-o LogLevel=ERROR "
-              "-o UserKnownHostsFile=/dev/null "
-              + shlex.quote(f"{s['user']}@{s['host']}") + " "
-              + shlex.quote(remote_cmd))
+    remote_cmd = f"entries=$(ls -1 {shlex.quote(p)}) || exit $?; printf '%s\\n' \"$entries\" | head -200"
+    script = _ssh_script(s, remote_cmd)
     return run_probe(f"browse-{name}", script, s)
 
 
 def _ssh_script(src, remote_cmd):
-    return ("sshpass -p \"$SRC_PASS\" ssh -o StrictHostKeyChecking=no "
-            "-o LogLevel=ERROR "
-            "-o UserKnownHostsFile=/dev/null "
-            + shlex.quote(f"{src['user']}@{src['host']}") + " "
-            + shlex.quote(remote_cmd))
+    return SOURCE_SSH.command(src, remote_cmd)
 
 
 def source_containers(name):
@@ -159,7 +210,7 @@ def source_containers(name):
     """
     src = _source(name)
     lines = run_probe(f"containers-{name}", _ssh_script(
-        src, "docker ps -a --format '{{json .}}' 2>/dev/null | head -200"), src)
+        src, "entries=$(docker ps -a --format '{{json .}}') || exit $?; printf '%s\\n' \"$entries\" | head -200"), src)
     out = []
     for line in lines:
         try:
@@ -257,6 +308,8 @@ def inspect_source_container(name, container):
     return {
         **privileges,
         "name": (item.get("Name") or container).lstrip("/"),
+        "source_container_id": item.get("Id", ""),
+        "source_running": bool((item.get("State") or {}).get("Running")),
         "image": config.get("Image", ""),
         "icon": (labels.get("net.unraid.docker.icon", "")
                  or labels.get("homestead.icon", "")),
@@ -299,34 +352,50 @@ def _config_mount(mounts, base_path):
     return next((m for m in binds if m["path"].rstrip("/") in CONFIG_MOUNTS), None)
 
 
-def run_probe(tag, script, src, timeout=70):
+def run_probe(tag, script, src, timeout=70, *, authenticated=True):
     """Run a one-shot pod, wait for it, return its stdout."""
-    pod = f"homestead-probe-{re.sub(r'[^a-z0-9-]', '-', tag)[:30]}-{int(time.time()) % 100000}"
+    setup = SOURCE_SSH.setup(src) if authenticated else ""
+    pod = f"homestead-probe-{re.sub(r'[^a-z0-9-]', '-', tag)[:30]}-{secrets.token_hex(5)}"
     body = {
         "apiVersion": "v1", "kind": "Pod",
         "metadata": {"name": pod, "namespace": NS, "labels": NAMES.labels("probe")},
         "spec": {"restartPolicy": "Never", "terminationGracePeriodSeconds": 1,
+                 "automountServiceAccountToken": False, "activeDeadlineSeconds": timeout,
                  "containers": [{
                      "name": "probe", "image": "alpine:3.20",
+                     "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"memory": "256Mi"}},
                      "command": ["sh", "-c",
-                                 "apk add --no-cache openssh-client sshpass >/dev/null 2>&1; " + script],
-                     "env": [{"name": "SRC_PASS", "valueFrom": {"secretKeyRef": {
-                         "name": source_secret(src["name"]), "key": "password"}}}],
+                                 "set -e\napk add --no-cache openssh-client sshpass >/dev/null 2>&1\n" + setup + script],
+                     "env": [{"name": "SSHPASS", "valueFrom": {"secretKeyRef": {
+                         "name": source_secret(src["name"], src), "key": "password"}}}] if authenticated else [],
                  }]},
     }
-    ksend("POST", f"/api/v1/namespaces/{NS}/pods", body)
+    receipt = ksend("POST", f"/api/v1/namespaces/{NS}/pods", body)
+    uid = receipt.get("metadata", {}).get("uid")
+    if not uid or receipt.get("metadata", {}).get("name") != pod:
+        raise ValueError("Probe creation was not confirmed; no retry or name-based cleanup was attempted")
     out, deadline = "", time.time() + timeout
     try:
         while time.time() < deadline:
             time.sleep(2)
-            st = kget(f"/api/v1/namespaces/{NS}/pods/{pod}").get("status", {})
+            current = kget(f"/api/v1/namespaces/{NS}/pods/{pod}")
+            if current.get("metadata", {}).get("uid") != uid:
+                raise ValueError("Probe identity changed; its result is not trusted")
+            st = current.get("status", {})
             if st.get("phase") in ("Succeeded", "Failed"):
+                if st["phase"] != "Succeeded":
+                    raise ValueError("SSH probe failed. Check the source key, login and SSH service; changed keys require a new fingerprint review.")
                 break
+        else:
+            raise ValueError("SSH probe timed out; no result was accepted")
         import urllib.request
         out = _pod_logs(pod)
+        if kget(f"/api/v1/namespaces/{NS}/pods/{pod}").get("metadata", {}).get("uid") != uid:
+            raise ValueError("Probe identity changed while reading logs; its result is not trusted")
     finally:
         try:
-            ksend("DELETE", f"/api/v1/namespaces/{NS}/pods/{pod}")
+            ksend("DELETE", f"/api/v1/namespaces/{NS}/pods/{pod}",
+                  {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": uid}})
         except Exception:
             pass
     return [l.strip() for l in out.splitlines() if l.strip()]
@@ -367,9 +436,9 @@ def measure_source_paths(name, paths, seconds=25):
     commands = []
     for candidate in wanted:
         quoted = shlex.quote(candidate)
-        commands.append(f"echo \"### {candidate}\"; [ -e {quoted} ] || echo MISSING; "
+        commands.append(f"printf '%s\\n' {shlex.quote('### ' + candidate)}; [ -e {quoted} ] || echo MISSING; "
                         f"[ -e {quoted} ] && {{ timeout {seconds} du -sk {quoted} 2>/dev/null "
-                        f"|| echo TIMEOUT; }}")
+                        f"|| echo TIMEOUT; }}; true")
     lines = run_probe(f"measure-{name}", _ssh_script(src, "; ".join(commands)), src,
                       timeout=min(180, seconds * len(wanted) + 40))
 
@@ -723,6 +792,8 @@ def prepare_import(cfg):
     mappings = import_mappings(cfg)
     # What the job copies; a mapping mounted empty is only the workload's.
     copied = [row for row in mappings if not row.get("medium") and row.get("copy", True)]
+    if copied:
+        SOURCE_SSH.verified(src)
     pvc = volumes[0]["name"] if volumes else ""
 
     # Each volume is judged on what is going into it, not on the import total:
@@ -768,6 +839,11 @@ def prepare_import(cfg):
     # folder with nothing to say which folder it is on.
     steps = ["set -e",
              "apk add --no-cache rsync openssh-client sshpass >/dev/null 2>&1"]
+    if copied:
+        steps.append(SOURCE_SSH.setup(src))
+    source_check = SOURCE_SSH.source_check(src, cfg) if copied else ""
+    if source_check:
+        steps.append(source_check)
     # rsync fails per folder, halfway through, after the volume exists. Asking
     # the source about all of them first turns that into one clear refusal.
     sources = [mapping["remote_path"] for mapping in copied]
@@ -775,10 +851,7 @@ def prepare_import(cfg):
         remote_check = "; ".join(f"[ -e {shlex.quote(source)} ] || echo {shlex.quote(source)}"
                                  for source in sources)
         steps.append("echo '==> checking the source folders exist'")
-        steps.append(
-            'missing=$(sshpass -p "$SRC_PASS" ssh -o StrictHostKeyChecking=no '
-            "-o UserKnownHostsFile=/dev/null "
-            f"{shlex.quote(src['user'] + '@' + src['host'])} {shlex.quote(remote_check)})")
+        steps.append("missing=$(" + _ssh_script(src, remote_check) + ")")
         steps.append('if [ -n "$missing" ]; then echo "==> missing $missing"; exit 4; fi')
     total = len(copied)
     # Measured up front, the copy can report bytes rather than folder counts.
@@ -791,7 +864,8 @@ def prepare_import(cfg):
     for index, mapping in enumerate(copied, start=1):
         base = mount_of[mapping["pvc"]]
         target = (base + "/" + mapping["folder"]) if mapping["folder"] else base
-        spec = shlex.quote(f"{src['user']}@{src['host']}:{mapping['remote_path']}/")
+        host = f"[{src['host']}]" if ":" in src["host"] else src["host"]
+        spec = shlex.quote(f"{src['user']}@{host}:{mapping['remote_path']}/")
         label = mapping["folder"] or (mapping["pvc"] if len(volumes) > 1 else "appdata")
         steps.append(f"mkdir -p {shlex.quote(target)}")
         weight = f" ({mapping['bytes']}B)" if mapping.get("bytes") else ""
@@ -809,14 +883,16 @@ def prepare_import(cfg):
             # made every file root-owned, which is why an imported container
             # could not write to data a fresh deployment would have created
             # itself.
-            'sshpass -p "$SRC_PASS" rsync -aH --numeric-ids --info=progress2 '
-            "-e 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' "
+            "sshpass -e rsync -aH --protect-args --numeric-ids --info=progress2 "
+            + "-e " + shlex.quote(SOURCE_SSH.transport(src)) + " "
             # A leading slash anchors the pattern to the folder being copied,
             # so /recordings means that one and not every directory so named.
             + "".join(f"--exclude={shlex.quote(pattern + '/')} "
                       for pattern in mapping.get("exclude") or [])
             + f"{spec} {shlex.quote(target + '/')}")
         steps.append("echo " + shlex.quote(f"==> step {index}/{total} {label} complete"))
+        if source_check:
+            steps.append(source_check)
     # Only when asked: the copy already keeps whatever the source had.
     owner_uid, owner_gid = _ownership(cfg)
     if owner_uid is not None:
@@ -846,14 +922,14 @@ def prepare_import(cfg):
         # must distinguish a completed copy from a failed or missing Job.
         "spec": {"backoffLimit": 0,
                  "template": {"metadata": {"labels": NAMES.labels("import")},
-                              "spec": {"restartPolicy": "Never",
+                              "spec": {"restartPolicy": "Never", "automountServiceAccountToken": False,
                                        "containers": [{
                                            "name": "copy", "image": "alpine:3.20",
                                            "resources": {"requests": {"cpu": "100m", "memory": "128Mi"},
                                                          "limits": {"memory": "512Mi"}},
                                            "command": ["sh", "-c", script],
-                                           "env": [{"name": "SRC_PASS", "valueFrom": {"secretKeyRef": {
-                                               "name": source_secret(src["name"]), "key": "password"}}}],
+                                           "env": [{"name": "SSHPASS", "valueFrom": {"secretKeyRef": {
+                                               "name": source_secret(src["name"], src), "key": "password"}}}],
                                            "volumeMounts": [
                                                {"name": f"vol{index}", "mountPath": mount_of[volume["name"]]}
                                                for index, volume in enumerate(volumes)],
