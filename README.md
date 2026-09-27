@@ -730,6 +730,18 @@ claims as part of admission. Fresh-state reviews show the observed storage-class
 profile choice and warn that initialization is not recovery; a stopped VM's full
 history cannot be inferred from its current status. The planned claim is only a
 placement placeholder: KubeVirt provisions it, and provisioning is not guaranteed.
+Starting or editing an existing stopped VM with no state PVC requires a separate
+fresh-state acknowledgement and its exact typed name, independently of memory
+overrides. The job records that consent; it never claims the old state was
+recovered. Known missing state on a running instance and ownership/binding
+conflicts remain non-overridable. No state volume is deleted or adopted.
+
+Automatic backup-tracking selectors use the VM's outer labels OR its namespace
+labels. Namespace identity/version is bound to the review, and VM label changes
+cannot skip admission as cosmetic edits. The observed KubeVirt version and feature
+gates determine known persistent-state/backup defaults; unknown builds are called
+out. Resume checks the existing instance, not future-instance selectors. Selecting
+backup tracking does not configure a backup target or prove recoverability.
 
 Reviewed VM creation and edits record a job before creating or changing images,
 login Secrets, claims or the VM. Each resource write has a durable intent and an

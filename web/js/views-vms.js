@@ -242,6 +242,20 @@ function vmCard(v) {
     <div class="row vm-actions">${vmActions(v)}</div></div>`;
 }
 
+window.vmStateInitHtml = (plan, prefix, changed) => {
+  const state = plan.vm?.state_initialization;
+  if (!state || plan.blocked) return "";
+  return `<div class="reviewbox vm-state-confirm"><b>Initialize fresh VM state?</b>
+    <div class="note warn">${esc(state.reason)} Cancel and inspect the original state volume and backups if this VM has run before.</div>
+    <label class="check"><input type="checkbox" id="${prefix}StateAck" onchange="${changed}()"> I intend to initialize fresh state, not recover the original TPM/EFI or backup state</label>
+    <div class="f"><label for="${prefix}StateName">Type ${esc(state.name)} to confirm</label><input id="${prefix}StateName" autocomplete="off" spellcheck="false" oninput="${changed}()"></div></div>`;
+};
+window.vmStateInitReady = (plan, prefix) => !plan.vm?.state_initialization ||
+  ($(`#${prefix}StateAck`)?.checked === true && $(`#${prefix}StateName`)?.value === plan.vm.state_initialization.name);
+window.vmStateInitBody = (plan, prefix) => plan.vm?.state_initialization ? {
+  ack_state_initialization: $(`#${prefix}StateAck`)?.checked === true,
+  confirm_state_name: $(`#${prefix}StateName`)?.value || ""
+} : {};
 let VM_POWER_REVIEW = null, VM_POWER_SEQUENCE = 0, VM_POWER_BUSY = false;
 window.vmPower = async (ns, name, action) => {
   if (VM_POWER_BUSY && ["start", "restart", "unpause"].includes(action)) return toast("A VM power request is being sent; wait for its result", "bad");
@@ -274,6 +288,7 @@ window.vmPowerReview = async config => {
         <p class="small">Restart policy: ${esc(facts.policy_before || "unknown")}${facts.policy_after !== facts.policy_before ? ` → <b>${esc(facts.policy_after)}</b>` : " (unchanged)"}</p></div>
       ${plan.blockers?.length ? `<div class="note bad">${plan.blockers.map(esc).join(" · ")}</div>` : ""}
       ${deployCapacityHtml(plan)}
+      ${vmStateInitHtml(plan, "vmPower", "vmPowerReviewReady")}
       ${!plan.blocked ? '<label class="check"><input type="checkbox" id="vmPowerApprove" onchange="vmPowerReviewReady()"> Proceed with this power action and accept the displayed memory, placement, storage/state and restart-policy risks</label>' : ""}
       <div class="modalactions"><button class="btn" onclick="modalBack()">Cancel</button><button class="btn pri" id="vmPowerApply" disabled onclick="vmPowerReviewedApply()">${esc(VM_ACTIONS[frozen.action]?.[0] || "Apply")} reviewed VM</button></div></div>`;
   } catch (error) {
@@ -283,7 +298,7 @@ window.vmPowerReview = async config => {
   }
 };
 window.vmPowerReviewReady = () => {
-  const ready = !!(VM_POWER_REVIEW && !VM_POWER_BUSY && !VM_POWER_REVIEW.capacity.blocked && $("#vmPowerApprove")?.checked);
+  const ready = !!(VM_POWER_REVIEW && !VM_POWER_BUSY && !VM_POWER_REVIEW.capacity.blocked && $("#vmPowerApprove")?.checked && vmStateInitReady(VM_POWER_REVIEW.capacity, "vmPower"));
   if ($("#vmPowerApply")) $("#vmPowerApply").disabled = !ready;
   return ready;
 };
@@ -296,7 +311,7 @@ window.vmPowerReviewedApply = async () => {
   button.textContent = "Sending reviewed power action…";
   try {
     const result = await api("/api/vm/power", {method:"POST", headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({...review.config, capacity_token:review.capacity_token, confirm_capacity:true})});
+      body:JSON.stringify({...review.config, ...vmStateInitBody(review.capacity, "vmPower"), capacity_token:review.capacity_token, confirm_capacity:true})});
     if (result.operation && window.noteOperation) noteOperation(result.operation);
     toast(result.detail, "ok");
     modalBack(); setTimeout(() => refresh(true), 1200);
@@ -538,6 +553,7 @@ window.vmEditReview = async (config, restartAfter = false) => {
         <p class="small muted">${facts.admission_needed ? "Resource and policy changes may take effect immediately through KubeVirt. Host RAM estimates include launcher overhead but are not a configured memory limit." : "No new launcher capacity is needed for this metadata or stop/manual-policy edit."}</p></div>
       ${plan.blockers?.length ? `<div class="note bad">${plan.blockers.map(esc).join(" · ")}</div>` : ""}
       ${facts.admission_needed ? deployCapacityHtml(plan) : `<div class="note warn">${(plan.warnings || []).map(esc).join(" ")}</div>`}
+      ${vmStateInitHtml(plan, "vmEdit", "vmEditReviewReady")}
       ${review.volumes?.length ? `<div class="reviewbox"><b>New disks</b>${review.volumes.map(v => `<p class="small"><span class="mono">${esc(v.name)}</span> · ${esc(v.size)} · ${esc(v.storage_class)} · ${esc(v.access_mode)}</p>`).join("")}</div>` : ""}
       <p class="small muted">${restartAfter ? "After saving, a separate restart review checks the saved VM and current host capacity. Saving does not automatically send Restart." : "Save sends no Restart request. If needed, restart the VM through its power controls afterward."}</p>
       ${!plan.blocked ? '<label class="check"><input type="checkbox" id="vmEditApprove" onchange="vmEditReviewReady()"> Save these exact changes and accept the displayed memory, policy and partial-save risks</label>' : ""}
@@ -550,7 +566,7 @@ window.vmEditReview = async (config, restartAfter = false) => {
 };
 window.vmEditReviewBack = () => { VM_EDIT_REVIEW = null; ++VM_EDIT_SEQUENCE; modalBack(); };
 window.vmEditReviewReady = () => {
-  const ready = !!(VM_EDIT_REVIEW && !VM_EDIT_BUSY && !VM_EDIT_REVIEW.capacity.blocked && $("#vmEditApprove")?.checked);
+  const ready = !!(VM_EDIT_REVIEW && !VM_EDIT_BUSY && !VM_EDIT_REVIEW.capacity.blocked && $("#vmEditApprove")?.checked && vmStateInitReady(VM_EDIT_REVIEW.capacity, "vmEdit"));
   if ($("#vmEditApply")) $("#vmEditApply").disabled = !ready;
   return ready;
 };
@@ -563,7 +579,7 @@ window.vmEditReviewedApply = async () => {
   let saved = false;
   try {
     const result = await api("/api/vm/edit", {method:"POST", headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({...review.config, capacity_token:review.capacity_token, confirm_capacity:true})});
+      body:JSON.stringify({...review.config, ...vmStateInitBody(review.capacity, "vmEdit"), capacity_token:review.capacity_token, confirm_capacity:true})});
     if (result.operation && window.noteOperation) noteOperation(result.operation);
     saved = true;
     toast(result.detail, "ok"); closeModal(); refresh(true);

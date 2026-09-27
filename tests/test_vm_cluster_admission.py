@@ -300,6 +300,22 @@ class VMClusterAdmissionTests(unittest.TestCase):
         self.assertFalse(any(obj.get("metadata", {}).get("name", "").startswith("persistent-state-for") for _, _, obj in self.sent))
         self.assertNotIn("DELETE", [method for method, _, _ in self.sent])
 
+    def test_backup_namespace_change_mid_batch_retains_first_vm_and_stops(self):
+        self.persistent_batch()
+        self.config["spec"]["configuration"].update(developerConfiguration={"featureGates": ["IncrementalBackup"]},
+            changedBlockTrackingLabelSelectors={"namespaceLabelSelector": {"matchLabels": {"backup": "yes"}}})
+        namespace = {"metadata": {"name": "lab", "uid": "ns-uid", "resourceVersion": "1", "labels": {"backup": "yes"}}}
+        self.objects["/api/v1/namespaces/lab"] = namespace
+        body = self.reviewed()
+        def changed(method, path, value):
+            if path.endswith("/virtualmachines"):
+                namespace["metadata"]["resourceVersion"] = "2"
+        self.after_write = changed
+        result = self.call("/api/vm/k3s-cluster", body)
+        self.assertEqual(400, result[0], result)
+        self.assertEqual(1, sum(path.endswith("/virtualmachines") for _, path, _ in self.sent))
+        self.assertNotIn("DELETE", [method for method, _, _ in self.sent])
+
 
 if __name__ == "__main__":
     unittest.main()

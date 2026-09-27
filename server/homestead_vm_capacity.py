@@ -217,7 +217,7 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
     elif expanded_spec is not None:
         dependency_vm["spec"]["template"]["spec"] = copy.deepcopy(expanded_spec)
     state = STATE.inspect(dependency_vm, dependency_vm["spec"]["template"]["spec"], configuration, read,
-                          vmi=vmi, version=kubevirt_version)
+                          vmi=vmi, version=kubevirt_version, cold=action != "unpause")
     blockers.extend(state["blockers"])
     warnings.extend(state["warnings"])
     planned_claims = dict(planned_claims or {})
@@ -250,5 +250,6 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
     result["vm"] = {"action": action, "guest_memory_gb": round(model["guest_memory_bytes"] / 1024**3, 2),
                     "request_is_lower_bound": action != "unpause", "ownership_known": ownership_known,
                     "cpu_request_is_estimate": action != "unpause" and model["cpu_request_is_estimate"],
+                    "state_initialization": state["initialization"],
                     "resident_node": resident_node, "context": context}
     return result

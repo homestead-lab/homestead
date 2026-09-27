@@ -22,6 +22,7 @@ def dispatch(body, context, ops, send, before_send):
     observations = context["observations"]
     vm, vmi = observations["vm"], observations.get("vmi") or {}
     ref = {"namespace": vm["namespace"], "name": vm["name"], "uid": vm["uid"],
+           "state_initialization_acknowledged": body.get("ack_state_initialization") is True and body.get("confirm_state_name") == vm["name"],
            "version": vm["resourceVersion"], "previous_vmi_uid": vmi.get("uid", ""), "action": action,
            "review_digest": hashlib.sha256(body["capacity_token"].encode()).hexdigest(),
            "review_expires": int(body["capacity_token"].split(".", 1)[0]),

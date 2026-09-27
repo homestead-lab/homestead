@@ -15,6 +15,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
     running = fixtures.VMCapacityTests.running
     disk = fixtures.VMCapacityTests.disk
     persistent_state = fixtures.VMCapacityTests.persistent_state
+    fresh_state = fixtures.VMCapacityTests.fresh_state
 
     def setUp(self):
         fixtures.VMCapacityTests.setUp(self)
@@ -104,6 +105,33 @@ class VMPowerAdmissionTests(unittest.TestCase):
         pvc = self.persistent_state()
         pvc["metadata"]["ownerReferences"][0]["uid"] = "old-vm"
         signed = self.reviewed()
+        result, writes = self.call("/api/vm/power", signed)
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+
+    def test_fresh_state_requires_separate_typed_consent_and_journals_it(self):
+        self.fresh_state()
+        signed = self.reviewed()
+        for controls in ({}, {"ack_state_initialization": True}, {"ack_state_initialization": True, "confirm_state_name": "other"},
+                         {"ack_state_initialization": "true", "confirm_state_name": "guest"}):
+            result, writes = self.call("/api/vm/power", {**signed, **controls})
+            self.assertEqual(409, result[0], result)
+            writes.assert_not_called()
+            self.assertFalse(server.OPS._read())
+        result, writes = self.call("/api/vm/power", {**signed, "ack_state_initialization": True, "confirm_state_name": "guest"})
+        self.assertEqual(200, result[0], result)
+        writes.assert_called_once()
+        self.assertTrue(server.OPS._read()[0]["ref"]["state_initialization_acknowledged"])
+
+    def test_namespace_backup_selector_change_invalidates_review(self):
+        self.fresh_state()
+        self.vm["spec"]["template"]["spec"]["domain"].pop("devices")
+        self.config["spec"]["configuration"].update(developerConfiguration={"featureGates": ["IncrementalBackup"]},
+            changedBlockTrackingLabelSelectors={"namespaceLabelSelector": {"matchLabels": {"backup": "yes"}}})
+        namespace = {"metadata": {"name": "lab", "uid": "namespace-uid", "resourceVersion": "1", "labels": {"backup": "yes"}}}
+        self.objects["/api/v1/namespaces/lab"] = namespace
+        signed = {**self.reviewed(), "ack_state_initialization": True, "confirm_state_name": "guest"}
+        namespace["metadata"].update(resourceVersion="2", labels={"backup": "no"})
         result, writes = self.call("/api/vm/power", signed)
         self.assertEqual(409, result[0], result)
         writes.assert_not_called()

@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 
-function setup({blocked=false, missing=false, fail=false, cpuEstimate=false}={}) {
+function setup({blocked=false, missing=false, fail=false, cpuEstimate=false, stateInit=false}={}) {
   const sent=[], notices=[], fields={"#modal":{classList:{contains:()=>false}},
     "#vmPowerApprove":{checked:false}, "#vmPowerApply":{}, ".modalbox":{scrollTop:500}};
   const body={_html:"", get innerHTML(){return this._html;}, set innerHTML(html){this._html=html;delete fields["#vmPowerLoading"];},
@@ -20,7 +20,8 @@ function setup({blocked=false, missing=false, fail=false, cpuEstimate=false}={})
       sent.push({path, body:JSON.parse(options.body)});
       if(path.endsWith("/preview")) return {capacity_token:"review-token", capacity:missing ? null : {blocked,
         pod_memory_gb:4.25, warnings:["High RAM"], blockers:blocked ? ["missing device"] : [],
-        vm:{guest_memory_gb:4,request_is_lower_bound:true,cpu_request_is_estimate:cpuEstimate,policy_before:"Halted",policy_after:"Always"}}};
+        vm:{guest_memory_gb:4,request_is_lower_bound:true,cpu_request_is_estimate:cpuEstimate,policy_before:"Halted",policy_after:"Always",
+          state_initialization:stateInit ? {name:"guest",reason:"New <state> is not recovery"} : null}}};
       if(fail) throw new Error("lost response");
       return {ok:true,detail:"starting"};
     }};
@@ -56,6 +57,23 @@ test("unknown renderer CPU allowance is not presented as an exact request", asyn
   assert.match(t.fields["#mbody"].innerHTML,/conservative IO-thread allowance/);
   assert.match(t.fields["#mbody"].innerHTML,/RAM requests are lower bounds/);
   assert.doesNotMatch(t.fields["#mbody"].innerHTML,/Scheduler requests are lower bounds/);
+});
+test("fresh state needs its own checkbox and exact typed VM name", async()=>{
+  const t=setup({stateInit:true});
+  await t.ctx.vmPower("lab","guest","start");
+  assert.match(t.fields["#mbody"].innerHTML,/Initialize fresh VM state/);
+  assert.match(t.fields["#mbody"].innerHTML,/&lt;state>/);
+  t.fields["#vmPowerApprove"].checked=true;
+  t.fields["#vmPowerStateAck"]={checked:false};t.fields["#vmPowerStateName"]={value:"guest"};
+  assert.equal(t.ctx.vmPowerReviewReady(),false);
+  t.fields["#vmPowerStateAck"].checked=true;t.fields["#vmPowerStateName"].value="other";
+  await t.ctx.vmPowerReviewedApply();assert.equal(t.sent.length,1);
+  t.fields["#vmPowerStateName"].value="guest";
+  assert.equal(t.ctx.vmPowerReviewReady(),true);
+  await t.ctx.vmPowerReviewedApply();
+  assert.equal(t.sent[1].body.ack_state_initialization,true);
+  assert.equal(t.sent[1].body.confirm_state_name,"guest");
+  await t.ctx.vmPowerReviewedApply();assert.equal(t.sent.length,2);
 });
 test("missing and blocked reviews cannot submit even with checked input", async()=>{
   for(const options of [{blocked:true},{missing:true}]){

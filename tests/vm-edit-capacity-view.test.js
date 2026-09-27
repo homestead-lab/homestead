@@ -1,6 +1,6 @@
 "use strict";
 const test=require("node:test"), assert=require("node:assert/strict"), fs=require("node:fs"), vm=require("node:vm");
-function setup({blocked=false,missing=false,fail=false}={}) {
+function setup({blocked=false,missing=false,fail=false,stateInit=false}={}) {
   const fields={"#vmEditLoading":{},"#vmEditApprove":{checked:false},"#vmEditApply":{},"#mbody":{innerHTML:"",insertAdjacentHTML(_where,html){this.innerHTML=html+this.innerHTML;}}};
   const sent=[],restarts=[];
   const ctx={console, URLSearchParams, Map, Date, Promise, encodeURIComponent,
@@ -11,7 +11,7 @@ function setup({blocked=false,missing=false,fail=false}={}) {
       const body=JSON.parse(options.body);sent.push({path,body});
       if(path.endsWith("/preview"))return {capacity_token:missing ? null : "signed-edit",volumes:[],
         capacity:{blocked,warnings:["high RAM"],blockers:blocked ? ["missing KVM"] : [],
-          vm:{admission_needed:true,policy_before:"Halted",policy_after:"Always"}}};
+          vm:{admission_needed:true,policy_before:"Halted",policy_after:"Always",state_initialization:stateInit ? {name:"guest",reason:"Fresh state is not recovery"} : null}}};
       if(fail)throw new Error("connection lost");
       return {ok:true,detail:"saved"};
     }};
@@ -19,6 +19,20 @@ function setup({blocked=false,missing=false,fail=false}={}) {
   ctx.vmPowerReview=async config=>restarts.push(config);
   return {ctx,fields,sent,restarts};
 }
+test("edit initialization consent is separate and submitted only for exact typed name",async()=>{
+  const t=setup({stateInit:true});
+  await t.ctx.vmEditReview({ns:"lab",name:"guest",memory:"6Gi"});
+  assert.match(t.fields["#mbody"].innerHTML,/Fresh state is not recovery/);
+  t.fields["#vmEditApprove"].checked=true;
+  t.fields["#vmEditStateAck"]={checked:false};t.fields["#vmEditStateName"]={value:"guest"};
+  await t.ctx.vmEditReviewedApply();assert.equal(t.sent.length,1);
+  t.fields["#vmEditStateAck"].checked=true;t.fields["#vmEditStateName"].value="wrong";
+  assert.equal(t.ctx.vmEditReviewReady(),false);
+  t.fields["#vmEditStateName"].value="guest";
+  await t.ctx.vmEditReviewedApply();
+  assert.equal(t.sent[1].body.ack_state_initialization,true);
+  assert.equal(t.sent[1].body.confirm_state_name,"guest");
+});
 test("edit review freezes nested input, hides secrets and requires consent",async()=>{
   const t=setup(),cfg={name:"guest",ns:"lab",memory:"6Gi",cloud_init:{user_data:"private-test-data"}};
   await t.ctx.vmEditReview(cfg);

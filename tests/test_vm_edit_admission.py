@@ -13,6 +13,7 @@ class VMEditAdmissionTests(unittest.TestCase):
     read = fixtures.VMCapacityTests.read
     disk = fixtures.VMCapacityTests.disk
     running = fixtures.VMCapacityTests.running
+    fresh_state = fixtures.VMCapacityTests.fresh_state
 
     def setUp(self):
         fixtures.VMCapacityTests.setUp(self)
@@ -77,6 +78,26 @@ class VMEditAdmissionTests(unittest.TestCase):
             result, writes = self.call("/api/vm/edit", body)
             self.assertEqual(409, result[0], result)
             writes.assert_not_called()
+
+    def test_missing_state_edit_requires_typed_initialization_consent(self):
+        self.fresh_state()
+        signed = self.reviewed()
+        result, writes = self.call("/api/vm/edit", signed)
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+        self.assertFalse(server.OPS._read())
+        result, writes = self.call("/api/vm/edit", {**signed, "ack_state_initialization": True, "confirm_state_name": "guest"})
+        self.assertEqual(200, result[0], result)
+        self.assertEqual(1, writes.call_count)
+        self.assertTrue(server.OPS._read()[0]["ref"]["state_initialization_acknowledged"])
+
+    def test_outer_label_change_cannot_skip_admission_as_metadata_only(self):
+        prepared = server.prepare_vm_edit({"ns": "lab", "name": "guest", "description": "edited"})
+        plan, _, _ = server.vm_edit_capacity(prepared)
+        self.assertFalse(plan["vm"]["admission_needed"])
+        prepared["vm"]["metadata"]["labels"] = {"backup": "yes"}
+        plan, _, _ = server.vm_edit_capacity(prepared)
+        self.assertTrue(plan["vm"]["admission_needed"])
 
     def disk_setup(self, platform):
         self.body = {"ns": "lab", "name": "guest", "add_disks": [{"size": "2Gi", "storage_class": "storage"}]}

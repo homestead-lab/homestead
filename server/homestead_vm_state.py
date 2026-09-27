@@ -10,6 +10,7 @@ import urllib.error
 from urllib.parse import quote, unquote
 
 import homestead_pod_resources as RESOURCES
+import homestead_vm_state_policy as POLICY
 
 PREFIX = "persistent-state-for"
 IDENTITY = ("namespace", "name", "uid", "resourceVersion")
@@ -24,9 +25,11 @@ def needed(vm, spec, vmi=None):
         for obj in (vm, vmi))
 
 
-def inspect(vm, spec, config, read, *, vmi=None, version=None):
-    result = {"volumes": [], "planned_claims": {}, "dependencies": {}, "blockers": [], "warnings": []}
-    if not needed(vm, spec, vmi):
+def inspect(vm, spec, config, read, *, vmi=None, version=None, cold=True):
+    policy = POLICY.selection(vm, spec, config, read, version=version, cold=cold)
+    result = {"volumes": [], "planned_claims": {}, "dependencies": policy["dependencies"],
+              "blockers": policy["blockers"], "warnings": policy["warnings"], "initialization": None}
+    if not needed(vm, spec, vmi) and not policy["automatic"]:
         return result
     meta = vm["metadata"]
     namespace, name = meta["namespace"], meta["name"]
@@ -173,6 +176,9 @@ def inspect(vm, spec, config, read, *, vmi=None, version=None):
         size = str(max(10 * 1024**2, RESOURCES.quantity(minimum)))
         result["planned_claims"][legacy] = {"name": legacy, "storage_class": klass, "access_mode": mode, "volume_mode": "Filesystem", "size": size}
         result["volumes"].append({"name": "homestead-state-evidence", "persistentVolumeClaim": {"claimName": legacy}})
+        if meta.get("uid"):
+            result["initialization"] = {"name": name, "namespace": namespace, "uid": meta["uid"],
+                "reason": "No persistent state PVC was found. Initializing fresh TPM/EFI/backup state is not recovery and may make encrypted guest data inaccessible."}
         result["warnings"].append(f"No persisted TPM/EFI/CBT state was found: KubeVirt would create fresh state ({klass}, {mode}). If this VM ran before, recover its original PVC first. Provisioning/size mutation is not guaranteed; the displayed claim name is only a placement placeholder.")
     except ValueError as error:
         result["blockers"].append(str(error))

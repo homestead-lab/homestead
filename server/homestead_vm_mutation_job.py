@@ -11,6 +11,7 @@ def dispatch(kind, body, namespace, name, identity, ops, send, commit):
         raise ValueError("Unsupported reviewed VM mutation")
     token = body["capacity_token"]  # admission has already verified this token
     ref = {"namespace": namespace, "name": name, "identity": identity,
+           "state_initialization_acknowledged": body.get("ack_state_initialization") is True and body.get("confirm_state_name") == name,
            "review_digest": hashlib.sha256(token.encode()).hexdigest(),
            "review_expires": int(token.split(".", 1)[0]), "dispatch_protocol": 1,
            "phase": "prepared", "phase_at": time.time(), "retain_resources": True, "writes": []}

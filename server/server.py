@@ -3549,6 +3549,7 @@ def vm_edit_capacity(prepared):
     current, vm = prepared["current"], prepared["vm"]
     before, after = VMS._strategy(current), VMS._strategy(vm)
     needed = (vm["spec"]["template"] != current["spec"]["template"] or
+              (vm.get("metadata", {}).get("labels") or {}) != (current.get("metadata", {}).get("labels") or {}) or
               bool(prepared["resize"] or prepared["effects"] or prepared["to_create"]) or
               (before != after and after not in ("Halted", "Manual")))
     observations, claims, expanded_spec = {}, {}, None
@@ -3662,7 +3663,7 @@ def vm_cluster_configuration(body, *, preview=False):
 def vm_cluster_snapshot():
     cache, external = {}, {}
     def read(path):
-        capture = any(part in path for part in ("/storageclasses", "/storageprofiles/", "/network-attachment-definitions/", "/kubevirts"))
+        capture = bool(re.fullmatch(r"/api/v1/namespaces/[^/]+", path)) or any(part in path for part in ("/storageclasses", "/storageprofiles/", "/network-attachment-definitions/", "/kubevirts"))
         if path not in cache:
             try:
                 cache[path] = kget(path)

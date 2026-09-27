@@ -73,6 +73,23 @@ class VMCapacityTests(unittest.TestCase):
             "spec": {"claimRef": {"name": pvc["metadata"]["name"], "namespace": "lab", "uid": "state-uid"}}}
         return pvc
 
+    def fresh_state(self):
+        self.vm["spec"]["template"]["spec"]["domain"]["devices"] = {"tpm": {"persistent": True}}
+        self.config["status"] = {"observedKubeVirtVersion": "v1.9.0"}
+        self.config["spec"]["configuration"]["vmStateStorageClass"] = "state"
+        self.objects["/api/v1/namespaces/lab/persistentvolumeclaims"] = {"items": []}
+        self.objects["/apis/storage.k8s.io/v1/storageclasses/state"] = {
+            "metadata": {"name": "state", "uid": "state-class", "resourceVersion": "1"},
+            "volumeBindingMode": "WaitForFirstConsumer"}
+
+    def test_existing_stopped_vm_missing_state_is_explicit_initialization(self):
+        self.fresh_state()
+        result = self.plan()
+        self.assertFalse(result["blocked"])
+        self.assertEqual("guest", result["vm"]["state_initialization"]["name"])
+        self.vm["metadata"].pop("uid")
+        self.assertIsNone(self.plan(action="create")["vm"]["state_initialization"])
+
     def test_persistent_state_pv_topology_constrains_placement(self):
         self.persistent_state()
         self.assertFalse(self.plan()["blocked"])
