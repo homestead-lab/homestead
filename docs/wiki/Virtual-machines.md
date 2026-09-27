@@ -4,7 +4,7 @@
 Harvester, and something you can add to k3s or RKE2. The page appears when the
 cluster has KubeVirt.
 
-![VMs](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-vms.png)
+![VMs](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-vms.jpg)
 
 ## Each VM
 
@@ -40,7 +40,7 @@ download has not started after three minutes says why.
 
 ## New VM
 
-![New VM](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-vm-new.png)
+![New VM](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-vm-new.jpg)
 
 **＋ New VM** asks for a name, CPU cores, memory, a disk size, a root password
 and a boot disk:
@@ -192,7 +192,7 @@ on disposable resources before relying on them for production recovery.
 
 ## Edit
 
-![Edit VM](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-vm-edit.png)
+![Edit VM](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-vm-edit.jpg)
 
 **Edit** covers what a VM is made of:
 

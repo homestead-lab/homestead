@@ -5,7 +5,7 @@ address, image and update status. In Kubernetes terms each one is a
 Deployment (or a StatefulSet or DaemonSet you made elsewhere); Homestead calls
 them containers because that is what you think of them as.
 
-![Containers](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-containers.png)
+![Containers](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-containers.jpg)
 
 ## Deploying a container
 
@@ -243,7 +243,7 @@ Twice a day - or whenever you press **Check images** - Homestead checks each con
 tags like `latest`, by version for tags like `1.2.3` - and shows a pill on the
 container and a count at the top of the page.
 
-![Image updates](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-image-updates.png)
+![Image updates](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-image-updates.jpg)
 
 **Update** pins the new image, watches the rollout (pulling, starting, ready),
 and keeps the previous image so **Roll back** returns to exactly it. A registry
@@ -447,4 +447,4 @@ A volume no container or VM definition references is **disconnected**. Those
 retained and old volumes are hidden by default; **Show disconnected** reveals a
 red group beneath the live volumes without letting it obscure the active paths.
 
-![Architecture](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-architecture.png)
+![Architecture](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-architecture.jpg)

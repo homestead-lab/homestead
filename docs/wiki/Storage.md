@@ -4,7 +4,7 @@
 persistent volume claims - with its size, how full it is, who uses it, and
 what Longhorn thinks of it.
 
-![Volumes](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-volumes.png)
+![Volumes](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-volumes.jpg)
 
 ## Reading the table
 
@@ -94,7 +94,7 @@ Each node's card lists every disk on the host: the system disk, the disks
 Longhorn uses, and any nothing uses yet. **Disks** (on Volumes, on a node, or in
 Settings → Cluster) opens them all.
 
-![Disks](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-disks.png)
+![Disks](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-disks.jpg)
 
 - **Add to Longhorn** (Harvester) - Harvester formats the disk (wiping it first
   if you say so) and gives it to Longhorn, as its own UI does.
@@ -192,7 +192,7 @@ On Harvester, switching V2 on reserves the hugepages and loads the modules
 itself; on k3s and RKE2 those are two commands on each host, given in the
 tooltips. A V2 volume schedules only on hosts where everything is ticked.
 
-![Settings - Cluster](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-settings-cluster.png)
+![Settings - Cluster](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-settings-cluster.jpg)
 
 To make room: add a disk, delete old copies and volumes you no longer need, or
 move volumes with too many copies onto a class with fewer.
@@ -203,7 +203,7 @@ Kubernetes cannot change a volume's class, so **Change storage class** makes a
 copy on the new class and swaps it in under the original's name - every
 container, VM, share and backup job that uses it by name carries on unchanged.
 
-![Change storage class](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-storage-class-change.png)
+![Change storage class](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-storage-class-change.jpg)
 
 The review lists everything that uses the volume and what happens to each, the
 room the copy needs on each node (both copies exist until you remove the old
@@ -217,7 +217,7 @@ one), how much data moves and how long things are stopped. Then, as a job:
 4. the original is released and the copy takes its name;
 5. everything starts again as it was.
 
-![Storage class change in progress](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-storage-class-progress.png)
+![Storage class change in progress](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-storage-class-progress.jpg)
 
 If anything fails before the swap, everything is put back on the untouched
 original. After it, the original stays as an **old copy** on Volumes until you

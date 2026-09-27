@@ -6,7 +6,7 @@ The Dashboard is the cluster at a glance: CPU, memory, network and disk for the
 whole cluster, what is unhealthy right now, and the containers and VMs using the
 most.
 
-![Dashboard](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-dashboard.png)
+![Dashboard](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-dashboard.jpg)
 
 - **Health** changes only on a real change - a node going not-Ready, a volume
   degrading, a workload failing to start - and a problem shows once it has
@@ -26,12 +26,12 @@ Warning levels (temperatures, disk errors, CPU and memory) are set in
 every disk on it - the system disk, the disks Longhorn stores data on (with
 how full each is), and any disk nothing uses yet.
 
-![Nodes](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-nodes.png)
+![Nodes](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-nodes.jpg)
 
 Clicking a node opens it: its hardware, the pods and VMs on it, per-disk read
 and write speed, and each drive's health.
 
-![Node detail](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-node-detail.png)
+![Node detail](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-node-detail.jpg)
 
 ### Uptime
 
@@ -161,7 +161,7 @@ on a host that has it. See [Containers](Containers#hardware).
 control plane and etcd (and how many servers can fail before it stops), node
 pressure, core services, and platform warnings from the last day.
 
-![Cluster](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-cluster.png)
+![Cluster](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-cluster.jpg)
 
 - **Add a host** walks through adding a machine, for the cluster you have:
   Harvester's installer screens, or k3s/RKE2's join command, and shows the new
