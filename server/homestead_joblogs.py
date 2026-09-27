@@ -61,8 +61,8 @@ def _ref_job(key="name", ns_key="namespace", title="Output"):
     return lambda item: job_output(item["ref"].get(ns_key, ""), item["ref"].get(key, ""), title)
 
 
-def _events(ns, name):
-    selector = _q(f"involvedObject.name={name}")
+def _events(ns, name, uid=""):
+    selector = _q(f"involvedObject.name={name}" + (f",involvedObject.uid={uid}" if uid else ""))
     rows = kget(f"/api/v1/namespaces/{_q(ns)}/events?fieldSelector={selector}").get("items", [])
     rows.sort(key=lambda e: e.get("lastTimestamp") or e.get("eventTime") or "")
     return "\n".join(f"{(e.get('lastTimestamp') or e.get('eventTime') or '')[:19].replace('T', ' ')}  "
@@ -170,9 +170,30 @@ def register(ops):
             ("self-data-move", _ref_job(key="job", title="Copy")),
             ("vm-disk-import", disk_import),
             ("image-cleanup", image_cleanup),
+            ("node-power", node_power),
             ("deployment", rollout), ("image-update", rollout), ("image-rollback", rollout),
             ("k3s-cluster", k3s_cluster)):
         ops.LOGGERS[kind] = reader
+
+
+def node_power(item):
+    ref = item.get("ref") or {}
+    name, uid, ns = ref.get("helper_pod"), ref.get("helper_uid"), ref.get("helper_namespace", "lab")
+    if not name:
+        return [{"title": "Power helper", "text": "", "note": "No power helper was submitted. The steps above show where maintenance stopped; inspect the host's cordon state."}]
+    if not uid:
+        return [{"title": "Power helper", "text": "", "note": f"Creation of {ns}/{name} was not confirmed. Inspect it in Kubernetes before retrying; no same-name pod is assumed to belong to this request."}]
+    try:
+        pod = kget(f"/api/v1/namespaces/{_q(ns)}/pods/{_q(name)}")
+    except Exception:
+        return [{"title": "Power helper", "text": "", "note": f"{ns}/{name} is unavailable. This does not confirm shutdown; check the host's console or physical power."}]
+    if (pod.get("metadata") or {}).get("uid") != uid:
+        return [{"title": "Power helper", "text": "", "note": "Helper identity changed; replacement events and logs are not shown."}]
+    try:
+        events = {"title": "Power helper events", "text": _events(ns, name, uid), "note": ""}
+    except Exception:
+        events = {"title": "Power helper events", "text": "", "note": "Events are unavailable; try refreshing the log."}
+    return [events, _pod_source(ns, pod, "Power helper log", "power")]
 
 
 def copy_job(item):

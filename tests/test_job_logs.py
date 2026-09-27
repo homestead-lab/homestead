@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 import urllib.error
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -128,8 +129,37 @@ class ReaderTests(unittest.TestCase):
         ops = type("Ops", (), {"LOGGERS": {}})()
         JL.register(ops)
         for kind in ("import", "protect-run", "helm", "restructure", "reclass", "self-data-move",
-                     "vm-disk-import", "image-cleanup", "deployment", "image-update", "k3s-cluster"):
+                     "vm-disk-import", "image-cleanup", "deployment", "image-update", "k3s-cluster", "node-power"):
             self.assertIn(kind, ops.LOGGERS)
+
+    def test_power_helper_shows_uid_scoped_events_and_container_log(self):
+        pod = self.pod("power-helper", ("power",))
+        pod["metadata"]["uid"] = "helper-uid"
+        event = {"reason": "Pulling", "message": "Pulling helper image", "involvedObject": {"uid": "helper-uid"}}
+        with mock.patch.object(JL, "kget", side_effect=[pod, {"items": [event]}]) as read, \
+                mock.patch.object(JL, "ktext", return_value="Requesting reboot") as logs:
+            out = JL.node_power({"ref": {"helper_pod": "power-helper", "helper_uid": "helper-uid", "helper_namespace": "lab"}})
+        self.assertIn("Pulling helper image", out[0]["text"])
+        self.assertEqual("Requesting reboot", out[1]["text"])
+        self.assertIn("involvedObject.uid%3Dhelper-uid", read.call_args_list[1].args[0])
+        self.assertIn("container=power", logs.call_args.args[0])
+
+    def test_unknown_or_replaced_power_helper_does_not_show_another_pods_logs(self):
+        for ref in ({}, {"helper_pod": "helper"}, {"helper_pod": "helper", "helper_uid": "original"}):
+            with mock.patch.object(JL, "kget", return_value={"metadata": {"uid": "replacement"}}), \
+                    mock.patch.object(JL, "ktext") as logs:
+                out = JL.node_power({"ref": ref})
+            logs.assert_not_called()
+            self.assertTrue(out[0]["note"])
+            self.assertEqual("", out[0]["text"])
+
+    def test_power_helper_log_remains_available_if_events_cannot_be_read(self):
+        pod = self.pod("helper", ("power",)); pod["metadata"]["uid"] = "uid"
+        with mock.patch.object(JL, "kget", side_effect=[pod, PermissionError()]), \
+                mock.patch.object(JL, "ktext", return_value="systemctl output"):
+            out = JL.node_power({"ref": {"helper_pod": "helper", "helper_uid": "uid"}})
+        self.assertIn("unavailable", out[0]["note"])
+        self.assertEqual("systemctl output", out[1]["text"])
 
 
 if __name__ == "__main__":

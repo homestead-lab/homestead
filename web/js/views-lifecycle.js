@@ -478,10 +478,16 @@ window.nodeCordon = async (node, cordon) => {
 window.nodeDrain = async node => {
   evacuateNode(node);
 };
+let NODE_POWER_REVIEW_SEQUENCE = 0;
 window.nodePowerReview = async (node, action) => {
+  window.__nodePowerPlan = null;
+  const sequence = ++NODE_POWER_REVIEW_SEQUENCE;
   let plan;
   try { plan = await api(`/api/node/power/plan?${new URLSearchParams({ node, action })}`); }
   catch (e) { return toast(`Could not assess this host: ${e.message}`, "bad"); }
+  if (sequence !== NODE_POWER_REVIEW_SEQUENCE) return;
+  if (plan.node !== node || plan.action !== action || !plan.review_token || typeof plan.ready !== 'boolean')
+    return toast("Host review is incomplete; refresh before continuing", "bad");
   window.__nodePowerPlan = plan;
   const verb = action === "reboot" ? "Reboot" : "Shut down";
   const volumes = plan.volumes || [];
@@ -509,27 +515,37 @@ window.nodePowerReview = async (node, action) => {
     plan.ready ? UI.field(`Type ${node} to confirm`, `<input type="text" id="pw_confirm" autocomplete="off" placeholder="${esc(node)}">`) : "",
     plan.ready && plan.stranded?.length ? UI.ack("pw_allow", `I understand ${plan.stranded.length} workload${plan.stranded.length === 1 ? "" : "s"} may remain down`) : "",
     plan.ready && plan.requires_data_ack ? UI.ack("pw_data", "I understand the volume copies or storage visibility risk") : "",
+    UI.more("After the request", "Follow Recent jobs for the helper's events, logs and host status. Reboot checks use a changed boot ID; shutdown cannot be confirmed from NotReady alone. The host stays cordoned until you inspect it and allow scheduling."),
     UI.actions(plan.ready ? UI.cancel() + UI.button(`${verb} host`, `nodePower('${esc(node)}','${esc(action)}')`, { kind: "danger", id: "pw_execute" }) : UI.cancel("Close")),
   ].join(""), true);
 };
 window.nodePower = async (node, action) => {
   const plan = window.__nodePowerPlan;
-  if (!plan || plan.node !== node || plan.action !== action) return toast("review the host impact again", "bad");
-  const c = $("#pw_confirm").value.trim();
+  if (!plan || !plan.ready || plan.node !== node || plan.action !== action) return toast("review the host impact again", "bad");
+  const c = $("#pw_confirm")?.value.trim();
   if (c !== node) return toast("type the host name exactly to confirm", "bad");
   if (plan.stranded?.length && !$("#pw_allow")?.checked)
     return toast("confirm the workloads that will remain down", "bad");
   if (plan.requires_data_ack && !$("#pw_data")?.checked)
     return toast("confirm the volume risk", "bad");
+  // Consume approval before sending, including double clicks and lost replies.
+  window.__nodePowerPlan = null;
   const button = $("#pw_execute");
   if (button) { button.disabled = true; button.textContent = "Draining host…"; }
   try {
     const r = await api("/api/node/power", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ node, action, confirm: c, review_token: plan.review_token,
         allow_stranded: !!$("#pw_allow")?.checked, allow_data_risk: !!$("#pw_data")?.checked }) });
-    modal("Host " + action, `<pre>${esc(r.steps.join("\n"))}</pre>
-      <div class="note" style="margin-top:12px">The Recent Jobs tray follows the host going down, returning after a reboot, and affected Longhorn volumes becoming healthy. The host remains cordoned; review it before uncordoning.</div>`);
-  } catch (e) { toast(e.message, "bad"); if (button) { button.disabled = false; button.textContent = "Retry power action"; } }
+    if (r.operation) window.noteOperation?.(r.operation);
+    modal("Host maintenance", UI.lead("Follow progress in Recent jobs. The host stays cordoned; check it before allowing scheduling.") +
+      UI.more("Steps so far", `<pre>${esc((r.steps || []).join("\n"))}</pre>`) + UI.actions(UI.cancel("Close")));
+  } catch (e) {
+    toast(e.message + " — inspect Recent jobs and the host before making another request.", "bad");
+    if (button) {
+      button.disabled = false; button.textContent = "Review host again";
+      button.onclick = () => window.nodePowerReview(node, action);
+    }
+  } finally { window.refreshOperations?.(true); }
 };
 
 /* ---------------- VMs: the page is views-vms.js; moving and creating stay here ---------------- */

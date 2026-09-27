@@ -148,15 +148,44 @@ class MaintenanceSafetyTests(unittest.TestCase):
 
     def test_power_helper_intent_is_recorded_before_submission(self):
         calls = []
+        receipts = []
+        def send(method, path, body):
+            calls.append("POST")
+            return {**body, "metadata": {**body["metadata"], "uid": "helper-uid"}}
+        def progress(phase, *args, **details):
+            calls.append(phase)
+            receipts.append(details)
         with mock.patch.object(lifecycle, "NODE_POWER_ENABLED", True), \
                 mock.patch.object(lifecycle, "node_action_check", return_value=(True, "", {})), \
                 mock.patch.object(lifecycle, "set_cordon"), \
                 mock.patch.object(lifecycle, "drain", return_value={"evicted": [], "skipped": []}), \
-                mock.patch.object(lifecycle, "ksend", side_effect=lambda *a, **k: calls.append("POST")):
+                mock.patch.object(lifecycle, "ksend", side_effect=send):
             lifecycle.node_power("node1", "reboot", reviewed_pods=[], before_send=lambda: calls.append("CHECK"),
-                                 progress=lambda phase, *a, **k: calls.append(phase))
+                                 progress=progress)
         self.assertLess(calls.index("CHECK"), calls.index("sending"))
         self.assertLess(calls.index("sending"), calls.index("POST"))
+        self.assertLess(calls.index("POST"), calls.index("observing"))
+        self.assertEqual("helper-uid", receipts[-1]["helper_uid"])
+
+    def test_missing_creation_receipt_leaves_sending_intent_and_does_not_retry(self):
+        phases = []
+        with mock.patch.object(lifecycle, "NODE_POWER_ENABLED", True), \
+                mock.patch.object(lifecycle, "node_action_check", return_value=(True, "", {})), \
+                mock.patch.object(lifecycle, "set_cordon"), \
+                mock.patch.object(lifecycle, "drain", return_value={"evicted": [], "skipped": []}), \
+                mock.patch.object(lifecycle, "ksend", return_value={}) as send:
+            with self.assertRaisesRegex(ValueError, "not confirmed"):
+                lifecycle.node_power("node1", "reboot", reviewed_pods=[], before_send=lambda: None,
+                                     progress=lambda phase, *a, **k: phases.append(phase))
+        self.assertEqual("sending", phases[-1])
+        send.assert_called_once()
+
+    def test_post_drain_replacement_with_same_boot_id_blocks_power(self):
+        original = power.plan("node1", "reboot")
+        self.objects["/api/v1/pods"]["items"] = []
+        self.objects["/api/v1/nodes/node1"]["metadata"]["uid"] = "replacement"
+        with self.assertRaisesRegex(ValueError, "identity changed"):
+            power.recheck_after_drain(original)
 
     def test_reboot_observer_accepts_missed_notready_but_needs_known_old_boot(self):
         self.objects["/api/v1/nodes/node1"]["status"]["nodeInfo"]["bootID"] = "new"
