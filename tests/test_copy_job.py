@@ -333,6 +333,8 @@ class CopyJobTests(unittest.TestCase):
         self.assertEqual("failed", flow.legacy_status(item)[0])
         self.assertTrue(item["ref"]["retain_resources"])
         self.assertEqual([], self.sent)
+        self.dep["metadata"]["annotations"] = {restructure.HELD: "1"}
+        self.assertIn("legacy storage-copy hold", guard.pending(self.dep, "lab", self.read))
 
     def test_unknown_phase_never_reports_success(self):
         self.start()

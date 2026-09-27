@@ -117,7 +117,8 @@ require Kubernetes inspection; they are never adopted by name or replayed.
 Destination files can be overwritten or partially copied: take a backup first.
 Checks do not prove free filesystem space, application consistency, absence of
 external writers, or atomicity against changes made outside Homestead. Old
-`restructure` jobs without identity receipts stop for inspection; finish upgrading
+`restructure` jobs without identity receipts stop for inspection; their legacy
+hold needs manual Kubernetes recovery after checking the copy and data. Finish upgrading
 all Homestead replicas before using the new flow.
 Paused Deployments cannot increase replicas through Edit until resumed and
 reviewed again. [Compose batches](Importing#batch-capacity-review) have a joint

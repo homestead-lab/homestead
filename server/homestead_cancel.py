@@ -450,7 +450,7 @@ def restructure_plan(item):
     return {"mode": "forget", "needs": "admin", "confirm": item["ref"]["name"],
             "action": "Acknowledge and stop tracking",
             "keeps": ["Legacy copy Jobs and all volumes remain; a copy already submitted may continue.",
-                      "Inspect the copy and storage mappings before a fresh Start review. Nothing is rolled back."],
+                      "Inspect the copy and storage mappings in Kubernetes before manually removing any legacy hold. Stopping tracking does not release it."],
             "options": [{"id": "ack", "label": "I inspected the copy and accept partial data or late effects",
                          "detail": "Stopping tracking does not stop the copy, restore mappings, or restart the app.", "default": False}]}
 
