@@ -342,6 +342,10 @@ case "$*" in
   'config view '*) echo 'https://127.0.0.1:6443' ;;
   'get nodes '*)
     [ "$TEST_MODE" != unreachable ] || exit 1
+    if [ "$TEST_MODE" = many ]; then
+      for n in 1 2 3 4 5 6 7 8; do printf 'node%s|192.168.1.%s|True|v1.34.1+k3s1\\n' "$n" "$n"; done
+      exit 0
+    fi
     printf 'node1|192.168.1.108|True|v1.34.1+k3s1\\nnode2|192.168.1.109|False|v1.33.5+k3s1\\n' ;;
   '-n longhorn-system get daemonset '*)
     [ "$TEST_MODE" != denied ] || exit 1
@@ -368,6 +372,7 @@ esac
 have() { command -v "$1" >/dev/null 2>&1; }
 hostname() { echo node1; }
 default_ip() { echo 192.168.1.108; }
+term_rows() { echo 24; }
 os_name() { echo Ubuntu; }
 msg() { printf '%s\\n' "$2"; }
 KIND=k3s-server; KC=kubectl; UI=text; here='k3s server node'
@@ -376,6 +381,8 @@ cluster_overview
 """
             if again:
                 script += "TEST_MODE=unreachable; export TEST_MODE; cluster_overview\n"
+            if mode == "many":
+                script += 'prepare_overview; n=1; while [ "$n" -le "$CLUSTER_PAGES" ]; do CLUSTER_PAGE=$n; echo PAGE; main_overview; n=$((n+1)); done\n'
             script += 'main_overview; echo DETAILS; cluster_details; printf "PRESENT=%s\\n" "$HOMESTEAD_PRESENT"\n'
             env = dict(os.environ, PATH=tmp + os.pathsep + os.environ["PATH"],
                        TEST_MODE=mode, TEST_CALLS=str(root / "calls"))
@@ -399,6 +406,23 @@ cluster_overview
         self.assertIn("PRESENT=yes", details)
         self.assertEqual(5, len(calls.splitlines()))
         self.assertNotIn("--raw", calls)
+
+    def test_long_member_lists_can_be_paged_without_losing_addresses(self):
+        out, _ = self.overview("many")
+        summary = out.split("DETAILS", 1)[0]
+        self.assertGreaterEqual(summary.count("PAGE"), 2)
+        for n in range(1, 9):
+            self.assertIn(f"192.168.1.{n}", summary)
+        self.assertNotIn("...", summary)
+        self.assertTrue(all(len(line) <= 80 for line in summary.splitlines()))
+
+    def test_addresses_wrap_and_remain_available_in_full(self):
+        out, _ = self.overview()
+        summary = out.split("DETAILS", 1)[0]
+        self.assertIn("192.168.1.243", summary)
+        self.assertIn("pending address", summary)
+        self.assertNotIn("...", summary)
+        self.assertTrue(all(len(line) <= 80 for line in summary.splitlines()))
 
     def test_digest_pinned_image_keeps_readiness_visible_on_the_main_menu(self):
         out, _ = self.overview("digest")

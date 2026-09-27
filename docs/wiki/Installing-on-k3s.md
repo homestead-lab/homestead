@@ -290,8 +290,10 @@ sudo sh -x /tmp/homestead-install.sh --dry-run
 On an existing node, setup's main menu shows the host IP, Kubernetes node
 versions, cluster members and internal IPs, the configured API endpoint, service
 VIPs, and the Longhorn manager and Homestead deployment readiness. Select
-**Cluster details** for the full lists when the summary is shortened. The
-summary refreshes whenever you return to the main menu.
+**Cluster details** for the full lists. Members and VIPs wrap in the main menu;
+when they exceed the terminal height, **More member/VIP addresses** cycles
+through the remaining lines while component status and actions stay visible.
+The summary refreshes whenever you return to the main menu.
 
 Assigned LoadBalancer addresses are distinguished from requested addresses that
 are still pending. The API endpoint can be a local address such as
