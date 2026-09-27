@@ -875,12 +875,21 @@ function shortImage(ref) {
 
 /* The part of an image that changes: a tag, or the start of a digest. */
 function imageVersion(ref) {
-  const text = String(ref || "");
-  const [name, digest] = text.split("@");
-  if (digest) return digest.replace(/^sha256:/, "").slice(0, 7);
+  const [name, digest] = String(ref || "").split("@");
   const tail = name.split("/").pop() || name;
-  return tail.includes(":") ? tail.slice(tail.lastIndexOf(":") + 1) : "latest";
+  return { tag: tail.includes(":") ? tail.slice(tail.lastIndexOf(":") + 1) : "latest",
+    short: digest ? digest.replace(/^sha256:/, "").slice(0, 7) : "" };
 }
+/* What a person reads for an image change: the release when it changes
+   (2.8.200 → 2.8.205), and the start of the digest only when the tag stays
+   the same - latest → latest is a different build, not no change. */
+function imageChangeWords(before, after) {
+  const was = imageVersion(before), now = imageVersion(after);
+  if (was.tag !== now.tag) return [was.tag, now.tag];
+  const word = v => (v.short ? `${v.tag} · ${v.short}` : v.tag);
+  return [word(was), word(now)];
+}
+window.imageChangeWords = imageChangeWords;
 
 /* The same warning for several apps is said once, with the apps it is about. */
 function groupedConcerns(rows) {
@@ -919,7 +928,7 @@ async function reviewImageActions(items, action = "update") {
     // One line per app: its name, and what its image moves from and to.
     const apps = rows.map(({config, preview}) => {
       const flagged = preview.capacity.blocked || (preview.capacity.warnings || []).length;
-      const change = preview.images.map(i => `<span class="upd-change" title="${esc(i.before)} → ${esc(i.after)}">${preview.images.length > 1 ? `${esc(i.container)} ` : ""}<code>${esc(imageVersion(i.before))}</code> → <code>${esc(imageVersion(i.after))}</code></span>`).join("");
+      const change = preview.images.map(i => `<span class="upd-change" title="${esc(i.before)} → ${esc(i.after)}">${preview.images.length > 1 ? `${esc(i.container)} ` : ""}${(([was, now]) => `<code>${esc(was)}</code> → <code>${esc(now)}</code>`)(imageChangeWords(i.before, i.after))}</span>`).join("");
       return `<li><span class="upd-name">${flagged ? `<span class="upd-flag ${preview.capacity.blocked ? "bad" : "warn"}" title="See the notes above">!</span>` : ""}<b>${esc(config.name)}</b> <span class="dim">${esc(config.ns)}</span></span>${change}</li>`;
     }).join("");
     $("#mbody").innerHTML = `<div class="update-review ui-stack">
