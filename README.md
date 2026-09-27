@@ -668,11 +668,27 @@ Job-history writes require a working shared filesystem lock; lock failures do
 not fall back to a process-local lock. On Linux, Homestead flushes the file and
 its replacement directory entry before acknowledging the journal write. A corrupt,
 unreadable or unexpectedly missing job store stops job changes instead of being
-treated as an empty queue. The persistent `.operations-initialized.json` marker
-distinguishes a new installation from a lost `operations.json` file.
+treated as an empty queue. The persistent `.operations-v2-initialized.json` marker
+distinguishes a new installation from a lost `operations-v2.json` file.
+
+New jobs use `operations-v2.json`, isolated from the `operations.json` file used
+by older releases. This stops old pollers, history pruning and **Clear finished**
+from overwriting newer recovery records during an upgrade. The current UI reads
+both stores; existing jobs stay in their original store rather than being moved
+away from a worker that may still be running. Progress on a new job does not
+rewrite unchanged legacy history. Duplicate identities across the stores fail
+closed instead of choosing one copy. These are separate job histories, not one
+cross-file transaction.
+
+Finish upgrading every Homestead replica before making VM changes. An older
+replica still has its old API behavior and cannot display or manage new jobs.
+Downgrading does not cancel newer operations: retain both stores and upgrade
+again to inspect those jobs. Do not copy newer records into the legacy file or
+delete either history to force a retry. Verify mixed-version behavior on a
+disposable deployment before relying on a rolling upgrade with active jobs.
 
 If job-history access fails, restore the data-volume connection and permissions
-first. Preserve `operations.json`, its initialization marker, the
+first. Preserve `operations-v2.json` and `operations.json`, their initialization markers, the
 `vm-power-approvals.json` ledger and `.vm-power-approvals-initialized.json` marker,
 and any temporary files for recovery; do not delete them to make a failed action retry. Inspect the
 actual cluster resources before restoring a consistent backup of the job store.

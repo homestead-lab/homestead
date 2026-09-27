@@ -21,8 +21,10 @@ kget = None
 deployment_progress = None
 smart_progress = None
 DATA_DIR = "/data"
-STORE = "operations.json"
-STORE_MARKER = ".operations-initialized.json"
+STORE = "operations-v2.json"
+STORE_MARKER = ".operations-v2-initialized.json"
+LEGACY_STORE = "operations.json"
+LEGACY_MARKER = ".operations-initialized.json"
 MAX_OPERATIONS = 100
 TERMINAL = {"succeeded", "failed", "cancelled"}
 # A cancel that has begun and not yet finished. The poll leaves such a job
@@ -49,9 +51,9 @@ def _store_path():
     return os.path.join(DATA_DIR, STORE)
 
 
-def _initialized():
+def _initialized(marker=STORE_MARKER):
     try:
-        with open(os.path.join(DATA_DIR, STORE_MARKER), encoding="utf-8") as handle:
+        with open(os.path.join(DATA_DIR, marker), encoding="utf-8") as handle:
             value = json.load(handle)
     except FileNotFoundError:
         return False
@@ -62,10 +64,10 @@ def _initialized():
     return True
 
 
-def _read():
-    initialized = _initialized()
+def _read_store(store, marker):
+    initialized = _initialized(marker)
     try:
-        with open(_store_path(), encoding="utf-8") as handle:
+        with open(os.path.join(DATA_DIR, store), encoding="utf-8") as handle:
             value = json.load(handle)
     except FileNotFoundError:
         if not initialized:
@@ -78,6 +80,18 @@ def _read():
             for item in value) or len({item["id"] for item in value}) != len(value)):
         raise ValueError("Job history has invalid records. Recover the store before starting or changing jobs; existing records were not replaced.")
     return value
+
+
+def _read():
+    # Never migrate active jobs out from under an older worker. Existing jobs
+    # remain in their original store; new jobs never enter the legacy store.
+    legacy = _read_store(LEGACY_STORE, LEGACY_MARKER)
+    current = _read_store(STORE, STORE_MARKER)
+    if any("_legacy_store" in item for item in current):
+        raise ValueError("Job history has invalid store ownership; recover the store before changing jobs")
+    if {item["id"] for item in legacy} & {item["id"] for item in current}:
+        raise ValueError("Job history has duplicate identities across stores; recover the stores before changing jobs")
+    return [{**item, "_legacy_store": True} for item in legacy] + current
 
 
 def _write(items):
@@ -93,11 +107,20 @@ def _write(items):
                  (item.get("status") == "failed" and item.get("ref", {}).get("retain_resources")) or _receipt_needed(item)}
     recent = [i for i in range(len(items)) if i not in protected][-MAX_OPERATIONS:] if MAX_OPERATIONS > 0 else []
     kept = protected | set(recent)
-    SHARED.write_json(path, [item for i, item in enumerate(items) if i in kept], durable=True, separators=(",", ":"))
+    current = [item for i, item in enumerate(items) if i in kept and not item.get("_legacy_store")]
+    legacy = [{key: value for key, value in item.items() if key != "_legacy_store"}
+              for i, item in enumerate(items) if i in kept and item.get("_legacy_store")]
+    SHARED.write_json(path, current, durable=True, separators=(",", ":"))
     # A later missing file is not a new installation. Publish the marker before
     # returning permission to perform the mutation the journal precedes.
     if not initialized:
         SHARED.write_json(os.path.join(DATA_DIR, STORE_MARKER), {"version": 1}, durable=True)
+    # Avoid rewriting old history merely because a new job progressed. This is
+    # not a cross-file transaction: each store contains disjoint job identities.
+    if legacy != _read_store(LEGACY_STORE, LEGACY_MARKER):
+        SHARED.write_json(os.path.join(DATA_DIR, LEGACY_STORE), legacy, durable=True, separators=(",", ":"))
+        if not _initialized(LEGACY_MARKER):
+            SHARED.write_json(os.path.join(DATA_DIR, LEGACY_MARKER), {"version": 1}, durable=True)
 
 
 def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
@@ -161,7 +184,7 @@ def record_phase(operation_id, phase, progress, message, **ref_updates):
 
 def _public(item):
     out = {key: value for key, value in item.items()
-           if key not in ("ref", "cancel_started", "previous_status", "history")}
+           if key not in ("ref", "cancel_started", "previous_status", "history", "_legacy_store")}
     # Every job still going can be cancelled; what that does is asked for
     # separately, as it reads Kubernetes and the tray is polled often.
     out["cancellable"] = item.get("status") not in TERMINAL and (
