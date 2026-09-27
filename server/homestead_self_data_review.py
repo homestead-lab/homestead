@@ -40,6 +40,26 @@ def _fact(obj):
     return {"name": obj["metadata"]["name"], "uid": identity(obj)["uid"], "shape": shape(obj)}
 
 
+def recheck_binding(approved, current):
+    """Fresh checks may remove a warning, never add one or change the work."""
+    changed = sorted(k for k in set(approved) | set(current) if k != "approvals" and approved.get(k) != current.get(k))
+    old, new = approved.get("approvals", {}), current.get("approvals", {})
+    def receipt(a, b):
+        return a.get("proposal") == b.get("proposal") and set(b.get("warnings", [])) <= set(a.get("warnings", []))
+    try:
+        worker_ok = (old["worker"]["threshold"] == new["worker"]["threshold"] and old["worker"]["nodes"] == new["worker"]["nodes"]
+                     and receipt(old["worker"]["receipt"], new["worker"]["receipt"]))
+        policy_ok = (old["policy"]["threshold"] == new["policy"]["threshold"] and all(
+            receipt(old["policy"]["reviews"][s], new["policy"]["reviews"][s]) for s in ("copy", "restart")))
+        if not worker_ok or not policy_ok: changed.append("capacity")
+    except (KeyError, TypeError):
+        changed.append("capacity")
+    if changed:
+        # Field names only: no configuration, secret, or API response values.
+        raise Held("Move review changed during preparation (" + ", ".join(changed) + "). Homestead has not been stopped. Keep the original volume, then review a new move.")
+    return True
+
+
 class Review:
     def __init__(self, read, namespace, deployment, *, actor, image, threshold, source_pod=None, data_dir="/data", runtime_check=None, clock=time.time, route_check=None):
         import homestead_self_data_anchor as A
