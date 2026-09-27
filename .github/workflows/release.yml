@@ -104,6 +104,7 @@ jobs:
           trap 'kill "$server_pid"' EXIT
           node scripts/check_volume_layout.mjs
           node scripts/capture_screenshots.mjs
+          node scripts/capture_mobile.mjs || echo "phone screenshots skipped"
       - name: Capture the installer's screens
         # The installer and node doctor, run with --dry-run in tmux; a screen
         # that does not capture only means one picture fewer.
