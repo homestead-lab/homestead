@@ -9,6 +9,7 @@ are deliberately excluded.
 import homestead_shared as SHARED
 import homestead_vm_power_receipts as POWER_RECEIPTS
 import homestead_storage_conflicts as STORAGE_CONFLICTS
+from homestead_storage_journal import Held as StorageHeld
 import json
 import os
 import secrets
@@ -28,6 +29,12 @@ LEGACY_STORE = "operations.json"
 LEGACY_MARKER = ".operations-initialized.json"
 MAX_OPERATIONS = 100
 TERMINAL = {"succeeded", "failed", "cancelled"}
+WRITE_GUARD = None  # installed by the server; checked before dispatch and persistence
+
+
+def require_write():
+    if WRITE_GUARD is not None:
+        WRITE_GUARD()
 # A cancel that has begun and not yet finished. The poll leaves such a job
 # alone, so a step cannot move it on while it is being put back.
 CANCELLING = "cancelling"
@@ -96,6 +103,7 @@ def _read():
 
 
 def _write(items):
+    require_write()
     initialized = _initialized()
     # Record consumption before writing/pruning visible history. A clock jump,
     # history clear or restart must never resurrect an already-used approval.
@@ -626,6 +634,7 @@ RESOLVERS = {
 def _refresh(item):
     if item.get("status") in TERMINAL or item.get("status") == CANCELLING:
         return False
+    require_write()  # outside resolver error handling: a hold is not job progress
     resolver = RESOLVERS.get(item.get("kind"))
     if not resolver:
         return _finish(item, "failed", item.get("progress", 0), "Unknown operation type")
@@ -658,6 +667,10 @@ def snapshot():
 
 
 def list_operations():
+    try:
+        require_write()
+    except StorageHeld:
+        return snapshot()  # inspection stays available without advancing old jobs
     with _lock:
         items = _read()
         changed = False

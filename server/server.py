@@ -30,6 +30,7 @@ import homestead_import_job as IMPORT_JOB
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
 import homestead_operations as OPS
 import homestead_storage_guard as STORAGE_GUARD
+import homestead_self_data_fence as SELF_DATA_FENCE
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
 API = "https://kubernetes.default.svc"
@@ -45,6 +46,7 @@ STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.195")
+_self_data_fence = None
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -162,6 +164,7 @@ def kget(path, timeout=10):
 
 
 def ksend(method, path, body=None, ctype="application/json", timeout=15):
+    require_self_data_write()
     return STORAGE_GUARD.send(method, path, body, lambda: _ksend(method, path, body, ctype, timeout), OPS, kget,
                               own_controller=(SELF.NS, NAMES.BRAND))
 
@@ -173,6 +176,43 @@ def _ksend(method, path, body=None, ctype="application/json", timeout=15):
     with urllib.request.urlopen(req, context=CTX, timeout=timeout) as r:
         raw = r.read().decode()
         return json.loads(raw) if raw.strip() else {}
+
+
+def require_self_data_write():
+    if _self_data_fence is not None:
+        _self_data_fence.require_write()
+
+
+def self_data_file_write(path):
+    if _self_data_fence is None:
+        return
+    root, candidate = os.path.realpath(DATA_DIR), os.path.realpath(path)
+    try:
+        within = os.path.commonpath((root, candidate)) == root
+    except ValueError:
+        within = False
+    if within:
+        require_self_data_write()
+
+
+def initialize_self_data_fence():
+    """Called before feature bindings can write defaults or start background jobs."""
+    global _self_data_fence
+    if not TOKEN:  # local demo/test server has no cluster or persistent handoff
+        return
+    with open(f"{SA}/namespace", encoding="utf-8") as handle:
+        namespace = handle.read().strip()
+    _self_data_fence = SELF_DATA_FENCE.Fence(kget, namespace, NAMES.BRAND,
+        os.environ.get("HOSTNAME", ""), NAMES.BRAND, DATA_DIR)
+    _self_data_fence.inspect()  # unknown/source state must not reach feature imports
+
+
+OPS.WRITE_GUARD = require_self_data_write
+# Set before later feature binds, some of which create persistent defaults.
+import homestead_shared as SELF_DATA_SHARED
+SELF_DATA_SHARED.WRITE_GUARD = self_data_file_write
+if __name__ == "__main__":
+    initialize_self_data_fence()
 
 
 def cached(key, ttl, fn):
@@ -6249,6 +6289,12 @@ class H(BaseHTTPRequestHandler):
                 CFACCESS.verify(token)
             except ValueError as error:
                 self._send(403, {"error": f"Cloudflare Access did not sign this request: {error}"})
+                return True
+        if self.command in ("POST", "PUT", "PATCH", "DELETE") or path in ("/api/console", "/api/node/shell", "/api/vm/console"):
+            try:
+                require_self_data_write()
+            except SELF_DATA_FENCE.Held as error:
+                self._send(503, {"error": str(error), "data_handoff": True})
                 return True
         if (is_spa_route(path) or is_page_path(path) or is_public_path(path) or is_vendor_path(path) or
                 (path.startswith("/js/") and path.endswith(".js"))):
