@@ -31,6 +31,7 @@ import homestead_rollout_capacity as ROLLOUT_CAPACITY
 import homestead_operations as OPS
 import homestead_storage_guard as STORAGE_GUARD
 import homestead_self_data_fence as SELF_DATA_FENCE
+import homestead_self_data_worker as SELF_DATA_WORKER
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
 API = "https://kubernetes.default.svc"
@@ -5220,6 +5221,25 @@ def fit_own_strategy():
         print(f"could not check Homestead's own update strategy: {error}", flush=True)
 
 
+def self_data_handoff_status(operation):
+    """Read only the control record identified by this installation's receipt.
+
+    A missing marker is not permission to discover/adopt a same-name operation.
+    This read-only route never invokes the legacy move resolver or job polling.
+    """
+    if not re.fullmatch(r"[a-f0-9]{24}", operation):
+        return None
+    try:
+        marker = SELF_DATA_FENCE.read_marker(DATA_DIR)
+        if not marker or (marker["namespace"], marker["deployment"], marker["operation"]) != (SELF.NS, NAMES.BRAND, operation):
+            return None
+        anchor = SELF_DATA_FENCE.A.Anchor(kget, None, SELF.NS, NAMES.BRAND)
+        anchor.load(operation=operation, uid=marker["anchor_uid"])
+        return SELF_DATA_WORKER.progress(anchor, time.time())
+    except Exception:
+        return SELF_DATA_WORKER.unavailable_status(operation)
+
+
 def move_homestead_data(storage_class):
     """Copies Homestead's data to a new claim on another class, then points it there.
 
@@ -6421,6 +6441,11 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("cluster", 15, CLUSTER.inventory))
             if p == "/api/self/replicas":
                 return self._send(200, homestead_replicas())
+            if p.startswith("/api/self/data/handoff/"):
+                status = self_data_handoff_status(p[len("/api/self/data/handoff/"):])
+                if status is None:
+                    return self._send(404, {"error": "No recorded data move with this identity"})
+                return self._send(503 if status["status"] == "unknown" else 200, status)
             if p == "/api/ipam":
                 return self._send(200, IPAM.view())
             if p == "/api/vm/store":

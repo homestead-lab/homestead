@@ -108,6 +108,8 @@ class Fence:
             raise Held("This data handoff marker belongs to another Homestead installation")
         control.load(operation=marker["operation"], uid=marker["anchor_uid"])
         state = control.state
+        if state.get("runtime", {}).get("state") == "held":
+            raise Held("The data move needs a recovery review; startup and writes remain held")
         if state.get("pointer_receipt") != A.pointer_digest(self.namespace, state, marker["anchor_uid"]):
             raise Held("The data handoff local receipt was not confirmed; startup and writes remain held")
         plan = state.get("plan", {})
