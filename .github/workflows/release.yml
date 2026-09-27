@@ -172,6 +172,8 @@ jobs:
           PORT=4173 WEBROOT=web DATA_DIR=/tmp/homestead-demo-data python server/server.py >/tmp/homestead-demo.log 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid"' EXIT
+          # The server takes a moment to start; nothing is captured before it answers.
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:4173/healthz >/dev/null && break; sleep 1; done
           node scripts/check_volume_layout.mjs
           node scripts/capture_screenshots.mjs
           node scripts/capture_mobile.mjs || echo "phone screenshots skipped"
