@@ -129,7 +129,9 @@ box_menu() { # title text tag item...
   rows=$(term_rows); lines=$(text_lines "$text" 84)
   list=$items; [ "$list" -gt $((rows - lines - 9)) ] && list=$((rows - lines - 9)); [ "$list" -lt 3 ] && list=3
   height=$((lines + list + 8)); [ "$height" -gt "$rows" ] && height=$rows
-  "$BOX" --title "$title" --cancel-button "Back" --menu "$text" "$height" 90 "$list" "$@" 3>&1 1>"$TTY" 2>&3 < "$TTY"
+  # The tags are for the script; people read the items.
+  if [ "$BOX" = dialog ]; then notags=--no-tags; else notags=--notags; fi
+  "$BOX" --title "$title" --cancel-button "Back" "$notags" --menu "$text" "$height" 90 "$list" "$@" 3>&1 1>"$TTY" 2>&3 < "$TTY"
 }
 
 # The answer given ahead in the environment, if there is one.
@@ -398,7 +400,7 @@ new_cluster() {
   v=$(versions); [ -n "$v" ] && args="$args $v"
   [ "$DIST" = rke2 ] && args="$args --rke2"
   yesno HS_YES "Ready" "About to:
-  - install $(dist_name) on this machine, as the first server of a new cluster, at $NODE_IP
+  - install $(dist_name) here, the first server of a new cluster, at $NODE_IP
   - $( [ "$longhorn" = yes ] && echo "install Longhorn (open-iscsi and an NFS client go on the host first)" || echo "use k3s's local-path storage")
   - $( [ "$kubevirt" = yes ] && echo "install KubeVirt and CDI" || echo "leave VMs out (KubeVirt can be added later)")
   - install Homestead, at http://$NODE_IP:8088
