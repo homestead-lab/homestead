@@ -31,6 +31,9 @@
 #                        (emulated, and slow, if this machine has no /dev/kvm)
 #   --k3s-version v1.31.4+k3s1   pin k3s (default: k3s's stable channel)
 #   --rke2-version v1.33.4+rke2r1  pin RKE2 (default: RKE2's stable channel)
+#   --longhorn-version v1.9.1    pin Longhorn (default: the newest chart)
+#   --kubevirt-version v1.6.0    pin KubeVirt (default: KubeVirt's stable release)
+#   --cdi-version v1.62.0        pin CDI (default: the newest release)
 #   --homestead-version 2.8.95   pin Homestead (default: the newest release)
 # Options for every mode:
 #   --rke2                   RKE2 instead of k3s
@@ -54,6 +57,9 @@ KUBEVIRT=0
 DIST=k3s
 K3S_VERSION=""
 RKE2_VERSION=""
+LONGHORN_VERSION=""
+KUBEVIRT_VERSION=""
+CDI_VERSION=""
 HOMESTEAD_VERSION=""
 NODE_IP=""
 RAW=https://raw.githubusercontent.com/wjcloudy/homestead
@@ -66,7 +72,7 @@ command -v curl >/dev/null 2>&1 || fail "curl is needed"
 
 host_packages() {
   # Longhorn mounts volumes over iSCSI and serves shared (RWX) volumes over NFS.
-  say "Installing what Longhorn needs on this host"
+  say "Installing host packages for Longhorn (open-iscsi, NFS client)"
   if command -v apt-get >/dev/null 2>&1; then
     DEBIAN_FRONTEND=noninteractive apt-get update -qq
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq open-iscsi nfs-common
@@ -75,7 +81,7 @@ host_packages() {
   elif command -v zypper >/dev/null 2>&1; then
     zypper --non-interactive install -y open-iscsi nfs-client
   else
-    echo "  unknown package manager: install open-iscsi and an NFS client yourself"
+    echo "  Unknown package manager. Install open-iscsi and an NFS client manually."
   fi
   systemctl enable --now iscsid >/dev/null 2>&1 || true
   modprobe iscsi_tcp 2>/dev/null || true
@@ -84,27 +90,29 @@ host_packages() {
 # KubeVirt and CDI from their newest releases, dropped into the manifests
 # folder like the rest; each one's switch goes in once its CRD is there.
 install_kubevirt() {
-  say "Asking $DIST to install KubeVirt and CDI"
+  say "Installing KubeVirt and CDI"
   KV_RELEASES=https://github.com/kubevirt/kubevirt/releases/download
   CDI_RELEASES=https://github.com/kubevirt/containerized-data-importer/releases
-  KV=$(curl -sfL https://storage.googleapis.com/kubevirt-prow/release/kubevirt/kubevirt/stable.txt) \
-    || fail "could not read KubeVirt's newest release"
-  # GitHub sends .../releases/latest on to the newest release's tag; its API says it too.
-  CDI=$(curl -sfLI -o /dev/null -w '%{url_effective}' "$CDI_RELEASES/latest" | sed 's|.*/||')
+  KV="$KUBEVIRT_VERSION"
+  [ -n "$KV" ] || KV=$(curl -sfL https://storage.googleapis.com/kubevirt-prow/release/kubevirt/kubevirt/stable.txt) \
+    || fail "Could not retrieve the current KubeVirt release."
+  CDI="$CDI_VERSION"
+  # GitHub redirects .../releases/latest to the newest release's tag; its API reports it too.
+  [ -n "$CDI" ] || CDI=$(curl -sfLI -o /dev/null -w '%{url_effective}' "$CDI_RELEASES/latest" | sed 's|.*/||')
   case "$CDI" in v*) ;; *) CDI=$(curl -sfL https://api.github.com/repos/kubevirt/containerized-data-importer/releases/latest \
     | sed -n 's/.*"tag_name": *"\(v[^"]*\)".*/\1/p' | head -n 1) ;; esac
-  case "$KV" in v*) ;; *) fail "could not tell KubeVirt's newest release ($KV)" ;; esac
-  case "$CDI" in v*) ;; *) fail "could not tell CDI's newest release ($CDI)" ;; esac
+  case "$KV" in v*) ;; *) KV="v$KV" ;; esac
+  case "$CDI" in v*) ;; *) fail "Could not determine the CDI release ($CDI)." ;; esac
   echo "  KubeVirt $KV, CDI $CDI"
   curl -sfL "$KV_RELEASES/$KV/kubevirt-operator.yaml" -o "$MANIFESTS/kubevirt-operator.yaml" \
-    || fail "could not download KubeVirt $KV"
+    || fail "Could not download KubeVirt $KV."
   curl -sfL "$CDI_RELEASES/download/$CDI/cdi-operator.yaml" -o "$MANIFESTS/cdi-operator.yaml" \
-    || fail "could not download CDI $CDI"
+    || fail "Could not download CDI $CDI."
   modprobe kvm_intel 2>/dev/null || modprobe kvm_amd 2>/dev/null || true
   EMULATION=""
   if [ ! -e /dev/kvm ]; then
     EMULATION="      useEmulation: true"
-    echo "  this machine has no /dev/kvm (hardware virtualisation): KubeVirt will emulate, and VMs run slowly"
+    echo "  Hardware virtualisation (/dev/kvm) is not available: KubeVirt will use emulation."
   fi
   wait_crd kubevirts.kubevirt.io
   cat > "$MANIFESTS/kubevirt-cr.yaml" <<KUBEVIRT_CR
@@ -138,11 +146,11 @@ CDI_CR
 
 wait_crd() {
   i=0; until $KUBECTL get crd "$1" >/dev/null 2>&1; do
-    i=$((i+1)); if [ $i -gt 60 ]; then echo "  $1 is not there yet; $DIST keeps trying"; return 0; fi; sleep 3; done
+    i=$((i+1)); if [ $i -gt 60 ]; then echo "  $1 is not available yet; $DIST will retry."; return 0; fi; sleep 3; done
 }
 
 install_k3s() {
-  say "Installing k3s ($*)"
+  say "Installing k3s${K3S_VERSION:+ $K3S_VERSION} ($1)"
   if [ -n "$K3S_VERSION" ]; then export INSTALL_K3S_VERSION="$K3S_VERSION"; fi
   if [ -n "$NODE_IP" ]; then set -- "$@" --node-ip "$NODE_IP"; fi
   curl -sfL https://get.k3s.io | sh -s - "$@"
@@ -152,7 +160,7 @@ install_k3s() {
 # RKE2 installed and its service started (which waits for it to come up).
 install_rke2() { # server|agent [url token]
   type="$1"; url="${2:-}"; token="${3:-}"
-  say "Installing RKE2 ($type)"
+  say "Installing RKE2${RKE2_VERSION:+ $RKE2_VERSION} ($type)"
   mkdir -p /etc/rancher/rke2
   {
     [ -n "$NODE_IP" ] && echo "node-ip: $NODE_IP"
@@ -165,7 +173,7 @@ install_rke2() { # server|agent [url token]
   } > /etc/rancher/rke2/config.yaml
   if [ -n "$RKE2_VERSION" ]; then export INSTALL_RKE2_VERSION="$RKE2_VERSION"; fi
   curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE="$type" sh -
-  say "Starting RKE2 (a few minutes the first time: it fetches its images)"
+  say "Starting RKE2 (the first start takes several minutes while images are downloaded)"
   systemctl enable --now "rke2-$type.service"
 }
 
@@ -181,11 +189,11 @@ parse_common() { # sets DIST, NODE_IP, versions; leaves the rest to the caller
 
 case "$MODE" in
   agent|join)
-    [ $# -ge 2 ] || fail "usage: $MODE https://<server>:6443 <token> (RKE2: https://<server>:9345 <token> --rke2)"
+    [ $# -ge 2 ] || fail "Usage: $MODE https://<server>:6443 <token> (RKE2: https://<server>:9345 <token> --rke2)"
     URL="$1"; TOKEN="$2"; shift 2
     while [ $# -gt 0 ]; do
       set +e; parse_common "$@"; used=$?; set -e
-      [ "$used" = 0 ] && fail "unknown option $1"
+      [ "$used" = 0 ] && fail "Unknown option: $1"
       shift "$used"
     done
     host_packages
@@ -196,10 +204,10 @@ case "$MODE" in
       if [ "$MODE" = agent ]; then install_k3s agent
       else unset K3S_URL; install_k3s server --server "$URL"; fi
     fi
-    say "Joined. The machine appears on Homestead's Nodes page within a minute or two."
+    say "Node joined the cluster. It appears on the Homestead Nodes page within a few minutes."
     exit 0 ;;
   server|addons) ;;
-  *) sed -n '2,50p' "$0" 2>/dev/null || true; fail "say server, agent, join or addons" ;;
+  *) sed -n '2,55p' "$0" 2>/dev/null || true; fail "Specify a mode: server, agent, join or addons." ;;
 esac
 
 while [ $# -gt 0 ]; do
@@ -207,14 +215,17 @@ while [ $# -gt 0 ]; do
     --no-longhorn) LONGHORN=0; shift; continue ;;
     --kubevirt) KUBEVIRT=1; shift; continue ;;
     --homestead-version) HOMESTEAD_VERSION="$2"; shift 2; continue ;;
+    --longhorn-version) LONGHORN_VERSION="$2"; shift 2; continue ;;
+    --kubevirt-version) KUBEVIRT_VERSION="$2"; shift 2; continue ;;
+    --cdi-version) CDI_VERSION="$2"; shift 2; continue ;;
   esac
   set +e; parse_common "$@"; used=$?; set -e
-  [ "$used" = 0 ] && fail "unknown option $1"
+  [ "$used" = 0 ] && fail "Unknown option: $1"
   shift "$used"
 done
 
 if [ "$DIST" = rke2 ]; then
-  [ "$LONGHORN" = 1 ] || fail "RKE2 has no storage of its own: leave out --no-longhorn, and Longhorn holds Homestead's data"
+  [ "$LONGHORN" = 1 ] || fail "RKE2 has no built-in storage, so --no-longhorn is not supported. Longhorn stores Homestead's data."
   MANIFESTS=/var/lib/rancher/rke2/server/manifests
   KUBECTL="/var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml"
   SERVICE=rke2-server
@@ -227,24 +238,31 @@ fi
 [ "$LONGHORN" = 1 ] && host_packages
 if [ "$MODE" = addons ]; then
   # The cluster is running already: only what goes on top of it.
-  $KUBECTL get nodes >/dev/null 2>&1 || fail "no $DIST server is running here; use server to make one"
+  $KUBECTL get nodes >/dev/null 2>&1 || fail "No $DIST server is running on this machine. Use server mode to create a cluster."
 elif [ "$DIST" = rke2 ]; then
   install_rke2 server
 else
   install_k3s server --cluster-init
 fi
 
-say "Waiting for this node to be Ready"
+say "Waiting for the node to become ready"
 i=0; until $KUBECTL get nodes 2>/dev/null | grep -q " Ready"; do
-  i=$((i+1)); [ $i -gt 180 ] && fail "the node did not become Ready; see: journalctl -u $SERVICE"; sleep 2; done
+  i=$((i+1)); [ $i -gt 180 ] && fail "The node did not become ready. See: journalctl -u $SERVICE"; sleep 2; done
 IP=$($KUBECTL get node "$(hostname)" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || true)
 [ -n "$IP" ] || IP=$($KUBECTL get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
 mkdir -p "$MANIFESTS"
 
-if [ "$LONGHORN" = 1 ]; then
-  say "Asking $DIST to install Longhorn"
+if [ "$LONGHORN" = 1 ] && [ "$MODE" = addons ] && $KUBECTL get crd volumes.longhorn.io >/dev/null 2>&1 \
+   && [ ! -f "$MANIFESTS/longhorn.yaml" ]; then
+  # Installed another way already: used as it is.
+  say "Longhorn is already installed"
+  CLASS=longhorn; MODE_RW=ReadWriteMany
+elif [ "$LONGHORN" = 1 ]; then
+  say "Installing Longhorn${LONGHORN_VERSION:+ $LONGHORN_VERSION}"
   # One replica until more nodes join; raise it on the Volumes page later.
-  cat > "$MANIFESTS/longhorn.yaml" <<'EOF'
+  CHART_VERSION=""
+  [ -n "$LONGHORN_VERSION" ] && CHART_VERSION="  version: ${LONGHORN_VERSION#v}"
+  cat > "$MANIFESTS/longhorn.yaml" <<EOF
 apiVersion: helm.cattle.io/v1
 kind: HelmChart
 metadata:
@@ -255,6 +273,7 @@ metadata:
 spec:
   repo: https://charts.longhorn.io
   chart: longhorn
+$CHART_VERSION
   targetNamespace: longhorn-system
   createNamespace: true
   valuesContent: |
@@ -270,11 +289,11 @@ fi
 
 if [ "$KUBEVIRT" = 1 ]; then install_kubevirt; fi
 
-say "Fetching Homestead's manifest"
+say "Downloading the Homestead manifest"
 REF=main
 if [ -n "$HOMESTEAD_VERSION" ]; then REF="v${HOMESTEAD_VERSION#v}"; fi
 TMP=$(mktemp)
-curl -sfL "$RAW/$REF/deploy/deploy.yaml" -o "$TMP" || fail "could not download $RAW/$REF/deploy/deploy.yaml"
+curl -sfL "$RAW/$REF/deploy/deploy.yaml" -o "$TMP" || fail "Could not download $RAW/$REF/deploy/deploy.yaml."
 # Harvester's answers become this cluster's: its storage class, and this
 # machine's address - the ServiceLB publishes Services on the nodes' own
 # addresses, so there is no separate VIP to choose.
@@ -285,9 +304,9 @@ sed -e "s/longhorn-r2/$CLASS/g" \
     "$TMP" > "$MANIFESTS/homestead.yaml"
 rm -f "$TMP"
 
-say "Waiting for Homestead to start (Longhorn first, if it is being installed: a few minutes)"
+say "Waiting for Homestead to start (this takes several minutes when Longhorn is being installed)"
 i=0; until $KUBECTL -n lab rollout status deployment/homestead --timeout=10s >/dev/null 2>&1; do
-  i=$((i+1)); [ $i -gt 90 ] && fail "Homestead did not start; see: $KUBECTL -n lab get pods"; sleep 10; done
+  i=$((i+1)); [ $i -gt 90 ] && fail "Homestead did not start. See: $KUBECTL -n lab get pods"; sleep 10; done
 
-say "Homestead is running: open http://$IP:8088 and create the first account."
-echo "   To add machines, Cluster > Add a host shows the commands for this cluster."
+say "Homestead is running at http://$IP:8088. Open this address to create the administrator account."
+echo "   To add nodes, see Cluster > Add a host in Homestead."

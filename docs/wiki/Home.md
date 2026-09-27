@@ -56,5 +56,5 @@ probe - and your first sign-in.
 - [Settings](Settings) - cluster, hardware, users, MQTT, redundancy, Homestead's own health
 - [Troubleshooting](Troubleshooting) - the problems people actually hit
 
-The [README](https://github.com/wjcloudy/homestead#readme) has the full
-reference for every feature; this wiki is the guided tour.
+The [reference](https://github.com/wjcloudy/homestead/blob/main/docs/reference.md) covers every feature in depth; this wiki is the guided
+tour.

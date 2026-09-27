@@ -12,7 +12,7 @@ On any node of a k3s, RKE2, Harvester or plain Kubernetes cluster:
 curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
 ```
 
-Choose **Check this node and fix what is wrong**. It looks at:
+Select **Check node health**. It looks at:
 
 - **The host:** the Kubernetes service, disk and inodes, memory, the clock,
   `iscsid` and multipath (Longhorn needs one, and is broken by the other),
@@ -24,8 +24,8 @@ Choose **Check this node and fix what is wrong**. It looks at:
 
 ![The node doctor](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-doctor.png)
 
-What it found is listed worst first: `[!!]` wrong, `[ !]` worth a look, `[ok]`
-fine. Choosing one says what is wrong and why it matters, and offers its fix,
+The results are listed by severity: `[FAIL]`, `[WARN]`, then `[ OK ]`.
+Selecting one shows what is wrong and why it matters, and offers its fix,
 asking first.
 
 ![A finding and its fix](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-doctor-fix.png)
@@ -34,18 +34,18 @@ The fixes restart a stopped service (which also renews
 certificates due within 90 days), turn on time sync or `iscsid`, uncordon the
 node, delete failed pods, force-delete pods stuck on a node that is gone,
 restart CoreDNS or Homestead, blacklist Longhorn's devices from multipath, or
-clean up a full disk. **Fix everything marked safe** applies the safe ones
+clean up a full disk. **Apply all safe fixes** applies the safe ones
 together.
 
-The main menu also has **Clean up** (unused images, the journal to 200 MB,
-failed pods, etcd snapshots beyond the ten newest), **Take an etcd snapshot
-now**, and on a k3s server **Restore the cluster from a snapshot**. That
+The main menu also has **Clean up disk space** (unused images, the journal to
+200 MB, failed pods, etcd snapshots beyond the ten most recent), **Take an etcd
+snapshot**, and on a k3s server **Restore from an etcd snapshot**. That
 stops k3s, resets the cluster to the snapshot you choose - after you type
 RESTORE - and starts it again. Everything since that moment is lost, but
 volumes' data is not in the snapshot; Longhorn keeps that.
 
-`--report` prints the check and exits 0 (well), 1 (worth a look) or 2
-(something wrong), for cron. `--fix-safe` applies the safe fixes with no
+`--report` prints the results and exits 0 (healthy), 1 (warnings) or 2
+(failures), for cron. `--fix-safe` applies the safe fixes with no
 questions. Every fix is written to `/var/log/homestead-doctor.log`.
 
 ## Homestead

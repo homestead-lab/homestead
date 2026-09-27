@@ -1,60 +1,65 @@
 #!/bin/sh
-# Homestead's installer and node doctor: one line, then a menu.
+# Homestead installer and node doctor.
 #
 #   curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
 #
-# It says what it found on the machine and offers what fits: installing
-# Homestead (and a cluster under it), or - on a node of a k3s, RKE2, Harvester
-# or plain Kubernetes cluster - checking the node and its cluster and fixing
-# what is wrong, cleaning up, and taking or restoring etcd snapshots.
+# The installer detects what is already on the machine and offers the options
+# that apply:
+#   - on a machine without Kubernetes: create a new cluster (k3s, or RKE2 for
+#     hardened upstream Kubernetes) with Longhorn, optionally KubeVirt, and
+#     Homestead; or join the machine to an existing cluster as a server or
+#     worker node;
+#   - on a k3s or RKE2 server node: install Longhorn and Homestead on the
+#     running cluster;
+#   - on a Harvester node: install Homestead on the Harvester cluster.
+# System checks run before any change is made, and an installation summary
+# shows the settings and component versions for review. Versions are chosen
+# from the current releases of each component.
 #
-# Installing looks at the machine first and does what fits:
-#   - a bare Linux machine: a new cluster - k3s, or RKE2 for full upstream
-#     Kubernetes - with Longhorn (and KubeVirt, if wanted) and Homestead; or
-#     this machine joined to one, as a server or a worker;
-#   - a k3s or RKE2 server already running: Longhorn and Homestead added to it;
-#   - a Harvester host: Homestead installed into Harvester, on an address you
-#     choose.
-# Before anything changes it checks the machine - memory, disk, the network,
-# ports, the clock, the firewall - says what it found, and shows what it is
-# about to do.
+# On a node that is already part of a cluster, the node doctor checks the node
+# and the cluster, lists the results by severity, and offers a fix for each
+# issue, asking before every change. It can also clean up disk space and take
+# or restore etcd snapshots.
 #
-# The questions come as menus: whiptail or dialog, and whiptail is fetched
-# with the machine's package manager when neither is there (--text, or
-# HS_UI=text, keeps to plain prompts). Every answer can be given ahead
-# instead, for an unattended install:
-#   HS_ROLE=new|server|agent|addons|harvester   what to do
-#   HS_DIST=k3s|rke2                            a new cluster's Kubernetes
-#   HS_NODE_IP=192.168.1.50                     this machine's address
+# Menus use whiptail or dialog. If neither is installed, whiptail is installed
+# from the distribution's repositories; --text uses plain prompts instead.
+#
+# Unattended installation: set the answers in the environment.
+#   HS_ROLE=new|server|agent|addons|harvester   installation mode
+#   HS_DIST=k3s|rke2                            distribution for a new cluster
+#   HS_NODE_IP=192.168.1.50                     this node's IP address
 #   HS_SERVER=192.168.1.50  HS_TOKEN=...        the cluster to join
-#   HS_LONGHORN=yes|no  HS_KUBEVIRT=yes|no      what a new cluster gets
-#   HS_VIP=192.168.1.242  HS_CLASS=harvester-longhorn   Harvester: Homestead's address and storage
-#   HS_YES=1                                    no "go ahead?" question
-# The doctor checks the host (the Kubernetes service, disk, memory, clock,
-# the iSCSI and multipath settings Longhorn needs, certificates, containerd)
-# and the cluster (API, etcd, this node, the others, failing or stuck pods,
-# Longhorn volumes, DNS, Homestead, etcd snapshots), lists what it found worst
-# first, and offers each fix - asking before every change.
+#   HS_LONGHORN=yes|no  HS_KUBEVIRT=yes|no      components for a new cluster
+#   HS_K8S_VERSION=v1.33.4+k3s1                 k3s or RKE2 version
+#   HS_LONGHORN_VERSION=v1.9.1  HS_KUBEVIRT_VERSION=v1.6.0  HS_CDI_VERSION=v1.62.0
+#   HS_VERSION=2.8.184                          Homestead version
+#   HS_VIP=192.168.1.242  HS_CLASS=harvester-longhorn   Harvester: address and storage class
+#   HS_YES=1                                    install without the summary
+# Versions not set are the current recommended releases.
 #
-# Options: --install / --doctor   go straight there instead of the menu
-#          --report      check, print, exit 0 well / 1 worth a look / 2 wrong
-#          --fix-safe    check, then apply every fix marked safe
-#          --dry-run     show the commands, change nothing
-#          --text        plain prompts instead of menus
-#          --ref v2.8.176  that release's scripts and Homestead
-#          --skip-checks   installing: report the checks, but go on regardless
+# Options: --install / --doctor   open the installer or the node doctor directly
+#          --report      run the health checks, print the results and exit
+#                        (0 healthy, 1 warnings, 2 failures)
+#          --fix-safe    run the health checks and apply every safe fix
+#          --dry-run     print the commands instead of running them
+#          --text        use plain prompts instead of menus
+#          --ref v2.8.176  use the scripts from this release
+#          --skip-checks   continue the installation when system checks fail
 set -u
 
 RAW="https://raw.githubusercontent.com/wjcloudy/homestead"
 REF="${HOMESTEAD_REF:-main}"
 DRY=0
 DIST=k3s
+ROLE=""
 ACTION=""
 SKIP_CHECKS=0
 UI=""
 TTY=/dev/tty
 WIKI="https://github.com/wjcloudy/homestead/wiki"
 FAILED=0
+BACK=Back
+MENU_DEFAULT=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -66,30 +71,30 @@ while [ $# -gt 0 ]; do
     --skip-checks) SKIP_CHECKS=1; shift ;;
     --text) UI=text; shift ;;
     --ref) REF="$2"; shift 2 ;;
-    -h|--help) sed -n '2,45p' "$0" 2>/dev/null; exit 0 ;;
-    *) printf 'unknown option %s (try --help)\n' "$1" >&2; exit 2 ;;
+    -h|--help) sed -n '2,50p' "$0" 2>/dev/null; exit 0 ;;
+    *) printf 'Unknown option: %s (see --help)\n' "$1" >&2; exit 2 ;;
   esac
 done
 
 # ------------------------------------------------------------------ output
 say() { printf '\n==> %s\n' "$*"; }
-note() { printf '    %s\n' "$*"; }
-fail() { printf '\nerror: %s\n' "$*" >&2; exit 1; }
+fail() { printf '\nError: %s\n' "$*" >&2; exit 1; }
 run() {
   # Every change goes through here, so --dry-run shows it instead.
   { printf '%s run: %s\n' "$(date '+%F %T' 2>/dev/null)" "$*" >> /var/log/homestead-doctor.log; } 2>/dev/null || true
   if [ "$DRY" = 1 ]; then printf '+ %s\n' "$*"; else "$@"; fi
 }
+cancelled() { fail "Installation cancelled. No changes were made."; }
 
 # ------------------------------------------------------------------ questions
 have() { command -v "$1" >/dev/null 2>&1; }
 interactive() { [ -r "$TTY" ] && [ -w "$TTY" ] && (: < "$TTY") 2>/dev/null; }
 
-# Minimal and cloud images often come without whiptail: it is small, and in
-# every distribution's own packages (whiptail on Debian and Ubuntu, newt on
-# the rest).
+# Minimal and cloud images often ship without whiptail. It is a small package
+# in every distribution's repositories (whiptail on Debian and Ubuntu, newt
+# elsewhere).
 get_menus() {
-  printf 'Fetching whiptail, to show menus (--text does without)...\n' > "$TTY"
+  printf 'Installing whiptail to display menus (use --text to skip)...\n' > "$TTY"
   if have apt-get; then
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq whiptail >/dev/null 2>&1 \
       || { apt-get update -qq >/dev/null 2>&1 && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq whiptail >/dev/null 2>&1; }
@@ -101,7 +106,7 @@ get_menus() {
   have whiptail
 }
 
-# HS_UI=whiptail|dialog|text picks the look; otherwise the best there is.
+# HS_UI=whiptail|dialog|text selects the interface; otherwise the best available.
 [ -z "$UI" ] && [ -n "${HS_UI:-}" ] && UI="$HS_UI"
 if [ -z "$UI" ]; then
   if ! interactive || [ "${TERM:-dumb}" = dumb ]; then UI=text
@@ -112,8 +117,8 @@ if [ -z "$UI" ]; then
 fi
 BOX="$UI"
 
-# Boxes are as tall as what they hold, within the terminal: the text's lines
-# as the box wraps them, plus the box's own frame and buttons.
+# Boxes are as tall as their contents, within the terminal: the text's lines
+# as the box wraps them, plus the frame and buttons.
 term_rows() { rows=$(stty size < "$TTY" 2>/dev/null | cut -d' ' -f1); echo "${rows:-24}"; }
 text_lines() { # text width
   printf '%s\n' "$1" | awk -v w="$2" '{ n += int((length($0) + w - 1) / w); if (!length($0)) n++ } END { print n }'
@@ -129,15 +134,20 @@ box_menu() { # title text tag item...
   rows=$(term_rows); lines=$(text_lines "$text" 84)
   list=$items; [ "$list" -gt $((rows - lines - 9)) ] && list=$((rows - lines - 9)); [ "$list" -lt 3 ] && list=3
   height=$((lines + list + 8)); [ "$height" -gt "$rows" ] && height=$rows
-  # The tags are for the script; people read the items.
-  if [ "$BOX" = dialog ]; then notags=--no-tags; else notags=--notags; fi
-  "$BOX" --title "$title" --cancel-button "Back" "$notags" --menu "$text" "$height" 90 "$list" "$@" 3>&1 1>"$TTY" 2>&3 < "$TTY"
+  # The tags are for the script; the items are what people read.
+  if [ "$BOX" = dialog ]; then notags=--no-tags; cancel=--cancel-label; else notags=--notags; cancel=--cancel-button; fi
+  "$BOX" --title "$title" "$cancel" "$BACK" "$notags" --menu "$text" "$height" 90 "$list" "$@" 3>&1 1>"$TTY" 2>&3 < "$TTY"
 }
 
-# The answer given ahead in the environment, if there is one.
+infobox() { # text
+  if [ "$UI" = text ]; then printf '%s\n' "$1" > "$TTY"
+  else "$BOX" --infobox "$1" 7 60 > "$TTY" 2>&1; fi
+}
+
+# The answer set in the environment, if there is one.
 given() { eval "printf '%s' \"\${$1:-}\""; }
 
-need_tty() { interactive || fail "no terminal to ask on: give the answer as $1=... (see --help)"; }
+need_tty() { interactive || fail "No terminal is available for input. Set $1 to provide this value (see --help)."; }
 
 msg() { # title text
   if [ "$UI" = text ]; then printf '\n-- %s --\n%s\n' "$1" "$2"
@@ -170,7 +180,7 @@ ask() { # var title text default [secret] -> the answer on stdout
     printf '%s' "${reply:-$4}"; return
   fi
   kind=--inputbox; [ "${5:-}" = secret ] && kind=--passwordbox
-  "$BOX" --title "$2" "$kind" "$3" "$(fit "$3" 9)" 78 "$4" 3>&1 1>"$TTY" 2>&3 < "$TTY" || exit 1
+  "$BOX" --title "$2" "$kind" "$3" "$(fit "$3" 9)" 78 "$4" 3>&1 1>"$TTY" 2>&3 < "$TTY" || cancelled
 }
 
 choose() { # var title text tag item [tag item...] -> the tag on stdout
@@ -179,16 +189,16 @@ choose() { # var title text tag item [tag item...] -> the tag on stdout
   var="$1"; title="$2"; text="$3"; shift 3
   need_tty "$var"
   if [ "$UI" = text ]; then
-    # Tags and items alternate: the items are listed, and the nth tag chosen.
+    # Tags and items alternate: the items are listed, and the nth tag returned.
     printf '\n%s\n%s\n' "$title" "$text" > "$TTY"
     i=0; for word in "$@"; do i=$((i+1)); [ $((i % 2)) = 0 ] && printf '  %d) %s\n' $((i / 2)) "$word" > "$TTY"; done
-    printf 'Choose 1-%d [1]: ' $(( $# / 2 )) > "$TTY"
+    printf 'Select 1-%d [1]: ' $(( $# / 2 )) > "$TTY"
     read -r reply < "$TTY" || reply=""
     [ -z "$reply" ] && reply=1
     i=0; for word in "$@"; do i=$((i+1)); if [ $((i % 2)) = 1 ] && [ $(( (i + 1) / 2 )) = "$reply" ]; then printf '%s' "$word"; return; fi; done
-    fail "no choice $reply"
+    fail "Invalid selection: $reply"
   fi
-  box_menu "$title" "$text" "$@" || exit 1
+  box_menu "$title" "$text" "$@" || cancelled
 }
 
 # ------------------------------------------------------------------ the machine
@@ -204,82 +214,260 @@ is_harvester() { grep -qi harvester /etc/os-release 2>/dev/null || [ -f /etc/ran
 active() { systemctl is-active --quiet "$1" 2>/dev/null; }
 kvm() { [ -e /dev/kvm ] || grep -Eq 'vmx|svm' /proc/cpuinfo 2>/dev/null; }
 
-# ------------------------------------------------------------------ checks
+# ------------------------------------------------------------------ system checks
 REPORT=""
-check() { # ok|warn|fail text
-  # Long lines wrap under their own text, not back under the ok/note column.
+check() { # pass|warn|fail text
+  # Long lines wrap under their own text, not under the status column.
   text=$(printf '%s\n' "$2" | fold -s -w 64 | sed 's/ *$//; 2,$s/^/        /')
   case "$1" in
-    ok) REPORT="$REPORT
-  ok    $text" ;;
+    pass) REPORT="$REPORT
+  PASS  $text" ;;
     warn) REPORT="$REPORT
-  note  $text" ;;
+  WARN  $text" ;;
     fail) REPORT="$REPORT
-  STOP  $text"; FAILED=1 ;;
+  FAIL  $text"; FAILED=1 ;;
   esac
 }
 
 prechecks() { # role
   REPORT=""; FAILED=0
-  [ "$(id -u)" = 0 ] && check ok "running as root" || check fail "run with sudo: curl ... | sudo sh"
-  have curl && check ok "curl is here" || check fail "curl is needed"
-  have systemctl && check ok "systemd runs this machine" || check fail "$DIST needs systemd"
+  [ "$(id -u)" = 0 ] && check pass "Running as root" || check fail "Not running as root. Run the installer with sudo."
+  have curl && check pass "curl is installed" || check fail "curl is not installed."
+  have systemctl && check pass "systemd is available" || check fail "systemd is not available. $(dist_name) requires systemd."
   case "$(uname -m)" in
-    x86_64|amd64|aarch64|arm64) check ok "$(os_name) on $(uname -m)" ;;
-    *) check fail "$(uname -m) is not a platform $DIST and Homestead run on (x86-64 or arm64)" ;;
+    x86_64|amd64|aarch64|arm64) check pass "$(os_name), $(uname -m)" ;;
+    *) check fail "Unsupported architecture: $(uname -m). x86_64 and arm64 are supported." ;;
   esac
   mem=$(mem_mb); cpus=$(nproc 2>/dev/null || echo 1)
-  if [ "$1" = agent ]; then want=1024; else want=2048; fi
-  if [ "$mem" -lt "$want" ]; then check fail "${mem} MB of memory: a $1 needs at least $want MB"
-  elif [ "$mem" -lt 4096 ] && [ "$1" = new ]; then check warn "${mem} MB of memory is enough to start; $([ "$DIST" = rke2 ] && echo "an RKE2 server wants 4 GB, and ")Longhorn and VMs want 8 GB or more"
-  elif [ "$mem" -lt 4096 ] && [ "$1" = server ] && [ "$DIST" = rke2 ]; then check warn "${mem} MB of memory: an RKE2 server wants 4 GB or more"
-  else check ok "${mem} MB of memory, $cpus CPUs"; fi
+  if [ "$1" = agent ]; then want=1024; node="worker"; else want=2048; node="server"; fi
+  if [ "$mem" -lt "$want" ]; then check fail "${mem} MB memory. A $node node requires at least $want MB."
+  elif [ "$mem" -lt 4096 ] && [ "$1" = new ]; then check warn "${mem} MB memory. 4 GB is the minimum recommended for $(dist_name) with Longhorn; 8 GB or more for virtual machines."
+  elif [ "$mem" -lt 4096 ] && [ "$1" = server ] && [ "$DIST" = rke2 ]; then check warn "${mem} MB memory. 4 GB or more is recommended for an RKE2 server node."
+  else check pass "${mem} MB memory, $cpus CPUs"; fi
   free=$(disk_gb); free=${free:-0}
-  if [ "$free" -lt 10 ]; then check fail "${free} GB free under /var: $DIST and its images need at least 10 GB"
-  elif [ "$free" -lt 30 ]; then check warn "${free} GB free under /var - enough to start; volumes and images fill it quickly"
-  else check ok "${free} GB free under /var"; fi
+  if [ "$free" -lt 10 ]; then check fail "${free} GB free in /var. At least 10 GB is required."
+  elif [ "$free" -lt 30 ]; then check warn "${free} GB free in /var. 30 GB or more is recommended for container images and volumes."
+  else check pass "${free} GB free in /var"; fi
   host=$(hostname)
   if printf '%s' "$host" | grep -Eq '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$' && [ "$host" != localhost ]; then
-    check ok "hostname $host"
+    check pass "Hostname $host is a valid node name"
   else
-    check fail "hostname '$host' cannot be a Kubernetes node name: lower-case letters, digits and dashes (hostnamectl set-hostname node1)"
+    check fail "Hostname '$host' is not a valid node name. Use lowercase letters, digits and hyphens (hostnamectl set-hostname node1)."
   fi
   get="get.$DIST.io"
-  if reachable "https://$get" && reachable https://ghcr.io/v2/; then check ok "the internet is reachable ($get, ghcr.io)"
-  else check fail "cannot reach $get or ghcr.io: this machine needs the internet to install"; fi
+  if reachable "https://$get" && reachable https://ghcr.io/v2/; then check pass "Internet access ($get, ghcr.io)"
+  else check fail "Cannot reach $get or ghcr.io. Internet access is required."; fi
   if [ "$1" != addons ]; then
     ports="6443 10250"; [ "$DIST" = rke2 ] && ports="6443 9345 10250"
-    for port in $ports; do
-      listening "$port" && check fail "port $port is in use: another Kubernetes, or something else, is running here"
-    done
+    busy=""
+    for port in $ports; do listening "$port" && busy="$busy $port"; done
+    if [ -n "$busy" ]; then check fail "Port(s)$busy in use. Another Kubernetes installation or service may be running."
+    else check pass "Ports $(echo $ports | sed 's/ /, /g') are available"; fi
   fi
-  if [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = yes ]; then check ok "the clock is synchronised"
-  else check warn "the clock is not synchronised (timedatectl): certificates and joining can fail on a wrong clock"; fi
+  if [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = yes ]; then check pass "System clock is synchronised"
+  else check warn "System clock is not synchronised. Certificate validation and cluster join may fail."; fi
   if active ufw || active firewalld; then
-    check warn "a firewall is on: open 6443/tcp,$([ "$DIST" = rke2 ] && echo " 9345/tcp,") 10250/tcp, 8472/udp and 2379-2380/tcp between the machines, and 8088/tcp for Homestead"
+    check warn "A firewall is active. Between nodes, allow TCP 6443,$([ "$DIST" = rke2 ] && echo " 9345,") 10250 and 2379-2380, and UDP 8472. Allow TCP 8088 for Homestead."
   fi
   if [ -n "${NODE_IP:-}" ] && dynamic_ip "$NODE_IP"; then
-    check warn "$NODE_IP comes from DHCP: reserve it on your router, or a changed address breaks the cluster"
+    check warn "$NODE_IP is assigned by DHCP. Reserve it on the DHCP server; a changed address breaks the cluster."
   fi
   if [ "$1" = new ]; then
-    kvm && check ok "hardware virtualisation is on (VMs run at full speed)" \
-      || check warn "no hardware virtualisation (/dev/kvm): VMs would be emulated and slow"
+    kvm && check pass "Hardware virtualisation is available" \
+      || check warn "Hardware virtualisation is not available. Virtual machines would run in emulation mode."
   fi
   if [ "$FAILED" = 1 ] && [ "$SKIP_CHECKS" = 0 ]; then
-    msg "Checks - cannot go on" "These have to be put right first:
+    msg "System Checks Failed" "Resolve the following before installing:
 $REPORT"
-    fail "the checks above stopped the install"
+    fail "Installation stopped: system checks failed."
   fi
-  msg "Checks" "This machine:
+  msg "System Checks" "Results for $(hostname):
 $REPORT"
+}
+
+# ------------------------------------------------------------------ versions
+# Release lists are retrieved only when a version menu opens, never for an
+# unattended installation. k3s and RKE2 publish release channels; the other
+# components are listed from their GitHub releases.
+K8S_VERSION=$(given HS_K8S_VERSION); K8S_NOTE=""
+LONGHORN_VERSION=$(given HS_LONGHORN_VERSION); LONGHORN_NOTE=""
+KUBEVIRT_VERSION=$(given HS_KUBEVIRT_VERSION); KUBEVIRT_NOTE=""
+CDI_VERSION=$(given HS_CDI_VERSION); CDI_NOTE=""
+HS_RELEASE=$(given HS_VERSION); HS_NOTE=""
+[ -z "$HS_RELEASE" ] && [ "$REF" != main ] && HS_RELEASE="${REF#v}"
+HS_RELEASE="${HS_RELEASE#v}"
+VCACHE="${TMPDIR:-/tmp}/homestead-releases.$$"
+
+fetch() { curl -sfL --max-time 15 "$1" 2>/dev/null; }
+newest_first() { sed 's/^v//' | sort -t. -k1,1nr -k2,2nr -k3,3nr | sed 's/^/v/'; }
+cached() { # key command... -> the command's output, retrieved once per run
+  mkdir -p "$VCACHE" 2>/dev/null
+  f="$VCACHE/$1"; shift
+  [ -s "$f" ] || "$@" > "$f" 2>/dev/null
+  cat "$f" 2>/dev/null
+}
+channels() { # k3s|rke2 -> "channel version" lines, releases only
+  fetch "https://update.$1.io/v1-release/channels" | tr -d '\n' \
+    | grep -o '"name":"[^"]*","latest":"[^"]*"' \
+    | sed 's/"name":"\([^"]*\)","latest":"\([^"]*\)"/\1 \2/' \
+    | grep -v '^testing ' | grep -Ev ' v[0-9.]+-'
+}
+releases() { # owner/repo -> release tags, newest first, without pre-releases
+  fetch "https://api.github.com/repos/$1/releases?per_page=50" | grep -o '"tag_name": *"[^"]*"' \
+    | sed 's/.*"\([^"]*\)"$/\1/' | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | newest_first
+}
+kubevirt_stable() { fetch https://storage.googleapis.com/kubevirt-prow/release/kubevirt/kubevirt/stable.txt | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$'; }
+channel_version() { cached "channels-$DIST" channels "$DIST" | awk -v c="$1" '$1==c {print $2; exit}'; }
+recommended() { # component -> its recommended release
+  case "$1" in
+    k8s) channel_version stable ;;
+    longhorn) cached longhorn releases longhorn/longhorn | head -n 1 ;;
+    kubevirt) cached kubevirt-stable kubevirt_stable ;;
+    cdi) cached cdi releases kubevirt/containerized-data-importer | head -n 1 ;;
+    homestead) cached homestead releases wjcloudy/homestead | head -n 1 | sed 's/^v//' ;;
+  esac
+}
+component_name() {
+  case "$1" in k8s) dist_name ;; longhorn) echo Longhorn ;; kubevirt) echo KubeVirt ;; cdi) echo CDI ;; homestead) echo Homestead ;; esac
+}
+get_version() {
+  case "$1" in k8s) echo "$K8S_VERSION" ;; longhorn) echo "$LONGHORN_VERSION" ;; kubevirt) echo "$KUBEVIRT_VERSION" ;;
+    cdi) echo "$CDI_VERSION" ;; homestead) echo "$HS_RELEASE" ;; esac
+}
+set_version() { # component version note
+  case "$1" in
+    k8s) K8S_VERSION="$2"; K8S_NOTE="$3" ;;
+    longhorn) LONGHORN_VERSION="$2"; LONGHORN_NOTE="$3" ;;
+    kubevirt) KUBEVIRT_VERSION="$2"; KUBEVIRT_NOTE="$3" ;;
+    cdi) CDI_VERSION="$2"; CDI_NOTE="$3" ;;
+    homestead) HS_RELEASE="${2#v}"; HS_NOTE="$3" ;;
+  esac
+}
+get_note() {
+  case "$1" in k8s) echo "$K8S_NOTE" ;; longhorn) echo "$LONGHORN_NOTE" ;; kubevirt) echo "$KUBEVIRT_NOTE" ;;
+    cdi) echo "$CDI_NOTE" ;; homestead) echo "$HS_NOTE" ;; esac
+}
+default_note() {
+  case "$1" in k8s) echo "stable channel" ;; kubevirt) echo "stable release" ;; *) echo "latest release" ;; esac
+}
+
+# Versions not set are resolved to the current recommended release, so the
+# summary shows exactly what will be installed.
+resolve_versions() { # components...
+  said=""
+  for c in "$@"; do
+    [ -n "$(get_version "$c")" ] && { [ -n "$(get_note "$c")" ] || set_version "$c" "$(get_version "$c")" "set"; continue; }
+    [ -n "$said" ] || { infobox "Retrieving release information..."; said=1; }
+    if [ "$c" = k8s ] && [ -n "${JOIN_VERSION:-}" ]; then set_version k8s "$JOIN_VERSION" "matches the cluster"; continue; fi
+    set_version "$c" "$(recommended "$c")" "$(default_note "$c")"
+  done
+}
+
+version_line() { # component -> a summary line
+  v=$(get_version "$1"); n=$(get_note "$1")
+  printf '%-20s %s%s' "$(component_name "$1") version" "${v:-default}" "${n:+  ($n)}"
+}
+
+version_choices() { # component -> "version|label" lines, newest first
+  rec=$(recommended "$1")
+  if [ "$1" = k8s ]; then
+    stable=$(channel_version stable); latest=$(channel_version latest)
+    [ -n "$stable" ] && printf '%s|%-18s %s
+' "$stable" "$stable" "stable channel (recommended)"
+    [ -n "$latest" ] && [ "$latest" != "$stable" ] && printf '%s|%-18s %s
+' "$latest" "$latest" "latest channel"
+    cached "channels-$DIST" channels "$DIST" | awk '$1 ~ /^v[0-9]+\.[0-9]+$/ {print $2}' | newest_first | head -n 6 |
+      while read -r v; do
+        [ "$v" = "$stable" ] || [ "$v" = "$latest" ] || printf '%s|%-18s %s channel
+' "$v" "$v" "$(printf '%s' "$v" | cut -d. -f1-2)"
+      done
+    return
+  fi
+  case "$1" in
+    longhorn) list=$(cached longhorn releases longhorn/longhorn) ;;
+    kubevirt) list=$(cached kubevirt releases kubevirt/kubevirt) ;;
+    cdi) list=$(cached cdi releases kubevirt/containerized-data-importer) ;;
+    homestead) list=$(cached homestead releases wjcloudy/homestead); rec="v$rec" ;;
+  esac
+  printf '%s\n' "$list" | head -n 8 | while read -r v; do
+    [ -n "$v" ] || continue
+    if [ "$v" = "$rec" ]; then printf '%s|%-18s %s
+' "$v" "$v" "recommended"; else echo "$v|$v"; fi
+  done
+}
+
+pick_version() { # component
+  comp="$1"; name=$(component_name "$comp")
+  choices=$(version_choices "$comp")
+  set --
+  while IFS='|' read -r v label; do [ -n "$v" ] && set -- "$@" "$v" "$label"; done <<EOF
+$choices
+EOF
+  text="Select the $name version to install."
+  [ $# -eq 0 ] && text="$text
+
+The release list could not be retrieved. Check internet access, or enter a version manually."
+  [ "$comp" = k8s ] && [ "$ROLE" != new ] && text="$text Use the same version as the existing server nodes."
+  set -- "$@" "@manual" "Enter a version manually"
+  v=$(menu "$name Version" "$text" "$@") || return 0
+  if [ "$v" = "@manual" ]; then
+    example=$(printf '%s\n' "$choices" | head -n 1 | cut -d'|' -f1); example=${example:-v1.0.0}
+    if [ "$UI" = text ]; then
+      printf 'Enter the %s version (for example, %s): ' "$name" "$example" > "$TTY"; read -r v < "$TTY" || v=""
+    else
+      v=$("$BOX" --title "$name Version" --inputbox "Enter the $name version (for example, $example):" 9 78 "" 3>&1 1>"$TTY" 2>&3 < "$TTY") || return 0
+    fi
+    [ -n "$v" ] || return 0
+    printf '%s' "$v" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+' || { msg "Invalid Version" "'$v' is not a valid version number."; return 0; }
+    case "$v" in v*) ;; *) [ "$comp" = homestead ] || v="v$v" ;; esac
+  fi
+  if [ "${v#v}" = "$(recommended "$comp" | sed 's/^v//')" ]; then set_version "$comp" "$v" "$(default_note "$comp")"
+  else set_version "$comp" "$v" "selected"; fi
+}
+
+version_args() { # components... -> the bootstrap options that pin them
+  for c in "$@"; do
+    v=$(get_version "$c"); [ -n "$v" ] || continue
+    case "$c" in
+      k8s) printf ' --%s-version %s' "$DIST" "$v" ;;
+      longhorn) printf ' --longhorn-version %s' "$v" ;;
+      kubevirt) printf ' --kubevirt-version %s' "$v" ;;
+      cdi) printf ' --cdi-version %s' "$v" ;;
+      homestead) printf ' --homestead-version %s' "${v#v}" ;;
+    esac
+  done
+}
+
+# The final screen before any change: the settings and each component's
+# version. Selecting a component lists its releases. HS_YES skips it.
+summary() { # text components...
+  summary_text="$1"; shift
+  answer=$(given HS_YES)
+  if [ -n "$answer" ]; then case "$answer" in y*|Y*|1|true) return 0 ;; *) cancelled ;; esac; fi
+  need_tty HS_YES
+  resolve_versions "$@"
+  comps="$*"
+  while :; do
+    set -- install "Install"
+    for c in $comps; do set -- "$@" "$c" "$(version_line "$c")"; done
+    set -- "$@" cancel "Cancel installation"
+    BACK=Cancel; MENU_DEFAULT=1
+    pick=$(menu "Installation Summary" "$summary_text" "$@") || pick=cancel
+    BACK=Back; MENU_DEFAULT=""
+    case "$pick" in
+      install) return 0 ;;
+      cancel) cancelled ;;
+      *) pick_version "$pick" ;;
+    esac
+  done
 }
 
 # ------------------------------------------------------------------ progress
 LOG=/var/log/homestead-install.log
 
-# A long step, run with a progress bar that follows its "==> " stages - the
-# whole output goes to $LOG, and is shown if the step fails. Without menus
-# the output simply scrolls past, as it always did.
+# A long step, run with a progress bar that follows its "==> " stages. The
+# full output goes to $LOG and is shown if the step fails. Without menus the
+# output is printed as it runs.
 progress() { # title stages command...
   title="$1"; stages="$2"; shift 2
   if [ "$UI" = text ] || [ "$DRY" = 1 ]; then run "$@"; return; fi
@@ -296,14 +484,14 @@ progress() { # title stages command...
       printf 'XXX\n%d\n%s\n\n%s\nXXX\n' "$pct" "${stage:-Starting}" "$(tail -n 1 "$LOG" 2>/dev/null | cut -c1-70)"
       sleep 1
     done
-    printf 'XXX\n100\nDone\nXXX\n'
+    printf 'XXX\n100\nComplete\nXXX\n'
   } | "$BOX" --title "$title" --gauge "Starting" 12 78 0 > "$TTY" 2>&1
   wait "$job" 2>/dev/null
   code=$(cat "$status" 2>/dev/null || echo 1)
   if [ "$code" != 0 ]; then
     tail -n 40 "$LOG" > /tmp/homestead-install.tail 2>/dev/null
-    "$BOX" --title "$title - stopped" --scrolltext --textbox /tmp/homestead-install.tail 24 100 < "$TTY" > "$TTY" 2>&1
-    fail "the install stopped; the whole log is in $LOG"
+    "$BOX" --title "Installation Failed" --scrolltext --textbox /tmp/homestead-install.tail 24 100 < "$TTY" > "$TTY" 2>&1
+    fail "Installation failed. The full log is in $LOG."
   fi
 }
 
@@ -311,32 +499,28 @@ progress() { # title stages command...
 bootstrap() { # stages, then args for bootstrap-k3s.sh
   stages="$1"; shift
   script=/tmp/homestead-bootstrap-k3s.sh
-  run curl -sfL "$RAW/$REF/scripts/bootstrap-k3s.sh" -o "$script" || fail "could not download bootstrap-k3s.sh"
-  progress "Installing" "$stages" sh "$script" "$@" || fail "the install stopped; the lines above say where"
-}
-
-versions() {
-  if [ "$REF" != main ]; then printf -- '--homestead-version %s' "${REF#v}"; fi
+  run curl -sfL "$RAW/$REF/scripts/bootstrap-k3s.sh" -o "$script" || fail "Could not download bootstrap-k3s.sh."
+  progress "Installing" "$stages" sh "$script" "$@" || fail "Installation failed. See the output above."
 }
 
 # ------------------------------------------------------------------ flows
 flow_new() {
-  role=$(choose HS_ROLE "Homestead" "What should this machine be?" \
-    new "Start a new cluster here (the first server)" \
-    server "Join a cluster as another server (control plane)" \
-    agent "Join a cluster as a worker")
-  [ "$role" = harvester ] && fail "this is not a Harvester host"
-  case "$role" in
+  ROLE=$(choose HS_ROLE "Installation Mode" "Select how to install this machine:" \
+    new "Create a new cluster" \
+    server "Join an existing cluster as a server node" \
+    agent "Join an existing cluster as a worker node")
+  [ "$ROLE" = harvester ] && fail "This machine is not a Harvester node."
+  case "$ROLE" in
     new) pick_dist ;;
     server|agent) find_cluster ;;
   esac
   pick_ip
-  prechecks "$role"
-  case "$role" in
+  prechecks "$ROLE"
+  case "$ROLE" in
     new) new_cluster ;;
-    server|agent) join_cluster "$role" ;;
+    server|agent) join_cluster "$ROLE" ;;
     addons) add_to_cluster ;;
-    *) fail "unknown role $role" ;;
+    *) fail "Unknown installation mode: $ROLE" ;;
   esac
 }
 
@@ -346,39 +530,42 @@ pick_ip() {
   best=$(default_ip)
   count=$(all_ips | wc -l | tr -d ' ')
   if [ "${count:-0}" -le 1 ]; then NODE_IP="$best"; return; fi
-  # More than one address: which one the other machines reach this one on.
   set --
-  while read -r dev addr; do set -- "$@" "$addr" "$dev$([ "$addr" = "$best" ] && printf ' (default route)')"; done <<EOF
+  while read -r dev addr; do set -- "$@" "$addr" "$addr   $dev$([ "$addr" = "$best" ] && printf ', default route')"; done <<EOF
 $(all_ips)
 EOF
-  NODE_IP=$(choose HS_NODE_IP "This machine's address" "Which address do the other machines reach this one on? The cluster registers it by this address." "$@")
+  NODE_IP=$(choose HS_NODE_IP "Node IP Address" "Select the IP address that other nodes use to reach this machine. The node is registered with this address." "$@")
 }
 
-# Which Kubernetes a new cluster runs. Unattended, k3s unless HS_DIST says.
+# The distribution for a new cluster. Unattended, k3s unless HS_DIST is set.
 pick_dist() {
   if [ -z "$(given HS_DIST)" ] && ! interactive; then DIST=k3s; return; fi
-  DIST=$(choose HS_DIST "Kubernetes" "Which Kubernetes should the cluster run? Both work the same in Homestead." \
-    k3s "k3s - light and quick; the least memory (mini PCs, old PCs)" \
-    rke2 "RKE2 - full upstream Kubernetes, hardened; what Harvester runs")
-  case "$DIST" in k3s|rke2) ;; *) fail "HS_DIST is k3s or rke2, not $DIST" ;; esac
+  DIST=$(choose HS_DIST "Kubernetes Distribution" "Select the Kubernetes distribution for the new cluster. Homestead supports both." \
+    k3s "k3s    Lightweight Kubernetes; suited to small machines" \
+    rke2 "RKE2   Hardened upstream Kubernetes, as used by Harvester")
+  case "$DIST" in k3s|rke2) ;; *) fail "Unsupported distribution: $DIST. Set HS_DIST to k3s or rke2." ;; esac
 }
 
-# The cluster to join: its address, and which Kubernetes it runs - an RKE2
-# server answers on 9345, a k3s server on 6443.
+# The cluster to join: its address and distribution. An RKE2 server answers
+# on port 9345, a k3s server on port 6443.
 find_cluster() {
-  server=$(ask HS_SERVER "The cluster" "The address of a server already in the cluster (its IP or name):" "")
-  [ -n "$server" ] || fail "no server given"
+  server=$(ask HS_SERVER "Join Cluster" "Enter the IP address or hostname of an existing server node:" "")
+  [ -n "$server" ] || fail "No server address was entered."
   host=${server#https://}; host=${host%%/*}; host=${host%%:*}
   given_dist=$(given HS_DIST)
   if [ -n "$given_dist" ]; then DIST="$given_dist"
   elif [ "$DRY" = 1 ]; then DIST=k3s
   elif curl -sk --max-time 10 "https://$host:9345/cacerts" 2>/dev/null | grep -q "BEGIN CERTIFICATE"; then DIST=rke2
   elif curl -sk --max-time 10 "https://$host:6443/cacerts" 2>/dev/null | grep -q "BEGIN CERTIFICATE"; then DIST=k3s
-  else fail "cannot reach a cluster at $host - check the address, and that port 6443 (k3s) or 9345 (RKE2) is open"; fi
+  else fail "Unable to reach a cluster at $host. Check the address, and that port 6443 (k3s) or 9345 (RKE2) is open."; fi
   case "$server" in
     https://*) url="$server" ;;
     *) if [ "$DIST" = rke2 ]; then url="https://$host:9345"; else url="https://$host:6443"; fi ;;
   esac
+  # The cluster's own version, where its API server reports it without credentials.
+  JOIN_VERSION=""
+  [ "$DRY" = 1 ] || JOIN_VERSION=$(curl -sk --max-time 5 "https://$host:6443/version" 2>/dev/null \
+    | sed -n 's/.*"gitVersion": *"\([^"]*\)".*/\1/p' | head -n 1)
 }
 
 dist_name() { if [ "$DIST" = rke2 ]; then echo RKE2; else echo k3s; fi; }
@@ -388,24 +575,32 @@ dist_flag() { [ "$DIST" = rke2 ] && printf -- '--rke2'; true; }
 new_cluster() {
   longhorn=yes; kubevirt=no
   kvm && kubevirt=yes
-  if [ "$DIST" = rke2 ]; then
-    : # RKE2 has no storage of its own: Longhorn holds Homestead's data and the volumes.
-  else
-    yesno HS_LONGHORN "Storage" "Install Longhorn? It keeps copies of each volume on several machines, takes snapshots and backups, and is what Homestead's Volumes and Data protection pages use. Without it, k3s's local-path storage keeps each volume on one machine only." yes || longhorn=no
+  if [ "$DIST" = k3s ]; then
+    # RKE2 has no storage of its own, so Longhorn is always installed there.
+    yesno HS_LONGHORN "Storage" "Install Longhorn distributed block storage?
+
+Longhorn replicates volumes across nodes and provides snapshots and backups. The Homestead Volumes and Data Protection pages require it. Without Longhorn, k3s local-path storage keeps each volume on a single node." yes || longhorn=no
   fi
-  yesno HS_KUBEVIRT "Virtual machines" "Install KubeVirt and CDI, to run VMs beside your containers?$(kvm || printf ' This machine has no hardware virtualisation, so VMs would be emulated and slow.')" "$kubevirt" && kubevirt=yes || kubevirt=no
+  yesno HS_KUBEVIRT "Virtual Machines" "Install KubeVirt and CDI to run virtual machines alongside containers?$(kvm || printf '\n\nHardware virtualisation is not available on this machine. Virtual machines would run in emulation mode, with reduced performance.')" "$kubevirt" && kubevirt=yes || kubevirt=no
+  comps="k8s"
+  [ "$longhorn" = yes ] && comps="$comps longhorn"
+  [ "$kubevirt" = yes ] && comps="$comps kubevirt cdi"
+  comps="$comps homestead"
+  # shellcheck disable=SC2086
+  summary "Review the settings below. Select a component to change its version, or select Install to begin.
+
+  Installation mode    New cluster (first server node)
+  Distribution         $(dist_name)
+  Node IP address      $NODE_IP
+  Storage              $([ "$longhorn" = yes ] && echo Longhorn || echo "k3s local-path")
+  Virtual machines     $([ "$kubevirt" = yes ] && echo "KubeVirt and CDI" || echo "Not installed")
+  Homestead URL        http://$NODE_IP:8088" $comps
   args="server --node-ip $NODE_IP"
   [ "$longhorn" = no ] && args="$args --no-longhorn"
   [ "$kubevirt" = yes ] && args="$args --kubevirt"
-  v=$(versions); [ -n "$v" ] && args="$args $v"
   [ "$DIST" = rke2 ] && args="$args --rke2"
-  yesno HS_YES "Ready" "About to:
-  - install $(dist_name) here, the first server of a new cluster, at $NODE_IP
-  - $( [ "$longhorn" = yes ] && echo "install Longhorn (open-iscsi and an NFS client go on the host first)" || echo "use k3s's local-path storage")
-  - $( [ "$kubevirt" = yes ] && echo "install KubeVirt and CDI" || echo "leave VMs out (KubeVirt can be added later)")
-  - install Homestead, at http://$NODE_IP:8088
-
-Go ahead?" yes || fail "stopped - nothing was changed"
+  # shellcheck disable=SC2086
+  args="$args$(version_args $comps)"
   stages=5; [ "$longhorn" = yes ] && stages=$((stages + 2)); [ "$kubevirt" = yes ] && stages=$((stages + 1)); [ "$DIST" = rke2 ] && stages=$((stages + 1))
   # shellcheck disable=SC2086
   bootstrap "$stages" $args
@@ -413,47 +608,57 @@ Go ahead?" yes || fail "stopped - nothing was changed"
 }
 
 join_cluster() { # server|agent
-  token=$(ask HS_TOKEN "The cluster's token" "It runs $(dist_name). On that server: sudo cat $(token_file)
-(Homestead's Cluster > Add a host shows where it is too.) Paste it:" "" secret)
-  [ -n "$token" ] || fail "no token given"
-  mode=agent; [ "$1" = server ] && mode=join
-  yesno HS_YES "Ready" "About to install $(dist_name) here and join the cluster at $url as a $([ "$1" = server ] && echo "server (control plane and etcd)" || echo worker), registered as $(hostname) at $NODE_IP. Longhorn's host tools (open-iscsi, an NFS client) go on first.
+  token=$(ask HS_TOKEN "Cluster Token" "Enter the cluster token. To display it, run this command on an existing server node:
 
-Go ahead?" yes || fail "stopped - nothing was changed"
+  sudo cat $(token_file)" "" secret)
+  [ -n "$token" ] || fail "No cluster token was entered."
+  mode=agent; [ "$1" = server ] && mode=join
+  summary "Review the settings below. Select a component to change its version, or select Install to begin.
+
+  Installation mode    Join an existing cluster as a $([ "$1" = server ] && echo "server node" || echo "worker node")
+  Distribution         $(dist_name)
+  Cluster              $url
+  Node name            $(hostname)
+  Node IP address      $NODE_IP
+
+Longhorn host packages (open-iscsi, NFS client) are installed first." k8s
   # shellcheck disable=SC2046
-  bootstrap 3 "$mode" "$url" "$token" --node-ip "$NODE_IP" $(dist_flag)
-  say "$(hostname) has joined. It shows on Homestead's Nodes page within a minute or two."
+  bootstrap 3 "$mode" "$url" "$token" --node-ip "$NODE_IP" $(dist_flag) $(version_args k8s)
+  msg "Installation Complete" "$(hostname) has joined the cluster. It appears on the Homestead Nodes page within a few minutes."
 }
 
 add_to_cluster() {
   if [ "$DIST" = rke2 ]; then kcmd="/var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml"; else kcmd="k3s kubectl"; fi
   if $kcmd -n lab get deployment homestead >/dev/null 2>&1; then
-    ip=$(default_ip)
-    msg "Already installed" "Homestead is running on this cluster already: http://$ip:8088. It updates itself from Settings > Updates."
+    msg "Homestead Already Installed" "Homestead is already running on this cluster at http://$(default_ip):8088. Update it from Settings > Updates."
     exit 0
   fi
-  v=$(versions)
-  yesno HS_YES "Ready" "$(dist_name) is running here. About to add Longhorn (unless it is there) and Homestead to it, at http://$(default_ip):8088.
+  comps="homestead"; storage="Longhorn (already installed)"
+  if ! $kcmd get crd volumes.longhorn.io >/dev/null 2>&1; then comps="longhorn homestead"; storage="Longhorn (to be installed)"; fi
+  # shellcheck disable=SC2086
+  summary "Review the settings below. Select a component to change its version, or select Install to begin.
 
-Go ahead?" yes || fail "stopped - nothing was changed"
+  Installation mode    Install on this $(dist_name) cluster
+  Storage              $storage
+  Homestead URL        http://$(default_ip):8088" $comps
   # shellcheck disable=SC2086,SC2046
-  bootstrap 5 addons $v $(dist_flag)
+  bootstrap 5 addons $(dist_flag) $(version_args $comps)
   finish_new
 }
 
 finish_new() {
   ip="${NODE_IP:-$(default_ip)}"
-  token_file=$(token_file)
-  msg "Homestead is running" "Open http://$ip:8088 and create the first account.
+  msg "Installation Complete" "Homestead is available at:
 
-To add machines, run the same line on each:
-  curl -sfL $RAW/main/scripts/install.sh | sudo sh
-choose to join, and give this address ($ip) and the token from:
-  sudo cat $token_file
+  http://$ip:8088
 
-In Homestead: Settings > Cluster > Add-ons adds the node probe (drive
-health), Multus (LAN addresses for containers and VMs) and kube-vip (an
-address of its own for each app)."
+Open this address to create the administrator account.
+
+To add a node, run the installer on the new machine and select Join an existing cluster. Provide this server's address ($ip) and the cluster token, which this command displays:
+
+  sudo cat $(token_file)
+
+Optional components (node probe, Multus, kube-vip) are available in Homestead under Settings > Cluster > Add-ons."
 }
 
 flow_harvester() {
@@ -462,51 +667,54 @@ flow_harvester() {
     KC="/var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml"
   fi
   $KC get nodes >/dev/null 2>&1 || [ "$DRY" = 1 ] \
-    || fail "this Harvester host cannot reach its cluster with kubectl - run this on a management host, as root"
+    || fail "kubectl cannot reach the Harvester cluster. Run the installer as root on a Harvester management node."
   if $KC -n lab get deployment homestead >/dev/null 2>&1; then
-    msg "Already installed" "Homestead is running on this Harvester cluster already. It updates itself from Settings > Updates."
+    msg "Homestead Already Installed" "Homestead is already running on this Harvester cluster. Update it from Settings > Updates."
     exit 0
   fi
   REPORT=""; FAILED=0
-  reachable https://ghcr.io/v2/ && check ok "ghcr.io is reachable" || check fail "cannot reach ghcr.io, where Homestead's image is"
-  if [ "$FAILED" = 1 ] && [ "$SKIP_CHECKS" = 0 ]; then msg "Checks - cannot go on" "$REPORT"; fail "the checks above stopped the install"; fi
-  vip=$(ask HS_VIP "Homestead's address" "Harvester found. Homestead needs an address of its own on your LAN - free, and outside your router's DHCP range (for example 192.168.1.242):" "")
-  printf '%s' "$vip" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || fail "$vip is not an address like 192.168.1.242"
+  reachable https://ghcr.io/v2/ && check pass "Internet access (ghcr.io)" || check fail "Cannot reach ghcr.io, which hosts the Homestead image."
+  if [ "$FAILED" = 1 ] && [ "$SKIP_CHECKS" = 0 ]; then msg "System Checks Failed" "$REPORT"; fail "Installation stopped: system checks failed."; fi
+  vip=$(ask HS_VIP "Homestead IP Address" "Harvester detected. Enter an unused IP address for Homestead on your LAN, outside the DHCP range (for example, 192.168.1.242):" "")
+  printf '%s' "$vip" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || fail "'$vip' is not a valid IPv4 address."
   if [ "$DRY" = 0 ] && ping -c 1 -W 1 "$vip" >/dev/null 2>&1; then
-    yesno HS_TAKEN "Address in use?" "Something already answers at $vip. Use it anyway?" no || fail "choose a free address"
+    yesno HS_TAKEN "Address In Use" "A device already responds at $vip. Use this address anyway?" no || fail "Installation cancelled. Choose an unused address."
   fi
   set --
-  for c in $($KC get storageclass -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do set -- "$@" "$c" "storage class $c"; done
-  [ $# -gt 0 ] || set -- harvester-longhorn "Harvester's default"
-  class=$(choose HS_CLASS "Homestead's data" "Which storage class holds Homestead's own data? harvester-longhorn, Harvester's default, is the usual choice." "$@")
-  yesno HS_YES "Ready" "About to install Homestead into this Harvester cluster:
-  - at http://$vip:8088
-  - its data on $class
-  - in the namespace lab
+  for c in $($KC get storageclass -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do set -- "$@" "$c" "$c"; done
+  [ $# -gt 0 ] || set -- harvester-longhorn "harvester-longhorn"
+  class=$(choose HS_CLASS "Storage Class" "Select the storage class for Homestead's data. harvester-longhorn is the Harvester default." "$@")
+  summary "Review the settings below. Select a component to change its version, or select Install to begin.
 
-Go ahead?" yes || fail "stopped - nothing was changed"
+  Installation mode    Install on this Harvester cluster
+  Homestead URL        http://$vip:8088
+  Storage class        $class
+  Namespace            lab" homestead
   say "Installing Homestead"
   manifest=/tmp/homestead-deploy.yaml
-  run curl -sfL "$RAW/$REF/deploy/deploy.yaml" -o "$manifest" || fail "could not download Homestead's manifest"
+  ref="$REF"; [ -n "$HS_RELEASE" ] && ref="v$HS_RELEASE"
+  run curl -sfL "$RAW/$ref/deploy/deploy.yaml" -o "$manifest" || fail "Could not download the Homestead manifest."
   run sed -i -e "s/192\\.168\\.1\\.242/$vip/g" -e "s/longhorn-r2/$class/g" \
     -e "s/accessModes: \\[ReadWriteMany\\]/accessModes: [ReadWriteOnce]/" "$manifest"
   # shellcheck disable=SC2086
-  run $KC apply -f "$manifest" || fail "kubectl could not apply the manifest"
-  say "Waiting for Homestead to start"
+  run $KC apply -f "$manifest" || fail "kubectl could not apply the Homestead manifest."
   # shellcheck disable=SC2086
-  progress "Starting Homestead" 1 sh -c "echo '==> Waiting for Homestead to start'; $KC -n lab rollout status deployment/homestead --timeout=10m" \
-    || fail "Homestead did not start: $KC -n lab get pods says why"
-  msg "Homestead is running" "Open http://$vip:8088 and create the first account.
+  progress "Installing" 1 sh -c "echo '==> Waiting for Homestead to start'; $KC -n lab rollout status deployment/homestead --timeout=10m" \
+    || fail "Homestead did not start. Run: $KC -n lab get pods"
+  msg "Installation Complete" "Homestead is available at:
 
-Next: Networking > Your VIPs, to keep addresses for your apps; Settings >
-Cluster > Add-ons for the node probe. More in $WIKI/Installing-on-Harvester"
+  http://$vip:8088
+
+Open this address to create the administrator account.
+
+Next steps: reserve addresses for applications under Networking > Your VIPs, and install the node probe from Settings > Cluster > Add-ons. See $WIKI/Installing-on-Harvester"
 }
 
-# ------------------------------------------------------------------ the doctor's questions
+# ------------------------------------------------------------------ doctor prompts
 DLOG=/var/log/homestead-doctor.log
 DMODE=menu
 FOUND=$(mktemp 2>/dev/null || echo /tmp/homestead-doctor.$$)
-trap 'rm -f "$FOUND"' EXIT
+trap 'rm -rf "$FOUND" "$VCACHE"' EXIT
 logline() { { printf '%s %s\n' "$(date '+%F %T' 2>/dev/null)" "$*" >> "$DLOG"; } 2>/dev/null || true; }
 confirm() { # title text -> 0 for yes
   [ "$DMODE" = fix ] && return 0
@@ -519,11 +727,11 @@ confirm() { # title text -> 0 for yes
 }
 typed() { # title text word -> 0 when the word is typed
   if [ "$UI" = text ]; then
-    printf '\n%s\n%s\nType %s to go ahead: ' "$1" "$2" "$3" > "$TTY"; read -r reply < "$TTY" || reply=""
+    printf '\n%s\n%s\nType %s to continue: ' "$1" "$2" "$3" > "$TTY"; read -r reply < "$TTY" || reply=""
   else
     reply=$("$BOX" --title "$1" --inputbox "$2
 
-Type $3 to go ahead:" "$(fit "$2" 11)" 78 "" 3>&1 1>"$TTY" 2>&3 < "$TTY") || return 1
+Type $3 to continue:" "$(fit "$2" 11)" 78 "" 3>&1 1>"$TTY" 2>&3 < "$TTY") || return 1
   fi
   [ "$reply" = "$3" ]
 }
@@ -532,8 +740,10 @@ menu() { # title text tag item... -> tag, or 1 when cancelled
   if [ "$UI" = text ]; then
     printf '\n%s\n%s\n' "$title" "$text" > "$TTY"
     i=0; for word in "$@"; do i=$((i+1)); [ $((i % 2)) = 0 ] && printf '  %2d) %s\n' $((i / 2)) "$word" > "$TTY"; done
-    printf 'Choose 1-%d (Enter to go back): ' $(( $# / 2 )) > "$TTY"; read -r reply < "$TTY" || reply=""
-    [ -z "$reply" ] && return 1
+    if [ -n "$MENU_DEFAULT" ]; then printf 'Select 1-%d [1]: ' $(( $# / 2 )) > "$TTY"
+    else printf 'Select 1-%d (Enter for %s): ' $(( $# / 2 )) "$BACK" > "$TTY"; fi
+    read -r reply < "$TTY" || reply=""
+    if [ -z "$reply" ]; then [ -n "$MENU_DEFAULT" ] && reply=1 || return 1; fi
     i=0; for word in "$@"; do i=$((i+1)); if [ $((i % 2)) = 1 ] && [ $(( (i + 1) / 2 )) = "$reply" ]; then printf '%s' "$word"; return 0; fi; done
     return 1
   fi
@@ -562,7 +772,7 @@ detect_node() {
   [ -z "$CRICTL" ] && have crictl && CRICTL=crictl
   NODE=$(hostname)
 }
-# A cluster that does not answer should not hold the doctor up.
+# A cluster that does not respond must not stall the checks.
 kc() {
   [ -n "$KC" ] || return 1
   if have timeout; then timeout 60 $KC "$@" 2>/dev/null; else $KC "$@" 2>/dev/null; fi
@@ -573,11 +783,11 @@ kc() {
 found() { printf '%s|%s|%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" "${5:-}" "${6:-no}" >> "$FOUND"; }
 
 check_service() {
-  [ -n "$SERVICE" ] || { found service bad "No Kubernetes service here" "Neither k3s, RKE2 nor a kubelet is installed on this machine. The installer sets one up: install.sh"; return; }
-  if active "$SERVICE"; then found service ok "$SERVICE is running" "systemd reports $SERVICE active."
+  [ -n "$SERVICE" ] || { found service bad "No Kubernetes service found" "k3s, RKE2 and kubelet are not installed on this node. Select Install Homestead from the main menu to create or join a cluster."; return; }
+  if active "$SERVICE"; then found service ok "$SERVICE service is running" "systemd reports the service as active."
   else
     why=$(journalctl -u "$SERVICE" -p err -n 5 --no-pager 2>/dev/null | tail -n 5 | cut -c1-200)
-    found service bad "$SERVICE is not running" "systemd reports $SERVICE $(systemctl is-active "$SERVICE" 2>/dev/null). Its last errors:
+    found service bad "$SERVICE service is not running" "systemd reports the service as $(systemctl is-active "$SERVICE" 2>/dev/null). Recent errors:
 $why" fix_restart yes
   fi
 }
@@ -586,13 +796,13 @@ check_disk() {
     use=$(df -P "$m" 2>/dev/null | awk 'NR==2 {gsub("%","",$5); print $5}')
     case "$use" in ''|*[!0-9]*) continue ;; esac
     [ "$use" -le 100 ] || continue
-    if [ "$use" -ge 90 ]; then found "disk$m" bad "$m is ${use}% full" "Kubernetes starts evicting pods and refuses new ones as a node fills. Cleaning up removes images nothing uses and trims the journal." fix_cleanup yes
-    elif [ "$use" -ge 80 ]; then found "disk$m" warn "$m is ${use}% full" "Getting full. Cleaning up removes images nothing uses and trims the journal." fix_cleanup yes
-    else found "disk$m" ok "$m is ${use}% full" "Room to spare."; fi
+    if [ "$use" -ge 90 ]; then found "disk$m" bad "$m is ${use}% full" "Kubernetes evicts pods and rejects new ones when a node runs low on disk space. The fix removes unused container images and reduces the system journal." fix_cleanup yes
+    elif [ "$use" -ge 80 ]; then found "disk$m" warn "$m is ${use}% full" "Disk usage is high. The fix removes unused container images and reduces the system journal." fix_cleanup yes
+    else found "disk$m" ok "$m is ${use}% full" "Sufficient free space."; fi
     ino=$(df -Pi "$m" 2>/dev/null | awk 'NR==2 {gsub("%","",$5); print $5}')
     case "$ino" in ''|*[!0-9]*) ino=0 ;; esac
     if [ "$ino" -le 100 ] && [ "$ino" -ge 90 ]; then
-      found "inodes$m" bad "$m has used ${ino}% of its inodes" "Files cannot be created even with space left - usually many small files in container layers or logs." fix_cleanup yes
+      found "inodes$m" bad "$m has used ${ino}% of its inodes" "New files cannot be created once inodes are exhausted, even when disk space remains. This is usually caused by many small files in container layers or logs." fix_cleanup yes
     fi
   done
 }
@@ -600,20 +810,20 @@ check_memory() {
   total=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null); avail=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null)
   [ -n "$total" ] && [ -n "$avail" ] || return
   pct=$(( avail * 100 / total ))
-  if [ "$pct" -lt 5 ]; then found memory bad "Only ${pct}% of memory is free" "The kernel will start killing processes. Homestead's Nodes page shows which apps use the most; move or stop some."
-  elif [ "$pct" -lt 15 ]; then found memory warn "${pct}% of memory is free" "Tight. Homestead's Nodes page shows which apps use the most."
-  else found memory ok "${pct}% of memory is free" "$(( avail / 1024 )) of $(( total / 1024 )) MB available."; fi
+  if [ "$pct" -lt 5 ]; then found memory bad "Only ${pct}% of memory is available" "The kernel may terminate processes to reclaim memory. Review workload memory use on the Homestead Nodes page, and stop or move workloads."
+  elif [ "$pct" -lt 15 ]; then found memory warn "${pct}% of memory is available" "Available memory is low. Review workload memory use on the Homestead Nodes page."
+  else found memory ok "${pct}% of memory is available" "$(( avail / 1024 )) MB of $(( total / 1024 )) MB available."; fi
 }
 check_clock() {
-  if [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = yes ]; then found clock ok "The clock is synchronised" "NTP keeps it right."
-  else found clock warn "The clock is not synchronised" "A clock that drifts breaks certificates, etcd and joining. Turning on time sync fixes it." fix_clock yes; fi
+  if [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = yes ]; then found clock ok "System clock is synchronised" "NTP synchronisation is active."
+  else found clock warn "System clock is not synchronised" "Clock drift causes certificate, etcd and cluster join failures. The fix enables time synchronisation." fix_clock yes; fi
 }
 check_iscsi() {
   { have iscsiadm || kc get crd volumes.longhorn.io >/dev/null; } || return
-  if active iscsid || active iscsid.socket; then found iscsid ok "iscsid is running" "Longhorn attaches volumes through it."
-  else found iscsid bad "iscsid is not running" "Longhorn attaches every volume over iSCSI; without it volumes cannot attach on this node." fix_iscsid yes; fi
+  if active iscsid || active iscsid.socket; then found iscsid ok "iscsid is running" "Longhorn attaches volumes over iSCSI."
+  else found iscsid bad "iscsid is not running" "Longhorn attaches volumes over iSCSI. Volumes cannot attach to this node until iscsid is running." fix_iscsid yes; fi
   if active multipathd && [ "$KIND" != harvester ] && ! grep -qs 'devnode "\^sd\[a-z0-9\]+"' /etc/multipath.conf; then
-    found multipath warn "multipathd may grab Longhorn's disks" "multipathd claims the block devices Longhorn makes, and volumes then fail to mount (\"already mounted or mount point busy\"). Longhorn's advice is a blacklist for them in /etc/multipath.conf." fix_multipath no
+    found multipath warn "multipathd may claim Longhorn devices" "multipathd can claim the block devices that Longhorn creates, which makes volume mounts fail with \"already mounted or mount point busy\". Longhorn recommends excluding these devices in /etc/multipath.conf." fix_multipath no
   fi
 }
 check_certs() {
@@ -628,67 +838,67 @@ check_certs() {
   done
   [ -n "$soonest" ] || return
   days=$(( (soonest - $(date +%s)) / 86400 ))
-  if [ "$days" -lt 7 ]; then found certs bad "A certificate expires in $days days" "$(basename "$soonest_file") ends in $days days; then the API stops answering. Restarting $SERVICE renews the ones due within 90 days." fix_restart yes
-  elif [ "$days" -lt 90 ]; then found certs warn "Certificates expire in $days days" "$SERVICE renews them on a restart within 90 days of expiry; a restart now does it." fix_restart yes
-  else found certs ok "Certificates are good for $days days" "The soonest to end is $(basename "$soonest_file")."; fi
+  if [ "$days" -lt 7 ]; then found certs bad "A certificate expires in $days days" "$(basename "$soonest_file") expires in $days days, after which the API server stops responding. Restarting $SERVICE renews certificates that expire within 90 days." fix_restart yes
+  elif [ "$days" -lt 90 ]; then found certs warn "Certificates expire in $days days" "$SERVICE renews certificates that expire within 90 days when it restarts. The fix restarts it now." fix_restart yes
+  else found certs ok "Certificates are valid for $days days" "The next to expire is $(basename "$soonest_file")."; fi
 }
 check_runtime() {
   [ -n "$CRICTL" ] || return
-  if $CRICTL info >/dev/null 2>&1; then found runtime ok "containerd answers" "The container runtime is up."
-  else found runtime bad "containerd does not answer" "No container on this node can start. Restarting $SERVICE restarts it." fix_restart yes; fi
+  if $CRICTL info >/dev/null 2>&1; then found runtime ok "Container runtime is responding" "containerd is running."
+  else found runtime bad "Container runtime is not responding" "No containers can start on this node. Restarting $SERVICE restarts containerd." fix_restart yes; fi
 }
 
 check_cluster() {
-  [ -n "$KC" ] || { found api warn "The cluster is not checked from here" "kubectl cannot reach the cluster from this machine (a worker has no admin access). Run the doctor on a server to check the cluster too."; return; }
-  if kc get --raw /readyz >/dev/null; then found api ok "The API server answers" "kubectl reaches it."
-  else found api bad "The API server does not answer" "Nothing in the cluster can be changed until it does. On a server, restarting $SERVICE usually brings it back." fix_restart yes; return; fi
+  [ -n "$KC" ] || { found api warn "Cluster checks skipped" "kubectl cannot reach the cluster from this node. Worker nodes do not hold administrator credentials; run the doctor on a server node to check the cluster."; return; }
+  if kc get --raw /readyz >/dev/null; then found api ok "API server is responding" "kubectl can reach the API server."
+  else found api bad "API server is not responding" "The cluster cannot be changed until the API server responds. Restarting $SERVICE on a server node usually restores it." fix_restart yes; return; fi
   case "$KIND" in k3s-server|rke2-server|harvester)
-    if kc get --raw /readyz/etcd >/dev/null; then found etcd ok "etcd is healthy" "The cluster's database answers."
-    else found etcd bad "etcd is not healthy" "The cluster's database is not answering - often too few servers are up to form a quorum. Check the other servers first." ; fi ;;
+    if kc get --raw /readyz/etcd >/dev/null; then found etcd ok "etcd is healthy" "The cluster datastore is responding."
+    else found etcd bad "etcd is not healthy" "The cluster datastore is not responding, usually because too few server nodes are available for quorum. Check the other server nodes first." ; fi ;;
   esac
   state=$(kc get node "$NODE" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status} {.spec.unschedulable}')
   case "$state" in
-    "True true"*) found node warn "$NODE is cordoned" "It runs what it has but takes nothing new - left over from maintenance?" fix_uncordon yes ;;
-    True*) found node ok "$NODE is Ready" "Kubernetes sees this node as healthy." ;;
-    "") found node warn "$NODE is not in the cluster" "The cluster has no node by this machine's name." ;;
-    *) found node bad "$NODE is not Ready" "Kubernetes does not see this node as healthy; its kubelet or network is the usual cause." fix_restart yes ;;
+    "True true"*) found node warn "Node $NODE is cordoned" "The node keeps its running workloads but accepts no new ones. Nodes are usually cordoned for maintenance. The fix uncordons it." fix_uncordon yes ;;
+    True*) found node ok "Node $NODE is ready" "Kubernetes reports this node as healthy." ;;
+    "") found node warn "Node $NODE is not registered" "The cluster has no node named $NODE." ;;
+    *) found node bad "Node $NODE is not ready" "Kubernetes reports this node as not ready. The kubelet or the node network is the usual cause." fix_restart yes ;;
   esac
-  down=$(kc get nodes --no-headers | awk '$2 !~ /^Ready/ {print $1}' | tr '\n' ' ')
-  [ -n "$down" ] && found nodes warn "Nodes not ready: $down" "Look at those machines - run the doctor there. One gone for good is removed in Homestead: Cluster > Remove a host."
+  down=$(kc get nodes --no-headers | awk '$2 !~ /^Ready/ {print $1}' | tr '\n' ' ' | sed 's/ *$//')
+  [ -n "$down" ] && found nodes warn "Nodes not ready: $down" "Run the doctor on each of these nodes. To remove a node that will not return, use Cluster > Remove a host in Homestead."
   broken=$(kc get pods -A --no-headers | awk '$4 ~ /CrashLoopBackOff|Error|ImagePullBackOff|ErrImagePull|CreateContainerConfigError/ {print $1"/"$2" ("$4")"}' | head -n 12)
-  if [ -n "$broken" ]; then found pods warn "Pods failing: $(printf '%s\n' "$broken" | wc -l | tr -d ' ')" "These keep failing:
+  if [ -n "$broken" ]; then found pods warn "Failing pods: $(printf '%s\n' "$broken" | wc -l | tr -d ' ')" "The following pods are failing:
 $broken
 
-Each one's log says why (Homestead: Containers > Logs). Restarting them gives each a fresh start." fix_restart_broken no; fi
+Each pod's log shows the cause (Homestead: Containers > Logs). The fix deletes these pods so that they are recreated." fix_restart_broken no; fi
   failed=$(kc get pods -A --field-selector=status.phase=Failed --no-headers | wc -l | tr -d ' ')
-  [ "${failed:-0}" -gt 0 ] && found failed warn "$failed failed pods left behind" "Pods that ended in failure - evicted, or out of their deadline - are kept until deleted. Nothing uses them." fix_failed_pods yes
+  [ "${failed:-0}" -gt 0 ] && found failed warn "Failed pods: $failed" "Pods that ended in failure, such as evicted pods, remain until deleted. They use no resources. The fix deletes them." fix_failed_pods yes
   stuck=$(kc get pods -A --no-headers | awk '$4=="Terminating" {print $1"/"$2}' | head -n 20)
-  if [ -n "$stuck" ]; then found terminating warn "Pods stuck terminating" "These have been told to stop and have not:
+  if [ -n "$stuck" ]; then found terminating warn "Pods stuck terminating" "The following pods have not stopped:
 $stuck
 
-Usually their node is gone. Force-deleting them lets their apps start elsewhere." fix_terminating no; fi
+This usually means their node is unavailable. The fix force-deletes them so that their workloads can start on other nodes." fix_terminating no; fi
   if kc get crd volumes.longhorn.io >/dev/null; then
     bad=$(kc -n longhorn-system get volumes.longhorn.io --no-headers -o custom-columns=N:.metadata.name,R:.status.robustness | awk '$2=="faulted" || $2=="degraded" {print $1" ("$2")"}')
-    if [ -n "$bad" ]; then found longhorn warn "Longhorn volumes not healthy" "$bad
+    if [ -n "$bad" ]; then found longhorn warn "Longhorn volumes are not healthy" "$bad
 
-Degraded ones rebuild on their own when a node with room is up; faulted ones need a backup restored (Homestead: Data protection)."
-    else found longhorn ok "Longhorn volumes are healthy" "Every volume has its copies."; fi
+Degraded volumes rebuild automatically when a node with capacity is available. Faulted volumes must be restored from a backup (Homestead: Data Protection)."
+    else found longhorn ok "Longhorn volumes are healthy" "All volumes have their configured replicas."; fi
   fi
   if [ "$(kc -n kube-system get deploy coredns -o jsonpath='{.status.readyReplicas}')" = "" ] && kc -n kube-system get deploy coredns >/dev/null; then
-    found dns bad "CoreDNS is not ready" "Pods cannot find each other or the internet by name." fix_dns yes
+    found dns bad "CoreDNS is not ready" "Pods cannot resolve service or external names. The fix restarts CoreDNS." fix_dns yes
   fi
   if kc -n lab get deploy homestead >/dev/null; then
     ready=$(kc -n lab get deploy homestead -o jsonpath='{.status.readyReplicas}')
-    if [ -n "$ready" ] && [ "$ready" -gt 0 ]; then found homestead ok "Homestead is running" "Its web page should answer."
-    else found homestead bad "Homestead is not running" "Its Deployment has no ready copy. A restart often clears it; if not, its pod's events say why." fix_homestead yes; fi
+    if [ -n "$ready" ] && [ "$ready" -gt 0 ]; then found homestead ok "Homestead is running" "The Homestead deployment has a ready replica."
+    else found homestead bad "Homestead is not running" "The Homestead deployment has no ready replicas. The fix restarts it; if the problem persists, check the pod's events." fix_homestead yes; fi
   fi
   if [ "$KIND" = k3s-server ] && [ -d "$DATA/server/db/etcd" ]; then
     newest=$(ls -t "$DATA"/server/db/snapshots 2>/dev/null | head -n 1)
-    if [ -z "$newest" ]; then found snapshot warn "No etcd snapshot on this server" "k3s snapshots the cluster twice a day by default; none here means none can be restored." fix_snapshot yes
+    if [ -z "$newest" ]; then found snapshot warn "No etcd snapshots found" "k3s takes an etcd snapshot every 12 hours by default. Without a snapshot, the cluster cannot be restored. The fix takes one now." fix_snapshot yes
     else
       age=$(( ($(date +%s) - $(stat -c %Y "$DATA/server/db/snapshots/$newest" 2>/dev/null || date +%s)) / 3600 ))
-      if [ "$age" -gt 48 ]; then found snapshot warn "The newest etcd snapshot is $age hours old" "k3s normally takes one every 12 hours. Take one now." fix_snapshot yes
-      else found snapshot ok "etcd snapshot $age hours old" "$newest"; fi
+      if [ "$age" -gt 48 ]; then found snapshot warn "Newest etcd snapshot is $age hours old" "k3s normally takes a snapshot every 12 hours. The fix takes one now." fix_snapshot yes
+      else found snapshot ok "Newest etcd snapshot is $age hours old" "$newest"; fi
     fi
   fi
 }
@@ -698,13 +908,13 @@ run_checks() {
   steps="check_service check_disk check_memory check_clock check_runtime check_certs check_iscsi check_cluster"
   if [ "$UI" = text ]; then
     for s in $steps; do
-      [ "$DMODE" = menu ] && printf '  checking %s...\n' "$(printf '%s' "${s#check_}" | tr _ ' ')" > "$TTY" 2>/dev/null
+      [ "$DMODE" = menu ] && printf 'Checking %s...\n' "$(printf '%s' "${s#check_}" | tr _ ' ')" > "$TTY" 2>/dev/null
       $s
     done
     return
   fi
-  { n=0; for s in $steps; do n=$((n+1)); printf 'XXX\n%d\nChecking: %s\nXXX\n' $(( n * 100 / 9 )) "$(printf '%s' "${s#check_}" | tr _ ' ')"; $s; done; } \
-    | "$BOX" --title "Homestead doctor" --gauge "Checking" 8 70 0 > "$TTY" 2>&1
+  { n=0; for s in $steps; do n=$((n+1)); printf 'XXX\n%d\nChecking %s\nXXX\n' $(( n * 100 / 9 )) "$(printf '%s' "${s#check_}" | tr _ ' ')"; $s; done; } \
+    | "$BOX" --title "Node Health" --gauge "Starting checks" 8 70 0 > "$TTY" 2>&1
 }
 
 # ------------------------------------------------------------------ fixes
@@ -730,7 +940,7 @@ fix_snapshot() {
   case "$KIND" in
     k3s-server) run k3s etcd-snapshot save --name "doctor-$(date +%Y%m%d-%H%M)" ;;
     rke2-server) run rke2 etcd-snapshot save --name "doctor-$(date +%Y%m%d-%H%M)" ;;
-    *) msg "Snapshots" "Etcd snapshots are taken on a k3s or RKE2 server." ;;
+    *) msg "etcd Snapshot" "etcd snapshots can only be taken on a k3s or RKE2 server node." ;;
   esac
 }
 fix_multipath() {
@@ -743,11 +953,11 @@ fix_cleanup() {
   [ -n "$CRICTL" ] && run $CRICTL rmi --prune
   have journalctl && run journalctl --vacuum-size=200M
   if [ -d "$DATA/server/db/snapshots" ]; then
-    # Keep the ten newest etcd snapshots.
+    # Keep the ten most recent etcd snapshots.
     ls -t "$DATA"/server/db/snapshots 2>/dev/null | tail -n +11 | while read -r old; do run rm -f "$DATA/server/db/snapshots/$old"; done
   fi
   after=$(df -Pm /var 2>/dev/null | awk 'NR==2 {print $4}')
-  [ -n "$before" ] && [ -n "$after" ] && [ "$DRY" = 0 ] && msg "Cleaned up" "$(( after - before )) MB freed under /var."
+  [ -n "$before" ] && [ -n "$after" ] && [ "$DRY" = 0 ] && msg "Clean-up Complete" "$(( after - before )) MB freed in /var."
 }
 
 apply_fix() { # id
@@ -756,40 +966,48 @@ apply_fix() { # id
   fix=$(printf '%s' "$line" | cut -d'|' -f5)
   [ -n "$fix" ] || { msg "$title" "$detail
 
-There is nothing the doctor can do for this one by itself."; return; }
+No automatic fix is available for this item."; return; }
   if confirm "$title" "$detail
 
-Fix it now?"; then
+Apply the fix now?"; then
     logline "fix: $1 ($fix)"
-    if $fix; then msg "Done" "$title - fixed. Check again to see it cleared." ; else msg "Did not work" "The fix did not finish; $DLOG has what ran."; fi
+    if $fix; then msg "Fix Applied" "$title: the fix was applied. Run the checks again to confirm."
+    else msg "Fix Failed" "The fix did not complete. See $DLOG for details."; fi
   fi
 }
 
 # ------------------------------------------------------------------ restore
 restore() {
-  [ "$KIND" = k3s-server ] || { msg "Restore" "Restoring from an etcd snapshot is done here on a k3s server. On RKE2: rke2 server --cluster-reset --cluster-reset-restore-path=<snapshot>; on Harvester, follow Harvester's own guide."; return; }
+  [ "$KIND" = k3s-server ] || { msg "Restore from Snapshot" "Snapshot restore is available on k3s server nodes. On RKE2, run: rke2 server --cluster-reset --cluster-reset-restore-path=<snapshot>. On Harvester, follow the Harvester documentation."; return; }
   dir="$DATA/server/db/snapshots"
   set --
-  for f in $(ls -t "$dir" 2>/dev/null | head -n 15); do set -- "$@" "$f" "$(date -d "@$(stat -c %Y "$dir/$f")" '+%F %H:%M' 2>/dev/null)"; done
-  [ $# -gt 0 ] || { msg "Restore" "There are no etcd snapshots on this server."; return; }
-  snap=$(menu "Restore from a snapshot" "Which snapshot? The whole cluster - every app, setting and secret - goes back to that moment. Volumes' data is not in it; Longhorn keeps that." "$@") || return
+  for f in $(ls -t "$dir" 2>/dev/null | head -n 15); do set -- "$@" "$f" "$f   $(date -d "@$(stat -c %Y "$dir/$f")" '+%F %H:%M' 2>/dev/null)"; done
+  [ $# -gt 0 ] || { msg "Restore from Snapshot" "No etcd snapshots were found on this node."; return; }
+  snap=$(menu "Restore from Snapshot" "Select a snapshot. The cluster state (workloads, settings and secrets) is restored to that point. Volume data is not included; Longhorn manages volume data separately." "$@") || return
   servers=$(kc get nodes --no-headers | grep -c 'control-plane' || echo 1)
-  typed "Restore the cluster" "This stops k3s, resets the cluster to $snap, and starts it again. Everything changed since then is lost.$([ "${servers:-1}" -gt 1 ] && printf '\n\nThis cluster has %s servers: stop k3s on the others first, and afterwards delete %s/server/db on each of them and start it, so they join again from this one.' "$servers" "$DATA")" RESTORE || { msg "Restore" "Not restored."; return; }
+  typed "Confirm Restore" "k3s will be stopped, the cluster reset to $snap, and k3s started again. All changes made after the snapshot will be lost.$([ "${servers:-1}" -gt 1 ] && printf '\n\nThis cluster has %s server nodes. Before continuing, stop k3s on the other server nodes. Afterwards, delete %s/server/db on each of them and start k3s, so that they rejoin from this node.' "$servers" "$DATA")" RESTORE || { msg "Restore from Snapshot" "Restore cancelled."; return; }
   logline "restore: $snap"
   run systemctl stop k3s
-  run k3s server --cluster-reset --cluster-reset-restore-path="$dir/$snap" || { msg "Restore" "The reset did not finish; journalctl -u k3s and $LOG say why. k3s is stopped."; return; }
+  run k3s server --cluster-reset --cluster-reset-restore-path="$dir/$snap" || { msg "Restore Failed" "The cluster reset did not complete, and k3s is stopped. See journalctl -u k3s for details."; return; }
   run systemctl start k3s
-  msg "Restored" "The cluster is back at $snap. Check again in a minute, once k3s is up."
+  msg "Restore Complete" "The cluster has been restored to $snap. Run the health checks again once k3s has started."
 }
 
 cleanup_menu() {
-  choice=$(menu "Clean up" "What to clear away:" \
-    all "Everything below" \
-    images "Container images no pod uses (crictl rmi --prune)" \
-    journal "The system journal, down to 200 MB" \
+  choice=$(menu "Clean Up" "Select what to remove:" \
+    all "All of the following" \
+    images "Unused container images" \
+    journal "System journal entries beyond 200 MB" \
     failed "Failed and evicted pods" \
-    snapshots "etcd snapshots beyond the ten newest") || return
-  confirm "Clean up" "Clear away: $choice?" || return
+    snapshots "etcd snapshots older than the ten most recent") || return
+  case "$choice" in
+    all) what="unused container images, journal entries beyond 200 MB, failed pods and older etcd snapshots" ;;
+    images) what="unused container images" ;;
+    journal) what="journal entries beyond 200 MB" ;;
+    failed) what="failed and evicted pods" ;;
+    snapshots) what="etcd snapshots older than the ten most recent" ;;
+  esac
+  confirm "Clean Up" "Remove $what?" || return
   case "$choice" in
     all) fix_cleanup; fix_failed_pods ;;
     images) [ -n "$CRICTL" ] && run $CRICTL rmi --prune ;;
@@ -797,18 +1015,22 @@ cleanup_menu() {
     failed) fix_failed_pods ;;
     snapshots) ls -t "$DATA"/server/db/snapshots 2>/dev/null | tail -n +11 | while read -r old; do run rm -f "$DATA/server/db/snapshots/$old"; done ;;
   esac
-  msg "Clean up" "Done."
+  msg "Clean Up" "Clean-up complete."
 }
 
-doctor_report() { # the findings, worst first, as text
+mark() { case "$1" in bad) echo "[FAIL]" ;; warn) echo "[WARN]" ;; *) echo "[ OK ]" ;; esac; }
+doctor_report() { # the results, most severe first, as text
   for level in bad warn ok; do
     grep "|$level|" "$FOUND" | while IFS='|' read -r id lvl title detail fix safe; do
-      case "$lvl" in bad) mark="[!!]" ;; warn) mark="[ !]" ;; *) mark="[ok]" ;; esac
-      printf '%s %s%s\n' "$mark" "$title" "$([ -n "$fix" ] && [ "$lvl" != ok ] && printf ' (fixable)')"
+      printf '%s %s%s\n' "$(mark "$lvl")" "$title" "$([ -n "$fix" ] && [ "$lvl" != ok ] && printf ' (fix available)')"
     done
   done
 }
-
+save_report() {
+  out="/var/log/homestead-doctor-$(date +%Y%m%d-%H%M).txt"
+  { printf 'Homestead node health report: %s (%s), %s\n\n' "$NODE" "$KIND" "$(date)"; doctor_report; } > "$out" \
+    && msg "Report Saved" "The health report was saved to $out."
+}
 
 # ------------------------------------------------------------------ the doctor
 doctor() { # menu | report | fix
@@ -816,11 +1038,11 @@ doctor() { # menu | report | fix
   detect_node
   run_checks
   if [ "$DMODE" = report ]; then
-    printf 'Homestead doctor - %s (%s)\n\n' "$NODE" "$KIND"; doctor_report
+    printf 'Homestead node health report: %s (%s)\n\n' "$NODE" "$KIND"; doctor_report
     grep -q '|bad|' "$FOUND" && exit 2; grep -q '|warn|' "$FOUND" && exit 1; exit 0
   fi
   if [ "$DMODE" = fix ]; then
-    printf 'Homestead doctor - %s (%s): fixing what is safe\n' "$NODE" "$KIND"
+    printf 'Applying safe fixes on %s (%s)\n' "$NODE" "$KIND"
     grep -E '\|(bad|warn)\|' "$FOUND" | while IFS='|' read -r id lvl title detail fix safe; do
       [ -n "$fix" ] && [ "$safe" = yes ] && { printf '  %s\n' "$title"; $fix; }
     done
@@ -831,42 +1053,43 @@ doctor() { # menu | report | fix
     for level in bad warn ok; do
       while IFS='|' read -r id lvl title detail fix safe; do
         [ -n "$id" ] || continue
-        case "$lvl" in bad) mark="[!!]" ;; warn) mark="[ !]" ;; *) mark="[ok]" ;; esac
-        set -- "$@" "$id" "$mark $title$([ -n "$fix" ] && [ "$lvl" != ok ] && printf ' - fix')"
+        set -- "$@" "$id" "$(mark "$lvl") $title$([ -n "$fix" ] && [ "$lvl" != ok ] && printf ' (fix available)')"
       done <<EOF
 $(grep "|$level|" "$FOUND")
 EOF
     done
     bad=$(grep -c '|bad|' "$FOUND"); warn=$(grep -c '|warn|' "$FOUND")
-    # A tag starting with "-" reads to whiptail as an option, and it quits.
+    # A tag starting with "-" reads to whiptail as an option, so the
+    # separator's tag is "~".
     set -- "$@" "~" "" \
-      "@fix" "Fix everything marked safe" "@again" "Check again" "@save" "Save this report"
-    pick=$(menu "Health - $NODE" "$KIND · $bad wrong, $warn worth a look. Choose one to see it and fix it:" "$@") || return 0
+      "@fix" "Apply all safe fixes" "@again" "Run checks again" "@save" "Save report"
+    pick=$(menu "Node Health: $NODE" "$(kind_name): $bad failed, $warn warnings. Select an item for details." "$@") || return 0
     case "$pick" in
       "~") ;;
       @fix)
-        if confirm "Fix everything safe" "Apply every fix marked safe - restarting a stopped service, turning on time sync and iscsid, uncordoning this node, clearing failed pods, cleaning up a full disk, restarting CoreDNS or Homestead?"; then
+        if confirm "Apply Safe Fixes" "Apply all fixes marked as safe? These may restart stopped services, enable time synchronisation and iscsid, uncordon this node, delete failed pods, free disk space, and restart CoreDNS or Homestead."; then
           grep -E '\|(bad|warn)\|' "$FOUND" | while IFS='|' read -r id lvl title detail fix safe; do [ -n "$fix" ] && [ "$safe" = yes ] && $fix; done
           run_checks
         fi ;;
       @again) run_checks ;;
-      @save) out="/var/log/homestead-doctor-$(date +%Y%m%d-%H%M).txt"
-        { printf 'Homestead doctor - %s (%s) - %s\n\n' "$NODE" "$KIND" "$(date)"; doctor_report; } > "$out" && msg "Saved" "The report is in $out" ;;
+      @save) save_report ;;
       *) apply_fix "$pick" ;;
     esac
   done
 }
+
 # ------------------------------------------------------------------ installing
 do_install() {
   if [ "$(given HS_ROLE)" = harvester ] || { [ -z "$(given HS_ROLE)" ] && is_harvester; }; then
+    ROLE=harvester
     flow_harvester
   elif { [ -z "$(given HS_ROLE)" ] || [ "$(given HS_ROLE)" = addons ]; } && { active k3s || active rke2-server; }; then
-    HS_ROLE=addons
+    ROLE=addons
     active rke2-server && DIST=rke2
     prechecks addons
     add_to_cluster
   elif active k3s-agent || active rke2-agent; then
-    msg "A worker already" "This machine is a worker in a cluster already. Run the installer on one of the cluster's servers to add Homestead."
+    msg "Worker Node" "This machine is already a worker node. Run the installer on a server node to install Homestead."
   else
     flow_new
   fi
@@ -874,52 +1097,62 @@ do_install() {
 
 # ------------------------------------------------------------------ start
 what_is_here() {
-  found="a machine with no Kubernetes yet"
-  is_harvester && found="a Harvester host"
-  active k3s && found="a k3s server"
-  active k3s-agent && found="a k3s worker"
-  { active rke2-server || active rke2-agent; } && ! is_harvester && found="an RKE2 machine"
-  active kubelet && [ "$found" = "a machine with no Kubernetes yet" ] && found="a Kubernetes node"
+  found="No Kubernetes installation"
+  is_harvester && found="Harvester node"
+  active k3s && found="k3s server node"
+  active k3s-agent && found="k3s worker node"
+  { active rke2-server || active rke2-agent; } && ! is_harvester && found="RKE2 node"
+  active kubelet && [ "$found" = "No Kubernetes installation" ] && found="Kubernetes node"
   printf '%s' "$found"
 }
+kind_name() {
+  case "$KIND" in
+    k3s-server) echo "k3s server node" ;; k3s-agent) echo "k3s worker node" ;;
+    rke2-server) echo "RKE2 server node" ;; rke2-agent) echo "RKE2 worker node" ;;
+    harvester) echo "Harvester node" ;; kubernetes) echo "Kubernetes node" ;; *) echo "Node" ;;
+  esac
+}
 
-[ "$(id -u)" = 0 ] || [ "$DRY" = 1 ] || fail "run as root: curl ... | sudo sh"
+[ "$(id -u)" = 0 ] || [ "$DRY" = 1 ] || fail "The installer must run as root: curl ... | sudo sh"
+banner() { say "Homestead installer ($REF)$([ "$DRY" = 1 ] && printf ', dry run: no changes will be made')"; }
 case "$ACTION" in
-  install) say "Homestead installer ($REF)$([ "$DRY" = 1 ] && printf ' - dry run, nothing changes')"; do_install; exit 0 ;;
+  install) banner; do_install; exit 0 ;;
   doctor) doctor menu; exit 0 ;;
   report) UI=text; doctor report ;;
   fix-safe) UI=text; doctor fix ;;
 esac
-# No choice made ahead: an answer in the environment means an unattended install.
+# Without a terminal, or with the mode set in the environment: unattended.
 if [ -n "$(given HS_ROLE)" ] || ! interactive; then
-  say "Homestead installer ($REF)$([ "$DRY" = 1 ] && printf ' - dry run, nothing changes')"; do_install; exit 0
+  banner; do_install; exit 0
 fi
 
 here=$(what_is_here)
 while :; do
   detect_node
-  if [ "$here" = "a machine with no Kubernetes yet" ]; then
-    set -- install "Install Homestead - a new cluster, or join this machine to one" \
-      checks "Check this machine is ready, without changing anything"
+  if [ "$here" = "No Kubernetes installation" ]; then
+    set -- install "Install Homestead" \
+      checks "Run system checks"
   else
-    set -- doctor "Check this node and its cluster, and fix what is wrong"
-    kc -n lab get deployment homestead >/dev/null || set -- "$@" install "Add Homestead to this cluster"
-    set -- "$@" clean "Clean up - old images, the journal, failed pods, old snapshots"
-    case "$KIND" in k3s-server|rke2-server) set -- "$@" snapshot "Take an etcd snapshot now" restore "Restore the cluster from a snapshot..." ;; esac
+    set -- doctor "Check node health"
+    kc -n lab get deployment homestead >/dev/null || set -- "$@" install "Install Homestead on this cluster"
+    set -- "$@" clean "Clean up disk space"
+    case "$KIND" in k3s-server|rke2-server) set -- "$@" snapshot "Take an etcd snapshot" restore "Restore from an etcd snapshot" ;; esac
     set -- "$@" report "Save a health report"
   fi
-  pick=$(menu "Homestead" "This machine: $(hostname), $(os_name), $(uname -m)
-Found: $here
+  BACK=Exit
+  pick=$(menu "Homestead" "Host        $(hostname)
+System      $(os_name), $(uname -m)
+Detected    $here
 
-What would you like to do?" "$@") || { say "Bye."; exit 0; }
+Select an option:" "$@") || exit 0
+  BACK=Back
   case "$pick" in
     install) do_install ;;
     checks) ( prechecks new ) ;;
     doctor) doctor menu ;;
     clean) cleanup_menu ;;
-    snapshot) confirm "Snapshot" "Take an etcd snapshot of the cluster now?" && fix_snapshot && msg "Snapshot" "Taken." ;;
+    snapshot) confirm "etcd Snapshot" "Take an etcd snapshot now?" && fix_snapshot && msg "etcd Snapshot" "Snapshot saved." ;;
     restore) restore ;;
-    report) DMODE=menu; run_checks; out="/var/log/homestead-doctor-$(date +%Y%m%d-%H%M).txt"
-      { printf 'Homestead doctor - %s (%s) - %s\n\n' "$NODE" "$KIND" "$(date)"; doctor_report; } > "$out" && msg "Saved" "The report is in $out" ;;
+    report) DMODE=menu; run_checks; save_report ;;
   esac
 done
