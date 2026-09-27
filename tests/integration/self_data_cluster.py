@@ -7,6 +7,7 @@ No kubeconfig or host ports are used. This is not a CSI detach/host-loss test.
 import json
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -32,6 +33,7 @@ def main():
                   "--mount", f"type=bind,source={directory},target=/fixture,readonly", K3S,
                   "server", "--disable", "traefik", "--disable", "servicelb", "--node-name", "release-test")
         print("Disposable k3s fixture:", cid, flush=True)
+        stop_watch = threading.Event()
         def kube(*args, data=None): return run("docker", "exec", "-i", cid, "kubectl", *args, data=data)
         try:
             deadline = time.monotonic() + 180
@@ -73,6 +75,24 @@ def main():
                           "provisioner": "rancher.io/local-path", "volumeBindingMode": "WaitForFirstConsumer", "reclaimPolicy": "Retain"})
             kube("apply", "-f", "-", data=json.dumps({"apiVersion": "v1", "kind": "List", "items": items}))
             kube("-n", "lab", "wait", "--for=condition=available", "deployment/homestead", "--timeout=120s")
+            def watch_controllers():
+                previous = {}
+                def differences(a, b, path=""):
+                    if isinstance(a, dict) and isinstance(b, dict):
+                        return [d for key in set(a) | set(b) for d in differences(a.get(key), b.get(key), path + "/" + key)]
+                    return [path] if a != b else []
+                while not stop_watch.is_set():
+                    try:
+                        for rs in json.loads(kube("-n", "lab", "get", "replicasets", "-o", "json"))["items"]:
+                            name, meta = rs["metadata"]["name"], rs["metadata"]
+                            value = {"spec": rs["spec"], **{k: meta.get(k) for k in ("annotations", "labels", "ownerReferences")}}
+                            if name in previous:
+                                changed = differences(previous[name], value)
+                                if changed: print("ReplicaSet changed fields:", sorted(changed), flush=True)
+                            previous[name] = value
+                    except Exception: pass
+                    stop_watch.wait(1)
+            threading.Thread(target=watch_controllers, daemon=True).start()
             service = json.loads(kube("-n", "lab", "get", "service", "homestead", "-o", "json"))
             url = "http://" + service["spec"]["clusterIP"] + ":8088"
             subprocess.run(["docker", "run", "--rm", "--network", "container:" + cid, "--read-only", "--tmpfs", "/tmp",
@@ -89,6 +109,7 @@ def main():
                 except Exception: pass
             raise
         finally:
+            stop_watch.set()
             # Only the exact container just created, including its disposable
             # anonymous storage. No host kubeconfig or user cluster is touched.
             run("docker", "rm", "-f", "-v", cid)
