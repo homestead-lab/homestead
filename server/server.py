@@ -3682,12 +3682,13 @@ def vm_cluster_snapshot():
 
 def prepare_vm_cluster(cfg):
     token = CAPACITY_REVIEW.derive_secret(cfg, "k3s-bootstrap-join")
-    batch = K3SC.prepare(cfg, token=token)
+    batch = K3SC.prepare(cfg, token=token, guest_checks=True)
     read, external = vm_cluster_snapshot()
     platform = PLATFORM.detect()
     prepared = []
     for config in batch["configs"]:
         item = IMP.prepare_vm(config, platform, cfg["storage_class"])
+        K3SC.HEALTH.pin(item, batch["guest_health"])
         IMP._recheck_vm_creation(item)
         claims = VM_CLAIMS.plans(item["vm"], read, item["claims"], item["downloads"])
         VM_CLAIMS.pin(item["vm"], claims, item["claims"])

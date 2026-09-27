@@ -725,10 +725,37 @@ cleanup, automatic resume or replay. A fresh batch or individual reviewed VM
 action cannot overlap an unresolved batch target. Legacy jobs remain tracking-only
 and are not given invented receipts or automatic deletion rights.
 
-For these batches, an open guest API port is reported only as connectivity, not
-authenticated k3s identity, readiness or quorum. The job remains unverified until
-inspection or timeout; resolving tracking does not prove installation succeeded.
-Guest installation may continue and no IP-address records are freed.
+New batches install a small Python readiness probe through cloud-init. KubeVirt
+runs it through the QEMU guest agent; it is a **readiness** probe, never a liveness
+probe that restarts a guest. Every server queries its local k3s API using its own
+CA and client certificate. Credentials stay inside the guest: no exported
+kubeconfig, additional listener, SSH connection or unverified HTTP callback.
+
+The bootstrap check verifies the planned node names, firmware UUIDs, LAN addresses,
+roles, Ready conditions and fresh node leases, plus the requested Homestead,
+Longhorn and optional KubeVirt/CDI components. A config-bound completion marker
+stays in each guest. Afterwards the probe checks its own identity and active k3s
+service; servers also check their local API, own Ready condition and fresh lease.
+This avoids permanently locking the cluster to its original workers/add-ons.
+Completion means bootstrap checks passed on every guest and those local readiness
+checks pass—not that every component remains healthy forever or failover was tested.
+
+The parent verifies each created VM UID, owned instance, pinned probe/firmware
+settings and original cloud-init Secret UID/content hash through the host Kubernetes
+API. Its guest agent must be connected and the instance Running, Ready and not
+paused, with a fresh host heartbeat. Operation records contain only public settings,
+hashes and identity receipts, never the bootstrap Secret or guest credentials.
+Missing guest-agent/Python support, failed installation, unavailable observations or
+changed identities cannot become success merely because a TCP port answers. Check
+the job and guest console (`/var/log/homestead-k3s.log`) if verification times out.
+
+These checks trust the host control plane and guest root; they are not remote
+attestation or proof against a compromised guest. They verify installation and
+current local readiness, not future HA or safe simultaneous host failures. Use
+ongoing cluster health monitoring and a disposable failover rehearsal for those.
+Older reviewed batches without the probe contract remain explicitly unverified
+until inspection or timeout. Resolving tracking never proves installation succeeded,
+deletes resources or frees IP records; guest installation may continue.
 
 Copies on different nodes all mount Homestead's data claim, so more than one
 copy needs a claim every node can mount: ReadWriteMany on a class Longhorn

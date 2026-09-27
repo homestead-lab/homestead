@@ -10,8 +10,10 @@ field install would use, or k3s's own installer for a bare cluster. Asked for
 KubeVirt, the nodes get the host's CPU as it is, so VMs can run inside them
 where the host allows nested virtualisation, and emulated where it does not.
 
-The build is a job: the VMs start, k3s answers on the server's address,
-and - when it was asked for - the Homestead inside answers on port 8088.
+The reviewed build is a job with identity-bound guest-agent probes. Local TLS
+checks verify bootstrap topology/components and ongoing server API readiness;
+an open network port alone cannot complete it. Older jobs retain their original
+monitoring contract without invented verification receipts.
 """
 import copy
 import hashlib
@@ -24,6 +26,7 @@ import time
 from contextlib import nullcontext
 import homestead_vm_power_job as VM_POWER
 import homestead_vm_write as VM_WRITE
+import homestead_k3s_health as HEALTH
 import urllib.parse
 
 BOOTSTRAP = "https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh"
@@ -119,7 +122,7 @@ def plan(cfg):
             "url": f"http://{nodes[0]['address']}:8088" if setup != "k3s" else ""}
 
 
-def user_data(node, first, token, password, setup, k3s_version="", kubevirt=False):
+def user_data(node, first, token, password, setup, k3s_version="", kubevirt=False, health=None):
     """cloud-init for one node: a login, the guest agent (so its address shows
     here), and the line that makes it a server or joins it to the first."""
     version = f" --k3s-version {k3s_version}" if k3s_version else ""
@@ -146,7 +149,8 @@ def user_data(node, first, token, password, setup, k3s_version="", kubevirt=Fals
         f"password: {json.dumps(password)}",
         "chpasswd: {expire: false}",
         "package_update: true",
-        "packages: [qemu-guest-agent, curl]",
+        "packages: [qemu-guest-agent, curl, python3]" if health else "packages: [qemu-guest-agent, curl]",
+        *(["write_files: " + json.dumps(HEALTH.cloud_files(health))] if health else []),
         "runcmd:",
         "  - [systemctl, enable, --now, qemu-guest-agent]",
         # Printed to the serial console as well as kept in LOG, so the job's
@@ -155,7 +159,7 @@ def user_data(node, first, token, password, setup, k3s_version="", kubevirt=Fals
         ""])
 
 
-def prepare(cfg, token=None):
+def prepare(cfg, token=None, guest_checks=False):
     """Build the entire batch without creating anything or persisting secrets.
 
     A supplied token lets an admission layer reproduce the exact reviewed
@@ -170,6 +174,7 @@ def prepare(cfg, token=None):
     if not re.fullmatch(r"[a-zA-Z0-9_-]{16,128}", token):
         raise ValueError("invalid internal cluster join token")
     ns = str(cfg.get("namespace") or "lab")
+    health = HEALTH.prepare(ns, built, cfg.get("review_id")) if guest_checks else None
     static = {"prefix": int(cfg.get("prefix") or 24), "gateway": str(cfg.get("gateway") or ""),
               "dns": [d for d in (cfg.get("dns") or []) if d]}
     configs = []
@@ -180,7 +185,8 @@ def prepare(cfg, token=None):
               "image_id": cfg.get("image_id") or "", "image_url": "" if cfg.get("image_id") else (cfg.get("image_url") or UBUNTU),
               "static_ip": dict(static, address=node["address"]),
               "cloud_init": user_data(node, built["first"], token, str(cfg["password"]), built["setup"],
-                                      str(cfg.get("k3s_version") or ""), built["kubevirt"]),
+                                      str(cfg.get("k3s_version") or ""), built["kubevirt"],
+                                      next(row for row in health["nodes"] if row["name"] == node["name"]) if health else None),
               # VMs inside these VMs need the host's CPU as it is, virtualisation
               # included - where the host allows nesting. Without it KubeVirt in
               # the cluster emulates.
@@ -192,7 +198,7 @@ def prepare(cfg, token=None):
         if (cfg.get("macs") or {}).get(node["name"]):
             vm["mac"] = cfg["macs"][node["name"]]
         configs.append(vm)
-    return {"namespace": ns, "plan": built, "configs": configs}
+    return {"namespace": ns, "plan": built, "configs": configs, **({"guest_health": health} if health else {})}
 
 
 def start(cfg, ops):
@@ -226,7 +232,9 @@ def commit(prepared, ops, *, create_one=None, before_node=None, review=None, sen
                           {"namespace": ns, "name": built["name"], "nodes": copy.deepcopy(built["nodes"]),
                            "first": built["first"], "setup": built["setup"], "started": time.time(),
                            "phase": "provisioning", "phase_at": time.time(), "retain_resources": True,
-                           "created": [], "attempted": "", **journal}, "Checking batch before creating VMs")
+                           "created": [], "attempted": "", **journal,
+                           **({"guest_health": copy.deepcopy(prepared["guest_health"])} if prepared.get("guest_health") else {})},
+                          "Checking batch before creating VMs")
     with VM_POWER.worker_lock(operation["id"], ops) if journal else nullcontext():
         writer = VM_WRITE.ResourceWriter(send, VM_WRITE.operation_recorder(ops, operation["id"])) if journal else None
         return _commit_nodes(prepared, ops, operation, create_one, before_node, writer)
@@ -280,7 +288,7 @@ def _commit_nodes(prepared, ops, operation, create_one, before_node, writer):
 
 
 def status(item):
-    """VMs running, then k3s answering, then the Homestead inside."""
+    """Reviewed guest verification, with compatibility for older stored jobs."""
     ref = item["ref"]
     waited = time.time() - float(ref.get("started") or time.time())
     names = [n["name"] for n in ref["nodes"]]
@@ -290,6 +298,8 @@ def status(item):
         return "running", item.get("progress", 0), item.get("message") or "VM provisioning is in progress; partial resources are retained"
     if ref.get("phase") == "failed":
         return "failed", item.get("progress", 0), item.get("message") or "VM provisioning stopped; inspect retained resources"
+    if ref.get("dispatch_protocol") == 2 and ref.get("guest_health"):
+        return HEALTH.status(item, kget, limit=START_LIMIT)
     running = 0
     for name in names:
         try:

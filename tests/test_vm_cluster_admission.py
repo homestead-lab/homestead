@@ -136,6 +136,14 @@ class VMClusterAdmissionTests(unittest.TestCase):
         item = server.OPS._read()[-1]
         self.assertEqual("awaiting-ready", item["ref"]["phase"])
         self.assertEqual(2, len(item["ref"]["created"]))
+        health = item["ref"]["guest_health"]
+        for vm, node in zip(vms, health["nodes"]):
+            spec = vm["spec"]["template"]["spec"]
+            self.assertEqual(node["uuid"], spec["domain"]["firmware"]["uuid"])
+            self.assertEqual(node["probe"], spec["readinessProbe"])
+            self.assertNotIn("livenessProbe", spec)
+        self.assertNotIn(self.body["password"], json.dumps(item))
+        self.assertNotIn("K3S_TOKEN", json.dumps(item))
 
     def test_changed_input_or_dependency_cannot_reuse_approval(self):
         body = self.reviewed()
