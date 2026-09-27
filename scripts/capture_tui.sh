@@ -41,9 +41,9 @@ shot() { # name text-the-screen-shows
   fi
 }
 key() { tmux send-keys -t tui "$@"; }
-start() { # PATH-prefix
+start() { # PATH-prefix [rows]
   tmux kill-session -t tui 2>/dev/null
-  tmux new-session -d -s tui -x 100 -y 32 \
+  tmux new-session -d -s tui -x 100 -y "${2:-32}" \
     "env PATH=$1:$PATH TERM=xterm-256color NEWT_COLORS=root=white,black sh scripts/install.sh --dry-run; sleep 30"
   sleep 2
 }
@@ -66,7 +66,13 @@ stub systemctl 'case "$1" in
 esac'
 stub journalctl 'exit 0'
 stub k3s '[ "$1" = kubectl ] && shift
+[ "${1:-}" = --request-timeout=3s ] && shift
 case "$*" in
+  "config view "*) echo "https://127.0.0.1:6443" ;;
+  "get nodes -o jsonpath"*) printf "node1|192.0.2.50|True|v1.34.1+k3s1\nnode2|192.0.2.51|False|v1.34.1+k3s1\n" ;;
+  "-n longhorn-system get daemonset "*) echo "longhorn-manager|longhornio/longhorn-manager:v1.9.2|1|2" ;;
+  "-n lab get deployment homestead --ignore-not-found"*) echo "homestead|ghcr.io/wjcloudy/homestead:2.8.199|1|1" ;;
+  "get services "*) echo "lab/homestead|192.0.2.242 | " ;;
   "get --raw /readyz"|"get --raw /readyz/etcd") echo ok ;;
   "get node node1 -o jsonpath"*) echo "True true" ;;
   "get nodes --no-headers") echo "node1 Ready control-plane 1d v1.33"; echo "node2 NotReady <none> 1d v1.33" ;;
@@ -78,9 +84,15 @@ case "$*" in
   *) exit 0 ;;
 esac'
 start "$BIN"
-shot node-menu "Check node health"               # a node: health, clean-up, snapshots
+shot node-menu "Longhorn"               # a node: health, clean-up, snapshots
+key Down; key Enter; shot cluster-details "Service VIPs"
+key Escape; shot node-menu-return "Check node health"
 key Enter; shot doctor "warnings"                # the results, most severe first
 key Enter; shot doctor-fix "Apply the fix now"   # one result, and its fix
+key Escape
+
+start "$BIN" 24
+shot node-menu-small "Homestead   "
 key Escape
 
 # A screen that never showed is a menu that broke: say so.
