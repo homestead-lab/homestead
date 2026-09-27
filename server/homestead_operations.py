@@ -156,7 +156,7 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
                         existing.get("status") not in TERMINAL or previous.get("retain_resources")):
                     if existing.get("tracking_stopped") and existing.get("status") in TERMINAL:
                         continue
-                    raise ValueError(f"VM job {existing['id']} is still active or needs recovery; inspect it first")
+                    raise ValueError(f"Workload job {existing['id']} is still active or needs recovery; inspect it first")
         if kind == "node-power" and any(i.get("kind") == kind and i.get("status") not in TERMINAL and
                                         i.get("ref", {}).get("node") == ref.get("node") for i in items):
             raise ValueError("Host maintenance is already active; inspect its job before retrying")
@@ -174,6 +174,8 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
 
 
 def _vm_targets(kind, ref):
+    if kind == "workload-rename":
+        return {(ref.get("namespace"), "deployment/" + name) for name in (ref.get("name"), ref.get("new_name")) if name}
     names = [row.get("name") for row in ref.get("nodes", [])] if kind == "k3s-cluster" else [ref.get("name")]
     return {(ref.get("namespace"), name) for name in names if name}
 
@@ -214,6 +216,9 @@ def _public(item):
         out["batch_name"] = item["ref"]["name"]
     if item.get("kind") == "snapshot-delete":
         out["cancellable"] = False  # Longhorn merging cannot be undone or safely interrupted.
+    if item.get("kind") == "workload-rename":
+        out["tracking_only"] = True
+        out["rename_recovery"] = True
     if item.get("kind") == "k3s-cluster" and item.get("ref", {}).get("retain_resources") and item["ref"].get("phase") == "provisioning":
         out["cancellable"] = False  # synchronous dispatch may still be in flight
     check = RESUMABLE.get(item.get("kind"))
@@ -697,7 +702,7 @@ CLEANUPS = set()
 def _cleanable(item):
     return (item.get("status") == "failed" and item.get("kind") in CLEANUPS and not item.get("cleaned")
             and not item.get("tracking_stopped")
-            and (item.get("kind") == "k3s-cluster" or not item.get("ref", {}).get("retain_resources")))
+            and (item.get("kind") in ("k3s-cluster", "workload-rename") or not item.get("ref", {}).get("retain_resources")))
 MODES = {"rollback": "Cancel and put back", "stop": "Cancel it", "forget": "Stop tracking it"}
 
 

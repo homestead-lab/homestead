@@ -817,6 +817,14 @@ runs: an import's or storage move's copy, a Helm or backup run, a rollout's
 newest pod (its events and log), CDI's importer, and each node's console as a
 k3s cluster installs itself.
 
+Workload renames are separately reviewed, name-only jobs. They wait for the
+original pods to terminate and recheck placement before starting the replacement.
+Service addresses, volumes and existing service-selector labels are preserved.
+Failures retain resources without automatic rollback or replay; inspect both
+names before starting either. Admin recovery only acknowledges the outcome and
+stops tracking. See [renaming a workload](https://github.com/wjcloudy/homestead/wiki/Containers#renaming-a-workload)
+for the supported ownership, autoscaler and readiness boundaries.
+
 Jobs that can be cancelled offer **Cancel**. It first says what cancelling would
 do: what is put back, what stays as it is, and anything Kubernetes cannot take
 back. Where it can, a cancel rolls back - a deploy is removed, an update or
@@ -892,7 +900,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.188/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.189/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -903,7 +911,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.188 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.189 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1723,10 +1731,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.188`, the workflow publishes:
+For a release such as `v2.8.189`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.188
+ghcr.io/wjcloudy/homestead:2.8.189
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -1737,8 +1745,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.188
-git push origin v2.8.188
+git tag v2.8.189
+git push origin v2.8.189
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.

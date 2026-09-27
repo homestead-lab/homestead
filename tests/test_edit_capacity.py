@@ -115,6 +115,36 @@ class EditCapacityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "paused"):
             server.edit_capacity_plan(self.config)
 
+    def test_rename_preview_is_name_only_and_requires_confirmation(self):
+        self.objects["/apis/autoscaling/v2/namespaces/lab/horizontalpodautoscalers"] = {"items": []}
+        self.config = {"ns": "lab", "name": "shared", "workload_name": "renamed"}
+        result, send, create, icons = self.call("/api/edit/preview", self.config)
+        self.assertEqual(200, result[0], result)
+        self.assertEqual({"from": "shared", "to": "renamed"}, result[1]["capacity"]["rename"])
+        self.assertTrue(result[1]["capacity"]["requires_confirmation"])
+        for target in (send, create, icons):
+            target.assert_not_called()
+
+    def test_rename_cannot_smuggle_seed_volume_or_port_writes(self):
+        self.config["workload_name"] = "renamed"
+        result, send, create, icons = self.call("/api/edit", self.config)
+        self.assertEqual(400, result[0], result)
+        self.assertIn("separately", result[1]["error"])
+        for target in (send, create, icons):
+            target.assert_not_called()
+
+    def test_reviewed_rename_bypasses_ordinary_edit_and_network_side_effects(self):
+        self.objects["/apis/autoscaling/v2/namespaces/lab/horizontalpodautoscalers"] = {"items": []}
+        self.config = {"ns": "lab", "name": "shared", "workload_name": "renamed"}
+        config = self.reviewed()
+        with mock.patch.object(server.RENAME, "dispatch", return_value={"ok": True, "renamed": True}) as rename, \
+                mock.patch.object(server, "ksend") as send, mock.patch.object(lifecycle, "edit_workload") as edit:
+            result, _, create, icons = self.call("/api/edit", config)
+        self.assertEqual(200, result[0], result)
+        rename.assert_called_once()
+        for target in (send, create, icons, edit):
+            target.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
