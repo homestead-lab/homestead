@@ -40,6 +40,15 @@ def _fact(obj):
     return {"name": obj["metadata"]["name"], "uid": identity(obj)["uid"], "shape": shape(obj)}
 
 
+def _controller_fact(obj):
+    # The fixed apps/v1 ReplicaSet list endpoint may omit per-item TypeMeta.
+    # Preserve the endpoint's type so observational annotation normalization
+    # matches an individual GET; never reinterpret a conflicting explicit type.
+    if obj.get("kind", "ReplicaSet") != "ReplicaSet" or obj.get("apiVersion", "apps/v1") != "apps/v1":
+        raise Held("Unexpected controller type in the ReplicaSet inventory")
+    return _fact({**obj, "kind": "ReplicaSet", "apiVersion": "apps/v1"})
+
+
 def recheck_binding(approved, current):
     """Fresh checks may remove a warning, never add one or change the work."""
     changed = sorted(k for k in set(approved) | set(current) if k != "approvals" and approved.get(k) != current.get(k))
@@ -154,7 +163,7 @@ class Review:
                    "namespace_uid": identity(namespace)["uid"], "deployment": _fact(dep),
                    "claims": [_fact(p) for p in claims], "volumes": [_fact(p) for p in pvs],
                    "pods": sorted((_fact(p) for p in owned), key=lambda p: p["uid"]),
-                   "controllers": sorted((_fact(s) for s in sets if ROLLOUT.controller(s).get("uid") == identity(dep)["uid"]), key=lambda s: s["uid"]),
+                   "controllers": sorted((_controller_fact(s) for s in sets if ROLLOUT.controller(s).get("uid") == identity(dep)["uid"]), key=lambda s: s["uid"]),
                    "nodes": sorted(pins, key=lambda n: n["name"]), "image": self.image, "threshold": self.threshold}
         if self.runtime_check is not None:
             binding["source_runtime"] = self.runtime_check(copy.deepcopy(owned), source)
