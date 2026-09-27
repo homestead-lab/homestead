@@ -366,7 +366,7 @@ def stopped_attempt(ns, claim, ops):
     return None
 
 
-def start(ns, claim, target, ops, *, expected=None):
+def start(ns, claim, target, ops, *, expected=None, handoff_review=None):
     review = plan(ns, claim, target, capture=expected is not None)
     if not review["ok"]:
         raise ValueError("; ".join(review["blockers"]))
@@ -400,6 +400,14 @@ def start(ns, claim, target, ops, *, expected=None):
     if expected is not None:
         ref["review_fences"] = expected["_fences"]
         ref["copy_claims"] = {claim: expected["_source_binding"]}
+    if handoff_review is not None:
+        if expected is None or not re.fullmatch(r"[0-9a-f]{64}", str(handoff_review.get("digest", ""))):
+            raise ValueError("A durable storage move requires a verified initial review")
+        # An older resolver must never interpret this as its legacy 'stop'
+        # phase. Protocol-tagged records cannot be adopted by that engine.
+        ref.update(storage_protocol=1, storage_approval_protocol=1, handoff_phase="stop", phase="handoff",
+                   retain_resources=True, review_digest=handoff_review["digest"],
+                   review_expires=handoff_review["expires"])
     return ops.start("reclass", f"Move {claim} to {target}",
                      {"kind": "PersistentVolumeClaim", "name": claim, "namespace": ns},
                      "/volumes?" + urllib.parse.urlencode({"find": claim}), ref,

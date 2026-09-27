@@ -5,6 +5,7 @@ one implementation for real work and read-only next-write inspection; preview
 has a request-local journal and no cluster writer or durable checkpoint.
 """
 import copy
+import hashlib
 
 import homestead_reclass as RC
 import homestead_reclass_handoff as HANDOFF
@@ -13,6 +14,34 @@ import homestead_storage_guard as GUARD
 
 PROTOCOL = 1
 PHASES = ("stop", "copy", "cutover", "restart", "done")
+
+
+def _initial_review(body, actor, ops):
+    cfg, result, context = RC._review(body, actor, ops)
+    # Initial approvals are specific to this engine. A legacy review must not
+    # authorize the new hold/recovery semantics merely because its inputs match.
+    context = {**context, "storage_protocol": PROTOCOL}
+    return cfg, result, context
+
+
+def preview(body, actor, ops):
+    cfg, result, context = _initial_review(body, actor, ops)
+    return {key: value for key, value in result.items() if not key.startswith("_")} | {
+        "warnings": result["warnings"] + ["If a step cannot be verified, workloads stay stopped and both copies are kept for review. Homestead will not automatically retry an uncertain request or roll back."],
+        "capacity_token": RC.REVIEW.issue(cfg, context)}
+
+
+def start_reviewed(body, actor, ops):
+    """Persist the approved initial stop, without stopping any workload here."""
+    with ops._lock:
+        cfg, result, context = _initial_review(body, actor, ops)
+        token = str(body.get("capacity_token") or "")
+        if (not result["ok"] or body.get("confirm_capacity") is not True or
+                not RC.REVIEW.valid({**cfg, "capacity_token": token}, context)):
+            raise ValueError("Review the current volume, affected workloads and warnings before starting the move")
+        receipt = {"digest": hashlib.sha256(token.encode()).hexdigest(), "expires": int(token.split(".", 1)[0])}
+        return RC.start(cfg["namespace"], cfg["claim"], cfg["target"], ops,
+                        expected=result, handoff_review=receipt)
 
 
 def check(item):
