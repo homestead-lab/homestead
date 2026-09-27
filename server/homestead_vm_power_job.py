@@ -1,10 +1,18 @@
 """Durable, one-shot VM power dispatch; monitoring never sends a power request."""
 import hashlib
+import re
 import time
 import urllib.error
 from urllib.parse import quote
+import homestead_shared as SHARED
 
 API = "/apis/kubevirt.io/v1"
+
+
+def worker_lock(ident, ops, timeout=10):
+    if not re.fullmatch(r"[0-9a-f]{24}", str(ident or "")):
+        raise ValueError("Invalid power job identifier")
+    return SHARED.SharedLock("vm-power-" + ident, strict=True, directory=lambda: ops.DATA_DIR, timeout=timeout)
 
 
 def dispatch(body, context, ops, send, before_send):
@@ -17,11 +25,16 @@ def dispatch(body, context, ops, send, before_send):
            "version": vm["resourceVersion"], "previous_vmi_uid": vmi.get("uid", ""), "action": action,
            "review_digest": hashlib.sha256(body["capacity_token"].encode()).hexdigest(),
            "review_expires": int(body["capacity_token"].split(".", 1)[0]),
-           "phase": "prepared", "phase_at": time.time(), "retain_resources": True}
+           "phase": "prepared", "phase_at": time.time(), "retain_resources": True, "dispatch_protocol": 1}
     job = ops.start("vm-power", f"{action.capitalize()} VM {vm['name']}",
                     {"kind": "VirtualMachine", "namespace": vm["namespace"], "name": vm["name"]},
                     "/vms", ref, "Power intent recorded; rechecking before dispatch")
     ident = job["id"]
+    with worker_lock(ident, ops):
+        return _dispatch_owned(ident, vm["name"], ops, send, before_send)
+
+
+def _dispatch_owned(ident, name, ops, send, before_send):
     try:
         before_send()
     except Exception:
@@ -49,7 +62,7 @@ def dispatch(body, context, ops, send, before_send):
             "KubeVirt accepted the request; waiting for the expected VM instance to become ready")
     except Exception as error:
         raise ValueError(f"KubeVirt accepted power but its receipt could not be saved. Inspect job {ident}; do not repeat the request.") from error
-    return {**result, "detail": f"Power request accepted for {vm['name']}; follow its job for readiness", "operation": operation}
+    return {**result, "detail": f"Power request accepted for {name}; follow its job for readiness", "operation": operation}
 
 
 def status(item, read):

@@ -1033,6 +1033,27 @@ ssh_pwauth: true
         resource: { kind: "VirtualMachine", name: "k3s-lab-server-1", namespace: "lab" } },
     ]),
     // What cancelling each running job above would do, as the server says it.
+    "/api/operations/power-recovery/preview": (url, init) => {
+      const id=JSON.parse(init.body).id, op=(window.__demoOps || []).find(row=>row.id===id);
+      if (!op?.power_recovery) throw new Error("This job has no uncertain power outcome");
+      const blocked=!!op.demo_dispatching;
+      return {capacity_token:blocked?null:"demo-recovery-review",plan:{id,blocked,requires_confirmation:true,
+        blockers:blocked?["A Homestead dispatcher is still active. Wait before resolving this job."]:[],
+        resource:{...op.resource,original_uid:"demo-original-vm"},action:"restart",dispatch_phase:"uncertain",confirm:op.resource.name,
+        observed:{vm:{uid:"demo-original-vm"},instance:{uid:"demo-current-instance"},same_vm:true,run_strategy:"RerunOnFailure",
+          vm_status:"Running",instance_phase:"Running",ready:true,paused:false,queued_changes:0},
+        warnings:["Tracking only: no VM, disk, Secret or restart policy is changed.",
+          "The local dispatcher is inactive, but Kubernetes may still apply the old request late. A running guest does not prove which request caused it.",
+          "Resolving this record permits a new, separately reviewed action. The original outcome stays unknown; nothing is retried."]}};
+    },
+    "/api/operations/power-recovery/resolve": (url, init) => {
+      const body=JSON.parse(init.body), op=(window.__demoOps || []).find(row=>row.id===body.id);
+      if (!op?.power_recovery || op.demo_dispatching || body.capacity_token!=="demo-recovery-review" || body.confirm!==op.resource.name || !body.confirm_capacity || !body.acknowledge_unknown)
+        throw new Error("Review the uncertain outcome and confirm the VM name first");
+      Object.assign(op,{status:"failed",power_recovery:false,cancellable:false,dismissible:false,
+        message:"Admin acknowledged an unknown outcome. No retry or rollback was sent; a late effect is still possible.",finished_at:new Date().toISOString()});
+      return {ok:true,detail:"Tracking resolved as unknown; no cluster change was sent",operation:op};
+    },
     "/api/operations/cancel-plan": (url, init) => {
       const id = JSON.parse(init?.body || "{}").id;
       const op = (window.__demoOps || []).find(item => item.id === id) || {};

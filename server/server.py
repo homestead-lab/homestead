@@ -14,6 +14,7 @@ import homestead_vm_capacity as VM_CAPACITY
 import homestead_vm_claims as VM_CLAIMS
 import homestead_vm_profiles as VM_PROFILES
 import homestead_vm_power_job as VM_POWER_JOB
+import homestead_vm_power_recovery as VM_POWER_RECOVERY
 import homestead_vm_batch as VM_BATCH
 import homestead_batch_capacity as BATCH_CAPACITY
 import homestead_volume_usage as VOLUME_USAGE
@@ -5853,6 +5854,7 @@ ADMIN_ROUTES = {
     "/api/shares/repair",
     # Carrying a stopped job on runs its remaining steps - a swap, for one.
     "/api/operations/resume",
+    "/api/operations/power-recovery/preview", "/api/operations/power-recovery/resolve",
     "/api/network/vips/add", "/api/network/vips/remove", "/api/network/vips/label", "/api/network/vips/default", "/api/network/vm-networks",
     "/api/files/list", "/api/files/read", "/api/files/write", "/api/files/close",
     "/api/node/smart/test",
@@ -7352,6 +7354,10 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, result)
             if p == "/api/operations/resume":
                 return self._send(200, OPS.resume(b.get("id", "")))
+            if p == "/api/operations/power-recovery/preview":
+                return self._send(200, VM_POWER_RECOVERY.preview(b.get("id", ""), OPS, kget, self.user))
+            if p == "/api/operations/power-recovery/resolve":
+                return self._send(200, VM_POWER_RECOVERY.resolve(b, OPS, kget, self.user))
             if p == "/api/operations/cancel-plan":
                 return self._send(200, OPS.cancel_plan(b.get("id", "")))
             if p == "/api/operations/cancel":

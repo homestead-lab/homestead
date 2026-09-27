@@ -51,6 +51,7 @@ function renderOperations() {
     <div class="jobactions">
       <button class="btn sm" onclick="openOperation('${esc(operation.href || "/")}','${esc(operation.id || "")}')">Open</button>
       <button class="btn sm" data-tip="Every step it has taken, and the output of what does its work" onclick="operationLog('${esc(operation.id)}')">${icon("log")}Log</button>
+      ${operation.power_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview('${esc(operation.id)}')">Inspect outcome</button>` : ""}
       ${operation.resumable ? `<button class="btn sm pri" data-need="admin" data-tip="Run the steps that are left, from the one it stopped at" onclick="resumeOperation('${esc(operation.id)}')">Carry on</button>` : ""}
       ${operation.cleanable ? `<button class="btn sm danger" data-need="admin" data-tip="Says what it left behind - its VMs, disks and addresses - and removes it" onclick="cancelOperation('${esc(operation.id)}')">Clean up</button>` : ""}
       ${operation.cancellable ? `<button class="btn sm danger" data-need="operator" data-tip="Says what stopping it would undo and what it cannot, before anything changes" onclick="cancelOperation('${esc(operation.id)}')">${operation.status === "cancelling" ? "Cancel again" : "Cancel"}</button>` : ""}
@@ -147,6 +148,62 @@ window.resumeOperation = async id => {
     refreshOperations(true);
     if (op?.kind === "reclass" && window.reclassWatch) reclassWatch(id);
   } catch (e) { toast(e.message, "bad"); }
+};
+
+let POWER_RECOVERY = null, POWER_RECOVERY_SEQ = 0, POWER_RECOVERY_BUSY = false;
+window.powerRecoveryReview = async id => {
+  if (POWER_RECOVERY_BUSY) return;
+  POWER_RECOVERY = null;
+  const sequence = ++POWER_RECOVERY_SEQ;
+  modal("Inspect VM power outcome", '<div id="powerRecoveryLoading" class="empty"><span class="spin2"></span>Checking dispatcher and current VM state…</div>', true);
+  try {
+    const review = await api("/api/operations/power-recovery/preview", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
+    if (sequence !== POWER_RECOVERY_SEQ || !$("#powerRecoveryLoading")) return;
+    const p = review.plan;
+    if (!p || typeof p.blocked !== "boolean" || (!p.blocked && !review.capacity_token)) throw new Error("Recovery review is incomplete. Nothing was resolved.");
+    POWER_RECOVERY = {id,...review};
+    const observed=p.observed || {}, resource=p.resource || {};
+    $("#mbody").innerHTML = `<div class="update-review">
+      <div class="reviewbox"><b>Resolve tracking, not power</b><p class="small">${esc(resource.namespace || "")} / ${esc(resource.name || "Power job")} · requested ${esc(p.action || "power")} · ${esc(p.dispatch_phase || "dispatcher busy")}</p>
+        <p class="small">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>
+      ${p.blockers?.length ? `<div class="note bad">${p.blockers.map(esc).join(" · ")}</div>` : ""}
+      ${p.observed ? `<div class="reviewbox"><b>Current observations</b>
+        <p class="small">VM: ${esc(observed.vm_status)} · policy: ${esc(observed.run_strategy)}</p>
+        <p class="small">Instance: ${esc(observed.instance_phase)} · Ready: ${observed.ready ? "yes" : "no"} · Paused: ${observed.paused ? "yes" : "no"}</p>
+        <p class="small">Queued power changes: ${esc(observed.queued_changes)} · Original VM: ${observed.same_vm ? "same identity" : "missing or replaced"}</p>
+        <p class="small" style="overflow-wrap:anywhere">Reviewed VM UID: ${esc(resource.original_uid)}<br>Current VM UID: ${esc(observed.vm?.uid || "not found")}<br>Current instance UID: ${esc(observed.instance?.uid || "not found")}</p></div>` : ""}
+      ${(p.warnings || []).map(w=>`<div class="note warn small">${esc(w)}</div>`).join("")}
+      ${!p.blocked ? `<div class="f"><label>Type ${esc(p.confirm)} to confirm inspection</label><input id="powerRecoveryName" autocomplete="off" oninput="powerRecoveryReady()"></div>
+        <label class="check"><input id="powerRecoveryAck" type="checkbox" onchange="powerRecoveryReady()"> I inspected the VM. I accept that the old request may still take effect late and that resolving this record allows a new, separately reviewed power action.</label>` : ""}
+      <div class="modalactions"><button class="btn" onclick="closeModal()">Keep tracking</button><button class="btn danger" id="powerRecoveryApply" disabled onclick="powerRecoveryResolve()">Record unknown outcome</button></div></div>`;
+    if ($(".modalbox")) $(".modalbox").scrollTop=0;
+  } catch(error) {
+    if (sequence !== POWER_RECOVERY_SEQ || !$("#powerRecoveryLoading")) return;
+    POWER_RECOVERY=null;
+    $("#mbody").innerHTML=`<div class="note bad">${esc(error.message)}</div><button class="btn" onclick="closeModal()">Close</button>`;
+  }
+};
+window.powerRecoveryReady = () => {
+  const ready=!!(POWER_RECOVERY && !POWER_RECOVERY_BUSY && !POWER_RECOVERY.plan.blocked && $("#powerRecoveryAck")?.checked && $("#powerRecoveryName")?.value===POWER_RECOVERY.plan.confirm);
+  if ($("#powerRecoveryApply")) $("#powerRecoveryApply").disabled=!ready;
+  return ready;
+};
+window.powerRecoveryResolve = async () => {
+  if (!powerRecoveryReady()) return;
+  const review=POWER_RECOVERY, button=$("#powerRecoveryApply");
+  POWER_RECOVERY=null;POWER_RECOVERY_BUSY=true;button.disabled=true;
+  try {
+    const result=await api("/api/operations/power-recovery/resolve", {method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({id:review.id,capacity_token:review.capacity_token,confirm_capacity:true,confirm:review.plan.confirm,acknowledge_unknown:true})});
+    if (result.operation) noteOperation(result.operation);
+    toast(result.detail,"ok");closeModal();
+  } catch(error) {
+    if ($("#powerRecoveryApply")===button) {
+      $("#mbody").insertAdjacentHTML("afterbegin",`<div class="note bad">${esc(error.message)}. Nothing was retried. Check the job before opening a new review.</div>`);
+      if ($(".modalbox")) $(".modalbox").scrollTop=0;
+    }
+    toast(error.message,"bad");
+  } finally {POWER_RECOVERY_BUSY=false;refreshOperations(true);}
 };
 
 /* Cancelling a job says first what it would do: what is put back, what is

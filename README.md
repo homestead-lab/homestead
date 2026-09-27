@@ -734,11 +734,19 @@ health check or an atomic Kubernetes capacity reservation.
 
 Before dispatch, cancellation fences the dispatcher and sends no power. After
 acceptance, cancellation only stops tracking; it cannot undo the accepted request.
-An in-flight or uncertain request cannot be cancelled or automatically replayed.
+An in-flight request cannot be cancelled or automatically replayed.
 Inspect **Recent jobs → Log** and the VM; **Stop** and **Force stop** remain
 available even when capacity checks or job storage are unavailable. Recovery of
-an uncertain dispatch still requires inspection; do not delete journal files to
-unblock it. Power receipts cannot be dismissed while needed for recovery or while
+an uncertain dispatch uses **Inspect outcome** in its job, available to admins.
+The review checks the per-job shared dispatcher lock, current VM/instance
+identity and queued power changes. A live dispatcher, deleting resources,
+unverified ownership or queued changes prevents resolution. After inspecting the
+current state, an admin must type the VM name and acknowledge that Kubernetes
+could still apply the original request late. Resolving changes only the tracking
+record: the original outcome remains unknown, no retry/rollback is sent, and any
+future power action needs its own review. The inspection and admin identity are
+kept in the journal. Do not delete journal or lock files to unblock a request.
+Power receipts cannot be dismissed while needed for recovery or while
 their approval is valid, including through **Clear finished**.
 
 ### Permissions look after themselves
