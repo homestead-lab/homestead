@@ -16,6 +16,22 @@ from test_self_data_coordinator import OP, IMAGE, obj
 
 
 class ReviewTests(unittest.TestCase):
+    def test_final_recheck_allows_resolved_warnings_but_not_new_risks(self):
+        receipt = {"proposal": "work", "warnings": ["missing-metrics"]}
+        original = {"deployment": {"uid": "same"}, "approvals": {
+            "worker": {"threshold": 88, "nodes": [], "receipt": copy.deepcopy(receipt)},
+            "policy": {"threshold": 88, "reviews": {s: copy.deepcopy(receipt) for s in ("copy", "restart")}}}}
+        current = copy.deepcopy(original)
+        current["approvals"]["worker"]["receipt"]["warnings"] = []
+        current["approvals"]["policy"]["reviews"]["copy"]["warnings"] = []
+        self.assertTrue(R.recheck_binding(original, current))
+        for mutate in (lambda c: c["deployment"].update(uid="replacement"),
+                       lambda c: c["approvals"]["policy"]["reviews"]["copy"].update(proposal="other"),
+                       lambda c: c["approvals"]["policy"]["reviews"]["restart"]["warnings"].append("more-pressure"),
+                       lambda c: c["approvals"]["worker"].update(threshold=100)):
+            changed = copy.deepcopy(current); mutate(changed)
+            with self.assertRaises(Held): R.recheck_binding(original, changed)
+
     def setUp(self):
         self.f = admission_fixture.AdmissionTests(); self.f.setUp()
         self.c = self.f.cluster

@@ -5507,9 +5507,7 @@ def start_self_data_move(body, actor):
                 result = {**result, "items": [p for p in result["items"] if p["metadata"]["uid"] != worker["uid"]]}
             return result
         _, _, binding, _ = reviewer(read)._snapshot(approved["config"])
-        if binding != approved["binding"]:
-            raise SELF_DATA_FENCE.Held("Workloads, data volumes, access or capacity changed during preparation. Homestead has not been stopped; review the retained move.")
-        return True
+        return SELF_DATA_REVIEW.recheck_binding(approved["binding"], binding)
     # Setup owns only its new anchor and helpers; the raw transport allows the
     # final anchor acknowledgement after local write fencing. No source writes
     # or Deployment changes are allowed through this callback after publication.
