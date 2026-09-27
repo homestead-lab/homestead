@@ -967,7 +967,7 @@ async function viewShares() {
   const ip = smb.address || "address pending";
   paint(`<div class="phead"><div><h2>Network shares</h2>
     <p>SMB shares and optional NFSv4 exports backed by Longhorn volumes</p></div>
-    <div class="row"><button class="btn pri" data-need="admin" onclick="newShare()">＋ New share</button></div></div>
+    <div class="row"><button class="btn" data-need="admin" onclick="smbUsers()">SMB users</button><button class="btn pri" data-need="admin" onclick="newShare()">＋ New share</button></div></div>
   <div class="card" style="margin-bottom:14px"><div class="between"><div><div class="ctitle">SMB server · ${esc(smb.name || "homestead-smb")}</div>
     <div class="dim small">${smb.error ? `Status unavailable: ${esc(smb.error)}` : !smb.installed ? "Not installed · your first share can install it" :
       `${smb.enabled ? `${smb.ready || 0}/${smb.desired || 1} ready` : "Stopped"}${smb.address ? ` · \\\\${esc(smb.address)}` : " · waiting for an address"} · ${smb.served_shares?.length ?? 0}/${sh.length} share mappings${smb.in_sync ? "" : " · out of sync"}`}</div></div>
@@ -1027,22 +1027,83 @@ window.repairSamba = async button => {
     toast(result.detail, "ok"); viewShares();
   } catch (e) { toast(e.message, "bad"); if (button) { button.disabled = false; button.textContent = "Repair mapping"; } }
 };
+window.smbUsers = async () => {
+  modal("SMB users", '<div class="empty">Loading users…</div>', true, "smb-access");
+  try {
+    const users = await api("/api/shares/users");
+    STATE.data.smbUsers = users;
+    $("#mbody").innerHTML = UI.lead("One password per SMB user, shared across their private shares.")
+      + UI.table([{ label: "User" }, { label: "Shares" }, { label: "Actions" }], users.map(user => [esc(user.user),
+        esc(user.shares.join(", ") || "No shares"),
+        UI.button("Change password", `smbUserEdit('${user.user}')`, { small: true })
+        + (!user.shares.length ? UI.button("Remove", `smbUserRemove('${user.user}')`, { small: true }) : "")]))
+      + UI.more("About SMB users", "These accounts are separate from Homestead sign-ins. Saved passwords are never displayed. Remove a user only after reassigning their private shares; unused users remain available for new shares.")
+      + UI.actions(UI.cancel("Close") + UI.button("Add user", "smbUserEdit()", { kind: "pri" }));
+  } catch (error) {
+    $("#mbody").innerHTML = UI.callout("bad", "Could not load SMB users", esc(error.message))
+      + UI.actions(UI.cancel("Close") + UI.button("Retry", "smbUsers()", { kind: "pri" }));
+  }
+};
+window.smbUserEdit = (name = "") => {
+  const user = (STATE.data.smbUsers || []).find(row => row.user === name);
+  modal(name ? `Change SMB password · ${esc(name)}` : "Add SMB user",
+    UI.lead(name ? "Set one password for every share assigned to this user." : "Save an SMB account to select when creating private shares.")
+    + (user?.shares.length ? UI.callout("warn", "SMB connections will restart", `This changes access to ${esc(user.shares.join(", "))}. Reconnect clients with the new password.`) : "")
+    + UI.fields(UI.field("Username", `<input id="su_user" value="${esc(name)}" ${name ? "readonly" : ""} autocomplete="username" maxlength="32">`)
+      + UI.field("New password", '<input id="su_password" type="password" autocomplete="new-password">'))
+    + UI.actions(UI.button("Back", "smbUsers()") + UI.button(name ? "Change password" : "Add user", `smbUserSave('${name ? "password" : "create"}',this)`, { kind: "pri" })), false, "smb-access");
+};
+window.smbUserSave = async (action, button) => {
+  const user = $("#su_user").value.trim(), password = $("#su_password").value;
+  if (!/^[A-Za-z0-9_.-]{1,32}$/.test(user)) return toast("Enter a valid SMB username", "bad");
+  if (!password) return toast("A password is required", "bad");
+  button.disabled = true;
+  try {
+    const result = await api("/api/shares/users", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user, password, action }) });
+    toast(result.message, "ok"); if (window.noteOperation) noteOperation(result.operation);
+    await smbUsers();
+  } catch (error) { button.disabled = false; toast(error.message, "bad"); }
+};
+window.smbUserRemove = name => {
+  modal(`Remove SMB user · ${esc(name)}`, UI.lead("Remove this unused account and its saved password. Shares and their data are kept.")
+    + UI.actions(UI.button("Back", "smbUsers()") + UI.button("Remove user", `smbUserDelete('${name}',this)`, { kind: "danger" })), false, "smb-access");
+};
+window.smbUserDelete = async (user, button) => {
+  button.disabled = true;
+  try {
+    const result = await api("/api/shares/users/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user }) });
+    toast(result.message, "ok"); await smbUsers();
+  } catch (error) { button.disabled = false; toast(error.message, "bad"); }
+};
 window.newShare = async () => {
-  modal("New share", `<div class="empty"><span class="spin2"></span>loading volumes</div>`, true);
-  const options = await api("/api/shares/options").catch(() => ({ pvcs: [], storage_classes: [] }));
+  modal("New share", `<div class="empty"><span class="spin2"></span>loading volumes</div>`, true, "smb-access");
+  let options, users;
+  try {
+    [options, users] = await Promise.all([api("/api/shares/options"), api("/api/shares/users")]);
+  } catch (error) {
+    $("#mbody").innerHTML = UI.callout("bad", "Could not load share options", esc(error.message))
+      + UI.actions(UI.cancel() + UI.button("Retry", "newShare()", { kind: "pri" }));
+    return;
+  }
+  STATE.data.smbUsers = users;
+  const existing = users.filter(user => user.has_password);
   $("#mbody").innerHTML = `
     <div class="f"><label>Share name ${tip("Windows sees this name after the server address, and Homestead mounts it at /shares/<name> inside Samba.")}</label>
       <input type="text" id="sh_name" placeholder="media" autocomplete="off"></div>
     <div class="sec">Storage</div>
-    <p class="ui-help">A new Longhorn volume for this share alone, or a volume that already exists - including one a container uses - optionally just a folder inside it. A ReadWriteOnce volume attaches on one node, so Samba and the workload that owns it must run on the same host.</p>
+    <p class="ui-help">Use a new Longhorn volume or a folder in an existing volume.</p>
     <div id="sh_storage"></div>
-    <div class="f2" style="margin-top:14px"><div class="f"><label>Username</label><input type="text" id="sh_user" value="lab" autocomplete="username" oninput="shareAccountHint()"></div>
-      <div class="f"><label>Password</label><input type="password" id="sh_pass" autocomplete="new-password" placeholder="Required unless guest access is enabled">
-        <span class="dim xs" id="sh_account"></span></div></div>
+    ${UI.more("Sharing an existing volume", "A volume can also be used by a container. ReadWriteOnce storage attaches on one node, so Samba and that workload must run on the same host.")}
+    ${UI.section("SMB access", `<div class="f"><label>SMB user</label><select id="sh_identity" onchange="shareAccountHint()">
+      ${existing.map(user => `<option value="${esc(user.user)}">${esc(user.user)} · existing user</option>`).join("")}
+      <option value="">Add a new user…</option></select><span class="ui-help">Existing users reuse their saved password. Manage passwords in SMB users.</span></div>
+      <div class="f2" id="sh_new_account"><div class="f"><label>New username</label><input type="text" id="sh_user" value="${existing.length ? "" : "lab"}" autocomplete="username"></div>
+      <div class="f"><label>Password</label><input type="password" id="sh_pass" autocomplete="new-password"></div></div>`)}
     ${options.samba_installed ? "" : `<div class="sec">Samba's address</div>
       <p class="ui-help">Samba is not installed yet; this share installs it. Choose the address Windows will find it at (\\\\address\\share).</p>
       <div class="f" id="sh_smb"><span class="dim xs"><span class="spin2"></span></span></div>`}
-    <label class="switch"><input type="checkbox" id="sh_pub"> Allow guest access</label>
+    <label class="switch"><input type="checkbox" id="sh_pub" onchange="shareAccountHint()"> Allow guest access</label>
     <label class="switch"><input type="checkbox" id="sh_ro"> Read only</label>
     <p class="ui-help">Creating a share restarts Samba, so open SMB sessions drop briefly.</p>
     ${UI.actions(UI.cancel() + UI.button("Create share", "mkShare(this)", { kind: "pri", id: "sh_go", attrs: 'data-need="admin"' }))}`;
@@ -1071,22 +1132,17 @@ window.newShare = async () => {
   shareAccountHint();
 };
 window.shareAccountHint = () => {
-  const user = $("#sh_user")?.value.trim(), hint = $("#sh_account"), field = $("#sh_pass");
-  if (!hint || !field) return;
-  // Samba keeps one password per account, and Homestead never shows it back,
-  // so an account that already has one must not have to be retyped.
-  const known = (STATE.data.shares || []).filter(row => !row.public && row.user === user && row.has_password);
-  hint.textContent = known.length
-    ? `${user} already has a password from ${known.map(row => row.name).join(", ")}. Leave this blank to reuse it, or type a new one to change it for every share using ${user}.`
-    : "";
-  field.placeholder = known.length ? `Leave blank to reuse the ${user} password`
-    : "Required unless guest access is enabled";
+  const existing = !!$("#sh_identity")?.value, guest = !!$("#sh_pub")?.checked;
+  $("#sh_new_account")?.classList.toggle("hidden", existing || guest);
+  if ($("#sh_identity")) $("#sh_identity").disabled = guest;
+  if ($("#sh_pass")) { $("#sh_pass").disabled = existing || guest; if (existing || guest) $("#sh_pass").value = ""; }
 };
 window.mkShare = async button => {
   const name = $("#sh_name").value.trim();
   if (!/^[a-z0-9-]{2,30}$/.test(name)) return toast("lowercase letters, numbers and dashes only", "bad");
-  const account = $("#sh_user").value.trim();
-  const known = (STATE.data.shares || []).some(row => !row.public && row.user === account && row.has_password);
+  const selected = $("#sh_identity").value;
+  const account = selected || $("#sh_user").value.trim();
+  const known = (STATE.data.smbUsers || []).some(row => row.user === selected && row.has_password);
   if (!$("#sh_pub").checked && !$("#sh_pass").value && !known) {
     return toast("a password is required for a private share", "bad");
   }
@@ -1097,7 +1153,8 @@ window.mkShare = async button => {
   }
   const reusing = storage.kind === "existing";
   if (reusing && !storage.source) return toast("choose the volume this share should use", "bad");
-  const body = { name, user: $("#sh_user").value.trim(), password: $("#sh_pass").value,
+  const body = { name, user: account, password: selected || $("#sh_pub").checked ? "" : $("#sh_pass").value,
+    account_mode: selected ? "existing" : "new",
     public: $("#sh_pub").checked, read_only: $("#sh_ro").checked, sub_path: folder,
     samba_ip: ($("#sh_smb_lb_ip")?.value || "").trim() };
   if ($("#sh_smb") && !body.samba_ip) return toast("choose the address Samba should answer on - add VIPs under Networking if the list is empty", "bad");

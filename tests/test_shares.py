@@ -249,9 +249,9 @@ class ShareTests(unittest.TestCase):
         shares.edit_share("secure", 10, "lab", "", False, False)
         self.assertEqual("legacy-password", self.decoded_secret()["secure"]["password"])
 
-    def test_guest_access_removes_stored_credential(self):
+    def test_guest_access_removes_share_credential_but_retains_reusable_user(self):
         result = shares.edit_share("secure", 10, "lab", "", True, False)
-        self.assertEqual({}, self.decoded_secret())
+        self.assertEqual({"user:lab": {"user": "lab", "password": "legacy-password"}}, self.decoded_secret())
         self.assertFalse(result["shares"][0]["has_password"])
         dep = self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-smb"]
         args = dep["spec"]["template"]["spec"]["containers"][0]["args"]
@@ -420,8 +420,55 @@ class ShareTests(unittest.TestCase):
         result = shares.edit_share("secure", 10, "lab", "", True, False)
 
         self.assertTrue(result["shares"][0]["public"] or result["shares"][1]["public"])
-        self.assertEqual({"media"}, set(self.decoded_secret()),
+        self.assertEqual({"media", "user:lab"}, set(self.decoded_secret()),
                          "the remaining share keeps one consistent account password")
+
+    def test_user_inventory_migrates_legacy_names_without_exposing_or_writing_passwords(self):
+        users = shares.list_users()
+        self.assertEqual([{"user": "lab", "has_password": True, "shares": ["secure"]}], users)
+        self.assertNotIn("legacy-password", json.dumps(users))
+        self.assertEqual([], self.sent)
+
+    def test_unused_user_can_be_saved_selected_and_kept_after_last_share_is_removed(self):
+        shares.save_user("backup", "backup-password")
+        self.assertFalse(any("deployments" in path for _, path, _ in self.sent))
+        self.assertEqual([], next(u for u in shares.list_users() if u["user"] == "backup")["shares"])
+        shares.create_share("archive", 0, "backup", "", False, pvc="share-secure", account_mode="existing")
+        self.assertEqual("backup-password", self.decoded_secret()["archive"]["password"])
+        shares.delete_share("archive")
+        self.assertEqual([], next(u for u in shares.list_users() if u["user"] == "backup")["shares"])
+        shares.delete_user("backup")
+        self.assertNotIn("backup", [u["user"] for u in shares.list_users()])
+
+    def test_user_password_change_updates_every_share_and_rolls_back_on_failure(self):
+        from unittest.mock import patch
+        shares.create_share("archive", 0, "lab", "", False, pvc="share-secure", account_mode="existing")
+        result = shares.save_user("lab", "replacement", "password")
+        self.assertNotIn("replacement", json.dumps({k:v for k,v in result.items() if k != "deployment"}))
+        self.assertEqual({"replacement"}, {v["password"] for v in self.decoded_secret().values()})
+        before = copy.deepcopy(self.objects)
+        with patch.object(shares, "apply_samba", side_effect=ValueError("rollout failed")):
+            with self.assertRaisesRegex(ValueError, "rollout failed"):
+                shares.save_user("lab", "rejected-password", "password")
+        self.assertEqual(before, self.objects)
+
+    def test_new_share_cannot_accidentally_reset_existing_user_or_use_a_stale_selection(self):
+        for user, password, mode in [("lab", "oops", "new"), ("lab", "oops", "existing"), ("missing", "", "existing")]:
+            with self.subTest(mode=mode, user=user):
+                with self.assertRaises(ValueError):
+                    shares.create_share("archive", 10, user, password, False, account_mode=mode)
+        self.assertEqual([], self.created)
+        self.assertEqual([], self.sent)
+
+    def test_used_user_cannot_be_deleted_and_duplicate_creation_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "secure"):
+            shares.delete_user("lab")
+        with self.assertRaisesRegex(ValueError, "already exists"):
+            shares.save_user("lab", "replacement")
+        for password in ("", "bad;argument", "bad\nargument"):
+            with self.assertRaises(ValueError):
+                shares.save_user("backup", password)
+        self.assertEqual([], self.sent)
 
     def test_folder_cannot_escape_the_volume(self):
         for folder in ("../etc", "media/../../etc", "media/../secrets"):
