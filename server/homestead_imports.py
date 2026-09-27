@@ -24,6 +24,8 @@ import homestead_shared as SHARED
 import homestead_hvimage as HVIMAGE
 import homestead_runtime as RUNTIME
 import homestead_pod_resources as RESOURCES
+import homestead_import_job as IMPORT_JOB
+import homestead_operations as OPS
 
 kget = ksend = create_pvc = build_deployment = None
 NS = "lab"
@@ -1075,8 +1077,12 @@ def import_cleanup_plan(name):
     try:
         job = kget(f"/apis/batch/v1/namespaces/{NS}/jobs/{name}")
     except Exception:
+        if IMPORT_JOB.journalled(NS, name, {}, OPS):
+            return {"job": name, "namespace": NS, "workload": "", "volume": "", "volumes": [], "known": True, "journalled": True}
         return {"job": name, "workload": "", "volume": "", "volume_created": False,
                 "volumes": [], "namespace": NS, "known": False}
+    if IMPORT_JOB.journalled(NS, name, job, OPS):
+        return {"job": name, "namespace": NS, "workload": "", "volume": "", "volumes": [], "known": True, "journalled": True}
     meta = job.get("metadata", {}) or {}
     annotations = meta.get("annotations", {}) or {}
     app = NAMES.label_of(meta, "app")
@@ -1134,6 +1140,8 @@ def delete_import(name):
         job = {}
     except ValueError:
         job = {}  # legacy client reports a missing Job this way
+    if IMPORT_JOB.journalled(NS, name, job, OPS):
+        return IMPORT_JOB.remove_completed_job(NS, name, job, kget, ksend, OPS)
     complete = any(c.get("type") == "Complete" and c.get("status") == "True"
                    for c in (job.get("status") or {}).get("conditions") or [])
     for owner in (job.get("metadata") or {}).get("ownerReferences") or []:

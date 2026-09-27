@@ -53,3 +53,15 @@ test("uncertain submission consumes approval and requires a new preview",async()
   await t.fields["#importGo"].onclick();
   assert.equal(t.calls[2].path,"/api/import/preview");
 });
+
+test("import submission shows its durable job and refreshes history after lost responses",async()=>{
+  for (const fail of [false,true]) {
+    const t=setup({fail}), jobs=[];let refreshed=0;
+    const api=t.ctx.api;
+    t.ctx.api=async(...args)=>{const result=await api(...args);return {...result,operation:{id:'durable-import'}};};
+    t.ctx.noteOperation=job=>jobs.push(job);t.ctx.refreshOperations=()=>refreshed++;
+    await t.ctx.importReview({name:'app'});t.fields['#importConfirm'].checked=true;
+    await t.ctx.confirmImport();
+    assert.equal(refreshed,1);assert.equal(jobs.length,fail?0:1);
+  }
+});
