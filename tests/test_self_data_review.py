@@ -16,6 +16,17 @@ from test_self_data_coordinator import OP, IMAGE, obj
 
 
 class ReviewTests(unittest.TestCase):
+    def test_replicaset_observational_annotations_do_not_change_review(self):
+        rs = {"apiVersion": "apps/v1", "kind": "ReplicaSet", "metadata": {"name": "app", "uid": "rs", "resourceVersion": "1"}, "spec": {"replicas": 1}}
+        before = R._fact(rs)
+        rs["metadata"]["annotations"] = {"deployment.kubernetes.io/revision": "1", "homestead.io/ran-digests": "observed"}
+        self.assertEqual(before, R._fact(rs))
+        rs["metadata"]["annotations"]["user-setting"] = "changed"
+        self.assertNotEqual(before, R._fact(rs))
+        rs["metadata"]["annotations"].pop("user-setting")
+        rs["spec"]["replicas"] = 2
+        self.assertNotEqual(before, R._fact(rs))
+
     def test_final_recheck_allows_resolved_warnings_but_not_new_risks(self):
         receipt = {"proposal": "work", "warnings": ["missing-metrics"]}
         original = {"deployment": {"uid": "same"}, "approvals": {
