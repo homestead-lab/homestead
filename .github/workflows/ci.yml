@@ -90,10 +90,14 @@ jobs:
     # Every dialog and every page opened against the demo data at a desktop
     # and a phone width, and checked against docs/design.md: content wider
     # than the screen or dialog, text under 10px, or one that no longer
-    # opens fails here.
+    # opens fails here. Dialogs and pages run side by side.
     needs: changes
     if: needs.changes.outputs.ui == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        audit: [dialogs, pages]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -103,21 +107,16 @@ jobs:
         run: |
           npm install --no-save --no-package-lock playwright@1.55.0 >/dev/null
           npx playwright install --with-deps chromium >/dev/null
-      - name: Check every dialog
+      - name: Check every ${{ matrix.audit == 'dialogs' && 'dialog' || 'page' }}
         run: |
           PORT=4173 WEBROOT=web DATA_DIR=/tmp/homestead-demo-data python server/server.py >/tmp/homestead-demo.log 2>&1 &
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:4173/ >/dev/null && break; sleep 1; done
-          node scripts/audit_dialogs.mjs
-      - name: Check every page
-        if: always()
-        run: node scripts/audit_pages.mjs
+          node scripts/audit_${{ matrix.audit }}.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: dialogs-and-pages
-          path: |
-            release-assets/dialogs
-            release-assets/pages
+          name: ${{ matrix.audit }}
+          path: release-assets/${{ matrix.audit }}
   test-and-build:
     runs-on: ubuntu-latest
     steps:
