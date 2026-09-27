@@ -34,10 +34,18 @@ class VMEditAdmissionTests(unittest.TestCase):
         handler._body = lambda: copy.deepcopy(body)
         handler._client_ip = lambda: "127.0.0.1"
         handler._send = mock.Mock()
+        def expand(method, path, body):
+            self.assertEqual(("PUT", "/apis/subresources.kubevirt.io/v1/namespaces/lab/expand-vm-spec"), (method, path))
+            self.assertTrue(hasattr(self, "profile_memory"), "unexpected expansion")
+            result = copy.deepcopy(body)
+            result["spec"]["template"]["spec"]["domain"].update(cpu={"cores": 3}, memory={"guest": self.profile_memory})
+            return result
         with mock.patch.object(server.VMS, "ksend", side_effect=lambda method, path, body=None, **kw: body) as writes, \
-                mock.patch.object(server, "ksend") as other_writes:
+                mock.patch.object(server, "ksend", side_effect=expand) as other_writes:
             handler.do_POST()
-        other_writes.assert_not_called()
+        if not hasattr(self, "profile_memory"):
+            other_writes.assert_not_called()
+        self.expansions = other_writes.call_args_list
         return handler._send.call_args.args, writes
 
     def reviewed(self):
@@ -52,6 +60,123 @@ class VMEditAdmissionTests(unittest.TestCase):
             result, writes = self.call("/api/vm/edit", body)
             self.assertEqual(409, result[0], result)
             writes.assert_not_called()
+
+    def disk_setup(self, platform):
+        self.body = {"ns": "lab", "name": "guest", "add_disks": [{"size": "2Gi", "storage_class": "storage"}]}
+        self.objects["/api/v1/namespaces/lab/persistentvolumeclaims"] = {"items": []}
+        self.objects["/apis/storage.k8s.io/v1/storageclasses/storage"] = {
+            "metadata": {"name": "storage", "uid": "sc-uid", "resourceVersion": "1"},
+            "provisioner": "example.test/storage", "volumeBindingMode": "WaitForFirstConsumer"}
+        self.objects["/apis/cdi.kubevirt.io/v1beta1/storageprofiles/storage"] = {
+            "metadata": {"name": "storage", "uid": "profile-uid", "resourceVersion": "1"},
+            "status": {"claimPropertySets": [{"accessModes": ["ReadWriteOnce"], "volumeMode": "Block"}]}}
+        patch = mock.patch.object(server.VMS, "platform", return_value=platform)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_cdi_edit_pins_new_disk_modes_and_preserves_existing_templates(self):
+        self.disk_setup({"harvester": False, "cdi": True})
+        self.disk()
+        old = {"metadata": {"name": "root"}, "spec": {"storage": {"storageClassName": "old", "resources": {"requests": {"storage": "20Gi"}}}}}
+        self.vm["spec"]["dataVolumeTemplates"] = [copy.deepcopy(old)]
+        body = self.reviewed()
+        result, writes = self.call("/api/vm/edit", body)
+        self.assertEqual(200, result[0], result)
+        templates = writes.call_args.args[2]["spec"]["dataVolumeTemplates"]
+        self.assertEqual(old, templates[0])
+        storage = templates[1]["spec"]["storage"]
+        self.assertEqual(["ReadWriteOnce"], storage["accessModes"])
+        self.assertEqual("Block", storage["volumeMode"])
+        self.assertEqual("storage", storage["storageClassName"])
+
+    def test_plain_edit_pins_the_posted_claim_not_only_the_vm_model(self):
+        self.disk_setup({"harvester": False, "cdi": False})
+        body = self.reviewed()
+        result, writes = self.call("/api/vm/edit", body)
+        self.assertEqual(200, result[0], result)
+        claim = next(c.args[2] for c in writes.call_args_list if c.args[0] == "POST")
+        self.assertEqual("Filesystem", claim["spec"]["volumeMode"])
+        self.assertEqual(["ReadWriteOnce"], claim["spec"]["accessModes"])
+
+    def test_profile_mode_change_before_edit_writes_requires_new_review(self):
+        self.disk_setup({"harvester": False, "cdi": True})
+        body = self.reviewed()
+        original = server.VMS.commit_edit
+        def commit(prepared, before_save=None):
+            profile = self.objects["/apis/cdi.kubevirt.io/v1beta1/storageprofiles/storage"]
+            profile["metadata"]["resourceVersion"] = "2"
+            profile["status"]["claimPropertySets"][0]["volumeMode"] = "Filesystem"
+            return original(prepared, before_save=before_save)
+        with mock.patch.object(server.VMS, "commit_edit", side_effect=commit):
+            result, writes = self.call("/api/vm/edit", body)
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+
+    def test_edit_context_keeps_reviewed_manifest_snapshot(self):
+        self.disk_setup({"harvester": False, "cdi": True})
+        prepared = server.prepare_vm_edit(self.body)
+        _, _, context = server.vm_edit_capacity(prepared)
+        prepared["vm"]["spec"]["dataVolumeTemplates"][0]["spec"]["storage"]["volumeMode"] = "Filesystem"
+        self.assertEqual("Block", context["prepared"]["vm"]["spec"]["dataVolumeTemplates"][0]["spec"]["storage"]["volumeMode"])
+
+    def profile_setup(self):
+        self.vm["spec"]["instancetype"] = {"name": "guest-size", "kind": "VirtualMachineClusterInstancetype"}
+        self.vm["spec"]["template"]["spec"]["domain"] = {"devices": {"interfaces": []}}
+        self.profile_memory = "6Gi"
+        self.body = {"ns": "lab", "name": "guest", "node": "node1"}
+
+    def test_profile_edit_expands_proposed_vm_not_current_saved_spec(self):
+        self.profile_setup()
+        result, writes = self.call("/api/vm/edit/preview", self.body)
+        self.assertEqual(200, result[0], result)
+        self.assertEqual(6, result[1]["capacity"]["vm"]["guest_memory_gb"])
+        submitted = self.expansions[0].args[2]
+        self.assertEqual({"kubernetes.io/hostname": "node1"}, submitted["spec"]["template"]["spec"]["nodeSelector"])
+        self.assertNotIn("nodeSelector", self.vm["spec"]["template"]["spec"])
+        self.assertNotIn("memory", self.vm["spec"]["template"]["spec"]["domain"])
+        writes.assert_not_called()
+        result, writes = self.call("/api/vm/edit", self.reviewed())
+        self.assertEqual(200, result[0], result)
+        self.assertEqual(2, len(self.expansions))
+        self.assertNotIn("memory", writes.call_args.args[2]["spec"]["template"]["spec"]["domain"])
+        self.assertEqual("guest-size", writes.call_args.args[2]["spec"]["instancetype"]["name"])
+
+    def test_profile_changes_invalidate_review_and_post_preparation_gate(self):
+        self.profile_setup()
+        body = self.reviewed()
+        self.profile_memory = "8Gi"
+        result, writes = self.call("/api/vm/edit", body)
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+        body = self.reviewed()
+        original = server.VMS.commit_edit
+        def commit(prepared, before_save=None):
+            self.profile_memory = "7Gi"
+            return original(prepared, before_save=before_save)
+        with mock.patch.object(server.VMS, "commit_edit", side_effect=commit):
+            result, writes = self.call("/api/vm/edit", body)
+        self.assertEqual(409, result[0], result)
+        self.assertIn("profile expansion changed", result[1]["error"])
+        writes.assert_not_called()
+
+    def test_instance_type_cpu_memory_overrides_are_rejected_without_writes(self):
+        self.profile_setup()
+        for changes in ({"cores": 3}, {"memory": "6Gi"}):
+            result, writes = self.call("/api/vm/edit/preview", {**self.body, **changes})
+            self.assertEqual(400, result[0], result)
+            self.assertIn("controlled by", result[1]["error"])
+            self.assertEqual([], self.expansions)
+            writes.assert_not_called()
+
+    def test_profile_vm_metadata_and_stop_changes_do_not_need_expansion(self):
+        self.profile_setup()
+        self.nodes = []
+        for changes in ({"description": "kept"}, {"run_strategy": "Halted"}):
+            self.body = {"ns": "lab", "name": "guest", **changes}
+            result, writes = self.call("/api/vm/edit", self.reviewed())
+            self.assertEqual(200, result[0], result)
+            self.assertEqual([], self.expansions)
+            self.assertEqual(1, writes.call_count)
 
     def test_memory_edit_reviews_proposed_resources_and_never_restarts(self):
         body = self.reviewed()

@@ -79,6 +79,50 @@ class VMCreateAdmissionTests(unittest.TestCase):
         vm = next(c.args[2] for c in writes.call_args_list if c.args[1].endswith("/virtualmachines"))
         self.assertEqual("RerunOnFailure", vm["spec"]["runStrategy"])
         self.assertEqual(body["mac"], vm["spec"]["template"]["spec"]["domain"]["devices"]["interfaces"][0]["macAddress"])
+        claim = next(c.args[2] for c in writes.call_args_list if c.args[1].endswith("/persistentvolumeclaims"))
+        self.assertEqual("Filesystem", claim["spec"]["volumeMode"])
+        self.assertEqual("storage", claim["spec"]["storageClassName"])
+
+    def cdi_setup(self):
+        self.platform["cdi"] = True
+        self.objects["/apis/cdi.kubevirt.io/v1beta1/storageprofiles/storage"] = {
+            "metadata": {"name": "storage", "uid": "profile-uid", "resourceVersion": "1"},
+            "status": {"claimPropertySets": [{"accessModes": ["ReadWriteOnce"], "volumeMode": "Block"}]}}
+
+    def test_cdi_create_submits_reviewed_modes_not_later_defaults(self):
+        self.cdi_setup()
+        body = self.reviewed()
+        result, writes, _ = self.call("/api/vm/create", body)
+        self.assertEqual(200, result[0], result)
+        vm = next(c.args[2] for c in writes.call_args_list if c.args[1].endswith("/virtualmachines"))
+        storage = vm["spec"]["dataVolumeTemplates"][0]["spec"]["storage"]
+        self.assertEqual(["ReadWriteOnce"], storage["accessModes"])
+        self.assertEqual("Block", storage["volumeMode"])
+        self.assertEqual("storage", storage["storageClassName"])
+
+    def test_changed_cdi_modes_invalidate_creation_approval(self):
+        self.cdi_setup()
+        body = self.reviewed()
+        profile = self.objects["/apis/cdi.kubevirt.io/v1beta1/storageprofiles/storage"]
+        profile["status"]["claimPropertySets"][0]["volumeMode"] = "Filesystem"
+        result, writes, _ = self.call("/api/vm/create", body)
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+
+    def test_create_context_is_snapshot_not_mutable_manifest_alias(self):
+        cfg = server.vm_create_configuration(self.body, preview=True)
+        prepared = server.IMP.prepare_vm(cfg, self.platform, "storage")
+        _, _, context = server.vm_creation_capacity(prepared)
+        prepared["claims"][0]["spec"]["volumeMode"] = "Block"
+        self.assertEqual("Filesystem", context["prepared"]["claims"][0]["spec"]["volumeMode"])
+
+    def test_address_record_failure_does_not_hide_prior_secret_warning(self):
+        body = self.reviewed()
+        with mock.patch.object(server.IMP, "commit_vm", return_value={"ok": True, "address": "192.0.2.4", "warning": "Login Secret ownership needs inspection."}), \
+                mock.patch.object(server.IPAM, "save_record", side_effect=OSError("unavailable")):
+            result = server.reviewed_vm_create(body)
+        self.assertIn("Secret ownership", result["warning"])
+        self.assertIn("IP-address record", result["warning"])
 
     def test_mutated_memory_mac_password_or_source_cannot_reuse_approval(self):
         body = self.reviewed()

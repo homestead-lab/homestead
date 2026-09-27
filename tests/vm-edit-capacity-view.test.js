@@ -57,3 +57,23 @@ test("going back invalidates approval",async()=>{
   t.fields["#vmEditApprove"].checked=true;t.ctx.vmEditReviewBack();
   await t.ctx.vmEditReviewedApply();assert.equal(t.sent.length,1);
 });
+test("profile resources render read-only, escaped and explicitly unknown on failure",()=>{
+  const t=setup();
+  let html=t.ctx.vmEditResourceFields({cores:3,memory:"6Gi",resource_profile:{name:"medium<profile>"}});
+  assert.match(html,/managed by instance type medium&lt;profile>/);
+  assert.match(html,/>3</);assert.match(html,/>6Gi</);
+  assert.doesNotMatch(html,/id="ve_cores"|id="ve_mem"/);
+  html=t.ctx.vmEditResourceFields({cores:null,memory:"",profile_error:"Profile resources unavailable"});
+  assert.match(html,/Unavailable/);assert.doesNotMatch(html,/input/);
+});
+test("save omits locked or unchanged profile fields but sends deliberate resource edits",async()=>{
+  const t=setup(),reviews=[];
+  t.ctx.__vmEdit={ns:"lab",name:"guest",v:{cores:3,memory:"6Gi"}};
+  for(const [id,value] of Object.entries({ve_strategy:"Manual",ve_desc:"text",ve_node:""}))t.fields[`#${id}`]={value};
+  t.ctx.vmEditReview=async body=>reviews.push(body);
+  await t.ctx.vmEditSave();assert.equal("cores" in reviews[0],false);assert.equal("memory" in reviews[0],false);
+  t.fields["#ve_cores"]={value:"3"};t.fields["#ve_mem"]={value:"6Gi"};
+  await t.ctx.vmEditSave();assert.equal("cores" in reviews[1],false);assert.equal("memory" in reviews[1],false);
+  t.fields["#ve_cores"].value="4";t.fields["#ve_mem"].value="8Gi";
+  await t.ctx.vmEditSave();assert.equal(reviews[2].cores,4);assert.equal(reviews[2].memory,"8Gi");
+});

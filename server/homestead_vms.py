@@ -27,6 +27,7 @@ import urllib.parse
 
 import homestead_hvimage as HVIMAGE
 import homestead_vmusage as VMUSAGE
+import homestead_vm_profiles as PROFILES
 
 kget = ksend = None
 events_for = lambda ns, name, uid="": []
@@ -376,6 +377,16 @@ def detail(ns, name):
     except urllib.error.HTTPError:
         vmi = {}
     row = _row(vm, vmi, _claims(ns), _datavolumes(ns))
+    row["resource_profile"] = copy.deepcopy(vm["spec"].get("instancetype") or {})
+    row["preference_profile"] = copy.deepcopy(vm["spec"].get("preference") or {})
+    row["profile_error"] = ""
+    if row["resource_profile"] or row["preference_profile"]:
+        try:
+            expanded = PROFILES.expand(vm, kget)
+            row["cores"], row["memory"] = _cores(expanded["domain"]), _memory(expanded["domain"])
+        except (ValueError, OSError):
+            row["cores"], row["memory"] = None, ""
+            row["profile_error"] = "Profile resources could not be resolved. They are left unchanged; check KubeVirt and Homestead RBAC before changing hardware."
     # The VM's own page always explains a disk that is still filling.
     row["filling"] = _filling(vm, _datavolumes(ns), explain=True)
     guest = (vmi.get("status") or {}).get("guestOSInfo") or {}
@@ -848,6 +859,8 @@ def prepare_edit(ns, name, cfg, current=None):
         raise ValueError("The VM is deleting; wait before editing")
     vm = copy.deepcopy(current)
     spec = vm["spec"]
+    if spec.get("instancetype") and any(key in cfg for key in ("cores", "memory")):
+        raise ValueError("CPU and memory are controlled by this VM's instance type. Leave those fields unchanged; change the profile through a separately reviewed configuration workflow.")
     tspec = spec["template"]["spec"]
     dom = tspec["domain"]
     changed_hardware = False

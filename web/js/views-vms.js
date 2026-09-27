@@ -325,11 +325,12 @@ window.vmOpen = async (ns, name) => {
     <div class="seg" style="margin:12px 0">${tab("overview", "Overview")}${tab("disks", `Disks · ${v.disks.length}`)}${tab("network", `Network · ${v.nics.length}`)}${tab("events", "Events")}</div>
     <div class="vm-pane" data-pane="overview">
       <div class="vm-facts wide">
-        <div><span>CPU</span><b>${v.cores} cores</b></div><div><span>Memory</span><b>${esc(v.memory || "—")}</b></div>
+        <div><span>CPU</span><b>${v.cores == null ? "Unavailable" : `${esc(v.cores)} cores`}</b></div><div><span>Memory</span><b>${esc(v.memory || "—")}</b></div>
         <div><span>Guest OS</span><b>${esc(v.guest?.prettyName || v.os || "unknown")}</b></div>
         <div><span>Kernel</span><b class="mono xs">${esc(v.guest?.kernelRelease || "—")}</b></div>
         <div><span>Live migration</span><b>${v.migratable ? "possible" : "not possible"}</b></div>
         <div><span>Created</span><b>${esc((v.created || "").slice(0, 10))}</b></div></div>
+      ${v.profile_error ? `<div class="note warn">${esc(v.profile_error)}</div>` : ""}
       ${v.description ? `<p class="small" style="margin-top:10px">${esc(v.description)}</p>` : ""}
       ${v.guest?.prettyName ? "" : '<p class="dim xs" style="margin-top:8px">The guest reports its OS and addresses through the QEMU guest agent, when it runs one.</p>'}
       <table class="tbl dense stack" style="margin-top:10px"><thead><tr><th>Condition</th><th>Status</th><th>Detail</th></tr></thead><tbody>
@@ -396,6 +397,20 @@ function vmNicRow(n, o) {
     <td><label class="switch"><input type="checkbox" class="vn_rm"> remove</label></td></tr>`;
 }
 
+function vmEditResourceFields(v) {
+  const profile = v.resource_profile || {}, locked = !!profile.name || !!v.profile_error;
+  const explanation = v.profile_error || (profile.name
+    ? `CPU and memory are managed by instance type ${profile.name}. This form keeps that profile; it does not replace it with manual values.`
+    : v.preference_profile?.name ? `Defaults come from preference ${v.preference_profile.name}. Unchanged CPU and memory are left as they are.` : "");
+  return `${explanation ? `<div class="note ${v.profile_error ? "warn" : "small"}">${esc(explanation)}</div>` : ""}
+    <div class="f2"><div class="f"><label>CPU cores</label>${locked
+      ? `<div class="mono">${esc(v.cores ?? "Unavailable")}</div>`
+      : `<input id="ve_cores" type="number" min="1" max="128" value="${esc(v.cores)}">`}</div>
+      <div class="f"><label>Memory</label>${locked
+        ? `<div class="mono">${esc(v.memory || "Unavailable")}</div>`
+        : `<input id="ve_mem" class="mono" value="${esc(v.memory)}" placeholder="4Gi">`}</div></div>`;
+}
+
 window.vmEdit = async (ns, name) => {
   modal(`Edit · ${name}`, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
   let v, o;
@@ -407,11 +422,10 @@ window.vmEdit = async (ns, name) => {
   const tab = (id, label) => `<button class="${id === "general" ? "on" : ""}" onclick="vmEditTab(this,'${id}')">${label}</button>`;
   const disks = v.disks.filter(d => d.kind === "disk" || d.kind === "cd-rom");
   const ci = v.cloud_init || {};
-  $("#mbody").innerHTML = `<div class="between"><div class="seg">${tab("general", "General")}${tab("disks", `Disks · ${disks.length}`)}${tab("network", `Network · ${v.nics.length}`)}${tab("cloud", "Cloud-init")}</div>
+  $("#mbody").innerHTML = `<div class="between vm-edit-tabs"><div class="seg">${tab("general", "General")}${tab("disks", `Disks · ${disks.length}`)}${tab("network", `Network · ${v.nics.length}`)}${tab("cloud", "Cloud-init")}</div>
       <button class="btn sm" data-need="admin" onclick="vmYaml('${esc(ns)}','${esc(name)}')" title="Every field, as YAML">${icon("edit")}Edit YAML</button></div>
     <div class="ve-pane" data-pane="general" style="margin-top:12px">
-      <div class="f2"><div class="f"><label>CPU cores</label><input id="ve_cores" type="number" min="1" max="128" value="${v.cores}"></div>
-        <div class="f"><label>Memory</label><input id="ve_mem" class="mono" value="${esc(v.memory)}" placeholder="4Gi"></div></div>
+      ${vmEditResourceFields(v)}
       <div class="f2"><div class="f"><label>Run strategy ${tip("RerunOnFailure (Harvester's default): runs, and starts again if the guest crashes, but not after you stop it. Always: kept running whatever happens. Manual: runs only when started, never restarted. Halted: kept off.")}</label>
         <select id="ve_strategy">${["RerunOnFailure", "Always", "Manual", "Halted"].map(x => vmOpt(x, x, v.run_strategy)).join("")}</select></div>
         <div class="f"><label>Host ${tip("Keep the VM on one host, or let Kubernetes choose. A VM on a disk only one host can reach stays there anyway.")}</label>
@@ -469,7 +483,7 @@ window.vmAddNic = () => {
     <td class="dim xs">automatic</td><td><button class="btn sm" onclick="this.closest('tr').remove()">✕</button></td></tr>`);
 };
 window.vmEditSave = async () => {
-  const { ns, name } = window.__vmEdit;
+  const { ns, name, v } = window.__vmEdit;
   const badUrl = $$("#mbody tr[data-disk], #mbody .vd-add").some(box => box.querySelector(".vd_src,.va_src")?.value === "url"
     && !/^https?:\/\/[^/\s]+/i.test(box.querySelector(".vd_url,.va_url").value.trim()));
   if (badUrl) return toast("a disk's URL must start with http:// or https://", "bad");
@@ -492,9 +506,13 @@ window.vmEditSave = async () => {
   const nics = $$("#mbody tr[data-nic]").map(row => ({ name: row.dataset.nic, model: row.querySelector(".vn_model").value,
     network: row.querySelector(".vn_net").value, mac: row.querySelector(".vn_mac").value.trim(), remove: row.querySelector(".vn_rm").checked }));
   const add_nics = $$("#mbody tr.vn-add").map(row => ({ model: row.querySelector(".vn_model").value, network: row.querySelector(".vn_net").value }));
-  const body = { ns, name, cores: +$("#ve_cores").value, memory: $("#ve_mem").value.trim(), run_strategy: $("#ve_strategy").value,
+  const body = { ns, name, run_strategy: $("#ve_strategy").value,
     description: $("#ve_desc").value, node: $("#ve_node").value, restart: false,
     disks, add_disks, nics, add_nics };
+  // Profile-controlled fields have no inputs. Unchanged preference defaults
+  // must not become explicit overrides just because the form was opened.
+  if ($("#ve_cores") && +$("#ve_cores").value !== v.cores) body.cores = +$("#ve_cores").value;
+  if ($("#ve_mem") && $("#ve_mem").value.trim() !== v.memory) body.memory = $("#ve_mem").value.trim();
   if ($("#ve_user")) body.cloud_init = { user_data: $("#ve_user").value, network_data: $("#ve_netdata").value };
   return vmEditReview(body, !!$("#ve_restart")?.checked);
 };

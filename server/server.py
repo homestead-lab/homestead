@@ -12,6 +12,7 @@ import homestead_memory as MEMORY
 import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_vm_capacity as VM_CAPACITY
 import homestead_vm_claims as VM_CLAIMS
+import homestead_vm_profiles as VM_PROFILES
 import homestead_vm_batch as VM_BATCH
 import homestead_batch_capacity as BATCH_CAPACITY
 import homestead_volume_usage as VOLUME_USAGE
@@ -3337,15 +3338,8 @@ def vm_power_capacity_plan(body):
     current = kget(f"{VMS.API}/namespaces/{ns}/virtualmachines/{name}")
     rollout_review_context(current)  # require identity/version, not a name-only approval
     expanded_spec = None
-    if action != "unpause" and any(current.get("spec", {}).get(key) for key in ("instancetype", "preference")):
-        # KubeVirt owns profile merging/defaults. Its GET expansion endpoint is
-        # read-only; never borrow resources from a possibly stale running VMI.
-        expanded = kget(f"{VMS.SUB}/namespaces/{ns}/virtualmachines/{name}/expand-spec")
-        if VM_CAPACITY.VMRES.identity(expanded) != VM_CAPACITY.VMRES.identity(current):
-            raise ValueError("The VM changed during profile expansion; refresh its review")
-        expanded_spec = (expanded.get("spec", {}).get("template") or {}).get("spec")
-        if not isinstance(expanded_spec, dict) or not expanded_spec.get("domain"):
-            raise ValueError("KubeVirt could not expand this VM's instance type/preferences")
+    if action != "unpause":
+        expanded_spec = VM_PROFILES.expand(current, kget)
     dependencies = {}
     def observed_read(path):
         capture = any(part in path for part in ("/persistentvolumeclaims/", "/persistentvolumes/", "/storageclasses/",
@@ -3419,6 +3413,7 @@ def vm_creation_capacity(prepared):
                 observations[path] = VM_CAPACITY.VMRES.identity(value)
         return value
     claims = VM_CLAIMS.plans(prepared["vm"], read, prepared["claims"], prepared["downloads"])
+    VM_CLAIMS.pin(prepared["vm"], claims, prepared["claims"])
     borrowed = {(volume.get("persistentVolumeClaim") or {}).get("claimName") or (volume.get("dataVolume") or {}).get("name")
                 for volume in prepared["vm"]["spec"]["template"]["spec"].get("volumes") or []} - {None, ""} - set(claims)
     borrowed_users = []
@@ -3449,7 +3444,7 @@ def vm_creation_capacity(prepared):
         plan["future_start_blocked"] = plan["blocked"]
         plan["blocked"] = bool(plan["blockers"])
         plan["warnings"].append("The VM is created stopped. Displayed guest placement is for a future start and will be checked again then.")
-    context = {"action": "vm-create", "prepared": prepared, "dependencies": observations}
+    context = {"action": "vm-create", "prepared": copy.deepcopy(prepared), "dependencies": observations}
     return plan, claims, context
 
 
@@ -3505,7 +3500,8 @@ def reviewed_vm_create(body):
                               "category": "server", "mac": result.get("mac", ""), "owner": "homestead",
                               "note": f"VM {cfg['namespace']}/{cfg['name']}"})
         except Exception:
-            result["warning"] = "VM created, but its IP-address record could not be saved; inspect IP addresses before reusing the address."
+            result["warning"] = " ".join(filter(None, [result.get("warning"),
+                "VM created, but its IP-address record could not be saved; inspect IP addresses before reusing the address."]))
     return result
 
 
@@ -3546,7 +3542,7 @@ def vm_edit_capacity(prepared):
     needed = (vm["spec"]["template"] != current["spec"]["template"] or
               bool(prepared["resize"] or prepared["effects"] or prepared["to_create"]) or
               (before != after and after not in ("Halted", "Manual")))
-    observations, claims = {}, {}
+    observations, claims, expanded_spec = {}, {}, None
     def read(path):
         try:
             value = kget(path)
@@ -3570,9 +3566,13 @@ def vm_edit_capacity(prepared):
         VMS._set_claim_templates(proposed, [row for row in VMS._claim_templates(vm) if row["metadata"]["name"] not in old_claims])
         downloads = [effect for effect in prepared["effects"] if effect["kind"] == "image-download"]
         claims = VM_CLAIMS.plans(proposed, read, prepared["to_create"], downloads)
+        # Pin only newly planned disks. Existing controller templates must not
+        # be rewritten using today's storage defaults.
+        VM_CLAIMS.pin(vm, claims, prepared["to_create"])
+        expanded_spec = VM_PROFILES.expand(vm, kget, ksend)
         threshold = get_app_settings()["thresholds"]["memory"]["critical"]
         plan = VM_CAPACITY.plan(vm, read, PLACE.get_nodes(), action="edit", current=current,
-                               warning_percent=threshold, planned_claims=claims)
+                               warning_percent=threshold, planned_claims=claims, expanded_spec=expanded_spec)
         plan["warnings"].append("Template and restart-policy changes may take effect immediately through KubeVirt. Saving is not a promise that the guest remains stopped or unchanged.")
         if after == "Halted":
             plan["warnings"].append("The requested policy is Halted. Resource placement shown is conservative; a separate reviewed Start is required to run it again.")
@@ -3585,7 +3585,8 @@ def vm_edit_capacity(prepared):
     plan["vm"].update(admission_needed=needed, policy_before=before, policy_after=after)
     plan["warnings"].append("VM, Secret and disk changes are not a transaction. If saving fails, inspect retained resources before trying again. No automatic restart is sent by Save.")
     plan["requires_confirmation"] = True
-    context = {"action": "vm-edit", "prepared": prepared, "dependencies": observations}
+    context = {"action": "vm-edit", "prepared": copy.deepcopy(prepared), "dependencies": observations,
+               "expanded_spec": expanded_spec}
     return plan, claims, context
 
 
@@ -3611,7 +3612,9 @@ def reviewed_vm_edit(body):
     plan, _, context = vm_edit_capacity(prepared)
     CAPACITY_REVIEW.enforce(body, plan, context)
     def before_save(resolved):
-        fresh, _, _ = vm_edit_capacity(resolved)
+        fresh, _, fresh_context = vm_edit_capacity(resolved)
+        if fresh_context["expanded_spec"] != context["expanded_spec"]:
+            raise CAPACITY_REVIEW.Rejected("VM profile expansion changed during preparation; review the proposed resources again", fresh)
         for path, expected in context["dependencies"].items():
             value = VM_CAPACITY._optional(kget, path) if not isinstance(expected, list) else kget(path)
             if isinstance(expected, list):
