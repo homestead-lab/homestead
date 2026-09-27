@@ -506,23 +506,69 @@ function accessPorts(ports) {
     more(1, "more-narrow") + more(2, "more-wide");
 }
 
+/* Where a workload's pods would go, host by host: memory now and after the
+   start, what the scheduler has already reserved, and why a host is out.
+   Shared by the start review and anything else that places pods. */
+function capacityHosts(candidates, { unavailable = "live RAM unavailable", reserved = "Already reserved" } = {}) {
+  const eligible = candidates.filter(x => x.eligible);
+  const rejected = candidates.filter(x => !x.eligible);
+  const memory = host => {
+    if (!host.metrics_available || host.projected_percent === null || host.projected_percent === undefined) return `<span class="ui-help">${esc(unavailable)}</span>`;
+    const now = host.capacity_gb ? host.used_gb / host.capacity_gb * 100 : 0;
+    return `${UI.meter({ now, after: host.projected_percent, label: `${host.name} memory` })}
+      <span class="sub">${esc(host.projected_gb)} / ${esc(host.capacity_gb)} GiB after start · ${esc(host.projected_percent)}%</span>`;
+  };
+  const about = host => `<span class="mono">${esc(host.name)}</span><span class="sub">${host.metrics_available ? `Live RAM ${esc(host.used_gb)} GiB` : esc(unavailable)}${host.reservations_known
+    ? ` · ${esc(reserved)}: ${esc(host.reserved_gb)} / ${esc(host.allocatable_gb)} GiB RAM · ${esc(host.reserved_cpu_percent)}% CPU`
+    : " · Scheduler reservations unavailable."}</span>`;
+  const status = host => host.warnings?.length ? UI.chip(host.projected_pods ? "Tight" : "Warning", "warn")
+    : host.projected_pods ? UI.chip("Chosen", "ok") : UI.chip("Room", "");
+  let html = "";
+  if (eligible.length) html += UI.section("Hosts that can run it", UI.table(
+    [{ label: "Host" }, { label: "Memory", className: "grow" }, { label: "" }],
+    eligible.map(host => [about(host), memory(host), status(host)])));
+  if (rejected.length) html += UI.section("Unavailable for the next pod", UI.table(
+    [{ label: "Host" }, { label: "Why" }],
+    rejected.map(host => [`<span class="mono">${esc(host.name)}</span>`, esc((host.reasons || []).join(" · ") || "not eligible")])));
+  return html;
+}
+window.capacityHosts = capacityHosts;
+
 window.wlScale = async (ns, name, n) => {
   if (n > 0) {
     try {
       const plan = await api(`/api/workloads/start-plan?${new URLSearchParams({ ns, name, replicas: n })}`);
       if (plan.requires_confirmation || plan.blocked) {
-        const hosts = (plan.candidates || []).filter(x => x.eligible);
-        const rejected = (plan.candidates || []).filter(x => !x.eligible);
-        modal(`Start ${name}?`, `<div class="note ${plan.blocked ? "bad" : "warn"}"><b>${plan.blocked ? "Not enough eligible capacity for the requested replicas." : "Placement and memory need review."}</b>
-          ${plan.unbounded?.length ? ` ${esc(plan.unbounded.join(", "))} ${plan.unbounded.length === 1 ? "has" : "have"} no memory limit, so actual use could exceed this estimate.` : ""}</div>
-          <p class="small muted">Starting ${plan.additional} more pod${plan.additional === 1 ? "" : "s"}. Each pod requests ${esc(plan.pod_request_gb ?? "unknown")} GiB RAM and ${esc(plan.pod_cpu_request_percent ?? "unknown")}% CPU (100% = one core); its memory estimate including init/sidecar peaks and overhead is ${plan.pod_memory_gb ? `${esc(plan.pod_memory_gb)} GiB` : "unknown"}. Requests reserve scheduler capacity; limits bound container usage. They are not the same as live usage.</p>
-          ${plan.warnings?.length ? `<div class="note warn">${plan.warnings.map(esc).join(" · ")}</div>` : ""}
-          ${hosts.length ? `<div class="dependency-list">${hosts.map(host => `<div class="drow"><div class="dl mono">${esc(host.name)}</div><div class="dv">${host.metrics_available && host.projected_percent !== null ? `Live RAM ${esc(host.used_gb)} GiB · projected ${esc(host.projected_gb)} / ${esc(host.capacity_gb)} GiB (${esc(host.projected_percent)}%)` : "live RAM unavailable"}<div class="dim xs">${host.reservations_known ? `Already reserved: ${esc(host.reserved_gb)} / ${esc(host.allocatable_gb)} GiB RAM · ${esc(host.reserved_cpu_percent)}% CPU. Resource/port/storage upper bound: ${esc(host.request_slots)} additional pod(s); topology may reduce this.` : "Scheduler reservations unavailable."}</div>${host.warnings?.length ? `<div class="dim xs">${host.warnings.map(esc).join(" · ")}</div>` : ""}</div></div>`).join("")}</div>` : ""}
-          ${plan.topology_status && plan.topology_status !== "not-needed" ? `<p class="small muted">${plan.topology_status === "fits" ? "A scheduling order fits the checked pod affinity and spread rules in this snapshot." : plan.topology_status === "blocked" ? "The checked pod affinity and spread rules cannot fit all requested replicas." : "Pod affinity and spread placement remains unverified."} Host eligibility below is for the next pod; it can change as replicas start.</p>` : ""}
-          <p class="dim xs">Projection uses the greater of live RAM and existing reservations, plus the estimated new pods that fit each host. This is a snapshot, not a reservation or an OOM guarantee; competing starts, storage and other scheduler constraints can change placement.</p>
-          ${rejected.length ? `<div class="sec">Unavailable for the next pod</div><div class="dependency-list">${rejected.map(host => `<div class="drow"><div class="dl mono">${esc(host.name)}</div><div class="dv">${esc((host.reasons || []).join(" · ") || "not eligible")}${host.projected_pods ? `<div class="dim xs">If later replicas use this host: ${host.metrics_available && host.projected_percent !== null ? `projected RAM ${esc(host.projected_gb)} / ${esc(host.capacity_gb)} GiB (${esc(host.projected_percent)}%)` : "live RAM unavailable"}. ${(host.warnings || []).map(esc).join(" · ")}</div>` : ""}</div></div>`).join("")}</div>` : ""}
-          ${!plan.blocked ? `<div class="note">Capacity warnings can be overridden, including high projected RAM and missing usage metrics. Proceeding may cause memory pressure, OOM restarts or downtime; it does not change resource requests or limits.</div><label class="switch" style="margin-top:14px"><input type="checkbox" id="wl_capacity_ok"> Proceed despite capacity warnings — I accept the placement and memory risks</label>
-            <div class="row" style="margin-top:14px"><button class="btn danger" onclick="wlScaleGo('${esc(ns)}','${esc(name)}',${n},true)">Start anyway</button><button class="btn" onclick="closeModal()">Cancel</button></div>` : `<div class="row" style="margin-top:14px"><button class="btn" onclick="closeModal()">Close</button></div>`}`);
+        const pods = `${plan.additional} pod${plan.additional === 1 ? "" : "s"}`;
+        const topology = plan.topology_status && plan.topology_status !== "not-needed"
+          ? plan.topology_status === "fits" ? "A scheduling order fits the checked pod affinity and spread rules in this snapshot."
+            : plan.topology_status === "blocked" ? "The checked pod affinity and spread rules cannot fit all requested replicas."
+            : "Pod affinity and spread placement remains unverified." : "";
+        const concerns = [...(plan.warnings || []),
+          ...(plan.unbounded?.length ? [`${plan.unbounded.join(", ")} ${plan.unbounded.length === 1 ? "has" : "have"} no memory limit, so actual use could exceed this estimate`] : []),
+          ...(topology && plan.topology_status !== "fits" ? [topology] : [])];
+        const concernHtml = concerns.length ? `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : "";
+        const slots = (plan.candidates || []).filter(x => x.eligible && x.reservations_known && x.request_slots !== null && x.request_slots !== undefined)
+          .map(x => `${esc(x.name)}: ${esc(x.request_slots)} additional pod(s)`);
+        modal(`Start ${name}?`, [
+          UI.lead(`Starting ${pods} of <b>${esc(name)}</b>. ${plan.blocked ? "There is not room for it on any host that may run it." : "It fits, but check where it would land first."}`),
+          plan.blocked
+            ? UI.callout("bad", "Not enough eligible capacity for the requested replicas.", concernHtml)
+            : UI.callout("warn", "Placement and memory need review.", concernHtml),
+          capacityHosts(plan.candidates || []),
+          UI.facts([
+            ["Each pod requests", `${esc(plan.pod_request_gb ?? "unknown")} GiB RAM · ${esc(plan.pod_cpu_request_percent ?? "unknown")}% CPU`],
+            ["Estimated peak memory", plan.pod_memory_gb ? `${esc(plan.pod_memory_gb)} GiB` : "unknown"],
+          ]),
+          UI.more("How this is estimated", `
+            <p>Requests reserve scheduler capacity (100% CPU is one core); limits bound container usage. Neither is the same as live usage. The peak estimate includes init and sidecar containers and overhead.</p>
+            <p>Projection uses the greater of live RAM and existing reservations, plus the estimated new pods that fit each host. This is a snapshot, not a reservation or an OOM guarantee; competing starts, storage and other scheduler constraints can change placement.</p>
+            ${slots.length ? `<p>Resource, port and storage upper bound - ${slots.join(" · ")}; topology may reduce this.</p>` : ""}
+            ${topology ? `<p>${esc(topology)}</p>` : ""}`),
+          plan.blocked ? "" : UI.ack("wl_capacity_ok", "Proceed despite capacity warnings: I accept the placement and memory risks"),
+          UI.actions(plan.blocked ? UI.cancel("Close")
+            : UI.cancel() + UI.button("Start anyway", `wlScaleGo('${esc(ns)}','${esc(name)}',${n},true)`, { kind: "danger" })),
+        ].join(""));
         return;
       }
     } catch (e) { return toast(`Could not check node memory: ${e.message}`, "bad"); }
@@ -1380,18 +1426,29 @@ let DEPLOY_REVIEW_SEQUENCE = 0;
 let DEPLOY_SUBMITTING = false;
 function deployCapacityHtml(plan, overlap = false, imageChange = false) {
   if (!plan) return "";
-  return `<div class="reviewbox deploy-capacity"><b>${overlap ? "New pods alongside current pods" : plan.rollout ? "Updated pod: capacity after old pods stop" : "Placement and memory"}</b>
-    ${plan.rollout ? `<p class="small muted">${esc(plan.rollout.strategy)} · ${esc(plan.rollout.replicas)} desired replica(s) · ${plan.rollout.ownership_known ? `${esc(plan.rollout.owned_pods.length)} existing pod(s) identified by controller ownership; ${esc(plan.rollout.release_request_gb)} GiB of requests would be released only after termination.` : "Pod ownership is unverified; released capacity is unknown."}</p>
-      ${plan.rollout.strategy === "RollingUpdate" ? `<p class="small muted">Up to ${esc(plan.rollout.max_surge)} extra pod(s), ${esc(plan.rollout.max_unavailable)} unavailable replica(s). Intermediate rollout steps remain unverified.</p>` : ""}` : ""}
-    <p class="small muted">${esc(plan.additional)} ${plan.vm ? "VM launcher" : "pod(s)"}, ${plan.vm?.request_is_lower_bound ? "requesting at least" : "each requesting"} ${esc(plan.pod_request_gb)} GiB RAM; ${plan.vm?.cpu_request_is_estimate ? "conservative CPU allowance" : "CPU request"}: ${esc(plan.pod_cpu_request_percent)}% (100% = one core). Memory estimate: ${esc(plan.pod_memory_gb)} GiB ${plan.vm ? "for the VM and launcher" : "per pod, including init stages"}.</p>
-    ${plan.blocked ? `<div class="note bad">${overlap ? "This overlap does not fit while old pods remain. Progress may depend on old-pod removal within the rollout policy." : plan.rollout?.start_blocked ? "The rollout cannot start within its current availability policy. Review the overlap blockers below." : "This deployment cannot fit the checked placement constraints. Change its resources, volumes or host selection before deploying."}</div>` : ""}
-    ${plan.warnings?.length ? `<div class="note warn">${plan.warnings.map(esc).join(" · ")}</div>` : ""}
-    ${!overlap ? `<div class="note">${plan.blocked ? "This is a placement blocker, not just a capacity warning. Resolve the listed scheduler, hardware or storage constraints before proceeding." : "Capacity warnings can be overridden, including high projected RAM and missing usage metrics. Proceeding may cause memory pressure, OOM restarts or downtime; it does not change resource requests or limits."}</div>` : ""}
-    <details${plan.blocked ? " open" : ""}><summary>Host capacity and placement</summary><div class="dependency-list">${(plan.candidates || []).map(host => `<div class="drow"><div class="dl mono">${esc(host.name)}</div><div class="dv">${host.eligible ? "Eligible for the next pod" : esc((host.reasons || []).join(" · ") || "Not eligible")}
-      <div class="dim xs">${host.metrics_available && host.projected_percent != null ? `Live RAM ${esc(host.used_gb)} GiB · projected ${esc(host.projected_gb)} / ${esc(host.capacity_gb)} GiB (${esc(host.projected_percent)}%)` : "Live RAM unavailable"}</div>
-      <div class="dim xs">${host.reservations_known ? `${plan.rollout ? "Reserved RAM after planned termination" : "Reserved RAM"} ${esc(host.reserved_gb)} GiB; resource/port/storage upper bound ${esc(host.request_slots)} more pod(s).` : "Scheduler reservations unavailable."}</div></div></div>`).join("")}</div></details>
-    ${plan.rollout?.overlap ? `<details${plan.rollout.start_blocked ? " open" : ""}><summary>Overlap while old pods remain${plan.rollout.start_blocked ? " — rollout cannot start" : ""}</summary>${deployCapacityHtml(plan.rollout.overlap, true)}</details>` : ""}
-    <p class="dim xs">This is a snapshot, not a reservation or an OOM guarantee. ${plan.vm ? "The server checks again before sending the VM action. Guest readiness and successful rescheduling are not guaranteed." : imageChange ? "The server checks again before changing the workload or its recovery metadata." : "The server checks again before creating anything. Planned volumes have not been provisioned."}</p></div>`;
+  const title = overlap ? "New pods alongside current pods" : plan.rollout ? "Updated pod: capacity after old pods stop" : "Placement and memory";
+  const blocked = overlap ? "This overlap does not fit while old pods remain. Progress may depend on old-pod removal within the rollout policy."
+    : plan.rollout?.start_blocked ? "The rollout cannot start within its current availability policy. Review the overlap blockers below."
+    : "This deployment cannot fit the checked placement constraints. Change its resources, volumes or host selection before deploying.";
+  const concerns = plan.warnings?.length ? `<ul class="ui-list">${plan.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : "";
+  const rollout = plan.rollout ? `<p>${esc(plan.rollout.strategy)} · ${esc(plan.rollout.replicas)} desired replica(s) · ${plan.rollout.ownership_known
+      ? `${esc(plan.rollout.owned_pods.length)} existing pod(s) identified by controller ownership; ${esc(plan.rollout.release_request_gb)} GiB of requests would be released only after termination.`
+      : "Pod ownership is unverified; released capacity is unknown."}</p>
+    ${plan.rollout.strategy === "RollingUpdate" ? `<p>Up to ${esc(plan.rollout.max_surge)} extra pod(s), ${esc(plan.rollout.max_unavailable)} unavailable replica(s). Intermediate rollout steps remain unverified.</p>` : ""}` : "";
+  const requests = `${esc(plan.additional)} ${plan.vm ? "VM launcher" : "pod(s)"}, ${plan.vm?.request_is_lower_bound ? "requesting at least" : "each requesting"} ${esc(plan.pod_request_gb)} GiB RAM; ${plan.vm?.cpu_request_is_estimate ? "conservative CPU allowance" : "CPU request"}: ${esc(plan.pod_cpu_request_percent)}% (100% = one core). Memory estimate: ${esc(plan.pod_memory_gb)} GiB ${plan.vm ? "for the VM and launcher" : "per pod, including init stages"}.`;
+  return `<div class="deploy-capacity ui-stack">
+    ${UI.section(title, [
+      plan.blocked ? UI.callout("bad", blocked, `${concerns}${overlap ? "" : "<p>This is a placement blocker, not just a capacity warning. Resolve the listed scheduler, hardware or storage constraints before proceeding.</p>"}`)
+        : concerns ? UI.callout("warn", "Placement and memory need review.", concerns) : "",
+      plan.pod_request_gb !== undefined && plan.pod_request_gb !== null ? `<p class="ui-help">${requests}</p>` : "",
+      capacityHosts(plan.candidates || [], { unavailable: "Live RAM unavailable",
+        reserved: plan.rollout ? "Reserved RAM after planned termination" : "Reserved RAM" }),
+    ].join(""))}
+    ${UI.more("How this is estimated", `${rollout}
+      ${!overlap && !plan.blocked ? "<p>Capacity warnings can be overridden, including high projected RAM and missing usage metrics. Proceeding may cause memory pressure, OOM restarts or downtime; it does not change resource requests or limits.</p>" : ""}
+      <p>This is a snapshot, not a reservation or an OOM guarantee. ${plan.vm ? "The server checks again before sending the VM action. Guest readiness and successful rescheduling are not guaranteed." : imageChange ? "The server checks again before changing the workload or its recovery metadata." : "The server checks again before creating anything. Planned volumes have not been provisioned."}</p>`, !!plan.blocked)}
+    ${plan.rollout?.overlap ? UI.more(`Overlap while old pods remain${plan.rollout.start_blocked ? " - rollout cannot start" : ""}`, deployCapacityHtml(plan.rollout.overlap, true), !!plan.rollout.start_blocked) : ""}
+  </div>`;
 }
 window.deployReviewReady = () => {
   const review = DEPLOY_REVIEW;

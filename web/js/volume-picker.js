@@ -34,6 +34,9 @@ const VOLUME_PICKER_DEFAULTS = {
   newSourceHelp: "",
   removable: true,
   readOnlyToggle: true,
+  // A second "folder in volume" field, for pickers whose path is not
+  // already a folder inside the volume.
+  folders: true,
   onChange: () => { },
 };
 
@@ -245,7 +248,7 @@ function syncVolumeRow(row) {
   $(".vcopy", row).style.display = moved ? "flex" : "none";
   if (moved) $(".vcopy-text", row).textContent = `Copy the data from ${moved} (the container stops while it copies; the original files are kept)`;
   $(".vnew", row).style.display = (isNew && !first) || ram ? "grid" : "none";
-  $(".vfolder", row).style.display = volumeHasFolders(actual) ? "block" : "none";
+  $(".vfolder", row).style.display = ctx.folders !== false && volumeHasFolders(actual) ? "block" : "none";
   $(".vnew", row).classList.toggle("ram", ram);
   const sizeLabel = $(".vsize-label", row);
   if (sizeLabel) sizeLabel.textContent = ram ? "Size MiB" : "Size GiB";

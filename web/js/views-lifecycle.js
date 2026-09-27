@@ -327,17 +327,19 @@ window.editSave = async (ns, name) => {
 };
 function storageCopyReview(config, capacity) {
   const where = (claim, folder) => esc(folder ? `${claim}/${folder}` : claim);
-  const rows = (config.containers || []).flatMap(c => (c.volumes || []).filter(v => v.copy_from).map(v => `
-    <div class="note"><b>${esc(c.name)} · ${esc(v.path)}</b><br>
-      ${where(v.copy_from.claim, v.copy_from.sub_path)} → ${where(v.source, v.sub_path)}
-      ${v.copy_from.data === false ? '<br><span class="muted">Prepare an empty location; do not copy files.</span>' : ""}</div>`)).join("");
-  return `<p>The app stops while its storage changes. Follow progress in <b>Recent jobs</b>.</p>${rows}
-    <p>Existing destination files may be overwritten. Volumes are kept, but this is not a backup.</p>
-    <div class="note ${capacity.blocked ? "bad" : ""}">${capacity.blocked ? "This move is blocked. Check placement details below." :
-      "Before copying and restarting, Homestead checks placement again. If anything fails or cannot be confirmed, it stops for inspection—no automatic rollback or retry."}</div>
-    <details ${capacity.blocked ? "open" : ""}><summary>Capacity and placement details</summary>
-      <h3>After the move</h3>${deployCapacityHtml(capacity)}
-      <h3>Temporary copy helper</h3>${deployCapacityHtml(capacity.copy_helper)}</details>`;
+  const rows = (config.containers || []).flatMap(c => (c.volumes || []).filter(v => v.copy_from).map(v => [
+    `<b>${esc(c.name)}</b><br>${esc(v.path)}`, where(v.copy_from.claim, v.copy_from.sub_path),
+    where(v.source, v.sub_path) + (v.copy_from.data === false ? '<br><span class="muted">Prepare empty; no files copied.</span>' : "")
+  ]));
+  return UI.lead('The app stops while its storage changes. Follow progress in <b>Recent jobs</b>.') +
+    UI.callout(capacity.blocked ? "bad" : "warn", capacity.blocked ? "This move is blocked" : "Check your backup first",
+      'Existing destination files may be overwritten. Volumes are kept, but this is not a backup.') +
+    UI.section("Storage changes", UI.table([{label:"Container path"},{label:"From"},{label:"To"}],rows)) +
+    UI.lead("Placement is checked again before copying and restarting. Failed or uncertain steps stop for inspection—no automatic rollback or retry.") +
+    UI.more("Capacity and placement details", UI.section("After the move",deployCapacityHtml(capacity)) +
+      UI.section("Temporary copy helper",deployCapacityHtml(capacity.copy_helper)), capacity.blocked) +
+    (!capacity.blocked ? UI.ack("editCapacityConfirm","I accept the outage, destination changes and capacity warnings") : "") +
+    UI.actions(UI.button("Back to edit","modalBack()") + UI.button("Start data move","confirmEdit()",{id:"editGo",kind:"pri",disabled:capacity.blocked}));
 }
 window.editReview = async body => {
   EDIT_REVIEW = null;
@@ -350,12 +352,16 @@ window.editReview = async body => {
     EDIT_REVIEW = { config, ...review, submitting: false };
     const rename = review.capacity.rename;
     const copying = !!review.capacity.copy_helper;
-    childModal(rename ? "Rename workload" : copying ? "Move container data" : "Review workload changes", `
+    if (copying) {
+      childModal("Move container data", storageCopyReview(config,review.capacity), true, "operation-review");
+      return;
+    }
+    childModal(rename ? "Rename workload" : "Review workload changes", `
       ${rename ? `<p><b>${esc(rename.from)}</b> → <b>${esc(rename.to)}</b></p><p>Only the workload name changes. Save other edits separately. Expect a short outage; volumes and service addresses are kept.</p>` : ""}
       ${rename ? `<div class="note ${review.capacity.blocked ? "bad" : ""}">${review.capacity.blocked ? "Rename is blocked by the placement check. Review the details below." : "If a step fails, inspect both workload names in Recent jobs. Homestead will not automatically restart the old copy or remove the replacement."}</div>
-        <details ${review.capacity.blocked ? "open" : ""}><summary>Capacity and placement · ${(review.capacity.warnings || []).length} warning(s)</summary>${deployCapacityHtml(review.capacity)}</details>` : copying ? storageCopyReview(config, review.capacity) : deployCapacityHtml(review.capacity)}
-      ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="editCapacityConfirm"> ${rename ? "I accept the outage and capacity warnings" : copying ? "I accept the outage, destination changes and capacity warnings" : "Proceed despite capacity warnings — I accept the restart, placement, memory and storage risks"}</label>` : ""}
-      <div class="modalactions"><button class="btn" onclick="modalBack()">Back to edit</button><button id="editGo" class="btn pri" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmEdit()">${rename ? "Rename workload" : copying ? "Start data move" : "Save reviewed changes"}</button></div>`, true, "operation-review");
+        <details ${review.capacity.blocked ? "open" : ""}><summary>Capacity and placement · ${(review.capacity.warnings || []).length} warning(s)</summary>${deployCapacityHtml(review.capacity)}</details>` : deployCapacityHtml(review.capacity)}
+      ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="editCapacityConfirm"> ${rename ? "I accept the outage and capacity warnings" : "Proceed despite capacity warnings — I accept the restart, placement, memory and storage risks"}</label>` : ""}
+      <div class="modalactions"><button class="btn" onclick="modalBack()">Back to edit</button><button id="editGo" class="btn pri" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmEdit()">${rename ? "Rename workload" : "Save reviewed changes"}</button></div>`, true, "operation-review");
   } catch (e) { toast(e.message, "bad"); }
 };
 window.confirmEdit = async () => {
@@ -476,23 +482,34 @@ window.nodePowerReview = async (node, action) => {
   try { plan = await api(`/api/node/power/plan?${new URLSearchParams({ node, action })}`); }
   catch (e) { return toast(`Could not assess this host: ${e.message}`, "bad"); }
   window.__nodePowerPlan = plan;
+  const verb = action === "reboot" ? "Reboot" : "Shut down";
   const volumes = plan.volumes || [];
-  childModal(`${action === "reboot" ? "Reboot" : "Shut down"} · ${node}`, `
-    ${plan.blockers?.length ? `<div class="note bad"><b>Blocked:</b> ${plan.blockers.map(esc).join(" · ")}</div>` : ""}
-    <div class="sec">What goes down</div>
-    <p class="small">${plan.pods} pod${plan.pods === 1 ? "" : "s"} and ${plan.vms?.length || 0} VM${plan.vms?.length === 1 ? "" : "s"} currently run on this host. Draining may move them, but live migration and restart are not guaranteed.</p>
-    ${(plan.workloads || []).length ? `<div class="dependency-list">${(plan.workloads || []).map(w => `<div class="drow"><div class="dl mono">${esc(w.ns)}/${esc(w.name)}</div><div class="dv">${w.stranded ? '<span class="pill crit">no other eligible host</span>' : `<span class="pill med">may move to ${esc((w.eligible || []).join(", "))}</span>`}</div></div>`).join("")}</div>` : `<div class="dim small">No user Deployments are mapped to this host.</div>`}
-    ${plan.vms?.length ? `<div class="note warn">VMs to check: ${plan.vms.map(esc).join(", ")}. Their migration or shutdown must be verified separately.</div>` : ""}
-    ${plan.maintenance?.budgets?.length ? `<div class="sec">Disruption budgets</div><div class="dependency-list">${plan.maintenance.budgets.map(b => `<div class="drow"><div class="dl mono">${esc(b.pod)}</div><div class="dv">${esc(b.budget)} · ${b.allowed == null ? "status unknown" : `${b.allowed} disruption(s) allowed`}${b.unhealthy_allowed ? " · unhealthy eviction allowed" : ""}</div></div>`).join("")}</div>` : ""}
-    ${plan.maintenance?.local_storage?.length ? `<div class="sec">Local and external storage</div><div class="note warn">Drain deletes emptyDir data. Host-local paths do not move with pods. External storage may depend on this host; verify availability before proceeding.</div><div class="dependency-list">${plan.maintenance.local_storage.map(v => `<div class="drow"><div class="dl mono">${esc(v.pod)}</div><div class="dv">${esc(v.kind)} · ${esc(v.source)}</div></div>`).join("")}</div>` : ""}
-    <div class="sec">Volume copies during the outage</div>
-    ${volumes.length ? `<div class="dependency-list">${volumes.map(v => `<div class="drow"><div class="dl mono">${esc(v.claim)}</div><div class="dv"><span class="pill ${v.risk === "unavailable" ? "crit" : v.risk === "single-copy" ? "med" : "low"}">${v.risk === "unavailable" ? "no healthy copy elsewhere" : v.risk === "single-copy" ? "one copy left · unprotected" : "replica resync needed"}</span></div></div>`).join("")}</div>` : `<div class="dim small">No Longhorn replica on this host was found.</div>`}
-    ${(plan.warnings || []).length ? `<div class="note warn" style="margin-top:12px">${plan.warnings.map(esc).join(" · ")}</div>` : ""}
-    ${!plan.ready ? `<div class="row" style="margin-top:14px"><button class="btn" onclick="closeModal()">Close</button></div>` : `
-      <div class="f" style="margin-top:14px"><label>Type <b class="mono">${esc(node)}</b> to confirm</label><input type="text" id="pw_confirm" autocomplete="off"></div>
-      ${plan.stranded?.length ? `<label class="switch"><input type="checkbox" id="pw_allow"> I understand ${plan.stranded.length} workload${plan.stranded.length === 1 ? "" : "s"} may remain down</label>` : ""}
-      ${plan.requires_data_ack ? `<label class="switch"><input type="checkbox" id="pw_data"> I understand the volume copies or storage visibility risk</label>` : ""}
-      <div class="row" style="margin-top:14px"><button class="btn danger" id="pw_execute" onclick="nodePower('${esc(node)}','${esc(action)}')">${action === "reboot" ? "Reboot" : "Shut down"} host</button><button class="btn" onclick="closeModal()">Cancel</button></div>`}`, true);
+  const workloads = plan.workloads || [];
+  const budgets = plan.maintenance?.budgets || [];
+  const local = plan.maintenance?.local_storage || [];
+  const risk = { unavailable: ["no healthy copy elsewhere", "bad"], "single-copy": ["one copy left · unprotected", "warn"], resync: ["replica resync needed", "info"] };
+  const concerns = [...(plan.vms?.length ? [`VMs to check: ${plan.vms.join(", ")}. Their migration or shutdown must be verified separately.`] : []), ...(plan.warnings || [])];
+  childModal(`${verb} · ${node}`, [
+    UI.lead(`${plan.pods} pod${plan.pods === 1 ? "" : "s"} and ${plan.vms?.length || 0} VM${plan.vms?.length === 1 ? "" : "s"} currently run on <b>${esc(node)}</b>. Homestead cordons it and waits for drained pods to leave; live migration and restart elsewhere are not guaranteed.`),
+    plan.blockers?.length
+      ? UI.callout("bad", "Blocked", `<ul class="ui-list">${plan.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>`)
+      : concerns.length ? UI.callout("warn", "Check before going ahead", `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>`) : "",
+    UI.section("What goes down", workloads.length
+      ? UI.table([{ label: "Workload" }, { label: "During the outage" }], workloads.map(w => [`<span class="mono">${esc(w.ns)}/${esc(w.name)}</span>`,
+        w.stranded ? UI.chip("no other eligible host", "bad") : `${UI.chip("may move", "ok")} <span class="sub">to ${esc((w.eligible || []).join(", "))}</span>`]))
+      : `<div class="ui-empty">No user Deployments are mapped to this host.</div>`),
+    UI.section("Volume copies during the outage", volumes.length
+      ? UI.table([{ label: "Volume" }, { label: "Copies" }], volumes.map(v => [`<span class="mono">${esc(v.claim)}</span>`, UI.chip(...(risk[v.risk] || risk.resync))]))
+      : `<div class="ui-empty">No Longhorn replica on this host was found.</div>`),
+    budgets.length ? UI.section("Disruption budgets", UI.table([{ label: "Pod" }, { label: "Budget" }], budgets.map(b => [`<span class="mono">${esc(b.pod)}</span>`,
+      `${esc(b.budget)} · ${b.allowed == null ? "status unknown" : `${b.allowed} disruption(s) allowed`}${b.unhealthy_allowed ? " · unhealthy eviction allowed" : ""}`]))) : "",
+    local.length ? UI.section("Local and external storage", `<p class="ui-help">Drain deletes emptyDir data. Host-local paths do not move with pods. External storage may depend on this host; verify availability before proceeding.</p>`
+      + UI.table([{ label: "Pod" }, { label: "Storage" }], local.map(v => [`<span class="mono">${esc(v.pod)}</span>`, `${esc(v.kind)} · ${esc(v.source)}`]))) : "",
+    plan.ready ? UI.field(`Type ${node} to confirm`, `<input type="text" id="pw_confirm" autocomplete="off" placeholder="${esc(node)}">`) : "",
+    plan.ready && plan.stranded?.length ? UI.ack("pw_allow", `I understand ${plan.stranded.length} workload${plan.stranded.length === 1 ? "" : "s"} may remain down`) : "",
+    plan.ready && plan.requires_data_ack ? UI.ack("pw_data", "I understand the volume copies or storage visibility risk") : "",
+    UI.actions(plan.ready ? UI.cancel() + UI.button(`${verb} host`, `nodePower('${esc(node)}','${esc(action)}')`, { kind: "danger", id: "pw_execute" }) : UI.cancel("Close")),
+  ].join(""), true);
 };
 window.nodePower = async (node, action) => {
   const plan = window.__nodePowerPlan;

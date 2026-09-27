@@ -16,6 +16,7 @@ function setup(review) {
       return { ok: true, name: "demo" };
     } };
   vm.createContext(c);
+  vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), c);
   vm.runInContext(fs.readFileSync("web/js/views-workloads.js", "utf8"), c);
   vm.runInContext(fs.readFileSync("web/js/views-lifecycle.js", "utf8"), c);
   return { c, fields, sent, notices, html: () => html, fail: () => { fail = true; } };
@@ -93,7 +94,8 @@ test("Storage move has one plain-language review with escaped paths and both pla
     { path: "/data", source: "new", sub_path: "<folder>", copy_from: { claim: "old" } }
   ] }] });
   assert.match(t.html(), /&lt;main&gt;/);
-  assert.match(t.html(), /old → new\/&lt;folder&gt;/);
+  assert.match(t.html(), /data-label="From">old/);
+  assert.match(t.html(), /new\/&lt;folder&gt;/);
   assert.match(t.html(), /Existing destination files may be overwritten/);
   assert.match(t.html(), /no automatic rollback or retry/);
   assert.match(t.html(), /Temporary copy helper/);
