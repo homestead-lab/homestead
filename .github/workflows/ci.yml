@@ -90,9 +90,18 @@ jobs:
         with:
           context: .
           push: false
+          load: true
           tags: homestead:ci
           build-args: |
             VERSION=ci
             REVISION=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Verify self-data copies in the built Linux image
+        run: |
+          docker run --rm --network none --read-only --tmpfs /tmp --tmpfs /data \
+            --user 0:0 --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add FSETID \
+            --security-opt no-new-privileges \
+            --env HOMESTEAD_TEST_SERVER_DIR=/srv \
+            --mount "type=bind,source=$PWD,target=/repo,readonly" \
+            --entrypoint python3 homestead:ci -m unittest discover -s /repo/tests -p 'test_self_data*.py' -v

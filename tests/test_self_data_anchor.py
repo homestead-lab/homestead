@@ -1,12 +1,13 @@
 """Independent control history survives either PVC and rejects competing workers."""
 import copy
 import json
+import os
 import sys
 import unittest
 import urllib.error
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+sys.path.insert(0, os.environ.get("HOMESTEAD_TEST_SERVER_DIR", str(Path(__file__).resolve().parents[1] / "server")))
 import homestead_self_data_anchor as anchor
 from homestead_storage_journal import Held, Journal
 
@@ -232,6 +233,58 @@ class AnchorTests(unittest.TestCase):
         self.assertEqual({"name", "uid", "resourceVersion"}, set(state["deployment"]))
         self.assertEqual({"name", "uid", "resourceVersion"}, set(state["source"]))
         self.assertEqual({"state.json"}, set(record["data"]))
+
+    def copy_phase(self):
+        def fact(name):
+            return {"name": name, "uid": name + "-uid", "shape": "d" * 64}
+        plan = {"deployment_shape": "a" * 64, "source_pvc_shape": "b" * 64,
+                "source_pv": fact("old-pv"), "destination_pvc": fact("data-new"),
+                "destination_pv": fact("new-pv"), "worker": fact("coordinator"),
+                "nodes": [{"name": "node1", "uid": "node-uid", "boot_id": "boot-1"}],
+                "data_volume": "data", "target_shareable": False}
+        self.record.configure(plan)
+        self.record.advance("quiesce")
+        self.record.advance("copy")
+        return plan
+
+    def test_copy_intent_survives_restart_and_prevents_second_copy(self):
+        self.copy_phase()
+        self.record.copy_started()
+        restored = self.restored()
+        self.assertEqual("intent", restored.state["copy_receipt"]["state"])
+        with self.assertRaises(Held): restored.copy_started()
+        with self.assertRaises(Held): restored.advance("verify")
+
+    def test_verified_copy_receipt_allows_next_phase_but_not_recopy(self):
+        self.copy_phase()
+        self.record.copy_started()
+        self.record.copy_finished({"manifest": "c" * 64, "files": 10, "bytes": 1024})
+        self.restored().advance("verify")
+        self.assertEqual("verify", self.restored().state["phase"])
+        with self.assertRaises(Held): self.restored().copy_started()
+        with self.assertRaises(Held): self.restored().copy_finished()
+
+    def test_uncertain_copy_cannot_be_acknowledged_as_verified(self):
+        self.copy_phase()
+        self.record.copy_started()
+        self.record.copy_finished()
+        with self.assertRaises(Held): self.restored().copy_finished({"manifest": "c" * 64, "files": 10, "bytes": 1024})
+        with self.assertRaises(Held): self.restored().advance("verify")
+
+    def test_copy_receipt_cannot_override_worker_or_report_negative_totals(self):
+        self.copy_phase()
+        self.record.copy_started()
+        for bad in ({"state": "verified"}, {"manifest": "c" * 64, "files": -1, "bytes": 1024},
+                    {"manifest": "c" * 64, "files": 10, "bytes": 1024, "worker_uid": "different"}):
+            with self.assertRaises(Held): self.record.copy_finished(bad)
+        self.assertEqual("intent", self.restored().state["copy_receipt"]["state"])
+
+    def test_plan_is_immutable_and_cannot_alias_source_and_destination(self):
+        plan = self.copy_phase()
+        with self.assertRaises(Held): self.record.configure(plan)
+        state = copy.deepcopy(self.record.state)
+        state["plan"]["destination_pv"] = state["plan"]["source_pv"]
+        with self.assertRaises(Held): anchor._validate(state, "lab")
 
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@ Their distribution licence files remain installed with the packages.
 | [protobuf](https://github.com/protocolbuffers/protobuf) | PodResources message decoding | BSD-3-Clause |
 | [typing-extensions](https://github.com/python/typing_extensions) | gRPC runtime dependency | PSF-2.0 |
 | [smartmontools](https://www.smartmontools.org/) | reading drive health in the node probe's SMART sidecar | GPL-2.0-or-later; unmodified, installed from Alpine's package repository, whose [source](https://gitlab.alpinelinux.org/alpine/aports) is published |
+| [rsync](https://rsync.samba.org/) | verified copies of Homestead's persistent data | GPL-3.0-or-later; [full licence](licenses/RSYNC-GPL-3.0.txt); unmodified Alpine package; [upstream source](https://rsync.samba.org/ftp/rsync/src/) and [Alpine packaging](https://gitlab.alpinelinux.org/alpine/aports/-/tree/master/main/rsync) |
 
 ## Images Homestead starts in your cluster
 
