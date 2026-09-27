@@ -20,6 +20,7 @@ import secrets
 import shlex
 
 import homestead_names as NAMES
+import homestead_copy_checks as COPY_CHECKS
 
 kget = ksend = ktext = None
 IMAGE = "alpine:3.20"
@@ -35,7 +36,7 @@ def bind(_kget, _ksend, _ktext):
 
 def _folder(value, where):
     folder = str(value or "").strip().strip("/")
-    if folder and (not FOLDER.match(folder) or ".." in folder.split("/")):
+    if folder and (not FOLDER.fullmatch(folder) or any(part in (".", "..") for part in folder.split("/"))):
         raise ValueError(f"{where}: {folder} is not a folder name this can copy")
     return folder
 
@@ -115,12 +116,20 @@ def script(moves, mount_of):
     app running as its own user found it could not write there and would not
     start. Only a location this made is changed: a volume or folder that was
     already there keeps its own."""
-    lines = ["set -e",
+    lines = ["set -e", COPY_CHECKS.SHELL,
              # The owner and mode of a path, or of the nearest folder above it
              # that exists, no higher than the volume it is in.
              'owner_of() { r="$1"; while [ ! -e "$r" ] && [ "$r" != "$2" ]; do r=$(dirname "$r"); done; '
              'stat -c "%u:%g %a" "$r"; }',
              'take_owner() { set -- $(owner_of "$1" "$2") "$3"; chown "$1" "$3"; chmod "$2" "$3"; }']
+    # Refuse symlink aliases before any destination is changed, including
+    # existing children that cp could otherwise follow while overwriting.
+    for move in moves:
+        for side in ("from", "to"):
+            base = mount_of[move[side]]
+            path = base + ("/" + move[side + "_folder"] if move[side + "_folder"] else "")
+            check = "copy_destination" if side == "to" else "copy_path"
+            lines.append(f"{check} {shlex.quote(path)} {shlex.quote(base)}")
     for index, move in enumerate(moves, 1):
         src = mount_of[move["from"]] + ("/" + move["from_folder"] if move["from_folder"] else "")
         dst = mount_of[move["to"]] + ("/" + move["to_folder"] if move["to_folder"] else "")
@@ -136,13 +145,16 @@ def script(moves, mount_of):
         if move.get("data") is False:
             lines += [f"mkdir -p {d}; echo 'starting empty, owned as before'", own]
             continue
+        lines.append(f"needed=''; if measured=$(timeout 60 du -sk {s} 2>/dev/null); then "
+                     "needed=$(printf '%s\\n' \"$measured\" | awk 'NR == 1 {print $1}'); fi; "
+                     f"copy_space {shlex.quote(mount_of[move['to']])} \"$needed\"")
         if move["from"] == move["to"] and _inside(move["to_folder"], move["from_folder"]):
             # Into a folder of itself, as when a whole volume becomes one
             # folder of it: everything but the folder being filled.
             rest = move["to_folder"][len(move["from_folder"]):].strip("/")
             skip = shlex.quote(src + "/" + rest.split("/")[0])
             lines.append(f"mkdir -p {d} && for f in {s}/* {s}/.[!.]* {s}/..?*; do "
-                         f"[ -e \"$f\" ] || continue; [ \"$f\" = {skip} ] && continue; cp -a \"$f\" {d}/; done")
+                         f"[ -e \"$f\" ] || [ -L \"$f\" ] || continue; [ \"$f\" = {skip} ] && continue; cp -a \"$f\" {d}/; done")
             lines.append(own)
             continue
         lines += [
