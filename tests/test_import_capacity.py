@@ -9,6 +9,7 @@ import server
 import homestead_imports as imports
 import homestead_import_guard as guard
 import homestead_place as place
+from fixtures_source import source
 
 
 class ImportCapacityTests(unittest.TestCase):
@@ -21,7 +22,7 @@ class ImportCapacityTests(unittest.TestCase):
         journal = mock.patch.object(server.OPS, "DATA_DIR", temporary.name)
         journal.start()
         self.addCleanup(journal.stop)
-        self.body = {"name": "imported", "source": "tower", "image": "example/app:1",
+        self.body = {"name": "imported", "source": "tower", "image": "example/app:1", "source_consistency": "stopped",
                      "memory": "256Mi", "memory_limit": "1Gi", "network_mode": "internal",
                      "volumes": [{"name": "new-data", "size_gb": 10, "storage_class": "storage"}],
                      "mappings": [{"remote_path": "/data", "mount_path": "/config", "pvc": "new-data"}]}
@@ -29,7 +30,7 @@ class ImportCapacityTests(unittest.TestCase):
             "metadata": {"name": "storage", "uid": "sc"}, "provisioner": "driver.longhorn.io"}
         for patch in (mock.patch.object(imports, "kget", side_effect=self.get),
                       mock.patch.object(imports, "build_deployment", side_effect=server.build_deployment),
-                      mock.patch.object(imports, "_source", return_value={"name": "tower", "host": "192.0.2.10", "user": "test"}),
+                      mock.patch.object(imports, "_source", return_value=source(user="test")),
                       mock.patch.object(imports, "source_secret", return_value="source-credentials"),
                       mock.patch.object(imports, "NS", "lab"),
                       mock.patch.object(server, "DEFAULT_NS", "lab"),
@@ -69,6 +70,18 @@ class ImportCapacityTests(unittest.TestCase):
         self.assertEqual(["Copy files", "Imported application"], [p["title"] for p in response[1]["phases"]])
         self.assertEqual(.12, response[1]["phases"][0]["capacity"]["pod_request_gb"])
         self.reviewed()
+
+    def test_copy_requires_explicit_source_consistency_choice(self):
+        for choice in (None, "", "live"):
+            response, writes, pvc, icons, jobs = self.call("/api/import/preview", {**self.body,"source_consistency":choice})
+            self.assertEqual(400,response[0],response)
+            for mutation in (writes,pvc,icons,jobs):mutation.assert_not_called()
+
+    def test_source_consistency_change_requires_fresh_review(self):
+        body = self.reviewed()
+        response, writes, pvc, icons, jobs = self.call("/api/import", {**body,"source_consistency":"snapshot"})
+        self.assertNotEqual(200,response[0],response)
+        for mutation in (writes,pvc,icons,jobs):mutation.assert_not_called()
 
     def test_unreviewed_import_never_mutates(self):
         response, *mutations = self.call("/api/import", self.body)

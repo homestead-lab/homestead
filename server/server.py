@@ -42,7 +42,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.192")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.193")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2253,6 +2253,8 @@ def import_capacity_plan(body):
     guard_managed_smb(DEFAULT_NS, cfg.get("name"))
     cfg = NETWORK.prepare_deploy(cfg)  # read-only VIP selection and validation
     prepared = IMP.prepare_import(cfg)
+    if prepared["job"] and cfg.get("source_consistency") not in ("stopped", "snapshot"):
+        raise ValueError("Choose whether the source writers are stopped or the copied paths are a consistent snapshot")
     inventory, pods = IMP.import_inventory(prepared, kget)
     threshold = get_app_settings()["thresholds"]["memory"]["critical"]
     claims = {row["name"]: row for row in prepared["volumes"] if row["create"]}
@@ -5951,6 +5953,7 @@ ADMIN_ROUTES = {
     "/api/auth/users", "/api/auth/users/delete", "/api/auth/role",
     "/api/node/power", "/api/node/drain", "/api/node/cordon", "/api/node/hardware",
     "/api/sources", "/api/sources/delete", "/api/sources/browse",
+    "/api/sources/scan", "/api/sources/trust",
     "/api/sources/containers", "/api/sources/inspect", "/api/sources/measure",
     "/api/import", "/api/import/preview", "/api/imports/delete", "/api/imports/cleanup-plan",
     "/api/vm-disks/import",
@@ -7445,7 +7448,11 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/sources":
                 return self._send(200, {"ok": True, "sources": IMP.add_source(
                     b["name"], b["host"], b["user"], b.get("password"),
-                    b.get("kind", "unraid"), b.get("base_path", "/mnt/user/appdata"))})
+                    b.get("kind", "unraid"), b.get("base_path", "/mnt/user/appdata"), b.get("port", 22))})
+            if p == "/api/sources/scan":
+                return self._send(200, IMP.scan_source(b.get("name"), self.user))
+            if p == "/api/sources/trust":
+                return self._send(200, IMP.trust_source(b, self.user))
             if p == "/api/sources/delete":
                 return self._send(200, {"ok": True, "sources": IMP.del_source(b["name"])})
             if p == "/api/sources/browse":

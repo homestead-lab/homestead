@@ -1102,7 +1102,9 @@ async function viewImport() {
         <div class="csub">${esc(s.kind)} · ${esc(s.user)}@${esc(s.host)}</div></div>
         <button class="btn sm danger" onclick="srcDel('${esc(s.name)}')">✕</button></div>
       <div class="drow"><div class="dl">Base path</div><div class="dv mono small">${esc(s.base_path)}</div></div>
-      <button class="btn wide" style="margin-top:12px" onclick="srcBrowse('${esc(s.name)}')">Browse appdata</button>
+      <div class="drow"><div class="dl">SSH identity</div><div class="dv">${s.ssh_trust ? 'Key pinned' : 'Verification needed'}</div></div>
+      <div class="row" style="margin-top:12px"><button class="btn" data-need="admin" onclick="srcVerify('${esc(s.name)}')">Verify source</button>
+      <button class="btn" ${s.ssh_trust ? '' : 'disabled'} onclick="srcBrowse('${esc(s.name)}')">Browse appdata</button></div>
     </div>`).join("") || `<div class="empty">No import sources yet. Add the host you want to pull from.</div>`}</div>
 
     ${jobs.length ? `<div class="sec">Transfers</div>
@@ -1226,36 +1228,77 @@ window.doVmDiskImport = async () => {
     toast(result.message, "ok"); closeModal(); resetPaint(); viewImport();
   } catch (e) { toast(e.message, "bad"); }
 };
-window.srcAdd = () => modal("Add import source", `
-  <div class="f"><label>Name</label><input type="text" id="sc_name" placeholder="unraid"></div>
-  <div class="f2">
-    <div class="f"><label>Host</label><input type="text" id="sc_host" placeholder="192.168.1.177"></div>
-    <div class="f"><label>Type</label><select id="sc_kind">
-      <option value="unraid">Unraid</option><option value="proxmox">Proxmox</option><option value="ssh">Generic SSH</option></select></div>
-  </div>
-  <div class="f2">
-    <div class="f"><label>Username</label><input type="text" id="sc_user" value="root"></div>
-    <div class="f"><label>Password</label><input type="password" id="sc_pass"></div>
-  </div>
-  <div class="f"><label>Appdata base path</label><input type="text" id="sc_path" value="/mnt/user/appdata"></div>
-  <div class="dim xs" style="margin-bottom:12px">Unraid® is a registered trademark of Lime Technology, Inc. This application is not affiliated with, endorsed, or sponsored by Lime Technology, Inc.</div>
-  <div class="row" style="margin-top:16px">
-    <button class="btn pri" onclick="doSrcAdd()">Add source</button>
-    <button class="btn" onclick="closeModal()">Cancel</button></div>
-  <div class="note" style="margin-top:14px">The password is stored in a Kubernetes Secret in the
-  <span class="mono">lab</span> namespace, not in the ConfigMap. Anyone with cluster access can read it.</div>`);
+window.srcAdd = () => modal("Add import source", UI.lead("Save the connection, then verify its SSH fingerprint. No login is attempted until you trust the source.") +
+  UI.fields(UI.field("Name", '<input id="sc_name" placeholder="unraid">'), UI.field("Host", '<input id="sc_host" placeholder="192.0.2.10">'),
+    UI.field("Username", '<input id="sc_user" value="root" autocomplete="off">'), UI.field("Password", '<input type="password" id="sc_pass" autocomplete="new-password">'),
+    UI.field("SSH port", '<input id="sc_port" type="number" min="1" max="65535" value="22">'),
+    UI.field("Type", '<select id="sc_kind"><option value="unraid">Unraid</option><option value="proxmox">Proxmox</option><option value="ssh">Generic SSH</option></select>')) +
+  UI.field("Appdata base path", '<input id="sc_path" value="/mnt/user/appdata">') +
+  UI.more("Credentials and source ownership", '<p>The password is stored in a Kubernetes Secret. Administrators with access to Secrets can read it. Removing a source does not revoke credentials already used by copy Jobs.</p><p>Unraid® is a registered trademark of Lime Technology, Inc. Homestead is not affiliated with or endorsed by Lime Technology, Inc.</p>') +
+  UI.actions(UI.cancel() + UI.button("Save and verify", "doSrcAdd()", {kind:"pri",id:"sc_save"})), false, "operation-review");
 window.doSrcAdd = async () => {
+  const save = $("#sc_save"), password = $("#sc_pass");
+  if (!save || save.disabled) return;
   const body = { name: $("#sc_name").value.trim(), host: $("#sc_host").value.trim(),
     user: $("#sc_user").value.trim(), password: $("#sc_pass").value,
-    kind: $("#sc_kind").value, base_path: $("#sc_path").value.trim() };
+    kind: $("#sc_kind").value, base_path: $("#sc_path").value.trim(), port: +$("#sc_port").value };
   if (!body.name || !body.host) return toast("name and host are required", "bad");
   try {
-    await api("/api/sources", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    toast("source added", "ok"); closeModal(); resetPaint(); viewImport();
-  } catch (e) { toast(e.message, "bad"); }
+    save.disabled = true;
+    const result = await api("/api/sources", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    password.value = ""; body.password = "";
+    STATE.data.srcs = result.sources;
+    if ($("#sc_save") === save) await srcVerify(body.name);
+  } catch (e) { toast(e.message + " — refresh Sources before retrying an uncertain save.", "bad"); }
+};
+let SOURCE_KEY_REVIEW = null, SOURCE_KEY_SEQUENCE = 0, SOURCE_KEY_BUSY = false;
+window.srcVerify = async name => {
+  if (SOURCE_KEY_BUSY) return;
+  SOURCE_KEY_REVIEW = null;
+  const sequence = ++SOURCE_KEY_SEQUENCE;
+  modal(`Verify source · ${name}`, '<div id="sourceKeyLoading" class="empty"><span class="spin2"></span>Reading the SSH host key. No login or password is sent…</div>', false, "operation-review");
+  try {
+    const review = await api("/api/sources/scan", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name})});
+    if (sequence !== SOURCE_KEY_SEQUENCE || !$("#sourceKeyLoading")) return;
+    if (!review.capacity_token || !review.key || !review.fingerprint || review.name !== name) throw new Error("Fingerprint review is incomplete. Nothing was trusted.");
+    SOURCE_KEY_REVIEW = review;
+    const file = {"ssh-ed25519":"ed25519","ecdsa-sha2-nistp256":"ecdsa","ssh-rsa":"rsa"}[review.algorithm];
+    $("#mbody").innerHTML = UI.lead("Compare this fingerprint with the source host's own console before allowing Homestead to log in.") +
+      UI.callout(review.changed ? "bad" : "warn", review.changed ? "The source key changed" : "A scan is not proof of identity",
+        review.changed ? "A reinstall or an unexpected host can cause this. Confirm the change independently; do not trust it just to clear an error." : "Use the host's physical console or an already trusted management session, not this new SSH connection.") +
+      UI.facts([["Host",esc(review.connection?.host) + ":" + esc(review.connection?.port)],["Host key",esc(review.algorithm)]]) +
+      UI.section("Compare fingerprint", `<div class="mono" style="overflow-wrap:anywhere">${esc(review.fingerprint)}</div>`) +
+      UI.section("On the source console", `<code style="overflow-wrap:anywhere">ssh-keygen -lf /etc/ssh/ssh_host_${esc(file || "ed25519")}_key.pub</code>`) +
+      UI.more("What trusting changes", `<p>New discovery and copy connections must match this key. A key change stops new connections; it is never accepted automatically. Existing helpers retain the key and credentials they started with.</p>${review.previous ? `<p>Previously pinned: <span class="mono" style="overflow-wrap:anywhere">${esc(review.previous)}</span></p>` : ""}`) +
+      UI.ack("sourceKeyAck", "I compared this fingerprint with the source host's console.", {onchange:"sourceKeyReady()"}) +
+      UI.actions(UI.cancel("Not now") + UI.button("Trust this source", "sourceKeyTrust()", {kind:"pri",id:"sourceKeyApply",disabled:true}));
+  } catch(e) {
+    if (sequence !== SOURCE_KEY_SEQUENCE || !$("#sourceKeyLoading")) return;
+    SOURCE_KEY_REVIEW = null;
+    $("#mbody").innerHTML = UI.callout("bad", "Source not verified", esc(e.message)) + UI.actions(UI.cancel("Close"));
+  }
+};
+window.sourceKeyReady = () => {
+  const ready = !!(SOURCE_KEY_REVIEW && !SOURCE_KEY_BUSY && $("#sourceKeyAck")?.checked);
+  if ($("#sourceKeyApply")) $("#sourceKeyApply").disabled = !ready;
+  return ready;
+};
+window.sourceKeyTrust = async () => {
+  if (!sourceKeyReady()) return;
+  const review = SOURCE_KEY_REVIEW, button = $("#sourceKeyApply");
+  SOURCE_KEY_REVIEW = null; SOURCE_KEY_BUSY = true; $("#sourceKeyApply").disabled = true;
+  try {
+    await api("/api/sources/trust", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+      name:review.name,key:review.key,capacity_token:review.capacity_token,confirm_fingerprint:true})});
+    toast("Source key pinned", "ok");
+    if ($("#sourceKeyApply") === button) { closeModal(); resetPaint(); viewImport(); }
+  } catch(e) {
+    if ($("#sourceKeyApply") === button) $("#mbody").innerHTML = UI.callout("bad", "Trust save not confirmed", esc(e.message) + " Refresh and scan again; nothing was retried.") + UI.actions(UI.cancel("Close"));
+    else toast("Trust save not confirmed. Refresh Sources before retrying.", "bad");
+  } finally { SOURCE_KEY_BUSY = false; }
 };
 window.srcDel = async name => {
-  if (!confirm(`Remove import source "${name}"?`)) return;
+  if (!confirm(`Remove import source "${name}"? Existing copy Jobs and their credentials are retained; this does not stop or revoke them.`)) return;
   try { await api("/api/sources/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
     toast("removed", "ok"); resetPaint(); viewImport(); } catch (e) { toast(e.message, "bad"); }
 };
@@ -1595,6 +1638,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
         volume to create. Import will bring across its image, ports and environment alone.
         <div style="margin-top:8px"><button class="btn sm" onclick="imStorageAnyway()">Add storage anyway</button></div></div>`}
     <div id="im_storage" ${keeps ? "" : "hidden"}>
+    ${UI.field("Source data safety", '<select id="im_consistency"><option value="">Choose before copying…</option><option value="stopped">All source writers are stopped</option><option value="snapshot">These paths are a consistent snapshot or backup</option></select>', {help: cfg.source_container_id ? "The original Docker container must stay stopped. Snapshot mode skips that check; verify the paths really point to the snapshot." : "Homestead does not stop source applications. Stop every writer or choose stable backup paths before copying."})}
     <div class="sec">Folders to copy ${tip("Every Docker path under the source appdata directory can come across. They all live in one Longhorn volume for this app, each in its own subfolder, mounted back where the container expects it.")}</div>
     <div class="note">Source folders → the volumes you define below → mounted back at each container path.</div>
     ${keeps && cfg.guessed_path ? `<div class="note warn">Nothing this container mounts sits under <span class="mono">${esc(src.base_path || "/mnt/user/appdata")}</span>,
@@ -2021,6 +2065,7 @@ window.doImport = async source => {
   if (!first && !keepsNothing) return toast("add at least one volume", "bad");
   const existing = !!first && !first.create;
   const body = { source, name: $("#im_name").value.trim(), remote_path: $("#im_path").value.trim(),
+    source_consistency: $("#im_consistency")?.value || "", source_container_id: cfg.source_container_id || "",
     image: $("#im_image").value.trim(), icon: $("#im_icon").value.trim(),
     mappings, volumes: keepsNothing ? [] : volumes,
     pvc_name: first?.name || "", size_gb: first?.size_gb || 0, reuse_existing: existing,
@@ -2046,6 +2091,8 @@ window.doImport = async source => {
   // A RAM scratch mapping has no source by design, so only copied folders are
   // asked for one.
   const copied = body.mappings.filter(row => !row.medium && row.copy !== false);
+  if (copied.length && !["stopped", "snapshot"].includes(body.source_consistency))
+    return toast("Choose Source data safety: stop all source writers or copy a consistent snapshot/backup.", "bad");
   const bad = body.mappings.find(row => row.medium || row.copy === false
     ? !String(row.mount_path || "").startsWith("/")
     : !String(row.remote_path || "").startsWith("/") || !String(row.mount_path || "").startsWith("/"));
@@ -2076,6 +2123,7 @@ window.importReview = async body => {
     IMPORT_REVIEW = {config, ...result, submitting:false};
     childModal("Review import", `<div class="update-review">
       <div class="reviewbox"><b>${esc(config.name)}</b><p>${esc(config.image)}</p>
+        ${config.source_consistency ? `<p>${config.source_consistency === "snapshot" ? "Copy from a consistent snapshot or backup. Source-container checks are skipped; verify the selected paths." : "All source writers must stay stopped." + (config.source_container_id ? " The original Docker container is checked before and after copying each folder." : " Homestead cannot verify other writers.")}</p>` : ""}
         ${(result.volumes || []).map(v => `<div class="dependency-row"><span>${v.create ? 'Create' : 'Reuse'} volume</span><b>${esc(v.name)} · ${esc(v.access_mode)} · ${esc(v.storage_class)}</b></div>`).join('')}
       </div><div class="note warn">${result.capacity.warnings.map(esc).join('<br>')}</div>
       ${result.phases.map(p => `<h3>${esc(p.title)}</h3>${deployCapacityHtml(p.capacity)}`).join('')}
