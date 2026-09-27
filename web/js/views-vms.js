@@ -659,12 +659,19 @@ window.k3sReview = async () => {
     $("#k_go").disabled = !plan.ok;
   } catch (e) { $("#k_review").innerHTML = `<div class="note bad">${esc(e.message)}</div>`; $("#k_go").disabled = true; }
 };
+let K3S_CREATE_BUSY = false;
 window.k3sCreate = async () => {
   const button = $("#k_go");
+  if (K3S_CREATE_BUSY || !button || button.disabled) return;
+  K3S_CREATE_BUSY = true;
   button.disabled = true; button.textContent = "Creating VMs…";
   try {
     await api("/api/vm/k3s-cluster", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(k3sBody()) });
     toast("Cluster VMs created - the job tray follows them coming up", "ok");
     closeModal(); if (window.refreshOperations) refreshOperations(true); go("vms");
-  } catch (e) { toast(e.message, "bad"); button.disabled = false; button.textContent = "Create cluster"; }
+  } catch (e) {
+    toast(e.message, "bad"); button.disabled = true; button.textContent = "Inspect batch before retrying";
+    $("#k_review")?.insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(e.message)}. Some VMs or their disks and Secrets may already exist. No request was repeated. Inspect the job tray and Virtual machines before a new review.</div>`);
+    if (window.refreshOperations) refreshOperations(true);
+  } finally { K3S_CREATE_BUSY = false; }
 };

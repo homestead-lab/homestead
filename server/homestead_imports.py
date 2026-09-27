@@ -2483,6 +2483,9 @@ def commit_vm(prepared, before_save=None):
         raise
     # The Secret goes when the VM does.
     uid = ((created or {}).get("metadata") or {}).get("uid") if isinstance(created, dict) else ""
+    created_meta = ((created or {}).get("metadata") or {}) if isinstance(created, dict) else {}
+    prepared["result"]["vm_identity"] = {key: created_meta.get(key, "")
+                                        for key in ("namespace", "name", "uid", "resourceVersion")}
     if secret_name and uid:
         try:
             secret_identity = created_secrets.get(secret_name) or {}

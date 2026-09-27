@@ -432,6 +432,11 @@ def _cluster_vms(ref):
 
 def k3s_plan(item):
     ref = item["ref"]
+    if ref.get("retain_resources"):
+        return {"mode": "forget", "can": ref.get("phase") != "provisioning", "needs": "operator",
+                "why_not": "VM creation may still be in flight. Wait for its receipt or failure before stopping tracking.",
+                "keeps": ["All VMs, disks, Secrets and IP-address records remain. Guest installation continues.",
+                          "Inspect each VM and use its explicit delete controls if it is no longer wanted."]}
     vms = _cluster_vms(ref)
     addresses = [n["address"] for n in ref.get("nodes") or []]
     return {"mode": "rollback", "needs": "admin", "severity": "high", "confirm": ref["name"],
@@ -444,6 +449,10 @@ def k3s_plan(item):
 
 def k3s_cancel(item, _options):
     ref = item["ref"]
+    if ref.get("retain_resources"):
+        if ref.get("phase") == "provisioning":
+            raise ValueError("VM creation may still be in flight; nothing was cancelled or deleted")
+        return "Stopped tracking guest startup. All VMs, disks, Secrets and IP-address records are retained."
     removed = []
     for node in _cluster_vms(ref):
         try:

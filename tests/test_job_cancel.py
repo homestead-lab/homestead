@@ -261,21 +261,27 @@ class K3sClusterTests(Store):
         with self.assertRaisesRegex(ValueError, "failed already"):
             OPS.cancel(op)
 
-    def test_a_build_that_fails_part_way_removes_the_vms_it_made(self):
+    def test_a_build_that_fails_part_way_retains_vms_and_records_the_uncertain_target(self):
         removed, made = [], []
 
         def create(vm):
             if vm["name"].endswith("agent-1"):
                 raise ValueError("no room")
             made.append(vm["name"])
+            return {"vm_identity": {"namespace": "lab", "name": vm["name"], "uid": "made-uid", "resourceVersion": "1"}}
         K3SC.bind(lambda path: {}, create, lambda ip: "", lambda ns, node: removed.append(node["name"]))
         try:
-            with self.assertRaisesRegex(ValueError, "agent-1 could not be made: no room. The 1 VM made before it"):
+            with self.assertRaisesRegex(ValueError, "Stopped at k3s-lab-agent-1. 1 creation receipt"):
                 K3SC.start({"name": "k3s-lab", "servers": 1, "agents": 1, "network": "default/lan",
                             "addresses": ["192.168.1.60", "192.168.1.61"], "password": "a-long-password"}, OPS)
         finally:
             K3SC.bind(None, None, None)
-        self.assertEqual(["k3s-lab-server-1"], removed)
+        self.assertEqual([], removed)
+        item = OPS._read()[-1]
+        self.assertEqual("failed", item["status"])
+        self.assertEqual("k3s-lab-agent-1", item["ref"]["attempted"])
+        self.assertEqual("made-uid", item["ref"]["created"][0]["identity"]["uid"])
+        self.assertFalse(OPS._public(item)["cleanable"])
 
 
 class DeploymentTests(Store):

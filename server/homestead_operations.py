@@ -60,8 +60,14 @@ def _write(items):
     os.makedirs(DATA_DIR, exist_ok=True)
     path = _store_path()
     tmp = SHARED.temporary(path)
+    # A busy history must not evict an in-flight dispatch intent or a failed
+    # batch's recovery record. Bound ordinary terminal history, not active work.
+    protected = {i for i, item in enumerate(items) if item.get("status") not in TERMINAL or
+                 (item.get("status") == "failed" and item.get("ref", {}).get("retain_resources"))}
+    recent = [i for i in range(len(items)) if i not in protected][-MAX_OPERATIONS:]
+    kept = protected | set(recent)
     with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(items[-MAX_OPERATIONS:], handle, separators=(",", ":"))
+        json.dump([item for i, item in enumerate(items) if i in kept], handle, separators=(",", ":"))
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(tmp, path)
@@ -87,6 +93,10 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
         if kind == "node-power" and any(i.get("kind") == kind and i.get("status") not in TERMINAL and
                                         i.get("ref", {}).get("node") == ref.get("node") for i in items):
             raise ValueError("Host maintenance is already active; inspect its job before retrying")
+        if kind == "k3s-cluster" and any(i.get("kind") == kind and i.get("status") not in TERMINAL and
+                                        (i.get("ref", {}).get("namespace"), i.get("ref", {}).get("name")) ==
+                                        (ref.get("namespace"), ref.get("name")) for i in items):
+            raise ValueError("This k3s VM batch is already active; inspect its job before retrying")
         if kind in ("snapshot-delete", "snapshot-revert") and any(
                 i.get("kind") in ("snapshot-delete", "snapshot-revert") and i.get("status") not in TERMINAL
                 and i.get("ref", {}).get("volume") == ref.get("volume") for i in items):
@@ -119,6 +129,8 @@ def _public(item):
     out["cleanable"] = _cleanable(item)
     if item.get("kind") == "snapshot-delete":
         out["cancellable"] = False  # Longhorn merging cannot be undone or safely interrupted.
+    if item.get("kind") == "k3s-cluster" and item.get("ref", {}).get("retain_resources") and item["ref"].get("phase") == "provisioning":
+        out["cancellable"] = False  # synchronous dispatch may still be in flight
     check = RESUMABLE.get(item.get("kind"))
     if item.get("status") == "failed" and check:
         try:
@@ -576,7 +588,8 @@ CLEANUPS = set()
 
 
 def _cleanable(item):
-    return item.get("status") == "failed" and item.get("kind") in CLEANUPS and not item.get("cleaned")
+    return (item.get("status") == "failed" and item.get("kind") in CLEANUPS and not item.get("cleaned")
+            and not item.get("ref", {}).get("retain_resources"))
 MODES = {"rollback": "Cancel and put back", "stop": "Cancel it", "forget": "Stop tracking it"}
 
 
