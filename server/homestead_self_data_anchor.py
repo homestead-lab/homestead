@@ -100,7 +100,7 @@ def _journal(job, operation, namespace):
 
 def _validate(state, namespace):
     _keys(state, ("protocol", "operation", "deployment", "source", "destination", "replicas", "phase", "journal"),
-          ("plan", "copy_receipt", "pointer_receipt", "runtime", "setup"))
+          ("plan", "copy_receipt", "pointer_receipt", "runtime", "setup", "setup_aborted"))
     if type(state["protocol"]) is not int or state["protocol"] != 1:
         raise Held("The data handoff protocol is unsupported")
     if not isinstance(state["operation"], str) or not re.fullmatch(r"[a-f0-9]{24}", state["operation"]):
@@ -115,6 +115,9 @@ def _validate(state, namespace):
     if state["phase"] not in PHASES:
         raise Held("The data handoff phase is invalid")
     _journal(state["journal"], state["operation"], namespace)
+    if "setup_aborted" in state and (state["setup_aborted"] is not True or state["phase"] != "prepare"
+            or "pointer_receipt" in state or state["journal"]["ref"]["storage_writes"]):
+        raise Held("Only unpublished setup can be abandoned")
     if "setup" in state:
         from homestead_self_data_bootstrap import validate, complete
         validate(state["setup"], namespace, state["deployment"]["name"], state["operation"])
@@ -293,6 +296,8 @@ class Anchor:
 
     def _replace(self, state):
         self.handle()
+        if self.state.get("setup_aborted"):
+            raise Held("Preparation was abandoned; this operation cannot be resumed")
         encoded = _validate(state, self.namespace)
         body = copy.deepcopy(self.obj)
         body.pop("status", None)
@@ -396,6 +401,14 @@ class Anchor:
             raise Held("The data handoff worker cannot overwrite its current hold or status")
         state = copy.deepcopy(self.state)
         state["runtime"] = {"worker_uid": worker_uid, "checked_at": checked_at, "state": status, "message": message}
+        self._replace(state)
+
+    def abort_setup(self):
+        self.handle()
+        if self.state["phase"] != "prepare" or "pointer_receipt" in self.state or self.state["journal"]["ref"]["storage_writes"]:
+            raise Held("The move has already been handed over; automatic rollback is not safe")
+        state = copy.deepcopy(self.state)
+        state["setup_aborted"] = True
         self._replace(state)
 
     def copy_started(self):

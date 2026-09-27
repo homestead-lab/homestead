@@ -49,6 +49,10 @@ def progress(anchor, now):
     requested this view. Missing/stale heartbeats are not 'still running'.
     """
     state = anchor.state
+    if state.get("setup_aborted"):
+        return {"operation": state["operation"], "phase": "prepare", "status": "cancelled", "stale": False,
+                "message": "Preparation abandoned. Homestead keeps its original data volume. Both volumes are retained.",
+                "stages": [], "copy_percent": None, "retention_policy": "keep_both_volumes", "requires_review": False, "can_cancel": False}
     phase = state["phase"]
     runtime = state.get("runtime", {})
     stamp = runtime.get("checked_at")
@@ -261,13 +265,18 @@ def maintenance_page(operation):
 :root{color-scheme:dark;font:16px system-ui;background:#101115;color:#eceef3}body{margin:0;padding:24px;display:grid;min-height:85vh;place-items:center}
 main{box-sizing:border-box;width:min(100%,560px);padding:clamp(22px,5vw,40px);border:1px solid #343640;border-radius:24px;background:#191a20}
 h1{font-size:26px;margin:0 0 14px}p{line-height:1.55;color:#bfc2cd}li{padding:9px 0}li[data-state=pending]{color:#737782}li[data-state=current]{color:#72ddb1}a{color:#72ddb1}
+button{font:inherit;padding:12px 18px;border:1px solid #616571;border-radius:12px;background:#eceef3;color:#17191d;cursor:pointer}button:disabled{opacity:.5;cursor:wait}
 </style><main><h1>Moving Homestead data</h1><p id="message" role="status">Checking progress…</p><ol id="stages"></ol>
-<p>Both volumes are retained. You can leave this page open; it will reconnect automatically.</p><a id="return" href="/settings" hidden>Return to Homestead</a></main>
+<p>Both volumes are retained. You can leave this page open; it will reconnect automatically.</p><button id="abandon" hidden>Keep original volume</button><p id="error" role="alert" hidden></p><a id="return" href="/settings" hidden>Return to Homestead</a></main>
 <script>
+document.querySelector('#abandon').onclick=async function(){this.disabled=true;const error=document.querySelector('#error');error.hidden=true;
+try{const r=await fetch('/api/self/data/abandon',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Homestead-Auth':'1'},body:JSON.stringify({operation:'OPERATION'})});const result=await r.json();if(!r.ok)throw Error(result.error||'Recovery needs an administrator session.');location.replace('/settings')}
+catch(e){error.textContent=e.message;error.hidden=false;this.disabled=false}};
 async function refresh(){try{const r=await fetch('/api/self/data/handoff/OPERATION',{credentials:'same-origin',cache:'no-store'});
 if(r.status===401||r.status===403){document.querySelector('#message').textContent='Open the browser where you confirmed this move to view its progress. No new login is needed.';return;}
 const s=await r.json();if(!s.operation)throw Error();document.querySelector('#message').textContent=s.message;
+document.querySelector('#abandon').hidden=s.can_abandon!==true;
 document.querySelector('#stages').replaceChildren(...(s.stages||[]).map(x=>{const li=document.createElement('li');li.textContent=x.label;li.dataset.state=x.state;return li}));
-if(s.status==='done'){document.querySelector('#return').hidden=false;setTimeout(()=>location.replace('/settings'),5000);return;}}
+if(s.status==='done'||s.status==='cancelled'){document.querySelector('#return').hidden=false;setTimeout(()=>location.replace('/settings'),5000);return;}}
 catch(e){document.querySelector('#message').textContent='Reconnecting… The last shown stage is not confirmation of completion.'}setTimeout(refresh,3000)}refresh();
 </script></html>'''.replace("OPERATION", operation)

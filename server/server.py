@@ -38,6 +38,7 @@ import homestead_self_data_review as SELF_DATA_REVIEW
 import homestead_self_data_prepare as SELF_DATA_PREPARE
 import homestead_self_data_execute as SELF_DATA_EXECUTE
 import homestead_self_data_route as SELF_DATA_ROUTE
+import homestead_self_data_finish as SELF_DATA_FINISH
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
 API = "https://kubernetes.default.svc"
@@ -205,7 +206,7 @@ def self_data_request(method):
         # Destination's explicitly read-only boot routes have their own guard;
         # they must not create activity/feature lock files on the copied data.
         progress = getattr(handler, "command", "") == "GET" and re.fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}(?:/view)?", path)
-        if _self_data_boot_pending or not path.startswith("/api/") or progress:
+        if _self_data_boot_pending or not path.startswith("/api/") or progress or path in ("/api/auth/state", "/api/self/data/abandon"):
             return method(handler)
         try:
             with self_data_activity():
@@ -268,7 +269,7 @@ def self_data_boot_status():
         if _self_data_boot_failed:
             raise SELF_DATA_FENCE.Held("Destination background activation needs review")
         state = _self_data_fence.inspect()
-        if state.get("mode") not in ("start", "done"):
+        if state.get("mode") not in ("start", "done", "recovery"):
             raise SELF_DATA_FENCE.Held("Destination startup state changed")
         OPS._read()
         AUTH.review_signing_key()
@@ -5249,7 +5250,12 @@ def homestead_data_volume(dep=None):
                   "only one node can mount, so a copy on a second node would never start")
     else:
         reason = ""
-    shared = shared_storage_classes(rows)
+    # Do not request RWX merely because a non-Longhorn class has no
+    # migratable flag. k3s local-path (and many block CSI drivers) cannot
+    # provision it. Unknown drivers get the conservative single-node mode.
+    shared_drivers = {"driver.longhorn.io", "nfs.csi.k8s.io", "efs.csi.aws.com", "file.csi.azure.com"}
+    shared = shared_storage_classes([r for r in rows if r.get("provisioner") in shared_drivers
+                                     or r.get("provisioner", "").endswith(".cephfs.csi.ceph.com")])
     # Every class it could move to, and whether copies on several nodes could
     # then share it: the move is not only for redundancy.
     classes = [{"name": r["name"], "shareable": r["name"] in shared} for r in rows
@@ -5303,6 +5309,19 @@ def self_data_handoff_status(operation):
     if not re.fullmatch(r"[a-f0-9]{24}", operation):
         return None
     try:
+        if _self_data_fence is not None:
+            try:
+                recovery = _self_data_fence.recovery()
+                if recovery["operation"] == operation and not recovery["writable"]:
+                    view = SELF_DATA_WORKER.unavailable_status(operation)
+                    view.update(status="preparing", can_abandon=True, requires_review=False,
+                        message="Homestead is still on its original volume. You can wait for preparation or abandon it safely before the move starts.")
+                    return view
+            except Exception:
+                pass
+        completed = SELF_DATA_FINISH.read(DATA_DIR, SELF.NS, NAMES.BRAND)
+        if completed and completed[1].state["operation"] == operation:
+            return SELF_DATA_WORKER.progress(completed[1], time.time())
         marker = SELF_DATA_FENCE.read_marker(DATA_DIR)
         if not marker:
             job = next((i for i in OPS._read() if i.get("kind") == SELF_DATA_EXECUTE.KIND and i.get("ref", {}).get("operation") == operation), None)
@@ -5323,6 +5342,20 @@ def self_data_handoff_status(operation):
         return SELF_DATA_WORKER.progress(anchor, time.time())
     except Exception:
         return SELF_DATA_WORKER.unavailable_status(operation)
+
+
+def abandon_self_data_preparation(body):
+    if _self_data_fence is None:
+        raise SELF_DATA_FENCE.Held("Data-move recovery is unavailable")
+    recovery = _self_data_fence.recovery()
+    if body.get("operation") != recovery["operation"]:
+        raise SELF_DATA_FENCE.Held("The preparation changed; reload its status")
+    anchor = SELF_DATA_FENCE.A.Anchor(kget, _ksend, SELF.NS, NAMES.BRAND).load(operation=recovery["operation"], uid=recovery["anchor_uid"])
+    if not anchor.state.get("setup_aborted"):
+        anchor.abort_setup()  # CAS disarms the publisher; never clears a published handoff.
+    if not _self_data_boot_pending:
+        threading.Thread(target=finish_self_data_helpers, name="data-move-cleanup", daemon=True).start()
+    return {"ok": True, "message": "Preparation abandoned. Both volumes are retained."}
 
 
 def _self_data_helper_image(read, ns):
@@ -5486,7 +5519,7 @@ def start_self_data_move(body, actor):
     return {"ok": True, "operation": job, "handoff": execution["scope"].operation}, execution["status_token"]
 
 
-OPS.RESOLVERS[SELF_DATA_EXECUTE.KIND] = lambda item: SELF_DATA_EXECUTE.resolve(item, kget)
+OPS.RESOLVERS[SELF_DATA_EXECUTE.KIND] = lambda item: SELF_DATA_EXECUTE.resolve(item, kget, directory=DATA_DIR)
 
 
 def move_homestead_data(storage_class):
@@ -6313,7 +6346,7 @@ def needed_role(path, method):
         return "admin"
     if path == "/api/storage/classes" and method != "GET":
         return "admin"
-    if path in ("/api/portal", "/api/self/replicas", "/api/self/data/move", "/api/self/data/move/preview", "/api/self/data/prepare", "/api/self/data/prepare/preview", "/api/ipam/unifi", "/api/mqtt", "/api/mqtt/test") and method != "GET":
+    if path in ("/api/portal", "/api/self/replicas", "/api/self/data/move", "/api/self/data/abandon", "/api/self/data/move/preview", "/api/self/data/prepare", "/api/self/data/prepare/preview", "/api/ipam/unifi", "/api/mqtt", "/api/mqtt/test") and method != "GET":
         return "admin"
     # A chart can make anything anywhere in the cluster, and so can raw YAML;
     # a secret's values are for admins only.
@@ -6483,7 +6516,7 @@ class H(BaseHTTPRequestHandler):
             if self.command == "GET" and static:
                 return None  # Bundled UI can explain an outage without touching data.
             try:
-                self_data_boot_status()
+                boot_state = self_data_boot_status()
             except SELF_DATA_FENCE.Held as error:
                 self._send(503, {"error": str(error), "data_handoff": True})
                 return True
@@ -6493,15 +6526,25 @@ class H(BaseHTTPRequestHandler):
                 self._send(200, {"ok": True, "data_handoff": True, "read_only": True})
                 return True
             if self.command == "GET" and path == "/api/auth/state":
-                self._send(200, {"data_handoff": True, "setup": False})
+                detail = {"recovery": True, "operation": boot_state["operation"]} if boot_state.get("mode") == "recovery" else {}
+                self._send(200, {"data_handoff": True, "setup": False, **detail})
                 return True
-            if self.command != "GET" or not re.fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}(?:/view)?", path):
+            recovery_action = self.command == "POST" and path == "/api/self/data/abandon" and boot_state.get("mode") == "recovery"
+            if not recovery_action and (self.command != "GET" or not re.fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}(?:/view)?", path)):
                 self._send(503, {"error": "Homestead is verifying its new data volume. Wait for the move to finish before changing anything.", "data_handoff": True})
                 return True
-        if self.command in ("POST", "PUT", "PATCH", "DELETE") or path in ("/healthz", "/api/console", "/api/node/shell", "/api/vm/console"):
+        if path != "/api/self/data/abandon" and (self.command in ("POST", "PUT", "PATCH", "DELETE") or path in ("/healthz", "/api/auth/state", "/api/console", "/api/node/shell", "/api/vm/console")):
             try:
                 require_self_data_write()
             except SELF_DATA_FENCE.Held as error:
+                if self.command == "GET" and path in ("/healthz", "/api/auth/state") and _self_data_fence is not None:
+                    try:
+                        recovery = _self_data_fence.recovery()
+                        self._send(200, {"ok": True, "read_only": True, "data_handoff": True, "setup": False,
+                                         "recovery": True, "operation": recovery["operation"]})
+                        return True
+                    except Exception:
+                        pass
                 self._send(503, {"error": str(error), "data_handoff": True})
                 return True
         if (is_spa_route(path) or is_page_path(path) or is_public_path(path) or is_vendor_path(path) or
@@ -7084,6 +7127,11 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, PORTAL.save(b.get("links")))
             if p == "/api/self/replicas":
                 return self._send(200, set_homestead_replicas(b.get("replicas")))
+            if p == "/api/self/data/abandon":
+                try:
+                    return self._send(200, abandon_self_data_preparation(b))
+                except SELF_DATA_FENCE.Held as error:
+                    return self._send(409, {"error": str(error)})
             if p == "/api/self/data/move":
                 try:
                     result, token = start_self_data_move(b, self.user)
@@ -8036,6 +8084,22 @@ def start_background_tasks():
     threading.Thread(target=_hardware_loop, daemon=True).start()
     threading.Thread(target=_samba_loop, daemon=True).start()
     threading.Thread(target=_vmstore_loop, daemon=True).start()
+    threading.Thread(target=finish_self_data_helpers, name="data-move-cleanup", daemon=True).start()
+
+
+def finish_self_data_helpers():
+    if _self_data_fence is None: return
+    while True:
+        try:
+            with self_data_activity():
+                result = SELF_DATA_FINISH.finish(_self_data_fence, kget, ksend)
+            if result["done"]: return
+        except Exception:
+            # The verified destination stays usable. Do not replay a delete or
+            # remove either PVC to make cleanup appear successful.
+            print("Data move helper cleanup needs review; both volumes are retained", flush=True)
+            return
+        time.sleep(2)
 
 
 def finish_self_data_boot():
