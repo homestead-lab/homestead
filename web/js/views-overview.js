@@ -505,6 +505,43 @@ window.probeRemove = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
+window.allocationProbeSettings = async () => {
+  try {
+    const current = await api("/api/node/probe/allocation");
+    window._allocationProbeReview = current;
+    childModal("VM allocation collector", `
+      <p>Reads which dedicated CPUs and memory the kubelet has assigned. This helps NUMA placement checks; it does not reserve resources or make a VM safe to start by itself.</p>
+      <div class="note">${esc(current.detail || "Status unavailable")}</div>
+      ${!current.installed ? '<p>Install the node probe first in Cluster → Add-ons.</p>' : `
+      <div class="note warn"><b>Optional host access.</b> Adds a root sidecar with no Linux capabilities and a read-only root filesystem. Only the kubelet’s dedicated socket directory and host boot ID are mounted read-only. Socket access permits talking to kubelet; this collector implements only read-only RPCs. Requests and responses use a separate authentication key, not your account keys.</div>
+      <label class="f">Kubelet socket directory ${tip("Use the kubelet root directory’s pod-resources subdirectory. It must already exist on every selected probe node and contain kubelet.sock. Custom k3s/RKE2 installations may use a different root; do not enter the whole kubelet directory.")}
+        <input id="allocationProbeDirectory" class="input mono" value="${esc(current.directory || "/var/lib/kubelet/pod-resources")}" autocomplete="off" spellcheck="false"></label>
+      <p class="dim small">Saving restarts node-probe pods, temporarily interrupting host telemetry. Workload containers and VMs are not restarted. The extra sidecar requests 32 MiB RAM and is limited to 96 MiB per node. A missing socket leaves the collector unavailable; Homestead will not interpret that as free capacity. One directory is used across this probe’s nodes.</p>
+      <label class="vip-check"><input id="allocationProbeConsent" type="checkbox"><span>I approve this socket access and the probe restart.</span></label>
+      <div class="row" style="margin-top:16px">
+        <button class="btn pri" data-need="admin" onclick="allocationProbeSave(true,this)">${current.enabled ? "Save collector settings" : "Enable collector"}</button>
+        ${current.enabled ? '<button class="btn" data-need="admin" onclick="allocationProbeSave(false,this)">Disable collector</button>' : ""}
+        <button class="btn" onclick="modalBack()">Cancel</button>
+      </div>`}`, false, "operation-review");
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+window.allocationProbeSave = async (enabled, button) => {
+  const current = window._allocationProbeReview;
+  if (!current?.installed || !current.uid || !current.resource_version) return toast("Reload the probe configuration first", "bad");
+  if (enabled && !$("#allocationProbeConsent")?.checked) return toast("Confirm socket access and the probe restart first", "bad");
+  if (!enabled && !confirm("Disable allocation collection? Probe pods restart; NUMA starts will remain blocked without verified allocation evidence. Workloads and their volumes are unchanged.")) return;
+  const body = {enabled, directory: $("#allocationProbeDirectory")?.value || "",
+    uid: current.uid, resource_version: current.resource_version, acknowledge_host_access: enabled};
+  window._allocationProbeReview = null; // uncertain saves always require a fresh read
+  if (button) button.disabled = true;
+  try {
+    const result = await api("/api/node/probe/allocation", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    toast(result.detail, "ok");
+    modalBack();
+  } catch (e) { toast(`${e.message}. Reopen VM allocation to read the current configuration before another change.`, "bad"); }
+};
+
 window.smartStartConfirm = (node, disk, type) => childModal(`Start ${type} SMART test?`, `
   <p>This asks <b>${esc(node)} / ${esc(disk)}</b> to run its built-in ${esc(type)} self-test.</p>
   <div class="note">The test does not erase data, but a long test can reduce storage performance and may take hours. Progress and the final drive result remain in Activity.</div>

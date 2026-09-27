@@ -1584,9 +1584,25 @@ Buffers packages above; the ordinary telemetry probe still runs on the standard
 library alone. Linux CI exercises a temporary fake kubelet Unix socket without
 contacting a cluster. Those transport tests are skipped on Windows.
 
-The PodResources reader is groundwork for NUMA admission, not an enabled add-on
-or completed placement guarantee. It does not yet install a socket mount or
-authorize a NUMA start. Missing policy/allocation evidence remains a blocker.
+The PodResources collector is opt-in under **Cluster → Add-ons → Node probe →
+VM allocation** (administrator only). It adds a root sidecar with all Linux
+capabilities dropped, a read-only filesystem, the existing dedicated kubelet
+`pod-resources` directory, and the host boot-ID file. No broad kubelet tree,
+account key, or Kubernetes API token is supplied to that sidecar. Requests and
+responses use a separate authentication Secret; traffic is authenticated, not
+encrypted, and requires a trusted cluster network. The configured socket directory
+must already exist on every probe node; custom kubelet roots need their own path.
+
+Enable, disable and path changes restart probe pods, not workload containers or
+VMs. The collector requests 32 MiB and has a 96 MiB limit per node. Disabling
+removes only its sidecar and dedicated mounts; it does not delete any workload
+PVC or authentication Secret. The latter remains owned by the probe DaemonSet.
+Changing configuration requires a fresh probe UID/resource-version read and
+never overwrites an unmanaged sidecar or foreign authentication Secret.
+
+This remains groundwork for NUMA admission, not a completed placement guarantee.
+Backend policy/provenance integration and local placement checks are still needed
+before this collector can authorize a NUMA start. Missing evidence remains a blocker.
 
 ## Security notes
 

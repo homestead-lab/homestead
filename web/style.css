@@ -892,6 +892,8 @@ html[data-theme="light"] .modalbox:has(#net_editor){background:var(--surf);color
 html[data-theme="light"] .modalbox:has(.update-review),html[data-theme="light"] .modalbox:has(#imageQueue){background:var(--surf);color:var(--tx)}
 html[data-theme="light"] .modalbox[data-context="operation-review"]{background:var(--surf);color:var(--tx)}
 html[data-theme="light"] .modalbox[data-context="operation-review"] .note.warn{color:#824600}
+.modalbox[data-context="operation-review"] .modalhead{background:var(--surf)}
+.modalbox:has(#allocationProbeDirectory) .dim{color:var(--mut)}
 html[data-theme="light"] #net_editor .net-access-choice:has(input:checked),html[data-theme="light"] #net_editor .net-address-choice:has(input:checked){background:#edf5ff}
 .net-current-access{display:flex;flex-direction:column;gap:7px;background:var(--surf2);border:1px solid var(--line);border-radius:12px;padding:16px;margin:0 0 20px;overflow-wrap:anywhere}
 .net-current-access small,.net-address-choice small,.net-access-choice small{color:var(--mut);font-size:12px;line-height:1.5}

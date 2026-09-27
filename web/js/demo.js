@@ -491,6 +491,8 @@
     "/api/node/probe/install": { state: "installed",
       detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
+    "/api/node/probe/allocation": {installed: true, enabled: false, managed: false, directory: "",
+      uid: "demo-probe", resource_version: "1", detail: "Allocation collector is disabled (demo; no host changes)"},
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
       info: { version: "2.8.183", namespace: "lab", storage_class: "longhorn-r2", vip: "192.168.1.242",
         kubernetes: "v1.32.4+rke2r1",

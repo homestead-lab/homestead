@@ -5,7 +5,8 @@
 listener, Kubernetes token, checkpoint access, or mutation method. Importing
 the module does not load its gRPC dependencies until a snapshot is requested.
 
-This is not yet installed by the node-probe manifests or consumed by admission.
+It can now be explicitly enabled through the node probe's VM allocation settings;
+default/manual-install manifests do not enable it. It is not yet consumed by admission.
 Do not enable NUMA placement solely because this reader reports `complete`.
 The backend must also verify current probe/host identity, freshness, supported
 kubelet version and actual CPU/topology-manager policy, online topology and
@@ -26,11 +27,23 @@ DRA presence is flagged, not interpreted as proof of resource availability.
 The CPU/memory bracket does not claim to detect device-only changes.
 
 Only a regular local Unix socket is accepted, not a symlink or TCP endpoint.
-Future installation must be opt-in with a validated minimal socket directory,
+Installation is opt-in with a validated minimal socket directory,
 not a broad kubelet root or credentials mount. A read-only filesystem mount does
 not itself restrict what RPCs can be sent through a socket; the fixed client
-methods are part of the trust boundary. Any future network helper also needs
-separate authentication and provenance checks before its output is trusted.
+methods are part of the trust boundary. `allocation_http.py` uses a separate
+DaemonSet-owned Secret, request/response domain separation, target node/Pod UID,
+short-lived nonces, a bounded replay cache, response size limits and boot identity
+checks. HTTP health only means the process is up, not that allocations are known.
+It serves one request at a time with socket timeouts. There is no public Service.
+Signed HTTP is not confidentiality; the cluster network and host root are trusted.
+Backend verification of response authentication, ownership, current policy and
+freshness is still required before this output can authorize placement.
+
+The sidecar mounts an empty read-only directory at the standard service-account
+path, so Kubernetes' service-account admission does not inject its token into this
+container; other existing probe containers' token policy is unchanged. See the
+upstream [service-account admission implementation](https://github.com/kubernetes/kubernetes/blob/v1.32.0/plugin/pkg/admission/serviceaccount/admission.go).
+Arbitrary mutating webhooks and a compromised host are outside this assertion.
 
 ## Schema maintenance
 

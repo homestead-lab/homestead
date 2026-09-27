@@ -21,6 +21,7 @@ import homestead_vm_batch as VM_BATCH
 import homestead_batch_capacity as BATCH_CAPACITY
 import homestead_volume_usage as VOLUME_USAGE
 import homestead_snapshot_delete as SNAPSHOT_DELETE
+import homestead_allocation_probe as ALLOCATION_PROBE
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -4568,6 +4569,7 @@ import homestead_power as POWER
 import homestead_privileges as PRIV
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
+ALLOCATION_PROBE.bind(kget, ksend, DEFAULT_NS)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
 MOVE.bind(kget, ksend, DEFAULT_NS, HOMESTEAD_VERSION)
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
@@ -5883,6 +5885,7 @@ ADMIN_ROUTES = {
     "/api/node/smart/test",
     # Installing the probe stands a privileged container on every node.
     "/api/node/probe/install", "/api/node/probe/remove",
+    "/api/node/probe/allocation",
     # Object storage holds every backup, and its keys.
     "/api/objectstore/deploy", "/api/objectstore/longhorn", "/api/objectstore/remove",
     # A cluster's credentials, and what they reach.
@@ -6324,6 +6327,8 @@ class H(BaseHTTPRequestHandler):
                 report["health_assessment"] = smart_disk_health(
                     report, get_app_settings().get("smart"))
                 return self._send(200, report)
+            if p == "/api/node/probe/allocation":
+                return self._send(200, ALLOCATION_PROBE.status())
             if p == "/api/history/long":
                 return self._send(200, HISTORY.series((q.get("range") or ["24h"])[0]))
             if p == "/api/history":
@@ -7043,6 +7048,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, PROBE.install(HOMESTEAD_VERSION))
             if p == "/api/node/probe/remove":
                 return self._send(200, PROBE.remove())
+            if p == "/api/node/probe/allocation":
+                return self._send(200, ALLOCATION_PROBE.configure(b, HOMESTEAD_VERSION))
             if p == "/api/node/smart/test":
                 result = SMART.start_test(b.get("node"), b.get("disk"), b.get("test"))
                 result["operation"] = OPS.start(
