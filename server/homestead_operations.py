@@ -268,6 +268,9 @@ def _public(item):
             out["resumable"] = not check(item)
         except Exception:
             out["resumable"] = False
+    if item.get("kind") == "reclass" and item.get("ref", {}).get("storage_protocol") == 1:
+        out.update(cancellable=False, cleanable=False, resumable=False,
+                   storage_recovery=item.get("ref", {}).get("handoff_phase") != "done")
     return out
 
 
@@ -694,6 +697,8 @@ def resume(operation_id):
         match = next((item for item in items if item.get("id") == operation_id), None)
         if not match:
             raise ValueError("operation not found")
+        if match.get("kind") == "reclass" and match.get("ref", {}).get("storage_protocol") == 1:
+            raise ValueError("Review this storage move's retained resources and capacity before continuing")
         check = RESUMABLE.get(match.get("kind"))
         if match.get("status") != "failed" or not check:
             raise ValueError("only a failed job that can carry on can be resumed")
@@ -769,6 +774,9 @@ def _plan_for(item):
                       "and only stops showing here."],
             "confirm": "", "needs": "operator", "options": []}
     entry = CANCELLERS.get(item.get("kind"))
+    if item.get("kind") == "reclass" and item.get("ref", {}).get("storage_protocol") == 1:
+        plan.update(can=False, why_not="Use the storage move review to pause safely; cancelling must not roll back or delete retained data")
+        return plan
     if item.get("kind") == "snapshot-delete":
         plan.update(can=False, why_not="Longhorn snapshot removal cannot be undone or safely cancelled")
         return plan

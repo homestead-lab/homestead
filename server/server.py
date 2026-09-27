@@ -4735,6 +4735,16 @@ OPS.CLEANUPS.update((COPY_JOB.KIND, "restructure"))
 OPS.RESOLVERS[IMPORT_JOB.KIND] = lambda item: IMPORT_JOB.status(item, kget)
 OPS.CANCELLERS[IMPORT_JOB.KIND] = (IMPORT_JOB.cancel_plan, IMPORT_JOB.cancel_run)
 import homestead_reclass as RECLASS
+import homestead_storage_admission as STORAGE_ADMISSION
+import homestead_storage_recovery as STORAGE_RECOVERY
+
+
+def storage_restart_admission(item, proposals):
+    return STORAGE_ADMISSION.plan(item, proposals, kget, PLACE.get_nodes(), get_app_settings()["thresholds"]["memory"]["critical"])
+
+
+def storage_helper_admission(item, manifest):
+    return copy_admission(manifest)
 import homestead_vmstore as VMSTORE
 import homestead_nodeshell as NODESHELL
 import homestead_hvimage as HVIMAGE
@@ -5971,6 +5981,7 @@ ADMIN_ROUTES = {
     "/api/operations/resume",
     "/api/operations/power-recovery/preview", "/api/operations/power-recovery/resolve",
     "/api/operations/vm-recovery/preview", "/api/operations/vm-recovery/resolve",
+    "/api/operations/storage-recovery/preview", "/api/operations/storage-recovery/act",
     "/api/network/vips/add", "/api/network/vips/remove", "/api/network/vips/label", "/api/network/vips/default", "/api/network/vm-networks",
     "/api/files/list", "/api/files/read", "/api/files/write", "/api/files/close",
     "/api/node/smart/test",
@@ -7466,6 +7477,12 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, VM_MUTATION_RECOVERY.preview(b.get("id", ""), OPS, kget, self.user))
             if p == "/api/operations/vm-recovery/resolve":
                 return self._send(200, VM_MUTATION_RECOVERY.resolve(b, OPS, kget, self.user))
+            if p == "/api/operations/storage-recovery/preview":
+                return self._send(200, STORAGE_RECOVERY.preview(b.get("id", ""), OPS, kget, self.user,
+                                                               storage_helper_admission, storage_restart_admission))
+            if p == "/api/operations/storage-recovery/act":
+                return self._send(200, STORAGE_RECOVERY.act(b, OPS, kget, self.user,
+                                                          storage_helper_admission, storage_restart_admission))
             if p == "/api/operations/cancel-plan":
                 return self._send(200, OPS.cancel_plan(b.get("id", "")))
             if p == "/api/operations/cancel":
