@@ -2213,3 +2213,6 @@ textarea{min-height:0}
   .ui-actions:has(.upd-ok){flex-direction:column}
   .ui-actions:has(.upd-ok) .ui-actions-start{flex-direction:row}
 }
+
+/* SMB credential forms use the shared solid surface in light mode. */
+html[data-theme="light"] .modalbox[data-context="smb-access"]{background:var(--surf);color:var(--tx)}
