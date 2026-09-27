@@ -900,7 +900,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.194/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.195/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -911,7 +911,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.194 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.195 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1257,14 +1257,26 @@ things for. Then, as a job you can watch or leave:
    volume of the original name is bound to the copy;
 5. everything starts again the way it was.
 
-Anything going wrong before the swap - the copy failing, not matching, or the
-new class never making a volume within ten minutes - puts everything back as
-it was: the new volume removed, the workloads started on the untouched
-original. The original is kept as an **old copy** on Volumes until you remove
-it, so both copies take room until then. A VM on a DataVolume is switched to
+New moves keep a durable record before each write. If a step fails or its outcome
+cannot be verified, the move holds its data and workload state for review; it does
+not automatically roll back, delete the copy or repeat the request. **Review storage
+move** in Recent jobs offers Pause or Continue when safe. Fresh capacity checks run
+before copying, cutover and restart; warning-free checks proceed, capacity warnings
+need acknowledgement and hard placement/storage blockers cannot be overridden.
+The original is kept as an **old copy** on Volumes until you remove it, so both
+copies take room until then. A VM on a DataVolume is switched to
 the plain volume, as a moved VM is; a DaemonSet, a bare pod, or a volume a
 StatefulSet's template made cannot be stopped or recreated safely, and is
 said so up front. Homestead's own data moves from Settings › Redundancy.
+
+Finish upgrading every Homestead replica before starting a move. Homestead verifies
+capability records against the live pod UID and container runtime ID of processes
+sharing its data claim. Its own update/restart/replica changes are blocked while
+a move is unfinished or needs recovery. Jobs created by older versions retain
+their original engine; they are not silently converted. These checks do not fence
+external administrators, manually forced downgrades, or storage controllers.
+See the [storage recovery guidance](wiki/Storage.md#when-a-storage-move-needs-review)
+before changing retained resources manually.
 
 ## Storage classes
 
@@ -1751,10 +1763,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.194`, the workflow publishes:
+For a release such as `v2.8.195`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.194
+ghcr.io/wjcloudy/homestead:2.8.195
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -1765,8 +1777,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.194
-git push origin v2.8.194
+git tag v2.8.195
+git push origin v2.8.195
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.

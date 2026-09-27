@@ -28,6 +28,8 @@ import homestead_rename as RENAME
 import homestead_copy_job as COPY_JOB
 import homestead_import_job as IMPORT_JOB
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
+import homestead_operations as OPS
+import homestead_storage_guard as STORAGE_GUARD
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
 API = "https://kubernetes.default.svc"
@@ -42,7 +44,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.194")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.195")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -160,6 +162,11 @@ def kget(path, timeout=10):
 
 
 def ksend(method, path, body=None, ctype="application/json", timeout=15):
+    return STORAGE_GUARD.send(method, path, body, lambda: _ksend(method, path, body, ctype, timeout), OPS, kget,
+                              own_controller=(SELF.NS, NAMES.BRAND))
+
+
+def _ksend(method, path, body=None, ctype="application/json", timeout=15):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(API + path, data=data, method=method,
                                  headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": ctype})
@@ -4589,7 +4596,6 @@ import homestead_longhorn as LH
 import homestead_place as PLACE
 import homestead_hardware as HW
 import homestead_updates as UPDATES
-import homestead_operations as OPS
 import homestead_vmusage as VMUSAGE
 import homestead_cancel as CANCEL
 import homestead_joblogs as JOBLOGS
@@ -4735,11 +4741,70 @@ OPS.CLEANUPS.update((COPY_JOB.KIND, "restructure"))
 OPS.RESOLVERS[IMPORT_JOB.KIND] = lambda item: IMPORT_JOB.status(item, kget)
 OPS.CANCELLERS[IMPORT_JOB.KIND] = (IMPORT_JOB.cancel_plan, IMPORT_JOB.cancel_run)
 import homestead_reclass as RECLASS
+import homestead_storage_admission as STORAGE_ADMISSION
+import homestead_storage_recovery as STORAGE_RECOVERY
+import homestead_storage_workflow as STORAGE_WORKFLOW
+import homestead_storage_runtime as STORAGE_RUNTIME
+
+
+def storage_restart_admission(item, proposals):
+    return STORAGE_ADMISSION.plan(item, proposals, kget, PLACE.get_nodes(), get_app_settings()["thresholds"]["memory"]["critical"])
+
+
+def storage_helper_admission(item, manifest):
+    return copy_admission(manifest)
+
+
+def storage_runtime_check():
+    try:
+        return STORAGE_RUNTIME.require(OPS, kget, SELF.NS, SELF.POD, NAMES.BRAND, HOMESTEAD_VERSION, DATA_DIR)
+    except STORAGE_WORKFLOW.JOURNAL.Held:
+        raise
+    except Exception:
+        raise STORAGE_WORKFLOW.JOURNAL.Held("Homestead replica compatibility could not be verified; restore cluster and shared-data access before moving storage") from None
+
+
+def _storage_runtime_loop():
+    # Every replica reports, not only the leader. No capability is inferred on
+    # behalf of an older binary that does not understand the new journal.
+    while True:
+        try:
+            STORAGE_RUNTIME.report(OPS, kget, SELF.NS, SELF.POD, NAMES.BRAND, HOMESTEAD_VERSION, DATA_DIR)
+            beat("storage-runtime", 20)
+        except Exception as error:
+            beat("storage-runtime", 20, error)
+        time.sleep(20)
+
+
+def storage_move_progress(item):
+    if "storage_protocol" in item.get("ref", {}):
+        return STORAGE_WORKFLOW.resolve(item, OPS.checkpoint, storage_helper_admission, storage_restart_admission,
+                                        runtime_check=storage_runtime_check)
+    # Keep pre-upgrade jobs on their existing steps; never infer receipts for
+    # mutations made by an older engine. Exempt only this job from its own fence.
+    with STORAGE_GUARD.dispatching(item):
+        return RECLASS.resolve(item)
+
+
+def storage_volume_action(volume, action):
+    # Snapshot rollback also stops/restarts workloads and writes through the
+    # Longhorn REST API, not just ksend. Hold the fence around the entire step.
+    with STORAGE_GUARD.volume(OPS, kget, volume):
+        return action()
+
+
+def storage_legacy_cancel(item, options):
+    if "storage_protocol" in item.get("ref", {}):
+        raise ValueError("Use the storage move recovery review; legacy rollback is not supported for this job")
+    with OPS._lock, STORAGE_GUARD.dispatching(item):
+        return CANCEL.reclass_cancel(item, options)
+
+
 import homestead_vmstore as VMSTORE
 import homestead_nodeshell as NODESHELL
 import homestead_hvimage as HVIMAGE
 import homestead_revert as REVERT
-OPS.RESOLVERS["reclass"] = RECLASS.resolve
+OPS.RESOLVERS["reclass"] = storage_move_progress
 OPS.RESUMABLE["reclass"] = RECLASS.resumable
 OPS.RESOLVERS["protect-run"] = LH.run_status
 MOVE_SOURCE.bind(kget, ksend, LH, DEFAULT_NS)
@@ -4834,12 +4899,13 @@ def _vmstore_loop():
             except Exception as error:
                 beat("vmstore", 3600, error, leader_only=True)
         time.sleep(3600)
-OPS.RESOLVERS["snapshot-revert"] = REVERT.resolve
+OPS.RESOLVERS["snapshot-revert"] = lambda item: storage_volume_action(item["ref"]["volume"], lambda: REVERT.resolve(item))
 SNAPSHOT_DELETE.bind(kget, ksend)
-OPS.RESOLVERS["snapshot-delete"] = SNAPSHOT_DELETE.resume_resolve
+OPS.RESOLVERS["snapshot-delete"] = lambda item: storage_volume_action(item["ref"]["volume"], lambda: SNAPSHOT_DELETE.resume_resolve(item))
 OPS.RESUMABLE["snapshot-delete"] = SNAPSHOT_DELETE.resumable
 OPS.RESOLVERS["share-remove"] = SHARES.removal_progress
-OPS.CANCELLERS["snapshot-revert"] = (REVERT.cancel_plan, REVERT.cancel_run)
+OPS.CANCELLERS["snapshot-revert"] = (REVERT.cancel_plan,
+    lambda item, options: storage_volume_action(item["ref"]["volume"], lambda: REVERT.cancel_run(item, options)))
 DISKS.bind(kget, ksend, node_temps)
 OPS.RESOLVERS["disk-retire"] = DISKS.retire_step
 OPS.RESUMABLE["disk-retire"] = DISKS.retire_resumable
@@ -4875,6 +4941,7 @@ def delete_workload(ns, name):
 # Every job can be cancelled; what that does for each kind is said there.
 CANCEL.bind(kget, ksend, delete_workload, lambda: cleanup_restore_classes())
 CANCEL.register(OPS)
+OPS.CANCELLERS["reclass"] = (CANCEL.reclass_plan, storage_legacy_cancel)
 # What each job has to show for itself: a pod's log, a VM's console.
 JOBLOGS.bind(kget, raw_get)
 JOBLOGS.register(OPS)
@@ -5971,6 +6038,7 @@ ADMIN_ROUTES = {
     "/api/operations/resume",
     "/api/operations/power-recovery/preview", "/api/operations/power-recovery/resolve",
     "/api/operations/vm-recovery/preview", "/api/operations/vm-recovery/resolve",
+    "/api/operations/storage-recovery/preview", "/api/operations/storage-recovery/act",
     "/api/network/vips/add", "/api/network/vips/remove", "/api/network/vips/label", "/api/network/vips/default", "/api/network/vm-networks",
     "/api/files/list", "/api/files/read", "/api/files/write", "/api/files/close",
     "/api/node/smart/test",
@@ -6397,8 +6465,9 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/volumes":
                 return self._send(200, cached("vol", 8, get_volumes))
             if p == "/api/volumes/delete-plan":
-                return self._send(200, VOLUMES.deletion_plan(
-                    (q.get("ns") or [DEFAULT_NS])[0], (q.get("name") or [""])[0], (q.get("volume") or [""])[0]))
+                plan = VOLUMES.deletion_plan((q.get("ns") or [DEFAULT_NS])[0],
+                    (q.get("name") or [""])[0], (q.get("volume") or [""])[0])
+                return self._send(200, STORAGE_GUARD.review(plan, OPS, kget))
             if p == "/api/events":
                 return self._send(200, cached("ev", 10, get_events))
             if p == "/api/storage":
@@ -7356,24 +7425,27 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "detail": f"{name} opens on port {port} first" if port
                                         else f"{name} shows its ports in their own order"})
             if p == "/api/volumes/reclass/plan":
-                return self._send(200, RECLASS.preview({**b, "namespace": b.get("namespace") or DEFAULT_NS}, self.user, OPS))
+                return self._send(200, STORAGE_WORKFLOW.preview({**b, "namespace": b.get("namespace") or DEFAULT_NS}, self.user, OPS,
+                                                               runtime_check=storage_runtime_check))
             if p == "/api/volumes/reclass/start":
-                op = RECLASS.start_reviewed({**b, "namespace": b.get("namespace") or DEFAULT_NS}, self.user, OPS)
+                op = STORAGE_WORKFLOW.start_reviewed({**b, "namespace": b.get("namespace") or DEFAULT_NS}, self.user, OPS,
+                                                    runtime_check=storage_runtime_check)
                 _cache.pop("vol", None)
                 return self._send(200, {"ok": True, "operation": op})
             if p == "/api/volumes/old-copies/remove":
                 _cache.pop("vol", None)
-                return self._send(200, RECLASS.remove_old_copy(b.get("pv", "")))
+                return self._send(200, RECLASS.remove_old_copy(b.get("pv", ""), OPS))
             if p == "/api/volumes/delete":
-                result = VOLUMES.delete(b)
-                result["operation"] = OPS.start(
-                    "volume-delete", f"Delete volume {result['name']}",
-                    {"kind": "PersistentVolumeClaim", "name": result["name"],
-                     "namespace": result["namespace"]},
-                    "/volumes", {"namespace": result["namespace"], "name": result["name"],
-                                  "action": result["action"], "pv": result["pv"],
-                                  "orphan": result.get("orphan", False),
-                                  "volume": result["longhorn_volume"]}, result["message"])
+                with OPS._lock:
+                    result = VOLUMES.delete(b, validate=lambda plan: STORAGE_GUARD.review(plan, OPS, kget))
+                    result["operation"] = OPS.start(
+                        "volume-delete", f"Delete volume {result['name']}",
+                        {"kind": "PersistentVolumeClaim", "name": result["name"],
+                         "namespace": result["namespace"]},
+                        "/volumes", {"namespace": result["namespace"], "name": result["name"],
+                                      "action": result["action"], "pv": result["pv"],
+                                      "orphan": result.get("orphan", False),
+                                      "volume": result["longhorn_volume"]}, result["message"])
                 return self._send(200, result)
             if p == "/api/lh/job":
                 return self._send(200, LH.save_job(b))
@@ -7392,9 +7464,11 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/lh/snapshot":
                 return self._send(200, LH.create_snapshot(b["volume"], b.get("name")))
             if p == "/api/lh/snapshot/delete":
-                return self._send(200, {"ok": True, "operation": SNAPSHOT_DELETE.start(b, OPS)})
+                return self._send(200, {"ok": True, "operation": storage_volume_action(
+                    b.get("volume"), lambda: SNAPSHOT_DELETE.start(b, OPS))})
             if p == "/api/lh/snapshot/revert":
-                operation = REVERT.start(str(b.get("volume") or ""), str(b.get("snapshot") or ""), OPS)
+                operation = storage_volume_action(b.get("volume"), lambda: REVERT.start(
+                    str(b.get("volume") or ""), str(b.get("snapshot") or ""), OPS))
                 return self._send(200, {"ok": True, "operation": operation,
                                         "detail": "Rolling back: what uses it stops first, then starts again"})
             if p == "/api/lh/backup":
@@ -7406,19 +7480,20 @@ class H(BaseHTTPRequestHandler):
                         "/data-protection", {"namespace": "longhorn-system", "name": result["backup"]})
                 return self._send(200, result)
             if p == "/api/lh/restore":
-                plan = LH.restore_plan(
-                    b.get("backup"), b.get("namespace", DEFAULT_NS), b.get("name"))
-                if plan.get("conflict"):
-                    return self._send(409, {"error": plan["conflict"]["message"], "plan": plan})
-                result = LH.restore_backup(b)
-                result["operation"] = OPS.start(
-                    "volume-restore", f"Restore {result['name']}",
-                    {"kind": "PersistentVolumeClaim", "name": result["name"],
-                     "namespace": result["namespace"]},
-                    "/volumes?" + urllib.parse.urlencode({"find": result["name"]}),
-                    {"namespace": result["namespace"], "name": result["name"],
-                     "backup": result["backup"]},
-                    "Waiting for Longhorn to provision the restored volume")
+                with OPS._lock:
+                    plan = LH.restore_plan(
+                        b.get("backup"), b.get("namespace", DEFAULT_NS), b.get("name"))
+                    if plan.get("conflict"):
+                        return self._send(409, {"error": plan["conflict"]["message"], "plan": plan})
+                    result = LH.restore_backup(b)
+                    result["operation"] = OPS.start(
+                        "volume-restore", f"Restore {result['name']}",
+                        {"kind": "PersistentVolumeClaim", "name": result["name"],
+                         "namespace": result["namespace"]},
+                        "/volumes?" + urllib.parse.urlencode({"find": result["name"]}),
+                        {"namespace": result["namespace"], "name": result["name"],
+                         "backup": result["backup"]},
+                        "Waiting for Longhorn to provision the restored volume")
                 return self._send(200, result)
             if p == "/api/lh/target":
                 return self._send(200, LH.set_backup_target(
@@ -7466,6 +7541,12 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, VM_MUTATION_RECOVERY.preview(b.get("id", ""), OPS, kget, self.user))
             if p == "/api/operations/vm-recovery/resolve":
                 return self._send(200, VM_MUTATION_RECOVERY.resolve(b, OPS, kget, self.user))
+            if p == "/api/operations/storage-recovery/preview":
+                return self._send(200, STORAGE_RECOVERY.preview(b.get("id", ""), OPS, kget, self.user,
+                    storage_helper_admission, storage_restart_admission, runtime_check=storage_runtime_check))
+            if p == "/api/operations/storage-recovery/act":
+                return self._send(200, STORAGE_RECOVERY.act(b, OPS, kget, self.user,
+                    storage_helper_admission, storage_restart_admission, runtime_check=storage_runtime_check))
             if p == "/api/operations/cancel-plan":
                 return self._send(200, OPS.cancel_plan(b.get("id", "")))
             if p == "/api/operations/cancel":
@@ -7646,6 +7727,7 @@ def _samba_loop():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8080"))
+    threading.Thread(target=_storage_runtime_loop, daemon=True).start()
     threading.Thread(target=_sampler, daemon=True).start()
     threading.Thread(target=_reconcile_permissions, daemon=True).start()
     threading.Thread(target=_upgrade_node_probe, daemon=True).start()

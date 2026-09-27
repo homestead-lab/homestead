@@ -18,7 +18,8 @@ _MISSING = object()
 
 
 def protected(kind, ref):
-    return kind in KINDS or (kind == "k3s-cluster" and ref.get("dispatch_protocol") == 2)
+    return (kind in KINDS or (kind == "k3s-cluster" and ref.get("dispatch_protocol") == 2)
+            or (kind == "reclass" and ref.get("storage_approval_protocol") == 1))
 
 
 def _load(path):

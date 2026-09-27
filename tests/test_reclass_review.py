@@ -61,6 +61,28 @@ class ReviewTests(unittest.TestCase):
         with self.assertRaises(ValueError):rc.start_reviewed(body,'admin',self.ops)
         self.assertEqual([],self.cluster.sent)
 
+    def test_snapshot_conflict_is_explained_and_rechecked_after_review(self):
+        self.cluster.pvs['pv-old']['spec']['csi'] = {'driver': 'driver.longhorn.io', 'volumeHandle': 'real-lh-id'}
+        body = self.approved()
+        held = {'id': 'snapshot', 'kind': 'snapshot-revert', 'status': 'failed',
+                'ref': {'volume': 'real-lh-id'}, 'tracking_stopped': True}
+        with mock.patch.object(self.ops, '_read', return_value=[held]):
+            result = rc.preview(self.body, 'admin', self.ops)
+            self.assertFalse(result['ok'])
+            self.assertIn('needs recovery', ' '.join(result['blockers']))
+            self.assertNotIn('_source_binding', result)
+            with self.assertRaises(ValueError): rc.start_reviewed(body, 'admin', self.ops)
+        self.assertEqual([], self.ops.started)
+        self.assertEqual([], self.cluster.sent)
+
+    def test_source_backing_identity_is_saved_before_the_first_stop(self):
+        self.cluster.pvs['pv-old']['spec']['csi'] = {'driver': 'driver.longhorn.io', 'volumeHandle': 'real-lh-id'}
+        item = rc.start_reviewed(self.approved(), 'admin', self.ops)
+        self.assertEqual({'uid': 'frigate-config-uid', 'pv': 'pv-old', 'pv_uid': 'pv-old-uid',
+                          'csi_driver': 'driver.longhorn.io', 'csi_handle': 'real-lh-id'},
+                         item['ref']['copy_claims']['frigate-config'])
+        self.assertEqual([], self.cluster.sent)
+
     def test_queued_start_rechecks_before_stopping_anything(self):
         item=rc.start_reviewed(self.approved(),'admin',self.ops)
         self.assertIn('review_fences',item['ref'])
@@ -130,6 +152,64 @@ class ReviewTests(unittest.TestCase):
         with mock.patch.object(rc,'_longhorn_used',return_value=7*1024**3):
             rc.start_reviewed(body,'admin',self.ops)
         self.assertEqual(1,len(self.ops.started))
+
+    def statefulset(self, templated=False):
+        obj = copy.deepcopy(self.cluster.deps['frigate'])
+        obj['metadata'].update(name='database', uid='database-uid')
+        obj['spec']['persistentVolumeClaimRetentionPolicy'] = {'whenScaled': 'Delete'}
+        if templated:
+            obj['metadata']['name'] = 'config'
+            obj['spec']['volumeClaimTemplates'] = [{'metadata': {'name': 'frigate'}}]
+            obj['spec']['template']['spec']['volumes'] = []
+        self.extra['/apis/apps/v1/namespaces/lab/statefulsets'] = {'items': [obj]}
+        return obj
+
+    def test_statefulset_auto_delete_is_blocked_before_job_or_stop(self):
+        self.statefulset()
+        plan = rc.preview(self.body, 'admin', self.ops)
+        self.assertFalse(plan['ok'])
+        self.assertIn('scale-down retention policy', ' '.join(plan['blockers']))
+        with self.assertRaises(ValueError):
+            rc.start_reviewed({**self.body, 'capacity_token': plan['capacity_token'], 'confirm_capacity': True}, 'admin', self.ops)
+        self.assertEqual([], self.ops.started)
+        self.assertEqual([], self.cluster.sent)
+
+    def test_statefulset_generated_claim_is_found_without_pod_template_mount(self):
+        obj = self.statefulset(templated=True)
+        pvc = copy.deepcopy(self.cluster.pvcs['frigate-config'])
+        pvc['metadata']['name'] = 'frigate-config-10'
+        self.cluster.pvcs['frigate-config-10'] = pvc
+        self.cluster.pvs['pv-old']['spec']['claimRef']['name'] = 'frigate-config-10'
+        result = rc.preview({**self.body, 'claim': 'frigate-config-10'}, 'admin', self.ops)
+        self.assertFalse(result['ok'])
+        self.assertTrue(any(c['name'] == obj['metadata']['name'] for c in result['consumers']))
+        self.assertIn('template', ' '.join(result['blockers']))
+
+    def datavolume(self):
+        claim = self.body['claim']
+        self.extra['/apis/kubevirt.io/v1/namespaces/lab/virtualmachines'] = {'items': [{
+            'metadata': {'name': 'guest', 'uid': 'guest-uid', 'resourceVersion': '1'},
+            'spec': {'runStrategy': 'Always', 'template': {'spec': {'volumes': [{'dataVolume': {'name': claim}}]}}}}]}
+        path = '/apis/cdi.kubevirt.io/v1beta1/namespaces/lab/datavolumes/' + claim
+        self.extra[path] = {'metadata': {'name': claim, 'uid': 'dv-uid', 'resourceVersion': '1'}}
+        self.cluster.pvcs[claim]['metadata']['ownerReferences'] = [{
+            'kind': 'DataVolume', 'apiVersion': 'cdi.kubevirt.io/v1beta1', 'name': claim, 'uid': 'dv-uid'}]
+        return path
+
+    def test_datavolume_identity_is_reviewed_and_rechecked(self):
+        path = self.datavolume()
+        body = self.approved()
+        item = rc.start_reviewed(body, 'admin', self.ops)
+        self.assertEqual('dv-uid', item['ref']['review_fences'][path]['uid'])
+        self.extra[path]['metadata']['resourceVersion'] = '2'
+        with self.assertRaises(ValueError): rc.start_reviewed(body, 'admin', OPS())
+        self.assertEqual([], self.cluster.sent)
+
+    def test_datavolume_owner_mismatch_is_never_detached(self):
+        path = self.datavolume()
+        self.extra[path]['metadata']['uid'] = 'replacement'
+        with self.assertRaisesRegex(ValueError, 'ownership'): self.approved()
+        self.assertEqual([], self.cluster.sent)
 
 
 class HistoryTests(unittest.TestCase):

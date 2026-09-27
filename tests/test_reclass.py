@@ -2,6 +2,8 @@ import copy
 import sys
 import unittest
 import urllib.error
+from contextlib import nullcontext
+from types import SimpleNamespace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -109,7 +111,12 @@ class Cluster:
 
 class OPS:
     def __init__(self):
+        import threading
+        self._lock = threading.RLock()
         self.started = []
+
+    def _read(self):
+        return self.started
 
     def list_operations(self):
         return []
@@ -218,10 +225,12 @@ class ReclassTests(unittest.TestCase):
     def test_the_old_copy_is_removed_the_way_its_class_removes_volumes(self):
         c = Cluster()
         run(RC.start("lab", "frigate-config", "longhorn-r3", OPS()))
-        RC.remove_old_copy("pv-old")
+        c.pvs["pv-old"]["metadata"].update(uid="old-uid", resourceVersion="1")
+        history = SimpleNamespace(_lock=nullcontext(), _read=lambda: [])
+        RC.remove_old_copy("pv-old", history)
         self.assertEqual("Delete", c.pvs["pv-old"]["spec"]["persistentVolumeReclaimPolicy"])
         with self.assertRaisesRegex(ValueError, "not an old copy"):
-            RC.remove_old_copy("pv-new")
+            RC.remove_old_copy("pv-new", history)
 
     def test_progress_is_read_from_the_copys_own_output(self):
         self.assertEqual({"percent": 57, "speed": "11.83MB/s", "verifying": False, "verified": False},
