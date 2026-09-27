@@ -141,8 +141,8 @@ window.imageUpdateCenter = async () => {
   const available = HomesteadUpdateState.availableWorkloads(report);
   const policy = report.policy || {};
   modal("Image updates", `<div class="update-center">
-    <div class="note"><b>${esc(policy.policy === "notify_only" ? "Notify only" : policy.policy === "maintenance_window" ? "Maintenance window" : "Approval required")}</b>
-      ${esc(policy.reason || "Every rollout requires an explicit review.")}</div>
+    ${UI.lead(`<b>${esc(policy.policy === "notify_only" ? "Notify only" : policy.policy === "maintenance_window" ? "Maintenance window" : "Approval required")}.</b>
+      ${esc(policy.reason || "Every rollout requires an explicit review.")}`)}
     ${available.length ? `<div class="update-selectbar">
       <label class="switch"><input type="checkbox" id="updateSelectAll" checked onchange="toggleImageUpdateSelection(this.checked)"> Select all</label>
       <span id="updateSelectedCount">${available.length} of ${available.length} selected</span>
@@ -156,8 +156,7 @@ window.imageUpdateCenter = async () => {
         ${failures.length ? '<span class="pill crit">check failed</span>' : ""}
         <button class="btn sm" onclick="openUpdateWorkload('${esc(w.name)}')">Open</button></div></div>`;
     }).join("")}</div>` : '<div class="empty small">Images are current and registry checks succeeded.</div>'}
-    <div class="row" style="margin-top:16px"><button class="btn" onclick="closeModal();go('workloads')">Open Containers</button>
-      <button class="btn" onclick="checkImageUpdates()">Check now</button></div></div>`, true);
+    ${UI.actions(UI.button("Check now", "checkImageUpdates()") + UI.button("Open Containers", "closeModal();go('workloads')"))}</div>`, true);
   if (window.applyRole) window.applyRole();
 };
 window.syncImageUpdateSelection = () => {
@@ -261,8 +260,8 @@ function workloadGroupBar(all, pick) {
   return `<div class="wgroup-bar">
     ${names.length ? `<div class="seg wgroup-chips" role="group" aria-label="Show group">${chip("", "All", all.length)}${names.map(name =>
       chip(name, name, all.filter(w => w.group === name).length)).join("")}${loose ? chip(NO_GROUP, "Ungrouped", loose) : ""}</div>` : ""}
-    <button class="btn sm" data-need="operator" onclick="manageWorkloadGroups()">${icon("list")}${names.length ? "Groups" : "Group workloads"}</button>
-    <button class="btn sm" onclick="wlFailover()" title="What each container does when its node fails: move, or wait for the node">${icon("node")}If a node fails</button></div>`;
+    <button class="btn sm" data-need="operator" onclick="manageWorkloadGroups()" aria-label="${names.length ? "Groups" : "Group workloads"}">${icon("list")}<span class="hide-sm">${names.length ? "Groups" : "Group workloads"}</span></button>
+    <button class="btn sm" onclick="wlFailover()" aria-label="If a node fails" title="What each container does when its node fails: move, or wait for the node">${icon("node")}<span class="hide-sm">If a node fails</span></button></div>`;
 }
 
 /* Put one workload in a group: pick one it could join, or name a new one. */
@@ -343,11 +342,11 @@ function renderWorkloads() {
         ? `<a class="linkish" onclick="togglePlatformContainers()" data-tip="KubeVirt, CDI and the like: installed by Homestead's add-ons, run by their own operators, and upgraded with them under System → Cluster">${platformShown() ? "hide" : "show"} ${platform.length} platform container${platform.length === 1 ? "" : "s"}</a>`
         : "system pods hidden"}${report && !updateCount && !updateErrors ? (unchecked ? ` · ${unchecked} not checked yet` : " · images current") : ""}</p></div>
       <div class="row"><span class="dim xs scanprogress" id="scanprogress"></span>
-      <span class="dim xs" title="When the registries were last asked">${checkedAgo()}</span>
+      <span class="dim xs hide-sm" title="When the registries were last asked">${checkedAgo()}</span>
       ${updateCount ? `<button class="pill warn pillbtn" title="Review and stage image updates" onclick="imageUpdateCenter()">${updateCount} update${updateCount === 1 ? "" : "s"}</button>` : ""}
-      ${updateErrors ? `<button class="pill crit pillbtn" data-tip="${updateErrors} image${updateErrors === 1 ? "" : "s"} could not be compared with ${updateErrors === 1 ? "its" : "their"} registry; every other image was" onclick="imageUpdateCenter()">${updateErrors} check${updateErrors === 1 ? "" : "s"} failed</button>` : ""}
-      ${layoutSwitch("containers", "renderWorkloads")}
-      <button class="btn" onclick="checkImageUpdates()">↻ Check images</button>
+      ${updateErrors ? `<button class="pill crit pillbtn" data-tip="${updateErrors} image${updateErrors === 1 ? "" : "s"} could not be compared with ${updateErrors === 1 ? "its" : "their"} registry; every other image was" onclick="imageUpdateCenter()">${updateErrors} <span class="hide-sm">check${updateErrors === 1 ? "" : "s"} </span>failed</button>` : ""}
+      <span class="hide-sm">${layoutSwitch("containers", "renderWorkloads")}</span>
+      <button class="btn" onclick="checkImageUpdates()" title="Ask the registries for newer images">↻ Check<span class="hide-sm"> images</span></button>
       <button class="btn pri hide-sm" data-need="operator" onclick="go('deploy')">＋ Deploy</button></div></div>
 
     ${all.length ? workloadGroupBar(all, group) : ""}
@@ -843,17 +842,27 @@ window.checkImageUpdates = async () => {
     toast(e.message, "bad");
   } finally {
     watching = false;
-    if (button) { button.disabled = false; button.textContent = "↻ Check images"; }
+    if (button) { button.disabled = false; button.innerHTML = '↻ Check<span class="hide-sm"> images</span>'; }
     const bar = $("#scanprogress");
     if (bar) bar.innerHTML = "";
   }
 };
 
+/* An image reference short enough to read: its last path part, and the start
+   of a digest. The whole reference stays in the title and in the details. */
+function shortImage(ref) {
+  const text = String(ref || "");
+  const [name, digest] = text.split("@");
+  const tail = name.split("/").pop() || name;
+  return digest ? `${tail} · ${digest.replace(/^sha256:/, "").slice(0, 12)}` : tail;
+}
+
 let IMAGE_REVIEW = null, IMAGE_REVIEW_SEQUENCE = 0;
 async function reviewImageActions(items, action = "update") {
   const sequence = ++IMAGE_REVIEW_SEQUENCE;
   IMAGE_REVIEW = null;
-  modal(action === "rollback" ? "Review rollback" : "Review image updates",
+  const rollback = action === "rollback";
+  modal(rollback ? "Review rollback" : "Review image updates",
     '<div id="imageReviewLoading" class="empty"><span class="spin2"></span> Checking exact images and rollout capacity…</div>', true);
   try {
     const rows = [];
@@ -867,23 +876,32 @@ async function reviewImageActions(items, action = "update") {
     if (!rows.length) throw new Error("Select at least one image change");
     IMAGE_REVIEW = rows;
     const blocked = rows.some(row => row.preview.capacity.blocked);
-    $("#mbody").innerHTML = `<div class="update-review">
-      <div class="note">Exact image digests and full-pod capacity are checked again before each change.
-      Updates run one at a time, Homestead last. Failure, lost contact or an expired review stops the remaining queue.
-      Closing this dialog stops unstarted updates; a rollout already submitted continues.</div>
-      ${rows.map(({config, preview}) => `<section class="update-workload-review"><b>${esc(config.ns)} / ${esc(config.name)}</b>
-        ${preview.images.map(image => `<div class="update-image"><b>${esc(image.container)}</b>
-          <div><span>Current</span><code>${esc(image.before)}</code></div>
-          <div><span>Apply</span><code>${esc(image.after)}</code></div>
-          <div><span>Recovery</span><code>${esc(image.rollback)}</code></div></div>`).join("")}
-        ${deployCapacityHtml(preview.capacity, false, true)}</section>`).join("")}
-      ${blocked ? '<div class="note bad">Resolve the placement blockers before starting this selection.</div>' :
-        '<label class="switch update-approval"><input type="checkbox" id="imageCapacityApprove" onchange="imageReviewReady()"> I approve these image changes, downtime and any listed capacity risks (including high or unknown RAM).</label>'}
-      <div class="row" style="margin-top:18px"><button class="btn pri" id="imageCapacityApply" disabled onclick="imageReviewedApply()">${action === "rollback" ? "Start rollback" : "Install reviewed updates"}</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div></div>`;
+    // Every concern in one callout, named by the workload it is about.
+    const concerns = rows.flatMap(({config, preview}) => (preview.capacity.warnings || [])
+      .map(w => rows.length > 1 ? `${config.name}: ${w}` : w));
+    const many = rows.length > 1;
+    const image = image => `<code title="${esc(image)}">${esc(shortImage(image))}</code>`;
+    $("#mbody").innerHTML = `<div class="update-review ui-stack">
+      ${UI.lead(`${rollback ? "Returns" : "Installs the new image for"} ${many ? `<b>${rows.length} workloads</b>, one at a time with Homestead last` : `<b>${esc(rows[0].config.ns)}/${esc(rows[0].config.name)}</b>`}${rollback ? ` to the image ${many ? "each" : "it"} ran before` : ""}. ${many ? "Each restarts" : "It restarts"} while it changes.`)}
+      ${blocked ? UI.callout("bad", "Placement blocks this change.", `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul><p>Resolve the placement blockers before starting this selection.</p>`)
+        : concerns.length ? UI.callout("warn", "Check before going ahead", `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>`) : ""}
+      ${UI.table([{ label: "Container" }, { label: "Now" }, { label: rollback ? "Back to" : "New" }],
+        rows.flatMap(({config, preview}) => preview.images.map(i => [
+          `${esc(i.container)}${many ? `<span class="sub">${esc(config.ns)}/${esc(config.name)}</span>` : ""}`, image(i.before), image(i.after)])))}
+      ${UI.more("Capacity and placement", rows.map(({config, preview}) =>
+        `${many ? `<p><b>${esc(config.ns)}/${esc(config.name)}</b></p>` : ""}${deployCapacityHtml(preview.capacity, false, true)}`).join(""), blocked)}
+      ${UI.more("Exact images and how updates run", `
+        ${UI.facts(rows.flatMap(({preview}) => preview.images.flatMap(i => [
+          [`${i.container} now`, `<code>${esc(i.before)}</code>`], [`${i.container} ${rollback ? "back to" : "new"}`, `<code>${esc(i.after)}</code>`],
+          [`${i.container} recovery`, `<code>${esc(i.rollback)}</code>`]])))}
+        <p>Exact image digests and full-pod capacity are checked again before each change. Updates run one at a time, Homestead last.
+        Failure, lost contact or an expired review stops the remaining queue. Closing this dialog stops unstarted updates; a rollout already submitted continues.</p>`)}
+      ${blocked ? "" : UI.ack("imageCapacityApprove", `I approve ${many ? "these changes" : "this change"} and the restart${concerns.length ? ", including the capacity risks above" : ""}`, { onchange: "imageReviewReady()" })}
+      ${UI.actions(UI.cancel() + UI.button(rollback ? "Start rollback" : many ? "Install updates" : "Install update", "imageReviewedApply()", { kind: "pri", id: "imageCapacityApply", disabled: true }))}
+    </div>`;
   } catch (error) {
     IMAGE_REVIEW = null;
-    if (sequence === IMAGE_REVIEW_SEQUENCE && $("#imageReviewLoading")) $("#mbody").innerHTML = `<div class="note bad">Review could not finish: ${esc(error.message)}. Nothing was changed. Close this dialog and review again.</div>`;
+    if (sequence === IMAGE_REVIEW_SEQUENCE && $("#imageReviewLoading")) $("#mbody").innerHTML = UI.callout("bad", "Review could not finish.", `${esc(error.message)}. Nothing was changed. Close this dialog and review again.`) + UI.actions(UI.cancel("Close"));
   }
 }
 window.imageReviewReady = () => {

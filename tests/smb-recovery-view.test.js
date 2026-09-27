@@ -14,6 +14,7 @@ async function render(server) {
       : path === "/api/shares/server" ? server : {},
   };
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), context);
   vm.runInContext(fs.readFileSync("web/js/views-storage.js", "utf8"), context);
   await context.viewShares();
   return html;
