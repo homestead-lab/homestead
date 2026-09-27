@@ -127,6 +127,14 @@ class VMPowerAdmissionTests(unittest.TestCase):
         writes.assert_called_once_with("PUT", "/apis/subresources.kubevirt.io/v1/namespaces/lab/virtualmachines/guest/start", {})
         self.assertEqual(1, len(server.OPS._read()))
 
+    def test_invalid_numa_policy_cannot_be_overridden_by_capacity_ack(self):
+        self.vm["spec"]["template"]["spec"]["domain"]["cpu"]["numa"] = {"guestMappingPassthrough": {}}
+        self.config["status"] = {"observedKubeVirtVersion": "v1.9.0"}
+        result, writes = self.call("/api/vm/power", self.reviewed())
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+        self.assertFalse(server.OPS._read())
+
     def test_persistent_state_replacement_after_review_never_sends_power(self):
         pvc = self.persistent_state()
         signed = self.reviewed()

@@ -14,6 +14,7 @@ import homestead_vm_network as NETWORK
 import homestead_vm_support as SUPPORT
 import homestead_vm_cpu as CPU
 import homestead_vm_security as SECURITY
+import homestead_vm_numa as NUMA
 
 MIB = 1024**2
 
@@ -109,8 +110,9 @@ def project(vm, configuration=None, *, expanded_spec=None, read=None, kubevirt_v
     network = NETWORK.evidence(spec, vm["metadata"]["namespace"], config, read)
     support = SUPPORT.project(vm, spec, config, network, read)
     security = SECURITY.evidence(spec, config, kubevirt_version)
-    blockers.extend(network["blockers"] + support["blockers"] + security["blockers"])
-    warnings.extend(network["warnings"] + support["warnings"] + security["warnings"])
+    numa = NUMA.policy(spec, config, kubevirt_version)
+    blockers.extend(network["blockers"] + support["blockers"] + security["blockers"] + numa["blockers"])
+    warnings.extend(network["warnings"] + support["warnings"] + security["warnings"] + numa["warnings"])
     resources = domain.get("resources") or {}
     requests, limits = resources.get("requests") or {}, resources.get("limits") or {}
     cpu_model = CPU.project(vm, spec, config, kubevirt_version)
