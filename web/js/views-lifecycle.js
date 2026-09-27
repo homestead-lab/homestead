@@ -1057,7 +1057,6 @@ async function viewImport() {
   paint(`<div class="phead"><div><h2>Import</h2>
       <p>Bring containers, appdata and virtual-machine disks into Homestead</p></div>
       <div class="row"><button class="btn" data-need="operator" onclick="composeImport()">＋ Docker Compose</button>
-      <button class="btn" data-need="admin" onclick="fleetLink()">＋ Homestead cluster</button>
       <button class="btn" data-need="admin" onclick="srcAdd()">＋ Container source</button>
       <button class="btn pri" data-need="admin" onclick="vmDiskImport()">＋ VM disk</button></div></div>
 
@@ -1065,7 +1064,8 @@ async function viewImport() {
       ${moves.some(m => ["succeeded", "cancelled"].includes(m.status)) ? '<button class="btn sm" data-need="admin" onclick="moveDismiss()">Clear finished</button>' : ""}</div>` : ""}
     <div id="movesList">${movesHtml(moves)}</div>
 
-    <div class="sec">Other Homestead clusters ${tip("Another Homestead installation on the network. Its workloads can be listed here, and later moved across: volume data travels through the shared Longhorn backup target, the definition comes straight from the other Homestead.")}</div>
+    <div class="between"><div class="sec">Other Homestead clusters ${tip("Linked clusters, and any added here for moves before linking existed. Their workloads can be listed and moved here: volume data travels through the shared Longhorn backup target, the definition comes straight from the other Homestead.")}</div>
+      <button class="btn sm" onclick="fleetOpenSettings()">Linked clusters</button></div>
     ${clusters.length ? `<div class="grid g3">${clusters.map(c => `<div class="card flat clcard">
       <div class="between"><div class="clhead"><div class="ctitle">${esc(c.label || c.name)}</div>
         ${c.fleet ? `<div class="csub mono clurl" title="Linked · ${esc(c.url)}">linked · ${esc(c.url)}</div>`
@@ -1081,7 +1081,7 @@ async function viewImport() {
     </div>`).join("")}</div>`
     : `<div class="empty">No other clusters connected.
        <ol class="clguide">
-         <li><b>＋ Homestead cluster</b> above links it: its address and an admin account there, used once.</li>
+         <li>Link it under <b>Settings → Linked clusters</b>: its address and an admin account there, used once.</li>
          <li>Backup storage on that cluster, which its volumes travel through - its card offers to set it up.</li>
          <li><b>Browse workloads</b> on its card, then <b>Move to this cluster</b>.</li></ol></div>`}
 

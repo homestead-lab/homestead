@@ -6335,7 +6335,7 @@ ADMIN_ROUTES = {
     "/api/move/clusters/check", "/api/move/clusters/readiness", "/api/move/clusters/storage",
     # Linking clusters hands every linked Homestead admin over this one.
     "/api/fleet/join", "/api/fleet/accept", "/api/fleet/remove", "/api/fleet/leave",
-    "/api/fleet/address", "/api/fleet/sync",
+    "/api/fleet/address", "/api/fleet/sync", "/api/fleet/link-legacy",
     # Joining and removing hosts: the join token, disk wipes, a DHCP responder.
     "/api/onboard/guide", "/api/cluster/cleanup", "/api/cluster/removal",
     "/api/cluster/remove-node", "/api/cluster/cleanup/run",
@@ -6756,6 +6756,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, FLEET.leave())
             if p == "/api/fleet/address":
                 return self._send(200, FLEET.set_address(b.get("url")))
+            if p == "/api/fleet/link-legacy":
+                return self._send(200, MOVE.link_legacy(str(b.get("name") or ""), b.get("own_url", "")))
         except ValueError as error:
             return self._send(409, {"error": str(error)})
         except FLEET.Unreachable as error:
@@ -6843,6 +6845,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, FLEET.summary(via=self._fleet_from))
             if p == "/api/fleet/hello":
                 return self._send(200, FLEET.hello())
+            if p == "/api/fleet/legacy":
+                return self._send(200, MOVE.legacy_clusters())
             if p == "/api/fleet/state":
                 self._who()
                 if not self._fleet_from:
