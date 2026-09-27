@@ -2,7 +2,8 @@
 
 No application imports, data-directory access, account secrets or file journal.
 The deployment wrapper must supply the pinned API handle, narrow Kubernetes
-client and current admission adapter. It is not wired to the legacy mover yet.
+client and current admission adapter. Source setup hands control over only after
+the final review, writer drain and durable local publication.
 """
 import hashlib
 import hmac

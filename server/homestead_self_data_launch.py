@@ -4,8 +4,8 @@ Builders do not apply resources. Reviewed setup must journal creation receipts,
 observe the admitted Pod UID/spec, pin them in the anchor, and only then publish
 the local pointer. A bare, non-restarting Pod deliberately has no controller that
 could replace a lost coordinator. Both data claims stay unmounted here.
-The progress Service is cluster-internal; external authenticated/TLS routing is
-the setup gateway's responsibility, not an implicit public LoadBalancer.
+The private progress Service verifies setup. The optional maintenance listener
+joins the existing app Service during the move; no new public address is created.
 
 Identity/projection contracts:
 https://kubernetes.io/docs/concepts/workloads/pods/downward-api/
