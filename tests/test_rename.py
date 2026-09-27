@@ -111,7 +111,7 @@ class RenameTests(unittest.TestCase):
         self.assertEqual(["POST", "PATCH", "PATCH", "DELETE"], [row[0] for row in self.sent])
         new = self.objects["new"]
         self.assertEqual("old", new["spec"]["template"]["metadata"]["labels"]["homestead.io/workload"])
-        self.assertEqual("new", new["spec"]["selector"]["matchLabels"]["homestead.io/rename-target"])
+        self.assertIn("new", [value for key, value in new["spec"]["selector"]["matchLabels"].items() if key.startswith("homestead.io/rename-")])
         self.assertEqual("data", new["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"])
         self.assertNotIn("do-not-journal", json.dumps(ops._read()))
         self.assertEqual(4, len(ops._read()[0]["ref"]["writes"]))
@@ -124,6 +124,23 @@ class RenameTests(unittest.TestCase):
         self.assertTrue(all(obj["spec"]["replicas"] == 0 for obj in self.objects.values()))
         self.assertTrue(ops._read()[0]["ref"]["retain_resources"])
         self.assertTrue(ops.list_operations()[0]["cleanable"])
+
+    def test_repeated_rename_preserves_labels_a_later_service_may_select(self):
+        self.dispatch()
+        before = self.objects["new"]
+        again = lifecycle._renamed_deployment(before, "lab", "third")
+        labels = again["spec"]["template"]["metadata"]["labels"]
+        for key, value in before["spec"]["selector"]["matchLabels"].items():
+            self.assertEqual(value, labels[key])
+            self.assertEqual(value, again["spec"]["selector"]["matchLabels"][key])
+        self.assertEqual(len(before["spec"]["selector"]["matchLabels"]) + 1,
+                         len(again["spec"]["selector"]["matchLabels"]))
+
+    def test_custom_controller_hash_label_cannot_be_silently_removed(self):
+        self.source["spec"]["template"]["metadata"]["labels"]["pod-template-hash"] = "custom"
+        with self.assertRaisesRegex(ValueError, "existing pod labels"):
+            self.prepare()
+        self.assertEqual([], self.sent)
 
     def test_incomplete_capacity_response_cannot_start_replacement(self):
         self.admission.return_value = {}

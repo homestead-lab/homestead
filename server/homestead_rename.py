@@ -68,6 +68,10 @@ def prepare(body, current, clone, read):
     if type(count) is not int or not 0 <= count <= 100:
         raise ValueError("Workload replica count is unsupported")
     proposed = clone(current, source["namespace"], body["workload_name"])
+    old_labels = current["spec"]["template"].get("metadata", {}).get("labels", {})
+    new_labels = proposed["spec"]["template"].get("metadata", {}).get("labels", {})
+    if any(new_labels.get(key) != value for key, value in old_labels.items()):
+        raise ValueError("Rename would change existing pod labels, possibly breaking Services; review controller-generated labels first")
     # Completion was verified against the original UID above. The completed
     # copy Job is historical evidence, not an interlock owned by the new UID.
     proposed.get("metadata", {}).get("annotations", {}).pop(IMPORT.JOB, None)

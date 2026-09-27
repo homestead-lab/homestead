@@ -179,8 +179,12 @@ def _renamed_deployment(dep, ns, new_name):
     labels.pop("pod-template-hash", None)
     # Keep existing service selectors working. Add a distinct target selector
     # without rewriting workload labels already used by Services/policies.
-    selector["homestead.io/rename-target"] = new_name
-    labels["homestead.io/rename-target"] = new_name
+    # A later Service may use this selector too. Each rename adds a fresh key
+    # instead of overwriting the previous rename's label and breaking it.
+    marker = "homestead.io/rename-" + hashlib.sha256(
+        (str(dep.get("metadata", {}).get("uid", "")) + ":" + new_name).encode()).hexdigest()[:16]
+    selector[marker] = new_name
+    labels[marker] = new_name
     spec["replicas"] = 0
     return cloned
 
