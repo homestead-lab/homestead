@@ -284,3 +284,25 @@ with `--dry-run` (exit at the first menu):
 curl -fL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh -o /tmp/homestead-install.sh
 sudo sh -x /tmp/homestead-install.sh --dry-run
 ```
+
+## Cluster details in setup
+
+On an existing node, setup's main menu shows the host IP, Kubernetes node
+versions, cluster members and internal IPs, the configured API endpoint, service
+VIPs, and the Longhorn manager and Homestead deployment readiness. Select
+**Cluster details** for the full lists. Members and VIPs wrap in the main menu;
+when they exceed the terminal height, **More member/VIP addresses** cycles
+through the remaining lines while component status and actions stay visible.
+The summary refreshes whenever you return to the main menu.
+
+Assigned LoadBalancer addresses are distinguished from requested addresses that
+are still pending. The API endpoint can be a local address such as
+`127.0.0.1:6443`; it is not necessarily a control-plane VIP. Component versions
+come from workload image tags; a digest-pinned image may not expose a version
+tag. Ready/desired replicas describe the component, not overall volume health.
+Use **Check node health** for the broader checks.
+
+Discovery is read-only, with short timeouts. Unreachable or unauthorized queries
+show **unavailable**, while a successful lookup with no component shows
+**not installed**. Workers without administrator credentials direct you to run
+setup on a server node.

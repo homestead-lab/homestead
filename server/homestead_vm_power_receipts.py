@@ -70,7 +70,6 @@ def remember(directory, items):
             receipts[digest] = ident
             changed = True
     if changed or not initialized:
-        os.makedirs(directory, exist_ok=True)
         SHARED.write_json(os.path.join(directory, STORE), {"version": 1, "receipts": receipts}, durable=True, separators=(",", ":"))
     if not initialized:
         SHARED.write_json(os.path.join(directory, MARKER), {"version": 1}, durable=True)

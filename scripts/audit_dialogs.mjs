@@ -21,6 +21,8 @@ const theme = process.env.HOMESTEAD_AUDIT_THEME === "light" ? "light" : "dark";
 // "click:<fn>" (the first control whose onclick calls fn), or "text:<label>"
 // (the first button in the dialog with that label).
 const DIALOGS = [
+  ["self-data-prepare", "settings", "window.__demoDataPrepared=false;replicasMoveData()", "selfDataPrepareReview()"],
+  ["self-data-final-review", "settings", "window.__demoDataPrepared=true;replicasMoveData('demo-data-prepare')", "selfDataFinalReview()"],
   ["change-password", "dash", "pwChange()"],
   ["storage-recovery-ready", "storage", "window.__demoStorageState='ready';storageRecoveryReview('op4')"],
   ["storage-recovery-running", "storage", "window.__demoStorageState='running';storageRecoveryReview('op4')"],
@@ -83,6 +85,11 @@ const DIALOGS = [
   ["volume-files", "storage", "click:volumeFiles"],
   ["volume-ownership", "storage", "volumeChown('lab','frigate-config')"],
   ["share-new", "shares", "newShare()"],
+  ["share-new-user", "shares", "newShare()", "document.querySelector('#sh_identity').value='';shareAccountHint()"],
+  ["share-users", "shares", "smbUsers()"],
+  ["share-user-add", "shares", "smbUsers()", "smbUserEdit()"],
+  ["share-user-password", "shares", "smbUsers()", "smbUserEdit('lab')"],
+  ["share-user-remove", "shares", "smbUserRemove('backup')"],
   ["disks", "storage", "lhDisks()"],
   ["disk-add", "storage", "diskAdd('harvester-node1')"],
   ["vm-image-store", "vms", "vmStore()"],

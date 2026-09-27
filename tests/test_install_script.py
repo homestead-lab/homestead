@@ -328,6 +328,140 @@ class TerminalHandoffTests(unittest.TestCase):
                 self.startup(args=args, env=env, prompt=False)
 
 
+@unittest.skipUnless(SH and sys.platform != "win32", "cluster fixtures need POSIX")
+class ClusterOverviewTests(unittest.TestCase):
+    def overview(self, mode="running", again=False):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kubectl = root / "kubectl"
+            kubectl.write_text("""#!/bin/sh
+printf '%s\\n' "$*" >> "$TEST_CALLS"
+[ "$1" = --request-timeout=3s ] || exit 98
+shift
+case "$*" in
+  'config view '*) echo 'https://127.0.0.1:6443' ;;
+  'get nodes '*)
+    [ "$TEST_MODE" != unreachable ] || exit 1
+    if [ "$TEST_MODE" = many ]; then
+      for n in 1 2 3 4 5 6 7 8; do printf 'node%s|192.168.1.%s|True|v1.34.1+k3s1\\n' "$n" "$n"; done
+      exit 0
+    fi
+    printf 'node1|192.168.1.108|True|v1.34.1+k3s1\\nnode2|192.168.1.109|False|v1.33.5+k3s1\\n' ;;
+  '-n longhorn-system get daemonset '*)
+    [ "$TEST_MODE" != denied ] || exit 1
+    [ "$TEST_MODE" != absent ] || exit 0
+    echo 'longhorn-manager|longhornio/longhorn-manager:v1.9.2|1|2' ;;
+  '-n lab get deployment '*)
+    [ "$TEST_MODE" != denied ] || exit 1
+    [ "$TEST_MODE" != absent ] || exit 0
+    if [ "$TEST_MODE" = digest ]; then
+      echo 'homestead|ghcr.io/wjcloudy/homestead@sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234|1|1'
+    else echo 'homestead|ghcr.io/wjcloudy/homestead:2.8.199|1|1'; fi ;;
+  'get services '*)
+    [ "$TEST_MODE" != denied ] || exit 1
+    [ "$TEST_MODE" != absent ] || exit 0
+    printf 'lab/homestead|192.168.1.242 | \\nlab/nas-data||192.168.1.243 \\nlab/pending|| \\n' ;;
+  *) exit 99 ;;
+esac
+""", encoding="utf-8")
+            kubectl.chmod(0o755)
+            script = SCRIPT.read_text(encoding="utf-8")
+            script = script.split("# Main-menu discovery", 1)[1].split("# ------------------------------------------------------------------ findings", 1)[0]
+            script = "# Main-menu discovery" + script
+            script += """
+have() { command -v "$1" >/dev/null 2>&1; }
+hostname() { echo node1; }
+default_ip() { echo 192.168.1.108; }
+term_rows() { echo 24; }
+os_name() { echo Ubuntu; }
+msg() { printf '%s\\n' "$2"; }
+KIND=k3s-server; KC=kubectl; UI=text; here='k3s server node'
+[ "$TEST_MODE" != worker ] || { KIND=k3s-agent; KC=''; }
+cluster_overview
+"""
+            if again:
+                script += "TEST_MODE=unreachable; export TEST_MODE; cluster_overview\n"
+            if mode == "many":
+                script += 'prepare_overview; n=1; while [ "$n" -le "$CLUSTER_PAGES" ]; do CLUSTER_PAGE=$n; echo PAGE; main_overview; n=$((n+1)); done\n'
+            script += 'main_overview; echo DETAILS; cluster_details; printf "PRESENT=%s\\n" "$HOMESTEAD_PRESENT"\n'
+            env = dict(os.environ, PATH=tmp + os.pathsep + os.environ["PATH"],
+                       TEST_MODE=mode, TEST_CALLS=str(root / "calls"))
+            result = subprocess.run([SH, "-s"], input=script, text=True, env=env,
+                                    capture_output=True, timeout=10)
+            self.assertEqual(0, result.returncode, result.stderr)
+            calls = (root / "calls").read_text() if (root / "calls").exists() else ""
+            return result.stdout, calls
+
+    def test_main_menu_shows_live_members_versions_component_readiness_and_vips(self):
+        out, calls = self.overview()
+        summary, details = out.split("DETAILS", 1)
+        for expected in ("192.168.1.108", "node2", "v1.34.1+k3s1", "v1.33.5+k3s1",
+                         "not ready (1/2); longhorn-manager:v1.9.2", "ready (1/1); homestead:2.8.199",
+                         "192.168.1.242", "127.0.0.1:6443"):
+            self.assertIn(expected, summary)
+        self.assertTrue(all(len(line) <= 80 for line in summary.splitlines()))
+        self.assertIn("node2  192.168.1.109  NotReady", details)
+        self.assertIn("192.168.1.243 (requested; pending)", details)
+        self.assertIn("lab/pending  pending address", details)
+        self.assertIn("PRESENT=yes", details)
+        self.assertEqual(5, len(calls.splitlines()))
+        self.assertNotIn("--raw", calls)
+
+    def test_long_member_lists_can_be_paged_without_losing_addresses(self):
+        out, _ = self.overview("many")
+        summary = out.split("DETAILS", 1)[0]
+        self.assertGreaterEqual(summary.count("PAGE"), 2)
+        for n in range(1, 9):
+            self.assertIn(f"192.168.1.{n}", summary)
+        self.assertNotIn("...", summary)
+        self.assertTrue(all(len(line) <= 80 for line in summary.splitlines()))
+
+    def test_addresses_wrap_and_remain_available_in_full(self):
+        out, _ = self.overview()
+        summary = out.split("DETAILS", 1)[0]
+        self.assertIn("192.168.1.243", summary)
+        self.assertIn("pending address", summary)
+        self.assertNotIn("...", summary)
+        self.assertTrue(all(len(line) <= 80 for line in summary.splitlines()))
+
+    def test_digest_pinned_image_keeps_readiness_visible_on_the_main_menu(self):
+        out, _ = self.overview("digest")
+        summary = out.split("DETAILS", 1)[0]
+        self.assertIn("Homestead   ready (1/1); homestead@sha256:1234567890ab", summary)
+        self.assertIn("digest pinned", summary)
+        self.assertNotIn("1234567890abcdef1234567890abcdef", summary)
+
+    def test_absent_components_are_distinct_from_forbidden_queries(self):
+        absent, _ = self.overview("absent")
+        self.assertIn("Longhorn    not installed", absent)
+        self.assertIn("Homestead   not installed", absent)
+        self.assertIn("PRESENT=no", absent)
+        self.assertIn("no LoadBalancer services", absent)
+        denied, _ = self.overview("denied")
+        self.assertIn("Longhorn    unavailable", denied)
+        self.assertIn("Homestead   unavailable", denied)
+        self.assertIn("VIPs        unavailable", denied)
+        self.assertIn("PRESENT=unknown", denied)
+        self.assertNotIn("not installed", denied)
+
+    def test_failed_api_stops_followup_queries_and_clears_previous_status(self):
+        out, calls = self.overview("unreachable")
+        self.assertEqual(2, len(calls.splitlines()))
+        self.assertIn("Cluster API unavailable or access denied", out)
+        self.assertIn("PRESENT=unknown", out)
+        out, _ = self.overview(again=True)
+        self.assertNotIn("node2", out)
+        self.assertNotIn("2.8.199", out)
+        self.assertIn("Homestead   unavailable", out)
+
+    def test_worker_without_credentials_keeps_a_useful_menu_without_querying(self):
+        out, calls = self.overview("worker")
+        self.assertEqual("", calls)
+        self.assertIn("192.168.1.108", out)
+        self.assertIn("require server-node credentials", out)
+        self.assertIn("PRESENT=unknown", out)
+
+
 STUBS = {
     "systemctl": """#!/bin/sh
 case "$1" in

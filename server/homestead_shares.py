@@ -216,6 +216,12 @@ def _state():
         if not row.get("public") and name not in credentials and deployment_users.get(user):
             credentials[name] = {"user": user, "password": deployment_users[user]}
         row["read_only"] = bool(row.get("read_only", False))
+    # Account entries survive removal of the last share. The colon cannot
+    # occur in a share name, so these keys coexist with legacy share entries.
+    for value in list(credentials.values()):
+        if value.get("password"):
+            user = _user(value.get("user"))
+            credentials.setdefault("user:" + user, dict(value))
     return rows, credentials, config_obj, secret_obj, deployment
 
 
@@ -279,6 +285,9 @@ def _save_credentials(credentials, current=None):
     clean = {name: {"user": str(value.get("user") or "lab"),
                     "password": str(value.get("password") or "")}
              for name, value in credentials.items() if value.get("password")}
+    for name, value in list(clean.items()):
+        if not name.startswith("user:"):
+            clean["user:" + value["user"]] = dict(value)
     body = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
             "metadata": _metadata(SECRET(), current),
             "data": {"credentials.json": base64.b64encode(
@@ -341,6 +350,9 @@ def _commit(rows, credentials, config_obj, secret_obj, deployment):
 def account_password(credentials, user):
     """The password already in use by a Samba account, if it has one."""
     user = _user(user)
+    saved = credentials.get("user:" + user) or {}
+    if saved.get("password"):
+        return str(saved["password"])
     for value in credentials.values():
         if value.get("user") == user and value.get("password"):
             return str(value["password"])
@@ -362,10 +374,67 @@ def _set_account_password(credentials, rows, user, password):
     changes that had nothing to do with either share.
     """
     user = _user(user)
+    password = str(password or "")
+    if not password or any(c in password for c in (";", "\n", "\r", "\x00")):
+        raise ValueError("password is required and cannot contain semicolons or line breaks")
+    credentials["user:" + user] = {"user": user, "password": password}
+    for value in credentials.values():
+        if value.get("user") == user:
+            value["password"] = password
     for row in rows:
         if row.get("public") or _user(row.get("user")) != user:
             continue
         credentials[row["name"]] = {"user": user, "password": str(password)}
+
+
+def list_users():
+    """Only account names, password presence and share membership leave the Secret."""
+    rows, credentials, _, _, _ = _state()
+    names = {_user(row.get("user")) for row in rows if not row.get("public")}
+    names.update(_user(value.get("user")) for value in credentials.values())
+    return [{"user": user, "has_password": bool(account_password(credentials, user)),
+             "shares": account_shares(rows, user)} for user in sorted(names)]
+
+
+@serialized
+def save_user(user, password, action="create"):
+    if not str(user or "").strip():
+        raise ValueError("username is required")
+    user = _user(user)
+    rows, credentials, config_obj, secret_obj, deployment = _state()
+    exists = bool(account_password(credentials, user)) or bool(account_shares(rows, user))
+    if action not in ("create", "password"):
+        raise ValueError("choose create or password")
+    if action == "create" and exists:
+        raise ValueError("SMB user already exists; select it or change its password in SMB users")
+    if action == "password" and not exists:
+        raise ValueError("SMB user no longer exists; refresh the user list")
+    _set_account_password(credentials, rows, user, password)
+    assigned = account_shares(rows, user)
+    if assigned:
+        _validate_access(rows, credentials)
+        result = _commit(rows, credentials, config_obj, secret_obj, deployment)
+    else:
+        _save_credentials(credentials, secret_obj)
+        result = None
+    _clear_cache()
+    return {"user": user, "shares": assigned, "deployment": result,
+            "message": "SMB password updated for all assigned shares; Samba is restarting" if assigned
+                       else "SMB user saved"}
+
+
+@serialized
+def delete_user(user):
+    if not str(user or "").strip():
+        raise ValueError("username is required")
+    user = _user(user)
+    rows, credentials, _, secret_obj, _ = _state()
+    assigned = account_shares(rows, user)
+    if assigned:
+        raise ValueError("SMB user is still used by: " + ", ".join(assigned) + ". Reassign those shares first.")
+    credentials = {key: value for key, value in credentials.items() if value.get("user") != user}
+    _save_credentials(credentials, secret_obj)
+    return {"user": user, "message": "Unused SMB user removed"}
 
 
 def _validate_access(rows, credentials):
@@ -626,13 +695,23 @@ def _clear_cache():
 
 @serialized
 def create_share(name, size_gb, user, password, public, read_only=False,
-                 pvc=None, sub_path="", storage_class=None, access_mode=None, new_name="", samba_ip=""):
+                 pvc=None, sub_path="", storage_class=None, access_mode=None, new_name="", samba_ip="", account_mode=None):
     """Create a share on a new Longhorn claim, or on a folder of an existing one.
     pvc names a claim that exists; new_name the one to create, if not share-<name>."""
     name, user, sub_path = _name(name), _user(user), _sub_path(sub_path)
     rows, credentials, config_obj, secret_obj, deployment = _state()
     if any(row.get("name") == name for row in rows):
         raise ValueError("share already exists; use Edit to change it")
+    if account_mode not in (None, "existing", "new"):
+        raise ValueError("choose an existing or new SMB user")
+    if not public and account_mode:
+        known = bool(account_password(credentials, user))
+        if account_mode == "existing" and (not known or password):
+            raise ValueError("select an existing SMB user; change passwords in SMB users")
+        if account_mode == "new" and known:
+            raise ValueError("SMB user already exists; select it from existing users")
+        if account_mode == "new" and (not password or any(c in str(password) for c in (";", "\n", "\r", "\x00"))):
+            raise ValueError("password is required and cannot contain semicolons or line breaks")
     if not deployment and install:
         # Samba first: if it cannot be put in place - no address to give it,
         # say - nothing of the share has been made yet to leave behind.

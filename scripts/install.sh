@@ -816,6 +816,7 @@ menu() { # title text tag item... -> tag, or 1 when cancelled
 # ------------------------------------------------------------------ the node
 KIND=none; SERVICE=""; DATA=""; KC=""
 detect_node() {
+  KIND=none; SERVICE=""; DATA=""; KC=""
   if grep -qi harvester /etc/os-release 2>/dev/null || [ -f /etc/rancher/rancherd/config.yaml ]; then KIND=harvester; fi
   for s in k3s k3s-agent rke2-server rke2-agent kubelet; do
     if systemctl list-unit-files "$s.service" 2>/dev/null | grep -q "^$s.service"; then SERVICE=$s; break; fi
@@ -839,6 +840,126 @@ detect_node() {
 kc() {
   [ -n "$KC" ] || return 1
   if have timeout; then timeout 60 $KC "$@" 2>/dev/null; else $KC "$@" 2>/dev/null; fi
+}
+
+# Main-menu discovery has a shorter deadline than a full health check. All
+# requests are read-only, and an unavailable API must still leave a usable menu.
+summary_kc() {
+  [ -n "$KC" ] || return 1
+  if have timeout; then timeout 4 $KC --request-timeout=3s "$@" 2>/dev/null
+  else $KC --request-timeout=3s "$@" 2>/dev/null; fi
+}
+summary_line() { # Keep the main menu usable on a 24-row terminal.
+  printf '%s\n' "$*" | awk '{if (length > 80) print substr($0,1,77) "..."; else print}'
+}
+summary_addresses() { # label value: wrap with an aligned continuation indent.
+  printf '%s\n' "$2" | awk -v label="$1" '
+    BEGIN {prefix=sprintf("%-12s",label); line=prefix}
+    {for(i=1;i<=NF;i++) {
+      word=$i
+      if(length(line)>12 && length(line)+1+length(word)>80) {print line; line=sprintf("%12s", "")}
+      if(length(line)>12) line=line " "
+      while(length(line)+length(word)>80) {
+        take=80-length(line); print line substr(word,1,take); word=substr(word,take+1); line=sprintf("%12s", "")
+      }
+      line=line word
+    }} END {print line}'
+}
+prepare_overview() {
+  CLUSTER_ADDRESS_LINES="$(summary_addresses Members "$CLUSTER_MEMBERS")
+$(summary_addresses VIPs "$CLUSTER_VIP_SUMMARY")"
+  # Keep status and menu actions visible. Large lists continue on further
+  # menu pages rather than being silently truncated or pushing actions away.
+  CLUSTER_PAGE_SIZE=$(( $(term_rows) - 20 ))
+  [ "$CLUSTER_PAGE_SIZE" -ge 2 ] || CLUSTER_PAGE_SIZE=2
+  count=$(printf '%s\n' "$CLUSTER_ADDRESS_LINES" | wc -l | tr -d ' ')
+  CLUSTER_PAGES=$(( (count + CLUSTER_PAGE_SIZE - 1) / CLUSTER_PAGE_SIZE ))
+  CLUSTER_PAGE=${CLUSTER_PAGE:-1}
+  [ "$CLUSTER_PAGE" -le "$CLUSTER_PAGES" ] || CLUSTER_PAGE=1
+}
+component_summary() { # name|image|ready|desired, from an existing workload
+  awk -F '|' '{
+    image=$2; sub(/^.*\//,"",image)
+    if (image == "") image="image unavailable"
+    if (image ~ /@sha256:/) image=substr(image,1,index(image,"@sha256:")+19) " (digest pinned)"
+    ready=$3+0; desired=$4+0
+    state=(desired == 0 ? "not scheduled" : ready >= desired ? "ready" : "not ready")
+    printf "%s (%d/%d); %s", state, ready, desired, image
+  }'
+}
+cluster_overview() {
+  CLUSTER_NODES=""; CLUSTER_VIPS=""; CLUSTER_API="unavailable"
+  CLUSTER_K8S="unavailable"; CLUSTER_LONGHORN="unavailable"
+  CLUSTER_HOMESTEAD="unavailable"; HOMESTEAD_PRESENT=unknown
+  CLUSTER_NOTE=""; CLUSTER_MEMBERS="unavailable"; CLUSTER_VIP_SUMMARY="unavailable"
+  [ "$KIND" != none ] || return 0
+  if [ -z "$KC" ]; then
+    CLUSTER_NOTE="Cluster details require server-node credentials; run setup on a server."
+    return 0
+  fi
+  CLUSTER_API=$(summary_kc config view --minify -o jsonpath='{.clusters[0].cluster.server}') || CLUSTER_API="unavailable"
+  if ! CLUSTER_NODES=$(summary_kc get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.status.addresses[?(@.type=="InternalIP")].address}{"|"}{.status.conditions[?(@.type=="Ready")].status}{"|"}{.status.nodeInfo.kubeletVersion}{"\n"}{end}'); then
+    CLUSTER_NOTE="Cluster API unavailable or access denied; status could not be read."
+    return 0
+  fi
+  CLUSTER_K8S=$(printf '%s\n' "$CLUSTER_NODES" | awk -F '|' 'NF>=4 && !seen[$4]++ {printf "%s%s", sep,$4; sep=", "}')
+  CLUSTER_MEMBERS=$(printf '%s\n' "$CLUSTER_NODES" | awk -F '|' 'NF>=4 {printf "%s%s %s%s",sep,$1,$2,($3=="True" ? "" : " (not ready)"); sep=", "}')
+  CLUSTER_NODES=$(printf '%s\n' "$CLUSTER_NODES" | awk -F '|' 'NF>=4 {printf "%s  %s  %s  %s\n",$1,$2,($3=="True" ? "Ready" : "NotReady"),$4}')
+  if [ -z "$CLUSTER_NODES" ]; then CLUSTER_MEMBERS="no members returned"; CLUSTER_K8S="unavailable"; fi
+  if lh=$(summary_kc -n longhorn-system get daemonset longhorn-manager --ignore-not-found -o jsonpath='{.metadata.name}{"|"}{.spec.template.spec.containers[?(@.name=="longhorn-manager")].image}{"|"}{.status.numberReady}{"|"}{.status.desiredNumberScheduled}'); then
+    # Empty JSONPath literals can survive --ignore-not-found: require a name.
+    case "$lh" in longhorn-manager\|*) CLUSTER_LONGHORN=$(printf '%s\n' "$lh" | component_summary) ;;
+      *) CLUSTER_LONGHORN="not installed" ;; esac
+  fi
+  if hs=$(summary_kc -n lab get deployment homestead --ignore-not-found -o jsonpath='{.metadata.name}{"|"}{.spec.template.spec.containers[?(@.name=="homestead")].image}{"|"}{.status.readyReplicas}{"|"}{.spec.replicas}'); then
+    case "$hs" in homestead\|*) HOMESTEAD_PRESENT=yes; CLUSTER_HOMESTEAD=$(printf '%s\n' "$hs" | component_summary) ;;
+      *) HOMESTEAD_PRESENT=no; CLUSTER_HOMESTEAD="not installed" ;; esac
+  fi
+  if services=$(summary_kc get services -A -o jsonpath='{range .items[?(@.spec.type=="LoadBalancer")]}{.metadata.namespace}{"/"}{.metadata.name}{"|"}{range .status.loadBalancer.ingress[*]}{.ip}{.hostname}{" "}{end}{"|"}{.spec.loadBalancerIP}{" "}{.metadata.annotations.kube-vip\.io/loadbalancerIPs}{"\n"}{end}'); then
+    CLUSTER_VIPS=$(printf '%s\n' "$services" | awk -F '|' 'NF>=3 {
+      gsub(/^ +| +$/,"",$2); gsub(/^ +| +$/,"",$3)
+      if ($2!="") print $1 "  " $2 " (assigned)"
+      else if ($3!="") print $1 "  " $3 " (requested; pending)"
+      else print $1 "  pending address"
+    }')
+    CLUSTER_VIP_SUMMARY=$(printf '%s\n' "$CLUSTER_VIPS" | awk 'NF {printf "%s%s",sep,$0; sep=", "}')
+    [ -n "$CLUSTER_VIP_SUMMARY" ] || CLUSTER_VIP_SUMMARY="no LoadBalancer services"
+  fi
+}
+main_overview() {
+  summary_line "Host        $(hostname)  $(default_ip)"
+  summary_line "Detected    $here"
+  if [ "$KIND" = none ]; then
+    summary_line "System      $(os_name), $(uname -m)"
+  else
+    summary_line "Kubernetes  $CLUSTER_K8S"
+    summary_line "API         $CLUSTER_API"
+    prepare_overview
+    printf '%s\n' "$CLUSTER_ADDRESS_LINES" | awk -v page="$CLUSTER_PAGE" -v size="$CLUSTER_PAGE_SIZE" 'NR>(page-1)*size && NR<=page*size'
+    summary_line "Longhorn    $CLUSTER_LONGHORN"
+    summary_line "Homestead   $CLUSTER_HOMESTEAD"
+  fi
+}
+cluster_details() {
+  details="Host: $(hostname)  $(default_ip)
+Detected: $here
+API endpoint: $CLUSTER_API
+Kubernetes node versions: $CLUSTER_K8S
+
+Members (name, internal IPs, readiness, Kubernetes):
+${CLUSTER_NODES:-Unavailable}
+
+Service VIPs (assigned addresses or pending requests):
+${CLUSTER_VIPS:-$CLUSTER_VIP_SUMMARY}
+
+Longhorn managers: $CLUSTER_LONGHORN
+Homestead deployment: $CLUSTER_HOMESTEAD
+Versions above are workload image tags; digest pins may have no version tag.
+Readiness is ready/desired replicas, not a full cluster or volume health check.
+API endpoint may be local; service VIPs are separate from the control-plane endpoint.
+$CLUSTER_NOTE"
+  if [ "$UI" = text ]; then msg "Cluster details" "$details"
+  else "$BOX" --title "Cluster details" --scrolltext --msgbox "$details" "$(fit "$details" 7)" 78 < "$TTY" > "$TTY" 2>&1; fi
 }
 
 # ------------------------------------------------------------------ findings
@@ -1189,27 +1310,32 @@ if [ -n "$(given HS_ROLE)" ] || ! interactive; then
   banner; do_install; exit 0
 fi
 
-here=$(what_is_here)
 while :; do
   detect_node
-  if [ "$here" = "No Kubernetes installation" ]; then
+  here=$(what_is_here)
+  if [ "$KIND" != none ] && [ "$here" = "No Kubernetes installation" ]; then here="$(kind_name) (service stopped)"; fi
+  cluster_overview
+  prepare_overview
+  if [ "$KIND" = none ]; then
     set -- install "Install Homestead" \
       checks "Run system checks"
   else
     set -- doctor "Check node health"
-    kc -n lab get deployment homestead >/dev/null || set -- "$@" install "Install Homestead on this cluster"
+    [ "$HOMESTEAD_PRESENT" = no ] && set -- "$@" install "Install Homestead on this cluster"
+    [ "$CLUSTER_PAGES" -le 1 ] || set -- "$@" addresses "More member/VIP addresses ($CLUSTER_PAGE/$CLUSTER_PAGES)"
+    set -- "$@" details "Cluster details (members, VIPs and versions)"
     set -- "$@" clean "Clean up disk space"
     case "$KIND" in k3s-server|rke2-server) set -- "$@" snapshot "Take an etcd snapshot" restore "Restore from an etcd snapshot" ;; esac
     set -- "$@" report "Save a health report"
   fi
   BACK=Exit
-  pick=$(menu "Homestead" "Host        $(hostname)
-System      $(os_name), $(uname -m)
-Detected    $here
+  pick=$(menu "Homestead setup" "$(main_overview)
 
 Select an option:" "$@") || exit 0
   BACK=Back
   case "$pick" in
+    addresses) CLUSTER_PAGE=$((CLUSTER_PAGE % CLUSTER_PAGES + 1)) ;;
+    details) cluster_details ;;
     install) do_install ;;
     checks) ( prechecks new ) ;;
     doctor) doctor menu ;;

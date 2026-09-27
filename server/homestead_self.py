@@ -18,6 +18,7 @@ import urllib.error
 
 import homestead_names as NAMES
 import homestead_yaml as YAML
+import homestead_shared as SHARED
 
 kget = ksend = None
 NS = "lab"                # Homestead's own namespace
@@ -281,9 +282,10 @@ def adopt_old_keys():
                 failed += 1
     if not failed:
         try:
-            os.makedirs(DATA_DIR, exist_ok=True)
-            with open(marker, "w", encoding="utf-8") as handle:
-                handle.write(str(int(time.time())))
+            with SHARED.write_scope(marker):
+                os.makedirs(DATA_DIR, exist_ok=True)
+                with open(marker, "w", encoding="utf-8") as handle:
+                    handle.write(str(int(time.time())))
         except OSError:
             pass
     return {"done": not failed, "changed": changed, "failed": failed}

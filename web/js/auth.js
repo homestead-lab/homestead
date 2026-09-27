@@ -32,13 +32,30 @@ async function authState() {
 
 /* Homestead is up but its cluster is not answering: say so, and keep trying. */
 function clusterUnavailable(error) {
-  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.200" alt="">
+  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.202" alt="">
     <h2>Homestead</h2><p class="sub">Waiting for the cluster</p>
     <div class="gateerr">${esc(error || "The Kubernetes API did not answer.")}</div>
     <p class="dim small">This page tries again every few seconds.</p>
     <button class="btn wide" onclick="location.reload()">Try now</button>`);
   clearTimeout(window.__authRetry);
   window.__authRetry = setTimeout(boot, 5000);
+}
+
+function dataHandoffStarting(state = {}) {
+  if (state.recovery && /^[a-f0-9]{24}$/.test(state.operation || "")) {
+    gate(`<img class="mark" src="/assets/homestead-mark.svg" alt="">
+      <h2>Data move paused</h2><p>Homestead is still on its original volume. No copy or shutdown has been authorized.</p>
+      <p class="dim small">Review the preparation or keep using the original volume. Both volumes will be retained.</p>
+      <a class="btn wide" href="/api/self/data/handoff/${state.operation}/view">Review preparation</a>`);
+    return;
+  }
+  gate(`<img class="mark" src="/assets/homestead-mark.svg" alt="">
+    <h2>Checking the new data volume</h2>
+    <p class="sub">Homestead is starting after its data move.</p>
+    <p>Changes stay paused until the move coordinator confirms the restart. Both volumes are retained.</p>
+    <p class="dim small">This page will continue automatically. Do not start the old copy.</p>`);
+  clearTimeout(window.__authRetry);
+  window.__authRetry = setTimeout(boot, 3000);
 }
 
 window.sessionSummary = (state = {}) => {
@@ -71,7 +88,7 @@ function ungate() { $("#gate").classList.add("hidden"); }
 
 function loginForm(err, setup) {
   gate(`
-    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.200" alt="">
+    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.202" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}
@@ -249,6 +266,7 @@ $("#whoami").onclick = () => go("settings");
 async function boot() {
   const st = await authState();
   if (st.unavailable) return clusterUnavailable(st.error);
+  if (st.data_handoff) return dataHandoffStarting(st);
   if (st.setup) return loginForm(null, true);
   if (!st.user) return loginForm();
   ME = st.user; ROLE = st.role || "admin"; ungate(); afterAuth();

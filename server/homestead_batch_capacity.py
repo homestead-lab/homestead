@@ -11,7 +11,7 @@ import homestead_place as PLACE
 import homestead_pod_resources as RESOURCES
 
 
-def plan(entries, namespace, pods, nodes, claims, threshold, *, budget=256, seconds=2, read=None, allocation_options=None):
+def plan(entries, namespace, pods, nodes, claims, threshold, *, budget=256, seconds=2, read=None, allocation_options=None, features=None):
     warnings = {"This is a snapshot, not a reservation. Kubernetes chooses placement; the example below is not enforced.",
                 "Other controllers' pending replicas and concurrent admissions are not fully simulated.",
                 "Admission webhooks may change the final pod spec; provisioning and application readiness are not guaranteed."}
@@ -23,7 +23,7 @@ def plan(entries, namespace, pods, nodes, claims, threshold, *, budget=256, seco
         return PLACE.manifest_plan(entry["deployment"], namespace, entry["name"], count, threshold,
                                    planned_claims=claims, pod_snapshot=snapshot, nodes_snapshot=nodes, read=read,
                                    workload_kind=entry.get("workload_kind", "container"),
-                                   memory_estimate_bytes=entry.get("memory_estimate_bytes"))
+                                   memory_estimate_bytes=entry.get("memory_estimate_bytes"), features=features)
     for entry in entries:
         dep, count = entry["deployment"], entry["replicas"]
         if not isinstance(count, int) or not 0 <= count <= 100:

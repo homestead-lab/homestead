@@ -76,13 +76,7 @@ def _read():
 
 
 def _write(rows):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    tmp = SHARED.temporary(_path())
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(rows[-MAX_MOVES:], handle, separators=(",", ":"))
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(tmp, _path())
+    SHARED.write_json(_path(), rows[-MAX_MOVES:], durable=True, separators=(",", ":"))
 
 
 def _find(move_id):
@@ -760,6 +754,11 @@ def _tick(move):
 
 def tick_all():
     """One pass over every running move."""
+    with SHARED.write_scope(_path()):
+        _tick_all()
+
+
+def _tick_all():
     with _lock:
         running = [m["id"] for m in _read() if m.get("status") == "running"]
     for move_id in running:

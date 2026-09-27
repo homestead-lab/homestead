@@ -21,6 +21,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import homestead_rollout_capacity as ROLLOUT
+import homestead_shared as SHARED
 
 
 kget = ksend = None
@@ -516,10 +517,11 @@ def _immutable(ref, digest):
 
 def _history(event):
     try:
-        os.makedirs(DATA_DIR, exist_ok=True)
         path = os.path.join(DATA_DIR, "image-update-history.jsonl")
-        with open(path, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, separators=(",", ":")) + "\n")
+        with SHARED.write_scope(path):
+            os.makedirs(DATA_DIR, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event, separators=(",", ":")) + "\n")
     except OSError:
         pass
 
