@@ -83,15 +83,18 @@ def _subset(wanted, actual):
     return type(wanted) is type(actual) and wanted == actual
 
 
-def admitted(body, obj, target):
+def admitted(body, obj, target, *, dry_run=False):
     meta = obj.get("metadata", {}) if isinstance(obj, dict) else {}
     if (not isinstance(obj, dict) or any(obj.get(k) != target[k] for k in ("kind", "apiVersion"))
             or any(meta.get(k) != target[k] for k in ("name", "namespace"))
             or meta.get("deletionTimestamp") or meta.get("ownerReferences") or meta.get("finalizers")):
         raise Held("The helper creation response does not match the requested resource")
-    identity(obj)
+    if not dry_run:
+        identity(obj)
     if meta.get("labels", {}) != body.get("metadata", {}).get("labels", {}):
         raise Held("Admission changed helper labels; it must not join another workload's service")
+    if meta.get("annotations", {}) != body.get("metadata", {}).get("annotations", {}):
+        raise Held("Admission added unreviewed helper annotations")
     if not _subset(body, obj):
         raise Held("Admission changed a reviewed helper setting; inspect it before continuing")
     kind = obj["kind"]
@@ -103,13 +106,15 @@ def admitted(body, obj, target):
             raise Held("Admission changed the helper's scoped access")
     elif kind == "Pod":
         wanted, spec = body["spec"], obj["spec"]
-        allowed = {"nodeName", "dnsPolicy", "schedulerName", "serviceAccount", "priority", "preemptionPolicy", "tolerations"}
+        allowed = {"nodeName", "dnsPolicy", "schedulerName", "serviceAccount", "serviceAccountName", "priority", "preemptionPolicy", "tolerations", "terminationGracePeriodSeconds"}
         if set(spec) - set(wanted) - allowed:
             raise Held("Admission added unreviewed helper pod settings")
         host = wanted["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"][0]["matchFields"][0]["values"][0]
         if (spec.get("nodeName") not in (None, "", host) or spec.get("dnsPolicy", "ClusterFirst") != "ClusterFirst"
                 or spec.get("schedulerName", "default-scheduler") != "default-scheduler"
-                or spec.get("serviceAccount", wanted["serviceAccountName"]) != wanted["serviceAccountName"]
+                or spec.get("serviceAccount", wanted.get("serviceAccountName", "default")) != wanted.get("serviceAccountName", "default")
+                or spec.get("serviceAccountName", "default") != wanted.get("serviceAccountName", "default")
+                or spec.get("terminationGracePeriodSeconds", 30) != wanted.get("terminationGracePeriodSeconds", 30)
                 or spec.get("priority", 0) != 0 or spec.get("preemptionPolicy", "PreemptLowerPriority") != "PreemptLowerPriority"):
             raise Held("The helper placement changed after review")
         for toleration in spec.get("tolerations", []):
@@ -123,11 +128,11 @@ def admitted(body, obj, target):
                 raise Held("Admission changed helper mounts, privileges or placement")
         container, original = spec["containers"][0], wanted["containers"][0]
         extras = set(container) - set(original)
-        if extras - {"terminationMessagePath", "terminationMessagePolicy"} or any(
-                container.get(key, default) != default for key, default in (("terminationMessagePath", "/dev/termination-log"), ("terminationMessagePolicy", "File"))):
+        if extras - {"terminationMessagePath", "terminationMessagePolicy", "imagePullPolicy"} or any(
+                container.get(key, default) != original.get(key, default) for key, default in (("terminationMessagePath", "/dev/termination-log"), ("terminationMessagePolicy", "File"), ("imagePullPolicy", "IfNotPresent"))):
             raise Held("Admission added unreviewed helper container settings")
         for key in ("env", "volumeMounts", "securityContext", "resources", "command", "ports"):
-            if container[key] != original[key]:
+            if container.get(key) != original.get(key):
                 raise Held("Admission changed the helper container")
     else:
         wanted, spec = body["spec"], obj["spec"]
@@ -140,6 +145,7 @@ def admitted(body, obj, target):
 class Setup:
     def __init__(self, anchor, scope, *, image, node, status_digest, approval=None, admit=None, clock=None):
         self.anchor, self.read, self.send = anchor, anchor.read, anchor.send
+        self.scope, self.clock = scope, clock
         state = anchor.state
         if ((scope.namespace, scope.deployment, scope.operation) != (anchor.namespace, state["deployment"]["name"], state["operation"])
                 or not {state["source"]["name"], state["destination"]} <= set(scope.claims)):
@@ -220,6 +226,10 @@ class Setup:
         if target["kind"] == "Pod":
             if self.admit is None or self.admit(copy.deepcopy(body)) is not True:
                 raise Held("Current capacity and placement must be reviewed before starting the coordinator")
+            # The source account checks actual Pod admission before persisting a
+            # create intent. Do not grant Pod creation to the coordinator Role.
+            from homestead_self_data_preflight import Preflight
+            Preflight(self.scope, self.send, **({"clock": self.clock} if self.clock is not None else {})).worker(body)
             # Admission may take time; recheck prior setup receipts afterwards.
             for previous, receipt in enumerate(receipts):
                 self._observe(previous, receipt)
@@ -267,3 +277,18 @@ class Setup:
             raise Held("Waiting for the exact coordinator pod to become ready")
         self._current()
         return {"name": pod["metadata"]["name"], "uid": identity(pod)["uid"], "shape": shape(pod)}
+
+    def preflight_copy(self, plan):
+        """Source-side final check; pin its receipt with the immutable plan.
+
+        This does not authorize downtime or publish the local fence. The caller
+        still needs signed review, source proof and writer-drain orchestration.
+        """
+        from homestead_self_data_preflight import Preflight, copy_job
+        if plan.get("worker") != self.worker_fact():
+            raise Held("Copy preflight needs the exact ready coordinator identity")
+        job = copy_job(self.anchor.namespace, {**self.anchor.state, "plan": plan})
+        receipt = Preflight(self.scope, self.send, **({"clock": self.clock} if self.clock is not None else {})).copy(job)
+        if plan.get("worker") != self.worker_fact():
+            raise Held("The coordinator changed during copy admission preflight")
+        return receipt

@@ -162,7 +162,7 @@ def job(namespace, name, source, destination, image, operation, node):
             "spec": {"backoffLimit": 0, "parallelism": 1, "completions": 1,
                      "podReplacementPolicy": "Failed", "activeDeadlineSeconds": 86400,
                      "template": {"metadata": {"labels": labels}, "spec": {
-                         "restartPolicy": "Never", "automountServiceAccountToken": False,
+                         "restartPolicy": "Never", "automountServiceAccountToken": False, "enableServiceLinks": False,
                          "affinity": {"nodeAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": {
                              "nodeSelectorTerms": [{"matchFields": [{"key": "metadata.name", "operator": "In", "values": [node]}]}]}}},
                          "securityContext": {"seccompProfile": {"type": "RuntimeDefault"}},

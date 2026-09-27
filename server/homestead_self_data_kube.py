@@ -90,6 +90,31 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+class PreviewScope:
+    """Source-side preflight only; never grants a worker real Pod creation.
+
+    Kubernetes RBAC uses the same permission for dry-run and real creation.
+    Use the source app's reviewed existing credentials, not an enlarged worker
+    Role. The transport refuses requests that omit the literal dry-run flag.
+    """
+    def __init__(self, scope):
+        self.namespace = scope.namespace
+        self.worker_name = access_name(scope.namespace, scope.deployment, scope.operation)
+        self.copy_name = scope.copy_name
+        self.pod_name = "homestead-copy-check-" + scope.operation
+
+    def check(self, method, path, body=None, *, logs=False):
+        meta = body.get("metadata", {}) if isinstance(body, dict) else {}
+        suffix = "?dryRun=All&fieldValidation=Strict"
+        wanted = (("v1", "Pod", {self.worker_name, self.pod_name}) if path == f"/api/v1/namespaces/{self.namespace}/pods" + suffix else
+                  ("batch/v1", "Job", {self.copy_name}) if path == f"/apis/batch/v1/namespaces/{self.namespace}/jobs" + suffix else None)
+        if (logs or method != "POST" or wanted is None or not isinstance(body, dict) or not isinstance(meta, dict)
+                or body.get("apiVersion") != wanted[0] or body.get("kind") != wanted[1]
+                or meta.get("namespace") != self.namespace or meta.get("name") not in wanted[2]
+                or any(key in meta for key in ("uid", "resourceVersion", "generateName", "ownerReferences"))):
+            raise Held("This preflight client only permits the reviewed dry-run Pod and Job requests")
+
+
 class Client:
     def __init__(self, scope, *, token_path=TOKEN, ca_path=CA):
         self.scope, self.token_path = scope, token_path
