@@ -23,6 +23,8 @@ class StaticAddressTests(unittest.TestCase):
             self.sent.append((method, path, body))
             if path.endswith("/virtualmachines"):
                 return dict(body, metadata=dict(body["metadata"], uid="uid-1"))
+            if path.endswith("/secrets"):
+                return dict(body, metadata=dict(body["metadata"], uid="secret-1", resourceVersion="10"))
             return body
         imports.kget, imports.ksend, imports.NS, imports._cache = get, send, "lab", {}
 
@@ -52,6 +54,8 @@ class StaticAddressTests(unittest.TestCase):
                           "networkDataSecretRef": {"name": "k3s-demo-server-1-cloudinit"}}, cloud)
         owner = next(b for m, p, b in self.sent if m == "PATCH" and "/secrets/" in p)
         self.assertEqual("uid-1", owner["metadata"]["ownerReferences"][0]["uid"])
+        self.assertEqual("secret-1", owner["metadata"]["uid"])
+        self.assertEqual("10", owner["metadata"]["resourceVersion"])
 
     def test_the_pod_network_cannot_have_an_address_of_its_own(self):
         with self.assertRaisesRegex(ValueError, r"LAN network \(bridged\)"):

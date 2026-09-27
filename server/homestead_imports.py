@@ -2334,7 +2334,7 @@ def prepare_vm(cfg, platform=None, default_class=""):
     if network == "pod":
         if cfg.get("static_ip"):
             raise ValueError("an address of its own needs a LAN network (bridged), not the pod network")
-        interface, net = {"name": "default", "masquerade": {}}, {"name": "default", "pod": {}}
+        interface, net = {"name": "default", "masquerade": {}, "macAddress": mac}, {"name": "default", "pod": {}}
     else:
         if not re.fullmatch(r"[a-z0-9-]+/[a-z0-9.-]+", network):
             raise ValueError(f"{network} is not a LAN network like default/vlan1")
@@ -2419,7 +2419,7 @@ def prepare_vm(cfg, platform=None, default_class=""):
     return {"namespace": ns, "name": name, "vm": vm, "claims": claims, "secrets": secrets,
             "downloads": downloads, "secret_name": secret_name,
             "result": {"ok": True, "vm": name, "datavolume": dv, "address": address,
-                       "mac": mac if network != "pod" else ""}}
+                       "mac": mac}}
 
 
 def _recheck_vm_creation(prepared):
@@ -2427,6 +2427,16 @@ def _recheck_vm_creation(prepared):
     targets = [f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}"]
     for kind, rows in (("persistentvolumeclaims", prepared["claims"]), ("secrets", prepared["secrets"])):
         targets.extend(f"/api/v1/namespaces/{ns}/{kind}/{row['metadata']['name']}" for row in rows)
+    # Controller-made claims need the same collision protection as claims we
+    # POST ourselves. A name in a template is not permission to adopt a disk.
+    for template in prepared["vm"]["spec"].get("dataVolumeTemplates") or []:
+        claim = _required_name(template["metadata"]["name"], "disk name")
+        targets.extend([f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}",
+                        f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{claim}"])
+    annotation = (prepared["vm"].get("metadata", {}).get("annotations") or {}).get("harvesterhci.io/volumeClaimTemplates", "[]")
+    for template in json.loads(annotation):
+        claim = _required_name(template["metadata"]["name"], "disk name")
+        targets.append(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}")
     for path in targets:
         if _get_or_none(path) is not None:
             raise ValueError("A VM or planned dependency already exists; inspect it and review creation again")
@@ -2453,8 +2463,10 @@ def commit_vm(prepared, before_save=None):
         before_save(prepared)
     for claim in prepared["claims"]:
         ksend("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", claim)
+    created_secrets = {}
     for secret in prepared["secrets"]:
-        ksend("POST", f"/api/v1/namespaces/{ns}/secrets", secret)
+        result = ksend("POST", f"/api/v1/namespaces/{ns}/secrets", secret)
+        created_secrets[secret["metadata"]["name"]] = (result or {}).get("metadata") or {}
     secret_name = prepared["secret_name"]
     try:
         created = ksend("POST", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines", vm)
@@ -2473,12 +2485,16 @@ def commit_vm(prepared, before_save=None):
     uid = ((created or {}).get("metadata") or {}).get("uid") if isinstance(created, dict) else ""
     if secret_name and uid:
         try:
+            secret_identity = created_secrets.get(secret_name) or {}
+            if not secret_identity.get("uid") or not secret_identity.get("resourceVersion"):
+                raise ValueError("Created Secret identity/version is unavailable")
             ksend("PATCH", f"/api/v1/namespaces/{ns}/secrets/{secret_name}",
-                  {"metadata": {"ownerReferences": [{"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
+                  {"metadata": {"uid": secret_identity["uid"], "resourceVersion": secret_identity["resourceVersion"],
+                                "ownerReferences": [{"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
                                                      "name": name, "uid": uid}]}},
                   ctype="application/merge-patch+json")
         except Exception:
-            pass
+            prepared["result"]["warning"] = "VM created, but its login Secret ownership could not be recorded. Keep the Secret and inspect it before cleanup."
     _bust("flow", "ov")
     return prepared["result"]
 

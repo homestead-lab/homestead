@@ -1311,6 +1311,16 @@ ssh_pwauth: true
           vm_network_options: { harvester: false, cluster_networks: [], multus: true,
             interfaces: [{ name: "eth0", kind: "nic", master: "", nodes: ["k3s-1"], everywhere: true },
               { name: "br0", kind: "bridge", master: "", nodes: ["k3s-1"], everywhere: true }] } },
+    "/api/vm/create/preview": (url, init) => {
+      const body=JSON.parse(init.body), memory=parseFloat(body.memory)||2;
+      return {config:{...body,mac:body.mac||"52:54:00:12:34:56"},capacity_token:"demo-vm-create-review",
+        volumes:body.disk_import ? [] : [{name:`${body.name}-disk`,size:`${body.disk_gb||20}Gi`,access_mode:"ReadWriteMany",volume_mode:"Block",storage_class:body.storage_class||"longhorn"}],
+        capacity:{blocked:false,requires_confirmation:true,additional:1,pod_request_gb:memory,pod_memory_gb:memory+0.25,pod_cpu_request_percent:20,
+          vm:{action:"create",guest_memory_gb:memory,request_is_lower_bound:true},
+          warnings:["Demo: storage provisioning and image importer overhead need live checks. Partial resources are retained if creation stops."],
+          candidates:[{name:"harvester-node1",eligible:true,metrics_available:true,used_gb:8,capacity_gb:32,projected_gb:8+memory+0.25,
+            projected_percent:Math.round((8+memory+0.25)/32*100),reservations_known:true,reserved_gb:6,request_slots:1}]}};
+    },
     "/api/vm/create": { ok: true, vm: "demo", datavolume: "demo-disk" },
     "/api/vm/store": (() => {
       const now = Math.floor(Date.now() / 1000), H = demoPlatform === "harvester";
