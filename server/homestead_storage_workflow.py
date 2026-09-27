@@ -1,4 +1,4 @@
-"""Durable storage-move orchestration, pending production job-creation activation.
+"""Durable storage-move orchestration with replica-checked production dispatch.
 
 The operations lock owns every resolver/inspection call. Stage functions share
 one implementation for real work and read-only next-write inspection; preview
@@ -24,16 +24,20 @@ def _initial_review(body, actor, ops):
     return cfg, result, context
 
 
-def preview(body, actor, ops):
+def preview(body, actor, ops, *, runtime_check=None):
+    if runtime_check is not None:
+        runtime_check()
     cfg, result, context = _initial_review(body, actor, ops)
     return {key: value for key, value in result.items() if not key.startswith("_")} | {
-        "warnings": result["warnings"] + ["If a step cannot be verified, workloads stay stopped and both copies are kept for review. Homestead will not automatically retry an uncertain request or roll back."],
+        "warnings": result["warnings"] + ["If a step cannot be verified, the move pauses for review. Data is kept; there is no automatic retry or rollback."],
         "capacity_token": RC.REVIEW.issue(cfg, context)}
 
 
-def start_reviewed(body, actor, ops):
+def start_reviewed(body, actor, ops, *, runtime_check=None):
     """Persist the approved initial stop, without stopping any workload here."""
     with ops._lock:
+        if runtime_check is not None:
+            runtime_check()
         cfg, result, context = _initial_review(body, actor, ops)
         token = str(body.get("capacity_token") or "")
         if (not result["ok"] or body.get("confirm_capacity") is not True or
@@ -59,18 +63,23 @@ def _decision(role, objects, result):
 
 
 def _approved(item, decision):
+    if not decision["warnings"]:
+        return True  # fresh admission passed without any overridable warning
     granted = item["ref"].get("storage_approvals", {}).get(item["ref"]["handoff_phase"], {}).get(decision["role"], {})
     return (set(decision["warnings"]) <= set(granted.get("warnings", [])) and
             set(decision["shapes"]) <= set(granted.get("shapes", [])))
 
 
-def step(item, checkpoint, helper_admission, restart_admission, *, inspecting=False, decisions=None):
+def step(item, checkpoint, helper_admission, restart_admission, *, inspecting=False, decisions=None, runtime_check=None):
     check(item)
     ref, phase = item["ref"], item["ref"]["handoff_phase"]
     if ref.get("storage_hold") and not inspecting:
         raise JOURNAL.Held("Storage move is held; review it before continuing")
+    if runtime_check is not None and phase != "done":
+        runtime_check()
     def journal_factory(work, read, send, save):
-        return JOURNAL.Journal(work, read, None if inspecting else send, None if inspecting else save, preview=inspecting)
+        return JOURNAL.Journal(work, read, None if inspecting else send, None if inspecting else save,
+                               preview=inspecting, before_write=runtime_check)
     def admit(role, objects, callback, value):
         result = callback(item, value)
         decision = _decision(role, objects, result)
@@ -110,11 +119,11 @@ def step(item, checkpoint, helper_admission, restart_admission, *, inspecting=Fa
     return "succeeded", 100, "Storage move completed; the original copy is retained"
 
 
-def resolve(item, checkpoint, helper_admission, restart_admission):
+def resolve(item, checkpoint, helper_admission, restart_admission, *, runtime_check=None):
     """Failures become an explicit durable hold, not a retry or rollback."""
     try:
         with GUARD.dispatching(item):
-            result = step(item, checkpoint, helper_admission, restart_admission)
+            result = step(item, checkpoint, helper_admission, restart_admission, runtime_check=runtime_check)
         phase = item["ref"]["handoff_phase"]
         ui_phase = {"stop": "stop", "copy": "stop" if result[1] <= 8 else "verify" if item.get("copy", {}).get("verifying") else
                     "create" if not HANDOFF._receipt(item, "copy-job") else "copy",
@@ -129,7 +138,7 @@ def resolve(item, checkpoint, helper_admission, restart_admission):
         return "failed", item.get("progress", 0), message
 
 
-def inspect(item, helper_admission, restart_admission):
+def inspect(item, helper_admission, restart_admission, *, runtime_check=None):
     """Simulate until the next write or wait using the exact guarded stages."""
     check(item)
     work, decisions = copy.deepcopy(item), []
@@ -140,7 +149,8 @@ def inspect(item, helper_admission, restart_admission):
         # Bound the walk so inspection can never spin on a waiting controller.
         for _ in PHASES:
             phase = work["ref"]["handoff_phase"]
-            outcome = step(work, lambda _: None, helper_admission, restart_admission, inspecting=True, decisions=decisions)
+            outcome = step(work, lambda _: None, helper_admission, restart_admission, inspecting=True,
+                           decisions=decisions, runtime_check=runtime_check)
             result["message"] = outcome[2]
             if work["ref"]["handoff_phase"] == phase or outcome[0] == "succeeded":
                 break

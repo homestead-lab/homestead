@@ -14,6 +14,8 @@ import server
 import homestead_storage_admission as admission
 import homestead_place as place
 import homestead_storage_journal as journal
+import homestead_storage_runtime as runtime
+from test_storage_runtime import pod as runtime_pod
 
 
 class StorageRecoveryTests(unittest.TestCase):
@@ -23,6 +25,7 @@ class StorageRecoveryTests(unittest.TestCase):
         self.cluster.item["ref"].update(storage_protocol=1, handoff_phase="copy")
         self.warnings = ["Measured RAM is above the configured warning limit"]
         self.blocked = False
+        self.runtime_check = None
         self.helper = lambda item, obj: {"blocked": self.blocked, "warnings": self.warnings}
         self.restart = lambda item, proposals: {"blocked": self.blocked, "warnings": self.warnings}
         directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
@@ -48,18 +51,18 @@ class StorageRecoveryTests(unittest.TestCase):
     def poll(self):
         with ops._lock:
             item = self.load()
-            outcome = workflow.resolve(item, self.checkpoint, self.helper, self.restart)
+            outcome = workflow.resolve(item, self.checkpoint, self.helper, self.restart, runtime_check=self.runtime_check)
             ops._finish(item, *outcome)
             self.save()
             return outcome
 
     def preview(self, actor="admin"):
-        return recovery.preview("handoff", ops, self.cluster.read, actor, self.helper, self.restart)
+        return recovery.preview("handoff", ops, self.cluster.read, actor, self.helper, self.restart, runtime_check=self.runtime_check)
 
     def act(self, action, preview=None, actor="admin", **overrides):
         value = preview or self.preview(actor)
         body = {"id": "handoff", "action": action, "capacity_token": value["tokens"].get(action), "confirm_capacity": True, **overrides}
-        result = recovery.act(body, ops, self.cluster.read, actor, self.helper, self.restart)
+        result = recovery.act(body, ops, self.cluster.read, actor, self.helper, self.restart, runtime_check=self.runtime_check)
         self.load()
         return result
 
@@ -84,6 +87,13 @@ class StorageRecoveryTests(unittest.TestCase):
         self.assertEqual(8, self.poll()[1])
         steps = self.load()["steps"]
         self.assertEqual("stop", next(row["id"] for row in steps if row["state"] == "active"))
+
+    def test_fresh_warning_free_admission_does_not_require_an_extra_confirmation(self):
+        self.warnings = []
+        self.assertEqual(12, self.poll()[1])
+        self.assertEqual(20, self.poll()[1])
+        self.assertNotIn("storage_hold", self.load()["ref"])
+        self.assertNotIn("storage_approvals", self.load()["ref"])
 
     def test_pause_keeps_resources_and_continue_only_changes_history(self):
         before = len(self.cluster.sent)
@@ -210,6 +220,20 @@ class StorageRecoveryTests(unittest.TestCase):
         self.assertEqual(200, call("act", body, "admin")[0])
 
     def test_full_orchestrator_uses_real_admission_and_separate_cutover_restart_reviews(self):
+        own = runtime_pod("homestead")
+        own["spec"]["nodeName"] = "a"
+        own["spec"]["containers"][0]["resources"] = {"requests": {"memory": "64Mi", "cpu": "10m"}}
+        base_read = self.cluster.read
+        def read(path):
+            if path == "/api/v1/namespaces/lab/pods/homestead": return copy.deepcopy(own)
+            data = base_read(path)
+            if path in ("/api/v1/pods", "/api/v1/namespaces/lab/pods"):
+                data["items"].append(copy.deepcopy(own))
+            return data
+        self.cluster.read = read
+        patch = mock.patch.object(rc, "kget", read); patch.start(); self.addCleanup(patch.stop)
+        runtime.report(ops, read, "lab", "homestead", "homestead", "test-release")
+        self.runtime_check = lambda: runtime.require(ops, read, "lab", "homestead", "homestead", "test-release")
         nodes = [{"name": "a", "status": "Ready", "schedulable": True, "hardware": {},
             "labels": {"kubernetes.io/hostname": "a"}, "allocatable": {"cpu": "4", "memory": "8Gi", "pods": "100"},
             "mem_cap_gb": 8, "mem_used_gb": 1, "mem_metrics_available": True}]

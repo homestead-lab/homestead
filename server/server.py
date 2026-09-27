@@ -44,7 +44,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.194")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.195")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -162,7 +162,8 @@ def kget(path, timeout=10):
 
 
 def ksend(method, path, body=None, ctype="application/json", timeout=15):
-    return STORAGE_GUARD.send(method, path, body, lambda: _ksend(method, path, body, ctype, timeout), OPS, kget)
+    return STORAGE_GUARD.send(method, path, body, lambda: _ksend(method, path, body, ctype, timeout), OPS, kget,
+                              own_controller=(SELF.NS, NAMES.BRAND))
 
 
 def _ksend(method, path, body=None, ctype="application/json", timeout=15):
@@ -4743,6 +4744,7 @@ import homestead_reclass as RECLASS
 import homestead_storage_admission as STORAGE_ADMISSION
 import homestead_storage_recovery as STORAGE_RECOVERY
 import homestead_storage_workflow as STORAGE_WORKFLOW
+import homestead_storage_runtime as STORAGE_RUNTIME
 
 
 def storage_restart_admission(item, proposals):
@@ -4753,9 +4755,31 @@ def storage_helper_admission(item, manifest):
     return copy_admission(manifest)
 
 
+def storage_runtime_check():
+    try:
+        return STORAGE_RUNTIME.require(OPS, kget, SELF.NS, SELF.POD, NAMES.BRAND, HOMESTEAD_VERSION, DATA_DIR)
+    except STORAGE_WORKFLOW.JOURNAL.Held:
+        raise
+    except Exception:
+        raise STORAGE_WORKFLOW.JOURNAL.Held("Homestead replica compatibility could not be verified; restore cluster and shared-data access before moving storage") from None
+
+
+def _storage_runtime_loop():
+    # Every replica reports, not only the leader. No capability is inferred on
+    # behalf of an older binary that does not understand the new journal.
+    while True:
+        try:
+            STORAGE_RUNTIME.report(OPS, kget, SELF.NS, SELF.POD, NAMES.BRAND, HOMESTEAD_VERSION, DATA_DIR)
+            beat("storage-runtime", 20)
+        except Exception as error:
+            beat("storage-runtime", 20, error)
+        time.sleep(20)
+
+
 def storage_move_progress(item):
     if "storage_protocol" in item.get("ref", {}):
-        return STORAGE_WORKFLOW.resolve(item, OPS.checkpoint, storage_helper_admission, storage_restart_admission)
+        return STORAGE_WORKFLOW.resolve(item, OPS.checkpoint, storage_helper_admission, storage_restart_admission,
+                                        runtime_check=storage_runtime_check)
     # Keep pre-upgrade jobs on their existing steps; never infer receipts for
     # mutations made by an older engine. Exempt only this job from its own fence.
     with STORAGE_GUARD.dispatching(item):
@@ -7401,9 +7425,11 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "detail": f"{name} opens on port {port} first" if port
                                         else f"{name} shows its ports in their own order"})
             if p == "/api/volumes/reclass/plan":
-                return self._send(200, RECLASS.preview({**b, "namespace": b.get("namespace") or DEFAULT_NS}, self.user, OPS))
+                return self._send(200, STORAGE_WORKFLOW.preview({**b, "namespace": b.get("namespace") or DEFAULT_NS}, self.user, OPS,
+                                                               runtime_check=storage_runtime_check))
             if p == "/api/volumes/reclass/start":
-                op = RECLASS.start_reviewed({**b, "namespace": b.get("namespace") or DEFAULT_NS}, self.user, OPS)
+                op = STORAGE_WORKFLOW.start_reviewed({**b, "namespace": b.get("namespace") or DEFAULT_NS}, self.user, OPS,
+                                                    runtime_check=storage_runtime_check)
                 _cache.pop("vol", None)
                 return self._send(200, {"ok": True, "operation": op})
             if p == "/api/volumes/old-copies/remove":
@@ -7517,10 +7543,10 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, VM_MUTATION_RECOVERY.resolve(b, OPS, kget, self.user))
             if p == "/api/operations/storage-recovery/preview":
                 return self._send(200, STORAGE_RECOVERY.preview(b.get("id", ""), OPS, kget, self.user,
-                                                               storage_helper_admission, storage_restart_admission))
+                    storage_helper_admission, storage_restart_admission, runtime_check=storage_runtime_check))
             if p == "/api/operations/storage-recovery/act":
                 return self._send(200, STORAGE_RECOVERY.act(b, OPS, kget, self.user,
-                                                          storage_helper_admission, storage_restart_admission))
+                    storage_helper_admission, storage_restart_admission, runtime_check=storage_runtime_check))
             if p == "/api/operations/cancel-plan":
                 return self._send(200, OPS.cancel_plan(b.get("id", "")))
             if p == "/api/operations/cancel":
@@ -7701,6 +7727,7 @@ def _samba_loop():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8080"))
+    threading.Thread(target=_storage_runtime_loop, daemon=True).start()
     threading.Thread(target=_sampler, daemon=True).start()
     threading.Thread(target=_reconcile_permissions, daemon=True).start()
     threading.Thread(target=_upgrade_node_probe, daemon=True).start()

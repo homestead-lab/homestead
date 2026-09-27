@@ -47,8 +47,8 @@ def _resources(item, read):
     return rows
 
 
-def _snapshot(item, read, actor, helper_admission, restart_admission):
-    inspection = WORKFLOW.inspect(item, helper_admission, restart_admission)
+def _snapshot(item, read, actor, helper_admission, restart_admission, runtime_check=None):
+    inspection = WORKFLOW.inspect(item, helper_admission, restart_admission, runtime_check=runtime_check)
     rows = _resources(item, read)
     warnings = sorted({warning for d in inspection["decisions"] for warning in d["warnings"]})
     warnings.append("This review does not delete data. Continuing may restart workloads and never rolls back or repeats an uncertain request.")
@@ -75,22 +75,22 @@ def _snapshot(item, read, actor, helper_admission, restart_admission):
     return plan, context, inspection["decisions"]
 
 
-def preview(ident, ops, read, actor, helper_admission, restart_admission):
+def preview(ident, ops, read, actor, helper_admission, restart_admission, *, runtime_check=None):
     with ops._lock:
-        plan, context, _ = _snapshot(_job(ops._read(), ident), read, actor, helper_admission, restart_admission)
+        plan, context, _ = _snapshot(_job(ops._read(), ident), read, actor, helper_admission, restart_admission, runtime_check)
         tokens = {action: REVIEW.issue({"id": ident, "action": action}, context) for action in ("continue", "pause")
                   if plan["can_" + action]}
         return {"plan": plan, "tokens": tokens}
 
 
-def act(body, ops, read, actor, helper_admission, restart_admission):
+def act(body, ops, read, actor, helper_admission, restart_admission, *, runtime_check=None):
     ident, action = str(body.get("id") or ""), body.get("action")
     if action not in ("continue", "pause"):
         raise ValueError("Choose Continue or Pause")
     with ops._lock:
         items = ops._read()
         item = _job(items, ident)
-        plan, context, decisions = _snapshot(item, read, actor, helper_admission, restart_admission)
+        plan, context, decisions = _snapshot(item, read, actor, helper_admission, restart_admission, runtime_check)
         config = {"id": ident, "action": action, "capacity_token": body.get("capacity_token")}
         if not plan["can_" + action] or body.get("confirm_capacity") is not True or not REVIEW.valid(config, context):
             raise ValueError("Review this storage move again and acknowledge its current state before continuing or pausing")
