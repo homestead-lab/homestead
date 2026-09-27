@@ -9,6 +9,7 @@ permissions:
   contents: write
   packages: write
   id-token: write
+  actions: read
 
 concurrency:
   group: publish-${{ github.ref }}
@@ -19,23 +20,16 @@ env:
 
 jobs:
   publish:
+    # Nothing is pushed until this commit has passed its tests and a real
+    # data-move rehearsal. A tag is put on a commit already on main, whose
+    # push ran all of CI - tests and rehearsal included - so that run is
+    # waited for rather than repeated, while the image builds. A commit CI
+    # never saw is tested here instead.
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12"
-      - name: Install allocation client test dependencies
-        run: |
-          python -m pip install --only-binary=:all: --require-hashes -r requirements-topology.txt
-      - name: Test release source
-        run: |
-          python -m unittest discover -s tests -v
-          python -m compileall -q server
-          for file in web/js/*.js; do node --check "$file"; done
-      - name: Rehearse data moves before publication
-        # Isolated Docker k3s only; fail before pushing any container or chart.
-        run: python3 tests/integration/self_data_cluster.py
       - name: Resolve version
         id: version
         shell: bash
@@ -68,7 +62,63 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.description=Open-source homelab dashboard for Harvester, Rancher, Longhorn, Fleet, KubeVirt and Kubernetes
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      - name: Build the image (not pushed yet)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            REVISION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Wait for this commit's CI
+        id: checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          # Up to 30 minutes for CI to finish; three for it to appear at all.
+          for attempt in $(seq 1 90); do
+            run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$GITHUB_SHA" --event push \
+                  --json databaseId,status,conclusion --jq '.[0] // empty')
+            if [ -z "$run" ]; then
+              if [ "$attempt" -ge 9 ]; then
+                echo "No CI run on main for $GITHUB_SHA: testing here instead."
+                echo "here=true" >> "$GITHUB_OUTPUT"; exit 0
+              fi
+            else
+              status=$(jq -r .status <<<"$run"); conclusion=$(jq -r .conclusion <<<"$run")
+              if [ "$status" = completed ]; then
+                echo "CI run $(jq -r .databaseId <<<"$run"): $conclusion"
+                # A newer push to main cancels the run before it finished:
+                # nothing was said either way, so the checks run here.
+                if [ "$conclusion" = cancelled ]; then echo "here=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+                [ "$conclusion" = success ] || { echo "CI did not pass on this commit; nothing is published."; exit 1; }
+                echo "here=false" >> "$GITHUB_OUTPUT"; exit 0
+              fi
+            fi
+            sleep 20
+          done
+          echo "CI on this commit did not finish in 30 minutes; nothing is published."; exit 1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: steps.checks.outputs.here == 'true'
+        with:
+          python-version: "3.12"
+      - name: Test release source
+        if: steps.checks.outputs.here == 'true'
+        run: |
+          python -m pip install --only-binary=:all: --require-hashes -r requirements-topology.txt
+          python -m unittest discover -s tests -v
+          python -m compileall -q server
+          for file in web/js/*.js; do node --check "$file"; done
+      - name: Rehearse data moves before publication
+        # Isolated Docker k3s only; fail before pushing any container or chart.
+        if: steps.checks.outputs.here == 'true'
+        run: python3 tests/integration/self_data_cluster.py
+      - name: Push the image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         id: build
         with:
           context: .
@@ -98,6 +148,20 @@ jobs:
           helm package charts/homestead --destination release-assets
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
           helm push "release-assets/homestead-${{ steps.version.outputs.version }}.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          name: homestead-chart
+          path: release-assets/*.tgz
+
+  screenshots:
+    # The release's pictures, from the demo data, alongside the build.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
       - name: Install screenshot browser
         run: |
           npm install --no-save --no-package-lock playwright@1.55.0
@@ -122,12 +186,23 @@ jobs:
           node scripts/render_tui.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: homestead-screenshots-${{ steps.version.outputs.version }}
+          name: homestead-screenshots
           path: |
             release-assets/*.png
             release-assets/*.jpg
+
+  release:
+    # The GitHub release: only once the image and chart are out.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [publish, screenshots]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: release-assets
+          merge-multiple: true
       - name: Publish release screenshots
-        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
