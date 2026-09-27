@@ -203,7 +203,7 @@ class VMClusterAdmissionTests(unittest.TestCase):
         self.assertEqual([], self.sent)
 
     def test_observed_owned_launcher_is_counted_once_not_as_another_future_vm(self):
-        self.nodes[0]["allocatable"]["memory"] = "8Gi"
+        self.nodes[0]["allocatable"]["memory"] = "8.5Gi"  # includes guest probe + console helper
         body = self.reviewed()
         def changed(method, path, vm):
             if path.endswith("/virtualmachines"):
@@ -218,7 +218,7 @@ class VMClusterAdmissionTests(unittest.TestCase):
         self.assertEqual(200, result[0], result)
 
     def test_unassigned_owned_launcher_is_replaced_by_exactly_one_future_demand(self):
-        self.nodes[0]["allocatable"]["memory"] = "8Gi"
+        self.nodes[0]["allocatable"]["memory"] = "8.5Gi"  # includes guest probe + console helper
         body = self.reviewed()
         def changed(method, path, vm):
             if path.endswith("/virtualmachines"):
@@ -238,6 +238,18 @@ class VMClusterAdmissionTests(unittest.TestCase):
         body = self.reviewed()
         result = self.call("/api/vm/k3s-cluster", body)
         self.assertEqual(200, result[0], result)
+
+    def test_joint_network_devices_cannot_be_double_booked_across_guest_vms(self):
+        nad = self.objects["/apis/k8s.cni.cncf.io/v1/namespaces/default/network-attachment-definitions/lan"]
+        nad["metadata"]["annotations"] = {"k8s.v1.cni.cncf.io/resourceName": "vendor/lan"}
+        self.nodes[0]["allocatable"]["vendor/lan"] = "1"
+        result = self.call("/api/vm/k3s-cluster/plan", self.body)
+        self.assertEqual(200, result[0], result)
+        self.assertTrue(result[1]["capacity"]["blocked"])
+        self.assertIn("vendor/lan", str(result[1]["capacity"]["reasons"]))
+        self.assertEqual([], self.sent)
+        self.nodes[0]["allocatable"]["vendor/lan"] = "2"
+        self.reviewed()
 
     def test_missing_kvm_cannot_be_overridden(self):
         del self.nodes[0]["allocatable"]["devices.kubevirt.io/kvm"]

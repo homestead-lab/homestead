@@ -103,6 +103,52 @@ class VMPowerAdmissionTests(unittest.TestCase):
         self.assertEqual(200, result[0], result)
         writes.assert_called_once()
 
+    def test_missing_network_device_cannot_be_overridden_by_capacity_checkbox(self):
+        for device in ("tun", "vhost-net"):
+            signed = self.reviewed()
+            self.nodes[0]["allocatable"]["devices.kubevirt.io/" + device] = "0"
+            result, writes = self.call("/api/vm/power", signed)
+            self.assertEqual(409, result[0], result)
+            writes.assert_not_called()
+            self.nodes[0]["allocatable"]["devices.kubevirt.io/" + device] = "100"
+
+    def test_network_resource_version_and_free_devices_are_rechecked(self):
+        spec = self.vm["spec"]["template"]["spec"]
+        spec["networks"] = [{"name": "lan", "multus": {"networkName": "lab/lan"}}]
+        spec["domain"]["devices"] = {"interfaces": [{"name": "lan", "sriov": {}}]}
+        self.nodes[0]["allocatable"]["vendor/nic"] = "1"
+        path = "/apis/k8s.cni.cncf.io/v1/namespaces/lab/network-attachment-definitions/lan"
+        nad = {"metadata": {"name": "lan", "namespace": "lab", "uid": "nad-uid", "resourceVersion": "1",
+                            "annotations": {"k8s.v1.cni.cncf.io/resourceName": "vendor/nic"}}}
+        self.objects[path] = nad
+        signed = self.reviewed()
+        nad["metadata"]["resourceVersion"] = "2"
+        result, writes = self.call("/api/vm/power", signed)
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+        signed = self.reviewed()
+        self.pods.append({"metadata": {"name": "consumer", "namespace": "lab"}, "status": {"phase": "Running"},
+                          "spec": {"nodeName": "node1", "containers": [{"name": "app", "resources": {"requests": {"vendor/nic": "1"}}}]}})
+        result, writes = self.call("/api/vm/power", signed)
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+
+    def test_changed_hook_configmap_invalidates_review_without_exposing_script(self):
+        import json
+        self.vm["spec"]["template"]["metadata"] = {"annotations": {"hooks.kubevirt.io/hookSidecars": json.dumps([
+            {"configMap": {"name": "hook", "key": "script"}}])}}
+        path = "/api/v1/namespaces/lab/configmaps/hook"
+        value = {"metadata": {"name": "hook", "namespace": "lab", "uid": "hook-uid", "resourceVersion": "1"},
+                 "data": {"script": "private-script-value"}}
+        self.objects[path] = value
+        preview, _ = self.call("/api/vm/power/preview", self.body)
+        self.assertNotIn("private-script-value", str(preview))
+        signed = self.reviewed()
+        value["metadata"]["resourceVersion"] = "2"
+        result, writes = self.call("/api/vm/power", signed)
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+
     def test_stop_force_stop_pause_do_not_depend_on_capacity(self):
         for action in ("stop", "force-stop", "pause"):
             with mock.patch.object(server, "vm_power_capacity_plan", side_effect=AssertionError("must not check capacity")):

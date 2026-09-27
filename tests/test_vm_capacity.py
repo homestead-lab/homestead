@@ -14,7 +14,8 @@ class VMCapacityTests(unittest.TestCase):
         self.nodes = [{"name": "node1", "status": "Ready", "schedulable": True,
                        "labels": {"kubevirt.io/schedulable": "true"}, "mem_cap_gb": 16,
                        "mem_used_gb": 2, "mem_metrics_available": True,
-                       "allocatable": {"cpu": "8", "memory": "16Gi", "pods": "110", "devices.kubevirt.io/kvm": "100"}}]
+                       "allocatable": {"cpu": "8", "memory": "16Gi", "pods": "110", "devices.kubevirt.io/kvm": "100",
+                                       "devices.kubevirt.io/tun": "100", "devices.kubevirt.io/vhost-net": "100"}}]
         self.config = {"metadata": {"name": "kubevirt", "namespace": "kubevirt", "uid": "kv-uid", "resourceVersion": "1"}, "spec": {"configuration": {}}}
         self.pods = []
         self.objects = {}
@@ -59,7 +60,7 @@ class VMCapacityTests(unittest.TestCase):
         result = self.plan()
         self.assertFalse(result["blocked"])
         self.assertTrue(result["requires_confirmation"])
-        self.assertEqual(6.2, result["candidates"][0]["projected_gb"])
+        self.assertEqual(6.3, result["candidates"][0]["projected_gb"])
         self.assertEqual(4.0, result["vm"]["guest_memory_gb"])
         self.assertTrue(result["vm"]["request_is_lower_bound"])
 

@@ -9,6 +9,8 @@ import copy
 from decimal import Decimal, ROUND_CEILING
 
 import homestead_pod_resources as RESOURCES
+import homestead_vm_network as NETWORK
+import homestead_vm_support as SUPPORT
 
 MIB = 1024**2
 
@@ -82,7 +84,7 @@ def _positive(value, label):
     return number
 
 
-def project(vm, configuration=None, *, expanded_spec=None):
+def project(vm, configuration=None, *, expanded_spec=None, read=None):
     """Project the proposed VMI into placement input with explicit uncertainty.
 
     configuration is the *observed* KubeVirt spec.configuration, or None when
@@ -101,6 +103,10 @@ def project(vm, configuration=None, *, expanded_spec=None):
         blockers.append("KubeVirt emulation/device configuration must be readable before checking host eligibility")
     domain = spec.get("domain") or {}
     cpu, memory, devices = (domain.get(key) or {} for key in ("cpu", "memory", "devices"))
+    network = NETWORK.evidence(spec, vm["metadata"]["namespace"], config, read)
+    support = SUPPORT.project(vm, spec, config, network, read)
+    blockers.extend(network["blockers"] + support["blockers"])
+    warnings.extend(network["warnings"] + support["warnings"])
     resources = domain.get("resources") or {}
     requests, limits = resources.get("requests") or {}, resources.get("limits") or {}
     guest = RESOURCES.quantity(memory.get("guest") or requests.get("memory") or limits.get("memory"))
@@ -116,9 +122,14 @@ def project(vm, configuration=None, *, expanded_spec=None):
             warnings.append("implicit memory overcommit changes scheduler requests, not the VM's possible physical RAM use")
     physical = max(guest, requested_memory, RESOURCES.quantity(memory.get("maxGuest")))
     overhead = max(256 * MIB, (physical + 19) // 20) if physical else 0
-    estimate = max(physical + overhead, RESOURCES.quantity(limits.get("memory")))
+    ratio = config.get("additionalGuestMemoryOverheadRatio")
+    if ratio not in (None, ""):
+        scale = max(Decimal(1), _positive(ratio, "additional guest-memory overhead ratio"))
+        overhead = int((overhead * scale).to_integral_value(rounding=ROUND_CEILING))
+        warnings.append("cluster additional guest-memory overhead ratio is included in the planning allowance")
+    estimate = max(physical, RESOURCES.quantity(limits.get("memory"))) + overhead
     warnings.append("RAM projection includes a planning allowance of max(256 MiB, 5% of guest/reserved RAM), not KubeVirt's exact launcher overhead or a memory limit")
-    warnings.append("launcher sidecars, admission defaults and runtime overhead may require more resources than this lower-bound request")
+    warnings.append("unrecognised/injected helpers, admission defaults and runtime overhead may require more resources than this lower-bound request")
     if not limits.get("memory"):
         warnings.append("VM launcher memory is not explicitly limited")
 
@@ -167,7 +178,8 @@ def project(vm, configuration=None, *, expanded_spec=None):
 
     pod = {key: copy.deepcopy(spec[key]) for key in
            ("nodeSelector", "affinity", "tolerations", "schedulerName", "priorityClassName", "topologySpreadConstraints", "nodeName", "resourceClaims") if key in spec}
-    selectors = pod.setdefault("nodeSelector", {})
+    selectors = {**copy.deepcopy(developer.get("nodeSelectors") or {}), **pod.get("nodeSelector", {})}
+    pod["nodeSelector"] = selectors
     def select(key, value):
         if key in selectors and selectors[key] != value:
             blockers.append(f"VM node selector conflicts with required {key}={value}")
@@ -197,23 +209,42 @@ def project(vm, configuration=None, *, expanded_spec=None):
         warnings.append("software emulation is enabled; CPU performance and nested virtualization are not guaranteed")
     elif configuration is not None:
         projected_requests["devices.kubevirt.io/kvm"] = "1"
-    device_counts = {}
+    for resource, count in network["requests"].items():
+        projected_requests[resource] = str(max(count, int(projected_requests.get(resource, "0"))))
+    if devices.get("autoattachVSOCK") is True:
+        projected_requests["devices.kubevirt.io/vhost-vsock"] = "1"
+    if "sev" in (domain.get("launchSecurity") or {}):
+        projected_requests["devices.kubevirt.io/sev"] = "1"
+    if any((disk.get("lun") or {}).get("reservation") is True for disk in devices.get("disks") or []):
+        projected_requests["devices.kubevirt.io/pr-helper"] = "1"
+    permitted = config.get("permittedHostDevices")
+    allowed = {entry.get("resourceName") for kind in ("pciHostDevices", "mediatedDevices", "usb")
+               for entry in (permitted or {}).get(kind) or []}
+    # Distinct uses share the same finite pool: a host device and a NIC using
+    # the same extended resource are two allocations, not alternative requests.
+    device_counts = dict(network["requests"])
     for device in (devices.get("gpus") or []) + (devices.get("hostDevices") or []):
         resource = device.get("deviceName")
         if resource:
             device_counts[resource] = device_counts.get(resource, 0) + 1
+            if permitted is not None and resource not in allowed:
+                blockers.append(f"VM passthrough resource {resource} is not permitted by KubeVirt configuration")
         else:
             blockers.append("VM passthrough device resource name is unresolved")
     for resource, count in device_counts.items():
         projected_requests[resource] = str(max(count, int(projected_requests.get(resource, "0"))))
-    if devices.get("interfaces") or devices.get("autoattachPodInterface") is not False:
-        warnings.append("network binding plugins may add tun, vhost-net or SR-IOV device requirements")
-    if cpu.get("numa") or domain.get("launchSecurity") or devices.get("autoattachVSOCK") or spec.get("resourceClaims"):
-        warnings.append("NUMA, confidential-compute, VSOCK or dynamic-device requirements need additional host admission")
-    if domain.get("ioThreadsPolicy") or devices.get("filesystems"):
-        warnings.append("IO threads and filesystem sidecars add resource overhead not yet rendered")
-    pod["containers"] = [{"name": "vm-launcher-estimate", "resources": {"requests": projected_requests}}]
-    pod["volumes"] = []
+    if cpu.get("numa") or domain.get("launchSecurity") or spec.get("resourceClaims"):
+        warnings.append("NUMA locality, confidential-compute policy and dynamic-device allocation still need additional host admission")
+    if domain.get("ioThreadsPolicy"):
+        warnings.append("IO-thread topology adds runtime overhead beyond this planning estimate")
+    extra = support["extra_memory"]
+    if not resources.get("overcommitGuestOverhead") or huge:
+        projected_requests["memory"] = str(int(projected_requests["memory"]) + extra)
+    projected_requests["ephemeral-storage"] = str(int(projected_requests.get("ephemeral-storage", "0")) + 50_000_000)
+    estimate += extra + support["support_memory"]
+    pod["containers"] = [{"name": "vm-launcher-estimate", "resources": {"requests": projected_requests}}, *support["containers"]]
+    pod["initContainers"] = support["initContainers"]
+    pod["volumes"] = support["volumes"]
     for volume in spec.get("volumes") or []:
         claim = (volume.get("persistentVolumeClaim") or {}).get("claimName") or (volume.get("dataVolume") or {}).get("name")
         if claim:
@@ -222,7 +253,7 @@ def project(vm, configuration=None, *, expanded_spec=None):
             pod["volumes"].append({"name": volume["name"], "hostPath": {"path": volume["hostDisk"].get("path")}})
             warnings.append("VM host disk contents and available space must be verified on the chosen host")
         elif volume.get("containerDisk"):
-            warnings.append("container-disk download and sidecar resources are not fully rendered")
+            warnings.append("container-disk helper resources are included; image-download storage and admission changes remain unverified")
         elif volume.get("emptyDisk"):
             warnings.append("ephemeral VM disk consumes node storage; free space must be checked")
     # Do not copy VM template annotations: they can contain credentials or
@@ -230,4 +261,6 @@ def project(vm, configuration=None, *, expanded_spec=None):
     template = {"metadata": {"labels": copy.deepcopy((outer.get("template", {}).get("metadata") or {}).get("labels") or {})}, "spec": pod}
     return {"manifest": {"spec": {"template": template}}, "guest_memory_bytes": guest,
             "memory_estimate_bytes": estimate, "planning_overhead_bytes": overhead,
+            "support_memory_bytes": support["support_memory"], "additional_overhead_bytes": extra,
+            "dependencies": {**network["dependencies"], **support["dependencies"]},
             "request_is_lower_bound": True, "warnings": sorted(set(warnings)), "blockers": blockers}

@@ -696,6 +696,21 @@ These checks protect the journal, but do not make Kubernetes mutations atomic or
 prove cross-node locking/failover on a particular storage backend. Validate that
 behavior on disposable resources before relying on a custom RWX backend.
 
+VM capacity reviews include launcher network devices (`tun`/`vhost-net`),
+Multus-annotated device pools and registered binding helpers. Two interfaces or
+VMs using the same finite device pool each need an allocation. Missing devices,
+unregistered bindings, unresolved SR-IOV requirements and disallowed passthrough
+resources cannot be waived with the memory-warning checkbox. Network definitions
+and hook dependencies are bound to their Kubernetes UID/version and rechecked.
+
+The estimate also includes console, container-disk, filesystem and hook helpers,
+their configured support-container requests/limits, and known probe/passthrough/
+TPM/SEV overhead. Unbounded hooks remain visible as warnings. These are planning
+estimates, not an exact renderer for every KubeVirt version or a resource
+reservation. Physical CNI/bridge/link readiness, injected helpers, NUMA locality,
+dynamic allocations and advanced runtime policy still require separate validation.
+Explicit memory-pressure overrides remain available; hardware blockers do not.
+
 Reviewed VM creation and edits record a job before creating or changing images,
 login Secrets, claims or the VM. Each resource write has a durable intent and an
 acknowledged UID/version receipt; the journal contains no cloud-init, credentials

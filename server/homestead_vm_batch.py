@@ -43,7 +43,7 @@ def plan(prepared, read, nodes, *, created=None, threshold=88):
         if set(claims) & set(definitions):
             raise ValueError("VM batch disks must have distinct names")
         claims.update(definitions)
-        model = RESOURCES.project(vm, configuration)
+        model = RESOURCES.project(vm, configuration, read=read)
         blockers.extend(f"{name}: {text}" for text in model["blockers"])
         warnings.update(model["warnings"])
         count = 1

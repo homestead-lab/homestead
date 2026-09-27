@@ -137,7 +137,7 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
             raise ValueError("KubeVirt configuration identity unavailable")
     except Exception:
         configuration = None
-    model = VMRES.project(vm, configuration, expanded_spec=expanded_spec)
+    model = VMRES.project(vm, configuration, expanded_spec=expanded_spec, read=read)
     try:
         pods = _items(read, "/api/v1/pods")
     except Exception:
@@ -174,7 +174,8 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
             # edit/template resources do not describe a paused, already-running VM.
             live_vm = copy.deepcopy(current or vm)
             live_vm["spec"]["template"]["spec"] = copy.deepcopy(vmi["spec"])
-            live_model = VMRES.project(live_vm, configuration, expanded_spec=vmi["spec"])
+            live_vm["spec"]["template"]["metadata"] = copy.deepcopy(vmi.get("metadata") or {})
+            live_model = VMRES.project(live_vm, configuration, expanded_spec=vmi["spec"], read=read)
             model = live_model
             model["memory_estimate_bytes"] = max(model["memory_estimate_bytes"], RESOURCES.memory_estimate(launcher["spec"])[0])
             pods = [pod for pod in pods if pod.get("metadata", {}).get("uid") != launcher["metadata"]["uid"]]
@@ -215,7 +216,7 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
     evidence = dependencies(dependency_vm, read, planned_claims, pods=dependency_pods)
     blockers.extend(evidence["blockers"])
     warnings.extend(evidence["warnings"])
-    context["dependencies"] = evidence["context"]
+    context["dependencies"] = {**model["dependencies"], **evidence["context"]}
     result = PLACE.manifest_plan(manifest, namespace, name, 1, warning_percent,
                                  planned_claims=planned_claims, pod_snapshot=pods, nodes_snapshot=nodes,
                                  read=read, memory_estimate_bytes=model["memory_estimate_bytes"],

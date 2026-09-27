@@ -104,7 +104,7 @@ class ResourceProjectionTests(unittest.TestCase):
     def test_guest_memory_is_not_called_complete_launcher_memory(self):
         result = self.project()
         self.assertGreater(result["memory_estimate_bytes"], 4 * 1024**3)
-        self.assertEqual(4 * 1024**3, pods.pod_request(self.pod(result), "memory"))
+        self.assertEqual(4 * 1024**3 + 35_000_000, pods.pod_request(self.pod(result), "memory"))
         self.assertTrue(result["request_is_lower_bound"])
         self.assertNotIn("limits", self.pod(result)["containers"][0]["resources"])
         self.assertIn("not KubeVirt's exact", " ".join(result["warnings"]))
@@ -114,21 +114,21 @@ class ResourceProjectionTests(unittest.TestCase):
         result = self.project()
         self.assertGreater(result["planning_overhead_bytes"], 3 * 1024**3)
         self.assertGreater(result["memory_estimate_bytes"], 64 * 1024**3)
-        self.assertEqual(32 * 1024**3, pods.pod_request(self.pod(result), "memory"))
+        self.assertEqual(32 * 1024**3 + 35_000_000, pods.pod_request(self.pod(result), "memory"))
 
     def test_cpu_allocation_ratio_and_explicit_cpu_override(self):
-        self.assertEqual(200, pods.pod_request(self.pod(self.project()), "cpu"))
-        self.assertEqual(500, pods.pod_request(self.pod(self.project({"developerConfiguration": {"cpuAllocationRatio": 4}})), "cpu"))
+        self.assertEqual(205, pods.pod_request(self.pod(self.project()), "cpu"))
+        self.assertEqual(505, pods.pod_request(self.pod(self.project({"developerConfiguration": {"cpuAllocationRatio": 4}})), "cpu"))
         self.domain["resources"] = {"requests": {"cpu": "700m"}}
-        self.assertEqual(700, pods.pod_request(self.pod(self.project({"developerConfiguration": {"cpuAllocationRatio": 4}})), "cpu"))
+        self.assertEqual(705, pods.pod_request(self.pod(self.project({"developerConfiguration": {"cpuAllocationRatio": 4}})), "cpu"))
 
     def test_cpu_limit_without_request_is_used(self):
         self.domain["resources"] = {"limits": {"cpu": "1500m"}}
-        self.assertEqual(1500, pods.pod_request(self.pod(self.project()), "cpu"))
+        self.assertEqual(1505, pods.pod_request(self.pod(self.project()), "cpu"))
 
     def test_cpu_topology_multiplies_sockets_cores_threads(self):
         self.domain["cpu"] = {"sockets": 2, "cores": 3, "threads": 2}
-        self.assertEqual(1200, pods.pod_request(self.pod(self.project()), "cpu"))
+        self.assertEqual(1205, pods.pod_request(self.pod(self.project()), "cpu"))
 
     def test_invalid_allocation_ratio_and_fractional_cores_reject(self):
         for ratio in (0, -1, "NaN", "Infinity", "bad"):
@@ -152,7 +152,7 @@ class ResourceProjectionTests(unittest.TestCase):
     def test_dedicated_cpu_and_emulator_are_not_overcommitted(self):
         self.domain["cpu"].update({"dedicatedCpuPlacement": True, "isolateEmulatorThread": True})
         result = self.project()
-        self.assertEqual(3000, pods.pod_request(self.pod(result), "cpu"))
+        self.assertEqual(3015, pods.pod_request(self.pod(result), "cpu"))
         self.assertEqual("true", self.pod(result)["nodeSelector"]["cpumanager"])
         self.assertIn("SMT", " ".join(result["warnings"]))
 
@@ -166,7 +166,7 @@ class ResourceProjectionTests(unittest.TestCase):
         self.domain["memory"]["hugepages"] = {"pageSize": "2Mi"}
         result = self.project()
         self.assertEqual(4 * 1024**3, pods.pod_request(self.pod(result), "hugepages-2Mi"))
-        self.assertEqual(0, pods.pod_request(self.pod(result), "memory"))
+        self.assertEqual(35_000_000, pods.pod_request(self.pod(result), "memory"))
         self.assertGreater(result["memory_estimate_bytes"], 4 * 1024**3)
 
     def test_hugepages_require_alignment(self):
@@ -217,11 +217,11 @@ class ResourceProjectionTests(unittest.TestCase):
     def test_implicit_overcommit_changes_reservation_not_physical_estimate(self):
         self.domain["memory"]["guest"] = "3Gi"
         result = self.project({"developerConfiguration": {"memoryOvercommit": 150}})
-        self.assertEqual(2 * 1024**3, pods.pod_request(self.pod(result), "memory"))
+        self.assertEqual(2 * 1024**3 + 35_000_000, pods.pod_request(self.pod(result), "memory"))
         self.assertGreater(result["memory_estimate_bytes"], 3 * 1024**3)
         self.domain["resources"] = {"requests": {"memory": "1Gi"}}
         result = self.project({"developerConfiguration": {"memoryOvercommit": 150}})
-        self.assertEqual(1024**3, pods.pod_request(self.pod(result), "memory"))
+        self.assertEqual(1024**3 + 35_000_000, pods.pod_request(self.pod(result), "memory"))
 
     def test_forbidden_cpu_feature_constrains_every_existing_or_term(self):
         self.spec["affinity"] = {"nodeAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": {
