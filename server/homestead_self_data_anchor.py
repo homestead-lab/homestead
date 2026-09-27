@@ -123,7 +123,7 @@ def _validate(state, namespace):
     if "plan" in state:
         plan = state["plan"]
         _keys(plan, ("deployment_shape", "source_pvc_shape", "source_pv", "destination_pvc", "destination_pv",
-                     "worker", "nodes", "data_volume", "target_shareable"), ("copy_image", "copy_node", "admission"))
+                     "worker", "nodes", "data_volume", "target_shareable"), ("copy_image", "copy_node", "admission", "copy_preflight"))
         if "admission" in plan:
             from homestead_self_data_admission import validate_policy
             validate_policy(plan["admission"])
@@ -167,6 +167,11 @@ def _validate(state, namespace):
                 raise Held("The data copy image is not pinned to a digest")
             if plan.get("copy_node") not in seen:
                 raise Held("The data copy node was not included in the reviewed host inventory")
+        if "copy_preflight" in plan or worker_admission is not None:
+            from homestead_self_data_preflight import copy_job, validate_receipt
+            if "copy_preflight" not in plan:
+                raise Held("The copy Job and Pod need admission preflight before the data move is pinned")
+            validate_receipt(plan["copy_preflight"], copy_job(namespace, state))
     if "pointer_receipt" in state:
         if "plan" not in state:
             raise Held("A data handoff pointer receipt requires a pinned plan")

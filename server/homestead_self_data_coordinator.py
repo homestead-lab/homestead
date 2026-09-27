@@ -228,6 +228,9 @@ class Coordinator:
                 if dep["spec"].get("replicas", 1) != self.state["replicas"]:
                     raise Held("Homestead replica count changed after review")
                 dep = self._admission("stop", dep)
+                if "copy_preflight" in self.plan or self.state.get("setup", {}).get("admission") is not None:
+                    from homestead_self_data_preflight import validate_receipt
+                    validate_receipt(self.plan.get("copy_preflight"), self._copy_manifest(), now=self.clock())
                 proposed = copy.deepcopy(dep); proposed["spec"]["replicas"] = 0
                 self._update_dep("stop", dep, proposed)
             self.anchor.advance("quiesce")
