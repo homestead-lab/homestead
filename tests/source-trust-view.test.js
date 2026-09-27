@@ -6,7 +6,7 @@ function setup({fail=false}={}) {
   let closed=0;
   const ctx={console,Map,Set,Date,Promise,URLSearchParams,encodeURIComponent,
     document:{addEventListener(){}},STATE:{data:{}},$:key=>fields[key],$$:()=>[],
-    esc:x=>String(x).replaceAll('<','&lt;'),toast:()=>{},modal:()=>{},
+    esc:x=>String(x).replaceAll('<','&lt;'),toast:()=>{},modal:(_title,_html,_wide,context)=>{fields.context=context;},
     closeModal:()=>closed++,resetPaint:()=>{},
     UI:new Proxy({}, {get:(_,key)=>(...args)=>JSON.stringify({[key]:args})}),
     api:async(path,opts)=>{
@@ -21,6 +21,7 @@ function setup({fail=false}={}) {
 }
 test('source trust requires acknowledgement and submits exact reviewed key once',async()=>{
   const t=setup();await t.ctx.srcVerify('tower');
+  assert.equal(t.fields.context,'operation-review');
   assert.match(t.fields['#mbody'].innerHTML,/physical console/);
   await t.ctx.sourceKeyTrust();assert.equal(t.calls.length,1);
   t.fields['#sourceKeyAck'].checked=true;

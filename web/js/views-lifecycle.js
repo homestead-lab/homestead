@@ -1235,7 +1235,7 @@ window.srcAdd = () => modal("Add import source", UI.lead("Save the connection, t
     UI.field("Type", '<select id="sc_kind"><option value="unraid">Unraid</option><option value="proxmox">Proxmox</option><option value="ssh">Generic SSH</option></select>')) +
   UI.field("Appdata base path", '<input id="sc_path" value="/mnt/user/appdata">') +
   UI.more("Credentials and source ownership", '<p>The password is stored in a Kubernetes Secret. Administrators with access to Secrets can read it. Removing a source does not revoke credentials already used by copy Jobs.</p><p>Unraid® is a registered trademark of Lime Technology, Inc. Homestead is not affiliated with or endorsed by Lime Technology, Inc.</p>') +
-  UI.actions(UI.cancel() + UI.button("Save and verify", "doSrcAdd()", {kind:"pri",id:"sc_save"})));
+  UI.actions(UI.cancel() + UI.button("Save and verify", "doSrcAdd()", {kind:"pri",id:"sc_save"})), false, "operation-review");
 window.doSrcAdd = async () => {
   const save = $("#sc_save"), password = $("#sc_pass");
   if (!save || save.disabled) return;
@@ -1256,7 +1256,7 @@ window.srcVerify = async name => {
   if (SOURCE_KEY_BUSY) return;
   SOURCE_KEY_REVIEW = null;
   const sequence = ++SOURCE_KEY_SEQUENCE;
-  modal(`Verify source · ${name}`, '<div id="sourceKeyLoading" class="empty"><span class="spin2"></span>Reading the SSH host key. No login or password is sent…</div>');
+  modal(`Verify source · ${name}`, '<div id="sourceKeyLoading" class="empty"><span class="spin2"></span>Reading the SSH host key. No login or password is sent…</div>', false, "operation-review");
   try {
     const review = await api("/api/sources/scan", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name})});
     if (sequence !== SOURCE_KEY_SEQUENCE || !$("#sourceKeyLoading")) return;
