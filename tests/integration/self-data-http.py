@@ -49,7 +49,15 @@ for attempt in range(2):
         time.sleep(3)
     else: raise RuntimeError("Preparation timed out")
     cfg = {"operation": operation, "destination": prepared["destination"], "worker_node": "release-test", "copy_node": "release-test"}
-    preview = request("/api/self/data/move/preview", cfg)
+    deadline = time.monotonic() + 120
+    while True:
+        try:
+            preview = request("/api/self/data/move/preview", cfg)
+            break
+        except RuntimeError as error:
+            if "report current data-move support" not in str(error) or time.monotonic() >= deadline: raise
+            print("Waiting for the new replica's runtime report", flush=True)
+            time.sleep(3)
     request("/api/self/data/move", {**cfg, "capacity_token": preview["capacity_token"], "confirm_capacity": True, "confirm_move": True})
     print("MOVE CONFIRMED", attempt + 1, flush=True)
     deadline = time.monotonic() + 300
