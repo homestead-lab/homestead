@@ -63,7 +63,7 @@ rules:
   - apiGroups: ["apps"]
     resources: [deployments, deployments/scale, replicasets, statefulsets, daemonsets]
     verbs: [get, list, watch, create, update, patch, delete]
-  # Workload rename keeps any autoscaler attached to the replacement Deployment.
+  # Read autoscaler ownership before allowing a workload rename.
   - apiGroups: ["autoscaling"]
     resources: [horizontalpodautoscalers]
     verbs: [get, list, watch, update]

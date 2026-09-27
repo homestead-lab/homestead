@@ -13,7 +13,7 @@ import homestead_shared as SHARED
 STORE = "vm-power-approvals.json"
 # Keep historical filenames: replacing the ledger would resurrect approvals.
 MARKER = ".vm-power-approvals-initialized.json"
-KINDS = {"vm-power", "vm-create", "vm-edit"}
+KINDS = {"vm-power", "vm-create", "vm-edit", "workload-rename"}
 _MISSING = object()
 
 

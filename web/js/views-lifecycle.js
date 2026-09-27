@@ -243,7 +243,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
         <button class="btn pri" id="e_save" onclick="editSave('${esc(ns)}','${esc(name)}')">Save &amp; restart</button>
         <button class="btn" onclick="closeModal()">Cancel</button>
       </div>
-      <div class="note" style="margin-top:14px">Saving rolls the pod. Renaming the workload performs a guarded stop, recreate and readiness check. With a ReadWriteOnce volume the old pod must fully stop before the renamed one starts, so expect a short outage. A failed rename restores the original Deployment.</div>`;
+      <div class="note" style="margin-top:14px">Saving rolls the pod. Renaming is a separate, reviewed action with a short outage; volumes and service addresses are kept. If it stops part-way, inspect the job before restarting either workload.</div>`;
     containers.forEach((container, index) => renderVolumeRows(editVolumePicker(index),
       (container.volumes || []).filter(volume => !volume.managed).map(editVolumeRow)));
     window.__editHadService = !!w.has_service;
@@ -289,6 +289,8 @@ window.editAutostartToggle = () => {
 };
 let EDIT_REVIEW = null, EDIT_REVIEW_SEQUENCE = 0;
 window.editSave = async (ns, name) => {
+  const workloadName = $("#e_workload_name").value.trim();
+  if (workloadName !== name) return window.editReview({ns, name, workload_name: workloadName});
   const containers = $$("#e_containers .edit-container").map(panel => {
     const index = panel.dataset.index;
     const env = {};
@@ -310,9 +312,6 @@ window.editSave = async (ns, name) => {
     init_container: el.dataset.init, config_map: el.dataset.configMap,
     key: el.dataset.key, value: el.value,
   }));
-  const workloadName = $("#e_workload_name").value.trim();
-  const renaming = workloadName !== name;
-  if (renaming && !confirm(`Rename Kubernetes Deployment “${name}” to “${workloadName}”?\n\nHomestead will stop the old workload, start the renamed one, wait for readiness, and restore the original if startup fails. Expect a short outage.`)) return;
   const body = { ns, name, workload_name: workloadName, pod_hostname: $("#e_pod_name").value.trim(),
     icon: $("#e_icon").value.trim(), replicas: Math.max(1, +$("#e_rep").value || 1),
     autostart: $("#e_autostart").checked, manage_ports: true, containers, seed_configs,
@@ -321,7 +320,6 @@ window.editSave = async (ns, name) => {
   const nodeSelect = $("#e_node");
   if (nodeSelect.value !== (nodeSelect.dataset.current || "")) body.node = nodeSelect.value || null;
   const moves = containers.flatMap(container => container.volumes.filter(volume => volume.copy_from));
-  if (moves.length && renaming) return toast("Rename the workload and move its data in separate saves", "bad");
   if ((STATE.data.wl || []).some(x => x.self && x.ns === ns && x.name === name) && !body.autostart) {
     if (!confirm(`Turning autostart off stops Homestead, and this page with it. Nothing here can start it again - it stays down until someone runs\n\n  kubectl -n ${ns} scale deployment/${name} --replicas=1\n\non the cluster. Stop it anyway?`)) return;
     body.confirm_self = true;
@@ -344,9 +342,13 @@ window.editReview = async body => {
     if (sequence !== EDIT_REVIEW_SEQUENCE) return;
     if (!review.capacity || !review.capacity_token) throw new Error("Capacity review unavailable; refresh before saving.");
     EDIT_REVIEW = { config, ...review, submitting: false };
-    childModal("Review workload changes", `${deployCapacityHtml(review.capacity)}
-      ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="editCapacityConfirm"> Proceed despite capacity warnings — I accept the restart, placement, memory and storage risks</label>` : ""}
-      <div class="modalactions"><button class="btn" onclick="modalBack()">Back to edit</button><button id="editGo" class="btn pri" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmEdit()">Save reviewed changes</button></div>`, true);
+    const rename = review.capacity.rename;
+    childModal(rename ? "Rename workload" : "Review workload changes", `
+      ${rename ? `<p><b>${esc(rename.from)}</b> → <b>${esc(rename.to)}</b></p><p>Only the workload name changes. Save other edits separately. Expect a short outage; volumes and service addresses are kept.</p>` : ""}
+      ${rename ? `<div class="note ${review.capacity.blocked ? "bad" : ""}">${review.capacity.blocked ? "Rename is blocked by the placement check. Review the details below." : "If a step fails, inspect both workload names in Recent jobs. Homestead will not automatically restart the old copy or remove the replacement."}</div>
+        <details ${review.capacity.blocked ? "open" : ""}><summary>Capacity and placement · ${(review.capacity.warnings || []).length} warning(s)</summary>${deployCapacityHtml(review.capacity)}</details>` : deployCapacityHtml(review.capacity)}
+      ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="editCapacityConfirm"> ${rename ? "I accept the outage and capacity warnings" : "Proceed despite capacity warnings — I accept the restart, placement, memory and storage risks"}</label>` : ""}
+      <div class="modalactions"><button class="btn" onclick="modalBack()">Back to edit</button><button id="editGo" class="btn pri" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmEdit()">${rename ? "Rename workload" : "Save reviewed changes"}</button></div>`, true, "operation-review");
   } catch (e) { toast(e.message, "bad"); }
 };
 window.confirmEdit = async () => {
@@ -359,16 +361,19 @@ window.confirmEdit = async () => {
   review.submitting = true;
   const button = $("#editGo");
   button.disabled = true;
-  button.textContent = "Saving reviewed changes…";
+  button.textContent = renaming ? "Renaming… follow Recent jobs" : "Saving reviewed changes…";
+  if (renaming) window.startOperationChecks?.();
   try {
     const result = await api("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const activeName = result.name || workloadName || name;
-    toast(result.operation ? `${activeName} saved; copying its data in the job tray` :
+    if (result.operation) window.noteOperation?.(result.operation);
+    toast(renaming ? `${name} renamed to ${activeName}` : result.operation ? `${activeName} saved; copying its data in the job tray` :
       result.network || (renaming ? `${name} renamed to ${activeName}` : `${activeName} updated`), "ok");
     EDIT_REVIEW = null;
     closeModal(); setTimeout(() => refresh(true), 1200);
   } catch (e) {
     EDIT_REVIEW = null;
+    window.startOperationChecks?.();
     toast(e.message, "bad");
     button.disabled = false;
     button.textContent = "Review again";

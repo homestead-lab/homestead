@@ -57,7 +57,8 @@ logs, console, edit - and:
   page.
 - **Group** - put it in a group (below).
 - **Placement** - where it runs (below).
-- **Rename** - the Kubernetes objects are renamed with it, carefully.
+- **Rename** - replaces the Deployment under its new Kubernetes name; Services
+  and volumes keep their existing names and addresses.
 - **Move** - to another namespace, or [another cluster](Moving-between-clusters).
 
 **Edit** opens the same form as Deploy, with everything the container has now.
@@ -104,14 +105,48 @@ icons or restart the workload. The final Deployment PUT retains its reviewed
 resource version. Multi-object saves are not atomic: a later API failure can
 still leave a partially applied edit.
 
-Renames and data-copy edits review conditional post-stop workload capacity;
+Renames review conditional post-stop capacity, then recheck after the original
+pods have terminated (see below). Data-copy edits still use conditional preflight;
 copy-helper placement and capacity changes during a long copy are not simulated.
 Paused Deployments cannot increase replicas through Edit until resumed and
 reviewed again. [Compose batches](Importing#batch-capacity-review) have a joint
 preflight and before-each-service recheck. [Manual host moves](#moving-between-hosts)
 also review the whole replacement pod and chosen destination before restarting.
 Image updates and rollback also review the complete rollout. Unraid/cross-cluster
-migration and VM launches remain separate paths; extending the guard is planned.
+migration remain separate paths; extending the guard is planned. VM launches have
+their own [placement reviews](Virtual-machines).
+
+### Renaming a workload
+
+Change **Workload name** in **Edit**, then review **Rename workload**. It is a
+name-only action: save any other edits separately. Expect an outage while the
+old pods stop and the replacement starts. A stopped workload stays stopped.
+
+Homestead stages the replacement at zero replicas, verifies the original pods
+have gone (including terminating pods), and checks placement again using the
+actual API-admitted replacement. Memory-pressure warnings can be accepted;
+a hard placement blocker cannot. Every scale or deletion is fenced by the
+Deployment's UID and resource version. Existing service-selector labels,
+volumes and service addresses are preserved. The old Deployment is removed
+only after the replacement is ready, without garbage-collecting its dependents;
+stopped old ReplicaSets are also retained. Readiness is Kubernetes readiness,
+not proof of application health or storage fencing after a host failure.
+
+**Recent jobs → Log** follows the rename. Each reviewed approval is single-use
+and persists across restarts. If a step fails, times out, or its response is
+lost, Homestead stops making changes. It does **not** automatically restart the
+old workload, delete the replacement, or claim that rollback succeeded. Check
+both names before starting either: the replacement may already be running.
+An admin can **Inspect outcome / Review retained resources**, type the original
+name and acknowledge possible late effects to stop tracking. This changes no
+cluster resources and does not make the old approval reusable. A live dispatcher
+cannot be dismissed through recovery; restarting Homestead does not replay it.
+
+Autoscaled, paused and controller/Helm-owned Deployments need their controlling
+configuration handled first. An incomplete import copy also blocks rename.
+Other external controllers and concurrent changes cannot be made atomic with
+this workflow; capacity is a fresh estimate, not a reservation. Do not delete
+job history or approval-ledger files to bypass a retained rename.
 
 The arithmetic follows Kubernetes' [resource request model](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/)
 and [init-sidecar accounting](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/).
