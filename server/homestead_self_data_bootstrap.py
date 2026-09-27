@@ -31,7 +31,10 @@ def targets(namespace, deployment, operation):
 def validate(value, namespace, deployment, operation):
     # Local import avoids making the anchor import a second copy of itself.
     import homestead_self_data_anchor as A
-    A._keys(value, ("resources", "receipts"))
+    A._keys(value, ("resources", "receipts"), ("admission",))
+    if "admission" in value:
+        from homestead_self_data_admission import validate_worker_approval
+        validate_worker_approval(value["admission"])
     expected = targets(namespace, deployment, operation)
     if not isinstance(value["resources"], list) or len(value["resources"]) != len(expected):
         raise Held("The helper setup plan is incomplete")
@@ -135,7 +138,7 @@ def admitted(body, obj, target):
 
 
 class Setup:
-    def __init__(self, anchor, scope, *, image, node, status_digest, admit=None):
+    def __init__(self, anchor, scope, *, image, node, status_digest, approval=None, admit=None, clock=None):
         self.anchor, self.read, self.send = anchor, anchor.read, anchor.send
         state = anchor.state
         if ((scope.namespace, scope.deployment, scope.operation) != (anchor.namespace, state["deployment"]["name"], state["operation"])
@@ -144,6 +147,17 @@ class Setup:
         self.bodies = L.resources(scope, anchor_uid=anchor.handle()["uid"], image=image, node=node, status_digest=status_digest)
         self.resources = [{"target": target, "payload": digest(body)} for target, body in
                           zip(targets(scope.namespace, scope.deployment, scope.operation), self.bodies)]
+        self.approval = copy.deepcopy(approval if approval is not None else state.get("setup", {}).get("admission"))
+        if self.approval is not None:
+            from homestead_self_data_admission import WorkerAdmitter
+            current_admission = WorkerAdmitter(self.read, scope.namespace, self.approval, **({"clock": clock} if clock is not None else {}))
+            if {n["name"] for n in self.approval["nodes"]} != set(scope.nodes):
+                raise Held("The coordinator review does not match the helper's host scope")
+            if admit is not None:
+                raise Held("A persisted coordinator approval cannot use an alternative admission callback")
+            admit = current_admission
+        if admit is None:
+            raise Held("Current capacity and placement must be reviewed before starting the coordinator")
         self.failed, self.admit = False, admit
 
     def _current(self):
@@ -184,10 +198,15 @@ class Setup:
         """Checkpoint setup, or create at most one resource, in reviewed order."""
         self._current()
         if "setup" not in self.anchor.state:
-            self.anchor.prepare_setup(self.resources)
+            # Check before granting helper permissions, then again immediately
+            # before Pod creation. No live pod reservations are removed here.
+            if self.admit(copy.deepcopy(self.bodies[-2])) is not True:
+                raise Held("Current capacity and placement must be reviewed before starting the coordinator")
+            self._current()
+            self.anchor.prepare_setup(self.resources, admission=self.approval)
             return {"created": 0, "total": len(self.resources), "complete": False}
         setup = self.anchor.state["setup"]
-        if setup["resources"] != self.resources:
+        if setup["resources"] != self.resources or setup.get("admission") != self.approval:
             raise Held("The helper configuration differs from the saved setup review")
         receipts = copy.deepcopy(setup["receipts"])
         for i, receipt in enumerate(receipts):

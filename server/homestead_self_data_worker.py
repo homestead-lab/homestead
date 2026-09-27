@@ -138,7 +138,7 @@ class Runner:
                 if self.require_setup_receipts:
                     from homestead_self_data_bootstrap import complete
                     setup = anchor.state.get("setup")
-                    if not setup or not complete(setup):
+                    if not setup or not complete(setup) or "admission" not in setup:
                         raise Held("The coordinator has no complete helper setup receipts; Homestead was not stopped")
                 admit = self.admit
                 if admit is None:

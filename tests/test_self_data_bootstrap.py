@@ -262,7 +262,15 @@ class BootstrapTests(unittest.TestCase):
         anchor = c.fresh()
         handle = anchor.create(operation=op, deployment=prior["deployment"], source=prior["source"], destination="target", replicas=2)
         scope = K.Scope("lab", "homestead", op, ["source", "target"], ["old-pv", "new-pv"], ["node1"])
-        setup = B.Setup(anchor, scope, image=IMAGE, node="node1", status_digest="b" * 64, admit=lambda _: True)
+        def parent_read(path):
+            if path == "/api/v1/pods": return {"items": [copy.deepcopy(v) for v in c.objects.values() if v.get("kind") == "Pod"]}
+            return fixture.read(path)
+        anchor.read = parent_read
+        import homestead_self_data_admission as D
+        preview_pod = B.L.resources(scope, anchor_uid="pending", image=IMAGE, node="node1", status_digest="b" * 64)[-2]
+        report = D.review(parent_read, "lab", "worker", preview_pod, fixture.pin, 88, clock=lambda: 1000)
+        approval = {"threshold": 88, "nodes": fixture.pin, "receipt": report["receipt"]}
+        setup = B.Setup(anchor, scope, image=IMAGE, node="node1", status_digest="b" * 64, approval=approval, clock=lambda: 1000)
         setup.step()
         for _ in range(9): setup.step()
         pod = c.objects[setup.resources[-2]["target"]["path"]]
@@ -277,12 +285,13 @@ class BootstrapTests(unittest.TestCase):
         plan["admission"] = fixture.policy()
         bad = copy.deepcopy(plan); bad["worker"]["uid"] = "wrong-worker"
         with self.assertRaisesRegex(Held, "not the helper created"): anchor.configure(bad)
+        bad = copy.deepcopy(plan); bad["nodes"][0]["boot_id"] = "new-boot"
+        with self.assertRaisesRegex(Held, "host identities differ"): anchor.configure(bad)
         anchor.configure(plan)
         anchor.pointer_published(A.pointer_digest("lab", anchor.state, handle["uid"]))
         def read(path):
             scope.check("GET", path)
-            if path == "/api/v1/pods": return {"items": [copy.deepcopy(v) for v in c.objects.values() if v.get("kind") == "Pod"]}
-            return fixture.read(path)
+            return parent_read(path)
         runner = W.Runner(read, c.send, lambda _: c.logs_text, namespace="lab", deployment="homestead",
             operation=op, anchor_uid=handle["uid"], worker_uid=identity(pod)["uid"], clock=lambda: 1000, require_setup_receipts=True)
         self.assertEqual("quiesce", runner.tick()["phase"])
