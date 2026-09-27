@@ -119,7 +119,7 @@ window.addonsPaint = async () => {
     : '<span class="pill ok">installed</span>';
   const probeButton = !can("admin") ? "" : !probe.installed
     ? '<button class="btn sm pri" onclick="probeInstallConfirm()">Install node probe</button>'
-    : '<button class="btn sm" onclick="allocationProbeSettings()">VM allocation</button><button class="btn sm" onclick="probeRemove()">Remove</button>';
+    : '<button class="btn sm" onclick="allocationProbeSettings()">VM placement checks</button><button class="btn sm" onclick="probeRemove()">Remove</button>';
   const probeRow = `<div class="addon-row"><div><b>Node probe</b> ${probePill}
       <div class="dim small">Host hardware, /dev/kvm, temperatures, physical disks, SMART health and per-disk throughput</div>
       <div class="dim xs" style="margin-top:4px">A lightweight read-only probe runs on every node; SMART tests use its separate privileged sidecar.</div></div>

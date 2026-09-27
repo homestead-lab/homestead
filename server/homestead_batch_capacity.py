@@ -11,7 +11,7 @@ import homestead_place as PLACE
 import homestead_pod_resources as RESOURCES
 
 
-def plan(entries, namespace, pods, nodes, claims, threshold, *, budget=256, seconds=2, read=None):
+def plan(entries, namespace, pods, nodes, claims, threshold, *, budget=256, seconds=2, read=None, allocation_options=None):
     warnings = {"This is a snapshot, not a reservation. Kubernetes chooses placement; the example below is not enforced.",
                 "Other controllers' pending replicas and concurrent admissions are not fully simulated.",
                 "Admission webhooks may change the final pod spec; provisioning and application readiness are not guaranteed."}
@@ -71,7 +71,7 @@ def plan(entries, namespace, pods, nodes, claims, threshold, *, budget=256, seco
             return None
         # Placement history order is immaterial once the synthetic pod set is
         # identical. Deduplicate permutations without hiding host alternatives.
-        key = (left, tuple(sorted((p["service"], p["host"]) for p in placements)))
+        key = (left, tuple(sorted((p["service"], p["host"], p.get("numa_cell", -1)) for p in placements)))
         if key in memo:
             return None
         memo.add(key)
@@ -88,17 +88,25 @@ def plan(entries, namespace, pods, nodes, claims, threshold, *, budget=256, seco
                 if not candidate["eligible"]:
                     failures.update(f"{entry['name']} on {candidate['name']}: {reason}" for reason in candidate["reasons"])
                     continue
-                pod = copy.deepcopy(entry["deployment"]["spec"]["template"])
-                pod.setdefault("metadata", {}).update(namespace=namespace, name=f"planned-{index}-{left[index]}")
-                pod["spec"]["nodeName"] = candidate["name"]
-                pod["status"] = {"phase": "Pending"}
-                after = list(left)
-                after[index] -= 1
-                result = search(tuple(after), added + [pod], placements + [{"service": entry["name"], "host": candidate["name"]}])
-                if result is not None:
-                    return result
-                if limited:
-                    return None
+                options = allocation_options(entry, candidate["name"], pods + added) if allocation_options else [None]
+                if not options:
+                    failures.add(f"{entry['name']} on {candidate['name']}: local CPU/memory allocations cannot fit the remaining batch")
+                for option in options:
+                    pod = copy.deepcopy(entry["deployment"]["spec"]["template"])
+                    pod.setdefault("metadata", {}).update(namespace=namespace, name=f"planned-{index}-{left[index]}")
+                    pod["spec"]["nodeName"] = candidate["name"]
+                    pod["status"] = {"phase": "Pending"}
+                    position = {"service": entry["name"], "host": candidate["name"]}
+                    if option is not None:
+                        pod["_homestead_numa"] = option
+                        position["numa_cell"] = option["cell"]
+                    after = list(left)
+                    after[index] -= 1
+                    result = search(tuple(after), added + [pod], placements + [position])
+                    if result is not None:
+                        return result
+                    if limited:
+                        return None
         return None
 
     # Bound recursion and work for untrusted pasted files. Large batches must

@@ -39,6 +39,9 @@ def plan(prepared, read, nodes, *, created=None, threshold=88):
     kubevirt_version = RESOURCES.CPU.observed_version(configurations[0])
     claims, entries, warnings, blockers = {}, [], set(), []
     headroom = {}
+    numa_entries = set()
+    has_numa = False
+    allocations = {}
     for item in prepared:
         vm, name = item["vm"], item["name"]
         definitions = CLAIMS.plans(vm, read, item["claims"], item["downloads"])
@@ -101,17 +104,33 @@ def plan(prepared, read, nodes, *, created=None, threshold=88):
             claims.update(state["planned_claims"])
         model["manifest"]["spec"]["template"]["spec"]["volumes"].extend(state["volumes"])
         numa = ((vm["spec"]["template"]["spec"].get("domain") or {}).get("cpu") or {}).get("numa")
-        if count and isinstance(numa, dict) and numa.get("guestMappingPassthrough") is not None:
+        if isinstance(numa, dict) and numa.get("guestMappingPassthrough") is not None:
+            has_numa = True
             # A controller created earlier but still awaiting its launcher is
             # still an unallocated demand. It cannot bypass the single-VM
             # prerequisite merely because creation already has a receipt.
-            blockers.append(f"{name}: NUMA guest placement requires verified local CPU and hugepage allocations; physical topology alone cannot authorize a start")
+            if count:
+                numa_entries.add(name)
         entries.append({"name": name, "deployment": model["manifest"], "replicas": count,
                         "workload_kind": "vm", "memory_estimate_bytes": model["memory_estimate_bytes"]})
     nodes = copy.deepcopy(nodes)
     for node in nodes:
         node["batch_starting_headroom_gb"] = headroom.get(node["name"], 0)
-    result = BATCH.plan(entries, namespace, pods, nodes, claims, threshold, read=read)
+    if has_numa:
+        # Collect once outside the bounded combinatorial search. Each branch
+        # then debits the same snapshot, including synthetic cell assignments.
+        allocations = {node["name"]: CAPACITY.ALLOCATION.inspect(node, read) for node in nodes}
+        if numa_entries and not any(value["verified"] for value in allocations.values()):
+            blockers.append("NUMA guest placement requires verified local CPU and hugepage allocations; physical topology alone cannot authorize a start")
+    def allocation_options(entry, host, snapshot):
+        if entry["name"] not in numa_entries:
+            return [None]
+        return CAPACITY.NUMA_FIT.options(allocations[host], entry["deployment"]["spec"]["template"]["spec"], snapshot, host)["options"]
+    result = BATCH.plan(entries, namespace, pods, nodes, claims, threshold, read=read,
+                        allocation_options=allocation_options if numa_entries else None)
+    result["numa_policy"] = {name: {"host": value["host"], "fingerprint": value["policy"]["fingerprint"],
+                                   "dependencies": value["dependencies"]}
+                             for name, value in allocations.items() if value["verified"]}
     result["blockers"] = sorted(set(blockers))
     if blockers:
         result.update(blocked=True, status="blocked")

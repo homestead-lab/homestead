@@ -157,7 +157,7 @@ def project(vm, configuration=None, *, expanded_spec=None, read=None, kubevirt_v
         projected_requests["hugepages-" + str(huge)] = str(guest)
         # Hugepage guest memory is not also an ordinary-memory request.
         projected_requests["memory"] = "0"
-        warnings.append("hugepage RAM and ordinary launcher overhead are separate; NUMA-local availability is unverified")
+        warnings.append("Hugepage RAM and ordinary launcher overhead are separate; a capacity review is not a kubelet allocation guarantee")
     if resources.get("overcommitGuestOverhead"):
         warnings.append("guest overhead is overcommitted; scheduler reservations do not cover its physical RAM")
     for resource in set(requests) | set(limits):
@@ -224,8 +224,8 @@ def project(vm, configuration=None, *, expanded_spec=None, read=None, kubevirt_v
             blockers.append("VM passthrough device resource name is unresolved")
     for resource, count in device_counts.items():
         projected_requests[resource] = str(max(count, int(projected_requests.get(resource, "0"))))
-    if cpu.get("numa") or spec.get("resourceClaims"):
-        warnings.append("NUMA locality and dynamic-device allocation still need additional host admission")
+    if spec.get("resourceClaims"):
+        blockers.append("Dynamic resource claims are not supported by VM admission yet; resolved device allocation must be verified before starting")
     if domain.get("ioThreadsPolicy") and not cpu_model["io_threads"]:
         warnings.append("IO-thread topology adds runtime overhead beyond this planning estimate")
     extra = support["extra_memory"]

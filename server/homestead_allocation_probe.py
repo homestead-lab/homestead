@@ -14,12 +14,14 @@ VOLUMES = ("allocation-socket", "allocation-auth", "allocation-boot", "allocatio
 ANNOTATION = "homestead.io/allocation-socket"
 MANAGED = "homestead.io/allocation-probe"
 read = write = None
+capacity_check = None
 NS = "lab"
 
 
-def bind(kget, ksend, namespace):
-    global read, write, NS
+def bind(kget, ksend, namespace, capacity=None):
+    global read, write, NS, capacity_check
     read, write, NS = kget, ksend, namespace
+    capacity_check = capacity
 
 
 def socket_directory(value):
@@ -52,6 +54,7 @@ def status():
     containers = (pod.get("spec") or {}).get("containers") or []
     enabled = any(row.get("name") == CONTAINER for row in containers)
     return {"installed": True, "enabled": enabled, "managed": bool(directory), "directory": directory,
+            "image": next((row.get("image", "") for row in containers if row.get("name") == CONTAINER), ""),
             "uid": meta["uid"], "resource_version": meta["resourceVersion"],
             "detail": "Collector configured; ready probe pods and verified policy are still required" if enabled else "Allocation collector is disabled"}
 
@@ -95,12 +98,12 @@ def _key(obj):
     return sm["uid"]
 
 
-def configure(body, version):
+def configure(body, version, *, preview=False):
     if type(body.get("enabled")) is not bool:
         raise ValueError("Choose whether to enable the allocation collector")
     enabled = body["enabled"]
     directory = socket_directory(body.get("directory")) if enabled else ""
-    if enabled and body.get("acknowledge_host_access") is not True:
+    if enabled and not preview and body.get("acknowledge_host_access") is not True:
         raise ValueError("Confirm the read-only kubelet socket access and probe restart")
     try:
         obj = read(_path())
@@ -127,9 +130,7 @@ def configure(body, version):
     annotations.pop(ANNOTATION, None)
     annotations.pop("homestead.io/allocation-key-uid", None)
     if enabled:
-        key_uid = _key(obj)
         annotations[ANNOTATION] = directory
-        annotations["homestead.io/allocation-key-uid"] = key_uid
         spec["containers"].append({"name": CONTAINER, "image": "ghcr.io/wjcloudy/homestead:" + version,
             "imagePullPolicy": "IfNotPresent", "command": ["python3", "/srv/probe/allocation_http.py"],
             "env": [{"name": name, "valueFrom": {"fieldRef": {"fieldPath": field}}}
@@ -150,6 +151,16 @@ def configure(body, version):
             # already mounts this path. Do not change other containers' token
             # policy, and never pass the helper an API credential.
             {"name": VOLUMES[3], "emptyDir": {"medium": "Memory", "sizeLimit": "64Ki"}}])
+        if capacity_check is None:
+            raise ValueError("Node capacity checks are unavailable; nothing was changed")
+        check = capacity_check(obj, template)
+        if preview:
+            return check
+        if check["blocked"]:
+            raise ValueError("; ".join(check["blockers"]))
+        if check["warnings"] and (body.get("confirm_capacity") is not True or body.get("capacity_review") != check["fingerprint"]):
+            raise ValueError("Capacity warnings need a fresh review; reopen VM placement checks")
+        annotations["homestead.io/allocation-key-uid"] = _key(obj)
     patch = [{"op": "test", "path": "/metadata/uid", "value": meta["uid"]},
              {"op": "test", "path": "/metadata/resourceVersion", "value": meta["resourceVersion"]},
              {"op": "replace", "path": "/spec/template", "value": template}]
@@ -158,3 +169,35 @@ def configure(body, version):
     except Exception:
         raise ValueError("Probe update was not confirmed; reload configuration before another change. No automatic retry or cleanup was performed") from None
     return {"enabled": enabled, "detail": "Allocation collector configuration saved; probe pods are restarting. Workloads were not changed"}
+
+
+def reconcile(version):
+    """Only update an already opted-in helper; no new host access or mounts."""
+    obj = read(_path())
+    template = obj["spec"]["template"]
+    annotations = template.get("metadata", {}).get("annotations") or {}
+    rows = template["spec"]["containers"]
+    indices = [i for i, row in enumerate(rows) if row.get("name") == CONTAINER]
+    if not annotations.get(ANNOTATION) or len(indices) != 1:
+        return {"state": "absent", "detail": "Optional VM placement checks are not enabled"}
+    index = indices[0]
+    desired = "ghcr.io/wjcloudy/homestead:" + version
+    if rows[index].get("image") == desired:
+        return {"state": "current", "detail": "VM placement helper is current"}
+    if not rows[index].get("image", "").startswith("ghcr.io/wjcloudy/homestead:"):
+        return {"state": "unmanaged", "detail": "Custom VM placement helper image was preserved"}
+    meta = obj["metadata"]
+    if not meta.get("uid") or not meta.get("resourceVersion") or meta.get("deletionTimestamp"):
+        raise ValueError("Probe identity changed; helper was not updated")
+    state = obj.get("status") or {}
+    if state.get("observedGeneration") != meta.get("generation") or state.get("numberReady") != state.get("desiredNumberScheduled"):
+        return {"state": "waiting", "detail": "Waiting for node monitoring to finish restarting before updating VM placement checks"}
+    check = capacity_check(obj, template) if capacity_check else {"blocked": True}
+    if check["blocked"] or check.get("warnings"):
+        return {"state": "review", "detail": "Review VM placement checks to update the helper: node capacity needs attention"}
+    write("PATCH", _path(), [
+        {"op": "test", "path": "/metadata/uid", "value": meta["uid"]},
+        {"op": "test", "path": "/metadata/resourceVersion", "value": meta["resourceVersion"]},
+        {"op": "replace", "path": f"/spec/template/spec/containers/{index}/image", "value": desired}],
+        ctype="application/json-patch+json")
+    return {"state": "updated", "detail": "VM placement helper image updated; probe pods are restarting"}

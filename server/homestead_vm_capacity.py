@@ -12,6 +12,8 @@ import homestead_vm_resources as VMRES
 import homestead_pod_resources as RESOURCES
 import homestead_vm_state as STATE
 import homestead_numa_evidence as NUMA_EVIDENCE
+import homestead_allocation_evidence as ALLOCATION
+import homestead_vm_numa_fit as NUMA_FIT
 
 
 def _items(read, path):
@@ -251,6 +253,7 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
         # Physical CPU membership is never treated as an exclusive allocation.
         hosts = {node["name"]: node for node in nodes}
         context["numa_hosts"] = {}
+        context["numa_policy"] = {}
         for candidate in result["candidates"]:
             if not candidate["eligible"]:
                 continue
@@ -258,16 +261,24 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
             if evidence["verified"]:
                 context["numa_hosts"][candidate["name"]] = evidence["host"]
                 context["dependencies"].update(evidence["dependencies"])
-            candidate["numa"] = {"physical_verified": evidence["verified"], "allocation_verified": False,
-                                 "reason": evidence["reason"]}
-            reason = ("NUMA physical topology was verified, but dedicated CPU-manager allocation evidence is unavailable; this placement cannot yet be verified"
-                      if evidence["verified"] else evidence["reason"])
-            candidate["eligible"] = False
-            candidate["reasons"].append(reason)
-            candidate.update(request_slots=0, max_additional_pods=0, projected_pods=0)
-        result["resource_slots"] = 0
-        result["blocked"] = True
-        blockers.append("NUMA guest placement requires verified local CPU and hugepage allocations; physical topology alone cannot authorize a start")
+            allocation = ALLOCATION.inspect(hosts[candidate["name"]], read) if evidence["verified"] else evidence
+            fit = NUMA_FIT.options(allocation, manifest["spec"]["template"]["spec"], pods, candidate["name"])
+            candidate["numa"] = {"physical_verified": evidence["verified"], "allocation_verified": allocation["verified"],
+                                 "reason": fit["reason"], "fitting_cells": [option["cell"] for option in fit["options"]]}
+            if allocation["verified"]:
+                context["dependencies"].update(allocation["dependencies"])
+                context["numa_policy"][candidate["name"]] = allocation["policy"]["fingerprint"]
+            if not fit["options"]:
+                candidate["eligible"] = False
+                candidate["reasons"].append(fit["reason"])
+                candidate.update(request_slots=0, max_additional_pods=0, projected_pods=0)
+            else:
+                # This is a single-VM review, not a multi-replica estimate.
+                candidate.update(request_slots=1, max_additional_pods=1, projected_pods=1)
+        result["resource_slots"] = sum(1 for candidate in result["candidates"] if candidate["eligible"])
+        if not result["resource_slots"]:
+            result["blocked"] = True
+            blockers.append("NUMA guest placement requires verified local CPU and hugepage allocations; physical topology alone cannot authorize a start")
     result["warnings"] = sorted(set(result["warnings"] + warnings))
     result["blockers"] = sorted(set(blockers))
     result["blocked"] |= bool(blockers)

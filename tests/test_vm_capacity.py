@@ -112,6 +112,18 @@ class VMCapacityTests(unittest.TestCase):
         self.assertFalse(plan["blocked"], plan)
         self.assertNotIn("numa_hosts", plan["vm"]["context"])
 
+    def test_verified_local_cpu_and_memory_allow_numa_start_and_recheck_exhaustion(self):
+        import test_vm_numa_fit
+        self.numa_host()
+        evidence = test_vm_numa_fit.snapshot()
+        with mock.patch.object(capacity.ALLOCATION, "inspect", return_value=evidence), mock.patch.object(capacity.NUMA_EVIDENCE.time, "time", return_value=numa_fixtures.NOW):
+            result = self.plan()
+            self.assertFalse(result["blocked"], result)
+            self.assertEqual([0, 1], result["candidates"][0]["numa"]["fitting_cells"])
+            self.assertEqual("policy", result["vm"]["context"]["numa_policy"]["node1"])
+            evidence["allocation"]["unallocated_cpu_ids"] = []
+            self.assertTrue(self.plan()["blocked"])
+
     def disk(self, phase="Bound", dv=False):
         self.vm["spec"]["template"]["spec"]["volumes"] = [{"name": "root", **({"dataVolume": {"name": "root"}} if dv else {"persistentVolumeClaim": {"claimName": "root"}})}]
         self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/root"] = {

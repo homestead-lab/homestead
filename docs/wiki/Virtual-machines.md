@@ -158,13 +158,37 @@ to keep their console output, which it does from 1.1 even where Harvester
 turns that off for other VMs; with an older KubeVirt, the log says so and
 where to look instead.
 
-**Cancel** on the job, while the cluster is still coming up, deletes its VMs
-with their disks and frees their addresses in IP addresses, after the cluster's
-name is typed. Only VMs carrying the cluster's label are deleted. A build that
-fails part-way, one VM not made, removes the ones it had made already. A build
-that failed later - the cluster never came up - keeps its VMs so you can read
-their logs; **Clean up** on the failed job removes them, their disks and their
-addresses, and the job stays in the list as failed.
+Interrupted or failed creation keeps partial VMs, disks and Secrets. Open the
+job's **Inspect outcome** action to compare recorded creation receipts with the
+current resources. An administrator can resolve tracking after inspecting the
+resources and typing the batch name. This does not delete resources, resend a
+request, cancel an upstream operation or prove that the guest cluster is ready.
+Remove unwanted resources deliberately after checking their ownership and data.
+
+## Placement checks before starting
+
+Create, start, restart, resume and start-capable edits show a capacity review.
+High or unknown RAM usage can be acknowledged. Missing hardware, storage conflicts,
+changed resource identities and insufficient scheduler capacity cannot be bypassed.
+The server rechecks before writing; the review is not a scheduler reservation.
+
+For NUMA VMs, enable **Settings → Cluster → Add-ons → Node probe → VM placement
+checks**. The short dialog explains host access and the monitoring restart; socket
+settings are under **Advanced**. It uses an additional 32–96 MiB per probe node.
+**Check hosts** explains missing or unsupported evidence. Workloads are not
+restarted, and disabling checks does not delete their volumes.
+
+Locality checks need Static CPU and memory managers. Multi-NUMA hosts also need
+pod-scoped `single-numa-node` topology policy. Homestead verifies current policy,
+exclusive CPU allocations and local memory/hugepages together; it does not configure
+kubelet policy for you. Dynamic claims and unverified device-local NUMA placement
+remain unsupported and blocked. Kubernetes still makes the final placement.
+
+Power requests and saves are journalled in Recent jobs. If a response is lost,
+inspect the outcome before trying again; Homestead does not automatically replay
+an uncertain mutation. During an HA upgrade, finish upgrading all Homestead replicas
+before making VM changes. Test shared-storage locking and guest-agent compatibility
+on disposable resources before relying on them for production recovery.
 
 ## Edit
 

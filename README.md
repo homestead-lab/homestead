@@ -728,8 +728,9 @@ The estimate also includes console, container-disk, filesystem and hook helpers,
 their configured support-container requests/limits, and known probe/passthrough/
 TPM/SEV overhead. Unbounded hooks remain visible as warnings. These are planning
 estimates, not an exact renderer for every KubeVirt version or a resource
-reservation. Physical CNI/bridge/link readiness, injected helpers, NUMA locality,
-dynamic allocations and advanced runtime policy still require separate validation.
+reservation. Physical CNI/bridge/link readiness and injected helpers still require
+separate validation. NUMA locality requires the opt-in checks described below;
+dynamic resource claims and unverified NUMA device locality are blocked.
 Explicit memory-pressure overrides remain available; hardware blockers do not.
 
 High-vCPU VMs also receive a CPU/thread/process RAM allowance, including graphics
@@ -738,8 +739,8 @@ Supplemental IO-thread CPU and isolated-emulator parity are included. The observ
 KubeVirt version selects the verified 1.6–1.9 CPU rule; older, vendor, unknown or
 changing versions use an explicitly labelled conservative IO-thread allowance.
 A target version alone is not evidence of the running renderer. Configuration
-identity/version changes invalidate approval. Actual launcher requests, host SMT
-and NUMA-local CPU/hugepage availability still need verification.
+identity/version changes invalidate approval. Actual launcher behavior still needs
+validation on the installed KubeVirt version; a preflight is not a reservation.
 
 Persistent TPM/EFI and active changed-block-tracking state can require a separate
 KubeVirt-managed filesystem PVC. Reviews discover legacy names and labelled
@@ -1606,7 +1607,7 @@ library alone. Linux CI exercises a temporary fake kubelet Unix socket without
 contacting a cluster. Those transport tests are skipped on Windows.
 
 The PodResources collector is opt-in under **Cluster → Add-ons → Node probe →
-VM allocation** (administrator only). It adds a root sidecar with all Linux
+VM placement checks** (administrator only). It adds a root sidecar with all Linux
 capabilities dropped, a read-only filesystem, the existing dedicated kubelet
 `pod-resources` directory, and the host boot-ID file. No broad kubelet tree,
 account key, or Kubernetes API token is supplied to that sidecar. Requests and
@@ -1621,9 +1622,28 @@ PVC or authentication Secret. The latter remains owned by the probe DaemonSet.
 Changing configuration requires a fresh probe UID/resource-version read and
 never overwrites an unmanaged sidecar or foreign authentication Secret.
 
-This remains groundwork for NUMA admission, not a completed placement guarantee.
-Backend policy/provenance integration and local placement checks are still needed
-before this collector can authorize a NUMA start. Missing evidence remains a blocker.
+Enabling checks first reviews every current probe node's capacity. RAM warnings
+can be acknowledged separately; hard request shortfalls and incomplete rollout
+inventory cannot. Existing opted-in helpers follow Homestead image upgrades when
+capacity allows. Otherwise the settings dialog explains the pending update;
+**Save settings** performs a fresh review. **Check hosts** shows per-host evidence
+status, not just whether the helper process is running.
+
+NUMA admission authenticates fresh PodResources readings against the current probe,
+host UID/boot ID, physical topology and kubelet configuration. It accounts for
+assigned exclusive CPUs, memory-manager allocations, hugepage reservations and
+pending workloads together on each NUMA cell. Joint VM reviews debit each proposed
+placement and recheck before later writes. Policy or dependency changes invalidate
+the approval; resume of an existing UID-owned launcher is not a new allocation.
+
+Supported locality checks require Static CPU and memory managers; multi-NUMA hosts
+also need pod-scoped `single-numa-node` topology policy. Supported kubelet version
+shapes are upstream 1.28–1.36 and their k3s/RKE2 builds, with the known PodResources
+v1 schema. Unknown fields/builds, missing evidence, unsupported dynamic resource
+claims and unverified device-local NUMA placement fail closed with an explanation.
+Homestead does not change kubelet policy. An example fit does not pin the VM,
+reserve resources, prove guest readiness or guarantee failover. Concurrent starts,
+webhooks and actual vendor launchers still require disposable-cluster validation.
 
 ## Security notes
 

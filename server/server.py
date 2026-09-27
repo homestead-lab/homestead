@@ -22,6 +22,8 @@ import homestead_batch_capacity as BATCH_CAPACITY
 import homestead_volume_usage as VOLUME_USAGE
 import homestead_snapshot_delete as SNAPSHOT_DELETE
 import homestead_allocation_probe as ALLOCATION_PROBE
+import homestead_allocation_capacity as ALLOCATION_CAPACITY
+import homestead_allocation_evidence as ALLOCATION_EVIDENCE
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -3692,6 +3694,9 @@ def vm_cluster_snapshot():
                                     key=lambda row: (row.get("namespace") or "", row.get("name") or ""))
                               if isinstance(value.get("items"), list) else VM_CAPACITY.VMRES.identity(value))
         return copy.deepcopy(value)
+    # Allocation observations bracket a live RPC. Identity/policy reads must
+    # bypass this batch's otherwise useful immutable inventory cache.
+    read.fresh = kget
     return read, external
 
 
@@ -3709,7 +3714,8 @@ def prepare_vm_cluster(cfg):
         VM_CLAIMS.pin(item["vm"], claims, item["claims"])
         prepared.append(item)
     plan = VM_BATCH.plan(prepared, read, PLACE.get_nodes(), threshold=get_app_settings()["thresholds"]["memory"]["critical"])
-    context = {"action": "vm-cluster-create", "prepared": copy.deepcopy(prepared), "external": external}
+    context = {"action": "vm-cluster-create", "prepared": copy.deepcopy(prepared), "external": external,
+               "numa_policy": copy.deepcopy(plan.get("numa_policy") or {})}
     return batch, prepared, plan, context
 
 
@@ -3737,6 +3743,8 @@ def reviewed_vm_cluster(body):
         read, _ = vm_cluster_snapshot()
         fresh = VM_BATCH.plan(prepared, read, PLACE.get_nodes(), created=receipts,
                               threshold=get_app_settings()["thresholds"]["memory"]["critical"])
+        if (fresh.get("numa_policy") or {}) != context["numa_policy"]:
+            raise CAPACITY_REVIEW.Rejected("Host allocation policy changed; retain partial resources and review again", fresh)
         for path, expected in context["external"].items():
             value = VM_CAPACITY._optional(read, path) if expected is None else read(path)
             actual = (sorted([VM_CAPACITY.VMRES.identity(row) for row in VM_CAPACITY._items(read, path)],
@@ -4569,7 +4577,15 @@ import homestead_power as POWER
 import homestead_privileges as PRIV
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
-ALLOCATION_PROBE.bind(kget, ksend, DEFAULT_NS)
+def allocation_probe_capacity(obj, template):
+    listing = kget("/api/v1/pods")
+    if not isinstance(listing.get("items"), list) or (listing.get("metadata") or {}).get("continue"):
+        raise ValueError("Complete workload inventory is unavailable; nothing was changed")
+    return ALLOCATION_CAPACITY.plan(obj, template, PLACE.get_nodes(), listing["items"],
+                                    get_app_settings()["thresholds"]["memory"]["critical"])
+
+
+ALLOCATION_PROBE.bind(kget, ksend, DEFAULT_NS, allocation_probe_capacity)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
 MOVE.bind(kget, ksend, DEFAULT_NS, HOMESTEAD_VERSION)
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
@@ -5885,7 +5901,7 @@ ADMIN_ROUTES = {
     "/api/node/smart/test",
     # Installing the probe stands a privileged container on every node.
     "/api/node/probe/install", "/api/node/probe/remove",
-    "/api/node/probe/allocation",
+    "/api/node/probe/allocation", "/api/node/probe/allocation/check",
     # Object storage holds every backup, and its keys.
     "/api/objectstore/deploy", "/api/objectstore/longhorn", "/api/objectstore/remove",
     # A cluster's credentials, and what they reach.
@@ -6328,7 +6344,23 @@ class H(BaseHTTPRequestHandler):
                     report, get_app_settings().get("smart"))
                 return self._send(200, report)
             if p == "/api/node/probe/allocation":
-                return self._send(200, ALLOCATION_PROBE.status())
+                current = ALLOCATION_PROBE.status()
+                if current["enabled"] and current.get("image") != "ghcr.io/wjcloudy/homestead:" + HOMESTEAD_VERSION:
+                    current["detail"] = "Helper update pending. Review capacity and save settings to use this release."
+                if current["installed"]:
+                    try:
+                        current["capacity"] = ALLOCATION_PROBE.configure({**current, "enabled": True,
+                            "directory": current.get("directory") or "/var/lib/kubelet/pod-resources"}, HOMESTEAD_VERSION, preview=True)
+                    except Exception:
+                        current["capacity"] = {"blocked": True, "blockers": ["Capacity could not be checked. Refresh before enabling."], "warnings": []}
+                return self._send(200, current)
+            if p == "/api/node/probe/allocation/check":
+                node = (q.get("node") or [""])[0]
+                host = next((row for row in PLACE.get_nodes() if row["name"] == node), None)
+                if host is None:
+                    raise ValueError("Choose a current host")
+                check = ALLOCATION_EVIDENCE.inspect(host, kget)
+                return self._send(200, {"name": node, "verified": check["verified"], "detail": check["reason"]})
             if p == "/api/history/long":
                 return self._send(200, HISTORY.series((q.get("range") or ["24h"])[0]))
             if p == "/api/history":
@@ -7533,6 +7565,17 @@ def _upgrade_node_probe():
         return
     if result["state"] in ("updated", "error"):
         print(f"node probe: {result['detail']}", flush=True)
+    try:
+        for attempt in range(7):
+            result = ALLOCATION_PROBE.reconcile(HOMESTEAD_VERSION)
+            if result["state"] != "waiting" or attempt == 6:
+                break
+            # Background read-only waiting, never retry an uncertain PATCH.
+            time.sleep(10)
+        if result["state"] in ("updated", "review", "waiting"):
+            print(f"VM placement checks: {result['detail']}", flush=True)
+    except Exception:
+        print("VM placement helper not updated; review its settings in Cluster > Add-ons", flush=True)
 
 
 def _samba_loop():

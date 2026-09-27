@@ -223,6 +223,41 @@ class VMPowerAdmissionTests(unittest.TestCase):
         self.assertEqual(200, result[0], result)
         writes.assert_called_once()
 
+    def test_numa_policy_change_or_exhausted_cpu_rejects_approved_start(self):
+        import test_vm_numa_fit
+        import test_numa_evidence
+        self.numa_host()
+        evidence = test_vm_numa_fit.snapshot()
+        with mock.patch.object(server.VM_CAPACITY.ALLOCATION, "inspect", return_value=evidence), mock.patch.object(server.VM_CAPACITY.NUMA_EVIDENCE.time, "time", return_value=test_numa_evidence.NOW):
+            signed = self.reviewed()
+            evidence["policy"]["fingerprint"] = "changed"
+            result, writes = self.call("/api/vm/power", signed)
+            self.assertEqual(409, result[0], result)
+            writes.assert_not_called()
+            signed = self.reviewed()
+            evidence["allocation"]["unallocated_cpu_ids"] = []
+            result, writes = self.call("/api/vm/power", signed)
+            self.assertEqual(409, result[0], result)
+            writes.assert_not_called()
+
+    def test_numa_current_verified_fit_allows_one_shot_start(self):
+        import test_vm_numa_fit
+        import test_numa_evidence
+        self.numa_host()
+        with mock.patch.object(server.VM_CAPACITY.ALLOCATION, "inspect", return_value=test_vm_numa_fit.snapshot()), mock.patch.object(server.VM_CAPACITY.NUMA_EVIDENCE.time, "time", return_value=test_numa_evidence.NOW):
+            result, writes = self.call("/api/vm/power", self.reviewed())
+            self.assertEqual(200, result[0], result)
+            writes.assert_called_once()
+
+    def test_dynamic_claim_start_is_explicitly_unsupported_and_cannot_be_overridden(self):
+        self.vm["spec"]["template"]["spec"]["resourceClaims"] = [{"name": "accelerator", "resourceClaimName": "device"}]
+        preview, writes = self.call("/api/vm/power/preview", self.body)
+        self.assertTrue(preview[1]["capacity"]["blocked"])
+        self.assertIn("Dynamic resource claims", str(preview[1]["capacity"]["blockers"]))
+        result, writes = self.call("/api/vm/power", {**self.body, "confirm_capacity": True, "capacity_token": preview[1]["capacity_token"]})
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+
     def test_missing_network_device_cannot_be_overridden_by_capacity_checkbox(self):
         for device in ("tun", "vhost-net"):
             signed = self.reviewed()

@@ -5,7 +5,7 @@ function setup(fail=false) {
   let html="", context="";
   const ctx={console, STATE:{data:{}}, $:key=>fields[key], esc:v=>String(v).replaceAll("<","&lt;").replaceAll('"',"&quot;"), tip:()=>"",
     childModal:(_title,body,_wide,style)=>{html=body;context=style;}, modalBack(){}, toast:m=>notices.push(m), confirm:()=>true,
-    api:async(path,options)=>{calls.push({path,options});if(!options) return {installed:true,enabled:true,uid:"uid",resource_version:"12",detail:"<private>",directory:"/custom/pod-resources"};
+    api:async(path,options)=>{calls.push({path,options});if(!options) return {installed:true,enabled:true,uid:"uid",resource_version:"12",detail:"<private>",directory:"/custom/pod-resources",capacity:{blocked:false,blockers:[],warnings:[],fingerprint:"review"}};
       if(fail) throw new Error("lost response");return {detail:"saved"};}};
   ctx.window=ctx;vm.createContext(ctx);vm.runInContext(fs.readFileSync("web/js/views-overview.js","utf8"),ctx);
   return {ctx,calls,notices,fields,html:()=>html,context:()=>context};
@@ -31,4 +31,19 @@ test("disable requires confirmation but not enable-access consent",async()=>{
   await t.ctx.allocationProbeSave(false,{});assert.equal(t.calls.length,1);
   t.ctx.confirm=()=>true;await t.ctx.allocationProbeSave(false,{});
   assert.equal(JSON.parse(t.calls[1].options.body).enabled,false);
+});
+test("advanced details are collapsed and RAM acknowledgement cannot bypass blockers",async()=>{
+  const t=setup();await t.ctx.allocationProbeSettings();
+  assert.match(t.html(),/<details class="vm-placement-advanced">/);
+  assert.doesNotMatch(t.html(),/<details[^>]*open/);
+  t.fields["#allocationProbeConsent"].checked=true;
+  t.ctx._allocationProbeReview.capacity.warnings=["RAM high"];
+  await t.ctx.allocationProbeSave(true,{});assert.equal(t.calls.length,1);
+  t.fields["#allocationProbeCapacity"]={checked:true};
+  t.ctx._allocationProbeReview.capacity.blocked=true;
+  await t.ctx.allocationProbeSave(true,{});assert.equal(t.calls.length,1);
+  t.ctx._allocationProbeReview.capacity.blocked=false;
+  await t.ctx.allocationProbeSave(true,{});
+  const body=JSON.parse(t.calls[1].options.body);
+  assert.equal(body.confirm_capacity,true);assert.equal(body.capacity_review,"review");
 });

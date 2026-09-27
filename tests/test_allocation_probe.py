@@ -119,6 +119,9 @@ class AllocationConfigurationTests(unittest.TestCase):
         self.obj["metadata"].update(uid="probe-uid", resourceVersion="10")
         self.secret = None
         self.sent = []
+        self.capacity = mock.Mock(return_value={"blocked": False, "blockers": [], "warnings": [], "fingerprint": "capacity-1"})
+        capacity_patch = mock.patch.object(probe, "capacity_check", self.capacity)
+        capacity_patch.start(); self.addCleanup(capacity_patch.stop)
         patch_read = mock.patch.object(probe, "read", side_effect=self.read)
         patch_write = mock.patch.object(probe, "write", side_effect=self.write)
         patch_ns = mock.patch.object(probe, "NS", "lab")
@@ -218,13 +221,50 @@ class AllocationConfigurationTests(unittest.TestCase):
         import server
         for method in ("GET", "POST"):
             self.assertEqual("admin", server.needed_role("/api/node/probe/allocation", method))
+            self.assertEqual("admin", server.needed_role("/api/node/probe/allocation/check", method))
         handler = object.__new__(server.H)
         handler.path, handler.headers = "/api/node/probe/allocation", {}
         handler._client_ip = lambda: "127.0.0.1"
         handler._guard = lambda path: False
         handler._body = lambda: copy.deepcopy(self.body)
         handler._send = mock.Mock()
-        with mock.patch.object(probe, "read", side_effect=self.read), mock.patch.object(probe, "write", side_effect=self.write):
+        with mock.patch.object(probe, "read", side_effect=self.read), mock.patch.object(probe, "write", side_effect=self.write), mock.patch.object(probe, "capacity_check", self.capacity):
             handler.do_POST()
         self.assertEqual(200, handler._send.call_args.args[0], handler._send.call_args.args)
         self.assertEqual(2, len(self.sent))
+
+    def test_capacity_preview_never_creates_key_or_changes_probe(self):
+        result = probe.configure({**self.body, "acknowledge_host_access": False}, "9.9.9", preview=True)
+        self.assertEqual("capacity-1", result["fingerprint"])
+        self.assertEqual([], self.sent)
+
+    def test_capacity_warning_override_is_explicit_and_bound_to_review(self):
+        self.capacity.return_value.update(warnings=["RAM high"])
+        for body in (self.body, {**self.body, "confirm_capacity": True, "capacity_review": "old"}):
+            with self.assertRaisesRegex(ValueError, "fresh review"):
+                probe.configure(body, "9.9.9")
+            self.assertEqual([], self.sent)
+        probe.configure({**self.body, "confirm_capacity": True, "capacity_review": "capacity-1"}, "9.9.9")
+        self.assertEqual(2, len(self.sent))
+
+    def test_hard_capacity_failure_is_not_overridable_and_has_zero_writes(self):
+        self.capacity.return_value.update(blocked=True, blockers=["Host request capacity exceeded"])
+        with self.assertRaisesRegex(ValueError, "capacity exceeded"):
+            probe.configure({**self.body, "confirm_capacity": True, "capacity_review": "capacity-1"}, "9.9.9")
+        self.assertEqual([], self.sent)
+
+    def test_upgrade_never_enables_checks_or_ignores_capacity_warning(self):
+        self.assertEqual("absent", probe.reconcile("9.9.9")["state"])
+        self.assertEqual([], self.sent)
+        probe.configure(self.body, "9.9.8")
+        self.sent.clear()
+        self.capacity.return_value.update(warnings=["RAM high"])
+        self.assertEqual("review", probe.reconcile("9.9.9")["state"])
+        self.assertEqual([], self.sent)
+        self.capacity.return_value.update(warnings=[])
+        with mock.patch.object(probe, "write") as write:
+            self.assertEqual("updated", probe.reconcile("9.9.9")["state"])
+        operations = write.call_args.args[2]
+        self.assertEqual(["test", "test", "replace"], [op["op"] for op in operations])
+        self.assertTrue(operations[-1]["path"].endswith("/image"))
+        self.assertEqual("ghcr.io/wjcloudy/homestead:9.9.9", operations[-1]["value"])
