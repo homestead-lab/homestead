@@ -154,7 +154,11 @@ async function api(path, opts) {
   // `keep` marks a read whose answer matters after the page changes.
   const readOnly = (!opts || !opts.method || opts.method === "GET") && !opts?.keep;
   const startedAt = window.NAV_TOKEN;
+  // Linked clusters: which one this goes to (fleet.js).
+  if (window.fleetRoute) ({ path, opts } = window.fleetRoute(path, opts || {}));
   const r = await fetch(path, opts);
+  const missing = r.headers.get("x-homestead-fleet-missing");
+  if (missing && window.fleetNoteMissing) window.fleetNoteMissing(missing);
   const ct = r.headers.get("content-type") || "";
   const b = ct.includes("json") ? await r.json() : await r.text();
   if (readOnly && startedAt !== window.NAV_TOKEN) return ABANDONED;

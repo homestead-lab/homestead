@@ -257,7 +257,8 @@ boot();
 
 async function afterAuth() {
   paintWho();
-  await Promise.all([loadHealthSettings(), window.loadPlatform ? loadPlatform() : null]);
+  await Promise.all([loadHealthSettings(), window.loadPlatform ? loadPlatform() : null,
+    window.fleetLoad ? fleetLoad() : null]);
   const route = HomesteadRouter.resolve(window.location.pathname);
   if (!route.known) {
     // A mistyped or outdated address: land on the dashboard, and say so.

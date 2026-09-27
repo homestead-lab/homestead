@@ -25,6 +25,11 @@ const PAGES = [
   ["deploy", "deploy"],
   ["containers", "workloads"],
   ["containers-rows", "workloads", "setViewLayout('containers','renderWorkloads','rows')"],
+  // Every linked cluster at once.
+  ["containers-all", "workloads", "localStorage.setItem('homestead.fleet.mode','all');viewWorkloads()"],
+  ["vms-all", "vms", "localStorage.setItem('homestead.fleet.mode','all');viewVMs()"],
+  ["nodes-all", "nodes", "localStorage.setItem('homestead.fleet.mode','all');viewNodes()"],
+  ["volumes-all", "storage", "localStorage.setItem('homestead.fleet.mode','all');viewStorage()"],
   ["vms", "vms"],
   ["app-store", "store"],
   ["helm", "helm"],
@@ -76,7 +81,7 @@ async function audit([label, width, height, mobile], items) {
 
   for (const [name, view, after] of items) {
     try {
-      await page.evaluate(() => { try { closeModal(); } catch (e) { /* none open */ } });
+      await page.evaluate(() => { try { closeModal(); } catch (e) { /* none open */ } localStorage.removeItem("homestead.fleet.mode"); });
       await page.evaluate((v) => document.querySelector(`#nav a[data-view="${v}"]`).click(), view);
       await page.locator("#views .phead").waitFor();
       await page.waitForTimeout(1200);

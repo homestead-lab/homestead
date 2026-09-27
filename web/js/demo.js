@@ -1698,6 +1698,30 @@ ssh_pwauth: true
   };
 
   const original = window.fetch.bind(window);
+  /* Linked clusters: this one, a shed that answers, and a garage that is off. */
+  const demoSites = [
+    { id: "a1f00d", handle: "loft-rack", name: "Loft rack", url: "http://192.168.1.242:8088", self: true, version: "2.8.200", reachable: true, compatible: true, error: "" },
+    { id: "b2c0de", handle: "shed", name: "Shed", url: "http://192.168.1.250:8088", self: false, version: "2.8.200", reachable: true, compatible: true, error: "" },
+    { id: "c3beef", handle: "garage", name: "Garage", url: "http://192.168.1.251:8088", self: false, version: "", reachable: false, compatible: true,
+      error: "no answer from http://192.168.1.251:8088" }];
+  const siteTag = id => { const s = demoSites.find(x => x.id === id); return { id: s.id, name: s.name, handle: s.handle, self: s.self }; };
+  const shedNodes = ["shed-node1", "shed-node2"];
+  const shedWorkloads = [
+    { ...workloads[0], name: "jellyfin", group: "", nodes: [shedNodes[0]], icon: "", images: ["jellyfin/jellyfin:10.9.11"], cpu: 0.41, mem_mb: 1210, ports: [{ port: 8096, ip: "192.168.1.250" }] },
+    { ...workloads[0], name: "unifi", group: "", nodes: [shedNodes[1]], icon: "", images: ["jacobalberty/unifi:v8.4"], cpu: 0.06, mem_mb: 690, ports: [{ port: 8443, ip: "192.168.1.250" }] }];
+  const mine = rows => rows.map(row => ({ ...row, site: siteTag("a1f00d") }));
+  const shed = rows => rows.map(row => ({ ...row, site: siteTag("b2c0de") }));
+  Object.assign(responses, {
+    "/api/fleet": { self: "a1f00d", protocol: 1, linked: true, members: demoSites, via: "", via_id: "",
+      address: "http://192.168.1.242:8088", suggested_address: "http://192.168.1.242:8088" },
+    "/api/fleet/switch": { ok: true }, "/api/fleet/address": { ok: true, missed: [] },
+    "/api/fleet/join": { ok: true, member: { name: "Garage" }, missed: [] },
+    "/api/fleet/remove": { ok: true, told: true, missed: [] }, "/api/fleet/leave": { ok: true, missed: [] },
+    "/api/fleet/all/workloads": () => [...mine(workloads), ...shed(shedWorkloads)],
+    "/api/fleet/all/nodes": () => [...mine(nodes), ...shed(shedNodes.map((name, i) => ({ ...nodes[i], name })))],
+    "/api/fleet/all/vms": () => [...mine(demoVms), ...shed([{ ...demoVms[0], name: "pfsense", node: shedNodes[0], ip: "192.168.1.1", ips: ["192.168.1.1"] }])],
+    "/api/fleet/all/volumes": () => [...mine(volumes), ...shed(volumes.slice(0, 2).map((v, i) => ({ ...v, name: `pvc-shed-${i}`, pvc_name: ["jellyfin-config", "unifi-data"][i] })))],
+  });
   window.fetch = async function (input, init) {
     const url = new URL(typeof input === "string" ? input : input.url, location.origin);
     if (!url.pathname.startsWith("/api/")) return original(input, init);

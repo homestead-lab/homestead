@@ -1057,7 +1057,7 @@ async function viewImport() {
   paint(`<div class="phead"><div><h2>Import</h2>
       <p>Bring containers, appdata and virtual-machine disks into Homestead</p></div>
       <div class="row"><button class="btn" data-need="operator" onclick="composeImport()">＋ Docker Compose</button>
-      <button class="btn" data-need="admin" onclick="clusterAdd()">＋ Homestead cluster</button>
+      <button class="btn" data-need="admin" onclick="fleetLink()">＋ Homestead cluster</button>
       <button class="btn" data-need="admin" onclick="srcAdd()">＋ Container source</button>
       <button class="btn pri" data-need="admin" onclick="vmDiskImport()">＋ VM disk</button></div></div>
 
@@ -1067,9 +1067,10 @@ async function viewImport() {
 
     <div class="sec">Other Homestead clusters ${tip("Another Homestead installation on the network. Its workloads can be listed here, and later moved across: volume data travels through the shared Longhorn backup target, the definition comes straight from the other Homestead.")}</div>
     ${clusters.length ? `<div class="grid g3">${clusters.map(c => `<div class="card flat clcard">
-      <div class="between"><div class="clhead"><div class="ctitle">${esc(c.name)}</div>
-        <div class="csub mono clurl" title="${esc(c.user)}@${esc(c.url)}">${esc(c.user)}@${esc(c.url)}</div></div>
-        <button class="btn sm danger" data-need="admin" onclick="clusterDel('${esc(c.name)}')">✕</button></div>
+      <div class="between"><div class="clhead"><div class="ctitle">${esc(c.label || c.name)}</div>
+        ${c.fleet ? `<div class="csub mono clurl" title="Linked · ${esc(c.url)}">linked · ${esc(c.url)}</div>`
+          : `<div class="csub mono clurl" title="${esc(c.user)}@${esc(c.url)}">${esc(c.user)}@${esc(c.url)}</div>`}</div>
+        ${c.fleet ? "" : `<button class="btn sm danger" data-need="admin" onclick="clusterDel('${esc(c.name)}')">✕</button>`}</div>
       <div class="clver"><span class="dim xs">Version</span>
         <span id="clver_${esc(c.name)}"><span class="dim xs"><span class="spin2"></span> checking…</span></span>
         <button class="iconbtn clrecheck" data-tip="Check the version again" onclick="clusterCheck('${esc(c.name)}')">${icon("refresh")}</button></div>
@@ -1080,7 +1081,7 @@ async function viewImport() {
     </div>`).join("")}</div>`
     : `<div class="empty">No other clusters connected.
        <ol class="clguide">
-         <li><b>＋ Homestead cluster</b> above: the other Homestead's address and an admin account there.</li>
+         <li><b>＋ Homestead cluster</b> above links it: its address and an admin account there, used once.</li>
          <li>Backup storage on that cluster, which its volumes travel through - its card offers to set it up.</li>
          <li><b>Browse workloads</b> on its card, then <b>Move to this cluster</b>.</li></ol></div>`}
 
@@ -1125,6 +1126,8 @@ async function viewImport() {
       start it once the copy finishes. Path mappings from the source host do not carry over; the appdata
       lands at the mount path you choose.
     </div>`);
+  // Sent here by "move to" on another cluster: open that review.
+  if (window.fleetPendingMove) fleetPendingMove();
   // A running move keeps its own card current without repainting the page.
   if (moves.some(m => m.status === "running")) {
     clearTimeout(window.__moveTimer);
