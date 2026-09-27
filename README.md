@@ -1572,11 +1572,21 @@ The production image contains no build tools. CI performs the checks before the
 image is published:
 
 ```bash
+python -m pip install --only-binary=:all: --require-hashes -r requirements-topology.txt
 python -m unittest discover -s tests -v
 for file in web/js/*.js web/sw.js; do node --check "$file"; done
 node --test tests/*.test.js
 docker build --build-arg VERSION=dev -t homestead:dev .
 ```
+
+Use Python 3.12. The allocation collector's tests need the pinned gRPC/Protocol
+Buffers packages above; the ordinary telemetry probe still runs on the standard
+library alone. Linux CI exercises a temporary fake kubelet Unix socket without
+contacting a cluster. Those transport tests are skipped on Windows.
+
+The PodResources reader is groundwork for NUMA admission, not an enabled add-on
+or completed placement guarantee. It does not yet install a socket mount or
+authorize a NUMA start. Missing policy/allocation evidence remains a blocker.
 
 ## Security notes
 
