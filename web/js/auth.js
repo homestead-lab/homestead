@@ -41,7 +41,14 @@ function clusterUnavailable(error) {
   window.__authRetry = setTimeout(boot, 5000);
 }
 
-function dataHandoffStarting() {
+function dataHandoffStarting(state = {}) {
+  if (state.recovery && /^[a-f0-9]{24}$/.test(state.operation || "")) {
+    gate(`<img class="mark" src="/assets/homestead-mark.svg" alt="">
+      <h2>Data move paused</h2><p>Homestead is still on its original volume. No copy or shutdown has been authorized.</p>
+      <p class="dim small">Review the preparation or keep using the original volume. Both volumes will be retained.</p>
+      <a class="btn wide" href="/api/self/data/handoff/${state.operation}/view">Review preparation</a>`);
+    return;
+  }
   gate(`<img class="mark" src="/assets/homestead-mark.svg" alt="">
     <h2>Checking the new data volume</h2>
     <p class="sub">Homestead is starting after its data move.</p>
@@ -259,7 +266,7 @@ $("#whoami").onclick = () => go("settings");
 async function boot() {
   const st = await authState();
   if (st.unavailable) return clusterUnavailable(st.error);
-  if (st.data_handoff) return dataHandoffStarting();
+  if (st.data_handoff) return dataHandoffStarting(st);
   if (st.setup) return loginForm(null, true);
   if (!st.user) return loginForm();
   ME = st.user; ROLE = st.role || "admin"; ungate(); afterAuth();

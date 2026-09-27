@@ -257,6 +257,8 @@ class Fence:
         self.pod, self.container, self.directory = pod, container, directory
         self.checked = False
         self.observed_marker = False
+        self.completed_marker = None
+        self.completed_checked = False
 
     def _anchor(self):
         return A.Anchor(self.read, lambda *_: (_ for _ in ()).throw(Held("Startup never writes control records")),
@@ -273,25 +275,51 @@ class Fence:
 
     def _inspect(self):
         marker = read_marker(self.directory)
+        from homestead_self_data_finish import read as read_completed
+        completed = read_completed(self.directory, self.namespace, self.deployment)
+        if completed:
+            receipt, saved = completed
+            aborted = saved.state.get("setup_aborted") is True
+            pointer = A.pointer(self.namespace, saved.state, saved.handle()["uid"]) if "plan" in saved.state else None
+            if marker is None or marker == pointer:
+                live = None
+                try: live = self.read(saved.path)
+                except urllib.error.HTTPError as error:
+                    if error.code != 404: raise
+                if live is None or identity(live)["uid"] == saved.handle()["uid"]:
+                    dep = self.read(f"/apis/apps/v1/namespaces/{self.namespace}/deployments/{self.deployment}")
+                    if identity(dep)["uid"] != saved.state["deployment"]["uid"] or dep["metadata"].get("deletionTimestamp"):
+                        raise Held("The completed data move belongs to a different Deployment")
+                    if aborted:
+                        binding = receipt["source_binding"]
+                        self._mounted_destination({"destination": saved.state["source"]["name"]}, binding, dep)
+                    else:
+                        self._mounted_destination(pointer, saved.state["plan"], dep)
+                    self.checked = True
+                    self.completed_marker = pointer
+                    self.completed_checked = True
+                    return {"mode": "done", "writable": True, "operation": saved.state["operation"], "anchor_uid": saved.handle()["uid"], "cleanup": True}
         if marker is None and self.observed_marker:
             raise Held("The recorded data handoff marker disappeared; it is not safe to resume")
         self.observed_marker = self.observed_marker or marker is not None
         control = self._anchor()
         if marker is None:
             try:
-                self.read(control.path)
+                obj = self.read(control.path)
             except urllib.error.HTTPError as error:
                 if error.code == 404:
                     self.checked = True
                     return {"mode": "normal", "writable": True}
                 raise
-            # Finding a same-name record after a missing/lost pointer is not
-            # enough to establish which operation this mounted data belongs to.
-            raise Held("A data handoff exists but its local receipt is missing; inspect both retained volumes")
+            operation = obj.get("metadata", {}).get("labels", {}).get(A.LABEL)
+            control.load(operation=operation, uid=identity(obj)["uid"])
+            return self.recovery(control)
         if (marker["namespace"], marker["deployment"]) != (self.namespace, self.deployment):
             raise Held("This data handoff marker belongs to another Homestead installation")
         control.load(operation=marker["operation"], uid=marker["anchor_uid"])
         state = control.state
+        if "pointer_receipt" not in state:
+            return self.recovery(control)
         if state.get("runtime", {}).get("state") == "held":
             raise Held("The data move needs a recovery review; startup and writes remain held")
         if state.get("pointer_receipt") != A.pointer_digest(self.namespace, state, marker["anchor_uid"]):
@@ -324,6 +352,33 @@ class Fence:
         self.checked = True
         return {"mode": phase, "writable": phase == "done", "operation": state["operation"],
                 "anchor_uid": marker["anchor_uid"], "destination_uid": marker["destination_uid"]}
+
+    def recovery(self, control=None):
+        """Only an unchanged original mount may abandon unpublished preparation.
+
+        This is not rollback: no stop, copy or claim switch has been authorized.
+        The abort CAS races safely with publication, and permanently disarms it.
+        """
+        if control is None:
+            obj = self.read(self._anchor().path)
+            control = self._anchor().load(operation=obj["metadata"]["labels"][A.LABEL], uid=identity(obj)["uid"])
+        state = control.state
+        if state["phase"] != "prepare" or "pointer_receipt" in state or state["journal"]["ref"]["storage_writes"]:
+            raise Held("This move has been handed over. Recovery must inspect both retained volumes; automatic rollback is not safe")
+        marker = read_marker(self.directory)
+        if marker is not None and marker != A.pointer(self.namespace, state, control.handle()["uid"]):
+            raise Held("The local move receipt does not match this preparation")
+        dep = self.read(f"/apis/apps/v1/namespaces/{self.namespace}/deployments/{self.deployment}")
+        if identity(dep)["uid"] != state["deployment"]["uid"] or dep["metadata"].get("deletionTimestamp"):
+            raise Held("The original Deployment was replaced")
+        source = state["source"]
+        pvc = self.read(f"/api/v1/namespaces/{self.namespace}/persistentvolumeclaims/{source['name']}")
+        pv = self.read("/api/v1/persistentvolumes/" + pvc["spec"]["volumeName"])
+        binding = {"data_volume": "data", "destination_pvc": {"name": source["name"], "uid": source["uid"]},
+                   "destination_pv": {"name": pv["metadata"]["name"], "uid": identity(pv)["uid"]}}
+        self._mounted_destination({"destination": source["name"]}, binding, dep)
+        return {"mode": "recovery", "writable": bool(state.get("setup_aborted")), "operation": state["operation"],
+                "anchor_uid": control.handle()["uid"], "source_binding": binding}
 
     def _mounted_destination(self, marker, plan, dep):
         pod = self.read(f"/api/v1/namespaces/{self.namespace}/pods/{self.pod}")
@@ -373,7 +428,10 @@ class Fence:
         Setup must durably publish the marker on the shared source BEFORE it
         authorizes stopping writers. Once observed, removing it is a hard hold.
         """
-        if self.checked and not self.observed_marker and read_marker(self.directory) is None:
+        marker = read_marker(self.directory)
+        if self.checked and self.completed_checked and marker in (None, self.completed_marker):
+            return  # Verified destination retirement; a new move's marker revokes this.
+        if self.checked and not self.observed_marker and marker is None:
             return
         result = self.inspect()
         if not result["writable"]:

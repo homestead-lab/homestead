@@ -177,7 +177,7 @@ class Setup:
         state = self.anchor._decode(obj, handle["operation"], handle["uid"])
         if identity(obj) != identity(self.anchor.obj) or state != self.anchor.state:
             raise Held("The helper setup record advanced elsewhere")
-        if (state["phase"] != "prepare" or "pointer_receipt" in state or not allow_plan and "plan" in state
+        if (state.get("setup_aborted") or state["phase"] != "prepare" or "pointer_receipt" in state or not allow_plan and "plan" in state
                 or state["journal"]["ref"]["storage_writes"]):
             raise Held("The data move is no longer in helper setup")
 

@@ -83,6 +83,16 @@ class DataMoveTests(unittest.TestCase):
             server.move_homestead_data("longhorn")
         self.assertEqual([], self.c.sent)
 
+    def test_local_path_and_unknown_destination_classes_are_not_assumed_rwx(self):
+        self.use(Cluster())
+        rows = [{"name": "local-path", "provisioner": "rancher.io/local-path", "migratable": False},
+                {"name": "unknown", "provisioner": "example.test", "migratable": False},
+                {"name": "longhorn", "provisioner": "driver.longhorn.io", "migratable": False}]
+        with mock.patch.object(server, "storage_classes", return_value=rows):
+            info = server.homestead_data_volume()
+        self.assertEqual(["longhorn"], info["candidates"])
+        self.assertEqual({"local-path": False, "unknown": False, "longhorn": True}, {r["name"]: r["shareable"] for r in info["classes"]})
+
     def test_old_jobs_never_switch_a_claim_even_when_the_job_succeeded(self):
         self.use(Cluster())
         self.c.jobs["old-job"] = {"status": {"succeeded": 1}}

@@ -51,9 +51,16 @@ def handshake(pod, execution, anchor_uid):
         return False
 
 
-def resolve(item, read, *, clock=time.time):
+def resolve(item, read, *, clock=time.time, directory=None):
     """Existing Jobs UI reports only; it cannot execute or replay the move."""
     ref = item["ref"]
+    if directory:
+        from homestead_self_data_finish import read as read_completed
+        saved = read_completed(directory, ref["namespace"], ref["deployment"])
+        if saved and saved[1].state["operation"] == ref["operation"]:
+            ref["retain_resources"] = False
+            status = W.progress(saved[1], clock())
+            return ("cancelled" if status["status"] == "cancelled" else "succeeded"), 100, status["message"]
     if ref.get("setup_error"):
         return "failed", 0, ref["setup_error"]
     if not ref.get("anchor_uid"):
@@ -61,6 +68,7 @@ def resolve(item, read, *, clock=time.time):
     try:
         anchor = A.Anchor(read, None, ref["namespace"], ref["deployment"]).load(operation=ref["operation"], uid=ref["anchor_uid"])
         view = W.progress(anchor, clock())
+        if view["status"] == "cancelled": return "cancelled", 100, view["message"]
         if view["status"] == "done":
             ref["retain_resources"] = False
             return "succeeded", 100, view["message"]

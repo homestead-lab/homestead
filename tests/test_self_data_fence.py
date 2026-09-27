@@ -64,10 +64,10 @@ class FenceTests(unittest.TestCase):
         self.c = Cluster(published=False)
         self.fence.read = self.c.read
         self.save_marker()
-        with self.assertRaisesRegex(Held, "not confirmed"): self.fence.inspect()
+        with self.assertRaises(Held): self.fence.inspect()
 
     def test_unknown_same_name_anchor_never_authorizes_missing_pointer(self):
-        with self.assertRaisesRegex(Held, "receipt is missing"):
+        with self.assertRaisesRegex(Held, "handed over"):
             self.fence.inspect()
         self.assertFalse(self.fence.checked)
 

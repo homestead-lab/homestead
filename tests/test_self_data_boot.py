@@ -111,6 +111,31 @@ class BootTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(503, h._send.call_args.args[0])
 
+    def test_unpublished_source_keeps_existing_route_for_read_only_recovery(self):
+        self.fence.recovery.return_value = {"mode": "recovery", "writable": False, "operation": "a" * 24}
+        with mock.patch.object(server, "_self_data_boot_pending", False):
+            for path in ("/healthz", "/api/auth/state"):
+                h, result = self.handler(path)
+                self.assertTrue(result)
+                self.assertEqual(200, h._send.call_args.args[0])
+                self.assertTrue(h._send.call_args.args[1]["recovery"])
+
+    def test_recovery_action_requires_real_admin_and_csrf_not_status_capability(self):
+        self.fence.inspect.return_value = {"mode": "recovery", "writable": False, "operation": "a" * 24}
+        path = "/api/self/data/abandon"
+        h, _ = self.handler(path, "POST")
+        self.assertEqual(401, h._send.call_args.args[0])
+        h._who.return_value = {"user": "admin", "role": "admin"}
+        with mock.patch.object(server.CFACCESS, "enabled", return_value=False):
+            h._guard(path)
+        self.assertEqual(403, h._send.call_args.args[0])
+        h.headers["X-Homestead-Auth"] = "1"
+        h._who.return_value = {"user": "viewer", "role": "viewer"}
+        with mock.patch.object(server.CFACCESS, "enabled", return_value=False):
+            h._guard(path)
+        self.assertEqual(403, h._send.call_args.args[0])
+        self.assertEqual("admin", server.needed_role(path, "POST"))
+
     def test_real_http_listener_reports_read_only_readiness_and_refuses_feature_routes(self):
         listener = server.ThreadingHTTPServer(("127.0.0.1", 0), server.H)
         thread = threading.Thread(target=listener.serve_forever, daemon=True)
