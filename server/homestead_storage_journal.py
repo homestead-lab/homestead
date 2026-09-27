@@ -53,16 +53,16 @@ def shape(obj):
     """Ignore status/managedFields, but do not overlook edits to storage or holds."""
     meta = obj.get("metadata") or {}
     annotations = dict(meta.get("annotations", {}))
-    if obj.get("kind") == "Deployment" and obj.get("apiVersion") == "apps/v1":
+    if obj.get("kind") in ("Deployment", "ReplicaSet") and obj.get("apiVersion") == "apps/v1":
         # The Deployment controller increments this asynchronously after our
         # acknowledged template update. It is status bookkeeping, not a new
         # user edit. All spec, labels and other annotations remain pinned.
         annotations.pop("deployment.kubernetes.io/revision", None)
-        # Observational image bookkeeping is refreshed asynchronously too.
+        # Observational image bookkeeping is refreshed asynchronously too,
+        # then copied onto ReplicaSets by the Deployment controller.
         # The image in spec (and self-data's live runtime identity) is still
         # checked; this annotation neither schedules nor changes the workload.
         annotations.pop("homestead.io/ran-digests", None)
-        annotations.pop("harvui.io/ran-digests", None)
     return digest({"spec": obj.get("spec"), "labels": meta.get("labels", {}),
                    "annotations": annotations, "owners": meta.get("ownerReferences", [])})
 
