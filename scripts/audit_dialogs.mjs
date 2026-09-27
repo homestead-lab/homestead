@@ -73,6 +73,7 @@ const DIALOGS = [
   ["nfs-remove", "settings", "nfsRemove()"],
   ["volume-create", "storage", "volumeCreate()"],
   ["volume-edit", "storage", "click:volumeEdit"],
+  ["volume-class-review", "storage", "volumeReclass({name:'frigate-config',pvc_name:'frigate-config',namespace:'lab',storage_class:'longhorn-r2'})"],
   ["volume-delete", "storage", "click:volumeDelete"],
   ["storage-class-new", "storage", "storageClassCreate()"],
   ["volume-files", "storage", "click:volumeFiles"],
