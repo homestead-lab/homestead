@@ -328,6 +328,7 @@ function dismissModal() {
   closeModal();
 }
 function closeModal(updateRoute = true) {
+  if (window.selfDataClose) window.selfDataClose();
   window.__modalGuard = null;
   MODAL_STACK.length = 0;
   paintModalBack();

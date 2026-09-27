@@ -113,6 +113,7 @@ window.openOperation = (href, id = "") => {
   if (["image-update", "image-rollback"].includes(operation?.kind) && target.name && window.monitorImageRollout)
     setTimeout(() => monitorImageRollout(target.namespace || "lab", target.name), 150);
   if (operation?.kind === "reclass" && window.reclassWatch) setTimeout(() => reclassWatch(operation.id), 150);
+  if (operation?.kind === "self-data-prepare" && window.replicasMoveData) setTimeout(() => replicasMoveData(operation.id), 150);
 };
 /* Bring the row or card that mentions this name into view and mark it for a
    moment, once the page has drawn. The name must match a whole word, so
