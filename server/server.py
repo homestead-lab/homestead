@@ -8098,6 +8098,9 @@ def finish_self_data_helpers():
             with self_data_activity():
                 result = SELF_DATA_FINISH.finish(_self_data_fence, kget, ksend)
             if result["done"]: return
+        except SELF_DATA_FENCE.Held as error:
+            print("Data move helper cleanup needs review: " + str(error), flush=True)
+            return
         except Exception:
             # The verified destination stays usable. Do not replay a delete or
             # remove either PVC to make cleanup appear successful.
