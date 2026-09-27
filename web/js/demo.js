@@ -1063,11 +1063,12 @@ ssh_pwauth: true
       if (op.kind === "vm-power") return {...base,mode:"forget",action:"Stop tracking it",severity:"low",confirm:op.resource.name,
         can:op.cancellable,why_not:"An uncertain request cannot be forgotten",undo:[],
         keeps:["The accepted power request still runs in KubeVirt. Stopping tracking does not undo it.","Its approval stays consumed."]};
-      if (op.kind === "k3s-cluster") return { ...base, mode: "rollback", action: "Cancel and put back", needs: "admin",
-        confirm: "k3s-lab",
-        undo: ["Deletes 3 VMs - k3s-lab-server-1, k3s-lab-agent-1 and k3s-lab-agent-2 - with their disks",
-          "Forgets 192.168.1.60, 192.168.1.61 and 192.168.1.62 in IP addresses, so they can be used again"],
-        keeps: ["Anything installed inside the VMs so far is lost", "The VM image the nodes started from is kept"] };
+      if (op.kind === "k3s-cluster") return { ...base, mode: "forget", tracking_only:true, action: "Stop tracking it", needs: "admin",
+        cleanup:op.status==="failed",severity:"low",confirm:"k3s-lab",undo:[],
+        keeps:["This older job has no creation identity receipts. A matching name or label cannot prove it is the original VM; automatic cleanup is disabled.",
+          "All VMs, disks, Secrets and IP-address records remain. Guest installation may continue.",
+          "Inspect each VM separately before removing it. No addresses are freed and readiness is not verified.",
+          "After acknowledgement, the finished tracking record can be cleared. Save any recovery details you still need."] };
       if (op.kind === "reclass") return { ...base, mode: "rollback", action: "Cancel and put back", needs: "admin",
         undo: ["Stops the copy and deletes the new volume on longhorn-r3",
           "Starts paperless again as it was, on the original paperless-data"],
@@ -1095,9 +1096,15 @@ ssh_pwauth: true
     "/api/operations/cancel": (url, init) => {
       const id = JSON.parse(init?.body || "{}").id;
       const op = (window.__demoOps || []).find(item => item.id === id);
+      if(op?.kind==="k3s-cluster") {
+        if(JSON.parse(init.body).confirm!=="k3s-lab")throw new Error("Type k3s-lab to confirm");
+        Object.assign(op,{status:op.status==="failed"?"failed":"cancelled",cancellable:false,cleanable:false,
+          tracking_stopped:true,dismissible:true,finished_at:new Date().toISOString(),
+          message:"Tracking stopped. All VMs, disks, Secrets and IP-address records are retained; no cleanup or readiness verification was performed."});
+        return {ok:true,id,detail:op.message,operation:op};
+      }
       if (op) Object.assign(op, { status: "cancelled", cancellable: false, finished_at: new Date().toISOString(),
         message: op.kind === "vm-power" ? "Stopped tracking; KubeVirt is unchanged and the approval remains consumed"
-          : op.kind === "k3s-cluster" ? "Cluster k3s-lab cancelled: its VMs are being deleted with their disks, and their addresses are free again"
           : "Cancelled and put back" });
       return { ok: true, id, detail: op?.message || "cancelled", operation: op };
     },

@@ -104,7 +104,7 @@ def _write(items):
     # A busy history must not evict an in-flight dispatch intent or a failed
     # batch's recovery record. Bound ordinary terminal history, not active work.
     protected = {i for i, item in enumerate(items) if item.get("status") not in TERMINAL or
-                 (item.get("status") == "failed" and item.get("ref", {}).get("retain_resources")) or _receipt_needed(item)}
+                 _recovery_needed(item) or _receipt_needed(item)}
     recent = [i for i in range(len(items)) if i not in protected][-MAX_OPERATIONS:] if MAX_OPERATIONS > 0 else []
     kept = protected | set(recent)
     current = [item for i, item in enumerate(items) if i in kept and not item.get("_legacy_store")]
@@ -190,7 +190,9 @@ def _public(item):
     out["cancellable"] = item.get("status") not in TERMINAL and (
         item.get("status") != CANCELLING or _cancel_stale(item))
     out["cleanable"] = _cleanable(item)
-    out["dismissible"] = item.get("status") in TERMINAL and not _receipt_needed(item)
+    out["dismissible"] = item.get("status") in TERMINAL and not _receipt_needed(item) and not _recovery_needed(item)
+    if item.get("kind") == "k3s-cluster":
+        out["tracking_only"] = True
     if item.get("kind") == "vm-power":
         out["cancellable"] = out["cancellable"] and item.get("ref", {}).get("phase") in ("prepared", "accepted")
         out["power_recovery"] = item.get("status") not in TERMINAL and item.get("ref", {}).get("phase") in ("uncertain", "dispatching")
@@ -212,6 +214,15 @@ def _receipt_needed(item):
         return False
     ref = item.get("ref") or {}
     return bool(ref.get("retain_resources") or float(ref.get("review_expires") or 0) >= time.time())
+
+
+def _recovery_needed(item):
+    if item.get("tracking_stopped"):
+        return False
+    if item.get("cleaned") and not item.get("ref", {}).get("retain_resources"):
+        return False  # completed cleanup recorded by a previous release
+    return item.get("status") in ("failed", "cancelled") and bool(
+        item.get("ref", {}).get("retain_resources") or item.get("kind") == "k3s-cluster")
 
 
 # Each step a job has said, kept with it: what the Log view shows for any job,
@@ -589,7 +600,7 @@ def dismiss_finished():
     """
     with _lock:
         items = _read()
-        keep = [item for item in items if item.get("status") not in TERMINAL or _receipt_needed(item)]
+        keep = [item for item in items if item.get("status") not in TERMINAL or _receipt_needed(item) or _recovery_needed(item)]
         removed = len(items) - len(keep)
         if removed:
             _write(keep)
@@ -598,7 +609,7 @@ def dismiss_finished():
             "detail": (f"cleared {removed} finished job" + ("" if removed == 1 else "s")
                        if removed else "nothing finished to clear")
                       + (f"; {len(keep) - protected} still running" if len(keep) > protected else "")
-                      + (f"; {protected} power receipt(s) retained for replay protection" if protected else "")}
+                      + (f"; {protected} recovery/approval record(s) retained" if protected else "")}
 
 
 # Kinds whose steps are each safe to run again, and which say whether a
@@ -636,6 +647,8 @@ def dismiss(operation_id):
             raise ValueError("an active operation cannot be dismissed")
         if _receipt_needed(match):
             raise ValueError("This power receipt is still needed for recovery or replay protection; inspect its job and wait for the approval to expire")
+        if _recovery_needed(match):
+            raise ValueError("This job retains partial-resource recovery details. Review retained resources before clearing its history.")
         items = [item for item in items if item.get("id") != operation_id]
         _write(items)
     return {"ok": True, "id": operation_id}
@@ -667,7 +680,8 @@ CLEANUPS = set()
 
 def _cleanable(item):
     return (item.get("status") == "failed" and item.get("kind") in CLEANUPS and not item.get("cleaned")
-            and not item.get("ref", {}).get("retain_resources"))
+            and not item.get("tracking_stopped")
+            and (item.get("kind") == "k3s-cluster" or not item.get("ref", {}).get("retain_resources")))
 MODES = {"rollback": "Cancel and put back", "stop": "Cancel it", "forget": "Stop tracking it"}
 
 
@@ -775,10 +789,14 @@ def cancel(operation_id, options=None, confirm="", allowed=None, by=""):
             match.pop("previous_status", None)
             if by:
                 match["cancelled_by"] = str(by)[:120]
+            if plan["mode"] == "forget":
+                match.update(tracking_stopped=True, tracking_stopped_at=_now())
             if before == "failed":
-                # It failed; that stays its outcome. Only what it left is gone.
-                match.update(status="failed", cleaned=True, updated_at=_now(),
-                             message=f"Cleaned up after failing: {message}"[:500])
+                # Tracking-only acknowledgement must not claim data was removed.
+                if plan["mode"] != "forget":
+                    match["cleaned"] = True
+                lead = "Tracking stopped after failure" if plan["mode"] == "forget" else "Cleaned up after failing"
+                match.update(status="failed", updated_at=_now(), message=f"{lead}: {message}"[:500])
                 _note(match, "failed", match.get("progress", 0), match["message"])
             else:
                 _finish(match, "cancelled", match.get("progress", 0), message)

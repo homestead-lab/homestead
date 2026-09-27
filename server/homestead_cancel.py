@@ -6,8 +6,7 @@ and then does it:
 
   rollback  puts things back as they were before the job: a deploy removed,
             a rollout returned to the version before it, a volume move
-            started again on its untouched original, a k3s cluster's VMs,
-            disks and addresses removed;
+            started again on its untouched original;
   stop      halts it and keeps what is already done, when what is done
             cannot be taken back - a node that has already dropped an image;
   forget    for the few things Kubernetes cannot take back once asked - a
@@ -30,8 +29,6 @@ import urllib.parse
 import homestead_disks as DISKS
 import homestead_helm as HELM
 import homestead_imports as IMP
-import homestead_ipam as IPAM
-import homestead_k3scluster as K3SC
 import homestead_longhorn as LH
 import homestead_move_engine as MOVE_ENGINE
 import homestead_names as NAMES
@@ -39,7 +36,6 @@ import homestead_reclass as RECLASS
 import homestead_restructure as RESTRUCTURE
 import homestead_smart as SMART
 import homestead_updates as UPDATES
-import homestead_vms as VMS
 
 kget = ksend = None
 # The server's own ways of doing these, so a cancel does them the same way:
@@ -419,67 +415,29 @@ def migration_cancel(item, _options):
     return "Migration aborted; the VM stays where it was"
 
 
-def _cluster_vms(ref):
-    """The cluster's VMs that are still there and carry its label - never a
-    VM that merely shares a name."""
-    out = []
-    for node in ref.get("nodes") or []:
-        vm = _get(f"/apis/kubevirt.io/v1/namespaces/{_q(ref['namespace'])}/virtualmachines/{_q(node['name'])}")
-        if vm and ((vm.get("metadata") or {}).get("labels") or {}).get(K3SC.LABEL) == ref["name"]:
-            out.append(node)
-    return out
-
-
 def k3s_plan(item):
     ref = item["ref"]
-    if ref.get("retain_resources"):
-        return {"mode": "forget", "can": ref.get("phase") != "provisioning", "needs": "operator",
-                "why_not": "VM creation may still be in flight. Wait for its receipt or failure before stopping tracking.",
-                "keeps": ["All VMs, disks, Secrets and IP-address records remain. Guest installation continues.",
-                          "Inspect each VM and use its explicit delete controls if it is no longer wanted."]}
-    vms = _cluster_vms(ref)
-    addresses = [n["address"] for n in ref.get("nodes") or []]
-    return {"mode": "rollback", "needs": "admin", "severity": "high", "confirm": ref["name"],
-            "undo": ([f"Deletes {_s(len(vms), 'VM')} - {_names([n['name'] for n in vms])} - with their disks"]
-                     if vms else ["Its VMs are gone already"])
-                    + [f"Forgets {_names(addresses)} in IP addresses, so they can be used again"],
-            "keeps": ["Anything installed inside the VMs so far is lost",
-                      "The VM image the nodes started from is kept"]}
+    legacy = not ref.get("retain_resources")
+    kept = ["All VMs, disks, Secrets and IP-address records remain. Guest installation may continue.",
+            "This does not stop or undo installation, confirm readiness, or free any addresses.",
+            "Inspect each VM and use its separate delete/impact controls if it is no longer wanted.",
+            "After this acknowledgement, the finished tracking record can be cleared. Save any recovery details you still need."]
+    if legacy:
+        kept.insert(0, "This older job has no creation identity receipts. A matching VM name or cluster label cannot prove it is the original VM; automatic cleanup is disabled.")
+    return {"mode": "forget", "tracking_only": True, "can": ref.get("phase") != "provisioning",
+            "needs": "admin" if legacy or item.get("status") == "failed" else "operator",
+            "confirm": ref.get("name", ""),
+            "why_not": "VM creation may still be in flight. Wait for its receipt or failure before stopping tracking.",
+            "keeps": kept}
 
 
 def k3s_cancel(item, _options):
     ref = item["ref"]
-    if ref.get("retain_resources"):
-        if ref.get("phase") == "provisioning":
-            raise ValueError("VM creation may still be in flight; nothing was cancelled or deleted")
-        return "Stopped tracking guest startup. All VMs, disks, Secrets and IP-address records are retained."
-    removed = []
-    for node in _cluster_vms(ref):
-        try:
-            VMS.delete(ref["namespace"], node["name"], with_disks=True)
-        except urllib.error.HTTPError as error:
-            if error.code != 404:
-                raise
-        removed.append(node["name"])
-    forget_addresses({n["address"]: n["name"] for n in ref.get("nodes") or []})
-    return (f"Cluster {ref['name']} cancelled: {_names(removed)} {'is' if len(removed) == 1 else 'are'} being "
-            "deleted with their disks, and their addresses are free again" if removed
-            else f"Cluster {ref['name']} cancelled; its VMs were already gone")
-
-
-def forget_addresses(names_by_ip):
-    """Drop the address records made for these VMs - only a record still
-    under the VM's name, so an address someone has since taken is kept."""
-    def change(data):
-        for ip, name in names_by_ip.items():
-            record = data["records"].get(ip)
-            if record and record.get("name") == name:
-                data["records"].pop(ip, None)
-        return {"ok": True}
-    try:
-        IPAM.update(change)
-    except Exception:
-        pass
+    if ref.get("phase") == "provisioning":
+        raise ValueError("VM creation may still be in flight; nothing was cancelled or deleted")
+    # Legacy names/labels cannot prove historical ownership. No cluster writes.
+    ref["retain_resources"] = True
+    return "Stopped tracking guest startup. All VMs, disks, Secrets and IP-address records are retained; no cleanup or readiness verification was performed."
 
 
 # --------------------------------------------------------- data and storage
@@ -719,6 +677,5 @@ def register(ops):
             (("move",), move_plan, move_cancel)):
         for kind in kinds:
             ops.CANCELLERS[kind] = (plan, run or (lambda _item, _options: ""))
-    # A k3s build that fails leaves its VMs running, their disks and their
-    # addresses taken; the same cancel removes them afterwards.
+    # Failed k3s jobs allow a retention/tracking review, not automatic deletion.
     ops.CLEANUPS.add("k3s-cluster")

@@ -12,6 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_k3scluster as cluster
 import homestead_operations as ops
 import homestead_cancel as cancel
+import homestead_vms as vms
+import homestead_ipam as ipam
 
 
 class BootstrapRecoveryTests(unittest.TestCase):
@@ -19,6 +21,9 @@ class BootstrapRecoveryTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         patch = mock.patch.object(ops, "DATA_DIR", self.tmp.name)
+        patch.start()
+        self.addCleanup(patch.stop)
+        patch = mock.patch.object(ops, "CLEANUPS", {"k3s-cluster"})
         patch.start()
         self.addCleanup(patch.stop)
         self.cfg = {"name": "test", "network": "default/lan", "servers": 1, "agents": 1,
@@ -81,7 +86,9 @@ class BootstrapRecoveryTests(unittest.TestCase):
         self.assertEqual("failed", item["status"])
         self.assertEqual("test-agent-1", item["ref"]["attempted"])
         self.assertEqual(1, len(item["ref"]["created"]))
-        self.assertFalse(ops._public(item)["cleanable"])
+        self.assertTrue(ops._public(item)["cleanable"])
+        self.assertTrue(ops._public(item)["tracking_only"])
+        self.assertFalse(ops._public(item)["dismissible"])
         for private in (self.cfg["password"], self.token):
             self.assertNotIn(private, json.dumps(item) + str(error.exception))
 
@@ -146,7 +153,7 @@ class BootstrapRecoveryTests(unittest.TestCase):
     def test_new_job_cancel_cannot_delete_resources_or_race_dispatch(self):
         item = {"ref": {"retain_resources": True, "phase": "provisioning"}}
         self.assertFalse(cancel.k3s_plan(item)["can"])
-        with mock.patch.object(cancel.VMS, "delete") as delete, mock.patch.object(cancel, "forget_addresses") as forget:
+        with mock.patch.object(vms, "delete") as delete, mock.patch.object(ipam, "update") as forget:
             with self.assertRaises(ValueError):
                 cancel.k3s_cancel(item, {})
             item["ref"]["phase"] = "awaiting-ready"

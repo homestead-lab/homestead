@@ -733,13 +733,27 @@ Jobs that can be cancelled offer **Cancel**. It first says what cancelling would
 do: what is put back, what stays as it is, and anything Kubernetes cannot take
 back. Where it can, a cancel rolls back - a deploy is removed, an update or
 edit returns to the version before it, a volume move starts everything again
-on its untouched original, a k3s cluster's VMs, disks and addresses are
-removed, a restore or disk import deletes its half-filled claim. Where what is
+on its untouched original, a restore or disk import deletes its half-filled claim. Where what is
 done cannot be undone, it stops the rest (an image cleanup keeps the nodes it
 already cleaned). A step that must not be interrupted, such as a volume swap,
 is refused until it has finished, and the few things Kubernetes cannot take
 back once asked, such as a volume deletion, are only no longer tracked.
 Cancelling something that deletes VMs or stops a volume move needs an admin.
+
+k3s VM-batch cancellation **only stops tracking**: VMs, disks, Secrets and IP
+records stay in place, and guest installation may continue. Older jobs have no
+creation-identity receipts; a matching name or label is not proof that a VM still
+belongs to the original job. Homestead therefore never uses that legacy shortcut
+to delete a cluster with its disks. Use each VM's separate deletion/impact review
+when you deliberately want to remove resources.
+
+Failed batches offer **Review retained resources**, not **Clean up**. An admin
+must confirm the cluster name and acknowledge that stopping tracking removes
+nothing and does not verify readiness. The job remains failed; its history records
+who stopped tracking. Until that review, **Dismiss**, **Clear finished** and
+history pruning preserve the recovery details. After acknowledgement, the record
+can be cleared, so save details you still need. Provisioning that may still be
+in flight cannot be stopped through this tracking action.
 
 Reviewed VM **Start**, **Restart** and **Resume** first record a durable power
 intent. Each approval is consumed once under the shared job-store lock; repeating
