@@ -114,7 +114,6 @@ const DIALOGS = [
   ["node-shutdown", "nodes", "nodePowerReview('harvester-node1','poweroff')", "document.querySelector('#mbody .ui-more').open=true"],
   ["app-store-app", "store", "click:storeDetails"],
   ["deploy-preview", "deploy", "click:previewYaml"],
-  ["fleet-manage", "workloads", "fleetManage()"],
   ["fleet-link", "workloads", "fleetLink()"],
   ["move-to-cluster", "workloads", "moveToCluster('container','frigate')"],
 ];

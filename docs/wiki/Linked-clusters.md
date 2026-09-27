@@ -22,8 +22,8 @@ it relays everything, consoles included, to the others.
 You need an **admin** account on the other Homestead, and both should run the
 same release (or one close to it).
 
-1. **Import → ＋ Homestead cluster**, or **Link a cluster** in the switch once
-   one is linked.
+1. **Settings → Linked clusters → Link a cluster** (or **Link a cluster** in the
+   switch, once one is linked).
 2. Enter the other Homestead's address - what you open it at on your LAN, with
    the port, e.g. `http://192.168.1.250:8088` - and the admin username and
    password there.
@@ -39,10 +39,17 @@ Link a third cluster from either of the first two: it is linked to all of
 them. A Homestead already linked to others cannot be pulled into a second
 group - unlink it there first, or link from within its group.
 
-## Switching
+## Switching, or all together
 
-Click the cluster name at the start of the top bar (on a phone, above the page
-title):
+Once a cluster is linked, its name appears at the start of the top bar (on a
+phone, above the page title). Click it for:
+
+- **All clusters** - every cluster's containers, VMs, nodes and volumes
+  together;
+- each cluster by name - that cluster on its own.
+
+**Settings → Linked clusters → How they show** picks the same thing: **One
+cluster at a time** or **All clusters together**. The dots in the switch say:
 
 - a green dot: the cluster answers;
 - red: it does not answer from here - it is off, or its address has changed;
@@ -65,7 +72,8 @@ on the others, to relay for people and to move workloads.
 
 ## Unlink
 
-**Manage clusters** in the switch lists every linked cluster:
+**Settings → Linked clusters** (or **Manage clusters** in the switch) lists
+every linked cluster:
 
 - **Unlink** removes one. It keeps running as it is. The rest get a new key,
   so the one unlinked can no longer act for them.
@@ -73,6 +81,15 @@ on the others, to relay for people and to move workloads.
   other.
 - **Where the others reach this Homestead** changes this one's address - after
   a new VIP, say. The others hear straight away.
+
+## Clusters added before linking
+
+Clusters added on Import for moves in earlier releases - with an account and
+password kept here - are listed under **Settings → Linked clusters → Added
+before linking**. **Link** links each with that account, then deletes the
+password; moves that named it keep working. **Forget** deletes the account and
+leaves the cluster alone. One already linked under another name offers **Use
+the link** instead.
 
 ## Security
 

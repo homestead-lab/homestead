@@ -17,13 +17,15 @@ to update if not.
 
 ## 2. Link the two
 
-[Link the clusters](Linked-clusters): **Import → ＋ Homestead cluster** takes
-the other Homestead's address and an admin account there, used once. Linked
+[Link the clusters](Linked-clusters): **Settings → Linked clusters → Link a
+cluster** takes the other Homestead's address and an admin account there, used
+once. Linked
 clusters are sources for each other with nothing more to add - in both
 directions.
 
 Clusters added before linking existed, with an account and password kept in a
-Secret, still work, and are listed on Import beside the linked ones.
+Secret, still work; **Settings → Linked clusters** offers to link each and
+delete its password.
 
 ## 3. Give the source backup storage
 
