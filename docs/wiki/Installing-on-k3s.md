@@ -242,3 +242,45 @@ error. `lookup ghcr.io` means host DNS, not a missing app configuration. Check
 `resolvectl status`, `resolvectl query ghcr.io`, the host route and outbound HTTPS.
 Fix the host's persistent DNS/network configuration before retrying; do not remove
 the old serving pod or its volume just to clear an image-pull error.
+
+## If the installer stops before showing a menu
+
+The last message can say `Installing whiptail` even when that package has
+finished installing. On Ubuntu 26.04 with sudo-rs, `curl | sudo sh` can leave
+terminal-size and menu subprocesses stopped before the menu accepts input. The installer now
+asks you to press Enter in the main shell first, so sudo can hand over the
+terminal before a menu subprocess uses it. Reports and unattended installs
+skip this prompt. Terminal-size queries are read-only, with a 24-row fallback.
+
+For an older installer, download it first so sudo starts with terminal input:
+
+```bash
+curl -fL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh -o /tmp/homestead-install.sh
+sudo sh /tmp/homestead-install.sh
+```
+
+Add `--text` to the saved-script command to use plain prompts.
+
+From another SSH session, inspect the process tree and the package log:
+
+```bash
+ps -eo pid,ppid,tty,stat,etime,args --forest | grep -E 'stty|whiptail|apt-get|dpkg|sudo|sh -s'
+sudo tail -n 40 /var/log/apt/term.log
+```
+
+A `T` in the process state means stopped, rather than downloading packages.
+If the log shows `Setting up whiptail` followed by `Log ended`, the package
+installation completed. If a package manager is still running, check its
+output and locks before attempting another installation; do not delete lock
+files. The optional menu-package attempt now shows its output, is limited to
+120 seconds plus a 10-second termination grace period, and falls back to text
+prompts on failure. If interrupted during package configuration, inspect the
+package-manager state (`sudo dpkg --audit` on Debian/Ubuntu) before retrying.
+
+To trace startup without changing the cluster, save the script and run it
+with `--dry-run` (exit at the first menu):
+
+```bash
+curl -fL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh -o /tmp/homestead-install.sh
+sudo sh -x /tmp/homestead-install.sh --dry-run
+```
