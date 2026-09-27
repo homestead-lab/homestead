@@ -70,15 +70,7 @@ def private_key():
                 private = int(json.load(handle)["private"], 16)
         except (OSError, ValueError, KeyError):
             private = EC.new_private_key()
-            os.makedirs(DATA_DIR, exist_ok=True)
-            tmp = SHARED.temporary(_key_path())
-            with open(tmp, "w", encoding="utf-8") as handle:
-                json.dump({"private": f"{private:064x}", "created": int(time.time())}, handle)
-            try:
-                os.chmod(tmp, 0o600)
-            except OSError:
-                pass
-            os.replace(tmp, _key_path())
+            SHARED.write_json(_key_path(), {"private": f"{private:064x}", "created": int(time.time())}, mode=0o600)
         _key_cache["private"] = private
         _key_cache["public"] = EC.public_bytes(EC.public_key(private))
         return private
@@ -117,15 +109,7 @@ def _read():
 
 
 def _write(rows):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    tmp = SHARED.temporary(_subs_path())
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(rows, handle, indent=1)
-    try:
-        os.chmod(tmp, 0o600)
-    except OSError:
-        pass
-    os.replace(tmp, _subs_path())
+    SHARED.write_json(_subs_path(), rows, mode=0o600, indent=1)
 
 
 def endpoint_allowed(endpoint):

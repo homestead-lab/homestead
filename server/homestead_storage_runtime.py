@@ -15,7 +15,7 @@ from homestead_storage_journal import Held
 
 FILE = "storage-runtime-v1.json"
 PROTOCOL = 1
-SELF_DATA_PROTOCOL = 1
+SELF_DATA_PROTOCOL = 2  # shared activity drain, including direct file writers
 
 
 def _records(directory):

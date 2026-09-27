@@ -10,12 +10,104 @@ import os
 import re
 import stat
 import urllib.error
+import threading
+import time
+from contextlib import contextmanager
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 
 import homestead_self_data_anchor as A
 from homestead_storage_journal import Held, identity, shape
 
 
 MARKER = ".self-data-handoff-v1.json"
+
+
+class WriteBarrier:
+    """Shared activity locks drain all upgraded replicas before publication.
+
+    The lock file is never removed or replaced. Normal activity takes shared
+    locks, so requests remain concurrent. Freeze takes an exclusive lock and
+    must publish the durable startup fence before releasing it. New activity
+    fails promptly while frozen; an existing activity can finish nested writes.
+    A timeout does not stop processes or prove that they have drained.
+    """
+    def __init__(self, directory, check):
+        self.directory, self.check = directory, check
+        self.local = threading.local()
+
+    def _open(self):
+        if fcntl is None:
+            raise Held("Self-data moves need Linux shared-file locking")
+        path = os.path.join(self.directory, ".self-data-access-v1.lock")
+        try:
+            os.makedirs(self.directory, exist_ok=True)
+            fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        except OSError:
+            raise Held("The shared data activity lock is unavailable; no change was authorized") from None
+        try:
+            info, current = os.fstat(fd), os.lstat(path)
+            if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                    or (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino)):
+                raise Held("The shared data activity lock cannot be verified")
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
+
+    @contextmanager
+    def activity(self):
+        if getattr(self.local, "depth", 0):
+            self.check()
+            self.local.depth += 1
+            try:
+                yield
+            finally:
+                self.local.depth -= 1
+            return
+        self.check()
+        fd = self._open()
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise Held("Homestead is finishing current work for its data move. Wait before making changes") from None
+            except OSError:
+                raise Held("The shared data activity lock is unavailable; no change was authorized") from None
+            self.local.depth = 1
+            self.check()  # Fence may have been published while opening the lock.
+            yield
+        finally:
+            self.local.depth = 0
+            os.close(fd)
+
+    @contextmanager
+    def freeze(self, timeout=30):
+        if getattr(self.local, "depth", 0):
+            raise Held("The data handoff must drain outside an active request or job")
+        self.check()
+        fd = self._open()
+        try:
+            deadline = time.monotonic() + timeout
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise Held("Current Homestead activity has not finished. No copy or shutdown was authorized") from None
+                    time.sleep(.05)
+                except OSError:
+                    raise Held("The data activity lock could not be acquired; no copy or shutdown was authorized") from None
+            self.local.depth = 1
+            self.check()
+            yield
+        finally:
+            self.local.depth = 0
+            os.close(fd)
 
 
 def mounted_data(directory):

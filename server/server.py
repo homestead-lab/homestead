@@ -5,6 +5,8 @@ Pure Python stdlib: no pip install at runtime, so it starts even with no interne
 """
 import copy, html, json, os, re, secrets, signal, ssl, sys, time, threading, urllib.request, urllib.parse, urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from contextlib import nullcontext
+from functools import wraps
 
 # Imported ahead of the feature modules because settings are read during start.
 import homestead_names as NAMES
@@ -50,6 +52,7 @@ LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.197")
 _self_data_fence = None
+_self_data_barrier = None
 _self_data_boot_pending = False
 _self_data_boot_failed = False
 
@@ -169,9 +172,10 @@ def kget(path, timeout=10):
 
 
 def ksend(method, path, body=None, ctype="application/json", timeout=15):
-    require_self_data_write()
-    return STORAGE_GUARD.send(method, path, body, lambda: _ksend(method, path, body, ctype, timeout), OPS, kget,
-                              own_controller=(SELF.NS, NAMES.BRAND))
+    with self_data_activity():
+        require_self_data_write()
+        return STORAGE_GUARD.send(method, path, body, lambda: _ksend(method, path, body, ctype, timeout), OPS, kget,
+                                  own_controller=(SELF.NS, NAMES.BRAND))
 
 
 def _ksend(method, path, body=None, ctype="application/json", timeout=15):
@@ -188,6 +192,42 @@ def require_self_data_write():
         _self_data_fence.require_write()
 
 
+def self_data_activity():
+    return _self_data_barrier.activity() if _self_data_barrier is not None else nullcontext()
+
+
+def self_data_request(method):
+    @wraps(method)
+    def guarded(handler):
+        path = urllib.parse.urlparse(handler.path).path
+        # Destination's explicitly read-only boot routes have their own guard;
+        # they must not create activity/feature lock files on the copied data.
+        progress = getattr(handler, "command", "") == "GET" and re.fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}", path)
+        if _self_data_boot_pending or not path.startswith("/api/") or progress:
+            return method(handler)
+        try:
+            with self_data_activity():
+                return method(handler)
+        except SELF_DATA_FENCE.Held as error:
+            handler._extra_headers = []
+            return handler._send(503, {"error": str(error), "data_handoff": True})
+    return guarded
+
+
+def self_data_file_scope(path):
+    root, candidate = os.path.realpath(DATA_DIR), os.path.realpath(path)
+    try:
+        within = os.path.commonpath((root, candidate)) == root
+    except ValueError:
+        within = False
+    if within:
+        # Also preserve the standalone check used by test/demo integrations
+        # which bind a fence without creating a Linux activity barrier.
+        require_self_data_write()
+        return self_data_activity()
+    return nullcontext()
+
+
 def self_data_file_write(path):
     if _self_data_fence is None:
         return
@@ -202,7 +242,7 @@ def self_data_file_write(path):
 
 def initialize_self_data_fence():
     """Called before feature bindings can write defaults or start background jobs."""
-    global _self_data_fence, _self_data_boot_pending
+    global _self_data_fence, _self_data_boot_pending, _self_data_barrier
     if not TOKEN:  # local demo/test server has no cluster or persistent handoff
         return
     with open(f"{SA}/namespace", encoding="utf-8") as handle:
@@ -211,6 +251,7 @@ def initialize_self_data_fence():
         os.environ.get("HOSTNAME", ""), NAMES.BRAND, DATA_DIR)
     state = _self_data_fence.inspect()  # unknown/source state must not reach feature imports
     _self_data_boot_pending = not state["writable"]
+    _self_data_barrier = SELF_DATA_FENCE.WriteBarrier(DATA_DIR, require_self_data_write)
 
 
 def self_data_boot_status():
@@ -238,6 +279,7 @@ OPS.WRITE_GUARD = require_self_data_write
 # Set before later feature binds, some of which create persistent defaults.
 import homestead_shared as SELF_DATA_SHARED
 SELF_DATA_SHARED.WRITE_GUARD = self_data_file_write
+SELF_DATA_SHARED.WRITE_SCOPE = self_data_file_scope
 if __name__ == "__main__":
     initialize_self_data_fence()
 
@@ -537,7 +579,8 @@ def _hardware_loop():
     while True:
         if LEADER.is_leader():
             try:
-                reconcile_hardware()
+                with self_data_activity():
+                    reconcile_hardware()
                 beat("hardware", 30, leader_only=True)
             except Exception as error:
                 beat("hardware", 30, error, leader_only=True)
@@ -4961,7 +5004,8 @@ def _vmstore_loop():
     while True:
         if LEADER.is_leader():
             try:
-                VMSTORE.refresh()
+                with self_data_activity():
+                    VMSTORE.refresh()
                 beat("vmstore", 3600, leader_only=True)
             except Exception as error:
                 beat("vmstore", 3600, error, leader_only=True)
@@ -5081,7 +5125,8 @@ def _alerts_loop():
         # One replica raises alerts, or every notification arrives twice.
         if LEADER.is_leader():
             try:
-                push_alerts(ALERTS.observe(_alert_sources()))
+                with self_data_activity():
+                    push_alerts(ALERTS.observe(_alert_sources()))
                 beat("alerts", 20, leader_only=True)
             except Exception as error:
                 beat("alerts", 20, error, leader_only=True)
@@ -6512,6 +6557,7 @@ class H(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         return json.loads(self.rfile.read(n).decode()) if n else {}
 
+    @self_data_request
     def do_GET(self):
         self._extra_headers = []
         u = urllib.parse.urlparse(self.path)
@@ -6955,6 +7001,7 @@ class H(BaseHTTPRequestHandler):
         except Exception as e:
             return self._send(500, {"error": str(e)})
 
+    @self_data_request
     def do_POST(self):
         self._extra_headers = []
         u = urllib.parse.urlparse(self.path)
@@ -7873,6 +7920,7 @@ class H(BaseHTTPRequestHandler):
         except Exception as e:
             return self._send(500, {"error": str(e)})
 
+    @self_data_request
     def do_DELETE(self):
         self._extra_headers = []
         u = urllib.parse.urlparse(self.path)
@@ -7897,13 +7945,15 @@ class H(BaseHTTPRequestHandler):
 def _reconcile_permissions():
     """Bring Homestead's own ClusterRole up to this release, before anything needs it."""
     try:
-        result = SELF.reconcile()
+        with self_data_activity():
+            result = SELF.reconcile()
     except Exception as error:
         print(f"permissions: not checked ({str(error)[:120]})", flush=True)
         return
     print(f"permissions: {result['state']} - {result['detail']}", flush=True)
     try:
-        adopted = SELF.adopt_old_keys()
+        with self_data_activity():
+            adopted = SELF.adopt_old_keys()
         if adopted.get("changed"):
             print(f"moved {adopted['changed']} objects' keys to {NAMES.DOMAIN}", flush=True)
     except Exception as error:
@@ -7934,7 +7984,8 @@ def _upgrade_node_probe():
     that simply has no probe - not a reason to refuse to start.
     """
     try:
-        result = PROBE.reconcile(HOMESTEAD_VERSION)
+        with self_data_activity():
+            result = PROBE.reconcile(HOMESTEAD_VERSION)
     except Exception as error:
         print(f"node probe: not updated ({str(error)[:120]})", flush=True)
         return
@@ -7942,7 +7993,8 @@ def _upgrade_node_probe():
         print(f"node probe: {result['detail']}", flush=True)
     try:
         for attempt in range(7):
-            result = ALLOCATION_PROBE.reconcile(HOMESTEAD_VERSION)
+            with self_data_activity():
+                result = ALLOCATION_PROBE.reconcile(HOMESTEAD_VERSION)
             if result["state"] != "waiting" or attempt == 6:
                 break
             # Background read-only waiting, never retry an uncertain PATCH.
@@ -7958,10 +8010,11 @@ def _samba_loop():
     while True:
         if LEADER.is_leader():
             try:
-                state = samba_state()
-                if state.get("name") == "samba" and state.get("installed"):
-                    install_samba()
-                result = SHARES.reconcile_samba(SAMBA_IMAGE)
+                with self_data_activity():
+                    state = samba_state()
+                    if state.get("name") == "samba" and state.get("installed"):
+                        install_samba()
+                    result = SHARES.reconcile_samba(SAMBA_IMAGE)
                 beat("samba", 60, leader_only=True)
                 if result.get("state") == "repaired":
                     print("network shares: restored SMB settings from the share inventory", flush=True)
@@ -7969,7 +8022,8 @@ def _samba_loop():
                 beat("samba", 60, error, leader_only=True)
                 print(f"network shares: {str(error)[:180]}", flush=True)
             try:
-                nfs_result = reconcile_nfs()
+                with self_data_activity():
+                    nfs_result = reconcile_nfs()
                 if nfs_result.get("state") == "updated":
                     print("network shares: restored NFS exports from the share inventory", flush=True)
             except Exception as error:
