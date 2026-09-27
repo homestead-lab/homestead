@@ -1133,6 +1133,12 @@ window.importRemove = async (name, state) => {
   const running = state === "running";
   const plan = await api("/api/imports/cleanup-plan", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }) }).catch(() => ({ workload: "", volume: "", volume_created: false, volumes: [], known: false }));
+  if (plan.journalled) {
+    modal(`Remove import Job · ${name}`, UI.lead("Remove the copy Job after a verified successful import. The app, Services and all volumes stay in place.") +
+      UI.callout("info", "Incomplete import?", "Open Recent jobs → Inspect import. An active or uncertain copy cannot be removed here.") +
+      UI.actions(UI.cancel("Keep it") + UI.button("Remove completed Job", `importRemoveNow('${esc(name)}',this)`, {kind:"danger",id:"imr_go"})));
+    return;
+  }
   // An import can have filled several volumes; every one it created is offered.
   const claims = plan.volumes?.length ? plan.volumes
     : plan.volume ? [{ name: plan.volume, created: plan.volume_created }] : [];
@@ -2086,15 +2092,18 @@ window.confirmImport = async () => {
   try {
     const result = await api("/api/import", {method:"POST", headers:{"Content-Type":"application/json"},
       body:JSON.stringify({...review.config, capacity_token:review.capacity_token, confirm_capacity:true})});
+    if (result.operation) window.noteOperation?.(result.operation);
     IMPORT_REVIEW = null;
-    toast(result.job ? "Copy started; the application stays stopped" : "Imported application created stopped", "ok");
+    toast(result.job ? "Copy started; the application stays stopped" : "Import configuration saved", "ok");
     closeModal(); resetPaint(); viewImport();
   } catch (e) {
     IMPORT_REVIEW = null; // An unknown outcome is never an automatic retry.
-    toast(e.message + " — check Import and Containers before trying again; any created volumes are kept.", "bad");
+    toast(e.message + " — inspect Recent jobs before trying again; any created volumes are kept.", "bad");
     $("#importGo").textContent = "Review again";
     $("#importGo").disabled = false;
     $("#importGo").onclick = () => importReview(review.config);
+  } finally {
+    window.refreshOperations?.(true);
   }
 };
 

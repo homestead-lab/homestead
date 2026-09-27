@@ -52,7 +52,7 @@ function renderOperations() {
       <button class="btn sm" onclick="openOperation('${esc(operation.href || "/")}','${esc(operation.id || "")}')">Open</button>
       <button class="btn sm" data-tip="Every step it has taken, and the output of what does its work" onclick="operationLog('${esc(operation.id)}')">${icon("log")}Log</button>
       ${operation.power_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview('${esc(operation.id)}')">Inspect outcome</button>` : ""}
-      ${operation.mutation_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview('${esc(operation.id)}',true)">Inspect ${operation.kind === "k3s-cluster" ? "batch" : "save"} outcome</button>` : ""}
+      ${operation.mutation_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview('${esc(operation.id)}',${operation.kind === 'import-create' ? "'import'" : 'true'})">Inspect ${operation.kind === "k3s-cluster" ? "batch" : operation.kind === "import-create" ? "import" : "save"} outcome</button>` : ""}
       ${operation.resumable ? `<button class="btn sm pri" data-need="admin" data-tip="Run the steps that are left, from the one it stopped at" onclick="resumeOperation('${esc(operation.id)}')">Carry on</button>` : ""}
       ${operation.cleanable ? `<button class="btn sm ${operation.tracking_only ? "" : "danger"}" data-need="admin" data-tip="${operation.tracking_only ? "Review retained resources and recovery choices; nothing is deleted" : "Says what it left behind and what cleanup removes"}" onclick="cancelOperation('${esc(operation.id)}')">${operation.tracking_only ? "Review retained resources" : "Clean up"}</button>` : ""}
       ${operation.cancellable ? `<button class="btn sm danger" data-need="${operation.copy_recovery ? "admin" : "operator"}" data-tip="Reviews what can be stopped or recovered before anything changes" onclick="cancelOperation('${esc(operation.id)}')">${operation.rename_recovery || operation.copy_recovery ? "Inspect outcome" : operation.status === "cancelling" ? "Cancel again" : "Cancel"}</button>` : ""}
@@ -157,7 +157,7 @@ window.powerRecoveryReview = async (id, mutation = false) => {
   POWER_RECOVERY = null;
   const sequence = ++POWER_RECOVERY_SEQ;
   const endpoint=mutation ? "/api/operations/vm-recovery" : "/api/operations/power-recovery";
-  modal(mutation ? "Inspect VM configuration outcome" : "Inspect VM power outcome", '<div id="powerRecoveryLoading" class="empty"><span class="spin2"></span>Checking dispatcher and current VM state…</div>', true, "operation-review");
+  modal(mutation === "import" ? "Inspect import" : mutation ? "Inspect VM configuration outcome" : "Inspect VM power outcome", '<div id="powerRecoveryLoading" class="empty"><span class="spin2"></span>Checking current resources…</div>', true, "operation-review");
   try {
     const review = await api(endpoint + "/preview", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
     if (sequence !== POWER_RECOVERY_SEQ || !$("#powerRecoveryLoading")) return;
@@ -166,6 +166,22 @@ window.powerRecoveryReview = async (id, mutation = false) => {
     if (mutation && !p.blocked && (!Array.isArray(p.resources) || !p.resources.length)) throw new Error("Resource inspection is incomplete. Nothing was resolved.");
     POWER_RECOVERY = {id,...review,endpoint};
     const observed=p.observed || {}, resource=p.resource || {};
+    if (mutation === "import" || p.action === "import-create") {
+      POWER_RECOVERY.importing = true;
+      const kindName = kind => ({PersistentVolumeClaim:"Volume",Deployment:"App",Service:"Network Service",Job:"Copy Job"})[kind] || kind;
+      const writeName = value => ({accepted:"Saved",intent:"Sent; no receipt",uncertain:"Response lost",unverified:"Receipt not verified",refused:"Rejected","not dispatched":"Not sent"})[value] || value;
+      $("#mbody").innerHTML = UI.lead("Inspect what this import left behind. Resolving its record keeps all data and does not start or stop apps.") +
+        UI.callout(p.blocked ? "bad" : "warn", p.blocked ? "Not ready to resolve" : "The import outcome is unverified",
+          p.blocked ? (p.blockers || []).map(esc).join("<br>") : "A sent request may still finish late. Nothing will be retried, started or deleted.") +
+        UI.section("Retained resources", UI.table([{label:"Resource"},{label:"Last request"},{label:"Now"}],
+          (p.resources || []).map(row=>[`${esc(kindName(row.resource.kind))} · ${esc(row.resource.name)}`,esc(writeName(row.last_write)),esc(row.relationship)]))) +
+        UI.more("Identity checks and recovery limits", (p.warnings || []).map(w=>`<p>${esc(w)}</p>`).join("") +
+          (p.resources || []).map(row=>`<p style="overflow-wrap:anywhere">${esc(row.resource.name)}<br>Recorded UID: ${esc(row.expected?.uid || "unverified")}<br>Current UID: ${esc(row.current?.uid || "not found")}</p>`).join("")) +
+        (!p.blocked ? UI.ack("powerRecoveryAck", "I inspected the retained resources and accept that the old request may still finish.", {onchange:"powerRecoveryReady()"}) : "") +
+        UI.actions(UI.cancel("Keep tracking") + UI.button("Resolve as unknown", "powerRecoveryResolve()", {kind:"pri",id:"powerRecoveryApply",disabled:true}));
+      if ($(".modalbox")) $(".modalbox").scrollTop=0;
+      return;
+    }
     $("#mbody").innerHTML = `<div class="update-review">
       <div class="reviewbox"><b>${mutation ? "Resolve tracking, keep resources" : "Resolve tracking, not power"}</b><p class="small">${esc(resource.namespace || "")} / ${esc(resource.name || "VM job")} · requested ${esc(p.action || "VM change")} · ${esc(p.dispatch_phase || "dispatcher busy")}</p>
         <p class="small">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>
@@ -188,7 +204,7 @@ window.powerRecoveryReview = async (id, mutation = false) => {
   }
 };
 window.powerRecoveryReady = () => {
-  const ready=!!(POWER_RECOVERY && !POWER_RECOVERY_BUSY && !POWER_RECOVERY.plan.blocked && $("#powerRecoveryAck")?.checked && $("#powerRecoveryName")?.value===POWER_RECOVERY.plan.confirm);
+  const ready=!!(POWER_RECOVERY && !POWER_RECOVERY_BUSY && !POWER_RECOVERY.plan.blocked && $("#powerRecoveryAck")?.checked && (POWER_RECOVERY.importing || $("#powerRecoveryName")?.value===POWER_RECOVERY.plan.confirm));
   if ($("#powerRecoveryApply")) $("#powerRecoveryApply").disabled=!ready;
   return ready;
 };

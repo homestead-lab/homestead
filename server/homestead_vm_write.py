@@ -10,6 +10,9 @@ import re
 import urllib.error
 
 RESOURCES = {
+    ("apps/v1", "deployments"): "Deployment",
+    ("batch/v1", "jobs"): "Job",
+    ("v1", "services"): "Service",
     ("v1", "persistentvolumeclaims"): "PersistentVolumeClaim",
     ("v1", "secrets"): "Secret",
     ("kubevirt.io/v1", "virtualmachines"): "VirtualMachine",
@@ -37,7 +40,7 @@ def operation_recorder(ops, ident):
             item = next((row for row in items if row.get("id") == ident), None)
             if not item or item.get("status") in ops.TERMINAL or item.get("status") == ops.CANCELLING:
                 raise WriteFailure("VM mutation job has ended or is unavailable")
-            if item.get("kind") not in ("vm-create", "vm-edit", "k3s-cluster"):
+            if item.get("kind") not in ("vm-create", "vm-edit", "k3s-cluster", "import-create"):
                 raise WriteFailure("This job cannot record VM resource mutations")
             entries = copy.deepcopy(item["ref"].get("writes", []))
             if not isinstance(entries, list):

@@ -1,7 +1,9 @@
 import copy
 import json
 import sys
+import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -12,6 +14,11 @@ import homestead_imports as imports
 
 class ContainerImportStorageTests(unittest.TestCase):
     def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        journal = mock.patch.object(imports.OPS, "DATA_DIR", temporary.name)
+        journal.start()
+        self.addCleanup(journal.stop)
         self.sent = []
         self.created = []
 
@@ -88,6 +95,11 @@ class ImportJobRemovalTests(unittest.TestCase):
     def setUp(self):
         self.sent = []
         self.job = {}
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        journal = mock.patch.object(imports.OPS, "DATA_DIR", temporary.name)
+        journal.start()
+        self.addCleanup(journal.stop)
         self.deployments = set()
 
         def get(path):

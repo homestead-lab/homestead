@@ -174,11 +174,13 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
 
 
 def _vm_targets(kind, ref):
-    if kind in ("workload-rename", "workload-copy"):
+    if kind in ("workload-rename", "workload-copy", "import-create"):
         targets = {(ref.get("namespace"), "deployment/" + name) for name in (ref.get("name"), ref.get("new_name")) if name}
         if kind == "workload-copy":
             targets |= {(ref.get("namespace"), "pvc/" + move[key]) for move in ref.get("moves", [])
                         for key in ("from", "to") if move.get(key)}
+        if kind == "import-create":
+            targets |= {(ref.get("namespace"), "pvc/" + name) for name in ref.get("claims", {})}
         return targets
     names = [row.get("name") for row in ref.get("nodes", [])] if kind == "k3s-cluster" else [ref.get("name")]
     return {(ref.get("namespace"), name) for name in names if name}
@@ -226,7 +228,7 @@ def _public(item):
     if item.get("kind") == "vm-power":
         out["cancellable"] = out["cancellable"] and item.get("ref", {}).get("phase") in ("prepared", "accepted")
         out["power_recovery"] = item.get("status") not in TERMINAL and item.get("ref", {}).get("phase") in ("uncertain", "dispatching")
-    if item.get("kind") in ("vm-create", "vm-edit"):
+    if item.get("kind") in ("vm-create", "vm-edit", "import-create"):
         out["cancellable"] = False  # a configuration write cannot be undone by forgetting its job
         out["mutation_recovery"] = bool(item.get("ref", {}).get("retain_resources"))
     if item.get("kind") == "k3s-cluster" and item.get("ref", {}).get("dispatch_protocol") == 2:
@@ -256,6 +258,8 @@ def _receipt_needed(item):
     if not POWER_RECEIPTS.protected(item.get("kind"), item.get("ref") or {}):
         return False
     ref = item.get("ref") or {}
+    if item.get("kind") == "import-create" and item.get("status") == "succeeded" and ref.get("job_uid") and not ref.get("helper_removed"):
+        return True  # completed helper cleanup still needs its exact receipt
     return bool(ref.get("retain_resources") or float(ref.get("review_expires") or 0) >= time.time())
 
 

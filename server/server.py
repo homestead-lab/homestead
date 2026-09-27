@@ -26,6 +26,7 @@ import homestead_allocation_capacity as ALLOCATION_CAPACITY
 import homestead_allocation_evidence as ALLOCATION_EVIDENCE
 import homestead_rename as RENAME
 import homestead_copy_job as COPY_JOB
+import homestead_import_job as IMPORT_JOB
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -41,7 +42,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.191")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.192")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2270,7 +2271,7 @@ def import_capacity_plan(body):
                 "The application stays stopped while copying. Starting it later requires a fresh capacity check."]
     capacity = {"blocked": any(row["capacity"]["blocked"] for row in phases),
                 "requires_confirmation": True, "warnings": warnings}
-    context = {"action": "import", **inventory, "prepared": prepared}
+    context = {"action": "import", "namespace": DEFAULT_NS, **inventory, "prepared": prepared}
     return cfg, prepared, phases, capacity, context
 
 
@@ -2289,12 +2290,13 @@ def reviewed_import(body):
     # inventory from before it. Registry/network/claim drift needs new review.
     _, prepared, _, capacity, context = import_capacity_plan(body)
     CAPACITY_REVIEW.enforce(body, capacity, context)
+    context = copy.deepcopy(context)  # persisted logo must not mutate the signed review
     if prepared["deployment"]:
         annotations = prepared["deployment"]["metadata"].setdefault("annotations", {})
         if cfg.get("icon"):
             annotations[NAMES.key("icon")] = cfg["icon"]
             annotations[NAMES.key("icon-source")] = cfg.get("icon_source", "")
-    return IMP.commit_import(prepared)
+    return IMPORT_JOB.dispatch(body, prepared, context, kget, ksend, OPS, create_pvc, copy_admission)
 
 
 def image_update_capacity_plan(body, action):
@@ -3860,7 +3862,7 @@ def shared_storage_classes(rows=None):
             if class_selectable(row) and not row["migratable"]]
 
 
-def create_pvc(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce"):
+def create_pvc(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce", send=None):
     sc = sc or STORAGE_CLASS
     if access_mode == "ReadWriteMany":
         chosen = next((row for row in storage_classes() if row["name"] == sc), None)
@@ -3875,7 +3877,7 @@ def create_pvc(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce"):
             "spec": {"accessModes": [access_mode],
                      "storageClassName": sc,
                      "resources": {"requests": {"storage": f"{size_gb}Gi"}}}}
-    return ksend("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", body)
+    return (send or ksend)("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", body)
 
 
 def ensure_claim(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce"):
@@ -4728,6 +4730,8 @@ OPS.RESOLVERS[COPY_JOB.KIND] = lambda item: COPY_JOB.resolve(item, kget, ksend, 
 OPS.CANCELLERS[COPY_JOB.KIND] = (lambda item: COPY_JOB.recovery_plan(item, kget, OPS),
                                 lambda item, options: COPY_JOB.recovery_run(item, options, kget, ksend, OPS))
 OPS.CLEANUPS.update((COPY_JOB.KIND, "restructure"))
+OPS.RESOLVERS[IMPORT_JOB.KIND] = lambda item: IMPORT_JOB.status(item, kget)
+OPS.CANCELLERS[IMPORT_JOB.KIND] = (IMPORT_JOB.cancel_plan, IMPORT_JOB.cancel_run)
 import homestead_reclass as RECLASS
 import homestead_vmstore as VMSTORE
 import homestead_nodeshell as NODESHELL
@@ -6899,6 +6903,8 @@ class H(BaseHTTPRequestHandler):
                     b.get("name"), b.get("paths") or [], b.get("seconds", 25)))
             if p == "/api/imports/delete":
                 plan = IMP.import_cleanup_plan(b.get("name"))
+                if plan.get("journalled") and any(b.get(key) for key in ("remove_workload", "remove_volume", "remove_volumes")):
+                    raise ValueError("This import retains workloads and volumes. Manage them separately after inspecting the copy.")
                 made = {row["name"] for row in plan["volumes"] if row["created"]}
                 # The request names claims; asking for all of them is the old
                 # boolean, which an import with one volume still sends.
@@ -6912,6 +6918,8 @@ class H(BaseHTTPRequestHandler):
                 if b.get("remove_workload") and plan["workload"]:
                     guard_managed_smb(plan["namespace"], plan["workload"])
                 result = IMP.delete_import(b.get("name"))
+                if result.get("journalled"):
+                    return self._send(200, {**result, "removed": [], "releasing": []})
                 removed = []
                 if b.get("remove_workload") and plan["workload"]:
                     ns, name = plan["namespace"], plan["workload"]
@@ -7450,11 +7458,6 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, preview_import(b))
             if p == "/api/import":
                 result = reviewed_import(b)
-                if result["job"]:
-                    result["operation"] = OPS.start(
-                        "import", f"Import {b['name']}",
-                        {"kind": "Job", "name": result["job"], "namespace": DEFAULT_NS},
-                        "/import", {"namespace": DEFAULT_NS, "name": result["job"]})
                 return self._send(200, result)
             if p == "/api/operations/resume":
                 return self._send(200, OPS.resume(b.get("id", "")))

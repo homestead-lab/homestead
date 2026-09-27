@@ -165,6 +165,7 @@ def register(ops):
             ("helm", _ref_job(title="Helm")),
             ("restructure", _ref_job(key="job", title="Copy")),
             ("workload-copy", copy_job),
+            ("import-create", copy_job),
             ("reclass", _ref_job(key="job", title="Copy and check")),
             ("self-data-move", _ref_job(key="job", title="Copy")),
             ("vm-disk-import", disk_import),
