@@ -6,8 +6,10 @@ import { chromium } from "playwright";
 import { readdir, readFile } from "node:fs/promises";
 
 const dir = "release-assets";
-const BASIC = ["#000000", "#aa0000", "#00aa00", "#aa5500", "#0000aa", "#aa00aa", "#00aaaa", "#aaaaaa",
-  "#555555", "#ff5555", "#55ff55", "#ffff55", "#5555ff", "#ff55ff", "#55ffff", "#ffffff"];
+// A soft palette (Tango's), with black as the frame's own so the screen
+// around a box blends into it.
+const BASIC = ["#101014", "#cc3e44", "#4e9a06", "#c4a000", "#3465a4", "#75507b", "#06989a", "#d3d7cf",
+  "#555753", "#ef2929", "#8ae234", "#fce94f", "#729fcf", "#ad7fa8", "#34e2e2", "#eeeeec"];
 const cube = n => {
   if (n < 16) return BASIC[n];
   if (n >= 232) { const v = 8 + (n - 232) * 10; return `rgb(${v},${v},${v})`; }
@@ -16,17 +18,34 @@ const cube = n => {
 };
 const escape = text => text.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
-/* Terminal text with SGR colour codes -> HTML spans. */
+/* Just the box: blank rows above and below dropped (their colour codes kept,
+   as later rows rely on them), and the margin every row shares taken off. */
+function crop(ans) {
+  const visible = line => line.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+  const lines = ans.replace(/\n+$/, "").split("\n");
+  const used = lines.map((line, i) => (visible(line).trim() ? i : -1)).filter(i => i >= 0);
+  if (!used.length) return ans;
+  const first = used[0], last = used[used.length - 1];
+  const codes = lines.slice(0, first).map(line => (line.match(/\x1b\[[0-9;]*m/g) || []).join("")).join("");
+  const kept = lines.slice(first, last + 1);
+  const margin = Math.min(...kept.filter(line => visible(line).trim()).map(line => line.match(/^ */)[0].length));
+  return codes + kept.map(line => line.slice(Math.min(margin, line.match(/^ */)[0].length))).join("\n");
+}
+
+/* Terminal text with SGR colour codes -> HTML: a row per line, each run of
+   one colour a cell as tall as the row, so backgrounds meet with no gaps. */
 function toHtml(ans) {
   const state = { fg: null, bg: null, bold: false, reverse: false };
-  let html = "";
+  let html = "<div class=row>";
   for (const part of ans.split(/(\x1b\[[0-9;]*m)/)) {
     const sgr = part.match(/^\x1b\[([0-9;]*)m$/);
     if (!sgr) {
       if (!part) continue;
       let fg = state.fg || "#c8c8c8", bg = state.bg || "transparent";
       if (state.reverse) [fg, bg] = [bg === "transparent" ? "#101014" : bg, fg];
-      html += `<span style="color:${fg};background:${bg};${state.bold ? "font-weight:700;" : ""}">${escape(part.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ""))}</span>`;
+      const style = `color:${fg};background:${bg};${state.bold ? "font-weight:700;" : ""}`;
+      const lines = part.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").split("\n");
+      html += lines.map(line => line ? `<span style="${style}">${escape(line)}</span>` : "").join("</div><div class=row>");
       continue;
     }
     const codes = (sgr[1] || "0").split(";").map(Number);
@@ -49,7 +68,7 @@ function toHtml(ans) {
       }
     }
   }
-  return html;
+  return html + "</div>";
 }
 
 const files = (await readdir(dir).catch(() => [])).filter(f => /^tui-.+\.ans$/.test(f));
@@ -58,9 +77,13 @@ const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1000, height: 700 }, deviceScaleFactor: 2 });
 for (const file of files) {
   const ans = await readFile(`${dir}/${file}`, "utf8");
-  await page.setContent(`<html><body style="margin:0;background:#101014">
-    <div id="term" style="display:inline-block;padding:18px 20px;background:#101014;border-radius:10px">
-      <pre style="margin:0;font:14px/1.25 'DejaVu Sans Mono',Menlo,Consolas,monospace;color:#c8c8c8">${toHtml(ans)}</pre></div></body></html>`);
+  await page.setContent(`<html><head><style>
+      body{margin:0;background:#101014}
+      #term{display:inline-block;padding:18px 20px;background:#101014;border-radius:10px;
+        font:14px 'DejaVu Sans Mono',Menlo,Consolas,monospace;color:#c8c8c8}
+      .row{height:18px;line-height:18px;white-space:pre}
+      .row span{display:inline-block;height:18px;vertical-align:top}
+    </style></head><body><div id="term">${toHtml(crop(ans))}</div></body></html>`);
   const name = `homestead-${file.replace(/\.ans$/, "")}.png`;
   await page.locator("#term").screenshot({ path: `${dir}/${name}` });
   console.log(`rendered ${name}`);

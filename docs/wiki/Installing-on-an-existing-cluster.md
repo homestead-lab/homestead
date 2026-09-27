@@ -2,7 +2,17 @@
 
 Already run RKE2, k3s, kubeadm, Talos or a managed Kubernetes, and look after
 it with Headlamp, Lens or kubectl? Homestead installs beside whatever is there
-and changes nothing until you ask it to. Headlamp can stay: Homestead's
+and changes nothing until you ask it to.
+
+On a **k3s or RKE2 server**, the one-line installer does it for you - it
+finds the cluster, adds Longhorn if it is missing, and installs Homestead:
+
+```bash
+curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
+```
+
+For anything else - or to choose every value yourself - use Helm or the
+manifest below. Headlamp can stay: Homestead's
 **Resources** page covers the same ground (every kind, YAML, events, logs), and
 the rest of Homestead adds the homelab layer on top.
 
