@@ -106,8 +106,8 @@ setting restarts Homestead, not the host.
 
 The Service is plain HTTP, for your LAN. To reach Homestead from elsewhere - and
 to install it as an app with push notifications on your phone - put it behind
-HTTPS. The README's
-[Cloudflare Tunnel section](https://github.com/wjcloudy/homestead#publishing-through-a-cloudflare-tunnel)
+HTTPS. The reference's
+[Cloudflare Tunnel section](https://github.com/wjcloudy/homestead/blob/main/docs/reference.md#publishing-through-a-cloudflare-tunnel)
 covers doing that safely: Homestead can change anything in the cluster, so it
 belongs behind Cloudflare Access (or a VPN), never published bare.
 
