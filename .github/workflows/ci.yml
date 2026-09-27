@@ -45,9 +45,10 @@ jobs:
             release-assets/*.ans
             release-assets/*.png
   dialogs:
-    # Every dialog opened against the demo data at a desktop and a phone
-    # width, and checked against docs/design.md: content wider than the
-    # dialog, text under 10px, or a dialog that no longer opens fails here.
+    # Every dialog and every page opened against the demo data at a desktop
+    # and a phone width, and checked against docs/design.md: content wider
+    # than the screen or dialog, text under 10px, or one that no longer
+    # opens fails here.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -61,11 +62,16 @@ jobs:
           PORT=4173 WEBROOT=web DATA_DIR=/tmp/homestead-demo-data python server/server.py >/tmp/homestead-demo.log 2>&1 &
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:4173/ >/dev/null && break; sleep 1; done
           node scripts/audit_dialogs.mjs
+      - name: Check every page
+        if: always()
+        run: node scripts/audit_pages.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
-          name: dialogs
-          path: release-assets/dialogs
+          name: dialogs-and-pages
+          path: |
+            release-assets/dialogs
+            release-assets/pages
   test-and-build:
     runs-on: ubuntu-latest
     steps:
