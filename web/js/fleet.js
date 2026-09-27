@@ -106,7 +106,7 @@ function fleetMenuHtml() {
       esc(m.self ? `this one · v${m.version}` : m.reachable ? `v${m.version}` : "not answering"))).join("")}
     <div class="fleet-sep"></div>
     <button type="button" data-need="admin" onclick="fleetMenuClose();fleetLink()">${icon("plus")}<span class="fleet-item"><b>Link a cluster</b></span></button>
-    <button type="button" onclick="fleetMenuClose();fleetManage()">${icon("gear")}<span class="fleet-item"><b>Manage clusters</b></span></button>`;
+    <button type="button" onclick="fleetOpenSettings()">${icon("gear")}<span class="fleet-item"><b>Manage clusters</b></span></button>`;
 }
 
 window.fleetMenuClose = () => {
@@ -157,37 +157,97 @@ window.fleetShowAll = () => {
 };
 
 /* ---------------------------------------------------------------- manage */
-window.fleetManage = async () => {
-  modal("Clusters", '<div class="empty"><span class="spin2"></span> Asking each cluster…</div>', true);
-  let view;
-  try { view = await api("/api/fleet"); FLEET.view = view; }
-  catch (e) {
-    $("#mbody").innerHTML = UI.callout("bad", "Could not read the linked clusters.", esc(e.message)) + UI.actions(UI.cancel("Close"));
-    return;
-  }
-  // One line each: the cluster, where it is and what it runs, and its button.
-  const rows = view.members.map(m => `<li>
+/* Linked clusters live in Settings: the switch's "Manage clusters" and the
+   Import page both lead there. */
+window.fleetOpenSettings = () => {
+  fleetMenuClose();
+  closeModal();
+  settingsTab("fleet");
+  if (STATE.view === "settings") fleetSettingsPaint(); else go("settings");
+};
+window.fleetManage = window.fleetOpenSettings;
+
+// One line each: the cluster, where it is and what it runs, and its button.
+function fleetMembersHtml(view) {
+  return view.members.map(m => `<li>
     <span class="fleet-dot ${m.self || m.reachable ? (m.compatible === false ? "warn" : "ok") : "bad"}" aria-hidden="true"></span>
     <div class="fleet-row"><b>${esc(m.name)}</b>${m.self ? ` ${UI.chip("this one")}` : ""}${m.compatible === false ? ` ${UI.chip("update needed", "warn")}` : ""}
       <span class="fleet-sub"${m.self || m.reachable ? "" : ` title="${esc(m.error || "")}"`}><span class="mono">${esc(m.url || "no address")}</span>
         · ${m.self || m.reachable ? `v${esc(m.version)}` : "not answering"}</span></div>
     ${m.self ? (view.linked ? UI.button("Leave", "fleetLeave()", { attrs: 'data-need="admin"' }) : "")
       : UI.button("Unlink", `fleetUnlink('${esc(m.id)}','${esc(m.name)}')`, { attrs: 'data-need="admin"' })}</li>`).join("");
-  $("#mbody").innerHTML = `<div class="ui-stack">
-    ${UI.lead(view.linked
-      ? "Signed in here, you can open any of these from the top bar, see them together under All clusters, and move containers and VMs between them."
-      : "Link another Homestead to open it from here - even when only this one is reachable from outside - and to see and move workloads across both.")}
-    <ul class="fleet-list">${rows}</ul>
+}
+
+// Clusters added for moves with a stored account, before linking existed.
+function fleetLegacyHtml(rows) {
+  return rows.map(r => `<li>
+    <span class="fleet-dot" aria-hidden="true"></span>
+    <div class="fleet-row"><b>${esc(r.name)}</b>
+      <span class="fleet-sub">${r.linked_as ? `linked as ${esc(r.linked_as.name)}` : `<span class="mono">${esc(r.user)}@${esc(r.url)}</span>`}</span></div>
+    <div class="row nowrap">${UI.button("Forget", `fleetForgetLegacy('${esc(r.name)}')`, { attrs: 'data-need="admin"' })}
+      ${UI.button(r.linked_as ? "Use the link" : "Link", `fleetLinkLegacy('${esc(r.name)}')`, { kind: "pri", attrs: 'data-need="admin"' })}</div></li>`).join("");
+}
+
+window.fleetSettingsPaint = async () => {
+  const host = $("#fleetCard");
+  if (!host) return;
+  const [view, legacy] = await Promise.all([api("/api/fleet").catch(() => null), api("/api/fleet/legacy").catch(() => [])]);
+  if (!$("#fleetCard")) return;
+  if (view) FLEET.view = view;
+  const all = fleetMode() === "all";
+  const mode = (value, label) => `<button type="button" class="${(value === "all") === all ? "on" : ""}" aria-pressed="${(value === "all") === all}"
+    onclick="fleetSetMode('${value}')">${label}</button>`;
+  host.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">Linked clusters</div>
+      <div class="csub">Other Homesteads managed from this one - even when only this one is reachable from outside.</div></div>
+      ${UI.button("Link a cluster", "fleetLink()", { kind: "pri", attrs: 'data-need="admin"' })}</div>
+    ${view ? `<ul class="fleet-list">${fleetMembersHtml(view)}</ul>` : UI.callout("bad", "Could not read the linked clusters.")}
+    ${view?.linked ? UI.section("How they show", `<div class="seg fleet-mode" role="group" aria-label="How linked clusters show">
+        ${mode("one", "One cluster at a time")}${mode("all", "All clusters together")}</div>
+      <p class="ui-help">${all
+        ? "Containers, Virtual Machines, Nodes and Volumes list every cluster, each row tagged with its own. The switch at the start of the top bar still opens one cluster on its own."
+        : "The switch at the start of the top bar opens any cluster here, with your sign-in and role. Its All clusters shows them together."}</p>`) : ""}
+    ${legacy.length ? UI.section("Added before linking", `<p class="ui-help">Added on Import for moves, with an account kept here.
+      Link each to manage it from here too; its password is then deleted, and moves already made keep working.</p>
+      <ul class="fleet-list">${fleetLegacyHtml(legacy)}</ul>`) : ""}
     ${UI.section("Where the others reach this Homestead", UI.field("Address",
-      `<div class="fleet-address"><input id="fleetAddress" value="${esc(view.address || view.suggested_address || "")}" placeholder="http://192.0.2.242:8088">
+      `<div class="fleet-address"><input id="fleetAddress" value="${esc(view?.address || view?.suggested_address || "")}" placeholder="http://192.0.2.242:8088">
       ${UI.button("Save", "fleetSaveAddress()", { attrs: 'data-need="admin"' })}</div>`,
-      { help: "Its LAN address and port. Every linked cluster uses it to relay pages and consoles to this one." }))}
+      { help: "Its LAN address and port. Linked clusters use it to relay pages and consoles to this one." }))}
     ${UI.more("How linking works", `<p>Linked Homesteads share a key that signs every request between them. Nobody's
       password is kept: the admin account asked for when linking is used once. A person signed in to one cluster keeps
       their role on the others, and each cluster applies its own rules to it.</p>
-      <p>Unlinking a cluster gives the rest a new key, so the one that left can no longer act for them.</p>`)}
-    ${UI.actions(UI.cancel("Close") + UI.button("Link a cluster", "fleetLink()", { kind: "pri", attrs: 'data-need="admin"' }))}
-  </div>`;
+      <p>Unlinking a cluster gives the rest a new key, so the one that left can no longer act for them.</p>`)}`;
+};
+
+window.fleetSetMode = mode => {
+  setFleetMode(mode);
+  STATE.data.wl = STATE.data.vms = STATE.data.nodes = STATE.data.vols = null;
+  if (window.renderBreadcrumb) renderBreadcrumb(STATE.view, STATE.modalDetail);
+  fleetSettingsPaint();
+};
+
+async function fleetRefreshAfter() {
+  await fleetLoad();
+  if ($("#fleetCard")) fleetSettingsPaint();
+}
+
+window.fleetLinkLegacy = async name => {
+  try {
+    const result = await api("/api/fleet/link-legacy", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, own_url: FLEET.view?.address || "" }) });
+    toast(`${name} is linked as ${result.member?.name || name}`, "ok");
+    await fleetRefreshAfter();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+window.fleetForgetLegacy = async name => {
+  if (!confirm(`Forget ${name}?${String.fromCharCode(10, 10)}Its stored account is deleted. Nothing on that cluster is touched.`)) return;
+  try {
+    await api("/api/move/clusters/remove", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }) });
+    toast(`${name} forgotten`, "ok");
+    await fleetRefreshAfter();
+  } catch (e) { toast(e.message, "bad"); }
 };
 
 window.fleetLink = () => {
@@ -218,8 +278,8 @@ window.fleetLinkSave = async () => {
     const result = await api("/api/fleet/join", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body) });
     toast(`${result.member?.name || "The cluster"} is linked${result.missed?.length ? `; ${result.missed.length} other cluster(s) will catch up when they answer` : ""}`, "ok");
-    await fleetLoad();
-    fleetManage();
+    closeModal();
+    await fleetRefreshAfter();
   } catch (e) {
     toast(e.message, "bad");
     if (go) { go.disabled = false; go.textContent = "Link"; }
@@ -232,8 +292,7 @@ window.fleetUnlink = async (id, name) => {
     const result = await api("/api/fleet/remove", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id }) });
     toast(result.told ? `${name} is unlinked` : `${name} is unlinked here; it did not answer, so it still lists the others until it does`, result.told ? "ok" : "warn");
-    await fleetLoad();
-    fleetManage();
+    await fleetRefreshAfter();
   } catch (e) { toast(e.message, "bad"); }
 };
 
@@ -243,8 +302,7 @@ window.fleetLeave = async () => {
     await api("/api/fleet/leave", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     setFleetMode("one");
     toast("This Homestead stands alone again", "ok");
-    await fleetLoad();
-    closeModal();
+    await fleetRefreshAfter();
   } catch (e) { toast(e.message, "bad"); }
 };
 

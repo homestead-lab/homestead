@@ -22,6 +22,11 @@ relay in `server/server.py` (`_fleet_target`, `_fleet_forward`,
 - **Move to cluster**, in a container's or VM's `…` menu, opens the
   destination at its review of that move: moves are still started by the
   cluster a workload goes to ([Moving between clusters](wiki/Moving-between-clusters.md)).
+- **Settings → Linked clusters** links and unlinks clusters, sets this one's
+  address, and picks one-at-a-time or all-together. Clusters added on Import
+  for moves before linking existed are listed there to link (with their stored
+  account, whose password is then deleted) or forget; the old name stays as an
+  alias, so moves that recorded it carry on.
 - Linked clusters appear on Import as clusters a move can come from, without
   being added there.
 
@@ -134,6 +139,8 @@ with a dialog open go to it.
 | `POST /api/fleet/remove` | admin | Unlink a member |
 | `POST /api/fleet/leave` | admin | Unlink this one |
 | `POST /api/fleet/address` | admin | Where the others reach this one |
+| `GET /api/fleet/legacy` | viewer | Clusters added for moves before linking, and whether each is linked already |
+| `POST /api/fleet/link-legacy` | admin | Link one of those with its stored account, then delete the password |
 
 ## Limits
 

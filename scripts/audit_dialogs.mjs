@@ -113,7 +113,6 @@ const DIALOGS = [
   ["node-reboot", "nodes", "nodePowerReview('harvester-node1','reboot')"],
   ["app-store-app", "store", "click:storeDetails"],
   ["deploy-preview", "deploy", "click:previewYaml"],
-  ["fleet-manage", "workloads", "fleetManage()"],
   ["fleet-link", "workloads", "fleetLink()"],
   ["move-to-cluster", "workloads", "moveToCluster('container','frigate')"],
 ];

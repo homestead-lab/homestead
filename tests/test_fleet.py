@@ -10,6 +10,7 @@ import time
 import unittest
 import urllib.error
 import urllib.parse
+from unittest import mock
 from pathlib import Path
 
 SERVER = Path(__file__).resolve().parents[1] / "server"
@@ -404,3 +405,43 @@ class MoveClientTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LegacyClusterTests(unittest.TestCase):
+    """Clusters added for moves, with a stored account, before linking existed."""
+
+    def setUp(self):
+        import homestead_move as move
+        self.move = move
+        self.a = Cluster("loft", "http://10.0.0.1:8088", {})
+        self.b = Cluster("shed", "http://10.0.0.2:8088", {})
+        wire([self.a, self.b])
+        move.bind(self.a.kube.get, self.a.kube.send, "lab", "2.8.300")
+        move.FLEET = self.a.fleet
+        self.addCleanup(setattr, move, "FLEET", None)
+        move.add_cluster("oldshed", self.b.url, "admin", "secret")
+
+    def test_an_old_cluster_is_listed_for_linking(self):
+        rows = self.move.legacy_clusters()
+        self.assertEqual(["oldshed"], [row["name"] for row in rows])
+        self.assertIsNone(rows[0]["linked_as"])
+
+    def test_linking_it_uses_the_stored_account_then_forgets_the_password(self):
+        result = self.move.link_legacy("oldshed")
+        self.assertEqual("shed", result["member"]["handle"])
+        self.assertEqual(2, len(self.b.fleet.members()))
+        self.assertNotIn("/api/v1/namespaces/lab/secrets/homestead-cluster-oldshed", self.a.kube.objects)
+        self.assertEqual([], self.move.legacy_clusters())
+        # Listed once, as linked; the old name still reaches it for moves that recorded it.
+        self.assertEqual(["shed"], [row["name"] for row in self.move.list_clusters()])
+        row = self.move._cluster("oldshed")
+        self.assertTrue(row["fleet"])
+        self.assertEqual(self.b.url, row["url"])
+
+    def test_one_already_linked_under_another_name_is_not_linked_twice(self):
+        self.a.fleet.join(self.b.url, "admin", "secret")
+        self.assertEqual("shed", self.move.legacy_clusters()[0]["linked_as"]["name"].lower())
+        with mock.patch.object(self.a.fleet, "join") as join:
+            self.move.link_legacy("oldshed")
+        join.assert_not_called()
+        self.assertEqual(["shed"], [row["name"] for row in self.move.list_clusters()])

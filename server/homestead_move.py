@@ -206,9 +206,11 @@ def _secret_name(name):
 def list_clusters():
     """Other Homesteads this one knows about. Never includes their passwords.
 
-    Every linked cluster is one of them, without being added here.
+    Every linked cluster is one of them, without being added here. A cluster
+    added here before linking existed, and since linked, keeps its old name
+    for the moves that recorded it, but is listed once, as linked.
     """
-    rows = _stored_clusters()
+    rows = [row for row in _stored_clusters() if not row.get("alias")]
     if FLEET:
         known = {row["name"] for row in rows}
         try:
@@ -274,8 +276,8 @@ def add_cluster(name, url, user, password):
 
 
 def remove_cluster(name):
-    if any(row.get("fleet") and row["name"] == name for row in list_clusters()):
-        raise ValueError(f"{name} is linked; unlink it from the cluster switcher instead")
+    if any(row.get("fleet") and not row.get("alias") and row["name"] == name for row in _stored_clusters() + list_clusters()):
+        raise ValueError(f"{name} is linked; unlink it under Settings → Linked clusters")
     rows = [row for row in _stored_clusters() if row["name"] != name]
     _save_clusters(rows)
     _tokens.pop(name, None)
@@ -288,10 +290,65 @@ def remove_cluster(name):
 
 
 def _cluster(name):
-    row = next((x for x in list_clusters() if x["name"] == name), None)
+    row = next((x for x in list_clusters() + [r for r in _stored_clusters() if r.get("alias")]
+                if x["name"] == name), None)
     if not row:
         raise ValueError(f"no cluster named {name}")
+    if row.get("fleet") and FLEET:
+        # A linked cluster is reached where it says it is now.
+        member = FLEET.member(row.get("id", ""))
+        if member:
+            row = {**row, "url": member.get("url") or row["url"]}
     return row
+
+
+def legacy_clusters():
+    """Clusters added with a stored account before linking existed, and
+    whether each is already linked under another name."""
+    linked = {}
+    if FLEET:
+        try:
+            linked = {m["url"].rstrip("/"): m for m in FLEET.others()}
+        except Exception:
+            linked = {}
+    out = []
+    for row in _stored_clusters():
+        if row.get("alias") or row.get("fleet"):
+            continue
+        member = linked.get(str(row.get("url", "")).rstrip("/"))
+        out.append({"name": row["name"], "url": row.get("url", ""), "user": row.get("user", ""),
+                    "added": row.get("added", ""),
+                    "linked_as": {"id": member["id"], "name": member.get("name", "")} if member else None})
+    return out
+
+
+def link_legacy(name, own_url=""):
+    """Turn a cluster added with a stored account into a linked one.
+
+    The stored account links it (unless it is linked already), then its
+    password is deleted. Its old name stays, pointing at the link, so a move
+    that recorded it carries on.
+    """
+    if not FLEET:
+        raise ValueError("linking is not available")
+    row = next((r for r in _stored_clusters() if r["name"] == name and not r.get("alias")), None)
+    if not row:
+        raise ValueError(f"no cluster named {name}")
+    member = next((m for m in FLEET.others() if m["url"].rstrip("/") == str(row["url"]).rstrip("/")), None)
+    missed = []
+    if not member:
+        result = FLEET.join(row["url"], row.get("user", ""), _password(name), own_url)
+        member, missed = result["member"], result.get("missed", [])
+    rows = [dict(r, user="", fleet=True, alias=True, id=member["id"]) if r["name"] == name else r
+            for r in _stored_clusters()]
+    _save_clusters(rows)
+    _tokens.pop(name, None)
+    try:
+        ksend("DELETE", f"/api/v1/namespaces/{NS}/secrets/{_secret_name(name)}")
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+    return {"ok": True, "member": member, "missed": missed}
 
 
 def _password(name):
