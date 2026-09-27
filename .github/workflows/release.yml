@@ -33,6 +33,9 @@ jobs:
           python -m unittest discover -s tests -v
           python -m compileall -q server
           for file in web/js/*.js; do node --check "$file"; done
+      - name: Rehearse data moves before publication
+        # Isolated Docker k3s only; fail before pushing any container or chart.
+        run: python3 tests/integration/self_data_cluster.py
       - name: Resolve version
         id: version
         shell: bash

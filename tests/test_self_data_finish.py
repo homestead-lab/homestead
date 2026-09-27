@@ -11,6 +11,9 @@ sys.path.insert(0, os.environ.get("HOMESTEAD_TEST_SERVER_DIR", str(Path(__file__
 import homestead_self_data_anchor as A
 import homestead_self_data_fence as F
 import homestead_self_data_finish as FIN
+import homestead_self_data_execute as E
+import homestead_operations as OPS
+import server
 import homestead_self_data_worker as W
 import homestead_shared as SHARED
 from homestead_storage_journal import Held
@@ -53,6 +56,60 @@ class CleanupTests(unittest.TestCase):
         self.c.objects["/api/v1/namespaces/lab/pods/new-0"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"] = "source"
         restarted = F.Fence(self.c.read, "lab", "homestead", "new-0", "homestead", self.directory)
         with self.assertRaisesRegex(Held, "original data volume"): restarted.inspect()
+
+    def test_completion_clears_copied_job_without_jobs_poll_and_is_idempotent(self):
+        self.finish()
+        self.assertNotIn(OPS._read()[0]["status"], OPS.TERMINAL)
+        with mock.patch.object(OPS, "list_operations", side_effect=AssertionError("No resolver polling")):
+            self.assertTrue(E.reconcile_completed(OPS, self.directory, "lab", "homestead"))
+            E.idle(OPS)
+            saved = OPS._read()[0]
+            self.assertEqual("succeeded", saved["status"])
+            self.assertEqual(100, saved["progress"])
+            self.assertFalse(saved["ref"]["retain_resources"])
+            with mock.patch.object(OPS, "_write", side_effect=AssertionError("Already complete")):
+                self.assertFalse(E.reconcile_completed(OPS, self.directory, "lab", "homestead"))
+
+    def test_completion_never_clears_another_job_or_uncertain_identity(self):
+        self.finish()
+        for key in ("operation", "anchor_uid", "namespace", "deployment", "source", "destination"):
+            original = OPS._read()
+            altered = copy.deepcopy(original); altered[0]["ref"][key] = "different"
+            OPS._write(altered)
+            self.assertFalse(E.reconcile_completed(OPS, self.directory, "lab", "homestead"))
+            with self.assertRaises(Held): E.idle(OPS)
+            OPS._write(original)
+        other = OPS.start("deployment", "Other work", {}, "/containers", {"retain_resources": True})
+        E.reconcile_completed(OPS, self.directory, "lab", "homestead")
+        saved = next(i for i in OPS._read() if i["id"] == other["id"])
+        self.assertEqual("queued", saved["status"])
+        self.assertTrue(saved["ref"]["retain_resources"])
+        with self.assertRaises(Held): E.idle(OPS)
+
+    def test_unproven_completion_or_write_fence_does_not_clear_job(self):
+        self.assertFalse(E.reconcile_completed(OPS, self.directory, "lab", "homestead"))
+        with self.assertRaises(Held): E.idle(OPS)
+        self.finish()
+        with mock.patch.object(OPS, "WRITE_GUARD", side_effect=Held("Source is fenced")):
+            with self.assertRaises(Held): E.reconcile_completed(OPS, self.directory, "lab", "homestead")
+        with self.assertRaises(Held): E.idle(OPS)
+
+    def test_next_prepare_reconciles_before_guard_without_resolver_poll(self):
+        self.finish()
+        def start(*_):
+            E.idle(OPS)
+            return {"id": "next"}
+        with mock.patch.object(server, "DATA_DIR", self.directory), \
+             mock.patch.object(server.SELF, "NS", "lab"), \
+             mock.patch.object(server, "_require_no_data_handoff"), \
+             mock.patch.object(server, "homestead_data_volume", return_value={"classes": [{"name": "next", "shareable": False}]}), \
+             mock.patch.object(server, "_self_data_helper_image", return_value=({}, "image")), \
+             mock.patch.object(server, "get_app_settings", return_value={"thresholds": {"memory": {"critical": 88}}}), \
+             mock.patch.object(server.SELF_DATA_PREPARE, "review", return_value=({}, {}, {}, {"destination": "next"})), \
+             mock.patch.object(server.SELF_DATA_PREPARE, "start", side_effect=start), \
+             mock.patch.object(OPS, "list_operations", side_effect=AssertionError("No resolver polling")):
+            result = server.self_data_preparation({"storage_class": "next"}, "admin", start=True)
+        self.assertEqual("next", result["operation"]["id"])
 
     def test_new_move_marker_revokes_cached_completion(self):
         self.finish(); self.fence.inspect()
