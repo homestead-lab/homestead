@@ -32,6 +32,7 @@ import homestead_operations as OPS
 import homestead_storage_guard as STORAGE_GUARD
 import homestead_self_data_fence as SELF_DATA_FENCE
 import homestead_self_data_worker as SELF_DATA_WORKER
+import homestead_self_data_review as SELF_DATA_REVIEW
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
 API = "https://kubernetes.default.svc"
@@ -5240,6 +5241,48 @@ def self_data_handoff_status(operation):
         return SELF_DATA_WORKER.unavailable_status(operation)
 
 
+def preview_self_data_move(body, actor):
+    """Read-only final review for a prepared, bound destination.
+
+    Provisioning and execution are connected separately. Never accept a worker
+    image, capacity receipt, actor or cluster identity from the request body.
+    """
+    try:
+        # Read the saved job snapshot, not list_operations(): polling resolvers
+        # can change workloads or write job history during an alleged preview.
+        jobs = OPS._read()
+        if any(item.get("status") not in OPS.TERMINAL or item.get("ref", {}).get("retain_resources") for item in jobs):
+            raise SELF_DATA_FENCE.Held("Finish running jobs and review retained recovery jobs before moving Homestead's data")
+        ns = SELF.NS
+        cache = {}
+        def read(path):
+            if path not in cache: cache[path] = copy.deepcopy(kget(path))
+            return copy.deepcopy(cache[path])
+        try:
+            read(f"/api/v1/namespaces/{ns}/configmaps/{NAMES.BRAND}-data-handoff")
+        except urllib.error.HTTPError as error:
+            if error.code != 404: raise
+        else:
+            raise SELF_DATA_FENCE.Held("An earlier data move record exists; review it before starting another move")
+        pod_name = _dns_name(SELF.POD, "Homestead pod")
+        pod = read(f"/api/v1/namespaces/{ns}/pods/{pod_name}")
+        containers = [c for c in pod.get("spec", {}).get("containers", []) if c.get("name") == NAMES.BRAND]
+        statuses = [c for c in pod.get("status", {}).get("containerStatuses", []) if c.get("name") == NAMES.BRAND]
+        if len(containers) != 1 or len(statuses) != 1 or not statuses[0].get("ready") or not statuses[0].get("state", {}).get("running"):
+            raise SELF_DATA_FENCE.Held("The running Homestead image is not ready to be used for this move")
+        digest_match = re.search(r"(?:^|@|://)(sha256:[a-f0-9]{64})$", statuses[0].get("imageID", ""))
+        if not digest_match:
+            raise SELF_DATA_FENCE.Held("The running Homestead image digest is unavailable; wait for it before reviewing")
+        image = UPDATES._immutable(containers[0]["image"], digest_match.group(1))
+        result = SELF_DATA_REVIEW.Review(read, ns, NAMES.BRAND, actor=actor, image=image,
+            threshold=get_app_settings()["thresholds"]["memory"]["critical"], source_pod=pod, data_dir=DATA_DIR, clock=time.time).preview(body)
+        return result
+    except SELF_DATA_FENCE.Held:
+        raise
+    except Exception:
+        raise SELF_DATA_FENCE.Held("The data move review is unavailable. Nothing was changed; check cluster access and volume readiness") from None
+
+
 def move_homestead_data(storage_class):
     """Copies Homestead's data to a new claim on another class, then points it there.
 
@@ -6147,7 +6190,7 @@ def needed_role(path, method):
         return "admin"
     if path == "/api/storage/classes" and method != "GET":
         return "admin"
-    if path in ("/api/portal", "/api/self/replicas", "/api/self/data/move", "/api/ipam/unifi", "/api/mqtt", "/api/mqtt/test") and method != "GET":
+    if path in ("/api/portal", "/api/self/replicas", "/api/self/data/move", "/api/self/data/move/preview", "/api/ipam/unifi", "/api/mqtt", "/api/mqtt/test") and method != "GET":
         return "admin"
     # A chart can make anything anywhere in the cluster, and so can raw YAML;
     # a secret's values are for admins only.
@@ -6889,6 +6932,11 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, set_homestead_replicas(b.get("replicas")))
             if p == "/api/self/data/move":
                 return self._send(200, move_homestead_data(b.get("storage_class", "")))
+            if p == "/api/self/data/move/preview":
+                try:
+                    return self._send(200, preview_self_data_move(b, self.user))
+                except SELF_DATA_FENCE.Held as error:
+                    return self._send(409, {"error": str(error), "review_required": True})
             if p == "/api/cluster/components/upgrade":
                 result = COMPONENTS.upgrade(str(b.get("component") or ""), str(b.get("to") or ""))
                 for key in ("components", "helm", "platform"):
