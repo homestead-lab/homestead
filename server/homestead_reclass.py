@@ -34,6 +34,7 @@ import urllib.parse
 import homestead_names as NAMES
 import homestead_capacity_review as REVIEW
 import homestead_storage_journal as JOURNAL
+import homestead_storage_conflicts as CONFLICTS
 
 kget = ksend = ktext = None
 storage_classes = lambda: []
@@ -244,6 +245,7 @@ def plan(ns, claim, target, *, capture=False):
     if not pvc:
         raise ValueError(f"volume {claim} does not exist in {ns}")
     fences = {} if capture else None
+    source_binding = {}
     _pin(fences, f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}", pvc)
     spec = pvc.get("spec") or {}
     current = spec.get("storageClassName") or ""
@@ -266,6 +268,10 @@ def plan(ns, claim, target, *, capture=False):
             owner = pv.get("spec", {}).get("claimRef", {})
             if (owner.get("uid"), owner.get("name"), owner.get("namespace")) != (pvc["metadata"]["uid"], claim, ns):
                 raise ValueError("The backing volume does not match this claim's identity")
+            csi = pv.get("spec", {}).get("csi", {})
+            source_binding = {"uid": pvc["metadata"]["uid"], "pv": spec["volumeName"],
+                              "pv_uid": pv["metadata"]["uid"], "csi_driver": csi.get("driver"),
+                              "csi_handle": csi.get("volumeHandle")}
     blockers, warnings = [], []
     if row.get("internal"):
         blockers.append(f"{target} is reserved by Harvester")
@@ -343,7 +349,7 @@ def plan(ns, claim, target, *, capture=False):
     elif not space["longhorn"]:
         warnings.append(f"{target} is not Longhorn, so Homestead cannot check it has room for {space['size_gb']} GB")
     moving = space["used_gb"] if space["used_gb"] is not None else space["size_gb"]
-    return {**({"_fences": fences} if capture else {}), "ok": not blockers, "blockers": blockers, "warnings": warnings, "namespace": ns, "claim": claim,
+    return {**({"_fences": fences, "_source_binding": source_binding} if capture else {}), "ok": not blockers, "blockers": blockers, "warnings": warnings, "namespace": ns, "claim": claim,
             "from_class": current, "to_class": target, "volume_mode": mode, "access_modes": modes,
             "consumers": used, "space": space,
             # Roughly: a LAN-speed disk copy, and as long again to check it.
@@ -393,6 +399,7 @@ def start(ns, claim, target, ops, *, expected=None):
            "started": time.time()}
     if expected is not None:
         ref["review_fences"] = expected["_fences"]
+        ref["copy_claims"] = {claim: expected["_source_binding"]}
     return ops.start("reclass", f"Move {claim} to {target}",
                      {"kind": "PersistentVolumeClaim", "name": claim, "namespace": ns},
                      "/volumes?" + urllib.parse.urlencode({"find": claim}), ref,
@@ -412,6 +419,14 @@ def _config(body):
 def _review(body, actor, ops):
     cfg = _config(body)
     result = plan(cfg["namespace"], cfg["claim"], cfg["target"], capture=True)
+    with ops._lock:
+        conflicts = CONFLICTS.conflicts(ops._read(), "reclass", {
+            "namespace": cfg["namespace"], "claim": cfg["claim"],
+            "temp": cfg["claim"][:63 - len(TEMP_SUFFIX)].rstrip("-") + TEMP_SUFFIX,
+            "copy_claims": {cfg["claim"]: result["_source_binding"]}})
+    if conflicts:
+        result["blockers"].append("Another storage job is active or needs recovery. Review it before moving this volume.")
+        result["ok"] = False
     stopped = stopped_attempt(cfg["namespace"], cfg["claim"], ops)
     if stopped:
         result["blockers"].insert(0, "An earlier move needs inspection before another move can start")
@@ -432,14 +447,15 @@ def _binding(result):
 
 def preview(body, actor, ops):
     cfg, result, context = _review(body, actor, ops)
-    return {key: value for key, value in result.items() if key != "_fences"} | {"capacity_token": REVIEW.issue(cfg, context)}
+    return {key: value for key, value in result.items() if not key.startswith("_")} | {"capacity_token": REVIEW.issue(cfg, context)}
 
 
 def start_reviewed(body, actor, ops):
-    cfg, result, context = _review(body, actor, ops)
-    if not result["ok"] or body.get("confirm_capacity") is not True or not REVIEW.valid({**cfg, "capacity_token":body.get("capacity_token")}, context):
-        raise ValueError("Review the current volume, affected workloads and warnings before starting the move")
-    return start(cfg["namespace"], cfg["claim"], cfg["target"], ops, expected=result)
+    with ops._lock:
+        cfg, result, context = _review(body, actor, ops)
+        if not result["ok"] or body.get("confirm_capacity") is not True or not REVIEW.valid({**cfg, "capacity_token":body.get("capacity_token")}, context):
+            raise ValueError("Review the current volume, affected workloads and warnings before starting the move")
+        return start(cfg["namespace"], cfg["claim"], cfg["target"], ops, expected=result)
 
 
 # ---- the steps -------------------------------------------------------------------

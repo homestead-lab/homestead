@@ -8,6 +8,7 @@ are deliberately excluded.
 """
 import homestead_shared as SHARED
 import homestead_vm_power_receipts as POWER_RECEIPTS
+import homestead_storage_conflicts as STORAGE_CONFLICTS
 import json
 import os
 import secrets
@@ -179,6 +180,7 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
                 (i.get("status") not in TERMINAL or i.get("ref", {}).get("retain_resources"))
                 for i in items if i.get("kind") in POWER_RECEIPTS.KINDS | {"k3s-cluster"}):
             raise ValueError("An affected workload or volume has another job or recovery hold; inspect it before moving storage")
+        STORAGE_CONFLICTS.require_clear(items, kind, ref, resource)
         items.append(item)
         _write(items)
     return _public(item)
@@ -284,6 +286,8 @@ def _receipt_needed(item):
 
 
 def _recovery_needed(item):
+    if item.get("status") in TERMINAL and STORAGE_CONFLICTS.unresolved(item):
+        return True
     if item.get("tracking_stopped"):
         return False
     if item.get("cleaned") and not item.get("ref", {}).get("retain_resources"):

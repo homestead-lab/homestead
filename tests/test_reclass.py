@@ -111,7 +111,12 @@ class Cluster:
 
 class OPS:
     def __init__(self):
+        import threading
+        self._lock = threading.RLock()
         self.started = []
+
+    def _read(self):
+        return self.started
 
     def list_operations(self):
         return []

@@ -9,6 +9,7 @@ import contextlib
 import re
 import threading
 import urllib.parse
+import homestead_storage_conflicts as CONFLICTS
 
 _local = threading.local()
 _PVC = re.compile(r"^/api/v1/namespaces/([^/]+)/persistentvolumeclaims(?:/([^/]+))?$" )
@@ -33,9 +34,7 @@ def dispatching(item):
 
 
 def _active(items):
-    return [item for item in items if item.get("kind") == "reclass" and
-            (item.get("status") not in ("succeeded", "failed", "cancelled") or item.get("ref", {}).get("retain_resources") or
-             (item.get("status") in ("failed", "cancelled") and item.get("ref", {}).get("phase") not in ("done", "rolled-back")))]
+    return [item for item in items if item.get("kind") == "reclass" and CONFLICTS.unresolved(item)]
 
 
 def _matches(item, namespace="", claim="", pv="", handle="", job=""):

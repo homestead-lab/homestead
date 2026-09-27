@@ -7454,19 +7454,20 @@ class H(BaseHTTPRequestHandler):
                         "/data-protection", {"namespace": "longhorn-system", "name": result["backup"]})
                 return self._send(200, result)
             if p == "/api/lh/restore":
-                plan = LH.restore_plan(
-                    b.get("backup"), b.get("namespace", DEFAULT_NS), b.get("name"))
-                if plan.get("conflict"):
-                    return self._send(409, {"error": plan["conflict"]["message"], "plan": plan})
-                result = LH.restore_backup(b)
-                result["operation"] = OPS.start(
-                    "volume-restore", f"Restore {result['name']}",
-                    {"kind": "PersistentVolumeClaim", "name": result["name"],
-                     "namespace": result["namespace"]},
-                    "/volumes?" + urllib.parse.urlencode({"find": result["name"]}),
-                    {"namespace": result["namespace"], "name": result["name"],
-                     "backup": result["backup"]},
-                    "Waiting for Longhorn to provision the restored volume")
+                with OPS._lock:
+                    plan = LH.restore_plan(
+                        b.get("backup"), b.get("namespace", DEFAULT_NS), b.get("name"))
+                    if plan.get("conflict"):
+                        return self._send(409, {"error": plan["conflict"]["message"], "plan": plan})
+                    result = LH.restore_backup(b)
+                    result["operation"] = OPS.start(
+                        "volume-restore", f"Restore {result['name']}",
+                        {"kind": "PersistentVolumeClaim", "name": result["name"],
+                         "namespace": result["namespace"]},
+                        "/volumes?" + urllib.parse.urlencode({"find": result["name"]}),
+                        {"namespace": result["namespace"], "name": result["name"],
+                         "backup": result["backup"]},
+                        "Waiting for Longhorn to provision the restored volume")
                 return self._send(200, result)
             if p == "/api/lh/target":
                 return self._send(200, LH.set_backup_target(
