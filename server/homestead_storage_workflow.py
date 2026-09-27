@@ -1,4 +1,4 @@
-"""Durable storage-move orchestration, pending production/UI registration.
+"""Durable storage-move orchestration, pending production job-creation activation.
 
 The operations lock owns every resolver/inspection call. Stage functions share
 one implementation for real work and read-only next-write inspection; preview
@@ -9,6 +9,7 @@ import copy
 import homestead_reclass as RC
 import homestead_reclass_handoff as HANDOFF
 import homestead_storage_journal as JOURNAL
+import homestead_storage_guard as GUARD
 
 PROTOCOL = 1
 PHASES = ("stop", "copy", "cutover", "restart", "done")
@@ -83,7 +84,16 @@ def step(item, checkpoint, helper_admission, restart_admission, *, inspecting=Fa
 def resolve(item, checkpoint, helper_admission, restart_admission):
     """Failures become an explicit durable hold, not a retry or rollback."""
     try:
-        return step(item, checkpoint, helper_admission, restart_admission)
+        with GUARD.dispatching(item):
+            result = step(item, checkpoint, helper_admission, restart_admission)
+        phase = item["ref"]["handoff_phase"]
+        ui_phase = {"stop": "stop", "copy": "stop" if result[1] <= 8 else "verify" if item.get("copy", {}).get("verifying") else
+                    "create" if not HANDOFF._receipt(item, "copy-job") else "copy",
+                    "cutover": "swap", "restart": "start", "done": "done"}[phase]
+        RC._steps(item, ui_phase)
+        if phase == "done":
+            item["old_pv"] = item["ref"]["old_pv"]
+        return result
     except Exception as error:
         message = str(error) if isinstance(error, JOURNAL.Held) else "Storage state could not be verified. Inspect retained resources before continuing."
         item["ref"].update(retain_resources=True, storage_hold=message)

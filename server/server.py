@@ -28,6 +28,8 @@ import homestead_rename as RENAME
 import homestead_copy_job as COPY_JOB
 import homestead_import_job as IMPORT_JOB
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
+import homestead_operations as OPS
+import homestead_storage_guard as STORAGE_GUARD
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
 API = "https://kubernetes.default.svc"
@@ -160,6 +162,10 @@ def kget(path, timeout=10):
 
 
 def ksend(method, path, body=None, ctype="application/json", timeout=15):
+    return STORAGE_GUARD.send(method, path, body, lambda: _ksend(method, path, body, ctype, timeout), OPS, kget)
+
+
+def _ksend(method, path, body=None, ctype="application/json", timeout=15):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(API + path, data=data, method=method,
                                  headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": ctype})
@@ -4589,7 +4595,6 @@ import homestead_longhorn as LH
 import homestead_place as PLACE
 import homestead_hardware as HW
 import homestead_updates as UPDATES
-import homestead_operations as OPS
 import homestead_vmusage as VMUSAGE
 import homestead_cancel as CANCEL
 import homestead_joblogs as JOBLOGS
@@ -4737,6 +4742,7 @@ OPS.CANCELLERS[IMPORT_JOB.KIND] = (IMPORT_JOB.cancel_plan, IMPORT_JOB.cancel_run
 import homestead_reclass as RECLASS
 import homestead_storage_admission as STORAGE_ADMISSION
 import homestead_storage_recovery as STORAGE_RECOVERY
+import homestead_storage_workflow as STORAGE_WORKFLOW
 
 
 def storage_restart_admission(item, proposals):
@@ -4745,11 +4751,36 @@ def storage_restart_admission(item, proposals):
 
 def storage_helper_admission(item, manifest):
     return copy_admission(manifest)
+
+
+def storage_move_progress(item):
+    if "storage_protocol" in item.get("ref", {}):
+        return STORAGE_WORKFLOW.resolve(item, OPS.checkpoint, storage_helper_admission, storage_restart_admission)
+    # Keep pre-upgrade jobs on their existing steps; never infer receipts for
+    # mutations made by an older engine. Exempt only this job from its own fence.
+    with STORAGE_GUARD.dispatching(item):
+        return RECLASS.resolve(item)
+
+
+def storage_volume_action(volume, action):
+    # Snapshot rollback also stops/restarts workloads and writes through the
+    # Longhorn REST API, not just ksend. Hold the fence around the entire step.
+    with STORAGE_GUARD.volume(OPS, kget, volume):
+        return action()
+
+
+def storage_legacy_cancel(item, options):
+    if "storage_protocol" in item.get("ref", {}):
+        raise ValueError("Use the storage move recovery review; legacy rollback is not supported for this job")
+    with OPS._lock, STORAGE_GUARD.dispatching(item):
+        return CANCEL.reclass_cancel(item, options)
+
+
 import homestead_vmstore as VMSTORE
 import homestead_nodeshell as NODESHELL
 import homestead_hvimage as HVIMAGE
 import homestead_revert as REVERT
-OPS.RESOLVERS["reclass"] = RECLASS.resolve
+OPS.RESOLVERS["reclass"] = storage_move_progress
 OPS.RESUMABLE["reclass"] = RECLASS.resumable
 OPS.RESOLVERS["protect-run"] = LH.run_status
 MOVE_SOURCE.bind(kget, ksend, LH, DEFAULT_NS)
@@ -4844,12 +4875,13 @@ def _vmstore_loop():
             except Exception as error:
                 beat("vmstore", 3600, error, leader_only=True)
         time.sleep(3600)
-OPS.RESOLVERS["snapshot-revert"] = REVERT.resolve
+OPS.RESOLVERS["snapshot-revert"] = lambda item: storage_volume_action(item["ref"]["volume"], lambda: REVERT.resolve(item))
 SNAPSHOT_DELETE.bind(kget, ksend)
-OPS.RESOLVERS["snapshot-delete"] = SNAPSHOT_DELETE.resume_resolve
+OPS.RESOLVERS["snapshot-delete"] = lambda item: storage_volume_action(item["ref"]["volume"], lambda: SNAPSHOT_DELETE.resume_resolve(item))
 OPS.RESUMABLE["snapshot-delete"] = SNAPSHOT_DELETE.resumable
 OPS.RESOLVERS["share-remove"] = SHARES.removal_progress
-OPS.CANCELLERS["snapshot-revert"] = (REVERT.cancel_plan, REVERT.cancel_run)
+OPS.CANCELLERS["snapshot-revert"] = (REVERT.cancel_plan,
+    lambda item, options: storage_volume_action(item["ref"]["volume"], lambda: REVERT.cancel_run(item, options)))
 DISKS.bind(kget, ksend, node_temps)
 OPS.RESOLVERS["disk-retire"] = DISKS.retire_step
 OPS.RESUMABLE["disk-retire"] = DISKS.retire_resumable
@@ -4885,6 +4917,7 @@ def delete_workload(ns, name):
 # Every job can be cancelled; what that does for each kind is said there.
 CANCEL.bind(kget, ksend, delete_workload, lambda: cleanup_restore_classes())
 CANCEL.register(OPS)
+OPS.CANCELLERS["reclass"] = (CANCEL.reclass_plan, storage_legacy_cancel)
 # What each job has to show for itself: a pod's log, a VM's console.
 JOBLOGS.bind(kget, raw_get)
 JOBLOGS.register(OPS)
@@ -6408,8 +6441,9 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/volumes":
                 return self._send(200, cached("vol", 8, get_volumes))
             if p == "/api/volumes/delete-plan":
-                return self._send(200, VOLUMES.deletion_plan(
-                    (q.get("ns") or [DEFAULT_NS])[0], (q.get("name") or [""])[0], (q.get("volume") or [""])[0]))
+                plan = VOLUMES.deletion_plan((q.get("ns") or [DEFAULT_NS])[0],
+                    (q.get("name") or [""])[0], (q.get("volume") or [""])[0])
+                return self._send(200, STORAGE_GUARD.review(plan, OPS, kget))
             if p == "/api/events":
                 return self._send(200, cached("ev", 10, get_events))
             if p == "/api/storage":
@@ -7376,15 +7410,16 @@ class H(BaseHTTPRequestHandler):
                 _cache.pop("vol", None)
                 return self._send(200, RECLASS.remove_old_copy(b.get("pv", ""), OPS))
             if p == "/api/volumes/delete":
-                result = VOLUMES.delete(b)
-                result["operation"] = OPS.start(
-                    "volume-delete", f"Delete volume {result['name']}",
-                    {"kind": "PersistentVolumeClaim", "name": result["name"],
-                     "namespace": result["namespace"]},
-                    "/volumes", {"namespace": result["namespace"], "name": result["name"],
-                                  "action": result["action"], "pv": result["pv"],
-                                  "orphan": result.get("orphan", False),
-                                  "volume": result["longhorn_volume"]}, result["message"])
+                with OPS._lock:
+                    result = VOLUMES.delete(b, validate=lambda plan: STORAGE_GUARD.review(plan, OPS, kget))
+                    result["operation"] = OPS.start(
+                        "volume-delete", f"Delete volume {result['name']}",
+                        {"kind": "PersistentVolumeClaim", "name": result["name"],
+                         "namespace": result["namespace"]},
+                        "/volumes", {"namespace": result["namespace"], "name": result["name"],
+                                      "action": result["action"], "pv": result["pv"],
+                                      "orphan": result.get("orphan", False),
+                                      "volume": result["longhorn_volume"]}, result["message"])
                 return self._send(200, result)
             if p == "/api/lh/job":
                 return self._send(200, LH.save_job(b))
@@ -7403,9 +7438,11 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/lh/snapshot":
                 return self._send(200, LH.create_snapshot(b["volume"], b.get("name")))
             if p == "/api/lh/snapshot/delete":
-                return self._send(200, {"ok": True, "operation": SNAPSHOT_DELETE.start(b, OPS)})
+                return self._send(200, {"ok": True, "operation": storage_volume_action(
+                    b.get("volume"), lambda: SNAPSHOT_DELETE.start(b, OPS))})
             if p == "/api/lh/snapshot/revert":
-                operation = REVERT.start(str(b.get("volume") or ""), str(b.get("snapshot") or ""), OPS)
+                operation = storage_volume_action(b.get("volume"), lambda: REVERT.start(
+                    str(b.get("volume") or ""), str(b.get("snapshot") or ""), OPS))
                 return self._send(200, {"ok": True, "operation": operation,
                                         "detail": "Rolling back: what uses it stops first, then starts again"})
             if p == "/api/lh/backup":

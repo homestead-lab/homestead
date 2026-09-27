@@ -275,6 +275,37 @@ class CopyCluster(Cluster):
 
 
 class CopyHandoffTests(unittest.TestCase):
+    def test_copy_progress_comes_from_verified_owned_pod_without_claiming_completion(self):
+        cluster = CopyCluster(); cluster.stage(); cluster.stage(); cluster.complete()
+        job = cluster.objects["/apis/batch/v1/namespaces/lab/jobs/data-copy-job"]
+        job["status"] = {"active": 1}
+        pod = cluster.objects["/api/v1/namespaces/lab/pods/copy-pod"]
+        pod["status"]["phase"] = "Running"
+        outcome = cluster.stage(log="==> copying\n  1,234,567  57%  11.83MB/s  0:00:04\n")
+        self.assertEqual(43, outcome[1])
+        self.assertEqual(57, cluster.item["copy"]["percent"])
+        self.assertIn("11.83MB/s", outcome[2])
+        self.assertNotIn("copy_verified", cluster.item["ref"])
+        self.assertEqual(70, cluster.stage(log="==> verifying\n")[1])
+        self.assertNotIn("copy_verified", cluster.item["ref"])
+
+    def test_unavailable_copy_logs_show_unknown_progress_not_zero_percent(self):
+        cluster = CopyCluster(); cluster.stage(); cluster.stage()
+        outcome = cluster.stage(log="")
+        self.assertIsNone(cluster.item["copy"]["percent"])
+        self.assertTrue(cluster.item["copy"]["unavailable"])
+        self.assertIn("Waiting for the copy pod", outcome[2])
+
+    def test_copy_progress_rejects_pod_replacement_during_log_read(self):
+        cluster = CopyCluster(); cluster.stage(); cluster.stage(); cluster.complete()
+        cluster.objects["/apis/batch/v1/namespaces/lab/jobs/data-copy-job"]["status"] = {"active": 1}
+        cluster.objects["/api/v1/namespaces/lab/pods/copy-pod"]["status"]["phase"] = "Running"
+        def replaced(_):
+            cluster.objects["/api/v1/namespaces/lab/pods/copy-pod"]["metadata"]["uid"] = "replacement"
+            return "1,234 99% 10MB/s\n"
+        with mock.patch.object(rc, "kget", cluster.read), mock.patch.object(rc, "ksend", cluster.send), mock.patch.object(rc, "ktext", side_effect=replaced):
+            with self.assertRaises(journal.Held): handoff.copy_stage(cluster.item, cluster.checkpoint, lambda _: {"blocked": False})
+
     def test_scale_down_must_be_observed_even_when_no_pods_exist(self):
         cluster = CopyCluster()
         obj = cluster.objects["/apis/apps/v1/namespaces/lab/deployments/app"]
