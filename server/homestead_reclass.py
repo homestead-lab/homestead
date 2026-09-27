@@ -33,6 +33,7 @@ import urllib.parse
 
 import homestead_names as NAMES
 import homestead_capacity_review as REVIEW
+import homestead_storage_journal as JOURNAL
 
 kget = ksend = ktext = None
 storage_classes = lambda: []
@@ -435,19 +436,21 @@ def _steps(item, phase, copy=None):
         item["copy"] = copy
 
 
-def _stop(ns, ref):
-    _close_helpers(ns, ref["claim"])
-    _clear_finished(ns, ref["claim"])
+def _stop(ns, ref, send=None, *, cleanup=True):
+    send = send or ksend
+    if cleanup:
+        _close_helpers(ns, ref["claim"])
+        _clear_finished(ns, ref["claim"])
     for c in ref["consumers"]:
         if c.get("stopped"):
             continue
         name = c["name"]
         if c["kind"] in ("Deployment", "StatefulSet"):
             plural = "deployments" if c["kind"] == "Deployment" else "statefulsets"
-            ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/{plural}/{name}", {"spec": {"replicas": 0}},
+            send("PATCH", f"/apis/apps/v1/namespaces/{ns}/{plural}/{name}", {"spec": {"replicas": 0}},
                   ctype="application/merge-patch+json")
         elif c["kind"] == "CronJob":
-            ksend("PATCH", f"/apis/batch/v1/namespaces/{ns}/cronjobs/{name}", {"spec": {"suspend": True}},
+            send("PATCH", f"/apis/batch/v1/namespaces/{ns}/cronjobs/{name}", {"spec": {"suspend": True}},
                   ctype="application/merge-patch+json")
         elif c["kind"] == "VirtualMachine":
             vm = kget(f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}")
@@ -476,19 +479,58 @@ def _stop(ns, ref):
                 if not vm["spec"]["dataVolumeTemplates"]:
                     vm["spec"].pop("dataVolumeTemplates")
             vm["metadata"].pop("managedFields", None)
-            ksend("PUT", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}", vm)
+            send("PUT", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}", vm)
             if c.get("via") == "dv":
                 pvc = _get(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{ref['claim']}") or {}
                 owners = [o for o in (pvc.get("metadata") or {}).get("ownerReferences") or [] if o.get("kind") != "DataVolume"]
-                ksend("PATCH", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{ref['claim']}",
+                send("PATCH", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{ref['claim']}",
                       {"metadata": {"ownerReferences": owners or None}}, ctype="application/merge-patch+json")
                 try:
-                    ksend("DELETE", f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{ref['claim']}",
+                    send("DELETE", f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{ref['claim']}",
                           {"kind": "DeleteOptions", "apiVersion": "v1", "propagationPolicy": "Orphan"})
                 except urllib.error.HTTPError as error:
                     if error.code != 404:
                         raise
         c["stopped"] = True
+
+
+def journaled_stop(item, checkpoint):
+    """New handoff's stop stage; not enabled until its later stages are wired.
+
+    Re-entering a confirmed step only verifies its receipt. An interrupted write
+    blocks every later step. Never trust the legacy in-memory `stopped` flags as
+    evidence that a particular Kubernetes object was changed.
+    """
+    ref = item["ref"]
+    writer = JOURNAL.Journal(item, kget, ksend, checkpoint)
+    writer.check()
+    def send(method, path, body=None, **kw):
+        expected = ref.get("review_fences", {}).get(path)
+        if not expected:
+            raise JOURNAL.Held("A stop dependency was not included in the review; no request was sent")
+        if method in ("PATCH", "PUT") and any(part in path for part in ("/deployments/", "/statefulsets/", "/virtualmachines/")):
+            body = copy.deepcopy(body)
+            annotations = body.setdefault("metadata", {}).setdefault("annotations", {})
+            key = "homestead.io/storage-copy-job"
+            existing = kget(path).get("metadata", {}).get("annotations", {}).get(key)
+            if existing and existing != item["id"]:
+                raise JOURNAL.Held("Another storage-copy hold exists on this workload")
+            annotations[key] = item["id"]
+        return writer.write("stop:" + method + ":" + path, method, path, body, expected=expected, **kw)
+    # Replay only the control flow, never the API writes. The journal decides
+    # which previously accepted objects may be observed under their exact UID.
+    for consumer in ref["consumers"]:
+        consumer.pop("stopped", None)
+    # Unlike legacy cleanup, never force-delete a helper by its name alone.
+    for pod in _items(f"/api/v1/namespaces/{ref['namespace']}/pods"):
+        if ref["claim"] not in _claims_in(pod.get("spec")):
+            continue
+        finished_job = pod.get("status", {}).get("phase") in FINISHED and any(
+            owner.get("kind") == "Job" for owner in pod["metadata"].get("ownerReferences", []))
+        if _helper(pod) or finished_job:
+            send("DELETE", f"/api/v1/namespaces/{ref['namespace']}/pods/{pod['metadata']['name']}")
+    _stop(ref["namespace"], ref, send=send, cleanup=False)
+    checkpoint(item)
 
 
 def _start(ns, ref):
