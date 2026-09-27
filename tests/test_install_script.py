@@ -108,6 +108,226 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("HS_SERVER", out)
 
 
+@unittest.skipUnless(SH and sys.platform != "win32", "package-manager stand-ins need POSIX")
+class MenuBootstrapTests(unittest.TestCase):
+    """Run the actual startup over stdin, without root or real package changes."""
+
+    def startup(self, manager="apt-get", behavior="success", args=(), extra_env=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pkg = root / manager
+            pkg.write_text("""#!/bin/sh
+printf '%s %s\\n' "$(basename "$0")" "$*" >> "$TEST_CALLS"
+printf 'repository progress\\n'
+printf 'package diagnostic\\n' >&2
+case "$TEST_BEHAVIOR" in
+  fail) exit 42 ;;
+  retry)
+    if [ ! -e "$TEST_RETRIED" ]; then
+      touch "$TEST_RETRIED"
+      exit 100
+    fi ;;
+  hang) trap '' TERM; sleep 10 ;;
+esac
+# A package hook trying to read input must see EOF, not installer source.
+cat > "$TEST_CONSUMED"
+touch "$TEST_INSTALLED"
+""", encoding="utf-8")
+            pkg.chmod(0o755)
+            real_timeout = shutil.which("timeout")
+            if not real_timeout:
+                self.skipTest("timeout is unavailable")
+            timer = root / "timeout"
+            timer.write_text(f"""#!/bin/sh
+[ "$1 $2 $3" = '-k 10 120' ] || exit 99
+shift 3
+exec '{real_timeout}' -k 0.1 0.2 "$@"
+""", encoding="utf-8")
+            timer.chmod(0o755)
+            script = SCRIPT.read_text(encoding="utf-8").split("# Boxes are as tall", 1)[0]
+            script = script.replace("TTY=/dev/tty", 'TTY="$TEST_TTY"')
+            # A regular file stands in for the terminal; preserve successive writes.
+            script = script.replace('> "$TTY"', '>> "$TTY"')
+            # Control discovery, never the bootstrap under test. Other host
+            # package managers must not become an accidental fallback.
+            script = script.replace("# HS_UI=", """interactive() { return 0; }
+id() { echo 0; }
+have() {
+  case "$1" in
+    whiptail) [ -f "$TEST_INSTALLED" ] ;;
+    dialog) [ "${TEST_DIALOG:-0}" = 1 ] ;;
+    timeout) [ "${TEST_NO_TIMEOUT:-0}" = 0 ] ;;
+    apt-get|dnf|yum|zypper|apk) [ "$1" = "$TEST_MANAGER" ] ;;
+    *) command -v "$1" >/dev/null 2>&1 ;;
+  esac
+}
+# HS_UI=""")
+            # More than a shell input buffer remains when the package command
+            # runs. Reading stdin here used to eat the remainder of curl | sh.
+            script += "\n" + "# remaining installer source\n" * 4096
+            script += "printf 'INSTALLER_CONTINUES:%s\\n' \"$UI\"\n"
+            env = dict(os.environ, PATH=tmp + os.pathsep + os.environ["PATH"], TERM="xterm",
+                       HS_UI="", SUDO_USER="", TEST_MANAGER=manager, TEST_BEHAVIOR=behavior,
+                       TEST_TTY=str(root / "terminal"), TEST_CALLS=str(root / "calls"),
+                       TEST_INSTALLED=str(root / "installed"), TEST_CONSUMED=str(root / "consumed"),
+                       TEST_RETRIED=str(root / "retried"))
+            env.update(extra_env or {})
+            if behavior == "installed":
+                (root / "installed").touch()
+            result = subprocess.run([SH, "-s", "--", *args], input=script, text=True,
+                                    capture_output=True, env=env, timeout=5)
+            def read(name):
+                path = root / name
+                return path.read_text() if path.exists() else ""
+            return result, read("terminal"), read("calls"), read("consumed")
+
+    def test_package_output_is_visible_and_hooks_cannot_eat_the_piped_installer(self):
+        for manager in ("apt-get", "dnf", "yum", "zypper", "apk"):
+            with self.subTest(manager=manager):
+                result, terminal, calls, consumed = self.startup(manager)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertIn("INSTALLER_CONTINUES:whiptail", result.stdout)
+                self.assertIn("repository progress", terminal)
+                self.assertIn("package diagnostic", terminal)
+                self.assertIn("opening the installer", terminal)
+                self.assertIn(manager, calls)
+                self.assertEqual("", consumed)
+
+    def test_failed_package_install_continues_in_text_mode_with_diagnostics(self):
+        result, terminal, calls, _ = self.startup(behavior="fail")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("INSTALLER_CONTINUES:text", result.stdout)
+        self.assertIn("failed (exit 42)", terminal)
+        self.assertIn("package diagnostic", terminal)
+        self.assertNotIn("opening the installer", terminal)
+
+    def test_stalled_package_and_its_child_are_bounded_and_fall_back_to_text(self):
+        result, terminal, calls, _ = self.startup(behavior="hang")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("INSTALLER_CONTINUES:text", result.stdout)
+        self.assertIn("timed out", terminal)
+        self.assertEqual(1, len(calls.splitlines()), "do not retry after a timeout")
+
+    def test_apt_can_refresh_stale_indexes_and_retry(self):
+        result, terminal, calls, _ = self.startup(behavior="retry")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("INSTALLER_CONTINUES:whiptail", result.stdout)
+        commands = calls.splitlines()
+        self.assertEqual(3, len(commands))
+        self.assertTrue(commands[0].endswith("install -y whiptail"))
+        self.assertTrue(commands[1].endswith("update"))
+        self.assertTrue(commands[2].endswith("install -y whiptail"))
+
+    def test_text_report_dry_run_and_existing_menus_do_not_install_packages(self):
+        cases = [(("--text",), {}, "success", "text"),
+                 (("--report",), {}, "success", "text"),
+                 (("--fix-safe",), {}, "success", "text"),
+                 (("--dry-run",), {}, "success", "text"),
+                 ((), {"HS_UI": "text"}, "success", "text"),
+                 ((), {}, "installed", "whiptail"),
+                 ((), {"TEST_DIALOG": "1"}, "success", "dialog")]
+        for args, env, behavior, ui in cases:
+            with self.subTest(args=args, env=env, behavior=behavior):
+                result, terminal, calls, _ = self.startup(args=args, extra_env=env, behavior=behavior)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertIn("INSTALLER_CONTINUES:" + ui, result.stdout)
+                self.assertEqual("", calls)
+
+    def test_missing_timeout_or_package_manager_uses_text_without_installing(self):
+        for env in ({"TEST_NO_TIMEOUT": "1"}, {"TEST_MANAGER": "none"}):
+            with self.subTest(env=env):
+                result, terminal, calls, _ = self.startup(extra_env=env)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertIn("INSTALLER_CONTINUES:text", result.stdout)
+                self.assertIn("text prompts", terminal)
+                self.assertEqual("", calls)
+
+
+@unittest.skipUnless(SH and sys.platform != "win32", "terminal stand-ins need POSIX")
+class TerminalSizeTests(unittest.TestCase):
+    def test_nested_piped_menu_queries_size_without_changing_terminal_settings(self):
+        self.check_rows("40", 0, "40")
+
+    def test_missing_tput_failed_query_or_invalid_dimensions_use_24_rows(self):
+        for value, status in (("", 127), ("99", 1), ("0", 0), ("-1", 0), ("bad", 0)):
+            with self.subTest(value=value, status=status):
+                self.check_rows(value, status, "24")
+
+    def check_rows(self, value, status, expected):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name, content in {
+                "tput": '#!/bin/sh\n[ "$1" = lines ] || exit 1\ncat >/dev/null\nprintf "%s\\n" "$TEST_ROWS"\nexit "$TEST_STATUS"\n',
+                "stty": '#!/bin/sh\ntouch "$TEST_STTY_CALLED"\nexit 1\n',
+            }.items():
+                path = root / name
+                path.write_text(content, encoding="utf-8")
+                path.chmod(0o755)
+            source = SCRIPT.read_text(encoding="utf-8")
+            function = source[source.index("term_rows() {"):source.index("text_lines() {")]
+            script = 'TTY=/dev/null\n' + function
+            script += 'menu() { rows=$(term_rows); printf "ROWS:%s\\n" "$rows"; }\npick=$(menu)\n'
+            script += '# remaining source\n' * 4096 + 'printf "%s\\n" "$pick"\n'
+            env = dict(os.environ, PATH=tmp + os.pathsep + os.environ["PATH"],
+                       TEST_ROWS=value, TEST_STATUS=str(status), TEST_STTY_CALLED=str(root / "called"))
+            result = subprocess.run([SH, "-s"], input=script, capture_output=True,
+                                    text=True, env=env, timeout=5)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual("ROWS:" + expected + "\n", result.stdout)
+            self.assertFalse((root / "called").exists(), "size queries must not change terminal settings")
+
+
+@unittest.skipUnless(SH and sys.platform != "win32", "PTY handoff needs POSIX")
+class TerminalHandoffTests(unittest.TestCase):
+    def startup(self, args=(), env=None, prompt=True):
+        import pty
+        import select
+        import time
+        master, slave = pty.openpty()
+        process = None
+        try:
+            source = SCRIPT.read_text(encoding="utf-8").split("# Boxes are as tall", 1)[0]
+            source = source.replace("TTY=/dev/tty", 'TTY="$TEST_TTY"')
+            source += "\nprintf 'STARTUP_COMPLETE\\n'\n"
+            full = dict(os.environ, SUDO_USER="rancher", HS_ROLE="", HS_UI="text",
+                        TERM="xterm", TEST_TTY=os.ttyname(slave))
+            full.update(env or {})
+            process = subprocess.Popen([SH, "-s", "--", *args], stdin=subprocess.PIPE,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=full)
+            process.stdin.write(source)
+            process.stdin.close()
+            process.stdin = None
+            seen = b""
+            if prompt:
+                deadline = time.monotonic() + 3
+                while b"Press Enter" not in seen and time.monotonic() < deadline:
+                    if select.select([master], [], [], 0.1)[0]:
+                        seen += os.read(master, 4096)
+                self.assertIn(b"Press Enter", seen)
+                self.assertIsNone(process.poll(), "must wait for the terminal, not read script input")
+                os.write(master, b"\n")
+            out, err = process.communicate(timeout=5)
+            self.assertEqual(0, process.returncode, err)
+            self.assertIn("STARTUP_COMPLETE", out)
+            if not prompt:
+                self.assertFalse(select.select([master], [], [], 0)[0], "unattended mode must not prompt")
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.communicate()
+            os.close(master)
+            os.close(slave)
+
+    def test_piped_sudo_reads_the_terminal_before_opening_the_interface(self):
+        self.startup()
+
+    def test_reports_and_unattended_installs_do_not_wait_for_enter(self):
+        for args, env in [(("--report",), {}), (("--fix-safe",), {}),
+                          ((), {"HS_ROLE": "agent"}), ((), {"SUDO_USER": ""})]:
+            with self.subTest(args=args, env=env):
+                self.startup(args=args, env=env, prompt=False)
+
+
 STUBS = {
     "systemctl": """#!/bin/sh
 case "$1" in
