@@ -145,7 +145,7 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
             if consumed:
                 raise ValueError(f"This approval already has job {consumed}; inspect history instead of repeating it. The displayed job may have been cleared.")
             for existing in items:
-                if existing.get("kind") not in POWER_RECEIPTS.KINDS | {"k3s-cluster"}:
+                if existing.get("kind") not in POWER_RECEIPTS.KINDS | {"k3s-cluster", "reclass"}:
                     continue
                 previous = existing.get("ref") or {}
                 if previous.get("review_digest") == ref.get("review_digest"):
@@ -168,12 +168,29 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
                 i.get("kind") in ("snapshot-delete", "snapshot-revert") and i.get("status") not in TERMINAL
                 and i.get("ref", {}).get("volume") == ref.get("volume") for i in items):
             raise ValueError("A snapshot operation is already active on this volume; inspect its job first")
+        if kind == "reclass" and any(i.get("kind") == "reclass" and
+                i.get("resource", {}).get("name") == resource.get("name") and
+                i.get("resource", {}).get("namespace") == resource.get("namespace") and
+                (i.get("status") not in TERMINAL or (i.get("status") == "failed" and not RESUMABLE["reclass"](i)))
+                for i in items):
+            raise ValueError("This volume already has a storage-class move; inspect its job first")
+        if kind == "reclass" and any(
+                _vm_targets(kind, ref) & _vm_targets(i.get("kind"), i.get("ref") or {}) and
+                (i.get("status") not in TERMINAL or i.get("ref", {}).get("retain_resources"))
+                for i in items if i.get("kind") in POWER_RECEIPTS.KINDS | {"k3s-cluster"}):
+            raise ValueError("An affected workload or volume has another job or recovery hold; inspect it before moving storage")
         items.append(item)
         _write(items)
     return _public(item)
 
 
 def _vm_targets(kind, ref):
+    if kind == "reclass":
+        ns = ref.get("namespace")
+        targets = {(ns, "pvc/" + ref["claim"])} if ref.get("claim") else set()
+        targets |= {(ns, ("deployment/" if c.get("kind") == "Deployment" else "") + c["name"])
+                    for c in ref.get("consumers", []) if c.get("name") and c.get("kind") in ("Deployment", "VirtualMachine")}
+        return targets
     if kind in ("workload-rename", "workload-copy", "import-create"):
         targets = {(ref.get("namespace"), "deployment/" + name) for name in (ref.get("name"), ref.get("new_name")) if name}
         if kind == "workload-copy":
@@ -625,6 +642,12 @@ def _refresh(item):
         # state and let the next poll recover when Kubernetes is reachable.
         return _finish(item, "running", item.get("progress", 0),
                        f"Status temporarily unavailable: {error}")
+
+
+def snapshot():
+    """Read job history without advancing resolvers or writing to Kubernetes."""
+    with _lock:
+        return [_public(item) for item in _read()]
 
 
 def list_operations():
