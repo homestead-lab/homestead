@@ -3662,6 +3662,7 @@ def vm_cluster_configuration(body, *, preview=False):
 def vm_cluster_snapshot():
     cache, external = {}, {}
     def read(path):
+        capture = any(part in path for part in ("/storageclasses", "/storageprofiles/", "/network-attachment-definitions/", "/kubevirts"))
         if path not in cache:
             try:
                 cache[path] = kget(path)
@@ -3669,10 +3670,12 @@ def vm_cluster_snapshot():
                 if error.code != 404:
                     raise
                 cache[path] = error
+                if capture:
+                    external[path] = None
         value = cache[path]
         if isinstance(value, Exception):
             raise value
-        if any(part in path for part in ("/storageclasses", "/storageprofiles/", "/network-attachment-definitions/", "/kubevirts")):
+        if capture:
             external[path] = (sorted([VM_CAPACITY.VMRES.identity(row) for row in value["items"]],
                                     key=lambda row: (row.get("namespace") or "", row.get("name") or ""))
                               if isinstance(value.get("items"), list) else VM_CAPACITY.VMRES.identity(value))
@@ -3723,10 +3726,10 @@ def reviewed_vm_cluster(body):
         fresh = VM_BATCH.plan(prepared, read, PLACE.get_nodes(), created=receipts,
                               threshold=get_app_settings()["thresholds"]["memory"]["critical"])
         for path, expected in context["external"].items():
-            value = read(path)
+            value = VM_CAPACITY._optional(read, path) if expected is None else read(path)
             actual = (sorted([VM_CAPACITY.VMRES.identity(row) for row in VM_CAPACITY._items(read, path)],
                              key=lambda row: (row.get("namespace") or "", row.get("name") or ""))
-                      if isinstance(expected, list) else VM_CAPACITY.VMRES.identity(value))
+                      if isinstance(expected, list) else VM_CAPACITY.VMRES.identity(value) if value else None)
             if actual != expected:
                 raise CAPACITY_REVIEW.Rejected("VM batch dependencies changed; retain partial resources and review again", fresh)
         CAPACITY_REVIEW.enforce(cfg, fresh, context)

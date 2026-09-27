@@ -14,6 +14,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
     read = fixtures.VMCapacityTests.read
     running = fixtures.VMCapacityTests.running
     disk = fixtures.VMCapacityTests.disk
+    persistent_state = fixtures.VMCapacityTests.persistent_state
 
     def setUp(self):
         fixtures.VMCapacityTests.setUp(self)
@@ -88,6 +89,23 @@ class VMPowerAdmissionTests(unittest.TestCase):
         self.config["metadata"]["resourceVersion"] = "2"
         result, writes = self.call("/api/vm/power", signed)
         self.assertEqual(409, result[0])
+        writes.assert_not_called()
+
+    def test_persistent_state_replacement_after_review_never_sends_power(self):
+        pvc = self.persistent_state()
+        signed = self.reviewed()
+        pvc["metadata"]["uid"] = "replacement-state"
+        self.objects["/api/v1/persistentvolumes/state-pv"]["spec"]["claimRef"]["uid"] = "replacement-state"
+        result, writes = self.call("/api/vm/power", signed)
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+
+    def test_stale_vm_state_owner_cannot_be_overridden_by_memory_confirmation(self):
+        pvc = self.persistent_state()
+        pvc["metadata"]["ownerReferences"][0]["uid"] = "old-vm"
+        signed = self.reviewed()
+        result, writes = self.call("/api/vm/power", signed)
+        self.assertEqual(409, result[0], result)
         writes.assert_not_called()
 
     def test_observed_renderer_change_after_thread_review_never_dispatches(self):

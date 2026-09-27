@@ -720,6 +720,17 @@ A target version alone is not evidence of the running renderer. Configuration
 identity/version changes invalidate approval. Actual launcher requests, host SMT
 and NUMA-local CPU/hugepage availability still need verification.
 
+Persistent TPM/EFI and active changed-block-tracking state can require a separate
+KubeVirt-managed filesystem PVC. Reviews discover legacy names and labelled
+claims, require this VM's controller UID, bind the PVC/PV identities and include
+volume topology and other writers in placement. Missing state reported by an
+existing instance, mismatched owners, ambiguous claims, lost volumes and unfinished
+migration handoffs block the action. Homestead never adopts or deletes these
+claims as part of admission. Fresh-state reviews show the observed storage-class/
+profile choice and warn that initialization is not recovery; a stopped VM's full
+history cannot be inferred from its current status. The planned claim is only a
+placement placeholder: KubeVirt provisions it, and provisioning is not guaranteed.
+
 Reviewed VM creation and edits record a job before creating or changing images,
 login Secrets, claims or the VM. Each resource write has a durable intent and an
 acknowledged UID/version receipt; the journal contains no cloud-init, credentials

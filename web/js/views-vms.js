@@ -274,7 +274,7 @@ window.vmPowerReview = async config => {
         <p class="small">Restart policy: ${esc(facts.policy_before || "unknown")}${facts.policy_after !== facts.policy_before ? ` → <b>${esc(facts.policy_after)}</b>` : " (unchanged)"}</p></div>
       ${plan.blockers?.length ? `<div class="note bad">${plan.blockers.map(esc).join(" · ")}</div>` : ""}
       ${deployCapacityHtml(plan)}
-      ${!plan.blocked ? '<label class="check"><input type="checkbox" id="vmPowerApprove" onchange="vmPowerReviewReady()"> Proceed with this power action and accept the displayed memory, placement and restart-policy risks</label>' : ""}
+      ${!plan.blocked ? '<label class="check"><input type="checkbox" id="vmPowerApprove" onchange="vmPowerReviewReady()"> Proceed with this power action and accept the displayed memory, placement, storage/state and restart-policy risks</label>' : ""}
       <div class="modalactions"><button class="btn" onclick="modalBack()">Cancel</button><button class="btn pri" id="vmPowerApply" disabled onclick="vmPowerReviewedApply()">${esc(VM_ACTIONS[frozen.action]?.[0] || "Apply")} reviewed VM</button></div></div>`;
   } catch (error) {
     if (sequence !== VM_POWER_SEQUENCE || !$("#vmPowerLoading")) return;

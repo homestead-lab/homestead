@@ -59,6 +59,44 @@ class VMCapacityTests(unittest.TestCase):
             "metadata": {"name": "pv-root", "uid": "pv-uid", "resourceVersion": "1"},
             "spec": {"claimRef": {"name": "root", "namespace": "lab", "uid": "disk-uid"}}}
 
+    def persistent_state(self):
+        self.vm["spec"]["template"]["spec"]["domain"]["devices"] = {"tpm": {"persistent": True}}
+        pvc = fixtures.child(self.vm, "VirtualMachine", "persistent-state-for-guest-abc", "state-uid")
+        pvc["metadata"]["labels"] = {"persistent-state-for": "guest"}
+        pvc["spec"] = {"volumeName": "state-pv", "volumeMode": "Filesystem", "accessModes": ["ReadWriteOnce"]}
+        pvc["status"] = {"phase": "Bound"}
+        base = "/api/v1/namespaces/lab/persistentvolumeclaims"
+        self.objects[base] = {"items": [pvc]}
+        self.objects[base + "/" + pvc["metadata"]["name"]] = pvc
+        self.objects["/api/v1/persistentvolumes/state-pv"] = {
+            "metadata": {"name": "state-pv", "uid": "pv-uid", "resourceVersion": "1"},
+            "spec": {"claimRef": {"name": pvc["metadata"]["name"], "namespace": "lab", "uid": "state-uid"}}}
+        return pvc
+
+    def test_persistent_state_pv_topology_constrains_placement(self):
+        self.persistent_state()
+        self.assertFalse(self.plan()["blocked"])
+        self.objects["/api/v1/persistentvolumes/state-pv"]["spec"]["nodeAffinity"] = {"required": {
+            "nodeSelectorTerms": [{"matchExpressions": [{"key": "kubernetes.io/hostname", "operator": "In", "values": ["node2"]}]}]}}
+        result = self.plan()
+        self.assertTrue(result["blocked"])
+        self.assertIn("volume node affinity", str(result["candidates"]))
+
+    def test_persistent_state_other_writer_is_blocked_even_on_shared_claim(self):
+        pvc = self.persistent_state()
+        pvc["spec"]["accessModes"] = ["ReadWriteMany"]
+        self.pods = [{"metadata": {"name": "other", "namespace": "lab", "uid": "other-uid", "resourceVersion": "1"},
+                      "spec": {"volumes": [{"persistentVolumeClaim": {"claimName": pvc["metadata"]["name"]}}]},
+                      "status": {"phase": "Running"}}]
+        self.assertIn("another pod", " ".join(self.plan()["blockers"]))
+
+    def test_resume_requires_state_to_be_mounted_by_the_actual_launcher(self):
+        pvc = self.persistent_state()
+        self.running()
+        self.assertIn("does not mount", " ".join(self.plan(action="unpause")["blockers"]))
+        self.pods[0]["spec"]["volumes"] = [{"name": "state", "persistentVolumeClaim": {"claimName": pvc["metadata"]["name"]}}]
+        self.assertFalse(self.plan(action="unpause")["blocked"])
+
     def running(self):
         vmi = fixtures.child(self.vm, "VirtualMachine", "guest", "vmi-uid")
         vmi["spec"] = copy.deepcopy(self.vm["spec"]["template"]["spec"])

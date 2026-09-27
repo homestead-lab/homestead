@@ -260,6 +260,46 @@ class VMClusterAdmissionTests(unittest.TestCase):
         self.assertEqual(409, self.call("/api/vm/k3s-cluster", body)[0])
         self.assertEqual([], self.sent)
 
+    def persistent_batch(self):
+        original = server.IMP.prepare_vm
+        def prepare(*args, **kwargs):
+            value = original(*args, **kwargs)
+            value["vm"]["spec"]["template"]["spec"]["domain"].setdefault("devices", {})["tpm"] = {"persistent": True}
+            return value
+        patch = mock.patch.object(server.IMP, "prepare_vm", side_effect=prepare)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.config["spec"]["configuration"]["vmStateStorageClass"] = "state"
+        self.objects["/api/v1/namespaces/lab/persistentvolumeclaims"] = {"items": []}
+        sc = copy.deepcopy(self.objects["/apis/storage.k8s.io/v1/storageclasses/storage"])
+        sc["metadata"].update(name="state", uid="state-class-uid")
+        self.objects["/apis/storage.k8s.io/v1/storageclasses/state"] = sc
+        return sc
+
+    def test_backend_state_topology_participates_in_joint_batch_placement(self):
+        sc = self.persistent_batch()
+        sc["allowedTopologies"] = [{"matchLabelExpressions": [{"key": "zone", "values": ["unavailable"]}]}]
+        result = self.call("/api/vm/k3s-cluster/plan", self.body)
+        self.assertEqual(200, result[0], result)
+        self.assertTrue(result[1]["capacity"]["blocked"])
+        self.assertIn("storage class topology", str(result))
+        self.assertEqual([], self.sent)
+
+    def test_missing_backend_profile_appearing_mid_batch_stops_further_writes(self):
+        self.persistent_batch()
+        body = self.reviewed()
+        def changed(method, path, value):
+            if path.endswith("/virtualmachines"):
+                self.objects["/apis/cdi.kubevirt.io/v1beta1/storageprofiles/state"] = {
+                    "metadata": {"name": "state", "uid": "new-profile", "resourceVersion": "1"},
+                    "status": {"claimPropertySets": [{"volumeMode": "Filesystem", "accessModes": ["ReadWriteOnce"]}]}}
+        self.after_write = changed
+        result = self.call("/api/vm/k3s-cluster", body)
+        self.assertEqual(400, result[0], result)
+        self.assertEqual(1, sum(path.endswith("/virtualmachines") for _, path, _ in self.sent))
+        self.assertFalse(any(obj.get("metadata", {}).get("name", "").startswith("persistent-state-for") for _, _, obj in self.sent))
+        self.assertNotIn("DELETE", [method for method, _, _ in self.sent])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,7 @@ import homestead_vm_capacity as CAPACITY
 import homestead_vm_claims as CLAIMS
 import homestead_vm_resources as RESOURCES
 import homestead_place as PLACE
+import homestead_vm_state as STATE
 
 
 def contains(actual, expected):
@@ -49,8 +50,10 @@ def plan(prepared, read, nodes, *, created=None, threshold=88):
         warnings.update(model["warnings"])
         count = 1
         receipt = created.get(name)
+        state_vm, vmi = vm, None
         if receipt:
             current = read(f"/apis/kubevirt.io/v1/namespaces/{namespace}/virtualmachines/{name}")
+            state_vm = current
             meta = current.get("metadata") or {}
             if (meta.get("uid") != receipt.get("uid") or meta.get("deletionTimestamp") or
                     not contains(current.get("spec"), vm["spec"])):
@@ -81,6 +84,22 @@ def plan(prepared, read, nodes, *, created=None, threshold=88):
             single = CAPACITY.plan(vm, read, nodes, action="create", planned_claims=definitions, warning_percent=threshold)
             blockers.extend(f"{name}: {text}" for text in single["blockers"])
             warnings.update(single["warnings"])
+        state = STATE.inspect(state_vm, vm["spec"]["template"]["spec"], configuration, read,
+                              vmi=vmi, version=kubevirt_version)
+        blockers.extend(f"{name}: {text}" for text in state["blockers"])
+        warnings.update(state["warnings"])
+        if state["volumes"]:
+            own_ids = {pod["metadata"]["uid"] for pod in owned} if receipt else set()
+            state_disks = {"metadata": state_vm["metadata"], "spec": {"template": {"spec": {"volumes": state["volumes"]}}}}
+            evidence = CAPACITY.dependencies(state_disks, read, state["planned_claims"], pods=[
+                pod for pod in pods if pod.get("metadata", {}).get("uid") not in own_ids])
+            blockers.extend(f"{name}: {text}" for text in evidence["blockers"])
+            warnings.update(evidence["warnings"])
+        if set(claims) & set(state["planned_claims"]):
+            blockers.append(f"{name}: disk name collides with controller-managed persistent state")
+        else:
+            claims.update(state["planned_claims"])
+        model["manifest"]["spec"]["template"]["spec"]["volumes"].extend(state["volumes"])
         entries.append({"name": name, "deployment": model["manifest"], "replicas": count,
                         "workload_kind": "vm", "memory_estimate_bytes": model["memory_estimate_bytes"]})
     nodes = copy.deepcopy(nodes)

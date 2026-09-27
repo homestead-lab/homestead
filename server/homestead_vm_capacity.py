@@ -10,6 +10,7 @@ from urllib.parse import quote
 import homestead_place as PLACE
 import homestead_vm_resources as VMRES
 import homestead_pod_resources as RESOURCES
+import homestead_vm_state as STATE
 
 
 def _items(read, path):
@@ -215,10 +216,29 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
         dependency_vm["spec"]["template"]["spec"] = copy.deepcopy(vmi["spec"])
     elif expanded_spec is not None:
         dependency_vm["spec"]["template"]["spec"] = copy.deepcopy(expanded_spec)
+    state = STATE.inspect(dependency_vm, dependency_vm["spec"]["template"]["spec"], configuration, read,
+                          vmi=vmi, version=kubevirt_version)
+    blockers.extend(state["blockers"])
+    warnings.extend(state["warnings"])
+    planned_claims = dict(planned_claims or {})
+    if set(planned_claims) & set(state["planned_claims"]):
+        blockers.append("VM disk name collides with controller-managed persistent state")
+    else:
+        planned_claims.update(state["planned_claims"])
+    for volume in state["volumes"]:
+        claim = volume["persistentVolumeClaim"]["claimName"]
+        if action == "unpause" and resident_node and not any(
+                (row.get("persistentVolumeClaim") or {}).get("claimName") == claim
+                for row in manifest["spec"]["template"]["spec"].get("volumes") or []):
+            blockers.append("The current launcher does not mount its verified persistent state PVC; inspect it before resuming")
+        for target in (manifest["spec"]["template"]["spec"], dependency_vm["spec"]["template"]["spec"]):
+            volumes = target.setdefault("volumes", [])
+            if not any((row.get("persistentVolumeClaim") or {}).get("claimName") == claim for row in volumes):
+                volumes.append(copy.deepcopy(volume))
     evidence = dependencies(dependency_vm, read, planned_claims, pods=dependency_pods)
     blockers.extend(evidence["blockers"])
     warnings.extend(evidence["warnings"])
-    context["dependencies"] = {**model["dependencies"], **evidence["context"]}
+    context["dependencies"] = {**model["dependencies"], **state["dependencies"], **evidence["context"]}
     result = PLACE.manifest_plan(manifest, namespace, name, 1, warning_percent,
                                  planned_claims=planned_claims, pod_snapshot=pods, nodes_snapshot=nodes,
                                  read=read, memory_estimate_bytes=model["memory_estimate_bytes"],
