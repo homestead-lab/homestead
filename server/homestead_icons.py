@@ -14,6 +14,7 @@ import socket
 import tempfile
 import urllib.parse
 import urllib.request
+import homestead_shared as SHARED
 
 
 MAX_ICON_BYTES = 256 * 1024
@@ -116,19 +117,20 @@ def store(data, data_dir, mime=""):
     digest = hashlib.sha256(data).hexdigest()
     ext = MIME_EXTENSIONS[mime]
     icon_dir = os.path.join(data_dir, "icons")
-    os.makedirs(icon_dir, mode=0o750, exist_ok=True)
     path = os.path.join(icon_dir, f"{digest}.{ext}")
-    if not os.path.exists(path):
-        fd, temporary = tempfile.mkstemp(prefix=".icon-", dir=icon_dir)
-        try:
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(data)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, path)
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
+    with SHARED.write_scope(path):
+        os.makedirs(icon_dir, mode=0o750, exist_ok=True)
+        if not os.path.exists(path):
+            fd, temporary = tempfile.mkstemp(prefix=".icon-", dir=icon_dir)
+            try:
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(data)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, path)
+            finally:
+                if os.path.exists(temporary):
+                    os.unlink(temporary)
     return f"/api/icons/{digest}.{ext}"
 
 

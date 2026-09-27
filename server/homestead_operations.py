@@ -9,6 +9,7 @@ are deliberately excluded.
 import homestead_shared as SHARED
 import homestead_vm_power_receipts as POWER_RECEIPTS
 import homestead_storage_conflicts as STORAGE_CONFLICTS
+from homestead_storage_journal import Held as StorageHeld
 import json
 import os
 import secrets
@@ -28,6 +29,12 @@ LEGACY_STORE = "operations.json"
 LEGACY_MARKER = ".operations-initialized.json"
 MAX_OPERATIONS = 100
 TERMINAL = {"succeeded", "failed", "cancelled"}
+WRITE_GUARD = None  # installed by the server; checked before dispatch and persistence
+
+
+def require_write():
+    if WRITE_GUARD is not None:
+        WRITE_GUARD()
 # A cancel that has begun and not yet finished. The poll leaves such a job
 # alone, so a step cannot move it on while it is being put back.
 CANCELLING = "cancelling"
@@ -96,6 +103,7 @@ def _read():
 
 
 def _write(items):
+    require_write()
     initialized = _initialized()
     # Record consumption before writing/pruning visible history. A clock jump,
     # history clear or restart must never resurrect an already-used approval.
@@ -238,7 +246,7 @@ def _public(item):
            if key not in ("ref", "cancel_started", "previous_status", "history", "_legacy_store")}
     # Every job still going can be cancelled; what that does is asked for
     # separately, as it reads Kubernetes and the tray is polled often.
-    out["cancellable"] = item.get("status") not in TERMINAL and (
+    out["cancellable"] = item.get("kind") != "self-data-handoff" and item.get("status") not in TERMINAL and (
         item.get("status") != CANCELLING or _cancel_stale(item))
     out["cleanable"] = _cleanable(item)
     out["dismissible"] = item.get("status") in TERMINAL and not _receipt_needed(item) and not _recovery_needed(item)
@@ -256,6 +264,8 @@ def _public(item):
         out["batch_name"] = item["ref"]["name"]
     if item.get("kind") == "snapshot-delete":
         out["cancellable"] = False  # Longhorn merging cannot be undone or safely interrupted.
+    if item.get("kind") == "self-data-prepare":
+        out["cancellable"] = out["cleanable"] = False
     if item.get("kind") == "workload-rename":
         out["tracking_only"] = True
         out["rename_recovery"] = True
@@ -277,6 +287,10 @@ def _public(item):
 
 
 def _receipt_needed(item):
+    if item.get("kind") == "self-data-handoff":
+        return True  # Keep the source dispatch identity even after completion.
+    if item.get("kind") == "self-data-prepare" and item.get("ref", {}).get("prepared"):
+        return True  # The final move and later cleanup still need these exact identities.
     if not POWER_RECEIPTS.protected(item.get("kind"), item.get("ref") or {}):
         return False
     ref = item.get("ref") or {}
@@ -626,6 +640,7 @@ RESOLVERS = {
 def _refresh(item):
     if item.get("status") in TERMINAL or item.get("status") == CANCELLING:
         return False
+    require_write()  # outside resolver error handling: a hold is not job progress
     resolver = RESOLVERS.get(item.get("kind"))
     if not resolver:
         return _finish(item, "failed", item.get("progress", 0), "Unknown operation type")
@@ -652,12 +667,19 @@ def _refresh(item):
 
 
 def snapshot():
-    """Read job history without advancing resolvers or writing to Kubernetes."""
-    with _lock:
-        return [_public(item) for item in _read()]
+    """Inspect atomic saved files without creating locks or advancing jobs.
+
+    This is a display snapshot, not a mutation authorization. The two journals
+    are not a transaction; inconsistent/unavailable reads remain an error.
+    """
+    return [_public(item) for item in _read()]
 
 
 def list_operations():
+    try:
+        require_write()
+    except StorageHeld:
+        return snapshot()  # inspection stays available without advancing old jobs
     with _lock:
         items = _read()
         changed = False
@@ -778,6 +800,9 @@ def _plan_for(item):
                       "and only stops showing here."],
             "confirm": "", "needs": "operator", "options": []}
     entry = CANCELLERS.get(item.get("kind"))
+    if item.get("kind") == "self-data-handoff":
+        plan.update(can=False, why_not="A data move cannot be safely cancelled after handoff. Both volumes and its progress record are retained.")
+        return plan
     if item.get("kind") == "reclass" and "storage_protocol" in item.get("ref", {}):
         plan.update(can=False, why_not="Use the storage move review to pause safely; cancelling must not roll back or delete retained data")
         return plan

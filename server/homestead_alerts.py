@@ -50,11 +50,7 @@ def _load():
 
 
 def _save(state):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    tmp = SHARED.temporary(_path())
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(state, handle)
-    os.replace(tmp, _path())
+    SHARED.write_json(_path(), state)
 
 
 def _append(state, fact, phase, now):

@@ -14,6 +14,7 @@ import struct
 import threading
 import time
 import urllib.parse
+import homestead_shared as SHARED
 
 
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -130,9 +131,10 @@ def kubernetes_message(payload):
 def audit(data_dir, event):
     record = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **event}
     path = os.path.join(data_dir, "console-audit.jsonl")
-    os.makedirs(data_dir, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, separators=(",", ":")) + "\n")
+    with SHARED.write_scope(path):
+        os.makedirs(data_dir, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, separators=(",", ":")) + "\n")
 
 
 class ConsoleProxy:

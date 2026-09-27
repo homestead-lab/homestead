@@ -24,7 +24,7 @@ async function copyText(text) {
 async function readClipboard() {
   try { return navigator.clipboard?.readText ? await navigator.clipboard.readText() : null; } catch (_) { return null; }
 }
-const HOMESTEAD_VERSION = "2.8.201";
+const HOMESTEAD_VERSION = "2.8.202";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -328,6 +328,7 @@ function dismissModal() {
   closeModal();
 }
 function closeModal(updateRoute = true) {
+  if (window.selfDataClose) window.selfDataClose();
   window.__modalGuard = null;
   MODAL_STACK.length = 0;
   paintModalBack();
