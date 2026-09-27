@@ -288,12 +288,14 @@ def deletion_plan(namespace, name, volume=""):
     }
 
 
-def delete(cfg):
+def delete(cfg, validate=None):
     namespace, name = _identity(cfg.get("namespace"), cfg.get("name"))
     action = cfg.get("action")
     if action not in ("delete_claim", "delete_data"):
         raise ValueError("action must be delete_claim or delete_data")
     plan = deletion_plan(namespace, name, cfg.get("volume", ""))
+    if validate is not None:
+        plan = validate(plan)
     if not cfg.get("uid") or cfg.get("uid") != plan["uid"]:
         raise ValueError("the volume changed after preview; review its impact again")
     if cfg.get("confirmation") != name:

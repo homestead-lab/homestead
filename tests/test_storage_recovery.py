@@ -79,6 +79,12 @@ class StorageRecoveryTests(unittest.TestCase):
         self.assertIn("pause", result["tokens"])
         self.assertNotIn("continue", result["tokens"])
 
+    def test_steps_stay_on_stop_until_workload_controllers_are_quiescent(self):
+        self.cluster.objects["/apis/apps/v1/namespaces/lab/deployments/app"]["status"]["observedGeneration"] = 0
+        self.assertEqual(8, self.poll()[1])
+        steps = self.load()["steps"]
+        self.assertEqual("stop", next(row["id"] for row in steps if row["state"] == "active"))
+
     def test_pause_keeps_resources_and_continue_only_changes_history(self):
         before = len(self.cluster.sent)
         self.act("pause")

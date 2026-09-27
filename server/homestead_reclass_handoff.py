@@ -131,7 +131,9 @@ def claim(item, name, writer, *, source=False):
                 (pv_expected.get("uid" if source else "pv_uid") and pv_meta["uid"] != pv_expected["uid" if source else "pv_uid"]) or
                 (owner.get("uid"), owner.get("name"), owner.get("namespace")) != (meta["uid"], name, ref["namespace"])):
             raise JOURNAL.Held("A backing volume identity or ownership changed")
-        ref["copy_claims"][name] = {"uid": meta["uid"], "pv": volume, "pv_uid": pv_meta["uid"]}
+        csi = pv.get("spec", {}).get("csi", {})
+        ref["copy_claims"][name] = {"uid": meta["uid"], "pv": volume, "pv_uid": pv_meta["uid"],
+                                   "csi_driver": csi.get("driver"), "csi_handle": csi.get("volumeHandle")}
     elif source:
         raise JOURNAL.Held("The source backing volume is unavailable")
     else:
@@ -149,6 +151,32 @@ def pods(item):
 def _owned(pod, uid):
     return any(o.get("kind") == "Job" and o.get("uid") == uid and o.get("controller") is True
                for o in pod.get("metadata", {}).get("ownerReferences", []))
+
+
+def _copy_progress(item, job_uid, copy_pods):
+    """Best-effort progress from an exact Job-owned pod, never a label match."""
+    for pod in copy_pods:
+        if pod.get("status", {}).get("phase") not in ("Running", "Succeeded"):
+            continue
+        identity = JOURNAL.identity(pod)
+        path = f"/api/v1/namespaces/{item['ref']['namespace']}/pods/{pod['metadata']['name']}"
+        try:
+            output = str(RC.ktext(path + "/log?container=copy&tailLines=40") or "")
+            current = RC.kget(path)
+        except Exception:
+            continue  # inaccessible logs are not a fabricated percentage
+        if JOURNAL.identity(current)["uid"] != identity["uid"] or not _owned(current, job_uid):
+            raise JOURNAL.Held("The copy progress pod was replaced; inspect its Job before continuing")
+        progress = RC.copy_progress(output, RC._bytes(item["ref"]["size"]))
+        item["copy"] = progress
+        if progress["verifying"]:
+            return 70, "Checking the copied data against the original"
+        if progress["percent"]:
+            return 15 + int(progress["percent"] * .5), f"Copying {progress['percent']}%" + (f" at {progress['speed']}" if progress["speed"] else "")
+    item["copy"] = {"percent": None, "speed": "", "verifying": False, "verified": False, "unavailable": True}
+    return 35, ("Copy running; waiting for reported progress and checksum verification" if any(
+        p.get("status", {}).get("phase") == "Running" for p in copy_pods) else
+        "Waiting for the copy pod and volume attachments; progress is unavailable")
 
 
 def copy_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journal):
@@ -208,7 +236,8 @@ def copy_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journal):
         raise JOURNAL.Held("The copy Job failed; both volumes and workload holds are retained")
     copy_pods = [p for p in using if _owned(p, job_uid)]
     if not complete or any(p.get("status", {}).get("phase") not in RC.FINISHED for p in copy_pods):
-        return "running", 35, "Copying and checking data; waiting for the copy Job and its pods to finish"
+        progress, message = _copy_progress(item, job_uid, copy_pods)
+        return "running", progress, message
     if not copy_pods or not all(ref["copy_claims"][n].get("pv") for n in (ref["claim"], ref["temp"])):
         raise JOURNAL.Held("Copy verification evidence or bound volume identity is unavailable")
     verified = False

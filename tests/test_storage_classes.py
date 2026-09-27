@@ -22,6 +22,8 @@ CLASSES = {"items": [
 
 class StorageClassTests(unittest.TestCase):
     def setUp(self):
+        for name in ("kget", "ksend"):
+            self.addCleanup(setattr, server, name, getattr(server, name))
         self.sent = []
         self.claims = {"items": [{"spec": {"storageClassName": "longhorn-r2"}}]}
         server.kget = lambda path, **kw: (copy.deepcopy(CLASSES) if "storageclasses" in path
@@ -105,6 +107,8 @@ class StorageClassTests(unittest.TestCase):
 
 class LonghornV2Tests(unittest.TestCase):
     def setUp(self):
+        for name in ("kget", "ksend"):
+            self.addCleanup(setattr, server, name, getattr(server, name))
         self.sent = []
         self.enabled = "true"
         self.objects = {
