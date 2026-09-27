@@ -447,37 +447,19 @@ def k3s_cancel(item, _options):
 
 # --------------------------------------------------------- data and storage
 def restructure_plan(item):
-    ref = item["ref"]
-    name, phase = ref["name"], ref.get("phase") or "stopping"
-    if phase not in ("stopping", "copying"):
-        return {"mode": "forget", "keeps": [f"The copy is done; {name} is starting on its new storage"]}
-    _, target, _ = rollout_target(ref["namespace"], name, item.get("started_at"))
-    undo = ["Stops the copy"] if phase == "copying" else []
-    keeps = ["The old volumes were only read, and are as they were",
-             "Volumes the edit made are kept, with anything copied so far; delete them from Volumes if not wanted"]
-    if not target:
-        return {"mode": "stop", "undo": undo or ["Stops before anything is copied"],
-                "keeps": [f"{name} stays stopped, with the edited storage: point its paths back and start it"] + keeps}
-    count = int(ref.get("replicas") or 0)
-    return {"mode": "rollback", "severity": "high",
-            "undo": undo + [f"{name} goes back to its storage as it was before the edit"
-                            + (f" and starts again ({_s(count, 'replica')})" if count else ", stopped as it was")],
-            "keeps": keeps}
+    return {"mode": "forget", "needs": "admin", "confirm": item["ref"]["name"],
+            "action": "Acknowledge and stop tracking",
+            "keeps": ["Legacy copy Jobs and all volumes remain; a copy already submitted may continue.",
+                      "Inspect the copy and storage mappings before a fresh Start review. Nothing is rolled back."],
+            "options": [{"id": "ack", "label": "I inspected the copy and accept partial data or late effects",
+                         "detail": "Stopping tracking does not stop the copy, restore mappings, or restart the app.", "default": False}]}
 
 
-def restructure_cancel(item, _options):
-    ref = item["ref"]
-    ns, name = ref["namespace"], ref["name"]
-    if ref.get("job"):
-        _delete(f"/apis/batch/v1/namespaces/{_q(ns)}/jobs/{_q(ref['job'])}?propagationPolicy=Background")
-    if ref.get("phase") not in ("stopping", "copying"):
-        return "Stopped following it"
-    _, target, _ = rollout_target(ns, name, item.get("started_at"))
-    ref["phase"] = "cancelled"
-    if not target:
-        return f"Copy stopped; {name} stays stopped with the edited storage"
-    roll_back(ns, name, target, int(ref.get("replicas") or 0))
-    return f"{name} is back on its storage as it was" + (" and starting" if ref.get("replicas") else "")
+def restructure_cancel(item, options):
+    if options.get("ack") is not True:
+        raise ValueError("Acknowledge the copy's partial data and possible late effects first")
+    item["ref"]["retain_resources"] = False
+    return "Tracking stopped only. Copy Jobs, workload configuration and all volumes are unchanged; no restart or rollback was sent."
 
 
 def reclass_plan(item):

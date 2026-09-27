@@ -642,9 +642,9 @@ def edit_workload(cfg, hold=False, prepared=None):
         ksend("PUT", path, cm)
     _create_pending_pvcs(ns, prepared["claims"])
     held = RESTRUCTURE.hold(dep) if hold else None
-    ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
+    saved = ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
     _bust("wl", "ov", "flow", "impact:")
-    return {"ok": True, "name": name, **({"held_replicas": held} if hold else {})}
+    return {"ok": True, "name": name, **({"held_replicas": held, "_held_receipt": saved} if hold else {})}
 
 
 # --------------------------------------------------------------- move

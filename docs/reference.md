@@ -900,7 +900,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.189/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.190/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -911,7 +911,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.189 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.190 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1073,9 +1073,27 @@ save is applied with the container stopped, a job copies each old location to
 its new one (keeping owners and times), and the container starts again. A new
 volume, copied into or started empty, is owned as the old location was: a new
 volume is root's, and an app that runs as its own user could not write to it. The old
-volumes are only read, never deleted, so pointing the paths back undoes it;
-remove them from Volumes once you are happy. Progress is in the job tray, and
-the steps carry on from where they were if Homestead restarts part-way.
+volumes are never deleted. Source-only mounts are read-only; a move into another
+folder of the same volume necessarily writes that volume. Existing destination
+files can be overwritten, so pointing paths back is not a guaranteed undo.
+Take a backup first. Progress and logs are in **Recent jobs**.
+
+The reviewed move records intent before editing or submitting a copy Job, waits
+for the original pods to exit, and checks helper placement before copying. After
+the confirmed Job completes and releases its pods, placement is checked again
+before restarting. Completion waits for Deployment readiness, not merely an
+accepted restart request. Workload/PVC/backing-volume identities and the held
+configuration must still match. Other observed consumers of either claim block
+the handoff. Capacity warnings can be acknowledged; hard placement blockers cannot.
+
+A restart resumes confirmed observation steps, never an uncertain write. Failed
+or ambiguous steps retain volumes and copy Jobs without automatic rollback.
+**Inspect outcome** can release a verified inactive copy's hold after admin
+confirmation, without changing replicas or mappings; review data before starting.
+Missing creation receipts require manual Kubernetes inspection. Initial edits
+span multiple objects and can partially apply. This is not a backup, free-space
+guarantee, distributed storage lock or proof of application consistency. Legacy
+jobs lacking receipts stop for inspection; upgrade every Homestead replica first.
 
 The same RAM-backed volume is offered wherever storage is chosen — the deploy
 wizard, the container editor and the import form all share one picker — so an
@@ -1731,10 +1749,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.189`, the workflow publishes:
+For a release such as `v2.8.190`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.189
+ghcr.io/wjcloudy/homestead:2.8.190
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -1745,8 +1763,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.189
-git push origin v2.8.189
+git tag v2.8.190
+git push origin v2.8.190
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.

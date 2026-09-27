@@ -5,6 +5,8 @@ JOB = "homestead.io/import-job"
 
 def pending(deployment, namespace, read):
     meta = deployment.get("metadata") or {}
+    if (meta.get("annotations") or {}).get("homestead.io/storage-copy-job"):
+        return "A storage copy holds this workload stopped. Inspect its Recent jobs entry before starting or changing it."
     name = (meta.get("annotations") or {}).get(JOB)
     if not name or not meta.get("uid"):
         return ""  # an uncreated preview has no copy to wait for yet

@@ -86,3 +86,21 @@ test("Host review names budgets and local data with escaped content", async () =
   assert.match(t.html(), /&lt;files&gt;/);
   assert.doesNotMatch(t.html(), /id="pw_execute"/);
 });
+
+test("Storage move has one plain-language review with escaped paths and both placement phases", async () => {
+  const t = setup({ ...review, capacity: { ...review.capacity, copy_helper: review.capacity } });
+  await t.c.window.editReview({ ns: "lab", name: "demo", containers: [{ name: "<main>", volumes: [
+    { path: "/data", source: "new", sub_path: "<folder>", copy_from: { claim: "old" } }
+  ] }] });
+  assert.match(t.html(), /&lt;main&gt;/);
+  assert.match(t.html(), /old → new\/&lt;folder&gt;/);
+  assert.match(t.html(), /Existing destination files may be overwritten/);
+  assert.match(t.html(), /no automatic rollback or retry/);
+  assert.match(t.html(), /Temporary copy helper/);
+  assert.match(t.html(), /Start data move/);
+  await t.c.window.confirmEdit();
+  assert.equal(t.sent.length, 0);
+  t.fields["#editCapacityConfirm"].checked = true;
+  await t.c.window.confirmEdit();
+  assert.equal(t.sent.length, 1);
+});

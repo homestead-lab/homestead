@@ -319,20 +319,26 @@ window.editSave = async (ns, name) => {
   if ($("#e_lan_on")) body.lan = $("#e_lan_on").checked && $("#el_ip") ? containerLanRead("el") : null;
   const nodeSelect = $("#e_node");
   if (nodeSelect.value !== (nodeSelect.dataset.current || "")) body.node = nodeSelect.value || null;
-  const moves = containers.flatMap(container => container.volumes.filter(volume => volume.copy_from));
   if ((STATE.data.wl || []).some(x => x.self && x.ns === ns && x.name === name) && !body.autostart) {
     if (!confirm(`Turning autostart off stops Homestead, and this page with it. Nothing here can start it again - it stays down until someone runs\n\n  kubectl -n ${ns} scale deployment/${name} --replicas=1\n\non the cluster. Stop it anyway?`)) return;
     body.confirm_self = true;
   }
-  const where = (claim, folder) => folder ? `${claim}/${folder}` : claim;
-  const copying = moves.filter(volume => volume.copy_from.data !== false);
-  if (moves.length && !confirm((copying.length ? `Copy ${copying.length} location${copying.length === 1 ? "" : "s"} to new storage?`
-        : `Start ${moves.length} path${moves.length === 1 ? "" : "s"} on a new, empty volume?`) + "\n\n" +
-      moves.map(volume => `${volume.path}: ${volume.copy_from.data === false ? "empty, owned like " : ""}${where(volume.copy_from.claim, volume.copy_from.sub_path)} → ${where(volume.source, volume.sub_path)}`).join("\n") +
-      `\n\n${name} stops, ${copying.length ? "the data is copied" : "the new volume is made writable for it"}, and it starts again. ` +
-      "The old volumes are kept; delete them from Volumes once you have checked.")) return;
   await window.editReview(body);
 };
+function storageCopyReview(config, capacity) {
+  const where = (claim, folder) => esc(folder ? `${claim}/${folder}` : claim);
+  const rows = (config.containers || []).flatMap(c => (c.volumes || []).filter(v => v.copy_from).map(v => `
+    <div class="note"><b>${esc(c.name)} · ${esc(v.path)}</b><br>
+      ${where(v.copy_from.claim, v.copy_from.sub_path)} → ${where(v.source, v.sub_path)}
+      ${v.copy_from.data === false ? '<br><span class="muted">Prepare an empty location; do not copy files.</span>' : ""}</div>`)).join("");
+  return `<p>The app stops while its storage changes. Follow progress in <b>Recent jobs</b>.</p>${rows}
+    <p>Existing destination files may be overwritten. Volumes are kept, but this is not a backup.</p>
+    <div class="note ${capacity.blocked ? "bad" : ""}">${capacity.blocked ? "This move is blocked. Check placement details below." :
+      "Before copying and restarting, Homestead checks placement again. If anything fails or cannot be confirmed, it stops for inspection—no automatic rollback or retry."}</div>
+    <details ${capacity.blocked ? "open" : ""}><summary>Capacity and placement details</summary>
+      <h3>After the move</h3>${deployCapacityHtml(capacity)}
+      <h3>Temporary copy helper</h3>${deployCapacityHtml(capacity.copy_helper)}</details>`;
+}
 window.editReview = async body => {
   EDIT_REVIEW = null;
   const sequence = ++EDIT_REVIEW_SEQUENCE;
@@ -343,12 +349,13 @@ window.editReview = async body => {
     if (!review.capacity || !review.capacity_token) throw new Error("Capacity review unavailable; refresh before saving.");
     EDIT_REVIEW = { config, ...review, submitting: false };
     const rename = review.capacity.rename;
-    childModal(rename ? "Rename workload" : "Review workload changes", `
+    const copying = !!review.capacity.copy_helper;
+    childModal(rename ? "Rename workload" : copying ? "Move container data" : "Review workload changes", `
       ${rename ? `<p><b>${esc(rename.from)}</b> → <b>${esc(rename.to)}</b></p><p>Only the workload name changes. Save other edits separately. Expect a short outage; volumes and service addresses are kept.</p>` : ""}
       ${rename ? `<div class="note ${review.capacity.blocked ? "bad" : ""}">${review.capacity.blocked ? "Rename is blocked by the placement check. Review the details below." : "If a step fails, inspect both workload names in Recent jobs. Homestead will not automatically restart the old copy or remove the replacement."}</div>
-        <details ${review.capacity.blocked ? "open" : ""}><summary>Capacity and placement · ${(review.capacity.warnings || []).length} warning(s)</summary>${deployCapacityHtml(review.capacity)}</details>` : deployCapacityHtml(review.capacity)}
-      ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="editCapacityConfirm"> ${rename ? "I accept the outage and capacity warnings" : "Proceed despite capacity warnings — I accept the restart, placement, memory and storage risks"}</label>` : ""}
-      <div class="modalactions"><button class="btn" onclick="modalBack()">Back to edit</button><button id="editGo" class="btn pri" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmEdit()">${rename ? "Rename workload" : "Save reviewed changes"}</button></div>`, true, "operation-review");
+        <details ${review.capacity.blocked ? "open" : ""}><summary>Capacity and placement · ${(review.capacity.warnings || []).length} warning(s)</summary>${deployCapacityHtml(review.capacity)}</details>` : copying ? storageCopyReview(config, review.capacity) : deployCapacityHtml(review.capacity)}
+      ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="editCapacityConfirm"> ${rename ? "I accept the outage and capacity warnings" : copying ? "I accept the outage, destination changes and capacity warnings" : "Proceed despite capacity warnings — I accept the restart, placement, memory and storage risks"}</label>` : ""}
+      <div class="modalactions"><button class="btn" onclick="modalBack()">Back to edit</button><button id="editGo" class="btn pri" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmEdit()">${rename ? "Rename workload" : copying ? "Start data move" : "Save reviewed changes"}</button></div>`, true, "operation-review");
   } catch (e) { toast(e.message, "bad"); }
 };
 window.confirmEdit = async () => {

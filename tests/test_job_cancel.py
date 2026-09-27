@@ -425,28 +425,21 @@ class RestructureTests(Store):
         super().setUp()
         CANCEL.register(OPS)
 
-    def test_a_copy_cancelled_puts_the_storage_back_and_starts_the_app_as_it_ran(self):
+    def test_legacy_copy_recovery_never_deletes_or_rolls_back_or_restarts(self):
         op = self.job("restructure", {"namespace": "lab", "name": "app", "moves": [], "replicas": 2,
                                       "phase": "copying", "job": "app-restructure-abc"})
-        started = self.stored(op)["started_at"]
-        self.cluster.objects[self.DEP] = {
-            "metadata": {"name": "app", "uid": "u", "annotations": {CANCEL.REVISION: "2", RESTRUCTURE.HELD: "2"}},
-            "spec": {"replicas": 0, "selector": {"matchLabels": {"app": "app"}}, "template": {"spec": {"volumes": ["new"]}}}}
-        self.cluster.objects["/apis/apps/v1/namespaces/lab/replicasets"] = {"items": [
-            {"metadata": {"annotations": {CANCEL.REVISION: str(rev)}, "ownerReferences": [{"uid": "u"}],
-                          "creationTimestamp": made},
-             "spec": {"template": {"metadata": {"labels": {"app": "app"}}, "spec": {"volumes": [vols]}}}}
-            for rev, made, vols in ((1, "2026-01-01T00:00:00Z", "old"), (2, started, "new"))]}
+        self.cluster.objects[self.DEP] = {"metadata": {"name": "app", "uid": "u"},
+                                         "spec": {"replicas": 0, "template": {"spec": {"volumes": ["new"]}}}}
         self.cluster.objects["/apis/batch/v1/namespaces/lab/jobs/app-restructure-abc"] = {}
+        before = copy.deepcopy(self.cluster.objects)
         plan = OPS.cancel_plan(op)
-        self.assertEqual("rollback", plan["mode"])
-        self.assertIn("starts again (2 replicas)", plan["undo"][1])
-        OPS.cancel(op)
-        dep = self.cluster.objects[self.DEP]
-        self.assertEqual((2, ["old"]), (dep["spec"]["replicas"], dep["spec"]["template"]["spec"]["volumes"]))
-        self.assertNotIn(RESTRUCTURE.HELD, dep["metadata"]["annotations"])
-        self.assertNotIn("/apis/batch/v1/namespaces/lab/jobs/app-restructure-abc", self.cluster.objects)
-        self.assertEqual("cancelled", self.stored(op)["ref"]["phase"])
+        self.assertEqual("forget", plan["mode"])
+        with self.assertRaises(ValueError):
+            OPS.cancel(op, confirm="app")
+        OPS.cancel(op, {"ack": True}, confirm="app")
+        self.assertEqual(before, self.cluster.objects)
+        self.assertEqual([], self.cluster.calls)
+        self.assertTrue(self.stored(op)["tracking_stopped"])
 
 
 class ReclassTests(Store):

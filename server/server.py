@@ -25,6 +25,7 @@ import homestead_allocation_probe as ALLOCATION_PROBE
 import homestead_allocation_capacity as ALLOCATION_CAPACITY
 import homestead_allocation_evidence as ALLOCATION_EVIDENCE
 import homestead_rename as RENAME
+import homestead_copy_job as COPY_JOB
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -40,7 +41,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.189")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.190")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2501,12 +2502,24 @@ def edit_capacity_plan(config):
     if moves:
         if prepared["name"] != name:
             raise ValueError("rename the workload and move its data in separate saves")
+        if "lan" in config and (LAN.clean(config["lan"]) if config.get("lan") else None) != (LAN.read(current) or None):
+            raise ValueError("Change the LAN address and move storage in separate saves")
         proposed["spec"]["strategy"] = {"type": "Recreate"}
+        COPY_JOB.guards(current, kget)
+        COPY_JOB.validate_sources(config, current)
     threshold = get_app_settings()["thresholds"]["memory"]["critical"]
     plan = ROLLOUT_CAPACITY.plan(current, proposed, ns, kget, PLACE.get_nodes, PLACE.manifest_plan,
                                  threshold, planned_claims={row["name"]: row for row in prepared["claims"]})
     if moves:
-        plan["warnings"].append("data-copy helper placement is not simulated; final workload capacity must be rechecked if the cluster changes during copying")
+        helper = COPY_JOB.helper_manifest(ns, name, moves)
+        helper_plan = ROLLOUT_CAPACITY.plan(current, helper, ns, kget, PLACE.get_nodes, PLACE.manifest_plan,
+            threshold, planned_claims={row["name"]: row for row in prepared["claims"]})
+        plan["copy_helper"] = helper_plan
+        plan["blocked"] = plan["blocked"] or helper_plan["blocked"]
+        plan["requires_confirmation"] = True
+        plan["warnings"] += ["Copy helper: " + warning for warning in helper_plan["warnings"]]
+        plan["warnings"].append("Storage copy stops all containers. Placement is checked again before copying and restarting. Failed or uncertain steps keep the data and require inspection; no automatic rollback or deletion.")
+        plan["warnings"].append("Destination files may be merged or overwritten. This is not a backup or filesystem free-space/consistency guarantee; avoid external writers during the copy.")
     if moves or prepared["name"] != name or proposed["spec"].get("replicas", 1):
         import_blocker = PLACE.IMPORT_GUARD.pending(current, ns, kget)
         if import_blocker:
@@ -2515,6 +2528,38 @@ def edit_capacity_plan(config):
     if config.get("lan"):
         plan["warnings"].append("LAN network attachment availability is not guaranteed by the memory and placement review")
     return prepared, context, plan
+
+
+def apply_reviewed_edit(b, prepared, hold=False):
+    """Commit an already reviewed edit. Copy setup journals before calling this."""
+    persist_icon_config(b)
+    if "icon" in b:
+        ann = prepared["deployment"]["metadata"].setdefault("annotations", {})
+        for key in ("icon", "icon-source"):
+            ann.pop(NAMES.key(key), None)
+        if b["icon"]:
+            ann[NAMES.key("icon")] = b["icon"]
+            ann[NAMES.key("icon-source")] = b.get("icon_source", b["icon"])
+    result = LC.edit_workload(b, hold=hold, prepared=prepared)
+    if "lan" in b:
+        lan_message = edit_lan(b["ns"], result.get("name") or b["name"], b.get("lan"))
+        if lan_message:
+            result["lan"] = lan_message
+            if b.get("lan"):
+                b["network_mode"] = "lan"
+    ports = [port for container in b.get("containers") or [] for port in container.get("ports") or []]
+    if b.get("manage_ports") or any("expose" in port for port in ports):
+        message = NETWORK.sync_workload_ports(b["ns"], result.get("name") or b["name"], ports, network_mode=b.get("network_mode"))
+        if message:
+            result["network"] = message
+            _cache.pop("network", None)
+    return result
+
+
+def copy_admission(dep):
+    return PLACE.manifest_plan(dep, dep["metadata"]["namespace"], dep["metadata"]["name"], dep["spec"]["replicas"],
+        get_app_settings()["thresholds"]["memory"]["critical"], read=kget,
+        nodes_snapshot=PLACE.get_nodes(), pod_snapshot=ROLLOUT_CAPACITY.items(kget, "/api/v1/pods"))
 
 
 def reviewed_deploy(b):
@@ -4678,7 +4723,11 @@ OPS.RESOLVERS["volume-restore"] = _restore_then_tidy
 UPGRADES.bind(kget)
 PORTAL.bind(kget, ksend, DEFAULT_NS, lambda: cached("wl", 5, get_workloads),
             lambda source: ICONS.persist(source, DATA_DIR), lambda reference: ICONS.data_url(reference, DATA_DIR))
-OPS.RESOLVERS["restructure"] = RESTRUCTURE.resolve
+OPS.RESOLVERS["restructure"] = COPY_JOB.legacy_status
+OPS.RESOLVERS[COPY_JOB.KIND] = lambda item: COPY_JOB.resolve(item, kget, ksend, OPS, copy_admission)
+OPS.CANCELLERS[COPY_JOB.KIND] = (lambda item: COPY_JOB.recovery_plan(item, kget, OPS),
+                                lambda item, options: COPY_JOB.recovery_run(item, options, kget, ksend, OPS))
+OPS.CLEANUPS.update((COPY_JOB.KIND, "restructure"))
 import homestead_reclass as RECLASS
 import homestead_vmstore as VMSTORE
 import homestead_nodeshell as NODESHELL
@@ -6995,50 +7044,16 @@ class H(BaseHTTPRequestHandler):
                     result = RENAME.dispatch(b, context, prepared["deployment"], kget, ksend, OPS, admission)
                     _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
                     return self._send(200, result)
-                persist_icon_config(b)
-                if "icon" in b:
-                    ann = prepared["deployment"]["metadata"].setdefault("annotations", {})
-                    for key in ("icon", "icon-source"):
-                        ann.pop(NAMES.key(key), None)
-                    if b["icon"]:
-                        ann[NAMES.key("icon")] = b["icon"]
-                        ann[NAMES.key("icon-source")] = b.get("icon_source", b["icon"])
-                # Paths moved to other storage bring their data: the edit is
-                # saved stopped and a job copies before it starts again.
                 moves = RESTRUCTURE.copies(b)
                 guard_self(b.get("ns", ""), b.get("name", ""),
                            stopping=("autostart" in b and not b["autostart"]) or
                                     ("replicas" in b and int(b.get("replicas") or 0) == 0),
-                           confirmed=b.get("confirm_self") is True,
-                           renaming=bool(b.get("workload_name")) and b.get("workload_name") != b.get("name"),
-                           moving=bool(moves))
-                result = LC.edit_workload(b, hold=bool(moves), prepared=prepared)
+                           confirmed=b.get("confirm_self") is True, moving=bool(moves))
                 if moves:
-                    result["operation"] = OPS.start(
-                        "restructure", f"Move {b['name']}'s data",
-                        {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]}, "/containers",
-                        {"namespace": b["ns"], "name": b["name"], "moves": moves,
-                         "replicas": result.get("held_replicas", 0), "phase": "stopping"},
-                        f"Stopping {b['name']} to copy {len(moves)} location{'s' if len(moves) != 1 else ''}")
-                if "lan" in b:
-                    lan_message = edit_lan(b["ns"], result.get("name") or b["name"], b.get("lan"))
-                    if lan_message:
-                        result["lan"] = lan_message
-                        if b.get("lan"):
-                            b["network_mode"] = "lan"
-                ports = [port for container in b.get("containers") or []
-                         for port in container.get("ports") or []]
-                # manage_ports marks a client that owns the whole port list, so
-                # removing the last port removes the Service too. Older clients
-                # are recognised by a port carrying expose, and a body with no
-                # ports at all from one of those is left alone.
-                if b.get("manage_ports") or any("expose" in port for port in ports):
-                    message = NETWORK.sync_workload_ports(
-                        b["ns"], result.get("name") or b["name"], ports,
-                        network_mode=b.get("network_mode"))
-                    if message:
-                        result["network"] = message
-                        _cache.pop("network", None)
+                    result = COPY_JOB.start(b, context, prepared, moves, kget, OPS,
+                                            lambda: apply_reviewed_edit(b, prepared, hold=True))
+                else:
+                    result = apply_reviewed_edit(b, prepared)
                 return self._send(200, result)
             if p == "/api/move/preview":
                 return self._send(200, preview_host_move(b))
