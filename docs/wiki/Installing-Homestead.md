@@ -48,7 +48,7 @@ Sessions last 12 hours of inactivity, or 30 days with **Keep me signed in**, and
 never more than 90 days. Changing a password signs that account out
 everywhere.
 
-![Settings - Cluster](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-settings-cluster.png)
+![Settings - Cluster](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-settings-cluster.jpg)
 
 ## Things worth doing first
 

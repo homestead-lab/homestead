@@ -1,7 +1,7 @@
 // Release screenshots, from the demo data - never a live cluster.
 //
 // The README and the wiki link to these by name from the latest release
-// (releases/latest/download/homestead-<name>.png), so every release brings
+// (releases/latest/download/homestead-<name>.jpg), so every release brings
 // them up to date. A shot that cannot be taken is reported and skipped:
 // one missing picture is no reason to hold a release back.
 import { chromium } from "playwright";
@@ -34,7 +34,7 @@ const capture = async (view, name, before) => {
     }
     if (before) await page.evaluate(before);
     await settle();
-    await page.screenshot({ path: `${output}/homestead-${name}.png`, fullPage: true });
+    await page.screenshot({ path: `${output}/homestead-${name}.jpg`, fullPage: true, type: "jpeg", quality: 84 });
   } catch (error) {
     missed.push(`${name}: ${error.message.split("\n")[0]}`);
   }
@@ -50,7 +50,7 @@ const dialog = async (view, name, open) => {
     await page.evaluate(open);
     await page.locator("#modal:not(.hidden) #mbody").waitFor();
     await page.waitForTimeout(1400);
-    await page.screenshot({ path: `${output}/homestead-${name}.png` });
+    await page.screenshot({ path: `${output}/homestead-${name}.jpg`, type: "jpeg", quality: 84 });
     await page.evaluate(() => closeModal());
   } catch (error) {
     missed.push(`${name}: ${error.message.split("\n")[0]}`);

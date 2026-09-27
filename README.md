@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-hero.png" alt="Homestead on a phone: containers, the dashboard and virtual IPs">
+  <img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-hero.jpg" alt="Homestead on the desktop and on a phone: the dashboard, and virtual IPs">
 </p>
 
 ## Why Homestead
@@ -152,23 +152,23 @@ Homestead installs as an app on iOS and Android (over HTTPS), with push
 notifications for outages, degraded storage, failed jobs and image updates.
 
 <p align="center">
-  <img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-mobile.png" alt="Homestead on a phone: dashboard, containers, VIPs, replicated volumes, and snapshots and backups">
+  <img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-mobile.jpg" alt="Homestead on a phone: dashboard, containers, VIPs, replicated volumes, and snapshots and backups">
 </p>
 
 ## On the desktop
 
 <p align="center">
-  <img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-dashboard.png" alt="The Homestead dashboard">
+  <img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-dashboard.jpg" alt="The Homestead dashboard">
 </p>
 
 <table>
 <tr>
-<td width="50%"><img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-containers.png" alt="Containers"><p align="center"><b>Containers</b></p></td>
-<td width="50%"><img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-architecture.png" alt="Architecture: VIP to workload to volume to replica"><p align="center"><b>Architecture</b></p></td>
+<td width="50%"><img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-containers.jpg" alt="Containers"><p align="center"><b>Containers</b></p></td>
+<td width="50%"><img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-architecture.jpg" alt="Architecture: VIP to workload to volume to replica"><p align="center"><b>Architecture</b></p></td>
 </tr>
 <tr>
-<td width="50%"><img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-volumes.png" alt="Replicated volumes"><p align="center"><b>Volumes</b></p></td>
-<td width="50%"><img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-vms.png" alt="Virtual machines"><p align="center"><b>Virtual machines</b></p></td>
+<td width="50%"><img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-volumes.jpg" alt="Replicated volumes"><p align="center"><b>Volumes</b></p></td>
+<td width="50%"><img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-vms.jpg" alt="Virtual machines"><p align="center"><b>Virtual machines</b></p></td>
 </tr>
 </table>
 
