@@ -9,6 +9,8 @@ import homestead_reclass as rc
 import homestead_storage_workflow as workflow
 import homestead_operations as ops
 import homestead_vm_power_receipts as receipts
+import server
+from homestead_storage_journal import Held
 
 
 class Crash(BaseException):
@@ -141,3 +143,39 @@ class InitialStorageTests(unittest.TestCase):
         self.assertEqual("uncertain", self.load()["ref"]["storage_writes"][0]["state"])
         self.assertEqual("failed", self.poll()[0])
         self.assertEqual(1, len(self.sent))
+
+    def test_replica_change_after_initial_check_stops_before_durable_intent(self):
+        workflow.start_reviewed(self.approved(), "admin", ops)
+        check = mock.Mock(side_effect=[None, Held("Finish upgrading all replicas")])
+        with ops._lock:
+            item = self.load()
+            result = workflow.resolve(item, ops.checkpoint, lambda *_: {"blocked": False},
+                                      lambda *_: {"blocked": False}, runtime_check=check)
+        self.assertEqual("failed", result[0])
+        self.assertEqual(2, check.call_count)
+        self.assertFalse(item["ref"].get("storage_writes"))
+        self.assertEqual([], self.sent)
+
+    def test_public_routes_create_new_engine_and_recheck_replica_gate_at_start(self):
+        def call(endpoint, body, gate=None):
+            handler = object.__new__(server.H)
+            handler.path, handler.command = "/api/volumes/reclass/" + endpoint, "POST"
+            handler.headers = {"X-Homestead-Auth": "1"}
+            handler._who = lambda: {"user": "admin", "role": "admin"}
+            handler._body = lambda: copy.deepcopy(body)
+            handler._client_ip = lambda: "127.0.0.1"
+            handler._send = mock.Mock()
+            with mock.patch.object(server.CFACCESS, "enabled", return_value=False), \
+                    mock.patch.object(server, "storage_runtime_check", side_effect=gate) as checked, \
+                    mock.patch.object(rc, "start_reviewed", side_effect=AssertionError("legacy engine called")):
+                handler.do_POST()
+                checked.assert_called_once()
+            return handler._send.call_args.args
+        status, preview = call("plan", self.body)
+        self.assertEqual(200, status)
+        body = {**self.body, "capacity_token": preview["capacity_token"], "confirm_capacity": True}
+        self.assertNotEqual(200, call("start", body, Held("Finish upgrading all replicas"))[0])
+        self.assertEqual([], ops._read())
+        self.assertEqual(200, call("start", body)[0])
+        self.assertEqual(1, self.load()["ref"]["storage_protocol"])
+        self.assertEqual([], self.sent)

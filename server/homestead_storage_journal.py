@@ -96,11 +96,12 @@ def _payload(body):
 
 
 class Journal:
-    def __init__(self, item, read, send, checkpoint, *, preview=False):
+    def __init__(self, item, read, send, checkpoint, *, preview=False, before_write=None):
         self.item, self.read, self.send, self.checkpoint = item, read, send, checkpoint
         self.ref = item["ref"]
         self.failed = False
         self.preview = preview
+        self.before_write = before_write
         self.entries = self.ref.setdefault("storage_writes", [])
         if (not isinstance(self.entries, list) or any(not isinstance(e, dict) or not isinstance(e.get("step"), str) for e in self.entries)
                 or len({e["step"] for e in self.entries}) != len(self.entries)):
@@ -199,6 +200,8 @@ class Journal:
             if request.get("preconditions") not in (None, before):
                 raise Held("Storage delete preconditions do not match the reviewed object")
             request["preconditions"] = before
+        if self.before_write is not None:
+            self.before_write()
         event = {"step": step, "method": method, "target": dest, "payload": fingerprint,
                  "before": before, "state": "intent"}
         if self.preview:

@@ -17,6 +17,7 @@ _PV = re.compile(r"^/api/v1/persistentvolumes(?:/([^/]+))?$" )
 _LH = re.compile(r"^/apis/longhorn.io/[^/]+/namespaces/([^/]+)/volumes(?:/([^/]+))?$" )
 _JOB = re.compile(r"^/apis/batch/v1/namespaces/([^/]+)/jobs(?:/([^/]+))?$" )
 _SNAPSHOT = re.compile(r"^/apis/longhorn.io/[^/]+/namespaces/([^/]+)/snapshots(?:/([^/]+))?$" )
+_DEPLOYMENT = re.compile(r"^/apis/apps/v1/namespaces/([^/]+)/deployments(?:/([^/]+)(?:/scale)?)?$")
 
 PROTECTED = "Storage is protected by an active or interrupted move; review that job before changing or deleting this data"
 
@@ -105,13 +106,17 @@ def volume(ops, read, handle):
         yield
 
 
-def send(method, path, body, dispatch, ops, read):
+def send(method, path, body, dispatch, ops, read, own_controller=None):
     if method not in ("POST", "PUT", "PATCH", "DELETE"):
         return dispatch()
     path_only = urllib.parse.unquote(urllib.parse.urlsplit(path).path).rstrip("/")
     pvc, pv, lh, job_match = _PVC.fullmatch(path_only), _PV.fullmatch(path_only), _LH.fullmatch(path_only), _JOB.fullmatch(path_only)
     snapshot = _SNAPSHOT.fullmatch(path_only)
-    if not any((pvc, pv, lh, job_match, snapshot)):
+    deployment = _DEPLOYMENT.fullmatch(path_only)
+    own_change = bool(own_controller and deployment and deployment[1] == own_controller[0] and (
+        deployment[2] == own_controller[1] or (not deployment[2] and method == "DELETE") or
+        (method == "POST" and isinstance(body, dict) and body.get("metadata", {}).get("name") == own_controller[1])))
+    if not any((pvc, pv, lh, job_match, snapshot, own_change)):
         return dispatch()
     namespace, claim, volume, handle, job = "", "", "", "", ""
     name = ((body or {}).get("metadata") or {}).get("name") if method == "POST" and isinstance(body, dict) else None
@@ -120,6 +125,10 @@ def send(method, path, body, dispatch, ops, read):
     if lh: handle = lh[2] or name
     if job_match: namespace, job = job_match[1], job_match[2] or name
     with ops._lock:
+        if own_change:
+            if _active(ops._read()):
+                raise ValueError("Finish or recover the storage move before updating, restarting or changing Homestead's replicas")
+            return dispatch()
         items = [item for item in ops._read() if item["id"] != getattr(_local, "job", None)]
         if snapshot and _active(items) and (snapshot[2] or method == "POST"):
             obj = body if method == "POST" else read(path_only)

@@ -218,10 +218,9 @@ API discovery confirms they are not installed. Opening this review reads job
 history without advancing jobs. A queued move rechecks its initial inventory
 before stopping workloads, and duplicate queued moves of the same volume are blocked.
 
-These are initial-review safeguards, not an atomic storage/scheduler reservation
-or a completed rewrite of copy, swap, restart and recovery. Keep backups and inspect
-any interrupted move before continuing. After a lost Start response, check **Recent
-jobs**; the dialog does not repeat the request automatically. The existing workflow:
+Keep backups: preflight is not an atomic storage/scheduler reservation. After a
+lost Start response, check **Recent jobs**; the dialog does not repeat the request,
+and its approval cannot be consumed twice. The durable workflow for new moves:
 
 1. everything using the volume stops, and how each was running is noted;
 2. a volume the same size is made on the new class;
@@ -233,11 +232,52 @@ jobs**; the dialog does not repeat the request automatically. The existing workf
 
 ![Storage class change in progress](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-storage-class-progress.jpg)
 
-Some pre-swap failures trigger the existing rollback path, which attempts to return
-workloads to the original. Do not assume rollback or a restart succeeded: inspect
-the job and retained resources. After a successful swap, the original stays as an
-**old copy** on Volumes until you remove it. Post-copy identity fencing, uncertain-write
-recovery and live host-loss validation remain separate work.
+New moves record each request's intent before sending it and verify its resource
+identity afterwards. A lost or unverified reply is not retried or adopted by name.
+Copy completion requires the completed copy Job and checksum evidence from its
+own pod; unavailable log progress is shown as unavailable, not zero percent.
+Cutover reserves the new PV for the original claim name, preserves the original
+PV with Retain, and waits for the replacement claim's exact binding. Fresh joint
+placement checks run before cutover and restart. Warning-free checks continue;
+capacity warnings require review, and hard blockers cannot be overridden.
+
+After success, the original remains an **old copy** until explicitly removed.
+During a move or recovery hold, Homestead protects the claims, backing volumes,
+copy-verification Job and snapshot operations against conflicting changes.
+Unresolved storage jobs survive history cleanup. Live host-loss, CSI-controller
+and shared-filesystem failure rehearsals remain necessary before claiming HA.
+
+### When a storage move needs review
+
+Use **Recent jobs → Review storage move**. Pause stops further Homestead steps,
+but an already accepted copy Job can keep running. Continue rechecks identities,
+capacity and current placement; it does not undo data or replay an uncertain write.
+If the outcome is unknown, the screen remains inspection-only:
+
+1. Keep both copies, the copy Job, and Homestead's persistent job history. Do not
+   clear finalizers, force-detach storage, edit the journal, or delete resources
+   merely to make a request retry.
+2. Inspect the retained-resource details, exact UIDs, Kubernetes events and API
+   audit records. Check the actual PVC/PV binding and which copy workloads use;
+   names, Running status, and a disconnected node alone are not sufficient proof.
+3. Before manual recovery, establish that no old workload, copy helper or pending
+   API request can still write. An unreachable writer requires actual fencing by
+   the cluster/storage operator. If that cannot be established, leave the hold in
+   place and seek storage-administrator help rather than guessing which copy wins.
+4. Recover or restore verified data under a separately reviewed procedure. There
+   is currently no automatic acknowledgement or adoption of unknown API outcomes;
+   the retained job cannot safely be dismissed just because resources look correct.
+
+Homestead must have its data PVC mounted at its configured data directory. Every
+running process with writable access to that claim must report the supported
+storage protocol from the same Homestead version. Registration happens on each
+replica, normally within 20 seconds of startup; old-container records cannot
+authorize replacements. Finish the rollout before starting a move. Homestead's
+own update, restart and replica changes are interlocked while a move is unfinished
+or needs recovery. Jobs from older releases keep their original engine and recovery
+behavior. Externally forced downgrades, manual cluster changes, and external
+controllers are outside these internal guards; do not force an upgrade to bypass
+a recovery hold without an administrator-approved recovery plan.
 
 ## Without Longhorn
 
