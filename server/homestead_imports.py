@@ -1596,11 +1596,7 @@ def _save_scans():
     with _scan_lock:
         try:
             _load_scans()
-            os.makedirs(SCAN_DIR, exist_ok=True)
-            tmp = SHARED.temporary(path)
-            with open(tmp, "w", encoding="utf-8") as handle:
-                json.dump({"started": _SCAN_STARTED[0], "nodes": _SCANS}, handle, separators=(",", ":"))
-            os.replace(tmp, path)
+            SHARED.write_json(path, {"started": _SCAN_STARTED[0], "nodes": _SCANS}, separators=(",", ":"))
         except OSError:
             pass
 

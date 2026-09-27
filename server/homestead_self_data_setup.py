@@ -21,6 +21,25 @@ def _current(anchor):
         raise Held("The data handoff review changed before its local receipt was confirmed")
 
 
+def publish_after_drain(directory, anchor, barrier, verify_source_and_jobs, *, timeout=30):
+    """Close the check/write race before releasing the independent coordinator.
+
+    Called outside the initiating HTTP request, not while holding a feature
+    lock. The callback must recheck current source runtimes, the approved facts
+    and idle jobs under the exclusive activity lock. Pod removal is still the
+    coordinator's separate proof before it starts copying; draining is not CSI
+    fencing and never authorizes force-deleting an unreachable writer.
+    """
+    if os.path.realpath(barrier.directory) != os.path.realpath(directory):
+        raise Held("The data move activity lock does not cover the source directory")
+    with barrier.freeze(timeout=timeout):
+        _current(anchor)
+        if verify_source_and_jobs() is not True:
+            raise Held("The source replicas and saved jobs need a fresh review before moving data")
+        _current(anchor)
+        return publish_pointer(directory, anchor)
+
+
 def publish_pointer(directory, anchor):
     """Create, fsync and independently acknowledge the local startup fence once.
 

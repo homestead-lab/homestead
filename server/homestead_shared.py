@@ -15,6 +15,8 @@ import os
 import threading
 import errno
 import time
+import sys
+from contextlib import nullcontext
 
 try:
     import fcntl
@@ -28,6 +30,12 @@ except ImportError:
 
 DIR = os.environ.get("DATA_DIR", "/data")
 WRITE_GUARD = None
+WRITE_SCOPE = None
+
+
+def write_scope(path):
+    """Hold the self-data activity barrier through the complete write, if bound."""
+    return WRITE_SCOPE(path) if WRITE_SCOPE is not None else nullcontext()
 
 
 def bind(data_dir):
@@ -44,6 +52,7 @@ class SharedLock:
         self._thread = threading.RLock()
         self._depth = 0
         self._handle = None
+        self._scope = None
 
     def _path(self):
         folder = os.path.join(self.directory() if self.directory else DIR, ".locks")
@@ -52,6 +61,15 @@ class SharedLock:
 
     def __enter__(self):
         self._thread.acquire()
+        if self._depth == 0:
+            try:
+                directory = self.directory() if self.directory else DIR
+                self._scope = write_scope(os.path.join(directory, ".locks", f"{self.name}.lock"))
+                self._scope.__enter__()
+            except BaseException:
+                self._scope = None
+                self._thread.release()
+                raise
         self._depth += 1
         if self._depth == 1 and self.strict:
             try:
@@ -63,7 +81,11 @@ class SharedLock:
                 finally:
                     self._handle = None
                     self._depth -= 1
-                    self._thread.release()
+                    try:
+                        self._scope.__exit__(*sys.exc_info())
+                    finally:
+                        self._scope = None
+                        self._thread.release()
                 raise
             return self
         if self._depth == 1 and fcntl is not None:
@@ -113,7 +135,12 @@ class SharedLock:
                     self._handle.close()
                     self._handle = None
         finally:
-            self._thread.release()
+            try:
+                if self._depth == 0 and self._scope is not None:
+                    self._scope.__exit__(*exc)
+                    self._scope = None
+            finally:
+                self._thread.release()
         return False
 
     # threading.Lock's spelling, for code that calls these directly
@@ -130,14 +157,22 @@ def temporary(path):
     return f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
 
 
-def write_json(path, value, *, durable=False, **dump):
+def write_json(path, value, *, durable=False, mode=None, **dump):
+    with write_scope(path):
+        _write_json(path, value, durable=durable, mode=mode, **dump)
+
+
+def _write_json(path, value, *, durable=False, mode=None, **dump):
     if WRITE_GUARD is not None:
         WRITE_GUARD(path)
     folder = os.path.dirname(path)
     if folder:
         os.makedirs(folder, exist_ok=True)
     tmp = temporary(path)
-    with open(tmp, "w", encoding="utf-8") as handle:
+    descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), mode if mode is not None else 0o666)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        if mode is not None:
+            os.chmod(tmp, mode)
         json.dump(value, handle, **dump)
         handle.flush()
         os.fsync(handle.fileno())

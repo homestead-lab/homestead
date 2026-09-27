@@ -665,9 +665,12 @@ def _refresh(item):
 
 
 def snapshot():
-    """Read job history without advancing resolvers or writing to Kubernetes."""
-    with _lock:
-        return [_public(item) for item in _read()]
+    """Inspect atomic saved files without creating locks or advancing jobs.
+
+    This is a display snapshot, not a mutation authorization. The two journals
+    are not a transaction; inconsistent/unavailable reads remain an error.
+    """
+    return [_public(item) for item in _read()]
 
 
 def list_operations():
