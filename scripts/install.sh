@@ -22,7 +22,8 @@
 # or restore etcd snapshots.
 #
 # Menus use whiptail or dialog. If neither is installed, whiptail is installed
-# from the distribution's repositories; --text uses plain prompts instead.
+# from the distribution's repositories with a bounded, visible attempt. On
+# failure, or with --text, plain prompts are used instead.
 #
 # Unattended installation: set the answers in the environment.
 #   HS_ROLE=new|server|agent|addons|harvester   installation mode
@@ -90,23 +91,77 @@ cancelled() { fail "Installation cancelled. No changes were made."; }
 have() { command -v "$1" >/dev/null 2>&1; }
 interactive() { [ -r "$TTY" ] && [ -w "$TTY" ] && (: < "$TTY") 2>/dev/null; }
 
-# Minimal and cloud images often ship without whiptail. It is a small package
-# in every distribution's repositories (whiptail on Debian and Ubuntu, newt
-# elsewhere).
+# Menu packages are optional. Keep their input separate from the script when
+# invoked as curl | sh: package hooks must not consume the remaining program.
+# Bound the whole attempt, including an apt index refresh, and show output so
+# a package lock or repository failure is not mistaken for a frozen installer.
 get_menus() {
-  printf 'Installing whiptail to display menus (use --text to skip)...\n' > "$TTY"
-  if have apt-get; then
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq whiptail >/dev/null 2>&1 \
-      || { apt-get update -qq >/dev/null 2>&1 && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq whiptail >/dev/null 2>&1; }
-  elif have dnf; then dnf install -y -q newt >/dev/null 2>&1
-  elif have yum; then yum install -y -q newt >/dev/null 2>&1
-  elif have zypper; then zypper -n -q install newt >/dev/null 2>&1
-  elif have apk; then apk add -q newt >/dev/null 2>&1
+  if ! have timeout; then
+    printf 'No timeout command; skipping optional menu installation. Using text prompts.\n' > "$TTY"
+    return 1
   fi
-  have whiptail
+  menu_manager=""
+  for manager in apt-get dnf yum zypper apk; do
+    if have "$manager"; then menu_manager="$manager"; break; fi
+  done
+  if [ -z "$menu_manager" ]; then
+    printf 'No supported package manager; using text prompts.\n' > "$TTY"
+    return 1
+  fi
+  printf 'Installing optional whiptail menus with %s (up to 120 seconds; --text skips this).\n' "$menu_manager" > "$TTY"
+  timeout -k 10 120 sh -c '
+    # These commands contain no user credentials. Print each command as well
+    # as its output so the exact failing step is visible on the terminal.
+    set -x
+    case "$1" in
+      apt-get)
+        export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l
+        apt_menus() {
+          apt-get -o DPkg::Lock::Timeout=15 -o Acquire::Retries=0 \
+            -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 "$@"
+        }
+        apt_menus install -y whiptail && exit 0
+        apt_menus update && apt_menus install -y whiptail
+        ;;
+      dnf) dnf install -y newt ;;
+      yum) yum install -y newt ;;
+      zypper) zypper --non-interactive install -y newt ;;
+      apk) apk add newt ;;
+    esac
+  ' homestead-menus "$menu_manager" < /dev/null > "$TTY" 2>&1
+  menu_status=$?
+  case "$menu_status" in
+    0)
+      if have whiptail; then
+        printf 'Whiptail installed; opening the installer.\n' > "$TTY"
+        return 0
+      fi
+      printf 'Package command completed but whiptail is unavailable. Using text prompts.\n' > "$TTY"
+      ;;
+    # BusyBox returns 143 when its deadline sends SIGTERM; GNU returns 124.
+    124|137|143)
+      printf 'Menu installation timed out. Using text prompts. Check package-manager status before retrying package installation.\n' > "$TTY"
+      ;;
+    130) exit "$menu_status" ;;
+    *) printf 'Menu installation failed (exit %s). Using text prompts; see the package-manager output above.\n' "$menu_status" > "$TTY" ;;
+  esac
+  return 1
+}
+
+# sudo-rs can start a piped command outside the terminal foreground group.
+# The first terminal read must come from this shell, not a command-substitution
+# child (stty/whiptail), so sudo can hand terminal control to the command.
+# Reports and fully specified unattended installs must never wait for input.
+prepare_terminal() {
+  [ -n "${SUDO_USER:-}" ] && [ ! -t 0 ] && interactive || return 0
+  [ -z "${HS_ROLE:-}" ] || return 0
+  case "$ACTION" in report|fix-safe) return 0 ;; esac
+  printf 'Press Enter to open Homestead setup (Ctrl+C to cancel): ' > "$TTY"
+  read -r terminal_ready < "$TTY" || fail "Could not read the terminal. Download install.sh and run sudo sh install.sh."
 }
 
 # HS_UI=whiptail|dialog|text selects the interface; otherwise the best available.
+prepare_terminal
 [ -z "$UI" ] && [ -n "${HS_UI:-}" ] && UI="$HS_UI"
 if [ -z "$UI" ]; then
   if ! interactive || [ "${TERM:-dumb}" = dumb ]; then UI=text
@@ -119,7 +174,15 @@ BOX="$UI"
 
 # Boxes are as tall as their contents, within the terminal: the text's lines
 # as the box wraps them, plus the frame and buttons.
-term_rows() { rows=$(stty size < "$TTY" 2>/dev/null | cut -d' ' -f1); echo "${rows:-24}"; }
+term_rows() {
+  # stty can apply terminal settings even for a size query. Under curl | sudo
+  # sh, doing this in a menu command substitution can stop the process group
+  # before any menu is drawn. tput only queries the terminal; minimal images
+  # without tput or a usable terminfo entry get a conventional 24-row layout.
+  rows=$(tput lines 2>/dev/null < "$TTY") || rows=""
+  case "$rows" in ''|*[!0-9]*|0) rows=24 ;; esac
+  printf '%s\n' "$rows"
+}
 text_lines() { # text width
   printf '%s\n' "$1" | awk -v w="$2" '{ n += int((length($0) + w - 1) / w); if (!length($0)) n++ } END { print n }'
 }
