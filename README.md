@@ -84,18 +84,25 @@ prompts instead:
     storage class holds its data;
   - on a **k3s or RKE2 server**, whether to add Longhorn and Homestead to it.
 
-  It shows what it will do before anything changes, follows the install with
-  a progress bar (the full log goes to `/var/log/homestead-install.log`), and
-  ends with Homestead's address and the line for the next machine.
-- **Check this node and fix what is wrong.** The node doctor looks at the host:
+  Before anything changes, the **installation summary** shows the settings and
+  the version of each component - k3s or RKE2, Longhorn, KubeVirt, CDI and
+  Homestead - defaulting to each one's current recommended release. Selecting
+  a component lists its releases, retrieved live from k3s's and RKE2's release
+  channels and from GitHub, or takes a version typed in. The installation
+  then runs with a progress bar (the full log goes to
+  `/var/log/homestead-install.log`) and ends with Homestead's address and the
+  details for joining the next node.
+
+  ![The installation summary](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-ready.png)
+- **Check node health.** The node doctor looks at the host:
   - the Kubernetes service, disk and inodes, memory, the clock;
   - iSCSI and multipath, which Longhorn needs;
   - certificates, and containerd.
 
   Where kubectl reaches the cluster, it looks there too: the API, etcd, this
   node and the others, failing or stuck pods, Longhorn volumes, DNS,
-  Homestead, and the age of the newest etcd snapshot. It lists what it found,
-  worst first; choosing one says what is wrong and offers its fix, asking
+  Homestead, and the age of the newest etcd snapshot. It lists the results
+  by severity; selecting one shows the details and offers its fix, asking
   before every change.
 - **Clean up** unused images, the journal, failed pods and old snapshots;
   **take an etcd snapshot**; **restore the cluster from one** (on a k3s
@@ -104,7 +111,9 @@ prompts instead:
 For scripts and cron: `--report` prints the health check and exits 0, 1 or 2;
 `--fix-safe` applies the fixes marked safe; `--dry-run` shows the commands and
 changes nothing. An install can be unattended with its answers given ahead
-(`HS_ROLE=new HS_DIST=rke2 HS_NODE_IP=... HS_YES=1`); `--help` lists them.
+(`HS_ROLE=new HS_DIST=rke2 HS_NODE_IP=... HS_YES=1`), with versions pinned by
+`HS_K8S_VERSION`, `HS_LONGHORN_VERSION`, `HS_KUBEVIRT_VERSION`, `HS_CDI_VERSION`
+and `HS_VERSION`; `--help` lists them.
 Underneath, k3s and RKE2 installs come from
 [`scripts/bootstrap-k3s.sh`](scripts/bootstrap-k3s.sh) (`--rke2` for RKE2),
 which can also be run directly. The
@@ -745,7 +754,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.184/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.185/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -756,7 +765,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.184 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.185 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1530,10 +1539,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.184`, the workflow publishes:
+For a release such as `v2.8.185`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.184
+ghcr.io/wjcloudy/homestead:2.8.185
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -1544,8 +1553,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.184
-git push origin v2.8.184
+git tag v2.8.185
+git push origin v2.8.185
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.

@@ -66,7 +66,34 @@ class InstallerTests(unittest.TestCase):
     def test_an_unknown_kubernetes_is_refused(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_DIST": "k0s", "HS_NODE_IP": "10.0.0.5", "HS_YES": "1"})
         self.assertNotEqual(0, code)
-        self.assertIn("HS_DIST is k3s or rke2", out)
+        self.assertIn("Set HS_DIST to k3s or rke2", out)
+
+    def test_versions_set_ahead_are_pinned(self):
+        code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_DIST": "rke2", "HS_NODE_IP": "10.0.0.5",
+                                                          "HS_KUBEVIRT": "yes", "HS_K8S_VERSION": "v1.33.4+rke2r1",
+                                                          "HS_LONGHORN_VERSION": "v1.9.1", "HS_KUBEVIRT_VERSION": "v1.6.0",
+                                                          "HS_CDI_VERSION": "v1.62.0", "HS_VERSION": "2.8.180", "HS_YES": "1"})
+        self.assertIn("server --node-ip 10.0.0.5 --kubevirt --rke2 --rke2-version v1.33.4+rke2r1 --longhorn-version v1.9.1"
+                      " --kubevirt-version v1.6.0 --cdi-version v1.62.0 --homestead-version 2.8.180", out)
+
+    def test_a_joining_node_takes_the_version_given(self):
+        code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "agent", "HS_NODE_IP": "10.0.0.6", "HS_SERVER": "10.0.0.5",
+                                                          "HS_TOKEN": "tok", "HS_K8S_VERSION": "v1.32.8+k3s1", "HS_YES": "1"})
+        self.assertIn("agent https://10.0.0.5:6443 tok --node-ip 10.0.0.6 --k3s-version v1.32.8+k3s1", out)
+
+    def test_no_versions_given_means_no_pins_and_no_lookups(self):
+        code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_NODE_IP": "10.0.0.5", "HS_LONGHORN": "yes",
+                                                          "HS_KUBEVIRT": "no", "HS_YES": "1"})
+        self.assertIn("+ sh /tmp/homestead-bootstrap-k3s.sh server --node-ip 10.0.0.5\n", out)
+        self.assertNotIn("-version", out)
+        self.assertNotIn("Retrieving release information", out)
+
+    def test_summary_declined_changes_nothing(self):
+        code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_NODE_IP": "10.0.0.5", "HS_LONGHORN": "yes",
+                                                          "HS_KUBEVIRT": "no", "HS_YES": "no"})
+        self.assertNotEqual(0, code)
+        self.assertIn("Installation cancelled. No changes were made.", out)
+        self.assertNotIn("bootstrap-k3s.sh server", out)
 
     def test_harvester_gets_the_manifest_with_its_address_and_class(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "harvester", "HS_VIP": "192.168.1.250",
@@ -128,12 +155,12 @@ class DoctorTests(unittest.TestCase):
     def test_the_report_names_what_is_wrong_and_exits_to_match(self):
         code, out = run(["--report", "--dry-run"], path_extra=self.bin)
         self.assertIn("node1 (k3s-server)", out)
-        self.assertIn("[ !] node1 is cordoned (fixable)", out)
-        self.assertIn("[ !] Pods failing: 1", out)
-        self.assertIn("[ !] 2 failed pods left behind (fixable)", out)
-        self.assertIn("[ok] k3s is running", out)
-        self.assertIn("[ok] Homestead is running", out)
-        self.assertEqual(1, code, "worth a look, nothing wrong")
+        self.assertIn("[WARN] Node node1 is cordoned (fix available)", out)
+        self.assertIn("[WARN] Failing pods: 1", out)
+        self.assertIn("[WARN] Failed pods: 2 (fix available)", out)
+        self.assertIn("[ OK ] k3s service is running", out)
+        self.assertIn("[ OK ] Homestead is running", out)
+        self.assertEqual(1, code, "warnings, no failures")
 
     def test_fix_safe_uncordons_and_clears_failed_pods_but_leaves_the_rest(self):
         code, out = run(["--fix-safe", "--dry-run"], path_extra=self.bin)
