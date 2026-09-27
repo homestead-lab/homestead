@@ -41,7 +41,7 @@ def _fact(obj):
 
 
 class Review:
-    def __init__(self, read, namespace, deployment, *, actor, image, threshold, source_pod=None, data_dir="/data", runtime_check=None, clock=time.time):
+    def __init__(self, read, namespace, deployment, *, actor, image, threshold, source_pod=None, data_dir="/data", runtime_check=None, clock=time.time, route_check=None):
         import homestead_self_data_anchor as A
         A._name(namespace); A._name(deployment)
         if not isinstance(actor, str) or not actor or len(actor) > 256:
@@ -50,6 +50,7 @@ class Review:
         self.actor, self.image, self.threshold, self.clock = actor, image, threshold, clock
         self.source_pod, self.data_dir = copy.deepcopy(source_pod), data_dir
         self.runtime_check = runtime_check
+        self.route_check = route_check
 
     def _snapshot(self, body):
         started = self.clock()
@@ -141,7 +142,9 @@ class Review:
         # the worker's raw configuration in a review response.
         secret = SIGN.derive_secret({**cfg, "cluster_uid": binding["cluster_uid"], "namespace": ns, "deployment": self.deployment}, "self-data-progress")
         status_digest = hashlib.sha256(secret.encode()).hexdigest()
-        worker = L.resources(scope, anchor_uid="pending", image=self.image, node=cfg["worker_node"], status_digest=status_digest)[-2]
+        route, services = self.route_check(read, dep) if self.route_check else (None, [])
+        binding["services"] = services
+        worker = L.resources(scope, anchor_uid="pending", image=self.image, node=cfg["worker_node"], status_digest=status_digest, route=route)[-2]
         reports = {"worker": D.review(read, ns, "worker", worker, pins, self.threshold, clock=self.clock)}
         # This is conditional planning only. Real phase admission never sees
         # this inventory and never subtracts live/terminating writers.
@@ -173,7 +176,8 @@ class Review:
                              for s, label in (("worker", "Start move coordinator"), ("copy", "Copy and verify"), ("restart", "Restart Homestead"))]}
         execution = {"scope": scope, "deployment": dep, "source": claims[0], "destination": claims[1], "source_pv": pvs[0],
                      "destination_pv": pvs[1], "nodes": pins, "approval": approval, "policy": policy,
-                     "status_digest": status_digest, "status_token": secret, "config": cfg}
+                     "status_digest": status_digest, "status_token": secret, "config": cfg,
+                     "binding": binding, "image": self.image, "route": route}
         return cfg, public, binding, execution
 
     def preview(self, body):

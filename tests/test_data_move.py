@@ -77,67 +77,28 @@ class DataMoveTests(unittest.TestCase):
         server.set_homestead_replicas(2)
         self.assertEqual(2, self.c.sent[-1][2]["spec"]["replicas"])
 
-    def test_moving_copies_on_the_attached_node_then_switches_the_claim(self):
+    def test_legacy_live_copy_is_disabled_without_cluster_writes(self):
         self.use(Cluster())
-        with self.assertRaisesRegex(ValueError, "on longhorn-r2 already"):
-            server.move_homestead_data("longhorn-r2")
-        server.move_homestead_data("longhorn")
-        pvc = next(b for m, p, b in self.c.sent if p.endswith("/persistentvolumeclaims"))
-        self.assertEqual(("homestead-data-shared", "longhorn", ["ReadWriteMany"], "2Gi"),
-                         (pvc["metadata"]["name"], pvc["spec"]["storageClassName"], pvc["spec"]["accessModes"],
-                          pvc["spec"]["resources"]["requests"]["storage"]))
-        job = next(b for m, p, b in self.c.sent if p.endswith("/jobs"))
-        spec = job["spec"]["template"]["spec"]
-        self.assertEqual("harvester-node1", spec["nodeName"])
-        self.assertEqual(["homestead-data", "homestead-data-shared"],
-                         [v["persistentVolumeClaim"]["claimName"] for v in spec["volumes"]])
-        item = {"ref": {"namespace": server.SELF.NS, "job": job["metadata"]["name"], "old": "homestead-data",
-                        "new": "homestead-data-shared"}}
-        self.assertEqual("running", server._data_move_status(item)[0])
-        self.c.jobs[job["metadata"]["name"]] = {"status": {"succeeded": 1}}
-        self.assertEqual("running", server._data_move_status(item)[0])
-        self.assertEqual("homestead-data-shared",
-                         self.c.dep["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"])
-        # the new pods, reading the copied record, find the switch made
-        self.assertEqual("succeeded", server._data_move_status(item)[0])
-
-
-    def test_it_can_move_to_a_class_one_node_mounts(self):
-        """Not only for redundancy: any class, as a volume's class change is."""
-        CLASSES["items"].append({"metadata": {"name": "longhorn-v1-1x"}, "provisioner": "driver.longhorn.io",
-                                 "parameters": {"migratable": "true", "numberOfReplicas": "1"}})
-        self.addCleanup(CLASSES["items"].pop)
-        self.use(Cluster("longhorn"))
-        self.assertIn({"name": "longhorn-v1-1x", "shareable": False}, server.homestead_data_volume()["classes"])
-        server.move_homestead_data("longhorn-v1-1x")
-        pvc = next(b for m, p, b in self.c.sent if p.endswith("/persistentvolumeclaims"))
-        self.assertEqual(("homestead-data-moved", ["ReadWriteOnce"]), (pvc["metadata"]["name"], pvc["spec"]["accessModes"]))
-        job = next(b for m, p, b in self.c.sent if p.endswith("/jobs"))
-        self.c.jobs[job["metadata"]["name"]] = {"status": {"succeeded": 1}}
-        item = {"ref": {"namespace": server.SELF.NS, "job": job["metadata"]["name"], "old": "homestead-data",
-                        "new": "homestead-data-moved", "storage_class": "longhorn-v1-1x", "shareable": False}}
-        server._data_move_status(item)
-        # One node mounts it, so the old copy goes before the new one starts.
-        self.assertEqual("Recreate", self.c.dep["spec"]["strategy"]["type"])
-
-    def test_a_one_node_class_needs_one_copy_first(self):
-        CLASSES["items"].append({"metadata": {"name": "longhorn-v1-1x"}, "provisioner": "driver.longhorn.io",
-                                 "parameters": {"migratable": "true"}})
-        self.addCleanup(CLASSES["items"].pop)
-        cluster = Cluster("longhorn")
-        cluster.dep["spec"]["replicas"] = 2
-        self.use(cluster)
-        with self.assertRaisesRegex(ValueError, "set Redundancy to one copy first"):
-            server.move_homestead_data("longhorn-v1-1x")
-
-    def test_nothing_moves_while_a_job_is_running(self):
-        """The copy is of the moment: a job running meanwhile would come back
-        after the restart from an older step."""
-        self.use(Cluster())
-        self.running = [{"status": "running", "kind": "reclass", "title": "Move qdirstat-appdata to longhorn-v1-1x"}]
-        with self.assertRaisesRegex(ValueError, "1 job is still running .Move qdirstat-appdata"):
+        with self.assertRaisesRegex(ValueError, "live-copy mover was retired"):
             server.move_homestead_data("longhorn")
         self.assertEqual([], self.c.sent)
+
+    def test_old_jobs_never_switch_a_claim_even_when_the_job_succeeded(self):
+        self.use(Cluster())
+        self.c.jobs["old-job"] = {"status": {"succeeded": 1}}
+        item = {"ref": {"namespace": server.SELF.NS, "job": "old-job", "old": "homestead-data", "new": "target"}}
+        self.assertEqual("failed", server._data_move_status(item)[0])
+        self.assertTrue(item["ref"]["retain_resources"])
+        self.assertEqual([], self.c.sent)
+
+    def test_legacy_cancel_cannot_delete_an_unverified_destination(self):
+        import homestead_cancel as cancel
+        item = {"ref": {"namespace": "lab", "job": "old", "old": "source", "new": "target"}}
+        with mock.patch.object(cancel, "_delete") as delete:
+            self.assertFalse(cancel.self_move_plan(item)["can"])
+            with self.assertRaisesRegex(ValueError, "both volumes are retained"):
+                cancel.self_move_cancel(item, {})
+        delete.assert_not_called()
 
 
 if __name__ == "__main__":

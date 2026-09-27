@@ -10,6 +10,7 @@ import json
 import re
 import threading
 import time
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import homestead_self_data_anchor as A
@@ -91,6 +92,17 @@ class Runner:
         self.clock = clock
         self.lock = threading.Lock()
         self.hold = None
+        self._maintenance_active = False
+
+    def maintenance_ready(self):
+        # Keep the honest outage page reachable if the API subsequently fails.
+        # Never enter service before publication, or stay after verified success.
+        try:
+            state = self._load().state
+            self._maintenance_active = "pointer_receipt" in state and state["phase"] != "done"
+        except Exception:
+            pass
+        return self._maintenance_active
 
     def _load(self):
         return A.Anchor(self.read, self.send, self.namespace, self.deployment).load(
@@ -170,7 +182,7 @@ class Runner:
             stop.wait(interval)
 
 
-def status_server(address, runner, token_digest):
+def status_server(address, runner, token_digest, *, maintenance=False):
     """Read-only, operation-scoped capability, independent of login/account data.
 
     Setup returns the random status token once to the authorized browser and
@@ -190,10 +202,10 @@ def status_server(address, runner, token_digest):
             super().setup()
             self.connection.settimeout(10)
 
-        def answer(self, code, value):
-            body = json.dumps(value, separators=(",", ":")).encode()
+        def answer(self, code, value, content_type="application/json; charset=utf-8"):
+            body = (value if isinstance(value, str) else json.dumps(value, separators=(",", ":"))).encode()
             self.send_response(code)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
@@ -204,15 +216,27 @@ def status_server(address, runner, token_digest):
             self.wfile.write(body)
 
         def do_GET(self):
+            if maintenance and self.path in ("/", "/settings", "/settings/", "/index.html", "/api/self/data/handoff/" + runner.operation + "/view"):
+                return self.answer(200, maintenance_page(runner.operation), "text/html; charset=utf-8")
             if self.path == "/healthz":
                 # Only means the progress server answers, never app readiness.
                 return self.answer(200, {"service": "data-move-progress"})
-            if self.path != "/api/self/data/handoff/" + runner.operation:
+            if self.path == "/readyz":
+                return self.answer(200 if runner.maintenance_ready() else 503, {"service": "data-move-progress"})
+            if self.path not in ("/api/self/data/handoff/" + runner.operation, "/identity"):
                 return self.answer(404, {"error": "Not found"})
             values = self.headers.get_all("Authorization") or []
             token = values[0][7:] if len(values) == 1 and values[0].startswith("Bearer ") else ""
+            if not values and maintenance:
+                try:
+                    cookies = SimpleCookie(); cookies.load(self.headers.get("Cookie", ""))
+                    token = cookies["homestead-data-move"].value if "homestead-data-move" in cookies else ""
+                except Exception:
+                    token = ""
             if not re.fullmatch(r"[a-f0-9]{64}", token) or not hmac.compare_digest(hashlib.sha256(token.encode()).hexdigest(), token_digest):
                 return self.answer(401, {"error": "This move's status token is required"})
+            if self.path == "/identity":
+                return self.answer(200, {"operation": runner.operation, "anchor_uid": runner.anchor_uid, "worker_uid": runner.worker_uid})
             view = runner.snapshot()
             return self.answer(503 if view["status"] == "unknown" else 200, view)
 
@@ -226,3 +250,23 @@ def status_server(address, runner, token_digest):
         allow_reuse_address = False
 
     return Server(address, Handler)
+
+
+def maintenance_page(operation):
+    """Self-contained outage page: no volume, CDN, account data or new login."""
+    if not re.fullmatch(r"[a-f0-9]{24}", operation): raise ValueError("Invalid operation")
+    return '''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Moving data · Homestead</title><style>
+:root{color-scheme:dark;font:16px system-ui;background:#101115;color:#eceef3}body{margin:0;padding:24px;display:grid;min-height:85vh;place-items:center}
+main{box-sizing:border-box;width:min(100%,560px);padding:clamp(22px,5vw,40px);border:1px solid #343640;border-radius:24px;background:#191a20}
+h1{font-size:26px;margin:0 0 14px}p{line-height:1.55;color:#bfc2cd}li{padding:9px 0}li[data-state=pending]{color:#737782}li[data-state=current]{color:#72ddb1}a{color:#72ddb1}
+</style><main><h1>Moving Homestead data</h1><p id="message" role="status">Checking progress…</p><ol id="stages"></ol>
+<p>Both volumes are retained. You can leave this page open; it will reconnect automatically.</p><a id="return" href="/settings" hidden>Return to Homestead</a></main>
+<script>
+async function refresh(){try{const r=await fetch('/api/self/data/handoff/OPERATION',{credentials:'same-origin',cache:'no-store'});
+if(r.status===401||r.status===403){document.querySelector('#message').textContent='Open the browser where you confirmed this move to view its progress. No new login is needed.';return;}
+const s=await r.json();if(!s.operation)throw Error();document.querySelector('#message').textContent=s.message;
+document.querySelector('#stages').replaceChildren(...(s.stages||[]).map(x=>{const li=document.createElement('li');li.textContent=x.label;li.dataset.state=x.state;return li}));
+if(s.status==='done'){document.querySelector('#return').hidden=false;setTimeout(()=>location.replace('/settings'),5000);return;}}
+catch(e){document.querySelector('#message').textContent='Reconnecting… The last shown stage is not confirmation of completion.'}setTimeout(refresh,3000)}refresh();
+</script></html>'''.replace("OPERATION", operation)

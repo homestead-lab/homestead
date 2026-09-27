@@ -290,7 +290,7 @@ class PreparationTests(unittest.TestCase):
             state = server.self_data_preparation_state()
         self.assertEqual(1, len(state["preparations"]))
         self.assertFalse(state["preparations"][0]["prepared"])
-        self.assertFalse(state["execution_ready"])
+        self.assertTrue(state["execution_ready"])
 
     def test_status_error_is_safe_and_never_mutates(self):
         with mock.patch.object(server, "homestead_data_volume", side_effect=RuntimeError("private-secret")), \

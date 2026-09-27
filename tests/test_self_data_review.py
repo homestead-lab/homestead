@@ -187,7 +187,10 @@ class ReviewTests(unittest.TestCase):
             if path.endswith("/configmaps/homestead-data-handoff"):
                 raise urllib.error.HTTPError(path, 404, "absent", {}, None)
             if path.endswith("/pods/old-0"): return copy.deepcopy(current)
+            if path.endswith("/services"):
+                return {"items": [obj("Service", "homestead", {"selector": {"app": "homestead"}, "ports": [{"port": 8080}]})]}
             return self.f.read(path)
+        self.dep["spec"]["template"]["metadata"] = {"labels": {"app": "homestead"}}
         handler = object.__new__(server.H)
         handler.path = "/api/self/data/move/preview"; handler.user = "admin"
         handler.headers = {}

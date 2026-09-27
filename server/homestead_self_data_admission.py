@@ -149,6 +149,11 @@ def _proposal(purpose, proposal, namespace):
             raise Held("The coordinator capacity template belongs to a different namespace")
         config["anchor_uid"] = "pending"
         env[0]["value"] = json.dumps(config, sort_keys=True, separators=(",", ":"))
+        if "route" in config:
+            owners = template.get("metadata", {}).get("ownerReferences", [])
+            if len(owners) != 1 or owners[0].get("kind") != "ConfigMap" or owners[0].get("name") != scope.deployment + "-data-handoff":
+                raise Held("The maintenance helper needs its exact control-record owner")
+            owners[0]["uid"] = "pending"
     spec = template["spec"]
     replicas = 1 if purpose in ("copy", "worker") else proposal["spec"]["replicas"]
     if type(replicas) is not int or not 1 <= replicas <= 64:

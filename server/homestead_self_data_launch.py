@@ -30,10 +30,11 @@ PORT = 8081
 MAX_CONFIG = 32768
 
 
-def configuration(scope, anchor_uid, status_digest):
+def configuration(scope, anchor_uid, status_digest, route=None):
     value = {"protocol": 1, "namespace": scope.namespace, "deployment": scope.deployment,
              "operation": scope.operation, "anchor_uid": anchor_uid, "status_digest": status_digest,
              "claims": list(scope.claims), "volumes": list(scope.volumes), "nodes": list(scope.nodes)}
+    if route is not None: value["route"] = route
     raw = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
     parse_configuration(raw)
     return raw
@@ -51,12 +52,15 @@ def parse_configuration(raw):
         return result
     try:
         value = json.loads(raw, object_pairs_hook=unique)
-        if (not isinstance(value, dict) or set(value) != {"protocol", "namespace", "deployment", "operation",
+        if (not isinstance(value, dict) or set(value) - {"route"} != {"protocol", "namespace", "deployment", "operation",
                 "anchor_uid", "status_digest", "claims", "volumes", "nodes"}
                 or type(value["protocol"]) is not int or value["protocol"] != 1):
             raise ValueError("unsupported config")
         _uid(value["anchor_uid"])
         A._hash(value["status_digest"])
+        if "route" in value:
+            from homestead_self_data_route import validate
+            validate(value["route"])
         scope = K.Scope(value["namespace"], value["deployment"], value["operation"],
                         value["claims"], value["volumes"], value["nodes"])
     except (KeyError, TypeError, ValueError, RecursionError):
@@ -69,14 +73,14 @@ def _uid(value):
         raise Held("The coordinator resource identity is invalid")
 
 
-def resources(scope, *, anchor_uid, image, node, status_digest):
+def resources(scope, *, anchor_uid, image, node, status_digest, route=None):
     """Return scoped access, one independent Pod, and a private progress Service.
 
     No Pod UID can be supplied by setup: Kubernetes supplies it through the
     downward API. Never use this manifest's pre-admission shape as the worker
     receipt; scheduling/defaulting/webhooks can change the stored Pod spec.
     """
-    raw = configuration(scope, anchor_uid, status_digest)
+    raw = configuration(scope, anchor_uid, status_digest, route)
     if not isinstance(image, str) or not re.fullmatch(r"[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}", image):
         raise Held("The coordinator image must be pinned to a published digest")
     if node not in scope.nodes:
@@ -112,10 +116,13 @@ def resources(scope, *, anchor_uid, image, node, status_digest):
     service = {"apiVersion": "v1", "kind": "Service", "metadata": metadata(), "spec": {
         "type": "ClusterIP", "selector": {"homestead.io/handoff-worker": account},
         "ports": [{"name": "progress", "port": PORT, "targetPort": "progress", "protocol": "TCP"}]}}
+    if route is not None:
+        from homestead_self_data_route import apply
+        apply(pod, service, route, scope.deployment + "-data-handoff", anchor_uid)
     return [*access, pod, service]
 
 
-def serve(runner, token_digest, stop, *, address=("0.0.0.0", PORT)):
+def serve(runner, token_digest, stop, *, address=("0.0.0.0", PORT), route=None):
     """Bind progress before any mutation and keep it available during holds.
 
     run() catches per-step errors and durably holds. If the HTTP serving thread
@@ -123,21 +130,30 @@ def serve(runner, token_digest, stop, *, address=("0.0.0.0", PORT)):
     finish; its durable receipt, not process exit, determines recovery safety.
     """
     httpd = W.status_server(address, runner, token_digest)
-    failed = threading.Event()
-    def progress():
+    maintenance = None
+    if route is not None:
         try:
-            httpd.serve_forever(poll_interval=0.2)
+            maintenance = W.status_server((address[0], route["port"]), runner, token_digest, maintenance=True)
+        except Exception:
+            httpd.server_close()
+            raise
+    failed = threading.Event()
+    def progress(server):
+        try:
+            server.serve_forever(poll_interval=0.2)
         except Exception:
             failed.set()
         finally:
             if not stop.is_set():
                 failed.set()
             stop.set()
-    thread = threading.Thread(target=progress, name="handoff-progress", daemon=True)
+    thread = threading.Thread(target=progress, args=(httpd,), name="handoff-progress", daemon=True)
+    extra = threading.Thread(target=progress, args=(maintenance,), name="handoff-page", daemon=True) if maintenance else None
     started = False
     try:
         thread.start()
         started = True
+        if extra is not None: extra.start()
         runner.run(stop)
     finally:
         stop.set()
@@ -146,6 +162,10 @@ def serve(runner, token_digest, stop, *, address=("0.0.0.0", PORT)):
         httpd.server_close()
         if started:
             thread.join(timeout=5)
+        if extra is not None:
+            if extra.is_alive(): maintenance.shutdown()
+            maintenance.server_close()
+            if extra.ident is not None: extra.join(timeout=5)
     if failed.is_set():
         raise Held("The independent progress server stopped unexpectedly")
 
@@ -167,7 +187,7 @@ def main():
             require_setup_receipts=True)
         for signum in (signal.SIGTERM, signal.SIGINT):
             previous[signum] = signal.signal(signum, lambda *_: stop.set())
-        serve(runner, value["status_digest"], stop)
+        serve(runner, value["status_digest"], stop, **({"route": value["route"]} if "route" in value else {}))
         return 0
     except Exception:
         # No raw environment/config/API exception, and no automatic replay.

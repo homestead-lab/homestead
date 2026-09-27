@@ -87,7 +87,7 @@ def admitted(body, obj, target, *, dry_run=False):
     meta = obj.get("metadata", {}) if isinstance(obj, dict) else {}
     if (not isinstance(obj, dict) or any(obj.get(k) != target[k] for k in ("kind", "apiVersion"))
             or any(meta.get(k) != target[k] for k in ("name", "namespace"))
-            or meta.get("deletionTimestamp") or meta.get("ownerReferences") or meta.get("finalizers")):
+            or meta.get("deletionTimestamp") or meta.get("ownerReferences", []) != body.get("metadata", {}).get("ownerReferences", []) or meta.get("finalizers")):
         raise Held("The helper creation response does not match the requested resource")
     if not dry_run:
         identity(obj)
@@ -143,14 +143,15 @@ def admitted(body, obj, target, *, dry_run=False):
 
 
 class Setup:
-    def __init__(self, anchor, scope, *, image, node, status_digest, approval=None, admit=None, clock=None):
+    def __init__(self, anchor, scope, *, image, node, status_digest, approval=None, admit=None, clock=None, route=None, handshake=None):
         self.anchor, self.read, self.send = anchor, anchor.read, anchor.send
         self.scope, self.clock = scope, clock
         state = anchor.state
         if ((scope.namespace, scope.deployment, scope.operation) != (anchor.namespace, state["deployment"]["name"], state["operation"])
                 or not {state["source"]["name"], state["destination"]} <= set(scope.claims)):
             raise Held("Helper setup scope does not match this data move")
-        self.bodies = L.resources(scope, anchor_uid=anchor.handle()["uid"], image=image, node=node, status_digest=status_digest)
+        self.route, self.handshake = route, handshake
+        self.bodies = L.resources(scope, anchor_uid=anchor.handle()["uid"], image=image, node=node, status_digest=status_digest, route=route)
         self.resources = [{"target": target, "payload": digest(body)} for target, body in
                           zip(targets(scope.namespace, scope.deployment, scope.operation), self.bodies)]
         self.approval = copy.deepcopy(approval if approval is not None else state.get("setup", {}).get("admission"))
@@ -166,7 +167,7 @@ class Setup:
             raise Held("Current capacity and placement must be reviewed before starting the coordinator")
         self.failed, self.admit = False, admit
 
-    def _current(self):
+    def _current(self, *, allow_plan=False):
         if self.failed:
             raise Held("Helper setup stopped after an unverified request; nothing will be retried")
         if len(self.bodies) != len(self.resources) or any(digest(body) != resource["payload"] for body, resource in zip(self.bodies, self.resources)):
@@ -176,7 +177,7 @@ class Setup:
         state = self.anchor._decode(obj, handle["operation"], handle["uid"])
         if identity(obj) != identity(self.anchor.obj) or state != self.anchor.state:
             raise Held("The helper setup record advanced elsewhere")
-        if (state["phase"] != "prepare" or "pointer_receipt" in state or "plan" in state
+        if (state["phase"] != "prepare" or "pointer_receipt" in state or not allow_plan and "plan" in state
                 or state["journal"]["ref"]["storage_writes"]):
             raise Held("The data move is no longer in helper setup")
 
@@ -262,7 +263,7 @@ class Setup:
 
     def worker_fact(self):
         """Proof for configure(): actual scheduled Pod shape, never its manifest."""
-        self._current()
+        self._current(allow_plan=True)
         setup = self.anchor.state.get("setup")
         if not setup or setup["resources"] != self.resources or not complete(setup):
             raise Held("Helper setup is not complete")
@@ -270,12 +271,14 @@ class Setup:
         pod = observed[-2]
         statuses = pod.get("status", {}).get("containerStatuses", [])
         if (pod.get("status", {}).get("phase") != "Running" or not pod["spec"].get("nodeName")
-                or not any(c.get("type") == "Ready" and c.get("status") == "True" for c in pod["status"].get("conditions", []))
+                or self.route is None and not any(c.get("type") == "Ready" and c.get("status") == "True" for c in pod["status"].get("conditions", []))
                 or len(statuses) != 1 or statuses[0].get("name") != "coordinator" or type(statuses[0].get("restartCount")) is not int
-                or statuses[0]["restartCount"] != 0 or statuses[0].get("ready") is not True or not statuses[0].get("state", {}).get("running")
+                or statuses[0]["restartCount"] != 0 or self.route is None and statuses[0].get("ready") is not True or not statuses[0].get("state", {}).get("running")
                 or not statuses[0].get("containerID") or not statuses[0].get("imageID")):
             raise Held("Waiting for the exact coordinator pod to become ready")
-        self._current()
+        if self.route is not None and (self.handshake is None or self.handshake(pod) is not True):
+            raise Held("Waiting for the maintenance page to answer on the exact coordinator pod")
+        self._current(allow_plan=True)
         return {"name": pod["metadata"]["name"], "uid": identity(pod)["uid"], "shape": shape(pod)}
 
     def preflight_copy(self, plan):

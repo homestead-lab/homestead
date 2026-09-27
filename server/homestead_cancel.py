@@ -491,29 +491,11 @@ def reclass_cancel(item, _options):
 
 
 def self_move_plan(item):
-    ref = item["ref"]
-    if _switched(ref):
-        return {"can": False, "needs": "admin",
-                "why_not": f"Homestead is restarting onto {ref['new']} already; that cannot be stopped half-way"}
-    return {"mode": "rollback", "needs": "admin",
-            "undo": ["Stops the copy", f"Deletes {ref['new']}, the new claim it was copying into"],
-            "keeps": [f"Homestead carries on with its data on {ref['old']}, as before"]}
-
-
-def _switched(ref):
-    dep = _get(_deployment_path(ref["namespace"], NAMES.BRAND)) or {}
-    volumes = (((dep.get("spec") or {}).get("template") or {}).get("spec") or {}).get("volumes") or []
-    return any((v.get("persistentVolumeClaim") or {}).get("claimName") == ref["new"] for v in volumes)
+    return {"can": False, "needs": "admin", "why_not": "This older data move has no verified handoff receipts. Inspect both retained volumes before recovery; automatic rollback or deletion is disabled."}
 
 
 def self_move_cancel(item, _options):
-    ref = item["ref"]
-    if _switched(ref):
-        raise ValueError(f"Homestead is restarting onto {ref['new']} already")
-    ns = _q(ref["namespace"])
-    _delete(f"/apis/batch/v1/namespaces/{ns}/jobs/{_q(ref['job'])}?propagationPolicy=Background")
-    _delete(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{_q(ref['new'])}")
-    return f"Copy stopped; Homestead keeps its data on {ref['old']}"
+    raise ValueError("This older data move requires manual review; both volumes are retained")
 
 
 def disk_retire_plan(item):
