@@ -9,20 +9,22 @@
 # what is wrong, cleaning up, and taking or restoring etcd snapshots.
 #
 # Installing looks at the machine first and does what fits:
-#   - a bare Linux machine: a new k3s cluster with Longhorn (and KubeVirt, if
-#     wanted) and Homestead - or this machine joined to one, as a server or a
-#     worker;
-#   - a k3s server already running: Longhorn and Homestead added to it;
+#   - a bare Linux machine: a new cluster - k3s, or RKE2 for full upstream
+#     Kubernetes - with Longhorn (and KubeVirt, if wanted) and Homestead; or
+#     this machine joined to one, as a server or a worker;
+#   - a k3s or RKE2 server already running: Longhorn and Homestead added to it;
 #   - a Harvester host: Homestead installed into Harvester, on an address you
 #     choose.
 # Before anything changes it checks the machine - memory, disk, the network,
 # ports, the clock, the firewall - says what it found, and shows what it is
 # about to do.
 #
-# The questions come as menus where the machine has whiptail or dialog, as
-# plain prompts otherwise. Every answer can be given ahead instead, for an
-# unattended install:
+# The questions come as menus: whiptail or dialog, and whiptail is fetched
+# with the machine's package manager when neither is there (--text, or
+# HS_UI=text, keeps to plain prompts). Every answer can be given ahead
+# instead, for an unattended install:
 #   HS_ROLE=new|server|agent|addons|harvester   what to do
+#   HS_DIST=k3s|rke2                            a new cluster's Kubernetes
 #   HS_NODE_IP=192.0.2.50                     this machine's address
 #   HS_SERVER=192.0.2.50  HS_TOKEN=...        the cluster to join
 #   HS_LONGHORN=yes|no  HS_KUBEVIRT=yes|no      what a new cluster gets
@@ -46,6 +48,7 @@ set -u
 RAW="https://raw.githubusercontent.com/wjcloudy/homestead"
 REF="${HOMESTEAD_REF:-main}"
 DRY=0
+DIST=k3s
 ACTION=""
 SKIP_CHECKS=0
 UI=""
@@ -63,7 +66,7 @@ while [ $# -gt 0 ]; do
     --skip-checks) SKIP_CHECKS=1; shift ;;
     --text) UI=text; shift ;;
     --ref) REF="$2"; shift 2 ;;
-    -h|--help) sed -n '2,46p' "$0" 2>/dev/null; exit 0 ;;
+    -h|--help) sed -n '2,45p' "$0" 2>/dev/null; exit 0 ;;
     *) printf 'unknown option %s (try --help)\n' "$1" >&2; exit 2 ;;
   esac
 done
@@ -82,13 +85,54 @@ run() {
 have() { command -v "$1" >/dev/null 2>&1; }
 interactive() { [ -r "$TTY" ] && [ -w "$TTY" ] && (: < "$TTY") 2>/dev/null; }
 
+# Minimal and cloud images often come without whiptail: it is small, and in
+# every distribution's own packages (whiptail on Debian and Ubuntu, newt on
+# the rest).
+get_menus() {
+  printf 'Fetching whiptail, to show menus (--text does without)...\n' > "$TTY"
+  if have apt-get; then
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq whiptail >/dev/null 2>&1 \
+      || { apt-get update -qq >/dev/null 2>&1 && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq whiptail >/dev/null 2>&1; }
+  elif have dnf; then dnf install -y -q newt >/dev/null 2>&1
+  elif have yum; then yum install -y -q newt >/dev/null 2>&1
+  elif have zypper; then zypper -n -q install newt >/dev/null 2>&1
+  elif have apk; then apk add -q newt >/dev/null 2>&1
+  fi
+  have whiptail
+}
+
+# HS_UI=whiptail|dialog|text picks the look; otherwise the best there is.
+[ -z "$UI" ] && [ -n "${HS_UI:-}" ] && UI="$HS_UI"
 if [ -z "$UI" ]; then
   if ! interactive || [ "${TERM:-dumb}" = dumb ]; then UI=text
   elif have whiptail; then UI=whiptail
   elif have dialog; then UI=dialog
+  elif [ "$DRY" = 0 ] && [ "$(id -u)" = 0 ] && get_menus; then UI=whiptail
   else UI=text; fi
 fi
 BOX="$UI"
+
+# Boxes are as tall as what they hold, within the terminal: the text's lines
+# as the box wraps them, plus the box's own frame and buttons.
+term_rows() { rows=$(stty size < "$TTY" 2>/dev/null | cut -d' ' -f1); echo "${rows:-24}"; }
+text_lines() { # text width
+  printf '%s\n' "$1" | awk -v w="$2" '{ n += int((length($0) + w - 1) / w); if (!length($0)) n++ } END { print n }'
+}
+fit() { # text frame-rows -> a height for a 78-wide box
+  h=$(( $(text_lines "$1" 72) + $2 )); rows=$(term_rows)
+  [ "$h" -gt "$rows" ] && h=$rows; echo "$h"
+}
+
+box_menu() { # title text tag item...
+  title="$1"; text="$2"; shift 2
+  items=$(( $# / 2 ))
+  rows=$(term_rows); lines=$(text_lines "$text" 84)
+  list=$items; [ "$list" -gt $((rows - lines - 9)) ] && list=$((rows - lines - 9)); [ "$list" -lt 3 ] && list=3
+  height=$((lines + list + 8)); [ "$height" -gt "$rows" ] && height=$rows
+  # The tags are for the script; people read the items.
+  if [ "$BOX" = dialog ]; then notags=--no-tags; else notags=--notags; fi
+  "$BOX" --title "$title" --cancel-button "Back" "$notags" --menu "$text" "$height" 90 "$list" "$@" 3>&1 1>"$TTY" 2>&3 < "$TTY"
+}
 
 # The answer given ahead in the environment, if there is one.
 given() { eval "printf '%s' \"\${$1:-}\""; }
@@ -97,7 +141,7 @@ need_tty() { interactive || fail "no terminal to ask on: give the answer as $1=.
 
 msg() { # title text
   if [ "$UI" = text ]; then printf '\n-- %s --\n%s\n' "$1" "$2"
-  else "$BOX" --title "$1" --msgbox "$2" 20 76 < "$TTY" > "$TTY" 2>&1; fi
+  else "$BOX" --title "$1" --msgbox "$2" "$(fit "$2" 7)" 78 < "$TTY" > "$TTY" 2>&1; fi
 }
 
 yesno() { # var title text default(yes|no) -> 0 for yes
@@ -110,8 +154,8 @@ yesno() { # var title text default(yes|no) -> 0 for yes
     [ -z "$reply" ] && reply="$4"
     case "$reply" in y*|Y*) return 0 ;; *) return 1 ;; esac
   fi
-  if [ "$4" = no ]; then "$BOX" --title "$2" --defaultno --yesno "$3" 18 76 < "$TTY" > "$TTY" 2>&1
-  else "$BOX" --title "$2" --yesno "$3" 18 76 < "$TTY" > "$TTY" 2>&1; fi
+  if [ "$4" = no ]; then "$BOX" --title "$2" --defaultno --yesno "$3" "$(fit "$3" 7)" 78 < "$TTY" > "$TTY" 2>&1
+  else "$BOX" --title "$2" --yesno "$3" "$(fit "$3" 7)" 78 < "$TTY" > "$TTY" 2>&1; fi
 }
 
 ask() { # var title text default [secret] -> the answer on stdout
@@ -126,7 +170,7 @@ ask() { # var title text default [secret] -> the answer on stdout
     printf '%s' "${reply:-$4}"; return
   fi
   kind=--inputbox; [ "${5:-}" = secret ] && kind=--passwordbox
-  "$BOX" --title "$2" "$kind" "$3" 14 76 "$4" 3>&1 1>"$TTY" 2>&3 < "$TTY" || exit 1
+  "$BOX" --title "$2" "$kind" "$3" "$(fit "$3" 9)" 78 "$4" 3>&1 1>"$TTY" 2>&3 < "$TTY" || exit 1
 }
 
 choose() { # var title text tag item [tag item...] -> the tag on stdout
@@ -144,8 +188,7 @@ choose() { # var title text tag item [tag item...] -> the tag on stdout
     i=0; for word in "$@"; do i=$((i+1)); if [ $((i % 2)) = 1 ] && [ $(( (i + 1) / 2 )) = "$reply" ]; then printf '%s' "$word"; return; fi; done
     fail "no choice $reply"
   fi
-  count=$(( $# / 2 ))
-  "$BOX" --title "$title" --menu "$text" 20 76 "$count" "$@" 3>&1 1>"$TTY" 2>&3 < "$TTY" || exit 1
+  box_menu "$title" "$text" "$@" || exit 1
 }
 
 # ------------------------------------------------------------------ the machine
@@ -164,13 +207,15 @@ kvm() { [ -e /dev/kvm ] || grep -Eq 'vmx|svm' /proc/cpuinfo 2>/dev/null; }
 # ------------------------------------------------------------------ checks
 REPORT=""
 check() { # ok|warn|fail text
+  # Long lines wrap under their own text, not back under the ok/note column.
+  text=$(printf '%s\n' "$2" | fold -s -w 64 | sed 's/ *$//; 2,$s/^/        /')
   case "$1" in
     ok) REPORT="$REPORT
-  ok    $2" ;;
+  ok    $text" ;;
     warn) REPORT="$REPORT
-  note  $2" ;;
+  note  $text" ;;
     fail) REPORT="$REPORT
-  STOP  $2"; FAILED=1 ;;
+  STOP  $text"; FAILED=1 ;;
   esac
 }
 
@@ -178,18 +223,19 @@ prechecks() { # role
   REPORT=""; FAILED=0
   [ "$(id -u)" = 0 ] && check ok "running as root" || check fail "run with sudo: curl ... | sudo sh"
   have curl && check ok "curl is here" || check fail "curl is needed"
-  have systemctl && check ok "systemd runs this machine" || check fail "k3s needs systemd"
+  have systemctl && check ok "systemd runs this machine" || check fail "$DIST needs systemd"
   case "$(uname -m)" in
     x86_64|amd64|aarch64|arm64) check ok "$(os_name) on $(uname -m)" ;;
-    *) check fail "$(uname -m) is not a platform k3s and Homestead run on (x86-64 or arm64)" ;;
+    *) check fail "$(uname -m) is not a platform $DIST and Homestead run on (x86-64 or arm64)" ;;
   esac
   mem=$(mem_mb); cpus=$(nproc 2>/dev/null || echo 1)
   if [ "$1" = agent ]; then want=1024; else want=2048; fi
   if [ "$mem" -lt "$want" ]; then check fail "${mem} MB of memory: a $1 needs at least $want MB"
-  elif [ "$mem" -lt 4096 ] && [ "$1" = new ]; then check warn "${mem} MB of memory is enough to start; Longhorn and VMs want 8 GB or more"
+  elif [ "$mem" -lt 4096 ] && [ "$1" = new ]; then check warn "${mem} MB of memory is enough to start; $([ "$DIST" = rke2 ] && echo "an RKE2 server wants 4 GB, and ")Longhorn and VMs want 8 GB or more"
+  elif [ "$mem" -lt 4096 ] && [ "$1" = server ] && [ "$DIST" = rke2 ]; then check warn "${mem} MB of memory: an RKE2 server wants 4 GB or more"
   else check ok "${mem} MB of memory, $cpus CPUs"; fi
   free=$(disk_gb); free=${free:-0}
-  if [ "$free" -lt 10 ]; then check fail "${free} GB free under /var: k3s and its images need at least 10 GB"
+  if [ "$free" -lt 10 ]; then check fail "${free} GB free under /var: $DIST and its images need at least 10 GB"
   elif [ "$free" -lt 30 ]; then check warn "${free} GB free under /var - enough to start; volumes and images fill it quickly"
   else check ok "${free} GB free under /var"; fi
   host=$(hostname)
@@ -198,17 +244,19 @@ prechecks() { # role
   else
     check fail "hostname '$host' cannot be a Kubernetes node name: lower-case letters, digits and dashes (hostnamectl set-hostname node1)"
   fi
-  if reachable https://get.k3s.io && reachable https://ghcr.io/v2/; then check ok "the internet is reachable (get.k3s.io, ghcr.io)"
-  else check fail "cannot reach get.k3s.io or ghcr.io: this machine needs the internet to install"; fi
+  get="get.$DIST.io"
+  if reachable "https://$get" && reachable https://ghcr.io/v2/; then check ok "the internet is reachable ($get, ghcr.io)"
+  else check fail "cannot reach $get or ghcr.io: this machine needs the internet to install"; fi
   if [ "$1" != addons ]; then
-    for port in 6443 10250; do
+    ports="6443 10250"; [ "$DIST" = rke2 ] && ports="6443 9345 10250"
+    for port in $ports; do
       listening "$port" && check fail "port $port is in use: another Kubernetes, or something else, is running here"
     done
   fi
   if [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = yes ]; then check ok "the clock is synchronised"
   else check warn "the clock is not synchronised (timedatectl): certificates and joining can fail on a wrong clock"; fi
   if active ufw || active firewalld; then
-    check warn "a firewall is on: open 6443/tcp, 10250/tcp, 8472/udp and 2379-2380/tcp between the machines, and 8088/tcp for Homestead"
+    check warn "a firewall is on: open 6443/tcp,$([ "$DIST" = rke2 ] && echo " 9345/tcp,") 10250/tcp, 8472/udp and 2379-2380/tcp between the machines, and 8088/tcp for Homestead"
   fi
   if [ -n "${NODE_IP:-}" ] && dynamic_ip "$NODE_IP"; then
     check warn "$NODE_IP comes from DHCP: reserve it on your router, or a changed address breaks the cluster"
@@ -278,12 +326,16 @@ flow_new() {
     server "Join a cluster as another server (control plane)" \
     agent "Join a cluster as a worker")
   [ "$role" = harvester ] && fail "this is not a Harvester host"
+  case "$role" in
+    new) pick_dist ;;
+    server|agent) find_cluster ;;
+  esac
   pick_ip
   prechecks "$role"
   case "$role" in
     new) new_cluster ;;
     server|agent) join_cluster "$role" ;;
-    addons) add_to_k3s ;;
+    addons) add_to_cluster ;;
     *) fail "unknown role $role" ;;
   esac
 }
@@ -302,65 +354,96 @@ EOF
   NODE_IP=$(choose HS_NODE_IP "This machine's address" "Which address do the other machines reach this one on? The cluster registers it by this address." "$@")
 }
 
+# Which Kubernetes a new cluster runs. Unattended, k3s unless HS_DIST says.
+pick_dist() {
+  if [ -z "$(given HS_DIST)" ] && ! interactive; then DIST=k3s; return; fi
+  DIST=$(choose HS_DIST "Kubernetes" "Which Kubernetes should the cluster run? Both work the same in Homestead." \
+    k3s "k3s - light and quick; the least memory (mini PCs, old PCs)" \
+    rke2 "RKE2 - full upstream Kubernetes, hardened; what Harvester runs")
+  case "$DIST" in k3s|rke2) ;; *) fail "HS_DIST is k3s or rke2, not $DIST" ;; esac
+}
+
+# The cluster to join: its address, and which Kubernetes it runs - an RKE2
+# server answers on 9345, a k3s server on 6443.
+find_cluster() {
+  server=$(ask HS_SERVER "The cluster" "The address of a server already in the cluster (its IP or name):" "")
+  [ -n "$server" ] || fail "no server given"
+  host=${server#https://}; host=${host%%/*}; host=${host%%:*}
+  given_dist=$(given HS_DIST)
+  if [ -n "$given_dist" ]; then DIST="$given_dist"
+  elif [ "$DRY" = 1 ]; then DIST=k3s
+  elif curl -sk --max-time 10 "https://$host:9345/cacerts" 2>/dev/null | grep -q "BEGIN CERTIFICATE"; then DIST=rke2
+  elif curl -sk --max-time 10 "https://$host:6443/cacerts" 2>/dev/null | grep -q "BEGIN CERTIFICATE"; then DIST=k3s
+  else fail "cannot reach a cluster at $host - check the address, and that port 6443 (k3s) or 9345 (RKE2) is open"; fi
+  case "$server" in
+    https://*) url="$server" ;;
+    *) if [ "$DIST" = rke2 ]; then url="https://$host:9345"; else url="https://$host:6443"; fi ;;
+  esac
+}
+
+dist_name() { if [ "$DIST" = rke2 ]; then echo RKE2; else echo k3s; fi; }
+token_file() { echo "/var/lib/rancher/$DIST/server/node-token"; }
+dist_flag() { [ "$DIST" = rke2 ] && printf -- '--rke2'; true; }
+
 new_cluster() {
   longhorn=yes; kubevirt=no
   kvm && kubevirt=yes
-  yesno HS_LONGHORN "Storage" "Install Longhorn? It keeps copies of each volume on several machines, takes snapshots and backups, and is what Homestead's Volumes and Data protection pages use. Without it, k3s's local-path storage keeps each volume on one machine only." yes || longhorn=no
+  if [ "$DIST" = rke2 ]; then
+    : # RKE2 has no storage of its own: Longhorn holds Homestead's data and the volumes.
+  else
+    yesno HS_LONGHORN "Storage" "Install Longhorn? It keeps copies of each volume on several machines, takes snapshots and backups, and is what Homestead's Volumes and Data protection pages use. Without it, k3s's local-path storage keeps each volume on one machine only." yes || longhorn=no
+  fi
   yesno HS_KUBEVIRT "Virtual machines" "Install KubeVirt and CDI, to run VMs beside your containers?$(kvm || printf ' This machine has no hardware virtualisation, so VMs would be emulated and slow.')" "$kubevirt" && kubevirt=yes || kubevirt=no
   args="server --node-ip $NODE_IP"
   [ "$longhorn" = no ] && args="$args --no-longhorn"
   [ "$kubevirt" = yes ] && args="$args --kubevirt"
   v=$(versions); [ -n "$v" ] && args="$args $v"
+  [ "$DIST" = rke2 ] && args="$args --rke2"
   yesno HS_YES "Ready" "About to:
-  - install k3s on this machine, as the first server of a new cluster, at $NODE_IP
+  - install $(dist_name) here, the first server of a new cluster, at $NODE_IP
   - $( [ "$longhorn" = yes ] && echo "install Longhorn (open-iscsi and an NFS client go on the host first)" || echo "use k3s's local-path storage")
   - $( [ "$kubevirt" = yes ] && echo "install KubeVirt and CDI" || echo "leave VMs out (KubeVirt can be added later)")
   - install Homestead, at http://$NODE_IP:8088
 
 Go ahead?" yes || fail "stopped - nothing was changed"
-  stages=5; [ "$longhorn" = yes ] && stages=$((stages + 2)); [ "$kubevirt" = yes ] && stages=$((stages + 1))
+  stages=5; [ "$longhorn" = yes ] && stages=$((stages + 2)); [ "$kubevirt" = yes ] && stages=$((stages + 1)); [ "$DIST" = rke2 ] && stages=$((stages + 1))
   # shellcheck disable=SC2086
   bootstrap "$stages" $args
   finish_new
 }
 
 join_cluster() { # server|agent
-  server=$(ask HS_SERVER "The cluster" "The address of a server already in the cluster (its IP or name):" "")
-  [ -n "$server" ] || fail "no server given"
-  case "$server" in https://*) url="$server" ;; *) url="https://$server:6443" ;; esac
-  if [ "$DRY" = 0 ]; then
-    curl -sk --max-time 10 "$url/cacerts" 2>/dev/null | grep -q "BEGIN CERTIFICATE" \
-      || fail "cannot reach the cluster at $url - check the address, and that port 6443 is open"
-  fi
-  token=$(ask HS_TOKEN "The cluster's token" "On that server: sudo cat /var/lib/rancher/k3s/server/node-token
+  token=$(ask HS_TOKEN "The cluster's token" "It runs $(dist_name). On that server: sudo cat $(token_file)
 (Homestead's Cluster > Add a host shows where it is too.) Paste it:" "" secret)
   [ -n "$token" ] || fail "no token given"
   mode=agent; [ "$1" = server ] && mode=join
-  yesno HS_YES "Ready" "About to install k3s here and join the cluster at $url as a $([ "$1" = server ] && echo "server (control plane and etcd)" || echo worker), registered as $(hostname) at $NODE_IP. Longhorn's host tools (open-iscsi, an NFS client) go on first.
+  yesno HS_YES "Ready" "About to install $(dist_name) here and join the cluster at $url as a $([ "$1" = server ] && echo "server (control plane and etcd)" || echo worker), registered as $(hostname) at $NODE_IP. Longhorn's host tools (open-iscsi, an NFS client) go on first.
 
 Go ahead?" yes || fail "stopped - nothing was changed"
-  bootstrap 3 "$mode" "$url" "$token" --node-ip "$NODE_IP"
+  # shellcheck disable=SC2046
+  bootstrap 3 "$mode" "$url" "$token" --node-ip "$NODE_IP" $(dist_flag)
   say "$(hostname) has joined. It shows on Homestead's Nodes page within a minute or two."
 }
 
-add_to_k3s() {
-  if k3s kubectl -n lab get deployment homestead >/dev/null 2>&1; then
+add_to_cluster() {
+  if [ "$DIST" = rke2 ]; then kcmd="/var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml"; else kcmd="k3s kubectl"; fi
+  if $kcmd -n lab get deployment homestead >/dev/null 2>&1; then
     ip=$(default_ip)
     msg "Already installed" "Homestead is running on this cluster already: http://$ip:8088. It updates itself from Settings > Updates."
     exit 0
   fi
   v=$(versions)
-  yesno HS_YES "Ready" "k3s is running here. About to add Longhorn (unless it is there) and Homestead to it, at http://$(default_ip):8088.
+  yesno HS_YES "Ready" "$(dist_name) is running here. About to add Longhorn (unless it is there) and Homestead to it, at http://$(default_ip):8088.
 
 Go ahead?" yes || fail "stopped - nothing was changed"
-  # shellcheck disable=SC2086
-  bootstrap 5 addons $v
+  # shellcheck disable=SC2086,SC2046
+  bootstrap 5 addons $v $(dist_flag)
   finish_new
 }
 
 finish_new() {
   ip="${NODE_IP:-$(default_ip)}"
-  token_file=/var/lib/rancher/k3s/server/node-token
+  token_file=$(token_file)
   msg "Homestead is running" "Open http://$ip:8088 and create the first account.
 
 To add machines, run the same line on each:
@@ -432,7 +515,7 @@ confirm() { # title text -> 0 for yes
     printf '\n%s\n%s [y/N] ' "$1" "$2" > "$TTY"; read -r reply < "$TTY" || reply=""
     case "$reply" in y*|Y*) return 0 ;; *) return 1 ;; esac
   fi
-  "$BOX" --title "$1" --defaultno --yesno "$2" 20 78 < "$TTY" > "$TTY" 2>&1
+  "$BOX" --title "$1" --defaultno --yesno "$2" "$(fit "$2" 7)" 78 < "$TTY" > "$TTY" 2>&1
 }
 typed() { # title text word -> 0 when the word is typed
   if [ "$UI" = text ]; then
@@ -440,7 +523,7 @@ typed() { # title text word -> 0 when the word is typed
   else
     reply=$("$BOX" --title "$1" --inputbox "$2
 
-Type $3 to go ahead:" 20 78 "" 3>&1 1>"$TTY" 2>&3 < "$TTY") || return 1
+Type $3 to go ahead:" "$(fit "$2" 11)" 78 "" 3>&1 1>"$TTY" 2>&3 < "$TTY") || return 1
   fi
   [ "$reply" = "$3" ]
 }
@@ -454,7 +537,7 @@ menu() { # title text tag item... -> tag, or 1 when cancelled
     i=0; for word in "$@"; do i=$((i+1)); if [ $((i % 2)) = 1 ] && [ $(( (i + 1) / 2 )) = "$reply" ]; then printf '%s' "$word"; return 0; fi; done
     return 1
   fi
-  "$BOX" --title "$title" --cancel-button "Back" --menu "$text" 24 90 16 "$@" 3>&1 1>"$TTY" 2>&3 < "$TTY"
+  box_menu "$title" "$text" "$@"
 }
 
 # ------------------------------------------------------------------ the node
@@ -479,7 +562,11 @@ detect_node() {
   [ -z "$CRICTL" ] && have crictl && CRICTL=crictl
   NODE=$(hostname)
 }
-kc() { [ -n "$KC" ] && $KC "$@" 2>/dev/null; }
+# A cluster that does not answer should not hold the doctor up.
+kc() {
+  [ -n "$KC" ] || return 1
+  if have timeout; then timeout 60 $KC "$@" 2>/dev/null; else $KC "$@" 2>/dev/null; fi
+}
 
 # ------------------------------------------------------------------ findings
 # One line each: id|level|title|detail|fix|safe
@@ -609,7 +696,13 @@ Degraded ones rebuild on their own when a node with room is up; faulted ones nee
 run_checks() {
   : > "$FOUND"
   steps="check_service check_disk check_memory check_clock check_runtime check_certs check_iscsi check_cluster"
-  if [ "$UI" = text ]; then for s in $steps; do $s; done; return; fi
+  if [ "$UI" = text ]; then
+    for s in $steps; do
+      [ "$DMODE" = menu ] && printf '  checking %s...\n' "$(printf '%s' "${s#check_}" | tr _ ' ')" > "$TTY" 2>/dev/null
+      $s
+    done
+    return
+  fi
   { n=0; for s in $steps; do n=$((n+1)); printf 'XXX\n%d\nChecking: %s\nXXX\n' $(( n * 100 / 9 )) "$(printf '%s' "${s#check_}" | tr _ ' ')"; $s; done; } \
     | "$BOX" --title "Homestead doctor" --gauge "Checking" 8 70 0 > "$TTY" 2>&1
 }
@@ -745,11 +838,12 @@ $(grep "|$level|" "$FOUND")
 EOF
     done
     bad=$(grep -c '|bad|' "$FOUND"); warn=$(grep -c '|warn|' "$FOUND")
-    set -- "$@" "---" "------------" \
+    # A tag starting with "-" reads to whiptail as an option, and it quits.
+    set -- "$@" "~" "" \
       "@fix" "Fix everything marked safe" "@again" "Check again" "@save" "Save this report"
     pick=$(menu "Health - $NODE" "$KIND · $bad wrong, $warn worth a look. Choose one to see it and fix it:" "$@") || return 0
     case "$pick" in
-      ---) ;;
+      "~") ;;
       @fix)
         if confirm "Fix everything safe" "Apply every fix marked safe - restarting a stopped service, turning on time sync and iscsid, uncordoning this node, clearing failed pods, cleaning up a full disk, restarting CoreDNS or Homestead?"; then
           grep -E '\|(bad|warn)\|' "$FOUND" | while IFS='|' read -r id lvl title detail fix safe; do [ -n "$fix" ] && [ "$safe" = yes ] && $fix; done
@@ -766,14 +860,13 @@ EOF
 do_install() {
   if [ "$(given HS_ROLE)" = harvester ] || { [ -z "$(given HS_ROLE)" ] && is_harvester; }; then
     flow_harvester
-  elif { [ -z "$(given HS_ROLE)" ] || [ "$(given HS_ROLE)" = addons ]; } && active k3s; then
+  elif { [ -z "$(given HS_ROLE)" ] || [ "$(given HS_ROLE)" = addons ]; } && { active k3s || active rke2-server; }; then
     HS_ROLE=addons
+    active rke2-server && DIST=rke2
     prechecks addons
-    add_to_k3s
-  elif active k3s-agent; then
-    msg "A worker already" "This machine is a worker in a k3s cluster already. Run the installer on one of the cluster's servers to add Homestead."
-  elif active rke2-server || active rke2-agent; then
-    msg "RKE2 is running here" "This machine runs RKE2. Homestead installs onto it as onto any cluster: $WIKI/Installing-on-an-existing-cluster"
+    add_to_cluster
+  elif active k3s-agent || active rke2-agent; then
+    msg "A worker already" "This machine is a worker in a cluster already. Run the installer on one of the cluster's servers to add Homestead."
   else
     flow_new
   fi

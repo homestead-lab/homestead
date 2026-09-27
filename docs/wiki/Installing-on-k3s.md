@@ -31,24 +31,6 @@ Everything Homestead does, with nothing Harvester-specific needed:
 
 ## 1. What you need
 
-### Multus installation and upgrade diagnostics
-
-Homestead installs both the Multus agents and the separate `rke2-multus-crd` chart,
-with version-pinned releases and k3s-specific CNI paths. Add-on readiness requires
-the network-attachment API **and** the current DaemonSet available on its scheduled
-nodes. A completed Helm job alone is not enough.
-
-For older Homestead installs, **Settings → Cluster → Add-ons → Repair configuration**
-corrects the known missing `multusAutoconfigDir` and installs a missing CRD dependency.
-It only handles Homestead's recognised configuration, not arbitrary customised CNIs.
-The diagnostic command collects both Helm logs and Multus agent errors.
-
-If Homestead's own upgrade waits on `data-permissions`, inspect its init-container
-error. `lookup ghcr.io` means host DNS, not a missing app configuration. Check
-`resolvectl status`, `resolvectl query ghcr.io`, the host route and outbound HTTPS.
-Fix the host's persistent DNS/network configuration before retrying; do not remove
-the old serving pod or its volume just to clear an image-pull error.
-
 - **One or more Linux machines** with a 64-bit OS (Ubuntu Server 24.04 LTS,
   Debian 12, Rocky/Alma 9 or openSUSE Leap are all fine), `curl`, and root
   access. x86-64 or 64-bit ARM.
@@ -75,19 +57,21 @@ curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/inst
 
 ![The installer's menu](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-menu.png)
 
-Choose **Install Homestead**, then **Start a new cluster here**. The installer
+Choose **Install Homestead**, then **Start a new cluster here**, then **k3s**
+(the other choice, RKE2, has [its own guide](Installing-on-RKE2)). The installer
 checks the machine first (memory, disk, the internet, ports, the hostname, the
 clock, the firewall, `/dev/kvm`, an address from DHCP) and stops on anything
 that would make the install fail, saying what to put right.
 
 ![The checks](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-checks.png)
- It asks which
-address the other machines reach this one on, when it has more than one, and
-whether to install Longhorn and KubeVirt. It shows what it will do, and once
-you say yes it takes 5-10 minutes, with a progress bar:
+
+It asks which address the other machines reach this one on, when it has more
+than one, and whether to install Longhorn and KubeVirt. It shows what it will
+do, and once you say yes it takes 5-10 minutes, with a progress bar:
 
 ![What it will do](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-ready.png)
 
+It then:
 
 1. installs what Longhorn needs on the host (`open-iscsi` and an NFS client);
 2. installs k3s with an embedded etcd, so more servers can join later;
@@ -226,3 +210,21 @@ hand:
 - Longhorn pods crash-looping usually means `open-iscsi` is missing or
   `iscsid` is not running: `sudo systemctl enable --now iscsid`.
 - More in [Troubleshooting](Troubleshooting).
+
+### Multus installation and upgrade diagnostics
+
+Homestead installs both the Multus agents and the separate `rke2-multus-crd` chart,
+with version-pinned releases and k3s-specific CNI paths. Add-on readiness requires
+the network-attachment API **and** the current DaemonSet available on its scheduled
+nodes. A completed Helm job alone is not enough.
+
+For older Homestead installs, **Settings → Cluster → Add-ons → Repair configuration**
+corrects the known missing `multusAutoconfigDir` and installs a missing CRD dependency.
+It only handles Homestead's recognised configuration, not arbitrary customised CNIs.
+The diagnostic command collects both Helm logs and Multus agent errors.
+
+If Homestead's own upgrade waits on `data-permissions`, inspect its init-container
+error. `lookup ghcr.io` means host DNS, not a missing app configuration. Check
+`resolvectl status`, `resolvectl query ghcr.io`, the host route and outbound HTTPS.
+Fix the host's persistent DNS/network configuration before retrying; do not remove
+the old serving pod or its volume just to clear an image-pull error.

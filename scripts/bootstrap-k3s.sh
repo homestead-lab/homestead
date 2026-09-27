@@ -1,6 +1,6 @@
 #!/bin/sh
-# Turn a bare Linux machine into a k3s cluster running Homestead - or join
-# another machine to one.
+# Turn a bare Linux machine into a k3s (or RKE2) cluster running Homestead -
+# or join another machine to one.
 #
 #   New cluster, on the first machine:
 #     curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - server
@@ -11,8 +11,14 @@
 #   Another machine, as a second or third server (control plane and etcd):
 #     curl -sfL .../bootstrap-k3s.sh | sudo sh -s - join https://<first-machine>:6443 <token>
 #
-#   A k3s server that is already running, to add Longhorn and Homestead to it:
+#   A k3s (or RKE2) server that is already running, to add Longhorn and Homestead to it:
 #     curl -sfL .../bootstrap-k3s.sh | sudo sh -s - addons
+#
+#   RKE2 instead of k3s - full upstream Kubernetes, hardened, what Harvester
+#   runs on - add --rke2 to any of these. RKE2's servers are joined on 9345:
+#     curl -sfL .../bootstrap-k3s.sh | sudo sh -s - server --rke2
+#     curl -sfL .../bootstrap-k3s.sh | sudo sh -s - agent https://<first-machine>:9345 <token> --rke2
+#   (the token is in /var/lib/rancher/rke2/server/node-token on the first).
 #
 # For a guided install that asks these questions and checks the machine
 # first, use install.sh instead.
@@ -20,19 +26,24 @@
 # Options for "server", after the word:
 #   --no-longhorn        use k3s's local-path storage instead of Longhorn: no
 #                        replicas, and Homestead's data lives on this machine
+#                        (k3s only - RKE2 has no storage of its own)
 #   --kubevirt           also install KubeVirt and CDI, for virtual machines
 #                        (emulated, and slow, if this machine has no /dev/kvm)
 #   --k3s-version v1.31.4+k3s1   pin k3s (default: k3s's stable channel)
+#   --rke2-version v1.33.4+rke2r1  pin RKE2 (default: RKE2's stable channel)
 #   --homestead-version 2.8.95   pin Homestead (default: the newest release)
 # Options for every mode:
-#   --node-ip 192.0.2.50   the address k3s registers this machine by, when
-#                            it has more than one
+#   --rke2                   RKE2 instead of k3s
+#   --node-ip 192.0.2.50   the address the cluster registers this machine
+#                            by, when it has more than one
 #
 # What "server" does:
 #   1. installs what Longhorn needs on the host (open-iscsi, NFS client);
-#   2. installs k3s with an embedded etcd, so more servers can join later;
-#   3. drops a HelmChart for Longhorn and Homestead's manifest into k3s's
-#      manifests folder, which k3s applies itself - nothing else to run;
+#   2. installs k3s with an embedded etcd, so more servers can join later
+#      (or RKE2, which always has one, with its ServiceLB turned on so apps
+#      get the nodes' addresses as they do on k3s);
+#   3. drops a HelmChart for Longhorn and Homestead's manifest into the
+#      manifests folder, which k3s or RKE2 applies itself - nothing else to run;
 #   4. waits for Homestead and prints its address.
 # It is safe to run again: each step finds what the last run left.
 set -eu
@@ -40,10 +51,11 @@ set -eu
 MODE="${1:-}"; [ $# -gt 0 ] && shift
 LONGHORN=1
 KUBEVIRT=0
+DIST=k3s
 K3S_VERSION=""
+RKE2_VERSION=""
 HOMESTEAD_VERSION=""
 NODE_IP=""
-MANIFESTS=/var/lib/rancher/k3s/server/manifests
 RAW=https://raw.githubusercontent.com/wjcloudy/homestead
 
 say() { printf '\n==> %s\n' "$*"; }
@@ -69,10 +81,10 @@ host_packages() {
   modprobe iscsi_tcp 2>/dev/null || true
 }
 
-# KubeVirt and CDI from their newest releases, dropped into k3s's manifests
+# KubeVirt and CDI from their newest releases, dropped into the manifests
 # folder like the rest; each one's switch goes in once its CRD is there.
 install_kubevirt() {
-  say "Asking k3s to install KubeVirt and CDI"
+  say "Asking $DIST to install KubeVirt and CDI"
   KV_RELEASES=https://github.com/kubevirt/kubevirt/releases/download
   CDI_RELEASES=https://github.com/kubevirt/containerized-data-importer/releases
   KV=$(curl -sfL https://storage.googleapis.com/kubevirt-prow/release/kubevirt/kubevirt/stable.txt) \
@@ -126,7 +138,7 @@ CDI_CR
 
 wait_crd() {
   i=0; until $KUBECTL get crd "$1" >/dev/null 2>&1; do
-    i=$((i+1)); if [ $i -gt 60 ]; then echo "  $1 is not there yet; k3s keeps trying"; return 0; fi; sleep 3; done
+    i=$((i+1)); if [ $i -gt 60 ]; then echo "  $1 is not there yet; $DIST keeps trying"; return 0; fi; sleep 3; done
 }
 
 install_k3s() {
@@ -136,50 +148,101 @@ install_k3s() {
   curl -sfL https://get.k3s.io | sh -s - "$@"
 }
 
+# RKE2 reads its settings from a file rather than flags: written first, then
+# RKE2 installed and its service started (which waits for it to come up).
+install_rke2() { # server|agent [url token]
+  type="$1"; url="${2:-}"; token="${3:-}"
+  say "Installing RKE2 ($type)"
+  mkdir -p /etc/rancher/rke2
+  {
+    [ -n "$NODE_IP" ] && echo "node-ip: $NODE_IP"
+    [ -n "$url" ] && echo "server: $url"
+    [ -n "$token" ] && echo "token: $token"
+    # A server publishes LoadBalancer Services on the nodes' own addresses,
+    # as k3s does - Homestead's own address among them.
+    [ "$type" = server ] && echo "enable-servicelb: true"
+    true
+  } > /etc/rancher/rke2/config.yaml
+  if [ -n "$RKE2_VERSION" ]; then export INSTALL_RKE2_VERSION="$RKE2_VERSION"; fi
+  curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE="$type" sh -
+  say "Starting RKE2 (a few minutes the first time: it fetches its images)"
+  systemctl enable --now "rke2-$type.service"
+}
+
+parse_common() { # sets DIST, NODE_IP, versions; leaves the rest to the caller
+  case "$1" in
+    --rke2) DIST=rke2; return 1 ;;
+    --node-ip) NODE_IP="$2"; return 2 ;;
+    --k3s-version) K3S_VERSION="$2"; return 2 ;;
+    --rke2-version) RKE2_VERSION="$2"; return 2 ;;
+  esac
+  return 0
+}
+
 case "$MODE" in
   agent|join)
-    [ $# -ge 2 ] || fail "usage: $MODE https://<server>:6443 <token>"
+    [ $# -ge 2 ] || fail "usage: $MODE https://<server>:6443 <token> (RKE2: https://<server>:9345 <token> --rke2)"
     URL="$1"; TOKEN="$2"; shift 2
-    while [ $# -gt 0 ]; do case "$1" in
-      --k3s-version) K3S_VERSION="$2"; shift 2 ;;
-      --node-ip) NODE_IP="$2"; shift 2 ;;
-      *) fail "unknown option $1" ;; esac; done
+    while [ $# -gt 0 ]; do
+      set +e; parse_common "$@"; used=$?; set -e
+      [ "$used" = 0 ] && fail "unknown option $1"
+      shift "$used"
+    done
     host_packages
-    export K3S_URL="$URL" K3S_TOKEN="$TOKEN"
-    if [ "$MODE" = agent ]; then install_k3s agent
-    else unset K3S_URL; install_k3s server --server "$URL"; fi
+    if [ "$DIST" = rke2 ]; then
+      if [ "$MODE" = agent ]; then install_rke2 agent "$URL" "$TOKEN"; else install_rke2 server "$URL" "$TOKEN"; fi
+    else
+      export K3S_URL="$URL" K3S_TOKEN="$TOKEN"
+      if [ "$MODE" = agent ]; then install_k3s agent
+      else unset K3S_URL; install_k3s server --server "$URL"; fi
+    fi
     say "Joined. The machine appears on Homestead's Nodes page within a minute or two."
     exit 0 ;;
   server|addons) ;;
-  *) sed -n '2,40p' "$0" 2>/dev/null || true; fail "say server, agent, join or addons" ;;
+  *) sed -n '2,50p' "$0" 2>/dev/null || true; fail "say server, agent, join or addons" ;;
 esac
 
-while [ $# -gt 0 ]; do case "$1" in
-  --no-longhorn) LONGHORN=0; shift ;;
-  --kubevirt) KUBEVIRT=1; shift ;;
-  --k3s-version) K3S_VERSION="$2"; shift 2 ;;
-  --homestead-version) HOMESTEAD_VERSION="$2"; shift 2 ;;
-  --node-ip) NODE_IP="$2"; shift 2 ;;
-  *) fail "unknown option $1" ;; esac; done
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-longhorn) LONGHORN=0; shift; continue ;;
+    --kubevirt) KUBEVIRT=1; shift; continue ;;
+    --homestead-version) HOMESTEAD_VERSION="$2"; shift 2; continue ;;
+  esac
+  set +e; parse_common "$@"; used=$?; set -e
+  [ "$used" = 0 ] && fail "unknown option $1"
+  shift "$used"
+done
+
+if [ "$DIST" = rke2 ]; then
+  [ "$LONGHORN" = 1 ] || fail "RKE2 has no storage of its own: leave out --no-longhorn, and Longhorn holds Homestead's data"
+  MANIFESTS=/var/lib/rancher/rke2/server/manifests
+  KUBECTL="/var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml"
+  SERVICE=rke2-server
+else
+  MANIFESTS=/var/lib/rancher/k3s/server/manifests
+  KUBECTL="k3s kubectl"
+  SERVICE=k3s
+fi
 
 [ "$LONGHORN" = 1 ] && host_packages
 if [ "$MODE" = addons ]; then
-  # k3s is running already: only what goes on top of it.
-  k3s kubectl get nodes >/dev/null 2>&1 || fail "no k3s server is running here; use server to make one"
+  # The cluster is running already: only what goes on top of it.
+  $KUBECTL get nodes >/dev/null 2>&1 || fail "no $DIST server is running here; use server to make one"
+elif [ "$DIST" = rke2 ]; then
+  install_rke2 server
 else
   install_k3s server --cluster-init
 fi
 
-KUBECTL="k3s kubectl"
 say "Waiting for this node to be Ready"
 i=0; until $KUBECTL get nodes 2>/dev/null | grep -q " Ready"; do
-  i=$((i+1)); [ $i -gt 90 ] && fail "the node did not become Ready; see: journalctl -u k3s"; sleep 2; done
+  i=$((i+1)); [ $i -gt 180 ] && fail "the node did not become Ready; see: journalctl -u $SERVICE"; sleep 2; done
 IP=$($KUBECTL get node "$(hostname)" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || true)
 [ -n "$IP" ] || IP=$($KUBECTL get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
 mkdir -p "$MANIFESTS"
 
 if [ "$LONGHORN" = 1 ]; then
-  say "Asking k3s to install Longhorn"
+  say "Asking $DIST to install Longhorn"
   # One replica until more nodes join; raise it on the Volumes page later.
   cat > "$MANIFESTS/longhorn.yaml" <<'EOF'
 apiVersion: helm.cattle.io/v1
@@ -213,7 +276,7 @@ if [ -n "$HOMESTEAD_VERSION" ]; then REF="v${HOMESTEAD_VERSION#v}"; fi
 TMP=$(mktemp)
 curl -sfL "$RAW/$REF/deploy/deploy.yaml" -o "$TMP" || fail "could not download $RAW/$REF/deploy/deploy.yaml"
 # Harvester's answers become this cluster's: its storage class, and this
-# machine's address - k3s's ServiceLB publishes Services on the nodes' own
+# machine's address - the ServiceLB publishes Services on the nodes' own
 # addresses, so there is no separate VIP to choose.
 sed -e "s/longhorn-r2/$CLASS/g" \
     -e "s/accessModes: \[ReadWriteMany\]/accessModes: [$MODE_RW]/" \
@@ -224,7 +287,7 @@ rm -f "$TMP"
 
 say "Waiting for Homestead to start (Longhorn first, if it is being installed: a few minutes)"
 i=0; until $KUBECTL -n lab rollout status deployment/homestead --timeout=10s >/dev/null 2>&1; do
-  i=$((i+1)); [ $i -gt 90 ] && fail "Homestead did not start; see: k3s kubectl -n lab get pods"; sleep 10; done
+  i=$((i+1)); [ $i -gt 90 ] && fail "Homestead did not start; see: $KUBECTL -n lab get pods"; sleep 10; done
 
 say "Homestead is running: open http://$IP:8088 and create the first account."
 echo "   To add machines, Cluster > Add a host shows the commands for this cluster."
