@@ -32,7 +32,7 @@ class FenceTests(unittest.TestCase):
         self.save_marker()
         pod = self.c.objects["/api/v1/namespaces/lab/pods/new-0"]
         pod["metadata"]["ownerReferences"][0]["name"] = "hs-rs"
-        pod["spec"]["containers"] = [{"name": "homestead", "volumeMounts": [{"name": "data", "mountPath": self.directory}]}]
+        pod["spec"]["containers"][0]["volumeMounts"] = [{"name": "data", "mountPath": self.directory}]
 
     def test_normal_boot_without_marker_or_anchor_remains_writable(self):
         del self.c.objects[self.c.anchor.path]

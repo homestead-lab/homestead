@@ -40,7 +40,8 @@ class Cluster:
         self.dep_path = "/apis/apps/v1/namespaces/lab/deployments/homestead"
         self.dep = obj("Deployment", "homestead", {"replicas": 2, "template": {"spec": {
             "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "source"}}],
-            "containers": [{"name": "homestead", "image": IMAGE}]}}})
+            "containers": [{"name": "homestead", "image": IMAGE,
+                "readinessProbe": {"httpGet": {"path": "/healthz", "port": 8080}}}]}}})
         self.dep["status"] = {"observedGeneration": 1, "replicas": 2, "readyReplicas": 2, "availableReplicas": 2}
         self.put(self.dep_path, self.dep)
         self.rs_path = "/apis/apps/v1/namespaces/lab/replicasets/hs-rs"
@@ -168,12 +169,24 @@ class Cluster:
             pod = obj("Pod", f"new-{i}", {"nodeName": "node1", "volumes": [
                 {"name": "data", "persistentVolumeClaim": {"claimName": "target"}}]}, owner=("ReplicaSet", "hs-rs-uid"))
             pod["status"] = {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]}
+            pod["spec"]["containers"] = copy.deepcopy(dep["spec"]["template"]["spec"]["containers"])
             self.put(f"/api/v1/namespaces/lab/pods/new-{i}", pod)
 
 
 class CoordinatorTests(unittest.TestCase):
     def setUp(self):
         self.c = Cluster()
+
+    def test_ready_condition_without_app_probe_cannot_complete_move(self):
+        self.c.switching(); self.c.step(); self.c.settle_stop(); self.c.step(); self.c.settle_start()
+        self.c.objects["/api/v1/namespaces/lab/pods/new-0"]["spec"]["containers"][0].pop("readinessProbe")
+        with self.assertRaisesRegex(Held, "readiness probe"): self.c.step()
+        self.assertEqual("start", self.c.fresh().load(**self.c.handle).state["phase"])
+
+    def test_pod_image_changed_by_admission_cannot_complete_move(self):
+        self.c.switching(); self.c.step(); self.c.settle_stop(); self.c.step(); self.c.settle_start()
+        self.c.objects["/api/v1/namespaces/lab/pods/new-0"]["spec"]["containers"][0]["image"] = "unreviewed:latest"
+        with self.assertRaisesRegex(Held, "source image digest"): self.c.step()
 
     def test_complete_handoff_waits_for_controllers_mount_release_and_readiness(self):
         c = self.c

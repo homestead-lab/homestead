@@ -59,6 +59,10 @@ class ReviewTests(unittest.TestCase):
         D.validate_policy(result["policy"])
         self.assertEqual(result["policy"], self.review.approve(body)["policy"])
 
+    def test_no_app_probe_cannot_offer_a_move_whose_restart_is_unverifiable(self):
+        self.dep["spec"]["template"]["spec"]["containers"][0].pop("readinessProbe")
+        with self.assertRaisesRegex(Held, "readiness probe"): self.review.preview(self.body)
+
     def test_confirmation_cannot_accept_unsigned_browser_receipts(self):
         for body in ({**self.body, "confirm_move": True, "confirm_capacity": True},
                      {**self.approved(), "policy": {"approve": "everything"}},
@@ -150,6 +154,18 @@ class ReviewTests(unittest.TestCase):
         admit = D.Admitter(self.f.read, "lab", result["nodes"], result["policy"], handoff=state, clock=lambda: 1000)
         self.assertTrue(admit("stop", result["deployment"]))
 
+    def test_mutable_source_tag_becomes_pinned_restart_approval(self):
+        self.dep["spec"]["template"]["spec"]["containers"][0]["image"] = "ghcr.io/wjcloudy/homestead:latest"
+        result = self.review.approve(self.approved())
+        state = {"source": {"name": "source"}, "destination": "target", "replicas": 2, "operation": OP,
+                 "plan": {"data_volume": "data", "copy_image": IMAGE, "copy_node": "node1"}}
+        admit = D.Admitter(self.f.read, "lab", result["nodes"], result["policy"], handoff=state, clock=lambda: 1000)
+        self.assertTrue(admit("stop", result["deployment"]))
+        restarted = copy.deepcopy(result["deployment"])
+        restarted["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"] = "target"
+        self.assertNotEqual(result["policy"]["reviews"]["restart"]["proposal"],
+                            D.review(self.f.read, "lab", "restart", restarted, result["nodes"], 88, clock=lambda: 1000)["receipt"]["proposal"])
+
     def test_source_process_identity_and_whole_volume_mount_must_match(self):
         self.review.source_pod = copy.deepcopy(self.f.pods[0])
         self.review.preview(self.body)
@@ -182,6 +198,7 @@ class ReviewTests(unittest.TestCase):
              mock.patch.object(server, "DATA_DIR", "/data"), mock.patch.object(server, "kget", side_effect=read), \
              mock.patch.object(server.OPS, "_read", return_value=[]), \
              mock.patch.object(server.OPS, "list_operations", side_effect=AssertionError("must not poll resolvers")), \
+             mock.patch.object(server.STORAGE_RUNTIME, "require_self_data", return_value=[{"protocol": 1}]) as runtime, \
              mock.patch.object(server, "ksend", side_effect=AssertionError("review must not mutate")), \
              mock.patch.object(server, "get_app_settings", return_value={"thresholds": {"memory": {"critical": 88}}}):
             handler.do_POST()
@@ -189,6 +206,18 @@ class ReviewTests(unittest.TestCase):
         self.assertIn("capacity_token", handler._send.call_args.args[1])
         self.assertEqual("admin", server.needed_role(handler.path, "POST"))
         handler._guard.assert_called_once_with(handler.path)
+        runtime.assert_called_once()
+
+    def test_replica_runtime_proof_is_bound_to_the_confirmation(self):
+        proof = [{"pod_uid": "one", "container_id": "original", "mount": {"inode": 1}}]
+        self.review.runtime_check = mock.Mock(side_effect=lambda *_: copy.deepcopy(proof))
+        body = self.approved()
+        proof[0]["container_id"] = "restarted"
+        with self.assertRaisesRegex(Held, "Review the current move"):
+            self.review.approve(body)
+        self.review.runtime_check.side_effect = Held("Unverified replica")
+        with self.assertRaisesRegex(Held, "Unverified replica"):
+            self.review.preview(self.body)
 
     def test_api_holds_busy_or_recovery_jobs_without_reading_cluster(self):
         import server

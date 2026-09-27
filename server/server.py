@@ -50,6 +50,8 @@ LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.197")
 _self_data_fence = None
+_self_data_boot_pending = False
+_self_data_boot_failed = False
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -200,14 +202,36 @@ def self_data_file_write(path):
 
 def initialize_self_data_fence():
     """Called before feature bindings can write defaults or start background jobs."""
-    global _self_data_fence
+    global _self_data_fence, _self_data_boot_pending
     if not TOKEN:  # local demo/test server has no cluster or persistent handoff
         return
     with open(f"{SA}/namespace", encoding="utf-8") as handle:
         namespace = handle.read().strip()
     _self_data_fence = SELF_DATA_FENCE.Fence(kget, namespace, NAMES.BRAND,
         os.environ.get("HOSTNAME", ""), NAMES.BRAND, DATA_DIR)
-    _self_data_fence.inspect()  # unknown/source state must not reach feature imports
+    state = _self_data_fence.inspect()  # unknown/source state must not reach feature imports
+    _self_data_boot_pending = not state["writable"]
+
+
+def self_data_boot_status():
+    """The full app has loaded, but destination writers wait for verified cutover.
+
+    Do not run resolvers or acquire shared file locks here: both may write the
+    copied store. Read the journal and existing account key before readiness.
+    """
+    if not _self_data_boot_pending:
+        return {"writable": True}
+    try:
+        if _self_data_boot_failed:
+            raise SELF_DATA_FENCE.Held("Destination background activation needs review")
+        state = _self_data_fence.inspect()
+        if state.get("mode") not in ("start", "done"):
+            raise SELF_DATA_FENCE.Held("Destination startup state changed")
+        OPS._read()
+        AUTH.review_signing_key()
+        return state
+    except Exception:
+        raise SELF_DATA_FENCE.Held("Homestead cannot verify its new data volume yet. Changes and background jobs remain held") from None
 
 
 OPS.WRITE_GUARD = require_self_data_write
@@ -4812,7 +4836,7 @@ def _storage_runtime_loop():
     # behalf of an older binary that does not understand the new journal.
     while True:
         try:
-            STORAGE_RUNTIME.report(OPS, kget, SELF.NS, SELF.POD, NAMES.BRAND, HOMESTEAD_VERSION, DATA_DIR)
+            STORAGE_RUNTIME.report(OPS, kget, SELF.NS, SELF.POD, NAMES.BRAND, HOMESTEAD_VERSION, DATA_DIR, self_data=True)
             beat("storage-runtime", 20)
         except Exception as error:
             beat("storage-runtime", 20, error)
@@ -5347,8 +5371,12 @@ def preview_self_data_move(body, actor):
             return copy.deepcopy(cache[path])
         _require_no_data_handoff(read, ns)
         pod, image = _self_data_helper_image(read, ns)
+        def runtime_check(pods, claim):
+            return STORAGE_RUNTIME.require_self_data(OPS, pods, ns, NAMES.BRAND, HOMESTEAD_VERSION, claim,
+                own_uid=pod["metadata"]["uid"], data_mount=DATA_DIR)
         result = SELF_DATA_REVIEW.Review(read, ns, NAMES.BRAND, actor=actor, image=image,
-            threshold=get_app_settings()["thresholds"]["memory"]["critical"], source_pod=pod, data_dir=DATA_DIR, clock=time.time).preview(body)
+            threshold=get_app_settings()["thresholds"]["memory"]["critical"], source_pod=pod, data_dir=DATA_DIR,
+            runtime_check=runtime_check, clock=time.time).preview(body)
         return result
     except SELF_DATA_FENCE.Held:
         raise
@@ -6123,7 +6151,7 @@ def is_page_path(path):
     """
     clean = path or "/"
     last = clean.rstrip("/").rsplit("/", 1)[-1]
-    return (not clean.startswith("/api/") and clean != "/api"
+    return (not clean.startswith("/api/") and clean not in ("/api", "/healthz")
             and "." not in last and ".." not in clean and len(clean) < 200)
 
 
@@ -6425,6 +6453,28 @@ class H(BaseHTTPRequestHandler):
                 CFACCESS.verify(token)
             except ValueError as error:
                 self._send(403, {"error": f"Cloudflare Access did not sign this request: {error}"})
+                return True
+        if _self_data_boot_pending:
+            static = (is_spa_route(path) or is_page_path(path) or is_app_identity(path) or is_asset_path(path)
+                      or path in ("/style.css", "/sw.js") or is_vendor_path(path)
+                      or path.startswith("/js/") and path.endswith(".js"))
+            if self.command == "GET" and static:
+                return None  # Bundled UI can explain an outage without touching data.
+            try:
+                self_data_boot_status()
+            except SELF_DATA_FENCE.Held as error:
+                self._send(503, {"error": str(error), "data_handoff": True})
+                return True
+            # Ready means the real app loaded and can read its copied journal
+            # and account key, not that normal writers have been released.
+            if self.command == "GET" and path == "/healthz":
+                self._send(200, {"ok": True, "data_handoff": True, "read_only": True})
+                return True
+            if self.command == "GET" and path == "/api/auth/state":
+                self._send(200, {"data_handoff": True, "setup": False})
+                return True
+            if self.command != "GET" or not re.fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}", path):
+                self._send(503, {"error": "Homestead is verifying its new data volume. Wait for the move to finish before changing anything.", "data_handoff": True})
                 return True
         if self.command in ("POST", "PUT", "PATCH", "DELETE") or path in ("/api/console", "/api/node/shell", "/api/vm/console"):
             try:
@@ -7927,8 +7977,9 @@ def _samba_loop():
         time.sleep(60)
 
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "8080"))
+def start_background_tasks():
+    """Start only after normal boot or the independent move's verified completion."""
+    require_self_data_write()
     threading.Thread(target=_storage_runtime_loop, daemon=True).start()
     threading.Thread(target=_sampler, daemon=True).start()
     threading.Thread(target=_reconcile_permissions, daemon=True).start()
@@ -7946,8 +7997,44 @@ if __name__ == "__main__":
     threading.Thread(target=_hardware_loop, daemon=True).start()
     threading.Thread(target=_samba_loop, daemon=True).start()
     threading.Thread(target=_vmstore_loop, daemon=True).start()
+
+
+def finish_self_data_boot():
+    """Keep the already-bound HTTP app read-only until the coordinator finishes.
+
+    This thread never advances the coordinator and never repairs/copies stores.
+    A failed read leaves the gate closed. No background target is started twice.
+    """
+    global _self_data_boot_pending, _self_data_boot_failed
+    while _self_data_boot_pending:
+        try:
+            state = self_data_boot_status()
+        except SELF_DATA_FENCE.Held:
+            time.sleep(2)
+            continue
+        if state["writable"]:
+            # Start is outside the retry loop: a partially failed thread launch
+            # must not launch a duplicate set on the next tick.
+            try:
+                start_background_tasks()
+            except Exception:
+                _self_data_boot_failed = True
+                print("Data move startup needs review; background activation did not complete", flush=True)
+                return
+            _self_data_boot_pending = False
+            return
+        time.sleep(2)
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", "8080"))
+    http_server = ThreadingHTTPServer(("0.0.0.0", port), H)
+    if _self_data_boot_pending:
+        threading.Thread(target=finish_self_data_boot, name="data-move-startup", daemon=True).start()
+    else:
+        start_background_tasks()
     # On a rolling update or a drain, hand the lease over now rather than
     # leaving the others to wait out its expiry.
     signal.signal(signal.SIGTERM, lambda *_: (LEADER.release(), os._exit(0)))
     print(f"Homestead listening on :{port}", flush=True)
-    ThreadingHTTPServer(("0.0.0.0", port), H).serve_forever()
+    http_server.serve_forever()
