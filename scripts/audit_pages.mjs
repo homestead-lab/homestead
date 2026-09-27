@@ -24,6 +24,7 @@ const PAGES = [
   ["portal", "portal"],
   ["deploy", "deploy"],
   ["containers", "workloads"],
+  ["containers-rows", "workloads", "setViewLayout('containers','renderWorkloads','rows')"],
   ["vms", "vms"],
   ["app-store", "store"],
   ["helm", "helm"],
