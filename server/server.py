@@ -33,6 +33,7 @@ import homestead_storage_guard as STORAGE_GUARD
 import homestead_self_data_fence as SELF_DATA_FENCE
 import homestead_self_data_worker as SELF_DATA_WORKER
 import homestead_self_data_review as SELF_DATA_REVIEW
+import homestead_self_data_prepare as SELF_DATA_PREPARE
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
 API = "https://kubernetes.default.svc"
@@ -5241,6 +5242,92 @@ def self_data_handoff_status(operation):
         return SELF_DATA_WORKER.unavailable_status(operation)
 
 
+def _self_data_helper_image(read, ns):
+    pod_name = _dns_name(SELF.POD, "Homestead pod")
+    pod = read(f"/api/v1/namespaces/{ns}/pods/{pod_name}")
+    containers = [c for c in pod.get("spec", {}).get("containers", []) if c.get("name") == NAMES.BRAND]
+    statuses = [c for c in pod.get("status", {}).get("containerStatuses", []) if c.get("name") == NAMES.BRAND]
+    if len(containers) != 1 or len(statuses) != 1 or not statuses[0].get("ready") or not statuses[0].get("state", {}).get("running"):
+        raise SELF_DATA_FENCE.Held("The running Homestead image is not ready to be used for this move")
+    digest_match = re.search(r"(?:^|@|://)(sha256:[a-f0-9]{64})$", statuses[0].get("imageID", ""))
+    if not digest_match:
+        raise SELF_DATA_FENCE.Held("The running Homestead image digest is unavailable; wait for it before reviewing")
+    return pod, UPDATES._immutable(containers[0]["image"], digest_match.group(1))
+
+
+def _require_no_data_handoff(read, ns):
+    try:
+        read(f"/api/v1/namespaces/{ns}/configmaps/{NAMES.BRAND}-data-handoff")
+    except urllib.error.HTTPError as error:
+        if error.code == 404: return
+        raise
+    raise SELF_DATA_FENCE.Held("An earlier data move record exists; review it before starting another move")
+
+
+def self_data_preparation(body, actor, *, start=False):
+    """Review or enqueue destination preparation; never switches the app PVC."""
+    try:
+        # No resolver polling in review. Execution recomputes under the shared
+        # operations lock, before recording any preparation intent.
+        def reviewed():
+            _require_no_data_handoff(kget, SELF.NS)
+            info = homestead_data_volume()
+            row = next((r for r in info.get("classes", []) if r["name"] == body.get("storage_class")), None)
+            if row is None: raise SELF_DATA_FENCE.Held("Choose an available destination storage class")
+            _, image = _self_data_helper_image(kget, SELF.NS)
+            return SELF_DATA_PREPARE.review(kget, SELF.NS, NAMES.BRAND, body, actor=actor, image=image,
+                access_mode="ReadWriteMany" if row["shareable"] else "ReadWriteOnce",
+                threshold=get_app_settings()["thresholds"]["memory"]["critical"], clock=time.time)
+        if not start:
+            cfg, public, context, _ = reviewed()
+            return {**public, "capacity_token": CAPACITY_REVIEW.issue(cfg, context)}
+        with OPS._lock:
+            result = reviewed()
+            operation = SELF_DATA_PREPARE.start(body, result, OPS)
+            return {"ok": True, "operation": operation, "destination": result[3]["destination"],
+                    "detail": "Preparing the new volume. Homestead stays on its original data until you confirm the final move."}
+    except SELF_DATA_FENCE.Held:
+        raise
+    except Exception:
+        raise SELF_DATA_FENCE.Held("Destination preparation is unavailable. Inspect jobs before retrying; no data volume was deleted") from None
+
+
+def self_data_preparation_progress(item):
+    try:
+        return SELF_DATA_PREPARE.resolve(item, kget, ksend, OPS.checkpoint, clock=time.time)
+    except SELF_DATA_FENCE.Held as error:
+        item["ref"]["retain_resources"] = True
+        return "failed", item.get("progress", 0), str(error)
+
+
+def self_data_preparation_state():
+    """Settings can reopen preparation without advancing any job or exposing refs."""
+    try:
+        info = homestead_data_volume()
+        nodes = SELF_DATA_PREPARE.D._inventory(kget, "/api/v1/nodes")
+        jobs = []
+        for item in OPS._read():
+            ref = item.get("ref", {})
+            if item.get("kind") != SELF_DATA_PREPARE.KIND or ref.get("namespace") != SELF.NS:
+                continue
+            jobs.append({"id": item["id"], "operation": ref["operation"], "destination": ref["destination"],
+                "source": ref["source"]["name"], "storage_class": ref["storage_class"], "node": ref["node"],
+                "status": item["status"], "progress": item.get("progress", 0), "message": item.get("message", ""),
+                "prepared": item["status"] == "succeeded" and bool(ref.get("prepared"))
+                    and ref["source"]["name"] == info.get("pvc")})
+        return {"source": info.get("pvc"), "classes": info.get("classes", []), "preparations": jobs,
+            "execution_ready": False,  # Enable only with the complete fenced restart/progress path.
+            "nodes": [{"name": n["metadata"]["name"], "ready": not n["metadata"].get("deletionTimestamp")
+                and not n.get("spec", {}).get("unschedulable") and any(c.get("type") == "Ready" and c.get("status") == "True"
+                    for c in n.get("status", {}).get("conditions", []))} for n in nodes]}
+    except Exception:
+        raise SELF_DATA_FENCE.Held("Data preparation status is unavailable. Existing jobs and volumes have not been changed") from None
+
+
+OPS.RESOLVERS[SELF_DATA_PREPARE.KIND] = self_data_preparation_progress
+OPS.CANCELLERS[SELF_DATA_PREPARE.KIND] = (SELF_DATA_PREPARE.cancel_plan, SELF_DATA_PREPARE.cancel_run)
+
+
 def preview_self_data_move(body, actor):
     """Read-only final review for a prepared, bound destination.
 
@@ -5258,22 +5345,8 @@ def preview_self_data_move(body, actor):
         def read(path):
             if path not in cache: cache[path] = copy.deepcopy(kget(path))
             return copy.deepcopy(cache[path])
-        try:
-            read(f"/api/v1/namespaces/{ns}/configmaps/{NAMES.BRAND}-data-handoff")
-        except urllib.error.HTTPError as error:
-            if error.code != 404: raise
-        else:
-            raise SELF_DATA_FENCE.Held("An earlier data move record exists; review it before starting another move")
-        pod_name = _dns_name(SELF.POD, "Homestead pod")
-        pod = read(f"/api/v1/namespaces/{ns}/pods/{pod_name}")
-        containers = [c for c in pod.get("spec", {}).get("containers", []) if c.get("name") == NAMES.BRAND]
-        statuses = [c for c in pod.get("status", {}).get("containerStatuses", []) if c.get("name") == NAMES.BRAND]
-        if len(containers) != 1 or len(statuses) != 1 or not statuses[0].get("ready") or not statuses[0].get("state", {}).get("running"):
-            raise SELF_DATA_FENCE.Held("The running Homestead image is not ready to be used for this move")
-        digest_match = re.search(r"(?:^|@|://)(sha256:[a-f0-9]{64})$", statuses[0].get("imageID", ""))
-        if not digest_match:
-            raise SELF_DATA_FENCE.Held("The running Homestead image digest is unavailable; wait for it before reviewing")
-        image = UPDATES._immutable(containers[0]["image"], digest_match.group(1))
+        _require_no_data_handoff(read, ns)
+        pod, image = _self_data_helper_image(read, ns)
         result = SELF_DATA_REVIEW.Review(read, ns, NAMES.BRAND, actor=actor, image=image,
             threshold=get_app_settings()["thresholds"]["memory"]["critical"], source_pod=pod, data_dir=DATA_DIR, clock=time.time).preview(body)
         return result
@@ -6190,7 +6263,7 @@ def needed_role(path, method):
         return "admin"
     if path == "/api/storage/classes" and method != "GET":
         return "admin"
-    if path in ("/api/portal", "/api/self/replicas", "/api/self/data/move", "/api/self/data/move/preview", "/api/ipam/unifi", "/api/mqtt", "/api/mqtt/test") and method != "GET":
+    if path in ("/api/portal", "/api/self/replicas", "/api/self/data/move", "/api/self/data/move/preview", "/api/self/data/prepare", "/api/self/data/prepare/preview", "/api/ipam/unifi", "/api/mqtt", "/api/mqtt/test") and method != "GET":
         return "admin"
     # A chart can make anything anywhere in the cluster, and so can raw YAML;
     # a secret's values are for admins only.
@@ -6484,6 +6557,11 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("cluster", 15, CLUSTER.inventory))
             if p == "/api/self/replicas":
                 return self._send(200, homestead_replicas())
+            if p == "/api/self/data/prepare":
+                try:
+                    return self._send(200, self_data_preparation_state())
+                except SELF_DATA_FENCE.Held as error:
+                    return self._send(409, {"error": str(error)})
             if p.startswith("/api/self/data/handoff/"):
                 status = self_data_handoff_status(p[len("/api/self/data/handoff/"):])
                 if status is None:
@@ -6935,6 +7013,11 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/self/data/move/preview":
                 try:
                     return self._send(200, preview_self_data_move(b, self.user))
+                except SELF_DATA_FENCE.Held as error:
+                    return self._send(409, {"error": str(error), "review_required": True})
+            if p in ("/api/self/data/prepare", "/api/self/data/prepare/preview"):
+                try:
+                    return self._send(200, self_data_preparation(b, self.user, start=p == "/api/self/data/prepare"))
                 except SELF_DATA_FENCE.Held as error:
                     return self._send(409, {"error": str(error), "review_required": True})
             if p == "/api/cluster/components/upgrade":

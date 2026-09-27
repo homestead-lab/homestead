@@ -1574,7 +1574,21 @@ ssh_pwauth: true
         { name: "homestead-6f9c-a1", node: "harvester-node1", ready: true, leader: true, this: true, terminating: false }],
         data: { pvc: "homestead-data", storage_class: "longhorn-r2", access_modes: ["ReadWriteMany"], size: "2Gi", shareable: false,
           reason: "homestead-data is on longhorn-r2, a migratable class: Longhorn gives it a VM-disk volume that only one node can mount, so a copy on a second node would never start",
-          candidates: ["longhorn"] } },
+          candidates: ["longhorn"], classes: [{ name: "longhorn", shareable: true }] } },
+    "/api/self/data/prepare": (url, init) => {
+      if (init?.method === "POST") {
+        window.__demoDataPrepared = true;
+        return { operation: { id: "demo-data-prepare", title: "Prepare Homestead data volume", kind: "self-data-prepare", status: "succeeded", progress: 100, href: "/settings" }, destination: "homestead-data-prepared" };
+      }
+      return { source: "homestead-data", classes: [{ name: "longhorn", shareable: true }], execution_ready: false,
+        nodes: [{ name: "harvester-node1", ready: true }, { name: "harvester-node2", ready: true }],
+        preparations: window.__demoDataPrepared ? [{ id: "demo-data-prepare", operation: "a".repeat(24), destination: "homestead-data-prepared", node: "harvester-node1", status: "succeeded", progress: 100, prepared: true,
+          message: "Destination prepared. Review the move when you are ready for downtime." }] : [] };
+    },
+    "/api/self/data/prepare/preview": { size: "2Gi", storage_class: "longhorn", capacity_token: "demo-only", capacity: {
+      blocked: false, warnings: ["Storage capacity is not reserved until provisioning completes."], candidates: [] } },
+    "/api/self/data/move/preview": { capacity_token: "demo-only", downtime: "Homestead will be unavailable while data is copied and checked. Both volumes are retained.",
+      stages: ["Start move coordinator", "Copy and verify", "Restart Homestead"].map((label, i) => ({ label, detail: i ? "Conditional on stopping Homestead first. Capacity is checked again before acting." : "Starts alongside Homestead.", capacity: { blocked: false, warnings: [], candidates: [] } })) },
     "/api/self/data/move": { ok: true, detail: "copying homestead-data to homestead-data-shared on longhorn; Homestead restarts onto it when done" },
     "/api/portal/status": () => Object.fromEntries(portalLinks.map((link, i) => [link.id, i === 3 ? { up: false, ms: null } : { up: true, ms: 3 + i }])),
     "/api/portal/candidates": [

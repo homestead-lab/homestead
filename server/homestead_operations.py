@@ -264,6 +264,8 @@ def _public(item):
         out["batch_name"] = item["ref"]["name"]
     if item.get("kind") == "snapshot-delete":
         out["cancellable"] = False  # Longhorn merging cannot be undone or safely interrupted.
+    if item.get("kind") == "self-data-prepare":
+        out["cancellable"] = out["cleanable"] = False
     if item.get("kind") == "workload-rename":
         out["tracking_only"] = True
         out["rename_recovery"] = True
@@ -285,6 +287,8 @@ def _public(item):
 
 
 def _receipt_needed(item):
+    if item.get("kind") == "self-data-prepare" and item.get("ref", {}).get("prepared"):
+        return True  # The final move and later cleanup still need these exact identities.
     if not POWER_RECEIPTS.protected(item.get("kind"), item.get("ref") or {}):
         return False
     ref = item.get("ref") or {}
