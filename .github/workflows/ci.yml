@@ -13,6 +13,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    # What a pull request touches decides which of the slow checks it needs:
+    # the page and dialog audits for the web app, the installer's screens
+    # for the installer. A diff that only moves version numbers (a release
+    # bump) touches neither. A push to main runs everything.
+    runs-on: ubuntu-latest
+    outputs:
+      ui: ${{ steps.paths.outputs.ui }}
+      installer: ${{ steps.paths.outputs.installer }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      - id: paths
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "ui=true" >> "$GITHUB_OUTPUT"; echo "installer=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # The checkout is the pull request merged into main: its first
+          # parent is main, so this diff is exactly what the merge brings.
+          touches() {
+            git diff -U0 HEAD^1 HEAD -- "$@" | grep -E '^[+-]' | grep -Ev '^(\+\+\+|---) ' \
+              | sed -E 's/[0-9]+\.[0-9]+\.[0-9]+/X/g' > /tmp/lines || true
+            [ "$(grep '^+' /tmp/lines | cut -c2- | sort)" != "$(grep '^-' /tmp/lines | cut -c2- | sort)" ] && echo true || echo false
+          }
+          ui=$(touches web scripts/audit_dialogs.mjs scripts/audit_pages.mjs .github/workflows/ci.yml)
+          installer=$(touches scripts/install.sh scripts/capture_tui.sh scripts/render_tui.mjs .github/workflows/ci.yml)
+          echo "ui=$ui installer=$installer"
+          echo "ui=$ui" >> "$GITHUB_OUTPUT"; echo "installer=$installer" >> "$GITHUB_OUTPUT"
   source-copy:
     runs-on: ubuntu-latest
     steps:
@@ -24,6 +53,8 @@ jobs:
   installer-screens:
     # The installer's and node doctor's menus, driven in tmux as a person
     # would: a menu that stops appearing fails here, before a release.
+    needs: changes
+    if: needs.changes.outputs.installer == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -37,7 +68,7 @@ jobs:
           npm install --no-save --no-package-lock playwright@1.55.0 >/dev/null
           npx playwright install --with-deps chromium >/dev/null
           node scripts/render_tui.mjs
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: installer-screens
@@ -49,23 +80,27 @@ jobs:
     # and a phone width, and checked against docs/design.md: content wider
     # than the screen or dialog, text under 10px, or one that no longer
     # opens fails here.
+    needs: changes
+    if: needs.changes.outputs.ui == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - name: Check every dialog
+      - name: Install the browser
         run: |
           npm install --no-save --no-package-lock playwright@1.55.0 >/dev/null
           npx playwright install --with-deps chromium >/dev/null
+      - name: Check every dialog
+        run: |
           PORT=4173 WEBROOT=web DATA_DIR=/tmp/homestead-demo-data python server/server.py >/tmp/homestead-demo.log 2>&1 &
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:4173/ >/dev/null && break; sleep 1; done
           node scripts/audit_dialogs.mjs
       - name: Check every page
         if: always()
         run: node scripts/audit_pages.mjs
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: dialogs-and-pages
