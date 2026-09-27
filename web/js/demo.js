@@ -1233,7 +1233,7 @@ ssh_pwauth: true
       stranded: [{ ns: "lab", name: "frigate" }],
       volumes: [{ name: "pvc-demo-frigate", claim: "lab/frigate-config", healthy_elsewhere: 1, risk: "single-copy" },
         { name: "pvc-demo-ha", claim: "lab/homeassistant-config", healthy_elsewhere: 2, risk: "resync" }],
-      maintenance: { budgets: [{ pod: "lab/paperless-5c9d", budget: "minAvailable 1", allowed: 0 }], local_storage: [] },
+      maintenance: { budgets: [{ pod: "lab/paperless-5c9d", budget: "minAvailable 1", allowed: 1 }], local_storage: [] },
       warnings: ["DaemonSets and static pods remain on the host; their services stop during the outage.",
         "1 workload(s) have no eligible failover host", "2 volume(s) lose a replica until this host returns or Longhorn rebuilds"] }),
     // Starting a stopped app that only just fits: one host near its memory

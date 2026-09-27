@@ -14,7 +14,7 @@ class PowerPlanTests(unittest.TestCase):
         self.objects = {
             "/api/v1/nodes": {"items": [{"metadata": {"name": "node2"}, "status": {
                 "conditions": [{"type": "Ready", "status": "True"}]}}]},
-            "/api/v1/nodes/node1": {"status": {"conditions": [{"type": "Ready", "status": "True"}],
+            "/api/v1/nodes/node1": {"metadata": {"uid": "node-uid"}, "status": {"conditions": [{"type": "Ready", "status": "True"}],
                                                  "nodeInfo": {"bootID": "old"}}},
             "/apis/policy/v1/poddisruptionbudgets": {"items": []},
             "/api/v1/pods": {"items": [{"metadata": {"namespace": "lab", "name": "app-a",
@@ -92,15 +92,57 @@ class PowerPlanTests(unittest.TestCase):
         self.assertEqual("failed", state)
         self.assertIn("vol-a", message)
 
-    def test_helper_pull_failure_stops_monitoring(self):
+    def test_helper_pull_backoff_keeps_monitoring_because_it_can_still_run(self):
         self.objects["/api/v1/namespaces/lab/pods/power-helper"] = {
+            "metadata": {"uid": "helper-uid"},
             "status": {"phase": "Pending", "containerStatuses": [{"state": {
                 "waiting": {"reason": "ImagePullBackOff"}}}]}}
         item = {"ref": {"node": "node1", "action": "reboot", "boot_id": "old",
-                        "helper_pod": "power-helper", "started_epoch": power.time.time()}}
+                        "helper_pod": "power-helper", "helper_uid": "helper-uid", "started_epoch": power.time.time()}}
+        state, _, message = power.status(item)
+        self.assertEqual("running", state)
+        self.assertIn("ImagePullBackOff", message)
+        self.assertIn("do not send another", message)
+
+    def test_host_replacement_changes_review_and_cannot_confirm_old_request(self):
+        before = power.plan("node1", "reboot")
+        self.objects["/api/v1/nodes/node1"]["metadata"]["uid"] = "replacement"
+        self.objects["/api/v1/nodes/node1"]["status"]["nodeInfo"]["bootID"] = "new"
+        self.assertNotEqual(before["review_token"], power.plan("node1", "reboot")["review_token"])
+        state, _, message = power.status({"ref": {"node": "node1", "node_uid": "node-uid", "action": "reboot", "boot_id": "old"}})
+        self.assertEqual("failed", state)
+        self.assertIn("identity changed", message)
+
+    def test_missing_host_identity_blocks_new_power_review(self):
+        self.objects["/api/v1/nodes/node1"].pop("metadata")
+        self.assertIn("Host identity is unavailable", " ".join(power.plan("node1", "reboot")["blockers"]))
+
+    def test_notready_does_not_mean_shutdown_succeeded(self):
+        self.objects["/api/v1/nodes/node1"]["status"]["conditions"] = []
+        item = {"ref": {"node": "node1", "action": "poweroff", "started_epoch": power.time.time() - 30,
+                        "down_at": power.time.time() - 20}}
+        self.assertEqual("running", power.status(item)[0])
+        item["ref"]["started_epoch"] -= 601
         state, _, message = power.status(item)
         self.assertEqual("failed", state)
-        self.assertIn("cordoned", message)
+        self.assertIn("Shutdown could not be verified", message)
+        self.assertIn("physical power", message)
+
+    def test_missing_receipt_does_not_adopt_same_name_helper(self):
+        item = {"ref": {"node": "node1", "action": "reboot", "boot_id": "old", "helper_pod": "power-helper"}}
+        with mock.patch.object(power, "kget", wraps=self.get) as read:
+            state, _, message = power.status(item)
+        self.assertEqual("running", state)
+        self.assertIn("unconfirmed", message)
+        self.assertEqual([mock.call("/api/v1/nodes/node1")], read.call_args_list)
+
+    def test_replaced_helper_and_failed_helper_are_not_success(self):
+        path = "/api/v1/namespaces/lab/pods/power-helper"
+        item = {"ref": {"node": "node1", "action": "reboot", "boot_id": "old", "helper_pod": "power-helper", "helper_uid": "original"}}
+        self.objects[path] = {"metadata": {"uid": "replacement"}, "status": {"phase": "Succeeded"}}
+        self.assertIn("replaced", power.status(item)[2])
+        self.objects[path] = {"metadata": {"uid": "original"}, "status": {"phase": "Failed"}}
+        self.assertEqual("failed", power.status(item)[0])
 
 
 if __name__ == "__main__":

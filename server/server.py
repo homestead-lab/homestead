@@ -7803,7 +7803,7 @@ class H(BaseHTTPRequestHandler):
                 operation = OPS.start(
                     "node-power", f"{b['action']} {b['node']}", {"kind": "Node", "name": b["node"]},
                     "/nodes?node=" + urllib.parse.quote(b["node"]),
-                    {"node": b["node"], "action": b["action"], "boot_id": power_plan["boot_id"],
+                    {"node": b["node"], "node_uid": power_plan["node_uid"], "action": b["action"], "boot_id": power_plan["boot_id"],
                      "volumes": [v["name"] for v in power_plan["volumes"]],
                      "phase": "reviewed", "phase_at": time.time(), "started_epoch": time.time()},
                     "Host impact reviewed; preparing cordon and drain")

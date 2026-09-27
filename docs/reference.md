@@ -875,6 +875,19 @@ history pruning preserve the recovery details. After acknowledgement, the record
 can be cleared, so save details you still need. Provisioning that may still be
 in flight cannot be stopped through this tracking action.
 
+Host **Reboot** and **Shut down** keep progress in Recent jobs. Its log includes
+the confirmed power helper's events and output. A failed or lost browser reply
+requires a fresh host review, not a repeat of the previous request. A helper in
+image-pull backoff may still start later: inspect it before sending anything else.
+Missing creation receipts and replacement helpers are not treated as the original.
+
+A reboot is observed through the same Node identity returning Ready with a changed
+boot ID, followed by affected Longhorn health checks. The host stays cordoned;
+this does not verify application recovery or automatically allow scheduling.
+For shutdown, [NotReady is not proof of physical power-off](https://kubernetes.io/docs/reference/node/node-status/).
+After ten minutes without confirmation the job reports that shutdown could not
+be verified. Check the host console or physical power; no automatic retry is sent.
+
 Reviewed VM **Start**, **Restart** and **Resume** first record a durable power
 intent. Each approval is consumed once under the shared job-store lock; repeating
 the HTTP request does not send power again. A job records whether KubeVirt
