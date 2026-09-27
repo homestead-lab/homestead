@@ -434,7 +434,8 @@ function labelStackTables(root = document) {
         if (span === 1 && !cell.hasAttribute("data-label")) cell.dataset.label = heads[column] || "";
         // On a phone cells sit two to a line; a long one - a message, a path -
         // takes the whole line rather than wrapping to a word a line.
-        if (span === 1 && cell.textContent.trim().length > 34) cell.dataset.wide = "";
+        const text = cell.textContent.trim();
+        if (span === 1 && column > 0 && (text.length > 34 || (text.length > 18 && !/\s/.test(text)))) cell.dataset.wide = "";
         column += span;
       });
     });
