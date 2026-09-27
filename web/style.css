@@ -1907,3 +1907,159 @@ div.ipam-line.dim{display:block}
 @media(max-width:650px){.vip-steps{grid-template-columns:1fr}.vip-card{padding:12px}}
 .primary-ports{display:grid;gap:8px}
 .priv-fields{display:grid;gap:8px;margin-bottom:6px}
+
+/* ================================================================ dialogs
+   The components in js/ui.js, and the rules every dialog shares. The design
+   guide is docs/design.md; scripts/audit_dialogs.mjs checks each dialog. */
+#mbody{display:flex;flex-direction:column;gap:16px;padding:22px 24px 0}
+#mbody>*{margin-top:0;margin-bottom:0}
+#mbody>:last-child:not(.ui-actions){margin-bottom:22px}
+#mbody>.btn,#mbody>button,#mbody>a{align-self:flex-start}
+/* Section labels read as headings, not as code. */
+#mbody .sec{margin:6px 0 -6px;font:650 13px "Inter Tight",sans-serif;text-transform:none;letter-spacing:0;color:var(--tx)}
+/* A note is information unless it says otherwise: amber is for real risk. */
+.note{background:rgba(255,255,255,.035);border-color:var(--line2);color:var(--mut);line-height:1.55}
+.note b{color:var(--tx)}
+.note.warn{background:rgba(255,176,32,.07);border-color:rgba(255,176,32,.26);color:var(--med)}
+.note.warn b{color:inherit}
+
+.ui-lead{font-size:14px;line-height:1.6;color:var(--mut)}
+.ui-lead b,.ui-lead strong{color:var(--tx)}
+.ui-callout{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;align-items:start;padding:14px 16px;border-radius:14px;
+  border:1px solid var(--line2);background:rgba(255,255,255,.035);font-size:13px;line-height:1.55;color:var(--mut)}
+.ui-callout b{display:block;color:var(--tx);font-size:13.5px;margin-bottom:2px}
+.ui-callout-icon{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:rgba(255,255,255,.07);color:var(--tx)}
+.ui-icon{width:15px;height:15px;stroke-width:2}
+.ui-callout.ok{border-color:rgba(61,220,145,.28);background:rgba(61,220,145,.06)}.ui-callout.ok .ui-callout-icon{background:rgba(61,220,145,.16);color:var(--ok)}
+.ui-callout.warn{border-color:rgba(255,176,32,.32);background:rgba(255,176,32,.07)}.ui-callout.warn .ui-callout-icon{background:rgba(255,176,32,.16);color:var(--med)}
+.ui-callout.bad{border-color:rgba(255,77,79,.34);background:rgba(255,77,79,.07)}.ui-callout.bad .ui-callout-icon{background:rgba(255,77,79,.16);color:var(--crit)}
+.ui-callout.warn b{color:#ffd48a}.ui-callout.bad b{color:#ffb4b8}
+
+.ui-section{display:grid;gap:10px}
+.ui-section>header{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.ui-section h4{margin:0;font:650 13px "Inter Tight",sans-serif;color:var(--tx)}
+.ui-section-aside{font-size:12px;color:var(--mut)}
+
+.ui-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;margin:0;border:1px solid var(--line);border-radius:13px;overflow:hidden;background:var(--line)}
+.ui-facts>div{padding:10px 13px;background:var(--surf)}
+.ui-facts dt{font-size:11.5px;color:var(--mut);margin-bottom:3px}
+.ui-facts dd{margin:0;font-size:13px;color:var(--tx);font-weight:600;overflow-wrap:anywhere}
+
+.ui-checklist,.ui-steps{list-style:none;margin:0;padding:0;display:grid;gap:2px}
+.ui-checklist li,.ui-steps li{display:grid;grid-template-columns:28px minmax(0,1fr);gap:11px;align-items:start;padding:9px 2px}
+.ui-checklist li+li{border-top:1px solid var(--line)}
+.ui-check-mark,.ui-step-num{display:grid;place-items:center;width:24px;height:24px;border-radius:50%;border:1.5px solid var(--line2);color:var(--mut);font:700 12px "Inter Tight",sans-serif}
+.ui-checklist .ok .ui-check-mark{border-color:transparent;background:rgba(61,220,145,.16);color:var(--ok)}
+.ui-checklist .warn .ui-check-mark{border-color:transparent;background:rgba(255,176,32,.16);color:var(--med)}
+.ui-checklist .bad .ui-check-mark{border-color:transparent;background:rgba(255,77,79,.16);color:var(--crit)}
+.ui-checklist .skip{opacity:.55}
+.ui-check-title,.ui-step-title{font-size:13.5px;font-weight:600;color:var(--tx);padding-top:2px}
+.ui-check-detail,.ui-step-detail{font-size:12.5px;line-height:1.55;color:var(--mut);margin-top:3px}
+.ui-steps li{position:relative}
+.ui-steps li:not(:last-child)::before{content:"";position:absolute;left:13px;top:36px;bottom:-4px;width:1.5px;background:var(--line2)}
+.ui-steps .done .ui-step-num{border-color:transparent;background:rgba(61,220,145,.16);color:var(--ok)}
+.ui-steps .current .ui-step-num{border-color:#fff;background:#fff;color:#0a0a0b}
+.ui-steps .todo{opacity:.6}
+.ui-steps.guide .ui-step-num{border-color:var(--line2);color:var(--tx)}
+
+.ui-progress{display:grid;gap:6px}
+.ui-progress-head{display:flex;justify-content:space-between;font-size:12.5px;color:var(--mut)}.ui-progress-head b{color:var(--tx);font-family:"JetBrains Mono",monospace}
+.ui-bar{height:8px;border-radius:5px;background:rgba(255,255,255,.08);overflow:hidden}
+.ui-bar i{display:block;height:100%;border-radius:inherit;background:#fff;transition:width .4s var(--e)}
+.ui-progress.ok .ui-bar i{background:var(--ok)}.ui-progress.warn .ui-bar i{background:var(--med)}.ui-progress.bad .ui-bar i{background:var(--crit)}
+.ui-progress.unknown .ui-bar i{animation:ui-indeterminate 1.3s ease-in-out infinite}
+@keyframes ui-indeterminate{from{transform:translateX(-100%)}to{transform:translateX(290%)}}
+.ui-progress-detail{font-size:12px;color:var(--mut)}
+
+.ui-meter{position:relative;height:8px;border-radius:5px;background:rgba(255,255,255,.08);overflow:hidden;min-width:80px}
+.ui-meter i{position:absolute;top:0;bottom:0}
+.ui-meter .now{left:0;background:rgba(255,255,255,.55);border-radius:5px 0 0 5px}
+.ui-meter .after{background:var(--ok)}
+.ui-meter.warn .after{background:var(--med)}.ui-meter.bad .after{background:var(--crit)}
+.ui-meter .mark{position:absolute;top:-2px;bottom:-2px;width:2px;background:rgba(255,255,255,.35)}
+
+.ui-table-wrap{border:1px solid var(--line);border-radius:13px;overflow:auto}
+.ui-table{width:100%;border-collapse:collapse;font-size:13px}
+.ui-table th{text-align:left;font-size:11.5px;font-weight:600;color:var(--mut);padding:9px 13px;background:rgba(255,255,255,.025);border-bottom:1px solid var(--line)}
+.ui-table td{padding:11px 13px;border-bottom:1px solid var(--line);vertical-align:middle}
+.ui-table tr:last-child td{border-bottom:0}
+.ui-table .num{text-align:right;font-family:"JetBrains Mono",monospace;white-space:nowrap}
+.ui-table .grow{width:40%}
+.ui-table .sub{display:block;font-size:12px;color:var(--mut);margin-top:3px;font-weight:400}
+.ui-empty{padding:18px;text-align:center;color:var(--mut);font-size:13px;border:1px dashed var(--line2);border-radius:13px}
+
+.ui-more{border-top:1px solid var(--line);padding-top:4px}
+.ui-more summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:7px;padding:6px 0;font-size:13px;font-weight:600;color:var(--mut)}
+.ui-more summary::-webkit-details-marker{display:none}
+.ui-more summary::before{content:"";width:6px;height:6px;border-right:1.6px solid currentColor;border-bottom:1.6px solid currentColor;transform:rotate(-45deg);transition:transform .15s var(--e)}
+.ui-more[open] summary::before{transform:rotate(45deg)}
+.ui-more summary:hover{color:var(--tx)}
+.ui-more-body p,.ui-callout-body p,.ui-callout-body ul{margin:0}
+.ui-more-body{display:grid;gap:10px;padding:6px 0 4px;font-size:12.5px;line-height:1.6;color:var(--mut)}
+
+.ui-ack{display:grid;grid-template-columns:auto minmax(0,1fr);gap:11px;align-items:start;margin:0;padding:12px 14px;border:1px solid var(--line2);border-radius:13px;
+  font-size:13px;font-weight:500;color:var(--tx);cursor:pointer;line-height:1.5}
+.ui-ack input{width:17px;height:17px;margin:1px 0 0;accent-color:#fff}
+.ui-ack:has(input:checked){border-color:rgba(255,255,255,.4);background:rgba(255,255,255,.04)}
+/* Confirmations written before UI.ack - any checkbox whose id says confirm - look the same. */
+#mbody label:has(>input[type=checkbox][id*="onfirm" i]){display:grid;grid-template-columns:auto minmax(0,1fr);gap:11px;align-items:start;margin:0;
+  padding:12px 14px;border:1px solid var(--line2);border-radius:13px;font-size:13px;font-weight:500;color:var(--tx);line-height:1.5}
+#mbody label:has(>input[type=checkbox][id*="onfirm" i]:checked){border-color:rgba(255,255,255,.4);background:rgba(255,255,255,.04)}
+#mbody label>input[type=checkbox][id*="onfirm" i]{width:17px;height:17px;margin:1px 0 0}
+
+.ui-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 16px}
+.ui-field{display:grid;gap:6px;min-width:0}.ui-field.wide{grid-column:1/-1}
+.ui-field label{margin:0}
+.ui-help{font-size:12px;color:var(--mut);line-height:1.5}
+.ui-stack{display:grid;gap:14px}
+/* Nothing in a dialog is smaller than 10px. */
+#mbody .disklabel,#mbody .smartstat span,#mbody .store-spot-badge{font-size:10px}
+.volume-delete-option b{font-size:13.5px}.volume-delete-option small{font-size:12.5px}
+.ui-list{margin:4px 0 0;padding-left:18px;display:grid;gap:3px}
+
+.ui-chip{display:inline-flex;align-items:center;height:22px;padding:0 9px;border-radius:11px;font-size:11.5px;font-weight:650;white-space:nowrap;
+  background:rgba(255,255,255,.07);color:var(--mut);border:1px solid var(--line2)}
+.ui-chip.ok{background:rgba(61,220,145,.12);color:var(--ok);border-color:transparent}
+.ui-chip.warn{background:rgba(255,176,32,.13);color:var(--med);border-color:transparent}
+.ui-chip.bad{background:rgba(255,77,79,.13);color:#ff8f93;border-color:transparent}
+.ui-chip.info{background:rgba(74,158,255,.13);color:#8fc2ff;border-color:transparent}
+
+/* The buttons end every dialog, pinned to its bottom edge while the rest scrolls. */
+.ui-actions{position:sticky;bottom:0;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
+  margin:4px -24px 0 !important;padding:14px 24px calc(14px + env(safe-area-inset-bottom));border-top:1px solid var(--line);
+  background:color-mix(in srgb,var(--surf) 94%,transparent);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px)}
+.ui-actions-start,.ui-actions-end{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.ui-actions-end{margin-left:auto}
+.ui-actions.legacy{justify-content:flex-end}
+.ui-actions.legacy>.btn.pri,.ui-actions.legacy>.btn.danger{order:2}
+.ui-actions .btn{min-height:38px}
+.ui-actions .btn.danger:not(:disabled){background:var(--crit);border-color:var(--crit);color:#fff}
+.ui-actions .btn.danger:not(:disabled):hover{background:#ff6668;border-color:#ff6668}
+
+@media(max-width:640px){
+  .modal{padding:0;place-items:end stretch}
+  .modalbox{width:100%!important;max-height:94dvh;border-radius:20px 20px 0 0;border-bottom:0}
+  .modalhead{padding:14px 16px}
+  #mbody{padding:16px 16px 0;gap:14px}
+  .ui-actions{margin:4px -16px 0 !important;padding:12px 16px calc(12px + env(safe-area-inset-bottom))}
+  .ui-actions,.ui-actions-end{flex-direction:column-reverse;align-items:stretch}
+  .ui-actions-end,.ui-actions-start{width:100%;flex-direction:column-reverse}
+  .ui-actions .btn{width:100%;justify-content:center}
+  .ui-actions.legacy{flex-direction:column}
+  .ui-actions.legacy>.btn.pri,.ui-actions.legacy>.btn.danger{order:-1}
+  .ui-fields{grid-template-columns:1fr}
+  .volume-delete-grid{grid-template-columns:1fr}
+  .ui-facts{grid-template-columns:1fr 1fr}
+  /* Tables become cards: each cell on its own line, with its column's label. */
+  .ui-table thead{display:none}
+  .ui-table,.ui-table tbody,.ui-table tr,.ui-table td{display:block;width:auto!important}
+  .ui-table tr{padding:10px 13px;border-bottom:1px solid var(--line)}
+  .ui-table tr:last-child{border-bottom:0}
+  .ui-table td{padding:3px 0;border:0;text-align:left!important}
+  .ui-table td[data-label]:not([data-label=""]):not(:first-child)::before{content:attr(data-label);display:block;font:500 11px "Inter Tight",sans-serif;color:var(--mut);margin-bottom:2px}
+  .ui-table td:first-child{font-weight:600;padding-bottom:6px}
+}
+html[data-theme="light"] .ui-facts>div{background:var(--surf)}
+html[data-theme="light"] .ui-callout.warn b{color:#8a5200}html[data-theme="light"] .ui-callout.bad b{color:#a1242a}
+html[data-theme="light"] .ui-steps .current .ui-step-num{background:#16161a;border-color:#16161a;color:#fff}
+html[data-theme="light"] .ui-meter .now{background:rgba(0,0,0,.35)}html[data-theme="light"] .ui-bar i{background:#16161a}
