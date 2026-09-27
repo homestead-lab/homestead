@@ -80,6 +80,13 @@ class FenceTests(unittest.TestCase):
         self.fence.require_write()
         self.assertTrue(self.fence.inspect()["writable"])
 
+    def test_worker_hold_blocks_destination_even_after_phase_completion(self):
+        self.starting(); self.c.step()
+        control = self.c.fresh().load(**self.c.handle)
+        control.report("coordinator-uid", 1000, "held", "Restart verification needs review")
+        with self.assertRaisesRegex(Held, "recovery review"):
+            self.fence.require_write()
+
     def test_original_volume_never_resumes_after_cutover_or_completion(self):
         self.starting()
         for completed in (False, True):

@@ -12,6 +12,7 @@ import server
 import homestead_operations as OPS
 import homestead_shared as SHARED
 from homestead_storage_journal import Held
+from test_self_data_coordinator import Cluster
 
 
 class MutationHooksTests(unittest.TestCase):
@@ -101,6 +102,52 @@ class MutationHooksTests(unittest.TestCase):
         with mock.patch.object(server, "TOKEN", ""), mock.patch.object(server.SELF_DATA_FENCE, "Fence") as factory:
             server.initialize_self_data_fence()
             factory.assert_not_called()
+
+    def test_authenticated_status_route_reads_saved_identity_without_job_resolution(self):
+        c = Cluster()
+        marker = server.SELF_DATA_FENCE.A.pointer("lab", c.anchor.state, c.handle["uid"])
+        with mock.patch.object(server.SELF, "NS", "lab"), \
+                mock.patch.object(server.SELF_DATA_FENCE, "read_marker", return_value=marker), \
+                mock.patch.object(server, "kget", side_effect=c.read), \
+                mock.patch.object(server.OPS, "list_operations", side_effect=AssertionError("no resolver polling")), \
+                mock.patch.object(server, "ksend", side_effect=AssertionError("status must not mutate")):
+            handler = object.__new__(server.H)
+            handler.path = "/api/self/data/handoff/" + c.handle["operation"]
+            handler._guard = mock.Mock(return_value=False)
+            handler._send = mock.Mock()
+            before = len(c.sent)
+            handler.do_GET()
+        self.assertEqual(503, handler._send.call_args.args[0])  # no worker heartbeat yet
+        self.assertEqual("prepare", handler._send.call_args.args[1]["phase"])
+        self.assertNotIn("journal", handler._send.call_args.args[1])
+        self.assertEqual(before, len(c.sent))
+        handler._guard.assert_called_once_with(handler.path)
+
+    def test_status_route_does_not_discover_move_by_name_without_local_receipt(self):
+        with mock.patch.object(server.SELF_DATA_FENCE, "read_marker", return_value=None), \
+                mock.patch.object(server, "kget") as read:
+            self.assertIsNone(server.self_data_handoff_status("a" * 24))
+            read.assert_not_called()
+
+    def test_status_api_rejects_foreign_operation_and_hides_raw_api_failures(self):
+        c = Cluster()
+        marker = server.SELF_DATA_FENCE.A.pointer("lab", c.anchor.state, c.handle["uid"])
+        with mock.patch.object(server.SELF, "NS", "lab"), \
+                mock.patch.object(server.SELF_DATA_FENCE, "read_marker", return_value=marker), \
+                mock.patch.object(server, "kget", side_effect=OSError("private upstream error")) as read:
+            self.assertIsNone(server.self_data_handoff_status("f" * 24))
+            read.assert_not_called()
+            status = server.self_data_handoff_status(c.handle["operation"])
+            self.assertEqual("unknown", status["status"])
+            self.assertNotIn("private", status["message"])
+
+    def test_status_endpoint_requires_normal_app_authentication(self):
+        handler = object.__new__(server.H)
+        handler.command = "GET"; handler.headers = {}
+        handler._who = mock.Mock(return_value=None); handler._send = mock.Mock()
+        with mock.patch.object(server.CFACCESS, "enabled", return_value=False):
+            self.assertTrue(handler._guard("/api/self/data/handoff/" + "a" * 24))
+        self.assertEqual(401, handler._send.call_args.args[0])
 
     def test_real_entrypoint_blocks_before_creating_data_or_starting_services(self):
         script = r'''

@@ -41,6 +41,8 @@ class Coordinator:
             raise Held("This coordinator does not match the reviewed worker and copy plan")
         if self.state.get("pointer_receipt") != A.pointer_digest(self.ns, self.state, anchor.handle()["uid"]):
             raise Held("The local data handoff receipt is not durably published; Homestead was not stopped")
+        if self.state.get("runtime", {}).get("state") == "held":
+            raise Held("This data move needs a recovery review before its coordinator can continue")
         self.dep_path = f"/apis/apps/v1/namespaces/{self.ns}/deployments/{self.state['deployment']['name']}"
         self.job_name = "homestead-data-copy-" + self.state["operation"]
         self.job_path = f"/apis/batch/v1/namespaces/{self.ns}/jobs/{self.job_name}"

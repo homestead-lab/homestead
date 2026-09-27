@@ -100,7 +100,7 @@ def _journal(job, operation, namespace):
 
 def _validate(state, namespace):
     _keys(state, ("protocol", "operation", "deployment", "source", "destination", "replicas", "phase", "journal"),
-          ("plan", "copy_receipt", "pointer_receipt"))
+          ("plan", "copy_receipt", "pointer_receipt", "runtime"))
     if type(state["protocol"]) is not int or state["protocol"] != 1:
         raise Held("The data handoff protocol is unsupported")
     if not isinstance(state["operation"], str) or not re.fullmatch(r"[a-f0-9]{24}", state["operation"]):
@@ -155,6 +155,17 @@ def _validate(state, namespace):
         if "plan" not in state:
             raise Held("A data handoff pointer receipt requires a pinned plan")
         _hash(state["pointer_receipt"])
+    if "runtime" in state:
+        runtime = state["runtime"]
+        _keys(runtime, ("worker_uid", "checked_at", "state", "message"))
+        if (runtime["worker_uid"] != state.get("plan", {}).get("worker", {}).get("uid")
+                or "pointer_receipt" not in state
+                or type(runtime["checked_at"]) is not int or runtime["checked_at"] < 0
+                or runtime["state"] not in ("running", "held", "done")
+                or not isinstance(runtime["message"], str) or not 0 < len(runtime["message"]) <= 512
+                or any(ord(c) < 32 for c in runtime["message"])
+                or runtime["state"] == "done" and state["phase"] != "done"):
+            raise Held("The data handoff worker status is invalid")
     if "copy_receipt" in state:
         receipt = state["copy_receipt"]
         _keys(receipt, ("state", "worker_uid"), ("manifest", "files", "bytes"))
@@ -319,6 +330,22 @@ class Anchor:
             raise Held("The data handoff local receipt cannot be replaced or published at this stage")
         state = copy.deepcopy(self.state)
         state["pointer_receipt"] = digest
+        self._replace(state)
+
+    def report(self, worker_uid, checked_at, status, message):
+        """CAS-persist public worker status outside either data volume.
+
+        A runtime hold cannot be cleared by a later heartbeat or process restart.
+        Recovery needs a separate reviewed transition, not another poll.
+        """
+        self.handle()
+        previous = self.state.get("runtime", {})
+        if (worker_uid != self.state.get("plan", {}).get("worker", {}).get("uid")
+                or previous.get("state") == "held" and status != "held"
+                or type(checked_at) is not int or checked_at < previous.get("checked_at", 0)):
+            raise Held("The data handoff worker cannot overwrite its current hold or status")
+        state = copy.deepcopy(self.state)
+        state["runtime"] = {"worker_uid": worker_uid, "checked_at": checked_at, "state": status, "message": message}
         self._replace(state)
 
     def copy_started(self):
