@@ -1659,9 +1659,10 @@ ssh_pwauth: true
     "/api/image-updates/preview": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       return {capacity_token: "demo-image-review", action: body.action || "update",
-        images: [{container: body.name, before: "ghcr.io/example/app:1.0.0",
-          after: "ghcr.io/example/app@sha256:" + "b".repeat(64),
-          rollback: "ghcr.io/example/app@sha256:" + "a".repeat(64)}],
+        // As the server writes them: the release, pinned to its exact digest.
+        images: [{container: body.name, before: "ghcr.io/example/app:1.0.0@sha256:" + "a".repeat(64),
+          after: "ghcr.io/example/app:1.1.0@sha256:" + "b".repeat(64),
+          rollback: "ghcr.io/example/app:1.0.0@sha256:" + "a".repeat(64)}],
         capacity: {blocked: false, requires_confirmation: true, additional: 1,
           pod_request_gb: 0.5, pod_memory_gb: 2, pod_cpu_request_percent: 10,
           candidates: [{name: "h-node1", eligible: true, metrics_available: true,
