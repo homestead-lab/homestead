@@ -6690,11 +6690,12 @@ class H(BaseHTTPRequestHandler):
         cluster itself: a header, or for a console, which cannot send one, a
         query parameter.
         """
-        if FLEET.signed(self.headers) or FLEET.local_path(path):
+        headers = getattr(self, "headers", None) or {}
+        if FLEET.signed(headers) or FLEET.local_path(path):
             return ""
         query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-        target = (self.headers.get("X-Homestead-Cluster") or (query.get("hs_cluster") or [""])[0]
-                  or self._cookies().get(FLEET.COOKIE, ""))
+        target = (headers.get("X-Homestead-Cluster") or (query.get("hs_cluster") or [""])[0]
+                  or (self._cookies().get(FLEET.COOKIE, "") if headers else ""))
         return target if target and target != FLEET.self_id() else ""
 
     def _fleet_forward(self, target, path):
