@@ -91,6 +91,7 @@ const DIALOGS = [
   ["vm-delete", "vms", "vmDelete('default','home-assistant-os')"],
   ["k3s-cluster", "vms", "k3sCluster()"],
   ["image-updates", "workloads", "imageUpdateCenter()"],
+  ["image-update-review", "workloads", "imageUpdateReview('lab','frigate')"],
   ["workload-group", "workloads", "wlGroup('lab','frigate')"],
   ["workload-groups", "workloads", "manageWorkloadGroups()"],
   ["workload-start-capacity", "workloads", "wlScale('lab','doublecommander',1)"],

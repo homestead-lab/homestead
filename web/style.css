@@ -1488,19 +1488,7 @@ html[data-theme="light"] .compose-editor{background:#fff}
   .voltable td.empty{flex:1 1 100%;justify-content:center}
 }
 
-@media(max-width:700px){
-  .sharetable{overflow:visible}.sharetable table,.sharetable tbody,.sharetable tr,.sharetable td{display:block;width:100%}
-  .sharetable thead{display:none}.sharetable tr{display:grid;grid-template-columns:minmax(0,1fr) auto;padding:10px 12px;border-bottom:1px solid var(--line)}
-  .sharetable tr:last-child{border-bottom:0}.sharetable td{border:0;padding:4px 0;display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}
-  .sharetable td[data-label]::before{content:attr(data-label);color:var(--dim);font-size:10px;letter-spacing:.09em;text-transform:uppercase;flex:0 0 auto}
-  /* The name has a row to itself: a long storage path beside it took its room. */
-  .sharetable .shareidentity{grid-column:1/-1;padding:0 0 4px}
-  .sharetable td[data-label="Storage"],.sharetable td[data-label="Size"]{grid-column:1/-1}
-  .sharetable td[data-label="Storage"] .sharevol{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .sharetable td[data-label="Storage"] .tag{flex:0 0 auto;white-space:nowrap}
-  .sharetable td[data-label="Access"],.sharetable td[data-label="UNC path"],.sharetable .shareactions{grid-column:1/-1}
-  .sharetable td[data-label="UNC path"]{overflow-wrap:anywhere}.sharetable .shareactions{padding-top:6px}.sharetable .shareactions .row{width:100%}.sharetable .shareactions .btn{flex:1}
-}
+/* The share list is a stacked table like the rest (see the pages block). */
 
 /* IP addresses on a phone: each address a short card - the address and its
    kind, its name, then its MAC and what has seen it - with the tick at the
@@ -1580,7 +1568,10 @@ html[data-theme="light"] .compose-editor{background:#fff}
   .threshold-values{width:auto}
   .threshold-values label{flex:0 0 auto}
   .threshold-values input{width:54px}
-  .settings-card-head{flex-wrap:nowrap;align-items:flex-start}
+  /* The heading keeps a readable width; the buttons move under it when they do not fit beside it. */
+  .settings-card-head{flex-wrap:wrap;align-items:flex-start}
+  .settings-card-head>div:first-child{flex:1 1 220px;min-width:0}
+  .settings-card-head>.row{flex-wrap:wrap}
   .settings-card-head>.btn,.settings-card-head>.row .btn{padding:6px 10px;font-size:12px;white-space:nowrap}
   #mbody .settings-card-head{flex-wrap:wrap}
 }
@@ -1592,6 +1583,13 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .wgroup-chips button{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;padding:6px 12px;font-size:12.5px}
 .wgroup-chips button .dim{font-size:11px}
 .wgroup-bar>.btn{margin-left:auto}
+@media(max-width:700px){
+  /* One line on a phone: the chips scroll sideways, the two buttons are icons. */
+  .wgroup-bar{flex-wrap:nowrap;gap:8px}
+  .wgroup-chips{flex:1 1 auto;min-width:0}
+  .wgroup-bar>.btn{flex:0 0 auto;padding:6px 9px}
+  .wgroup-bar>.btn+.btn{margin-left:0}
+}
 .wgroup{margin-bottom:6px}
 .wgroup-head{display:flex;align-items:center;gap:10px;width:100%;padding:10px 2px 9px;margin:0 0 10px;background:none;border:0;
   border-bottom:1px solid var(--line);color:var(--tx);font:inherit;text-align:left;cursor:pointer}
@@ -2101,6 +2099,7 @@ html[data-theme="light"] .ui-meter .now{background:rgba(0,0,0,.35)}html[data-the
   .tbl.stack td:first-child{padding-bottom:2px;order:-1}
   /* Short values first, so they pair up; long ones and actions after. */
   .tbl.stack td[data-wide]{order:1}.tbl.stack td[data-label=""]{order:2}
+  .tbl.stack tr>td:first-child{order:-1}
   .tbl.stack td .row,.tbl.stack td[data-label=""] .row{justify-content:flex-start}
   .tbl.stack td[data-label=""]{display:flex;flex-wrap:wrap;gap:8px;padding-top:4px}
   .tbl.stack td .meter{min-width:0}
