@@ -62,3 +62,19 @@ test("the acknowledgement is one checkbox with an escaped sentence", () => {
   assert.match(html, /<input type="checkbox" id="ok_box">/);
   assert.match(html, /I accept &lt;risk&gt;/);
 });
+
+test("stat cards carry their figure, unit and tone", () => {
+  const html = UI.stats([{ title: "Free <space>", value: 906, unit: "GB", sub: "of 1392", tone: "ok" }, null, { title: "Wide", wide: true }]);
+  assert.match(html, /class="ui-stats"/);
+  assert.match(html, /card glow g-ok ui-stat/);
+  assert.match(html, /Free &lt;space&gt;/);
+  assert.match(html, /<div class="bignum">906<span class="unit">GB<\/span><\/div>/);
+  assert.match(html, /ui-stat statwide/, "a wide card spans the row");
+  assert.equal((html.match(/ui-stat[" ]/g) || []).length, 2, "empty entries are left out");
+});
+
+test("a guide is closed until opened", () => {
+  const html = UI.guide("How <this> works", "<p>kept</p>");
+  assert.match(html, /^<details class="ui-guide"><summary>How &lt;this&gt; works<\/summary>/);
+  assert.doesNotMatch(html, / open/);
+});
