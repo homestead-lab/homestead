@@ -51,6 +51,7 @@ start() { # PATH-prefix
 start "$BIN"
 shot menu "What would you like to do"          # what it found, and what it can do
 key Enter; shot role "What should this machine be"   # new cluster, or join
+key Enter; shot kubernetes "Which Kubernetes"   # k3s or RKE2
 key Enter; shot checks "This machine:"          # the checks, before anything changes
 key Enter; shot longhorn "Install Longhorn"     # what the new cluster gets
 key Enter; sleep 1; key Enter; shot ready "About to:"   # what it will do, asked once
