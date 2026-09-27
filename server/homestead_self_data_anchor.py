@@ -1,7 +1,7 @@
 """Kubernetes-resident journal for Homestead's own data-volume handoff.
 
-Not wired to the legacy mover yet. The eventual independent worker must quiesce
-writers and prove each phase before advancing. This record is deliberately NOT
+The independent worker must quiesce writers and prove each phase before
+advancing. This record is deliberately NOT
 on either data PVC. A stale copied journal cannot win a resourceVersion CAS.
 No request bodies, configuration, credentials or raw API errors belong here.
 Conditional PUT semantics: https://kubernetes.io/docs/reference/using-api/api-concepts/#resource-versions
