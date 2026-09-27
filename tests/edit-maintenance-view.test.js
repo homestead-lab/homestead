@@ -60,6 +60,21 @@ test("A refused edit requires another preview, not a replay", async () => {
   assert.equal(t.fields["#editGo"].textContent, "Review again");
 });
 
+test("Rename review explains a name-only outage and requires a separate acknowledgement", async () => {
+  const t = setup({ ...review, capacity: { ...review.capacity, rename: { from: "<old>", to: "new" } } });
+  await t.c.window.editReview({ ns: "lab", name: "old", workload_name: "new" });
+  assert.match(t.html(), /&lt;old&gt;/);
+  assert.match(t.html(), /Only the workload name changes/);
+  assert.match(t.html(), /Save other edits separately/);
+  assert.match(t.html(), /short outage/);
+  assert.match(t.html(), /Rename workload/);
+  await t.c.window.confirmEdit();
+  assert.equal(t.sent.length, 0);
+  t.fields["#editCapacityConfirm"].checked = true;
+  await t.c.window.confirmEdit();
+  assert.deepEqual(t.sent[0].body, { ns: "lab", name: "old", workload_name: "new", capacity_token: "token", confirm_capacity: true });
+});
+
 test("Host review names budgets and local data with escaped content", async () => {
   const t = setup({ ready: false, blockers: ["Budget prevents eviction"], pods: 1, vms: [], workloads: [], volumes: [],
     maintenance: { budgets: [{ pod: "lab/<app>", budget: "lab/pdb", allowed: 0 }],

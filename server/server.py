@@ -24,6 +24,7 @@ import homestead_snapshot_delete as SNAPSHOT_DELETE
 import homestead_allocation_probe as ALLOCATION_PROBE
 import homestead_allocation_capacity as ALLOCATION_CAPACITY
 import homestead_allocation_evidence as ALLOCATION_EVIDENCE
+import homestead_rename as RENAME
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -39,7 +40,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.188")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.189")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -2472,6 +2473,20 @@ def edit_capacity_plan(config):
     """Build the exact edit before seed/PVC/icon or workload writes."""
     ns, name = LC.dns_label(config["ns"], "namespace"), LC.dns_label(config["name"], "workload name")
     current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    if config.get("workload_name") and config["workload_name"] != name:
+        new_name = LC.dns_label(config["workload_name"], "new workload name")
+        if (config["ns"], config["name"], config["workload_name"]) != (ns, name, new_name):
+            raise ValueError("Use exact lowercase Kubernetes names for the rename")
+        guard_self(ns, name, renaming=True)
+        proposed, context = RENAME.prepare(config, current, LC._renamed_deployment, kget)
+        post_stop = copy.deepcopy(proposed)
+        post_stop["spec"]["strategy"] = {"type": "Recreate"}  # rename orchestration, not a saved strategy change
+        plan = ROLLOUT_CAPACITY.plan(current, post_stop, ns, kget, PLACE.get_nodes, PLACE.manifest_plan,
+                                     get_app_settings()["thresholds"]["memory"]["critical"])
+        plan["requires_confirmation"] = True
+        plan["rename"] = {"from": name, "to": new_name}
+        plan["warnings"].append("Rename stops the old pods before starting the new workload. Volumes and service addresses are kept. Failed or uncertain steps retain resources for inspection, not automatic rollback.")
+        return {"deployment": proposed, "name": new_name, "claims": [], "seeds": []}, context, plan
     prepared = LC.prepare_edit(config, current=current)
     context = {"action": "edit", **rollout_review_context(current),
                "seeds": [(path, cm.get("metadata", {}).get("resourceVersion")) for path, cm in prepared["seeds"]]}
@@ -4638,6 +4653,10 @@ OPS.RESOLVERS["k3s-cluster"] = K3SC.status
 OPS.RESOLVERS["node-power"] = POWER.status
 OPS.RESOLVERS["vm-power"] = lambda item: VM_POWER_JOB.status(item, kget)
 OPS.CANCELLERS["vm-power"] = (VM_POWER_JOB.cancel_plan, VM_POWER_JOB.cancel_run)
+OPS.RESOLVERS[RENAME.KIND] = lambda item: RENAME.status(item, OPS)
+OPS.CANCELLERS[RENAME.KIND] = (lambda item: RENAME.recovery_plan(item, kget, OPS),
+                              lambda item, options: RENAME.recovery_run(item, options, kget, OPS))
+OPS.CLEANUPS.add(RENAME.KIND)
 for _kind in ("vm-create", "vm-edit"):
     OPS.RESOLVERS[_kind] = VM_MUTATION_JOB.status
     OPS.CANCELLERS[_kind] = (VM_MUTATION_JOB.cancel_plan, VM_MUTATION_JOB.cancel_run)
@@ -6968,6 +6987,14 @@ class H(BaseHTTPRequestHandler):
                 guard_managed_smb(b.get("ns", ""), b.get("name", ""))
                 prepared, context, plan = edit_capacity_plan(b)
                 CAPACITY_REVIEW.enforce(b, plan, context)
+                if context.get("action") == RENAME.KIND:
+                    def admission(dep):
+                        return PLACE.manifest_plan(dep, b["ns"], dep["metadata"]["name"], dep["spec"]["replicas"],
+                            get_app_settings()["thresholds"]["memory"]["critical"], read=kget,
+                            nodes_snapshot=PLACE.get_nodes(), pod_snapshot=ROLLOUT_CAPACITY.items(kget, "/api/v1/pods"))
+                    result = RENAME.dispatch(b, context, prepared["deployment"], kget, ksend, OPS, admission)
+                    _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
+                    return self._send(200, result)
                 persist_icon_config(b)
                 if "icon" in b:
                     ann = prepared["deployment"]["metadata"].setdefault("annotations", {})

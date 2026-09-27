@@ -177,88 +177,17 @@ def _renamed_deployment(dep, ns, new_name):
     labels = spec.setdefault("template", {}).setdefault("metadata", {}).setdefault("labels", {})
     selector.pop("pod-template-hash", None)
     labels.pop("pod-template-hash", None)
-    selector["homestead.io/workload"] = new_name
-    labels["homestead.io/workload"] = new_name
+    # Keep existing service selectors working. Add a distinct target selector
+    # without rewriting workload labels already used by Services/policies.
+    selector["homestead.io/rename-target"] = new_name
+    labels["homestead.io/rename-target"] = new_name
     spec["replicas"] = 0
     return cloned
 
 
-def _retarget_hpas(ns, old_name, new_name):
-    """Keep HorizontalPodAutoscalers attached when their Deployment is renamed."""
-    path = f"/apis/autoscaling/v2/namespaces/{ns}/horizontalpodautoscalers"
-    try:
-        items = kget(path).get("items", [])
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            return []
-        raise
-    changed = []
-    for hpa in items:
-        target = hpa.get("spec", {}).get("scaleTargetRef", {})
-        if target.get("kind") != "Deployment" or target.get("name") != old_name:
-            continue
-        target["name"] = new_name
-        hpa.pop("status", None)
-        hpa_name = hpa["metadata"]["name"]
-        ksend("PUT", f"{path}/{hpa_name}", hpa)
-        changed.append(hpa_name)
-    return changed
+def rename_workload(*args, **kwargs):
+    raise ValueError("Use the reviewed rename workflow; legacy rename cannot safely change workloads")
 
-
-def rename_workload(ns, old_name, new_name, edited_dep):
-    """Recreate a Deployment under a new Kubernetes name with rollback on failure."""
-    new_name = dns_label(new_name, "workload name")
-    if new_name == old_name:
-        return {"ok": True, "name": old_name, "renamed": False}
-    try:
-        kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{new_name}")
-    except urllib.error.HTTPError as exc:
-        if exc.code != 404:
-            raise
-    else:
-        raise ValueError(f"workload {new_name} already exists in {ns}")
-
-    desired = int(edited_dep.get("spec", {}).get("replicas", 0) or 0)
-    new_dep = _renamed_deployment(edited_dep, ns, new_name)
-    new_created = False
-    hpas = []
-    try:
-        ksend("POST", f"/apis/apps/v1/namespaces/{ns}/deployments", new_dep)
-        new_created = True
-        # Move autoscaling control first so it cannot immediately undo the
-        # deliberate scale-down of the old Deployment.
-        hpas = _retarget_hpas(ns, old_name, new_name)
-        ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{old_name}/scale",
-              {"spec": {"replicas": 0}}, ctype="application/merge-patch+json")
-        _wait_for_replicas(ns, old_name, 0)
-        if desired:
-            ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{new_name}/scale",
-                  {"spec": {"replicas": desired}}, ctype="application/merge-patch+json")
-            _wait_for_replicas(ns, new_name, desired)
-        ksend("DELETE", f"/apis/apps/v1/namespaces/{ns}/deployments/{old_name}",
-              {"propagationPolicy": "Foreground"})
-    except Exception as exc:
-        if hpas:
-            try:
-                _retarget_hpas(ns, new_name, old_name)
-            except Exception:
-                pass
-        if new_created:
-            try:
-                ksend("DELETE", f"/apis/apps/v1/namespaces/{ns}/deployments/{new_name}",
-                      {"propagationPolicy": "Foreground"})
-            except Exception:
-                pass
-        try:
-            ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{old_name}/scale",
-                  {"spec": {"replicas": desired}}, ctype="application/merge-patch+json")
-        except Exception:
-            pass
-        raise RuntimeError(f"rename failed; {old_name} was restored: {exc}") from exc
-
-    _bust("wl", "ov", "flow", "impact:")
-    return {"ok": True, "name": new_name, "renamed": True,
-            "renamed_from": old_name, "replicas": desired, "hpas": hpas}
 
 
 def _container_feature_ids(spec, container, definitions):
@@ -703,14 +632,12 @@ def edit_workload(cfg, hold=False, prepared=None):
     ns, name = cfg["ns"], cfg["name"]
     prepared = prepared if prepared is not None else prepare_edit(cfg)
     dep, workload_name = prepared["deployment"], prepared["name"]
-    if workload_name != name and hold:
-        raise ValueError("rename the workload and move its data in separate saves")
+    if workload_name != name:
+        raise ValueError("Use the reviewed rename workflow; save other changes separately")
     for path, cm in prepared["seeds"]:
         ksend("PUT", path, cm)
     _create_pending_pvcs(ns, prepared["claims"])
     held = RESTRUCTURE.hold(dep) if hold else None
-    if workload_name != name:
-        return rename_workload(ns, name, workload_name, dep)
     ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
     _bust("wl", "ov", "flow", "impact:")
     return {"ok": True, "name": name, **({"held_replicas": held} if hold else {})}
