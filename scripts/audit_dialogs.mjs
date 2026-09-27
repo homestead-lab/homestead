@@ -51,6 +51,7 @@ const DIALOGS = [
   ["import-source-verify", "imports", "window.__demoSourceKeyChanged=false;srcVerify('unraid')"],
   ["import-source-key-changed", "imports", "window.__demoSourceKeyChanged=true;srcVerify('unraid')"],
   ["import-configure", "imports", "inspectImport('unraid','media-server')"],
+  ["import-copy-review", "imports", "importReview({name:'media-server',image:'example/media:1',source_consistency:'stopped',volumes:[{name:'media-config',create:false,access_mode:'ReadWriteOnce',storage_class:'longhorn'}],mappings:[{remote_path:'/mnt/user/appdata/media-server',mount_path:'/config'}]})", "document.querySelector('#mbody .ui-more').open=true"],
   ["import-recovery", "imports", "window.__demoOps=[...(window.__demoOps||[]).filter(x=>x.id!=='import-recovery'),{id:'import-recovery',kind:'import-create',mutation_recovery:true,resource:{namespace:'lab',name:'photos'}}];powerRecoveryReview('import-recovery','import')"],
   ["import-recovery-active", "imports", "window.__demoOps=[...(window.__demoOps||[]).filter(x=>x.id!=='import-active'),{id:'import-active',kind:'import-create',mutation_recovery:true,demo_dispatching:true,resource:{namespace:'lab',name:'photos'}}];powerRecoveryReview('import-active','import')"],
   ["import-job-remove", "imports", "importRemove('homestead-import-photos','done')"],

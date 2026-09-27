@@ -83,7 +83,8 @@ with tempfile.TemporaryDirectory(prefix="source-copy-") as directory:
         cfg = {"source": "fixture", "name": "fixture", "image": "example/app:1",
                "create_workload": False, "source_container_id": identity,
                "source_consistency": "stopped", "remote_path": str(source_dir),
-               "pvc": "fixture-data", "size_gb": 1, "mount_path": "/config"}
+               "pvc": "fixture-data", "size_gb": 1, "mount_path": "/config",
+               "mappings": [{"remote_path": str(source_dir), "mount_path": "/config", "bytes": 9 * 1024 ** 2}]}
         with mock.patch.object(imports, "_source", return_value=src):
             prepared = imports.prepare_import(cfg)
         job = prepared["job"]
@@ -98,6 +99,21 @@ with tempfile.TemporaryDirectory(prefix="source-copy-") as directory:
         print("PASS: running or replaced source refused before copying", flush=True)
 
         state.write_text(identity + " false false false")
+        low_space = "df() { printf 'Filesystem blocks used available capacity mounted\\nfixture 100 100 0 100%% /\\n'; };\n"
+        result = subprocess.run(["sh", "-c", low_space + script], env=env, capture_output=True, text=True)
+        assert result.returncode != 0 and not (destination / "a-small").exists()
+        assert "insufficient destination free space" in imports.import_progress(result.stdout)["error_detail"]
+        assert (destination / "borrowed-file").exists()
+        print("PASS: mounted destination free-space check refuses copy with an actionable error", flush=True)
+
+        alias = destination / "alias"
+        alias.symlink_to(source_dir, target_is_directory=True)
+        result = subprocess.run(["sh", "-c", script], env=env, capture_output=True, text=True)
+        assert result.returncode != 0 and not (destination / "a-small").exists()
+        assert "symbolic links" in result.stdout
+        alias.unlink()
+        print("PASS: unsafe destination link refuses copy without touching either side", flush=True)
+
         logpath = root / "interrupted.log"
         with logpath.open("w") as log:
             process = subprocess.Popen(["sh", "-c", script.replace("rsync -aH", "rsync --bwlimit=256 -aH")],
@@ -126,6 +142,11 @@ with tempfile.TemporaryDirectory(prefix="source-copy-") as directory:
         assert all(digest(destination / name) == value for name, value in hashes.items())
         assert (destination / "borrowed-file").exists()
         print("PASS: explicit fresh copy completes with matching hashes and preserves borrowed files", flush=True)
+
+        result = subprocess.run(["sh", "-c", "sync() { return 1; };\n" + script], env=env, capture_output=True, text=True)
+        assert result.returncode != 0 and "==> done" not in result.stdout
+        assert hashes == {p.name: digest(p) for p in source_dir.iterdir()}
+        print("PASS: failed final flush cannot emit a successful completion marker", flush=True)
 
         # Simulate a writer restarting after the initial check: successful file
         # transfer must not emit the workflow's final completion marker.
