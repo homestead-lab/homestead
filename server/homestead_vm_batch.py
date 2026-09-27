@@ -22,23 +22,26 @@ def contains(actual, expected):
     return actual == expected
 
 
-def plan(prepared, read, nodes, *, created=None, threshold=88):
-    if not prepared or len(prepared) > 9:
-        raise ValueError("A VM cluster batch must have between one and nine VMs")
+def plan(prepared, read, nodes, *, created=None, threshold=88, extra_entries=None,
+         pod_snapshot=None, starting_headroom=None):
+    mixed = extra_entries is not None
+    maximum = 32 if mixed else 9
+    if not prepared or len(prepared) > maximum:
+        raise ValueError(f"A VM admission batch must have between one and {maximum} VMs")
     namespace = prepared[0]["namespace"]
     if any(item["namespace"] != namespace for item in prepared):
         raise ValueError("A VM batch must use one namespace")
     if len({item["name"] for item in prepared}) != len(prepared):
         raise ValueError("VM batch names must be unique")
     created = created or {}
-    pods = copy.deepcopy(CAPACITY._items(read, "/api/v1/pods"))
+    pods = copy.deepcopy(CAPACITY._items(read, "/api/v1/pods") if pod_snapshot is None else pod_snapshot)
     configurations = CAPACITY._items(read, "/apis/kubevirt.io/v1/kubevirts")
     if len(configurations) != 1 or configurations[0].get("metadata", {}).get("deletionTimestamp"):
         raise ValueError("A single active KubeVirt configuration is required for VM batch admission")
     configuration = (configurations[0].get("spec") or {}).get("configuration") or {}
     kubevirt_version = RESOURCES.CPU.observed_version(configurations[0])
     claims, entries, warnings, blockers = {}, [], set(), []
-    headroom = {}
+    headroom = dict(starting_headroom or {})
     numa_entries = set()
     has_numa = False
     allocations = {}
@@ -83,8 +86,16 @@ def plan(prepared, read, nodes, *, created=None, threshold=88):
             # demand. No launcher yet still means one VM owed, not free RAM.
             pending = {pod["metadata"]["uid"] for pod in owned if not pod.get("spec", {}).get("nodeName")}
             pods = [pod for pod in pods if pod.get("metadata", {}).get("uid") not in pending]
+            # A receipt proves creation/start, not continued disk/network safety.
+            # Recheck existing dependencies while excluding only verified own
+            # launchers; do not count those as competing guest-disk writers.
+            own_ids = {pod["metadata"]["uid"] for pod in owned}
+            evidence = CAPACITY.dependencies(vm, read, definitions, pods=[
+                pod for pod in pods if pod.get("metadata", {}).get("uid") not in own_ids])
+            blockers.extend(f"{name}: {text}" for text in evidence["blockers"])
+            warnings.update(evidence["warnings"])
         else:
-            single = CAPACITY.plan(vm, read, nodes, action="create", planned_claims=definitions, warning_percent=threshold)
+            single = CAPACITY.plan(vm, read, nodes, action="start" if mixed else "create", planned_claims=definitions, warning_percent=threshold)
             blockers.extend(f"{name}: {text}" for text in single["blockers"])
             warnings.update(single["warnings"])
         state = STATE.inspect(state_vm, vm["spec"]["template"]["spec"], configuration, read,
@@ -113,6 +124,10 @@ def plan(prepared, read, nodes, *, created=None, threshold=88):
                 numa_entries.add(name)
         entries.append({"name": name, "deployment": model["manifest"], "replicas": count,
                         "workload_kind": "vm", "memory_estimate_bytes": model["memory_estimate_bytes"]})
+    if mixed:
+        entries.extend(copy.deepcopy(extra_entries))
+        if len({entry["name"] for entry in entries}) != len(entries):
+            raise ValueError("Mixed workload admission names must be unique")
     nodes = copy.deepcopy(nodes)
     for node in nodes:
         node["batch_starting_headroom_gb"] = headroom.get(node["name"], 0)
@@ -135,8 +150,8 @@ def plan(prepared, read, nodes, *, created=None, threshold=88):
     if blockers:
         result.update(blocked=True, status="blocked")
     result["warnings"] = sorted(set(result["warnings"]) | warnings | {
-        "Image importers and launcher sidecars can need additional resources; RAM requests are lower bounds and version-uncertain IO-thread CPU uses conservative planning, not guaranteed capacity.",
-        "Three guest servers provide guest-level quorum only. Shared physical hosts/storage can still fail together; placement examples are not enforced."})
+        "Image importers and launcher sidecars can need additional resources; RAM requests are lower bounds and version-uncertain IO-thread CPU uses conservative planning, not guaranteed capacity."} | (set() if mixed else {
+        "Three guest servers provide guest-level quorum only. Shared physical hosts/storage can still fail together; placement examples are not enforced."}))
     result["vm_count"] = len(prepared)
     result["created_count"] = len(created)
     return result
