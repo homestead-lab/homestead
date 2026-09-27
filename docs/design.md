@@ -79,6 +79,14 @@ Pages are designed for a phone as much as a desktop:
 - **The important thing first.** State and figures before explanation;
   explanation collapsed.
 - **Actions stay reachable** - in the header, or at the foot of each card.
+- **Controls take two lines at most.** A page's header buttons, pills,
+  filters and chips fit in two rows on a phone: shorten labels there
+  (`<span class="hide-sm">`), make secondary buttons icons with an
+  `aria-label`, let chip rows scroll sideways, and leave out controls a phone
+  does not need (the cards/rows switch).
+- **Card headings wrap, not squeeze.** A card's title and description keep a
+  readable width; its buttons move under it rather than crushing it into a
+  one-word column.
 
 ## Dialogs
 
