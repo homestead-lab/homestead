@@ -51,6 +51,7 @@ probe - and your first sign-in.
 - [Network shares](Network-shares) - Samba shares from any volume
 - [Networking](Networking) - your VIPs, services, IP address management
 - [Virtual machines](Virtual-machines) - create, edit, console, move
+- [Linked clusters](Linked-clusters) - several clusters from one sign-in, switched or shown together
 - [Moving between clusters](Moving-between-clusters) - bring workloads from one cluster to another
 - [Helm and Resources](Helm-and-resources) - charts, and every Kubernetes object
 - [Settings](Settings) - cluster, hardware, users, MQTT, redundancy, Homestead's own health

@@ -88,6 +88,15 @@ Pages are designed for a phone as much as a desktop:
   readable width; its buttons move under it rather than crushing it into a
   one-word column.
 
+### Linked clusters
+
+A list that All clusters can show - containers, VMs, nodes, volumes - marks
+each row's outermost element with `clusterAttr(row)`, so every action and
+dialog opened from the row goes to the row's cluster, and shows
+`clusterTag(row)` beside its name. Both are empty unless All clusters is on.
+A record kept by this cluster alone (an image update, say) is not shown on a
+row where `remoteRow(row)` is true. See `docs/multi-cluster.md`.
+
 ### Density
 
 Homestead is a working tool: show more at once, pad less.

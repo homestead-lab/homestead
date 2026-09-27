@@ -17,6 +17,7 @@
 - [Network shares](Network-shares)
 - [Networking](Networking)
 - [Virtual machines](Virtual-machines)
+- [Linked clusters](Linked-clusters)
 - [Moving between clusters](Moving-between-clusters)
 - [Helm and Resources](Helm-and-resources)
 - [Settings](Settings)

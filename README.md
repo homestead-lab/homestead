@@ -139,6 +139,9 @@ every web interface on your network.
 **Helm and Resources** - every Helm release and every Kubernetes object, with
 its YAML and events.
 
+**Linked clusters** - several clusters from one sign-in: switch between them,
+see their containers and VMs together, and move workloads across.
+
 **Safe by design** - viewer, operator and admin roles, guarded deletion, and
 every job cancellable, with a rollback.
 

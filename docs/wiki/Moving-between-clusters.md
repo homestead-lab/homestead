@@ -15,15 +15,15 @@ Both clusters should run a recent Homestead. The destination's cluster card
 says whether the two releases can move workloads between them, and which side
 to update if not.
 
-## 2. Add the source, on the destination
+## 2. Link the two
 
-**Import → ＋ Homestead cluster** takes:
+[Link the clusters](Linked-clusters): **Import → ＋ Homestead cluster** takes
+the other Homestead's address and an admin account there, used once. Linked
+clusters are sources for each other with nothing more to add - in both
+directions.
 
-- the source Homestead's address, e.g. `http://192.168.1.242:8088`;
-- an account on the **source Homestead** - not a Harvester or SSH login.
-  Operator can browse; a move needs admin.
-
-The password is kept in a Secret on the destination.
+Clusters added before linking existed, with an account and password kept in a
+Secret, still work, and are listed on Import beside the linked ones.
 
 ## 3. Give the source backup storage
 
@@ -47,6 +47,9 @@ The in-cluster store shares the fate of the cluster it is on: it is for moving
 workloads, not your only backup.
 
 ## 4. Browse and move
+
+From the workload's side: **Move to cluster** in its `…` menu picks the
+destination and opens it at the review below. From the destination's side:
 
 **Browse workloads** lists what the source runs, with the reason anything
 cannot move - a ConfigMap, Secret or host folder Homestead did not make and so

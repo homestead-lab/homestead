@@ -193,6 +193,7 @@ function vmActions(v, compact = false) {
         <button data-need="operator" onclick="this.closest('details').open=false;vmEdit('${esc(v.ns)}','${esc(v.name)}')">${icon("edit")}Edit</button>
         ${v.actions.includes("pause") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmPower('${esc(v.ns)}','${esc(v.name)}','pause')">${icon("pause")}Pause</button>` : ""}
         ${v.actions.includes("migrate") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmMove('${esc(v.ns)}','${esc(v.name)}')">${icon("move")}Move host</button>` : ""}
+        ${FLEET.view?.linked ? `<button data-need="admin" title="Move it to another linked cluster, disks and all" onclick="this.closest('details').open=false;moveToCluster('vm','${esc(v.name)}','${esc(v.site?.handle || "")}')">${icon("move")}Move to cluster</button>` : ""}
         ${v.actions.includes("force-stop") ? `<button class="danger" data-need="operator" onclick="this.closest('details').open=false;vmPower('${esc(v.ns)}','${esc(v.name)}','force-stop')" title="${esc(VM_ACTIONS["force-stop"][2])}">${icon("plug")}Force off</button>` : ""}
         <button class="danger" data-need="admin" onclick="this.closest('details').open=false;vmDelete('${esc(v.ns)}','${esc(v.name)}')">${icon("trash")}Delete</button>
       </div></details>`;
@@ -202,8 +203,8 @@ function vmActions(v, compact = false) {
 function vmTable(rows) {
   return `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack compact vm-table" data-sort="vms"><thead><tr>
     <th>VM</th><th>Status</th><th>Address</th><th>CPU</th><th>RAM</th><th>Disk IO</th><th data-nosort></th></tr></thead><tbody>
-    ${rows.map(v => `<tr class="clickable" onclick="if(!event.target.closest('button,details,a'))vmOpen('${esc(v.ns)}','${esc(v.name)}')">
-      <td class="cell-name" data-sort="${esc(v.name)}"><b>${esc(v.name)}</b> ${vmClusterTag(v)}
+    ${rows.map(v => `<tr class="clickable"${clusterAttr(v)} onclick="if(!event.target.closest('button,details,a'))vmOpen('${esc(v.ns)}','${esc(v.name)}')">
+      <td class="cell-name" data-sort="${esc(v.name)}"><b>${esc(v.name)}</b> ${clusterTag(v)}${vmClusterTag(v)}
         <div class="dim xs vm-sub">${esc([v.ns, v.os, v.node ? `on ${v.node}` : ""].filter(Boolean).join(" · "))}</div></td>
       <td data-label="Status" data-status data-sort="${esc(v.status)}"><span class="pill ${vmTone(v.status)}" data-tip="${esc([v.status, v.problem].filter(Boolean).join(": "))}">${esc(v.status)}</span>
         ${v.restart_required ? '<div class="dim xs">restart to apply changes</div>' : ""}
@@ -228,12 +229,12 @@ function vmActionButton(v, action, primary = false, iconOnly = false, extra = ""
    people come here for, and three narrow columns cut it off - and its size
    reads as one line rather than five labelled boxes. */
 function vmCard(v) {
-  return `<div class="card flat vm-card vm-${vmTone(v.status)}">
+  return `<div class="card flat vm-card vm-${vmTone(v.status)}"${clusterAttr(v)}>
     <div class="between vm-head">
       <a class="vm-title" onclick="vmOpen('${esc(v.ns)}','${esc(v.name)}')"><div class="av n3">${esc(v.name.slice(0, 2).toUpperCase())}</div>
         <div class="vm-name"><b title="${esc(v.name)}">${esc(v.name)}</b><div class="dim xs" title="${esc([v.ns, v.os].filter(Boolean).join(" · "))}">${esc(v.ns)}${v.os ? ` · ${esc(v.os)}` : ""}</div></div></a>
       <span class="pill ${vmTone(v.status)}" ${v.problem ? `data-tip="${esc(v.problem)}"` : ""}>${esc(v.status)}</span></div>
-    ${v.cluster ? `<div class="vm-tags">${vmClusterTag(v)}</div>` : ""}
+    ${v.cluster || clusterTag(v) ? `<div class="vm-tags">${clusterTag(v)}${vmClusterTag(v)}</div>` : ""}
     ${v.description ? `<div class="dim small vm-desc">${esc(v.description)}</div>` : ""}
     ${v.problem ? `<div class="note bad vm-problem">${esc(v.problem)}</div>` : ""}
     ${vmFilling(v)}
