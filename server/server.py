@@ -36,6 +36,8 @@ import homestead_self_data_fence as SELF_DATA_FENCE
 import homestead_self_data_worker as SELF_DATA_WORKER
 import homestead_self_data_review as SELF_DATA_REVIEW
 import homestead_self_data_prepare as SELF_DATA_PREPARE
+import homestead_self_data_execute as SELF_DATA_EXECUTE
+import homestead_self_data_route as SELF_DATA_ROUTE
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
 API = "https://kubernetes.default.svc"
@@ -202,7 +204,7 @@ def self_data_request(method):
         path = urllib.parse.urlparse(handler.path).path
         # Destination's explicitly read-only boot routes have their own guard;
         # they must not create activity/feature lock files on the copied data.
-        progress = getattr(handler, "command", "") == "GET" and re.fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}", path)
+        progress = getattr(handler, "command", "") == "GET" and re.fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}(?:/view)?", path)
         if _self_data_boot_pending or not path.startswith("/api/") or progress:
             return method(handler)
         try:
@@ -5302,6 +5304,18 @@ def self_data_handoff_status(operation):
         return None
     try:
         marker = SELF_DATA_FENCE.read_marker(DATA_DIR)
+        if not marker:
+            job = next((i for i in OPS._read() if i.get("kind") == SELF_DATA_EXECUTE.KIND and i.get("ref", {}).get("operation") == operation), None)
+            if job:
+                ref = job["ref"]
+                if not ref.get("anchor_uid") or ref.get("setup_error"):
+                    view = SELF_DATA_WORKER.unavailable_status(operation)
+                    view.update(status="held" if ref.get("setup_error") else "preparing", requires_review=bool(ref.get("setup_error")),
+                        message=ref.get("setup_error") or "Preparing the move. Homestead is still online.")
+                    return view
+                anchor = SELF_DATA_FENCE.A.Anchor(kget, None, SELF.NS, NAMES.BRAND)
+                anchor.load(operation=operation, uid=ref["anchor_uid"])
+                return SELF_DATA_WORKER.progress(anchor, time.time())
         if not marker or (marker["namespace"], marker["deployment"], marker["operation"]) != (SELF.NS, NAMES.BRAND, operation):
             return None
         anchor = SELF_DATA_FENCE.A.Anchor(kget, None, SELF.NS, NAMES.BRAND)
@@ -5385,7 +5399,7 @@ def self_data_preparation_state():
                 "prepared": item["status"] == "succeeded" and bool(ref.get("prepared"))
                     and ref["source"]["name"] == info.get("pvc")})
         return {"source": info.get("pvc"), "classes": info.get("classes", []), "preparations": jobs,
-            "execution_ready": False,  # Enable only with the complete fenced restart/progress path.
+            "execution_ready": True,
             "nodes": [{"name": n["metadata"]["name"], "ready": not n["metadata"].get("deletionTimestamp")
                 and not n.get("spec", {}).get("unschedulable") and any(c.get("type") == "Ready" and c.get("status") == "True"
                     for c in n.get("status", {}).get("conditions", []))} for n in nodes]}
@@ -5421,7 +5435,7 @@ def preview_self_data_move(body, actor):
                 own_uid=pod["metadata"]["uid"], data_mount=DATA_DIR)
         result = SELF_DATA_REVIEW.Review(read, ns, NAMES.BRAND, actor=actor, image=image,
             threshold=get_app_settings()["thresholds"]["memory"]["critical"], source_pod=pod, data_dir=DATA_DIR,
-            runtime_check=runtime_check, clock=time.time).preview(body)
+            runtime_check=runtime_check, clock=time.time, route_check=SELF_DATA_ROUTE.review).preview(body)
         return result
     except SELF_DATA_FENCE.Held:
         raise
@@ -5429,98 +5443,61 @@ def preview_self_data_move(body, actor):
         raise SELF_DATA_FENCE.Held("The data move review is unavailable. Nothing was changed; check cluster access and volume readiness") from None
 
 
-def move_homestead_data(storage_class):
-    """Copies Homestead's data to a new claim on another class, then points it there.
-
-    The copy runs as a job on the node that has the current volume attached,
-    since that is the only node that can mount it; Homestead keeps running
-    throughout and restarts once, onto the new claim. The old claim is kept.
-
-    The copy is of the moment it runs. Jobs record each step on this volume,
-    so one still running would come back after the restart from an older
-    step - a storage class change mid-swap, say - which is why nothing else
-    may be running."""
-    info = homestead_data_volume()
-    target_row = next((c for c in info.get("classes") or [] if c["name"] == storage_class), None)
-    if storage_class == info.get("storage_class"):
-        raise ValueError(f"{info['pvc']} is on {storage_class} already")
-    if not target_row:
-        raise ValueError(f"storage class {storage_class} is not one Homestead's data can move to")
+def start_self_data_move(body, actor):
+    """Persist the approved intent before launching the one-shot source setup."""
+    if _self_data_barrier is None:
+        raise SELF_DATA_FENCE.Held("Data moves require the mounted-data safety guard")
     ns = SELF.NS
-    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{NAMES.BRAND}")
-    if not target_row["shareable"] and int((dep.get("spec") or {}).get("replicas") or 1) > 1:
-        raise ValueError(f"{storage_class} gives a volume one node can mount, and {dep['spec']['replicas']} copies "
-                         "of Homestead run: set Redundancy to one copy first")
-    busy = [o for o in OPS.list_operations() if o.get("status") not in OPS.TERMINAL
-            and o.get("kind") != "self-data-move"]
-    if busy:
-        raise ValueError(f"{len(busy)} job{'s are' if len(busy) != 1 else ' is'} still running ({busy[0].get('title', '')}"
-                         f"{' and more' if len(busy) > 1 else ''}). The copy is taken as it stands and Homestead restarts "
-                         "onto it, so a job running meanwhile would lose its later steps: let them finish first")
-    names = {i["metadata"]["name"] for i in kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims").get("items", [])}
-    target = f"{NAMES.BRAND}-data-shared" if target_row["shareable"] else f"{NAMES.BRAND}-data-moved"
-    n = 2
-    while target in names:
-        target, n = f"{NAMES.BRAND}-data-shared-{n}", n + 1
-    size_gb = max(1, int(-(-parse_mem(info["size"]) // 1024**3)))
-    selector = urllib.parse.quote(f"app={NAMES.BRAND}", safe="")
-    pods = [p for p in kget(f"/api/v1/namespaces/{ns}/pods?labelSelector={selector}").get("items", [])
-            if (p.get("status") or {}).get("phase") == "Running" and (p.get("spec") or {}).get("nodeName")]
-    if not pods:
-        raise ValueError("no running Homestead pod shows which node holds the data volume")
-    node = pods[0]["spec"]["nodeName"]
-    create_pvc(ns, target, size_gb, storage_class, "ReadWriteMany" if target_row["shareable"] else "ReadWriteOnce")
-    job = f"{NAMES.BRAND}-data-move-{secrets.token_hex(3)}"
-    body = {"apiVersion": "batch/v1", "kind": "Job",
-            "metadata": {"name": job, "namespace": ns, "labels": NAMES.labels("data-move")},
-            "spec": {"backoffLimit": 1, "ttlSecondsAfterFinished": 86400,
-                     "template": {"metadata": {"labels": NAMES.labels("data-move")},
-                                  "spec": {"restartPolicy": "Never", "nodeName": node,
-                                           "containers": [{"name": "copy", "image": "alpine:3.20",
-                                                           "command": ["sh", "-c", "set -e; cp -a /old/. /new/; sync; echo copied"],
-                                                           "securityContext": {"runAsUser": 0},
-                                                           "volumeMounts": [{"name": "old", "mountPath": "/old", "readOnly": True},
-                                                                            {"name": "new", "mountPath": "/new"}]}],
-                                           "volumes": [{"name": "old", "persistentVolumeClaim": {"claimName": info["pvc"], "readOnly": True}},
-                                                       {"name": "new", "persistentVolumeClaim": {"claimName": target}}]}}}}
-    ksend("POST", f"/apis/batch/v1/namespaces/{ns}/jobs", body)
-    op = OPS.start("self-data-move", f"Move Homestead's data to {target}",
-                   {"kind": "PersistentVolumeClaim", "name": target, "namespace": ns}, "/settings",
-                   {"namespace": ns, "job": job, "old": info["pvc"], "new": target,
-                    "storage_class": storage_class, "shareable": target_row["shareable"]}, "Copying")
-    return {"ok": True, "operation": op, "detail": f"copying {info['pvc']} to {target} on {storage_class}; Homestead restarts onto it when done"}
+    def reviewer(read):
+        pod, image = _self_data_helper_image(read, ns)
+        def runtimes(pods, claim):
+            return STORAGE_RUNTIME.require_self_data(OPS, pods, ns, NAMES.BRAND, HOMESTEAD_VERSION, claim,
+                own_uid=pod["metadata"]["uid"], data_mount=DATA_DIR)
+        return SELF_DATA_REVIEW.Review(read, ns, NAMES.BRAND, actor=actor, image=image,
+            threshold=get_app_settings()["thresholds"]["memory"]["critical"], source_pod=pod, data_dir=DATA_DIR,
+            runtime_check=runtimes, clock=time.time, route_check=SELF_DATA_ROUTE.review)
+    with OPS._lock:
+        _require_no_data_handoff(kget, ns)
+        SELF_DATA_EXECUTE.idle(OPS)
+        execution = reviewer(kget).approve(body)
+        job = SELF_DATA_EXECUTE.enqueue(OPS, execution)
+    def recheck(approved, worker):
+        def read(path):
+            result = kget(path)
+            if path == "/api/v1/pods":
+                # Re-evaluate the same proposal, not two copies of our already
+                # running helper. Observed node memory is never subtracted.
+                result = {**result, "items": [p for p in result["items"] if p["metadata"]["uid"] != worker["uid"]]}
+            return result
+        _, _, binding, _ = reviewer(read)._snapshot(approved["config"])
+        if binding != approved["binding"]:
+            raise SELF_DATA_FENCE.Held("Workloads, data volumes, access or capacity changed during preparation. Homestead has not been stopped; review the retained move.")
+        return True
+    # Setup owns only its new anchor and helpers; the raw transport allows the
+    # final anchor acknowledgement after local write fencing. No source writes
+    # or Deployment changes are allowed through this callback after publication.
+    task = SELF_DATA_EXECUTE.Execution(kget, _ksend, OPS, execution, job, directory=DATA_DIR,
+        barrier=_self_data_barrier, recheck=recheck)
+    try:
+        threading.Thread(target=task.run, name="self-data-setup", daemon=True).start()
+    except Exception:
+        task.checkpoint(setup_error="The move setup could not start. Inspect the saved job before trying again.")
+        raise SELF_DATA_FENCE.Held("Move setup could not start; no data was copied or switched") from None
+    return {"ok": True, "operation": job, "handoff": execution["scope"].operation}, execution["status_token"]
+
+
+OPS.RESOLVERS[SELF_DATA_EXECUTE.KIND] = lambda item: SELF_DATA_EXECUTE.resolve(item, kget)
+
+
+def move_homestead_data(storage_class):
+    raise SELF_DATA_FENCE.Held("The live-copy mover was retired. Open Settings to prepare and confirm a verified data move.")
 
 
 def _data_move_status(item):
-    """Waits for the copy, then points Homestead at the new claim. Run again
-    after the switch - by the new pods, from the copied record - it finds the
-    claim already switched and finishes."""
-    ref = item["ref"]
-    ns, name = ref["namespace"], NAMES.BRAND
-    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    volumes = dep["spec"]["template"]["spec"].get("volumes") or []
-    data = next((v for v in volumes if v.get("name") == "data"), None)
-    if data and (data.get("persistentVolumeClaim") or {}).get("claimName") == ref["new"]:
-        where = ("which every node can mount" if ref.get("shareable", True)
-                 else f"on {ref.get('storage_class', 'its new class')}")
-        return "succeeded", 100, (f"Homestead keeps its data on {ref['new']}, {where}; "
-                                  f"{ref['old']} is kept - delete it from Volumes once all is well")
-    try:
-        status = kget(f"/apis/batch/v1/namespaces/{ns}/jobs/{ref['job']}").get("status") or {}
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return "failed", 50, "the copy job went missing; Homestead still uses its old data claim"
-        raise
-    if status.get("failed") and not status.get("active") and not status.get("succeeded"):
-        return "failed", 60, f"the copy failed; Homestead still uses {ref['old']}. The {ref['job']} job's log says why"
-    if not status.get("succeeded"):
-        return "running", 40 if status.get("active") else 15, "Copying Homestead's data"
-    data["persistentVolumeClaim"]["claimName"] = ref["new"]
-    # How it replaces itself follows the new volume: rolling only when
-    # several nodes can mount it, otherwise the old copy goes first.
-    dep["spec"]["strategy"] = own_strategy(ref.get("shareable", True))
-    ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
-    return "running", 90, f"Copied; Homestead is restarting onto {ref['new']}"
+    # Old jobs lack pre-write receipts and a quiesced-copy proof. Reading one
+    # after an upgrade must not silently switch claims or report safe success.
+    item["ref"]["retain_resources"] = True
+    return "failed", 0, "This older data move needs manual review. Both volumes are retained; no copy, restart or claim switch was requested."
 
 
 OPS.RESOLVERS["self-data-move"] = _data_move_status
@@ -6518,10 +6495,10 @@ class H(BaseHTTPRequestHandler):
             if self.command == "GET" and path == "/api/auth/state":
                 self._send(200, {"data_handoff": True, "setup": False})
                 return True
-            if self.command != "GET" or not re.fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}", path):
+            if self.command != "GET" or not re.fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}(?:/view)?", path):
                 self._send(503, {"error": "Homestead is verifying its new data volume. Wait for the move to finish before changing anything.", "data_handoff": True})
                 return True
-        if self.command in ("POST", "PUT", "PATCH", "DELETE") or path in ("/api/console", "/api/node/shell", "/api/vm/console"):
+        if self.command in ("POST", "PUT", "PATCH", "DELETE") or path in ("/healthz", "/api/console", "/api/node/shell", "/api/vm/console"):
             try:
                 require_self_data_write()
             except SELF_DATA_FENCE.Held as error:
@@ -6659,6 +6636,8 @@ class H(BaseHTTPRequestHandler):
                 except SELF_DATA_FENCE.Held as error:
                     return self._send(409, {"error": str(error)})
             if p.startswith("/api/self/data/handoff/"):
+                if re.fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}/view", p):
+                    return self._send(200, SELF_DATA_WORKER.maintenance_page(p.split("/")[-2]), "text/html; charset=utf-8")
                 status = self_data_handoff_status(p[len("/api/self/data/handoff/"):])
                 if status is None:
                     return self._send(404, {"error": "No recorded data move with this identity"})
@@ -7106,7 +7085,13 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/self/replicas":
                 return self._send(200, set_homestead_replicas(b.get("replicas")))
             if p == "/api/self/data/move":
-                return self._send(200, move_homestead_data(b.get("storage_class", "")))
+                try:
+                    result, token = start_self_data_move(b, self.user)
+                    secure = "Secure; " if self._over_tls() else ""
+                    self._extra_headers.append(("Set-Cookie", f"homestead-data-move={token}; Path=/api/self/data/handoff/; HttpOnly; {secure}SameSite=Strict; Max-Age=86400"))
+                    return self._send(202, result)
+                except SELF_DATA_FENCE.Held as error:
+                    return self._send(409, {"error": str(error), "review_required": True})
             if p == "/api/self/data/move/preview":
                 try:
                     return self._send(200, preview_self_data_move(b, self.user))

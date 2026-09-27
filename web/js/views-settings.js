@@ -322,37 +322,61 @@ window.selfDataWatch = async index => {
       if (!current) throw new Error("The preparation record is unavailable. Inspect existing volumes before creating another.");
       flow.state = state; flow.selected = current;
       $("#selfDataFlow").innerHTML = `<p><b>${esc(current.destination)}</b></p><p role="status">${esc(current.message || current.status)}</p>
-        ${UI.progress(current.progress, { label: "Preparation steps", kind: current.status === "failed" ? "bad" : "info" })}
+        ${current.prepared ? "" : UI.progress(current.progress, { label: "Preparation steps", kind: current.status === "failed" ? "bad" : "info" })}
         <p class="ui-help">Homestead still uses its original data. Neither volume is deleted by preparation.</p>
-        ${current.prepared ? UI.fields(
+        ${current.prepared ? UI.more("Host placement", UI.fields(
           UI.field("Move coordinator host", `<select aria-label="Move coordinator host" id="selfDataWorker" onchange="selfDataFinalInvalidate()">${selfDataHostOptions(state.nodes, current.node)}</select>`, { help: "Stays running while Homestead is stopped." }),
-          UI.field("Copy host", `<select aria-label="Copy host" id="selfDataCopy" onchange="selfDataFinalInvalidate()">${selfDataHostOptions(state.nodes, current.node)}</select>`, { help: "Must be able to mount both volumes." })) : ""}
-        <div id="selfDataFinal"></div>${UI.actions(UI.cancel("Close") + (current.prepared ? UI.button("Review downtime & move", "selfDataFinalReview()", { kind: "pri" }) : UI.button("Back to volumes", "replicasMoveData()")))}`;
+          UI.field("Copy host", `<select aria-label="Copy host" id="selfDataCopy" onchange="selfDataFinalInvalidate()">${selfDataHostOptions(state.nodes, current.node)}</select>`, { help: "Must be able to mount both volumes." }))) : ""}
+        <div id="selfDataFinal"></div><div id="selfDataReviewActions">${UI.actions(UI.cancel("Close") + (current.prepared ? UI.button("Review downtime & move", "selfDataFinalReview()", { kind: "pri" }) : UI.button("Back to volumes", "replicasMoveData()")))}</div>`;
       if (!["succeeded", "failed", "cancelled"].includes(current.status)) setTimeout(paint, 3000);
     } catch (e) { if (selfDataDialog === flow && flow.watch === watch && $("#selfDataFlow")) $("#selfDataFlow").innerHTML = `<p role="alert">${esc(e.message)}</p><button class="btn" onclick="replicasMoveData()">Check again</button>`; }
   };
   await paint();
 };
 window.selfDataFinalInvalidate = () => {
-  if (selfDataDialog) selfDataDialog.finalRequest = null;
+  if (selfDataDialog) { selfDataDialog.finalRequest = null; selfDataDialog.approvedMove = null; }
   if ($("#selfDataFinal")) $("#selfDataFinal").innerHTML = "";
+  if ($("#selfDataReviewActions")) $("#selfDataReviewActions").innerHTML = UI.actions(UI.cancel("Close") + UI.button("Review downtime & move", "selfDataFinalReview()", { kind: "pri" }));
 };
 window.selfDataFinalReview = async () => {
   const flow = selfDataDialog;
   if (!flow?.selected?.prepared || !$("#selfDataFinal")) return;
   const body = { operation: flow.selected.operation, destination: flow.selected.destination, worker_node: $("#selfDataWorker").value, copy_node: $("#selfDataCopy").value };
   const request = {}; flow.finalRequest = request;
+  flow.approvedMove = null;
+  selfDataMoveReady();
   $("#selfDataFinal").innerHTML = "<p>Checking the complete move…</p>";
   try {
     const result = await selfDataPost("/api/self/data/move/preview", body);
     if (selfDataDialog !== flow || flow.finalRequest !== request || !$("#selfDataFinal")) return;
     if (body.worker_node !== $("#selfDataWorker").value || body.copy_node !== $("#selfDataCopy").value) throw new Error("The host selection changed. Review the move again.");
-    $("#selfDataFinal").innerHTML = `${UI.callout("warn", "Planned downtime", `<p>${esc(result.downtime)}</p>`)}
+    if (!result.capacity_token || (result.stages || []).some(s => s.capacity?.blocked)) throw new Error("The move needs a new placement review.");
+    flow.approvedMove = { body, result };
+    $("#selfDataFinal").innerHTML = `${UI.callout("warn", "Planned downtime", `<p>${esc(result.downtime)}</p><p>Progress stays at this address. Your old volume is kept.</p>`)}
       ${(result.stages || []).map(s => UI.more(s.label, `<p>${esc(s.detail)}</p>${deployCapacityHtml(s.capacity)}`)).join("")}
-      <p role="status">Move execution is not yet enabled in this build. Your prepared volume is retained; no data has been copied or switched.</p>`;
-    // The draft must not fall back to the legacy live-copy endpoint. Confirmation
-    // will be connected only with the fenced execution and restart recovery path.
+      ${UI.ack("selfDataMoveConsent", "I accept the downtime and capacity warnings.", { onchange: "selfDataMoveReady()" })}`;
+    if ($("#selfDataReviewActions")) $("#selfDataReviewActions").innerHTML = UI.actions(UI.cancel("Close") + UI.button("Move data", "selfDataMoveStart()", { kind: "pri", id: "selfDataMoveStart", disabled: true }));
   } catch (e) { if (selfDataDialog === flow && flow.finalRequest === request && $("#selfDataFinal")) $("#selfDataFinal").innerHTML = `<p role="alert">${esc(e.message)}</p>`; }
+};
+window.selfDataMoveReady = () => {
+  const flow = selfDataDialog, saved = flow?.approvedMove;
+  const ready = !!(saved && !flow.busy && $("#selfDataMoveConsent")?.checked &&
+    saved.body.worker_node === $("#selfDataWorker")?.value && saved.body.copy_node === $("#selfDataCopy")?.value);
+  if ($("#selfDataMoveStart")) $("#selfDataMoveStart").disabled = !ready;
+  return ready;
+};
+window.selfDataMoveStart = async () => {
+  if (!selfDataMoveReady()) return;
+  const flow = selfDataDialog, saved = flow.approvedMove;
+  flow.busy = true; flow.approvedMove = null; selfDataMoveReady();
+  try {
+    const result = await selfDataPost("/api/self/data/move", { ...saved.body, capacity_token: saved.result.capacity_token, confirm_move: true, confirm_capacity: true });
+    noteOperation(result.operation);
+    if (!/^[a-f0-9]{24}$/.test(result.handoff || "")) throw new Error("The move response could not be verified.");
+    location.assign(`/api/self/data/handoff/${result.handoff}/view`);
+  } catch (e) {
+    if (selfDataDialog === flow && $("#selfDataFinal")) $("#selfDataFinal").innerHTML = `<p role="alert">${esc(e.message)}</p><p>Check the saved move in Jobs before trying again. It may already have started.</p>`;
+  }
 };
 window.replicasSave = async () => {
   const replicas = +$("#rep_count").value;

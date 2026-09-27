@@ -97,12 +97,19 @@ class BootTests(unittest.TestCase):
 
     def test_normal_health_endpoint_is_json_not_the_application_shell(self):
         self.assertFalse(server.is_page_path("/healthz"))
+        self.fence.require_write.side_effect = None
         with mock.patch.object(server, "_self_data_boot_pending", False):
             h, result = self.handler("/healthz")
             self.assertFalse(result)
             h._file = mock.Mock(side_effect=AssertionError("health probe served HTML"))
             h.do_GET()
         self.assertEqual((200, {"ok": True}), h._send.call_args.args)
+
+    def test_source_leaves_service_when_pointer_blocks_writes(self):
+        with mock.patch.object(server, "_self_data_boot_pending", False):
+            h, result = self.handler("/healthz")
+        self.assertTrue(result)
+        self.assertEqual(503, h._send.call_args.args[0])
 
     def test_real_http_listener_reports_read_only_readiness_and_refuses_feature_routes(self):
         listener = server.ThreadingHTTPServer(("127.0.0.1", 0), server.H)

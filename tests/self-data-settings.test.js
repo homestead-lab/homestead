@@ -19,7 +19,7 @@ function setup() {
         state.preparations = [{ id: "job", operation: body.operation, destination: "target", status: "running", node: "node1", progress: 15, message: "Creating volume", prepared: false }];
         return { operation: { id: "job" }, destination: "target" };
       }
-      if (path === "/api/self/data/move/preview") return { downtime: "Homestead will stop while copying.", stages: [{ label: "Copy and verify", detail: "Only after source stops", capacity: {} }] };
+      if (path === "/api/self/data/move/preview") return { capacity_token: "signed-move", downtime: "Homestead will stop while copying.", stages: [{ label: "Copy and verify", detail: "Only after source stops", capacity: {} }] };
       throw new Error("Unexpected mutation " + path);
     },
   };
@@ -75,7 +75,7 @@ test("reopens completed preparation from jobs and obtains read-only final review
   Object.assign(t.fields, { "#selfDataFinal": { innerHTML: "" }, "#selfDataWorker": { value: "node1" }, "#selfDataCopy": { value: "node1" } });
   await t.ctx.selfDataFinalReview();
   assert.match(t.fields["#selfDataFinal"].innerHTML, /Planned downtime/);
-  assert.match(t.fields["#selfDataFinal"].innerHTML, /not yet enabled/);
+  assert.match(t.fields["#selfDataFinal"].innerHTML, /I accept the downtime/);
   assert.deepEqual(t.sent.at(-1).body, { operation: "a".repeat(24), destination: "target", worker_node: "node1", copy_node: "node1" });
   t.ctx.selfDataFinalInvalidate(); assert.equal(t.fields["#selfDataFinal"].innerHTML, "");
 });
@@ -94,4 +94,40 @@ test("unsafe or incomplete preparation review never enables create", async () =>
     t.fields["#selfDataConsent"].checked = true;
     assert.equal(t.ctx.selfDataReady(), false);
   }
+});
+
+test("final move requires consent and matching hosts, and sends its signed review once", async () => {
+  const t = setup();
+  t.state.preparations = [{ id: "job", operation: "a".repeat(24), destination: "target", node: "node1", status: "succeeded", prepared: true }];
+  await t.ctx.replicasMoveData("job");
+  Object.assign(t.fields, { "#selfDataFinal": { innerHTML: "" }, "#selfDataWorker": { value: "node1" }, "#selfDataCopy": { value: "node1" },
+    "#selfDataMoveConsent": { checked: false }, "#selfDataMoveStart": { disabled: true } });
+  await t.ctx.selfDataFinalReview();
+  assert.equal(t.ctx.selfDataMoveReady(), false);
+  t.fields["#selfDataMoveConsent"].checked = true;
+  t.fields["#selfDataCopy"].value = "node2";
+  assert.equal(t.ctx.selfDataMoveReady(), false);
+  t.fields["#selfDataCopy"].value = "node1";
+  let calls = 0, redirect;
+  t.ctx.api = async (path, options) => {
+    calls++; const b = JSON.parse(options.body);
+    assert.equal(path, "/api/self/data/move"); assert.equal(b.capacity_token, "signed-move");
+    assert.equal(b.confirm_move, true); assert.equal(b.confirm_capacity, true);
+    return { operation: { id: "move" }, handoff: "a".repeat(24) };
+  };
+  t.ctx.location = { assign: path => redirect = path };
+  await t.ctx.selfDataMoveStart(); await t.ctx.selfDataMoveStart();
+  assert.equal(calls, 1); assert.equal(redirect, "/api/self/data/handoff/" + "a".repeat(24) + "/view");
+});
+
+test("lost final move response consumes consent and never blindly retries", async () => {
+  const t = setup();
+  t.state.preparations = [{ id: "job", operation: "a".repeat(24), destination: "target", node: "node1", status: "succeeded", prepared: true }];
+  await t.ctx.replicasMoveData("job");
+  Object.assign(t.fields, { "#selfDataFinal": { innerHTML: "" }, "#selfDataWorker": { value: "node1" }, "#selfDataCopy": { value: "node1" }, "#selfDataMoveConsent": { checked: true } });
+  await t.ctx.selfDataFinalReview();
+  let calls = 0;
+  t.ctx.api = async () => { calls++; throw Error("Connection lost"); };
+  await t.ctx.selfDataMoveStart(); await t.ctx.selfDataMoveStart();
+  assert.equal(calls, 1); assert.match(t.fields["#selfDataFinal"].innerHTML, /may already have started/);
 });

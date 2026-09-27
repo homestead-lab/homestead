@@ -99,6 +99,7 @@ class PreviewScope:
     """
     def __init__(self, scope):
         self.namespace = scope.namespace
+        self.anchor_name = scope.deployment + "-data-handoff"
         self.worker_name = access_name(scope.namespace, scope.deployment, scope.operation)
         self.copy_name = scope.copy_name
         self.pod_name = "homestead-copy-check-" + scope.operation
@@ -111,8 +112,15 @@ class PreviewScope:
         if (logs or method != "POST" or wanted is None or not isinstance(body, dict) or not isinstance(meta, dict)
                 or body.get("apiVersion") != wanted[0] or body.get("kind") != wanted[1]
                 or meta.get("namespace") != self.namespace or meta.get("name") not in wanted[2]
-                or any(key in meta for key in ("uid", "resourceVersion", "generateName", "ownerReferences"))):
+                or any(key in meta for key in ("uid", "resourceVersion", "generateName"))):
             raise Held("This preflight client only permits the reviewed dry-run Pod and Job requests")
+        if "ownerReferences" in meta:
+            owners = meta["ownerReferences"]
+            if (meta["name"] != self.worker_name or body["kind"] != "Pod" or not isinstance(owners, list) or len(owners) != 1
+                    or not isinstance(owners[0], dict) or not isinstance(owners[0].get("uid"), str) or not owners[0]["uid"]
+                    or owners[0] != {"apiVersion": "v1", "kind": "ConfigMap", "name": self.anchor_name,
+                                      "uid": owners[0]["uid"], "controller": True, "blockOwnerDeletion": False}):
+                raise Held("Only the maintenance worker may reference its control-record owner during preflight")
 
 
 class Client:

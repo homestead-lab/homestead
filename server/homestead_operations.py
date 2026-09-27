@@ -246,7 +246,7 @@ def _public(item):
            if key not in ("ref", "cancel_started", "previous_status", "history", "_legacy_store")}
     # Every job still going can be cancelled; what that does is asked for
     # separately, as it reads Kubernetes and the tray is polled often.
-    out["cancellable"] = item.get("status") not in TERMINAL and (
+    out["cancellable"] = item.get("kind") != "self-data-handoff" and item.get("status") not in TERMINAL and (
         item.get("status") != CANCELLING or _cancel_stale(item))
     out["cleanable"] = _cleanable(item)
     out["dismissible"] = item.get("status") in TERMINAL and not _receipt_needed(item) and not _recovery_needed(item)
@@ -287,6 +287,8 @@ def _public(item):
 
 
 def _receipt_needed(item):
+    if item.get("kind") == "self-data-handoff":
+        return True  # Keep the source dispatch identity even after completion.
     if item.get("kind") == "self-data-prepare" and item.get("ref", {}).get("prepared"):
         return True  # The final move and later cleanup still need these exact identities.
     if not POWER_RECEIPTS.protected(item.get("kind"), item.get("ref") or {}):
@@ -798,6 +800,9 @@ def _plan_for(item):
                       "and only stops showing here."],
             "confirm": "", "needs": "operator", "options": []}
     entry = CANCELLERS.get(item.get("kind"))
+    if item.get("kind") == "self-data-handoff":
+        plan.update(can=False, why_not="A data move cannot be safely cancelled after handoff. Both volumes and its progress record are retained.")
+        return plan
     if item.get("kind") == "reclass" and "storage_protocol" in item.get("ref", {}):
         plan.update(can=False, why_not="Use the storage move review to pause safely; cancelling must not roll back or delete retained data")
         return plan
