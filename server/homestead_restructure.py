@@ -8,19 +8,16 @@ folder, so an edit that asks for it runs as a tracked job:
   1. the edit is saved with the workload held at zero replicas, and the count
      it should run at parked in an annotation;
   2. once its pods are gone, a Job copies each old location to its new one;
-  3. the workload is scaled back to the parked count.
+  3. placement is rechecked before the workload is scaled back to that count.
 
-The old volumes are never touched: they are only read, and nothing here
-deletes them, so a mistake is undone by pointing the paths back. The steps
-advance from the operations poll, which the alert loop runs every few seconds
-whether or not anyone is watching, and every step is recorded, so a Homestead
-restart part-way picks up where it stopped.
+homestead_copy_job owns the durable, identity-checked handoff. Sources on separate
+volumes are mounted read-only; a folder move within one volume necessarily writes
+that volume. No volume is deleted. Uncertain mutations are not replayed, and
+recovery never automatically restores mappings or starts the workload.
 """
 import re
 import secrets
 import shlex
-import urllib.error
-import urllib.parse
 
 import homestead_names as NAMES
 
@@ -93,6 +90,16 @@ def copies(cfg):
         if spot in targets and targets[spot] != (move["from"], move["from_folder"]):
             raise ValueError(f"two paths would be copied into {move['to']}/{move['to_folder']}")
         targets[spot] = (move["from"], move["from_folder"])
+    for i, move in enumerate(out):
+        for j, other in enumerate(out):
+            if i != j and move["to"] == other["to"] and (
+                    _inside(move["to_folder"], other["to_folder"]) or _inside(other["to_folder"], move["to_folder"])):
+                raise ValueError("copy destinations overlap; move these paths in separate edits")
+            if move["to"] == other["from"] and (
+                    _inside(move["to_folder"], other["from_folder"]) or _inside(other["from_folder"], move["to_folder"])):
+                if i == j and _inside(move["to_folder"], move["from_folder"]):
+                    continue  # the script explicitly excludes this destination subtree
+                raise ValueError("a copy destination overlaps source data; use a separate volume or staged edits")
     return out
 
 
@@ -155,13 +162,16 @@ def job(ns, name, moves):
     return job_name, {
         "apiVersion": "batch/v1", "kind": "Job",
         "metadata": {"name": job_name, "namespace": ns, "labels": NAMES.labels("restructure", name)},
-        "spec": {"backoffLimit": 0, "ttlSecondsAfterFinished": 86400,
+        "spec": {"backoffLimit": 0,
                  "template": {"metadata": {"labels": NAMES.labels("restructure", name)},
                               "spec": {"restartPolicy": "Never",
                                        "containers": [{"name": "copy", "image": IMAGE,
+                                                       "resources": {"requests": {"cpu": "100m", "memory": "64Mi"},
+                                                                     "limits": {"memory": "256Mi"}},
                                                        "command": ["sh", "-c", script(moves, mount_of)],
                                                        "securityContext": {"runAsUser": 0},
-                                                       "volumeMounts": [{"name": f"v{index}", "mountPath": mount_of[claim]}
+                                                       "volumeMounts": [{"name": f"v{index}", "mountPath": mount_of[claim],
+                                                                        "readOnly": not any(m["to"] == claim for m in moves)}
                                                                         for index, claim in enumerate(claims)]}],
                                        "volumes": [{"name": f"v{index}", "persistentVolumeClaim": {"claimName": claim}}
                                                    for index, claim in enumerate(claims)]}}},
@@ -176,70 +186,7 @@ def hold(dep):
     return wanted
 
 
-def _pods(ns, dep):
-    labels = ((dep.get("spec", {}) or {}).get("selector", {}) or {}).get("matchLabels", {}) or {}
-    if not labels:
-        return []
-    selector = urllib.parse.quote(",".join(f"{k}={v}" for k, v in sorted(labels.items())), safe="")
-    return kget(f"/api/v1/namespaces/{ns}/pods?labelSelector={selector}").get("items", [])
-
-
-def _release(ns, name, replicas):
-    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    dep["spec"]["replicas"] = replicas
-    dep["metadata"].setdefault("annotations", {}).pop(HELD, None)
-    ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
-
-
-def _failure(ns, job_name):
-    """The copy's last words, so a failure says why."""
-    try:
-        selector = urllib.parse.quote(f"job-name={job_name}", safe="")
-        pods = kget(f"/api/v1/namespaces/{ns}/pods?labelSelector={selector}").get("items", [])
-        if pods:
-            text = ktext(f"/api/v1/namespaces/{ns}/pods/{pods[0]['metadata']['name']}/log?tailLines=3")
-            return " ".join(str(text).split())[-240:]
-    except Exception:
-        pass
-    return ""
-
-
 def resolve(item):
-    """Advances a restructure one step, for the operations poll."""
-    ref = item["ref"]
-    ns, name, moves = ref["namespace"], ref["name"], ref.get("moves") or []
-    replicas = int(ref.get("replicas") or 0)
-    try:
-        dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return "failed", item.get("progress", 0), f"{name} no longer exists, so its data was not copied"
-        raise
-    phase = ref.get("phase") or "stopping"
-    if phase == "stopping":
-        running = _pods(ns, dep)
-        if running:
-            return "running", 10, f"Waiting for {name} to stop ({len(running)} pod{'s' if len(running) != 1 else ''} left)"
-        job_name, body = job(ns, name, moves)
-        ksend("POST", f"/apis/batch/v1/namespaces/{ns}/jobs", body)
-        ref.update(phase="copying", job=job_name)
-        return "running", 25, f"Copying {len(moves)} location{'s' if len(moves) != 1 else ''}"
-    if phase == "copying":
-        try:
-            status = kget(f"/apis/batch/v1/namespaces/{ns}/jobs/{ref['job']}").get("status", {}) or {}
-        except urllib.error.HTTPError as error:
-            if error.code == 404:
-                return ("failed", 25, f"The copy job went missing; {name} stays stopped. "
-                        "Its old volumes are untouched.")
-            raise
-        if status.get("succeeded"):
-            _release(ns, name, replicas)
-            ref.update(phase="done")
-            return ("succeeded", 100, f"Data copied; {name} is starting" if replicas
-                    else f"Data copied; {name} stays stopped, as it was set to")
-        if status.get("failed"):
-            why = _failure(ns, ref["job"])
-            return ("failed", 60, f"The copy failed, so {name} stays stopped and its old volumes are "
-                    f"untouched. Point the paths back, or fix and start it." + (f" Last output: {why}" if why else ""))
-        return "running", 40 if status.get("active") else 30, "Copying data" if status.get("active") else "Starting the copy"
-    return "succeeded", 100, item.get("message", "")
+    """Legacy records have no receipts: stop automation, preserve all data."""
+    from homestead_copy_job import legacy_status
+    return legacy_status(item)

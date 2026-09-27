@@ -106,14 +106,26 @@ resource version. Multi-object saves are not atomic: a later API failure can
 still leave a partially applied edit.
 
 Renames review conditional post-stop capacity, then recheck after the original
-pods have terminated (see below). Data-copy edits still use conditional preflight;
-copy-helper placement and capacity changes during a long copy are not simulated.
+pods have terminated (see below). Data-copy edits review both the temporary helper
+and the final workload, then check placement afresh before each starts. The app
+stays held at zero replicas until the confirmed copy Job completes and its pods
+exit. Changed workload, PVC, backing PV or helper identities stop the handoff.
+**Recent jobs → Inspect outcome** lets an admin release a verified inactive copy's
+hold after typing the workload name and acknowledging partial data. This does not
+start anything, undo mappings or delete volumes or Jobs. Unknown creation receipts
+require Kubernetes inspection; they are never adopted by name or replayed.
+Destination files can be overwritten or partially copied: take a backup first.
+Checks do not prove free filesystem space, application consistency, absence of
+external writers, or atomicity against changes made outside Homestead. Old
+`restructure` jobs without identity receipts stop for inspection; their legacy
+hold needs manual Kubernetes recovery after checking the copy and data. Finish upgrading
+all Homestead replicas before using the new flow.
 Paused Deployments cannot increase replicas through Edit until resumed and
 reviewed again. [Compose batches](Importing#batch-capacity-review) have a joint
 preflight and before-each-service recheck. [Manual host moves](#moving-between-hosts)
 also review the whole replacement pod and chosen destination before restarting.
 Image updates and rollback also review the complete rollout. Unraid/cross-cluster
-migration remain separate paths; extending the guard is planned. VM launches have
+migration remain separate paths; extending durable handoff coverage is planned. VM launches have
 their own [placement reviews](Virtual-machines).
 
 ### Renaming a workload

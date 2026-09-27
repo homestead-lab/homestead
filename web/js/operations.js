@@ -54,8 +54,8 @@ function renderOperations() {
       ${operation.power_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview('${esc(operation.id)}')">Inspect outcome</button>` : ""}
       ${operation.mutation_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview('${esc(operation.id)}',true)">Inspect ${operation.kind === "k3s-cluster" ? "batch" : "save"} outcome</button>` : ""}
       ${operation.resumable ? `<button class="btn sm pri" data-need="admin" data-tip="Run the steps that are left, from the one it stopped at" onclick="resumeOperation('${esc(operation.id)}')">Carry on</button>` : ""}
-      ${operation.cleanable ? `<button class="btn sm ${operation.tracking_only ? "" : "danger"}" data-need="admin" data-tip="${operation.tracking_only ? "Review retained resources before stopping tracking; nothing is deleted" : "Says what it left behind and what cleanup removes"}" onclick="cancelOperation('${esc(operation.id)}')">${operation.tracking_only ? "Review retained resources" : "Clean up"}</button>` : ""}
-      ${operation.cancellable ? `<button class="btn sm danger" data-need="operator" data-tip="Says what stopping it would undo and what it cannot, before anything changes" onclick="cancelOperation('${esc(operation.id)}')">${operation.rename_recovery ? "Inspect outcome" : operation.status === "cancelling" ? "Cancel again" : "Cancel"}</button>` : ""}
+      ${operation.cleanable ? `<button class="btn sm ${operation.tracking_only ? "" : "danger"}" data-need="admin" data-tip="${operation.tracking_only ? "Review retained resources and recovery choices; nothing is deleted" : "Says what it left behind and what cleanup removes"}" onclick="cancelOperation('${esc(operation.id)}')">${operation.tracking_only ? "Review retained resources" : "Clean up"}</button>` : ""}
+      ${operation.cancellable ? `<button class="btn sm danger" data-need="${operation.copy_recovery ? "admin" : "operator"}" data-tip="Reviews what can be stopped or recovered before anything changes" onclick="cancelOperation('${esc(operation.id)}')">${operation.rename_recovery || operation.copy_recovery ? "Inspect outcome" : operation.status === "cancelling" ? "Cancel again" : "Cancel"}</button>` : ""}
       ${operationActive(operation) || operation.dismissible === false ? "" : `<button class="btn sm" data-need="operator" onclick="dismissOperation('${esc(operation.id)}')">Dismiss</button>`}
     </div>
   </article>`).join("");
@@ -232,15 +232,15 @@ window.cancelOperation = async id => {
   const high = plan.severity === "high";
   const cleanup = plan.cleanup && plan.mode !== "forget";
   const body = !plan.can
-    ? `<div class="note warn"><b>It cannot be cancelled at this step.</b><div>${esc(plan.why_not || "")}</div></div>
+    ? `<div class="note warn"><b>${plan.copy_recovery ? "The copy hold cannot be released yet." : "It cannot be cancelled at this step."}</b><div>${esc(plan.why_not || "")}</div></div>
        <div class="row" style="margin-top:12px"><button class="btn" onclick="closeModal()">Close</button></div>`
-    : `<p>${esc(cleanup ? "This job failed part-way. Cleaning up removes what it left behind; the job stays in the list as failed."
+    : `<p>${esc(plan.lead || (cleanup ? "This job failed part-way. Cleaning up removes what it left behind; the job stays in the list as failed."
         : plan.cleanup ? "This job failed. Stopping tracking keeps its failed outcome and all retained resources. Nothing is deleted or stopped in the cluster."
-        : CANCEL_LEAD[plan.mode] || CANCEL_LEAD.stop)}</p>
+        : CANCEL_LEAD[plan.mode] || CANCEL_LEAD.stop))}</p>
       <div class="dim xs">${esc(plan.message || "")} · ${Math.round(plan.progress || 0)}% done</div>
       ${plan.undo.length ? `<div class="note ${high ? "warn" : ""}" style="margin-top:12px"><b>${cleanup ? "What cleaning up removes" : plan.mode === "rollback" ? "What cancelling puts back" : "What cancelling does"}</b>${list(plan.undo)}</div>` : ""}
-      ${plan.keeps.length ? `<div class="note" style="margin-top:10px"><b>${plan.mode === "forget" ? "What carries on" : "What stays as it is"}</b>${list(plan.keeps)}</div>` : ""}
-      ${plan.options.map(option => `<label class="switch" style="margin-top:12px"><input type="checkbox" data-cancel-option="${esc(option.id)}" ${option.default ? "checked" : ""}> ${esc(option.label)}</label>
+      ${plan.keeps.length ? `<div class="note" style="margin-top:10px"><b>${plan.mode === "forget" && !plan.copy_recovery ? "What carries on" : "What stays as it is"}</b>${list(plan.keeps)}</div>` : ""}
+      ${plan.options.map(option => `<label class="switch" style="margin-top:12px"><input type="checkbox" data-cancel-option="${esc(option.id)}" onchange="cancelOperationGate()" ${option.default ? "checked" : ""}> ${esc(option.label)}</label>
         ${option.detail ? `<div class="dim xs">${esc(option.detail)}</div>` : ""}`).join("")}
       ${plan.confirm ? `<div class="f" style="margin-top:12px"><label>Type <b class="mono">${esc(plan.confirm)}</b> to confirm</label>
         <input id="oc_confirm" autocomplete="off" oninput="cancelOperationGate()"></div>` : ""}
@@ -249,14 +249,15 @@ window.cancelOperation = async id => {
         <button class="btn ${high ? "danger" : "pri"}" id="oc_go" data-need="${esc(plan.needs || "operator")}" ${plan.confirm ? "disabled" : ""}
           onclick="cancelOperationGo('${esc(plan.id)}')">${esc(cleanup ? "Remove what it made" : plan.action)}</button>
         <button class="btn" onclick="closeModal()">${plan.mode === "forget" ? "Keep tracking" : plan.cleanup ? "Leave it" : "Keep it running"}</button></div>`;
-  modal(`${plan.mode === "forget" ? "Stop tracking" : cleanup ? "Clean up" : "Cancel"} · ${plan.title}`, body, false, "operation-review");
+  modal(`${plan.copy_recovery ? "Inspect storage copy" : plan.mode === "forget" ? "Stop tracking" : cleanup ? "Clean up" : "Cancel"} · ${plan.title}`, body, false, "operation-review");
   window.__cancelPlan = plan;
   if (window.applyRole) window.applyRole();
 };
 window.cancelOperationGate = () => {
   const plan = window.__cancelPlan || {};
   const go = $("#oc_go");
-  if (go) go.disabled = !!plan.confirm && ($("#oc_confirm")?.value || "").trim() !== plan.confirm;
+  if (go) go.disabled = (!!plan.confirm && ($("#oc_confirm")?.value || "").trim() !== plan.confirm) ||
+    (!!plan.copy_recovery && !$("[data-cancel-option='ack']")?.checked);
 };
 window.cancelOperationGo = async id => {
   const plan = window.__cancelPlan || {};
@@ -264,8 +265,9 @@ window.cancelOperationGo = async id => {
   if (plan.confirm && confirm !== plan.confirm) return toast(`type ${plan.confirm} exactly to confirm`, "bad");
   const options = Object.fromEntries([...document.querySelectorAll("[data-cancel-option]")]
     .map(box => [box.dataset.cancelOption, box.checked]));
+  if (plan.copy_recovery && !options.ack) return toast("Check the storage and acknowledge partial data first", "bad");
   const go = $("#oc_go");
-  if (go) { go.disabled = true; go.textContent = "Cancelling…"; }
+  if (go) { go.disabled = true; go.textContent = plan.copy_recovery ? "Releasing hold…" : "Cancelling…"; }
   try {
     const result = await api("/api/operations/cancel", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id, options, confirm }) });

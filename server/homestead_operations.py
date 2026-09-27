@@ -174,8 +174,12 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
 
 
 def _vm_targets(kind, ref):
-    if kind == "workload-rename":
-        return {(ref.get("namespace"), "deployment/" + name) for name in (ref.get("name"), ref.get("new_name")) if name}
+    if kind in ("workload-rename", "workload-copy"):
+        targets = {(ref.get("namespace"), "deployment/" + name) for name in (ref.get("name"), ref.get("new_name")) if name}
+        if kind == "workload-copy":
+            targets |= {(ref.get("namespace"), "pvc/" + move[key]) for move in ref.get("moves", [])
+                        for key in ("from", "to") if move.get(key)}
+        return targets
     names = [row.get("name") for row in ref.get("nodes", [])] if kind == "k3s-cluster" else [ref.get("name")]
     return {(ref.get("namespace"), name) for name in names if name}
 
@@ -191,6 +195,21 @@ def record_phase(operation_id, phase, progress, message, **ref_updates):
         _finish(item, "failed" if phase == "failed" else "running", progress, message)
         _write(items)
         return _public(item)
+
+
+def checkpoint(item):
+    """Durably save a resolver's intent before its single upstream write.
+
+    Resolvers run under the shared operations lock. Re-read disk so earlier
+    checkpoints survive even if a later resolver or final history write fails.
+    """
+    with _lock:
+        items = _read()
+        index = next(i for i, row in enumerate(items) if row["id"] == item["id"])
+        if items[index]["status"] in TERMINAL or items[index]["status"] == CANCELLING:
+            raise ValueError("Job has ended; refusing further actions")
+        items[index] = json.loads(json.dumps(item))
+        _write(items)
 
 
 def _public(item):
@@ -219,6 +238,9 @@ def _public(item):
     if item.get("kind") == "workload-rename":
         out["tracking_only"] = True
         out["rename_recovery"] = True
+    if item.get("kind") in ("workload-copy", "restructure"):
+        out["tracking_only"] = True
+        out["copy_recovery"] = True
     if item.get("kind") == "k3s-cluster" and item.get("ref", {}).get("retain_resources") and item["ref"].get("phase") == "provisioning":
         out["cancellable"] = False  # synchronous dispatch may still be in flight
     check = RESUMABLE.get(item.get("kind"))
@@ -702,7 +724,7 @@ CLEANUPS = set()
 def _cleanable(item):
     return (item.get("status") == "failed" and item.get("kind") in CLEANUPS and not item.get("cleaned")
             and not item.get("tracking_stopped")
-            and (item.get("kind") in ("k3s-cluster", "workload-rename") or not item.get("ref", {}).get("retain_resources")))
+            and (item.get("kind") in ("k3s-cluster", "workload-rename", "workload-copy", "restructure") or not item.get("ref", {}).get("retain_resources")))
 MODES = {"rollback": "Cancel and put back", "stop": "Cancel it", "forget": "Stop tracking it"}
 
 

@@ -96,6 +96,42 @@ class EditCapacityTests(unittest.TestCase):
         create.assert_not_called()
         self.assertEqual("ReadWriteMany", prepared["claims"][0]["access_mode"])
 
+    def copy_config(self):
+        fixtures.RolloutCapacityTests.claim(self)
+        self.objects["/apis/autoscaling/v2/namespaces/lab/horizontalpodautoscalers"] = {"items": []}
+        spec = self.current["spec"]["template"]["spec"]
+        spec["containers"][0]["volumeMounts"] = [{"name": "data", "mountPath": "/data"}]
+        self.config["containers"][0]["volumes"] = [{"kind": "existing", "source": "data", "sub_path": "moved",
+            "path": "/data", "copy_from": {"claim": "data"}}]
+
+    def test_copy_preview_includes_helper_without_writes(self):
+        self.copy_config()
+        result, send, create, icons = self.call("/api/edit/preview", self.config)
+        self.assertEqual(200, result[0], result)
+        self.assertIn("copy_helper", result[1]["capacity"])
+        self.assertTrue(result[1]["capacity"]["requires_confirmation"])
+        self.assertEqual(.06, result[1]["capacity"]["copy_helper"]["pod_request_gb"])
+        for target in (send, create, icons):
+            target.assert_not_called()
+
+    def test_copy_dispatch_does_not_use_ordinary_edit_before_journal(self):
+        self.copy_config()
+        config = self.reviewed()
+        with mock.patch.object(server.COPY_JOB, "start", return_value={"ok": True}) as start:
+            result, send, create, icons = self.call("/api/edit", config)
+        self.assertEqual(200, result[0], result)
+        start.assert_called_once()
+        for target in (send, create, icons):
+            target.assert_not_called()
+
+    def test_copy_refuses_unrelated_source_before_writes(self):
+        self.copy_config()
+        self.config["containers"][0]["volumes"][0]["copy_from"]["claim"] = "someone-elses-data"
+        result, send, create, icons = self.call("/api/edit/preview", self.config)
+        self.assertEqual(400, result[0], result)
+        for target in (send, create, icons):
+            target.assert_not_called()
+
     def test_seed_preview_does_not_write_and_seed_version_binds_review(self):
         spec = self.current["spec"]["template"]["spec"]
         spec["initContainers"] = [{"name": "seed", "volumeMounts": [{"name": "seed", "mountPath": "/src"}]}]
