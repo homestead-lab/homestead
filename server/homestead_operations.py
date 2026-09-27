@@ -258,6 +258,8 @@ def _receipt_needed(item):
     if not POWER_RECEIPTS.protected(item.get("kind"), item.get("ref") or {}):
         return False
     ref = item.get("ref") or {}
+    if item.get("kind") == "import-create" and item.get("status") == "succeeded" and ref.get("job_uid") and not ref.get("helper_removed"):
+        return True  # completed helper cleanup still needs its exact receipt
     return bool(ref.get("retain_resources") or float(ref.get("review_expires") or 0) >= time.time())
 
 

@@ -77,6 +77,7 @@ successfully finished helper, using its UID as a deletion precondition. It first
 preserves completion on the matching workload. The application, Services and every
 volume remain, including newly created and borrowed claims. Manage unwanted resources
 separately after inspection. Incomplete imports cannot use this cleanup shortcut.
+The tracking receipt stays protected from history clearing until the helper is removed.
 Older imports retain their legacy cleanup choices; borrowed claims are never offered
 for deletion there. Do not delete Jobs or remove holds to bypass verification.
 

@@ -203,7 +203,8 @@ def remove_completed_job(ns, name, job, read, send, ops):
     if not ident:
         raise ValueError("Import Job identity is missing or replaced; inspect Recent jobs. Nothing was deleted.")
     with LOCKS.worker_lock(ident, ops, timeout=0), ops._lock:
-        item = next((i for i in ops._read() if i["id"] == ident and i["kind"] == KIND), None)
+        items = ops._read()
+        item = next((i for i in items if i["id"] == ident and i["kind"] == KIND), None)
         if not item or item.get("status") != "succeeded" or item["ref"].get("retain_resources"):
             raise ValueError("Wait for a verified successful import before removing its Job. Inspect incomplete imports in Recent jobs; all data is retained.")
         ref = item["ref"]
@@ -236,5 +237,7 @@ def remove_completed_job(ns, name, job, read, send, ops):
                 send("PUT", path, dep)
         send("DELETE", f"/apis/batch/v1/namespaces/{ns}/jobs/{name}",
              {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": ref["job_uid"]}, "propagationPolicy": "Background"})
+        ref["helper_removed"] = True
+        ops._write(items)
     return {"ok": True, "journalled": True, "name": name, "pods_removed": [], "prepulls_removed": [],
             "message": "Completed import Job removed; workload and all volumes retained"}

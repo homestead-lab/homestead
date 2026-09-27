@@ -281,6 +281,8 @@ class ImportJobTests(unittest.TestCase):
 
     def test_completed_cleanup_only_deletes_uid_pinned_job_and_retains_borrowed_pvc(self):
         self.borrowed(); self.start(); self.complete(); self.poll()
+        with mock.patch.object(ops.time, "time", return_value=int(self.body["capacity_token"].split(".")[0]) + 1):
+            self.assertFalse(ops._public(self.item())["dismissible"])
         before = copy.deepcopy(self.objects[self.pvc_path])
         self.assertTrue(imports.import_cleanup_plan("homestead-import-app")["journalled"])
         result = imports.delete_import("homestead-import-app")
@@ -291,6 +293,8 @@ class ImportJobTests(unittest.TestCase):
         self.assertEqual(self.job_path, deletes[0][1])
         self.assertEqual("Job-uid", deletes[0][2]["preconditions"]["uid"])
         self.assertEqual("", guard.pending(self.objects[self.dep_path], "lab", self.read))
+        with mock.patch.object(ops.time, "time", return_value=int(self.body["capacity_token"].split(".")[0]) + 1):
+            self.assertTrue(ops._public(self.item())["dismissible"])
 
     def test_active_missing_or_replaced_job_never_falls_back_to_name_cleanup(self):
         self.start()
