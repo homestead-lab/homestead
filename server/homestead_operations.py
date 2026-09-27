@@ -21,6 +21,7 @@ deployment_progress = None
 smart_progress = None
 DATA_DIR = "/data"
 STORE = "operations.json"
+STORE_MARKER = ".operations-initialized.json"
 MAX_OPERATIONS = 100
 TERMINAL = {"succeeded", "failed", "cancelled"}
 # A cancel that has begun and not yet finished. The poll leaves such a job
@@ -30,7 +31,7 @@ CANCELLING = "cancelling"
 # again after this long; every canceller's steps are safe to repeat.
 CANCEL_RETRY_AFTER = 120
 # Shared with any other Homestead replica on the same data volume.
-_lock = SHARED.SharedLock("operations")
+_lock = SHARED.SharedLock("operations", strict=True, directory=lambda: DATA_DIR)
 
 
 def bind(_kget, data_dir, _deployment_progress, _smart_progress=None):
@@ -47,30 +48,52 @@ def _store_path():
     return os.path.join(DATA_DIR, STORE)
 
 
+def _initialized():
+    try:
+        with open(os.path.join(DATA_DIR, STORE_MARKER), encoding="utf-8") as handle:
+            value = json.load(handle)
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError) as error:
+        raise ValueError("Job history initialization could not be verified; recover store access before changing jobs") from error
+    if value != {"version": 1}:
+        raise ValueError("Job history initialization marker is invalid; recover the store before changing jobs")
+    return True
+
+
 def _read():
+    initialized = _initialized()
     try:
         with open(_store_path(), encoding="utf-8") as handle:
             value = json.load(handle)
-        return value if isinstance(value, list) else []
-    except (OSError, ValueError, TypeError):
-        return []
+    except FileNotFoundError:
+        if not initialized:
+            return []
+        raise ValueError("Previously initialized job history is missing. Recover the store before changing jobs; missing history is not an empty queue.")
+    except (OSError, ValueError, TypeError) as error:
+        raise ValueError("Job history could not be read safely. Restore access or recover the store before starting or changing jobs; existing records were not replaced.") from error
+    if (not isinstance(value, list) or any(not isinstance(item, dict) or not isinstance(item.get("id"), str)
+            or not item["id"] or not isinstance(item.get("ref"), dict) or not isinstance(item.get("status"), str)
+            for item in value) or len({item["id"] for item in value}) != len(value)):
+        raise ValueError("Job history has invalid records. Recover the store before starting or changing jobs; existing records were not replaced.")
+    return value
 
 
 def _write(items):
+    initialized = _initialized()
     os.makedirs(DATA_DIR, exist_ok=True)
     path = _store_path()
-    tmp = SHARED.temporary(path)
     # A busy history must not evict an in-flight dispatch intent or a failed
     # batch's recovery record. Bound ordinary terminal history, not active work.
     protected = {i for i, item in enumerate(items) if item.get("status") not in TERMINAL or
                  (item.get("status") == "failed" and item.get("ref", {}).get("retain_resources"))}
     recent = [i for i in range(len(items)) if i not in protected][-MAX_OPERATIONS:]
     kept = protected | set(recent)
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump([item for i, item in enumerate(items) if i in kept], handle, separators=(",", ":"))
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(tmp, path)
+    SHARED.write_json(path, [item for i, item in enumerate(items) if i in kept], durable=True, separators=(",", ":"))
+    # A later missing file is not a new installation. Publish the marker before
+    # returning permission to perform the mutation the journal precedes.
+    if not initialized:
+        SHARED.write_json(os.path.join(DATA_DIR, STORE_MARKER), {"version": 1}, durable=True)
 
 
 def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):

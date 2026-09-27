@@ -664,6 +664,21 @@ written through temporary files of their own. Sign-ins are signed tokens, so
 any copy accepts them. Updates roll one copy at a time, so an update no
 longer takes Homestead away either.
 
+Job-history writes require a working shared filesystem lock; lock failures do
+not fall back to a process-local lock. On Linux, Homestead flushes the file and
+its replacement directory entry before acknowledging the journal write. A corrupt,
+unreadable or unexpectedly missing job store stops job changes instead of being
+treated as an empty queue. The persistent `.operations-initialized.json` marker
+distinguishes a new installation from a lost `operations.json` file.
+
+If job-history access fails, restore the data-volume connection and permissions
+first. Preserve `operations.json`, its initialization marker and any temporary
+files for recovery; do not delete them to make a failed action retry. Inspect the
+actual cluster resources before restoring a consistent backup of the job store.
+These checks protect the journal, but do not make Kubernetes mutations atomic or
+prove cross-node locking/failover on a particular storage backend. Validate that
+behavior on disposable resources before relying on a custom RWX backend.
+
 Copies on different nodes all mount Homestead's data claim, so more than one
 copy needs a claim every node can mount: ReadWriteMany on a class Longhorn
 serves through its share manager. A migratable class - Harvester's own and
