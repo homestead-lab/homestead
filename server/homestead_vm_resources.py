@@ -13,6 +13,7 @@ import homestead_pod_resources as RESOURCES
 import homestead_vm_network as NETWORK
 import homestead_vm_support as SUPPORT
 import homestead_vm_cpu as CPU
+import homestead_vm_security as SECURITY
 
 MIB = 1024**2
 
@@ -107,8 +108,9 @@ def project(vm, configuration=None, *, expanded_spec=None, read=None, kubevirt_v
     cpu, memory, devices = (domain.get(key) or {} for key in ("cpu", "memory", "devices"))
     network = NETWORK.evidence(spec, vm["metadata"]["namespace"], config, read)
     support = SUPPORT.project(vm, spec, config, network, read)
-    blockers.extend(network["blockers"] + support["blockers"])
-    warnings.extend(network["warnings"] + support["warnings"])
+    security = SECURITY.evidence(spec, config, kubevirt_version)
+    blockers.extend(network["blockers"] + support["blockers"] + security["blockers"])
+    warnings.extend(network["warnings"] + support["warnings"] + security["warnings"])
     resources = domain.get("resources") or {}
     requests, limits = resources.get("requests") or {}, resources.get("limits") or {}
     cpu_model = CPU.project(vm, spec, config, kubevirt_version)
@@ -169,6 +171,8 @@ def project(vm, configuration=None, *, expanded_spec=None, read=None, kubevirt_v
     select("kubevirt.io/schedulable", "true")
     if spec.get("architecture"):
         select("kubernetes.io/arch", spec["architecture"])
+    for key, value in security["selectors"].items():
+        select(key, value)
     if dedicated:
         select("cpumanager", "true")
     model = cpu.get("model") or config.get("cpuModel")
@@ -194,8 +198,8 @@ def project(vm, configuration=None, *, expanded_spec=None, read=None, kubevirt_v
         projected_requests[resource] = str(max(count, int(projected_requests.get(resource, "0"))))
     if devices.get("autoattachVSOCK") is True:
         projected_requests["devices.kubevirt.io/vhost-vsock"] = "1"
-    if "sev" in (domain.get("launchSecurity") or {}):
-        projected_requests["devices.kubevirt.io/sev"] = "1"
+    for resource, count in security["requests"].items():
+        projected_requests[resource] = str(max(count, int(projected_requests.get(resource, "0"))))
     if any((disk.get("lun") or {}).get("reservation") is True for disk in devices.get("disks") or []):
         projected_requests["devices.kubevirt.io/pr-helper"] = "1"
     permitted = config.get("permittedHostDevices")
@@ -214,8 +218,8 @@ def project(vm, configuration=None, *, expanded_spec=None, read=None, kubevirt_v
             blockers.append("VM passthrough device resource name is unresolved")
     for resource, count in device_counts.items():
         projected_requests[resource] = str(max(count, int(projected_requests.get(resource, "0"))))
-    if cpu.get("numa") or domain.get("launchSecurity") or spec.get("resourceClaims"):
-        warnings.append("NUMA locality, confidential-compute policy and dynamic-device allocation still need additional host admission")
+    if cpu.get("numa") or spec.get("resourceClaims"):
+        warnings.append("NUMA locality and dynamic-device allocation still need additional host admission")
     if domain.get("ioThreadsPolicy") and not cpu_model["io_threads"]:
         warnings.append("IO-thread topology adds runtime overhead beyond this planning estimate")
     extra = support["extra_memory"]

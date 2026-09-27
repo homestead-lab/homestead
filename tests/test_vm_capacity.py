@@ -49,6 +49,30 @@ class VMCapacityTests(unittest.TestCase):
         self.assertEqual(320.5, unknown["pod_cpu_request_percent"])
         self.assertTrue(unknown["vm"]["cpu_request_is_estimate"])
 
+    def encrypted(self):
+        spec = self.vm["spec"]["template"]["spec"]
+        spec["architecture"] = "amd64"
+        spec["domain"].update(launchSecurity={"snp": {}}, firmware={"bootloader": {"efi": {"secureBoot": False}}})
+        self.config["status"] = {"observedKubeVirtVersion": "v1.9.0"}
+        self.nodes[0]["labels"].update({"kubernetes.io/arch": "amd64", "kubevirt.io/sev": "true", "kubevirt.io/sev-snp": "true"})
+        self.nodes[0]["allocatable"]["devices.kubevirt.io/sev"] = "1"
+
+    def test_encryption_requires_both_capability_labels_and_unused_device(self):
+        self.encrypted()
+        self.assertFalse(self.plan()["blocked"])
+        self.nodes[0]["labels"].pop("kubevirt.io/sev-snp")
+        self.assertTrue(self.plan()["blocked"])
+        self.nodes[0]["labels"]["kubevirt.io/sev-snp"] = "true"
+        self.pods.append({"metadata": {"name": "other", "namespace": "lab"}, "spec": {
+            "nodeName": "node1", "containers": [{"resources": {"requests": {"devices.kubevirt.io/sev": "1"}}}]},
+            "status": {"phase": "Running"}})
+        self.assertTrue(self.plan()["blocked"])
+
+    def test_upgrade_does_not_guess_encryption_policy(self):
+        self.encrypted()
+        self.config["status"]["targetKubeVirtVersion"] = "v1.10.0"
+        self.assertIn("Encrypted-guest policy is unverified", str(self.plan()["blockers"]))
+
     def disk(self, phase="Bound", dv=False):
         self.vm["spec"]["template"]["spec"]["volumes"] = [{"name": "root", **({"dataVolume": {"name": "root"}} if dv else {"persistentVolumeClaim": {"claimName": "root"}})}]
         self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/root"] = {

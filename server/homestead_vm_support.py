@@ -110,7 +110,8 @@ def project(vm, spec, config, network, read=None):
         extras += (100 + 10 * exec_probes) * MIB
     if devices.get("gpus") or devices.get("hostDevices") or any("sriov" in iface for iface in devices.get("interfaces") or []):
         extras += 1024 * MIB
-    if "sev" in (domain.get("launchSecurity") or {}):
+    security = domain.get("launchSecurity")
+    if isinstance(security, dict) and any(security.get(mode) is not None for mode in ("sev", "snp")):
         extras += 256 * MIB
     if devices.get("tpm") is not None:
         extras += 53 * MIB

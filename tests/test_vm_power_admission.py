@@ -16,6 +16,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
     disk = fixtures.VMCapacityTests.disk
     persistent_state = fixtures.VMCapacityTests.persistent_state
     fresh_state = fixtures.VMCapacityTests.fresh_state
+    encrypted = fixtures.VMCapacityTests.encrypted
 
     def setUp(self):
         fixtures.VMCapacityTests.setUp(self)
@@ -91,6 +92,40 @@ class VMPowerAdmissionTests(unittest.TestCase):
         result, writes = self.call("/api/vm/power", signed)
         self.assertEqual(409, result[0])
         writes.assert_not_called()
+
+    def test_encryption_hardware_cannot_be_overridden_by_capacity_ack(self):
+        self.encrypted()
+        self.nodes[0]["labels"].pop("kubevirt.io/sev-snp")
+        result, writes = self.call("/api/vm/power", self.reviewed())
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+        self.assertFalse(server.OPS._read())
+
+    def test_encryption_gate_change_after_review_does_not_send_power(self):
+        self.encrypted()
+        signed = self.reviewed()
+        self.config["spec"]["configuration"]["developerConfiguration"] = {"disabledFeatureGates": ["WorkloadEncryptionSEV"]}
+        self.config["metadata"]["resourceVersion"] = "2"
+        result, writes = self.call("/api/vm/power", signed)
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+        self.assertFalse(server.OPS._read())
+
+    def test_encryption_device_disappearing_after_review_never_dispatches(self):
+        self.encrypted()
+        signed = self.reviewed()
+        self.nodes[0]["allocatable"]["devices.kubevirt.io/sev"] = "0"
+        result, writes = self.call("/api/vm/power", signed)
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+        self.assertFalse(server.OPS._read())
+
+    def test_supported_encrypted_guest_uses_normal_one_shot_power_journal(self):
+        self.encrypted()
+        result, writes = self.call("/api/vm/power", self.reviewed())
+        self.assertEqual(200, result[0], result)
+        writes.assert_called_once_with("PUT", "/apis/subresources.kubevirt.io/v1/namespaces/lab/virtualmachines/guest/start", {})
+        self.assertEqual(1, len(server.OPS._read()))
 
     def test_persistent_state_replacement_after_review_never_sends_power(self):
         pvc = self.persistent_state()
