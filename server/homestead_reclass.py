@@ -511,7 +511,7 @@ def _stop(ns, ref, send=None, *, cleanup=True):
         c["stopped"] = True
 
 
-def journaled_stop(item, checkpoint):
+def journaled_stop(item, checkpoint, *, journal_factory=JOURNAL.Journal):
     """New handoff's stop stage; not enabled until its later stages are wired.
 
     Re-entering a confirmed step only verifies its receipt. An interrupted write
@@ -519,7 +519,7 @@ def journaled_stop(item, checkpoint):
     evidence that a particular Kubernetes object was changed.
     """
     ref = item["ref"]
-    writer = JOURNAL.Journal(item, kget, ksend, checkpoint)
+    writer = journal_factory(item, kget, ksend, checkpoint)
     writer.check()
     # Check every retention policy before even closing a helper. A policy change
     # must not first be discovered after another workload has already stopped.

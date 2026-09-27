@@ -15,6 +15,13 @@ class Held(ValueError):
     """Public, credential-free reason to inspect the retained storage operation."""
 
 
+class NextWrite(Held):
+    """Read-only inspection reached a verified next write; nothing was sent."""
+    def __init__(self, step, method, target, before, payload):
+        super().__init__("Next storage step is ready for review")
+        self.plan = {"step": step, "method": method, "target": target, "before": before, "payload": payload}
+
+
 NAME = r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?"
 PATH = re.compile(rf"^/(?:api/(v1)|apis/([a-z0-9.]+/[a-z0-9]+))/(?:namespaces/({NAME})/)?([a-z]+)(?:/({NAME}))?$")
 KINDS = {
@@ -89,10 +96,11 @@ def _payload(body):
 
 
 class Journal:
-    def __init__(self, item, read, send, checkpoint):
+    def __init__(self, item, read, send, checkpoint, *, preview=False):
         self.item, self.read, self.send, self.checkpoint = item, read, send, checkpoint
         self.ref = item["ref"]
         self.failed = False
+        self.preview = preview
         self.entries = self.ref.setdefault("storage_writes", [])
         if (not isinstance(self.entries, list) or any(not isinstance(e, dict) or not isinstance(e.get("step"), str) for e in self.entries)
                 or len({e["step"] for e in self.entries}) != len(self.entries)):
@@ -193,6 +201,10 @@ class Journal:
             request["preconditions"] = before
         event = {"step": step, "method": method, "target": dest, "payload": fingerprint,
                  "before": before, "state": "intent"}
+        if self.preview:
+            # All validation above still runs. No intent, durable save or API
+            # dispatch may occur in an inspector's request-local journal.
+            raise NextWrite(step, method, dest, before, fingerprint)
         self.entries.append(event)
         self._save()  # must reach durable storage before the API call
         try:

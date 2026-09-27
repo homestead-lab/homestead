@@ -151,14 +151,14 @@ def _owned(pod, uid):
                for o in pod.get("metadata", {}).get("ownerReferences", []))
 
 
-def copy_stage(item, checkpoint, admission):
+def copy_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journal):
     """Make and observe the copy; never stop, roll back or restart on failure.
 
     Called only after journaled_stop. The caller owns the operations lock and
     turns Held into an inspectable recovery hold, not an automatic retry.
     """
     ref = item["ref"]
-    writer = JOURNAL.Journal(item, RC.kget, RC.ksend, checkpoint)
+    writer = journal_factory(item, RC.kget, RC.ksend, checkpoint)
     writer.check()
     if not quiescent(item, writer):
         return "running", 8, "Waiting for workload controllers to finish stopping before copying"
@@ -301,7 +301,7 @@ def _claim_for_cutover(item, writer, name, original_uid, delete_step, create_ste
     return obj
 
 
-def cutover_stage(item, checkpoint, admission):
+def cutover_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journal):
     """One fenced cutover write per poll. Retain both PVs before removing claims.
 
     A replacement claim is explicitly prebound; the copied PV is never made
@@ -311,7 +311,7 @@ def cutover_stage(item, checkpoint, admission):
     restart admission must run again after binding and immediately before launch.
     """
     ref = item["ref"]
-    writer = JOURNAL.Journal(item, RC.kget, RC.ksend, checkpoint)
+    writer = journal_factory(item, RC.kget, RC.ksend, checkpoint)
     writer.check()
     if not quiescent(item, writer):
         return "running", 75, "Waiting for workload controllers to finish stopping before cutover"
@@ -490,7 +490,7 @@ def _started_owner(pod, item):
     return False
 
 
-def restart_stage(item, checkpoint, admission):
+def restart_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journal):
     """Restore one controller per poll, with batch admission and no rollback.
 
     The admission callback must account for all remaining proposed workloads and
@@ -498,7 +498,7 @@ def restart_stage(item, checkpoint, admission):
     the first application may already have written to the new copy.
     """
     ref = item["ref"]
-    writer = JOURNAL.Journal(item, RC.kget, RC.ksend, checkpoint)
+    writer = journal_factory(item, RC.kget, RC.ksend, checkpoint)
     writer.check()
     bound_destination(item, writer)
     expected = {(c["kind"], c["name"]) for c in ref["consumers"]}

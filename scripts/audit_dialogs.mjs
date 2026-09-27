@@ -15,12 +15,16 @@ const output = "release-assets/dialogs";
 await mkdir(output, { recursive: true });
 const base = (process.env.HOMESTEAD_URL || "http://127.0.0.1:4173") + "/?demo=1";
 const only = process.argv[2] || "";
+const theme = process.env.HOMESTEAD_AUDIT_THEME === "light" ? "light" : "dark";
 
 // name, the page to open first, then the steps: JavaScript to run, or
 // "click:<fn>" (the first control whose onclick calls fn), or "text:<label>"
 // (the first button in the dialog with that label).
 const DIALOGS = [
   ["change-password", "dash", "pwChange()"],
+  ["storage-recovery-ready", "storage", "window.__demoStorageState='ready';storageRecoveryReview('op4')"],
+  ["storage-recovery-running", "storage", "window.__demoStorageState='running';storageRecoveryReview('op4')"],
+  ["storage-recovery-uncertain", "storage", "window.__demoStorageState='uncertain';storageRecoveryReview('op4')"],
   ["users", "settings", "manageUsers()"],
   ["compose-import", "workloads", "composeImport()"],
   ["move-workload", "workloads", "moveWorkload('frigate','lab')"],
@@ -113,9 +117,9 @@ for (const [label, width, height, mobile] of [["desktop", 1440, 900, false], ["m
   page.on("dialog", (dialog) => dialog.accept());
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.addInitScript(() => {
-    localStorage.setItem("homestead.settings", JSON.stringify({ theme: "dark", bg: "soft", blur: 26, motion: "off", refresh: 60 }));
-  });
+  await page.addInitScript(theme => {
+    localStorage.setItem("homestead.settings", JSON.stringify({ theme, bg: "soft", blur: 26, motion: "off", refresh: 60 }));
+  }, theme);
   await page.goto(base, { waitUntil: "networkidle" });
   await page.locator("#views .phead").waitFor();
   await page.evaluate(() => document.fonts.ready);

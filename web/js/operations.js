@@ -52,6 +52,7 @@ function renderOperations() {
       <button class="btn sm" onclick="openOperation('${esc(operation.href || "/")}','${esc(operation.id || "")}')">Open</button>
       <button class="btn sm" data-tip="Every step it has taken, and the output of what does its work" onclick="operationLog('${esc(operation.id)}')">${icon("log")}Log</button>
       ${operation.power_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview('${esc(operation.id)}')">Inspect outcome</button>` : ""}
+      ${operation.storage_recovery ? `<button class="btn sm" data-need="admin" onclick="storageRecoveryReview('${esc(operation.id)}')">Review storage move</button>` : ""}
       ${operation.mutation_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview('${esc(operation.id)}',${operation.kind === 'import-create' ? "'import'" : 'true'})">Inspect ${operation.kind === "k3s-cluster" ? "batch" : operation.kind === "import-create" ? "import" : "save"} outcome</button>` : ""}
       ${operation.resumable ? `<button class="btn sm pri" data-need="admin" data-tip="Run the steps that are left, from the one it stopped at" onclick="resumeOperation('${esc(operation.id)}')">Carry on</button>` : ""}
       ${operation.cleanable ? `<button class="btn sm ${operation.tracking_only ? "" : "danger"}" data-need="admin" data-tip="${operation.tracking_only ? "Review retained resources and recovery choices; nothing is deleted" : "Says what it left behind and what cleanup removes"}" onclick="cancelOperation('${esc(operation.id)}')">${operation.tracking_only ? "Review retained resources" : "Clean up"}</button>` : ""}
@@ -149,6 +150,67 @@ window.resumeOperation = async id => {
     refreshOperations(true);
     if (op?.kind === "reclass" && window.reclassWatch) reclassWatch(id);
   } catch (e) { toast(e.message, "bad"); }
+};
+
+let STORAGE_RECOVERY = null, STORAGE_RECOVERY_SEQ = 0, STORAGE_RECOVERY_BUSY = false;
+window.storageRecoveryReview = async id => {
+  if (STORAGE_RECOVERY_BUSY) return;
+  clearInterval(window.__reclassTimer); window.__reclassWatchToken = null;
+  STORAGE_RECOVERY = null;
+  const sequence = ++STORAGE_RECOVERY_SEQ;
+  modal("Review storage move", '<div id="storageRecoveryContent"><div class="empty"><span class="spin2"></span>Checking this move…</div></div>', true, "operation-review");
+  const host = $("#storageRecoveryContent");
+  try {
+    const response = await api("/api/operations/storage-recovery/preview", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
+    if (sequence !== STORAGE_RECOVERY_SEQ || $("#storageRecoveryContent") !== host) return;
+    const p = response.plan, tokens = response.tokens || {};
+    if (!p || p.id !== id || typeof p.can_continue !== "boolean" || typeof p.can_pause !== "boolean" ||
+        !Array.isArray(p.resources) || !Array.isArray(p.warnings) || !Array.isArray(p.blockers) ||
+        (p.can_continue && !tokens.continue) || (p.can_pause && !tokens.pause)) throw new Error("The review is incomplete. Refresh it before taking action.");
+    const action = p.can_continue ? "continue" : p.can_pause ? "pause" : null;
+    STORAGE_RECOVERY = {id, action, tokens, host};
+    const phases = {stop:"Stopping workloads",copy:"Copying and checking",cutover:"Switching storage",restart:"Restarting workloads",done:"Complete"};
+    const leads = {stop:"Continue stopping the affected workloads before copying their data.",
+      copy:"Continue copying and checking the data. Workloads remain stopped during the copy.",
+      cutover:"Switch the verified copy into place. Restarting workloads gets its own capacity review.",
+      restart:"Restart workloads on the copied volume after fresh capacity checks. The original data is retained."};
+    const issues = p.blockers.length ? p.blockers : p.warnings;
+    const writeNames = {accepted:"Confirmed",intent:"No receipt",uncertain:"Response lost",unverified:"Unverified receipt",refused:"Rejected"};
+    host.innerHTML = UI.lead(action === "continue" ? leads[p.phase] || "Continue from the confirmed steps after fresh safety checks." :
+      action === "pause" ? "Pause the next steps without deleting data or rolling back. A copy job already running can still finish." :
+      "This move needs inspection before it can continue. Its workloads and data have been left in place.") +
+      (issues.length ? UI.callout(p.blockers.length ? "bad" : "warn", p.blockers.length ? "Needs attention" : "Before you continue", `<ul>${issues.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`) : "") +
+      UI.facts([["Volume",esc(p.claim)],["Stage",esc(phases[p.phase] || p.phase)],["Storage",`${esc(p.from_class || "—")} → ${esc(p.to_class || "—")}`]]) +
+      UI.section("Current position", `<p>${esc(p.message || "Waiting for the next step")}</p>`) +
+      UI.more("Workloads and retained resources", UI.table(["Workload","Type"], (p.workloads || []).map(c=>[esc(c.name),esc(c.kind)])) +
+        UI.table(["Resource","Last request","Observed now"], p.resources.map(r=>[esc(r.resource?.name || "—"),esc(writeNames[r.receipt] || r.receipt),esc(r.relationship)]))) +
+      (action ? UI.ack("storageRecoveryAck", action === "continue" ? "I approve continuing with the warnings shown above." : "I understand that pausing does not stop an already running copy.", {onchange:"storageRecoveryReady()"}) : "") +
+      UI.actions(UI.cancel("Close") + UI.button("Refresh review", `storageRecoveryReview('${esc(id)}')`) +
+        (action ? UI.button(action === "continue" ? "Continue move" : "Pause move", "storageRecoveryApply()", {kind:"pri",id:"storageRecoveryApply",disabled:true}) : ""));
+  } catch (error) {
+    if (sequence === STORAGE_RECOVERY_SEQ && $("#storageRecoveryContent") === host)
+      host.innerHTML = UI.callout("bad","Review unavailable",esc(error.message)) + UI.actions(UI.cancel("Close"));
+  }
+};
+window.storageRecoveryReady = () => {
+  const ready = !!(STORAGE_RECOVERY?.action && $("#storageRecoveryAck")?.checked && !STORAGE_RECOVERY_BUSY);
+  if ($("#storageRecoveryApply")) $("#storageRecoveryApply").disabled = !ready;
+  return ready;
+};
+window.storageRecoveryApply = async () => {
+  if (!storageRecoveryReady()) return;
+  const pending = STORAGE_RECOVERY;
+  STORAGE_RECOVERY = null; STORAGE_RECOVERY_BUSY = true; storageRecoveryReady();
+  try {
+    const result = await api("/api/operations/storage-recovery/act", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+      id:pending.id, action:pending.action, capacity_token:pending.tokens[pending.action], confirm_capacity:true})});
+    if ($("#storageRecoveryContent") !== pending.host) return;
+    toast(result.detail,"ok"); closeModal();
+  } catch (error) {
+    if ($("#storageRecoveryContent") === pending.host)
+      pending.host.innerHTML = UI.callout("warn","Check the job before trying again",`${esc(error.message)} Nothing was retried automatically.`) +
+        UI.actions(UI.cancel("Close") + UI.button("Refresh review",`storageRecoveryReview('${esc(pending.id)}')`));
+  } finally { STORAGE_RECOVERY_BUSY = false; refreshOperations(true); }
 };
 
 let POWER_RECOVERY = null, POWER_RECOVERY_SEQ = 0, POWER_RECOVERY_BUSY = false;

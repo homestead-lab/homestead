@@ -1605,6 +1605,7 @@ window.volumeReclassStart = async (ns, claim) => {
 /* The move as it runs: its steps, the copy's progress, and at the end the
    old copy to remove when you are happy. */
 window.reclassWatch = async id => {
+  const watchToken = {}; window.__reclassWatchToken = watchToken;
   const paint = op => {
     const steps = op.steps || [];
     const copy = op.copy || {};
@@ -1612,6 +1613,7 @@ window.reclassWatch = async id => {
         ${s.state === "active" && (s.id === "copy" || s.id === "verify") ? `<div class="rc-copy">${meter(s.id === "verify" ? 100 : copy.percent || 0, "", "cpu")}
           <span class="mono xs">${s.id === "verify" ? "comparing with the original" : `${copy.percent || 0}%${copy.speed ? ` · ${esc(copy.speed)}` : ""}`}</span></div>` : ""}</div>`).join("")}</div>
       <div class="note ${op.status === "failed" ? "bad" : op.status === "succeeded" ? "good" : ""}" style="margin-top:12px">${esc(op.message || "")}</div>
+      ${op.storage_recovery ? `<div class="row"><button class="btn pri" data-need="admin" onclick="storageRecoveryReview('${esc(op.id)}')">Review storage move</button></div>` : ""}
       ${op.status === "failed" && op.resumable ? `<div class="row" style="margin-top:12px"><button class="btn pri" data-need="admin" onclick="resumeOperation('${esc(op.id)}')">Carry on from this step</button></div>` : ""}
       ${op.status === "succeeded" && op.old_pv ? `<div class="row" style="margin-top:12px"><button class="btn danger" data-need="admin" onclick="reclassRemoveOld('${esc(op.old_pv)}')">Remove the old copy</button>
         <span class="dim xs">Keep it until the app is working on the new one.</span></div>` : ""}
@@ -1623,7 +1625,7 @@ window.reclassWatch = async id => {
   const tick = async () => {
     if ($("#modal").classList.contains("hidden")) return clearInterval(window.__reclassTimer);
     const op = (await api("/api/operations", { keep: true }).catch(() => [])).find(o => o.id === id);
-    if (!op) return;
+    if (!op || window.__reclassWatchToken !== watchToken || $("#modal").classList.contains("hidden")) return;
     $("#mtitle").textContent = op.title;
     paint(op);
     if (op.status !== "running") { clearInterval(window.__reclassTimer); if (STATE.view === "storage") refresh(true); }
