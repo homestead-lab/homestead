@@ -142,7 +142,10 @@ class Client:
                 raise Held("The data move service token is unavailable")
             data = None if body is None else json.dumps(body, separators=(",", ":"), allow_nan=False).encode()
             request = urllib.request.Request(ORIGIN + path, data=data, method=method,
-                headers={"Authorization": "Bearer " + token, "Accept": "text/plain" if logs else "application/json",
+                # The Kubernetes log subresource negotiates through the API
+                # serializer even though its successful body is plain text.
+                # A text/plain-only Accept receives 406 on supported k3s APIs.
+                headers={"Authorization": "Bearer " + token, "Accept": "*/*" if logs else "application/json",
                          "Content-Type": "application/json"})
             limit = 65536 if logs else 16 * 1024 * 1024
             with self.opener.open(request, timeout=15) as response:
