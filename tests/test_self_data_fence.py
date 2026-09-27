@@ -5,6 +5,7 @@ import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, os.environ.get("HOMESTEAD_TEST_SERVER_DIR", str(Path(__file__).resolve().parents[1] / "server")))
 import homestead_self_data_fence as F
@@ -38,6 +39,32 @@ class FenceTests(unittest.TestCase):
         self.assertEqual({"mode": "normal", "writable": True}, self.fence.inspect())
         self.fence.read = lambda _: self.fail("normal mutations should not poll Kubernetes")
         self.fence.require_write()
+
+    def test_marker_disappearing_during_open_is_not_treated_as_no_marker(self):
+        self.save_marker()
+        with mock.patch.object(F.os, "open", side_effect=FileNotFoundError()):
+            with self.assertRaises(Held): F.read_marker(self.directory)
+
+    def test_marker_replaced_during_read_is_not_accepted(self):
+        self.save_marker()
+        lstat = F.os.lstat
+        count = 0
+        def replaced(path):
+            nonlocal count
+            count += 1
+            result = lstat(path)
+            if count == 2:
+                return type("Replaced", (), {"st_dev": result.st_dev, "st_ino": result.st_ino + 1,
+                    "st_size": result.st_size, "st_mtime_ns": result.st_mtime_ns})()
+            return result
+        with mock.patch.object(F.os, "lstat", side_effect=replaced):
+            with self.assertRaisesRegex(Held, "changed while reading"): F.read_marker(self.directory)
+
+    def test_published_but_unconfirmed_pointer_does_not_authorize_startup(self):
+        self.c = Cluster(published=False)
+        self.fence.read = self.c.read
+        self.save_marker()
+        with self.assertRaisesRegex(Held, "not confirmed"): self.fence.inspect()
 
     def test_unknown_same_name_anchor_never_authorizes_missing_pointer(self):
         with self.assertRaisesRegex(Held, "receipt is missing"):

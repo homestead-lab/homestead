@@ -10,6 +10,7 @@ import json
 import time
 
 import homestead_self_data_copy as COPY
+import homestead_self_data_anchor as A
 from homestead_storage_journal import Held, Journal, identity, shape
 
 
@@ -38,6 +39,8 @@ class Coordinator:
         self.plan = self.state.get("plan", {})
         if self.plan.get("worker", {}).get("uid") != worker_uid or not self.plan.get("copy_image"):
             raise Held("This coordinator does not match the reviewed worker and copy plan")
+        if self.state.get("pointer_receipt") != A.pointer_digest(self.ns, self.state, anchor.handle()["uid"]):
+            raise Held("The local data handoff receipt is not durably published; Homestead was not stopped")
         self.dep_path = f"/apis/apps/v1/namespaces/{self.ns}/deployments/{self.state['deployment']['name']}"
         self.job_name = "homestead-data-copy-" + self.state["operation"]
         self.job_path = f"/apis/batch/v1/namespaces/{self.ns}/jobs/{self.job_name}"
