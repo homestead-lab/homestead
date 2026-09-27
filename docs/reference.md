@@ -788,10 +788,33 @@ Copies on different nodes all mount Homestead's data claim, so more than one
 copy needs a claim every node can mount: ReadWriteMany on a class Longhorn
 serves through its share manager. A migratable class - Harvester's own and
 `longhorn-r2` - gives a VM-disk volume only one node can mount, and a copy on
-a second node would wait forever. Redundancy says so and offers **Move data**:
-a job on the node that has the volume attached copies it to a new claim on a
-shareable class (the stock `longhorn`, say), and Homestead restarts once onto
-it; the old claim is kept until you delete it. A rollout that stalls shows
+a second node would wait forever. Redundancy says so and offers **Move data**.
+Choose the destination class, prepare the new volume, then review and confirm
+the downtime. Host choices and capacity details are available under Details.
+Local-path and unknown storage drivers use single-node RWO; a known shareable
+driver such as non-migratable Longhorn can use RWX.
+
+An independent helper stops Homestead, waits for its pods to release the source,
+copies and verifies the files and metadata, releases the copy mounts, then starts
+Homestead on the new claim. Progress stays at the same address; no extra VIP or
+login is needed in the browser that confirmed the move. Completion checks the
+actual application's readiness. Temporary helpers are removed by recorded UID;
+**both data claims are kept** until you choose to remove an unused one.
+
+If preparation is interrupted **before handoff**, the original mount is verified
+and the recovery screen offers **Keep original volume** to an authenticated admin.
+This permanently abandons that preparation; it is not a rollback after copying.
+Once handoff is acknowledged, unknown writes, worker loss or failed checks hold
+the move for inspection. Do not start the old copy, delete the handoff ConfigMap
+or remove data-move receipts to bypass a hold. Uncertain helper creation/deletion
+also needs inspection; a successful data move does not prove cleanup succeeded.
+An expired administrator session during pre-handoff recovery requires cluster
+administrator assistance rather than allowing a status token to change data.
+
+Finish upgrading all replicas before a move and take a backup first. The flow
+does not force-detach volumes or fence an unreachable host; local-path storage
+does not become highly available by moving it. External writers and manual
+cluster changes are outside Homestead's write barrier. A rollout that stalls shows
 why - a volume that will not attach or mount, or a pod that cannot be placed -
 beside the pod.
 

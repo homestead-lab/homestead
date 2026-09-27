@@ -118,6 +118,11 @@ class ClientTests(unittest.TestCase):
 
     def test_copy_logs_are_bounded_and_cannot_read_other_containers(self):
         path = "/api/v1/namespaces/lab/pods/copy-pod/log?container=copy&tailLines=20"
+        def negotiate(req, **kw):
+            self.assertEqual("*/*", req.get_header("Accept"))
+            return Response(b"verified receipt", req.full_url)
+        self.open.side_effect = negotiate
+        self.assertEqual("verified receipt", self.client.logs(path))
         self.open.side_effect = lambda req, **kw: Response(b"x" * 65537, req.full_url)
         with self.assertRaisesRegex(Held, "limit"): self.client.logs(path)
         self.open.reset_mock()
