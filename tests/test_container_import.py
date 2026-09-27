@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 
 import homestead_imports as imports
+from fixtures_source import source
 
 
 class ContainerImportStorageTests(unittest.TestCase):
@@ -24,9 +25,9 @@ class ContainerImportStorageTests(unittest.TestCase):
 
         def get(path):
             if path.endswith("/configmaps/homestead-sources"):
-                return {"data": {"sources.json": json.dumps([{
+                return {"data": {"sources.json": json.dumps([source(**{
                     "name": "unraid", "host": "192.0.2.10", "user": "root", "base_path": "/mnt/user/appdata",
-                }])}}
+                })])}}
             if path.endswith("/persistentvolumeclaims/shared-appdata"):
                 return {"spec": {"storageClassName": "longhorn-rwx", "accessModes": ["ReadWriteMany"]}}
             raise AssertionError(path)
