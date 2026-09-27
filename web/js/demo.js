@@ -602,29 +602,29 @@
     "/api/network/vm-networks": { ok: true, name: "default/lan", detail: "VM network default/lan made, on the untagged LAN of mgmt; VMs and containers can join it now" },
     "/api/images/scan": { ok: true, nodes: ["harvester-node1", "harvester-node2", "harvester-node3"], detail: "asking containerd on 3 nodes for every image" },
     "/api/images/forget-rollback": { ok: true, detail: "home-assistant no longer keeps its previous image; it can be cleaned up now" },
-    "/api/move/clusters": [{ name: "shed", url: "http://192.168.1.250:8088",
-      user: "admin", added: "2026-09-22 14:05" }, { name: "attic", url: "http://192.168.1.60:8088",
-      user: "admin", added: "2026-09-22 16:40" }, { name: "garage", url: "http://192.168.1.71:8088",
-      user: "admin", added: "2026-09-22 17:02" }],
+    // Two linked clusters (shed answers, garage is off) and barn, added for
+    // moves before linking existed.
+    "/api/move/clusters": [
+      { name: "shed", label: "Shed", url: "http://192.168.1.250:8088", user: "", fleet: true, id: "b2c0de" },
+      { name: "garage", label: "Garage", url: "http://192.168.1.251:8088", user: "", fleet: true, id: "c3beef" },
+      { name: "barn", url: "http://192.168.1.252:8088", user: "admin", added: "2026-05-02 18:40" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "garage") return { name, version: "2.8.208", protocol: 1, local_version: "2.8.208",
+      if (name === "garage") return { name, version: "", protocol: null, local_version: "2.8.208", local_protocol: 1,
+        state: "unreachable", message: "could not reach garage: no answer from http://192.168.1.251:8088" };
+      if (name === "barn") return { name, version: "2.8.190", protocol: 1, local_version: "2.8.208",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "garage runs 2.8.208 and this one 2.8.208. Moves work between them; garage is the newer of the two." };
-      return name === "attic"
-        ? { name, version: "2.8.55", protocol: 0, local_version: "2.8.208", local_protocol: 1,
-            state: "behind", compatible: false,
-            message: "attic runs Homestead 2.8.55, too old to move workloads with this one (2.8.208). Update attic first." }
-        : { name, version: "2.8.208", protocol: 1, local_version: "2.8.208", local_protocol: 1,
-            state: "same", compatible: true, message: "Both run Homestead 2.8.208." };
+        message: "barn runs 2.8.190 and this one 2.8.208. Moves work between them; this Homestead is the newer of the two." };
+      return { name, version: "2.8.208", protocol: 1, local_version: "2.8.208", local_protocol: 1,
+        state: "same", compatible: true, message: "Both run Homestead 2.8.208." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
-    // shed is ready to move from; garage has no backup storage yet.
-    "/api/move/clusters/readiness": (url, init) => JSON.parse(init?.body || "{}").name === "garage"
+    // shed is ready to move from; barn has no backup storage yet.
+    "/api/move/clusters/readiness": (url, init) => JSON.parse(init?.body || "{}").name === "barn"
       ? { version: { compatible: true }, storage: { deployed: false }, target: { configured: false, error: "no backup target" }, ready: false }
       : { version: { compatible: true }, storage: { deployed: true, ready: true, reachable_off_cluster: true },
           target: { configured: true, reachable_off_cluster: true, url: "s3://homestead-backups@us-east-1/" }, ready: true },
-    "/api/move/clusters/storage": { ok: true, detail: "backup storage is starting on garage at http://192.168.1.244:9000" },
+    "/api/move/clusters/storage": { ok: true, detail: "backup storage is starting on barn at http://192.168.1.244:9000" },
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "shed", url: "http://192.168.1.250:8088",
       namespace: "lab", version: "2.8.208", protocol: 1, movable: 2, workloads: [

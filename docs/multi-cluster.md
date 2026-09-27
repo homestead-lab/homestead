@@ -27,8 +27,11 @@ relay in `server/server.py` (`_fleet_target`, `_fleet_forward`,
   for moves before linking existed are listed there to link (with their stored
   account, whose password is then deleted) or forget; the old name stays as an
   alias, so moves that recorded it carry on.
-- Linked clusters appear on Import as clusters a move can come from, without
-  being added there.
+- **Moving workloads**, the second card on that tab, holds the moves under way
+  and a card per cluster a move can come from - linked ones, and any added
+  before linking: whether the two releases can move workloads, backup storage
+  over there that this cluster can reach (setting up RustFS if it has none),
+  and **Browse workloads**. The Import page no longer has any of this.
 
 ## Trust
 
