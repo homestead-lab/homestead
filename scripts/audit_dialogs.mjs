@@ -35,6 +35,7 @@ const DIALOGS = [
   ["ip-import", "network", "ipamImport()"],
   ["workload-edit", "workloads", "wlEdit('lab','frigate')"],
   ["workload-edit-review", "workloads", "wlEdit('lab','frigate')", "text:Save"],
+  ["workload-storage-copy", "workloads", "wlEdit('lab','frigate')", "editReview({ns:'lab',name:'frigate',containers:[{name:'frigate',volumes:[{path:'/media/frigate',source:'camera-data',sub_path:'recordings',copy_from:{claim:'frigate-recordings'}}]}]})"],
   ["vm-migrate", "vms", "vmMove('default','home-assistant-os')"],
   ["vm-new", "vms", "vmNew()"],
   ["vm-image-delete", "images", "click:vmImageDelete"],

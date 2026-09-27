@@ -77,6 +77,19 @@ class ReaderTests(unittest.TestCase):
         self.assertIn("Installing k3s", out[0]["text"])
         self.assertEqual("the VM is not running yet", out[1]["note"])
 
+    def test_copy_logs_require_confirmed_job_and_pod_owner_uids(self):
+        ref = {"namespace": "lab", "job": "copy", "job_uid": "expected"}
+        self.objects[("/apis/batch/v1/namespaces/lab/jobs/copy", "")] = {"metadata": {"uid": "expected"}}
+        foreign, owned = self.pod("foreign"), self.pod("owned")
+        owned["metadata"]["ownerReferences"] = [{"kind": "Job", "uid": "expected", "controller": True}]
+        self.objects[("/api/v1/namespaces/lab/pods", JL._q("job-name=copy"))] = {"items": [foreign, owned]}
+        self.logs["/api/v1/namespaces/lab/pods/owned/log"] = "confirmed copy log"
+        self.assertEqual("confirmed copy log", JL.copy_job({"ref": ref})[0]["text"])
+        self.objects[("/apis/batch/v1/namespaces/lab/jobs/copy", "")]["metadata"]["uid"] = "replaced"
+        self.assertIn("identity changed", JL.copy_job({"ref": ref})[0]["note"])
+        del ref["job_uid"]
+        self.assertIn("No confirmed", JL.copy_job({"ref": ref})[0]["note"])
+
     def test_an_older_kubevirt_says_where_to_look_instead(self):
         self.objects[("/api/v1/namespaces/lab/pods", JL._q("vm.kubevirt.io/name=c-server-1"))] = {"items": [
             self.pod("virt-launcher-c-server-1-abcde")]}

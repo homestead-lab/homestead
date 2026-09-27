@@ -164,6 +164,7 @@ def register(ops):
             ("protect-run", _ref_job(title="Run")),
             ("helm", _ref_job(title="Helm")),
             ("restructure", _ref_job(key="job", title="Copy")),
+            ("workload-copy", copy_job),
             ("reclass", _ref_job(key="job", title="Copy and check")),
             ("self-data-move", _ref_job(key="job", title="Copy")),
             ("vm-disk-import", disk_import),
@@ -171,3 +172,18 @@ def register(ops):
             ("deployment", rollout), ("image-update", rollout), ("image-rollback", rollout),
             ("k3s-cluster", k3s_cluster)):
         ops.LOGGERS[kind] = reader
+
+
+def copy_job(item):
+    ref = item.get("ref") or {}
+    if not ref.get("job_uid"):
+        return [{"title": "Copy", "text": "", "note": "No confirmed copy Job identity; inspect the durable job steps."}]
+    obj = kget(f"/apis/batch/v1/namespaces/{ref['namespace']}/jobs/{ref['job']}")
+    if obj.get("metadata", {}).get("uid") != ref["job_uid"]:
+        return [{"title": "Copy", "text": "", "note": "Copy Job identity changed; replacement logs are not shown."}]
+    pods = [p for p in _pods(ref["namespace"], f"job-name={ref['job']}") if any(
+        o.get("controller") is True and o.get("kind") == "Job" and o.get("uid") == ref["job_uid"]
+        for o in p.get("metadata", {}).get("ownerReferences", []))]
+    if not pods:
+        return [{"title": "Copy", "text": "", "note": "The confirmed copy Job has no retained pod log yet."}]
+    return [_pod_source(ref["namespace"], pods[0], "Copy")]

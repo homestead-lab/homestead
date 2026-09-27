@@ -68,6 +68,20 @@ class CopiesTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             RESTRUCTURE.copies(edit(row("/a", "/mnt/disk", kind="host", claim="one")))
 
+    def test_overlapping_destinations_and_cross_source_writes_are_rejected(self):
+        for rows in ((row("/a", "new", "x", claim="one"), row("/b", "new", "x/y", claim="two")),
+                     (row("/a", "two", "", claim="one"), row("/b", "new", "", claim="two"))):
+            with self.assertRaises(ValueError):
+                RESTRUCTURE.copies(edit(*rows))
+
+    def test_helper_retains_completion_evidence_and_mounts_source_read_only(self):
+        _, obj = RESTRUCTURE.job("lab", "app", RESTRUCTURE.copies(edit(row("/data", "new", claim="old"))))
+        self.assertNotIn("ttlSecondsAfterFinished", obj["spec"])
+        spec = obj["spec"]["template"]["spec"]
+        mounts = {m["name"]: m for m in spec["containers"][0]["volumeMounts"]}
+        by_claim = {v["persistentVolumeClaim"]["claimName"]: mounts[v["name"]]["readOnly"] for v in spec["volumes"]}
+        self.assertEqual({"old": True, "new": False}, by_claim)
+
 
 class ScriptTests(unittest.TestCase):
     def test_the_copy_script_runs_and_keeps_what_it_moves(self):
@@ -180,57 +194,15 @@ class ScriptTests(unittest.TestCase):
 
 
 class ResolveTests(unittest.TestCase):
-    def setUp(self):
-        self.deployment = {"metadata": {"name": "app", "annotations": {RESTRUCTURE.HELD: "2"}},
-                           "spec": {"replicas": 0, "selector": {"matchLabels": {"app": "app"}}}}
-        self.pods, self.jobs, self.sent = [{"metadata": {"name": "app-1"}}], {}, []
-
-        def get(path):
-            if path.endswith("/deployments/app"):
-                return copy.deepcopy(self.deployment)
-            if "/pods?" in path:
-                return {"items": self.pods}
-            if "/jobs/" in path:
-                name = path.rsplit("/", 1)[-1]
-                if name not in self.jobs:
-                    raise urllib.error.HTTPError(path, 404, "gone", None, None)
-                return self.jobs[name]
-            raise AssertionError(path)
-
-        def send(method, path, body):
-            self.sent.append((method, path, body))
-            if path.endswith("/jobs"):
-                self.jobs[body["metadata"]["name"]] = {"status": {"active": 1}}
-            return body
-
-        RESTRUCTURE.bind(get, send, lambda path: "cp: No space left on device\n")
-        self.item = {"progress": 0, "ref": {"namespace": "lab", "name": "app", "replicas": 2, "phase": "stopping",
-                     "moves": [{"path": "/a", "from": "one", "from_folder": "", "to": "all", "to_folder": "a"}]}}
-
-    def test_waits_for_the_pods_then_copies_then_starts_again(self):
-        self.assertEqual("running", RESTRUCTURE.resolve(self.item)[0])
-        self.assertEqual([], self.sent)
-        self.pods = []
-        status, _, message = RESTRUCTURE.resolve(self.item)
-        self.assertEqual(("running", "copying"), (status, self.item["ref"]["phase"]))
-        self.assertIn("Copying 1 location", message)
-        self.assertEqual("running", RESTRUCTURE.resolve(self.item)[0])
-        self.jobs[self.item["ref"]["job"]] = {"status": {"succeeded": 1}}
-        status, progress, message = RESTRUCTURE.resolve(self.item)
-        self.assertEqual(("succeeded", 100), (status, progress))
-        saved = self.sent[-1][2]
-        self.assertEqual(2, saved["spec"]["replicas"])
-        self.assertNotIn(RESTRUCTURE.HELD, saved["metadata"]["annotations"])
-
-    def test_a_failed_copy_leaves_the_workload_stopped_and_says_why(self):
-        self.pods = []
-        RESTRUCTURE.resolve(self.item)
-        self.jobs[self.item["ref"]["job"]] = {"status": {"failed": 1}}
-        self.pods = [{"metadata": {"name": "copy-pod"}}]
-        status, _, message = RESTRUCTURE.resolve(self.item)
+    def test_legacy_records_are_not_replayed_or_automatically_restarted(self):
+        from unittest import mock
+        item = {"ref": {"namespace": "lab", "name": "app", "phase": "copying", "job": "old-copy"}}
+        with mock.patch.object(RESTRUCTURE, "ksend") as send:
+            status, _, message = RESTRUCTURE.resolve(item)
         self.assertEqual("failed", status)
-        self.assertIn("No space left", message)
-        self.assertEqual(1, len(self.sent))  # only the job; the workload was not started
+        self.assertIn("no identity receipts", message)
+        self.assertTrue(item["ref"]["retain_resources"])
+        send.assert_not_called()
 
 
 class HeldEditTests(WorkloadEditFixture, unittest.TestCase):
