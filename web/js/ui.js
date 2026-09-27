@@ -20,6 +20,11 @@
      UI.button      a button
      UI.actions     the dialog's buttons: last, right-aligned, primary last
 
+   and for pages:
+
+     UI.stats       a row of stat cards: a figure each, two to a row on a phone
+     UI.guide       how a page works, collapsed - in place of notes at its top
+
    Each returns HTML, escaped where it takes plain text: arguments named
    *Html are inserted as they are. */
 const UI = (() => {
@@ -119,8 +124,20 @@ const UI = (() => {
     ${startHtml ? `<div class="ui-actions-start">${startHtml}</div>` : ""}<div class="ui-actions-end">${buttonsHtml}</div></div>`;
   const cancel = (label = "Cancel") => button(label, "closeModal()");
 
+  /* [{ title, value, unit, sub, tone, wide, tipHtml }]: tone ok | warn | bad | info
+     tints the card; wide spans a whole row. */
+  const stats = cards => `<div class="ui-stats">${cards.filter(Boolean).map(c => {
+    const glow = { ok: "glow g-ok", warn: "glow g-warn", bad: "glow g-bad", info: "glow g-info" }[c.tone] || "flat";
+    return `<div class="card ${glow} ui-stat${c.wide ? " statwide" : ""}"><div class="ctitle">${text(c.title)}${c.tipHtml || ""}</div>
+      ${c.value !== undefined ? `<div class="bignum">${text(c.value)}${c.unit ? `<span class="unit">${text(c.unit)}</span>` : ""}</div>` : ""}
+      ${c.bodyHtml || ""}${c.sub ? `<div class="csub">${text(c.sub)}</div>` : ""}</div>`;
+  }).join("")}</div>`;
+
+  /* How a page works, for whoever needs it: closed until opened. */
+  const guide = (summary, bodyHtml) => `<details class="ui-guide"><summary>${text(summary)}</summary><div class="ui-guide-body">${bodyHtml}</div></details>`;
+
   return { lead, callout, section, facts, checklist, steps, progress, meter, table, more, ack,
-    fields, field, chip, button, actions, cancel };
+    fields, field, chip, button, actions, cancel, stats, guide };
 })();
 window.UI = UI;
 

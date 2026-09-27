@@ -68,10 +68,12 @@ Tests fail when the two disagree.
   first, and deleting data asks for the name to be typed.
 - **Pages work at phone width.** Check a changed page at 375px as well as on a
   desktop, and in the light theme as well as the dark one.
-- **Dialogs follow [docs/design.md](docs/design.md).** Build them from the
-  components in `web/js/ui.js` - one callout at most, numbers as meters and
-  tables, detail behind a disclosure, buttons last - and add a new dialog to
-  `scripts/audit_dialogs.mjs`, which CI runs at desktop and phone widths.
+- **Pages and dialogs follow [docs/design.md](docs/design.md).** Build them
+  from the shared components - `web/js/ui.js`, stacked tables, stat cards, the
+  guide - rather than one-off markup: one callout at most, numbers as meters
+  and tables, explanations collapsed, buttons last. Add a new dialog to
+  `scripts/audit_dialogs.mjs` and a new page to `scripts/audit_pages.mjs`;
+  CI runs both at desktop and phone widths.
 - **Permissions stay narrow.** A new permission goes in `deploy/deploy.yaml`
   with a comment saying what uses it; limit it by `resourceNames` where Kubernetes
   allows.
