@@ -33,6 +33,8 @@ import urllib.parse
 
 import homestead_names as NAMES
 import homestead_capacity_review as REVIEW
+import homestead_storage_journal as JOURNAL
+import homestead_storage_conflicts as CONFLICTS
 
 kget = ksend = ktext = None
 storage_classes = lambda: []
@@ -125,7 +127,12 @@ def consumers(ns, claim, fences=None):
              lambda o: o["spec"]["jobTemplate"]["spec"]["template"]["spec"])):
         for obj in _items(path):
             try:
-                if claim not in _claims_in(spec_of(obj)):
+                # StatefulSet-generated claims are absent from its Pod template.
+                # Include retained ordinal claims too, even outside current scale.
+                templated = kind == "StatefulSet" and any(re.fullmatch(
+                    re.escape(t["metadata"]["name"] + "-" + obj["metadata"]["name"]) + r"-\d+", claim)
+                    for t in obj["spec"].get("volumeClaimTemplates", []))
+                if claim not in _claims_in(spec_of(obj)) and not templated:
                     continue
             except (KeyError, TypeError):
                 raise ValueError("Workload inventory is incomplete; volume use cannot be checked") from None
@@ -134,6 +141,8 @@ def consumers(ns, claim, fences=None):
             if kind in ("Deployment", "StatefulSet"):
                 row["replicas"] = int(obj["spec"].get("replicas", 1) if obj["spec"].get("replicas") is not None else 1)
                 row["running"] = int((obj.get("status") or {}).get("readyReplicas", 0) or 0) > 0
+                if kind == "StatefulSet" and obj["spec"].get("persistentVolumeClaimRetentionPolicy", {}).get("whenScaled", "Retain") != "Retain":
+                    row["deletes_claims_on_scale_down"] = True
             elif kind == "CronJob":
                 row["suspend"] = bool(obj["spec"].get("suspend"))
                 row["running"] = False
@@ -236,6 +245,7 @@ def plan(ns, claim, target, *, capture=False):
     if not pvc:
         raise ValueError(f"volume {claim} does not exist in {ns}")
     fences = {} if capture else None
+    source_binding = {}
     _pin(fences, f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}", pvc)
     spec = pvc.get("spec") or {}
     current = spec.get("storageClassName") or ""
@@ -258,6 +268,10 @@ def plan(ns, claim, target, *, capture=False):
             owner = pv.get("spec", {}).get("claimRef", {})
             if (owner.get("uid"), owner.get("name"), owner.get("namespace")) != (pvc["metadata"]["uid"], claim, ns):
                 raise ValueError("The backing volume does not match this claim's identity")
+            csi = pv.get("spec", {}).get("csi", {})
+            source_binding = {"uid": pvc["metadata"]["uid"], "pv": spec["volumeName"],
+                              "pv_uid": pv["metadata"]["uid"], "csi_driver": csi.get("driver"),
+                              "csi_handle": csi.get("volumeHandle")}
     blockers, warnings = [], []
     if row.get("internal"):
         blockers.append(f"{target} is reserved by Harvester")
@@ -279,6 +293,8 @@ def plan(ns, claim, target, *, capture=False):
             blockers.append(f"DaemonSet {c['name']} runs on every node and cannot be stopped for the copy")
         if c["kind"] == "Deployment" and ns == OWN_NS and c["name"] == NAMES.BRAND:
             blockers.append("this is Homestead's own data; move it from Settings › Redundancy instead")
+        if c.get("deletes_claims_on_scale_down"):
+            blockers.append(f"StatefulSet {c['name']} can delete its volumes when stopped; change its scale-down retention policy to Retain before moving storage")
     known = {(c["kind"], c["name"]) for c in used}
     claim_pods = [p for p in _items(f"/api/v1/namespaces/{ns}/pods") if claim in _claims_in(p.get("spec"))]
     for pod in claim_pods:
@@ -301,6 +317,14 @@ def plan(ns, claim, target, *, capture=False):
                         "a disk of its own, no longer tied to that image")
     if any(c.get("via") == "dv" for c in used):
         warnings.append("the VM's DataVolume is turned into a plain volume, as a moved VM's is")
+        if capture:
+            path = f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{claim}"
+            dv = kget(path)
+            _pin(fences, path, dv)
+            owners = [o for o in pvc.get("metadata", {}).get("ownerReferences", []) if o.get("kind") == "DataVolume"]
+            if any(o.get("uid") != dv["metadata"]["uid"] or o.get("name") != claim or
+                   o.get("apiVersion", "").split("/")[0] != "cdi.kubevirt.io" for o in owners):
+                raise ValueError("The claim's DataVolume ownership does not match the reviewed disk")
 
     actual = _longhorn_used(ns, claim)
     replicas = int((row.get("replicas") or "1") or 1) if row.get("provisioner") == "driver.longhorn.io" else 1
@@ -325,7 +349,7 @@ def plan(ns, claim, target, *, capture=False):
     elif not space["longhorn"]:
         warnings.append(f"{target} is not Longhorn, so Homestead cannot check it has room for {space['size_gb']} GB")
     moving = space["used_gb"] if space["used_gb"] is not None else space["size_gb"]
-    return {**({"_fences": fences} if capture else {}), "ok": not blockers, "blockers": blockers, "warnings": warnings, "namespace": ns, "claim": claim,
+    return {**({"_fences": fences, "_source_binding": source_binding} if capture else {}), "ok": not blockers, "blockers": blockers, "warnings": warnings, "namespace": ns, "claim": claim,
             "from_class": current, "to_class": target, "volume_mode": mode, "access_modes": modes,
             "consumers": used, "space": space,
             # Roughly: a LAN-speed disk copy, and as long again to check it.
@@ -342,7 +366,7 @@ def stopped_attempt(ns, claim, ops):
     return None
 
 
-def start(ns, claim, target, ops, *, expected=None):
+def start(ns, claim, target, ops, *, expected=None, handoff_review=None):
     review = plan(ns, claim, target, capture=expected is not None)
     if not review["ok"]:
         raise ValueError("; ".join(review["blockers"]))
@@ -375,6 +399,15 @@ def start(ns, claim, target, ops, *, expected=None):
            "started": time.time()}
     if expected is not None:
         ref["review_fences"] = expected["_fences"]
+        ref["copy_claims"] = {claim: expected["_source_binding"]}
+    if handoff_review is not None:
+        if expected is None or not re.fullmatch(r"[0-9a-f]{64}", str(handoff_review.get("digest", ""))):
+            raise ValueError("A durable storage move requires a verified initial review")
+        # An older resolver must never interpret this as its legacy 'stop'
+        # phase. Protocol-tagged records cannot be adopted by that engine.
+        ref.update(storage_protocol=1, storage_approval_protocol=1, handoff_phase="stop", phase="handoff",
+                   retain_resources=True, review_digest=handoff_review["digest"],
+                   review_expires=handoff_review["expires"])
     return ops.start("reclass", f"Move {claim} to {target}",
                      {"kind": "PersistentVolumeClaim", "name": claim, "namespace": ns},
                      "/volumes?" + urllib.parse.urlencode({"find": claim}), ref,
@@ -394,6 +427,14 @@ def _config(body):
 def _review(body, actor, ops):
     cfg = _config(body)
     result = plan(cfg["namespace"], cfg["claim"], cfg["target"], capture=True)
+    with ops._lock:
+        conflicts = CONFLICTS.conflicts(ops._read(), "reclass", {
+            "namespace": cfg["namespace"], "claim": cfg["claim"],
+            "temp": cfg["claim"][:63 - len(TEMP_SUFFIX)].rstrip("-") + TEMP_SUFFIX,
+            "copy_claims": {cfg["claim"]: result["_source_binding"]}})
+    if conflicts:
+        result["blockers"].append("Another storage job is active or needs recovery. Review it before moving this volume.")
+        result["ok"] = False
     stopped = stopped_attempt(cfg["namespace"], cfg["claim"], ops)
     if stopped:
         result["blockers"].insert(0, "An earlier move needs inspection before another move can start")
@@ -414,14 +455,15 @@ def _binding(result):
 
 def preview(body, actor, ops):
     cfg, result, context = _review(body, actor, ops)
-    return {key: value for key, value in result.items() if key != "_fences"} | {"capacity_token": REVIEW.issue(cfg, context)}
+    return {key: value for key, value in result.items() if not key.startswith("_")} | {"capacity_token": REVIEW.issue(cfg, context)}
 
 
 def start_reviewed(body, actor, ops):
-    cfg, result, context = _review(body, actor, ops)
-    if not result["ok"] or body.get("confirm_capacity") is not True or not REVIEW.valid({**cfg, "capacity_token":body.get("capacity_token")}, context):
-        raise ValueError("Review the current volume, affected workloads and warnings before starting the move")
-    return start(cfg["namespace"], cfg["claim"], cfg["target"], ops, expected=result)
+    with ops._lock:
+        cfg, result, context = _review(body, actor, ops)
+        if not result["ok"] or body.get("confirm_capacity") is not True or not REVIEW.valid({**cfg, "capacity_token":body.get("capacity_token")}, context):
+            raise ValueError("Review the current volume, affected workloads and warnings before starting the move")
+        return start(cfg["namespace"], cfg["claim"], cfg["target"], ops, expected=result)
 
 
 # ---- the steps -------------------------------------------------------------------
@@ -435,19 +477,21 @@ def _steps(item, phase, copy=None):
         item["copy"] = copy
 
 
-def _stop(ns, ref):
-    _close_helpers(ns, ref["claim"])
-    _clear_finished(ns, ref["claim"])
+def _stop(ns, ref, send=None, *, cleanup=True):
+    send = send or ksend
+    if cleanup:
+        _close_helpers(ns, ref["claim"])
+        _clear_finished(ns, ref["claim"])
     for c in ref["consumers"]:
         if c.get("stopped"):
             continue
         name = c["name"]
         if c["kind"] in ("Deployment", "StatefulSet"):
             plural = "deployments" if c["kind"] == "Deployment" else "statefulsets"
-            ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/{plural}/{name}", {"spec": {"replicas": 0}},
+            send("PATCH", f"/apis/apps/v1/namespaces/{ns}/{plural}/{name}", {"spec": {"replicas": 0}},
                   ctype="application/merge-patch+json")
         elif c["kind"] == "CronJob":
-            ksend("PATCH", f"/apis/batch/v1/namespaces/{ns}/cronjobs/{name}", {"spec": {"suspend": True}},
+            send("PATCH", f"/apis/batch/v1/namespaces/{ns}/cronjobs/{name}", {"spec": {"suspend": True}},
                   ctype="application/merge-patch+json")
         elif c["kind"] == "VirtualMachine":
             vm = kget(f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}")
@@ -476,19 +520,65 @@ def _stop(ns, ref):
                 if not vm["spec"]["dataVolumeTemplates"]:
                     vm["spec"].pop("dataVolumeTemplates")
             vm["metadata"].pop("managedFields", None)
-            ksend("PUT", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}", vm)
+            send("PUT", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}", vm)
             if c.get("via") == "dv":
                 pvc = _get(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{ref['claim']}") or {}
                 owners = [o for o in (pvc.get("metadata") or {}).get("ownerReferences") or [] if o.get("kind") != "DataVolume"]
-                ksend("PATCH", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{ref['claim']}",
+                send("PATCH", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{ref['claim']}",
                       {"metadata": {"ownerReferences": owners or None}}, ctype="application/merge-patch+json")
                 try:
-                    ksend("DELETE", f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{ref['claim']}",
+                    send("DELETE", f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{ref['claim']}",
                           {"kind": "DeleteOptions", "apiVersion": "v1", "propagationPolicy": "Orphan"})
                 except urllib.error.HTTPError as error:
                     if error.code != 404:
                         raise
         c["stopped"] = True
+
+
+def journaled_stop(item, checkpoint, *, journal_factory=JOURNAL.Journal):
+    """New handoff's stop stage; not enabled until its later stages are wired.
+
+    Re-entering a confirmed step only verifies its receipt. An interrupted write
+    blocks every later step. Never trust the legacy in-memory `stopped` flags as
+    evidence that a particular Kubernetes object was changed.
+    """
+    ref = item["ref"]
+    writer = journal_factory(item, kget, ksend, checkpoint)
+    writer.check()
+    # Check every retention policy before even closing a helper. A policy change
+    # must not first be discovered after another workload has already stopped.
+    for consumer in ref["consumers"]:
+        if consumer["kind"] == "StatefulSet":
+            obj = kget(f"/apis/apps/v1/namespaces/{ref['namespace']}/statefulsets/{consumer['name']}")
+            if obj["spec"].get("persistentVolumeClaimRetentionPolicy", {}).get("whenScaled", "Retain") != "Retain":
+                raise JOURNAL.Held("A StatefulSet can delete its claims when stopped; change its retention policy and review again")
+    def send(method, path, body=None, **kw):
+        expected = ref.get("review_fences", {}).get(path)
+        if not expected:
+            raise JOURNAL.Held("A stop dependency was not included in the review; no request was sent")
+        if method in ("PATCH", "PUT") and any(part in path for part in ("/deployments/", "/statefulsets/", "/virtualmachines/")):
+            body = copy.deepcopy(body)
+            annotations = body.setdefault("metadata", {}).setdefault("annotations", {})
+            key = "homestead.io/storage-copy-job"
+            existing = kget(path).get("metadata", {}).get("annotations", {}).get(key)
+            if existing and existing != item["id"]:
+                raise JOURNAL.Held("Another storage-copy hold exists on this workload")
+            annotations[key] = item["id"]
+        return writer.write("stop:" + method + ":" + path, method, path, body, expected=expected, **kw)
+    # Replay only the control flow, never the API writes. The journal decides
+    # which previously accepted objects may be observed under their exact UID.
+    for consumer in ref["consumers"]:
+        consumer.pop("stopped", None)
+    # Unlike legacy cleanup, never force-delete a helper by its name alone.
+    for pod in _items(f"/api/v1/namespaces/{ref['namespace']}/pods"):
+        if ref["claim"] not in _claims_in(pod.get("spec")):
+            continue
+        finished_job = pod.get("status", {}).get("phase") in FINISHED and any(
+            owner.get("kind") == "Job" for owner in pod["metadata"].get("ownerReferences", []))
+        if _helper(pod) or finished_job:
+            send("DELETE", f"/api/v1/namespaces/{ref['namespace']}/pods/{pod['metadata']['name']}")
+    _stop(ref["namespace"], ref, send=send, cleanup=False)
+    checkpoint(item)
 
 
 def _start(ns, ref):
@@ -886,14 +976,31 @@ def old_copies():
     return out
 
 
-def remove_old_copy(pv):
+def remove_old_copy(pv, ops):
+    if not isinstance(pv, str) or len(pv) > 253 or not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", pv):
+        raise ValueError("Choose a valid backing volume")
+    # Serialize with handoff progression and job creation. A failed/cancelled
+    # move still needs its original until recovery explicitly completes; hiding
+    # its job is not permission to destroy that recovery copy.
+    with ops._lock:
+        for item in ops._read():
+            ref = item.get("ref", {})
+            if (item.get("kind") == "reclass" and pv in (ref.get("old_pv"), ref.get("cutover", {}).get("old_pv")) and
+                    (item.get("status") != "succeeded" or ref.get("retain_resources"))):
+                raise ValueError("This original volume is protected by a storage move. Finish its recovery before removing the old copy.")
+        return _remove_old_copy(pv)
+
+
+def _remove_old_copy(pv):
     obj = _get(f"/api/v1/persistentvolumes/{pv}")
     if not obj or not ((obj.get("metadata") or {}).get("annotations") or {}).get(OLD_COPY):
         raise ValueError(f"{pv} is not an old copy Homestead kept")
     if (obj.get("status") or {}).get("phase") != "Released":
         raise ValueError(f"{pv} is in use again, so it is not removed")
+    if obj.get("metadata", {}).get("deletionTimestamp"):
+        raise ValueError(f"{pv} is already deleting; inspect its progress")
     # Deleted the way its class deletes volumes: the provisioner removes the
     # data along with it.
-    ksend("PATCH", f"/api/v1/persistentvolumes/{pv}", {"spec": {"persistentVolumeReclaimPolicy": "Delete"}},
+    ksend("PATCH", f"/api/v1/persistentvolumes/{pv}", {"metadata": JOURNAL.identity(obj), "spec": {"persistentVolumeReclaimPolicy": "Delete"}},
           ctype="application/merge-patch+json")
     return {"ok": True, "detail": f"removing the old copy {pv}"}
