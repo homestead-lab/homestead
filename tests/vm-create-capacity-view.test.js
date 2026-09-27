@@ -56,3 +56,15 @@ test("back to configuration invalidates approval",async()=>{
   t.fields["#vmCreateApprove"].checked=true;t.ctx.vmCreateReviewBack();
   await t.ctx.vmCreateReviewedApply();assert.equal(t.sent.length,1);
 });
+
+test("create records its job and refreshes the tray on success or lost response",async()=>{
+  for(const fail of [false,true]){
+    const t=setup({fail}),jobs=[];let refreshed=0;
+    const original=t.ctx.api;
+    t.ctx.api=async(path,options)=>{const result=await original(path,options);return path.endsWith('/preview')?result:{...result,operation:{id:'created'}};};
+    t.ctx.noteOperation=op=>jobs.push(op);t.ctx.refreshOperations=()=>refreshed++;
+    await t.ctx.vmCreateReview({name:'guest',namespace:'lab'});
+    t.fields['#vmCreateApprove'].checked=true;await t.ctx.vmCreateReviewedApply();
+    assert.equal(jobs.length,fail?0:1);assert.equal(refreshed,1);
+  }
+});

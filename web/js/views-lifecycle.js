@@ -775,6 +775,7 @@ window.vmCreateReviewedApply = async () => {
   try {
     const result = await api("/api/vm/create", {method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({...cfg, capacity_token:review.capacity_token,confirm_capacity:true})});
+    if (result.operation && window.noteOperation) noteOperation(result.operation);
     toast(result.warning || `${cfg.name} created${result.address ? ` at ${result.address}` : ""}`, result.warning ? "bad" : "ok");
     closeModal(); go("vms");
     if (review.network.serviceMode) {
@@ -787,7 +788,7 @@ window.vmCreateReviewedApply = async () => {
       $("#mbody").insertAdjacentHTML("afterbegin",`<div class="note bad">${esc(error.message)}. The request was not repeated. Images, disks, login settings or the VM itself may already exist. Inspect Virtual machines and Volumes before a new review; retained disks are not deleted automatically.</div>`);
     }
     toast(error.message,"bad");
-  } finally { VM_CREATE_BUSY = false; }
+  } finally { VM_CREATE_BUSY = false; if (window.refreshOperations) refreshOperations(true); }
 };
 
 /* ---------------- image cache ---------------- */

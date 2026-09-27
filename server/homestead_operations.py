@@ -140,19 +140,19 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
     }
     with _lock:
         items = _read()
-        if kind == "vm-power":
+        if kind in POWER_RECEIPTS.KINDS:
             consumed = POWER_RECEIPTS.find(DATA_DIR, ref.get("review_digest"))
             if consumed:
                 raise ValueError(f"This approval already has job {consumed}; inspect history instead of repeating it. The displayed job may have been cleared.")
             for existing in items:
-                if existing.get("kind") != kind:
+                if existing.get("kind") not in POWER_RECEIPTS.KINDS:
                     continue
                 previous = existing.get("ref") or {}
                 if previous.get("review_digest") == ref.get("review_digest"):
                     raise ValueError(f"This approval already has job {existing['id']}; inspect it instead of repeating the request")
                 if (previous.get("namespace"), previous.get("name")) == (ref.get("namespace"), ref.get("name")) and (
                         existing.get("status") not in TERMINAL or previous.get("retain_resources")):
-                    raise ValueError(f"VM power job {existing['id']} is still active or needs recovery; inspect it first")
+                    raise ValueError(f"VM job {existing['id']} is still active or needs recovery; inspect it first")
         if kind == "node-power" and any(i.get("kind") == kind and i.get("status") not in TERMINAL and
                                         i.get("ref", {}).get("node") == ref.get("node") for i in items):
             raise ValueError("Host maintenance is already active; inspect its job before retrying")
@@ -174,7 +174,7 @@ def record_phase(operation_id, phase, progress, message, **ref_updates):
     with _lock:
         items = _read()
         item = next(i for i in items if i["id"] == operation_id)
-        if item.get("status") in TERMINAL or (item.get("kind") == "vm-power" and item.get("status") == CANCELLING):
+        if item.get("status") in TERMINAL or (item.get("kind") in POWER_RECEIPTS.KINDS and item.get("status") == CANCELLING):
             raise ValueError("Maintenance job has ended; refusing further actions")
         item["ref"].update(ref_updates, phase=phase, phase_at=time.time())
         _finish(item, "failed" if phase == "failed" else "running", progress, message)
@@ -196,6 +196,9 @@ def _public(item):
     if item.get("kind") == "vm-power":
         out["cancellable"] = out["cancellable"] and item.get("ref", {}).get("phase") in ("prepared", "accepted")
         out["power_recovery"] = item.get("status") not in TERMINAL and item.get("ref", {}).get("phase") in ("uncertain", "dispatching")
+    if item.get("kind") in ("vm-create", "vm-edit"):
+        out["cancellable"] = False  # a configuration write cannot be undone by forgetting its job
+        out["mutation_recovery"] = bool(item.get("ref", {}).get("retain_resources"))
     if item.get("kind") == "snapshot-delete":
         out["cancellable"] = False  # Longhorn merging cannot be undone or safely interrupted.
     if item.get("kind") == "k3s-cluster" and item.get("ref", {}).get("retain_resources") and item["ref"].get("phase") == "provisioning":
@@ -210,7 +213,7 @@ def _public(item):
 
 
 def _receipt_needed(item):
-    if item.get("kind") != "vm-power":
+    if item.get("kind") not in POWER_RECEIPTS.KINDS:
         return False
     ref = item.get("ref") or {}
     return bool(ref.get("retain_resources") or float(ref.get("review_expires") or 0) >= time.time())

@@ -1,4 +1,5 @@
 import copy
+import tempfile
 import unittest
 import urllib.error
 from unittest import mock
@@ -15,6 +16,12 @@ class VMEditAdmissionTests(unittest.TestCase):
 
     def setUp(self):
         fixtures.VMCapacityTests.setUp(self)
+        self.vm.update(apiVersion="kubevirt.io/v1", kind="VirtualMachine")
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        patch = mock.patch.object(server.OPS, "DATA_DIR", temporary.name)
+        patch.start()
+        self.addCleanup(patch.stop)
         self.vm_path = "/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/guest"
         self.objects[self.vm_path] = self.vm
         self.body = {"ns": "lab", "name": "guest", "memory": "6Gi", "restart": False}
@@ -40,7 +47,17 @@ class VMEditAdmissionTests(unittest.TestCase):
             result = copy.deepcopy(body)
             result["spec"]["template"]["spec"]["domain"].update(cpu={"cores": 3}, memory={"guest": self.profile_memory})
             return result
-        with mock.patch.object(server.VMS, "ksend", side_effect=lambda method, path, body=None, **kw: body) as writes, \
+        def send(method, path, body=None, **kw):
+            value = copy.deepcopy(body)
+            meta = value.setdefault("metadata", {})
+            meta.setdefault("namespace", "lab")
+            meta.setdefault("uid", "created-uid")
+            meta["resourceVersion"] = "written-version"
+            if method == "PATCH":
+                value.update(apiVersion="v1", kind="Secret" if "/secrets/" in path else "PersistentVolumeClaim")
+                meta.setdefault("name", path.rsplit("/", 1)[-1])
+            return value
+        with mock.patch.object(server.VMS, "ksend", side_effect=send) as writes, \
                 mock.patch.object(server, "ksend", side_effect=expand) as other_writes:
             handler.do_POST()
         if not hasattr(self, "profile_memory"):
@@ -102,11 +119,11 @@ class VMEditAdmissionTests(unittest.TestCase):
         self.disk_setup({"harvester": False, "cdi": True})
         body = self.reviewed()
         original = server.VMS.commit_edit
-        def commit(prepared, before_save=None):
+        def commit(prepared, before_save=None, send=None):
             profile = self.objects["/apis/cdi.kubevirt.io/v1beta1/storageprofiles/storage"]
             profile["metadata"]["resourceVersion"] = "2"
             profile["status"]["claimPropertySets"][0]["volumeMode"] = "Filesystem"
-            return original(prepared, before_save=before_save)
+            return original(prepared, before_save=before_save, send=send)
         with mock.patch.object(server.VMS, "commit_edit", side_effect=commit):
             result, writes = self.call("/api/vm/edit", body)
         self.assertEqual(409, result[0], result)
@@ -150,9 +167,9 @@ class VMEditAdmissionTests(unittest.TestCase):
         writes.assert_not_called()
         body = self.reviewed()
         original = server.VMS.commit_edit
-        def commit(prepared, before_save=None):
+        def commit(prepared, before_save=None, send=None):
             self.profile_memory = "7Gi"
-            return original(prepared, before_save=before_save)
+            return original(prepared, before_save=before_save, send=send)
         with mock.patch.object(server.VMS, "commit_edit", side_effect=commit):
             result, writes = self.call("/api/vm/edit", body)
         self.assertEqual(409, result[0], result)
@@ -229,9 +246,9 @@ class VMEditAdmissionTests(unittest.TestCase):
     def test_fresh_capacity_change_before_dependency_writes_blocks(self):
         body = self.reviewed()
         original = server.VMS.commit_edit
-        def commit(prepared, before_save=None):
+        def commit(prepared, before_save=None, send=None):
             self.nodes[0]["allocatable"]["memory"] = "1Gi"
-            return original(prepared, before_save=before_save)
+            return original(prepared, before_save=before_save, send=send)
         with mock.patch.object(server.VMS, "commit_edit", side_effect=commit):
             result, writes = self.call("/api/vm/edit", body)
         self.assertEqual(409, result[0], result)
@@ -287,14 +304,14 @@ class VMEditAdmissionTests(unittest.TestCase):
         body = self.reviewed()
         original = server.VMS.commit_edit
         sent = []
-        def commit(prepared, before_save=None):
-            def send(method, path, body=None, **kw):
+        def commit(prepared, before_save=None, send=None):
+            def transport(method, path, body=None, **kw):
                 sent.append((method, path))
                 if method == "PUT":
                     raise urllib.error.HTTPError(path, 500, "uncertain", {}, None)
-                return body
-            with mock.patch.object(server.VMS, "ksend", side_effect=send):
-                return original(prepared, before_save=before_save)
+                return {**body, "apiVersion": "v1", "kind": "Secret", "metadata": {**body["metadata"], "namespace": "lab", "name": "ci", "resourceVersion": "6"}}
+            send.send = transport
+            return original(prepared, before_save=before_save, send=send)
         with mock.patch.object(server.VMS, "commit_edit", side_effect=commit):
             result, _ = self.call("/api/vm/edit", body)
         self.assertNotEqual(200, result[0])

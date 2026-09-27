@@ -564,6 +564,7 @@ window.vmEditReviewedApply = async () => {
   try {
     const result = await api("/api/vm/edit", {method:"POST", headers:{"Content-Type":"application/json"},
       body:JSON.stringify({...review.config, capacity_token:review.capacity_token, confirm_capacity:true})});
+    if (result.operation && window.noteOperation) noteOperation(result.operation);
     saved = true;
     toast(result.detail, "ok"); closeModal(); refresh(true);
   } catch (error) {
@@ -572,7 +573,7 @@ window.vmEditReviewedApply = async () => {
       $("#mbody").insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(error.message)}. Some VM, disk or Secret changes may already be saved. No request was repeated and no Restart was sent. Close this review and inspect the VM before editing again.</div>`);
     }
     toast(error.message, "bad");
-  } finally { VM_EDIT_BUSY = false; }
+  } finally { VM_EDIT_BUSY = false; if (window.refreshOperations) refreshOperations(true); }
   if (saved && review.restartAfter) await vmPowerReview({ns:review.config.ns, name:review.config.name, action:"restart"});
 };
 

@@ -52,6 +52,7 @@ function renderOperations() {
       <button class="btn sm" onclick="openOperation('${esc(operation.href || "/")}','${esc(operation.id || "")}')">Open</button>
       <button class="btn sm" data-tip="Every step it has taken, and the output of what does its work" onclick="operationLog('${esc(operation.id)}')">${icon("log")}Log</button>
       ${operation.power_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview('${esc(operation.id)}')">Inspect outcome</button>` : ""}
+      ${operation.mutation_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview('${esc(operation.id)}',true)">Inspect save outcome</button>` : ""}
       ${operation.resumable ? `<button class="btn sm pri" data-need="admin" data-tip="Run the steps that are left, from the one it stopped at" onclick="resumeOperation('${esc(operation.id)}')">Carry on</button>` : ""}
       ${operation.cleanable ? `<button class="btn sm ${operation.tracking_only ? "" : "danger"}" data-need="admin" data-tip="${operation.tracking_only ? "Review retained resources before stopping tracking; nothing is deleted" : "Says what it left behind and what cleanup removes"}" onclick="cancelOperation('${esc(operation.id)}')">${operation.tracking_only ? "Review retained resources" : "Clean up"}</button>` : ""}
       ${operation.cancellable ? `<button class="btn sm danger" data-need="operator" data-tip="Says what stopping it would undo and what it cannot, before anything changes" onclick="cancelOperation('${esc(operation.id)}')">${operation.status === "cancelling" ? "Cancel again" : "Cancel"}</button>` : ""}
@@ -151,22 +152,24 @@ window.resumeOperation = async id => {
 };
 
 let POWER_RECOVERY = null, POWER_RECOVERY_SEQ = 0, POWER_RECOVERY_BUSY = false;
-window.powerRecoveryReview = async id => {
+window.powerRecoveryReview = async (id, mutation = false) => {
   if (POWER_RECOVERY_BUSY) return;
   POWER_RECOVERY = null;
   const sequence = ++POWER_RECOVERY_SEQ;
-  modal("Inspect VM power outcome", '<div id="powerRecoveryLoading" class="empty"><span class="spin2"></span>Checking dispatcher and current VM state…</div>', true);
+  const endpoint=mutation ? "/api/operations/vm-recovery" : "/api/operations/power-recovery";
+  modal(mutation ? "Inspect VM save outcome" : "Inspect VM power outcome", '<div id="powerRecoveryLoading" class="empty"><span class="spin2"></span>Checking dispatcher and current VM state…</div>', true, "operation-review");
   try {
-    const review = await api("/api/operations/power-recovery/preview", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
+    const review = await api(endpoint + "/preview", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
     if (sequence !== POWER_RECOVERY_SEQ || !$("#powerRecoveryLoading")) return;
     const p = review.plan;
     if (!p || typeof p.blocked !== "boolean" || (!p.blocked && !review.capacity_token)) throw new Error("Recovery review is incomplete. Nothing was resolved.");
-    POWER_RECOVERY = {id,...review};
+    POWER_RECOVERY = {id,...review,endpoint};
     const observed=p.observed || {}, resource=p.resource || {};
     $("#mbody").innerHTML = `<div class="update-review">
-      <div class="reviewbox"><b>Resolve tracking, not power</b><p class="small">${esc(resource.namespace || "")} / ${esc(resource.name || "Power job")} · requested ${esc(p.action || "power")} · ${esc(p.dispatch_phase || "dispatcher busy")}</p>
+      <div class="reviewbox"><b>${mutation ? "Resolve tracking, keep resources" : "Resolve tracking, not power"}</b><p class="small">${esc(resource.namespace || "")} / ${esc(resource.name || "VM job")} · requested ${esc(p.action || "VM change")} · ${esc(p.dispatch_phase || "dispatcher busy")}</p>
         <p class="small">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>
       ${p.blockers?.length ? `<div class="note bad">${p.blockers.map(esc).join(" · ")}</div>` : ""}
+      ${mutation && p.resources ? `<div class="reviewbox"><b>Resource write receipts and current identities</b>${p.resources.map(row=>`<div class="small" style="margin-top:10px;overflow-wrap:anywhere"><b>${esc(row.resource.kind)} · ${esc(row.resource.namespace)}/${esc(row.resource.name)}</b><br>Last write: ${esc(row.last_write)} · ${esc(row.relationship)}<br>Recorded UID: ${esc(row.expected?.uid || "no verified receipt")}<br>Current UID: ${esc(row.current?.uid || "not found")}</div>`).join("")}</div>` : ""}
       ${p.observed ? `<div class="reviewbox"><b>Current observations</b>
         <p class="small">VM: ${esc(observed.vm_status)} · policy: ${esc(observed.run_strategy)}</p>
         <p class="small">Instance: ${esc(observed.instance_phase)} · Ready: ${observed.ready ? "yes" : "no"} · Paused: ${observed.paused ? "yes" : "no"}</p>
@@ -174,7 +177,7 @@ window.powerRecoveryReview = async id => {
         <p class="small" style="overflow-wrap:anywhere">Reviewed VM UID: ${esc(resource.original_uid)}<br>Current VM UID: ${esc(observed.vm?.uid || "not found")}<br>Current instance UID: ${esc(observed.instance?.uid || "not found")}</p></div>` : ""}
       ${(p.warnings || []).map(w=>`<div class="note warn small">${esc(w)}</div>`).join("")}
       ${!p.blocked ? `<div class="f"><label>Type ${esc(p.confirm)} to confirm inspection</label><input id="powerRecoveryName" autocomplete="off" oninput="powerRecoveryReady()"></div>
-        <label class="check"><input id="powerRecoveryAck" type="checkbox" onchange="powerRecoveryReady()"> I inspected the VM. I accept that the old request may still take effect late and that resolving this record allows a new, separately reviewed power action.</label>` : ""}
+        <label class="check"><input id="powerRecoveryAck" type="checkbox" onchange="powerRecoveryReady()"> I inspected the VM${mutation ? " and retained resources" : ""}. I accept that the old request may still take effect late and that resolving this record allows a new, separately reviewed ${mutation ? "VM change" : "power action"}.</label>` : ""}
       <div class="modalactions"><button class="btn" onclick="closeModal()">Keep tracking</button><button class="btn danger" id="powerRecoveryApply" disabled onclick="powerRecoveryResolve()">Record unknown outcome</button></div></div>`;
     if ($(".modalbox")) $(".modalbox").scrollTop=0;
   } catch(error) {
@@ -193,7 +196,7 @@ window.powerRecoveryResolve = async () => {
   const review=POWER_RECOVERY, button=$("#powerRecoveryApply");
   POWER_RECOVERY=null;POWER_RECOVERY_BUSY=true;button.disabled=true;
   try {
-    const result=await api("/api/operations/power-recovery/resolve", {method:"POST",headers:{"Content-Type":"application/json"},
+    const result=await api(review.endpoint + "/resolve", {method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({id:review.id,capacity_token:review.capacity_token,confirm_capacity:true,confirm:review.plan.confirm,acknowledge_unknown:true})});
     if (result.operation) noteOperation(result.operation);
     toast(result.detail,"ok");closeModal();

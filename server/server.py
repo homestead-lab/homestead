@@ -15,6 +15,8 @@ import homestead_vm_claims as VM_CLAIMS
 import homestead_vm_profiles as VM_PROFILES
 import homestead_vm_power_job as VM_POWER_JOB
 import homestead_vm_power_recovery as VM_POWER_RECOVERY
+import homestead_vm_mutation_job as VM_MUTATION_JOB
+import homestead_vm_mutation_recovery as VM_MUTATION_RECOVERY
 import homestead_vm_batch as VM_BATCH
 import homestead_batch_capacity as BATCH_CAPACITY
 import homestead_volume_usage as VOLUME_USAGE
@@ -3495,7 +3497,8 @@ def reviewed_vm_create(body):
             if actual != expected:
                 raise CAPACITY_REVIEW.Rejected("VM creation dependencies changed during image preparation; inspect retained resources and review again", fresh)
         CAPACITY_REVIEW.enforce(cfg, fresh, context)
-    result = IMP.commit_vm(prepared, before_save=admit_after_preparation)
+    result = VM_MUTATION_JOB.dispatch("vm-create", cfg, cfg["namespace"], cfg["name"], None, OPS, IMP.ksend,
+        lambda send: IMP.commit_vm(prepared, before_save=admit_after_preparation, send=send))
     if result.get("address"):
         try:
             IPAM.save_record({"ip": result["address"], "name": cfg["name"], "kind": "static",
@@ -3634,7 +3637,8 @@ def reviewed_vm_edit(body):
                 raise CAPACITY_REVIEW.Rejected("VM edit dependencies changed; inspect retained resources and review again", fresh)
         CAPACITY_REVIEW.enforce(body, fresh, context)
         VMS._recheck_edit(resolved)
-    return VMS.commit_edit(prepared, before_save=before_save)
+    return VM_MUTATION_JOB.dispatch("vm-edit", body, prepared["namespace"], prepared["name"], prepared["identity"], OPS, VMS.ksend,
+        lambda send: VMS.commit_edit(prepared, before_save=before_save, send=send))
 
 
 def vm_cluster_configuration(body, *, preview=False):
@@ -4601,6 +4605,9 @@ OPS.RESOLVERS["k3s-cluster"] = K3SC.status
 OPS.RESOLVERS["node-power"] = POWER.status
 OPS.RESOLVERS["vm-power"] = lambda item: VM_POWER_JOB.status(item, kget)
 OPS.CANCELLERS["vm-power"] = (VM_POWER_JOB.cancel_plan, VM_POWER_JOB.cancel_run)
+for _kind in ("vm-create", "vm-edit"):
+    OPS.RESOLVERS[_kind] = VM_MUTATION_JOB.status
+    OPS.CANCELLERS[_kind] = (VM_MUTATION_JOB.cancel_plan, VM_MUTATION_JOB.cancel_run)
 OPS.CANCELLERS["node-power"] = (lambda item: {"can": False, "why_not":
     "A host power command cannot be cancelled after it has been sent"}, lambda item, options: "")
 MOVE_ENGINE.after_finish = cleanup_restore_classes
@@ -5855,6 +5862,7 @@ ADMIN_ROUTES = {
     # Carrying a stopped job on runs its remaining steps - a swap, for one.
     "/api/operations/resume",
     "/api/operations/power-recovery/preview", "/api/operations/power-recovery/resolve",
+    "/api/operations/vm-recovery/preview", "/api/operations/vm-recovery/resolve",
     "/api/network/vips/add", "/api/network/vips/remove", "/api/network/vips/label", "/api/network/vips/default", "/api/network/vm-networks",
     "/api/files/list", "/api/files/read", "/api/files/write", "/api/files/close",
     "/api/node/smart/test",
@@ -7358,6 +7366,10 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, VM_POWER_RECOVERY.preview(b.get("id", ""), OPS, kget, self.user))
             if p == "/api/operations/power-recovery/resolve":
                 return self._send(200, VM_POWER_RECOVERY.resolve(b, OPS, kget, self.user))
+            if p == "/api/operations/vm-recovery/preview":
+                return self._send(200, VM_MUTATION_RECOVERY.preview(b.get("id", ""), OPS, kget, self.user))
+            if p == "/api/operations/vm-recovery/resolve":
+                return self._send(200, VM_MUTATION_RECOVERY.resolve(b, OPS, kget, self.user))
             if p == "/api/operations/cancel-plan":
                 return self._send(200, OPS.cancel_plan(b.get("id", "")))
             if p == "/api/operations/cancel":

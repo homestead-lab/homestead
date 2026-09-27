@@ -18,7 +18,7 @@ class VMWriteJournalTests(unittest.TestCase):
         self.addCleanup(patch.stop)
         self.fixture = fixtures.VMWriteTests()
         self.fixture.setUp()
-        self.job = ops.start("vm-edit", "Save guest", {}, "/vms", {"namespace": "lab", "name": "guest", "phase": "prepared"})
+        self.job = ops.start("vm-edit", "Save guest", {}, "/vms", {"namespace": "lab", "name": "guest", "phase": "prepared", "review_digest": "a" * 64})
         self.record = writes.operation_recorder(ops, self.job["id"])
         self.writer = writes.ResourceWriter(self.send, self.record)
         self.sent = []

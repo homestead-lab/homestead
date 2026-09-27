@@ -1,4 +1,5 @@
 import copy
+import tempfile
 import unittest
 import urllib.error
 from unittest import mock
@@ -14,6 +15,11 @@ class VMCreateAdmissionTests(unittest.TestCase):
 
     def setUp(self):
         fixtures.VMCapacityTests.setUp(self)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        patch = mock.patch.object(server.OPS, "DATA_DIR", temporary.name)
+        patch.start()
+        self.addCleanup(patch.stop)
         self.body = {"name": "fresh", "namespace": "lab", "password": "test-only-password", "memory": "2Gi"}
         self.platform = {"harvester": False, "cdi": False}
         self.objects["/apis/storage.k8s.io/v1/storageclasses/storage"] = {
@@ -40,6 +46,10 @@ class VMCreateAdmissionTests(unittest.TestCase):
         def send(method, path, body=None, **kwargs):
             value = copy.deepcopy(body or {})
             value.setdefault("metadata", {}).update(uid="created-uid", resourceVersion="1")
+            value["metadata"].setdefault("namespace", "lab")
+            if method == "PATCH":
+                value.update(apiVersion="v1", kind="Secret")
+                value["metadata"].setdefault("name", path.rsplit("/", 1)[-1])
             return value
         with mock.patch.object(server.IMP, "ksend", side_effect=send) as writes, \
                 mock.patch.object(server, "ksend") as other_writes, \
@@ -82,6 +92,11 @@ class VMCreateAdmissionTests(unittest.TestCase):
         claim = next(c.args[2] for c in writes.call_args_list if c.args[1].endswith("/persistentvolumeclaims"))
         self.assertEqual("Filesystem", claim["spec"]["volumeMode"])
         self.assertEqual("storage", claim["spec"]["storageClassName"])
+        self.assertEqual("succeeded", result[1]["operation"]["status"])
+        duplicate, repeated, _ = self.call("/api/vm/create", body)
+        self.assertEqual(400, duplicate[0], duplicate)
+        self.assertIn("already has job", duplicate[1]["error"])
+        repeated.assert_not_called()
 
     def cdi_setup(self):
         self.platform["cdi"] = True
@@ -118,7 +133,7 @@ class VMCreateAdmissionTests(unittest.TestCase):
 
     def test_address_record_failure_does_not_hide_prior_secret_warning(self):
         body = self.reviewed()
-        with mock.patch.object(server.IMP, "commit_vm", return_value={"ok": True, "address": "192.0.2.4", "warning": "Login Secret ownership needs inspection."}), \
+        with mock.patch.object(server.VM_MUTATION_JOB, "dispatch", return_value={"ok": True, "address": "192.0.2.4", "warning": "Login Secret ownership needs inspection."}), \
                 mock.patch.object(server.IPAM, "save_record", side_effect=OSError("unavailable")):
             result = server.reviewed_vm_create(body)
         self.assertIn("Secret ownership", result["warning"])

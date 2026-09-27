@@ -55,3 +55,24 @@ test("stale recovery response cannot replace a newer job review",async()=>{
   t.fields["#powerRecoveryAck"].checked=true;t.fields["#powerRecoveryName"].value="guest";
   await t.ctx.powerRecoveryResolve();assert.equal(t.sent.at(-1).body.id,"new");
 });
+
+test("VM save recovery uses its own endpoint, escaped receipts and truthful retention language",async()=>{
+  const t=setup(),original=t.ctx.api;
+  t.ctx.api=async(path,options)=>{
+    const result=await original(path,options);
+    if(path.endsWith('/preview')) {
+      delete result.plan.observed;
+      result.plan.resources=[{resource:{kind:'Secret',namespace:'lab',name:'<login>'},last_write:'uncertain',relationship:'replacement; not adopted',
+        expected:{uid:'old'},current:{uid:'new'}}];
+    }
+    return result;
+  };
+  await t.ctx.powerRecoveryReview('job',true);
+  assert.equal(t.sent[0].path,'/api/operations/vm-recovery/preview');
+  const html=t.fields['#mbody'].innerHTML;
+  assert.match(html,/Resolve tracking, keep resources/);assert.match(html,/Secret · lab\/&lt;login>/);
+  assert.match(html,/replacement; not adopted/);assert.doesNotMatch(html,/separately reviewed power action/);
+  t.fields['#powerRecoveryAck'].checked=true;t.fields['#powerRecoveryName'].value='guest';
+  await t.ctx.powerRecoveryResolve();await t.ctx.powerRecoveryResolve();
+  assert.equal(t.sent.length,2);assert.equal(t.sent[1].path,'/api/operations/vm-recovery/resolve');
+});

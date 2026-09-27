@@ -77,3 +77,15 @@ test("save omits locked or unchanged profile fields but sends deliberate resourc
   t.fields["#ve_cores"].value="4";t.fields["#ve_mem"].value="8Gi";
   await t.ctx.vmEditSave();assert.equal(reviews[2].cores,4);assert.equal(reviews[2].memory,"8Gi");
 });
+
+test("edit records its job and refreshes the tray on success or lost response",async()=>{
+  for(const fail of [false,true]){
+    const t=setup({fail}),jobs=[];let refreshed=0;
+    const original=t.ctx.api;
+    t.ctx.api=async(path,options)=>{const result=await original(path,options);return path.endsWith('/preview')?result:{...result,operation:{id:'saved'}};};
+    t.ctx.noteOperation=op=>jobs.push(op);t.ctx.refreshOperations=()=>refreshed++;
+    await t.ctx.vmEditReview({name:'guest',ns:'lab'});
+    t.fields['#vmEditApprove'].checked=true;await t.ctx.vmEditReviewedApply();
+    assert.equal(jobs.length,fail?0:1);assert.equal(refreshed,1);
+  }
+});

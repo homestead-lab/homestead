@@ -696,6 +696,25 @@ These checks protect the journal, but do not make Kubernetes mutations atomic or
 prove cross-node locking/failover on a particular storage backend. Validate that
 behavior on disposable resources before relying on a custom RWX backend.
 
+Reviewed VM creation and edits record a job before creating or changing images,
+login Secrets, claims or the VM. Each resource write has a durable intent and an
+acknowledged UID/version receipt; the journal contains no cloud-init, credentials
+or request bodies. A completed save means Kubernetes acknowledged the configuration,
+not that the guest or its applications are ready. Consumed create/edit approvals
+share the permanently retained `vm-power-approvals.json` ledger despite its historical
+filename. Replaying an approval cannot send the same change again.
+
+For an interrupted or uncertain save, open **Recent jobs → Inspect save outcome**.
+An admin can compare recorded and current resource identities, then type the VM
+name and acknowledge the possible late effect to resolve tracking as **unknown**.
+This is blocked while a dispatcher is active and requires a fresh review if an
+observed identity/version changes. It does not delete partial resources, retry a
+save, adopt replacement resources, or prove an earlier request failed. Resources
+remain for inspection; Kubernetes may still apply an earlier request late. The
+old approval stays consumed, and a new change requires its own review. Until
+inspection resolves tracking, another reviewed save/start/restart/resume for that
+VM is blocked; emergency stop remains available independently.
+
 Copies on different nodes all mount Homestead's data claim, so more than one
 copy needs a claim every node can mount: ReadWriteMany on a class Longhorn
 serves through its share manager. A migratable class - Harvester's own and
