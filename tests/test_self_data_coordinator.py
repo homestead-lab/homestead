@@ -32,7 +32,7 @@ def fact(o):
 
 
 class Cluster:
-    def __init__(self):
+    def __init__(self, published=True):
         self.objects, self.sent, self.admissions = {}, [], []
         self.lost = None
         self.reject = None
@@ -77,6 +77,8 @@ class Cluster:
             "source_pv": fact(self.oldpv), "destination_pvc": fact(self.target), "destination_pv": fact(self.newpv),
             "worker": fact(worker), "nodes": [{"name": "node1", "uid": "node1-uid", "boot_id": "boot1"}],
             "data_volume": "data", "target_shareable": True, "copy_image": IMAGE, "copy_node": "node1"})
+        if published:
+            self.anchor.pointer_published(A.pointer_digest("lab", self.anchor.state, self.handle["uid"]))
         self.logs_text = "HOMESTEAD_SELF_DATA_COPY " + OP + " " + json.dumps(RECEIPT)
         self.job_path = "/apis/batch/v1/namespaces/lab/jobs/homestead-data-copy-" + OP
 

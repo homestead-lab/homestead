@@ -7,6 +7,7 @@ verified. The wrapper must gate imports/background jobs and mutating requests.
 """
 import json
 import os
+import re
 import stat
 import urllib.error
 
@@ -21,16 +22,26 @@ def read_marker(directory):
     path = os.path.join(directory, MARKER)
     try:
         before = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        raise Held("The data handoff marker cannot be inspected") from None
+    try:
         if not stat.S_ISREG(before.st_mode):
             raise Held("The data handoff marker is not a regular local record")
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
-        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+        with os.fdopen(descriptor, "rb") as handle:
             current = os.fstat(handle.fileno())
             if not stat.S_ISREG(current.st_mode) or (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino):
                 raise Held("The data handoff marker changed while opening it")
             raw = handle.read(8193)
-    except FileNotFoundError:
-        return None
+            after = os.fstat(handle.fileno())
+            if (current.st_size, current.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                raise Held("The data handoff marker changed while reading it")
+        published = os.lstat(path)
+        if (published.st_dev, published.st_ino, published.st_size, published.st_mtime_ns) != (
+                after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+            raise Held("The data handoff marker changed while reading it")
     except (OSError, UnicodeError):
         raise Held("The data handoff marker cannot be read; data access must be recovered") from None
     if len(raw) > 8192:
@@ -45,9 +56,11 @@ def read_marker(directory):
         for key in ("operation", "anchor_uid", "source_uid", "destination_uid"):
             if not isinstance(value[key], str) or not 0 < len(value[key]) <= 1024:
                 raise ValueError()
+        if not re.fullmatch(r"[a-f0-9]{24}", value["operation"]):
+            raise ValueError()
         if value["source"] == value["destination"] or value["source_uid"] == value["destination_uid"]:
             raise ValueError()
-    except (ValueError, TypeError, KeyError):
+    except (ValueError, TypeError, KeyError, UnicodeError):
         raise Held("The data handoff marker is invalid; it cannot authorize startup") from None
     return value
 
@@ -95,6 +108,8 @@ class Fence:
             raise Held("This data handoff marker belongs to another Homestead installation")
         control.load(operation=marker["operation"], uid=marker["anchor_uid"])
         state = control.state
+        if state.get("pointer_receipt") != A.pointer_digest(self.namespace, state, marker["anchor_uid"]):
+            raise Held("The data handoff local receipt was not confirmed; startup and writes remain held")
         plan = state.get("plan", {})
         if (state["source"]["name"], state["source"]["uid"], state["destination"],
                 plan.get("destination_pvc", {}).get("uid")) != (

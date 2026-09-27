@@ -7,6 +7,7 @@ No request bodies, configuration, credentials or raw API errors belong here.
 Conditional PUT semantics: https://kubernetes.io/docs/reference/using-api/api-concepts/#resource-versions
 """
 import copy
+import hashlib
 import json
 import re
 
@@ -16,6 +17,24 @@ from homestead_storage_journal import Held, identity, target
 PHASES = ("prepare", "quiesce", "copy", "verify", "switch", "start", "done")
 LABEL = "homestead.io/self-data-handoff"
 MAX_BYTES = 262144
+
+
+def pointer(namespace, state, uid):
+    """Non-secret local pointer; the API record remains the authority."""
+    if "plan" not in state:
+        raise Held("The data handoff needs a pinned plan before publishing its local receipt")
+    return {"protocol": 1, "namespace": namespace, "deployment": state["deployment"]["name"],
+            "operation": state["operation"], "anchor_uid": uid,
+            "source": state["source"]["name"], "source_uid": state["source"]["uid"],
+            "destination": state["destination"], "destination_uid": state["plan"]["destination_pvc"]["uid"]}
+
+
+def pointer_bytes(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+
+
+def pointer_digest(namespace, state, uid):
+    return hashlib.sha256(pointer_bytes(pointer(namespace, state, uid))).hexdigest()
 
 
 def _keys(value, required, optional=()):
@@ -81,7 +100,7 @@ def _journal(job, operation, namespace):
 
 def _validate(state, namespace):
     _keys(state, ("protocol", "operation", "deployment", "source", "destination", "replicas", "phase", "journal"),
-          ("plan", "copy_receipt"))
+          ("plan", "copy_receipt", "pointer_receipt"))
     if type(state["protocol"]) is not int or state["protocol"] != 1:
         raise Held("The data handoff protocol is unsupported")
     if not isinstance(state["operation"], str) or not re.fullmatch(r"[a-f0-9]{24}", state["operation"]):
@@ -132,6 +151,10 @@ def _validate(state, namespace):
                 raise Held("The data copy image is not pinned to a digest")
             if plan.get("copy_node") not in seen:
                 raise Held("The data copy node was not included in the reviewed host inventory")
+    if "pointer_receipt" in state:
+        if "plan" not in state:
+            raise Held("A data handoff pointer receipt requires a pinned plan")
+        _hash(state["pointer_receipt"])
     if "copy_receipt" in state:
         receipt = state["copy_receipt"]
         _keys(receipt, ("state", "worker_uid"), ("manifest", "files", "bytes"))
@@ -184,6 +207,8 @@ class Anchor:
             raise Held("The data handoff control record cannot be verified") from None
         if state["operation"] != operation or state["deployment"]["name"] + "-data-handoff" != self.name:
             raise Held("The data handoff control record belongs to another operation")
+        if "pointer_receipt" in state and state["pointer_receipt"] != pointer_digest(self.namespace, state, meta["uid"]):
+            raise Held("The data handoff pointer receipt belongs to another control record")
         return state
 
     def create(self, *, operation, deployment, source, destination, replicas):
@@ -279,6 +304,21 @@ class Anchor:
             raise Held("The data handoff plan is already pinned and cannot be replaced")
         state = copy.deepcopy(self.state)
         state["plan"] = copy.deepcopy(plan)
+        self._replace(state)
+
+    def pointer_published(self, digest):
+        """Only the setup publisher calls this AFTER file and directory fsync.
+
+        This proves pointer publication, not that writers have drained. A lost
+        checkpoint reply is held; publication must never be replayed by name.
+        """
+        handle = self.handle()
+        if (self.state["phase"] != "prepare" or "pointer_receipt" in self.state
+                or self.state["journal"]["ref"]["storage_writes"]
+                or digest != pointer_digest(self.namespace, self.state, handle["uid"])):
+            raise Held("The data handoff local receipt cannot be replaced or published at this stage")
+        state = copy.deepcopy(self.state)
+        state["pointer_receipt"] = digest
         self._replace(state)
 
     def copy_started(self):
