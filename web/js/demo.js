@@ -811,6 +811,19 @@ ssh_pwauth: true
           : [{ type: "Ready", status: "False", reason: v.problem ? "Unschedulable" : "", message: v.problem }],
         events: [{ type: "Normal", reason: "SuccessfulCreate", message: `Created virtual machine pod virt-launcher-${v.name}-x7k2p`, count: 1, last: new Date().toISOString() }] };
     },
+    "/api/vm/power/preview": (url, init) => {
+      const body = JSON.parse(init.body), v = demoVms.find(x => x.name === body.name) || demoVms[0];
+      const guest = parseFloat(v.memory) || 4;
+      const policy = v.run_strategy || "Halted";
+      return {capacity_token:"demo-vm-power-review", capacity:{blocked:false, requires_confirmation:true,
+        additional:1, pod_request_gb:guest, pod_memory_gb:guest + 0.25, pod_cpu_request_percent:20,
+        vm:{action:body.action, guest_memory_gb:guest, request_is_lower_bound:body.action !== "unpause",
+          policy_before:policy, policy_after:body.action === "start" && policy === "Halted" ? "Always" : policy},
+        warnings:["Demo estimates only: launcher overhead, storage attachment and actual guest readiness need live checks."],
+        candidates:[{name:v.node || "homestead-01", eligible:true, metrics_available:true, used_gb:10, capacity_gb:32,
+          projected_gb:10 + guest + 0.25, projected_percent:Math.round((10 + guest + 0.25) / 32 * 100),
+          reservations_known:true, reserved_gb:8, request_slots:1}]}};
+    },
     "/api/vm/power": (url, init) => ({ ok: true, detail: `${JSON.parse(init.body).name} is ${{ start: "starting", stop: "stopping" }[JSON.parse(init.body).action] || "done"}` }),
     "/api/vm/edit": { ok: true, detail: "saved; the new CPU and memory apply when it next starts" },
     "/api/vm/delete": { ok: true, detail: "deleted; its disks are kept" },

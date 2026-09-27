@@ -125,6 +125,10 @@ rules:
       - virtualmachineinstances/pause
       - virtualmachineinstances/unpause
     verbs: [update]
+  # Read-only resolution of the exact VM's instance type and preference.
+  - apiGroups: ["subresources.kubevirt.io"]
+    resources: [virtualmachines/expand-spec]
+    verbs: [get]
   # The VM console: the screen (VNC) and the serial port, streamed through
   # Homestead so the browser never holds the service-account token.
   - apiGroups: ["subresources.kubevirt.io"]

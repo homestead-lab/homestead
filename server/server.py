@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import homestead_names as NAMES
 import homestead_memory as MEMORY
 import homestead_capacity_review as CAPACITY_REVIEW
+import homestead_vm_capacity as VM_CAPACITY
 import homestead_batch_capacity as BATCH_CAPACITY
 import homestead_volume_usage as VOLUME_USAGE
 import homestead_snapshot_delete as SNAPSHOT_DELETE
@@ -3323,6 +3324,86 @@ def create_vm_with_address(cfg):
         except Exception:
             pass
     return result
+
+
+def vm_power_capacity_plan(body):
+    ns = _dns_name(body.get("ns", DEFAULT_NS), "namespace")
+    name = _dns_name(body.get("name"), "VM name")
+    action = body.get("action")
+    if action not in ("start", "restart", "unpause"):
+        raise ValueError("Only Start, Restart and Resume need a VM capacity review")
+    current = kget(f"{VMS.API}/namespaces/{ns}/virtualmachines/{name}")
+    rollout_review_context(current)  # require identity/version, not a name-only approval
+    expanded_spec = None
+    if action != "unpause" and any(current.get("spec", {}).get(key) for key in ("instancetype", "preference")):
+        # KubeVirt owns profile merging/defaults. Its GET expansion endpoint is
+        # read-only; never borrow resources from a possibly stale running VMI.
+        expanded = kget(f"{VMS.SUB}/namespaces/{ns}/virtualmachines/{name}/expand-spec")
+        if VM_CAPACITY.VMRES.identity(expanded) != VM_CAPACITY.VMRES.identity(current):
+            raise ValueError("The VM changed during profile expansion; refresh its review")
+        expanded_spec = (expanded.get("spec", {}).get("template") or {}).get("spec")
+        if not isinstance(expanded_spec, dict) or not expanded_spec.get("domain"):
+            raise ValueError("KubeVirt could not expand this VM's instance type/preferences")
+    dependencies = {}
+    def observed_read(path):
+        capture = any(part in path for part in ("/persistentvolumeclaims/", "/persistentvolumes/", "/storageclasses/",
+                                                "/datavolumes/", "/network-attachment-definitions/"))
+        try:
+            value = kget(path)
+        except urllib.error.HTTPError as error:
+            if capture and error.code == 404:
+                dependencies[path] = None
+            raise
+        if capture:
+            dependencies[path] = VM_CAPACITY.VMRES.identity(value)
+        return value
+    threshold = get_app_settings()["thresholds"]["memory"]["critical"]
+    plan = VM_CAPACITY.plan(current, observed_read, PLACE.get_nodes(), action=action, current=current,
+                            warning_percent=threshold, expanded_spec=expanded_spec)
+    strategy = VMS._strategy(current)
+    policy_after = "Always" if action == "start" and strategy == "Halted" else strategy
+    plan["vm"]["policy_before"], plan["vm"]["policy_after"] = strategy, policy_after
+    if strategy == "Once" and action in ("start", "restart"):
+        plan["blockers"].append("This VM uses the Once run strategy. Edit its run strategy and review that change before starting it again.")
+        plan["blocked"] = True
+    if policy_after != strategy:
+        plan["warnings"].append("Starting a Halted VM changes its KubeVirt run strategy to Always: it will be restarted after shutdown or failure until you stop it.")
+    plan["warnings"].append("Power requests address the VM by name. Identity is rechecked immediately before sending, but this is not an atomic scheduler reservation or a cross-resource transaction.")
+    plan["requires_confirmation"] = True
+    context = {"action": "vm-power", "observations": plan["vm"]["context"],
+               "policy_before": strategy, "policy_after": policy_after,
+               "expanded_spec": expanded_spec, "dependencies": dependencies}
+    return plan, context
+
+
+def preview_vm_power(body):
+    plan, context = vm_power_capacity_plan(body)
+    return {"capacity": plan, "capacity_token": CAPACITY_REVIEW.issue(body, context)}
+
+
+def reviewed_vm_power(body):
+    action = body.get("action", "")
+    ns = _dns_name(body.get("ns", DEFAULT_NS), "namespace")
+    name = _dns_name(body.get("name"), "VM name")
+    if action in ("stop", "force-stop", "pause"):
+        # Recovery must remain available even if capacity/config inventory fails.
+        return VMS.power(ns, name, action)
+    plan, context = vm_power_capacity_plan(body)
+    CAPACITY_REVIEW.enforce(body, plan, context)
+    for path, expected in context["dependencies"].items():
+        observed = VM_CAPACITY._optional(kget, path)
+        if (VM_CAPACITY.VMRES.identity(observed) if observed else None) != expected:
+            raise CAPACITY_REVIEW.Rejected("A VM storage/network dependency changed during admission; review it again", plan)
+    # Re-read both identities after the inventory and token checks. Never retry
+    # an API conflict by fetching and writing a new run policy.
+    current = kget(f"{VMS.API}/namespaces/{ns}/virtualmachines/{name}")
+    observations = context["observations"]
+    if VM_CAPACITY.VMRES.identity(current) != observations["vm"]:
+        raise CAPACITY_REVIEW.Rejected("The VM changed during admission; review it again", plan)
+    vmi = VM_CAPACITY._optional(kget, f"{VMS.API}/namespaces/{ns}/virtualmachineinstances/{name}")
+    if (VM_CAPACITY.VMRES.identity(vmi) if vmi else None) != observations.get("vmi"):
+        raise CAPACITY_REVIEW.Rejected("The running VM instance changed during admission; review it again", plan)
+    return VMS.power(ns, name, action)
 
 
 def selectable_storage_classes(rows=None):
@@ -6660,9 +6741,11 @@ class H(BaseHTTPRequestHandler):
                         {"kind": "VirtualMachine", "name": b["name"], "namespace": ns},
                         "/vms", {"namespace": ns, "name": result["migration"]})
                 return self._send(200, result)
+            if p == "/api/vm/power/preview":
+                return self._send(200, preview_vm_power(b))
             if p == "/api/vm/power":
                 _cache.pop("vms", None)
-                return self._send(200, VMS.power(b.get("ns", DEFAULT_NS), b.get("name", ""), b.get("action", "")))
+                return self._send(200, reviewed_vm_power(b))
             if p == "/api/vm/edit":
                 _cache.pop("vms", None)
                 return self._send(200, VMS.edit(b.get("ns", DEFAULT_NS), b.get("name", ""), b))
