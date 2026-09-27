@@ -27,6 +27,7 @@ except ImportError:
     msvcrt = None
 
 DIR = os.environ.get("DATA_DIR", "/data")
+WRITE_GUARD = None
 
 
 def bind(data_dir):
@@ -130,6 +131,8 @@ def temporary(path):
 
 
 def write_json(path, value, *, durable=False, **dump):
+    if WRITE_GUARD is not None:
+        WRITE_GUARD(path)
     folder = os.path.dirname(path)
     if folder:
         os.makedirs(folder, exist_ok=True)
