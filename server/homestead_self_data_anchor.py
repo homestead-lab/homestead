@@ -156,6 +156,9 @@ def _validate(state, namespace):
             if node["name"] in seen:
                 raise Held("The data handoff node inventory has duplicates")
             seen.add(node["name"])
+        worker_admission = state.get("setup", {}).get("admission")
+        if worker_admission is not None and sorted(plan["nodes"], key=lambda n: n["name"]) != sorted(worker_admission["nodes"], key=lambda n: n["name"]):
+            raise Held("The data move host identities differ from the coordinator's approved setup")
         _name(plan["data_volume"])
         if type(plan["target_shareable"]) is not bool:
             raise Held("The data handoff access-mode plan is invalid")
@@ -330,7 +333,7 @@ class Anchor:
         state["plan"] = copy.deepcopy(plan)
         self._replace(state)
 
-    def prepare_setup(self, resources):
+    def prepare_setup(self, resources, *, admission=None):
         """Pin helper creation targets/hashes once, before sending any POST."""
         self.handle()
         if (self.state["phase"] != "prepare" or any(k in self.state for k in ("setup", "plan", "pointer_receipt"))
@@ -338,6 +341,8 @@ class Anchor:
             raise Held("The helper setup review can no longer be changed")
         state = copy.deepcopy(self.state)
         state["setup"] = {"resources": copy.deepcopy(resources), "receipts": []}
+        if admission is not None:
+            state["setup"]["admission"] = copy.deepcopy(admission)
         self._replace(state)
 
     def checkpoint_setup(self, receipts):

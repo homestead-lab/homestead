@@ -49,6 +49,21 @@ def validate_policy(policy):
             raise Held("The data move capacity approval is invalid")
 
 
+def validate_worker_approval(approval):
+    import homestead_self_data_anchor as A
+    A._keys(approval, ("threshold", "nodes", "receipt"))
+    validate_policy({"threshold": approval["threshold"], "reviews": {"copy": approval["receipt"], "restart": approval["receipt"]}})
+    if not isinstance(approval["nodes"], list) or not 1 <= len(approval["nodes"]) <= 256:
+        raise Held("The coordinator capacity review needs a bounded host inventory")
+    names = set()
+    for node in approval["nodes"]:
+        A._keys(node, ("name", "uid", "boot_id"))
+        A._name(node["name"]); A._identity({"uid": node["uid"], "resourceVersion": node["boot_id"]})
+        if node["name"] in names:
+            raise Held("The coordinator capacity review has duplicate hosts")
+        names.add(node["name"])
+
+
 def _capacity_warning(message):
     return (message in BASE_WARNINGS or message.startswith("memory is not limited for ")
             or re.fullmatch(r"\d+ unscheduled pod\(s\) also compete for capacity", message)
@@ -115,12 +130,27 @@ def _nodes(read, pinned, now):
 
 
 def _proposal(purpose, proposal, namespace):
-    kind = "Job" if purpose == "copy" else "Deployment"
-    if purpose not in ("copy", "restart") or proposal.get("kind") != kind or proposal.get("metadata", {}).get("namespace") != namespace:
+    kind = {"copy": "Job", "restart": "Deployment", "worker": "Pod"}.get(purpose)
+    if kind is None or proposal.get("kind") != kind or proposal.get("metadata", {}).get("namespace") != namespace:
         raise Held("The capacity proposal does not match this data move")
-    template = proposal["spec"]["template"]
+    template = ({"metadata": copy.deepcopy(proposal["metadata"]), "spec": copy.deepcopy(proposal["spec"])}
+                if purpose == "worker" else proposal["spec"]["template"])
+    if purpose == "worker":
+        # A read-only preview cannot know a future ConfigMap's Kubernetes UID.
+        # Normalize ONLY that runtime identity for capacity acknowledgement.
+        # Bootstrap's separately journalled manifest still binds the real UID,
+        # and the launcher cannot override it. Scope/image/resources stay bound.
+        import homestead_self_data_launch as L
+        env = [e for c in template["spec"].get("containers", []) for e in c.get("env", []) if e.get("name") == L.CONFIG_ENV]
+        if len(env) != 1 or set(env[0]) != {"name", "value"}:
+            raise Held("The coordinator capacity template has ambiguous runtime configuration")
+        config, scope = L.parse_configuration(env[0]["value"])
+        if scope.namespace != namespace:
+            raise Held("The coordinator capacity template belongs to a different namespace")
+        config["anchor_uid"] = "pending"
+        env[0]["value"] = json.dumps(config, sort_keys=True, separators=(",", ":"))
     spec = template["spec"]
-    replicas = 1 if purpose == "copy" else proposal["spec"]["replicas"]
+    replicas = 1 if purpose in ("copy", "worker") else proposal["spec"]["replicas"]
     if type(replicas) is not int or not 1 <= replicas <= 64:
         raise Held("The data move replica count needs a bounded placement review")
     if (spec.get("resourceClaims") or spec.get("runtimeClassName") or spec.get("schedulingGates")
@@ -185,6 +215,26 @@ def review(read, namespace, purpose, proposal, pinned_nodes, threshold, *, clock
     report["receipt"] = {"proposal": _review_key(fingerprint, threshold, pinned_nodes),
                          "warnings": sorted(digest(w) for w in warnings)}
     return report
+
+
+class WorkerAdmitter:
+    """Initial helper starts alongside the existing apps, not in freed space.
+
+    Caller must validate the user's signed approval before pinning this receipt
+    in the setup journal. Thereafter that immutable record is its authority.
+    """
+    def __init__(self, read, namespace, approval, *, clock=time.time):
+        validate_worker_approval(approval)
+        self.read, self.namespace, self.clock = read, namespace, clock
+        self.approval = copy.deepcopy(approval)
+
+    def __call__(self, pod):
+        report = review(self.read, self.namespace, "worker", pod, self.approval["nodes"], self.approval["threshold"], clock=self.clock)
+        accepted = self.approval["receipt"]
+        if (report["receipt"]["proposal"] != accepted["proposal"]
+                or not set(report["receipt"]["warnings"]) <= set(accepted["warnings"])):
+            raise Held("The coordinator workload or capacity warnings changed; review before starting it")
+        return True
 
 
 class Admitter:
