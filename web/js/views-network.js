@@ -11,7 +11,7 @@ function networkVipCard(v, data) {
     <div class="vip-card-heading"><b class="mono">${esc(v.ip)}</b><span class="tag ${blocked ? "bad" : v.free ? "" : "info"}">${blocked ? "Unavailable" : v.free ? "Not assigned" : "In use"}</span></div>
     <div class="vip-card-label">${esc(v.label || "No label")}</div>
     ${isDefault ? '<div class="vip-card-default"><span class="tag ok">Default workload VIP</span><span class="dim xs">Suggested for new workloads; existing services stay where they are.</span></div>' : ""}
-    <div class="vip-card-usage small">${blocked ? esc(blocked) : (v.used_by || []).length ? `<span class="dim">Used by</span> ${(v.used_by || []).map(n => `<span class="mono">${esc(n)}</span>`).join("")}` : 'Saved for use. It is advertised when a workload Service requests it.'}</div>
+    ${blocked || (v.used_by || []).length ? `<div class="vip-card-usage small">${blocked ? esc(blocked) : `<span class="dim">Used by</span> ${(v.used_by || []).map(n => `<span class="mono">${esc(n)}</span>`).join("")}`}</div>` : ""}
     <div class="vip-card-actions">
       ${canUse ? `<button class="btn sm" data-need="operator" onclick="networkExpose('','','Deployment','${esc(v.ip)}')">Use this VIP</button>` : ""}
       ${canUse && !isDefault ? `<button class="btn sm" data-need="admin" onclick="vipDefault('${esc(v.ip)}')">Make default</button>` : ""}
@@ -36,24 +36,21 @@ async function viewNetworking() {
       <div class="row"><button class="btn" onclick="networkToggleSystem()">${showSystem ? "Hide" : "Show"} system</button>
       <button class="btn pri" data-need="operator" onclick="networkExpose()">＋ Expose workload</button></div></div>
     ${networkTabs("services")}
-    <div class="note" style="margin-bottom:14px"><b>Networking roles</b><br>
-      <b>${esc(controller.name)}</b> handles service addresses. Multus adds separate LAN interfaces; it does not provide VIP failover.
-      ${STATE.platform?.servicelb ? "ServiceLB also exposes unclassified Services on node IPs, not a movable VIP." : ""}
-      <div class="small" style="margin-top:8px"><b>Default workload VIP:</b> ${esc(data.shared_vip?.ip || "not configured")}. Choose a default below, then select <b>Default workload VIP</b> or <b>Specific VIP</b> when deploying.
-      VMs on the pod network can be exposed through a Service; bridged VMs use their own DHCP/static address, not a service VIP.</div>
-      <div class="small dim" style="margin-top:8px">VIP failover is not full-cluster HA: multiple eligible hosts, a surviving control-plane quorum, portable storage with healthy replicas, and workload restart policies are also needed.
-      ${Object.keys(data.node_names || {}).length < 2 ? "This is a single-node cluster: there is no second host to take over." : "Test host failure before relying on recovery."}</div></div>
-    <div class="grid g4 statgrid" style="margin-bottom:18px">
-      <div class="card glow ${controller.healthy ? "g-ok" : "g-bad"}"><div class="ctitle">Load balancer</div>
-        <div class="bignum" style="margin-top:8px">${controller.ready}<span class="unit">/${controller.desired}</span></div>
-        <div class="csub">${esc(controller.name)} agents ready · ${esc(controller.mode)}</div></div>
-      <div class="card flat"><div class="ctitle">Virtual IPs</div><div class="bignum" style="margin-top:8px">${data.summary.vips}</div>
-        <div class="csub">${data.summary.listeners} LAN listeners · ${data.available_vip_count} unused in pools</div></div>
-      <div class="card flat"><div class="ctitle">Application services</div><div class="bignum" style="margin-top:8px">${data.summary.app_services}</div>
-        <div class="csub">${data.summary.ready_endpoints} ready endpoints</div></div>
-      <div class="card flat"><div class="ctitle">Attention</div><div class="bignum" style="margin-top:8px">${data.summary.unhealthy}</div>
-        <div class="csub">${data.conflicts.length ? `${data.conflicts.length} listener conflict(s)` : "no VIP/port conflicts"}</div></div>
-    </div>
+    ${UI.guide("How addresses work here", `
+      <p><b>${esc(controller.name)}</b> handles service addresses. Multus adds separate LAN interfaces; it does not provide VIP failover.
+      ${STATE.platform?.servicelb ? "ServiceLB also exposes unclassified Services on node IPs, not a movable VIP." : ""}</p>
+      <p><b>Default workload VIP:</b> ${esc(data.shared_vip?.ip || "not configured")}. Choose a default below, then select <b>Default workload VIP</b> or <b>Specific VIP</b> when deploying.
+      VMs on the pod network can be exposed through a Service; bridged VMs use their own DHCP/static address, not a service VIP.</p>
+      <p>VIP failover is not full-cluster HA: multiple eligible hosts, a surviving control-plane quorum, portable storage with healthy replicas, and workload restart policies are also needed.
+      ${Object.keys(data.node_names || {}).length < 2 ? "This is a single-node cluster: there is no second host to take over." : "Test host failure before relying on recovery."}</p>`)}
+    ${UI.stats([
+      { title: "Load balancer", value: controller.ready, unit: `/${controller.desired}`, tone: controller.healthy ? "ok" : "bad",
+        sub: `${controller.name} agents ready · ${controller.mode}` },
+      { title: "Virtual IPs", value: data.summary.vips, sub: `${data.summary.listeners} LAN listeners · ${data.available_vip_count} unused in pools` },
+      { title: "Application services", value: data.summary.app_services, sub: `${data.summary.ready_endpoints} ready endpoints` },
+      { title: "Attention", value: data.summary.unhealthy, tone: data.summary.unhealthy || data.conflicts.length ? "warn" : "",
+        sub: data.conflicts.length ? `${data.conflicts.length} listener conflict(s)` : "no VIP/port conflicts" },
+    ])}
     ${(data.platform_clashes || []).length ? `<div class="note bad" style="margin-bottom:14px"><b>${data.platform_clashes.length === 1 ? "An app is" : `${data.platform_clashes.length} apps are`} on the cluster's own address.</b>
       ${esc(data.platform_clashes.map(c => `${c.namespace}/${c.service}`).join(", "))} ${data.platform_clashes.length === 1 ? "uses" : "use"}
       <span class="mono">${esc(data.platform_clashes[0].ip)}</span>, which ${esc(data.platform_clashes[0].owner)} holds: the dashboard answers there and new hosts join
@@ -63,10 +60,10 @@ async function viewNetworking() {
     <section class="vip-section" aria-label="Workload VIPs">
     <div class="vip-section-heading"><div><h3>Workload VIPs</h3><p class="dim small">Stable LAN addresses for containers and pod-network VMs, separate from your hosts' addresses.</p></div>
       <button class="btn sm pri" data-need="admin" onclick="vipAdd()">＋ Add VIP</button></div>
-    <ol class="vip-steps"><li><b>1 · Add an address</b><span>Reserve an unused address outside DHCP, then save it here.</span></li>
+    ${(data.registered_vips || []).length ? "" : `<ol class="vip-steps"><li><b>1 · Add an address</b><span>Reserve an unused address outside DHCP, then save it here.</span></li>
       <li><b>2 · Choose a default</b><span>Use <b>Make default</b> for the address suggested to new workloads.</span></li>
-      <li><b>3 · Connect a workload</b><span>Use a card below, or choose <b>Default workload VIP</b> / <b>Specific VIP</b> in Deploy → Networking.</span></li></ol>
-    <p class="small vip-default-summary"><b>Current default:</b> <span class="mono">${esc(data.shared_vip?.ip || "Not configured")}</span> · Multiple workloads can share it on different ports. Changing it does not move existing services.</p>
+      <li><b>3 · Connect a workload</b><span>Use a card below, or choose <b>Default workload VIP</b> / <b>Specific VIP</b> in Deploy → Networking.</span></li></ol>`}
+    <p class="small vip-default-summary">A saved VIP is advertised once a workload's Service requests it. <b>Current default:</b> <span class="mono">${esc(data.shared_vip?.ip || "Not configured")}</span> · Multiple workloads can share it on different ports. Changing it does not move existing services.</p>
     ${(data.registered_vips || []).length ? `<div class="vip-cards">${data.registered_vips.map(v => networkVipCard(v, data)).join("")}</div>`
       : '<div class="card flat empty small">No saved VIPs. Start with <b>Add VIP</b> above. Adding an address does not change your router or start a workload.</div>'}
     </section>
