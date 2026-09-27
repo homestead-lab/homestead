@@ -148,6 +148,7 @@ async function viewSettings() {
 
       <section class="card flat settings-wide" data-tab="mqtt" id="mqttCard"></section>
       <section class="card flat settings-wide" data-tab="fleet" id="fleetCard"><div class="empty small"><span class="spin2"></span> asking each cluster</div></section>
+      <section class="card flat settings-wide" data-tab="fleet" id="fleetMovesCard" hidden></section>
       <section class="card flat settings-wide" data-tab="cluster" id="addonsCard" hidden></section>
       <section class="card flat settings-wide" data-tab="cluster" id="lhSettingsCard"><div class="empty small"><span class="spin2"></span>reading Longhorn</div></section>
 

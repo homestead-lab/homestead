@@ -11,9 +11,10 @@ Both need Longhorn. Below, **source** is the cluster the workload is on now, and
 
 ## 1. Update both
 
-Both clusters should run a recent Homestead. The destination's cluster card
-says whether the two releases can move workloads between them, and which side
-to update if not.
+Both clusters should run a recent Homestead. On the destination, **Settings →
+Linked clusters → Moving workloads** has a card for each cluster, saying whether
+the two releases can move workloads between them, and which side to update if
+not.
 
 ## 2. Link the two
 
@@ -30,8 +31,8 @@ delete its password.
 ## 3. Give the source backup storage
 
 A move copies volumes through backups, so the source must be able to write
-them somewhere the destination can read. The cluster's card lists what is
-still needed, with a button beside each:
+them somewhere the destination can read. The source's card under **Moving
+workloads** lists what is still needed, with a button beside each:
 
 - **The source has a backup target already** (a NAS, S3) - the destination
   uses the same one. If the two clusters use different targets, the review
@@ -51,7 +52,8 @@ workloads, not your only backup.
 ## 4. Browse and move
 
 From the workload's side: **Move to cluster** in its `…` menu picks the
-destination and opens it at the review below. From the destination's side:
+destination and opens it at the review below. From the destination's side,
+under **Settings → Linked clusters → Moving workloads**:
 
 **Browse workloads** lists what the source runs, with the reason anything
 cannot move - a ConfigMap, Secret or host folder Homestead did not make and so
