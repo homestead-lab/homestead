@@ -61,6 +61,28 @@ class ReviewTests(unittest.TestCase):
         with self.assertRaises(ValueError):rc.start_reviewed(body,'admin',self.ops)
         self.assertEqual([],self.cluster.sent)
 
+    def test_snapshot_conflict_is_explained_and_rechecked_after_review(self):
+        self.cluster.pvs['pv-old']['spec']['csi'] = {'driver': 'driver.longhorn.io', 'volumeHandle': 'real-lh-id'}
+        body = self.approved()
+        held = {'id': 'snapshot', 'kind': 'snapshot-revert', 'status': 'failed',
+                'ref': {'volume': 'real-lh-id'}, 'tracking_stopped': True}
+        with mock.patch.object(self.ops, '_read', return_value=[held]):
+            result = rc.preview(self.body, 'admin', self.ops)
+            self.assertFalse(result['ok'])
+            self.assertIn('needs recovery', ' '.join(result['blockers']))
+            self.assertNotIn('_source_binding', result)
+            with self.assertRaises(ValueError): rc.start_reviewed(body, 'admin', self.ops)
+        self.assertEqual([], self.ops.started)
+        self.assertEqual([], self.cluster.sent)
+
+    def test_source_backing_identity_is_saved_before_the_first_stop(self):
+        self.cluster.pvs['pv-old']['spec']['csi'] = {'driver': 'driver.longhorn.io', 'volumeHandle': 'real-lh-id'}
+        item = rc.start_reviewed(self.approved(), 'admin', self.ops)
+        self.assertEqual({'uid': 'frigate-config-uid', 'pv': 'pv-old', 'pv_uid': 'pv-old-uid',
+                          'csi_driver': 'driver.longhorn.io', 'csi_handle': 'real-lh-id'},
+                         item['ref']['copy_claims']['frigate-config'])
+        self.assertEqual([], self.cluster.sent)
+
     def test_queued_start_rechecks_before_stopping_anything(self):
         item=rc.start_reviewed(self.approved(),'admin',self.ops)
         self.assertIn('review_fences',item['ref'])
