@@ -1184,6 +1184,36 @@ ssh_pwauth: true
           : "nothing finished to clear" };
     },
     "/api/workloads": workloads, "/api/network": network,
+    // Rebooting a host: one app has nowhere else to go, one volume keeps a
+    // single copy elsewhere while the host is down.
+    "/api/node/power/plan": url => ({ node: url.searchParams.get("node"), action: url.searchParams.get("action"), review_token: "demo-power",
+      boot_id: "demo", pods: 14, vms: [], storage_unknown: false, ready: true, requires_data_ack: true, blockers: [],
+      workloads: [{ ns: "lab", name: "frigate", stranded: true, eligible: [] },
+        { ns: "lab", name: "home-assistant", stranded: false, eligible: ["harvester-node2", "harvester-node3"] },
+        { ns: "lab", name: "paperless", stranded: false, eligible: ["harvester-node2"] }],
+      stranded: [{ ns: "lab", name: "frigate" }],
+      volumes: [{ name: "pvc-demo-frigate", claim: "lab/frigate-config", healthy_elsewhere: 1, risk: "single-copy" },
+        { name: "pvc-demo-ha", claim: "lab/homeassistant-config", healthy_elsewhere: 2, risk: "resync" }],
+      maintenance: { budgets: [{ pod: "lab/paperless-5c9d", budget: "minAvailable 1", allowed: 0 }], local_storage: [] },
+      warnings: ["DaemonSets and static pods remain on the host; their services stop during the outage.",
+        "1 workload(s) have no eligible failover host", "2 volume(s) lose a replica until this host returns or Longhorn rebuilds"] }),
+    // Starting a stopped app that only just fits: one host near its memory
+    // warning, one ruled out by placement.
+    "/api/workloads/start-plan": url => ({ namespace: url.searchParams.get("ns"), name: url.searchParams.get("name"),
+      current: 0, requested: 1, additional: 1, pod_memory_gb: 1.5, pod_request_gb: 0.5, pod_cpu_request_percent: 25,
+      reservations_known: true, resource_slots: 3, topology_status: "not-needed", unbounded: [], warning_percent: 88,
+      warnings: ["projected RAM reaches 91% (warning at 88%)"], requires_confirmation: true, blocked: false,
+      candidates: [
+        { name: "harvester-node1", eligible: true, reasons: [], used_gb: 12.6, capacity_gb: 15.6, projected_gb: 14.2, projected_percent: 91,
+          metrics_available: true, warnings: ["projected RAM reaches 91% (warning at 88%)"], reservations_known: true,
+          reserved_gb: 9.8, allocatable_gb: 15.1, reserved_cpu_percent: 42, request_slots: 2, max_additional_pods: 2, projected_pods: 1 },
+        { name: "harvester-node2", eligible: true, reasons: [], used_gb: 8.4, capacity_gb: 15.6, projected_gb: 9.9, projected_percent: 63,
+          metrics_available: true, warnings: [], reservations_known: true, reserved_gb: 6.1, allocatable_gb: 15.1,
+          reserved_cpu_percent: 31, request_slots: 1, max_additional_pods: 1, projected_pods: 0 },
+        { name: "harvester-node3", eligible: false, reasons: ["does not match the node selector (hardware: coral)"], used_gb: 5.2,
+          capacity_gb: 7.7, projected_gb: 5.2, projected_percent: 68, metrics_available: true, warnings: [], reservations_known: true,
+          reserved_gb: 3.0, allocatable_gb: 7.3, reserved_cpu_percent: 18, request_slots: 0, max_additional_pods: 0, projected_pods: 0 },
+      ] }),
     "/api/cluster": { generated_at: 1789891200, state: "attention",
       summary: "The platform is online, with resilience or warning items to review.",
       versions: { harvester: "1.6.0", kubernetes: "1.34.1+rke2r1" },
@@ -1534,7 +1564,16 @@ ssh_pwauth: true
       const body = JSON.parse(init?.body || "{}");
       const rename = body.workload_name && body.workload_name !== body.name;
       return { capacity_token: "demo-review", capacity: {
-      blocked: false, requires_confirmation: true, additional: 1, candidates: [],
+      blocked: false, requires_confirmation: true, additional: 1,
+      candidates: [
+        { name: "harvester-node2", eligible: true, reasons: [], used_gb: 8.4, capacity_gb: 15.6, projected_gb: 10.9, projected_percent: 70,
+          metrics_available: true, warnings: [], reservations_known: true, reserved_gb: 6.1, allocatable_gb: 15.1, reserved_cpu_percent: 31,
+          request_slots: 2, projected_pods: 1 },
+        { name: "harvester-node1", eligible: true, reasons: [], used_gb: 12.6, capacity_gb: 15.6, projected_gb: 12.6, projected_percent: 81,
+          metrics_available: true, warnings: [], reservations_known: true, reserved_gb: 9.8, allocatable_gb: 15.1, reserved_cpu_percent: 42,
+          request_slots: 1, projected_pods: 0 },
+        { name: "harvester-node3", eligible: false, reasons: ["does not have the Google Coral USB this workload asks for"] },
+      ],
       pod_request_gb: 0.5, pod_memory_gb: 1, pod_cpu_request_percent: 10,
       ...(rename ? { rename: { from: body.name, to: body.workload_name } } : {}),
       warnings: [rename ? "Old pods stop before the replacement starts. A failed or uncertain step keeps resources for inspection, without automatic rollback." : "Editing restarts all containers in the pod. This is a demo capacity snapshot."],

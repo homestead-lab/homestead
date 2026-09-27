@@ -229,6 +229,7 @@ function modal(t, h, wide, contextClass = "") {
   $("#mtitle").textContent = t;
   $("#mbody").innerHTML = h;
   enhanceActions($("#mbody"));
+  if (window.normaliseDialogActions) normaliseDialogActions($("#mbody"));
   $(".modalbox").classList.toggle("wide", !!wide);
   $(".modalbox").classList.toggle("node-detail-modal", contextClass === "node-detail-modal");
   $(".modalbox").dataset.context = contextClass || "";

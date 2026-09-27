@@ -1724,6 +1724,8 @@ scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 scripts/render_chart.py       regenerate charts/homestead from the manifests
 scripts/capture_screenshots.mjs  the release screenshots, from demo data
 scripts/capture_mobile.mjs    the README's phone pictures, in phone frames
+scripts/audit_dialogs.mjs     every dialog, desktop and phone, checked against docs/design.md
+web/js/ui.js                  the components dialogs are built from (docs/design.md)
 docs/wiki/                    the wiki's pages, published by .github/workflows/wiki.yml
 ```
 

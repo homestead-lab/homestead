@@ -32,6 +32,7 @@ function setup({blocked = false, fail = "", missing = false} = {}) {
     }};
   ctx.window=ctx;
   vm.createContext(ctx);
+  vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), ctx);
   vm.runInContext(fs.readFileSync("web/js/views-workloads.js","utf8"),ctx);
   return {ctx,fields,sent};
 }

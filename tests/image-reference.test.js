@@ -19,7 +19,8 @@ const context = {
   esc: value => String(value),
 };
 vm.createContext(context);
-vm.runInContext(fs.readFileSync("web/js/views-workloads.js", "utf8"), context);
+vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), context);
+  vm.runInContext(fs.readFileSync("web/js/views-workloads.js", "utf8"), context);
 
 test("an implicit Docker Hub image shows its resolved registry and tag", () => {
   assert.equal(context.imagePullRef("nginx"), "docker.io/library/nginx:latest");
