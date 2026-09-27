@@ -22,6 +22,7 @@ jobs:
     outputs:
       ui: ${{ steps.paths.outputs.ui }}
       installer: ${{ steps.paths.outputs.installer }}
+      self_data: ${{ steps.paths.outputs.self_data }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -29,7 +30,7 @@ jobs:
       - id: paths
         run: |
           if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "ui=true" >> "$GITHUB_OUTPUT"; echo "installer=true" >> "$GITHUB_OUTPUT"; exit 0
+            echo "ui=true" >> "$GITHUB_OUTPUT"; echo "installer=true" >> "$GITHUB_OUTPUT"; echo "self_data=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           # The checkout is the pull request merged into main: its first
           # parent is main, so this diff is exactly what the merge brings.
@@ -42,6 +43,16 @@ jobs:
           installer=$(touches scripts/install.sh scripts/capture_tui.sh scripts/render_tui.mjs .github/workflows/ci.yml)
           echo "ui=$ui installer=$installer"
           echo "ui=$ui" >> "$GITHUB_OUTPUT"; echo "installer=$installer" >> "$GITHUB_OUTPUT"
+          echo "self_data=$(touches server/homestead_self_data_*.py server/homestead_storage_journal.py server/server.py tests/integration/self_data_cluster.py tests/integration/self-data-http.py .github/workflows/ci.yml)" >> "$GITHUB_OUTPUT"
+  self-data-k3s:
+    needs: changes
+    if: needs.changes.outputs.self_data == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Two real data moves with retained volumes and helper cleanup
+        run: python3 tests/integration/self_data_cluster.py
   source-copy:
     runs-on: ubuntu-latest
     steps:
@@ -131,9 +142,18 @@ jobs:
         with:
           context: .
           push: false
+          load: true
           tags: homestead:ci
           build-args: |
             VERSION=ci
             REVISION=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Verify self-data copies in the built Linux image
+        run: |
+          docker run --rm --network none --read-only --tmpfs /tmp --tmpfs /data \
+            --user 0:0 --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add FSETID \
+            --security-opt no-new-privileges \
+            --env HOMESTEAD_TEST_SERVER_DIR=/srv \
+            --mount "type=bind,source=$PWD,target=/repo,readonly" \
+            --entrypoint python3 homestead:ci -m unittest discover -s /repo/tests -p 'test_self_data*.py' -v
