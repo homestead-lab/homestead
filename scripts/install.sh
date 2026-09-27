@@ -138,10 +138,11 @@ get_menus() {
       fi
       printf 'Package command completed but whiptail is unavailable. Using text prompts.\n' > "$TTY"
       ;;
-    124|137)
+    # BusyBox returns 143 when its deadline sends SIGTERM; GNU returns 124.
+    124|137|143)
       printf 'Menu installation timed out. Using text prompts. Check package-manager status before retrying package installation.\n' > "$TTY"
       ;;
-    130|143) exit "$menu_status" ;;
+    130) exit "$menu_status" ;;
     *) printf 'Menu installation failed (exit %s). Using text prompts; see the package-manager output above.\n' "$menu_status" > "$TTY" ;;
   esac
   return 1
@@ -155,7 +156,7 @@ prepare_terminal() {
   [ -n "${SUDO_USER:-}" ] && [ ! -t 0 ] && interactive || return 0
   [ -z "${HS_ROLE:-}" ] || return 0
   case "$ACTION" in report|fix-safe) return 0 ;; esac
-  printf 'Press Enter to open Homestead (Ctrl+C to cancel): ' > "$TTY"
+  printf 'Press Enter to open Homestead setup (Ctrl+C to cancel): ' > "$TTY"
   read -r terminal_ready < "$TTY" || fail "Could not read the terminal. Download install.sh and run sudo sh install.sh."
 }
 

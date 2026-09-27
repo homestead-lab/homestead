@@ -201,7 +201,7 @@ have() {
         self.assertIn("package diagnostic", terminal)
         self.assertNotIn("opening the installer", terminal)
 
-    def test_stalled_package_and_its_child_are_bounded_and_fall_back_to_text(self):
+    def test_stalled_package_does_not_block_installer_and_falls_back_to_text(self):
         result, terminal, calls, _ = self.startup(behavior="hang")
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("INSTALLER_CONTINUES:text", result.stdout)
@@ -303,7 +303,7 @@ class TerminalHandoffTests(unittest.TestCase):
                 while b"Press Enter" not in seen and time.monotonic() < deadline:
                     if select.select([master], [], [], 0.1)[0]:
                         seen += os.read(master, 4096)
-                self.assertIn(b"Press Enter", seen)
+                self.assertIn(b"Press Enter to open Homestead setup", seen)
                 self.assertIsNone(process.poll(), "must wait for the terminal, not read script input")
                 os.write(master, b"\n")
             out, err = process.communicate(timeout=5)
