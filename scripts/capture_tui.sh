@@ -12,6 +12,7 @@ cd "$(dirname "$0")/.."
 OUT=release-assets
 mkdir -p "$OUT"
 BIN=$(mktemp -d)
+MISSED=0
 trap 'tmux kill-server 2>/dev/null; rm -rf "$BIN"' EXIT
 
 stub() { printf '#!/bin/sh\n%s\n' "$2" > "$BIN/$1"; chmod +x "$BIN/$1"; }
@@ -36,20 +37,21 @@ shot() { # name text-the-screen-shows
   if tmux capture-pane -p -t tui | grep -q "$2"; then
     tmux capture-pane -p -e -t tui > "$OUT/tui-$1.ans"; echo "captured tui-$1"
   else
-    echo "skipped tui-$1: the screen never showed \"$2\""; tmux capture-pane -p -t tui | tail -n 8
+    echo "skipped tui-$1: the screen never showed \"$2\""; tmux capture-pane -p -t tui; MISSED=1
   fi
 }
 key() { tmux send-keys -t tui "$@"; }
 start() { # PATH-prefix
   tmux kill-session -t tui 2>/dev/null
   tmux new-session -d -s tui -x 100 -y 32 \
-    "env PATH=$1:$PATH TERM=xterm-256color sh scripts/install.sh --dry-run; sleep 30"
+    "env PATH=$1:$PATH TERM=xterm-256color NEWT_COLORS=root=white,black sh scripts/install.sh --dry-run; sleep 30"
   sleep 2
 }
 
 start "$BIN"
 shot menu "What would you like to do"          # what it found, and what it can do
 key Enter; shot role "What should this machine be"   # new cluster, or join
+key Enter; shot kubernetes "Which Kubernetes"   # k3s or RKE2
 key Enter; shot checks "This machine:"          # the checks, before anything changes
 key Enter; shot longhorn "Install Longhorn"     # what the new cluster gets
 key Enter; sleep 1; key Enter; shot ready "About to:"   # what it will do, asked once
@@ -79,3 +81,6 @@ shot node-menu "Check this node"                 # a node: check, clean up, snap
 key Enter; shot doctor "worth a look"            # what it found, worst first
 key Enter; shot doctor-fix "Fix it now"          # one finding, and its fix
 key Escape
+
+# A screen that never showed is a menu that broke: say so.
+exit "$MISSED"

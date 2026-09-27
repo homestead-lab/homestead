@@ -3,6 +3,7 @@
 **Install**
 - [On Harvester](Installing-on-Harvester)
 - [On k3s](Installing-on-k3s)
+- [On RKE2 (full Kubernetes)](Installing-on-RKE2)
 - [On an existing cluster](Installing-on-an-existing-cluster)
 - [Installing Homestead](Installing-Homestead)
 

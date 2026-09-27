@@ -22,9 +22,23 @@ not affiliated with, endorsed, or sponsored by Lime Technology, Inc.
 
 ![Homestead cluster dashboard](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-dashboard.png)
 
+## Quick install
+
+On a Linux machine - a bare one, a k3s or RKE2 server, or a Harvester host:
+
+```bash
+curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
+```
+
+It checks the machine, asks what to build - a new **k3s** or **RKE2** cluster,
+or joining this machine to one - and installs Kubernetes, Longhorn, KubeVirt
+if wanted, and Homestead. Then open `http://<the machine>:8088`. Run the same
+line on each further machine to join it, or on any node later to check and fix
+it. Already run a cluster? [Helm or the manifest](#install-with-helm).
+
 **New here?** The [wiki](https://github.com/wjcloudy/homestead/wiki) is the
-guided tour: building a cluster from nothing - Harvester, k3s, or the one you
-already run - with Homestead on it, then each part of Homestead in turn.
+guided tour: building a cluster from nothing - Harvester, k3s, RKE2, or the one
+you already run - with Homestead on it, then each part of Homestead in turn.
 
 ## Where it runs
 
@@ -33,11 +47,11 @@ is Harvester-only unless Harvester is what it is about.
 
 | | k3s | Harvester | RKE2 or other Kubernetes |
 |---|---|---|---|
-| **Install** | [one line](#one-line-install-and-node-doctor) from bare Linux | [one line](#one-line-install-and-node-doctor) on a host, or Helm or the manifest | [Helm or the manifest](#installing-with-the-manifest) |
+| **Install** | [one line](#one-line-install-and-node-doctor) from bare Linux | [one line](#one-line-install-and-node-doctor) on a host, or Helm or the manifest | RKE2: [one line](#one-line-install-and-node-doctor) from bare Linux, or onto an RKE2 server; any other: [Helm or the manifest](#installing-with-the-manifest) |
 | **Containers, App Store, Compose, Portal, Networking, IP addresses, Resources, dashboard** | yes | yes | yes |
 | **Volumes, data protection, disks** | yes, with Longhorn - the k3s script installs it, or Settings → Cluster → Add-ons | yes, Longhorn is built in | yes, with Longhorn - Settings → Cluster → Add-ons installs it on RKE2 |
 | **Virtual machines** | yes, with [KubeVirt](https://kubevirt.io) - the k3s script's `--kubevirt`, or Add-ons | built in | yes, with KubeVirt - Add-ons installs it on RKE2 |
-| **Addresses for apps** | the nodes' own addresses (k3s's ServiceLB), or a VIP per app with MetalLB | a VIP per app (kube-vip) | a VIP per app with MetalLB or kube-vip |
+| **Addresses for apps** | the nodes' own addresses (k3s's ServiceLB), or a VIP per app with kube-vip | a VIP per app (kube-vip) | RKE2 from the installer: the nodes' own addresses (its ServiceLB, turned on), or a VIP per app with kube-vip; others: MetalLB or kube-vip |
 | **Helm charts** | yes (k3s's Helm controller) | yes (RKE2's Helm controller) | yes on RKE2; listing only without a Helm controller |
 | **Adding a host** | the join command for a worker or a server | a guide to Harvester's installer | RKE2's join commands |
 | **Platform upgrades** | - | followed on the Cluster page | - |
@@ -51,20 +65,24 @@ a Harvester host, or on any node of a cluster:
 curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
 ```
 
-It says what it found on the machine and offers what fits, as menus (plain
-prompts where the machine has no `whiptail` or `dialog`):
+It says what it found on the machine and offers what fits, as menus. A machine
+without `whiptail` or `dialog` - minimal and cloud images often have neither -
+gets `whiptail` from its own package manager first; `--text` keeps to plain
+prompts instead:
 
 ![The installer's menu](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-menu.png)
 
 - **Install Homestead.** It checks the machine first: memory, disk, the
   internet, ports, the hostname, the clock, the firewall, hardware
   virtualisation, and whether the address is from DHCP. Then it asks:
-  - on a **bare machine**, whether to start a new k3s cluster or join one as
-    a server or a worker, which address the others reach this machine on,
-    and whether to add Longhorn and KubeVirt;
+  - on a **bare machine**, whether to start a new cluster - **k3s**, light
+    and quick, or **RKE2**, full upstream Kubernetes as Harvester runs it - or
+    join one as a server or a worker (it tells k3s from RKE2 by itself), which
+    address the others reach this machine on, and whether to add Longhorn and
+    KubeVirt;
   - on a **Harvester host**, which address Homestead answers on and which
     storage class holds its data;
-  - on a **k3s server**, whether to add Longhorn and Homestead to it.
+  - on a **k3s or RKE2 server**, whether to add Longhorn and Homestead to it.
 
   It shows what it will do before anything changes, follows the install with
   a progress bar (the full log goes to `/var/log/homestead-install.log`), and
@@ -86,10 +104,12 @@ prompts where the machine has no `whiptail` or `dialog`):
 For scripts and cron: `--report` prints the health check and exits 0, 1 or 2;
 `--fix-safe` applies the fixes marked safe; `--dry-run` shows the commands and
 changes nothing. An install can be unattended with its answers given ahead
-(`HS_ROLE=new HS_NODE_IP=... HS_YES=1`); `--help` lists them. Underneath, k3s
-installs come from [`scripts/bootstrap-k3s.sh`](scripts/bootstrap-k3s.sh),
+(`HS_ROLE=new HS_DIST=rke2 HS_NODE_IP=... HS_YES=1`); `--help` lists them.
+Underneath, k3s and RKE2 installs come from
+[`scripts/bootstrap-k3s.sh`](scripts/bootstrap-k3s.sh) (`--rke2` for RKE2),
 which can also be run directly. The
-[k3s guide](https://github.com/wjcloudy/homestead/wiki/Installing-on-k3s) walks
+[k3s guide](https://github.com/wjcloudy/homestead/wiki/Installing-on-k3s) and the
+[RKE2 guide](https://github.com/wjcloudy/homestead/wiki/Installing-on-RKE2) walk
 through all of it.
 
 **Addresses on k3s.** k3s's built-in ServiceLB publishes each app on every
@@ -98,7 +118,8 @@ each on its own port. For an address per app, as Harvester gives, add
 **kube-vip** from **Settings → Cluster → Add-ons**. It runs beside ServiceLB
 and takes only the Services given a VIP.
 
-**On a cluster you already run** - k3s, RKE2, kubeadm - use Helm or the
+**On a cluster you already run** - kubeadm, Talos, a managed one, or a k3s or
+RKE2 cluster you would rather not run the installer on - use Helm or the
 manifest below. **Settings → Cluster → Add-ons** then installs Longhorn and
 KubeVirt (with CDI) where they are missing, through the Helm controller k3s and
 RKE2 run, and the pages that need one offer the same install.
@@ -724,7 +745,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.183/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.184/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -735,7 +756,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.183 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.184 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1509,10 +1530,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.183`, the workflow publishes:
+For a release such as `v2.8.184`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.183
+ghcr.io/wjcloudy/homestead:2.8.184
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -1523,8 +1544,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.183
-git push origin v2.8.183
+git tag v2.8.184
+git push origin v2.8.184
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.

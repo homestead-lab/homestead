@@ -52,6 +52,22 @@ class InstallerTests(unittest.TestCase):
                                                           "HS_SERVER": "10.0.0.5", "HS_TOKEN": "tok", "HS_YES": "1"})
         self.assertIn("+ sh /tmp/homestead-bootstrap-k3s.sh agent https://10.0.0.5:6443 tok --node-ip 10.0.0.6", out)
 
+    def test_a_new_rke2_cluster_always_has_longhorn(self):
+        code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_DIST": "rke2", "HS_NODE_IP": "10.0.0.5",
+                                                          "HS_LONGHORN": "no", "HS_KUBEVIRT": "no", "HS_YES": "1"})
+        self.assertIn("+ sh /tmp/homestead-bootstrap-k3s.sh server --node-ip 10.0.0.5 --rke2", out)
+        self.assertNotIn("--no-longhorn", out, "RKE2 has no storage of its own")
+
+    def test_joining_an_rke2_cluster_uses_its_supervisor_port(self):
+        code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "server", "HS_DIST": "rke2", "HS_NODE_IP": "10.0.0.6",
+                                                          "HS_SERVER": "10.0.0.5", "HS_TOKEN": "tok", "HS_YES": "1"})
+        self.assertIn("+ sh /tmp/homestead-bootstrap-k3s.sh join https://10.0.0.5:9345 tok --node-ip 10.0.0.6 --rke2", out)
+
+    def test_an_unknown_kubernetes_is_refused(self):
+        code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_DIST": "k0s", "HS_NODE_IP": "10.0.0.5", "HS_YES": "1"})
+        self.assertNotEqual(0, code)
+        self.assertIn("HS_DIST is k3s or rke2", out)
+
     def test_harvester_gets_the_manifest_with_its_address_and_class(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "harvester", "HS_VIP": "192.168.1.250",
                                                           "HS_CLASS": "harvester-longhorn", "HS_YES": "1"})

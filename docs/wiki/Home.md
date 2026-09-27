@@ -14,13 +14,21 @@ Homestead's demo data, so they stay current on their own.*
 
 ## Start here
 
-**Starting from nothing?** Pick the cluster you want, and follow it through
-to Homestead running:
+**Starting from nothing?** One line on a Linux machine asks what to build and
+does it:
+
+```bash
+curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
+```
+
+Or pick the cluster you want, and follow its guide through to Homestead
+running:
 
 | You want | Guide |
 |---|---|
 | VMs and containers on dedicated hardware, all managed for you | [Installing on Harvester](Installing-on-Harvester) |
 | A light cluster on ordinary Linux machines - old PCs, mini PCs, VMs, 64-bit ARM boards | [Installing on k3s](Installing-on-k3s) |
+| Full upstream Kubernetes on your own machines - hardened, as Harvester runs it, closer to what work runs | [Installing on RKE2](Installing-on-RKE2) |
 | Homestead on a cluster you already run (RKE2, kubeadm, a Headlamp user's cluster) | [Installing on an existing cluster](Installing-on-an-existing-cluster) |
 
 **On k3s, everything works**: containers, the App Store, Compose, networking,
