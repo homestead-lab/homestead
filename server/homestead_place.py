@@ -53,13 +53,13 @@ def _bust(*keys):
 
 
 # ------------------------------------------------------------------ requirements
-def requirements(dep):
+def requirements(dep, *, features=None):
     """What this workload binds to the host."""
     spec = dep["spec"]["template"]["spec"]
     reqs = {"devices": [], "features": [], "resources": {}, "labels": {},
             "pinned": None, "preferred": None}
 
-    defs = hardware_features()
+    defs = hardware_features() if features is None else features
     by_label = {f["label"]: f for f in defs}
 
     for v in spec.get("volumes", []) or []:
@@ -115,7 +115,7 @@ def _node_devices(n):
     return t.get("devices") or {}
 
 
-def satisfies(node, reqs):
+def satisfies(node, reqs, *, features=None):
     """Returns (ok, [reasons it cannot run here])."""
     bad = []
     devs = _node_devices(node)
@@ -123,7 +123,8 @@ def satisfies(node, reqs):
 
     for fid in reqs.get("features", []):
         if not (node.get("hardware") or {}).get(fid):
-            name = next((f["name"] for f in hardware_features() if f["id"] == fid), fid)
+            defs = hardware_features() if features is None else features
+            name = next((f["name"] for f in defs if f["id"] == fid), fid)
             bad.append(f"no {name}")
 
     for d in reqs["devices"]:
@@ -376,7 +377,7 @@ def start_plan(ns, name, replicas=1, warning_percent=88):
 
 def manifest_plan(dep, ns, name, replicas=1, warning_percent=88, *, current=0, planned_claims=None,
                   pod_snapshot=_FETCH_PODS, nodes_snapshot=None, read=None,
-                  memory_estimate_bytes=None, workload_kind="container", resident_node=None):
+                  memory_estimate_bytes=None, workload_kind="container", resident_node=None, features=None):
     """Read-only capacity check for a proposed Deployment, including new claims.
 
     Existing start/scale callers provide current replicas. New deployments use
@@ -388,7 +389,7 @@ def manifest_plan(dep, ns, name, replicas=1, warning_percent=88, *, current=0, p
         raise ValueError("replicas must be between 0 and 100")
     additional = max(0, wanted - current)
     import_blocker = IMPORT_GUARD.pending(dep, ns, read) if wanted else ""
-    reqs = requirements(dep)
+    reqs = requirements(dep, features=features)
     pod_spec = dep["spec"]["template"]["spec"]
     memory, unbounded = _pod_memory(pod_spec)
     if memory_estimate_bytes is not None:
@@ -406,7 +407,7 @@ def manifest_plan(dep, ns, name, replicas=1, warning_percent=88, *, current=0, p
     base_slots = {}
     candidates = []
     for node in nodes:
-        ok, reasons = satisfies(node, reqs)
+        ok, reasons = satisfies(node, reqs, features=features)
         scheduler_reasons, scheduler_cautions = _start_scheduler_check(pod_spec, node)
         booked = reservations.get(node["name"], {})
         slots, fit_reasons, fit_warnings = _resource_fit(pod_spec, node, booked, reservations_known, additional)
