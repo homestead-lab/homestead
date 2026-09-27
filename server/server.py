@@ -13,6 +13,7 @@ import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_vm_capacity as VM_CAPACITY
 import homestead_vm_claims as VM_CLAIMS
 import homestead_vm_profiles as VM_PROFILES
+import homestead_vm_power_job as VM_POWER_JOB
 import homestead_vm_batch as VM_BATCH
 import homestead_batch_capacity as BATCH_CAPACITY
 import homestead_volume_usage as VOLUME_USAGE
@@ -3527,7 +3528,11 @@ def reviewed_vm_power(body):
     vmi = VM_CAPACITY._optional(kget, f"{VMS.API}/namespaces/{ns}/virtualmachineinstances/{name}")
     if (VM_CAPACITY.VMRES.identity(vmi) if vmi else None) != observations.get("vmi"):
         raise CAPACITY_REVIEW.Rejected("The running VM instance changed during admission; review it again", plan)
-    return VMS.power(ns, name, action)
+    def before_send():
+        fresh, fresh_context = vm_power_capacity_plan(body)
+        CAPACITY_REVIEW.enforce(body, fresh, fresh_context)
+    return VM_POWER_JOB.dispatch(body, context, OPS,
+        lambda: VMS.power(ns, name, action, raw_errors=True), before_send)
 
 
 def vm_edit_capacity(prepared):
@@ -4593,6 +4598,8 @@ def _remove_cluster_vm(ns, node):
 K3SC.bind(kget, lambda cfg: create_vm_with_address(cfg), lambda ip: vm_address_problem(ip), _remove_cluster_vm)
 OPS.RESOLVERS["k3s-cluster"] = K3SC.status
 OPS.RESOLVERS["node-power"] = POWER.status
+OPS.RESOLVERS["vm-power"] = lambda item: VM_POWER_JOB.status(item, kget)
+OPS.CANCELLERS["vm-power"] = (VM_POWER_JOB.cancel_plan, VM_POWER_JOB.cancel_run)
 OPS.CANCELLERS["node-power"] = (lambda item: {"can": False, "why_not":
     "A host power command cannot be cancelled after it has been sent"}, lambda item, options: "")
 MOVE_ENGINE.after_finish = cleanup_restore_classes

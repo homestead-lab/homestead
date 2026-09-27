@@ -297,6 +297,7 @@ window.vmPowerReviewedApply = async () => {
   try {
     const result = await api("/api/vm/power", {method:"POST", headers:{"Content-Type":"application/json"},
       body:JSON.stringify({...review.config, capacity_token:review.capacity_token, confirm_capacity:true})});
+    if (result.operation && window.noteOperation) noteOperation(result.operation);
     toast(result.detail, "ok");
     modalBack(); setTimeout(() => refresh(true), 1200);
   } catch (error) {
@@ -304,10 +305,11 @@ window.vmPowerReviewedApply = async () => {
     // lost. Inspect the current VM state before initiating a fresh review.
     if ($("#vmPowerApply") === button) {
       button.textContent = "Inspect VM before retrying";
-      $("#mbody").insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(error.message)}. The request was not repeated. Its outcome may be uncertain: close this review and inspect the VM before trying again.</div>`);
+      $("#mbody").insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(error.message)}. The request was not repeated. Its outcome may be uncertain: inspect the VM and its Recent jobs entry before trying again. Stop and Force stop remain available.</div>`);
+      if ($(".modalbox")) $(".modalbox").scrollTop = 0;
     }
     toast(error.message, "bad");
-  } finally { VM_POWER_BUSY = false; }
+  } finally { VM_POWER_BUSY = false; if (window.startOperationChecks) startOperationChecks(); }
 };
 
 window.vmOpen = async (ns, name) => {

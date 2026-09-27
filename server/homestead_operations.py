@@ -86,7 +86,7 @@ def _write(items):
     # A busy history must not evict an in-flight dispatch intent or a failed
     # batch's recovery record. Bound ordinary terminal history, not active work.
     protected = {i for i, item in enumerate(items) if item.get("status") not in TERMINAL or
-                 (item.get("status") == "failed" and item.get("ref", {}).get("retain_resources"))}
+                 (item.get("status") == "failed" and item.get("ref", {}).get("retain_resources")) or _receipt_needed(item)}
     recent = [i for i in range(len(items)) if i not in protected][-MAX_OPERATIONS:]
     kept = protected | set(recent)
     SHARED.write_json(path, [item for i, item in enumerate(items) if i in kept], durable=True, separators=(",", ":"))
@@ -113,6 +113,16 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
     }
     with _lock:
         items = _read()
+        if kind == "vm-power":
+            for existing in items:
+                if existing.get("kind") != kind:
+                    continue
+                previous = existing.get("ref") or {}
+                if previous.get("review_digest") == ref.get("review_digest"):
+                    raise ValueError(f"This approval already has job {existing['id']}; inspect it instead of repeating the request")
+                if (previous.get("namespace"), previous.get("name")) == (ref.get("namespace"), ref.get("name")) and (
+                        existing.get("status") not in TERMINAL or previous.get("retain_resources")):
+                    raise ValueError(f"VM power job {existing['id']} is still active or needs recovery; inspect it first")
         if kind == "node-power" and any(i.get("kind") == kind and i.get("status") not in TERMINAL and
                                         i.get("ref", {}).get("node") == ref.get("node") for i in items):
             raise ValueError("Host maintenance is already active; inspect its job before retrying")
@@ -134,7 +144,7 @@ def record_phase(operation_id, phase, progress, message, **ref_updates):
     with _lock:
         items = _read()
         item = next(i for i in items if i["id"] == operation_id)
-        if item.get("status") in TERMINAL:
+        if item.get("status") in TERMINAL or (item.get("kind") == "vm-power" and item.get("status") == CANCELLING):
             raise ValueError("Maintenance job has ended; refusing further actions")
         item["ref"].update(ref_updates, phase=phase, phase_at=time.time())
         _finish(item, "failed" if phase == "failed" else "running", progress, message)
@@ -150,6 +160,9 @@ def _public(item):
     out["cancellable"] = item.get("status") not in TERMINAL and (
         item.get("status") != CANCELLING or _cancel_stale(item))
     out["cleanable"] = _cleanable(item)
+    out["dismissible"] = item.get("status") in TERMINAL and not _receipt_needed(item)
+    if item.get("kind") == "vm-power":
+        out["cancellable"] = out["cancellable"] and item.get("ref", {}).get("phase") in ("prepared", "accepted")
     if item.get("kind") == "snapshot-delete":
         out["cancellable"] = False  # Longhorn merging cannot be undone or safely interrupted.
     if item.get("kind") == "k3s-cluster" and item.get("ref", {}).get("retain_resources") and item["ref"].get("phase") == "provisioning":
@@ -161,6 +174,13 @@ def _public(item):
         except Exception:
             out["resumable"] = False
     return out
+
+
+def _receipt_needed(item):
+    if item.get("kind") != "vm-power":
+        return False
+    ref = item.get("ref") or {}
+    return bool(ref.get("retain_resources") or float(ref.get("review_expires") or 0) >= time.time())
 
 
 # Each step a job has said, kept with it: what the Log view shows for any job,
@@ -538,14 +558,16 @@ def dismiss_finished():
     """
     with _lock:
         items = _read()
-        keep = [item for item in items if item.get("status") not in TERMINAL]
+        keep = [item for item in items if item.get("status") not in TERMINAL or _receipt_needed(item)]
         removed = len(items) - len(keep)
         if removed:
             _write(keep)
+        protected = sum(item.get("status") in TERMINAL for item in keep)
     return {"ok": True, "dismissed": removed, "remaining": len(keep),
             "detail": (f"cleared {removed} finished job" + ("" if removed == 1 else "s")
                        if removed else "nothing finished to clear")
-                      + (f"; {len(keep)} still running" if keep else "")}
+                      + (f"; {len(keep) - protected} still running" if len(keep) > protected else "")
+                      + (f"; {protected} power receipt(s) retained for replay protection" if protected else "")}
 
 
 # Kinds whose steps are each safe to run again, and which say whether a
@@ -581,6 +603,8 @@ def dismiss(operation_id):
             raise ValueError("operation not found")
         if match.get("status") not in TERMINAL:
             raise ValueError("an active operation cannot be dismissed")
+        if _receipt_needed(match):
+            raise ValueError("This power receipt is still needed for recovery or replay protection; inspect its job and wait for the approval to expire")
         items = [item for item in items if item.get("id") != operation_id]
         _write(items)
     return {"ok": True, "id": operation_id}

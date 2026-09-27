@@ -824,7 +824,16 @@ ssh_pwauth: true
           projected_gb:10 + guest + 0.25, projected_percent:Math.round((10 + guest + 0.25) / 32 * 100),
           reservations_known:true, reserved_gb:8, request_slots:1}]}};
     },
-    "/api/vm/power": (url, init) => ({ ok: true, detail: `${JSON.parse(init.body).name} is ${{ start: "starting", stop: "stopping" }[JSON.parse(init.body).action] || "done"}` }),
+    "/api/vm/power": (url, init) => {
+      const body=JSON.parse(init.body);
+      if (!["start","restart","unpause"].includes(body.action)) return {ok:true,detail:`${body.name}: ${body.action} requested`};
+      const operation={id:`demo-power-${Date.now()}`,kind:"vm-power",title:`${body.action} VM ${body.name}`,
+        resource:{kind:"VirtualMachine",namespace:body.ns,name:body.name},href:"/vms",status:"running",progress:25,
+        message:"KubeVirt accepted the request; waiting for the expected VM instance to become ready",
+        started_at:new Date().toISOString(),cancellable:true,dismissible:false};
+      (window.__demoOps ??=[]).unshift(operation);
+      return {ok:true,detail:`Power request accepted for ${body.name}; follow its job for readiness`,operation};
+    },
     "/api/vm/edit": { ok: true, detail: "saved; no Restart request was sent" },
     "/api/vm/edit/preview": (url, init) => {
       const b = JSON.parse(init.body || "{}"), memory = parseFloat(b.memory) || 4;
@@ -1030,6 +1039,9 @@ ssh_pwauth: true
       const base = { id, kind: op.kind, title: op.title, status: op.status, progress: op.progress,
         message: op.message, resource: op.resource, can: true, why_not: "", severity: "high",
         confirm: "", needs: "operator", options: [] };
+      if (op.kind === "vm-power") return {...base,mode:"forget",action:"Stop tracking it",severity:"low",confirm:op.resource.name,
+        can:op.cancellable,why_not:"An uncertain request cannot be forgotten",undo:[],
+        keeps:["The accepted power request still runs in KubeVirt. Stopping tracking does not undo it.","Its approval stays consumed."]};
       if (op.kind === "k3s-cluster") return { ...base, mode: "rollback", action: "Cancel and put back", needs: "admin",
         confirm: "k3s-lab",
         undo: ["Deletes 3 VMs - k3s-lab-server-1, k3s-lab-agent-1 and k3s-lab-agent-2 - with their disks",
@@ -1063,7 +1075,8 @@ ssh_pwauth: true
       const id = JSON.parse(init?.body || "{}").id;
       const op = (window.__demoOps || []).find(item => item.id === id);
       if (op) Object.assign(op, { status: "cancelled", cancellable: false, finished_at: new Date().toISOString(),
-        message: op.kind === "k3s-cluster" ? "Cluster k3s-lab cancelled: its VMs are being deleted with their disks, and their addresses are free again"
+        message: op.kind === "vm-power" ? "Stopped tracking; KubeVirt is unchanged and the approval remains consumed"
+          : op.kind === "k3s-cluster" ? "Cluster k3s-lab cancelled: its VMs are being deleted with their disks, and their addresses are free again"
           : "Cancelled and put back" });
       return { ok: true, id, detail: op?.message || "cancelled", operation: op };
     },
@@ -1105,9 +1118,9 @@ ssh_pwauth: true
     "/api/operations/dismiss": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       const before = (window.__demoOps || []).length;
-      window.__demoOps = (window.__demoOps || []).filter(op => body.all
+      window.__demoOps = (window.__demoOps || []).filter(op => op.dismissible === false || (body.all
         ? !["succeeded", "failed", "cancelled"].includes(op.status)
-        : op.id !== body.id);
+        : op.id !== body.id));
       const gone = before - window.__demoOps.length;
       return { ok: true, dismissed: gone, remaining: window.__demoOps.length,
         detail: gone ? `cleared ${gone} finished job${gone === 1 ? "" : "s"}; 1 still running`

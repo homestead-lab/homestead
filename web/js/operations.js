@@ -34,7 +34,7 @@ function renderOperations() {
   // Clearing one at a time is fine for a stray failure and tedious after a
   // batch, so the header offers the lot - and says how many, because it will
   // not touch anything still running.
-  const finished = items.filter(item => !operationActive(item));
+  const finished = items.filter(item => !operationActive(item) && item.dismissible !== false);
   const clear = $("#jobClear");
   if (clear) {
     // Only relabel when there is something to clear, so it never reads
@@ -54,7 +54,7 @@ function renderOperations() {
       ${operation.resumable ? `<button class="btn sm pri" data-need="admin" data-tip="Run the steps that are left, from the one it stopped at" onclick="resumeOperation('${esc(operation.id)}')">Carry on</button>` : ""}
       ${operation.cleanable ? `<button class="btn sm danger" data-need="admin" data-tip="Says what it left behind - its VMs, disks and addresses - and removes it" onclick="cancelOperation('${esc(operation.id)}')">Clean up</button>` : ""}
       ${operation.cancellable ? `<button class="btn sm danger" data-need="operator" data-tip="Says what stopping it would undo and what it cannot, before anything changes" onclick="cancelOperation('${esc(operation.id)}')">${operation.status === "cancelling" ? "Cancel again" : "Cancel"}</button>` : ""}
-      ${operationActive(operation) ? "" : `<button class="btn sm" data-need="operator" onclick="dismissOperation('${esc(operation.id)}')">Dismiss</button>`}
+      ${operationActive(operation) || operation.dismissible === false ? "" : `<button class="btn sm" data-need="operator" onclick="dismissOperation('${esc(operation.id)}')">Dismiss</button>`}
     </div>
   </article>`).join("");
   if (window.applyRole) window.applyRole();
@@ -105,6 +105,8 @@ window.openOperation = (href, id = "") => {
   if (q && !opensItsOwn) highlightInPage(q);
   // An image update or rollback opens its rollout, as it looked when it ran.
   const target = operation?.resource || {};
+  if (operation?.kind === "vm-power" && target.name && window.vmOpen)
+    setTimeout(() => vmOpen(target.namespace || "lab", target.name), 150);
   if (["image-update", "image-rollback"].includes(operation?.kind) && target.name && window.monitorImageRollout)
     setTimeout(() => monitorImageRollout(target.namespace || "lab", target.name), 150);
   if (operation?.kind === "reclass" && window.reclassWatch) setTimeout(() => reclassWatch(operation.id), 150);

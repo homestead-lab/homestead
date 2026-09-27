@@ -712,7 +712,7 @@ runs: an import's or storage move's copy, a Helm or backup run, a rollout's
 newest pod (its events and log), CDI's importer, and each node's console as a
 k3s cluster installs itself.
 
-Every job still running has **Cancel**. It first says what cancelling would
+Jobs that can be cancelled offer **Cancel**. It first says what cancelling would
 do: what is put back, what stays as it is, and anything Kubernetes cannot take
 back. Where it can, a cancel rolls back - a deploy is removed, an update or
 edit returns to the version before it, a volume move starts everything again
@@ -723,6 +723,23 @@ already cleaned). A step that must not be interrupted, such as a volume swap,
 is refused until it has finished, and the few things Kubernetes cannot take
 back once asked, such as a volume deletion, are only no longer tracked.
 Cancelling something that deletes VMs or stops a volume move needs an admin.
+
+Reviewed VM **Start**, **Restart** and **Resume** first record a durable power
+intent. Each approval is consumed once under the shared job-store lock; repeating
+the HTTP request does not send power again. A job records whether KubeVirt
+accepted, explicitly refused, or returned an uncertain response. Accepted jobs
+follow the reviewed VM identity and the expected VM-instance identity until it
+is Running, Ready and not paused. This is VM readiness, not a guest application
+health check or an atomic Kubernetes capacity reservation.
+
+Before dispatch, cancellation fences the dispatcher and sends no power. After
+acceptance, cancellation only stops tracking; it cannot undo the accepted request.
+An in-flight or uncertain request cannot be cancelled or automatically replayed.
+Inspect **Recent jobs → Log** and the VM; **Stop** and **Force stop** remain
+available even when capacity checks or job storage are unavailable. Recovery of
+an uncertain dispatch still requires inspection; do not delete journal files to
+unblock it. Power receipts cannot be dismissed while needed for recovery or while
+their approval is valid, including through **Clear finished**.
 
 ### Permissions look after themselves
 

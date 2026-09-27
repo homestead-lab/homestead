@@ -1,5 +1,8 @@
 import copy
 import unittest
+import tempfile
+import urllib.error
+from pathlib import Path
 from unittest import mock
 
 import test_vm_capacity as fixtures
@@ -17,7 +20,10 @@ class VMPowerAdmissionTests(unittest.TestCase):
         self.vm["spec"]["runStrategy"] = "Halted"
         self.objects["/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/guest"] = self.vm
         self.body = {"ns": "lab", "name": "guest", "action": "start"}
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         for patch in (mock.patch.object(server, "kget", side_effect=lambda path: copy.deepcopy(self.read(path))),
+                      mock.patch.object(server.OPS, "DATA_DIR", self.tmp.name),
                       mock.patch.object(server.PLACE, "get_nodes", side_effect=lambda: copy.deepcopy(self.nodes)),
                       mock.patch.object(server.PLACE, "hardware_features", return_value=[]),
                       mock.patch.object(server, "get_app_settings", return_value=server.DEFAULT_APP_SETTINGS),
@@ -25,14 +31,14 @@ class VMPowerAdmissionTests(unittest.TestCase):
             patch.start()
             self.addCleanup(patch.stop)
 
-    def call(self, path, body):
+    def call(self, path, body, error=None):
         handler = object.__new__(server.H)
         handler.path, handler.headers = path, {}
         handler._guard = lambda path: False
         handler._body = lambda: copy.deepcopy(body)
         handler._client_ip = lambda: "127.0.0.1"
         handler._send = mock.Mock()
-        with mock.patch.object(server.VMS, "ksend", return_value={}) as vm_writes, \
+        with mock.patch.object(server.VMS, "ksend", return_value={}, side_effect=error) as vm_writes, \
                 mock.patch.object(server, "ksend") as other_writes:
             handler.do_POST()
         other_writes.assert_not_called()
@@ -104,6 +110,68 @@ class VMPowerAdmissionTests(unittest.TestCase):
             self.assertEqual(200, result[0], result)
             writes.assert_called_once()
 
+    def test_same_approved_power_is_consumed_across_http_requests(self):
+        body = self.reviewed()
+        result, writes = self.call("/api/vm/power", body)
+        self.assertEqual(200, result[0], result)
+        ident = result[1]["operation"]["id"]
+        self.assertEqual("vm-power", result[1]["operation"]["kind"])
+        result, writes = self.call("/api/vm/power", body)
+        self.assertEqual(400, result[0], result)
+        self.assertIn(ident, result[1]["error"])
+        writes.assert_not_called()
+        stored = (Path(self.tmp.name) / server.OPS.STORE).read_text()
+        self.assertNotIn(body["capacity_token"], stored)
+        self.assertNotIn("capacity_token", stored)
+
+    def test_uncertain_response_is_durable_blocks_other_power_but_not_stop(self):
+        body = self.reviewed()
+        result, writes = self.call("/api/vm/power", body, error=TimeoutError("private-endpoint"))
+        self.assertEqual(400, result[0], result)
+        writes.assert_called_once()
+        self.assertNotIn("private-endpoint", str(result))
+        record = server.OPS._read()[0]
+        self.assertEqual("uncertain", record["ref"]["phase"])
+        self.assertFalse(server.OPS._public(record)["cancellable"])
+        result, writes = self.call("/api/vm/power", body)
+        self.assertEqual(400, result[0], result)
+        writes.assert_not_called()
+        result, writes = self.call("/api/vm/power", {**self.body, "action": "force-stop"})
+        self.assertEqual(200, result[0], result)
+        writes.assert_called_once()
+
+    def test_explicit_refusal_has_receipt_and_does_not_rewrite_policy(self):
+        result, writes = self.call("/api/vm/power", self.reviewed(), error=urllib.error.HTTPError("private-url", 409, "private-payload", {}, None))
+        self.assertEqual(400, result[0], result)
+        self.assertIn("HTTP 409", result[1]["error"])
+        self.assertNotIn("private", str(result))
+        writes.assert_called_once()
+        record = server.OPS._read()[0]
+        self.assertEqual("failed", record["status"])
+        self.assertFalse(record["ref"]["retain_resources"])
+
+    def test_journal_failure_never_sends_power(self):
+        body = self.reviewed()
+        with mock.patch.object(server.OPS, "_write", side_effect=OSError("journal unavailable")):
+            result, writes = self.call("/api/vm/power", body)
+        self.assertNotEqual(200, result[0])
+        writes.assert_not_called()
+
+    def test_admission_is_rechecked_after_obtaining_durable_intent(self):
+        body = self.reviewed()
+        start = server.OPS.start
+        def begin(*args, **kwargs):
+            result = start(*args, **kwargs)
+            self.nodes[0]["allocatable"]["memory"] = "1Gi"
+            return result
+        with mock.patch.object(server.OPS, "start", side_effect=begin):
+            result, writes = self.call("/api/vm/power", body)
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+        record = server.OPS._read()[0]
+        self.assertEqual("failed", record["status"])
+        self.assertIn("no power request was sent", record["message"])
+
     def test_restart_and_unpause_both_require_fresh_review(self):
         self.running()
         self.vm["spec"]["runStrategy"] = "Manual"
@@ -115,6 +183,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
             result, writes = self.call("/api/vm/power", self.reviewed())
             self.assertEqual(200, result[0], result)
             writes.assert_called_once()
+            server.OPS.cancel(result[1]["operation"]["id"], confirm="guest")
 
     def test_identity_change_during_final_check_stops_dispatch(self):
         signed = self.reviewed()

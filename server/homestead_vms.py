@@ -829,7 +829,7 @@ def _refusal(error):
         return f"HTTP {error.code}"
 
 
-def power(ns, name, action):
+def power(ns, name, action, *, raw_errors=False):
     """start, stop, force-stop, restart, pause, unpause."""
     _name(ns, "namespace"), _name(name, "VM name")
     try:
@@ -844,6 +844,8 @@ def power(ns, name, action):
         else:
             raise ValueError("the action is start, stop, force-stop, restart, pause or unpause")
     except urllib.error.HTTPError as error:
+        if raw_errors:
+            raise
         raise ValueError(f"KubeVirt refused to {action} {name}: {_refusal(error)}")
     words = {"start": "starting", "stop": "stopping", "force-stop": "being stopped at once", "restart": "restarting",
              "pause": "paused", "unpause": "resumed"}

@@ -6,7 +6,7 @@ const vm = require("node:vm");
 
 function setup({blocked=false, missing=false, fail=false}={}) {
   const sent=[], notices=[], fields={"#modal":{classList:{contains:()=>false}},
-    "#vmPowerApprove":{checked:false}, "#vmPowerApply":{}};
+    "#vmPowerApprove":{checked:false}, "#vmPowerApply":{}, ".modalbox":{scrollTop:500}};
   const body={_html:"", get innerHTML(){return this._html;}, set innerHTML(html){this._html=html;delete fields["#vmPowerLoading"];},
     insertAdjacentHTML(_where, html){this._html=html+this._html;}};
   fields["#mbody"]=body;
@@ -67,6 +67,7 @@ test("power errors consume approval and explain uncertain outcome without retry"
   await t.ctx.vmPowerReviewedApply();
   assert.equal(t.sent.length,2);
   assert.match(t.fields["#mbody"].innerHTML,/outcome may be uncertain/);
+  assert.equal(t.fields[".modalbox"].scrollTop,0);
   assert.equal(t.fields["#vmPowerApply"].disabled,true);
 });
 test("stop force stop and pause stay available without capacity review", async()=>{
@@ -103,4 +104,20 @@ test("force stop stays callable while a start response is pending",async()=>{
   assert.equal(t.sent.at(-1).body.action,"force-stop");
   finish({ok:true,detail:"accepted"});
   await pending;
+});
+test("confirmed power receipt is added to the job tray and failures refresh it too",async()=>{
+  for(const fail of [false,true]){
+    const t=setup({fail}),records=[];
+    let refreshes=0;
+    t.ctx.noteOperation=job=>records.push(job);
+    t.ctx.startOperationChecks=()=>refreshes++;
+    const original=t.ctx.api;
+    t.ctx.api=async(path,options)=>{
+      const result=await original(path,options);
+      return path.endsWith("/preview")?result:{...result,operation:{id:"job-id",kind:"vm-power"}};
+    };
+    await t.ctx.vmPower("lab","guest","start");
+    t.fields["#vmPowerApprove"].checked=true;await t.ctx.vmPowerReviewedApply();
+    assert.equal(records.length,fail?0:1);assert.equal(refreshes,1);
+  }
 });
