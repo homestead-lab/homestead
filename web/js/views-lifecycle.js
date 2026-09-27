@@ -688,7 +688,7 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
       : "Where the disk lives. The cluster's default class is chosen for you.")}</label>
       <select id="v_sc">${opts.storage_classes.map(c => `<option value="${esc(c)}" ${c === opts.default_class ? "selected" : ""}>${esc(classLabel(c))}</option>`).join("")}</select></div>` : ""}
     <div class="row" style="margin-top:18px">
-      <button class="btn pri" onclick="doVmCreate()">Create VM</button>
+      <button class="btn pri" onclick="doVmCreate()">Review VM</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div>
     <div class="note" style="margin-top:14px">${opts.harvester
       ? "New disks are made the way Harvester makes them: shared block volumes, so the VM can move between hosts. A URL is downloaded as a Harvester image, kept in its image list for the next VM."
@@ -708,7 +708,9 @@ window.vmBootChanged = () => {
   const size = +($("#v_boot")?.selectedOptions[0]?.dataset.size || 0);
   if (size && +$("#v_disk").value < Math.ceil(size)) $("#v_disk").value = Math.ceil(size);
 };
+let VM_CREATE_REVIEW = null, VM_CREATE_BUSY = false, VM_CREATE_SEQUENCE = 0;
 window.doVmCreate = async () => {
+  if (VM_CREATE_BUSY) return;
   const boot = $("#v_boot").value;
   const imported = boot.startsWith("disk:") ? boot.slice(5).split("/") : [];
   const body = { name: $("#v_name").value.trim(), cores: +$("#v_cores").value,
@@ -734,14 +736,59 @@ window.doVmCreate = async () => {
     return toast(image ? `${image.display} is a Harvester image: choose it under Boot disk instead of a URL`
       : "the image URL must start with http:// or https://", "bad");
   }
+  return vmCreateReview(body, {serviceMode, selectedVip});
+};
+window.vmCreateReview = async (body, network = {}) => {
+  if (VM_CREATE_BUSY) return;
+  VM_CREATE_REVIEW = null;
+  const sequence = ++VM_CREATE_SEQUENCE;
+  const frozen = JSON.parse(JSON.stringify(body));
   try {
-    const r = await api("/api/vm/create", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    toast(r.address ? `${body.name} created at ${r.address}, recorded in IP addresses` : `${body.name} created`, "ok"); closeModal(); go("vms");
-    if (serviceMode) {
-      try { await networkExpose(body.namespace, body.name, "VirtualMachine", selectedVip); }
-      catch (error) { toast(`VM created, but VIP setup could not open: ${error.message}. Use Edit → Network → Configure VIP / ports.`, "bad"); }
+    const review = await api("/api/vm/create/preview", {method:"POST", headers:{"Content-Type":"application/json"},body:JSON.stringify(frozen)});
+    if (sequence !== VM_CREATE_SEQUENCE) return;
+    if (!review.config?.mac || !review.capacity_token || typeof review.capacity?.blocked !== "boolean")
+      throw new Error("VM creation review unavailable. Nothing was created; refresh before continuing.");
+    VM_CREATE_REVIEW = {...review, network:{...network}};
+    const cfg = review.config;
+    childModal(`Review new VM · ${cfg.name}`, `<div class="update-review">
+      <div class="reviewbox"><b>${esc(cfg.namespace)}/${esc(cfg.name)}</b><p class="small">${esc(cfg.cores || 2)} virtual CPUs · ${esc(cfg.memory || "2Gi")} guest memory · ${esc(cfg.start === false ? "Created stopped" : "Starts after disk preparation")}</p>
+        <p class="small muted">${esc(cfg.network || "pod")} · MAC ${esc(cfg.mac)}${cfg.static_ip?.address ? ` · ${esc(cfg.static_ip.address)}` : ""}. Guest login settings are included in this review but are not displayed.</p></div>
+      <div class="reviewbox"><b>Disks to create</b>${review.volumes?.length ? review.volumes.map(v=>`<p class="small"><b>${esc(v.name)}</b> · ${esc(v.size)} · ${esc(v.access_mode)} · ${esc(v.volume_mode)}<br><span class="muted">${esc(v.storage_class)}</span></p>`).join("") : '<p class="small muted">Uses the selected existing imported disk; no new disk claim.</p>'}</div>
+      ${review.capacity.blockers?.length ? `<div class="note bad">${review.capacity.blockers.map(esc).join(" · ")}</div>` : ""}
+      ${deployCapacityHtml(review.capacity)}
+      ${!review.capacity.blocked ? '<label class="check"><input id="vmCreateApprove" type="checkbox" onchange="vmCreateReviewReady()"> Create this VM and accept the displayed capacity, storage and partial-creation risks</label>' : ""}
+      <div class="modalactions"><button class="btn" onclick="vmCreateReviewBack()">Back to configuration</button><button id="vmCreateApply" class="btn pri" disabled onclick="vmCreateReviewedApply()">Create reviewed VM</button></div></div>`,true);
+  } catch (error) { if(sequence === VM_CREATE_SEQUENCE) toast(error.message,"bad"); }
+};
+window.vmCreateReviewBack = () => { if (!VM_CREATE_BUSY) { VM_CREATE_REVIEW = null; ++VM_CREATE_SEQUENCE; modalBack(); } };
+window.vmCreateReviewReady = () => {
+  const ready = !!(VM_CREATE_REVIEW && !VM_CREATE_BUSY && !VM_CREATE_REVIEW.capacity.blocked && $("#vmCreateApprove")?.checked);
+  if($("#vmCreateApply")) $("#vmCreateApply").disabled = !ready;
+  return ready;
+};
+window.vmCreateReviewedApply = async () => {
+  if (!vmCreateReviewReady()) return toast("Review the VM and acknowledge its warnings first", "bad");
+  const review = VM_CREATE_REVIEW, cfg = review.config, button = $("#vmCreateApply");
+  VM_CREATE_REVIEW = null;
+  VM_CREATE_BUSY = true;
+  button.disabled = true; button.textContent = "Preparing disk and creating VM…";
+  try {
+    const result = await api("/api/vm/create", {method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({...cfg, capacity_token:review.capacity_token,confirm_capacity:true})});
+    if (result.operation && window.noteOperation) noteOperation(result.operation);
+    toast(result.warning || `${cfg.name} created${result.address ? ` at ${result.address}` : ""}`, result.warning ? "bad" : "ok");
+    closeModal(); go("vms");
+    if (review.network.serviceMode) {
+      try { await networkExpose(cfg.namespace,cfg.name,"VirtualMachine",review.network.selectedVip); }
+      catch(error) { toast(`VM created, but VIP setup could not open: ${error.message}. Use Edit → Network → Configure VIP / ports.`,"bad"); }
     }
-  } catch (e) { toast(e.message, "bad"); }
+  } catch(error) {
+    if($("#vmCreateApply") === button) {
+      button.textContent = "Inspect before creating again";
+      $("#mbody").insertAdjacentHTML("afterbegin",`<div class="note bad">${esc(error.message)}. The request was not repeated. Images, disks, login settings or the VM itself may already exist. Inspect Virtual machines and Volumes before a new review; retained disks are not deleted automatically.</div>`);
+    }
+    toast(error.message,"bad");
+  } finally { VM_CREATE_BUSY = false; if (window.refreshOperations) refreshOperations(true); }
 };
 
 /* ---------------- image cache ---------------- */

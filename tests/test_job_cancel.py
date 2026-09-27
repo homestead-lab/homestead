@@ -210,22 +210,27 @@ class K3sClusterTests(Store):
         return (mock.patch.object(VMS, "delete", lambda ns, name, with_disks=False: self.deleted.append((ns, name, with_disks))),
                 mock.patch.object(IPAM, "update", update))
 
-    def test_the_plan_names_the_vms_and_addresses_and_asks_for_the_cluster_name(self):
+    def test_legacy_plan_explains_missing_identity_and_confirms_tracking_only(self):
         plan = OPS.cancel_plan(self.op())
-        self.assertEqual(("rollback", "k3s-lab", "admin", "high"),
+        self.assertEqual(("forget", "k3s-lab", "admin", "low"),
                          (plan["mode"], plan["confirm"], plan["needs"], plan["severity"]))
-        self.assertIn("k3s-lab-server-1 and k3s-lab-agent-1", plan["undo"][0])
-        self.assertIn("192.0.2.60 and 192.0.2.61", plan["undo"][1])
+        self.assertTrue(plan["tracking_only"])
+        self.assertEqual([], plan["undo"])
+        self.assertIn("no creation identity receipts", plan["keeps"][0])
+        self.assertIn("IP-address records remain", " ".join(plan["keeps"]))
 
-    def test_cancelling_deletes_its_vms_with_their_disks_and_frees_their_addresses(self):
+    def test_cancelling_retains_every_vm_disk_and_address(self):
         op = self.op()
+        before = copy.deepcopy(self.records)
         a, b = self.patches()
         with a, b:
             OPS.cancel(op, confirm="k3s-lab")
-        self.assertEqual([("lab", "k3s-lab-server-1", True), ("lab", "k3s-lab-agent-1", True)], self.deleted)
-        # Only a record still under the VM's name: .61 has been taken since.
-        self.assertEqual({"192.0.2.61": {"name": "printer"}}, self.records)
+        self.assertEqual([], self.deleted)
+        self.assertEqual(before, self.records)
+        self.assertEqual([], self.cluster.calls)
         self.assertEqual("cancelled", self.stored(op)["status"])
+        self.assertTrue(self.stored(op)["tracking_stopped"])
+        self.assertTrue(self.stored(op)["ref"]["retain_resources"])
 
     def test_a_vm_that_only_shares_a_name_is_never_deleted(self):
         self.cluster.objects["/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/k3s-lab-agent-1"]["metadata"][
@@ -233,26 +238,35 @@ class K3sClusterTests(Store):
         a, b = self.patches()
         with a, b:
             OPS.cancel(self.op(), confirm="k3s-lab")
-        self.assertEqual([("lab", "k3s-lab-server-1", True)], self.deleted)
+        self.assertEqual([], self.deleted)
 
-    def test_a_failed_build_can_be_cleaned_up_and_stays_failed(self):
+    def test_failed_build_requires_retention_review_and_never_claims_cleanup(self):
         op = self.op()
         items = OPS._read()
         items[-1].update(status="failed", finished_at=OPS._now(), message="After 45 minutes the cluster is not up")
         OPS._write(items)
         listed = next(o for o in OPS.list_operations() if o["id"] == op)
         self.assertEqual((False, True), (listed["cancellable"], listed["cleanable"]))
+        self.assertTrue(listed["tracking_only"])
+        self.assertFalse(listed["dismissible"])
+        self.assertEqual(0, OPS.dismiss_finished()["dismissed"])
+        with self.assertRaisesRegex(ValueError, "recovery details"):
+            OPS.dismiss(op)
         self.assertTrue(OPS.cancel_plan(op)["cleanup"])
         a, b = self.patches()
         with a, b:
-            OPS.cancel(op, confirm="k3s-lab")
+            OPS.cancel(op, confirm="k3s-lab", by="test-admin")
         item = self.stored(op)
-        self.assertEqual(("failed", True), (item["status"], item["cleaned"]))
-        self.assertIn("Cleaned up after failing", item["message"])
-        self.assertEqual(2, len(self.deleted))
-        self.assertNotIn("192.0.2.60", self.records)
+        self.assertEqual(("failed", True), (item["status"], item["tracking_stopped"]))
+        self.assertFalse(item.get("cleaned"))
+        self.assertEqual("test-admin", item["cancelled_by"])
+        self.assertIn("Tracking stopped after failure", item["message"])
+        self.assertEqual([], self.deleted)
+        self.assertIn("192.0.2.60", self.records)
         with self.assertRaisesRegex(ValueError, "failed already"):
             OPS.cancel(op, confirm="k3s-lab")
+        self.assertTrue(OPS._public(item)["dismissible"])
+        self.assertEqual(1, OPS.dismiss_finished()["dismissed"])
 
     def test_other_failed_jobs_are_not_offered_a_clean_up(self):
         op = self.job("image-pull", {"namespace": "lab", "name": "x"})
@@ -261,21 +275,87 @@ class K3sClusterTests(Store):
         with self.assertRaisesRegex(ValueError, "failed already"):
             OPS.cancel(op)
 
-    def test_a_build_that_fails_part_way_removes_the_vms_it_made(self):
+    def test_same_name_and_label_replacement_is_retained_without_any_cluster_call(self):
+        op = self.op()
+        for obj in self.cluster.objects.values():
+            obj["metadata"]["uid"] = "replacement-never-created-by-job"
+        with mock.patch.object(CANCEL, "kget", side_effect=AssertionError("no ownership lookup needed")), \
+             mock.patch.object(VMS, "delete") as delete, mock.patch.object(IPAM, "update") as addresses:
+            OPS.cancel_plan(op)
+            OPS.cancel(op, confirm="k3s-lab")
+        delete.assert_not_called()
+        addresses.assert_not_called()
+        self.assertEqual([], self.cluster.calls)
+
+    def test_failed_new_and_legacy_recovery_records_survive_clear_and_pruning(self):
+        for retained in (False, True):
+            op = self.op()
+            items = OPS._read()
+            item = next(row for row in items if row["id"] == op)
+            item.update(status="failed")
+            item["ref"].update(retain_resources=retained, phase="failed")
+            OPS._write(items)
+            with mock.patch.object(OPS, "MAX_OPERATIONS", 0):
+                OPS._write(OPS._read())
+            self.assertEqual(0, OPS.dismiss_finished()["dismissed"])
+            with self.assertRaisesRegex(ValueError, "recovery details"):
+                OPS.dismiss(op)
+            with self.assertRaises(PermissionError):
+                OPS.cancel(op, confirm="k3s-lab", allowed=lambda role: role != "admin")
+            with self.assertRaisesRegex(ValueError, "type k3s-lab"):
+                OPS.cancel(op, confirm="wrong", allowed=lambda role: True)
+            OPS.cancel(op, confirm="k3s-lab", allowed=lambda role: True)
+            OPS.dismiss(op)
+
+    def test_tracking_result_write_failure_keeps_recovery_evidence(self):
+        op = self.op()
+        items = OPS._read()
+        items[-1]["status"] = "failed"
+        OPS._write(items)
+        original = OPS._write
+        def write(rows):
+            if any(row.get("tracking_stopped") for row in rows):
+                raise OSError("lost storage")
+            return original(rows)
+        with mock.patch.object(OPS, "_write", side_effect=write), mock.patch.object(VMS, "delete") as delete:
+            with self.assertRaises(OSError):
+                OPS.cancel(op, confirm="k3s-lab")
+        delete.assert_not_called()
+        self.assertEqual("cancelling", self.stored(op)["status"])
+        self.assertFalse(self.stored(op).get("tracking_stopped"))
+        self.assertEqual(0, OPS.dismiss_finished()["dismissed"])
+
+    def test_previously_completed_legacy_cleanup_remains_dismissible(self):
+        op = self.op()
+        items = OPS._read()
+        items[-1].update(status="failed", cleaned=True)
+        OPS._write(items)
+        self.assertTrue(OPS._public(self.stored(op))["dismissible"])
+        OPS.dismiss(op)
+        self.assertEqual([], OPS._read())
+
+    def test_a_build_that_fails_part_way_retains_vms_and_records_the_uncertain_target(self):
         removed, made = [], []
 
         def create(vm):
             if vm["name"].endswith("agent-1"):
                 raise ValueError("no room")
             made.append(vm["name"])
+            return {"vm_identity": {"namespace": "lab", "name": vm["name"], "uid": "made-uid", "resourceVersion": "1"}}
         K3SC.bind(lambda path: {}, create, lambda ip: "", lambda ns, node: removed.append(node["name"]))
         try:
-            with self.assertRaisesRegex(ValueError, "agent-1 could not be made: no room. The 1 VM made before it"):
+            with self.assertRaisesRegex(ValueError, "Stopped at k3s-lab-agent-1. 1 creation receipt"):
                 K3SC.start({"name": "k3s-lab", "servers": 1, "agents": 1, "network": "default/lan",
                             "addresses": ["192.0.2.60", "192.0.2.61"], "password": "a-long-password"}, OPS)
         finally:
             K3SC.bind(None, None, None)
-        self.assertEqual(["k3s-lab-server-1"], removed)
+        self.assertEqual([], removed)
+        item = OPS._read()[-1]
+        self.assertEqual("failed", item["status"])
+        self.assertEqual("k3s-lab-agent-1", item["ref"]["attempted"])
+        self.assertEqual("made-uid", item["ref"]["created"][0]["identity"]["uid"])
+        self.assertTrue(OPS._public(item)["cleanable"])
+        self.assertTrue(OPS._public(item)["tracking_only"])
 
 
 class DeploymentTests(Store):

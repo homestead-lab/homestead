@@ -173,10 +173,15 @@ class ClusterCreatorTests(unittest.TestCase):
 
     def test_nodes_get_the_hosts_cpu_for_vms_inside(self):
         made = []
-        K3S.bind(None, made.append, lambda address: "")
+        def create(vm):
+            made.append(vm)
+            return {"vm_identity": {"namespace": "lab", "name": vm["name"], "uid": vm["name"] + "-uid", "resourceVersion": "1"}}
+        K3S.bind(None, create, lambda address: "")
 
         class Ops:
             def start(self, *args):
+                return {"id": "op"}
+            def record_phase(self, *args, **kwargs):
                 return {"id": "op"}
         K3S.start(dict(self.CFG, kubevirt=True), Ops())
         self.assertEqual(["host-passthrough"] * 2, [vm.get("cpu_model") for vm in made])

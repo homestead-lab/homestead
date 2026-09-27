@@ -10,9 +10,20 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import homestead_names as NAMES
 import homestead_memory as MEMORY
 import homestead_capacity_review as CAPACITY_REVIEW
+import homestead_vm_capacity as VM_CAPACITY
+import homestead_vm_claims as VM_CLAIMS
+import homestead_vm_profiles as VM_PROFILES
+import homestead_vm_power_job as VM_POWER_JOB
+import homestead_vm_power_recovery as VM_POWER_RECOVERY
+import homestead_vm_mutation_job as VM_MUTATION_JOB
+import homestead_vm_mutation_recovery as VM_MUTATION_RECOVERY
+import homestead_vm_batch as VM_BATCH
 import homestead_batch_capacity as BATCH_CAPACITY
 import homestead_volume_usage as VOLUME_USAGE
 import homestead_snapshot_delete as SNAPSHOT_DELETE
+import homestead_allocation_probe as ALLOCATION_PROBE
+import homestead_allocation_capacity as ALLOCATION_CAPACITY
+import homestead_allocation_evidence as ALLOCATION_EVIDENCE
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -28,7 +39,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.186")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.187")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -389,8 +400,17 @@ def node_temps():
                    "disks": [], "sensors": 0, "smart_helper": {"available": False}}
         try:
             with urllib.request.urlopen(f"http://{ip}:9099/", timeout=4) as r:
-                payload.update(json.loads(r.read().decode()))
+                raw = r.read(4 * 1024**2 + 1)
+                if len(raw) > 4 * 1024**2:
+                    raise ValueError("node telemetry exceeds the size limit")
+                payload.update(json.loads(raw.decode()))
+            # Provenance is assigned by this backend, never accepted from the
+            # probe response. Consumers still verify Pod/DaemonSet ownership,
+            # current host boot and sample age before trusting NUMA data.
+            payload["numa_source"] = {"pod": {key: p.get("metadata", {}).get(key) for key in ("namespace", "name", "uid")},
+                                      "received_at": time.time()}
         except Exception:
+            payload.pop("numa_source", None)
             pass
         try:
             with urllib.request.urlopen(f"http://{ip}:9100/", timeout=20) as r:
@@ -671,6 +691,7 @@ def get_nodes():
                 disk_issues.append({**issue, "disk": disk.get("name", "unknown")})
         out.append({
             "name": name,
+            "uid": n["metadata"].get("uid"),
             "status": "Ready" if conds.get("Ready") == "True" else "NotReady",
             "roles": roles or ["worker"],
             "cpu_pct": round(ucpu / ccpu * 100, 1) if ccpu else 0,
@@ -3325,6 +3346,440 @@ def create_vm_with_address(cfg):
     return result
 
 
+def vm_power_capacity_plan(body):
+    ns = _dns_name(body.get("ns", DEFAULT_NS), "namespace")
+    name = _dns_name(body.get("name"), "VM name")
+    action = body.get("action")
+    if action not in ("start", "restart", "unpause"):
+        raise ValueError("Only Start, Restart and Resume need a VM capacity review")
+    current = kget(f"{VMS.API}/namespaces/{ns}/virtualmachines/{name}")
+    rollout_review_context(current)  # require identity/version, not a name-only approval
+    expanded_spec = None
+    if action != "unpause":
+        expanded_spec = VM_PROFILES.expand(current, kget)
+    dependencies = {}
+    def observed_read(path):
+        capture = any(part in path for part in ("/persistentvolumeclaims/", "/persistentvolumes/", "/storageclasses/",
+                                                "/datavolumes/", "/network-attachment-definitions/"))
+        try:
+            value = kget(path)
+        except urllib.error.HTTPError as error:
+            if capture and error.code == 404:
+                dependencies[path] = None
+            raise
+        if capture:
+            dependencies[path] = VM_CAPACITY.VMRES.identity(value)
+        return value
+    threshold = get_app_settings()["thresholds"]["memory"]["critical"]
+    plan = VM_CAPACITY.plan(current, observed_read, PLACE.get_nodes(), action=action, current=current,
+                            warning_percent=threshold, expanded_spec=expanded_spec)
+    strategy = VMS._strategy(current)
+    policy_after = "Always" if action == "start" and strategy == "Halted" else strategy
+    plan["vm"]["policy_before"], plan["vm"]["policy_after"] = strategy, policy_after
+    if strategy == "Once" and action in ("start", "restart"):
+        plan["blockers"].append("This VM uses the Once run strategy. Edit its run strategy and review that change before starting it again.")
+        plan["blocked"] = True
+    if policy_after != strategy:
+        plan["warnings"].append("Starting a Halted VM changes its KubeVirt run strategy to Always: it will be restarted after shutdown or failure until you stop it.")
+    plan["warnings"].append("Power requests address the VM by name. Identity is rechecked immediately before sending, but this is not an atomic scheduler reservation or a cross-resource transaction.")
+    plan["requires_confirmation"] = True
+    context = {"action": "vm-power", "observations": plan["vm"]["context"],
+               "policy_before": strategy, "policy_after": policy_after,
+               "expanded_spec": expanded_spec, "dependencies": dependencies}
+    return plan, context
+
+
+def preview_vm_power(body):
+    plan, context = vm_power_capacity_plan(body)
+    return {"capacity": plan, "capacity_token": CAPACITY_REVIEW.issue(body, context)}
+
+
+def vm_create_configuration(body, *, preview=False):
+    cfg = copy.deepcopy(body)
+    cfg["namespace"] = _dns_name(cfg.get("namespace", DEFAULT_NS), "namespace")
+    cfg["name"] = _dns_name(cfg.get("name"), "VM name")
+    if not cfg.get("mac"):
+        if not preview:
+            raise ValueError("Review VM creation first so its generated MAC is fixed")
+        cfg["mac"] = IMP._vm_mac()
+    if cfg.get("store_id"):
+        source = VMSTORE.source_for(str(cfg["store_id"]))
+        cfg["image_id"], cfg["image_url"] = source.get("image_id", ""), source.get("image_url", "")
+        cfg["disk_gb"] = max(int(cfg.get("disk_gb") or 0), source["min_gb"])
+    cfg["storage_class"] = str(cfg.get("storage_class") or vm_default_class())
+    return cfg
+
+
+def vm_creation_capacity(prepared):
+    """Read-only create evidence, including controller-created disk intentions."""
+    observations = {}
+    def read(path):
+        try:
+            value = kget(path)
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                observations[path] = None
+            raise
+        # Pod reservations are checked fresh, not frozen for ten minutes. Only
+        # actual dependencies/configuration bind the user's reviewed intent.
+        if path != "/api/v1/pods":
+            if isinstance(value.get("items"), list):
+                observations[path] = sorted([VM_CAPACITY.VMRES.identity(row) for row in value["items"]],
+                                            key=lambda row: (row.get("namespace") or "", row.get("name") or ""))
+            else:
+                observations[path] = VM_CAPACITY.VMRES.identity(value)
+        return value
+    claims = VM_CLAIMS.plans(prepared["vm"], read, prepared["claims"], prepared["downloads"])
+    VM_CLAIMS.pin(prepared["vm"], claims, prepared["claims"])
+    borrowed = {(volume.get("persistentVolumeClaim") or {}).get("claimName") or (volume.get("dataVolume") or {}).get("name")
+                for volume in prepared["vm"]["spec"]["template"]["spec"].get("volumes") or []} - {None, ""} - set(claims)
+    borrowed_users = []
+    if borrowed:
+        # A stopped VM still owns its guest disk. Do not rely on active Pods
+        # alone or the display-oriented best-effort import inventory.
+        inventory = kget("/apis/kubevirt.io/v1/virtualmachines")
+        if not isinstance(inventory.get("items"), list) or (inventory.get("metadata") or {}).get("continue"):
+            raise ValueError("VM disk ownership inventory is incomplete")
+        for owner in inventory["items"]:
+            if owner.get("metadata", {}).get("namespace") != prepared["namespace"]:
+                continue
+            volumes = ((owner.get("spec", {}).get("template") or {}).get("spec") or {}).get("volumes") or []
+            if any(((volume.get("persistentVolumeClaim") or {}).get("claimName") or (volume.get("dataVolume") or {}).get("name")) in borrowed for volume in volumes):
+                borrowed_users.append(owner["metadata"]["name"])
+    threshold = get_app_settings()["thresholds"]["memory"]["critical"]
+    plan = VM_CAPACITY.plan(prepared["vm"], read, PLACE.get_nodes(), action="create", warning_percent=threshold,
+                           planned_claims=claims)
+    plan["requires_confirmation"] = True
+    if borrowed_users:
+        plan["blockers"].append("Selected disk is referenced by existing VM(s), including stopped VMs: " + ", ".join(sorted(borrowed_users)))
+        plan["blocked"] = True
+    plan["warnings"] += ["Image import/provisioning may start before the guest. Importer and controller overhead is not fully rendered in this estimate.",
+                         "If a later step fails, created images, claims or Secrets are retained for inspection; do not blindly repeat creation."]
+    if prepared["vm"]["spec"].get("runStrategy") == "Halted":
+        # Still show the future start plan, but a stopped VM does not allocate
+        # a launcher. Storage provisioning/import can run independently.
+        plan["future_start_blocked"] = plan["blocked"]
+        plan["blocked"] = bool(plan["blockers"])
+        plan["warnings"].append("The VM is created stopped. Displayed guest placement is for a future start and will be checked again then.")
+    context = {"action": "vm-create", "prepared": copy.deepcopy(prepared), "dependencies": observations}
+    return plan, claims, context
+
+
+def preview_vm_create(body):
+    cfg = vm_create_configuration(body, preview=True)
+    prepared = IMP.prepare_vm(cfg, PLATFORM.detect(), cfg["storage_class"])
+    IMP._recheck_vm_creation(prepared)
+    plan, claims, context = vm_creation_capacity(prepared)
+    if cfg.get("static_ip"):
+        problem = vm_address_problem(str(cfg["static_ip"].get("address") or "").strip())
+        if problem:
+            plan["blockers"].append(problem)
+            plan["blocked"] = True
+    # Echo only the user's config plus normalized/generated values. Prepared
+    # Secrets/cloud-init manifests are never included in the preview response.
+    return {"config": cfg, "capacity": plan, "volumes": list(claims.values()),
+            "capacity_token": CAPACITY_REVIEW.issue(cfg, context)}
+
+
+def reviewed_vm_create(body):
+    cfg = vm_create_configuration(body)
+    prepared = IMP.prepare_vm(cfg, PLATFORM.detect(), cfg["storage_class"])
+    IMP._recheck_vm_creation(prepared)
+    plan, _, context = vm_creation_capacity(prepared)
+    CAPACITY_REVIEW.enforce(cfg, plan, context)
+    def check_address():
+        if cfg.get("static_ip"):
+            problem = vm_address_problem(str(cfg["static_ip"].get("address") or "").strip())
+            if problem:
+                raise ValueError(problem)
+    check_address()
+    def admit_after_preparation(resolved):
+        check_address()
+        # Downloads may resolve an image-specific class. Evaluate that exact
+        # resolved manifest, retaining the original signed input/consent.
+        fresh, _, _ = vm_creation_capacity(resolved)
+        for path, expected in context["dependencies"].items():
+            value = VM_CAPACITY._optional(kget, path) if not isinstance(expected, list) else kget(path)
+            if isinstance(expected, list):
+                if not isinstance(value.get("items"), list) or (value.get("metadata") or {}).get("continue"):
+                    raise ValueError("VM dependency inventory became incomplete")
+                actual = sorted([VM_CAPACITY.VMRES.identity(row) for row in value["items"]],
+                                key=lambda row: (row.get("namespace") or "", row.get("name") or ""))
+            else:
+                actual = VM_CAPACITY.VMRES.identity(value) if value else None
+            if actual != expected:
+                raise CAPACITY_REVIEW.Rejected("VM creation dependencies changed during image preparation; inspect retained resources and review again", fresh)
+        CAPACITY_REVIEW.enforce(cfg, fresh, context)
+    result = VM_MUTATION_JOB.dispatch("vm-create", cfg, cfg["namespace"], cfg["name"], None, OPS, IMP.ksend,
+        lambda send: IMP.commit_vm(prepared, before_save=admit_after_preparation, send=send))
+    if result.get("address"):
+        try:
+            IPAM.save_record({"ip": result["address"], "name": cfg["name"], "kind": "static",
+                              "category": "server", "mac": result.get("mac", ""), "owner": "homestead",
+                              "note": f"VM {cfg['namespace']}/{cfg['name']}"})
+        except Exception:
+            result["warning"] = " ".join(filter(None, [result.get("warning"),
+                "VM created, but its IP-address record could not be saved; inspect IP addresses before reusing the address."]))
+    return result
+
+
+def reviewed_vm_power(body):
+    action = body.get("action", "")
+    ns = _dns_name(body.get("ns", DEFAULT_NS), "namespace")
+    name = _dns_name(body.get("name"), "VM name")
+    if action in ("stop", "force-stop", "pause"):
+        # Recovery must remain available even if capacity/config inventory fails.
+        return VMS.power(ns, name, action)
+    plan, context = vm_power_capacity_plan(body)
+    CAPACITY_REVIEW.enforce(body, plan, context)
+    for path, expected in context["dependencies"].items():
+        observed = VM_CAPACITY._optional(kget, path)
+        if (VM_CAPACITY.VMRES.identity(observed) if observed else None) != expected:
+            raise CAPACITY_REVIEW.Rejected("A VM storage/network dependency changed during admission; review it again", plan)
+    # Re-read both identities after the inventory and token checks. Never retry
+    # an API conflict by fetching and writing a new run policy.
+    current = kget(f"{VMS.API}/namespaces/{ns}/virtualmachines/{name}")
+    observations = context["observations"]
+    if VM_CAPACITY.VMRES.identity(current) != observations["vm"]:
+        raise CAPACITY_REVIEW.Rejected("The VM changed during admission; review it again", plan)
+    vmi = VM_CAPACITY._optional(kget, f"{VMS.API}/namespaces/{ns}/virtualmachineinstances/{name}")
+    if (VM_CAPACITY.VMRES.identity(vmi) if vmi else None) != observations.get("vmi"):
+        raise CAPACITY_REVIEW.Rejected("The running VM instance changed during admission; review it again", plan)
+    def before_send():
+        fresh, fresh_context = vm_power_capacity_plan(body)
+        CAPACITY_REVIEW.enforce(body, fresh, fresh_context)
+    return VM_POWER_JOB.dispatch(body, context, OPS,
+        lambda: VMS.power(ns, name, action, raw_errors=True), before_send)
+
+
+def vm_edit_capacity(prepared):
+    """Admit proposed edits, not the old VMI's resource requirements.
+
+    Metadata-only and stop/manual-policy edits remain available without a
+    functioning capacity inventory. A template change is never assumed inert:
+    KubeVirt LiveUpdate may apply it without an explicit restart request.
+    """
+    current, vm = prepared["current"], prepared["vm"]
+    before, after = VMS._strategy(current), VMS._strategy(vm)
+    needed = (vm["spec"]["template"] != current["spec"]["template"] or
+              (vm.get("metadata", {}).get("labels") or {}) != (current.get("metadata", {}).get("labels") or {}) or
+              bool(prepared["resize"] or prepared["effects"] or prepared["to_create"]) or
+              (before != after and after not in ("Halted", "Manual")))
+    observations, claims, expanded_spec = {}, {}, None
+    def read(path):
+        try:
+            value = kget(path)
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                observations[path] = None
+            raise
+        if path != "/api/v1/pods":
+            if isinstance(value.get("items"), list):
+                observations[path] = sorted([VM_CAPACITY.VMRES.identity(row) for row in value["items"]],
+                                            key=lambda row: (row.get("namespace") or "", row.get("name") or ""))
+            else:
+                observations[path] = VM_CAPACITY.VMRES.identity(value)
+        return value
+    if needed:
+        # Existing controller templates are not promises to recreate a missing
+        # disk. Only new definitions get the planned-claim exception.
+        proposed = copy.deepcopy(vm)
+        old_claims = {VMS._volume_claim(volume) for volume in current["spec"]["template"]["spec"].get("volumes") or []}
+        proposed["spec"]["dataVolumeTemplates"] = [row for row in VMS._dv_templates(vm) if row["metadata"]["name"] not in old_claims]
+        VMS._set_claim_templates(proposed, [row for row in VMS._claim_templates(vm) if row["metadata"]["name"] not in old_claims])
+        downloads = [effect for effect in prepared["effects"] if effect["kind"] == "image-download"]
+        claims = VM_CLAIMS.plans(proposed, read, prepared["to_create"], downloads)
+        # Pin only newly planned disks. Existing controller templates must not
+        # be rewritten using today's storage defaults.
+        VM_CLAIMS.pin(vm, claims, prepared["to_create"])
+        expanded_spec = VM_PROFILES.expand(vm, kget, ksend)
+        threshold = get_app_settings()["thresholds"]["memory"]["critical"]
+        plan = VM_CAPACITY.plan(vm, read, PLACE.get_nodes(), action="edit", current=current,
+                               warning_percent=threshold, planned_claims=claims, expanded_spec=expanded_spec)
+        plan["warnings"].append("Template and restart-policy changes may take effect immediately through KubeVirt. Saving is not a promise that the guest remains stopped or unchanged.")
+        if after == "Halted":
+            plan["warnings"].append("The requested policy is Halted. Resource placement shown is conservative; a separate reviewed Start is required to run it again.")
+    else:
+        plan = {"blocked": False, "blockers": [], "warnings": [], "vm": {"action": "edit"}}
+    for effect in prepared["effects"]:
+        if effect["kind"] == "replace-datavolume" and effect.get("identity"):
+            plan["blockers"].append("Existing DataVolume replacement is unsafe in an edit. Add a disk with a new name/source, then detach the old disk; no old disk is deleted.")
+            plan["blocked"] = True
+    plan["vm"].update(admission_needed=needed, policy_before=before, policy_after=after)
+    plan["warnings"].append("VM, Secret and disk changes are not a transaction. If saving fails, inspect retained resources before trying again. No automatic restart is sent by Save.")
+    plan["requires_confirmation"] = True
+    context = {"action": "vm-edit", "prepared": copy.deepcopy(prepared), "dependencies": observations,
+               "expanded_spec": expanded_spec}
+    return plan, claims, context
+
+
+def prepare_vm_edit(body):
+    if body.get("restart"):
+        raise ValueError("Save the VM edit first, then review Restart separately against its saved resources")
+    ns = _dns_name(body.get("ns", DEFAULT_NS), "namespace")
+    name = _dns_name(body.get("name"), "VM name")
+    prepared = VMS.prepare_edit(ns, name, body)
+    VMS._recheck_edit(prepared)
+    return prepared
+
+
+def preview_vm_edit(body):
+    prepared = prepare_vm_edit(body)
+    plan, claims, context = vm_edit_capacity(prepared)
+    return {"capacity": plan, "volumes": list(claims.values()),
+            "capacity_token": CAPACITY_REVIEW.issue(body, context)}
+
+
+def reviewed_vm_edit(body):
+    prepared = prepare_vm_edit(body)
+    plan, _, context = vm_edit_capacity(prepared)
+    CAPACITY_REVIEW.enforce(body, plan, context)
+    def before_save(resolved):
+        fresh, _, fresh_context = vm_edit_capacity(resolved)
+        if fresh_context["expanded_spec"] != context["expanded_spec"]:
+            raise CAPACITY_REVIEW.Rejected("VM profile expansion changed during preparation; review the proposed resources again", fresh)
+        for path, expected in context["dependencies"].items():
+            value = VM_CAPACITY._optional(kget, path) if not isinstance(expected, list) else kget(path)
+            if isinstance(expected, list):
+                if not isinstance(value.get("items"), list) or (value.get("metadata") or {}).get("continue"):
+                    raise ValueError("VM edit dependency inventory became incomplete")
+                actual = sorted([VM_CAPACITY.VMRES.identity(row) for row in value["items"]],
+                                key=lambda row: (row.get("namespace") or "", row.get("name") or ""))
+            else:
+                actual = VM_CAPACITY.VMRES.identity(value) if value else None
+            if actual != expected:
+                raise CAPACITY_REVIEW.Rejected("VM edit dependencies changed; inspect retained resources and review again", fresh)
+        CAPACITY_REVIEW.enforce(body, fresh, context)
+        VMS._recheck_edit(resolved)
+    return VM_MUTATION_JOB.dispatch("vm-edit", body, prepared["namespace"], prepared["name"], prepared["identity"], OPS, VMS.ksend,
+        lambda send: VMS.commit_edit(prepared, before_save=before_save, send=send))
+
+
+def vm_cluster_configuration(body, *, preview=False):
+    cfg = copy.deepcopy(body)
+    cfg["namespace"] = _dns_name(cfg.get("namespace") or DEFAULT_NS, "namespace")
+    built = K3SC.plan(cfg)
+    cfg["name"] = built["name"]
+    if preview:
+        cfg["review_id"] = secrets.token_hex(16)
+        cfg["macs"] = {node["name"]: IMP._vm_mac() for node in built["nodes"]}
+    if not re.fullmatch(r"[a-f0-9]{32}", str(cfg.get("review_id") or "")):
+        raise ValueError("Review the VM cluster first to freeze its generated identifiers")
+    if not isinstance(cfg.get("macs"), dict) or set(cfg["macs"]) != {node["name"] for node in built["nodes"]}:
+        raise ValueError("VM cluster MAC addresses are incomplete; review again")
+    if len(set(cfg["macs"].values())) != len(built["nodes"]):
+        raise ValueError("VM cluster MAC addresses must be distinct")
+    cfg["storage_class"] = str(cfg.get("storage_class") or vm_default_class())
+    return cfg
+
+
+def vm_cluster_snapshot():
+    cache, external = {}, {}
+    def read(path):
+        capture = bool(re.fullmatch(r"/api/v1/namespaces/[^/]+", path)) or any(part in path for part in ("/storageclasses", "/storageprofiles/", "/network-attachment-definitions/", "/kubevirts"))
+        if path not in cache:
+            try:
+                cache[path] = kget(path)
+            except urllib.error.HTTPError as error:
+                if error.code != 404:
+                    raise
+                cache[path] = error
+                if capture:
+                    external[path] = None
+        value = cache[path]
+        if isinstance(value, Exception):
+            raise value
+        if capture:
+            external[path] = (sorted([VM_CAPACITY.VMRES.identity(row) for row in value["items"]],
+                                    key=lambda row: (row.get("namespace") or "", row.get("name") or ""))
+                              if isinstance(value.get("items"), list) else VM_CAPACITY.VMRES.identity(value))
+        return copy.deepcopy(value)
+    # Allocation observations bracket a live RPC. Identity/policy reads must
+    # bypass this batch's otherwise useful immutable inventory cache.
+    read.fresh = kget
+    return read, external
+
+
+def prepare_vm_cluster(cfg):
+    token = CAPACITY_REVIEW.derive_secret(cfg, "k3s-bootstrap-join")
+    batch = K3SC.prepare(cfg, token=token, guest_checks=True)
+    read, external = vm_cluster_snapshot()
+    platform = PLATFORM.detect()
+    prepared = []
+    for config in batch["configs"]:
+        item = IMP.prepare_vm(config, platform, cfg["storage_class"])
+        K3SC.HEALTH.pin(item, batch["guest_health"])
+        IMP._recheck_vm_creation(item)
+        claims = VM_CLAIMS.plans(item["vm"], read, item["claims"], item["downloads"])
+        VM_CLAIMS.pin(item["vm"], claims, item["claims"])
+        prepared.append(item)
+    plan = VM_BATCH.plan(prepared, read, PLACE.get_nodes(), threshold=get_app_settings()["thresholds"]["memory"]["critical"])
+    context = {"action": "vm-cluster-create", "prepared": copy.deepcopy(prepared), "external": external,
+               "numa_policy": copy.deepcopy(plan.get("numa_policy") or {})}
+    return batch, prepared, plan, context
+
+
+def preview_vm_cluster(body):
+    cfg = vm_cluster_configuration(body, preview=True)
+    batch, _, capacity, context = prepare_vm_cluster(cfg)
+    return {**batch["plan"], "ok": not capacity["blocked"], "config": cfg, "capacity": capacity,
+            "capacity_token": CAPACITY_REVIEW.issue(cfg, context)}
+
+
+def reviewed_vm_cluster(body):
+    cfg = vm_cluster_configuration(body)
+    batch, prepared, plan, context = prepare_vm_cluster(cfg)
+    CAPACITY_REVIEW.enforce(cfg, plan, context)
+    receipts = {}
+    def admit():
+        # All remaining controllers still count, including already-created VMs
+        # whose launchers have not appeared in Kubernetes yet.
+        for item, config in zip(prepared, batch["configs"]):
+            if item["name"] not in receipts:
+                IMP._recheck_vm_creation(item)
+                problem = vm_address_problem(config["static_ip"]["address"])
+                if problem:
+                    raise ValueError(problem)
+        read, _ = vm_cluster_snapshot()
+        fresh = VM_BATCH.plan(prepared, read, PLACE.get_nodes(), created=receipts,
+                              threshold=get_app_settings()["thresholds"]["memory"]["critical"])
+        if (fresh.get("numa_policy") or {}) != context["numa_policy"]:
+            raise CAPACITY_REVIEW.Rejected("Host allocation policy changed; retain partial resources and review again", fresh)
+        for path, expected in context["external"].items():
+            value = VM_CAPACITY._optional(read, path) if expected is None else read(path)
+            actual = (sorted([VM_CAPACITY.VMRES.identity(row) for row in VM_CAPACITY._items(read, path)],
+                             key=lambda row: (row.get("namespace") or "", row.get("name") or ""))
+                      if isinstance(expected, list) else VM_CAPACITY.VMRES.identity(value) if value else None)
+            if actual != expected:
+                raise CAPACITY_REVIEW.Rejected("VM batch dependencies changed; retain partial resources and review again", fresh)
+        CAPACITY_REVIEW.enforce(cfg, fresh, context)
+    def before_node(config, made):
+        receipts.update({row["name"]: row["identity"] for row in made})
+        admit()
+    def create_one(config, send=None):
+        index = next(i for i, item in enumerate(prepared) if item["name"] == config["name"])
+        def after_images(resolved):
+            # Image downloads can resolve a new storage class. Pin and re-admit
+            # that exact manifest before any PVC/Secret/VM mutation.
+            read, _ = vm_cluster_snapshot()
+            claims = VM_CLAIMS.plans(resolved["vm"], read, resolved["claims"], resolved["downloads"])
+            VM_CLAIMS.pin(resolved["vm"], claims, resolved["claims"])
+            prepared[index] = resolved
+            admit()
+        result = IMP.commit_vm(prepared[index], before_save=after_images, send=send)
+        if result.get("address"):
+            try:
+                IPAM.save_record({"ip": result["address"], "name": config["name"], "kind": "static",
+                                  "category": "server", "mac": result.get("mac", ""), "owner": "homestead",
+                                  "note": f"VM {config['namespace']}/{config['name']}"})
+            except Exception:
+                # A failed address record is not authority to repeat creation.
+                # Halt the batch with its pre-dispatch recovery intent retained.
+                raise ValueError("VM created but its IP-address record could not be saved; inspect it before continuing") from None
+        return result
+    return K3SC.commit(batch, OPS, create_one=create_one, before_node=before_node, review=cfg, send=IMP.ksend)
+
+
 def selectable_storage_classes(rows=None):
     """Classes a person may pick for their own workloads - the default first."""
     rows = [row for row in (rows if rows is not None else storage_classes()) if class_selectable(row)]
@@ -4122,6 +4577,15 @@ import homestead_power as POWER
 import homestead_privileges as PRIV
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS)
+def allocation_probe_capacity(obj, template):
+    listing = kget("/api/v1/pods")
+    if not isinstance(listing.get("items"), list) or (listing.get("metadata") or {}).get("continue"):
+        raise ValueError("Complete workload inventory is unavailable; nothing was changed")
+    return ALLOCATION_CAPACITY.plan(obj, template, PLACE.get_nodes(), listing["items"],
+                                    get_app_settings()["thresholds"]["memory"]["critical"])
+
+
+ALLOCATION_PROBE.bind(kget, ksend, DEFAULT_NS, allocation_probe_capacity)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
 MOVE.bind(kget, ksend, DEFAULT_NS, HOMESTEAD_VERSION)
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
@@ -4172,6 +4636,11 @@ def _remove_cluster_vm(ns, node):
 K3SC.bind(kget, lambda cfg: create_vm_with_address(cfg), lambda ip: vm_address_problem(ip), _remove_cluster_vm)
 OPS.RESOLVERS["k3s-cluster"] = K3SC.status
 OPS.RESOLVERS["node-power"] = POWER.status
+OPS.RESOLVERS["vm-power"] = lambda item: VM_POWER_JOB.status(item, kget)
+OPS.CANCELLERS["vm-power"] = (VM_POWER_JOB.cancel_plan, VM_POWER_JOB.cancel_run)
+for _kind in ("vm-create", "vm-edit"):
+    OPS.RESOLVERS[_kind] = VM_MUTATION_JOB.status
+    OPS.CANCELLERS[_kind] = (VM_MUTATION_JOB.cancel_plan, VM_MUTATION_JOB.cancel_run)
 OPS.CANCELLERS["node-power"] = (lambda item: {"can": False, "why_not":
     "A host power command cannot be cancelled after it has been sent"}, lambda item, options: "")
 MOVE_ENGINE.after_finish = cleanup_restore_classes
@@ -5425,11 +5894,14 @@ ADMIN_ROUTES = {
     "/api/shares/repair",
     # Carrying a stopped job on runs its remaining steps - a swap, for one.
     "/api/operations/resume",
+    "/api/operations/power-recovery/preview", "/api/operations/power-recovery/resolve",
+    "/api/operations/vm-recovery/preview", "/api/operations/vm-recovery/resolve",
     "/api/network/vips/add", "/api/network/vips/remove", "/api/network/vips/label", "/api/network/vips/default", "/api/network/vm-networks",
     "/api/files/list", "/api/files/read", "/api/files/write", "/api/files/close",
     "/api/node/smart/test",
     # Installing the probe stands a privileged container on every node.
     "/api/node/probe/install", "/api/node/probe/remove",
+    "/api/node/probe/allocation", "/api/node/probe/allocation/check",
     # Object storage holds every backup, and its keys.
     "/api/objectstore/deploy", "/api/objectstore/longhorn", "/api/objectstore/remove",
     # A cluster's credentials, and what they reach.
@@ -5871,6 +6343,24 @@ class H(BaseHTTPRequestHandler):
                 report["health_assessment"] = smart_disk_health(
                     report, get_app_settings().get("smart"))
                 return self._send(200, report)
+            if p == "/api/node/probe/allocation":
+                current = ALLOCATION_PROBE.status()
+                if current["enabled"] and current.get("image") != "ghcr.io/wjcloudy/homestead:" + HOMESTEAD_VERSION:
+                    current["detail"] = "Helper update pending. Review capacity and save settings to use this release."
+                if current["installed"]:
+                    try:
+                        current["capacity"] = ALLOCATION_PROBE.configure({**current, "enabled": True,
+                            "directory": current.get("directory") or "/var/lib/kubelet/pod-resources"}, HOMESTEAD_VERSION, preview=True)
+                    except Exception:
+                        current["capacity"] = {"blocked": True, "blockers": ["Capacity could not be checked. Refresh before enabling."], "warnings": []}
+                return self._send(200, current)
+            if p == "/api/node/probe/allocation/check":
+                node = (q.get("node") or [""])[0]
+                host = next((row for row in PLACE.get_nodes() if row["name"] == node), None)
+                if host is None:
+                    raise ValueError("Choose a current host")
+                check = ALLOCATION_EVIDENCE.inspect(host, kget)
+                return self._send(200, {"name": node, "verified": check["verified"], "detail": check["reason"]})
             if p == "/api/history/long":
                 return self._send(200, HISTORY.series((q.get("range") or ["24h"])[0]))
             if p == "/api/history":
@@ -6590,6 +7080,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, PROBE.install(HOMESTEAD_VERSION))
             if p == "/api/node/probe/remove":
                 return self._send(200, PROBE.remove())
+            if p == "/api/node/probe/allocation":
+                return self._send(200, ALLOCATION_PROBE.configure(b, HOMESTEAD_VERSION))
             if p == "/api/node/smart/test":
                 result = SMART.start_test(b.get("node"), b.get("disk"), b.get("test"))
                 result["operation"] = OPS.start(
@@ -6660,12 +7152,16 @@ class H(BaseHTTPRequestHandler):
                         {"kind": "VirtualMachine", "name": b["name"], "namespace": ns},
                         "/vms", {"namespace": ns, "name": result["migration"]})
                 return self._send(200, result)
+            if p == "/api/vm/power/preview":
+                return self._send(200, preview_vm_power(b))
             if p == "/api/vm/power":
                 _cache.pop("vms", None)
-                return self._send(200, VMS.power(b.get("ns", DEFAULT_NS), b.get("name", ""), b.get("action", "")))
+                return self._send(200, reviewed_vm_power(b))
+            if p == "/api/vm/edit/preview":
+                return self._send(200, preview_vm_edit(b))
             if p == "/api/vm/edit":
                 _cache.pop("vms", None)
-                return self._send(200, VMS.edit(b.get("ns", DEFAULT_NS), b.get("name", ""), b))
+                return self._send(200, reviewed_vm_edit(b))
             if p == "/api/vm/delete":
                 _cache.pop("vms", None)
                 return self._send(200, VMS.delete(b.get("ns", DEFAULT_NS), b.get("name", ""), bool(b.get("disks"))))
@@ -6695,18 +7191,14 @@ class H(BaseHTTPRequestHandler):
                 _cache.pop("lhcap", None)
                 return self._send(200, LHCAP.save(b))
             if p == "/api/vm/k3s-cluster/plan":
-                return self._send(200, K3SC.review(b))
+                return self._send(200, preview_vm_cluster(b))
             if p == "/api/vm/k3s-cluster":
-                return self._send(200, {"ok": True, "operation": K3SC.start(b, OPS)})
+                return self._send(200, {"ok": True, "operation": reviewed_vm_cluster(b)})
+            if p == "/api/vm/create/preview":
+                return self._send(200, preview_vm_create(b))
             if p == "/api/vm/create":
                 _cache.pop("vms", None)
-                if b.get("store_id"):
-                    # From the image store: its newest kept build, else the
-                    # publisher's address.
-                    source = VMSTORE.source_for(str(b["store_id"]))
-                    b["image_id"], b["image_url"] = source.get("image_id", ""), source.get("image_url", "")
-                    b["disk_gb"] = max(int(b.get("disk_gb") or 0), source["min_gb"])
-                return self._send(200, create_vm_with_address(b))
+                return self._send(200, reviewed_vm_create(b))
             if p == "/api/node/shell/prepare":
                 # Starts the node's helper and says plainly if it cannot,
                 # before the terminal connects - a refused WebSocket says nothing.
@@ -6924,6 +7416,14 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, result)
             if p == "/api/operations/resume":
                 return self._send(200, OPS.resume(b.get("id", "")))
+            if p == "/api/operations/power-recovery/preview":
+                return self._send(200, VM_POWER_RECOVERY.preview(b.get("id", ""), OPS, kget, self.user))
+            if p == "/api/operations/power-recovery/resolve":
+                return self._send(200, VM_POWER_RECOVERY.resolve(b, OPS, kget, self.user))
+            if p == "/api/operations/vm-recovery/preview":
+                return self._send(200, VM_MUTATION_RECOVERY.preview(b.get("id", ""), OPS, kget, self.user))
+            if p == "/api/operations/vm-recovery/resolve":
+                return self._send(200, VM_MUTATION_RECOVERY.resolve(b, OPS, kget, self.user))
             if p == "/api/operations/cancel-plan":
                 return self._send(200, OPS.cancel_plan(b.get("id", "")))
             if p == "/api/operations/cancel":
@@ -7065,6 +7565,17 @@ def _upgrade_node_probe():
         return
     if result["state"] in ("updated", "error"):
         print(f"node probe: {result['detail']}", flush=True)
+    try:
+        for attempt in range(7):
+            result = ALLOCATION_PROBE.reconcile(HOMESTEAD_VERSION)
+            if result["state"] != "waiting" or attempt == 6:
+                break
+            # Background read-only waiting, never retry an uncertain PATCH.
+            time.sleep(10)
+        if result["state"] in ("updated", "review", "waiting"):
+            print(f"VM placement checks: {result['detail']}", flush=True)
+    except Exception:
+        print("VM placement helper not updated; review its settings in Cluster > Add-ons", flush=True)
 
 
 def _samba_loop():

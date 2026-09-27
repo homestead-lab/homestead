@@ -34,7 +34,7 @@ function renderOperations() {
   // Clearing one at a time is fine for a stray failure and tedious after a
   // batch, so the header offers the lot - and says how many, because it will
   // not touch anything still running.
-  const finished = items.filter(item => !operationActive(item));
+  const finished = items.filter(item => !operationActive(item) && item.dismissible !== false);
   const clear = $("#jobClear");
   if (clear) {
     // Only relabel when there is something to clear, so it never reads
@@ -51,10 +51,12 @@ function renderOperations() {
     <div class="jobactions">
       <button class="btn sm" onclick="openOperation('${esc(operation.href || "/")}','${esc(operation.id || "")}')">Open</button>
       <button class="btn sm" data-tip="Every step it has taken, and the output of what does its work" onclick="operationLog('${esc(operation.id)}')">${icon("log")}Log</button>
+      ${operation.power_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview('${esc(operation.id)}')">Inspect outcome</button>` : ""}
+      ${operation.mutation_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview('${esc(operation.id)}',true)">Inspect ${operation.kind === "k3s-cluster" ? "batch" : "save"} outcome</button>` : ""}
       ${operation.resumable ? `<button class="btn sm pri" data-need="admin" data-tip="Run the steps that are left, from the one it stopped at" onclick="resumeOperation('${esc(operation.id)}')">Carry on</button>` : ""}
-      ${operation.cleanable ? `<button class="btn sm danger" data-need="admin" data-tip="Says what it left behind - its VMs, disks and addresses - and removes it" onclick="cancelOperation('${esc(operation.id)}')">Clean up</button>` : ""}
+      ${operation.cleanable ? `<button class="btn sm ${operation.tracking_only ? "" : "danger"}" data-need="admin" data-tip="${operation.tracking_only ? "Review retained resources before stopping tracking; nothing is deleted" : "Says what it left behind and what cleanup removes"}" onclick="cancelOperation('${esc(operation.id)}')">${operation.tracking_only ? "Review retained resources" : "Clean up"}</button>` : ""}
       ${operation.cancellable ? `<button class="btn sm danger" data-need="operator" data-tip="Says what stopping it would undo and what it cannot, before anything changes" onclick="cancelOperation('${esc(operation.id)}')">${operation.status === "cancelling" ? "Cancel again" : "Cancel"}</button>` : ""}
-      ${operationActive(operation) ? "" : `<button class="btn sm" data-need="operator" onclick="dismissOperation('${esc(operation.id)}')">Dismiss</button>`}
+      ${operationActive(operation) || operation.dismissible === false ? "" : `<button class="btn sm" data-need="operator" onclick="dismissOperation('${esc(operation.id)}')">Dismiss</button>`}
     </div>
   </article>`).join("");
   if (window.applyRole) window.applyRole();
@@ -105,6 +107,8 @@ window.openOperation = (href, id = "") => {
   if (q && !opensItsOwn) highlightInPage(q);
   // An image update or rollback opens its rollout, as it looked when it ran.
   const target = operation?.resource || {};
+  if (operation?.kind === "vm-power" && target.name && window.vmOpen)
+    setTimeout(() => vmOpen(target.namespace || "lab", target.name), 150);
   if (["image-update", "image-rollback"].includes(operation?.kind) && target.name && window.monitorImageRollout)
     setTimeout(() => monitorImageRollout(target.namespace || "lab", target.name), 150);
   if (operation?.kind === "reclass" && window.reclassWatch) setTimeout(() => reclassWatch(operation.id), 150);
@@ -147,6 +151,65 @@ window.resumeOperation = async id => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
+let POWER_RECOVERY = null, POWER_RECOVERY_SEQ = 0, POWER_RECOVERY_BUSY = false;
+window.powerRecoveryReview = async (id, mutation = false) => {
+  if (POWER_RECOVERY_BUSY) return;
+  POWER_RECOVERY = null;
+  const sequence = ++POWER_RECOVERY_SEQ;
+  const endpoint=mutation ? "/api/operations/vm-recovery" : "/api/operations/power-recovery";
+  modal(mutation ? "Inspect VM configuration outcome" : "Inspect VM power outcome", '<div id="powerRecoveryLoading" class="empty"><span class="spin2"></span>Checking dispatcher and current VM state…</div>', true, "operation-review");
+  try {
+    const review = await api(endpoint + "/preview", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
+    if (sequence !== POWER_RECOVERY_SEQ || !$("#powerRecoveryLoading")) return;
+    const p = review.plan;
+    if (!p || typeof p.blocked !== "boolean" || (!p.blocked && !review.capacity_token)) throw new Error("Recovery review is incomplete. Nothing was resolved.");
+    if (mutation && !p.blocked && (!Array.isArray(p.resources) || !p.resources.length)) throw new Error("Resource inspection is incomplete. Nothing was resolved.");
+    POWER_RECOVERY = {id,...review,endpoint};
+    const observed=p.observed || {}, resource=p.resource || {};
+    $("#mbody").innerHTML = `<div class="update-review">
+      <div class="reviewbox"><b>${mutation ? "Resolve tracking, keep resources" : "Resolve tracking, not power"}</b><p class="small">${esc(resource.namespace || "")} / ${esc(resource.name || "VM job")} · requested ${esc(p.action || "VM change")} · ${esc(p.dispatch_phase || "dispatcher busy")}</p>
+        <p class="small">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>
+      ${p.blockers?.length ? `<div class="note bad">${p.blockers.map(esc).join(" · ")}</div>` : ""}
+      ${mutation && p.resources ? `<div class="reviewbox"><b>Resource write receipts and current identities</b>${p.resources.map(row=>`<div class="small" style="margin-top:10px;overflow-wrap:anywhere"><b>${esc(row.resource.kind)} · ${esc(row.resource.namespace)}/${esc(row.resource.name)}</b><br>Last write: ${esc(row.last_write)} · ${esc(row.relationship)}<br>Recorded UID: ${esc(row.expected?.uid || "no verified receipt")}<br>Current UID: ${esc(row.current?.uid || "not found")}</div>`).join("")}</div>` : ""}
+      ${p.observed ? `<div class="reviewbox"><b>Current observations</b>
+        <p class="small">VM: ${esc(observed.vm_status)} · policy: ${esc(observed.run_strategy)}</p>
+        <p class="small">Instance: ${esc(observed.instance_phase)} · Ready: ${observed.ready ? "yes" : "no"} · Paused: ${observed.paused ? "yes" : "no"}</p>
+        <p class="small">Queued power changes: ${esc(observed.queued_changes)} · Original VM: ${observed.same_vm ? "same identity" : "missing or replaced"}</p>
+        <p class="small" style="overflow-wrap:anywhere">Reviewed VM UID: ${esc(resource.original_uid)}<br>Current VM UID: ${esc(observed.vm?.uid || "not found")}<br>Current instance UID: ${esc(observed.instance?.uid || "not found")}</p></div>` : ""}
+      ${(p.warnings || []).map(w=>`<div class="note warn small">${esc(w)}</div>`).join("")}
+      ${!p.blocked ? `<div class="f"><label>Type ${esc(p.confirm)} to confirm inspection</label><input id="powerRecoveryName" autocomplete="off" oninput="powerRecoveryReady()"></div>
+        <label class="check"><input id="powerRecoveryAck" type="checkbox" onchange="powerRecoveryReady()"> I inspected the ${p.action === "k3s-cluster" ? "planned VMs" : "VM"}${mutation ? " and retained resources" : ""}. I accept that the old request may still take effect late and that resolving this record allows a new, separately reviewed ${mutation ? "VM change" : "power action"}.</label>` : ""}
+      <div class="modalactions"><button class="btn" onclick="closeModal()">Keep tracking</button><button class="btn danger" id="powerRecoveryApply" disabled onclick="powerRecoveryResolve()">Record unknown outcome</button></div></div>`;
+    if ($(".modalbox")) $(".modalbox").scrollTop=0;
+  } catch(error) {
+    if (sequence !== POWER_RECOVERY_SEQ || !$("#powerRecoveryLoading")) return;
+    POWER_RECOVERY=null;
+    $("#mbody").innerHTML=`<div class="note bad">${esc(error.message)}</div><button class="btn" onclick="closeModal()">Close</button>`;
+  }
+};
+window.powerRecoveryReady = () => {
+  const ready=!!(POWER_RECOVERY && !POWER_RECOVERY_BUSY && !POWER_RECOVERY.plan.blocked && $("#powerRecoveryAck")?.checked && $("#powerRecoveryName")?.value===POWER_RECOVERY.plan.confirm);
+  if ($("#powerRecoveryApply")) $("#powerRecoveryApply").disabled=!ready;
+  return ready;
+};
+window.powerRecoveryResolve = async () => {
+  if (!powerRecoveryReady()) return;
+  const review=POWER_RECOVERY, button=$("#powerRecoveryApply");
+  POWER_RECOVERY=null;POWER_RECOVERY_BUSY=true;button.disabled=true;
+  try {
+    const result=await api(review.endpoint + "/resolve", {method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({id:review.id,capacity_token:review.capacity_token,confirm_capacity:true,confirm:review.plan.confirm,acknowledge_unknown:true})});
+    if (result.operation) noteOperation(result.operation);
+    toast(result.detail,"ok");closeModal();
+  } catch(error) {
+    if ($("#powerRecoveryApply")===button) {
+      $("#mbody").insertAdjacentHTML("afterbegin",`<div class="note bad">${esc(error.message)}. Nothing was retried. Check the job before opening a new review.</div>`);
+      if ($(".modalbox")) $(".modalbox").scrollTop=0;
+    }
+    toast(error.message,"bad");
+  } finally {POWER_RECOVERY_BUSY=false;refreshOperations(true);}
+};
+
 /* Cancelling a job says first what it would do: what is put back, what is
    stopped with the work so far kept, and what Kubernetes cannot take back -
    for a few jobs only the tracking stops. Nothing changes until the button
@@ -167,13 +230,15 @@ window.cancelOperation = async id => {
   if (plan.image_review) return imageRollback(plan.image_review.ns, plan.image_review.name);
   const list = rows => `<ul>${rows.map(row => `<li>${esc(row)}</li>`).join("")}</ul>`;
   const high = plan.severity === "high";
+  const cleanup = plan.cleanup && plan.mode !== "forget";
   const body = !plan.can
     ? `<div class="note warn"><b>It cannot be cancelled at this step.</b><div>${esc(plan.why_not || "")}</div></div>
        <div class="row" style="margin-top:12px"><button class="btn" onclick="closeModal()">Close</button></div>`
-    : `<p>${esc(plan.cleanup ? "This job failed part-way. Cleaning up removes what it left behind; the job stays in the list as failed."
+    : `<p>${esc(cleanup ? "This job failed part-way. Cleaning up removes what it left behind; the job stays in the list as failed."
+        : plan.cleanup ? "This job failed. Stopping tracking keeps its failed outcome and all retained resources. Nothing is deleted or stopped in the cluster."
         : CANCEL_LEAD[plan.mode] || CANCEL_LEAD.stop)}</p>
       <div class="dim xs">${esc(plan.message || "")} · ${Math.round(plan.progress || 0)}% done</div>
-      ${plan.undo.length ? `<div class="note ${high ? "warn" : ""}" style="margin-top:12px"><b>${plan.cleanup ? "What cleaning up removes" : plan.mode === "rollback" ? "What cancelling puts back" : "What cancelling does"}</b>${list(plan.undo)}</div>` : ""}
+      ${plan.undo.length ? `<div class="note ${high ? "warn" : ""}" style="margin-top:12px"><b>${cleanup ? "What cleaning up removes" : plan.mode === "rollback" ? "What cancelling puts back" : "What cancelling does"}</b>${list(plan.undo)}</div>` : ""}
       ${plan.keeps.length ? `<div class="note" style="margin-top:10px"><b>${plan.mode === "forget" ? "What carries on" : "What stays as it is"}</b>${list(plan.keeps)}</div>` : ""}
       ${plan.options.map(option => `<label class="switch" style="margin-top:12px"><input type="checkbox" data-cancel-option="${esc(option.id)}" ${option.default ? "checked" : ""}> ${esc(option.label)}</label>
         ${option.detail ? `<div class="dim xs">${esc(option.detail)}</div>` : ""}`).join("")}
@@ -182,9 +247,9 @@ window.cancelOperation = async id => {
       ${plan.needs === "admin" && !can("admin") ? `<div class="note warn" style="margin-top:12px">Cancelling this job needs an admin.</div>` : ""}
       <div class="row" style="margin-top:12px">
         <button class="btn ${high ? "danger" : "pri"}" id="oc_go" data-need="${esc(plan.needs || "operator")}" ${plan.confirm ? "disabled" : ""}
-          onclick="cancelOperationGo('${esc(plan.id)}')">${esc(plan.cleanup ? "Remove what it made" : plan.action)}</button>
-        <button class="btn" onclick="closeModal()">${plan.cleanup ? "Leave it" : "Keep it running"}</button></div>`;
-  modal(`${plan.cleanup ? "Clean up" : "Cancel"} · ${plan.title}`, body);
+          onclick="cancelOperationGo('${esc(plan.id)}')">${esc(cleanup ? "Remove what it made" : plan.action)}</button>
+        <button class="btn" onclick="closeModal()">${plan.mode === "forget" ? "Keep tracking" : plan.cleanup ? "Leave it" : "Keep it running"}</button></div>`;
+  modal(`${plan.mode === "forget" ? "Stop tracking" : cleanup ? "Clean up" : "Cancel"} · ${plan.title}`, body, false, "operation-review");
   window.__cancelPlan = plan;
   if (window.applyRole) window.applyRole();
 };

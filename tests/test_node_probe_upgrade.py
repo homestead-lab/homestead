@@ -23,6 +23,10 @@ class ShippedScriptTests(unittest.TestCase):
     def test_a_missing_script_directory_is_not_an_exception(self):
         self.assertEqual({}, probe.shipped_scripts(ROOT / "server" / "nope"))
 
+    def test_chart_ships_identical_topology_probe(self):
+        self.assertEqual((ROOT / "server/probe/probe.py").read_text(encoding="utf-8"),
+                         (ROOT / "charts/homestead/files/probe/probe.py").read_text(encoding="utf-8"))
+
 
 class RenderedManifestTests(unittest.TestCase):
     """The file people apply and the objects Homestead installs are the same."""

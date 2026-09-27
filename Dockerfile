@@ -1,5 +1,10 @@
 FROM python:3.12-alpine
 
+# Optional, read-only node allocation collector. Hash-locked binary wheels
+# keep compilers and generation tools out of the runtime image.
+COPY requirements-topology.txt /srv/requirements-topology.txt
+RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes -r /srv/requirements-topology.txt
+
 ARG VERSION=dev
 ARG REVISION=unknown
 LABEL org.opencontainers.image.title="Homestead" \
@@ -24,6 +29,7 @@ RUN apk add --no-cache smartmontools \
 COPY --chown=homestead:homestead server/*.py /srv/
 # The licence and the notices for what the image carries travel with it.
 COPY --chown=homestead:homestead LICENSE THIRD_PARTY_NOTICES.md /srv/
+COPY --chown=homestead:homestead licenses /srv/licenses/
 # The node probe's scripts travel with the release that reads them, so an
 # upgrade can bring the probe with it instead of asking for a kubectl command.
 COPY --chown=homestead:homestead server/probe/*.py /srv/probe/

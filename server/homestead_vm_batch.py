@@ -1,0 +1,142 @@
+"""Joint VM admission, including created controllers waiting for launchers.
+
+Read-only. Prepared manifests stay in memory; the returned plan contains no
+cloud-init or Secret data. A fitting example is not enforced placement.
+"""
+import copy
+
+import homestead_batch_capacity as BATCH
+import homestead_vm_capacity as CAPACITY
+import homestead_vm_claims as CLAIMS
+import homestead_vm_resources as RESOURCES
+import homestead_place as PLACE
+import homestead_vm_state as STATE
+
+
+def contains(actual, expected):
+    """Permit API defaults, never a changed submitted value/list membership."""
+    if isinstance(expected, dict):
+        return isinstance(actual, dict) and all(key in actual and contains(actual[key], value) for key, value in expected.items())
+    if isinstance(expected, list):
+        return isinstance(actual, list) and len(actual) == len(expected) and all(contains(a, e) for a, e in zip(actual, expected))
+    return actual == expected
+
+
+def plan(prepared, read, nodes, *, created=None, threshold=88):
+    if not prepared or len(prepared) > 9:
+        raise ValueError("A VM cluster batch must have between one and nine VMs")
+    namespace = prepared[0]["namespace"]
+    if any(item["namespace"] != namespace for item in prepared):
+        raise ValueError("A VM batch must use one namespace")
+    if len({item["name"] for item in prepared}) != len(prepared):
+        raise ValueError("VM batch names must be unique")
+    created = created or {}
+    pods = copy.deepcopy(CAPACITY._items(read, "/api/v1/pods"))
+    configurations = CAPACITY._items(read, "/apis/kubevirt.io/v1/kubevirts")
+    if len(configurations) != 1 or configurations[0].get("metadata", {}).get("deletionTimestamp"):
+        raise ValueError("A single active KubeVirt configuration is required for VM batch admission")
+    configuration = (configurations[0].get("spec") or {}).get("configuration") or {}
+    kubevirt_version = RESOURCES.CPU.observed_version(configurations[0])
+    claims, entries, warnings, blockers = {}, [], set(), []
+    headroom = {}
+    numa_entries = set()
+    has_numa = False
+    allocations = {}
+    for item in prepared:
+        vm, name = item["vm"], item["name"]
+        definitions = CLAIMS.plans(vm, read, item["claims"], item["downloads"])
+        if set(claims) & set(definitions):
+            raise ValueError("VM batch disks must have distinct names")
+        claims.update(definitions)
+        model = RESOURCES.project(vm, configuration, read=read, kubevirt_version=kubevirt_version)
+        blockers.extend(f"{name}: {text}" for text in model["blockers"])
+        warnings.update(model["warnings"])
+        count = 1
+        receipt = created.get(name)
+        state_vm, vmi = vm, None
+        if receipt:
+            current = read(f"/apis/kubevirt.io/v1/namespaces/{namespace}/virtualmachines/{name}")
+            state_vm = current
+            meta = current.get("metadata") or {}
+            if (meta.get("uid") != receipt.get("uid") or meta.get("deletionTimestamp") or
+                    not contains(current.get("spec"), vm["spec"])):
+                raise ValueError(f"Created VM {name} changed during the batch; inspect it before creating more VMs")
+            vmi = CAPACITY._optional(read, f"/apis/kubevirt.io/v1/namespaces/{namespace}/virtualmachineinstances/{name}")
+            owned, known = RESOURCES.launchers(current, vmi, pods)
+            if vmi and not known:
+                raise ValueError(f"Created VM {name} launcher ownership cannot be verified")
+            if vmi and any(not all(RESOURCES.identity(obj).values()) for obj in [vmi, *owned]):
+                raise ValueError(f"Created VM {name} launcher identity/version is incomplete")
+            if vmi and (vmi.get("metadata", {}).get("deletionTimestamp") or
+                        ((vmi.get("status") or {}).get("migrationState") or {}).get("startTimestamp")):
+                raise ValueError(f"Created VM {name} is terminating or migrating; stop and review the remaining batch")
+            scheduled = [pod for pod in owned if pod.get("spec", {}).get("nodeName") and
+                         not pod.get("metadata", {}).get("deletionTimestamp")]
+            if len(scheduled) > 1 or any(pod.get("metadata", {}).get("deletionTimestamp") for pod in owned):
+                raise ValueError(f"Created VM {name} launcher transition is not stable")
+            count = 0 if scheduled else 1
+            for pod in scheduled:
+                host = pod["spec"]["nodeName"]
+                estimate = max(model["memory_estimate_bytes"], PLACE._pod_memory(pod["spec"])[0])
+                headroom[host] = headroom.get(host, 0) + max(0, estimate - PLACE._pod_request(pod["spec"], "memory")) / 1024**3
+            # Replace only verified, unassigned launchers with a synthetic
+            # demand. No launcher yet still means one VM owed, not free RAM.
+            pending = {pod["metadata"]["uid"] for pod in owned if not pod.get("spec", {}).get("nodeName")}
+            pods = [pod for pod in pods if pod.get("metadata", {}).get("uid") not in pending]
+        else:
+            single = CAPACITY.plan(vm, read, nodes, action="create", planned_claims=definitions, warning_percent=threshold)
+            blockers.extend(f"{name}: {text}" for text in single["blockers"])
+            warnings.update(single["warnings"])
+        state = STATE.inspect(state_vm, vm["spec"]["template"]["spec"], configuration, read,
+                              vmi=vmi, version=kubevirt_version)
+        blockers.extend(f"{name}: {text}" for text in state["blockers"])
+        warnings.update(state["warnings"])
+        if state["volumes"]:
+            own_ids = {pod["metadata"]["uid"] for pod in owned} if receipt else set()
+            state_disks = {"metadata": state_vm["metadata"], "spec": {"template": {"spec": {"volumes": state["volumes"]}}}}
+            evidence = CAPACITY.dependencies(state_disks, read, state["planned_claims"], pods=[
+                pod for pod in pods if pod.get("metadata", {}).get("uid") not in own_ids])
+            blockers.extend(f"{name}: {text}" for text in evidence["blockers"])
+            warnings.update(evidence["warnings"])
+        if set(claims) & set(state["planned_claims"]):
+            blockers.append(f"{name}: disk name collides with controller-managed persistent state")
+        else:
+            claims.update(state["planned_claims"])
+        model["manifest"]["spec"]["template"]["spec"]["volumes"].extend(state["volumes"])
+        numa = ((vm["spec"]["template"]["spec"].get("domain") or {}).get("cpu") or {}).get("numa")
+        if isinstance(numa, dict) and numa.get("guestMappingPassthrough") is not None:
+            has_numa = True
+            # A controller created earlier but still awaiting its launcher is
+            # still an unallocated demand. It cannot bypass the single-VM
+            # prerequisite merely because creation already has a receipt.
+            if count:
+                numa_entries.add(name)
+        entries.append({"name": name, "deployment": model["manifest"], "replicas": count,
+                        "workload_kind": "vm", "memory_estimate_bytes": model["memory_estimate_bytes"]})
+    nodes = copy.deepcopy(nodes)
+    for node in nodes:
+        node["batch_starting_headroom_gb"] = headroom.get(node["name"], 0)
+    if has_numa:
+        # Collect once outside the bounded combinatorial search. Each branch
+        # then debits the same snapshot, including synthetic cell assignments.
+        allocations = {node["name"]: CAPACITY.ALLOCATION.inspect(node, read) for node in nodes}
+        if numa_entries and not any(value["verified"] for value in allocations.values()):
+            blockers.append("NUMA guest placement requires verified local CPU and hugepage allocations; physical topology alone cannot authorize a start")
+    def allocation_options(entry, host, snapshot):
+        if entry["name"] not in numa_entries:
+            return [None]
+        return CAPACITY.NUMA_FIT.options(allocations[host], entry["deployment"]["spec"]["template"]["spec"], snapshot, host)["options"]
+    result = BATCH.plan(entries, namespace, pods, nodes, claims, threshold, read=read,
+                        allocation_options=allocation_options if numa_entries else None)
+    result["numa_policy"] = {name: {"host": value["host"], "fingerprint": value["policy"]["fingerprint"],
+                                   "dependencies": value["dependencies"]}
+                             for name, value in allocations.items() if value["verified"]}
+    result["blockers"] = sorted(set(blockers))
+    if blockers:
+        result.update(blocked=True, status="blocked")
+    result["warnings"] = sorted(set(result["warnings"]) | warnings | {
+        "Image importers and launcher sidecars can need additional resources; RAM requests are lower bounds and version-uncertain IO-thread CPU uses conservative planning, not guaranteed capacity.",
+        "Three guest servers provide guest-level quorum only. Shared physical hosts/storage can still fail together; placement examples are not enforced."})
+    result["vm_count"] = len(prepared)
+    result["created_count"] = len(created)
+    return result

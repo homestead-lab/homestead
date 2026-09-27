@@ -1,14 +1,15 @@
 # Third-party notices
 
 Homestead is released under the [MIT License](LICENSE). It is written against
-Python's standard library and plain browser JavaScript, so very little
-third-party work ships inside it. What does, what it runs, and what it reads
+Python's standard library and plain browser JavaScript, with an optional
+node-allocation collector using gRPC and Protocol Buffers. What ships, what it runs, and what it reads
 are listed here with their terms.
 
 ## Bundled in this repository and the Homestead image
 
 | Component | Where | Licence |
 |---|---|---|
+| Kubernetes PodResources v1 schema (adapted from v1.32.0) and generated Python messages | `server/probe/podresources.proto`, `server/probe/podresources_pb2.py` | Apache-2.0; [full licence](licenses/KUBERNETES-PODRESOURCES.txt). Go-specific options and the unused Get RPC were removed; field numbers are unchanged. |
 | [Monaco Editor](https://github.com/microsoft/monaco-editor) 0.52.2 (a trimmed subset) | `web/vendor/monaco/` | MIT - © Microsoft Corporation; the full text is in [`web/vendor/monaco/LICENSE`](web/vendor/monaco/LICENSE) |
 | Codicon icon font, shipped with Monaco | `web/vendor/monaco/vs/base/browser/ui/codicons/codicon/codicon.ttf` | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) - © Microsoft Corporation, from [vscode-codicons](https://github.com/microsoft/vscode-codicons) |
 | [noVNC](https://github.com/novnc/noVNC) 1.7.0 (`core` and `vendor` from the npm package) | `web/vendor/novnc/` | MPL-2.0 - © the noVNC authors (see [`AUTHORS`](web/vendor/novnc/AUTHORS)); the full text is in [`web/vendor/novnc/LICENSE.txt`](web/vendor/novnc/LICENSE.txt). The files are unmodified, so their source is the upstream release. |
@@ -19,10 +20,15 @@ are listed here with their terms.
 
 The image is built on the official [`python:3.12-alpine`](https://hub.docker.com/_/python)
 image: the Python interpreter and standard library (PSF License) on Alpine
-Linux, whose packages carry their own licences. The image adds one package:
+Linux, whose packages carry their own licences. The image adds these packages;
+Python wheel versions and hashes are pinned in `requirements-topology.txt`.
+Their distribution licence files remain installed with the packages.
 
 | Package | Why | Licence |
 |---|---|---|
+| [grpcio](https://github.com/grpc/grpc) | bounded local PodResources RPCs in the optional allocation collector | Apache-2.0 |
+| [protobuf](https://github.com/protocolbuffers/protobuf) | PodResources message decoding | BSD-3-Clause |
+| [typing-extensions](https://github.com/python/typing_extensions) | gRPC runtime dependency | PSF-2.0 |
 | [smartmontools](https://www.smartmontools.org/) | reading drive health in the node probe's SMART sidecar | GPL-2.0-or-later; unmodified, installed from Alpine's package repository, whose [source](https://gitlab.alpinelinux.org/alpine/aports) is published |
 
 ## Images Homestead starts in your cluster

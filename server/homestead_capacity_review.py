@@ -10,7 +10,7 @@ import time
 
 _key = None
 TTL = 600
-CONTROL_FIELDS = {"capacity_token", "confirm_capacity"}
+CONTROL_FIELDS = {"capacity_token", "confirm_capacity", "ack_state_initialization", "confirm_state_name"}
 
 
 def bind(key_provider):
@@ -27,6 +27,15 @@ def _signature(config, expires, context=None):
 def issue(config, context=None):
     expires = int(time.time()) + TTL
     return f"{expires}.{_signature(config, expires, context)}"
+
+
+def derive_secret(config, purpose):
+    """Reproduce internal batch secrets without putting them in preview bodies.
+
+    The config must include a fresh random review ID. Domain separation keeps
+    this value distinct from any public approval token.
+    """
+    return _signature(config, 0, {"internal_secret": purpose})
 
 
 def valid(config, context=None):
@@ -50,3 +59,7 @@ def enforce(config, plan, context=None):
         raise Rejected("Deployment cannot fit the checked placement constraints. Review capacity before deploying.", plan)
     if plan.get("requires_confirmation") and (config.get("confirm_capacity") is not True or not valid(config, context)):
         raise Rejected("Placement or memory needs a fresh review and explicit acknowledgement before deploying.", plan)
+    state = (plan.get("vm") or {}).get("state_initialization")
+    if state and (config.get("ack_state_initialization") is not True or
+                  config.get("confirm_state_name") != state.get("name") or not valid(config, context)):
+        raise Rejected("Initializing missing VM state requires its own acknowledgement and the exact VM name. Recover the original state volume if needed.", plan)

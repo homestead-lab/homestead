@@ -12,7 +12,7 @@ import homestead_vms as VMS
 
 # The shape Harvester writes: runStrategy, limits, a multus network, a disk
 # claim and a cloud-init volume.
-VM = {"metadata": {"name": "win11", "namespace": "default", "uid": "u1", "creationTimestamp": "2026-09-01T00:00:00Z",
+VM = {"metadata": {"name": "win11", "namespace": "default", "uid": "u1", "resourceVersion": "10", "creationTimestamp": "2026-09-01T00:00:00Z",
                    "labels": {"harvesterhci.io/os": "windows"}, "annotations": {"field.cattle.io/description": "desk"}},
       "spec": {"runStrategy": "RerunOnFailure", "template": {"spec": {
           "domain": {"cpu": {"cores": 4, "sockets": 1, "threads": 1}, "memory": {"guest": "8092Mi"},
@@ -113,7 +113,7 @@ class VmTests(unittest.TestCase):
         ]}
         self.assertEqual("0/2 nodes are available: 2 Insufficient memory.", VMS._problem(vm, {}))
 
-    def test_power_uses_the_subresources_and_falls_back_to_the_strategy(self):
+    def test_power_uses_subresources_without_fallback_policy_mutation(self):
         c = self.use()
         VMS.power("default", "win11", "start")
         self.assertTrue(c.sent[-1][1].endswith("/virtualmachines/win11/start"))
@@ -122,8 +122,9 @@ class VmTests(unittest.TestCase):
         VMS.power("default", "win11", "force-stop")
         self.assertEqual({"gracePeriod": 0}, c.sent[-1][2])
         c = self.use(refuse_start=True)
-        VMS.power("default", "win11", "start")
-        self.assertEqual("RerunOnFailure", c.vm["spec"]["runStrategy"])
+        with self.assertRaisesRegex(ValueError, "does not support manual start"):
+            VMS.power("default", "win11", "start")
+        self.assertEqual(1, len(c.sent), "a refused request must not trigger a different write")
         with self.assertRaises(ValueError):
             VMS.power("default", "win11", "explode")
 

@@ -242,12 +242,89 @@ function vmCard(v) {
     <div class="row vm-actions">${vmActions(v)}</div></div>`;
 }
 
+window.vmStateInitHtml = (plan, prefix, changed) => {
+  const state = plan.vm?.state_initialization;
+  if (!state || plan.blocked) return "";
+  return `<div class="reviewbox vm-state-confirm"><b>Initialize fresh VM state?</b>
+    <div class="note warn">${esc(state.reason)} Cancel and inspect the original state volume and backups if this VM has run before.</div>
+    <label class="check"><input type="checkbox" id="${prefix}StateAck" onchange="${changed}()"> I intend to initialize fresh state, not recover the original TPM/EFI or backup state</label>
+    <div class="f"><label for="${prefix}StateName">Type ${esc(state.name)} to confirm</label><input id="${prefix}StateName" autocomplete="off" spellcheck="false" oninput="${changed}()"></div></div>`;
+};
+window.vmStateInitReady = (plan, prefix) => !plan.vm?.state_initialization ||
+  ($(`#${prefix}StateAck`)?.checked === true && $(`#${prefix}StateName`)?.value === plan.vm.state_initialization.name);
+window.vmStateInitBody = (plan, prefix) => plan.vm?.state_initialization ? {
+  ack_state_initialization: $(`#${prefix}StateAck`)?.checked === true,
+  confirm_state_name: $(`#${prefix}StateName`)?.value || ""
+} : {};
+let VM_POWER_REVIEW = null, VM_POWER_SEQUENCE = 0, VM_POWER_BUSY = false;
 window.vmPower = async (ns, name, action) => {
+  if (VM_POWER_BUSY && ["start", "restart", "unpause"].includes(action)) return toast("A VM power request is being sent; wait for its result", "bad");
+  if (["start", "restart", "unpause"].includes(action)) return vmPowerReview({ ns, name, action });
   if (action === "force-stop" && !confirm(`Force off ${name}? The power is cut at once - the guest is not asked to shut down, so unsaved work in it is lost. Shut down asks it first.`)) return;
   try {
     const r = await api("/api/vm/power", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ns, name, action }) });
     toast(r.detail, "ok"); setTimeout(() => refresh(true), 1200);
   } catch (e) { toast(e.message, "bad"); }
+};
+
+window.vmPowerReview = async config => {
+  if (VM_POWER_BUSY) return;
+  VM_POWER_REVIEW = null;
+  const sequence = ++VM_POWER_SEQUENCE, frozen = { ...config };
+  const open = window.childModal && !$("#modal").classList.contains("hidden") ? childModal : modal;
+  const title = `${VM_ACTIONS[frozen.action]?.[0] || "Power"} · ${frozen.name}`;
+  open(title, '<div id="vmPowerLoading" class="empty"><span class="spin2"></span>Checking VM, storage and host capacity…</div>', true);
+  try {
+    const review = await api("/api/vm/power/preview", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(frozen)});
+    if (sequence !== VM_POWER_SEQUENCE || !$("#vmPowerLoading")) return;
+    if (!review.capacity || typeof review.capacity.blocked !== "boolean" || !review.capacity_token)
+      throw new Error("VM capacity review unavailable. Nothing was sent; refresh before continuing.");
+    VM_POWER_REVIEW = { ...review, config:frozen };
+    const plan = review.capacity, facts = plan.vm || {};
+    $("#mbody").innerHTML = `<div class="update-review">
+      <p class="small muted">Review ${esc(frozen.name)} before ${frozen.action === "restart" ? "stopping and restarting its guest. Guest downtime is expected." : frozen.action === "unpause" ? "resuming its existing guest." : "starting its guest."}</p>
+      <div class="reviewbox"><b>VM memory and restart policy</b><p class="small">Guest memory: ${esc(facts.guest_memory_gb)} GiB · host RAM estimate: ${esc(plan.pod_memory_gb)} GiB.</p>
+        <p class="small muted">${facts.request_is_lower_bound ? (facts.cpu_request_is_estimate ? "CPU uses a conservative IO-thread allowance because this renderer version is unverified. RAM requests are lower bounds; the RAM estimate is not a configured memory limit." : "Scheduler requests are lower bounds; the launcher can need additional overhead. The RAM estimate is not a configured memory limit.") : "Uses the current launcher resources; its existing usage is not added twice."}</p>
+        <p class="small">Restart policy: ${esc(facts.policy_before || "unknown")}${facts.policy_after !== facts.policy_before ? ` → <b>${esc(facts.policy_after)}</b>` : " (unchanged)"}</p></div>
+      ${plan.blockers?.length ? `<div class="note bad">${plan.blockers.map(esc).join(" · ")}</div>` : ""}
+      ${deployCapacityHtml(plan)}
+      ${vmStateInitHtml(plan, "vmPower", "vmPowerReviewReady")}
+      ${!plan.blocked ? '<label class="check"><input type="checkbox" id="vmPowerApprove" onchange="vmPowerReviewReady()"> Proceed with this power action and accept the displayed memory, placement, storage/state and restart-policy risks</label>' : ""}
+      <div class="modalactions"><button class="btn" onclick="modalBack()">Cancel</button><button class="btn pri" id="vmPowerApply" disabled onclick="vmPowerReviewedApply()">${esc(VM_ACTIONS[frozen.action]?.[0] || "Apply")} reviewed VM</button></div></div>`;
+  } catch (error) {
+    if (sequence !== VM_POWER_SEQUENCE || !$("#vmPowerLoading")) return;
+    VM_POWER_REVIEW = null;
+    $("#mbody").innerHTML = `<div class="note bad">${esc(error.message)}</div><div class="modalactions"><button class="btn" onclick="modalBack()">Close</button></div>`;
+  }
+};
+window.vmPowerReviewReady = () => {
+  const ready = !!(VM_POWER_REVIEW && !VM_POWER_BUSY && !VM_POWER_REVIEW.capacity.blocked && $("#vmPowerApprove")?.checked && vmStateInitReady(VM_POWER_REVIEW.capacity, "vmPower"));
+  if ($("#vmPowerApply")) $("#vmPowerApply").disabled = !ready;
+  return ready;
+};
+window.vmPowerReviewedApply = async () => {
+  if (!vmPowerReviewReady()) return toast("Review and acknowledge the VM power action first", "bad");
+  const review = VM_POWER_REVIEW, button = $("#vmPowerApply");
+  VM_POWER_REVIEW = null; // one shot, including errors and lost responses
+  VM_POWER_BUSY = true;
+  button.disabled = true;
+  button.textContent = "Sending reviewed power action…";
+  try {
+    const result = await api("/api/vm/power", {method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({...review.config, ...vmStateInitBody(review.capacity, "vmPower"), capacity_token:review.capacity_token, confirm_capacity:true})});
+    if (result.operation && window.noteOperation) noteOperation(result.operation);
+    toast(result.detail, "ok");
+    modalBack(); setTimeout(() => refresh(true), 1200);
+  } catch (error) {
+    // No retry button: the server may have accepted power before contact was
+    // lost. Inspect the current VM state before initiating a fresh review.
+    if ($("#vmPowerApply") === button) {
+      button.textContent = "Inspect VM before retrying";
+      $("#mbody").insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(error.message)}. The request was not repeated. Its outcome may be uncertain: inspect the VM and its Recent jobs entry before trying again. Stop and Force stop remain available.</div>`);
+      if ($(".modalbox")) $(".modalbox").scrollTop = 0;
+    }
+    toast(error.message, "bad");
+  } finally { VM_POWER_BUSY = false; if (window.startOperationChecks) startOperationChecks(); }
 };
 
 window.vmOpen = async (ns, name) => {
@@ -265,11 +342,12 @@ window.vmOpen = async (ns, name) => {
     <div class="seg" style="margin:12px 0">${tab("overview", "Overview")}${tab("disks", `Disks · ${v.disks.length}`)}${tab("network", `Network · ${v.nics.length}`)}${tab("events", "Events")}</div>
     <div class="vm-pane" data-pane="overview">
       <div class="vm-facts wide">
-        <div><span>CPU</span><b>${v.cores} cores</b></div><div><span>Memory</span><b>${esc(v.memory || "—")}</b></div>
+        <div><span>CPU</span><b>${v.cores == null ? "Unavailable" : `${esc(v.cores)} cores`}</b></div><div><span>Memory</span><b>${esc(v.memory || "—")}</b></div>
         <div><span>Guest OS</span><b>${esc(v.guest?.prettyName || v.os || "unknown")}</b></div>
         <div><span>Kernel</span><b class="mono xs">${esc(v.guest?.kernelRelease || "—")}</b></div>
         <div><span>Live migration</span><b>${v.migratable ? "possible" : "not possible"}</b></div>
         <div><span>Created</span><b>${esc((v.created || "").slice(0, 10))}</b></div></div>
+      ${v.profile_error ? `<div class="note warn">${esc(v.profile_error)}</div>` : ""}
       ${v.description ? `<p class="small" style="margin-top:10px">${esc(v.description)}</p>` : ""}
       ${v.guest?.prettyName ? "" : '<p class="dim xs" style="margin-top:8px">The guest reports its OS and addresses through the QEMU guest agent, when it runs one.</p>'}
       <table class="tbl dense stack" style="margin-top:10px"><thead><tr><th>Condition</th><th>Status</th><th>Detail</th></tr></thead><tbody>
@@ -336,6 +414,20 @@ function vmNicRow(n, o) {
     <td><label class="switch"><input type="checkbox" class="vn_rm"> remove</label></td></tr>`;
 }
 
+function vmEditResourceFields(v) {
+  const profile = v.resource_profile || {}, locked = !!profile.name || !!v.profile_error;
+  const explanation = v.profile_error || (profile.name
+    ? `CPU and memory are managed by instance type ${profile.name}. This form keeps that profile; it does not replace it with manual values.`
+    : v.preference_profile?.name ? `Defaults come from preference ${v.preference_profile.name}. Unchanged CPU and memory are left as they are.` : "");
+  return `${explanation ? `<div class="note ${v.profile_error ? "warn" : "small"}">${esc(explanation)}</div>` : ""}
+    <div class="f2"><div class="f"><label>CPU cores</label>${locked
+      ? `<div class="mono">${esc(v.cores ?? "Unavailable")}</div>`
+      : `<input id="ve_cores" type="number" min="1" max="128" value="${esc(v.cores)}">`}</div>
+      <div class="f"><label>Memory</label>${locked
+        ? `<div class="mono">${esc(v.memory || "Unavailable")}</div>`
+        : `<input id="ve_mem" class="mono" value="${esc(v.memory)}" placeholder="4Gi">`}</div></div>`;
+}
+
 window.vmEdit = async (ns, name) => {
   modal(`Edit · ${name}`, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
   let v, o;
@@ -347,11 +439,10 @@ window.vmEdit = async (ns, name) => {
   const tab = (id, label) => `<button class="${id === "general" ? "on" : ""}" onclick="vmEditTab(this,'${id}')">${label}</button>`;
   const disks = v.disks.filter(d => d.kind === "disk" || d.kind === "cd-rom");
   const ci = v.cloud_init || {};
-  $("#mbody").innerHTML = `<div class="between"><div class="seg">${tab("general", "General")}${tab("disks", `Disks · ${disks.length}`)}${tab("network", `Network · ${v.nics.length}`)}${tab("cloud", "Cloud-init")}</div>
+  $("#mbody").innerHTML = `<div class="between vm-edit-tabs"><div class="seg">${tab("general", "General")}${tab("disks", `Disks · ${disks.length}`)}${tab("network", `Network · ${v.nics.length}`)}${tab("cloud", "Cloud-init")}</div>
       <button class="btn sm" data-need="admin" onclick="vmYaml('${esc(ns)}','${esc(name)}')" title="Every field, as YAML">${icon("edit")}Edit YAML</button></div>
     <div class="ve-pane" data-pane="general" style="margin-top:12px">
-      <div class="f2"><div class="f"><label>CPU cores</label><input id="ve_cores" type="number" min="1" max="128" value="${v.cores}"></div>
-        <div class="f"><label>Memory</label><input id="ve_mem" class="mono" value="${esc(v.memory)}" placeholder="4Gi"></div></div>
+      ${vmEditResourceFields(v)}
       <div class="f2"><div class="f"><label>Run strategy ${tip("RerunOnFailure (Harvester's default): runs, and starts again if the guest crashes, but not after you stop it. Always: kept running whatever happens. Manual: runs only when started, never restarted. Halted: kept off.")}</label>
         <select id="ve_strategy">${["RerunOnFailure", "Always", "Manual", "Halted"].map(x => vmOpt(x, x, v.run_strategy)).join("")}</select></div>
         <div class="f"><label>Host ${tip("Keep the VM on one host, or let Kubernetes choose. A VM on a disk only one host can reach stays there anyway.")}</label>
@@ -376,9 +467,9 @@ window.vmEdit = async (ns, name) => {
       <div class="f"><label>User data</label><textarea id="ve_user" class="mono helm-values" spellcheck="false" placeholder="#cloud-config">${esc(ci.user_data || "")}</textarea></div>
       <div class="f"><label>Network data</label><textarea id="ve_netdata" class="mono helm-values" spellcheck="false" style="min-height:90px" placeholder="optional">${esc(ci.network_data || "")}</textarea></div>
       <div class="dim xs">Cloud-init runs when the guest first boots; most images read it only once.</div>`}</div>
-    ${v.status === "Running" ? `<label class="switch" style="margin-top:12px"><input type="checkbox" id="ve_restart"> Restart now so the changes take effect</label>
-      <div class="dim xs">Otherwise they apply the next time it starts.</div>` : ""}
-    <div class="row" style="margin-top:14px"><button class="btn pri" onclick="vmEditSave()">Save</button><button class="btn" onclick="closeModal()">Cancel</button></div>`;
+    ${v.status === "Running" ? `<label class="switch" style="margin-top:12px"><input type="checkbox" id="ve_restart"> Review a restart after saving</label>
+      <div class="dim xs">Some changes can apply live through KubeVirt; a restart is a separate reviewed action.</div>` : ""}
+    <div class="row" style="margin-top:14px"><button class="btn pri" onclick="vmEditSave()">Review changes</button><button class="btn" onclick="closeModal()">Cancel</button></div>`;
   if (window.applyRole) applyRole();
 };
 window.vmEditTab = (button, pane) => {
@@ -409,7 +500,7 @@ window.vmAddNic = () => {
     <td class="dim xs">automatic</td><td><button class="btn sm" onclick="this.closest('tr').remove()">✕</button></td></tr>`);
 };
 window.vmEditSave = async () => {
-  const { ns, name } = window.__vmEdit;
+  const { ns, name, v } = window.__vmEdit;
   const badUrl = $$("#mbody tr[data-disk], #mbody .vd-add").some(box => box.querySelector(".vd_src,.va_src")?.value === "url"
     && !/^https?:\/\/[^/\s]+/i.test(box.querySelector(".vd_url,.va_url").value.trim()));
   if (badUrl) return toast("a disk's URL must start with http:// or https://", "bad");
@@ -432,14 +523,74 @@ window.vmEditSave = async () => {
   const nics = $$("#mbody tr[data-nic]").map(row => ({ name: row.dataset.nic, model: row.querySelector(".vn_model").value,
     network: row.querySelector(".vn_net").value, mac: row.querySelector(".vn_mac").value.trim(), remove: row.querySelector(".vn_rm").checked }));
   const add_nics = $$("#mbody tr.vn-add").map(row => ({ model: row.querySelector(".vn_model").value, network: row.querySelector(".vn_net").value }));
-  const body = { ns, name, cores: +$("#ve_cores").value, memory: $("#ve_mem").value.trim(), run_strategy: $("#ve_strategy").value,
-    description: $("#ve_desc").value, node: $("#ve_node").value, restart: !!$("#ve_restart")?.checked,
+  const body = { ns, name, run_strategy: $("#ve_strategy").value,
+    description: $("#ve_desc").value, node: $("#ve_node").value, restart: false,
     disks, add_disks, nics, add_nics };
+  // Profile-controlled fields have no inputs. Unchanged preference defaults
+  // must not become explicit overrides just because the form was opened.
+  if ($("#ve_cores") && +$("#ve_cores").value !== v.cores) body.cores = +$("#ve_cores").value;
+  if ($("#ve_mem") && $("#ve_mem").value.trim() !== v.memory) body.memory = $("#ve_mem").value.trim();
   if ($("#ve_user")) body.cloud_init = { user_data: $("#ve_user").value, network_data: $("#ve_netdata").value };
+  return vmEditReview(body, !!$("#ve_restart")?.checked);
+};
+
+let VM_EDIT_REVIEW = null, VM_EDIT_SEQUENCE = 0, VM_EDIT_BUSY = false;
+window.vmEditReview = async (config, restartAfter = false) => {
+  if (VM_EDIT_BUSY) return;
+  VM_EDIT_REVIEW = null;
+  const sequence = ++VM_EDIT_SEQUENCE, frozen = JSON.parse(JSON.stringify(config));
+  childModal(`Review changes · ${frozen.name}`, '<div id="vmEditLoading" class="empty"><span class="spin2"></span>Checking proposed VM, disks and capacity…</div>', true);
   try {
-    const r = await api("/api/vm/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    toast(r.detail, "ok"); closeModal(); refresh(true);
-  } catch (e) { toast(e.message, "bad"); }
+    const review = await api("/api/vm/edit/preview", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(frozen)});
+    if (sequence !== VM_EDIT_SEQUENCE || !$("#vmEditLoading")) return;
+    if (!review.capacity || typeof review.capacity.blocked !== "boolean" || !review.capacity_token)
+      throw new Error("VM edit review unavailable. Nothing was saved; go back and review again.");
+    VM_EDIT_REVIEW = {...review, config:frozen, restartAfter};
+    const plan = review.capacity, facts = plan.vm || {};
+    $("#mbody").innerHTML = `<div class="update-review">
+      <div class="reviewbox"><b>Save ${esc(frozen.name)}</b><p class="small">${esc(frozen.cores ?? "Unchanged")} CPU cores · ${esc(frozen.memory || "unchanged memory")}</p>
+        <p class="small">Restart policy: ${esc(facts.policy_before || "unknown")} → ${esc(facts.policy_after || "unknown")}</p>
+        <p class="small muted">${facts.admission_needed ? "Resource and policy changes may take effect immediately through KubeVirt. Host RAM estimates include launcher overhead but are not a configured memory limit." : "No new launcher capacity is needed for this metadata or stop/manual-policy edit."}</p></div>
+      ${plan.blockers?.length ? `<div class="note bad">${plan.blockers.map(esc).join(" · ")}</div>` : ""}
+      ${facts.admission_needed ? deployCapacityHtml(plan) : `<div class="note warn">${(plan.warnings || []).map(esc).join(" ")}</div>`}
+      ${vmStateInitHtml(plan, "vmEdit", "vmEditReviewReady")}
+      ${review.volumes?.length ? `<div class="reviewbox"><b>New disks</b>${review.volumes.map(v => `<p class="small"><span class="mono">${esc(v.name)}</span> · ${esc(v.size)} · ${esc(v.storage_class)} · ${esc(v.access_mode)}</p>`).join("")}</div>` : ""}
+      <p class="small muted">${restartAfter ? "After saving, a separate restart review checks the saved VM and current host capacity. Saving does not automatically send Restart." : "Save sends no Restart request. If needed, restart the VM through its power controls afterward."}</p>
+      ${!plan.blocked ? '<label class="check"><input type="checkbox" id="vmEditApprove" onchange="vmEditReviewReady()"> Save these exact changes and accept the displayed memory, policy and partial-save risks</label>' : ""}
+      <div class="modalactions"><button class="btn" onclick="vmEditReviewBack()">Back to edit</button><button class="btn pri" id="vmEditApply" disabled onclick="vmEditReviewedApply()">Save reviewed changes</button></div></div>`;
+  } catch (error) {
+    if (sequence !== VM_EDIT_SEQUENCE || !$("#vmEditLoading")) return;
+    VM_EDIT_REVIEW = null;
+    $("#mbody").innerHTML = `<div class="note bad">${esc(error.message)}</div><button class="btn" onclick="vmEditReviewBack()">Back to edit</button>`;
+  }
+};
+window.vmEditReviewBack = () => { VM_EDIT_REVIEW = null; ++VM_EDIT_SEQUENCE; modalBack(); };
+window.vmEditReviewReady = () => {
+  const ready = !!(VM_EDIT_REVIEW && !VM_EDIT_BUSY && !VM_EDIT_REVIEW.capacity.blocked && $("#vmEditApprove")?.checked && vmStateInitReady(VM_EDIT_REVIEW.capacity, "vmEdit"));
+  if ($("#vmEditApply")) $("#vmEditApply").disabled = !ready;
+  return ready;
+};
+window.vmEditReviewedApply = async () => {
+  if (!vmEditReviewReady()) return toast("Review and acknowledge these VM changes first", "bad");
+  const review = VM_EDIT_REVIEW, button = $("#vmEditApply");
+  VM_EDIT_REVIEW = null;
+  VM_EDIT_BUSY = true;
+  button.disabled = true; button.textContent = "Saving reviewed changes…";
+  let saved = false;
+  try {
+    const result = await api("/api/vm/edit", {method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({...review.config, ...vmStateInitBody(review.capacity, "vmEdit"), capacity_token:review.capacity_token, confirm_capacity:true})});
+    if (result.operation && window.noteOperation) noteOperation(result.operation);
+    saved = true;
+    toast(result.detail, "ok"); closeModal(); refresh(true);
+  } catch (error) {
+    if ($("#vmEditApply") === button) {
+      button.textContent = "Inspect VM before retrying";
+      $("#mbody").insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(error.message)}. Some VM, disk or Secret changes may already be saved. No request was repeated and no Restart was sent. Close this review and inspect the VM before editing again.</div>`);
+    }
+    toast(error.message, "bad");
+  } finally { VM_EDIT_BUSY = false; if (window.refreshOperations) refreshOperations(true); }
+  if (saved && review.restartAfter) await vmPowerReview({ns:review.config.ns, name:review.config.name, action:"restart"});
 };
 
 window.vmDelete = (ns, name) => {
@@ -506,6 +657,10 @@ window.k3sCluster = async () => {
       <button class="btn pri" id="k_go" data-need="operator" onclick="k3sCreate()" disabled>Create cluster</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div>`;
   k3sCountChanged();
+  $$("#mbody input, #mbody select").forEach(field => {
+    field.addEventListener("input", k3sInvalidateReview);
+    field.addEventListener("change", k3sInvalidateReview);
+  });
   if (window.applyRole) applyRole();
 };
 window.k3sSetupChanged = () => {
@@ -518,8 +673,7 @@ window.k3sSetupChanged = () => {
 window.k3sCountChanged = () => {
   const count = +$("#k_servers").value + Math.max(0, +$("#k_agents").value || 0);
   vmSubnetPicked("k", count);
-  $("#k_go").disabled = true;
-  $("#k_review").innerHTML = "";
+  k3sInvalidateReview();
 };
 function k3sBody() {
   const image = $("#k_image").value;
@@ -531,26 +685,66 @@ function k3sBody() {
     image_id: image.startsWith("image:") ? image.slice(6) : "", image_url: image === "url" ? K3S_UBUNTU : "",
     addresses: $("#k_ip").value.split(",").map(x => x.trim()).filter(Boolean) });
 }
+let K3S_REVIEW = null, K3S_REVIEW_SEQUENCE = 0, K3S_CREATE_BUSY = false;
+window.k3sInvalidateReview = () => {
+  K3S_REVIEW = null; ++K3S_REVIEW_SEQUENCE;
+  if ($("#k_go")) { $("#k_go").disabled = true; $("#k_go").textContent = "Create reviewed cluster"; }
+  if ($("#k_review")) $("#k_review").innerHTML = "";
+};
+window.k3sReviewReady = () => {
+  const ready = !!(K3S_REVIEW && !K3S_CREATE_BUSY && !K3S_REVIEW.capacity.blocked && $("#k_capacity_confirm")?.checked);
+  if ($("#k_go")) $("#k_go").disabled = !ready;
+  return ready;
+};
 window.k3sReview = async () => {
+  if (K3S_CREATE_BUSY) return;
+  k3sInvalidateReview();
+  const sequence = K3S_REVIEW_SEQUENCE, input = JSON.stringify(k3sBody());
   try {
-    const plan = await api("/api/vm/k3s-cluster/plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(k3sBody()) });
+    const plan = await api("/api/vm/k3s-cluster/plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: input });
+    if (sequence !== K3S_REVIEW_SEQUENCE || !$("#k_go")) return;
+    if (!plan.config || !plan.capacity_token || typeof plan.capacity?.blocked !== "boolean" || !Array.isArray(plan.nodes))
+      throw new Error("Complete VM batch review unavailable; nothing can be created yet.");
+    K3S_REVIEW = {...plan, input};
     $("#k_review").innerHTML = `<div class="sec">What it makes</div>
       <table class="tbl dense stack"><thead><tr><th>VM</th><th>Role</th><th>Address</th></tr></thead><tbody>
-      ${plan.nodes.map(n => `<tr><td><b>${esc(n.name)}</b></td><td data-label="Role">${n.role === "server" ? '<span class="tag info">server</span>' : '<span class="tag">worker</span>'}</td>
+      ${plan.nodes.map(n => `<tr><td><b>${esc(n.name)}</b><div class="mono xs dim">${esc(plan.config.macs?.[n.name] || "")}</div></td><td data-label="Role">${n.role === "server" ? '<span class="tag info">server</span>' : '<span class="tag">worker</span>'}</td>
         <td data-label="Address" class="mono">${esc(n.address)}${n.problem ? `<div class="badtext xs">${esc(n.problem)}</div>` : ""}</td></tr>`).join("")}</tbody></table>
       <div class="note ${plan.ok ? "" : "bad"}" style="margin-top:10px">${plan.ok
         ? `Each address is recorded under its VM in IP addresses. Allow 10-15 minutes: the VMs start, install ${esc(K3S_SETUPS[plan.setup])}${plan.kubevirt ? " and KubeVirt" : ""}, and join.
            ${plan.url ? `Its own Homestead then answers at <span class="mono">${esc(plan.url)}</span>.` : ""} The job tray follows it.`
-        : "Choose other addresses for the ones marked: something already has them."}</div>`;
-    $("#k_go").disabled = !plan.ok;
-  } catch (e) { $("#k_review").innerHTML = `<div class="note bad">${esc(e.message)}</div>`; $("#k_go").disabled = true; }
+        : "The batch cannot proceed under the checked constraints. Resolve the issues below and review again."}</div>
+      <div class="reviewbox"><b>Whole-batch capacity · ${plan.capacity.vm_count ?? plan.nodes.length} VMs</b>
+        <p class="small">Each VM: ${esc(plan.config.cores || 2)} CPU cores · ${esc(plan.config.memory || "4Gi")} memory · ${esc(plan.config.disk_gb || 40)} GiB disk.</p>
+        <p class="small muted">All VMs share one capacity budget, including new VMs waiting for launcher pods. The example is not an enforced reservation.</p>
+        <div class="dependency-list">${(plan.capacity.nodes || []).map(n => `<div class="drow"><div class="dl mono">${esc(n.name)}</div><div class="dv">${n.metrics_available ? `${esc(n.baseline_gb)} → up to ${esc(n.upper_gb)} GiB (${esc(n.upper_percent)}%)` : "Live RAM unavailable"}</div></div>`).join("")}</div>
+        ${(plan.capacity.blockers || []).concat(plan.capacity.reasons || []).length ? `<div class="note bad">${(plan.capacity.blockers || []).concat(plan.capacity.reasons || []).map(esc).join(" · ")}</div>` : ""}
+        <div class="note warn">${(plan.capacity.warnings || []).map(esc).join(" ")}</div>
+        ${(plan.capacity.example || []).length ? `<p class="small muted">Example placement: ${plan.capacity.example.map(p => `${esc(p.service)} → ${esc(p.host)}`).join("; ")}</p>` : ""}</div>
+      ${!plan.capacity.blocked ? '<div class="note">Memory warnings can be overridden, even above 100%, but that may cause OOM restarts or downtime. Hardware, storage and checked scheduling blockers cannot be overridden.</div><label class="check"><input type="checkbox" id="k_capacity_confirm" onchange="k3sReviewReady()"> Create this exact batch and accept the capacity and partial-creation risks. If a step fails, keep all resources for inspection.</label>' : ""}`;
+    k3sReviewReady();
+  } catch (e) {
+    if (sequence !== K3S_REVIEW_SEQUENCE || !$("#k_go")) return;
+    K3S_REVIEW = null;
+    $("#k_review").innerHTML = `<div class="note bad">${esc(e.message)}</div>`; $("#k_go").disabled = true;
+  }
 };
 window.k3sCreate = async () => {
   const button = $("#k_go");
+  if (K3S_CREATE_BUSY || !button || !k3sReviewReady()) return;
+  if (JSON.stringify(k3sBody()) !== K3S_REVIEW.input) { k3sInvalidateReview(); return toast("Configuration changed; review the VM batch again", "bad"); }
+  const review = K3S_REVIEW;
+  K3S_REVIEW = null;
+  K3S_CREATE_BUSY = true;
   button.disabled = true; button.textContent = "Creating VMs…";
   try {
-    await api("/api/vm/k3s-cluster", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(k3sBody()) });
+    await api("/api/vm/k3s-cluster", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({...review.config, capacity_token:review.capacity_token, confirm_capacity:true}) });
     toast("Cluster VMs created - the job tray follows them coming up", "ok");
     closeModal(); if (window.refreshOperations) refreshOperations(true); go("vms");
-  } catch (e) { toast(e.message, "bad"); button.disabled = false; button.textContent = "Create cluster"; }
+  } catch (e) {
+    toast(e.message, "bad"); button.disabled = true; button.textContent = "Inspect batch before retrying";
+    $("#k_review")?.insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(e.message)}. Some VMs or their disks and Secrets may already exist. No request was repeated. Inspect the job tray and Virtual machines before a new review.</div>`);
+    if (window.refreshOperations) refreshOperations(true);
+  } finally { K3S_CREATE_BUSY = false; }
 };

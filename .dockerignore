@@ -10,5 +10,11 @@ deploy
 !deploy/deploy.yaml
 scripts
 PLAN.md
+plan.md
+CLAUDE.md
+claude.md
+AGENTS.md
+release-assets
+node_modules
 *.local
 .env

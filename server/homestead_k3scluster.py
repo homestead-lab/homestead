@@ -10,14 +10,23 @@ field install would use, or k3s's own installer for a bare cluster. Asked for
 KubeVirt, the nodes get the host's CPU as it is, so VMs can run inside them
 where the host allows nested virtualisation, and emulated where it does not.
 
-The build is a job: the VMs start, k3s answers on the server's address,
-and - when it was asked for - the Homestead inside answers on port 8088.
+The reviewed build is a job with identity-bound guest-agent probes. Local TLS
+checks verify bootstrap topology/components and ongoing server API readiness;
+an open network port alone cannot complete it. Older jobs retain their original
+monitoring contract without invented verification receipts.
 """
+import copy
+import hashlib
+import ipaddress
 import json
 import re
 import secrets
 import socket
 import time
+from contextlib import nullcontext
+import homestead_vm_power_job as VM_POWER
+import homestead_vm_write as VM_WRITE
+import homestead_k3s_health as HEALTH
 import urllib.parse
 
 BOOTSTRAP = "https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh"
@@ -36,7 +45,7 @@ START_LIMIT = 45 * 60
 kget = None
 create = None       # makes one VM, with its address checked and recorded
 check = None        # why an address cannot be a VM's, or ""
-remove = None       # deletes one VM with its disks, and forgets its address
+remove = None       # legacy binding only; failed batches must never call it
 
 
 def bind(_kget, _create, _check, _remove=None):
@@ -82,6 +91,22 @@ def plan(cfg):
                          f"{count} address{'es' if count != 1 else ''}; {len(addresses)} given")
     if len(set(addresses)) != count:
         raise ValueError("each node needs an address of its own")
+    for address in addresses:
+        try:
+            if ipaddress.ip_address(address).version != 4:
+                raise ValueError()
+        except ValueError:
+            raise ValueError("each node needs a valid IPv4 address") from None
+    version = str(cfg.get("k3s_version") or "")
+    if version and not re.fullmatch(r"v\d+\.\d+\.\d+\+k3s\d+", version):
+        raise ValueError("k3s version must be a published version such as v1.34.1+k3s1")
+    if not 1 <= int(cfg.get("cores", 2)) <= 128:
+        raise ValueError("between 1 and 128 cores per VM")
+    memory = str(cfg.get("memory") or "4Gi")
+    if not re.fullmatch(r"\d+(\.\d+)?(Mi|Gi)", memory) or float(memory[:-2]) <= 0:
+        raise ValueError("memory per VM is like 4Gi or 512Mi")
+    if not 1 <= int(cfg.get("disk_gb", 40)) <= 16384:
+        raise ValueError("disk size per VM must be between 1 and 16384 GiB")
     if len(str(cfg.get("password") or "")) < 10:
         raise ValueError("the login password must be at least 10 characters")
     setup = str(cfg.get("setup") or "homestead")
@@ -97,7 +122,7 @@ def plan(cfg):
             "url": f"http://{nodes[0]['address']}:8088" if setup != "k3s" else ""}
 
 
-def user_data(node, first, token, password, setup, k3s_version="", kubevirt=False):
+def user_data(node, first, token, password, setup, k3s_version="", kubevirt=False, health=None):
     """cloud-init for one node: a login, the guest agent (so its address shows
     here), and the line that makes it a server or joins it to the first."""
     version = f" --k3s-version {k3s_version}" if k3s_version else ""
@@ -124,7 +149,8 @@ def user_data(node, first, token, password, setup, k3s_version="", kubevirt=Fals
         f"password: {json.dumps(password)}",
         "chpasswd: {expire: false}",
         "package_update: true",
-        "packages: [qemu-guest-agent, curl]",
+        "packages: [qemu-guest-agent, curl, python3]" if health else "packages: [qemu-guest-agent, curl]",
+        *(["write_files: " + json.dumps(HEALTH.cloud_files(health))] if health else []),
         "runcmd:",
         "  - [systemctl, enable, --now, qemu-guest-agent]",
         # Printed to the serial console as well as kept in LOG, so the job's
@@ -133,17 +159,25 @@ def user_data(node, first, token, password, setup, k3s_version="", kubevirt=Fals
         ""])
 
 
-def start(cfg, ops):
-    """Make the VMs, then follow the cluster coming up as a job."""
+def prepare(cfg, token=None, guest_checks=False):
+    """Build the entire batch without creating anything or persisting secrets.
+
+    A supplied token lets an admission layer reproduce the exact reviewed
+    cloud-init. Generated MACs/other reviewed values can be supplied per node.
+    """
+    cfg = copy.deepcopy(cfg)
     built = review(cfg)
     taken = [f"{n['name']}: {n['problem']}" for n in built["nodes"] if n["problem"]]
     if taken:
         raise ValueError("; ".join(taken))
-    token = secrets.token_hex(24)
+    token = token or secrets.token_hex(24)
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{16,128}", token):
+        raise ValueError("invalid internal cluster join token")
     ns = str(cfg.get("namespace") or "lab")
+    health = HEALTH.prepare(ns, built, cfg.get("review_id")) if guest_checks else None
     static = {"prefix": int(cfg.get("prefix") or 24), "gateway": str(cfg.get("gateway") or ""),
               "dns": [d for d in (cfg.get("dns") or []) if d]}
-    made = []
+    configs = []
     for node in built["nodes"]:
         vm = {"name": node["name"], "namespace": ns, "cores": int(cfg.get("cores") or 2),
               "memory": str(cfg.get("memory") or "4Gi"), "disk_gb": int(cfg.get("disk_gb") or 40),
@@ -151,7 +185,8 @@ def start(cfg, ops):
               "image_id": cfg.get("image_id") or "", "image_url": "" if cfg.get("image_id") else (cfg.get("image_url") or UBUNTU),
               "static_ip": dict(static, address=node["address"]),
               "cloud_init": user_data(node, built["first"], token, str(cfg["password"]), built["setup"],
-                                      str(cfg.get("k3s_version") or ""), built["kubevirt"]),
+                                      str(cfg.get("k3s_version") or ""), built["kubevirt"],
+                                      next(row for row in health["nodes"] if row["name"] == node["name"]) if health else None),
               # VMs inside these VMs need the host's CPU as it is, virtualisation
               # included - where the host allows nesting. Without it KubeVirt in
               # the cluster emulates.
@@ -160,47 +195,129 @@ def start(cfg, ops):
               # Its console kept as a log, so the job's Log shows the install.
               "log_console": True,
               "ipam_note": f"k3s cluster {built['name']}, {node['role']}"}
+        if (cfg.get("macs") or {}).get(node["name"]):
+            vm["mac"] = cfg["macs"][node["name"]]
+        configs.append(vm)
+    return {"namespace": ns, "plan": built, "configs": configs, **({"guest_health": health} if health else {})}
+
+
+def start(cfg, ops):
+    return commit(prepare(cfg), ops)
+
+
+def commit(prepared, ops, *, create_one=None, before_node=None, review=None, send=None):
+    """Journal before writes; stop on uncertainty and retain every partial VM.
+
+    Only public resource identities/phase information enter the operation.
+    Request bodies, login passwords and join tokens remain in memory only.
+    before_node is the fresh batch-admission hook, not an automatic retry.
+    """
+    ns, built = prepared["namespace"], prepared["plan"]
+    if (not built["nodes"] or len(built["nodes"]) != len(prepared["configs"]) or
+            any(node["name"] != cfg.get("name") or cfg.get("namespace") != ns
+                for node, cfg in zip(built["nodes"], prepared["configs"]))):
+        raise ValueError("Prepared VM batch is incomplete or inconsistent; nothing was created")
+    create_one = create_one or create
+    journal = {}
+    if review is not None:
+        token = review.get("capacity_token")
+        if not isinstance(token, str) or not token or not callable(send):
+            raise ValueError("Reviewed VM batch requires its approval and resource writer")
+        journal = {"dispatch_protocol": 2, "writes": [], "review_digest": hashlib.sha256(token.encode()).hexdigest(),
+                   "review_expires": int(token.split(".", 1)[0])}
+    elif send is not None:
+        raise ValueError("A batch resource writer requires reviewed dispatch")
+    operation = ops.start("k3s-cluster", f"k3s cluster {built['name']}",
+                          {"kind": "VirtualMachine", "name": built["nodes"][0]["name"], "namespace": ns}, "/vms",
+                          {"namespace": ns, "name": built["name"], "nodes": copy.deepcopy(built["nodes"]),
+                           "first": built["first"], "setup": built["setup"], "started": time.time(),
+                           "phase": "provisioning", "phase_at": time.time(), "retain_resources": True,
+                           "created": [], "attempted": "", **journal,
+                           **({"guest_health": copy.deepcopy(prepared["guest_health"])} if prepared.get("guest_health") else {})},
+                          "Checking batch before creating VMs")
+    with VM_POWER.worker_lock(operation["id"], ops) if journal else nullcontext():
+        writer = VM_WRITE.ResourceWriter(send, VM_WRITE.operation_recorder(ops, operation["id"])) if journal else None
+        return _commit_nodes(prepared, ops, operation, create_one, before_node, writer)
+
+
+def _commit_nodes(prepared, ops, operation, create_one, before_node, writer):
+    ns, built = prepared["namespace"], prepared["plan"]
+    made = []
+    for node, vm in zip(built["nodes"], prepared["configs"]):
         try:
-            create(vm)
+            ops.record_phase(operation["id"], "provisioning", int(10 * len(made) / len(built["nodes"])),
+                             f"Checking {node['name']} before creation", created=copy.deepcopy(made), attempted="")
+            if before_node:
+                before_node(vm, copy.deepcopy(made))
+            # Persist the possible target before dispatch. A lost response is
+            # not proof that this VM, its claims or its Secret were not made.
+            ops.record_phase(operation["id"], "provisioning", int(10 * len(made) / len(built["nodes"])),
+                             f"Creating {node['name']}; awaiting Kubernetes receipt", attempted=node["name"])
+            result = create_one(copy.deepcopy(vm), send=writer) if writer else create_one(copy.deepcopy(vm))
+            if writer:
+                writer.check()  # ownership warnings cannot hide uncertain writes
+            identity = (result or {}).get("vm_identity") or {}
+            if (identity.get("namespace") != ns or identity.get("name") != node["name"] or
+                    not identity.get("uid") or not identity.get("resourceVersion")):
+                raise ValueError("VM creation identity was not returned")
+            if writer:
+                with ops._lock:
+                    current = next(row for row in ops._read() if row["id"] == operation["id"])
+                    receipts = [entry for entry in current["ref"]["writes"] if entry["resource"] == {
+                        "apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "namespace": ns, "name": node["name"]}]
+                    if (not receipts or receipts[-1]["phase"] != "accepted" or receipts[-1]["identity"] != {
+                            key: identity[key] for key in ("uid", "resourceVersion")}):
+                        raise ValueError("VM result does not match its verified creation receipt")
+            made.append({"name": node["name"], "identity": identity})
+            ops.record_phase(operation["id"], "provisioning", int(10 * len(made) / len(built["nodes"])),
+                             f"Created {node['name']}; retaining its resources", created=copy.deepcopy(made), attempted="")
         except Exception as error:
-            raise ValueError(f"{node['name']} could not be made: {error}. {_undo(ns, made)}") from error
-        made.append(node)
-    return ops.start("k3s-cluster", f"k3s cluster {built['name']}",
-                     {"kind": "VirtualMachine", "name": built["nodes"][0]["name"], "namespace": ns}, "/vms",
-                     {"namespace": ns, "name": built["name"], "nodes": built["nodes"], "first": built["first"],
-                      "setup": built["setup"], "started": time.time()},
-                     f"Starting {len(made)} VM{'s' if len(made) != 1 else ''}")
-
-
-def _undo(ns, made):
-    """A build that stops part-way takes back the VMs it made, so a second
-    try does not find its own addresses and names taken."""
-    if not made:
-        return "Nothing was made."
-    if not remove:
-        return "Made so far: " + ", ".join(node["name"] for node in made)
-    left = []
-    for node in made:
-        try:
-            remove(ns, node)
-        except Exception:
-            left.append(node["name"])
-    if left:
-        return (f"{', '.join(left)} could not be removed again: delete {'it' if len(left) == 1 else 'them'} "
-                "from Virtual machines")
-    return f"The {len(made)} VM{'s' if len(made) != 1 else ''} made before it were removed again."
+            # Exception bodies can include a rejected Secret or cloud-init.
+            # Persist safe diagnostics only, never the raw request/error body.
+            message = (f"Stopped at {node['name']}. {len(made)} creation receipt(s) recorded. "
+                       "Resources are retained, including any uncertain creation; inspect the job and VMs before retrying.")
+            try:
+                ops.record_phase(operation["id"], "failed", int(10 * len(made) / len(built["nodes"])),
+                                 message, created=copy.deepcopy(made), failure_type=type(error).__name__)
+            except Exception:
+                # The preceding durable intent still names the possible write.
+                pass
+            raise ValueError(f"{message} Job {operation['id']}.") from None
+    return ops.record_phase(operation["id"], "awaiting-ready", 10,
+                            f"Created {len(made)} VMs; waiting for guest startup", created=made, attempted="")
 
 
 def status(item):
-    """VMs running, then k3s answering, then the Homestead inside."""
+    """Reviewed guest verification, with compatibility for older stored jobs."""
     ref = item["ref"]
     waited = time.time() - float(ref.get("started") or time.time())
     names = [n["name"] for n in ref["nodes"]]
+    if ref.get("phase") == "provisioning":
+        if waited > START_LIMIT:
+            return "failed", item.get("progress", 0), "VM provisioning was not confirmed complete. Partial VMs, disks and Secrets are retained; inspect them before a new review. Nothing was replayed."
+        return "running", item.get("progress", 0), item.get("message") or "VM provisioning is in progress; partial resources are retained"
+    if ref.get("phase") == "failed":
+        return "failed", item.get("progress", 0), item.get("message") or "VM provisioning stopped; inspect retained resources"
+    if ref.get("dispatch_protocol") == 2 and ref.get("guest_health"):
+        return HEALTH.status(item, kget, limit=START_LIMIT)
     running = 0
     for name in names:
         try:
+            if ref.get("retain_resources"):
+                receipt = next((row for row in ref.get("created") or [] if row["name"] == name), None)
+                if not receipt:
+                    return "failed", item.get("progress", 0), f"No creation receipt for {name}; inspect retained resources"
+                vm = kget(f"/apis/kubevirt.io/v1/namespaces/{ref['namespace']}/virtualmachines/{urllib.parse.quote(name)}")
+                if (vm.get("metadata") or {}).get("uid") != receipt["identity"]["uid"]:
+                    return "failed", item.get("progress", 0), f"{name} was replaced; the original batch is not confirmed ready"
             vmi = kget(f"/apis/kubevirt.io/v1/namespaces/{ref['namespace']}/virtualmachineinstances/"
                        f"{urllib.parse.quote(name)}")
+            if ref.get("retain_resources"):
+                owners = (vmi.get("metadata") or {}).get("ownerReferences") or []
+                if not any(owner.get("controller") is True and owner.get("kind") == "VirtualMachine" and
+                           owner.get("apiVersion") == "kubevirt.io/v1" and owner.get("name") == name and
+                           owner.get("uid") == receipt["identity"]["uid"] for owner in owners):
+                    continue
             running += (vmi.get("status") or {}).get("phase") == "Running"
         except Exception:
             pass
@@ -213,6 +330,10 @@ def status(item):
         return "running", 10 + int(40 * running / len(names)), f"{running} of {len(names)} VMs running"
     if not _answers(first, 6443):
         return "running", 60, f"VMs running; installing k3s on {names[0]} ({first}) - a few minutes"
+    if ref.get("dispatch_protocol") == 2:
+        # A listener is not authenticated guest-cluster readiness. Retain the
+        # journal for explicit inspection until authenticated checks exist.
+        return "running", 80, "VMs are running and the API port answers; guest-cluster identity, readiness and quorum are not verified. Inspect the batch outcome; nothing is replayed."
     if ref.get("setup") == "k3s":
         return "succeeded", 100, (f"k3s answers at https://{first}:6443. The kubeconfig is "
                                   f"/etc/rancher/k3s/k3s.yaml on {names[0]}; the login is ubuntu with your password")

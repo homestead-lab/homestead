@@ -18,7 +18,7 @@ data:
   probe.py: |
     #!/usr/bin/env python3
     """Read host sensors, devices and disk counters and serve them as JSON."""
-    import json, os, platform, socket, stat, threading, time
+    import json, os, platform, re, socket, stat, threading, time
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     SYS = "/host/sys"
@@ -341,6 +341,107 @@ data:
                 return parts[0]
         return ""
 
+
+    def _cpu_list(raw):
+        """Bounded Linux CPU/node-list parser; missing is not an empty set."""
+        if not isinstance(raw, str) or len(raw) > 65536:
+            raise ValueError()
+        result = set()
+        for item in raw.split(",") if raw else []:
+            if not re.fullmatch(r"[0-9]+(?:-[0-9]+)?", item):
+                raise ValueError()
+            ends = [int(part) for part in item.split("-")]
+            first, last = ends[0], ends[-1]
+            if not 0 <= first <= last < 8192:
+                raise ValueError()
+            values = set(range(first, last + 1))
+            if result & values:
+                raise ValueError()
+            result.update(values)
+        return result
+
+
+    def numa_facts():
+        """Physical topology only: never claim online CPUs are allocatable CPUs.
+
+        Existing read-only /sys and /proc mounts suffice. No kubelet credentials,
+        checkpoint writes, hotplug, hugepage allocation or privileged calls.
+        Per-node free pages include globally reserved pages; report reservations
+        separately instead of inventing a NUMA-local available count.
+        """
+        result = {"schema": 1, "complete": False, "cells": [], "page_pools": {},
+                  "node": os.environ.get("NODE_NAME", socket.gethostname()),
+                  "sampled_at": time.time(), "boot_id": None,
+                  "cpu_allocation": "unverified", "reason": "Host NUMA evidence is incomplete"}
+        boot_path = f"{PROC}/sys/kernel/random/boot_id"
+        online_path = f"{SYS}/devices/system/cpu/online"
+        nodes_path = f"{SYS}/devices/system/node/online"
+        try:
+            boot = _read(boot_path)
+            if not isinstance(boot, str) or not re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", boot):
+                raise ValueError()
+            online_raw, nodes_raw = _read(online_path), _read(nodes_path)
+            online, nodes = _cpu_list(online_raw), _cpu_list(nodes_raw)
+            if not online or not nodes or len(nodes) > 256:
+                raise ValueError()
+            covered, cells, memberships, pools = set(), [], {}, {}
+
+            def counter(path):
+                value = _read(path)
+                if not isinstance(value, str) or not re.fullmatch(r"[0-9]{1,20}", value):
+                    raise ValueError()
+                return int(value)
+
+            for node in sorted(nodes):
+                base = f"{SYS}/devices/system/node/node{node}"
+                memberships[node] = _read(f"{base}/cpulist")
+                cpus = _cpu_list(memberships[node]) & online
+                if covered & cpus:
+                    raise ValueError()
+                covered.update(cpus)
+                cores, seen = [], set()
+                for cpu in sorted(cpus):
+                    siblings = _cpu_list(_read(f"{SYS}/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list")) & online
+                    if cpu not in siblings or not siblings <= cpus:
+                        raise ValueError()
+                    if cpu not in seen:
+                        if seen & siblings:
+                            raise ValueError()
+                        cores.append(sorted(siblings))
+                        seen.update(siblings)
+                    elif not any(set(core) == siblings for core in cores):
+                        raise ValueError()
+                page_dir = f"{base}/hugepages"
+                names = sorted(os.listdir(page_dir))
+                if len(names) > 32:
+                    raise ValueError()
+                pages = {}
+                for name in names:
+                    match = re.fullmatch(r"hugepages-([0-9]{1,12})kB", name)
+                    if not match or int(match[1]) == 0:
+                        raise ValueError()
+                    size = str(int(match[1]) * 1024)
+                    row = {key: counter(f"{page_dir}/{name}/{file}") for key, file in
+                           (("total", "nr_hugepages"), ("free", "free_hugepages"), ("surplus", "surplus_hugepages"))}
+                    if row["free"] > row["total"] + row["surplus"]:
+                        raise ValueError()
+                    pages[size] = row
+                    if size not in pools:
+                        pools[size] = {"reserved": counter(f"{SYS}/kernel/mm/hugepages/{name}/resv_hugepages")}
+                cells.append({"id": node, "online_cpus": sorted(cpus), "cores": cores, "hugepages": pages})
+            # Hotplug/reboot during collection invalidates the topology. Counters
+            # may still change immediately after sampling: this is no reservation.
+            if (covered != online or _read(online_path) != online_raw or _read(nodes_path) != nodes_raw or
+                    _read(boot_path) != boot or any(_read(f"{SYS}/devices/system/node/node{node}/cpulist") != raw
+                                                    for node, raw in memberships.items())):
+                raise ValueError()
+            result.update(complete=True, boot_id=boot, cells=cells, page_pools=pools,
+                          reason="Physical snapshot only; dedicated CPU ownership and NUMA-local page reservations are unverified")
+        except (ValueError, OSError, TypeError, OverflowError):
+            # Do not turn missing, partial or malformed data into zero/free capacity.
+            pass
+        return result
+
     def payload():
         t, hw = thermal(), hwmon()
         allt = [x["celsius"] for x in t] + [x["celsius"] for x in hw]
@@ -365,7 +466,7 @@ data:
                 "kvm": os.path.exists(f"{DEV}/kvm"),
                 "interfaces": interfaces(),
                 "default_interface": default_interface(),
-                "v2": v2_facts(), "nfs": nfs_facts()}
+                "v2": v2_facts(), "nfs": nfs_facts(), "numa": numa_facts()}
 
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -758,7 +859,7 @@ spec:
               mountPath: "/host/proc"
               readOnly: true
         - name: smart
-          image: ghcr.io/wjcloudy/homestead:2.8.186
+          image: ghcr.io/wjcloudy/homestead:2.8.187
           imagePullPolicy: IfNotPresent
           command:
             - python3
