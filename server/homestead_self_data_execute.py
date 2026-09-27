@@ -51,6 +51,38 @@ def handshake(pod, execution, anchor_uid):
         return False
 
 
+def reconcile_completed(ops, directory, namespace, deployment):
+    """Persist proven completion without polling or advancing any other job.
+
+    The caller holds the writable-app activity guard. A copied running job can
+    outlive its external coordinator; only its exact durable completion receipt
+    may clear that hold, never a resource name or an elapsed timeout.
+    """
+    from homestead_self_data_finish import read as read_completed
+    with ops._lock:
+        ops.require_write()
+        saved = read_completed(directory, namespace, deployment)
+        if not saved: return False
+        anchor = saved[1]
+        state = anchor.state
+        expected = {"namespace": namespace, "deployment": deployment,
+                    "operation": state["operation"], "anchor_uid": anchor.handle()["uid"],
+                    "source": state["source"]["name"], "destination": state["destination"]}
+        items = ops._read()
+        matches = [i for i in items if i.get("kind") == KIND and
+                   all(i.get("ref", {}).get(k) == v for k, v in expected.items())]
+        if len(matches) > 1: raise Held("Duplicate data-move jobs need review")
+        if not matches: return False
+        item = matches[0]
+        status = W.progress(anchor, 0)
+        if status["status"] not in ("done", "cancelled"): return False
+        retained = item["ref"].get("retain_resources") is not False
+        item["ref"]["retain_resources"] = False
+        changed = ops._finish(item, "cancelled" if status["status"] == "cancelled" else "succeeded", 100, status["message"])
+        if changed or retained: ops._write(items)
+        return changed or retained
+
+
 def resolve(item, read, *, clock=time.time, directory=None):
     """Existing Jobs UI reports only; it cannot execute or replay the move."""
     ref = item["ref"]
