@@ -118,7 +118,10 @@ def _validate(state, namespace):
     if "plan" in state:
         plan = state["plan"]
         _keys(plan, ("deployment_shape", "source_pvc_shape", "source_pv", "destination_pvc", "destination_pv",
-                     "worker", "nodes", "data_volume", "target_shareable"), ("copy_image", "copy_node"))
+                     "worker", "nodes", "data_volume", "target_shareable"), ("copy_image", "copy_node", "admission"))
+        if "admission" in plan:
+            from homestead_self_data_admission import validate_policy
+            validate_policy(plan["admission"])
         for key in ("deployment_shape", "source_pvc_shape"):
             _hash(plan[key])
         for key in ("source_pv", "destination_pvc", "destination_pv", "worker"):

@@ -79,7 +79,7 @@ def progress(anchor, now):
 
 
 class Runner:
-    def __init__(self, read, send, logs, admit, *, namespace, deployment, operation, anchor_uid,
+    def __init__(self, read, send, logs, admit=None, *, namespace, deployment, operation, anchor_uid,
                  worker_uid, clock=time.time):
         A._name(namespace); A._name(deployment)
         if not re.fullmatch(r"[a-f0-9]{24}", operation or "") or not anchor_uid or not worker_uid:
@@ -134,7 +134,13 @@ class Runner:
                     # Setup still owns this record; heartbeat writes would race
                     # its publication CAS. Do not mutate it or stop the app.
                     return self.snapshot()
-                engine = C.Coordinator(anchor, self.read, self.send, self.logs, self.admit,
+                admit = self.admit
+                if admit is None:
+                    from homestead_self_data_admission import Admitter
+                    plan = anchor.state.get("plan", {})
+                    admit = Admitter(self.read, self.namespace, plan.get("nodes", []), plan.get("admission"),
+                                     handoff=anchor.state, clock=self.clock)
+                engine = C.Coordinator(anchor, self.read, self.send, self.logs, admit,
                                        worker_uid=self.worker_uid, clock=self.clock)
                 result = engine.step()
                 anchor.report(self.worker_uid, int(self.clock()),
