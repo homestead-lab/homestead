@@ -1024,6 +1024,7 @@ html[data-theme="light"] #net_editor .net-access-choice:has(input:checked),html[
   .wmeta{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:3px}
 }
 /* a registry check that could not run is one hoverable mark, not a whole row */
+.tip.unchecked-tip{color:var(--dim);border-style:dashed;background:none;margin-left:0}
 .tip.warn-tip{color:var(--med);border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.08);margin-left:0}
 .wimg{height:19px;display:flex;align-items:center;gap:4px;word-break:normal;white-space:nowrap;line-height:19px;overflow:hidden;font-size:10px}
 .wimage-name{min-width:0;overflow:hidden;text-overflow:ellipsis}.wimage-hardware{display:flex;align-items:center;gap:2px;flex:0 0 auto}.wimage-hardware:empty{display:none}
@@ -1526,25 +1527,29 @@ html[data-theme="light"] .compose-editor{background:#fff}
   .ipam-bulk select,.ipam-bulk input{flex:1 1 40%;min-width:0}
 }
 
-/* Containers as rows on a phone: two lines each - name and status, then usage
-   and the actions - instead of the generic stacked card, which made "rows"
-   taller than the cards they were meant to condense. The image and ports are
-   in the card view and the container's own dialogs. */
+/* Containers as rows on a phone: the name and where it runs, then its state
+   and usage under the name, with the actions at the right edge of every row.
+   A stopped row with nothing to report is its name alone. The image and
+   ports are in the card view and the container's own dialogs. */
 @media(max-width:560px){
-  .tbl.stack.wltable tr{display:grid;grid-template-columns:auto minmax(0,1fr) auto;
-    grid-template-areas:"name name status" "cpu ram acts";align-items:center;column-gap:12px;row-gap:6px;padding:9px 12px}
+  .tbl.stack.wltable tr{display:grid;grid-template-columns:28px auto auto minmax(0,1fr) auto;
+    grid-template-areas:"name name name name acts" ". status cpu ram acts";align-items:center;column-gap:10px;row-gap:4px;padding:9px 12px}
+  /* Stopped: one line - the name, any mark, the actions. */
+  .tbl.stack.wltable tr.wl-off{grid-template-columns:minmax(0,1fr) auto auto;grid-template-areas:"name status acts"}
   .tbl.stack.wltable td{display:block;padding:0;text-align:left;min-width:0}
   .tbl.stack.wltable td::before{content:none}
   .tbl.stack.wltable td.wl-cpu::before,.tbl.stack.wltable td.wl-ram::before{content:attr(data-label) " ";display:inline;
     font:600 10px "JetBrains Mono",monospace;color:var(--dim);letter-spacing:.06em}
-  .tbl.stack.wltable td.wl-image,.tbl.stack.wltable td.wl-access{display:none}
+  .tbl.stack.wltable td.wl-image,.tbl.stack.wltable td.wl-access,.tbl.stack.wltable tr.wl-quiet td.wl-status,
+  .tbl.stack.wltable tr.wl-off td.wl-cpu,.tbl.stack.wltable tr.wl-off td.wl-ram,.tbl.stack.wltable tr.wl-off .wl-ready{display:none}
   .tbl.stack.wltable td.wl-name{grid-area:name;max-width:none}
-  .tbl.stack.wltable td.wl-name>.row{flex-wrap:nowrap}.tbl.stack.wltable td.wl-name .wtitle{flex:1;min-width:0}
+  .tbl.stack.wltable td.wl-name>.row{flex-wrap:nowrap;gap:10px!important}.tbl.stack.wltable td.wl-name .wtitle{flex:1;min-width:0}
   .tbl.stack.wltable td.wl-status{grid-area:status}
   .tbl.stack.wltable td.wl-cpu{grid-area:cpu}.tbl.stack.wltable td.wl-ram{grid-area:ram}
-  .tbl.stack.wltable td.wl-actions{grid-area:acts;width:auto}
+  .tbl.stack.wltable td.wl-actions{grid-area:acts;width:auto;justify-self:end}
   .wltable .wl-actions .wacts{width:auto;gap:3px;flex-wrap:nowrap}
-  .wltable .wl-actions .wacts>.btn{flex:0 0 auto;width:30px;height:28px;padding:0;justify-content:center;font-size:0;gap:0}
+  .wltable .wl-actions .wacts>.btn,.wltable .wl-actions .wacts .actionmenu>summary{flex:0 0 auto;width:30px;height:28px;min-height:28px;padding:0;justify-content:center;gap:0}
+  .wltable .wl-actions .wl-label{display:none}
   .wltable .wl-actions .wacts>.btn svg{width:14px;height:14px}
 }
 
