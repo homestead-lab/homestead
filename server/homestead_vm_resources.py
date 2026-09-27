@@ -88,13 +88,15 @@ def _positive(value, label):
     return number
 
 
-def project(vm, configuration=None, *, expanded_spec=None, read=None, kubevirt_version=None):
+def project(vm, configuration=None, *, expanded_spec=None, read=None, kubevirt_version=None, cold_start=True):
     """Project the proposed VMI into placement input with explicit uncertainty.
 
     configuration is the *observed* KubeVirt spec.configuration, or None when
     unreadable. expanded_spec, if supplied, must come from KubeVirt expansion
     of this exact VM (not from a previous running VMI with stale settings).
     No credentials, disk URLs or cloud-init contents are included in the result.
+    cold_start=False is only for resuming an already verified UID-owned
+    launcher: future-start encryption/NUMA policy does not reallocate its CPUs.
     """
     outer = vm.get("spec") or {}
     spec = copy.deepcopy(expanded_spec if expanded_spec is not None else (outer.get("template") or {}).get("spec") or {})
@@ -111,7 +113,9 @@ def project(vm, configuration=None, *, expanded_spec=None, read=None, kubevirt_v
     support = SUPPORT.project(vm, spec, config, network, read)
     security = SECURITY.evidence(spec, config, kubevirt_version)
     numa = NUMA.policy(spec, config, kubevirt_version)
-    blockers.extend(network["blockers"] + support["blockers"] + security["blockers"] + numa["blockers"])
+    blockers.extend(network["blockers"] + support["blockers"])
+    if cold_start:
+        blockers.extend(security["blockers"] + numa["blockers"])
     warnings.extend(network["warnings"] + support["warnings"] + security["warnings"] + numa["warnings"])
     resources = domain.get("resources") or {}
     requests, limits = resources.get("requests") or {}, resources.get("limits") or {}

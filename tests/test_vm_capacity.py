@@ -6,6 +6,7 @@ from unittest import mock
 import test_vm_resources as fixtures
 import homestead_vm_capacity as capacity
 import homestead_place as place
+import test_numa_evidence as numa_fixtures
 
 
 class VMCapacityTests(unittest.TestCase):
@@ -72,6 +73,44 @@ class VMCapacityTests(unittest.TestCase):
         self.encrypted()
         self.config["status"]["targetKubeVirtVersion"] = "v1.10.0"
         self.assertIn("Encrypted-guest policy is unverified", str(self.plan()["blockers"]))
+
+    def numa_host(self):
+        self.vm["spec"]["template"]["spec"]["domain"]["cpu"].update(
+            numa={"guestMappingPassthrough": {}}, dedicatedCpuPlacement=True)
+        self.vm["spec"]["template"]["spec"]["domain"]["memory"]["hugepages"] = {"pageSize": "2Mi"}
+        self.config["status"] = {"observedKubeVirtVersion": "v1.9.0"}
+        self.nodes[0].update(numa_fixtures.host())
+        self.nodes[0]["labels"]["cpumanager"] = "true"
+        self.nodes[0]["allocatable"]["hugepages-2Mi"] = "8Gi"
+        self.objects.update(numa_fixtures.objects())
+
+    def test_numa_physical_topology_does_not_become_free_exclusive_cpus(self):
+        self.numa_host()
+        with mock.patch.object(capacity.NUMA_EVIDENCE.time, "time", return_value=numa_fixtures.NOW):
+            plan = self.plan()
+        self.assertTrue(plan["blocked"])
+        candidate = plan["candidates"][0]
+        self.assertTrue(candidate["numa"]["physical_verified"])
+        self.assertFalse(candidate["numa"]["allocation_verified"])
+        self.assertFalse(candidate["eligible"])
+        self.assertEqual(0, plan["resource_slots"])
+        self.assertIn("node1", plan["vm"]["context"]["numa_hosts"])
+
+    def test_stale_numa_sample_is_explicitly_unverified(self):
+        self.numa_host()
+        with mock.patch.object(capacity.NUMA_EVIDENCE.time, "time", return_value=numa_fixtures.NOW + 100):
+            plan = self.plan()
+        self.assertTrue(plan["blocked"])
+        self.assertFalse(plan["candidates"][0]["numa"]["physical_verified"])
+        self.assertEqual({}, plan["vm"]["context"]["numa_hosts"])
+
+    def test_resume_reuses_verified_numa_launcher_without_new_allocation(self):
+        self.numa_host()
+        self.running()
+        self.config["status"] = {"observedKubeVirtVersion": "v1.9.0", "targetKubeVirtVersion": "v1.10.0"}
+        plan = self.plan(action="unpause")
+        self.assertFalse(plan["blocked"], plan)
+        self.assertNotIn("numa_hosts", plan["vm"]["context"])
 
     def disk(self, phase="Bound", dv=False):
         self.vm["spec"]["template"]["spec"]["volumes"] = [{"name": "root", **({"dataVolume": {"name": "root"}} if dv else {"persistentVolumeClaim": {"claimName": "root"}})}]

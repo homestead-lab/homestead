@@ -11,6 +11,7 @@ import homestead_place as PLACE
 import homestead_vm_resources as VMRES
 import homestead_pod_resources as RESOURCES
 import homestead_vm_state as STATE
+import homestead_numa_evidence as NUMA_EVIDENCE
 
 
 def _items(read, path):
@@ -178,7 +179,8 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
             live_vm = copy.deepcopy(current or vm)
             live_vm["spec"]["template"]["spec"] = copy.deepcopy(vmi["spec"])
             live_vm["spec"]["template"]["metadata"] = copy.deepcopy(vmi.get("metadata") or {})
-            live_model = VMRES.project(live_vm, configuration, expanded_spec=vmi["spec"], read=read, kubevirt_version=kubevirt_version)
+            live_model = VMRES.project(live_vm, configuration, expanded_spec=vmi["spec"], read=read, kubevirt_version=kubevirt_version,
+                                       cold_start=False)
             model = live_model
             model["memory_estimate_bytes"] = max(model["memory_estimate_bytes"], RESOURCES.memory_estimate(launcher["spec"])[0])
             pods = [pod for pod in pods if pod.get("metadata", {}).get("uid") != launcher["metadata"]["uid"]]
@@ -243,6 +245,29 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
                                  planned_claims=planned_claims, pod_snapshot=pods, nodes_snapshot=nodes,
                                  read=read, memory_estimate_bytes=model["memory_estimate_bytes"],
                                  workload_kind="vm", resident_node=resident_node)
+    numa = ((dependency_vm["spec"]["template"]["spec"].get("domain") or {}).get("cpu") or {}).get("numa")
+    if isinstance(numa, dict) and numa.get("guestMappingPassthrough") is not None and action != "unpause":
+        # Only hosts otherwise eligible for this exact workload need probing.
+        # Physical CPU membership is never treated as an exclusive allocation.
+        hosts = {node["name"]: node for node in nodes}
+        context["numa_hosts"] = {}
+        for candidate in result["candidates"]:
+            if not candidate["eligible"]:
+                continue
+            evidence = NUMA_EVIDENCE.inspect(hosts[candidate["name"]], read)
+            if evidence["verified"]:
+                context["numa_hosts"][candidate["name"]] = evidence["host"]
+                context["dependencies"].update(evidence["dependencies"])
+            candidate["numa"] = {"physical_verified": evidence["verified"], "allocation_verified": False,
+                                 "reason": evidence["reason"]}
+            reason = ("NUMA physical topology was verified, but dedicated CPU-manager allocation evidence is unavailable; this placement cannot yet be verified"
+                      if evidence["verified"] else evidence["reason"])
+            candidate["eligible"] = False
+            candidate["reasons"].append(reason)
+            candidate.update(request_slots=0, max_additional_pods=0, projected_pods=0)
+        result["resource_slots"] = 0
+        result["blocked"] = True
+        blockers.append("NUMA guest placement requires verified local CPU and hugepage allocations; physical topology alone cannot authorize a start")
     result["warnings"] = sorted(set(result["warnings"] + warnings))
     result["blockers"] = sorted(set(blockers))
     result["blocked"] |= bool(blockers)

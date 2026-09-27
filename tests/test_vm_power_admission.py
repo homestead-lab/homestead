@@ -17,6 +17,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
     persistent_state = fixtures.VMCapacityTests.persistent_state
     fresh_state = fixtures.VMCapacityTests.fresh_state
     encrypted = fixtures.VMCapacityTests.encrypted
+    numa_host = fixtures.VMCapacityTests.numa_host
 
     def setUp(self):
         fixtures.VMCapacityTests.setUp(self)
@@ -131,6 +132,14 @@ class VMPowerAdmissionTests(unittest.TestCase):
         self.vm["spec"]["template"]["spec"]["domain"]["cpu"]["numa"] = {"guestMappingPassthrough": {}}
         self.config["status"] = {"observedKubeVirtVersion": "v1.9.0"}
         result, writes = self.call("/api/vm/power", self.reviewed())
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+        self.assertFalse(server.OPS._read())
+
+    def test_physical_numa_sample_is_not_capacity_override_authority(self):
+        self.numa_host()
+        with mock.patch.object(server.VM_CAPACITY.NUMA_EVIDENCE.time, "time", return_value=1000):
+            result, writes = self.call("/api/vm/power", self.reviewed())
         self.assertEqual(409, result[0], result)
         writes.assert_not_called()
         self.assertFalse(server.OPS._read())

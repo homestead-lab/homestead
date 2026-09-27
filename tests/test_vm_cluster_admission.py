@@ -239,6 +239,37 @@ class VMClusterAdmissionTests(unittest.TestCase):
         result = self.call("/api/vm/k3s-cluster", body)
         self.assertEqual(200, result[0], result)
 
+    def test_created_numa_controller_without_launcher_still_needs_allocation_evidence(self):
+        cfg = server.vm_cluster_configuration(self.body, preview=True)
+        _, prepared, _, _ = server.prepare_vm_cluster(cfg)
+        item = prepared[0]
+        domain = item["vm"]["spec"]["template"]["spec"]["domain"]
+        domain["cpu"].update(numa={"guestMappingPassthrough": {}}, dedicatedCpuPlacement=True)
+        domain["memory"] = {"guest": "4Gi", "hugepages": {"pageSize": "2Mi"}}
+        for bucket in ("requests", "limits"):
+            domain.get("resources", {}).get(bucket, {}).pop("cpu", None)
+        self.config["status"] = {"observedKubeVirtVersion": "v1.9.0"}
+        self.nodes[0]["labels"]["cpumanager"] = "true"
+        self.nodes[0]["allocatable"]["hugepages-2Mi"] = "8Gi"
+        current = copy.deepcopy(item["vm"])
+        current["metadata"].update(uid="created-uid", resourceVersion="1")
+        self.objects[f"/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/{item['name']}"] = current
+        result = server.VM_BATCH.plan(prepared, self.read, self.nodes, created={item["name"]: {"uid": "created-uid"}})
+        self.assertTrue(result["blocked"])
+        self.assertIn("physical topology alone cannot authorize", str(result["blockers"]))
+        self.assertEqual([], self.sent)
+
+        # Once an actual UID-owned launcher is assigned, the batch accounts
+        # for its existing reservation rather than allocating a second VM.
+        vmi = resource_fixtures.child(current, "VirtualMachine", item["name"], "running-vmi")
+        pod = resource_fixtures.child(vmi, "VirtualMachineInstance", "launcher", "running-pod")
+        pod["spec"]["containers"] = [{"name": "compute", "resources": {"requests": {"memory": "4Gi", "cpu": "2", "hugepages-2Mi": "4Gi"}}}]
+        self.objects[f"/apis/kubevirt.io/v1/namespaces/lab/virtualmachineinstances/{item['name']}"] = vmi
+        self.pods.append(pod)
+        result = server.VM_BATCH.plan(prepared, self.read, self.nodes, created={item["name"]: {"uid": "created-uid"}})
+        self.assertNotIn("physical topology alone cannot authorize", str(result["blockers"]))
+        self.assertEqual([], self.sent)
+
     def test_joint_network_devices_cannot_be_double_booked_across_guest_vms(self):
         nad = self.objects["/apis/k8s.cni.cncf.io/v1/namespaces/default/network-attachment-definitions/lan"]
         nad["metadata"]["annotations"] = {"k8s.v1.cni.cncf.io/resourceName": "vendor/lan"}

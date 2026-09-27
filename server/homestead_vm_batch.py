@@ -100,6 +100,12 @@ def plan(prepared, read, nodes, *, created=None, threshold=88):
         else:
             claims.update(state["planned_claims"])
         model["manifest"]["spec"]["template"]["spec"]["volumes"].extend(state["volumes"])
+        numa = ((vm["spec"]["template"]["spec"].get("domain") or {}).get("cpu") or {}).get("numa")
+        if count and isinstance(numa, dict) and numa.get("guestMappingPassthrough") is not None:
+            # A controller created earlier but still awaiting its launcher is
+            # still an unallocated demand. It cannot bypass the single-VM
+            # prerequisite merely because creation already has a receipt.
+            blockers.append(f"{name}: NUMA guest placement requires verified local CPU and hugepage allocations; physical topology alone cannot authorize a start")
         entries.append({"name": name, "deployment": model["manifest"], "replicas": count,
                         "workload_kind": "vm", "memory_estimate_bytes": model["memory_estimate_bytes"]})
     nodes = copy.deepcopy(nodes)

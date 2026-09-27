@@ -397,8 +397,17 @@ def node_temps():
                    "disks": [], "sensors": 0, "smart_helper": {"available": False}}
         try:
             with urllib.request.urlopen(f"http://{ip}:9099/", timeout=4) as r:
-                payload.update(json.loads(r.read().decode()))
+                raw = r.read(4 * 1024**2 + 1)
+                if len(raw) > 4 * 1024**2:
+                    raise ValueError("node telemetry exceeds the size limit")
+                payload.update(json.loads(raw.decode()))
+            # Provenance is assigned by this backend, never accepted from the
+            # probe response. Consumers still verify Pod/DaemonSet ownership,
+            # current host boot and sample age before trusting NUMA data.
+            payload["numa_source"] = {"pod": {key: p.get("metadata", {}).get(key) for key in ("namespace", "name", "uid")},
+                                      "received_at": time.time()}
         except Exception:
+            payload.pop("numa_source", None)
             pass
         try:
             with urllib.request.urlopen(f"http://{ip}:9100/", timeout=20) as r:
@@ -679,6 +688,7 @@ def get_nodes():
                 disk_issues.append({**issue, "disk": disk.get("name", "unknown")})
         out.append({
             "name": name,
+            "uid": n["metadata"].get("uid"),
             "status": "Ready" if conds.get("Ready") == "True" else "NotReady",
             "roles": roles or ["worker"],
             "cpu_pct": round(ucpu / ccpu * 100, 1) if ccpu else 0,
