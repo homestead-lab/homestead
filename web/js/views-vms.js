@@ -436,9 +436,9 @@ window.vmEdit = async (ns, name) => {
       <div class="f"><label>User data</label><textarea id="ve_user" class="mono helm-values" spellcheck="false" placeholder="#cloud-config">${esc(ci.user_data || "")}</textarea></div>
       <div class="f"><label>Network data</label><textarea id="ve_netdata" class="mono helm-values" spellcheck="false" style="min-height:90px" placeholder="optional">${esc(ci.network_data || "")}</textarea></div>
       <div class="dim xs">Cloud-init runs when the guest first boots; most images read it only once.</div>`}</div>
-    ${v.status === "Running" ? `<label class="switch" style="margin-top:12px"><input type="checkbox" id="ve_restart"> Restart now so the changes take effect</label>
-      <div class="dim xs">Otherwise they apply the next time it starts.</div>` : ""}
-    <div class="row" style="margin-top:14px"><button class="btn pri" onclick="vmEditSave()">Save</button><button class="btn" onclick="closeModal()">Cancel</button></div>`;
+    ${v.status === "Running" ? `<label class="switch" style="margin-top:12px"><input type="checkbox" id="ve_restart"> Review a restart after saving</label>
+      <div class="dim xs">Some changes can apply live through KubeVirt; a restart is a separate reviewed action.</div>` : ""}
+    <div class="row" style="margin-top:14px"><button class="btn pri" onclick="vmEditSave()">Review changes</button><button class="btn" onclick="closeModal()">Cancel</button></div>`;
   if (window.applyRole) applyRole();
 };
 window.vmEditTab = (button, pane) => {
@@ -493,13 +493,67 @@ window.vmEditSave = async () => {
     network: row.querySelector(".vn_net").value, mac: row.querySelector(".vn_mac").value.trim(), remove: row.querySelector(".vn_rm").checked }));
   const add_nics = $$("#mbody tr.vn-add").map(row => ({ model: row.querySelector(".vn_model").value, network: row.querySelector(".vn_net").value }));
   const body = { ns, name, cores: +$("#ve_cores").value, memory: $("#ve_mem").value.trim(), run_strategy: $("#ve_strategy").value,
-    description: $("#ve_desc").value, node: $("#ve_node").value, restart: !!$("#ve_restart")?.checked,
+    description: $("#ve_desc").value, node: $("#ve_node").value, restart: false,
     disks, add_disks, nics, add_nics };
   if ($("#ve_user")) body.cloud_init = { user_data: $("#ve_user").value, network_data: $("#ve_netdata").value };
+  return vmEditReview(body, !!$("#ve_restart")?.checked);
+};
+
+let VM_EDIT_REVIEW = null, VM_EDIT_SEQUENCE = 0, VM_EDIT_BUSY = false;
+window.vmEditReview = async (config, restartAfter = false) => {
+  if (VM_EDIT_BUSY) return;
+  VM_EDIT_REVIEW = null;
+  const sequence = ++VM_EDIT_SEQUENCE, frozen = JSON.parse(JSON.stringify(config));
+  childModal(`Review changes · ${frozen.name}`, '<div id="vmEditLoading" class="empty"><span class="spin2"></span>Checking proposed VM, disks and capacity…</div>', true);
   try {
-    const r = await api("/api/vm/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    toast(r.detail, "ok"); closeModal(); refresh(true);
-  } catch (e) { toast(e.message, "bad"); }
+    const review = await api("/api/vm/edit/preview", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(frozen)});
+    if (sequence !== VM_EDIT_SEQUENCE || !$("#vmEditLoading")) return;
+    if (!review.capacity || typeof review.capacity.blocked !== "boolean" || !review.capacity_token)
+      throw new Error("VM edit review unavailable. Nothing was saved; go back and review again.");
+    VM_EDIT_REVIEW = {...review, config:frozen, restartAfter};
+    const plan = review.capacity, facts = plan.vm || {};
+    $("#mbody").innerHTML = `<div class="update-review">
+      <div class="reviewbox"><b>Save ${esc(frozen.name)}</b><p class="small">${esc(frozen.cores ?? "Unchanged")} CPU cores · ${esc(frozen.memory || "unchanged memory")}</p>
+        <p class="small">Restart policy: ${esc(facts.policy_before || "unknown")} → ${esc(facts.policy_after || "unknown")}</p>
+        <p class="small muted">${facts.admission_needed ? "Resource and policy changes may take effect immediately through KubeVirt. Host RAM estimates include launcher overhead but are not a configured memory limit." : "No new launcher capacity is needed for this metadata or stop/manual-policy edit."}</p></div>
+      ${plan.blockers?.length ? `<div class="note bad">${plan.blockers.map(esc).join(" · ")}</div>` : ""}
+      ${facts.admission_needed ? deployCapacityHtml(plan) : `<div class="note warn">${(plan.warnings || []).map(esc).join(" ")}</div>`}
+      ${review.volumes?.length ? `<div class="reviewbox"><b>New disks</b>${review.volumes.map(v => `<p class="small"><span class="mono">${esc(v.name)}</span> · ${esc(v.size)} · ${esc(v.storage_class)} · ${esc(v.access_mode)}</p>`).join("")}</div>` : ""}
+      <p class="small muted">${restartAfter ? "After saving, a separate restart review checks the saved VM and current host capacity. Saving does not automatically send Restart." : "Save sends no Restart request. If needed, restart the VM through its power controls afterward."}</p>
+      ${!plan.blocked ? '<label class="check"><input type="checkbox" id="vmEditApprove" onchange="vmEditReviewReady()"> Save these exact changes and accept the displayed memory, policy and partial-save risks</label>' : ""}
+      <div class="modalactions"><button class="btn" onclick="vmEditReviewBack()">Back to edit</button><button class="btn pri" id="vmEditApply" disabled onclick="vmEditReviewedApply()">Save reviewed changes</button></div></div>`;
+  } catch (error) {
+    if (sequence !== VM_EDIT_SEQUENCE || !$("#vmEditLoading")) return;
+    VM_EDIT_REVIEW = null;
+    $("#mbody").innerHTML = `<div class="note bad">${esc(error.message)}</div><button class="btn" onclick="vmEditReviewBack()">Back to edit</button>`;
+  }
+};
+window.vmEditReviewBack = () => { VM_EDIT_REVIEW = null; ++VM_EDIT_SEQUENCE; modalBack(); };
+window.vmEditReviewReady = () => {
+  const ready = !!(VM_EDIT_REVIEW && !VM_EDIT_BUSY && !VM_EDIT_REVIEW.capacity.blocked && $("#vmEditApprove")?.checked);
+  if ($("#vmEditApply")) $("#vmEditApply").disabled = !ready;
+  return ready;
+};
+window.vmEditReviewedApply = async () => {
+  if (!vmEditReviewReady()) return toast("Review and acknowledge these VM changes first", "bad");
+  const review = VM_EDIT_REVIEW, button = $("#vmEditApply");
+  VM_EDIT_REVIEW = null;
+  VM_EDIT_BUSY = true;
+  button.disabled = true; button.textContent = "Saving reviewed changes…";
+  let saved = false;
+  try {
+    const result = await api("/api/vm/edit", {method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({...review.config, capacity_token:review.capacity_token, confirm_capacity:true})});
+    saved = true;
+    toast(result.detail, "ok"); closeModal(); refresh(true);
+  } catch (error) {
+    if ($("#vmEditApply") === button) {
+      button.textContent = "Inspect VM before retrying";
+      $("#mbody").insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(error.message)}. Some VM, disk or Secret changes may already be saved. No request was repeated and no Restart was sent. Close this review and inspect the VM before editing again.</div>`);
+    }
+    toast(error.message, "bad");
+  } finally { VM_EDIT_BUSY = false; }
+  if (saved && review.restartAfter) await vmPowerReview({ns:review.config.ns, name:review.config.name, action:"restart"});
 };
 
 window.vmDelete = (ns, name) => {

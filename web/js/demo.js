@@ -825,7 +825,17 @@ ssh_pwauth: true
           reservations_known:true, reserved_gb:8, request_slots:1}]}};
     },
     "/api/vm/power": (url, init) => ({ ok: true, detail: `${JSON.parse(init.body).name} is ${{ start: "starting", stop: "stopping" }[JSON.parse(init.body).action] || "done"}` }),
-    "/api/vm/edit": { ok: true, detail: "saved; the new CPU and memory apply when it next starts" },
+    "/api/vm/edit": { ok: true, detail: "saved; no Restart request was sent" },
+    "/api/vm/edit/preview": (url, init) => {
+      const b = JSON.parse(init.body || "{}"), memory = parseFloat(b.memory) || 4;
+      return {capacity_token:"demo-vm-edit", volumes:[], capacity:{blocked:false, blockers:[], requires_confirmation:true,
+        additional:1, pod_request_gb:memory, pod_memory_gb:memory+0.25, pod_cpu_request_percent:20,
+        warnings:["Template changes may take effect immediately through KubeVirt. Save sends no Restart request.", "If saving fails, inspect retained disks and Secrets before retrying."],
+        candidates:[{name:"harvester-node1",eligible:true,metrics_available:true,used_gb:8,capacity_gb:32,projected_gb:8+memory+0.25,
+          projected_percent:Math.round((8+memory+0.25)/32*100),reservations_known:true,reserved_gb:6,request_slots:1}],
+        vm:{action:"edit", admission_needed:true, guest_memory_gb:memory, request_is_lower_bound:true,
+          policy_before:"RerunOnFailure", policy_after:b.run_strategy || "RerunOnFailure"}}};
+    },
     "/api/vm/delete": { ok: true, detail: "deleted; its disks are kept" },
     "/api/sources": [{ name: "unraid", host: "192.168.1.10", user: "root", kind: "unraid", base_path: "/mnt/user/appdata", added: "2026-09-20 12:00" }],
     "/api/sources/containers": { containers: [{ name: "media-server", image: "example/media-server:latest", state: "running" }] },

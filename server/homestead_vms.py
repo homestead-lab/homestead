@@ -941,6 +941,13 @@ def _recheck_edit(prepared):
         current = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(claim)}")
         if _identity(current) != _identity(prepared["claims"][claim]):
             raise ValueError("A disk changed; review its resize again")
+    old_names = {_volume_claim(v) for v in prepared["current"]["spec"]["template"]["spec"].get("volumes") or []}
+    new_names = {_volume_claim(v) for v in prepared["vm"]["spec"]["template"]["spec"].get("volumes") or []} - old_names - {""}
+    for claim in new_names:
+        for path in (f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(claim)}",
+                     f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{urllib.parse.quote(claim)}"):
+            if _optional(path) is not None:
+                raise ValueError(f"New disk {claim} already exists; it cannot be adopted by this edit")
 
 
 def commit_edit(prepared, before_save=None):
@@ -955,6 +962,8 @@ def commit_edit(prepared, before_save=None):
     to_create, resize, dropped = prepared["to_create"], prepared["resize"], prepared["dropped"]
     changed_hardware = prepared["changed_hardware"]
     _recheck_edit(prepared)
+    if any(effect["kind"] == "replace-datavolume" and effect.get("identity") for effect in prepared["effects"]):
+        raise ValueError("An existing DataVolume cannot be replaced safely in a VM edit. Add a disk with a new name/source, then detach the old disk; its data is retained.")
     for effect in prepared["effects"]:
         if effect["kind"] == "image-download":
             result = HVIMAGE.download(kget, ksend, effect["namespace"], effect["url"], effect["storage_class"])
@@ -970,9 +979,6 @@ def commit_edit(prepared, before_save=None):
         if effect["kind"] == "secret":
             ksend("PATCH", effect["path"], {"metadata": effect["identity"], "data": effect["data"]},
                   ctype="application/merge-patch+json")
-        elif effect["kind"] == "replace-datavolume" and effect.get("identity"):
-            ksend("DELETE", effect["path"], {"apiVersion": "v1", "kind": "DeleteOptions",
-                  "preconditions": effect["identity"]})
     for claim in to_create:
         try:
             ksend("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", claim)
@@ -1004,7 +1010,7 @@ def commit_edit(prepared, before_save=None):
     if dropped:
         detail += f"; {', '.join(dropped)} detached and kept"
     if changed_hardware:
-        detail += "; restarting now to use the changes" if restarted else "; the changes apply when it next starts"
+        detail += "; restarting now to use the changes" if restarted else "; template updated; KubeVirt may apply supported changes live, otherwise review a restart"
     return {"ok": True, "detail": detail, "restart_needed": changed_hardware and not restarted}
 
 

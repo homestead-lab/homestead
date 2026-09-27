@@ -164,6 +164,7 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
     context["launchers"] = [VMRES.identity(pod) for pod in owned]
     manifest = model["manifest"]
     resident_node = None
+    dependency_pods = pods
     if action == "unpause":
         try:
             launcher = VMRES.resident(current or vm, vmi, pods)
@@ -177,14 +178,31 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
             model = live_model
             model["memory_estimate_bytes"] = max(model["memory_estimate_bytes"], RESOURCES.memory_estimate(launcher["spec"])[0])
             pods = [pod for pod in pods if pod.get("metadata", {}).get("uid") != launcher["metadata"]["uid"]]
+            dependency_pods = pods
             warnings.append("Unpause reuses the current launcher; its live RAM is already included in the host metric")
         except ValueError as error:
             blockers.append(str(error))
     elif action in ("restart", "edit") and owned and ownership_known:
         owned_uids = {pod["metadata"]["uid"] for pod in owned}
-        pods = [pod for pod in pods if pod.get("metadata", {}).get("uid") not in owned_uids]
-        warnings.append("post-stop placement assumes owned launchers fully terminate and release disks/devices; this is not guaranteed")
-        warnings.append("live RAM includes the old VM and is not subtracted from the conservative restart projection")
+        dependency_pods = [pod for pod in pods if pod.get("metadata", {}).get("uid") not in owned_uids]
+        if action == "restart":
+            pods = dependency_pods
+            warnings.append("post-stop placement assumes owned launchers fully terminate and release disks/devices; this is not guaranteed")
+            warnings.append("live RAM includes the old VM and is not subtracted from the conservative restart projection")
+        else:
+            # Save is not Stop. LiveUpdate may resize or migrate; never credit
+            # released launcher reservations, or accept a plan fitting only on
+            # some other host while the old instance remains here.
+            try:
+                launcher = VMRES.resident(current or vm, vmi, pods)
+                node = launcher["spec"]["nodeName"]
+                selector = manifest["spec"]["template"]["spec"].setdefault("nodeSelector", {})
+                if selector.get("kubernetes.io/hostname") not in (None, node):
+                    blockers.append("Stop the running VM before editing its pinned host; Save does not move its current instance")
+                selector["kubernetes.io/hostname"] = node
+            except ValueError as error:
+                blockers.append("Live edit requires a stable, verified resident launcher: " + str(error))
+            warnings.append("Live edit conservatively retains current launcher reservations and checks the proposed VM on its current host too. Stop the VM and review again if this overlap cannot fit; Save does not guarantee a live resize or migration.")
     elif action == "start" and vmi and (vmi.get("status") or {}).get("phase") not in ("Succeeded", "Failed"):
         blockers.append("VM already has an active instance; refresh and use its appropriate power action")
     blockers.extend(model["blockers"])
@@ -194,7 +212,7 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
         dependency_vm["spec"]["template"]["spec"] = copy.deepcopy(vmi["spec"])
     elif expanded_spec is not None:
         dependency_vm["spec"]["template"]["spec"] = copy.deepcopy(expanded_spec)
-    evidence = dependencies(dependency_vm, read, planned_claims, pods=pods)
+    evidence = dependencies(dependency_vm, read, planned_claims, pods=dependency_pods)
     blockers.extend(evidence["blockers"])
     warnings.extend(evidence["warnings"])
     context["dependencies"] = evidence["context"]

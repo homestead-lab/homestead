@@ -120,6 +120,25 @@ class EditPreparationTests(unittest.TestCase):
         patch = next(body for method, path, body in self.cluster.sent if method == "PATCH")
         self.assertEqual({"uid": "secret-uid", "resourceVersion": "20"}, patch["metadata"])
 
+    def test_new_disk_name_collision_after_preparation_cannot_adopt_a_pvc_or_dv(self):
+        prepared = vms.prepare_edit("lab", "web", {"add_disks": [{"kind": "disk", "size": "2Gi"}]})
+        get = self.cluster.get
+        for resource in ("persistentvolumeclaims", "datavolumes"):
+            def read(path):
+                if path.endswith(f"/{resource}/web-disk-0"):
+                    return {"metadata": {"name": "web-disk-0", "uid": "other", "resourceVersion": "1"}}
+                return get(path)
+            with mock.patch.object(vms, "kget", side_effect=read):
+                with self.assertRaisesRegex(ValueError, "cannot be adopted"):
+                    vms.commit_edit(prepared)
+        self.assertEqual([], self.cluster.sent)
+
+    def test_existing_datavolume_is_never_deleted_before_or_after_a_vm_edit(self):
+        prepared = vms.prepare_edit("lab", "web", {"disks": [{"name": "root", "source": {"image": "default/image-ubuntu"}}]})
+        with self.assertRaisesRegex(ValueError, "existing DataVolume"):
+            vms.commit_edit(prepared)
+        self.assertEqual([], self.cluster.sent)
+
 
 class CreatePreparationTests(unittest.TestCase):
     def setUp(self):

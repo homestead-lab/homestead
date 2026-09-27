@@ -1,0 +1,181 @@
+import copy
+import unittest
+import urllib.error
+from unittest import mock
+
+import test_vm_capacity as fixtures
+import server
+import homestead_capacity_review as review
+
+
+class VMEditAdmissionTests(unittest.TestCase):
+    read = fixtures.VMCapacityTests.read
+    disk = fixtures.VMCapacityTests.disk
+    running = fixtures.VMCapacityTests.running
+
+    def setUp(self):
+        fixtures.VMCapacityTests.setUp(self)
+        self.vm_path = "/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/guest"
+        self.objects[self.vm_path] = self.vm
+        self.body = {"ns": "lab", "name": "guest", "memory": "6Gi", "restart": False}
+        for patch in (mock.patch.object(server, "kget", side_effect=lambda path: copy.deepcopy(self.read(path))),
+                      mock.patch.object(server.VMS, "kget", side_effect=lambda path: copy.deepcopy(self.read(path))),
+                      mock.patch.object(server.PLACE, "get_nodes", side_effect=lambda: copy.deepcopy(self.nodes)),
+                      mock.patch.object(server.PLACE, "hardware_features", return_value=[]),
+                      mock.patch.object(server, "get_app_settings", return_value=server.DEFAULT_APP_SETTINGS),
+                      mock.patch.object(review, "_key", return_value=b"edit-review-tests")):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def call(self, path, body):
+        handler = object.__new__(server.H)
+        handler.path, handler.headers = path, {}
+        handler._guard = lambda path: False
+        handler._body = lambda: copy.deepcopy(body)
+        handler._client_ip = lambda: "127.0.0.1"
+        handler._send = mock.Mock()
+        with mock.patch.object(server.VMS, "ksend", side_effect=lambda method, path, body=None, **kw: body) as writes, \
+                mock.patch.object(server, "ksend") as other_writes:
+            handler.do_POST()
+        other_writes.assert_not_called()
+        return handler._send.call_args.args, writes
+
+    def reviewed(self):
+        result, writes = self.call("/api/vm/edit/preview", self.body)
+        self.assertEqual(200, result[0], result)
+        self.assertFalse(result[1]["capacity"]["blocked"], result)
+        writes.assert_not_called()
+        return {**self.body, "capacity_token": result[1]["capacity_token"], "confirm_capacity": True}
+
+    def test_unsigned_edit_writes_nothing(self):
+        for body in (self.body, {**self.body, "confirm_capacity": True}):
+            result, writes = self.call("/api/vm/edit", body)
+            self.assertEqual(409, result[0], result)
+            writes.assert_not_called()
+
+    def test_memory_edit_reviews_proposed_resources_and_never_restarts(self):
+        body = self.reviewed()
+        result, writes = self.call("/api/vm/edit", body)
+        self.assertEqual(200, result[0], result)
+        self.assertEqual(1, writes.call_count)
+        self.assertEqual(self.vm_path, writes.call_args.args[1])
+        vm = writes.call_args.args[2]
+        self.assertEqual("6Gi", vm["spec"]["template"]["spec"]["domain"]["memory"]["guest"])
+        self.assertEqual("1", vm["metadata"]["resourceVersion"])
+
+    def test_halted_to_always_needs_full_capacity_even_without_resource_change(self):
+        self.vm["spec"]["runStrategy"] = "Halted"
+        self.body = {"ns": "lab", "name": "guest", "run_strategy": "Always"}
+        body = self.reviewed()
+        self.nodes[0]["allocatable"]["memory"] = "1Gi"
+        result, writes = self.call("/api/vm/edit", body)
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+
+    def test_metadata_and_stop_policy_do_not_require_working_capacity_inventory(self):
+        self.nodes = []
+        self.config = {}
+        self.vm["spec"]["runStrategy"] = "Always"
+        for changes in ({"description": "new description"}, {"run_strategy": "Halted"}, {"run_strategy": "Manual"}):
+            self.body = {"ns": "lab", "name": "guest", **changes}
+            body = self.reviewed()
+            result, writes = self.call("/api/vm/edit", body)
+            self.assertEqual(200, result[0], result)
+            self.assertEqual(1, writes.call_count)
+
+    def test_edited_input_vm_identity_and_policy_invalidate_approval(self):
+        body = self.reviewed()
+        for change in ({"memory": "8Gi"}, {"run_strategy": "Always"}, {"description": "changed"}):
+            result, writes = self.call("/api/vm/edit", {**body, **change})
+            self.assertEqual(409, result[0], result)
+            writes.assert_not_called()
+        self.vm["metadata"]["resourceVersion"] = "2"
+        result, writes = self.call("/api/vm/edit", body)
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+
+    def test_restart_flag_cannot_bypass_separate_power_review(self):
+        body = self.reviewed()
+        result, writes = self.call("/api/vm/edit", {**body, "restart": True})
+        self.assertEqual(400, result[0], result)
+        self.assertIn("review Restart separately", result[1]["error"])
+        writes.assert_not_called()
+
+    def test_fresh_capacity_change_before_dependency_writes_blocks(self):
+        body = self.reviewed()
+        original = server.VMS.commit_edit
+        def commit(prepared, before_save=None):
+            self.nodes[0]["allocatable"]["memory"] = "1Gi"
+            return original(prepared, before_save=before_save)
+        with mock.patch.object(server.VMS, "commit_edit", side_effect=commit):
+            result, writes = self.call("/api/vm/edit", body)
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+
+    def test_live_update_still_needs_capacity_without_restart(self):
+        self.running()
+        body = self.reviewed()
+        self.nodes[0]["allocatable"]["memory"] = "1Gi"
+        result, writes = self.call("/api/vm/edit", body)
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+
+    def test_live_edit_cannot_use_another_hosts_capacity_or_credit_old_launcher(self):
+        _, pod = self.running()
+        second = copy.deepcopy(self.nodes[0])
+        second["name"] = "node2"
+        self.nodes.append(second)
+        self.nodes[0]["allocatable"]["memory"] = "8Gi"
+        # Old launcher requests 4.5 GiB. The proposed 6 GiB must not be
+        # admitted using released capacity or the spare second host.
+        result, writes = self.call("/api/vm/edit/preview", self.body)
+        self.assertEqual(200, result[0], result)
+        self.assertTrue(result[1]["capacity"]["blocked"])
+        writes.assert_not_called()
+
+    def test_live_host_change_requires_stop_instead_of_claiming_save_moves_vm(self):
+        self.running()
+        self.body["node"] = "node2"
+        result, writes = self.call("/api/vm/edit/preview", self.body)
+        self.assertEqual(200, result[0], result)
+        self.assertTrue(result[1]["capacity"]["blocked"])
+        self.assertIn("Stop the running VM", " ".join(result[1]["capacity"]["blockers"]))
+        writes.assert_not_called()
+
+    def test_high_ram_warning_can_be_acknowledged_but_not_missing_hardware(self):
+        self.nodes[0]["mem_used_gb"] = 15
+        body = self.reviewed()
+        result, writes = self.call("/api/vm/edit", body)
+        self.assertEqual(200, result[0], result)
+        self.assertEqual(1, writes.call_count)
+        del self.nodes[0]["allocatable"]["devices.kubevirt.io/kvm"]
+        result, writes = self.call("/api/vm/edit", body)
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+
+    def test_secret_payload_not_returned_and_failure_never_restarted_or_deleted(self):
+        self.vm["spec"]["template"]["spec"]["volumes"] = [{"name": "ci", "cloudInitNoCloud": {"secretRef": {"name": "ci"}}}]
+        self.objects["/api/v1/namespaces/lab/secrets/ci"] = {"metadata": {"name": "ci", "uid": "secret-uid", "resourceVersion": "5"}, "data": {}}
+        self.body["cloud_init"] = {"user_data": "test-only-private-data"}
+        result, writes = self.call("/api/vm/edit/preview", self.body)
+        self.assertNotIn("test-only-private-data", str(result))
+        body = self.reviewed()
+        original = server.VMS.commit_edit
+        sent = []
+        def commit(prepared, before_save=None):
+            def send(method, path, body=None, **kw):
+                sent.append((method, path))
+                if method == "PUT":
+                    raise urllib.error.HTTPError(path, 500, "uncertain", {}, None)
+                return body
+            with mock.patch.object(server.VMS, "ksend", side_effect=send):
+                return original(prepared, before_save=before_save)
+        with mock.patch.object(server.VMS, "commit_edit", side_effect=commit):
+            result, _ = self.call("/api/vm/edit", body)
+        self.assertNotEqual(200, result[0])
+        self.assertEqual(["PATCH", "PUT"], [method for method, _ in sent])
+        self.assertFalse(any("/restart" in path for _, path in sent))
+
+
+if __name__ == "__main__":
+    unittest.main()

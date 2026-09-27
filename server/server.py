@@ -3533,6 +3533,100 @@ def reviewed_vm_power(body):
     return VMS.power(ns, name, action)
 
 
+def vm_edit_capacity(prepared):
+    """Admit proposed edits, not the old VMI's resource requirements.
+
+    Metadata-only and stop/manual-policy edits remain available without a
+    functioning capacity inventory. A template change is never assumed inert:
+    KubeVirt LiveUpdate may apply it without an explicit restart request.
+    """
+    current, vm = prepared["current"], prepared["vm"]
+    before, after = VMS._strategy(current), VMS._strategy(vm)
+    needed = (vm["spec"]["template"] != current["spec"]["template"] or
+              bool(prepared["resize"] or prepared["effects"] or prepared["to_create"]) or
+              (before != after and after not in ("Halted", "Manual")))
+    observations, claims = {}, {}
+    def read(path):
+        try:
+            value = kget(path)
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                observations[path] = None
+            raise
+        if path != "/api/v1/pods":
+            if isinstance(value.get("items"), list):
+                observations[path] = sorted([VM_CAPACITY.VMRES.identity(row) for row in value["items"]],
+                                            key=lambda row: (row.get("namespace") or "", row.get("name") or ""))
+            else:
+                observations[path] = VM_CAPACITY.VMRES.identity(value)
+        return value
+    if needed:
+        # Existing controller templates are not promises to recreate a missing
+        # disk. Only new definitions get the planned-claim exception.
+        proposed = copy.deepcopy(vm)
+        old_claims = {VMS._volume_claim(volume) for volume in current["spec"]["template"]["spec"].get("volumes") or []}
+        proposed["spec"]["dataVolumeTemplates"] = [row for row in VMS._dv_templates(vm) if row["metadata"]["name"] not in old_claims]
+        VMS._set_claim_templates(proposed, [row for row in VMS._claim_templates(vm) if row["metadata"]["name"] not in old_claims])
+        downloads = [effect for effect in prepared["effects"] if effect["kind"] == "image-download"]
+        claims = VM_CLAIMS.plans(proposed, read, prepared["to_create"], downloads)
+        threshold = get_app_settings()["thresholds"]["memory"]["critical"]
+        plan = VM_CAPACITY.plan(vm, read, PLACE.get_nodes(), action="edit", current=current,
+                               warning_percent=threshold, planned_claims=claims)
+        plan["warnings"].append("Template and restart-policy changes may take effect immediately through KubeVirt. Saving is not a promise that the guest remains stopped or unchanged.")
+        if after == "Halted":
+            plan["warnings"].append("The requested policy is Halted. Resource placement shown is conservative; a separate reviewed Start is required to run it again.")
+    else:
+        plan = {"blocked": False, "blockers": [], "warnings": [], "vm": {"action": "edit"}}
+    for effect in prepared["effects"]:
+        if effect["kind"] == "replace-datavolume" and effect.get("identity"):
+            plan["blockers"].append("Existing DataVolume replacement is unsafe in an edit. Add a disk with a new name/source, then detach the old disk; no old disk is deleted.")
+            plan["blocked"] = True
+    plan["vm"].update(admission_needed=needed, policy_before=before, policy_after=after)
+    plan["warnings"].append("VM, Secret and disk changes are not a transaction. If saving fails, inspect retained resources before trying again. No automatic restart is sent by Save.")
+    plan["requires_confirmation"] = True
+    context = {"action": "vm-edit", "prepared": prepared, "dependencies": observations}
+    return plan, claims, context
+
+
+def prepare_vm_edit(body):
+    if body.get("restart"):
+        raise ValueError("Save the VM edit first, then review Restart separately against its saved resources")
+    ns = _dns_name(body.get("ns", DEFAULT_NS), "namespace")
+    name = _dns_name(body.get("name"), "VM name")
+    prepared = VMS.prepare_edit(ns, name, body)
+    VMS._recheck_edit(prepared)
+    return prepared
+
+
+def preview_vm_edit(body):
+    prepared = prepare_vm_edit(body)
+    plan, claims, context = vm_edit_capacity(prepared)
+    return {"capacity": plan, "volumes": list(claims.values()),
+            "capacity_token": CAPACITY_REVIEW.issue(body, context)}
+
+
+def reviewed_vm_edit(body):
+    prepared = prepare_vm_edit(body)
+    plan, _, context = vm_edit_capacity(prepared)
+    CAPACITY_REVIEW.enforce(body, plan, context)
+    def before_save(resolved):
+        fresh, _, _ = vm_edit_capacity(resolved)
+        for path, expected in context["dependencies"].items():
+            value = VM_CAPACITY._optional(kget, path) if not isinstance(expected, list) else kget(path)
+            if isinstance(expected, list):
+                if not isinstance(value.get("items"), list) or (value.get("metadata") or {}).get("continue"):
+                    raise ValueError("VM edit dependency inventory became incomplete")
+                actual = sorted([VM_CAPACITY.VMRES.identity(row) for row in value["items"]],
+                                key=lambda row: (row.get("namespace") or "", row.get("name") or ""))
+            else:
+                actual = VM_CAPACITY.VMRES.identity(value) if value else None
+            if actual != expected:
+                raise CAPACITY_REVIEW.Rejected("VM edit dependencies changed; inspect retained resources and review again", fresh)
+        CAPACITY_REVIEW.enforce(body, fresh, context)
+        VMS._recheck_edit(resolved)
+    return VMS.commit_edit(prepared, before_save=before_save)
+
+
 def selectable_storage_classes(rows=None):
     """Classes a person may pick for their own workloads - the default first."""
     rows = [row for row in (rows if rows is not None else storage_classes()) if class_selectable(row)]
@@ -6873,9 +6967,11 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/vm/power":
                 _cache.pop("vms", None)
                 return self._send(200, reviewed_vm_power(b))
+            if p == "/api/vm/edit/preview":
+                return self._send(200, preview_vm_edit(b))
             if p == "/api/vm/edit":
                 _cache.pop("vms", None)
-                return self._send(200, VMS.edit(b.get("ns", DEFAULT_NS), b.get("name", ""), b))
+                return self._send(200, reviewed_vm_edit(b))
             if p == "/api/vm/delete":
                 _cache.pop("vms", None)
                 return self._send(200, VMS.delete(b.get("ns", DEFAULT_NS), b.get("name", ""), bool(b.get("disks"))))
