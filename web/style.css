@@ -2191,3 +2191,20 @@ textarea{min-height:0}
   .tbl.stack.compact td:first-child>div,.tbl.stack.compact td:first-child .dim{display:block}
   .tbl.stack.compact td[data-actions]>div{display:flex;flex-wrap:nowrap}
 }
+
+/* Updating apps: one line each - the app, and its image from and to. */
+.upd-apps{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:12px}
+.upd-apps li{display:flex;align-items:center;justify-content:space-between;gap:6px 12px;flex-wrap:wrap;padding:9px 12px;font-size:13px}
+.upd-apps li+li{border-top:1px solid var(--line)}
+.upd-name{display:inline-flex;align-items:center;gap:6px;min-width:0}
+.upd-name .dim{font-size:12px}
+.upd-change{display:inline-flex;align-items:center;gap:5px;color:var(--mut);font-size:12px;white-space:nowrap}
+.upd-change code{font:500 12px "JetBrains Mono",monospace;color:var(--tx)}
+.upd-flag{display:inline-grid;place-items:center;width:17px;height:17px;border-radius:50%;font:700 11px "Inter Tight",sans-serif;color:#1a1200;background:var(--med)}
+.upd-flag.bad{background:var(--crit);color:#fff}
+.upd-ok{display:inline-flex;align-items:center;gap:8px;margin:0;font-size:12.5px;font-weight:500;color:var(--tx);cursor:pointer}
+.upd-ok input{width:16px;height:16px;margin:0;accent-color:#fff}
+@media(max-width:640px){
+  .ui-actions:has(.upd-ok){flex-direction:column}
+  .ui-actions:has(.upd-ok) .ui-actions-start{flex-direction:row}
+}
