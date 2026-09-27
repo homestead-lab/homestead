@@ -196,15 +196,25 @@ class CopyCluster(Cluster):
 
     def send(self, method, path, body, **kwargs):
         if method != "POST":
+            if method == "DELETE" and "/jobs/" in path:
+                uid = self.objects[path]["metadata"]["uid"]
+                for pod_path, pod in list(self.objects.items()):
+                    if pod["kind"] == "Pod" and handoff._owned(pod, uid):
+                        del self.objects[pod_path]
             return super().send(method, path, body, **kwargs)
         event = self.durable["ref"]["storage_writes"][-1]
         assert event["state"] == "intent"
         self.sent.append((method, path, copy.deepcopy(body)))
         obj = copy.deepcopy(body)
-        obj["metadata"].update(uid=obj["metadata"]["name"] + "-uid", resourceVersion="1")
+        obj["metadata"].update(uid=obj["metadata"]["name"] + ("-replacement-uid" if obj["metadata"]["name"] == "data" else "-uid"), resourceVersion="1")
         self.objects[path + "/" + obj["metadata"]["name"]] = obj
         if obj["kind"] == "PersistentVolumeClaim":
-            self.bind_volume(obj["metadata"]["name"], "pv-copy")
+            if obj["spec"].get("volumeName"):
+                pv = self.objects["/api/v1/persistentvolumes/" + obj["spec"]["volumeName"]]
+                pv["spec"]["claimRef"] = {"name": obj["metadata"]["name"], "namespace": "lab", "uid": obj["metadata"]["uid"]}
+                obj["status"] = {"phase": "Bound"}
+            else:
+                self.bind_volume(obj["metadata"]["name"], "pv-copy")
         if len(self.sent) == self.lose_reply:
             raise TimeoutError("lost after creation")
         return copy.deepcopy(obj)
@@ -222,6 +232,30 @@ class CopyCluster(Cluster):
         pod = self.objects["/api/v1/namespaces/lab/pods/copy-pod"]
         pod["metadata"]["ownerReferences"] = [{"kind": "Job", "controller": True, "uid": job["metadata"]["uid"]}]
         pod["status"] = {"phase": "Succeeded"}
+
+    def ready_cutover(self):
+        self.stage(); self.stage(); self.complete(); self.stage()
+        path = "/apis/storage.k8s.io/v1/storageclasses/new"
+        self.objects[path] = {"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
+            "metadata": {"name": "new", "uid": "class-new", "resourceVersion": "1"}, "reclaimPolicy": "Delete"}
+        self.item["ref"]["review_fences"][path] = journal.identity(self.objects[path])
+        self.checkpoint(self.item)
+
+    def cutover(self, admit=None, restored=False):
+        if restored:
+            self.item = copy.deepcopy(self.durable)
+        with mock.patch.object(rc, "kget", self.read), mock.patch.object(rc, "ksend", self.send), mock.patch.object(rc, "ktext", return_value="==> verified\n"):
+            result = handoff.cutover_stage(self.item, self.checkpoint, admit or (lambda proposals: {"blocked": False}))
+            self.checkpoint(self.item)  # normal operations-poll persistence
+            return result
+
+    def restart(self, admit=None, restored=False):
+        if restored:
+            self.item = copy.deepcopy(self.durable)
+        with mock.patch.object(rc, "kget", self.read), mock.patch.object(rc, "ksend", self.send):
+            result = handoff.restart_stage(self.item, self.checkpoint, admit or (lambda proposals: {"blocked": False}))
+            self.checkpoint(self.item)
+            return result
 
 
 class CopyHandoffTests(unittest.TestCase):
@@ -292,3 +326,204 @@ class CopyHandoffTests(unittest.TestCase):
         cluster = CopyCluster(); cluster.item["ref"]["review_fences"].pop("/api/v1/persistentvolumes/pv-data")
         with self.assertRaises(journal.Held): cluster.stage()
         self.assertEqual(1, len(cluster.sent))
+
+
+class CutoverTests(unittest.TestCase):
+    def ready(self):
+        cluster = CopyCluster(); cluster.ready_cutover()
+        return cluster
+
+    def finish(self, cluster):
+        for _ in range(20):
+            if cluster.cutover(restored=True)[1] == 91:
+                return
+        self.fail("Cutover never completed")
+
+    def test_each_poll_and_restart_performs_at_most_one_new_write(self):
+        cluster = self.ready()
+        for _ in range(20):
+            count = len(cluster.sent)
+            result = cluster.cutover(restored=True)
+            self.assertLessEqual(len(cluster.sent) - count, 1)
+            if result[1] == 91:
+                break
+        self.assertTrue(cluster.item["ref"]["cutover_complete"])
+        old = cluster.objects["/api/v1/persistentvolumes/pv-data"]
+        new = cluster.objects["/api/v1/persistentvolumes/pv-copy"]
+        self.assertEqual("Retain", old["spec"]["persistentVolumeReclaimPolicy"])
+        self.assertEqual("Delete", new["spec"]["persistentVolumeReclaimPolicy"])
+        self.assertEqual("lab/data", old["metadata"]["annotations"][rc.OLD_COPY])
+        self.assertEqual("data-replacement-uid", new["spec"]["claimRef"]["uid"])
+        self.assertEqual(0, cluster.objects["/apis/apps/v1/namespaces/lab/deployments/app"]["spec"]["replicas"])
+        deletions = [path for method, path, _ in cluster.sent if method == "DELETE"]
+        self.assertFalse(any("persistentvolumes/" in path for path in deletions))
+        reserve = next(body for method, path, body in cluster.sent if method == "PATCH" and body.get("spec", {}).get("claimRef"))
+        self.assertEqual("data", reserve["spec"]["claimRef"]["name"])
+        self.assertIsNotNone(reserve["spec"]["claimRef"])
+
+    def test_capacity_block_prevents_all_cutover_writes(self):
+        cluster = self.ready(); count = len(cluster.sent)
+        with self.assertRaises(journal.Held): cluster.cutover(lambda proposals: {"blocked": True})
+        self.assertEqual(count, len(cluster.sent))
+        self.assertIn("/api/v1/namespaces/lab/persistentvolumeclaims/data", cluster.objects)
+
+
+class RestartTests(unittest.TestCase):
+    def ready(self, second=False):
+        cluster = CopyCluster()
+        if second:
+            cluster.add("apps/v1", "deployments", "second", "Deployment", {"replicas": 1,
+                "template": {"spec": {"volumes": [{"persistentVolumeClaim": {"claimName": "data"}}]}}})
+            cluster.consumer("Deployment", "second", replicas=1)
+            cluster.stop()
+        cluster.ready_cutover()
+        CutoverTests().finish(cluster)
+        return cluster
+
+    def test_restart_has_fresh_admission_and_readiness_not_just_accepted_write(self):
+        cluster = self.ready(); seen = []
+        def admit(proposals):
+            seen.extend(proposals)
+            self.assertEqual(1, proposals[0]["object"]["spec"]["replicas"])
+            self.assertNotIn("homestead.io/storage-copy-job", proposals[0]["object"]["metadata"]["annotations"])
+            return {"blocked": False}
+        self.assertEqual(93, cluster.restart(admit)[1])
+        count = len(cluster.sent)
+        self.assertEqual(96, cluster.restart(restored=True)[1])
+        self.assertEqual(count, len(cluster.sent))
+        dep = cluster.objects["/apis/apps/v1/namespaces/lab/deployments/app"]
+        dep["status"] = {"observedGeneration": 1, "replicas": 1, "readyReplicas": 1, "availableReplicas": 1, "updatedReplicas": 1}
+        self.assertEqual("succeeded", cluster.restart()[0])
+        self.assertFalse(cluster.item["ref"]["retain_resources"])
+        self.assertEqual(1, len(seen))
+
+    def test_partial_restart_capacity_failure_does_not_roll_back_started_workload(self):
+        cluster = self.ready(second=True)
+        cluster.restart()
+        count = len(cluster.sent)
+        def deny(proposals):
+            self.assertEqual(["second"], [p["object"]["metadata"]["name"] for p in proposals])
+            return {"blocked": True}
+        with self.assertRaises(journal.Held): cluster.restart(deny, restored=True)
+        self.assertEqual(count, len(cluster.sent))
+        self.assertEqual(1, cluster.objects["/apis/apps/v1/namespaces/lab/deployments/app"]["spec"]["replicas"])
+        self.assertEqual(0, cluster.objects["/apis/apps/v1/namespaces/lab/deployments/second"]["spec"]["replicas"])
+
+    def test_lost_restart_reply_never_repeats_or_starts_next_controller(self):
+        cluster = self.ready(second=True); cluster.lose_reply = len(cluster.sent) + 1
+        with self.assertRaises(journal.Held): cluster.restart()
+        count = len(cluster.sent)
+        with self.assertRaises(journal.Held): cluster.restart(restored=True)
+        self.assertEqual(count, len(cluster.sent))
+        self.assertEqual(0, cluster.objects["/apis/apps/v1/namespaces/lab/deployments/second"]["spec"]["replicas"])
+
+    def test_changed_binding_during_admission_blocks_restart(self):
+        cluster = self.ready(); count = len(cluster.sent)
+        def change(_):
+            cluster.objects["/api/v1/persistentvolumes/pv-copy"]["spec"]["claimRef"]["uid"] = "other"
+            return {"blocked": False}
+        with self.assertRaises(journal.Held): cluster.restart(change)
+        self.assertEqual(count, len(cluster.sent))
+
+    def test_unowned_pod_is_not_mistaken_for_a_previously_restarted_workload(self):
+        cluster = self.ready(second=True); cluster.restart()
+        cluster.add("v1", "pods", "rogue", "Pod", {"volumes": [{"persistentVolumeClaim": {"claimName": "data"}}]})
+        cluster.objects["/api/v1/namespaces/lab/pods/rogue"]["status"] = {"phase": "Running"}
+        count = len(cluster.sent)
+        with self.assertRaises(journal.Held): cluster.restart()
+        self.assertEqual(count, len(cluster.sent))
+
+    def test_expected_replicaset_pod_is_allowed_without_trusting_labels(self):
+        cluster = self.ready(second=True); cluster.restart()
+        rs_path = cluster.add("apps/v1", "replicasets", "app-rs", "ReplicaSet", {})
+        cluster.objects[rs_path]["metadata"]["ownerReferences"] = [{"kind": "Deployment", "name": "app", "uid": "app-uid", "controller": True}]
+        pod_path = cluster.add("v1", "pods", "app-pod", "Pod", {"volumes": [{"persistentVolumeClaim": {"claimName": "data"}}]})
+        cluster.objects[pod_path]["metadata"]["ownerReferences"] = [{"kind": "ReplicaSet", "name": "app-rs", "uid": "app-rs-uid", "controller": True}]
+        cluster.objects[pod_path]["status"] = {"phase": "Running"}
+        self.assertEqual(93, cluster.restart()[1])
+
+
+class CutoverFaultTests(unittest.TestCase):
+    ready = CutoverTests.ready
+    finish = CutoverTests.finish
+
+    def test_lost_response_at_every_cutover_write_prevents_replay_or_restart(self):
+        baseline = self.ready(); initial = len(baseline.sent); self.finish(baseline)
+        count = len(baseline.sent) - initial
+        self.assertGreater(count, 8)
+        for offset in range(1, count + 1):
+            with self.subTest(write=offset):
+                cluster = self.ready(); cluster.lose_reply = len(cluster.sent) + offset
+                with self.assertRaises(journal.Held): self.finish(cluster)
+                sent = len(cluster.sent)
+                with self.assertRaises(journal.Held): cluster.cutover(restored=True)
+                self.assertEqual(sent, len(cluster.sent))
+                self.assertEqual(0, cluster.objects["/apis/apps/v1/namespaces/lab/deployments/app"]["spec"]["replicas"])
+
+    def test_crash_after_each_accepted_write_advances_without_resending(self):
+        baseline = self.ready(); self.finish(baseline)
+        expected = len(baseline.sent)
+        for index in range(1, 10):
+            with self.subTest(step=index):
+                cluster = self.ready()
+                for _ in range(index - 1): cluster.cutover()
+                # First stage rechecks copy proof, then checkpoints cutover state.
+                cluster.crash_after = len(cluster.saves) + (4 if index == 1 else 2)
+                with self.assertRaises(Crash): cluster.cutover()
+                cluster.crash_after = None; self.finish(cluster)
+                self.assertEqual(expected, len(cluster.sent))
+
+    def test_protection_removed_or_claim_replaced_stops_before_deleting(self):
+        cluster = self.ready(); cluster.cutover(); cluster.cutover()
+        count = len(cluster.sent)
+        cluster.objects["/api/v1/persistentvolumes/pv-data"]["spec"]["persistentVolumeReclaimPolicy"] = "Delete"
+        with self.assertRaises(journal.Held): cluster.cutover()
+        self.assertEqual(count, len(cluster.sent))
+        cluster.objects["/api/v1/persistentvolumes/pv-data"]["spec"]["persistentVolumeReclaimPolicy"] = "Retain"
+        cluster.objects["/api/v1/namespaces/lab/persistentvolumeclaims/data-copy"]["metadata"]["uid"] = "replacement"
+        with self.assertRaises(journal.Held): cluster.cutover()
+        self.assertEqual(count, len(cluster.sent))
+
+    def test_accepted_claim_delete_waits_for_finalizers_without_force_or_resend(self):
+        cluster = self.ready()
+        path = "/api/v1/namespaces/lab/persistentvolumeclaims/data-copy"
+        retained = copy.deepcopy(cluster.objects[path])
+        for _ in range(10):
+            cluster.cutover()
+            if handoff._receipt(cluster.item, "delete-temporary"):
+                break
+        self.assertIsNotNone(handoff._receipt(cluster.item, "delete-temporary"))
+        retained["metadata"]["deletionTimestamp"] = "2026-09-27T12:00:00Z"
+        retained["metadata"]["finalizers"] = ["kubernetes.io/pvc-protection"]
+        cluster.objects[path] = retained
+        count = len(cluster.sent)
+        for _ in range(3):
+            self.assertEqual(84, cluster.cutover(restored=True)[1])
+        self.assertEqual(count, len(cluster.sent))
+        self.assertIn("/api/v1/namespaces/lab/persistentvolumeclaims/data", cluster.objects)
+
+    def test_both_data_volumes_remain_retained_while_original_name_is_absent(self):
+        cluster = self.ready()
+        for _ in range(10):
+            cluster.cutover()
+            if handoff._receipt(cluster.item, "delete-source"):
+                break
+        self.assertNotIn("/api/v1/namespaces/lab/persistentvolumeclaims/data", cluster.objects)
+        for pv in ("pv-data", "pv-copy"):
+            self.assertEqual("Retain", cluster.objects["/api/v1/persistentvolumes/" + pv]["spec"]["persistentVolumeReclaimPolicy"])
+        count = len(cluster.sent)
+        cluster.objects["/api/v1/persistentvolumes/pv-copy"]["metadata"]["uid"] = "replacement"
+        with self.assertRaises(journal.Held): cluster.cutover(restored=True)
+        self.assertEqual(count, len(cluster.sent))
+
+    def test_changed_replacement_configuration_cannot_restore_delete_policy(self):
+        cluster = self.ready()
+        for _ in range(15):
+            cluster.cutover()
+            if handoff._receipt(cluster.item, "replacement"):
+                break
+        cluster.objects["/api/v1/namespaces/lab/persistentvolumeclaims/data"]["spec"]["accessModes"] = ["ReadWriteMany"]
+        count = len(cluster.sent)
+        with self.assertRaises(journal.Held): cluster.cutover()
+        self.assertEqual(count, len(cluster.sent))
+        self.assertEqual("Retain", cluster.objects["/api/v1/persistentvolumes/pv-copy"]["spec"]["persistentVolumeReclaimPolicy"])
