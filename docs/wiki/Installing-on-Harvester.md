@@ -99,8 +99,9 @@ curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/inst
 It sees that this is Harvester, checks the host reaches the cluster and
 GitHub's registry, and asks two things: Homestead's address (one from your free
 range) and the storage class for its data (`harvester-longhorn` is the usual
-one). It shows what it will do, installs, waits for Homestead to start, and
-prints its address.
+one). The installation summary shows the settings and the Homestead version -
+the newest release, or one chosen from the list - then it installs, waits for
+Homestead to start, and prints its address.
 
 By hand instead: pick an address from your free range - `192.168.1.242` below; use your own.
 From a host (step 4, first way), one line fetches the manifest, gives it your

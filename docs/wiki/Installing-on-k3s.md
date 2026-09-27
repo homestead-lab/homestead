@@ -57,7 +57,7 @@ curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/inst
 
 ![The installer's menu](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-menu.png)
 
-Choose **Install Homestead**, then **Start a new cluster here**, then **k3s**
+Select **Install Homestead**, then **Create a new cluster**, then **k3s**
 (the other choice, RKE2, has [its own guide](Installing-on-RKE2)). The installer
 checks the machine first (memory, disk, the internet, ports, the hostname, the
 clock, the firewall, `/dev/kvm`, an address from DHCP) and stops on anything
@@ -66,10 +66,20 @@ that would make the install fail, saying what to put right.
 ![The checks](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-checks.png)
 
 It asks which address the other machines reach this one on, when it has more
-than one, and whether to install Longhorn and KubeVirt. It shows what it will
-do, and once you say yes it takes 5-10 minutes, with a progress bar:
+than one, and whether to install Longhorn and KubeVirt. The installation
+summary then shows the settings and the version of each component:
 
-![What it will do](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-ready.png)
+![The installation summary](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-ready.png)
+
+Each defaults to its current recommended release - k3s's stable channel,
+Longhorn's and CDI's newest release, KubeVirt's stable release, Homestead's
+newest. To install another version, select the component: the list comes
+live from k3s's release channels and from GitHub, and **Enter a version
+manually** takes any other.
+
+![Choosing the k3s version](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-versions.png)
+
+Select **Install**, and it takes 5-10 minutes, with a progress bar.
 
 It then:
 
@@ -95,6 +105,8 @@ Options go after `server`:
 | `--no-longhorn` | uses k3s's built-in local-path storage instead: simpler, no copies, and each volume stays on the machine it was made on |
 | `--kubevirt` | also installs KubeVirt and CDI, so Homestead can run virtual machines - emulated, and slow, if the machine has no hardware virtualisation (`/dev/kvm`) |
 | `--k3s-version v1.33.4+k3s1` | pins k3s instead of its stable channel |
+| `--longhorn-version v1.9.1` | pins Longhorn instead of its newest release |
+| `--kubevirt-version v1.6.0`, `--cdi-version v1.62.0` | pin KubeVirt and CDI instead of their current releases |
 | `--homestead-version 2.8.118` | pins Homestead instead of the newest release |
 | `--node-ip 192.168.1.10` | the address k3s registers this machine by, when it has more than one |
 
@@ -108,10 +120,12 @@ On each further machine, run the same line:
 curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
 ```
 
-Choose **Install Homestead**, then **Join a cluster as a worker** (runs apps)
-or **as another server** (control plane and etcd as well). It asks for the
-first machine's address and the cluster's token, checks it can reach the
-cluster before changing anything, and joins.
+Select **Install Homestead**, then **Join an existing cluster as a worker
+node** (runs apps) or **as a server node** (control plane and etcd as well).
+It asks for the first machine's address and the cluster's token, checks it
+can reach the cluster before changing anything, and joins. Install the same
+k3s version as the existing servers: the summary uses the cluster's version
+where the cluster reports it, and otherwise lets you select it.
 
 Or, with no questions, each joins with the first machine's address and its
 token. The token is on the first machine:
@@ -194,8 +208,8 @@ first sign-in, updates and the node probe.
 
 ## If something is stuck
 
-Run the node doctor on the machine: the same line, then **Check this node and
-fix what is wrong**.
+Run the node doctor on the machine: the same line, then **Check node
+health**.
 
 ```bash
 curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
