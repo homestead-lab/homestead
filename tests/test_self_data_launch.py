@@ -122,6 +122,7 @@ class RuntimeTests(unittest.TestCase):
             args, kwargs = runner.call_args
             self.assertEqual((client.return_value.read, client.return_value.send, client.return_value.logs), args)
             self.assertNotIn("admit", kwargs)
+            self.assertTrue(kwargs["require_setup_receipts"])
             self.assertEqual("worker-uid", kwargs["worker_uid"])
             self.assertEqual("anchor-uid", kwargs["anchor_uid"])
             self.assertEqual(DIGEST, serve.call_args.args[1])

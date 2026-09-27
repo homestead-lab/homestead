@@ -80,11 +80,12 @@ def progress(anchor, now):
 
 class Runner:
     def __init__(self, read, send, logs, admit=None, *, namespace, deployment, operation, anchor_uid,
-                 worker_uid, clock=time.time):
+                 worker_uid, clock=time.time, require_setup_receipts=False):
         A._name(namespace); A._name(deployment)
         if not re.fullmatch(r"[a-f0-9]{24}", operation or "") or not anchor_uid or not worker_uid:
             raise Held("The data move worker needs its exact reviewed identities")
         self.read, self.send, self.logs, self.admit = read, send, logs, admit
+        self.require_setup_receipts = require_setup_receipts
         self.namespace, self.deployment = namespace, deployment
         self.operation, self.anchor_uid, self.worker_uid = operation, anchor_uid, worker_uid
         self.clock = clock
@@ -134,6 +135,11 @@ class Runner:
                     # Setup still owns this record; heartbeat writes would race
                     # its publication CAS. Do not mutate it or stop the app.
                     return self.snapshot()
+                if self.require_setup_receipts:
+                    from homestead_self_data_bootstrap import complete
+                    setup = anchor.state.get("setup")
+                    if not setup or not complete(setup):
+                        raise Held("The coordinator has no complete helper setup receipts; Homestead was not stopped")
                 admit = self.admit
                 if admit is None:
                     from homestead_self_data_admission import Admitter
