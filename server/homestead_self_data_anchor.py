@@ -100,7 +100,7 @@ def _journal(job, operation, namespace):
 
 def _validate(state, namespace):
     _keys(state, ("protocol", "operation", "deployment", "source", "destination", "replicas", "phase", "journal"),
-          ("plan", "copy_receipt", "pointer_receipt", "runtime"))
+          ("plan", "copy_receipt", "pointer_receipt", "runtime", "setup"))
     if type(state["protocol"]) is not int or state["protocol"] != 1:
         raise Held("The data handoff protocol is unsupported")
     if not isinstance(state["operation"], str) or not re.fullmatch(r"[a-f0-9]{24}", state["operation"]):
@@ -115,6 +115,11 @@ def _validate(state, namespace):
     if state["phase"] not in PHASES:
         raise Held("The data handoff phase is invalid")
     _journal(state["journal"], state["operation"], namespace)
+    if "setup" in state:
+        from homestead_self_data_bootstrap import validate, complete
+        validate(state["setup"], namespace, state["deployment"]["name"], state["operation"])
+        if ("plan" in state or "pointer_receipt" in state or state["phase"] != "prepare") and not complete(state["setup"]):
+            raise Held("The data move cannot continue past incomplete helper setup")
     if "plan" in state:
         plan = state["plan"]
         _keys(plan, ("deployment_shape", "source_pvc_shape", "source_pv", "destination_pvc", "destination_pv",
@@ -130,6 +135,11 @@ def _validate(state, namespace):
             _name(fact["name"])
             _identity({"uid": fact["uid"], "resourceVersion": "validated-separately"})
             _hash(fact["shape"])
+        if "setup" in state:
+            created = state["setup"]["receipts"][-2]
+            expected = state["setup"]["resources"][-2]["target"]
+            if (plan["worker"]["name"], plan["worker"]["uid"]) != (expected["name"], created["after"]["uid"]):
+                raise Held("The reviewed worker is not the helper created by this data move")
         if plan["destination_pvc"]["name"] != state["destination"]:
             raise Held("The data handoff plan names a different destination")
         if (plan["destination_pvc"]["uid"] == state["source"]["uid"]
@@ -318,6 +328,33 @@ class Anchor:
             raise Held("The data handoff plan is already pinned and cannot be replaced")
         state = copy.deepcopy(self.state)
         state["plan"] = copy.deepcopy(plan)
+        self._replace(state)
+
+    def prepare_setup(self, resources):
+        """Pin helper creation targets/hashes once, before sending any POST."""
+        self.handle()
+        if (self.state["phase"] != "prepare" or any(k in self.state for k in ("setup", "plan", "pointer_receipt"))
+                or self.state["journal"]["ref"]["storage_writes"]):
+            raise Held("The helper setup review can no longer be changed")
+        state = copy.deepcopy(self.state)
+        state["setup"] = {"resources": copy.deepcopy(resources), "receipts": []}
+        self._replace(state)
+
+    def checkpoint_setup(self, receipts):
+        """Append one intent or finish it; never rewrite/clear an unknown write."""
+        self.handle()
+        if (self.state["phase"] != "prepare" or "setup" not in self.state or "plan" in self.state
+                or "pointer_receipt" in self.state or self.state["journal"]["ref"]["storage_writes"]):
+            raise Held("The data move is no longer accepting helper setup receipts")
+        old = self.state["setup"]["receipts"]
+        append = (len(receipts) == len(old) + 1 and receipts[:-1] == old
+                  and all(r["state"] == "accepted" for r in old) and receipts[-1] == {"state": "intent"})
+        finish = (bool(old) and len(receipts) == len(old) and receipts[:-1] == old[:-1]
+                  and old[-1] == {"state": "intent"} and receipts[-1].get("state") in ("accepted", "refused", "uncertain", "unverified"))
+        if not (append or finish):
+            raise Held("Helper receipts cannot be rewritten or an uncertain creation replayed")
+        state = copy.deepcopy(self.state)
+        state["setup"]["receipts"] = copy.deepcopy(receipts)
         self._replace(state)
 
     def pointer_published(self, digest):

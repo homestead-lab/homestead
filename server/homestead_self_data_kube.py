@@ -147,6 +147,11 @@ class Client:
         return self._request("GET", path, logs=True)
 
 
+def access_name(namespace, deployment, operation):
+    suffix = hashlib.sha256((namespace + "/" + deployment + "/" + operation).encode()).hexdigest()[:24]
+    return "homestead-handoff-" + suffix
+
+
 def access_resources(scope):
     """Return operation-specific RBAC; this function does not apply anything.
 
@@ -154,8 +159,7 @@ def access_resources(scope):
     Top-level Job create cannot use resourceNames. It is namespace-scoped,
     while the trusted transport additionally validates the exact copy Job name.
     """
-    suffix = hashlib.sha256((scope.namespace + "/" + scope.deployment + "/" + scope.operation).encode()).hexdigest()[:24]
-    name = "homestead-handoff-" + suffix
+    name = access_name(scope.namespace, scope.deployment, scope.operation)
     labels = {"app.kubernetes.io/managed-by": "homestead", A.LABEL: scope.operation}
     def resource(kind, ns=scope.namespace):
         return {"apiVersion": "v1" if kind == "ServiceAccount" else "rbac.authorization.k8s.io/v1", "kind": kind,

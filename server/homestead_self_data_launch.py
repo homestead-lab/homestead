@@ -163,7 +163,8 @@ def main():
         _uid(worker_uid)
         client = K.Client(scope)
         runner = W.Runner(client.read, client.send, client.logs, namespace=scope.namespace,
-            deployment=scope.deployment, operation=scope.operation, anchor_uid=value["anchor_uid"], worker_uid=worker_uid)
+            deployment=scope.deployment, operation=scope.operation, anchor_uid=value["anchor_uid"], worker_uid=worker_uid,
+            require_setup_receipts=True)
         for signum in (signal.SIGTERM, signal.SIGINT):
             previous[signum] = signal.signal(signum, lambda *_: stop.set())
         serve(runner, value["status_digest"], stop)
