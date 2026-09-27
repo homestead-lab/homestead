@@ -99,7 +99,7 @@ def _validate(state, namespace):
     if "plan" in state:
         plan = state["plan"]
         _keys(plan, ("deployment_shape", "source_pvc_shape", "source_pv", "destination_pvc", "destination_pv",
-                     "worker", "nodes", "data_volume", "target_shareable"))
+                     "worker", "nodes", "data_volume", "target_shareable"), ("copy_image", "copy_node"))
         for key in ("deployment_shape", "source_pvc_shape"):
             _hash(plan[key])
         for key in ("source_pv", "destination_pvc", "destination_pv", "worker"):
@@ -127,6 +127,11 @@ def _validate(state, namespace):
         _name(plan["data_volume"])
         if type(plan["target_shareable"]) is not bool:
             raise Held("The data handoff access-mode plan is invalid")
+        if "copy_image" in plan or "copy_node" in plan:
+            if not isinstance(plan.get("copy_image"), str) or not re.fullmatch(r"[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}", plan["copy_image"]):
+                raise Held("The data copy image is not pinned to a digest")
+            if plan.get("copy_node") not in seen:
+                raise Held("The data copy node was not included in the reviewed host inventory")
     if "copy_receipt" in state:
         receipt = state["copy_receipt"]
         _keys(receipt, ("state", "worker_uid"), ("manifest", "files", "bytes"))
