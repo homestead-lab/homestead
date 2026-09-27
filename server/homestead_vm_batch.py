@@ -35,6 +35,7 @@ def plan(prepared, read, nodes, *, created=None, threshold=88):
     if len(configurations) != 1 or configurations[0].get("metadata", {}).get("deletionTimestamp"):
         raise ValueError("A single active KubeVirt configuration is required for VM batch admission")
     configuration = (configurations[0].get("spec") or {}).get("configuration") or {}
+    kubevirt_version = RESOURCES.CPU.observed_version(configurations[0])
     claims, entries, warnings, blockers = {}, [], set(), []
     headroom = {}
     for item in prepared:
@@ -43,7 +44,7 @@ def plan(prepared, read, nodes, *, created=None, threshold=88):
         if set(claims) & set(definitions):
             raise ValueError("VM batch disks must have distinct names")
         claims.update(definitions)
-        model = RESOURCES.project(vm, configuration, read=read)
+        model = RESOURCES.project(vm, configuration, read=read, kubevirt_version=kubevirt_version)
         blockers.extend(f"{name}: {text}" for text in model["blockers"])
         warnings.update(model["warnings"])
         count = 1
@@ -90,7 +91,7 @@ def plan(prepared, read, nodes, *, created=None, threshold=88):
     if blockers:
         result.update(blocked=True, status="blocked")
     result["warnings"] = sorted(set(result["warnings"]) | warnings | {
-        "Image importers and launcher sidecars can need additional resources; this is a lower-bound scheduling model, not guaranteed capacity.",
+        "Image importers and launcher sidecars can need additional resources; RAM requests are lower bounds and version-uncertain IO-thread CPU uses conservative planning, not guaranteed capacity.",
         "Three guest servers provide guest-level quorum only. Shared physical hosts/storage can still fail together; placement examples are not enforced."})
     result["vm_count"] = len(prepared)
     result["created_count"] = len(created)

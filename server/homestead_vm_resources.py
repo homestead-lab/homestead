@@ -1,6 +1,7 @@
 """Read-only VM resource evidence, never a replacement KubeVirt renderer.
 
-Cold-start requests below are lower bounds. Launcher overhead, sidecars,
+Cold-start memory requests below are lower bounds; version-uncertain IO-thread
+CPU may instead use an explicitly labelled conservative allowance. Overhead, sidecars,
 defaults and admission can change the final Pod. A separate operational RAM
 allowance must not be written as a Kubernetes request/limit or called exact.
 For an existing VMI, only its UID-owned launcher supplies observed requests.
@@ -11,6 +12,7 @@ from decimal import Decimal, ROUND_CEILING
 import homestead_pod_resources as RESOURCES
 import homestead_vm_network as NETWORK
 import homestead_vm_support as SUPPORT
+import homestead_vm_cpu as CPU
 
 MIB = 1024**2
 
@@ -84,7 +86,7 @@ def _positive(value, label):
     return number
 
 
-def project(vm, configuration=None, *, expanded_spec=None, read=None):
+def project(vm, configuration=None, *, expanded_spec=None, read=None, kubevirt_version=None):
     """Project the proposed VMI into placement input with explicit uncertainty.
 
     configuration is the *observed* KubeVirt spec.configuration, or None when
@@ -109,6 +111,10 @@ def project(vm, configuration=None, *, expanded_spec=None, read=None):
     warnings.extend(network["warnings"] + support["warnings"])
     resources = domain.get("resources") or {}
     requests, limits = resources.get("requests") or {}, resources.get("limits") or {}
+    cpu_model = CPU.project(vm, spec, config, kubevirt_version)
+    warnings.extend(cpu_model["warnings"])
+    blockers.extend(cpu_model["blockers"])
+    dedicated = cpu_model["dedicated"]
     guest = RESOURCES.quantity(memory.get("guest") or requests.get("memory") or limits.get("memory"))
     if not guest:
         blockers.append("VM guest memory could not be resolved")
@@ -121,44 +127,19 @@ def project(vm, configuration=None, *, expanded_spec=None, read=None):
         if overcommit != 100:
             warnings.append("implicit memory overcommit changes scheduler requests, not the VM's possible physical RAM use")
     physical = max(guest, requested_memory, RESOURCES.quantity(memory.get("maxGuest")))
-    overhead = max(256 * MIB, (physical + 19) // 20) if physical else 0
+    overhead = max(256 * MIB, (physical + 19) // 20, cpu_model["memory_floor"]) if physical else 0
     ratio = config.get("additionalGuestMemoryOverheadRatio")
     if ratio not in (None, ""):
         scale = max(Decimal(1), _positive(ratio, "additional guest-memory overhead ratio"))
         overhead = int((overhead * scale).to_integral_value(rounding=ROUND_CEILING))
         warnings.append("cluster additional guest-memory overhead ratio is included in the planning allowance")
     estimate = max(physical, RESOURCES.quantity(limits.get("memory"))) + overhead
-    warnings.append("RAM projection includes a planning allowance of max(256 MiB, 5% of guest/reserved RAM), not KubeVirt's exact launcher overhead or a memory limit")
+    warnings.append("RAM projection includes the larger of 256 MiB, 5% of guest/reserved RAM and a CPU/thread/process memory floor, not KubeVirt's exact launcher overhead or a memory limit")
     warnings.append("unrecognised/injected helpers, admission defaults and runtime overhead may require more resources than this lower-bound request")
     if not limits.get("memory"):
         warnings.append("VM launcher memory is not explicitly limited")
 
-    topology = any(cpu.get(key) for key in ("cores", "sockets", "threads"))
-    vcpus = 1
-    for key in ("cores", "sockets", "threads"):
-        count = _positive(cpu[key] if key in cpu else 1, key)
-        if count != int(count):
-            raise ValueError(f"VM {key} must be a whole number")
-        vcpus *= int(count)
-    explicit_cpu = requests.get("cpu", limits.get("cpu"))
-    dedicated = cpu.get("dedicatedCpuPlacement") is True
-    if dedicated:
-        amount = RESOURCES.quantity(explicit_cpu, "cpu") if explicit_cpu is not None else vcpus * 1000
-        if amount % 1000 or not amount:
-            blockers.append("dedicated VM CPU requests must be positive whole cores")
-        if topology and explicit_cpu is not None and amount != vcpus * 1000:
-            blockers.append("dedicated VM CPU topology conflicts with its CPU request")
-        if requests.get("cpu") is not None and limits.get("cpu") is not None and RESOURCES.quantity(limits["cpu"], "cpu") != amount:
-            blockers.append("dedicated VM CPU request and limit differ")
-        if cpu.get("isolateEmulatorThread"):
-            amount += 1000  # minimum; host SMT alignment can add another core
-            warnings.append("isolated emulator CPU includes one extra core; host SMT alignment may require another")
-        warnings.append("dedicated CPU topology, NUMA and CPU-manager allocations still require kubelet admission")
-    elif explicit_cpu is not None:
-        amount = RESOURCES.quantity(explicit_cpu, "cpu")
-    else:
-        ratio = _positive(developer.get("cpuAllocationRatio", 10), "CPU allocation ratio")
-        amount = int((Decimal(vcpus * 1000) / ratio).to_integral_value(rounding=ROUND_CEILING))
+    amount = cpu_model["cpu_millis"]
     projected_requests = {"cpu": f"{amount}m", "memory": str(requested_memory)}
     huge = (memory.get("hugepages") or {}).get("pageSize")
     if huge:
@@ -235,7 +216,7 @@ def project(vm, configuration=None, *, expanded_spec=None, read=None):
         projected_requests[resource] = str(max(count, int(projected_requests.get(resource, "0"))))
     if cpu.get("numa") or domain.get("launchSecurity") or spec.get("resourceClaims"):
         warnings.append("NUMA locality, confidential-compute policy and dynamic-device allocation still need additional host admission")
-    if domain.get("ioThreadsPolicy"):
+    if domain.get("ioThreadsPolicy") and not cpu_model["io_threads"]:
         warnings.append("IO-thread topology adds runtime overhead beyond this planning estimate")
     extra = support["extra_memory"]
     if not resources.get("overcommitGuestOverhead") or huge:
@@ -263,4 +244,5 @@ def project(vm, configuration=None, *, expanded_spec=None, read=None):
             "memory_estimate_bytes": estimate, "planning_overhead_bytes": overhead,
             "support_memory_bytes": support["support_memory"], "additional_overhead_bytes": extra,
             "dependencies": {**network["dependencies"], **support["dependencies"]},
+            "cpu_request_is_estimate": cpu_model["cpu_is_conservative"],
             "request_is_lower_bound": True, "warnings": sorted(set(warnings)), "blockers": blockers}

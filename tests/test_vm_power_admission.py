@@ -90,6 +90,28 @@ class VMPowerAdmissionTests(unittest.TestCase):
         self.assertEqual(409, result[0])
         writes.assert_not_called()
 
+    def test_observed_renderer_change_after_thread_review_never_dispatches(self):
+        self.config["status"] = {"observedKubeVirtVersion": "v1.9.0", "targetKubeVirtVersion": "v1.9.0"}
+        self.vm["spec"]["template"]["spec"]["domain"].update(
+            ioThreadsPolicy="supplementalPool", ioThreads={"supplementalPoolThreadCount": 3})
+        signed = self.reviewed()
+        self.config["status"]["targetKubeVirtVersion"] = "v1.10.0"
+        self.config["metadata"]["resourceVersion"] = "2"
+        result, writes = self.call("/api/vm/power", signed)
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+
+    def test_dedicated_io_threads_exhaust_cpu_even_with_capacity_override(self):
+        self.nodes[0]["labels"]["cpumanager"] = "true"
+        self.config["status"] = {"observedKubeVirtVersion": "v1.9.0"}
+        domain = self.vm["spec"]["template"]["spec"]["domain"]
+        domain["cpu"]["dedicatedCpuPlacement"] = True
+        domain.update(ioThreadsPolicy="supplementalPool", ioThreads={"supplementalPoolThreadCount": 7})
+        signed = self.reviewed()
+        result, writes = self.call("/api/vm/power", signed)
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+
     def test_current_capacity_is_checked_again_and_cannot_override_hardware(self):
         signed = self.reviewed()
         self.nodes[0]["allocatable"]["devices.kubevirt.io/kvm"] = "0"

@@ -711,6 +711,15 @@ reservation. Physical CNI/bridge/link readiness, injected helpers, NUMA locality
 dynamic allocations and advanced runtime policy still require separate validation.
 Explicit memory-pressure overrides remain available; hardware blockers do not.
 
+High-vCPU VMs also receive a CPU/thread/process RAM allowance, including graphics
+and Guaranteed-QoS headroom; it is not written as a memory request or limit.
+Supplemental IO-thread CPU and isolated-emulator parity are included. The observed
+KubeVirt version selects the verified 1.6–1.9 CPU rule; older, vendor, unknown or
+changing versions use an explicitly labelled conservative IO-thread allowance.
+A target version alone is not evidence of the running renderer. Configuration
+identity/version changes invalidate approval. Actual launcher requests, host SMT
+and NUMA-local CPU/hugepage availability still need verification.
+
 Reviewed VM creation and edits record a job before creating or changing images,
 login Secrets, claims or the VM. Each resource write has a durable intent and an
 acknowledged UID/version receipt; the journal contains no cloud-init, credentials

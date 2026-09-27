@@ -37,6 +37,18 @@ class VMCapacityTests(unittest.TestCase):
         with mock.patch.object(place, "hardware_features", return_value=[]):
             return capacity.plan(self.vm, self.read, self.nodes, **kwargs)
 
+    def test_observed_version_selects_thread_model_and_exposes_uncertainty(self):
+        self.vm["spec"]["template"]["spec"]["domain"].update(
+            ioThreadsPolicy="supplementalPool", ioThreads={"supplementalPoolThreadCount": 3})
+        self.config["status"] = {"observedKubeVirtVersion": "v1.9.0"}
+        known = self.plan()
+        self.assertEqual(50.5, known["pod_cpu_request_percent"])
+        self.assertFalse(known["vm"]["cpu_request_is_estimate"])
+        self.config["status"]["targetKubeVirtVersion"] = "v1.10.0"
+        unknown = self.plan()
+        self.assertEqual(320.5, unknown["pod_cpu_request_percent"])
+        self.assertTrue(unknown["vm"]["cpu_request_is_estimate"])
+
     def disk(self, phase="Bound", dv=False):
         self.vm["spec"]["template"]["spec"]["volumes"] = [{"name": "root", **({"dataVolume": {"name": "root"}} if dv else {"persistentVolumeClaim": {"claimName": "root"}})}]
         self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/root"] = {

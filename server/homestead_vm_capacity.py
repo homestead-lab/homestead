@@ -127,17 +127,19 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
     context = {"action": action, "vm": VMRES.identity(current or vm)}
     if ((current or vm).get("metadata") or {}).get("deletionTimestamp"):
         blockers.append("VM is being deleted")
+    kubevirt_version = None
     try:
         configs = _items(read, "/apis/kubevirt.io/v1/kubevirts")
         if len(configs) != 1 or (configs[0].get("metadata") or {}).get("deletionTimestamp"):
             raise ValueError("KubeVirt configuration is ambiguous")
         configuration = (configs[0].get("spec") or {}).get("configuration") or {}
+        kubevirt_version = VMRES.CPU.observed_version(configs[0])
         context["kubevirt"] = VMRES.identity(configs[0])
         if not all(context["kubevirt"].values()):
             raise ValueError("KubeVirt configuration identity unavailable")
     except Exception:
         configuration = None
-    model = VMRES.project(vm, configuration, expanded_spec=expanded_spec, read=read)
+    model = VMRES.project(vm, configuration, expanded_spec=expanded_spec, read=read, kubevirt_version=kubevirt_version)
     try:
         pods = _items(read, "/api/v1/pods")
     except Exception:
@@ -175,7 +177,7 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
             live_vm = copy.deepcopy(current or vm)
             live_vm["spec"]["template"]["spec"] = copy.deepcopy(vmi["spec"])
             live_vm["spec"]["template"]["metadata"] = copy.deepcopy(vmi.get("metadata") or {})
-            live_model = VMRES.project(live_vm, configuration, expanded_spec=vmi["spec"], read=read)
+            live_model = VMRES.project(live_vm, configuration, expanded_spec=vmi["spec"], read=read, kubevirt_version=kubevirt_version)
             model = live_model
             model["memory_estimate_bytes"] = max(model["memory_estimate_bytes"], RESOURCES.memory_estimate(launcher["spec"])[0])
             pods = [pod for pod in pods if pod.get("metadata", {}).get("uid") != launcher["metadata"]["uid"]]
@@ -227,5 +229,6 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
     result["requires_confirmation"] = bool(result["warnings"])
     result["vm"] = {"action": action, "guest_memory_gb": round(model["guest_memory_bytes"] / 1024**3, 2),
                     "request_is_lower_bound": action != "unpause", "ownership_known": ownership_known,
+                    "cpu_request_is_estimate": action != "unpause" and model["cpu_request_is_estimate"],
                     "resident_node": resident_node, "context": context}
     return result

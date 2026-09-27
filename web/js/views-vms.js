@@ -270,7 +270,7 @@ window.vmPowerReview = async config => {
     $("#mbody").innerHTML = `<div class="update-review">
       <p class="small muted">Review ${esc(frozen.name)} before ${frozen.action === "restart" ? "stopping and restarting its guest. Guest downtime is expected." : frozen.action === "unpause" ? "resuming its existing guest." : "starting its guest."}</p>
       <div class="reviewbox"><b>VM memory and restart policy</b><p class="small">Guest memory: ${esc(facts.guest_memory_gb)} GiB · host RAM estimate: ${esc(plan.pod_memory_gb)} GiB.</p>
-        <p class="small muted">${facts.request_is_lower_bound ? "Scheduler requests are lower bounds; the launcher can need additional overhead. The RAM estimate is not a configured memory limit." : "Uses the current launcher resources; its existing usage is not added twice."}</p>
+        <p class="small muted">${facts.request_is_lower_bound ? (facts.cpu_request_is_estimate ? "CPU uses a conservative IO-thread allowance because this renderer version is unverified. RAM requests are lower bounds; the RAM estimate is not a configured memory limit." : "Scheduler requests are lower bounds; the launcher can need additional overhead. The RAM estimate is not a configured memory limit.") : "Uses the current launcher resources; its existing usage is not added twice."}</p>
         <p class="small">Restart policy: ${esc(facts.policy_before || "unknown")}${facts.policy_after !== facts.policy_before ? ` → <b>${esc(facts.policy_after)}</b>` : " (unchanged)"}</p></div>
       ${plan.blockers?.length ? `<div class="note bad">${plan.blockers.map(esc).join(" · ")}</div>` : ""}
       ${deployCapacityHtml(plan)}

@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 
-function setup({blocked=false, missing=false, fail=false}={}) {
+function setup({blocked=false, missing=false, fail=false, cpuEstimate=false}={}) {
   const sent=[], notices=[], fields={"#modal":{classList:{contains:()=>false}},
     "#vmPowerApprove":{checked:false}, "#vmPowerApply":{}, ".modalbox":{scrollTop:500}};
   const body={_html:"", get innerHTML(){return this._html;}, set innerHTML(html){this._html=html;delete fields["#vmPowerLoading"];},
@@ -20,7 +20,7 @@ function setup({blocked=false, missing=false, fail=false}={}) {
       sent.push({path, body:JSON.parse(options.body)});
       if(path.endsWith("/preview")) return {capacity_token:"review-token", capacity:missing ? null : {blocked,
         pod_memory_gb:4.25, warnings:["High RAM"], blockers:blocked ? ["missing device"] : [],
-        vm:{guest_memory_gb:4,request_is_lower_bound:true,policy_before:"Halted",policy_after:"Always"}}};
+        vm:{guest_memory_gb:4,request_is_lower_bound:true,cpu_request_is_estimate:cpuEstimate,policy_before:"Halted",policy_after:"Always"}}};
       if(fail) throw new Error("lost response");
       return {ok:true,detail:"starting"};
     }};
@@ -49,6 +49,13 @@ test("start restart and resume review before dispatch and require acknowledgemen
     await t.ctx.vmPowerReviewedApply();
     assert.equal(t.sent.length,2,"consumed review cannot replay");
   }
+});
+test("unknown renderer CPU allowance is not presented as an exact request", async()=>{
+  const t=setup({cpuEstimate:true});
+  await t.ctx.vmPower("lab","guest","start");
+  assert.match(t.fields["#mbody"].innerHTML,/conservative IO-thread allowance/);
+  assert.match(t.fields["#mbody"].innerHTML,/RAM requests are lower bounds/);
+  assert.doesNotMatch(t.fields["#mbody"].innerHTML,/Scheduler requests are lower bounds/);
 });
 test("missing and blocked reviews cannot submit even with checked input", async()=>{
   for(const options of [{blocked:true},{missing:true}]){
