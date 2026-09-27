@@ -1530,69 +1530,76 @@ window.diskAddGo = async (node, blockdevice) => {
 /* ---------------- changing a volume's storage class ----------------
    A review first - what uses it, what stops, how much room it takes while
    both copies exist - then the move as a tracked job with its steps. */
+let RECLASS_REVIEW = null, RECLASS_SEQUENCE = 0, RECLASS_BUSY = false;
 window.volumeReclass = async x => {
+  if (RECLASS_BUSY) return;
+  RECLASS_REVIEW = null;
   const classes = (STATE.data.storageClasses || []).filter(c => !c.internal && !c.made_for && c.name !== x.storage_class);
   if (!classes.length) return toast("there is no other storage class to move it to", "warn");
   const pick = classes.find(c => c.default) || classes[0];
-  modal(`Change storage class · ${x.pvc_name || x.name}`, `
-    <div class="note">Kubernetes cannot change a volume's class, so Homestead copies it: everything using it is stopped,
-      the data is copied to a new volume and checked, and the new volume takes the old one's name - so nothing that uses it has to change.
-      The original is kept until you remove it.</div>
-    <div class="f2" style="margin-top:12px">
-      <div class="f"><label>From</label><input value="${esc(x.storage_class || "unknown")}" disabled></div>
-      <div class="f"><label>To</label><select id="rc_to" onchange="volumeReclassPlan('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}')">
-        ${classes.map(c => `<option value="${esc(c.name)}" ${c.name === pick.name ? "selected" : ""}>${esc(c.name)}${c.replicas ? ` · ${esc(c.replicas)} copies` : ""}${c.migratable ? " · migratable" : ""}${c.default ? " · default" : ""}</option>`).join("")}</select></div></div>
-    <div id="rc_plan"><div class="empty"><span class="spin2"></span> checking</div></div>
-    <div class="row" style="margin-top:14px"><button class="btn pri" id="rc_go" data-need="admin" disabled
-      onclick="volumeReclassStart('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}')">Move it</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`, true);
+  modal(`Change storage class · ${x.pvc_name || x.name}`, UI.lead("Copy this volume to another storage class, keeping its name. Workloads using it stop during the move; the original data is kept afterward.") +
+    UI.fields(UI.field("From", `<input value="${esc(x.storage_class || "unknown")}" disabled>`),
+      UI.field("To", `<select id="rc_to" onchange="volumeReclassPlan('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}')">${classes.map(c => `<option value="${esc(c.name)}" ${c.name === pick.name ? "selected" : ""}>${esc(c.name)}${c.replicas ? ` · ${esc(c.replicas)} copies` : ""}</option>`).join("")}</select>`)) +
+    '<div id="rc_plan"></div>' +
+    UI.ack("rc_ack", "I approve the downtime and the storage warnings shown above.", {onchange:"volumeReclassReady()"}) +
+    UI.actions(UI.cancel() + UI.button("Move volume", `volumeReclassStart('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}')`, {kind:"pri",id:"rc_go",disabled:true})), false, "operation-review");
   volumeReclassPlan(x.namespace || "lab", x.pvc_name || x.name);
 };
 
 window.volumeReclassPlan = async (ns, claim) => {
+  if (RECLASS_BUSY) return;
+  RECLASS_REVIEW = null;
+  const sequence = ++RECLASS_SEQUENCE;
   const host = $("#rc_plan"), go = $("#rc_go");
   if (!host) return;
   host.innerHTML = '<div class="empty"><span class="spin2"></span> checking what uses it and where it fits</div>';
   if (go) go.disabled = true;
+  if ($("#rc_ack")) $("#rc_ack").checked = false;
+  const config = {namespace:ns,claim,target:$("#rc_to").value};
   let p;
   try {
     p = await api("/api/volumes/reclass/plan", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ namespace: ns, claim, target: $("#rc_to").value }) });
-  } catch (e) { host.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return; }
+      body: JSON.stringify(config) });
+    if (sequence !== RECLASS_SEQUENCE || $("#rc_plan") !== host) return;
+    if (!p.capacity_token || !Array.isArray(p.blockers) || !Array.isArray(p.warnings) || !Array.isArray(p.consumers)) throw new Error("Review is incomplete; nothing can start.");
+  } catch (e) { if (sequence === RECLASS_SEQUENCE && $("#rc_plan") === host) host.innerHTML = UI.callout("bad", "Review unavailable", esc(e.message)); return; }
   const sp = p.space || {};
   const verb = c => c.kind === "VirtualMachine" ? (c.running ? "shut down, then started again" : "stopped already; stays stopped")
     : c.kind === "CronJob" ? "paused, then resumed" : c.running ? "stopped, then started again" : "stopped already; stays stopped";
-  const roomPct = sp.room_gb ? Math.min(100, Math.round(sp.size_gb / sp.room_gb * 100)) : 0;
-  host.innerHTML = `
-    ${p.blockers.length ? `<div class="note bad" style="margin-top:12px"><b>This cannot start yet.</b><ul>${p.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>
-      ${p.stopped ? `<button class="btn sm pri" data-need="admin" style="margin-top:8px" onclick="closeModal();resumeOperation('${esc(p.stopped.id)}')">Carry on the earlier move</button>` : ""}</div>` : ""}
-    ${p.warnings.length ? `<div class="note warn" style="margin-top:12px"><ul>${p.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
-    <div class="sec">What uses it</div>
-    ${p.consumers.length ? `<div class="rc-uses">${p.consumers.map(c => `<div><b>${esc(c.name)}</b> <span class="dim xs">${esc(c.kind)}</span>
-      <span class="small">${esc(verb(c))}</span></div>`).join("")}</div>` : '<div class="dim small">Nothing - it can move without stopping anything.</div>'}
-    <div class="sec">Space while it moves</div>
-    <div class="rc-space">
-      <div><span class="dim xs">NEW VOLUME</span><b class="mono">${esc(sizeText(sp.size_gb))}</b><span class="dim xs">${sp.replicas} cop${sp.replicas === 1 ? "y" : "ies"} · ${esc(sizeText(sp.allocated_gb))} allocated</span></div>
-      <div><span class="dim xs">DATA TO COPY</span><b class="mono">${sp.used_gb == null ? "—" : esc(sizeText(sp.used_gb))}</b><span class="dim xs">about ${esc(sizeText(sp.written_gb))} written across its copies</span></div>
-      <div><span class="dim xs">TIME</span><b class="mono">~${p.minutes} min</b><span class="dim xs">copy and check${p.downtime ? ", while stopped" : ""}</span></div>
-    </div>
-    ${sp.room_gb != null ? `<div class="rc-room"><div class="between"><span class="small">Room on ${esc(p.to_class)} for a ${sp.replicas}-copy volume</span>
-        <span class="mono xs">${esc(sizeText(sp.size_gb))} of ${esc(sizeText(sp.room_gb))}</span></div>${meter(roomPct, "", "disk")}</div>` : ""}
-    <div class="dim xs" style="margin-top:8px">Both copies exist until you remove the original from Volumes, so ${esc(p.from_class || "its current class")} keeps its
-      ${esc(sizeText(sp.size_gb))} allocated until then.</div>`;
-  if (go) go.disabled = !p.ok;
+  const messages = [...p.blockers, ...p.warnings];
+  host.innerHTML = (messages.length ? UI.callout(p.blockers.length ? "bad" : "warn", p.blockers.length ? "This move cannot start" : "Before moving", `<ul>${messages.map(m=>`<li>${esc(m)}</li>`).join("")}</ul>`) : "") +
+    UI.section("Affected workloads", UI.table([{label:"Workload"},{label:"Effect"}], p.consumers.map(c=>[`${esc(c.name)} · ${esc(c.kind)}`,esc(verb(c))]), {empty:"No workloads currently reference this volume."})) +
+    UI.section("Storage needed", UI.facts([["New volume",esc(sizeText(sp.size_gb))],["Replica allocation",`${esc(sizeText(sp.allocated_gb))} · ${esc(sp.replicas)} copies`],["Estimated destination room",sp.room_gb == null ? "Unknown" : esc(sizeText(sp.room_gb))]])) +
+    UI.more("What is checked", "The volume, backing disk, destination class and affected workloads are checked again before starting. Missing inventory blocks the move. This is not a storage or scheduler reservation; later recovery and host-loss validation remain separate safeguards. Both copies use space until you remove the original.");
+  RECLASS_REVIEW = {config,plan:p};
+  volumeReclassReady();
   if (window.applyRole) applyRole();
 };
 
+window.volumeReclassReady = () => {
+  const ready = !!(RECLASS_REVIEW?.plan.ok && !RECLASS_REVIEW.plan.blockers.length && !RECLASS_BUSY && $("#rc_ack")?.checked && $("#rc_to")?.value === RECLASS_REVIEW.config.target);
+  if ($("#rc_go")) $("#rc_go").disabled = !ready;
+  return ready;
+};
+
 window.volumeReclassStart = async (ns, claim) => {
-  const target = $("#rc_to").value;
-  if (!confirm(`Move ${claim} to ${target}?` + String.fromCharCode(10, 10)
-      + "Everything using it stops until the copy is made and checked.")) return;
+  if (!volumeReclassReady() || RECLASS_REVIEW.config.namespace !== ns || RECLASS_REVIEW.config.claim !== claim) return;
+  const review = RECLASS_REVIEW, host = $("#rc_plan"), go = $("#rc_go");
+  RECLASS_REVIEW = null; RECLASS_BUSY = true; go.disabled = true; $("#rc_to").disabled = true;
   try {
     const r = await api("/api/volumes/reclass/start", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ namespace: ns, claim, target }) });
-    reclassWatch(r.operation.id);
-  } catch (e) { toast(e.message, "bad"); }
+      body: JSON.stringify({...review.config,capacity_token:review.plan.capacity_token,confirm_capacity:true}) });
+    if (!r.operation?.id) throw new Error("Move receipt was not returned");
+    if (typeof noteOperation === "function") noteOperation(r.operation);
+    if ($("#rc_plan") === host) reclassWatch(r.operation.id);
+  } catch (e) {
+    if ($("#rc_plan") === host) host.innerHTML = UI.callout("bad", "Start not confirmed", esc(e.message) + " Check Recent jobs before reviewing again. Nothing was retried.");
+    else toast("Move start not confirmed; check Recent jobs.", "bad");
+  } finally {
+    RECLASS_BUSY = false;
+    if ($("#rc_plan") === host && $("#rc_to")) $("#rc_to").disabled = false;
+    if (typeof refreshOperations === "function") refreshOperations();
+  }
 };
 
 /* The move as it runs: its steps, the copy's progress, and at the end the

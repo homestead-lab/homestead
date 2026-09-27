@@ -42,7 +42,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.193")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.194")
 
 DEFAULT_APP_SETTINGS = {
     "thresholds": {
@@ -7356,19 +7356,9 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "detail": f"{name} opens on port {port} first" if port
                                         else f"{name} shows its ports in their own order"})
             if p == "/api/volumes/reclass/plan":
-                ns = b.get("namespace") or DEFAULT_NS
-                review = RECLASS.plan(ns, b.get("claim", ""), b.get("target", ""))
-                # An earlier move of this volume stopped part-way is finished
-                # by carrying it on, not by starting another over the top.
-                stopped = RECLASS.stopped_attempt(ns, b.get("claim", ""), OPS)
-                if stopped:
-                    review["stopped"] = stopped
-                    review["blockers"].insert(0, f"an earlier move of {b.get('claim', '')} stopped part-way "
-                                                 f"({stopped.get('message', '')[:160]}); carry that one on instead")
-                    review["ok"] = False
-                return self._send(200, review)
+                return self._send(200, RECLASS.preview({**b, "namespace": b.get("namespace") or DEFAULT_NS}, self.user, OPS))
             if p == "/api/volumes/reclass/start":
-                op = RECLASS.start(b.get("namespace") or DEFAULT_NS, b.get("claim", ""), b.get("target", ""), OPS)
+                op = RECLASS.start_reviewed({**b, "namespace": b.get("namespace") or DEFAULT_NS}, self.user, OPS)
                 _cache.pop("vol", None)
                 return self._send(200, {"ok": True, "operation": op})
             if p == "/api/volumes/old-copies/remove":

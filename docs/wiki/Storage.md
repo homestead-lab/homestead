@@ -205,9 +205,23 @@ container, VM, share and backup job that uses it by name carries on unchanged.
 
 ![Change storage class](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-storage-class-change.jpg)
 
-The review lists everything that uses the volume and what happens to each, the
-room the copy needs on each node (both copies exist until you remove the old
-one), how much data moves and how long things are stopped. Then, as a job:
+The review lists affected workloads, the new volume's size, replica allocation
+and estimated destination room. Both copies use space until you remove the old
+one. Unknown capacity is labelled unknown, not free space. Approve the downtime
+and warnings once, then choose **Move volume**.
+
+The initial confirmation expires after ten minutes and is bound to your account,
+the PVC/PV identities, destination class and affected workload versions. A changed
+selection or resource needs a new review. Incomplete/paginated inventory and API
+errors block the review; absent optional VM/Longhorn APIs are accepted only when
+API discovery confirms they are not installed. Opening this review reads job
+history without advancing jobs. A queued move rechecks its initial inventory
+before stopping workloads, and duplicate queued moves of the same volume are blocked.
+
+These are initial-review safeguards, not an atomic storage/scheduler reservation
+or a completed rewrite of copy, swap, restart and recovery. Keep backups and inspect
+any interrupted move before continuing. After a lost Start response, check **Recent
+jobs**; the dialog does not repeat the request automatically. The existing workflow:
 
 1. everything using the volume stops, and how each was running is noted;
 2. a volume the same size is made on the new class;
@@ -219,9 +233,11 @@ one), how much data moves and how long things are stopped. Then, as a job:
 
 ![Storage class change in progress](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-storage-class-progress.jpg)
 
-If anything fails before the swap, everything is put back on the untouched
-original. After it, the original stays as an **old copy** on Volumes until you
-remove it - your way back if something is wrong.
+Some pre-swap failures trigger the existing rollback path, which attempts to return
+workloads to the original. Do not assume rollback or a restart succeeded: inspect
+the job and retained resources. After a successful swap, the original stays as an
+**old copy** on Volumes until you remove it. Post-copy identity fencing, uncertain-write
+recovery and live host-loss validation remain separate work.
 
 ## Without Longhorn
 

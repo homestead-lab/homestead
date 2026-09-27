@@ -114,6 +114,9 @@ class OPS:
     def list_operations(self):
         return []
 
+    def snapshot(self):
+        return []
+
     def start(self, kind, title, resource, href, ref, message=""):
         item = {"id": "op", "kind": kind, "title": title, "resource": resource, "ref": ref, "status": "running"}
         self.started.append(item)
@@ -235,6 +238,8 @@ class ReclassTests(unittest.TestCase):
         sent = []
 
         def get(path):
+            if path.endswith("/pods"):
+                return {"items": []}
             if "/virtualmachines/" in path:
                 return copy.deepcopy(vm)
             if "/persistentvolumeclaims/" in path:
