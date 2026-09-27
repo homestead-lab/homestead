@@ -965,14 +965,17 @@ def _recheck_edit(prepared):
                 raise ValueError(f"New disk {claim} already exists; it cannot be adopted by this edit")
 
 
-def commit_edit(prepared, before_save=None):
+def commit_edit(prepared, before_save=None, send=None):
     """Apply a prepared edit, preserving Kubernetes optimistic concurrency.
 
     This is not a multi-object transaction: downloads or earlier dependency
     writes may remain if a later phase fails. Never replay an uncertain commit.
     before_save can re-admit after image downloads, before dependent writes.
+    send is a request-local write/journal adapter; the returned vm_identity
+    comes from the actual VM PUT response, not the pre-edit observation.
     """
     prepared = copy.deepcopy(prepared)
+    send = send or ksend  # request-local; image and dependency writes share it
     ns, name, vm = prepared["namespace"], prepared["name"], prepared["vm"]
     to_create, resize, dropped = prepared["to_create"], prepared["resize"], prepared["dropped"]
     changed_hardware = prepared["changed_hardware"]
@@ -981,7 +984,7 @@ def commit_edit(prepared, before_save=None):
         raise ValueError("An existing DataVolume cannot be replaced safely in a VM edit. Add a disk with a new name/source, then detach the old disk; its data is retained.")
     for effect in prepared["effects"]:
         if effect["kind"] == "image-download":
-            result = HVIMAGE.download(kget, ksend, effect["namespace"], effect["url"], effect["storage_class"])
+            result = HVIMAGE.download(kget, send, effect["namespace"], effect["url"], effect["storage_class"])
             templates = _claim_templates(vm)
             target = next(row for row in templates if row["metadata"]["name"] == effect["claim"])
             target["metadata"].setdefault("annotations", {})["harvesterhci.io/imageId"] = f"{result['namespace']}/{result['name']}"
@@ -992,21 +995,21 @@ def commit_edit(prepared, before_save=None):
         before_save(prepared)
     for effect in prepared["effects"]:
         if effect["kind"] == "secret":
-            ksend("PATCH", effect["path"], {"metadata": effect["identity"], "data": effect["data"]},
+            send("PATCH", effect["path"], {"metadata": effect["identity"], "data": effect["data"]},
                   ctype="application/merge-patch+json")
     for claim in to_create:
         try:
-            ksend("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", claim)
+            send("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", claim)
         except urllib.error.HTTPError as error:
             raise ValueError(f"the disk {claim['metadata']['name']} could not be made: {_refusal(error)}")
     try:
-        ksend("PUT", f"{API}/namespaces/{ns}/virtualmachines/{name}", vm)
+        saved = send("PUT", f"{API}/namespaces/{ns}/virtualmachines/{name}", vm)
     except urllib.error.HTTPError as error:
         raise ValueError(f"the VM was not saved: {_refusal(error)}")
     grown = []
     for claim, size in resize:
         try:
-            ksend("PATCH", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(claim)}",
+            send("PATCH", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(claim)}",
                   {"metadata": _identity(prepared["claims"][claim]),
                    "spec": {"resources": {"requests": {"storage": size}}}}, ctype="application/merge-patch+json")
             grown.append(f"{claim} to {size}")
@@ -1015,7 +1018,7 @@ def commit_edit(prepared, before_save=None):
     restarted = False
     if changed_hardware and prepared["restart"]:
         try:
-            ksend("PUT", f"{SUB}/namespaces/{ns}/virtualmachines/{name}/restart", {})
+            send("PUT", f"{SUB}/namespaces/{ns}/virtualmachines/{name}/restart", {})
             restarted = True
         except urllib.error.HTTPError:
             pass
@@ -1026,7 +1029,9 @@ def commit_edit(prepared, before_save=None):
         detail += f"; {', '.join(dropped)} detached and kept"
     if changed_hardware:
         detail += "; restarting now to use the changes" if restarted else "; template updated; KubeVirt may apply supported changes live, otherwise review a restart"
-    return {"ok": True, "detail": detail, "restart_needed": changed_hardware and not restarted}
+    identity = (saved.get("metadata") or {}) if isinstance(saved, dict) else {}
+    return {"ok": True, "detail": detail, "restart_needed": changed_hardware and not restarted,
+            "vm_identity": {key: identity.get(key, "") for key in ("namespace", "name", "uid", "resourceVersion")}}
 
 
 def edit(ns, name, cfg):

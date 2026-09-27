@@ -2442,17 +2442,21 @@ def _recheck_vm_creation(prepared):
             raise ValueError("A VM or planned dependency already exists; inspect it and review creation again")
 
 
-def commit_vm(prepared, before_save=None):
+def commit_vm(prepared, before_save=None, send=None):
     """Apply an already validated VM. Retain partial resources on any failure.
 
     An image download may outlast the original capacity snapshot. before_save
     receives the resolved manifest for re-admission before creating VM storage.
+    send is a request-local write/journal adapter. Its owner must check any
+    latched failure before acknowledging completion; ownership warnings can
+    otherwise leave a created VM with a partially applied Secret update.
     """
     prepared = copy.deepcopy(prepared)
+    send = send or ksend  # per-request journal hook; never replace global ksend
     ns, name, vm = prepared["namespace"], prepared["name"], prepared["vm"]
     _recheck_vm_creation(prepared)
     for download in prepared["downloads"]:
-        image = HVIMAGE.download(kget, ksend, ns, download["url"], download["storage_class"])
+        image = HVIMAGE.download(kget, send, ns, download["url"], download["storage_class"])
         templates = json.loads(vm["metadata"]["annotations"]["harvesterhci.io/volumeClaimTemplates"])
         claim = next(row for row in templates if row["metadata"]["name"] == download["claim"])
         claim["metadata"].setdefault("annotations", {})["harvesterhci.io/imageId"] = f"{image['namespace']}/{image['name']}"
@@ -2462,14 +2466,14 @@ def commit_vm(prepared, before_save=None):
     if before_save:
         before_save(prepared)
     for claim in prepared["claims"]:
-        ksend("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", claim)
+        send("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", claim)
     created_secrets = {}
     for secret in prepared["secrets"]:
-        result = ksend("POST", f"/api/v1/namespaces/{ns}/secrets", secret)
+        result = send("POST", f"/api/v1/namespaces/{ns}/secrets", secret)
         created_secrets[secret["metadata"]["name"]] = (result or {}).get("metadata") or {}
     secret_name = prepared["secret_name"]
     try:
-        created = ksend("POST", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines", vm)
+        created = send("POST", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines", vm)
     except urllib.error.HTTPError as error:
         # A failed response does not prove that creation had no effect. Keep
         # claims and Secrets for explicit inspection instead of deleting data.
@@ -2491,7 +2495,7 @@ def commit_vm(prepared, before_save=None):
             secret_identity = created_secrets.get(secret_name) or {}
             if not secret_identity.get("uid") or not secret_identity.get("resourceVersion"):
                 raise ValueError("Created Secret identity/version is unavailable")
-            ksend("PATCH", f"/api/v1/namespaces/{ns}/secrets/{secret_name}",
+            send("PATCH", f"/api/v1/namespaces/{ns}/secrets/{secret_name}",
                   {"metadata": {"uid": secret_identity["uid"], "resourceVersion": secret_identity["resourceVersion"],
                                 "ownerReferences": [{"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
                                                      "name": name, "uid": uid}]}},
