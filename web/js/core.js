@@ -24,7 +24,7 @@ async function copyText(text) {
 async function readClipboard() {
   try { return navigator.clipboard?.readText ? await navigator.clipboard.readText() : null; } catch (_) { return null; }
 }
-const HOMESTEAD_VERSION = "2.8.195";
+const HOMESTEAD_VERSION = "2.8.196";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -432,6 +432,9 @@ function labelStackTables(root = document) {
       [...row.children].forEach(cell => {
         const span = +cell.getAttribute("colspan") || 1;
         if (span === 1 && !cell.hasAttribute("data-label")) cell.dataset.label = heads[column] || "";
+        // On a phone cells sit two to a line; a long one - a message, a path -
+        // takes the whole line rather than wrapping to a word a line.
+        if (span === 1 && cell.textContent.trim().length > 34) cell.dataset.wide = "";
         column += span;
       });
     });
