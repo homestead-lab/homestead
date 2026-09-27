@@ -47,7 +47,19 @@ const report = [];
 const failures = [];
 const browser = await chromium.launch({ headless: true });
 
-for (const [label, width, height, mobile] of [["desktop", 1440, 900, false], ["mobile", 390, 844, true]]) {
+// Each width's list is shared between a few tabs, all at once: one tab
+// working through every item in turn took most of CI's time.
+const WORKERS = Number(process.env.AUDIT_WORKERS || 4);
+const WIDTHS = [["desktop", 1440, 900, false], ["mobile", 390, 844, true]];
+const todo = PAGES.filter(([name]) => !only || name.includes(only));
+const shares = Array.from({ length: WORKERS }, (_, i) => todo.filter((_, j) => j % WORKERS === i)).filter((share) => share.length);
+await Promise.all(WIDTHS.flatMap((width) => shares.map((share) => audit(width, share))));
+await browser.close();
+// Back in list order, whichever tab finished first.
+const order = (r) => todo.findIndex(([name]) => name === r.name) * 2 + (r.label === "mobile");
+report.sort((a, b) => order(a) - order(b));
+
+async function audit([label, width, height, mobile], items) {
   const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: mobile ? 2 : 1,
     isMobile: mobile, hasTouch: mobile, colorScheme: "dark" });
   const page = await context.newPage();
@@ -62,8 +74,7 @@ for (const [label, width, height, mobile] of [["desktop", 1440, 900, false], ["m
   // Running jobs and passing notices belong to a moment, not the page.
   await page.addStyleTag({ content: "#jobTray,#toast{display:none!important}" });
 
-  for (const [name, view, after] of PAGES) {
-    if (only && !name.includes(only)) continue;
+  for (const [name, view, after] of items) {
     try {
       await page.evaluate(() => { try { closeModal(); } catch (e) { /* none open */ } });
       await page.evaluate((v) => document.querySelector(`#nav a[data-view="${v}"]`).click(), view);
@@ -104,7 +115,6 @@ for (const [label, width, height, mobile] of [["desktop", 1440, 900, false], ["m
   }
   await context.close();
 }
-await browser.close();
 
 await writeFile(`${output}/report.json`, JSON.stringify(report, null, 2));
 for (const r of report) {
