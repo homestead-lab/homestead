@@ -229,8 +229,7 @@ function volumeUsageCell(x) {
   return `<div class="volusage-body">${known
     ? `<div class="volusage-line" data-tip="Filesystem usage reported by kubelet; filesystem capacity can be slightly smaller than the provisioned block device.">${meter(fs.used_pct)}<span class="mono">${esc(fs.used_gb)} / ${esc(fs.capacity_gb)} GiB files</span></div>`
     : `<span class="dim xs" data-tip="No fresh filesystem measurement is available. Detached volumes and some shared/raw-block mounts do not report filesystem usage.">Filesystem usage unavailable</span>`}
-    <span class="dim xs mono" data-tip="Provisioned logical volume size; this is not physical storage consumed.">${esc(x.size_gb)} GiB provisioned</span>
-    <span class="dim xs mono" data-tip="Longhorn block footprint, including snapshots and untrimmed blocks. Not filesystem usage, and not a sum across replicas; it can exceed the provisioned size.">${esc(x.actual_gb ?? "—")} GiB Longhorn footprint ${tip("Longhorn includes snapshots and allocated blocks, not just current files. Inspect snapshots before choosing any cleanup; deleting them removes recovery points.")}</span></div>`;
+    <span class="dim xs mono volsizes"><span data-tip="Provisioned logical volume size; this is not physical storage consumed.">${esc(x.size_gb)} GiB provisioned</span> · <span data-tip="Longhorn block footprint, including snapshots and untrimmed blocks. Not filesystem usage, and not a sum across replicas; it can exceed the provisioned size.">${esc(x.actual_gb ?? "—")} GiB Longhorn footprint ${tip("Longhorn includes snapshots and allocated blocks, not just current files. Inspect snapshots before choosing any cleanup; deleting them removes recovery points.")}</span></span></div>`;
 }
 
 /* While anything rebuilds or restores, re-read the volumes every few seconds
@@ -310,12 +309,14 @@ async function viewStorage() {
      <td data-label="Usage" class="volusage">${volumeUsageCell(x)}</td>
      <td data-label="Last used" class="small dim">${x.state === "attached" ? '<span class="tag ok">in use</span>' : esc(fmtAgo(x.last_used_secs))}</td>
      <td class="volactions"><div class="row">
-       <button class="iconbtn" data-need="operator" data-tip="Resize or change replicas" onclick='volumeEdit(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("edit")}</button>
-       <button class="iconbtn" data-need="admin" data-tip="Change storage class: copy it to a volume on another class, under the same name" onclick='volumeReclass(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("move")}</button>
-       <button class="iconbtn" data-need="admin" data-tip="Browse and edit the files on this volume" onclick="volumeFiles('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}',${x.state === "attached"})">${icon("list")}</button>
        <button class="iconbtn" data-tip="Snapshots and backups of this volume: take one now, or restore" onclick="lhSnaps('${esc(x.name)}','${esc(x.pvc_name || x.name)}')">${icon("snapshot")}</button>
-       <button class="iconbtn" data-need="admin" data-tip="Hand this volume's files to the user the container runs as" onclick="volumeChown('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}')">${icon("shield")}</button>
-       <button class="iconbtn danger" data-need="admin" data-tip="Review attachment and data-loss impact before deleting" onclick='volumeDelete(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("trash")}</button>
+       <button class="iconbtn" data-need="operator" data-tip="Resize or change replicas" onclick='volumeEdit(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("edit")}</button>
+       <details class="actionmenu"><summary class="iconbtn" title="More actions" aria-label="More actions for ${esc(x.pvc_name || x.name)}">⋯</summary><div class="actionmenu-pop">
+         <button data-need="admin" title="Browse and edit the files on this volume" onclick="this.closest('details').open=false;volumeFiles('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}',${x.state === "attached"})">${icon("list")}Browse files</button>
+         <button data-need="admin" title="Copy it to a volume on another class, under the same name" onclick='this.closest("details").open=false;volumeReclass(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("move")}Change storage class</button>
+         <button data-need="admin" title="Hand this volume's files to the user the container runs as" onclick="this.closest('details').open=false;volumeChown('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}')">${icon("shield")}Fix ownership</button>
+         <button class="danger" data-need="admin" title="Review attachment and data-loss impact before deleting" onclick='this.closest("details").open=false;volumeDelete(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("trash")}Delete</button>
+       </div></details>
      </div></td>
       </tr>`).join("") || `<tr><td colspan=7 class="empty">none</td></tr>`}
    </tbody></table></div></div>

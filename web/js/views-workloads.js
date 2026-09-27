@@ -345,7 +345,7 @@ function renderWorkloads() {
       <span class="dim xs hide-sm" title="When the registries were last asked">${checkedAgo()}</span>
       ${updateCount ? `<button class="pill warn pillbtn" title="Review and stage image updates" onclick="imageUpdateCenter()">${updateCount} update${updateCount === 1 ? "" : "s"}</button>` : ""}
       ${updateErrors ? `<button class="pill crit pillbtn" data-tip="${updateErrors} image${updateErrors === 1 ? "" : "s"} could not be compared with ${updateErrors === 1 ? "its" : "their"} registry; every other image was" onclick="imageUpdateCenter()">${updateErrors} <span class="hide-sm">check${updateErrors === 1 ? "" : "s"} </span>failed</button>` : ""}
-      <span class="hide-sm">${layoutSwitch("containers", "renderWorkloads")}</span>
+      ${layoutSwitch("containers", "renderWorkloads")}
       <button class="btn" onclick="checkImageUpdates()" title="Ask the registries for newer images">↻ Check<span class="hide-sm"> images</span></button>
       <button class="btn pri hide-sm" data-need="operator" onclick="go('deploy')">＋ Deploy</button></div></div>
 
@@ -403,11 +403,13 @@ function workloadActions(w, update, off, compact = false) {
   // has stay put whether or not an update is waiting.
   return `${update?.available ? `<button class="btn sm pri" title="Review and install the available image update" data-need="operator" onclick="imageUpdateReview('${w.ns}','${w.name}')">${icon("update")}Update</button>` : ""}
           <button class="${cls}" title="View live container logs" aria-label="Logs for ${esc(w.name)}" onclick="wlLogs('${w.ns}','${w.pods[0] ? w.pods[0].name : ""}','${w.name}')">${label("Logs", "log")}</button>
-          ${off ? "" : `<button class="${cls}" title="Restart: replace every pod in this workload with a fresh one" aria-label="Restart ${esc(w.name)}" data-need="operator" onclick="wlRestart('${w.ns}','${w.name}')">${label("Restart", "restart")}</button>`}
+          ${off ? "" : `<button class="${cls} sm-more" title="Restart: replace every pod in this workload with a fresh one" aria-label="Restart ${esc(w.name)}" data-need="operator" onclick="wlRestart('${w.ns}','${w.name}')">${label("Restart", "restart")}</button>`}
           ${off ? `<button class="${cls}" title="Start this workload" aria-label="Start ${esc(w.name)}" onclick="wlScale('${w.ns}','${w.name}',1)">${label("Start", "play")}</button>`
-                : `<button class="${cls}" title="Scale this workload to zero" aria-label="Stop ${esc(w.name)}" onclick="${w.self ? `wlStopSelf('${w.ns}','${w.name}')` : `wlScale('${w.ns}','${w.name}',0)`}">${label("Stop", "stop")}</button>`}
+                : `<button class="${cls} sm-more" title="Scale this workload to zero" aria-label="Stop ${esc(w.name)}" onclick="${w.self ? `wlStopSelf('${w.ns}','${w.name}')` : `wlScale('${w.ns}','${w.name}',0)`}">${label("Stop", "stop")}</button>`}
           <details class="actionmenu"><summary class="btn sm" title="More actions" aria-label="More actions for ${esc(w.name)}">⋯</summary>
             <div class="actionmenu-pop">
+              ${off ? "" : `<button class="sm-only" data-need="operator" onclick="this.closest('details').open=false;wlRestart('${w.ns}','${w.name}')">${icon("restart")}Restart</button>
+              <button class="sm-only" onclick="this.closest('details').open=false;${w.self ? `wlStopSelf('${w.ns}','${w.name}')` : `wlScale('${w.ns}','${w.name}',0)`}">${icon("stop")}Stop</button>`}
               <button aria-label="Console for ${esc(w.name)}" title="Open an audited interactive shell in a running container" data-need="operator" onclick="this.closest('details').open=false;wlConsole('${w.ns}','${w.name}')">${icon("console")}Console</button>
               <button aria-label="Edit ${esc(w.name)}" title="Edit image, resources, environment, storage and hardware" onclick="this.closest('details').open=false;wlEdit('${w.ns}','${w.name}')">${icon("edit")}Edit</button>
               ${(w.ports || []).length > 1 ? `<button aria-label="Main port of ${esc(w.name)}" title="Which port the card links to first - usually its web UI" onclick="this.closest('details').open=false;wlPrimaryPort('${w.ns}','${w.name}')">${icon("ext")}Main port</button>` : ""}

@@ -182,9 +182,12 @@ const vmClusterTag = v => v.cluster ? `<span class="tag info" data-tip="A node o
 function vmActions(v, compact = false) {
   const main = v.actions.filter(a => ["start", "stop", "restart", "unpause"].includes(a));
   const shown = compact ? main.slice(0, 1) : main;
-  return `${shown.map((a, i) => vmActionButton(v, a, i === 0 && a === "start", compact)).join("")}
+  // On a phone a card keeps its first power action; the rest join "…".
+  const later = compact ? [] : shown.slice(1);
+  return `${shown.map((a, i) => vmActionButton(v, a, i === 0 && a === "start", compact, i > 0 ? "sm-more" : "")).join("")}
       ${v.actions.includes("console") ? `<button class="btn sm ${compact ? "vm-iconbtn" : ""}" data-need="operator" title="Console" aria-label="Console" onclick="vmConsole('${esc(v.ns)}','${esc(v.name)}')">${icon("console")}${compact ? "" : "Console"}</button>` : ""}
       <details class="actionmenu"><summary class="btn sm" title="More actions">⋯</summary><div class="actionmenu-pop">
+        ${later.map(a => `<button class="sm-only" data-need="operator" onclick="this.closest('details').open=false;vmPower('${esc(v.ns)}','${esc(v.name)}','${a}')">${icon(VM_ACTIONS[a][1])}${VM_ACTIONS[a][0]}</button>`).join("")}
         <button onclick="this.closest('details').open=false;vmOpen('${esc(v.ns)}','${esc(v.name)}')">${icon("list")}Details</button>
         ${main.filter(a => !shown.includes(a)).map(a => `<button data-need="operator" onclick="this.closest('details').open=false;vmPower('${esc(v.ns)}','${esc(v.name)}','${a}')">${icon(VM_ACTIONS[a][1])}${VM_ACTIONS[a][0]}</button>`).join("")}
         <button data-need="operator" onclick="this.closest('details').open=false;vmEdit('${esc(v.ns)}','${esc(v.name)}')">${icon("edit")}Edit</button>
@@ -197,27 +200,27 @@ function vmActions(v, compact = false) {
 
 /* The same VMs as rows: everything a card says, one VM a line. */
 function vmTable(rows) {
-  return `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack vm-table" data-sort="vms"><thead><tr>
+  return `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack compact vm-table" data-sort="vms"><thead><tr>
     <th>VM</th><th>Status</th><th>Address</th><th>CPU</th><th>RAM</th><th>Disk IO</th><th data-nosort></th></tr></thead><tbody>
     ${rows.map(v => `<tr class="clickable" onclick="if(!event.target.closest('button,details,a'))vmOpen('${esc(v.ns)}','${esc(v.name)}')">
       <td class="cell-name" data-sort="${esc(v.name)}"><b>${esc(v.name)}</b> ${vmClusterTag(v)}
         <div class="dim xs vm-sub">${esc([v.ns, v.os, v.node ? `on ${v.node}` : ""].filter(Boolean).join(" · "))}</div></td>
-      <td data-label="Status" data-sort="${esc(v.status)}"><span class="pill ${vmTone(v.status)}" data-tip="${esc([v.status, v.problem].filter(Boolean).join(": "))}">${esc(v.status)}</span>
+      <td data-label="Status" data-status data-sort="${esc(v.status)}"><span class="pill ${vmTone(v.status)}" data-tip="${esc([v.status, v.problem].filter(Boolean).join(": "))}">${esc(v.status)}</span>
         ${v.restart_required ? '<div class="dim xs">restart to apply changes</div>' : ""}
         ${(v.filling || []).length ? `<div class="dim xs">${esc(VM_FILL_WORDS[v.filling[0].phase] || v.filling[0].phase)}${v.filling[0].progress != null ? ` · ${v.filling[0].progress.toFixed(0)}%` : ""}</div>` : ""}</td>
       <td data-label="Address" class="nowrap" data-sort="${esc((v.ips || [])[0] || "")}"><div class="vm-addr">${vmAddress(v, false)}</div>
         ${v.network ? `<div class="dim xs">${esc(v.network)}</div>` : ""}</td>
       <td data-label="CPU" class="nowrap vm-cell-use" data-sort="${v.usage?.cpu_pct ?? -1}">${v.usage?.cpu_pct != null ? `${meter(v.usage.cpu_pct, "", "cpu")}<div class="dim xs mono">${v.usage.cpu_pct}% of ${v.cores}</div>` : `<span class="dim xs">${v.cores} core${v.cores === 1 ? "" : "s"}</span>`}</td>
       <td data-label="RAM" class="nowrap vm-cell-use" data-sort="${v.usage?.mem_pct ?? -1}">${v.usage?.mem_pct != null ? `${meter(v.usage.mem_pct, "", "memory")}<div class="dim xs mono">${vmBytes(v.usage.mem)} of ${esc(v.memory)}</div>` : `<span class="dim xs">${esc(v.memory || "—")}</span>`}</td>
-      <td data-label="Disk IO" class="nowrap small" data-sort="${(v.usage?.read_bps || 0) + (v.usage?.write_bps || 0)}">${v.running ? vmIo(v.usage) : '<span class="dim">—</span>'}</td>
-      <td class="nowrap"><div class="row vm-actions" style="justify-content:flex-end">${vmActions(v, true)}</div></td></tr>`).join("")}
+      <td data-label="Disk IO" data-sm-hide class="nowrap small" data-sort="${(v.usage?.read_bps || 0) + (v.usage?.write_bps || 0)}">${v.running ? vmIo(v.usage) : '<span class="dim">—</span>'}</td>
+      <td class="nowrap" data-actions><div class="row vm-actions" style="justify-content:flex-end">${vmActions(v, true)}</div></td></tr>`).join("")}
     </tbody></table></div></div>`;
 }
 window.viewVMs = viewVMs;
 
-function vmActionButton(v, action, primary = false, iconOnly = false) {
+function vmActionButton(v, action, primary = false, iconOnly = false, extra = "") {
   const [label, iconName, title] = VM_ACTIONS[action];
-  return `<button class="btn sm ${primary ? "pri" : ""} ${iconOnly ? "vm-iconbtn" : ""}" data-need="operator" title="${esc(iconOnly ? `${label}: ${title}` : title)}"
+  return `<button class="btn sm ${primary ? "pri" : ""} ${iconOnly ? "vm-iconbtn" : ""} ${extra}" data-need="operator" title="${esc(iconOnly ? `${label}: ${title}` : title)}"
     aria-label="${esc(label)}" onclick="vmPower('${esc(v.ns)}','${esc(v.name)}','${action}')">${icon(iconName)}${iconOnly ? "" : label}</button>`;
 }
 
