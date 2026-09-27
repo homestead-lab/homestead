@@ -2135,3 +2135,79 @@ html[data-theme="light"] .ui-meter .now{background:rgba(0,0,0,.35)}html[data-the
   .rollout-steps.movesteps>div{flex:0 0 auto;padding:4px 9px;border-radius:13px}
   .rollout-steps.movesteps b{font-size:11px}
 }
+
+/* ================================================================ density
+   One set of sizes for the controls every page shares, tighter than before:
+   a professional tool shows more at once. docs/design.md, "Density". */
+.btn{padding:7px 13px;border-radius:10px;font-size:13px;min-height:32px}
+.btn.sm{padding:4px 10px;border-radius:8px;font-size:12px;min-height:28px}
+.iconbtn{width:34px;height:34px}
+.seg{padding:3px;gap:2px}
+.seg button{padding:6px 13px;font-size:12.5px}
+.pill{padding:3px 10px;font-size:11px}
+.tag{padding:2px 8px;border-radius:7px}
+label{margin:0 0 5px}
+.f{margin-bottom:12px}
+:where(input:not([type]),input[type=text],input[type=number],input[type=password],input[type=url],input[type=search],input[type=email],input[type=tel],input[type=date],input[type=time],select,textarea){
+  padding:7px 11px;border-radius:9px;min-height:34px}
+textarea{min-height:0}
+.phead{margin-bottom:14px;gap:14px}
+.phead h2{margin-bottom:2px}
+.grid{gap:12px}
+.ctitle{margin-bottom:2px}
+
+@media(max-width:560px){
+  .page{padding:12px 12px 64px}
+  .card{padding:13px;border-radius:16px}
+  .grid,.ui-stats{gap:10px}
+  .phead{margin-bottom:12px;gap:10px}
+  .phead p{font-size:12.5px;line-height:1.45}
+  .phead .row{gap:7px}
+  .sec{margin:18px 0 8px}
+  .bignum{font-size:28px}
+  .ui-stat .bignum{margin-top:6px}
+  .csub{font-size:11.5px}
+  /* 16px text stops a phone zooming in on a field it is typing into. */
+  :where(input:not([type]),input[type=text],input[type=number],input[type=password],input[type=url],input[type=search],input[type=email],input[type=tel],input[type=date],input[type=time],select,textarea){
+    font-size:16px;padding:6px 10px;min-height:36px}
+  .btn{min-height:34px;padding:6px 12px}
+  .btn.sm{min-height:30px;padding:4px 9px}
+  /* Secondary actions leave the row for its "…" menu. */
+  .sm-more{display:none!important}
+}
+.actionmenu-pop .sm-only{display:none}
+@media(max-width:560px){.actionmenu-pop .sm-only{display:flex}}
+
+/* A compact list (tbl stack compact): on a phone each row is two or three
+   short lines - the name with its status beside it, then its figures inline,
+   label and value - never a labelled box per value. */
+@media(max-width:560px){
+  .tbl.stack.compact tr{grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;padding:10px 12px}
+  .tbl.stack.compact td::before{display:inline;margin:0 5px 0 0;font-size:11.5px}
+  .tbl.stack.compact td[data-status]{grid-column:2;grid-row:1;justify-self:end;order:0;text-align:right!important;width:auto!important}
+  .tbl.stack.compact td[data-status]::before{display:none}
+  .tbl.stack.compact td[data-sm-hide]{display:none}
+  .tbl.stack.compact td[data-actions]{grid-column:1/-1;display:flex;justify-content:flex-end;padding-top:4px}
+  .tbl.stack.compact td .meter{display:none}
+  .tbl.stack.compact td>div{display:inline}
+  .tbl.stack.compact tr>td:first-child{grid-column:1;grid-row:1}
+  .tbl.stack.compact td:first-child>div,.tbl.stack.compact td:first-child .dim{display:block}
+  .tbl.stack.compact td[data-actions]>div{display:flex;flex-wrap:nowrap}
+}
+
+/* Updating apps: one line each - the app, and its image from and to. */
+.upd-apps{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:12px}
+.upd-apps li{display:flex;align-items:center;justify-content:space-between;gap:6px 12px;flex-wrap:wrap;padding:9px 12px;font-size:13px}
+.upd-apps li+li{border-top:1px solid var(--line)}
+.upd-name{display:inline-flex;align-items:center;gap:6px;min-width:0}
+.upd-name .dim{font-size:12px}
+.upd-change{display:inline-flex;align-items:center;gap:5px;color:var(--mut);font-size:12px;white-space:nowrap}
+.upd-change code{font:500 12px "JetBrains Mono",monospace;color:var(--tx)}
+.upd-flag{display:inline-grid;place-items:center;width:17px;height:17px;border-radius:50%;font:700 11px "Inter Tight",sans-serif;color:#1a1200;background:var(--med)}
+.upd-flag.bad{background:var(--crit);color:#fff}
+.upd-ok{display:inline-flex;align-items:center;gap:8px;margin:0;font-size:12.5px;font-weight:500;color:var(--tx);cursor:pointer}
+.upd-ok input{width:16px;height:16px;margin:0;accent-color:#fff}
+@media(max-width:640px){
+  .ui-actions:has(.upd-ok){flex-direction:column}
+  .ui-actions:has(.upd-ok) .ui-actions-start{flex-direction:row}
+}

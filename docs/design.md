@@ -88,6 +88,35 @@ Pages are designed for a phone as much as a desktop:
   readable width; its buttons move under it rather than crushing it into a
   one-word column.
 
+### Density
+
+Homestead is a working tool: show more at once, pad less.
+
+- **Use the shared sizes.** Buttons are 32px tall (`.btn.sm` 28px), inputs
+  34px, icon buttons 34px, pills and tags 3px by 10px. They live in the
+  density block at the end of `web/style.css`. A page does not pad its own
+  buttons or fields beyond them.
+- **Phones are tighter still**: page padding 12px, card padding 13px, gaps
+  10px, big figures 28px - but fields use 16px text there, or the phone zooms
+  in while typing.
+- **Three visible actions per card at most.** Primary action, the most used
+  one, then `…` (`details.actionmenu`) for the rest. Delete always lives in
+  `…`, never as a full button in a row. On a phone, secondary buttons carry
+  `sm-more` and a copy in the menu carries `sm-only`, so the row keeps one or
+  two buttons plus `…`.
+- **A list is shorter than its cards.** A table a page offers as the
+  "rows" layout is marked `compact` (`tbl stack compact`): on a phone each
+  row is the name with its status beside it, then its figures inline with
+  their labels - no labelled box per value, no meters. Mark the status cell
+  `data-status`, the actions cell `data-actions`, and cells a phone can do
+  without `data-sm-hide`.
+- **Related figures share a line**: "20 GiB provisioned · 27.8 GiB
+  footprint", not a line each.
+- **Menus are placed against the screen.** `…` menus open below their button,
+  or above when there is no room, and are never clipped by a table's scroll
+  box; one is open at a time, and Escape, a scroll or a click elsewhere
+  closes it.
+
 ## Dialogs
 
 ### The shape of a dialog

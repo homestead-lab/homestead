@@ -164,3 +164,42 @@ if (typeof MutationObserver === "function" && typeof document.querySelector === 
   const body = document.querySelector("#mbody");
   if (body) new MutationObserver(() => normaliseDialogActions(body)).observe(body, { childList: true });
 }
+
+/* A "…" menu opens against the screen, not its row: below its button when
+   there is room, above when not, so a table's scroll box never clips it.
+   One open menu at a time; a click elsewhere, a scroll or Escape closes it. */
+if (typeof document !== "undefined" && typeof document.addEventListener === "function"
+    && typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  const place = details => {
+    const pop = details.querySelector(".actionmenu-pop"), button = details.querySelector("summary");
+    if (!pop || !button) return;
+    const at = button.getBoundingClientRect();
+    pop.style.position = "fixed";
+    pop.style.bottom = "auto";
+    const width = pop.offsetWidth, height = pop.offsetHeight;
+    const below = at.bottom + 6 + height <= window.innerHeight - 8;
+    const top = below ? at.bottom + 6 : Math.max(8, at.top - 6 - height);
+    const left = Math.max(8, Math.min(at.right - width, window.innerWidth - width - 8));
+    pop.style.right = "auto";
+    pop.style.top = `${top}px`;
+    pop.style.left = `${left}px`;
+    // A card's blur makes it, not the screen, what "fixed" is measured from:
+    // correct by however far the menu actually landed from where it should.
+    const landed = pop.getBoundingClientRect();
+    pop.style.top = `${top - (landed.top - top)}px`;
+    pop.style.left = `${left - (landed.left - left)}px`;
+  };
+  document.addEventListener("toggle", event => {
+    const details = event.target;
+    if (!details.matches?.("details.actionmenu") || !details.open) return;
+    document.querySelectorAll("details.actionmenu[open]").forEach(other => { if (other !== details) other.open = false; });
+    place(details);
+  }, true);
+  document.addEventListener("click", event => {
+    document.querySelectorAll("details.actionmenu[open]").forEach(d => { if (!d.contains(event.target)) d.open = false; });
+  });
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape") document.querySelectorAll("details.actionmenu[open]").forEach(d => { d.open = false; });
+  });
+  window.addEventListener("scroll", () => document.querySelectorAll("details.actionmenu[open]").forEach(d => { d.open = false; }), { passive: true, capture: true });
+}

@@ -206,8 +206,10 @@ async function viewProtect() {
     <div class="row wacts">
       <button class="btn sm" data-need="operator" onclick="lhRun('${esc(j.name)}')" ${j.running ? "disabled" : ""}>${icon("play")}Run now</button>
       <button class="btn sm" onclick='lhJob(${JSON.stringify(j).replace(/'/g, "&#39;")})' data-need="operator">Edit</button>
-      <button class="btn sm" onclick="lhCovered('${esc(j.name)}')">Volumes</button>
-      <button class="btn sm danger" data-need="admin" onclick="lhJobDel('${esc(j.name)}')">Delete</button>
+      <details class="actionmenu"><summary class="btn sm" title="More actions" aria-label="More actions for ${esc(j.name)}">⋯</summary><div class="actionmenu-pop">
+        <button onclick="this.closest('details').open=false;lhCovered('${esc(j.name)}')">${icon("disk")}Volumes it covers</button>
+        <button class="danger" data-need="admin" onclick="this.closest('details').open=false;lhJobDel('${esc(j.name)}')">${icon("trash")}Delete</button>
+      </div></details>
     </div></div>`).join("")}</div>`
   : `<div class="empty">No recurring jobs yet. A plan sets up a sensible policy in one go -
      <a onclick="lhPlans()" style="cursor:pointer;text-decoration:underline">choose one</a> - or a daily snapshot of the <span class="mono">default</span>
