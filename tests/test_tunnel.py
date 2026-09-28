@@ -8,6 +8,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -167,10 +168,18 @@ class TunnelTests(unittest.TestCase):
         self.assertEqual(413, sent[0][0])
 
     def test_the_client_address_is_cloudflares_word_not_the_clients(self):
-        h, _ = handler(headers={"X-Forwarded-For": "1.2.3.4", **CF})
-        self.assertEqual("203.0.113.9", h._client_ip())
+        with mock.patch.object(server.CFACCESS, "enabled", return_value=True):
+            h, _ = handler(headers={"X-Forwarded-For": "1.2.3.4", **CF})
+            self.assertEqual("203.0.113.9", h._client_ip())
         h, _ = handler(headers={"X-Forwarded-For": "1.2.3.4"})
         self.assertEqual("192.168.1.50", h._client_ip(), "X-Forwarded-For is not trusted")
+
+    def test_without_access_cloudflares_header_is_anyones_to_send(self):
+        """Without Access nothing proves a request came through Cloudflare, so
+        its address header would let anyone dodge the sign-in limit."""
+        with mock.patch.object(server.CFACCESS, "enabled", return_value=False):
+            h, _ = handler(headers=dict(CF))
+            self.assertEqual("192.168.1.50", h._client_ip())
 
 
 class ThrottleTests(unittest.TestCase):

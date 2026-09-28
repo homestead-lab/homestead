@@ -25,8 +25,8 @@ window.vmConsole = (ns, name, kind = "vnc") => {
   Object.assign(VMC, { ns, name, kind });
   modal("Console · " + name, `<div class="vmc-bar">
       <div class="seg" role="tablist">
-        <button class="${kind === "vnc" ? "on" : ""}" onclick="vmConsole('${esc(ns)}','${esc(name)}','vnc')">Screen</button>
-        <button class="${kind === "serial" ? "on" : ""}" onclick="vmConsole('${esc(ns)}','${esc(name)}','serial')">Serial</button></div>
+        <button class="${kind === "vnc" ? "on" : ""}" onclick="vmConsole(${jsq(ns)},${jsq(name)},'vnc')">Screen</button>
+        <button class="${kind === "serial" ? "on" : ""}" onclick="vmConsole(${jsq(ns)},${jsq(name)},'serial')">Serial</button></div>
       <span class="dim xs" id="vmcState">connecting…</span>
       ${kind === "vnc" ? `<span class="vmc-tools">
         <button class="btn sm" onclick="vmConsoleKeys()" title="Send Ctrl+Alt+Del to the VM">Ctrl+Alt+Del</button>

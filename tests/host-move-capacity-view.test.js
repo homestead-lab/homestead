@@ -17,6 +17,7 @@ function setup(response = review) {
       return { ok: true };
     } };
   vm.createContext(c);
+  c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => (c.esc || String)(c.jsArg(s));
   vm.runInContext(fs.readFileSync("web/js/move.js", "utf8"), c);
   return { c, sent, fields, html: () => html, fail: () => { fail = true; } };
 }

@@ -15,7 +15,7 @@ function setup({fail=false}={}) {
       if(fail)throw Error('lost response');
       return {ok:true};
     }};
-  ctx.window=ctx;vm.createContext(ctx);vm.runInContext(fs.readFileSync('web/js/views-lifecycle.js','utf8'),ctx);
+  ctx.window=ctx;vm.createContext(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(fs.readFileSync('web/js/views-lifecycle.js','utf8'),ctx);
   ctx.viewImport=()=>{};
   return {ctx,calls,fields,closed:()=>closed};
 }

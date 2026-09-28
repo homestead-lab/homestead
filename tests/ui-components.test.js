@@ -10,6 +10,7 @@ const context = { window: {}, console, document: {},
   esc: value => String(value).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])),
   icon: name => `<svg data-icon="${name}"></svg>` };
 vm.createContext(context);
+context.jsArg = s => JSON.stringify(String(s ?? "")); context.jsq = s => (context.esc || String)(context.jsArg(s));
 vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), context);
 const UI = context.window.UI;
 

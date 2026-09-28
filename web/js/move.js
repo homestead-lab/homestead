@@ -50,7 +50,7 @@ window.moveWorkload = async (name, ns) => {
   window.__moveStranded = !viable.length;
   $("#mbody").innerHTML = `
     <div class="between"><p class="muted small">Currently on <b>${esc(here || "no node")}</b>. Pick a host for a full capacity review. These initial estimates are not an admission check.</p>
-      ${plan.recommended ? `<button class="btn pri sm" onclick="pickMove('${esc(plan.recommended)}')">Best fit · ${esc(plan.recommended.replace("harvester-", ""))}</button>` : ""}</div>
+      ${plan.recommended ? `<button class="btn pri sm" onclick="pickMove(${jsq(plan.recommended)})">Best fit · ${esc(plan.recommended.replace("harvester-", ""))}</button>` : ""}</div>
     ${(req.devices || []).length || (req.features || []).length || Object.keys(req.labels || {}).length ? `<div class="constraintbar"><b>Required</b>
       ${(req.devices || []).map(d => `<span class="tag hw">${esc(d.label)}</span>`).join("")}
       ${(req.features || []).filter(id => !(req.devices || []).some(d => d.id === id)).map(id => `<span class="tag hw">${esc(hardwareName(id))}</span>`).join("")}
@@ -61,7 +61,7 @@ window.moveWorkload = async (name, ns) => {
       ${plan.candidates.map(n => {
         const cur = n.current, blocked = !n.ok;
         return `<div class="movecard ${cur ? "cur" : ""} ${blocked ? "blocked" : ""}"
-             ${blocked || cur ? "" : `onclick="pickMove('${esc(n.name)}')"`} data-node="${esc(n.name)}">
+             ${blocked || cur ? "" : `onclick="pickMove(${jsq(n.name)})"`} data-node="${esc(n.name)}">
           <div class="between">
             <div class="row" style="gap:9px">
               <div class="av n2">${esc(n.name.replace(/[^0-9a-z]/gi, "").slice(-2).toUpperCase())}</div>
@@ -94,7 +94,7 @@ window.moveWorkload = async (name, ns) => {
       <label class="switch"><input type="checkbox" id="mv_pin"> Hard pin ${tip("A hard pin guarantees this host but prevents automatic failover. The default is a preference so the scheduler may recover elsewhere if the node fails.")}</label></div>
 
     <div class="row" style="margin-top:6px">
-      <button class="btn pri" id="mv_go" onclick="doMoveNow('${esc(wl.ns)}','${esc(name)}')" disabled>Review move</button>
+      <button class="btn pri" id="mv_go" onclick="doMoveNow(${jsq(wl.ns)},${jsq(name)})" disabled>Review move</button>
       <button class="btn" onclick="modalBack()">Cancel</button>
     </div>
     <div class="note" style="margin-top:14px">Eligible hosts already account for every configured hardware feature, passthrough path, USB ID, node label, advertised device resource, readiness and cordon. This is a stop-then-start, not a live move. A
@@ -187,7 +187,7 @@ window.evacuateNode = async node => {
     ${impact.stranded.length ? `<div class="note dependency-danger" style="margin-top:14px"><b>${impact.stranded.length} workload${impact.stranded.length === 1 ? " has" : "s have"} no compatible destination.</b> Evicting them stops their current pods; Kubernetes will leave them Pending until a host with every required hardware feature returns.</div>
       <label class="switch dependency-confirm"><input type="checkbox" id="ev_allow" onchange="document.getElementById('ev_go').disabled=!this.checked"> I understand ${impact.stranded.map(w => esc(w.name)).join(", ")} will not come back up now</label>` : ""}
     ${wls.length ? `<div class="row" style="margin-top:18px">
-      <button class="btn pri" id="ev_go" onclick="doEvacuate('${esc(node)}')" ${impact.stranded.length ? "disabled" : ""}>Evacuate ${wls.length} workload(s)</button>
+      <button class="btn pri" id="ev_go" onclick="doEvacuate(${jsq(node)})" ${impact.stranded.length ? "disabled" : ""}>Evacuate ${wls.length} workload(s)</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div>
     <div class="note" style="margin-top:14px">Each workload restarts on another host. With
     ReadWriteOnce volumes they restart one at a time, so this is not instant.</div>` : ""}`);

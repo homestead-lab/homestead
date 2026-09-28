@@ -23,7 +23,7 @@ function setup() {
       throw new Error("Unexpected mutation " + path);
     },
   };
-  ctx.window = ctx; vm.createContext(ctx); vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), ctx);
+  ctx.window = ctx; vm.createContext(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s)); vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), ctx);
   vm.runInContext(fs.readFileSync("web/js/views-settings.js", "utf8"), ctx);
   const form = () => Object.assign(fields, { "#selfDataClass": { value: "destination" }, "#selfDataHost": { value: "node1" },
     "#selfDataReview": { innerHTML: "" }, "#selfDataActions": { innerHTML: "" }, "#selfDataConsent": { checked: false }, "#selfDataPrepare": { disabled: true } });

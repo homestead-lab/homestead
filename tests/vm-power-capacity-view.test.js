@@ -27,6 +27,7 @@ function setup({blocked=false, missing=false, fail=false, cpuEstimate=false, sta
     }};
   ctx.window=ctx;
   vm.createContext(ctx);
+  ctx.jsArg = s => JSON.stringify(String(s ?? "")); ctx.jsq = s => (ctx.esc || String)(ctx.jsArg(s));
   vm.runInContext(fs.readFileSync("web/js/views-vms.js","utf8"),ctx);
   return {ctx,fields,sent,notices};
 }

@@ -32,7 +32,7 @@ async function authState() {
 
 /* Homestead is up but its cluster is not answering: say so, and keep trying. */
 function clusterUnavailable(error) {
-  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.214" alt="">
+  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.215" alt="">
     <h2>Homestead</h2><p class="sub">Waiting for the cluster</p>
     <div class="gateerr">${esc(error || "The Kubernetes API did not answer.")}</div>
     <p class="dim small">This page tries again every few seconds.</p>
@@ -88,7 +88,7 @@ function ungate() { $("#gate").classList.add("hidden"); }
 
 function loginForm(err, setup) {
   gate(`
-    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.214" alt="">
+    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.215" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}
@@ -198,15 +198,15 @@ window.manageUsers = async () => {
         ${us.map(u => `<tr><td><div class="row" style="gap:9px">
             <div class="av">${esc(u.name.slice(0, 2).toUpperCase())}</div><b>${esc(u.name)}</b>
             ${u.name === ME ? '<span class="tag ok">you</span>' : ""}</div></td>
-          <td><select onchange="setRole('${esc(u.name)}',this.value)" ${u.name === ME ? "disabled" : ""}
+          <td><select onchange="setRole(${jsq(u.name)},this.value)" ${u.name === ME ? "disabled" : ""}
               style="padding:5px 9px;font-size:12px;width:auto">
             ${["viewer", "operator", "admin"].map(r =>
               `<option value="${r}" ${u.role === r ? "selected" : ""}>${r}</option>`).join("")}
           </select></td>
           <td class="dim small mono">${esc(u.last_login || "never")}
-            <div><a class="linkish xs" onclick="userSignins('${esc(u.name)}')">Sign-in history</a></div></td>
+            <div><a class="linkish xs" onclick="userSignins(${jsq(u.name)})">Sign-in history</a></div></td>
           <td>${u.name === ME || us.length === 1 ? '<span class="dim xs">—</span>'
-            : `<button class="btn sm danger" onclick="delUser('${esc(u.name)}')">Remove</button>`}</td>
+            : `<button class="btn sm danger" onclick="delUser(${jsq(u.name)})">Remove</button>`}</td>
         </tr>`).join("")}</tbody></table></div></div>
       <div class="sec">Add a user</div>
       <div class="f2">

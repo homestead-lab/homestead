@@ -16,7 +16,7 @@ function setup({blocked=false,missing=false,fail=false}={}){
       if(fail)throw new Error("lost response");
       return {ok:true,detail:"Resolved as unknown",operation:{id:"job",status:"failed"}};
     }};
-  ctx.window=ctx;vm.createContext(ctx);vm.runInContext(fs.readFileSync("web/js/ui.js","utf8"),ctx);vm.runInContext(fs.readFileSync("web/js/operations.js","utf8"),ctx);
+  ctx.window=ctx;vm.createContext(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(fs.readFileSync("web/js/ui.js","utf8"),ctx);vm.runInContext(fs.readFileSync("web/js/operations.js","utf8"),ctx);
   ctx.noteOperation=job=>jobs.push(job);
   return {ctx,fields,sent,jobs};
 }

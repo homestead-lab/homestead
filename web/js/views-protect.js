@@ -179,7 +179,7 @@ async function viewProtect() {
       <div style="margin-top:12px">${d.groups.map(g => {
         const n = d.volumes.filter(v => v.groups.includes(g)).length;
         return `<span class="tag ${g === "default" ? "info" : ""}" role="button" tabindex="0" style="cursor:pointer"
-          data-tip="Edit ${esc(g)}" onclick="lhGroup('${esc(g)}')">${esc(g)} · ${n}</span>`;
+          data-tip="Edit ${esc(g)}" onclick="lhGroup(${jsq(g)})">${esc(g)} · ${n}</span>`;
       }).join("")}</div>
       <div class="dim xs" style="margin-top:12px">Longhorn puts every volume without a group in
         <span class="mono">default</span>. Give some volumes a plan of their own with a group.</div>
@@ -204,11 +204,11 @@ async function viewProtect() {
     </div>
     <div class="dim xs">${esc(j.desc)} · ${j.groups.length ? `groups ${j.groups.map(g => `<span class="tag">${esc(g)}</span>`).join("")}` : "no groups"} · ${j.concurrency} at a time</div>
     <div class="row wacts">
-      <button class="btn sm" data-need="operator" onclick="lhRun('${esc(j.name)}')" ${j.running ? "disabled" : ""}>${icon("play")}Run now</button>
+      <button class="btn sm" data-need="operator" onclick="lhRun(${jsq(j.name)})" ${j.running ? "disabled" : ""}>${icon("play")}Run now</button>
       <button class="btn sm" onclick='lhJob(${JSON.stringify(j).replace(/'/g, "&#39;")})' data-need="operator">Edit</button>
       <details class="actionmenu"><summary class="btn sm" title="More actions" aria-label="More actions for ${esc(j.name)}">⋯</summary><div class="actionmenu-pop">
-        <button onclick="this.closest('details').open=false;lhCovered('${esc(j.name)}')">${icon("disk")}Volumes it covers</button>
-        <button class="danger" data-need="admin" onclick="this.closest('details').open=false;lhJobDel('${esc(j.name)}')">${icon("trash")}Delete</button>
+        <button onclick="this.closest('details').open=false;lhCovered(${jsq(j.name)})">${icon("disk")}Volumes it covers</button>
+        <button class="danger" data-need="admin" onclick="this.closest('details').open=false;lhJobDel(${jsq(j.name)})">${icon("trash")}Delete</button>
       </div></details>
     </div></div>`).join("")}</div>`
   : `<div class="empty">No recurring jobs yet. A plan sets up a sensible policy in one go -
@@ -232,8 +232,8 @@ async function viewProtect() {
       || '<span class="tag warn" data-tip="No snapshot or backup job covers it">nothing</span>'}</td>
     <td class="small dim">${v.last_backup_at ? esc(v.last_backup_at.replace("T", " ").replace("Z", "")) : "never"}</td>
     <td><div class="row" style="gap:6px">
-      <button class="btn sm" onclick="lhSnaps('${esc(v.name)}','${esc(v.pvc || v.name)}')">Snapshots</button>
-      <button class="btn sm" data-need="operator" onclick="lhAssign('${esc(v.name)}','${esc(v.pvc || v.name)}')">Protect</button>
+      <button class="btn sm" onclick="lhSnaps(${jsq(v.name)},${jsq(v.pvc || v.name)})">Snapshots</button>
+      <button class="btn sm" data-need="operator" onclick="lhAssign(${jsq(v.name)},${jsq(v.pvc || v.name)})">Protect</button>
     </div></td></tr>`).join("")}
   </tbody></table></div></div>
 
@@ -246,7 +246,7 @@ async function viewProtect() {
       <td class="mono">${b.count}</td>
       <td class="small dim">${b.last_backup_at ? esc(b.last_backup_at.replace("T", " ").replace("Z", "")) : "—"}</td>
       <td class="mono">${b.size_mb ? (b.size_mb >= 1024 ? `${(b.size_mb / 1024).toFixed(1)} GB` : `${b.size_mb} MB`) : "—"}</td>
-      <td><button class="btn sm" onclick="lhBackupList('${esc(b.name)}','${esc(b.pvc || b.name)}')">Backups</button></td></tr>`).join("")}
+      <td><button class="btn sm" onclick="lhBackupList(${jsq(b.name)},${jsq(b.pvc || b.name)})">Backups</button></td></tr>`).join("")}
   </tbody></table></div></div>`
   : `<div class="empty">${tgt.configured ? "No backups on the target yet." : "No backup target, so no backups."}</div>`}`);
 }
@@ -265,8 +265,8 @@ function groupCard(g) {
       || '<span class="dim">no jobs cover it</span>'}</div>
     <div class="dim xs" style="margin-top:8px">${vols.slice(0, 8).map(v => esc(v.pvc || v.name)).join(", ")}${vols.length > 8 ? ` +${vols.length - 8}` : ""}</div>
     <div class="row wacts">
-      <button class="btn sm" data-need="operator" onclick="lhGroup('${esc(g.name)}')">Edit</button>
-      ${g.name === "default" ? "" : `<button class="btn sm danger" data-need="admin" onclick="lhGroupDel('${esc(g.name)}')">Delete</button>`}
+      <button class="btn sm" data-need="operator" onclick="lhGroup(${jsq(g.name)})">Edit</button>
+      ${g.name === "default" ? "" : `<button class="btn sm danger" data-need="admin" onclick="lhGroupDel(${jsq(g.name)})">Delete</button>`}
     </div></div>`;
 }
 
@@ -541,7 +541,7 @@ window.lhAssign = (vol, label) => {
       ${esc(j.name)} <span class="dim xs">${esc(j.task)}</span></label>`).join("")
       || '<div class="dim xs">no jobs defined yet</div>'}</div>
     <div class="row" style="margin-top:18px">
-      <button class="btn pri" onclick="lhAssignSave('${esc(vol)}')">Save</button>
+      <button class="btn pri" onclick="lhAssignSave(${jsq(vol)})">Save</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div>`);
 };
 window.lhAssignSave = async vol => {
@@ -587,8 +587,8 @@ function snapshotTimeline(snaps, vol, label) {
       ${(s.children || []).includes("volume-head") ? `<span class="tag" data-tip="This snapshot is the parent of live data. After marking it removed, Longhorn may need a fresh snapshot boundary before it can reclaim blocks.">parent of Volume Head</span>` : ""}</div>
       ${source === "system" ? '<p class="dim xs">Longhorn-created checkpoint (for example expansion or rebuild), not a user recovery point.</p>' : ""}
       ${s.error ? `<p class="warntext small">${esc(s.error)}</p>` : ""}
-      <div class="row snapshot-actions">${source !== "system" && source !== "unknown" && s.ready && !s.deleting && !s.removed ? `<button class="btn sm" data-need="admin" onclick="lhRevert('${esc(vol)}','${esc(s.name)}','${esc(label)}')">${icon("rollback")}Roll back</button>` : ""}
-      <button class="btn sm danger" data-need="admin" ${source === "unknown" ? "disabled" : ""} onclick="lhSnapDel('${esc(s.name)}','${esc(vol)}','${esc(label)}')">${icon("trash")}${s.deleting ? "Track cleanup" : source === "system" ? "Clean up" : "Delete"}</button></div>
+      <div class="row snapshot-actions">${source !== "system" && source !== "unknown" && s.ready && !s.deleting && !s.removed ? `<button class="btn sm" data-need="admin" onclick="lhRevert(${jsq(vol)},${jsq(s.name)},${jsq(label)})">${icon("rollback")}Roll back</button>` : ""}
+      <button class="btn sm danger" data-need="admin" ${source === "unknown" ? "disabled" : ""} onclick="lhSnapDel(${jsq(s.name)},${jsq(vol)},${jsq(label)})">${icon("trash")}${s.deleting ? "Track cleanup" : source === "system" ? "Clean up" : "Delete"}</button></div>
       </div></article>`;
   }).join("") || '<div class="empty small">No snapshots yet</div>'}
     <article class="snapshot-point head"><div class="snapshot-marker">${icon("play")}</div><div class="snapshot-content"><b>Volume Head</b><span class="dim small">Live data · now · never deleted as a snapshot</span></div></article></div>`;
@@ -636,9 +636,9 @@ window.lhSnaps = async (vol, label) => {
     if (token !== SNAPSHOT_REFRESH || $("#mtitle").textContent !== "Snapshots · " + label || $("#modal").classList.contains("hidden")) return;
     $("#mbody").innerHTML = `
       <div class="row" style="margin-bottom:16px">
-        <button class="btn pri" data-need="operator" onclick="lhSnapNow('${esc(vol)}','${esc(label)}')">Take snapshot now</button>
-        <button class="btn" data-need="operator" onclick="lhBackupNow('${esc(vol)}','${esc(label)}')">Back up now</button>
-        <button class="btn" onclick="lhSnaps('${esc(vol)}','${esc(label)}')">${icon("refresh")}Refresh</button>
+        <button class="btn pri" data-need="operator" onclick="lhSnapNow(${jsq(vol)},${jsq(label)})">Take snapshot now</button>
+        <button class="btn" data-need="operator" onclick="lhBackupNow(${jsq(vol)},${jsq(label)})">Back up now</button>
+        <button class="btn" onclick="lhSnaps(${jsq(vol)},${jsq(label)})">${icon("refresh")}Refresh</button>
       </div>
       <p class="dim small">Creation timeline, oldest first. Checkpoint ancestry can branch after rollback; this is not a dependency graph.</p>
       <div id="snapshot_live" data-token="${token}"><div class="sec">Snapshots (${snaps.length})</div>${snapshotTimeline(snaps, vol, label)}</div>
@@ -657,10 +657,10 @@ function backupTable(bks, vol, label) {
       <td class="mono">${b.size_mb} MB</td>
       <td class="small dim">${esc((b.created || "").replace("T", " ").replace("Z", ""))}</td>
       <td><div class="row" style="gap:6px">${b.restorable ? `<button class="btn sm" data-need="admin"
-        onclick="lhRestore('${esc(b.name)}')">${icon("rollback")}Restore</button>`
+        onclick="lhRestore(${jsq(b.name)})">${icon("rollback")}Restore</button>`
         : '<span class="dim xs">not ready</span>'}
         <button class="btn sm danger" data-need="admin" data-tip="Delete it from the backup target"
-          onclick="lhBackupDel('${esc(b.name)}','${esc(vol)}','${esc(label)}')">✕</button></div></td></tr>`).join("")
+          onclick="lhBackupDel(${jsq(b.name)},${jsq(vol)},${jsq(label)})">✕</button></div></td></tr>`).join("")
       || `<tr><td colspan=5 class="empty">no backups — needs a backup target</td></tr>`}
   </tbody></table></div></div>`;
 }
@@ -786,7 +786,7 @@ window.lhRevert = async (vol, snap, label) => {
         : '<div class="dim small">Nothing uses it now, so nothing needs stopping.</div>'}
       ${(p.blockers || []).map(b => `<div class="note bad">${esc(b)}</div>`).join("")}
       <div class="modalactions"><button class="btn" onclick="modalBack()">Cancel</button>
-        <button class="btn pri" ${p.ready ? "" : "disabled"} onclick="lhRevertGo('${esc(vol)}','${esc(snap)}')">${icon("rollback")}Roll back</button></div>`;
+        <button class="btn pri" ${p.ready ? "" : "disabled"} onclick="lhRevertGo(${jsq(vol)},${jsq(snap)})">${icon("rollback")}Roll back</button></div>`;
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
 window.lhRevertGo = async (vol, snap) => {

@@ -212,7 +212,7 @@ function composeServiceCard(s) {
       <div class="dim xs mono" title="${esc(s.image || "")}">${esc(s.image || "no image")}</div></div>
       <div class="row nowrap">
         ${s.line ? `<button class="linkish xs" onclick="composeGoto(${+s.line})">line ${+s.line}</button>` : ""}
-        <button class="btn sm" ${s.config ? "" : "disabled"} onclick="composeToForm('${esc(s.name)}')" data-tip="Open this service in the Deploy form to change anything before creating it">Edit in form</button></div></div>
+        <button class="btn sm" ${s.config ? "" : "disabled"} onclick="composeToForm(${jsq(s.name)})" data-tip="Open this service in the Deploy form to change anything before creating it">Edit in form</button></div></div>
     <div class="compose-facts">
       <span class="tag ${sum.lan ? "info" : ""}">${sum.network === "host" ? "host network" : sum.lan ? "LAN" : sum.network === "internal" ? "cluster only" : "no ports"}</span>
       ${(sum.ports || []).map(p => `<span class="tag">${esc(p)}</span>`).join("")}

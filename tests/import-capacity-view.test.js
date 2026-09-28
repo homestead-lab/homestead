@@ -21,7 +21,7 @@ function setup({blocked=false, missing=false, fail=false}={}) {
       if(fail) throw Error("Lost connection");
       return {job:"homestead-import-app"};
     }};
-  ctx.window=ctx; vm.createContext(ctx);
+  ctx.window=ctx; vm.createContext(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));
   vm.runInContext(fs.readFileSync("web/js/views-lifecycle.js","utf8"),ctx);
   ctx.viewImport=()=>{};
   return {ctx,calls,fields};

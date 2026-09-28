@@ -54,7 +54,7 @@ function renderPortal() {
       : !rows.length ? `<div class="empty">Nothing matches that search.</div>`
       : portalSections(rows).map(([section, members]) => `<section class="portal-section">
         ${section ? `<div class="sec">${esc(section)}</div>` : ""}
-        <div class="portal-grid">${members.map(link => `<a class="portal-tile card flat" href="${esc(link.url)}" target="_blank" rel="noopener noreferrer" data-link="${esc(link.id)}">
+        <div class="portal-grid">${members.map(link => `<a class="portal-tile card flat" href="${safeHref(link.url)}" target="_blank" rel="noopener noreferrer" data-link="${esc(link.id)}">
           ${portalIcon(link)}<span class="portal-text"><b>${esc(link.title)}</b>
             <span class="dim xs mono">${esc(portalHost(link.url))}</span>${link.note ? `<span class="dim xs">${esc(link.note)}</span>` : ""}</span>
           <span class="portal-dot" data-tip="not checked yet"></span></a>`).join("")}</div></section>`).join("")}`);

@@ -7,6 +7,7 @@ const vm = require("node:vm");
 
 const context = { window: {}, console };
 vm.createContext(context);
+context.jsArg = s => JSON.stringify(String(s ?? "")); context.jsq = s => (context.esc || String)(context.jsArg(s));
 vm.runInContext(fs.readFileSync("web/js/views-overview.js", "utf8"), context);
 
 const tone = value => vm.runInContext(`smartTestTone(${JSON.stringify(value)})`, context);

@@ -6,6 +6,24 @@ const STATE = { view: "dash", q: "", data: {}, busy: false };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+/* A value as a JavaScript string literal, for an inline handler written
+   into HTML: onclick="fn(${jsq(name)})". esc() alone is not enough there -
+   the browser turns &#39; back into ' before the handler runs, so a quote in
+   the value would end its string. jsArg() is the same literal unescaped, for
+   handler text given to UI.button(), which escapes what it is given. */
+const jsArg = s => JSON.stringify(String(s ?? ""));
+const jsq = s => esc(jsArg(s));
+/* A link from data - an app's project page, release notes, a portal tile -
+   as an href: http(s), or a path on this site. Anything else, a javascript:
+   URL above all, becomes "#", so a click on it does nothing. */
+const safeHref = url => {
+  const text = String(url ?? "").trim();
+  if (/^\/(?!\/)/.test(text)) return esc(text);
+  try {
+    const parsed = new URL(text);
+    return ["http:", "https:"].includes(parsed.protocol) ? esc(parsed.href) : "#";
+  } catch (e) { return "#"; }
+};
 /* Put text on the clipboard. The Clipboard API exists only on HTTPS and
    localhost, and Homestead is often opened at http://its-address, so the
    older copy command stands in there. */
@@ -24,7 +42,7 @@ async function copyText(text) {
 async function readClipboard() {
   try { return navigator.clipboard?.readText ? await navigator.clipboard.readText() : null; } catch (_) { return null; }
 }
-const HOMESTEAD_VERSION = "2.8.214";
+const HOMESTEAD_VERSION = "2.8.215";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -194,7 +212,7 @@ function hardwareChoices(cls, selected = []) {
     ${f.usb_ids?.length ? `<span class="dim xs"> USB ${esc(f.usb_ids.join(", "))}</span>` : ""}
     <span class="dim xs hw-hosts">${hosts.length ? `${hosts.length} host${hosts.length === 1 ? "" : "s"}: ${esc(hosts.map(x => x.replace("harvester-", "")).join(", "))}` : "no eligible host detected"}</span></span></label>`;
   }).join("");
-  return choices + `<button class="btn sm hw-manage" type="button" onclick="openHardwareManager('${esc(cls)}')">Browse host devices / add mapping</button>`;
+  return choices + `<button class="btn sm hw-manage" type="button" onclick="openHardwareManager(${jsq(cls)})">Browse host devices / add mapping</button>`;
 }
 const selectedHardware = cls => $$(`.${cls}:checked`).map(x => x.dataset.hwid);
 window.openHardwareManager = cls => {
@@ -309,7 +327,7 @@ function layoutSwitch(page, redraw) {
   const layout = viewLayout(page);
   const option = (value, label, iconName) => `<button class="${layout === value ? "on" : ""}" title="${label}"
     aria-label="Show as ${label.toLowerCase()}" aria-pressed="${layout === value}"
-    onclick="setViewLayout('${page}','${redraw}','${value}')">${icon(iconName)}</button>`;
+    onclick="setViewLayout(${jsq(page)},${jsq(redraw)},${jsq(value)})">${icon(iconName)}</button>`;
   return `<div class="seg iconseg" role="group" aria-label="Layout">${option("cards", "Cards", "dash")}${option("rows", "Rows", "list")}</div>`;
 }
 window.setViewLayout = (page, redraw, layout) => {
