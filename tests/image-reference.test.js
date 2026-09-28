@@ -50,5 +50,13 @@ test("a new build under the same tag shows the start of each digest", () => {
   assert.deepEqual([...context.imageChangeWords(`nginx:latest@sha256:${"a".repeat(64)}`, `nginx:latest@sha256:${"b".repeat(64)}`)],
     ["latest · aaaaaaa", "latest · bbbbbbb"]);
   assert.deepEqual([...context.imageChangeWords(`nginx@sha256:${"a".repeat(64)}`, `nginx@sha256:${"b".repeat(64)}`)],
+    ["aaaaaaa", "bbbbbbb"], "a digest alone has no release to name");
+});
+
+test("the release Homestead tracks names a digest-pinned image", () => {
+  // An update pins the image to its digest, dropping the tag; the server sends the tracked release beside it.
+  assert.deepEqual([...context.imageChangeWords(`ghcr.io/wjcloudy/homestead@sha256:${"a".repeat(64)}`,
+    `ghcr.io/wjcloudy/homestead@sha256:${"b".repeat(64)}`, "2.8.215", "2.8.217")], ["2.8.215", "2.8.217"]);
+  assert.deepEqual([...context.imageChangeWords(`nginx@sha256:${"a".repeat(64)}`, `nginx@sha256:${"b".repeat(64)}`, "latest", "latest")],
     ["latest · aaaaaaa", "latest · bbbbbbb"]);
 });

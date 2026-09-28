@@ -782,6 +782,11 @@
     "/api/move/moves/retry": { ok: true }, "/api/move/moves/abandon": { ok: true },
     "/api/move/moves/finish": { ok: true, message: "mosquitto lives here now; removed workload mosquitto on shed" },
     "/api/move/moves": () => [
+      { id: "d2", cluster: "shed", kind: "container", name: "grafana", source_namespace: "lab",
+        namespace: "lab", status: "failed", phase: "joining", phase_index: 0, source_stopped: false,
+        phases: ["joining", "quiescing", "backing-up", "syncing", "restoring", "creating", "starting", "done"],
+        progress: 1, message: "this cluster cannot reach shed's backup storage at http://192.168.1.108:9000. Give it an address this cluster can reach - shed's Migration button under Linked clusters - then retry",
+        source_removed: false, created_at: new Date(Date.now() - 2 * 60e3).toISOString(), claims: [] },
       { id: "d1", cluster: "shed", kind: "container", name: "frigate", source_namespace: "lab",
         namespace: "lab", status: "running", phase: "restoring", phase_index: 4,
         phases: ["joining", "quiescing", "backing-up", "syncing", "restoring", "creating", "starting", "done"],
@@ -1663,10 +1668,11 @@ ssh_pwauth: true
     "/api/image-updates/preview": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       return {capacity_token: "demo-image-review", action: body.action || "update",
-        // As the server writes them: the release, pinned to its exact digest.
-        images: [{container: body.name, before: "ghcr.io/example/app:1.0.0@sha256:" + "a".repeat(64),
-          after: "ghcr.io/example/app:1.1.0@sha256:" + "b".repeat(64),
-          rollback: "ghcr.io/example/app:1.0.0@sha256:" + "a".repeat(64)}],
+        // As the server sends them: images pinned to their digests, which
+        // carry no tag, and the releases Homestead tracks for them beside.
+        images: [{container: body.name, before: "ghcr.io/example/app@sha256:" + "a".repeat(64),
+          after: "ghcr.io/example/app@sha256:" + "b".repeat(64), before_tag: "1.0.0", after_tag: "1.1.0",
+          rollback: "ghcr.io/example/app@sha256:" + "a".repeat(64)}],
         capacity: {blocked: false, requires_confirmation: true, additional: 1,
           pod_request_gb: 0.5, pod_memory_gb: 2, pod_cpu_request_percent: 10,
           candidates: [{name: "h-node1", eligible: true, metrics_available: true,
