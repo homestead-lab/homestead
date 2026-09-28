@@ -7888,7 +7888,8 @@ class H(BaseHTTPRequestHandler):
                 return self._move(lambda: OBJECTS.set_transfers(bool(b.get("allow")), int(b.get("size_gb") or 100),
                                                                 str(b.get("lb_ip") or ""), str(b.get("vip_mode") or "")))
             if p == "/api/move/clusters/transfers":
-                return self._move(lambda: MOVE.transfers(b.get("name"), b.get("allow"), b.get("size_gb") or 100))
+                return self._move(lambda: MOVE.transfers(b.get("name"), b.get("allow"), b.get("size_gb") or 100,
+                                                         b.get("lb_ip") or "", b.get("vip_mode") or ""))
             if p == "/api/objectstore/longhorn":
                 return self._send(200, OBJECTS.point_longhorn(replace=bool(b.get("replace", True))))
             if p == "/api/objectstore/remove":

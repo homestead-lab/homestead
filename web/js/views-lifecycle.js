@@ -1741,8 +1741,8 @@ window.clusterReady = async name => {
   const step = (ok, text, action = "") => `<div class="clstep ${ok ? "done" : "todo"}"><span>${ok ? "✓" : "•"}</span><div>${text}${action}</div></div>`;
   host.innerHTML = step(true, "Connected")
     + (store.stopped
-      ? step(false, `Moves out of ${esc(name)} are turned off: its backup storage is stopped`,
-          `<div><button class="btn sm pri" data-need="admin" onclick="clusterTransfersOn(${jsq(name)})">Turn them on</button></div>`)
+      ? step(false, `Migration from ${esc(name)} is off: its backup storage is stopped`,
+          `<div><button class="btn sm pri" data-need="admin" onclick="clusterTransfersOn(${jsq(name)})">Enable it</button></div>`)
       : target.configured && target.reachable_off_cluster && !target.answers
       ? step(false, `Backup storage on ${esc(name)} is at <span class="mono">${esc(target.endpoint || "")}</span>, but this cluster cannot reach it`,
           `<div class="dim xs">It may still be starting. Otherwise the address is taken by something else or firewalled - give it another.</div>

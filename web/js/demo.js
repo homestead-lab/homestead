@@ -620,11 +620,14 @@
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     // shed is ready to move from; barn has no backup storage yet.
-    "/api/move/clusters/readiness": (url, init) => JSON.parse(init?.body || "{}").name === "barn"
+    "/api/move/clusters/readiness": (url, init) => JSON.parse(init?.body || "{}").name === "garage"
+      ? { version: { state: "unreachable", message: "could not reach garage" }, storage: {}, target: {}, ready: false }
+      : JSON.parse(init?.body || "{}").name === "barn"
       ? { version: { compatible: true }, storage: { deployed: false }, target: { configured: false, error: "no backup target" }, ready: false,
           shared_vip: "192.168.1.245", free_vips: [{ ip: "192.168.1.246", label: "spare", from: "vips" }, { ip: "192.168.1.230", label: "", from: "pool" }] }
       : { version: { compatible: true }, storage: { deployed: true, ready: true, reachable_off_cluster: true },
-          target: { configured: true, reachable_off_cluster: true, url: "s3://homestead-backups@us-east-1/" }, ready: true },
+          target: { configured: true, reachable_off_cluster: true, answers: true, url: "s3://homestead-backups@us-east-1/",
+            endpoint: "http://192.168.1.250:9000" }, ready: true },
     "/api/move/clusters/storage": { ok: true, detail: "backup storage is starting on barn at http://192.168.1.244:9000" },
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "shed", url: "http://192.168.1.250:8088",
@@ -1738,11 +1741,13 @@ ssh_pwauth: true
     "/api/fleet/remove": { ok: true, told: true, missed: [] },
     "/api/objectstore/transfers": (url, init) => init?.method === "POST"
       ? { allowed: JSON.parse(init.body || "{}").allow, deployed: true, detail: JSON.parse(init.body || "{}").allow ? "moves out are on" : "moves out are off: backup storage is stopped, its volume kept" }
-      : { allowed: true, deployed: true, ready: true, stopped: false, endpoint: "http://192.168.1.242:9000", backups_here: true },
+      : { allowed: true, deployed: true, ready: true, stopped: false, endpoint: "http://192.168.1.242:9000", reachable_off_cluster: true,
+          size_gb: 100, backups_here: true },
     "/api/move/clusters/transfers": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       if (body.allow !== undefined) return { allowed: body.allow, deployed: true, detail: body.allow ? "moves out are on" : "moves out are off" };
-      return body.name === "shed" ? { allowed: true, deployed: true, ready: true, stopped: false }
+      return body.name === "shed" ? { allowed: true, deployed: true, ready: true, stopped: false, endpoint: "http://192.168.1.250:9000",
+          reachable_off_cluster: true, size_gb: 100, backups_here: true }
         : { allowed: false, deployed: false, ready: false, stopped: false };
     },
     "/api/fleet/legacy": [{ name: "barn", url: "http://192.168.1.252:8088", user: "admin", added: "2026-05-02 18:40", linked_as: null }],
