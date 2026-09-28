@@ -10,7 +10,7 @@
 | **Apps** | the App Store catalogue, Portal links, UniFi, namespaces |
 | **MQTT** | cluster and node stats to an MQTT broker, with Home Assistant discovery |
 | **This device** | notifications on this phone or computer, installing the app |
-| **About** | Homestead's own health, Samba, redundancy, permissions, and node-probe status |
+| **About** | Homestead's version and updates, its own health, Samba, redundancy, permissions, and node-probe status |
 
 ![Settings - Cluster](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-settings-cluster.jpg)
 
@@ -47,6 +47,20 @@ on Harvester too:
 
 A page or form that needs one offers the same install. Harvester has the
 storage, VM and network add-ons built in, so its card shows only the node probe.
+
+## Homestead updates
+
+Homestead's own release, and the helpers it runs beside it - the SMB and NFS
+servers and the object store moves use - are updated apart from your apps.
+When one is waiting, a **Homestead** button with the new version appears on
+the top bar; it and **About › Homestead updates** show the release you run,
+the one on offer with a link to what's new, and each helper's image. **Update**
+opens the same reviewed rollout an app gets, helpers first and Homestead last;
+the page reconnects when Homestead is back. **Check now** asks the registries
+again. How updates are approved is set under **Updates**.
+
+A notification about a new Homestead release links here: `/settings?tab=about`
+opens this tab, as `?tab=` does for any of them.
 
 ## Homestead's own health
 

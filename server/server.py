@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.219")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.220")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -1193,6 +1193,22 @@ def is_managed_nfs(ns, name):
     return (ns, name) == (SMB_NAMESPACE, NFS.NAME)
 
 
+def homestead_part(ns, name):
+    """Which part of Homestead a Deployment is - itself, or a helper it runs
+    and keeps in step: the SMB and NFS servers, the object store moves use.
+    Empty for anything else. The Containers page hides these with the
+    platform, and their updates are Homestead's, not an app's."""
+    if is_self(ns, name):
+        return "self"
+    if is_managed_smb(ns, name):
+        return "smb"
+    if is_managed_nfs(ns, name):
+        return "nfs"
+    if (ns, name) == (OBJECTS.NS, OBJECTS.NAME):
+        return "objectstore"
+    return ""
+
+
 def guard_managed_smb(ns, name):
     if is_managed_smb(ns, name):
         raise ValueError("Homestead manages SMB and its mounts from Network Shares. "
@@ -1411,7 +1427,8 @@ def get_workloads():
             "self": is_self(ns, name),
             "managed_smb": is_managed_smb(ns, name),
             "managed_nfs": is_managed_nfs(ns, name),
-            "platform": PLATFORM_NS.get(ns, ""),
+            "platform": "Homestead" if homestead_part(ns, name) else PLATFORM_NS.get(ns, ""),
+            "homestead": homestead_part(ns, name),
             "failover": FAILOVER.mode_of(pspec),
             "lan": (LAN.read(d) or {}).get("address", ""),
         })
@@ -4868,6 +4885,7 @@ LH.bind(kget, ksend, _cache, STORAGE_CLASS)
 PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.features)
 POWER.bind(kget, PLACE.impact, LC.quorum_report, lambda: LC.NODE_POWER_ENABLED)
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE)
+UPDATES.PART = homestead_part
 SMART.bind(kget, DEFAULT_NS, AUTH.internal_signing_key)
 OPS.bind(kget, DATA_DIR, UPDATES.progress, SMART.progress)
 RESTRUCTURE.bind(kget, ksend, raw_get)

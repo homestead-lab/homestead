@@ -53,6 +53,12 @@ def bind(_kget, _ksend, default_ns="lab", data_dir="/data", system_namespaces=No
     SMB_NAMESPACE = smb_namespace
 
 
+# Which part of Homestead a Deployment is ("self", "nfs", ...), or "" for an
+# app: set by the server. Homestead's own updates are counted apart from
+# apps' - they have their own place on the top bar and under Settings › About.
+PART = lambda ns, name: ""
+
+
 def _managed_smb(ns, name):
     return ns == SMB_NAMESPACE and name in (NAMES.object_name("smb"), "samba")
 
@@ -410,13 +416,19 @@ def scan(force=False):
                                       "images": [{"container": "", "available": False,
                                                   "error": str(error)[:180]}]})
                 _scan_note(done=len(workloads), current=dep["metadata"]["name"],
-                           updates=sum(1 for x in workloads if x["available"]))
+                           updates=sum(1 for x in workloads if x["available"] and not x.get("homestead")))
     finally:
         _scan_note(running=False, current="", finished_at=time.time())
     workloads.sort(key=lambda x: (x["ns"], x["name"]))
+    for item in workloads:
+        item["homestead"] = PART(item["ns"], item["name"])
+    apps = [x for x in workloads if not x["homestead"]]
+    own = [x for x in workloads if x["homestead"]]
     return {"checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "updates": sum(1 for x in workloads if x["available"]),
-            "errors": sum(1 for x in workloads for image in x["images"] if image.get("error")),
+            "updates": sum(1 for x in apps if x["available"]),
+            "errors": sum(1 for x in apps for image in x["images"] if image.get("error")),
+            "homestead": {"updates": sum(1 for x in own if x["available"]),
+                          "errors": sum(1 for x in own for image in x["images"] if image.get("error"))},
             "workloads": workloads}
 
 

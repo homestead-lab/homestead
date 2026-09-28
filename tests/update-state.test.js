@@ -35,3 +35,16 @@ test("control-plane updates are applied last without disturbing the selected ord
   assert.deepEqual(state.orderApply(selected).map(item => item.name), ["plex", "frigate", "homestead"]);
   assert.deepEqual(selected.map(item => item.name), ["homestead", "plex", "frigate"]);
 });
+
+test("Homestead and its helpers are updated apart from apps, Homestead first", () => {
+  const report = { workloads: [
+    { ns: "lab", name: "homestead-nfs", homestead: "nfs", available: true },
+    { ns: "lab", name: "plex", homestead: "", available: true },
+    { ns: "lab", name: "homestead", homestead: "self", available: true },
+    { ns: "lab", name: "homestead-objectstore", homestead: "objectstore", available: false },
+  ] };
+  assert.deepEqual(state.availableWorkloads(report).map(item => item.name), ["plex"]);
+  assert.deepEqual(state.homesteadWorkloads(report).map(item => item.name), ["homestead", "homestead-nfs", "homestead-objectstore"]);
+  assert.deepEqual(state.orderApply(state.homesteadWorkloads(report).filter(w => w.available)).map(item => item.name),
+    ["homestead-nfs", "homestead"]);
+});
