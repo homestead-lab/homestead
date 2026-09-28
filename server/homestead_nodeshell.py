@@ -56,7 +56,7 @@ def body(node):
                      "restartPolicy": "Never", "terminationGracePeriodSeconds": 1,
                      "activeDeadlineSeconds": LIFETIME,
                      "tolerations": [{"operator": "Exists"}],
-                     "containers": [{"name": "shell", "image": IMAGE, "command": ["sleep", str(LIFETIME)],
+                     "containers": [{"name": "shell", "image": IMAGE, "command": ["sh", "-c", f"trap 'exit 0' TERM; sleep {LIFETIME} & wait"],
                                      "securityContext": {"privileged": True},
                                      "resources": {"requests": {"cpu": "5m", "memory": "8Mi"},
                                                    "limits": {"memory": "64Mi"}}}]}}

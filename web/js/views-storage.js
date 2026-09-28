@@ -276,12 +276,42 @@ function volumeProgressWatch() {
   }, 4000);
 }
 
+/* Claims on classes that are not Longhorn - k3s's local-path, NFS - which
+   Longhorn's list above leaves out, and why one is stuck. */
+/* Windows refuses guest shares by default, from its side: since Windows 10
+   it blocks insecure guest logons, and Windows 11 24H2 requires signing,
+   which a guest session cannot do. Nothing on the server changes that; the
+   PC's own settings do. */
+function shareGuestWindowsNote() {
+  return `<div class="note small"><b>Windows refuses guest shares until two of its own settings change.</b>
+    In PowerShell as administrator on each PC:
+    ${(cmd => window.guideCopy ? guideCopy(cmd) : `<pre class="mono small wrap-pre">${esc(cmd)}</pre>`)("Set-SmbClientConfiguration -EnableInsecureGuestLogons $true -RequireSecuritySignature $false -Force")}
+    <span class="dim xs">The first allows sign-in-free shares (off since Windows 10); the second stops Windows 11 24H2
+    requiring signed sessions, which a guest cannot sign. Both apply to every server that PC connects to - a share with
+    a user and password needs neither.</span></div>`;
+}
+
+function otherVolumesHtml(rows) {
+  if (!(rows || []).length) return "";
+  const stuck = rows.filter(r => r.phase !== "Bound");
+  return `<div class="between" style="margin-top:22px"><div class="sec">Other volumes <span class="dim">${rows.length}</span>
+      ${tip("Volumes on storage classes other than Longhorn, such as k3s's local-path. They have no replicas, snapshots or backups here; their data lives where that class keeps it.")}</div></div>
+    ${stuck.length ? `<div class="note warn small" style="margin-bottom:10px"><b>${stuck.length} volume${stuck.length === 1 ? " is" : "s are"} not made.</b>
+      Usually a shared (ReadWriteMany) volume asked of a class that serves one node - local-path does - which never makes it. Delete it and make it again on a class that shares, or as a single-node volume.</div>` : ""}
+    <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Volume</th><th>Class</th><th>Size</th><th>Mode</th><th>State</th></tr></thead><tbody>
+    ${rows.map(r => `<tr><td><b>${esc(r.name)}</b><div class="dim xs">${esc(r.namespace)}</div></td>
+      <td data-label="Class" class="mono">${esc(r.storage_class)}</td><td data-label="Size" class="mono">${esc(r.size || "—")}</td>
+      <td data-label="Mode"><span class="tag">${esc(r.access_modes.map(m => m === "ReadWriteMany" ? "RWX" : m === "ReadWriteOnce" ? "RWO" : m).join(", ") || "?")}</span></td>
+      <td data-label="State"><span class="pill ${r.phase === "Bound" ? "ok" : "crit"}">${esc(r.phase === "Bound" ? "in use" : r.phase || "unknown")}</span>
+        ${r.reason ? `<div class="dim xs" style="margin-top:4px">${esc(r.reason)}</div>` : ""}</td></tr>`).join("")}</tbody></table></div></div>`;
+}
+
 async function viewStorage() {
   if (platformLacks("longhorn", "Volumes")) return;
   const [v, st, classes, v2, cap] = await Promise.all([api("/api/volumes"), api("/api/storage").catch(() => null),
     api("/api/storage/classes").catch(() => []), api("/api/storage/v2").catch(() => null),
     api("/api/longhorn/capacity").catch(() => null)]);
-  const oldCopies = await api("/api/volumes/old-copies").catch(() => []);
+  const [oldCopies, others] = await Promise.all([api("/api/volumes/old-copies").catch(() => []), api("/api/volumes/other").catch(() => [])]);
   STATE.data.lhcap = cap || STATE.data.lhcap;
   STATE.data.storageClasses = classes;
   STATE.data.v2 = v2;
@@ -341,7 +371,8 @@ async function viewStorage() {
     <div class="card flat pad0"><div class="tblwrap"><table class="tbl dense"><thead><tr><th>Was</th><th>Class</th><th>Size</th><th></th></tr></thead><tbody>
     ${oldCopies.map(o => `<tr><td><b>${esc(o.was)}</b><div class="dim xs mono">${esc(o.pv)}</div></td><td>${esc(o.storage_class)}</td><td class="mono">${esc(o.size)}</td>
       <td><button class="btn sm danger" data-need="admin" onclick="reclassRemoveOld(${jsq(o.pv)})">Remove</button></td></tr>`).join("")}</tbody></table></div></div>` : ""}
-  ${storageClassCard(classes, v2)}`);
+  ${storageClassCard(classes, v2)}
+  ${otherVolumesHtml(others)}`);
   volumeProgressWatch();
 }
 window.volumeCreate = async () => {
@@ -1007,7 +1038,7 @@ async function viewShares() {
       <td class="small mono" data-label="Storage"><span class="sharevol">${esc(s.pvc || "—")}${s.sub_path ? `<span class="dim">/${esc(s.sub_path)}</span>` : ""}</span>
         ${s.owned === false ? '<span class="tag">shared volume</span>' : ""}</td>
       <td class="mono" data-label="Size">${s.size_gb ? s.size_gb + " GB" : "—"}</td>
-      <td data-label="Access"><span>${s.public ? '<span class="pill med">guest</span>' : `<span class="pill low">${esc(s.user)}</span>`}
+      <td data-label="Access"><span>${s.public ? `<span class="pill med" data-tip="No sign-in. Windows 11 refuses guest shares until two of its own settings are changed - see Allow guest access when making or editing a share">guest</span>` : `<span class="pill low">${esc(s.user)}</span>`}
         ${s.read_only ? '<span class="tag">read only</span>' : '<span class="tag">read/write</span>'}
         ${s.nfs_clients ? `<span class="pill slim info" data-tip="NFS ${s.nfs_read_only === false ? "read/write" : "read only"} for ${esc(s.nfs_clients)}">NFS</span>` : ""}</span></td>
       <td class="small muted mono" data-label="UNC path">${smb.address ? `\\\\${esc(ip)}\\${esc(s.name)}` : "Waiting for SMB address"}</td>
@@ -1122,6 +1153,7 @@ window.newShare = async () => {
       <p class="ui-help">Samba is not installed yet; this share installs it. Choose the address Windows will find it at (\\\\address\\share).</p>
       <div class="f" id="sh_smb"><span class="dim xs"><span class="spin2"></span></span></div>`}
     <label class="switch"><input type="checkbox" id="sh_pub" onchange="shareAccountHint()"> Allow guest access</label>
+    <div id="sh_guest_note" class="hidden">${shareGuestWindowsNote()}</div>
     <label class="switch"><input type="checkbox" id="sh_ro"> Read only</label>
     <p class="ui-help">Creating a share restarts Samba, so open SMB sessions drop briefly.</p>
     ${UI.actions(UI.cancel() + UI.button("Create share", "mkShare(this)", { kind: "pri", id: "sh_go", attrs: 'data-need="admin"' }))}`;
@@ -1151,6 +1183,7 @@ window.newShare = async () => {
 };
 window.shareAccountHint = () => {
   const existing = !!$("#sh_identity")?.value, guest = !!$("#sh_pub")?.checked;
+  $("#sh_guest_note")?.classList.toggle("hidden", !guest);
   $("#sh_new_account")?.classList.toggle("hidden", existing || guest);
   if ($("#sh_identity")) $("#sh_identity").disabled = guest;
   if ($("#sh_pass")) { $("#sh_pass").disabled = existing || guest; if (existing || guest) $("#sh_pass").value = ""; }
@@ -1193,8 +1226,9 @@ const shareAccountSiblings = share => (STATE.data.shares || [])
   .map(row => row.name);
 
 window.shareAccessToggle = () => {
-  const guest = $("#she_pub")?.checked;
+  const guest = $("#she_access")?.value === "guest";
   $("#she_private")?.classList.toggle("hidden", guest);
+  $("#she_guest_note")?.classList.toggle("hidden", !guest);
 };
 window.editShare = name => {
   const s = (STATE.data.shares || []).find(row => row.name === name);
@@ -1209,6 +1243,7 @@ window.editShare = name => {
       <div class="f"><label>Access</label><select id="she_access" onchange="shareAccessToggle()">
         <option value="private" ${s.public ? "" : "selected"}>Private · username and password</option>
         <option value="guest" ${s.public ? "selected" : ""}>Guest · no sign-in</option></select></div></div>
+    <div id="she_guest_note" class="${s.public ? "" : "hidden"}">${shareGuestWindowsNote()}</div>
     <div id="she_private" class="${s.public ? "hidden" : ""}"><div class="f"><label>Username</label>
       <input type="text" id="she_user" value="${esc(s.user || "lab")}" autocomplete="username"></div>
       <div class="f"><label>New password ${tip("Leave blank to keep the existing password. Passwords are stored in a Kubernetes Secret and are never returned to the browser.")}</label>

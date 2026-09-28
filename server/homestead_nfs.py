@@ -3,6 +3,7 @@
 The NFS daemon runs in its own pod.  Nothing here owns or deletes a PVC:
 shares and their data outlive the daemon's Deployment and Service.
 """
+import homestead_specs as SPECS
 import copy
 import ipaddress
 import os
@@ -124,7 +125,9 @@ def configure(deployment, selected):
         env.append({"name": f"NFS_EXPORT_{index}", "value":
                     f"{path} {row['clients']}({mode},sync,fsid={row.get('fsid') or _fsid(row)},root_squash,no_subtree_check)"})
         name = f"export-{index}"
-        mount = {"name": name, "mountPath": path, "readOnly": row["read_only"]}
+        mount = {"name": name, "mountPath": path}
+        if row["read_only"]:
+            mount["readOnly"] = True
         if row["sub_path"]:
             mount["subPath"] = row["sub_path"]
         mounts.append(mount)
@@ -139,9 +142,11 @@ def same_pod_config(a, b):
     left = a["spec"]["template"]["spec"]
     right = b["spec"]["template"]["spec"]
     fields = ("image", "env", "volumeMounts", "securityContext", "startupProbe", "readinessProbe")
-    return (all(left["containers"][0].get(key) == right["containers"][0].get(key) for key in fields)
-            and all(left.get(key) == right.get(key) for key in ("volumes", "hostname", "nodeSelector", "tolerations"))
-            and a["spec"].get("strategy") == b["spec"].get("strategy")
+    # Without the zero values Kubernetes leaves out when it stores a spec,
+    # or every check finds drift and restarts NFS (homestead_specs).
+    return (all(SPECS.same(left["containers"][0].get(key), right["containers"][0].get(key)) for key in fields)
+            and all(SPECS.same(left.get(key), right.get(key)) for key in ("volumes", "hostname", "nodeSelector", "tolerations"))
+            and SPECS.same(a["spec"].get("strategy"), b["spec"].get("strategy"))
             and a["spec"].get("replicas") == b["spec"].get("replicas"))
 
 
