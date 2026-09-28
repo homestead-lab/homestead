@@ -42,7 +42,7 @@ async function copyText(text) {
 async function readClipboard() {
   try { return navigator.clipboard?.readText ? await navigator.clipboard.readText() : null; } catch (_) { return null; }
 }
-const HOMESTEAD_VERSION = "2.8.220";
+const HOMESTEAD_VERSION = "2.8.221";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -664,6 +664,10 @@ function morph(a, b) {
     if (document.activeElement === x && /^(INPUT|SELECT|TEXTAREA)$/.test(x.nodeName)) continue;
     syncAttrs(x, y);
     if (x.isEqualNode(y)) continue;
+    // An open "…" menu lives on the page while it is open (ui.js), so its
+    // own <details> looks empty: filling it back in would show the menu
+    // twice. It is refreshed when it closes, with the next repaint.
+    if (x.shell) continue;
     morph(x, y);
   }
 }

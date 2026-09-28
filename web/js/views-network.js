@@ -88,7 +88,7 @@ function networkAddressesHtml(data) {
 
 async function viewNetworking() {
   if (networkTab() === "ip") return viewIpam();
-  const data = await api("/api/network");
+  const [data, baseline] = await Promise.all([api("/api/network"), api("/api/platform/baseline").catch(() => null)]);
   STATE.data.network = data;
   const q = STATE.q.toLowerCase();
   const showSystem = !!STATE.networkSystem;
@@ -102,6 +102,7 @@ async function viewNetworking() {
       <div class="row"><button class="btn" onclick="networkToggleSystem()">${showSystem ? "Hide" : "Show"} system</button>
       <button class="btn pri" data-need="operator" onclick="networkExpose()">＋ Expose workload</button></div></div>
     ${networkTabs("services")}
+    ${baselineHtml(baseline, "network")}
     ${UI.guide("How addresses work here", `
       <p><b>${esc(controller.name)}</b> handles service addresses. Multus adds separate LAN interfaces; it does not provide VIP failover.
       ${STATE.platform?.servicelb ? "ServiceLB also exposes unclassified Services on node IPs, not a movable VIP." : ""}</p>

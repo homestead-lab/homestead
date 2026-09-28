@@ -31,6 +31,8 @@
 #   HS_NODE_IP=192.0.2.50                     this node's IP address
 #   HS_SERVER=192.0.2.50  HS_TOKEN=...        the cluster to join
 #   HS_LONGHORN=yes|no  HS_KUBEVIRT=yes|no      components for a new cluster
+#   HS_KUBEVIP=yes|no  HS_MULTUS=yes|no         kube-vip and Multus, installed by Homestead (default yes)
+#   HS_KUBEVIP_VERSION=0.11.1  HS_MULTUS_VERSION=v4.3.102   their chart versions (default: tested)
 #   HS_K8S_VERSION=v1.33.4+k3s1                 k3s or RKE2 version
 #   HS_LONGHORN_VERSION=v1.9.1  HS_KUBEVIRT_VERSION=v1.6.0  HS_CDI_VERSION=v1.62.0
 #   HS_VERSION=2.8.184                          Homestead version
@@ -525,6 +527,25 @@ summary() { # text components...
   done
 }
 
+# kube-vip (virtual IPs) and Multus (dedicated LAN addresses) are installed
+# by Homestead after it starts, unless HS_KUBEVIP or HS_MULTUS is "no".
+network_line() {
+  kv=yes; mu=yes
+  case "$(given HS_KUBEVIP)" in n*|N*|0|false) kv=no ;; esac
+  case "$(given HS_MULTUS)" in n*|N*|0|false) mu=no ;; esac
+  if [ "$kv" = yes ] && [ "$mu" = yes ]; then echo "kube-vip and Multus"
+  elif [ "$kv" = yes ]; then echo "kube-vip"
+  elif [ "$mu" = yes ]; then echo "Multus"
+  else echo "Not installed"; fi
+}
+network_args() {
+  case "$(given HS_KUBEVIP)" in n*|N*|0|false) printf ' --no-kube-vip' ;; esac
+  case "$(given HS_MULTUS)" in n*|N*|0|false) printf ' --no-multus' ;; esac
+  v=$(given HS_KUBEVIP_VERSION); [ -n "$v" ] && printf ' --kube-vip-version %s' "$v"
+  v=$(given HS_MULTUS_VERSION); [ -n "$v" ] && printf ' --multus-version %s' "$v"
+  true
+}
+
 # ------------------------------------------------------------------ progress
 LOG=/var/log/homestead-install.log
 
@@ -657,13 +678,14 @@ Longhorn replicates volumes across nodes and provides snapshots and backups. The
   Node IP address      $NODE_IP
   Storage              $([ "$longhorn" = yes ] && echo Longhorn || echo "k3s local-path")
   Virtual machines     $([ "$kubevirt" = yes ] && echo "KubeVirt and CDI" || echo "Not installed")
+  Networking           $(network_line)
   Homestead URL        http://$NODE_IP:8088" $comps
   args="server --node-ip $NODE_IP"
   [ "$longhorn" = no ] && args="$args --no-longhorn"
   [ "$kubevirt" = yes ] && args="$args --kubevirt"
   [ "$DIST" = rke2 ] && args="$args --rke2"
   # shellcheck disable=SC2086
-  args="$args$(version_args $comps)"
+  args="$args$(version_args $comps)$(network_args)"
   stages=5; [ "$longhorn" = yes ] && stages=$((stages + 2)); [ "$kubevirt" = yes ] && stages=$((stages + 1)); [ "$DIST" = rke2 ] && stages=$((stages + 1))
   # shellcheck disable=SC2086
   bootstrap "$stages" $args
@@ -703,9 +725,10 @@ add_to_cluster() {
 
   Installation mode    Install on this $(dist_name) cluster
   Storage              $storage
+  Networking           $(network_line)
   Homestead URL        http://$(default_ip):8088" $comps
   # shellcheck disable=SC2086,SC2046
-  bootstrap 5 addons $(dist_flag) $(version_args $comps)
+  bootstrap 5 addons $(dist_flag) $(version_args $comps) $(network_args)
   finish_new
 }
 
@@ -721,7 +744,7 @@ To add a node, run the installer on the new machine and select Join an existing 
 
   sudo cat $(token_file)
 
-Optional components (node probe, Multus, kube-vip) are available in Homestead under Settings > Cluster > Add-ons."
+kube-vip and Multus are installed by Homestead after it starts; their progress is shown in its job tray. Optional components such as the node probe are available under Settings > Cluster > Add-ons."
 }
 
 flow_harvester() {

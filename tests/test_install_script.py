@@ -88,6 +88,12 @@ class InstallerTests(unittest.TestCase):
         self.assertNotIn("-version", out)
         self.assertNotIn("Retrieving release information", out)
 
+    def test_kube_vip_and_multus_can_be_left_out_or_pinned(self):
+        code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_NODE_IP": "10.0.0.5", "HS_LONGHORN": "yes",
+                                                          "HS_KUBEVIRT": "no", "HS_KUBEVIP": "no",
+                                                          "HS_MULTUS_VERSION": "v4.3.101", "HS_YES": "1"})
+        self.assertIn("+ sh /tmp/homestead-bootstrap-k3s.sh server --node-ip 10.0.0.5 --no-kube-vip --multus-version v4.3.101", out)
+
     def test_summary_declined_changes_nothing(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_NODE_IP": "10.0.0.5", "HS_LONGHORN": "yes",
                                                           "HS_KUBEVIRT": "no", "HS_YES": "no"})

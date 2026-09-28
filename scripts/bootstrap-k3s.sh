@@ -35,6 +35,13 @@
 #   --kubevirt-version v1.6.0    pin KubeVirt (default: KubeVirt's stable release)
 #   --cdi-version v1.62.0        pin CDI (default: the newest release)
 #   --homestead-version 2.8.95   pin Homestead (default: the newest release)
+#   --no-kube-vip        leave out kube-vip: apps stay on the nodes' own
+#                        addresses, with no VIP that moves between nodes
+#   --no-multus          leave out Multus: no LAN address of their own for
+#                        VMs and containers
+#   --kube-vip-version 0.11.1    pin kube-vip's chart (default: the one
+#                                Homestead has tested)
+#   --multus-version v4.3.102    pin RKE2's Multus chart (default: likewise)
 # Options for every mode:
 #   --rke2                   RKE2 instead of k3s
 #   --node-ip 192.0.2.50   the address the cluster registers this machine
@@ -47,7 +54,10 @@
 #      get the nodes' addresses as they do on k3s);
 #   3. drops a HelmChart for Longhorn and Homestead's manifest into the
 #      manifests folder, which k3s or RKE2 applies itself - nothing else to run;
-#   4. waits for Homestead and prints its address.
+#   4. asks Homestead, in its manifest, to install kube-vip (VIPs) and Multus
+#      (a VM's or container's own LAN address) once it is up - Homestead
+#      installs and upgrades them, as it does from Settings > Cluster > Add-ons;
+#   5. waits for Homestead and prints its address.
 # It is safe to run again: each step finds what the last run left.
 set -eu
 
@@ -61,6 +71,10 @@ LONGHORN_VERSION=""
 KUBEVIRT_VERSION=""
 CDI_VERSION=""
 HOMESTEAD_VERSION=""
+KUBE_VIP=1
+MULTUS=1
+KUBE_VIP_VERSION=""
+MULTUS_VERSION=""
 NODE_IP=""
 RAW=https://raw.githubusercontent.com/wjcloudy/homestead
 
@@ -218,6 +232,10 @@ while [ $# -gt 0 ]; do
     --longhorn-version) LONGHORN_VERSION="$2"; shift 2; continue ;;
     --kubevirt-version) KUBEVIRT_VERSION="$2"; shift 2; continue ;;
     --cdi-version) CDI_VERSION="$2"; shift 2; continue ;;
+    --no-kube-vip) KUBE_VIP=0; shift; continue ;;
+    --no-multus) MULTUS=0; shift; continue ;;
+    --kube-vip-version) KUBE_VIP_VERSION="$2"; shift 2; continue ;;
+    --multus-version) MULTUS_VERSION="$2"; shift 2; continue ;;
   esac
   set +e; parse_common "$@"; used=$?; set -e
   [ "$used" = 0 ] && fail "Unknown option: $1"
@@ -303,6 +321,29 @@ sed -e "s/longhorn-r2/$CLASS/g" \
     -e "/kube-vip.io\/loadbalancerIPs/d" \
     "$TMP" > "$MANIFESTS/homestead.yaml"
 rm -f "$TMP"
+# Components Homestead installs after it starts: kube-vip and Multus, the
+# same HelmCharts as Settings > Cluster > Add-ons, at tested versions unless
+# pinned here. Homestead records each installation, so a component removed
+# later is not reinstalled.
+flag_word() { if [ "$1" = 1 ]; then echo yes; else echo no; fi; }
+cat >> "$MANIFESTS/homestead.yaml" <<EOF
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: homestead-install
+  namespace: lab
+  labels:
+    homestead.io/managed: "true"
+data:
+  kube-vip: "$(flag_word "$KUBE_VIP")"
+  kube-vip-version: "$KUBE_VIP_VERSION"
+  multus: "$(flag_word "$MULTUS")"
+  multus-version: "$MULTUS_VERSION"
+EOF
+[ "$KUBE_VIP" = 1 ] && echo "  kube-vip will be installed by Homestead after it starts."
+[ "$MULTUS" = 1 ] && echo "  Multus will be installed by Homestead after it starts."
+true
 
 say "Waiting for Homestead to start (this takes several minutes when Longhorn is being installed)"
 i=0; until $KUBECTL -n lab rollout status deployment/homestead --timeout=10s >/dev/null 2>&1; do

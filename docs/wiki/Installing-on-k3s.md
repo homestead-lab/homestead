@@ -16,9 +16,10 @@ Everything Homestead does, with nothing Harvester-specific needed:
 - **Volumes, disks, data protection, network shares** - on Longhorn, which the
   script installs. With `--no-longhorn` apps still get volumes from k3s's
   `local-path`, but the Volumes and Data protection pages need Longhorn.
-- **Addresses** - k3s's built-in load balancer (ServiceLB) puts every app on the
-  machines' own addresses, so nothing else is needed; kube-vip or MetalLB, if you want an
-  address per app, is [below](#4-addresses-for-apps).
+- **Addresses** - k3s's built-in load balancer (ServiceLB) publishes apps on the
+  machines' own addresses. kube-vip, for a virtual IP per app, and Multus, for a
+  VM's or container's own LAN address, are installed by Homestead after it
+  starts - see [below](#4-addresses-for-apps).
 - **Helm** - charts install through the Helm controller k3s already runs.
 - **Adding and removing machines** - **Cluster → Add a host** gives this
   cluster's join lines; removing one gives k3s's uninstall steps.
@@ -177,11 +178,26 @@ k3s's built-in load balancer, ServiceLB, publishes a LoadBalancer service on
 port. Two apps cannot both take port 80. The script does not install MetalLB,
 and nothing in Homestead needs it.
 
-When you want an address per app, add **kube-vip** from **Settings →
-Cluster → Add-ons**, as Harvester uses. It runs beside ServiceLB rather than
-replacing it: kube-vip takes only the Services given a VIP, and everything
-else - Homestead and Traefik included - stays on the machines' own
-addresses. Then:
+For an address per app, Homestead installs **kube-vip**, as Harvester uses,
+and **Multus**, which [LAN networks](Networking#lan-networks) need. The script
+requests both in Homestead's manifest (a `homestead-install` ConfigMap) and
+Homestead installs them through the Helm controller once it starts, at the
+chart versions it has tested; progress is shown in its job tray. Leave either
+out with `--no-kube-vip` or `--no-multus`, or pin a chart with
+`--kube-vip-version 0.11.1` / `--multus-version v4.3.102` (in the guided
+installer: `HS_KUBEVIP=no`, `HS_MULTUS=no`, `HS_KUBEVIP_VERSION`,
+`HS_MULTUS_VERSION`). Homestead records what it installed, so a component you
+remove later is not reinstalled.
+
+An installation from before 2.8.221 shows **Required components not
+installed** under **Settings → Cluster → Add-ons** and on **Networking**, with
+**Install components**. Both are upgraded under **System → Cluster → Platform
+versions**, one minor chart version at a time, keeping the values Homestead
+set.
+
+kube-vip runs beside ServiceLB rather than replacing it: it takes only the
+Services given a VIP, and everything else - Homestead and Traefik included -
+stays on the machines' own addresses. Then:
 
 1. Add the addresses apps may have under **Networking → Your VIPs**, outside
    your router's DHCP range.
