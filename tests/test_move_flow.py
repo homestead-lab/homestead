@@ -8,6 +8,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import urllib.error
 from pathlib import Path
 
@@ -84,8 +85,14 @@ class FakeLonghorn:
     def backup_target(self):
         return dict(self.target)
 
-    def set_backup_target(self, url, secret="", poll="5m"):
+    harvester = False
+
+    def on_harvester(self):
+        return self.harvester
+
+    def set_backup_target(self, url, secret="", poll="5m", keys=None):
         self.target = {"configured": True, "url": url, "secret": secret}
+        self.keys = keys
 
     def create_backup(self, volume, name=None):
         name = f"homestead-{len(self.made) + 1}"
@@ -449,6 +456,28 @@ class EngineTests(unittest.TestCase):
         source_copy = self.cluster.objects["/apis/apps/v1/namespaces/lab/deployments/frigate"]
         self.assertEqual(0, source_copy["spec"]["replicas"], "the source stays stopped")
         self.assertEqual(("move", "Move frigate from shed"), self.ops.started[0][:2])
+
+    def _join(self):
+        there = {"url": "s3://homestead-backups@us-east-1/", "endpoint": "http://192.168.1.108:9000",
+                 "credentials": {"AWS_ACCESS_KEY_ID": "ak", "AWS_SECRET_ACCESS_KEY": "sk",
+                                 "AWS_ENDPOINTS": "http://192.168.1.108:9000", "VIRTUAL_HOSTED_STYLE": "false"}}
+        self.lh.target = {"configured": True, "url": "nfs://nas:/backups", "secret": ""}
+        move = {"cluster": "shed", "claims": [], "phase": "joining"}
+        with mock.patch.object(client, "remote", lambda name, path, body=None: there):
+            engine._joining(move)
+        return move
+
+    def test_on_harvester_the_join_hands_the_keys_to_its_setting(self):
+        """Harvester's backup-target setting holds the keys itself; a Secret beside it is never read."""
+        self.lh.harvester = True
+        self._join()
+        self.assertEqual("s3://homestead-backups@us-east-1/", self.lh.target["url"])
+        self.assertEqual({"access_key": "ak", "secret_key": "sk", "endpoint": "http://192.168.1.108:9000"}, self.lh.keys)
+
+    def test_on_longhorn_the_join_names_the_secret(self):
+        self._join()
+        self.assertEqual(engine.JOIN_SECRET, self.lh.target["secret"])
+        self.assertIsNone(self.lh.keys)
 
     def test_a_restart_part_way_through_picks_up_where_it_was(self):
         """The move lives on disk, not in memory."""

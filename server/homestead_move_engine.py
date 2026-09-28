@@ -382,8 +382,15 @@ def _joining(move):
     else:
         ksend("POST", f"/api/v1/namespaces/{LHNS}/secrets", body)
     move["previous_target"] = here.get("url", "") if here.get("configured") else ""
+    # On Harvester the target is Harvester's own setting, which carries the
+    # keys and endpoint itself and never reads the Secret above.
+    keys = None
+    if getattr(LH, "on_harvester", lambda: False)():
+        keys = {"access_key": credentials.get("AWS_ACCESS_KEY_ID", ""),
+                "secret_key": credentials.get("AWS_SECRET_ACCESS_KEY", ""),
+                "endpoint": credentials.get("AWS_ENDPOINTS", "")}
     # Checked often while a move waits on it; Longhorn's default is minutes.
-    LH.set_backup_target(there["url"], JOIN_SECRET, poll="30s")
+    LH.set_backup_target(there["url"], JOIN_SECRET, poll="30s", **({"keys": keys} if keys else {}))
     return _advance(move, "quiescing", 4, f"Reading backups from {move['cluster']}'s storage")
 
 
