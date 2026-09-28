@@ -131,14 +131,14 @@ function componentRow(c) {
     : c.behind ? `<span class="pill slim ${c.next ? "warn" : ""}" ${c.next ? "" : `data-tip="${esc(c.note || "")}"`}>${esc(c.newest)} is out</span>` : '<span class="pill slim ok">up to date</span>';
   const nodes = c.mixed && c.nodes ? `<div class="dim xs">${Object.entries(c.nodes).map(([n, v]) => `${esc(n)} ${esc(v)}`).join(" · ")}</div>` : "";
   const action = running ? `<span class="pill slim info">upgrading</span>`
-    : c.next ? `<button class="btn sm pri" data-need="admin" onclick="componentUpgrade('${esc(c.id)}')">Upgrade to ${esc(c.next)}</button>` : "";
+    : c.next ? `<button class="btn sm pri" data-need="admin" onclick="componentUpgrade(${jsq(c.id)})">Upgrade to ${esc(c.next)}</button>` : "";
   return `<div class="release-row component-row"><div>
       <span class="cluster-kicker">${esc(c.name.toUpperCase())}</span>
       <div><b class="mono">${esc(c.installed || "—")}</b> ${state}
         ${c.phase && c.phase !== "Deployed" ? `<span class="pill slim med">${esc(c.phase)}</span>` : ""}</div>
       <div class="dim xs">${esc(c.note || COMPONENT_HOW[c.how] || "")}${c.steps_left ? ` · ${esc(c.next)} first, then on to ${esc(c.newest)}: one minor version at a time` : ""}${c.error ? ` · could not check for releases: ${esc(c.error)}` : ""}</div>
       ${nodes}</div>
-    <div class="row">${c.notes_url ? `<a class="btn sm" href="${esc(c.notes_url)}" target="_blank" rel="noopener noreferrer">${icon("ext")}Notes</a>` : ""}${action}</div></div>`;
+    <div class="row">${c.notes_url ? `<a class="btn sm" href="${safeHref(c.notes_url)}" target="_blank" rel="noopener noreferrer">${icon("ext")}Notes</a>` : ""}${action}</div></div>`;
 }
 
 function componentsCard(r) {
@@ -172,9 +172,9 @@ window.componentUpgrade = async id => {
   modal(`Upgrade ${c.name} to ${c.next}`, `
     <p>${esc(c.name)} ${esc(c.installed)} → <b class="mono">${esc(c.next)}</b>${c.steps_left ? ` <span class="dim">(then ${esc(c.newest)}, as a further step)</span>` : ""}</p>
     <div class="note">${esc(COMPONENT_EFFECT[id](c, c.next).replace(/\s+/g, " "))}</div>
-    ${c.notes_url ? `<p class="small"><a href="${esc(c.notes_url)}" target="_blank" rel="noopener noreferrer">Read ${esc(c.next)}'s release notes ${icon("ext")}</a> first: they list anything to do before or after.</p>` : ""}
+    ${c.notes_url ? `<p class="small"><a href="${safeHref(c.notes_url)}" target="_blank" rel="noopener noreferrer">Read ${esc(c.next)}'s release notes ${icon("ext")}</a> first: they list anything to do before or after.</p>` : ""}
     <div class="modalactions"><button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn pri" onclick="componentUpgradeGo('${esc(id)}', '${esc(c.next)}')">Upgrade to ${esc(c.next)}</button></div>`);
+      <button class="btn pri" onclick="componentUpgradeGo(${jsq(id)}, ${jsq(c.next)})">Upgrade to ${esc(c.next)}</button></div>`);
 };
 
 window.componentUpgradeGo = async (id, to) => {
@@ -196,7 +196,7 @@ window.harvesterUpgradeStart = version => {
       (a passed-through device, or one node) are shut down while their node restarts.</div>
     <div class="f"><label>Type <b class="mono">${esc(version)}</b> to start</label><input id="hv_up_confirm" class="mono" autocomplete="off"></div>
     <div class="modalactions"><button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn pri" onclick="harvesterUpgradeGo('${esc(version)}')">Start the upgrade</button></div>`);
+      <button class="btn pri" onclick="harvesterUpgradeGo(${jsq(version)})">Start the upgrade</button></div>`);
 };
 
 window.harvesterUpgradeGo = async version => {
@@ -239,7 +239,7 @@ function releaseRow(label, row, kind) {
       <div><b>${esc(row.tag)}</b> <span class="pill slim ${kind === "stable" ? "ok" : "warn"}">${esc(row.channel === "stable" ? "stable" : row.channel)}</span>
         ${row.offered ? '<span class="pill slim info" data-tip="Harvester lists this version, so its dashboard shows an Upgrade button for it">offered by Harvester</span>' : ""}</div>
       <div class="dim xs">${esc(releaseDate(row.published))}${row.channel !== "stable" ? " · a test build: for a lab cluster, not one you depend on" : ""}</div></div>
-    ${row.url ? `<a class="btn sm" href="${esc(row.url)}" target="_blank" rel="noopener noreferrer">${icon("ext")}Release notes</a>` : ""}</div>`;
+    ${row.url ? `<a class="btn sm" href="${safeHref(row.url)}" target="_blank" rel="noopener noreferrer">${icon("ext")}Release notes</a>` : ""}</div>`;
 }
 
 function upgradeProgress(up) {
@@ -283,7 +283,7 @@ function upgradesCard(r) {
     </div>
     ${(r.offered || []).length ? `<div class="row" style="margin-top:8px;flex-wrap:wrap;gap:6px"><span class="dim xs">Harvester offers:</span>
       ${r.offered.filter(o => !r.current || upgradeNewer(o.version, r.current)).map(o => `<span class="tag">${esc(o.version)}</span>${r.active ? "" :
-        `<button class="btn sm pri" data-need="admin" onclick="harvesterUpgradeStart('${esc(o.version)}')">Upgrade to ${esc(o.version)}</button>`}`).join("")
+        `<button class="btn sm pri" data-need="admin" onclick="harvesterUpgradeStart(${jsq(o.version)})">Upgrade to ${esc(o.version)}</button>`}`).join("")
         || r.offered.map(o => `<span class="tag">${esc(o.version)}</span>`).join("")}</div>` : ""}
     ${r.stable && !r.stable.offered ? `<div class="note" style="margin-top:10px">Harvester shows an Upgrade button once it lists a version, which its upgrade checker does for supported upgrade paths - sometimes a few days after release. A test build is never offered: installing one means creating its Version by hand, as Harvester's upgrade guide describes.</div>` : ""}
   </section>`;

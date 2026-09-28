@@ -35,7 +35,7 @@ function renderResources() {
         <input class="res-filter" placeholder="Find a kind" value="${esc(RES.q)}" oninput="resFilter(this.value)">
         <select class="res-kind-select" onchange="resPick(this.value)">${RES.kinds.map(x => `<option value="${esc(resKey(x))}" ${x === k ? "selected" : ""}>${esc(x.category)} · ${esc(resLabel(x))}</option>`).join("")}</select>
         <div class="res-kind-list">${groups.map(g => `<div class="res-group">${esc(g)}</div>${kinds.filter(x => x.category === g).map(x =>
-          `<button class="res-kind ${x === k ? "on" : ""}" onclick="resPick('${esc(resKey(x))}')" title="${esc(x.group || "core")}/${esc(x.version)} · ${esc(x.resource)}">${esc(resLabel(x))}${x.group && x.category === "Custom resources" ? `<span class="dim xs"> ${esc(x.group)}</span>` : ""}</button>`).join("")}`).join("")}</div>
+          `<button class="res-kind ${x === k ? "on" : ""}" onclick="resPick(${jsq(resKey(x))})" title="${esc(x.group || "core")}/${esc(x.version)} · ${esc(x.resource)}">${esc(resLabel(x))}${x.group && x.category === "Custom resources" ? `<span class="dim xs"> ${esc(x.group)}</span>` : ""}</button>`).join("")}`).join("")}</div>
       </aside>
       <section class="res-main">
         <div class="between res-head"><div><b>${esc(resLabel(k))}</b> <span class="dim xs mono">${esc(k.group || "core")}/${esc(k.version)}</span>
@@ -45,7 +45,7 @@ function renderResources() {
         ${list.error ? `<div class="note bad">${esc(list.error)}</div>` : ""}
         <div class="card flat pad0"><div class="tblwrap"><table class="tbl dense stack" data-sort="res-${esc(k.resource)}"><thead><tr>
           ${k.namespaced && !RES.ns ? "<th>Namespace</th>" : ""}${list.columns.map(c => `<th title="${esc(c.description)}">${esc(c.name)}</th>`).join("")}</tr></thead><tbody>
-          ${rows.map(r => `<tr class="clickable" onclick="resOpen('${esc(r.namespace)}','${esc(r.name)}')">
+          ${rows.map(r => `<tr class="clickable" onclick="resOpen(${jsq(r.namespace)},${jsq(r.name)})">
             ${k.namespaced && !RES.ns ? `<td class="mono small dim" data-label="Namespace">${esc(r.namespace)}</td>` : ""}
             ${r.cells.map((c, i) => `<td data-label="${esc(list.columns[i]?.name || "")}" class="${i === 0 ? "mono small" : "small"}">${i === 0 ? `<b>${esc(String(c))}</b>` : esc(typeof c === "object" ? JSON.stringify(c) : String(c ?? ""))}</td>`).join("")}</tr>`).join("")
             || `<tr><td colspan="${list.columns.length + 1}" class="empty">None${RES.ns ? ` in ${esc(RES.ns)}` : ""}.</td></tr>`}</tbody></table></div></div>
@@ -70,14 +70,14 @@ window.resOpen = async (ns, name, reveal = false) => {
   catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   const pod = k.group === "" && k.resource === "pods";
   $("#mbody").innerHTML = `<div class="between"><div class="dim xs mono">${esc(k.group || "core")}/${esc(k.version)} · ${esc(k.kind)}${ns ? ` · ${esc(ns)}` : ""}</div>
-      <div class="row">${pod ? `<button class="btn sm" onclick="resLogs('${esc(ns)}','${esc(name)}')">${icon("log")}Logs</button>` : ""}
-        ${o.secret_hidden ? `<button class="btn sm" data-need="admin" onclick="resOpen('${esc(ns)}','${esc(name)}',true)">Reveal values</button>` : ""}
+      <div class="row">${pod ? `<button class="btn sm" onclick="resLogs(${jsq(ns)},${jsq(name)})">${icon("log")}Logs</button>` : ""}
+        ${o.secret_hidden ? `<button class="btn sm" data-need="admin" onclick="resOpen(${jsq(ns)},${jsq(name)},true)">Reveal values</button>` : ""}
         <button class="btn sm" data-need="admin" id="res_edit" onclick="resEdit()">${icon("edit")}Edit</button>
-        <button class="btn sm danger" data-need="admin" onclick="resDelete('${esc(ns)}','${esc(name)}')">${icon("trash")}Delete</button></div></div>
-    <div class="seg" style="margin:10px 0">${["YAML", "Events"].map((t, i) => `<button class="${i ? "" : "on"}" onclick="resTab(this,'${t}')">${t}</button>`).join("")}</div>
+        <button class="btn sm danger" data-need="admin" onclick="resDelete(${jsq(ns)},${jsq(name)})">${icon("trash")}Delete</button></div></div>
+    <div class="seg" style="margin:10px 0">${["YAML", "Events"].map((t, i) => `<button class="${i ? "" : "on"}" onclick="resTab(this,${jsq(t)})">${t}</button>`).join("")}</div>
     <div class="res-pane" data-pane="YAML"><textarea id="res_yaml" class="mono helm-values res-yaml" spellcheck="false" readonly>${esc(o.yaml)}</textarea>
-      <div class="row" id="res_save_row" hidden style="margin-top:8px"><button class="btn pri" onclick="resSave('${esc(ns)}','${esc(name)}')">Save</button>
-        <button class="btn" onclick="resOpen('${esc(ns)}','${esc(name)}',${reveal})">Cancel</button>
+      <div class="row" id="res_save_row" hidden style="margin-top:8px"><button class="btn pri" onclick="resSave(${jsq(ns)},${jsq(name)})">Save</button>
+        <button class="btn" onclick="resOpen(${jsq(ns)},${jsq(name)},${reveal})">Cancel</button>
         <span class="dim xs">Saved as a replace; if someone changed it meanwhile, the save is refused rather than overwrite them.</span></div></div>
     <div class="res-pane" data-pane="Events" hidden><div id="res_events" class="dim small">loading</div></div>`;
   if (window.applyRole) applyRole();

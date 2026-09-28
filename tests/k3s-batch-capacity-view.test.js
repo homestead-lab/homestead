@@ -11,7 +11,7 @@ function setup({blocked=false,missing=false}={}) {
         capacity_token:"signed-batch",ok:!blocked,nodes:[{name:"guest",role:"server",address:"192.0.2.20"}],
         capacity:{blocked,status:blocked?"blocked":"fits",warnings:["capacity may change"],nodes:[],example:[]}};
       return {ok:true};}};
-  ctx.window=ctx;vm.createContext(ctx);vm.runInContext(fs.readFileSync("web/js/views-vms.js","utf8"),ctx);
+  ctx.window=ctx;vm.createContext(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(fs.readFileSync("web/js/views-vms.js","utf8"),ctx);
   ctx.k3sBody=()=>({...cfg});
   return {ctx,fields,sent,cfg};
 }

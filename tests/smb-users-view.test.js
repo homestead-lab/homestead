@@ -15,6 +15,7 @@ function app() {
   };
   ctx.window = ctx;
   vm.createContext(ctx);
+  ctx.jsArg = s => JSON.stringify(String(s ?? "")); ctx.jsq = s => (ctx.esc || String)(ctx.jsArg(s));
   vm.runInContext(fs.readFileSync('web/js/ui.js','utf8'),ctx);
   vm.runInContext(fs.readFileSync('web/js/views-storage.js','utf8'),ctx);
   return {ctx,fields,get posted() {return posted;}};
@@ -44,6 +45,6 @@ test('user management lists membership and only offers removal for unused users'
   const {ctx,fields}=app(); ctx.STATE.data.smbUsers.push({user:'backup',has_password:true,shares:[]});
   await ctx.smbUsers();
   assert.match(fields['#mbody'].innerHTML,/>User</); assert.match(fields['#mbody'].innerHTML,/secure/);
-  assert.match(fields['#mbody'].innerHTML,/smbUserRemove\('backup'\)/);
-  assert.doesNotMatch(fields['#mbody'].innerHTML,/smbUserRemove\('lab'\)/);
+  assert.match(fields['#mbody'].innerHTML,/smbUserRemove\(&quot;backup&quot;\)/);
+  assert.doesNotMatch(fields['#mbody'].innerHTML,/smbUserRemove\(&quot;lab&quot;\)/);
 });

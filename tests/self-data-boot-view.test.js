@@ -8,7 +8,7 @@ async function setup(response, ok = true) {
     $: s => fields[s], $$: () => [], esc: v => String(v).replaceAll("<", "&lt;"),
     setTimeout: f => { timers.push(f); return timers.length; }, clearTimeout() {},
     api() {}, localStorage: { getItem() { return null; } } };
-  ctx.window = ctx; vm.createContext(ctx);
+  ctx.window = ctx; vm.createContext(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));
   vm.runInContext(fs.readFileSync("web/js/auth.js", "utf8"), ctx);
   ctx.afterAuth = () => started++;
   await new Promise(setImmediate);

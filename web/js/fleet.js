@@ -102,7 +102,7 @@ function fleetMenuHtml() {
     ${item(all, "fleetShowAll()", `<span class="fleet-dot all" aria-hidden="true"></span>`, "All clusters",
       `${view.members.length} together`)}
     <div class="fleet-sep"></div>
-    ${view.members.map(m => item(!all && m.self, `fleetSwitch('${esc(m.id)}')`, dot(m), m.name,
+    ${view.members.map(m => item(!all && m.self, `fleetSwitch(${jsq(m.id)})`, dot(m), m.name,
       esc(m.self ? `this one · v${m.version}` : m.reachable ? `v${m.version}` : "not answering"))).join("")}
     <div class="fleet-sep"></div>
     <button type="button" data-need="admin" onclick="fleetMenuClose();fleetLink()">${icon("plus")}<span class="fleet-item"><b>Link a cluster</b></span></button>
@@ -176,7 +176,7 @@ function fleetMembersHtml(view) {
         · ${m.self || m.reachable ? `v${esc(m.version)}` : "not answering"}</span></div>
     <div class="row nowrap fleet-row-acts"><span class="fleet-out" id="fout_${esc(m.id)}"></span>
     ${m.self ? (view.linked ? UI.button("Leave", "fleetLeave()", { attrs: 'data-need="admin"' }) : "")
-      : UI.button("Unlink", `fleetUnlink('${esc(m.id)}','${esc(m.name)}')`, { attrs: 'data-need="admin"' })}</div></li>`).join("");
+      : UI.button("Unlink", `fleetUnlink(${jsArg(m.id)},${jsArg(m.name)})`, { attrs: 'data-need="admin"' })}</div></li>`).join("");
 }
 
 /* Moves out of each cluster: on while its backup storage runs, which other
@@ -192,7 +192,7 @@ function fleetTransferCall(m, body = null) {
 function fleetOutHtml(m, state) {
   if (!state) return '<span class="dim xs">moves out: ?</span>';
   return `<label class="switch fleet-out-switch" title="${state.allowed ? "Other clusters can move workloads out of here" : "Workloads cannot move out of here"}">
-    <input type="checkbox" data-need="admin" ${state.allowed ? "checked" : ""} onchange="fleetTransfersSet('${esc(m.id)}', this.checked, this)">
+    <input type="checkbox" data-need="admin" ${state.allowed ? "checked" : ""} onchange="fleetTransfersSet(${jsq(m.id)}, this.checked, this)">
     <span>Moves out</span></label>`;
 }
 
@@ -220,7 +220,7 @@ window.fleetTransfersSet = async (id, allow, box) => {
       ${UI.lead(`Runs backup storage - an S3 store (RustFS) on a Longhorn volume - on ${esc(m.name)}, on its shared address at port 9000. A workload moving out is backed up there, and the cluster it goes to restores it from there.`)}
       ${UI.field("Size (GB)", '<input id="fo_size" type="number" min="5" value="100">', { help: "Holds the backups a move makes. Longhorn backups are incremental, so this is usually far less than the volumes." })}
       ${UI.more("Turning it off later", `<p>Stops the store and keeps its volume, and the backups on it. Turning it on again starts it as it was.</p>`)}
-      ${UI.actions(UI.cancel() + UI.button("Allow moves out", `fleetTransfersGo('${esc(id)}', true)`, { kind: "pri", id: "fo_go" }))}</div>`);
+      ${UI.actions(UI.cancel() + UI.button("Allow moves out", `fleetTransfersGo(${jsArg(id)}, true)`, { kind: "pri", id: "fo_go" }))}</div>`);
   }
   if (!allow && !confirm(`Turn off moves out of ${m.name}?${String.fromCharCode(10, 10)}Its backup storage stops; its volume and the backups on it are kept.`
       + (state.backups_here ? " Longhorn on " + m.name + " backs up there too, so those backups pause until it is on again." : ""))) {
@@ -252,8 +252,8 @@ function fleetLegacyHtml(rows) {
     <span class="fleet-dot" aria-hidden="true"></span>
     <div class="fleet-row"><b>${esc(r.name)}</b>
       <span class="fleet-sub">${r.linked_as ? `linked as ${esc(r.linked_as.name)}` : `<span class="mono">${esc(r.user)}@${esc(r.url)}</span>`}</span></div>
-    <div class="row nowrap">${UI.button("Forget", `fleetForgetLegacy('${esc(r.name)}')`, { attrs: 'data-need="admin"' })}
-      ${UI.button(r.linked_as ? "Use the link" : "Link", `fleetLinkLegacy('${esc(r.name)}')`, { kind: "pri", attrs: 'data-need="admin"' })}</div></li>`).join("");
+    <div class="row nowrap">${UI.button("Forget", `fleetForgetLegacy(${jsArg(r.name)})`, { attrs: 'data-need="admin"' })}
+      ${UI.button(r.linked_as ? "Use the link" : "Link", `fleetLinkLegacy(${jsArg(r.name)})`, { kind: "pri", attrs: 'data-need="admin"' })}</div></li>`).join("");
 }
 
 window.fleetSettingsPaint = async () => {
@@ -265,7 +265,7 @@ window.fleetSettingsPaint = async () => {
   if (view) FLEET.view = view;
   const all = fleetMode() === "all";
   const mode = (value, label) => `<button type="button" class="${(value === "all") === all ? "on" : ""}" aria-pressed="${(value === "all") === all}"
-    onclick="fleetSetMode('${value}')">${label}</button>`;
+    onclick="fleetSetMode(${jsq(value)})">${label}</button>`;
   host.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">Linked clusters</div>
       <div class="csub">Other Homesteads managed from this one - even when only this one is reachable from outside.</div></div>
       ${UI.button("Link a cluster", "fleetLink()", { kind: "pri", attrs: 'data-need="admin"' })}</div>
@@ -419,7 +419,7 @@ window.moveToCluster = (kind, name, sourceHandle = "") => {
   modal(`Move to cluster · ${name}`, `<div class="ui-stack">
     ${UI.lead(`Opens the cluster you pick at its review of this move. Nothing stops until you start it there.`)}
     <div class="fleet-pick">${choices.map(m => `<button type="button" class="btn" ${m.reachable ? "" : "disabled"}
-      onclick="moveToClusterGo('${esc(m.id)}','${esc(from)}','${esc(kind)}','${esc(name)}')">
+      onclick="moveToClusterGo(${jsq(m.id)},${jsq(from)},${jsq(kind)},${jsq(name)})">
       <span class="fleet-dot ${m.reachable ? "ok" : "bad"}"></span><b>${esc(m.name)}</b>
       <span class="dim xs">${m.reachable ? `v${esc(m.version)}` : "not answering"}</span></button>`).join("")}</div>
     ${UI.actions(UI.cancel())}</div>`);

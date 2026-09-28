@@ -188,14 +188,14 @@ window.manageUsers = async () => {
         ${us.map(u => `<tr><td><div class="row" style="gap:9px">
             <div class="av">${esc(u.name.slice(0, 2).toUpperCase())}</div><b>${esc(u.name)}</b>
             ${u.name === ME ? '<span class="tag ok">you</span>' : ""}</div></td>
-          <td><select onchange="setRole('${esc(u.name)}',this.value)" ${u.name === ME ? "disabled" : ""}
+          <td><select onchange="setRole(${jsq(u.name)},this.value)" ${u.name === ME ? "disabled" : ""}
               style="padding:5px 9px;font-size:12px;width:auto">
             ${["viewer", "operator", "admin"].map(r =>
               `<option value="${r}" ${u.role === r ? "selected" : ""}>${r}</option>`).join("")}
           </select></td>
           <td class="dim small mono">${esc(u.last_login || "never")}</td>
           <td>${u.name === ME || us.length === 1 ? '<span class="dim xs">—</span>'
-            : `<button class="btn sm danger" onclick="delUser('${esc(u.name)}')">Remove</button>`}</td>
+            : `<button class="btn sm danger" onclick="delUser(${jsq(u.name)})">Remove</button>`}</td>
         </tr>`).join("")}</tbody></table></div></div>
       <div class="sec">Add a user</div>
       <div class="f2">

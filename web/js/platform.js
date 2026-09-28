@@ -43,7 +43,7 @@ function platformLacks(need, title) {
     <div class="empty platform-missing"><b>This page needs ${esc(info.name)}</b>, because ${esc(info.why)}.
       <p class="dim small" style="max-width:560px;margin:10px auto 0">${esc(info.fix)}</p>
       ${can("admin") && p.helm_controller ? `<div class="row" style="justify-content:center;margin-top:12px">
-        <button class="btn pri" onclick="addonInstall('${need}')">Install ${esc(info.name)}</button></div>` : ""}</div>`);
+        <button class="btn pri" onclick="addonInstall(${jsq(need)})">Install ${esc(info.name)}</button></div>` : ""}</div>`);
   return true;
 }
 window.platformLacks = platformLacks;
@@ -96,7 +96,7 @@ window.addonsPaint = async () => {
     const pill = runtime ? `<span class="pill ${state.ready ? "ok" : "med"}">${esc(state.state)}</span>` : state.installed ? '<span class="pill ok">installed</span>'
       : state.installing ? '<span class="pill med">installing</span>' : '<span class="pill">not installed</span>';
     const button = state.repairable ? '<button class="btn sm pri" data-need="admin" onclick="multusRepair()">Repair configuration</button>' : state.installed || state.installing ? ""
-      : s.helm_controller ? `<button class="btn sm pri" data-need="admin" onclick="addonInstall('${key}')">Install ${esc(a.name)}</button>`
+      : s.helm_controller ? `<button class="btn sm pri" data-need="admin" onclick="addonInstall(${jsq(key)})">Install ${esc(a.name)}</button>`
       : '<span class="dim xs">needs the Helm controller k3s and RKE2 run</span>';
     const diagnostic = key === "multus" && !state.ready && state.diagnostic_command
       ? `<div class="note warn addon-diagnostic"><b>${esc(state.detail || "Multus is not ready")}</b> ${esc((state.issues || []).join("; "))} SSH to a server node to gather Helm, node-agent status and logs:</div>

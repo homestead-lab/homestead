@@ -9,7 +9,7 @@ function setup(send) {
       if(path.endsWith("/plan"))return {config:{name:"test",review_id:"frozen"},capacity_token:"signed",ok:true,nodes:[],
         capacity:{blocked:false,warnings:[],nodes:[]}};
       calls++;return send();}};
-  ctx.window=ctx;vm.createContext(ctx);vm.runInContext(fs.readFileSync("web/js/views-vms.js","utf8"),ctx);
+  ctx.window=ctx;vm.createContext(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(fs.readFileSync("web/js/views-vms.js","utf8"),ctx);
   ctx.k3sBody=()=>({name:"test"});
   return {ctx,fields,calls:()=>calls,refreshes:()=>refreshes};
 }

@@ -65,10 +65,10 @@ window.vmStore = async (check = false) => {
       + (r.update ? ' <span class="pill slim warn" data-tip="The publisher has a newer build; it downloads on the next check if this keeps itself current">newer build out</span>' : "");
   };
   const actions = r => `<div class="row nowrap" style="gap:6px;justify-content:flex-end">
-      ${s.harvester && !r.kept ? `<button class="btn sm" data-need="admin" onclick="vmStoreKeep('${esc(r.id)}')" data-tip="Download it now as a Harvester image, so VMs start from a local copy">Keep</button>` : ""}
-      ${s.harvester && r.kept ? `<label class="switch xs" data-tip="Check twice a day for a newer build, download it, and let go of older builds no disk came from"><input type="checkbox" ${r.auto ? "checked" : ""} data-need="admin" onchange="vmStoreAuto('${esc(r.id)}', this.checked)"> current</label>` : ""}
-      <button class="btn sm pri" data-need="operator" onclick="vmStoreNew('store:${esc(r.id)}')">New VM</button>
-      ${s.harvester && r.kept ? `<button class="btn sm danger" data-need="admin" title="Stop keeping it; builds a disk came from stay" onclick="vmStoreForget('${esc(r.id)}')">${icon("trash")}</button>` : ""}</div>`;
+      ${s.harvester && !r.kept ? `<button class="btn sm" data-need="admin" onclick="vmStoreKeep(${jsq(r.id)})" data-tip="Download it now as a Harvester image, so VMs start from a local copy">Keep</button>` : ""}
+      ${s.harvester && r.kept ? `<label class="switch xs" data-tip="Check twice a day for a newer build, download it, and let go of older builds no disk came from"><input type="checkbox" ${r.auto ? "checked" : ""} data-need="admin" onchange="vmStoreAuto(${jsq(r.id)}, this.checked)"> current</label>` : ""}
+      <button class="btn sm pri" data-need="operator" onclick="vmStoreNew(${jsq("store:" + r.id)})">New VM</button>
+      ${s.harvester && r.kept ? `<button class="btn sm danger" data-need="admin" title="Stop keeping it; builds a disk came from stay" onclick="vmStoreForget(${jsq(r.id)})">${icon("trash")}</button>` : ""}</div>`;
   const rows = s.images.filter(r => r.available);
   const distros = [...new Set(rows.map(r => r.distro))];
   const filter = (STATE.vmStoreFilter || "").toLowerCase();
@@ -83,7 +83,7 @@ window.vmStore = async (check = false) => {
       ${s.own.map(o => `<tr><td><b>${esc(o.display)}</b><div class="dim xs mono">${esc(o.image)}</div></td>
         <td class="small" data-label="From">${esc(o.from)}${o.created ? `<div class="dim xs">${esc(day(o.created))}</div>` : ""}</td>
         <td class="mono small" data-label="Size">${o.ready ? `${o.size_gb} GB` : o.failed ? '<span class="pill slim crit">failed</span>' : `<span class="pill slim med">${Math.round(o.progress || 0)}%</span>`}</td>
-        <td><div class="row nowrap" style="gap:6px;justify-content:flex-end">${o.ready ? `<button class="btn sm pri" data-need="operator" onclick="vmStoreNew('image:${esc(o.image)}')">New VM</button>` : ""}
+        <td><div class="row nowrap" style="gap:6px;justify-content:flex-end">${o.ready ? `<button class="btn sm pri" data-need="operator" onclick="vmStoreNew(${jsq("image:" + o.image)})">New VM</button>` : ""}
           <button class="btn sm" onclick="closeModal();go('images')" title="Sizes, copies and deleting are on the Image cache page">Image cache</button></div></td></tr>`).join("")}
       </tbody></table></div></div>` : ""}
     <div class="between" style="margin-top:14px;gap:10px;flex-wrap:wrap"><div class="sec" style="margin:0">From their publishers</div>
@@ -153,7 +153,7 @@ function vmAddress(v, withNetwork = true) {
   const ips = v.ips?.length ? v.ips : v.ip ? [v.ip] : [];
   if (!ips.length) return `<span class="dim">${v.running ? "no address reported yet" : "no address while stopped"}</span>`;
   return `<span class="mono vm-ip">${esc(ips[0])}</span>
-    <button class="iconbtn vm-copy" type="button" title="Copy ${esc(ips[0])}" onclick="event.stopPropagation();ipamCopy('${esc(ips[0])}')">${icon("copy")}</button>
+    <button class="iconbtn vm-copy" type="button" title="Copy ${esc(ips[0])}" onclick="event.stopPropagation();ipamCopy(${jsq(ips[0])})">${icon("copy")}</button>
     ${ips.length > 1 ? `<span class="tag" data-tip="${esc(ips.slice(1).join(", "))}">+${ips.length - 1}</span>` : ""}
     ${withNetwork && v.network ? `<span class="dim xs vm-net" title="${esc(v.network)}">on ${esc(v.network)}</span>` : ""}`;
 }
@@ -185,17 +185,17 @@ function vmActions(v, compact = false) {
   // On a phone a card keeps its first power action; the rest join "…".
   const later = compact ? [] : shown.slice(1);
   return `${shown.map((a, i) => vmActionButton(v, a, i === 0 && a === "start", compact, i > 0 ? "sm-more" : "")).join("")}
-      ${v.actions.includes("console") ? `<button class="btn sm ${compact ? "vm-iconbtn" : ""}" data-need="operator" title="Console" aria-label="Console" onclick="vmConsole('${esc(v.ns)}','${esc(v.name)}')">${icon("console")}${compact ? "" : "Console"}</button>` : ""}
+      ${v.actions.includes("console") ? `<button class="btn sm ${compact ? "vm-iconbtn" : ""}" data-need="operator" title="Console" aria-label="Console" onclick="vmConsole(${jsq(v.ns)},${jsq(v.name)})">${icon("console")}${compact ? "" : "Console"}</button>` : ""}
       <details class="actionmenu"><summary class="btn sm" title="More actions">⋯</summary><div class="actionmenu-pop">
-        ${later.map(a => `<button class="sm-only" data-need="operator" onclick="this.closest('details').open=false;vmPower('${esc(v.ns)}','${esc(v.name)}','${a}')">${icon(VM_ACTIONS[a][1])}${VM_ACTIONS[a][0]}</button>`).join("")}
-        <button onclick="this.closest('details').open=false;vmOpen('${esc(v.ns)}','${esc(v.name)}')">${icon("list")}Details</button>
-        ${main.filter(a => !shown.includes(a)).map(a => `<button data-need="operator" onclick="this.closest('details').open=false;vmPower('${esc(v.ns)}','${esc(v.name)}','${a}')">${icon(VM_ACTIONS[a][1])}${VM_ACTIONS[a][0]}</button>`).join("")}
-        <button data-need="operator" onclick="this.closest('details').open=false;vmEdit('${esc(v.ns)}','${esc(v.name)}')">${icon("edit")}Edit</button>
-        ${v.actions.includes("pause") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmPower('${esc(v.ns)}','${esc(v.name)}','pause')">${icon("pause")}Pause</button>` : ""}
-        ${v.actions.includes("migrate") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmMove('${esc(v.ns)}','${esc(v.name)}')">${icon("move")}Move host</button>` : ""}
-        ${FLEET.view?.linked ? `<button data-need="admin" title="Move it to another linked cluster, disks and all" onclick="this.closest('details').open=false;moveToCluster('vm','${esc(v.name)}','${esc(v.site?.handle || "")}')">${icon("move")}Move to cluster</button>` : ""}
-        ${v.actions.includes("force-stop") ? `<button class="danger" data-need="operator" onclick="this.closest('details').open=false;vmPower('${esc(v.ns)}','${esc(v.name)}','force-stop')" title="${esc(VM_ACTIONS["force-stop"][2])}">${icon("plug")}Force off</button>` : ""}
-        <button class="danger" data-need="admin" onclick="this.closest('details').open=false;vmDelete('${esc(v.ns)}','${esc(v.name)}')">${icon("trash")}Delete</button>
+        ${later.map(a => `<button class="sm-only" data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},${jsq(a)})">${icon(VM_ACTIONS[a][1])}${VM_ACTIONS[a][0]}</button>`).join("")}
+        <button onclick="this.closest('details').open=false;vmOpen(${jsq(v.ns)},${jsq(v.name)})">${icon("list")}Details</button>
+        ${main.filter(a => !shown.includes(a)).map(a => `<button data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},${jsq(a)})">${icon(VM_ACTIONS[a][1])}${VM_ACTIONS[a][0]}</button>`).join("")}
+        <button data-need="operator" onclick="this.closest('details').open=false;vmEdit(${jsq(v.ns)},${jsq(v.name)})">${icon("edit")}Edit</button>
+        ${v.actions.includes("pause") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},'pause')">${icon("pause")}Pause</button>` : ""}
+        ${v.actions.includes("migrate") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmMove(${jsq(v.ns)},${jsq(v.name)})">${icon("move")}Move host</button>` : ""}
+        ${FLEET.view?.linked ? `<button data-need="admin" title="Move it to another linked cluster, disks and all" onclick="this.closest('details').open=false;moveToCluster('vm',${jsq(v.name)},${jsq(v.site?.handle || "")})">${icon("move")}Move to cluster</button>` : ""}
+        ${v.actions.includes("force-stop") ? `<button class="danger" data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},'force-stop')" title="${esc(VM_ACTIONS["force-stop"][2])}">${icon("plug")}Force off</button>` : ""}
+        <button class="danger" data-need="admin" onclick="this.closest('details').open=false;vmDelete(${jsq(v.ns)},${jsq(v.name)})">${icon("trash")}Delete</button>
       </div></details>`;
 }
 
@@ -203,7 +203,7 @@ function vmActions(v, compact = false) {
 function vmTable(rows) {
   return `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack compact vm-table" data-sort="vms"><thead><tr>
     <th>VM</th><th>Status</th><th>Address</th><th>CPU</th><th>RAM</th><th>Disk IO</th><th data-nosort></th></tr></thead><tbody>
-    ${rows.map(v => `<tr class="clickable"${clusterAttr(v)} onclick="if(!event.target.closest('button,details,a'))vmOpen('${esc(v.ns)}','${esc(v.name)}')">
+    ${rows.map(v => `<tr class="clickable"${clusterAttr(v)} onclick="if(!event.target.closest('button,details,a'))vmOpen(${jsq(v.ns)},${jsq(v.name)})">
       <td class="cell-name" data-sort="${esc(v.name)}"><b>${esc(v.name)}</b> ${clusterTag(v)}${vmClusterTag(v)}
         <div class="dim xs vm-sub">${esc([v.ns, v.os, v.node ? `on ${v.node}` : ""].filter(Boolean).join(" · "))}</div></td>
       <td data-label="Status" data-status data-sort="${esc(v.status)}"><span class="pill ${vmTone(v.status)}" data-tip="${esc([v.status, v.problem].filter(Boolean).join(": "))}">${esc(v.status)}</span>
@@ -222,7 +222,7 @@ window.viewVMs = viewVMs;
 function vmActionButton(v, action, primary = false, iconOnly = false, extra = "") {
   const [label, iconName, title] = VM_ACTIONS[action];
   return `<button class="btn sm ${primary ? "pri" : ""} ${iconOnly ? "vm-iconbtn" : ""} ${extra}" data-need="operator" title="${esc(iconOnly ? `${label}: ${title}` : title)}"
-    aria-label="${esc(label)}" onclick="vmPower('${esc(v.ns)}','${esc(v.name)}','${action}')">${icon(iconName)}${iconOnly ? "" : label}</button>`;
+    aria-label="${esc(label)}" onclick="vmPower(${jsq(v.ns)},${jsq(v.name)},${jsq(action)})">${icon(iconName)}${iconOnly ? "" : label}</button>`;
 }
 
 /* A VM at a glance. Its address has a line of its own, whole - it is what
@@ -231,7 +231,7 @@ function vmActionButton(v, action, primary = false, iconOnly = false, extra = ""
 function vmCard(v) {
   return `<div class="card flat vm-card vm-${vmTone(v.status)}"${clusterAttr(v)}>
     <div class="between vm-head">
-      <a class="vm-title" onclick="vmOpen('${esc(v.ns)}','${esc(v.name)}')"><div class="av n3">${esc(v.name.slice(0, 2).toUpperCase())}</div>
+      <a class="vm-title" onclick="vmOpen(${jsq(v.ns)},${jsq(v.name)})"><div class="av n3">${esc(v.name.slice(0, 2).toUpperCase())}</div>
         <div class="vm-name"><b title="${esc(v.name)}">${esc(v.name)}</b><div class="dim xs" title="${esc([v.ns, v.os].filter(Boolean).join(" · "))}">${esc(v.ns)}${v.os ? ` · ${esc(v.os)}` : ""}</div></div></a>
       <span class="pill ${vmTone(v.status)}" ${v.problem ? `data-tip="${esc(v.problem)}"` : ""}>${esc(v.status)}</span></div>
     ${v.cluster || clusterTag(v) ? `<div class="vm-tags">${clusterTag(v)}${vmClusterTag(v)}</div>` : ""}
@@ -336,11 +336,11 @@ window.vmOpen = async (ns, name) => {
   let v;
   try { v = await api(`/api/vm?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`); }
   catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
-  const tab = (id, label) => `<button class="${id === "overview" ? "on" : ""}" onclick="vmTab(this,'${id}')">${label}</button>`;
+  const tab = (id, label) => `<button class="${id === "overview" ? "on" : ""}" onclick="vmTab(this,${jsq(id)})">${label}</button>`;
   $("#mbody").innerHTML = `<div class="between"><div><span class="pill ${vmTone(v.status)}">${esc(v.status)}</span>
       <span class="dim xs"> run strategy ${esc(v.run_strategy)}${v.node ? ` · on ${esc(v.node)}` : ""}</span></div>
       <div class="row">${v.actions.filter(a => VM_ACTIONS[a]).map(a => vmActionButton(v, a, a === "start")).join("")}
-        <button class="btn sm" data-need="operator" onclick="vmEdit('${esc(ns)}','${esc(name)}')">${icon("edit")}Edit</button></div></div>
+        <button class="btn sm" data-need="operator" onclick="vmEdit(${jsq(ns)},${jsq(name)})">${icon("edit")}Edit</button></div></div>
     ${v.problem ? `<div class="note bad" style="margin-top:10px">${esc(v.problem)}</div>` : ""}
     ${vmFilling(v)}
     <div class="seg" style="margin:12px 0">${tab("overview", "Overview")}${tab("disks", `Disks · ${v.disks.length}`)}${tab("network", `Network · ${v.nics.length}`)}${tab("events", "Events")}</div>
@@ -361,7 +361,7 @@ window.vmOpen = async (ns, name) => {
         <td class="mono small">${esc(d.claim || "—")}${d.storage_class ? `<div class="dim xs">${esc(d.storage_class)}</div>` : ""}</td>
         <td class="mono">${esc(d.size || "—")}</td><td>${d.boot ? `#${d.boot}` : ""}</td></tr>`).join("")}</tbody></table></div>
     <div class="vm-pane" data-pane="network" hidden><div class="note small">Pod-network VMs can use a default or custom Service VIP with port mappings. Bridged interfaces use DHCP or a static guest address.
-      <button class="btn sm" data-need="operator" onclick="networkManage('${esc(v.namespace)}','${esc(v.name)}','VirtualMachine')">Configure VIP / ports</button></div>
+      <button class="btn sm" data-need="operator" onclick="networkManage(${jsq(v.namespace)},${jsq(v.name)},'VirtualMachine')">Configure VIP / ports</button></div>
       <table class="tbl dense stack"><thead><tr><th>Interface</th><th>Network</th><th>MAC</th><th>Addresses</th></tr></thead><tbody>
       ${v.nics.map(n => `<tr><td><b>${esc(n.name)}</b><div class="dim xs">${esc(n.model)}</div></td><td>${esc(n.network || "—")}</td>
         <td class="mono xs">${esc(n.mac || "—")}</td><td class="mono small">${esc(n.ips.join(", ") || "—")}</td></tr>`).join("")}</tbody></table></div>
@@ -440,11 +440,11 @@ window.vmEdit = async (ns, name) => {
       api("/api/vm/create-options").catch(() => ({ cdi: true, images: [], storage_classes: [], networks: ["pod"], nodes: [] }))]);
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   window.__vmEdit = { ns, name, v, o };
-  const tab = (id, label) => `<button class="${id === "general" ? "on" : ""}" onclick="vmEditTab(this,'${id}')">${label}</button>`;
+  const tab = (id, label) => `<button class="${id === "general" ? "on" : ""}" onclick="vmEditTab(this,${jsq(id)})">${label}</button>`;
   const disks = v.disks.filter(d => d.kind === "disk" || d.kind === "cd-rom");
   const ci = v.cloud_init || {};
   $("#mbody").innerHTML = `<div class="between vm-edit-tabs"><div class="seg">${tab("general", "General")}${tab("disks", `Disks · ${disks.length}`)}${tab("network", `Network · ${v.nics.length}`)}${tab("cloud", "Cloud-init")}</div>
-      <button class="btn sm" data-need="admin" onclick="vmYaml('${esc(ns)}','${esc(name)}')" title="Every field, as YAML">${icon("edit")}Edit YAML</button></div>
+      <button class="btn sm" data-need="admin" onclick="vmYaml(${jsq(ns)},${jsq(name)})" title="Every field, as YAML">${icon("edit")}Edit YAML</button></div>
     <div class="ve-pane" data-pane="general" style="margin-top:12px">
       ${vmEditResourceFields(v)}
       <div class="f2"><div class="f"><label>Run strategy ${tip("RerunOnFailure (Harvester's default): runs, and starts again if the guest crashes, but not after you stop it. Always: kept running whatever happens. Manual: runs only when started, never restarted. Halted: kept off.")}</label>
@@ -460,7 +460,7 @@ window.vmEdit = async (ns, name) => {
       <div class="dim xs" style="margin-top:8px">Boot order: the lowest number boots first. Detached disks are kept as volumes.</div></div>
     <div class="ve-pane" data-pane="network" hidden style="margin-top:12px">
       <div class="note small"><b>Service VIP (default or selected address)</b><p>Uses a masquerade pod-network interface and forwards the ports you select. It is not the guest's own IP or MAC. Configure this separately from NIC changes; save those first if you are adding a pod interface.</p>
-        <button class="btn" data-need="operator" onclick="networkManage('${esc(ns)}','${esc(name)}','VirtualMachine')">Configure default / selected VIP</button></div>
+        <button class="btn" data-need="operator" onclick="networkManage(${jsq(ns)},${jsq(name)},'VirtualMachine')">Configure default / selected VIP</button></div>
       <div class="tblwrap"><table class="tbl dense stack ve-table"><thead><tr><th>Interface</th><th>Model</th><th>Network</th><th>MAC</th><th></th></tr></thead>
         <tbody id="ve_nics">${v.nics.map(n => vmNicRow(n, o)).join("")}</tbody></table></div>
       <div class="row" style="margin-top:10px"><button class="btn sm" onclick="vmAddNic()">＋ Interface</button></div>
@@ -607,7 +607,7 @@ window.vmDelete = (ns, name) => {
     ${disks.length ? `<label class="switch"><input type="checkbox" id="vd_disks"> Delete its disks too: ${disks.map(d => `<span class="mono">${esc(d.claim)}</span>`).join(", ")}</label>
       <div class="dim xs">Left unticked, the disks are kept and can be attached to another VM or deleted from Volumes later.</div>` : ""}
     <div class="f" style="margin-top:12px"><label>Type the VM's name to delete it</label><input id="vd_confirm" autocomplete="off"></div>
-    <div class="row"><button class="btn danger" onclick="vmDeleteGo('${esc(ns)}','${esc(name)}')">Delete</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    <div class="row"><button class="btn danger" onclick="vmDeleteGo(${jsq(ns)},${jsq(name)})">Delete</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
 };
 window.vmDeleteGo = async (ns, name) => {
   if ($("#vd_confirm").value.trim() !== name) return toast("type the VM's name exactly", "bad");

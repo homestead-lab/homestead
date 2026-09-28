@@ -19,6 +19,7 @@ const context = {
   esc: value => String(value),
 };
 vm.createContext(context);
+context.jsArg = s => JSON.stringify(String(s ?? "")); context.jsq = s => (context.esc || String)(context.jsArg(s));
 vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), context);
   vm.runInContext(fs.readFileSync("web/js/views-workloads.js", "utf8"), context);
 

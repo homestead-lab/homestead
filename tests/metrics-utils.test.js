@@ -7,6 +7,7 @@ const vm = require("node:vm");
 
 const context = {};
 vm.createContext(context);
+context.jsArg = s => JSON.stringify(String(s ?? "")); context.jsq = s => (context.esc || String)(context.jsArg(s));
 vm.runInContext(fs.readFileSync("web/js/metrics-utils.js", "utf8"), context);
 
 test("workload CPU usage is shown as percent of one core", () => {

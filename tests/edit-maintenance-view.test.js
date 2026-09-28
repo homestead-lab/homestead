@@ -16,6 +16,7 @@ function setup(review) {
       return { ok: true, name: "demo", operation: {id:'power-job'}, steps:['cordoned'] };
     } };
   vm.createContext(c);
+  c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => (c.esc || String)(c.jsArg(s));
   vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), c);
   vm.runInContext(fs.readFileSync("web/js/views-workloads.js", "utf8"), c);
   vm.runInContext(fs.readFileSync("web/js/views-lifecycle.js", "utf8"), c);

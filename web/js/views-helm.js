@@ -26,7 +26,7 @@ function renderHelm() {
       <button class="btn pri" data-need="admin" onclick="helmInstall()">＋ Install chart</button></div></div>
     ${rows.length ? `<div class="card flat pad0"><div class="tblwrap"><table class="tbl dense stack" data-sort="helm"><thead><tr>
       <th>Release</th><th>Chart</th><th>App</th><th>Status</th><th>Revision</th><th data-nosort>Updated</th></tr></thead><tbody>
-      ${rows.map(r => `<tr class="clickable" onclick="helmRelease('${esc(r.namespace)}','${esc(r.name)}')">
+      ${rows.map(r => `<tr class="clickable" onclick="helmRelease(${jsq(r.namespace)},${jsq(r.name)})">
         <td><div class="row nowrap" style="gap:9px">${appAvatar(r.name, r.icon && /^https:/.test(r.icon) ? r.icon : "")}<div><b>${esc(r.name)}</b>
           ${HELM_MANAGED[r.managed] ? `<span class="tag ${HELM_MANAGED[r.managed][1]}" data-tip="${esc(HELM_MANAGED[r.managed][2])}">${esc(HELM_MANAGED[r.managed][0])}</span>` : ""}
           <div class="dim xs mono">${esc(r.namespace)}</div></div></div></td>
@@ -50,13 +50,13 @@ window.helmRelease = async (ns, name) => {
       ${editable ? `<div class="note" style="margin-top:10px">From <span class="mono">${esc(r.source.repo || r.source.chart)}</span> through a HelmChart: change the version or values and the Helm controller upgrades it.</div>`
         : `<div class="note" style="margin-top:10px">Installed some other way${r.system ? " - it is part of the platform" : ""}. Homestead shows it but does not change it, since whatever installed it would change it back.</div>`}
       <div class="seg" style="margin:12px 0" role="tablist">${["values", "notes", "history", "objects"].map((t, i) =>
-        `<button class="${i ? "" : "on"}" onclick="helmTab(this,'${t}')">${{ values: "Values", notes: "Notes", history: "History", objects: `Objects · ${r.objects.length}` }[t]}</button>`).join("")}</div>
+        `<button class="${i ? "" : "on"}" onclick="helmTab(this,${jsq(t)})">${{ values: "Values", notes: "Notes", history: "History", objects: `Objects · ${r.objects.length}` }[t]}</button>`).join("")}</div>
       <div class="helm-pane" data-pane="values">
         ${editable ? `<div class="f2"><div class="f"><label>Chart version</label><input id="hr_version" class="mono" value="${esc(r.source.version || "")}" placeholder="latest"></div><div></div></div>
           <label>Values ${tip("Only what differs from the chart's defaults. Saved as the HelmChart's valuesContent.")}</label>
           <textarea id="hr_values" class="mono helm-values" rows="16" spellcheck="false">${esc(r.source.values || "")}</textarea>
-          <div class="row" style="margin-top:10px"><button class="btn pri" data-need="admin" onclick="helmUpgrade('${esc(ns)}','${esc(name)}')">Upgrade</button>
-            <button class="btn danger" data-need="admin" onclick="helmUninstall('${esc(ns)}','${esc(name)}')">Uninstall</button></div>`
+          <div class="row" style="margin-top:10px"><button class="btn pri" data-need="admin" onclick="helmUpgrade(${jsq(ns)},${jsq(name)})">Upgrade</button>
+            <button class="btn danger" data-need="admin" onclick="helmUninstall(${jsq(ns)},${jsq(name)})">Uninstall</button></div>`
         : `<pre class="mono helm-values">${esc(r.values || "# installed with the chart's defaults")}</pre>`}</div>
       <div class="helm-pane" data-pane="notes" hidden><pre class="helm-values">${esc(r.notes || "The chart left no notes.")}</pre></div>
       <div class="helm-pane" data-pane="history" hidden><table class="tbl dense stack"><thead><tr><th>Revision</th><th>Status</th><th>Chart</th><th>Updated</th><th>Description</th></tr></thead><tbody>
