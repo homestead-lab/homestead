@@ -71,10 +71,18 @@ which can also be run directly. The
 through all of it.
 
 **Addresses on k3s.** k3s's built-in ServiceLB publishes each app on every
-node's own address, so Homestead and every app work without anything else,
-each on its own port. For an address per app, as Harvester gives, add
-**kube-vip** from **Settings → Cluster → Add-ons**. It runs beside ServiceLB
-and takes only the Services given a VIP.
+node's own address, each on its own port. For an address per app, as
+Harvester gives, Homestead installs **kube-vip**, and for a VM's or
+container's own LAN address, **Multus**. The installer requests both in a
+`homestead-install` ConfigMap in Homestead's manifest; Homestead's leader
+installs whatever is missing through the Helm controller after startup, at
+tested chart versions (kube-vip 0.11.1 / v1.2.3, Multus v4.3.102), and
+records the result in `/data/baseline.json`, so a component removed later is
+not reinstalled. Opt out with `--no-kube-vip` / `--no-multus` (installer:
+`HS_KUBEVIP=no`, `HS_MULTUS=no`), or pin with `--kube-vip-version` /
+`--multus-version`. An older installation shows **Required components not
+installed** under **Settings → Cluster → Add-ons** and on **Networking**.
+kube-vip runs beside ServiceLB and takes only the Services given a VIP.
 
 **On a cluster you already run** - kubeadm, Talos, a managed one, or a k3s or
 RKE2 cluster you would rather not run the installer on - use Helm or the
@@ -362,6 +370,19 @@ addresses, kube-vip status, and Harvester IP pools in one view. It shows the
 live path from each VIP and listener through its Service to ready pod endpoints,
 including the owning node and a direct access link where the protocol is
 browser-friendly.
+
+**Nodes & addresses** (`homestead_vips.py`) groups every address by the node
+answering for it: the node's own addresses, and each VIP whose kube-vip lease
+that node holds (per Service, the shared `kube-vip.io/leaseName` lease, or
+`plndr-svcs-lock`). An address is reachable only when a node announces it and
+its Services carry it in `status.loadBalancer.ingress`, which kube-proxy builds
+its rules from. States: working, not reachable (announced, not carried), no
+node answers (endpoints ready, not announced), nothing running, port taken
+(ServiceLB). kube-vip 1.2.3 can announce a shared address without recording
+it; the leader checks every 30 seconds and patches the missing status where a
+live lease shows a node answering, logs it, and shows it on the page. An
+address still unreachable after a minute raises an alert. Node cards and the
+Architecture view show the same placement.
 
 **Expose workload** creates either a cluster-only Service or a LAN-facing
 LoadBalancer Service. Automatic allocation chooses an unused IPv4 address from
@@ -924,7 +945,8 @@ before requesting a fresh review.
 
 ### Permissions look after themselves
 
-The in-app update replaces Homestead's image, and a new release can need
+The in-app update (the top bar's **Homestead** button, or **Settings → About
+→ Homestead updates**) replaces Homestead's image, and a new release can need
 permissions the old one did not. Homestead carries its manifest inside the image
 and, on start, makes its own ClusterRole exactly what that release describes -
 adding what new features need and dropping what nothing uses any more - so an
@@ -963,6 +985,9 @@ TAG=2.8.221 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 - Multi-architecture index digests and their platform-specific child digests
   are treated as the same release, avoiding false update notifications.
 - Rollback restores the exact previous digest rather than trusting a mutable tag.
+- Homestead itself and its helpers (SMB, NFS, the object store) are counted
+  apart: `report.updates`/`errors` cover apps, `report.homestead` Homestead's
+  parts, which are updated from the top bar and Settings → About.
 
 ## Image cache cleanup
 

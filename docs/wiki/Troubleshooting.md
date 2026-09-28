@@ -122,8 +122,8 @@ the disk as failed.
 ## Networking
 
 **"No free address"** when exposing an app or making a share. Nothing is
-handing out addresses: add some under **Networking → Your VIPs**. See
-[Networking](Networking#your-vips).
+handing out addresses: add some under **Networking → Workload VIPs**. See
+[Networking](Networking#add-default-and-choose-workload-vips).
 
 **New hosts cannot join, though the dashboard works.** Something else is on the
 cluster's own address - the VIP hosts join through on port 9345. Homestead
@@ -133,9 +133,26 @@ Homestead's own shared address (`LB_IP` on its Deployment) is the cluster's
 address, change it to a free one. Homestead no longer offers the cluster's
 address, or one another program owns, anywhere it asks for one.
 
-**An app's address does not answer.** **Networking** shows each address's
-Service and whether its pods are ready. On Harvester, check the address is not
-also given out by your router's DHCP.
+**An app's address does not answer.** **Networking → Nodes & addresses**
+states each address's condition:
+
+- **not reachable** - a node answers for it (ping works) but its Service does
+  not carry it, so the ports are refused. Homestead records the address for
+  kube-vip within 30 seconds and says so above the cards; if it persists, an
+  alert is raised.
+- **no node answers** - its apps are running but the load balancer is not
+  announcing it: check that kube-vip is running and that the Service has its
+  load balancer class.
+- **nothing running** - no pod behind it is ready, so no node announces it.
+- **port taken** - ServiceLB could not publish the Service on the nodes'
+  addresses because another Service holds the port.
+
+On Harvester, also check the address is not given out by your router's DHCP.
+
+**kube-vip or Multus is missing on k3s or RKE2.** **Settings → Cluster →
+Add-ons** and **Networking** show **Required components not installed** with
+**Install components**. A new installation gets both after Homestead starts;
+the job tray shows the progress.
 
 ## VMs
 
