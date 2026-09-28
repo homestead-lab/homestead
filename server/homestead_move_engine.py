@@ -98,6 +98,9 @@ def _public(move):
         "id", "cluster", "kind", "name", "source_namespace", "namespace", "status", "phase",
         "progress", "message", "created_at", "updated_at", "finished_at", "previous_target",
         "source_removed", "address", "address_mode")} | {
+        # Nothing has stopped on the source yet: undoing it is a cancel, not a
+        # "put back".
+        "source_stopped": bool((move.get("flags") or {}).get("quiesced")),
         "claims": [{k: c.get(k) for k in ("claim", "size_gb", "backup", "created", "restored")}
                    for c in move.get("claims", [])],
         "phase_index": PHASES.index(move["phase"]) if move.get("phase") in PHASES else 0,
@@ -373,6 +376,14 @@ def _joining(move):
     if _same_target(here, there):
         return _advance(move, "quiescing", 4, "Both clusters share backup storage")
     credentials = there.get("credentials") or {}
+    # Harvester tests a backup target when it is set, and Longhorn needs it to
+    # read the backups anyway: a store this cluster cannot reach is said
+    # plainly here, rather than as whatever the setting's webhook replies.
+    endpoint = there.get("endpoint") or credentials.get("AWS_ENDPOINTS", "")
+    if endpoint and hasattr(CLIENT, "answers") and not CLIENT.answers(endpoint):
+        raise ValueError(f"this cluster cannot reach {move['cluster']}'s backup storage at {endpoint}. "
+                         f"Give it an address this cluster can reach - {move['cluster']}'s Migration button "
+                         "under Linked clusters - then retry")
     body = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
             "metadata": {"name": JOIN_SECRET, "namespace": LHNS,
                          "labels": {NAMES.key("managed"): "true"}},
@@ -735,6 +746,15 @@ def _finish(move, status, message):
             pass
 
 
+def _kubernetes_reason(error):
+    """What the API server (or a webhook behind it) said, from its Status body."""
+    try:
+        body = json.loads(error.read().decode("utf-8", "replace") or "{}")
+        return str(body.get("message") or "").strip()
+    except Exception:
+        return ""
+
+
 def _tick(move):
     handler = HANDLERS.get(move.get("phase"))
     if not handler:
@@ -751,8 +771,15 @@ def _tick(move):
     except (ValueError, PermissionError) as error:
         _finish(move, "failed", str(error)[:400])
     except urllib.error.HTTPError as error:
+        reason = _kubernetes_reason(error)
+        # Kubernetes saying no - an invalid object, a webhook refusing it - does
+        # not change by asking again, so it stops the move with what was said.
+        # A conflict, a rate limit or the API server struggling may clear.
+        if error.code in (400, 403, 404, 422):
+            return _finish(move, "failed", f"Kubernetes refused it (HTTP {error.code}): {reason}"[:400]) \
+                if reason else _finish(move, "failed", f"Kubernetes refused it (HTTP {error.code})")
         move["failures"] = int(move.get("failures", 0)) + 1
-        move["message"] = f"Waiting: Kubernetes returned HTTP {error.code}"
+        move["message"] = f"Waiting: Kubernetes returned HTTP {error.code}{f': {reason}' if reason else ''}"[:400]
     except Exception as error:
         move["failures"] = int(move.get("failures", 0)) + 1
         move["message"] = f"Waiting: {str(error)[:200]}"
@@ -817,10 +844,13 @@ def abandon(move_id):
     if move.get("source_removed"):
         raise ValueError(f"{move['name']} was already removed from {move['cluster']}; "
                          "there is nothing to put back")
-    move.update(status="cancelled", message="Putting it back", updated_at=_now())
+    stopped = bool((move.get("flags") or {}).get("quiesced"))
+    move.update(status="cancelled", message="Putting it back" if stopped else "Cancelling", updated_at=_now())
     _store(move)
+    # Nothing stopped there yet means nothing to start again there - and no
+    # need for the source to answer before this move can be cancelled.
     released = CLIENT.remote(move["cluster"], "/api/move/source",
-                             {"action": "release", "kind": move["kind"], "name": move["name"]})
+                             {"action": "release", "kind": move["kind"], "name": move["name"]}) if stopped         else {"detail": f"Cancelled; nothing had stopped on {move['cluster']}"}
     namespace, removed = move["namespace"], []
     obj = _get(_object_path(move["kind"], namespace, move["name"]))
     if obj and _ours(obj, move_id):
