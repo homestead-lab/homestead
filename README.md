@@ -108,6 +108,7 @@ volumes, ports, hardware and updates handled for you.
 
 **Containers** - deploy, edit, logs and console; groups, autostart and
 placement; update checks with a monitored rollout and one-click rollback.
+Homestead updates itself from its own button on the top bar.
 
 **Virtual machines** - KubeVirt VMs from a store of cloud images or your own
 disks, with a console, power actions and live migration.
@@ -130,7 +131,8 @@ and UniFi sync.
 and USB passthrough, and a terminal on every node.
 
 **Cluster** - control-plane and etcd health, adding and removing hosts, and
-platform upgrades on Harvester.
+platform versions: k3s or RKE2, Longhorn, KubeVirt, CDI, kube-vip and Multus
+upgraded a step at a time, Harvester upgrades followed.
 
 **Dashboard and alerts** - 90 days of history, push notifications, and MQTT
 with Home Assistant discovery.
@@ -190,10 +192,10 @@ Homestead checks what the cluster has, and each page works with that.
 | **Containers, App Store, Compose, Portal, Networking, IP addresses, Resources, dashboard** | yes | yes | yes |
 | **Volumes, data protection, disks** | yes, with Longhorn - the installer adds it, or Settings → Cluster → Add-ons | yes, Longhorn is built in | yes, with Longhorn - Settings → Cluster → Add-ons installs it on RKE2 |
 | **Virtual machines** | yes, with [KubeVirt](https://kubevirt.io) - the installer adds it, or Add-ons | built in | yes, with KubeVirt - Add-ons installs it on RKE2 |
-| **Addresses for apps** | the nodes' own addresses (k3s's ServiceLB), or a VIP per app with kube-vip | a VIP per app (kube-vip) | RKE2 from the installer: the nodes' own addresses (its ServiceLB), or a VIP per app with kube-vip; others: MetalLB or kube-vip |
+| **Addresses for apps** | a VIP per app with kube-vip, and LAN addresses with Multus - both installed by Homestead - beside the nodes' own addresses (ServiceLB) | a VIP per app (kube-vip), LAN addresses (Multus) | RKE2 from the installer: as k3s; others: MetalLB or kube-vip |
 | **Helm charts** | yes (k3s's Helm controller) | yes (RKE2's Helm controller) | yes on RKE2; listing only without a Helm controller |
 | **Adding a host** | the join command for a worker or a server | a guide to Harvester's installer | RKE2's join commands |
-| **Platform upgrades** | - | followed on the Cluster page | - |
+| **Platform upgrades** | k3s, Longhorn, KubeVirt, CDI, kube-vip and Multus, a step at a time | followed on the Cluster page | RKE2: as k3s; others: shown |
 
 ## Documentation
 

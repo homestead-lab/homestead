@@ -66,10 +66,15 @@ everywhere.
 
 ## Updating Homestead
 
-Homestead is on its own **Containers** page, in the **Homestead** group. When
-a release comes out it shows an update like any other container; **Update**
-pins the new image, watches it roll out, and keeps the old one for one-click
-rollback. The page reconnects by itself while Homestead replaces itself.
+When a release comes out, a **Homestead** button with the new version appears
+on the top bar. It, and **Settings → About → Homestead updates**, show the
+version you run, the new one with a link to its release notes, and the helpers
+Homestead runs beside it (the SMB and NFS servers and the object store used
+for moves). **Update** opens the same reviewed rollout apps get: helpers
+first, Homestead last, the old image kept for rollback. The page reconnects by
+itself while Homestead replaces itself. Homestead and its helpers are platform
+containers, so they are hidden on **Containers** and not counted among app
+updates; see [Settings](Settings#homestead-updates).
 
 Each release carries the permissions it needs, and Homestead brings its own
 role up to date when it starts. An install older than that feature needs to be
