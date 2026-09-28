@@ -1579,6 +1579,15 @@ ssh_pwauth: true
       node_tags: { "harvester-node1": ["rack-a"], "harvester-node2": [], "harvester-node3": ["rack-a"] } },
     "/api/disks/tags": (url, init) => ({ ok: true, detail: `tagged ${JSON.parse(init?.body || "{}").tags.join(", ")}` }),
     "/api/disks/node-tags": (url, init) => ({ ok: true, detail: `tagged ${JSON.parse(init?.body || "{}").tags.join(", ")}` }),
+    "/api/disks/inspect": (url, init) => {
+      const device = JSON.parse(init.body).device;
+      return { device, size_gb: 931.5, partitions: [], mounts: [], fstype: device.endsWith("c") ? "" : "ext4", uuid: "",
+        by_id: "/dev/disk/by-id/ata-WDC_WD10EZEX-00BN5A0_WD-WCC3F0123456", longhorn: device.endsWith("c") ? null : '{"diskName":"disk-1","diskUUID":"8f1c"}',
+        replicas: device.endsWith("c") ? 0 : 3, entries: 2, tools: ["mkfs.ext4", "mkfs.xfs", "wipefs", "chattr", "findmnt"],
+        error: "", system: false, state: device.endsWith("c") ? "blank" : "longhorn", mount_point: `/mnt/${device.split("/").pop()}`,
+        choices: device.endsWith("c") ? ["format"] : ["import", "erase"] };
+    },
+    "/api/disks/setup": { ok: true, path: "/mnt/sdc", tags: ["hdd"], detail: "/dev/sdc is formatted and mounted at /mnt/sdc; Longhorn is adding it on harvester-node3, tagged hdd" },
     "/api/disks/add": { ok: true, detail: "Harvester is wiping and adding /dev/sdb on harvester-node1 to Longhorn" },
     "/api/disks/scheduling": { ok: true, detail: "done" }, "/api/disks/evict": { ok: true, detail: "moving replicas off" },
     "/api/disks/remove": { ok: true, detail: "released" },

@@ -2338,9 +2338,12 @@ html[data-theme="light"] .modalbox[data-context="smb-access"]{background:var(--s
 
 /* Homestead's own update: its mark and the new release on the top bar, apart
    from apps' image updates; the same parts in its dialog and on About. */
-.hs-notice{display:inline-flex;flex-direction:row;align-items:center;width:auto;gap:6px;padding:0 10px 0 8px;border:1px solid rgba(61,220,145,.45);color:var(--ok);font:650 11.5px "JetBrains Mono",monospace;position:relative}
+/* An icon button like its neighbours: Homestead's mark, and a dot saying a
+   release is waiting. The version is in its tooltip and dialog. */
+.hs-notice{position:relative}
 .hs-notice img{width:18px;height:18px}
-.hs-notice>i{position:absolute;right:-3px;top:-3px;width:9px;height:9px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 2px var(--surf)}
+.hs-notice>span{display:none}
+.hs-notice>i{position:absolute;right:-3px;top:-4px;width:10px;height:10px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 2px var(--surf)}
 .hs-release{display:flex;flex-direction:column;gap:3px;padding:12px 14px;border:1px solid rgba(61,220,145,.4);border-radius:12px;background:rgba(61,220,145,.06)}
 .hs-release.current{border-color:var(--line);background:transparent}
 .hs-release b{font-size:17px}
@@ -2349,7 +2352,7 @@ html[data-theme="light"] .modalbox[data-context="smb-access"]{background:var(--s
 .hs-part>div{display:flex;flex-direction:column;gap:2px;min-width:0}
 .hs-part>div span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hs-actions{gap:8px;flex-wrap:wrap}
-@media (max-width:560px){.hs-notice{padding:0 8px}}
+
 /* Networking › Nodes & addresses: a card per node, an address per row, a
    port per line - port → what answers → where. */
 .addr-nodes{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px;margin-bottom:8px}
@@ -2425,3 +2428,9 @@ html[data-theme="light"] .modalbox[data-context="smb-access"]{background:var(--s
 .iso-lib>*{min-width:0}
 .iso-keep{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px}
 .iso-keep input{width:72px}
+
+/* Setting up a disk: the choices, one line each. */
+.disk-choices{display:flex;flex-direction:column;gap:8px}
+.disk-choice{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line);border-radius:10px;cursor:pointer}
+.disk-choice span{display:flex;flex-direction:column;gap:2px}
+.disk-choice small{color:var(--mut);font-size:12px}
