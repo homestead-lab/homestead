@@ -561,7 +561,8 @@ function storageClassCard(classes, v2 = null) {
     <div class="tblwrap"><table data-sort="storage-classes" class="tbl stack storage-class-table"><thead><tr>
       <th>Class</th><th>Engine</th><th>Replicas</th><th>Shared (RWX)</th><th>Encryption</th><th>Expansion</th><th>Volumes</th><th></th>
     </tr></thead><tbody>${rows.map(row => `<tr>
-      <td><b>${esc(row.name)}</b>${row.default ? '<span class="tag ok">default</span>' : ""}${row.internal ? '<span class="tag">Harvester internal</span>' : ""}${row.made_for === "image" ? '<span class="tag" data-tip="Harvester made it for one image: disks from that image are made on it">image</span>' : row.made_for === "restore" ? '<span class="tag warn" data-tip="Made to read one backup into a new volume; not needed once that volume exists">restore</span>' : ""}
+      <td><b>${esc(row.name)}</b>${row.default ? '<span class="tag ok">default</span>' : ""}${row.internal ? '<span class="tag">Harvester internal</span>' : ""}${row.made_for === "image" ? '<span class="tag" data-tip="Harvester made it for one image: disks from that image are made on it">image</span>' : row.made_for === "restore" ? '<span class="tag warn" data-tip="Made to read one backup into a new volume; not needed once that volume exists">restore</span>'
+        : row.made_for === "iso" ? '<span class="tag" data-tip="ISO copies Homestead made for VM CD-ROM drives: one replica, since the originals are on your shares">ISO copies</span>' : ""}
         <div class="dim xs mono">${esc(row.provisioner || "")}</div>
         ${(row.disk_tags || []).length || (row.node_tags || []).length ? `<div class="row" style="gap:4px;margin-top:4px">
           ${(row.disk_tags || []).map(t => `<span class="tag info" data-tip="Only on disks tagged ${esc(t)}">disk: ${esc(t)}</span>`).join("")}
