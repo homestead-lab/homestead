@@ -63,6 +63,14 @@ switch again - it is on every cluster - and pick the one you signed in to.
 If a cluster stops answering while you are on it, Homestead says so and offers
 a way back.
 
+## Updating them together
+
+The **Homestead updates** dialog (the top bar's **Homestead** button, or
+**Settings → About**) lists every linked cluster with its version and any
+waiting update. Tick **Include** on each one to update with this one; see
+[Settings](Settings#homestead-updates). Clusters a release or more apart can
+still move workloads between them, as long as their link protocol matches.
+
 ## Roles
 
 You keep the role you have on the cluster you signed in to. Each cluster

@@ -2390,3 +2390,14 @@ html[data-theme="light"] .modalbox[data-context="smb-access"]{background:var(--s
 .actionmenu-portal{position:fixed;top:0;left:0;width:0;height:0;z-index:75}
 .actionmenu-portal>summary{display:none}
 .actionmenu-portal>.actionmenu-pop{z-index:75}
+
+/* Homestead updates: linked clusters, each with a tick to include it. */
+.hs-fleet{display:flex;flex-direction:column;gap:6px}
+.hs-part-end{gap:8px;flex-wrap:nowrap}
+.hs-pick{display:inline-flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;white-space:nowrap}
+.hs-pick input{width:16px;height:16px}
+@media (max-width:560px){.hs-part-end{flex-direction:column;align-items:flex-end;gap:4px}}
+.hs-update,.hs-fleet,.hs-parts{min-width:0;max-width:100%}
+.hs-part>div:first-child{flex:1 1 auto}
+.hs-part .pill{white-space:nowrap}
+@media (max-width:560px){.hs-part{flex-wrap:wrap}.hs-part-end{margin-left:auto}}
