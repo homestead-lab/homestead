@@ -565,3 +565,116 @@ def alert_facts(inv):
                                       + f" ({disk['path']}). Its volumes run on their other copies meanwhile.",
                               "href": f"/nodes/{node}"})
     return facts
+
+
+# ---- a new disk set up, and every disk tagged -------------------------------
+setup_module = None     # homestead_disk_setup
+autotag_state = None    # () -> path of the auto-tag record
+
+
+def kind_tags(row):
+    """What a disk is, as a tag: "os" for the one the system runs from - only
+    that, so a class choosing "ssd" does not take the system disk - else
+    "ssd" (SSD or NVMe) or "hdd". [] when the probe has not said."""
+    if row.get("system"):
+        return ["os"]
+    kind = str(row.get("kind") or "").upper()
+    return ["hdd"] if kind == "HDD" else ["ssd"] if kind in ("SSD", "NVME") else []
+
+
+def _row(node, device):
+    name = device.rsplit("/", 1)[-1]
+    return next((r for r in (inventory()["nodes"].get(node) or []) if r["device"] == name), {})
+
+
+def inspect_disk(node, device):
+    return setup_module.inspect(node, device)
+
+
+def set_up(cfg):
+    """A disk made ready and given to Longhorn in one step: V1 formatted (or
+    kept, with its Longhorn data) and mounted by setup_module, V2 by its raw
+    device. A failed, empty Longhorn entry at the same place is cleared first,
+    so the new disk is not held back by the old one."""
+    node, device = str(cfg.get("node") or ""), str(cfg.get("device") or "")
+    engine = "v2" if str(cfg.get("engine") or "v1").lower() in ("v2", "longhornv2") else "v1"
+    mode, confirm = str(cfg.get("mode") or ""), str(cfg.get("confirm") or "")
+    row = _row(node, device)
+    if engine == "v2":
+        facts = setup_module.inspect(node, device)
+        if facts["state"] in ("missing", "system", "mounted"):
+            raise ValueError(setup_module.refusal(facts, "erase"))
+        if facts["state"] != "blank":
+            if confirm.strip() != device:
+                raise ValueError(f"type {device} to confirm: it holds {facts['fstype'] or 'partitions'}, which Longhorn's V2 engine erases")
+            out, err = setup_module.hostrun.run(node, f'wipefs -a {device} && echo WIPED', timeout=60)
+            if "WIPED" not in out:
+                raise ValueError(f"could not clear {device}: {(err or out)[:200]}")
+        path, kept = facts["by_id"] or device, False
+    else:
+        done = setup_module.setup(node, device, mode, str(cfg.get("fstype") or "ext4"), confirm)
+        path, kept = done["path"], done["kept_data"]
+    lh = kget(f"{LH}/nodes/{node}")
+    for disk_id, d in ((lh.get("spec") or {}).get("disks") or {}).items():
+        if d.get("path") != path:
+            continue
+        status = ((lh.get("status") or {}).get("diskStatus") or {}).get(disk_id) or {}
+        ready = next((c for c in status.get("conditions") or [] if c.get("type") == "Ready"), {}).get("status") == "True"
+        if ready:
+            return {"ok": True, "path": path, "detail": f"{device} is mounted at {path}, which Longhorn already uses on {node}"}
+        if status.get("scheduledReplica"):
+            raise ValueError(f"Longhorn's disk at {path} on {node} still lists replicas; replace it from its row first")
+        # The old entry for this folder, from before anything was mounted there.
+        _patch(f"{LH}/nodes/{node}", {"spec": {"disks": {disk_id: {"allowScheduling": False}}}}, "clearing the old entry")
+        _patch(f"{LH}/nodes/{node}", {"spec": {"disks": {disk_id: None}}}, "clearing the old entry")
+    disk_id = "disk-" + re.sub(r"[^a-z0-9]+", "-", path.lower()).strip("-")[:50]
+    tags = kind_tags(row)
+    _patch(f"{LH}/nodes/{node}", {"spec": {"disks": {disk_id: {
+        "path": path, "allowScheduling": True, "diskType": "block" if engine == "v2" else "filesystem",
+        "storageReserved": 0, "tags": tags}}}}, f"adding {path}")
+    _note_tagged(f"{node}/{disk_id}")
+    words = (f"{device} kept its Longhorn data and is mounted at {path}" if kept
+             else f"{device} is {'given to the V2 engine' if engine == 'v2' else f'formatted and mounted at {path}'}")
+    return {"ok": True, "path": path, "tags": tags,
+            "detail": f"{words}; Longhorn is adding it on {node}" + (f", tagged {', '.join(tags)}" if tags else "")}
+
+
+def _tagged():
+    import json as _json
+    try:
+        with open(autotag_state(), encoding="utf-8") as handle:
+            return set(_json.load(handle))
+    except (OSError, ValueError, TypeError):
+        return set()
+
+
+def _note_tagged(key):
+    import homestead_shared as SHARED
+    try:
+        SHARED.write_json(autotag_state(), sorted(_tagged() | {key}))
+    except (OSError, TypeError):
+        pass
+
+
+def auto_tag():
+    """Each Longhorn disk with no tags, seen for the first time: tagged by
+    what it is. Once only - tags someone removes or changes are theirs.
+    Returns [(node, disk id, tags)]."""
+    done, tagged = _tagged(), []
+    for node, rows in inventory()["nodes"].items():
+        for row in rows:
+            tags = kind_tags(row)
+            for disk in row["longhorn"]:
+                key = f"{node}/{disk['id']}"
+                if key in done:
+                    continue
+                if disk["tags"]:
+                    pass                        # someone tagged it: theirs
+                elif tags and disk["ready"]:
+                    set_disk_tags(node, disk["id"], tags)
+                    tagged.append((node, disk["id"], tags))
+                else:
+                    continue                    # not known yet: looked at again later
+                _note_tagged(key)
+                done.add(key)
+    return tagged

@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.225")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.226")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -5111,6 +5111,7 @@ import homestead_vmstore as VMSTORE
 import homestead_nodeshell as NODESHELL
 import homestead_hostrun as HOSTRUN
 import homestead_manifests as MANIFESTS
+import homestead_disk_setup as DISK_SETUP
 import homestead_hvimage as HVIMAGE
 import homestead_revert as REVERT
 OPS.RESOLVERS["reclass"] = storage_move_progress
@@ -5185,6 +5186,9 @@ REVERT.bind(kget, ksend, RECLASS, is_self)
 NODESHELL.bind(kget, ksend, DEFAULT_NS)
 HOSTRUN.bind(kget, ksend, lambda *a, **k: FILES._exec(*a, **k), DEFAULT_NS)
 MANIFESTS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
+DISK_SETUP.bind(HOSTRUN)
+DISKS.setup_module = DISK_SETUP
+DISKS.autotag_state = lambda: os.path.join(DATA_DIR, "disk-autotags.json")
 
 
 def _vm_image_disks():
@@ -5402,6 +5406,8 @@ def _host_fix_loop():
                     for node, marked in MANIFESTS.tick().items():
                         print(f"platform: {node}: k3s no longer re-applies "
                               f"{', '.join(marked) or 'no installer files (none left)'} at start", flush=True)
+                    for node, disk, tags in DISKS.auto_tag():
+                        print(f"storage: {node} {disk} tagged {', '.join(tags)}", flush=True)
                     fixed = reconcile_default_class()
                     if fixed:
                         print(f"storage: {fixed[0]} kept as the default class; "
@@ -6734,6 +6740,8 @@ def needed_role(path, method):
     # a secret's values are for admins only.
     if path in ("/api/helm/install", "/api/helm/upgrade", "/api/helm/uninstall", "/api/resources/save", "/api/vm/delete",
                 "/api/longhorn/settings", "/api/disks/add", "/api/disks/scheduling", "/api/disks/evict", "/api/disks/remove",
+                # Looking at a disk on its host, and formatting and mounting it there.
+                "/api/disks/inspect", "/api/disks/setup",
                 "/api/disks/tags", "/api/disks/node-tags",
                 # Replacing a failed disk deletes replicas and takes the disk out.
                 "/api/disks/retire", "/api/disks/retire/plan",
@@ -8303,6 +8311,14 @@ class H(BaseHTTPRequestHandler):
                 for key in ("disks", "lhcap", "nodes", "ov"):
                     _cache.pop(key, None)
                 return self._send(200, {"ok": True, "operation": op})
+            if p == "/api/disks/inspect":
+                return self._send(200, DISKS.inspect_disk(str(b.get("node") or ""), str(b.get("device") or "")))
+            if p == "/api/disks/setup":
+                result = DISKS.set_up(b)
+                with _lock:
+                    for key in [k for k in _cache if k.startswith(("disk", "stor", "lhcap"))]:
+                        _cache.pop(key, None)
+                return self._send(200, result)
             if p in ("/api/disks/add", "/api/disks/scheduling", "/api/disks/evict", "/api/disks/remove"):
                 action = p.rsplit("/", 1)[1]
                 result = (DISKS.add(b) if action == "add"
