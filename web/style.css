@@ -2289,3 +2289,11 @@ html[data-theme="light"] .modalbox[data-context="smb-access"]{background:var(--s
 .ipam-pop-list button:hover,.ipam-pop-list button:focus-visible{background:rgba(255,255,255,.1);outline:none}
 .ipam-pop-list button.on{border-color:var(--ok);color:var(--ok)}
 .ipam-pop-empty{padding:6px 2px;font-size:12px;color:#b4b4bc}
+.fleet-row-acts{gap:10px;align-items:center}
+.fleet-out-switch{margin:0;gap:6px;font-size:12px;white-space:nowrap}
+.fleet-out-help{margin-top:8px}
+@media(max-width:560px){
+  .fleet-list li{grid-template-columns:auto minmax(0,1fr);row-gap:8px}
+  .fleet-list li>:last-child:not(.fleet-row){grid-column:2}
+  .fleet-row-acts{justify-content:space-between}
+}

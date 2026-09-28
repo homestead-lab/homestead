@@ -117,6 +117,7 @@ const DIALOGS = [
   ["app-store-app", "store", "click:storeDetails"],
   ["deploy-preview", "deploy", "click:previewYaml"],
   ["fleet-link", "workloads", "fleetLink()"],
+  ["fleet-moves-out", "settings", "settingsTab('fleet')", "fleetTransfersSet('c3beef', true, {checked:true})"],
   ["move-to-cluster", "workloads", "moveToCluster('container','frigate')"],
 ];
 

@@ -1736,6 +1736,15 @@ ssh_pwauth: true
     "/api/fleet/switch": { ok: true }, "/api/fleet/address": { ok: true, missed: [] },
     "/api/fleet/join": { ok: true, member: { name: "Garage" }, missed: [] },
     "/api/fleet/remove": { ok: true, told: true, missed: [] },
+    "/api/objectstore/transfers": (url, init) => init?.method === "POST"
+      ? { allowed: JSON.parse(init.body || "{}").allow, deployed: true, detail: JSON.parse(init.body || "{}").allow ? "moves out are on" : "moves out are off: backup storage is stopped, its volume kept" }
+      : { allowed: true, deployed: true, ready: true, stopped: false, endpoint: "http://192.168.1.242:9000", backups_here: true },
+    "/api/move/clusters/transfers": (url, init) => {
+      const body = JSON.parse(init?.body || "{}");
+      if (body.allow !== undefined) return { allowed: body.allow, deployed: true, detail: body.allow ? "moves out are on" : "moves out are off" };
+      return body.name === "shed" ? { allowed: true, deployed: true, ready: true, stopped: false }
+        : { allowed: false, deployed: false, ready: false, stopped: false };
+    },
     "/api/fleet/legacy": [{ name: "barn", url: "http://192.168.1.252:8088", user: "admin", added: "2026-05-02 18:40", linked_as: null }],
     "/api/fleet/link-legacy": { ok: true, member: { name: "Barn" }, missed: [] }, "/api/fleet/leave": { ok: true, missed: [] },
     "/api/fleet/all/workloads": () => [...mine(workloads), ...shed(shedWorkloads)],

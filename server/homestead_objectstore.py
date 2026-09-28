@@ -100,8 +100,11 @@ def status():
         except Exception:
             bucket = False
     containers = (((deployment or {}).get("spec") or {}).get("template") or {}).get("spec", {}).get("containers") or [{}]
+    wanted = int(((deployment or {}).get("spec") or {}).get("replicas", 1) or 0) if deployment else 0
     return {
         "bucket_ready": bucket,
+        # Turned off: set up, but stopped, so moves out of this cluster wait.
+        "stopped": bool(deployment) and wanted == 0,
         "server": containers[0].get("image", "") if deployment else "",
         "deployed": bool(deployment),
         "ready": bool(deployment) and ready > 0,
@@ -319,6 +322,39 @@ def deploy(cfg=None):
     if cfg.get("point_longhorn", True):
         result["longhorn"] = point_longhorn()
     return result
+
+
+def transfers():
+    """Whether workloads may move out of this cluster: its store running."""
+    state = status()
+    try:
+        backups_here = (LH.backup_target() or {}).get("url") == backup_url()
+    except Exception:
+        backups_here = False
+    return {"allowed": state["deployed"] and not state["stopped"], "deployed": state["deployed"],
+            "ready": state["ready"], "stopped": state["stopped"], "endpoint": state["endpoint"],
+            "reachable_off_cluster": state["reachable_off_cluster"], "size_gb": state["size_gb"],
+            "backups_here": backups_here}
+
+
+def set_transfers(allow, size_gb=100, lb_ip="", vip_mode=""):
+    """Turn moves out of this cluster on or off: start the store (setting it
+    up the first time) or stop it. Stopping keeps its volume, and with it the
+    backups already made; they are there when it starts again."""
+    path = f"/apis/apps/v1/namespaces/{NS}/deployments/{NAME}"
+    deployment = _get(path)
+    if allow:
+        if not deployment:
+            result = deploy({"size_gb": size_gb, "lb_ip": lb_ip, "vip_mode": vip_mode, "point_longhorn": True})
+            return {**transfers(), "detail": f"moves out are on: backup storage is starting at {result.get('endpoint') or 'its address'}"}
+        ksend("PATCH", path, {"spec": {"replicas": 1}}, ctype="application/merge-patch+json")
+        return {**transfers(), "allowed": True, "detail": "moves out are on: backup storage is starting again"}
+    if deployment:
+        ksend("PATCH", path, {"spec": {"replicas": 0}}, ctype="application/merge-patch+json")
+    state = transfers()
+    return {**state, "allowed": False,
+            "detail": "moves out are off: backup storage is stopped, its volume kept"
+                      + ("; Longhorn backs up here, so its backups pause until it starts again" if state["backups_here"] else "")}
 
 
 def point_longhorn(replace=False):
