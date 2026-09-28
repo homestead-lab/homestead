@@ -65,6 +65,27 @@ working, refreshed every 15 seconds:
   installs it if needed;
 - the permissions check, backup storage and MQTT.
 
+## Configuration backup
+
+**Settings → About → Configuration backup** saves Homestead's own setup to a
+file on your device: settings, users and roles, hardware features, VIPs, IP
+addresses, MQTT, Portal, network shares and SMB users, import sources and the
+VM image store. Pick which parts to include.
+
+The file holds password hashes and keys, so it is always encrypted with a
+passphrase you choose - at least 8 characters - which Homestead does not keep.
+Without it the file cannot be read, and any change to the file is noticed.
+
+**Restore** reads a backup with its passphrase and lists each part it holds,
+saying whether it is the same as now or differs. Tick the parts to bring back;
+the rest stay as they are, and nothing is deleted. **Users and roles** is left
+unticked unless you choose it: restoring it replaces every account and
+password with the backup's and signs everyone out.
+
+Not in a backup: workloads and their data (volume backups under Data
+protection hold those), and linked clusters - link them again after
+restoring onto a new install.
+
 ## Redundancy
 
 **About → Redundancy** runs one to three copies of Homestead. With two or more,

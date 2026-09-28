@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.211")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.212")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -4734,6 +4734,7 @@ import homestead_probe as PROBE
 import homestead_objectstore as OBJECTS
 import homestead_move as MOVE
 import homestead_fleet as FLEET
+import homestead_config_backup as CONFIG
 import homestead_move_source as MOVE_SOURCE
 import homestead_move_engine as MOVE_ENGINE
 import homestead_compose as COMPOSE
@@ -6001,6 +6002,43 @@ VOLUMES.bind(kget, ksend, LH.snapshots, LH.backups, _cache, SYS_NS, DEFAULT_NS)
 SHARES.bind(kget, ksend, create_pvc, SMB_NAMESPACE, _cache)
 SHARES.install = install_samba
 NETWORK.bind(kget, ksend, SYS_NS, DEFAULT_NS, LB_IP)
+
+
+def _config_restored(parts):
+    """A restored part is read afresh everywhere it is cached."""
+    _cache.clear()
+    AUTH._store_cache.update(at=0)
+    HW._cache.clear()
+    IMP._cache.clear()
+
+
+# Homestead's own configuration, part by part, for its backup and restore.
+# Linked clusters are not a part: restoring an old shared key cuts the links.
+CONFIG.bind(kget, ksend, HOMESTEAD_VERSION, [
+    {"id": "settings", "label": "Settings", "detail": "Site name, health thresholds, update policy, App Store feed",
+     "objects": [("configmaps", DEFAULT_NS, _settings_map())]},
+    {"id": "users", "label": "Users and roles", "detail": "Every account, its role and password",
+     "caution": "Replaces every account and password with the backup's, and signs everyone out - sign in again with an account from the backup.",
+     "default": False, "objects": [("secrets", DEFAULT_NS, AUTH.SECRET_NAME())]},
+    {"id": "hardware", "label": "Hardware features", "detail": "Device mappings: iGPU, Coral, USB and the rest",
+     "objects": [("configmaps", DEFAULT_NS, HW._hardware_map())]},
+    {"id": "vips", "label": "VIPs", "detail": "Your saved VIPs, their labels and the default workload VIP",
+     "objects": [("configmaps", DEFAULT_NS, NETWORK.VIP_MAP)]},
+    {"id": "ipam", "label": "IP addresses", "detail": "Subnets, documented addresses, and the UniFi connection",
+     "objects": [("configmaps", DEFAULT_NS, IPAM._map()), ("secrets", DEFAULT_NS, IPAM._secret())]},
+    {"id": "mqtt", "label": "MQTT", "detail": "The broker, its credentials and what is published",
+     "objects": [("configmaps", DEFAULT_NS, MQTT._map()), ("secrets", DEFAULT_NS, MQTT._secret())]},
+    {"id": "portal", "label": "Portal", "detail": "Its sections and tiles",
+     "objects": [("configmaps", DEFAULT_NS, PORTAL._map())]},
+    {"id": "shares", "label": "Network shares", "detail": "Shares, their options, and SMB users",
+     "caution": "Brings back share definitions and SMB users; the volumes they point at must still exist.",
+     "objects": [("configmaps", SMB_NAMESPACE, SHARES.CONFIGMAP()), ("secrets", SMB_NAMESPACE, SHARES.SECRET())]},
+    {"id": "sources", "label": "Import sources", "detail": "Unraid and Docker hosts to import from",
+     "objects": [("configmaps", DEFAULT_NS, IMP._sources_map())]},
+    {"id": "vmstore", "label": "VM image store", "detail": "The cloud images kept, and whether they refresh",
+     "objects": [("configmaps", DEFAULT_NS, VMSTORE.CONFIGMAP)]},
+], site=lambda: (cached("settings", 15, get_app_settings) or {}).get("site_name", ""),
+    after_restore=_config_restored)
 CLUSTER.bind(kget, SYS_NS, lambda: cached("nodes", 5, get_nodes))
 CONSOLE_PROXY = CONSOLE.ConsoleProxy(API, TOKEN, CTX, DATA_DIR, SYS_NS, {DEFAULT_NS}, kget)
 VM_CONSOLE = VMCONSOLE.VmConsole(CONSOLE_PROXY, SYS_NS, kget)
@@ -6333,6 +6371,8 @@ ADMIN_ROUTES = {
     # A cluster's credentials, and what they reach.
     "/api/move/clusters/add", "/api/move/clusters/remove", "/api/move/remote",
     "/api/move/clusters/check", "/api/move/clusters/readiness", "/api/move/clusters/storage",
+    # Homestead's configuration: every password hash and key it holds.
+    "/api/config/parts", "/api/config/backup", "/api/config/inspect", "/api/config/restore",
     # Linking clusters hands every linked Homestead admin over this one.
     "/api/fleet/join", "/api/fleet/accept", "/api/fleet/remove", "/api/fleet/leave",
     "/api/fleet/address", "/api/fleet/sync", "/api/fleet/link-legacy",
@@ -6845,6 +6885,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, FLEET.summary(via=self._fleet_from))
             if p == "/api/fleet/hello":
                 return self._send(200, FLEET.hello())
+            if p == "/api/config/parts":
+                return self._send(200, CONFIG.parts())
             if p == "/api/fleet/legacy":
                 return self._send(200, MOVE.legacy_clusters())
             if p == "/api/fleet/state":
@@ -7257,6 +7299,18 @@ class H(BaseHTTPRequestHandler):
             addr = self._client_ip()
             if p.startswith("/api/fleet/"):
                 return self._fleet_post(p, b)
+            if p in ("/api/config/backup", "/api/config/inspect", "/api/config/restore"):
+                try:
+                    if p == "/api/config/backup":
+                        return self._send(200, CONFIG.backup(b.get("parts"), str(b.get("passphrase") or "")))
+                    if p == "/api/config/inspect":
+                        return self._send(200, CONFIG.inspect(b.get("file"), str(b.get("passphrase") or "")))
+                    return self._send(200, CONFIG.restore(b.get("file"), str(b.get("passphrase") or ""), b.get("parts") or []))
+                except PermissionError as error:
+                    # A wrong passphrase is not a missing role: 422, not 403.
+                    return self._send(422, {"error": str(error)})
+                except ValueError as error:
+                    return self._send(400, {"error": str(error)})
             if p == "/api/auth/setup":
                 # Whoever finishes setup becomes the first administrator, so it is
                 # not offered to the internet, however the hostname is protected.
