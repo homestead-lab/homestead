@@ -3520,8 +3520,13 @@ def set_default_storage_class(name):
     ksend("PATCH", f"/apis/storage.k8s.io/v1/storageclasses/{name}",
           {"metadata": {"annotations": {DEFAULT_CLASS_ANNOTATION: "true"}}},
           ctype="application/merge-patch+json")
-    # Kept, so a class k3s marks as default again at its next start is put back.
-    SHARED.write_json(_chosen_default_path(), {"name": name, "at": int(time.time())})
+    # Kept, so a class k3s marks as default again at its next start is put
+    # back. Only a convenience: the class is the default whether or not this
+    # is written.
+    try:
+        SHARED.write_json(_chosen_default_path(), {"name": name, "at": int(time.time())})
+    except OSError as error:
+        print(f"storage: could not remember {name} as the chosen default: {error}", flush=True)
     return {"ok": True, "classes": storage_class_inventory(),
             "message": f"{name} is now the default storage class"}
 
