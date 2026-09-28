@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.217")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.218")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -2478,11 +2478,25 @@ def image_update_capacity_plan(body, action):
     return prepared, capacity, context
 
 
+def release_tag(dep, container_name, image=""):
+    """The release a container follows: the tag Homestead tracks for it, else
+    the tag in its image. An update pins the image to its digest, which drops
+    the tag, so the tracked one is what says 2.8.215 rather than sha256:..."""
+    tracked = UPDATES._annotation_json(dep, UPDATES.TRACKED).get(container_name, "")
+    for ref in (tracked, image):
+        tail = str(ref or "").split("@", 1)[0].rsplit("/", 1)[-1]
+        if ":" in tail:
+            return tail.rsplit(":", 1)[1]
+    return ""
+
+
 def preview_image_update(body):
     action = body.get("action", "update")
     prepared, capacity, context = image_update_capacity_plan(body, action)
     old = {c["name"]: c.get("image", "") for c in UPDATES._pod_containers(prepared["current"])}
     images = [{"container": c["name"], "before": old.get(c["name"], ""), "after": c.get("image", ""),
+               "before_tag": release_tag(prepared["current"], c["name"], old.get(c["name"], "")),
+               "after_tag": release_tag(prepared["proposed"], c["name"], c.get("image", "")),
                "rollback": prepared["before"].get(c["name"], "")}
               for c in UPDATES._pod_containers(prepared["proposed"])
               if c.get("image", "") != old.get(c["name"], "")]

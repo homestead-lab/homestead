@@ -78,6 +78,12 @@ anything stops. Then, in the job tray:
 A move survives either Homestead restarting, and has no time limit that would
 abandon a large volume. A failed step can be retried once its cause is fixed.
 
+A move that fails says why - the reason Kubernetes gave, or that this cluster
+cannot reach the source's backup storage. **Retry** carries on from the step
+that failed. **Cancel**, offered while nothing has stopped on the source yet,
+drops the move and anything it set up here; once the source has stopped,
+the same button is **Put back**, and starts it again there.
+
 ## Afterwards
 
 The original stays on the source, **stopped**, until you remove it there - so

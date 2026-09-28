@@ -1963,7 +1963,7 @@ function movesHtml(moves) {
       m.status === "succeeded" && !m.source_removed
         ? `<button class="btn sm" data-need="admin" onclick="moveFinish(${jsq(m.id)},${jsq(m.name)},${jsq(m.cluster)})">Remove from ${esc(m.cluster)}</button>` : "",
       ["running", "failed", "succeeded"].includes(m.status) && !m.source_removed
-        ? `<button class="btn sm danger" data-need="admin" onclick="moveBack(${jsq(m.id)},${jsq(m.name)},${jsq(m.cluster)},${jsq(m.status)})">Put back</button>` : "",
+        ? `<button class="btn sm danger" data-need="admin" onclick="moveBack(${jsq(m.id)},${jsq(m.name)},${jsq(m.cluster)},${jsq(m.status)},${m.source_stopped === false ? "false" : "true"})">${m.source_stopped === false ? "Cancel" : "Put back"}</button>` : "",
       ["succeeded", "cancelled"].includes(m.status)
         ? `<button class="btn sm" data-need="admin" data-tip="${m.status === "succeeded" && !m.source_removed ? `Clear it from this list. ${esc(m.cluster)} keeps its stopped copy until you remove it there.` : "Clear it from this list"}"
             onclick="moveDismiss(${jsq(m.id)})">Dismiss</button>` : "",
@@ -1998,12 +1998,18 @@ window.moveAct = async (action, id) => {
   try {
     await api(`/api/move/moves/${action}`, { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
-    toast(action === "retry" ? "retrying from where it stopped" : "putting it back", "ok");
+    toast(action === "retry" ? "retrying from where it stopped" : "done", "ok");
     watchMoves();
   } catch (e) { toast(e.message, "bad"); }
 };
 
-window.moveBack = (id, name, cluster, status) => {
+window.moveBack = (id, name, cluster, status, stopped = true) => {
+  // Nothing has stopped on the source yet: undoing it only cancels the move.
+  if (!stopped) {
+    if (!confirm(`Cancel moving ${name}?` + String.fromCharCode(10, 10)
+        + `Nothing has stopped on ${cluster}; anything this move set up here is removed.`)) return;
+    return moveAct("abandon", id);
+  }
   const landed = status === "succeeded";
   if (!confirm(`Put ${name} back on ${cluster}?` + String.fromCharCode(10, 10)
       + "It starts again there, as it was, and what this move created here is removed"

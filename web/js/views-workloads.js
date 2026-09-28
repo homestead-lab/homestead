@@ -123,6 +123,17 @@ window.startUpdateChecks = () => {
   }, 15 * 60 * 1000);
 };
 
+/* The release an update moves to: 2.8.215 → 2.8.217, or a new build of
+   the same tag. */
+function updateVersions(w) {
+  const moving = (w.images || []).filter(i => i.available);
+  return moving.map(i => {
+    const from = imageVersion(i.source || i.deployed).tag, to = i.candidate_tag || "";
+    const text = from && to && from !== to ? `${from} → ${to}` : `${to || from || "latest"} · new build`;
+    return (moving.length > 1 ? `${i.container} ` : "") + text;
+  }).join(" · ");
+}
+
 window.imageUpdateCenter = async () => {
   let report = STATE.data.imageUpdates;
   if (!report) {
@@ -150,7 +161,7 @@ window.imageUpdateCenter = async () => {
     </div>` : ""}
     ${affected.length ? `<div class="settings-list">${affected.map(w => {
       const failures = (w.images || []).filter(image => image.error);
-      return `<div class="settings-list-row update-center-row">${w.available ? `<label class="update-pick" title="Stage ${esc(w.name)}"><input class="update-select" type="checkbox" checked data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" onchange="syncImageUpdateSelection()"><span></span></label>` : '<span class="update-pick-spacer"></span>'}<div><b>${esc(w.name)}</b><div class="dim xs mono">${esc(w.ns)}</div>
+      return `<div class="settings-list-row update-center-row">${w.available ? `<label class="update-pick" title="Stage ${esc(w.name)}"><input class="update-select" type="checkbox" checked data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" onchange="syncImageUpdateSelection()"><span></span></label>` : '<span class="update-pick-spacer"></span>'}<div><b>${esc(w.name)}</b><div class="dim xs mono">${esc(w.ns)}${updateVersions(w) ? ` · ${esc(updateVersions(w))}` : ""}</div>
         ${failures.map(image => `<div class="updateerror">${esc(image.container)} · ${esc(image.error)}</div>`).join("")}</div>
         <div class="row">${w.available ? '<span class="pill warn">update available</span>' : ""}
         ${failures.length ? '<span class="pill crit">check failed</span>' : ""}
@@ -874,19 +885,21 @@ function shortImage(ref) {
 }
 
 /* The part of an image that changes: a tag, or the start of a digest. */
-function imageVersion(ref) {
+function imageVersion(ref, tag = "") {
   const [name, digest] = String(ref || "").split("@");
   const tail = name.split("/").pop() || name;
-  return { tag: tail.includes(":") ? tail.slice(tail.lastIndexOf(":") + 1) : "latest",
-    short: digest ? digest.replace(/^sha256:/, "").slice(0, 7) : "" };
+  // A tag in the reference, else the release Homestead tracks for it; an
+  // image pinned only to its digest has none to show.
+  const own = tail.includes(":") ? tail.slice(tail.lastIndexOf(":") + 1) : digest ? "" : "latest";
+  return { tag: tag || own, short: digest ? digest.replace(/^sha256:/, "").slice(0, 7) : "" };
 }
 /* What a person reads for an image change: the release when it changes
-   (2.8.200 → 2.8.205), and the start of the digest only when the tag stays
-   the same - latest → latest is a different build, not no change. */
-function imageChangeWords(before, after) {
-  const was = imageVersion(before), now = imageVersion(after);
-  if (was.tag !== now.tag) return [was.tag, now.tag];
-  const word = v => (v.short ? `${v.tag} · ${v.short}` : v.tag);
+   (2.8.200 → 2.8.205), and the start of the digest only when the release
+   stays the same - latest → latest is a different build, not no change. */
+function imageChangeWords(before, after, beforeTag = "", afterTag = "") {
+  const was = imageVersion(before, beforeTag), now = imageVersion(after, afterTag);
+  if (was.tag && now.tag && was.tag !== now.tag) return [was.tag, now.tag];
+  const word = v => (v.tag && v.short ? `${v.tag} · ${v.short}` : v.tag || v.short || "?");
   return [word(was), word(now)];
 }
 window.imageChangeWords = imageChangeWords;
@@ -928,7 +941,7 @@ async function reviewImageActions(items, action = "update") {
     // One line per app: its name, and what its image moves from and to.
     const apps = rows.map(({config, preview}) => {
       const flagged = preview.capacity.blocked || (preview.capacity.warnings || []).length;
-      const change = preview.images.map(i => `<span class="upd-change" title="${esc(i.before)} → ${esc(i.after)}">${preview.images.length > 1 ? `${esc(i.container)} ` : ""}${(([was, now]) => `<code>${esc(was)}</code> → <code>${esc(now)}</code>`)(imageChangeWords(i.before, i.after))}</span>`).join("");
+      const change = preview.images.map(i => `<span class="upd-change" title="${esc(i.before)} → ${esc(i.after)}">${preview.images.length > 1 ? `${esc(i.container)} ` : ""}${(([was, now]) => `<code>${esc(was)}</code> → <code>${esc(now)}</code>`)(imageChangeWords(i.before, i.after, i.before_tag, i.after_tag))}</span>`).join("");
       return `<li><span class="upd-name">${flagged ? `<span class="upd-flag ${preview.capacity.blocked ? "bad" : "warn"}" title="See the notes above">!</span>` : ""}<b>${esc(config.name)}</b> <span class="dim">${esc(config.ns)}</span></span>${change}</li>`;
     }).join("");
     $("#mbody").innerHTML = `<div class="update-review ui-stack">

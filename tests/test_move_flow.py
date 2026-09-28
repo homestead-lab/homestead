@@ -463,9 +463,42 @@ class EngineTests(unittest.TestCase):
                                  "AWS_ENDPOINTS": "http://192.0.2.108:9000", "VIRTUAL_HOSTED_STYLE": "false"}}
         self.lh.target = {"configured": True, "url": "nfs://nas:/backups", "secret": ""}
         move = {"cluster": "shed", "claims": [], "phase": "joining"}
-        with mock.patch.object(client, "remote", lambda name, path, body=None: there):
+        with mock.patch.object(client, "remote", lambda name, path, body=None: there),                 mock.patch.object(client, "answers", lambda endpoint, timeout=3: self.reachable):
             engine._joining(move)
         return move
+
+    reachable = True
+
+    def test_a_store_this_cluster_cannot_reach_stops_the_join_and_says_so(self):
+        self.reachable = False
+        with self.assertRaises(ValueError) as caught:
+            self._join()
+        self.assertIn("cannot reach shed's backup storage at http://192.0.2.108:9000", str(caught.exception))
+        self.assertEqual("nfs://nas:/backups", self.lh.target["url"], "the target is left as it was")
+
+    def test_a_kubernetes_refusal_stops_the_move_with_its_reason(self):
+        import io, urllib.error
+        engine.start("shed", "container", "frigate", "moved", "automatic")
+        move = engine.moves()[0]
+        refusal = urllib.error.HTTPError("x", 422, "Unprocessable", {}, io.BytesIO(
+            b'{"message": "admission webhook denied the request: backup target unreachable"}'))
+        def refuse(m):
+            raise refusal
+        with mock.patch.dict(engine.HANDLERS, {move["phase"]: refuse}):
+            engine.tick_all()
+        move = engine.moves()[0]
+        self.assertEqual("failed", move["status"])
+        self.assertIn("backup target unreachable", move["message"])
+
+    def test_cancelling_before_anything_stopped_does_not_ask_the_source(self):
+        engine.start("shed", "container", "frigate", "moved", "automatic")
+        move = engine.moves()[0]
+        self.remote_calls.clear()
+        self.unreachable = True
+        result = engine.abandon(move["id"])
+        self.assertEqual("cancelled", result["status"])
+        self.assertFalse(result["source_stopped"])
+        self.assertNotIn("/api/move/source", self.remote_calls)
 
     def test_on_harvester_the_join_hands_the_keys_to_its_setting(self):
         """Harvester's backup-target setting holds the keys itself; a Secret beside it is never read."""
