@@ -2332,3 +2332,6 @@ html[data-theme="light"] .modalbox[data-context="smb-access"]{background:var(--s
   .tbl.stack.compact.evtable td.ev-msg,.tbl.stack.compact.evtable td.ev-from{grid-column:1/-1;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .tbl.stack.compact.evtable td.ev-msg::before,.tbl.stack.compact.evtable td.ev-from::before{display:none}
 }
+.fleet-mig{gap:7px}
+.fleet-mig .fleet-dot{background:var(--dim)}.fleet-mig.on .fleet-dot{background:var(--ok)}
+.move-sources{margin-top:12px}
