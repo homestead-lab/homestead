@@ -594,8 +594,10 @@ def readiness(name):
         # list, or a free address in one of its Harvester IP pools.
         out["free_vips"] = [{"ip": ip, "label": own.get(ip, ""), "from": "vips" if ip in own else "pool"}
                             for ip in (there.get("available_vips") or [])[:24]]
+        # Its shared address - where its backup storage goes unless told otherwise.
+        out["shared_vip"] = ((there.get("shared_vip") or {}).get("ip") or "")
     except Exception:
-        out["free_vips"] = []
+        out["free_vips"], out["shared_vip"] = [], ""
     out["ready"] = bool(out["target"].get("configured") and out["target"].get("reachable_off_cluster")
                         and out["target"].get("answers")
                         and out["version"].get("compatible") is not False)
@@ -614,7 +616,7 @@ def _needs_update(name):
     return version if release and release < RUSTFS_SINCE else ""
 
 
-def setup_storage(name, size_gb=100, lb_ip=""):
+def setup_storage(name, size_gb=100, lb_ip="", vip_mode=""):
     """Put backup storage on the far cluster, as its own Data protection page
     would: MinIO on a Longhorn volume, with Longhorn's backups pointed at it.
     Done as the stored account, which a move already needs to be admin."""
@@ -630,8 +632,10 @@ def setup_storage(name, size_gb=100, lb_ip=""):
                          "images can no longer be downloaded. Update it to 2.8.111 or later first, then set it up: "
                          "kubectl -n lab set image deployment/homestead homestead=ghcr.io/wjcloudy/homestead:2.8.111")
     size_gb = int(size_gb or 100)
+    # No address asked for: the far cluster's shared address, where it has one.
     result = remote(name, "/api/objectstore/deploy",
-                    {"size_gb": size_gb, "lb_ip": str(lb_ip or "").strip(), "point_longhorn": True})
+                    {"size_gb": size_gb, "lb_ip": str(lb_ip or "").strip(), "point_longhorn": True,
+                     **({"vip_mode": "shared"} if vip_mode == "shared" and not str(lb_ip or "").strip() else {})})
     where = result.get("endpoint") or ""
     wanted = str(lb_ip or "").strip()
     # Releases before 2.8.110 gave Longhorn the keys but never its target, so
