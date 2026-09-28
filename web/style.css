@@ -2264,3 +2264,28 @@ html[data-theme="light"] .modalbox[data-context="smb-access"]{background:var(--s
 .settings-grid>section[hidden]{display:none!important}
 .fleet-movegrid{margin-top:14px}
 #fleetMovesCard #movesList:not(:empty){margin-top:12px}
+
+/* ================================================================ address fields
+   An <input data-ipam> gets a button inside its box that offers free
+   addresses from IP addresses (ipam-picker.js). */
+.ipam-field{position:relative;display:block;min-width:0}
+.ipam-field>input{width:100%;padding-right:38px}
+.ipam-field:has(>input[hidden]),.ipam-field:has(>input[style*="display:none"]),.ipam-field:has(>input[style*="display: none"]){display:none}
+.fleet-address .ipam-field,.row>.ipam-field{flex:1}
+.ipam-btn{position:absolute;right:4px;top:50%;transform:translateY(-50%);display:grid;place-items:center;width:28px;height:26px;padding:0;
+  border:0;border-radius:7px;background:transparent;color:var(--dim);cursor:pointer}
+.ipam-btn:hover,.ipam-btn:focus-visible{color:var(--tx);background:rgba(255,255,255,.08);outline:none}
+.ipam-btn svg{width:14px;height:14px}
+.ipam-pop{position:fixed;z-index:80;width:320px;max-width:calc(100vw - 16px);max-height:min(380px,60vh);overflow:auto;padding:10px;
+  border:1px solid var(--line2);border-radius:12px;background:rgba(20,20,23,.98);box-shadow:0 16px 45px rgba(0,0,0,.6);backdrop-filter:blur(20px);color:#f2f2f4}
+.ipam-pop-head{display:flex;flex-direction:column;gap:2px;margin:0 2px 8px}
+.ipam-pop-head b{font-size:12.5px}
+.ipam-pop-head .dim{color:#9a9aa3}
+.ipam-pop-subnet+.ipam-pop-subnet{margin-top:10px}
+.ipam-pop-cidr{margin:0 2px 5px;font:600 11px "JetBrains Mono",monospace;color:#9a9aa3}
+.ipam-pop-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:4px}
+.ipam-pop-list button{padding:6px 8px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(255,255,255,.03);
+  color:#f2f2f4;font:500 12px "JetBrains Mono",monospace;text-align:left;cursor:pointer}
+.ipam-pop-list button:hover,.ipam-pop-list button:focus-visible{background:rgba(255,255,255,.1);outline:none}
+.ipam-pop-list button.on{border-color:var(--ok);color:var(--ok)}
+.ipam-pop-empty{padding:6px 2px;font-size:12px;color:#b4b4bc}

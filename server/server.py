@@ -6900,6 +6900,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(503 if status["status"] == "unknown" else 200, status)
             if p == "/api/ipam":
                 return self._send(200, IPAM.view())
+            if p == "/api/ipam/free":
+                return self._send(200, IPAM.free_addresses())
             if p == "/api/vm/store":
                 return self._send(200, VMSTORE.view(check=(q.get("check") or [""])[0] == "1"))
             if p == "/api/images/vm":

@@ -1743,6 +1743,10 @@ ssh_pwauth: true
     "/api/fleet/all/vms": () => [...mine(demoVms), ...shed([{ ...demoVms[0], name: "pfsense", node: shedNodes[0], ip: "192.168.1.1", ips: ["192.168.1.1"] }])],
     "/api/fleet/all/volumes": () => [...mine(volumes), ...shed(volumes.slice(0, 2).map((v, i) => ({ ...v, name: `pvc-shed-${i}`, pvc_name: ["jellyfin-config", "unifi-data"][i] })))],
   });
+  responses["/api/ipam/free"] = [
+    { cidr: "192.168.1.0/24", name: "Home LAN", free: ["192.168.1.231", "192.168.1.232", "192.168.1.233", "192.168.1.236",
+      "192.168.1.237", "192.168.1.238", "192.168.1.241", "192.168.1.247", "192.168.1.248", "192.168.1.249", "192.168.1.251", "192.168.1.253"] },
+    { cidr: "10.20.0.0/24", name: "Lab VLAN", free: ["10.20.0.10", "10.20.0.11", "10.20.0.12", "10.20.0.13"] }];
   window.fetch = async function (input, init) {
     const url = new URL(typeof input === "string" ? input : input.url, location.origin);
     if (!url.pathname.startsWith("/api/")) return original(input, init);
