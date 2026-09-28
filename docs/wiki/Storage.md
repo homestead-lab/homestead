@@ -147,10 +147,42 @@ tick *Give it up* and type the disk's name.
   one; the disk shows as failed, as above.
 - **k3s and other Linux** mount Longhorn's drives from `/etc/fstab`. A plain
   line there makes the host wait for the drive and stop at an emergency shell
-  when it never appears. **Add to Longhorn** off Harvester gives the commands
-  to mount a drive safely: `nofail` so the host starts without it, and the
-  empty folder locked (`chattr +i`) so nothing is written onto the system disk
-  in its place - Longhorn marks the disk failed instead.
+  when it never appears. **Add to Longhorn** mounts a drive the safe way, as
+  below: `nofail` so the host starts without it, and the empty folder locked
+  (`chattr +i`) so nothing is written onto the system disk in its place -
+  Longhorn marks the disk failed instead.
+
+### Adding a disk on k3s or RKE2
+
+**Add to Longhorn** on an unused disk sets it up from Homestead, as Harvester
+does on Harvester. It first looks at the disk on its host, changing nothing:
+its size and stable name, its partitions and filesystem, whether it is the
+system disk or mounted, and - mounting it read-only for a moment, without
+replaying a journal - whether it already holds Longhorn's data. Then it offers
+only what is safe for what it found:
+
+- **Format it** (a blank disk) - ext4 or XFS, typed to confirm;
+- **Keep its Longhorn data** (a disk from before, V1) - mounted as it is, with
+  no format. Replicas that belonged to another cluster show in Longhorn as
+  orphaned data; volumes come back from their backups;
+- **Erase it and format** (a disk holding anything else) - typed to confirm;
+- the **V2 engine** is given the raw device by its `/dev/disk/by-id` name.
+
+The system disk, and a disk that is mounted, are refused. A V1 disk is mounted
+at `/mnt/<device>`: the folder is locked while empty, fstab names the
+filesystem by UUID with `nofail` (a copy of fstab is kept first as
+`/etc/fstab.homestead-backup`), and the mount is checked to be that disk before
+Longhorn is told. A failed, empty Longhorn entry for the same folder - left by
+adding the folder before the disk was mounted - is cleared first. The work is
+done by a short-lived privileged helper on that host, admins only.
+
+### Disk tags
+
+New disks are tagged by what they are: **ssd** (SSD or NVMe) or **hdd**. The
+disk the system runs from is tagged **os** only - so a class choosing `ssd`
+does not place replicas on the system disk. Disks already in Longhorn with no
+tags get the same once; a tag you change or remove afterwards is yours and is
+not put back.
 
 ## Longhorn allocation
 

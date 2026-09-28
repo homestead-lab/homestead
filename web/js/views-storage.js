@@ -1545,7 +1545,7 @@ function diskRowsHtml(node, disks, harvester) {
           <div class="dim xs">${esc(sizeText(d.size_gb))}${d.kind ? ` · ${esc(d.kind)}` : ""}${d.mounts.length ? ` · ${esc(d.mounts.slice(0, 3).join(", "))}` : ""}</div></div>
         <div class="row">${d.system ? '<span class="tag">system</span>' : ""}<span class="tag ${tone}">${esc(word)}</span>
           ${d.can_add ? `<button class="btn sm pri" data-need="admin" onclick="diskAdd(${jsq(node)},${jsq(d.blockdevice.name)},${jsq(d.path)},${d.needs_wipe})">Add to Longhorn</button>` : ""}
-          ${!harvester && d.role === "unused" && d.device ? `<button class="btn sm pri" data-need="admin" onclick="diskAdd(${jsq(node)},'',${jsq("/dev/" + d.device)})">Add to Longhorn</button>` : ""}</div></div>
+          ${!harvester && d.role === "unused" && d.device ? `<button class="btn sm pri" data-need="admin" onclick="diskSetup(${jsq(node)},${jsq("/dev/" + d.device)})">Add to Longhorn</button>` : ""}</div></div>
       ${lh}</div>`;
   }).join("") + (harvester ? "" : `<button class="btn sm" data-need="admin" style="margin-top:8px" onclick="diskAdd(${jsq(node)})">＋ Add a disk to Longhorn</button>`)
     + (harvester && !disks.some(d => d.can_add) ? '<div class="dim xs" style="margin-top:8px">Every disk Harvester found here is in use. A new disk shows up once it is plugged in and Harvester has scanned it.</div>' : "");
@@ -1671,6 +1671,75 @@ window.diskAdd = (node, blockdevice = "", path = "", needsWipe = false) => {
     <div class="row" style="margin-top:14px"><button class="btn pri" onclick="diskAddGo(${jsq(node)},${jsq(blockdevice)})">Add</button>
       <button class="btn" onclick="modalBack()">Cancel</button></div>`);
 };
+/* Off Harvester: set a whole disk up for Longhorn from here. Homestead looks
+   at it on its host first (homestead_disk_setup), then offers only what is
+   safe for what it found: format a blank disk, keep one that already holds
+   Longhorn data, or - typed to confirm - erase one holding something else.
+   The system disk, and a mounted one, are refused. */
+window.diskSetup = async (node, device) => {
+  const v2 = STATE.data.lhcap?.v2?.enabled;
+  childModal(`Add ${device} · ${node}`, '<div class="empty"><span class="spin2"></span> Looking at the disk on its host…</div>');
+  let f;
+  try {
+    f = await api("/api/disks/inspect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node, device }) });
+  } catch (e) { $("#mbody").innerHTML = UI.callout("bad", "The disk could not be looked at.", esc(e.message)) + UI.actions(UI.button("Back", "modalBack()")); return; }
+  STATE.data.diskFacts = f;
+  const what = {
+    blank: "It is blank.",
+    longhorn: `It already holds Longhorn data${f.replicas ? ` - ${f.replicas} replica folder${f.replicas === 1 ? "" : "s"}` : ""}.`,
+    data: `It holds a ${esc(f.fstype)} filesystem with ${f.entries} item${f.entries === 1 ? "" : "s"} at its top.`,
+    partitioned: `It has ${f.partitions.length} partition${f.partitions.length === 1 ? "" : "s"} (${esc(f.partitions.map(p => `${p.name}${p.fstype ? ` ${p.fstype}` : ""}`).join(", "))}).`,
+    system: `It is this host's system disk (${esc(f.mounts.join(", "))}).`,
+    mounted: `It is mounted at ${esc(f.mounts.join(", "))}.`,
+    missing: esc(f.error || "It is not there."),
+  }[f.state];
+  const choice = (value, label, detail, checked) => `<label class="disk-choice"><input type="radio" name="ds_mode" value="${value}" ${checked ? "checked" : ""} onchange="diskSetupChanged()">
+    <span><b>${label}</b><small>${detail}</small></span></label>`;
+  const modes = f.choices || [];
+  $("#mbody").innerHTML = `<div class="ui-stack">
+    <div class="note ${["system", "mounted", "missing"].includes(f.state) ? "bad" : ""}"><b class="mono">${esc(device)}</b> · ${f.size_gb} GB${f.by_id ? ` · <span class="mono dim xs">${esc(f.by_id.replace("/dev/disk/by-id/", ""))}</span>` : ""}<br>${what}</div>
+    ${modes.length ? `
+      ${v2 ? `<div class="f"><label>Engine</label><select id="ds_engine" onchange="diskSetupChanged()"><option value="v1">V1 - formatted and mounted</option><option value="v2">V2 (SPDK) - the raw device</option></select></div>` : ""}
+      <div class="disk-choices" id="ds_modes">
+        ${modes.includes("format") ? choice("format", "Format it", `As a filesystem mounted at <span class="mono">${esc(f.mount_point)}</span>, for Longhorn.`, true) : ""}
+        ${modes.includes("import") ? choice("import", "Keep its Longhorn data", `Mounted as it is at <span class="mono">${esc(f.mount_point)}</span>. Replicas from another cluster show in Longhorn as orphaned data; volumes come back from their backups.`, true) : ""}
+        ${modes.includes("erase") ? choice("erase", "Erase it and format", "Everything on it is destroyed.", !modes.includes("import")) : ""}</div>
+      <div class="f" id="ds_fs_row"><label>Filesystem</label><select id="ds_fs"><option value="ext4">ext4</option><option value="xfs">XFS</option></select></div>
+      <div class="f" id="ds_confirm_row"><label>Type <span class="mono">${esc(device)}</span> to confirm - this erases it</label><input id="ds_confirm" class="mono" autocomplete="off"></div>
+      <p class="dim xs">Mounted the safe way: the empty folder is locked so nothing lands on the system disk if the drive dies, fstab names it
+        by UUID with <span class="mono">nofail</span> so the host still starts without it (a copy of fstab is kept first), and the mount is checked
+        before Longhorn is told. New disks are tagged <span class="mono">ssd</span> or <span class="mono">hdd</span>.</p>
+      ${UI.actions(UI.button("Back", "modalBack()") + UI.button("Set it up", `diskSetupGo(${jsArg(node)},${jsArg(device)})`, { kind: "pri", id: "ds_go", attrs: 'data-need="admin"' }))}`
+      : UI.actions(UI.button("Back", "modalBack()"))}</div>`;
+  diskSetupChanged();
+  if (window.applyRole) applyRole();
+};
+
+window.diskSetupChanged = () => {
+  const f = STATE.data.diskFacts || {};
+  const v2 = $("#ds_engine")?.value === "v2";
+  const mode = $("input[name=ds_mode]:checked")?.value || "";
+  if ($("#ds_modes")) $("#ds_modes").hidden = v2;
+  if ($("#ds_fs_row")) $("#ds_fs_row").hidden = v2 || mode === "import";
+  // Formatting a blank disk still asks for the device: it is a format all the same.
+  if ($("#ds_confirm_row")) $("#ds_confirm_row").hidden = v2 ? f.state === "blank" : mode === "import";
+};
+
+window.diskSetupGo = async (node, device) => {
+  const v2 = $("#ds_engine")?.value === "v2";
+  const body = { node, device, engine: v2 ? "v2" : "v1", mode: $("input[name=ds_mode]:checked")?.value || "",
+    fstype: $("#ds_fs")?.value || "ext4", confirm: $("#ds_confirm")?.value || "" };
+  const go = $("#ds_go");
+  if (go) { go.disabled = true; go.textContent = "Setting it up…"; }
+  try {
+    const r = await api("/api/disks/setup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    toast(r.detail, "ok"); STATE.data.disks = null; modalBack(); setTimeout(() => disksRepaint(node), 800);
+  } catch (e) {
+    toast(e.message, "bad");
+    if (go) { go.disabled = false; go.textContent = "Set it up"; }
+  }
+};
+
 /* Off Harvester, a disk is mounted on the host by hand before Longhorn is
    given the folder - and how it is mounted decides what a dead drive does at
    the next boot. A plain fstab line makes systemd wait for the drive and drop
