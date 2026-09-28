@@ -142,6 +142,8 @@
     "harvester-node2": { vips: [], management_vip: [], rwx: ["share-media", "frigate-config"], control_plane_vip: false },
   };
   nodes.forEach(n => { n.duties = demoDuties[n.name] || { vips: [], management_vip: [], rwx: [], control_plane_vip: false }; });
+  const demoNodeIps = { "harvester-node1": "192.168.1.207", "harvester-node2": "192.168.1.208", "harvester-node3": "192.168.1.209" };
+  nodes.forEach(n => { n.addresses = { InternalIP: demoNodeIps[n.name], Hostname: n.name }; });
   nodes.forEach(n => { n.disks = demoDisks[n.name].map(d => ({ device: d.device, size_gb: d.size_gb, role: d.role,
     lh_used_gb: d.longhorn.reduce((s, x) => s + x.used_gb, 0), lh_size_gb: d.longhorn.reduce((s, x) => s + x.size_gb, 0) })); });
   const pod = (name, node, image) => ({ name: `${name}-7d8f6d4c9-demo`, node, phase: "Running",
@@ -396,6 +398,31 @@
       reason: "No ready endpoints match the Service selector" }]),
     ingresses: [],
   };
+  /* Nodes & addresses: node1 answers for the management address and the app
+     VIPs; the file shares' address is answered for and left off its Service,
+     the fault Homestead records for kube-vip. */
+  const listener = (port, service, workloads, ready = 1) => ({ port, protocol: "TCP", namespace: service === "ingress-expose" ? "kube-system" : "lab", service, workloads, ready });
+  const place = (ip, node, listeners, state = "ok", reason = "") => ({ ip, kind: "vip", node, controller: "kube-vip", listeners,
+    services: [], unrouted: state === "unrouted" ? [{ namespace: "lab", name: "homestead-smb" }] : [], ready: 1, announced: !!node, state, reason });
+  network.addresses = {
+    nodes: nodes.map(n => ({ name: n.name, ips: [demoNodeIps[n.name]], ready: n.status === "Ready", control_plane: n.roles.includes("control-plane"),
+      vips: n.name === "harvester-node1" ? ["192.168.1.210", "192.168.1.214", "192.168.1.215", "192.168.1.216", "192.168.1.242", "192.168.1.245"]
+        : n.name === "harvester-node3" ? ["192.168.1.217"] : [] })),
+    addresses: [
+      ...Object.entries(demoNodeIps).map(([node, ip]) => ({ ip, kind: "node", node, controller: "", listeners: [], services: [], unrouted: [], ready: 0, announced: false, state: "ok", reason: "" })),
+      place("192.168.1.210", "harvester-node1", [listener(443, "ingress-expose", [])]),
+      place("192.168.1.214", "harvester-node1", [listener(5000, "frigate", ["frigate"])]),
+      place("192.168.1.215", "harvester-node1", [listener(8123, "home-assistant", ["home-assistant"])]),
+      place("192.168.1.216", "harvester-node1", [listener(8000, "paperless", ["paperless"])]),
+      place("192.168.1.217", "harvester-node3", [listener(22, "ubuntu-ssh", ["VirtualMachine/ubuntu"])]),
+      place("192.168.1.242", "harvester-node1", [listener(3010, "doublecommander", ["doublecommander"]), listener(8088, "homestead", ["homestead"])]),
+      place("192.168.1.245", "harvester-node1", [listener(445, "homestead-smb", ["homestead-smb"])], "unrouted",
+        "harvester-node1 answers for 192.168.1.245, but lab/homestead-smb does not carry it, so connections to its ports are refused"),
+    ],
+    problems: 1,
+    kept: [{ at: Math.floor(Date.now() / 1000) - 3600, namespace: "lab", name: "homestead-objectstore", ips: ["192.168.1.242"], node: "harvester-node1" }],
+  };
+
   const restorePlan = url => {
     const ns = url.searchParams.get("ns") || "";
     const name = url.searchParams.get("name") || "";
@@ -1707,7 +1734,8 @@ ssh_pwauth: true
         : i === 1 ? [{ vid: "v:frigate", vol: "frigate-config", running: true }, { vid: "v:home", vol: "home-assistant", running: true }]
         : [{ vid: "v:paperless", vol: "paperless-data", running: true }, { vid: "v:frigate", vol: "frigate-config", running: true },
           { vid: "v:ubuntu", vol: "ubuntu-2404", running: true }, { vid: "v:router", vol: "router-disk", running: false },
-          { vid: "v:orphan", vol: "paperless-old-copy", running: false }] })),
+          { vid: "v:orphan", vol: "paperless-old-copy", running: false }],
+        ips: [demoNodeIps[n.name]], vips: network.addresses.nodes[i].vips })),
       volumes: [{ id: "v:frigate", name: "frigate-config", replicas: 2, size_gb: 20, robustness: "healthy", attached: "harvester-node2" },
         { id: "v:home", name: "home-assistant", replicas: 2, size_gb: 10, robustness: "healthy", attached: "harvester-node1" },
         { id: "v:paperless", name: "paperless-data", replicas: 2, size_gb: 100, robustness: "healthy", attached: "harvester-node3" },
@@ -1719,10 +1747,10 @@ ssh_pwauth: true
         { id: "w:paperless", name: "paperless", ns: "lab", kind: "container", node: "harvester-node3", hardware: [], uptime: 220190, cpu: .18, mem_mb: 512, claims: [{ pvc: "paperless-data", vid: "v:paperless" }], ports: [{ name: "web", port: 8000, vip: "192.168.1.216" }] },
         { id: "w:vm-ubuntu", name: "ubuntu", ns: "lab", kind: "vm", node: "harvester-node3", running: true, state: "Running", ip: "192.168.1.61", hardware: [], uptime: 86400, cpu: .22, mem_mb: 1540, claims: [{ pvc: "ubuntu-2404", vid: "v:ubuntu" }], ports: [{ name: "ssh", port: 22, vip: "192.168.1.217" }] },
         { id: "w:vm-router", name: "router", ns: "lab", kind: "vm", node: "", running: false, state: "Stopped", ip: "", hardware: [], uptime: 0, cpu: 0, mem_mb: 0, claims: [{ pvc: "router-disk", vid: "v:router" }], ports: [] }],
-      vips: [{ id: "i:192.168.1.214", ip: "192.168.1.214", ports: [{ app: "frigate", port: 5000 }] },
-        { id: "i:192.168.1.215", ip: "192.168.1.215", ports: [{ app: "home-assistant", port: 8123 }] },
-        { id: "i:192.168.1.216", ip: "192.168.1.216", ports: [{ app: "paperless", port: 8000 }] },
-        { id: "i:192.168.1.217", ip: "192.168.1.217", ports: [{ app: "ubuntu", port: 22 }] }],
+      vips: [{ id: "i:192.168.1.214", ip: "192.168.1.214", kind: "vip", node: "harvester-node1", state: "ok", ports: [{ app: "frigate", port: 5000 }] },
+        { id: "i:192.168.1.215", ip: "192.168.1.215", kind: "vip", node: "harvester-node1", state: "ok", ports: [{ app: "home-assistant", port: 8123 }] },
+        { id: "i:192.168.1.216", ip: "192.168.1.216", kind: "vip", node: "harvester-node1", state: "ok", ports: [{ app: "paperless", port: 8000 }] },
+        { id: "i:192.168.1.217", ip: "192.168.1.217", kind: "vip", node: "harvester-node3", state: "ok", ports: [{ app: "ubuntu", port: 22 }] }],
     },
   };
 

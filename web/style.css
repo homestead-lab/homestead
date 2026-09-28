@@ -2350,3 +2350,43 @@ html[data-theme="light"] .modalbox[data-context="smb-access"]{background:var(--s
 .hs-part>div span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hs-actions{gap:8px;flex-wrap:wrap}
 @media (max-width:560px){.hs-notice{padding:0 8px}}
+/* Networking › Nodes & addresses: a card per node, an address per row, a
+   port per line - port → what answers → where. */
+.addr-nodes{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px;margin-bottom:8px}
+.addr-node{display:flex;flex-direction:column;gap:10px;min-width:0;padding:14px;border:1px solid var(--line);border-radius:14px;background:var(--surf)}
+.addr-node-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.addr-node-head>div{display:flex;flex-direction:column;gap:2px;min-width:0}
+.addr-loose{border-style:dashed}
+.addr-row{padding:10px 0 0;border-top:1px solid var(--line);min-width:0}
+.addr-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.addr-head .addr-state{margin-left:auto}
+.addr-reason{margin-top:6px;color:var(--mut)}
+.addr-unrouted .addr-reason,.addr-unannounced .addr-reason{color:var(--crit)}
+.addr-listeners{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.addr-listener{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;align-items:center;gap:8px}
+.addr-port{min-width:64px;font-size:12px;font-weight:650}
+.addr-arrow{color:var(--dim)}
+.addr-svc{display:flex;flex-direction:column;min-width:0}
+.addr-svc b,.addr-svc span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.addr-none{margin-top:6px}
+.addr-kept{margin-bottom:12px}
+@media (max-width:560px){
+  .addr-nodes{grid-template-columns:1fr}
+  .addr-node{padding:12px}
+  .addr-listener{grid-template-columns:auto minmax(0,1fr) auto}
+  .addr-arrow{display:none}
+}
+
+/* Architecture: an address says what it is and where it lives; a node its
+   addresses. */
+.a2vipip{display:flex;align-items:baseline;justify-content:space-between;gap:6px}
+.a2vip.a2broken{border-color:var(--crit)}
+.a2why{margin:-2px 0 6px;color:var(--crit);font-size:10.5px}
+.a2addrs{display:flex;flex-wrap:wrap;gap:4px;margin:-2px 0 7px}
+.a2addr{font-size:10.5px;padding:1px 6px;border-radius:6px;border:1px solid var(--line);color:var(--mut)}
+.a2addr.vip{border-color:var(--arch-access);color:var(--tx)}
+
+/* An open "…" menu, lifted to the page so no card clips it (ui.js). */
+.actionmenu-portal{position:fixed;top:0;left:0;width:0;height:0;z-index:75}
+.actionmenu-portal>summary{display:none}
+.actionmenu-portal>.actionmenu-pop{z-index:75}

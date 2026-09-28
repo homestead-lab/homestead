@@ -22,6 +22,7 @@ SHARED_VIP = ""
 DNS_NAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 VIP_ANNOTATION = "kube-vip.io/loadbalancerIPs"
 import homestead_platform as PLATFORM
+import homestead_vips as VIPS
 
 
 def bind(_kget, _ksend, system_namespaces, default_namespace, shared_vip):
@@ -400,6 +401,29 @@ def inventory():
 
     controller = _controller()
 
+    # Which node answers for each address and whether traffic reaches it:
+    # a Service can wait on kube-vip for two different reasons, and only one
+    # of them is kube-vip not having started.
+    try:
+        platform_info = PLATFORM.detect()
+    except Exception:
+        platform_info = {}
+    addresses = VIPS.address_map(services, nodes, _items("/apis/coordination.k8s.io/v1/leases"), platform_info,
+                                 endpoints={(r["namespace"], r["name"]): r["ready_endpoints"] for r in raw_rows},
+                                 targets={(r["namespace"], r["name"]): r["targets"] for r in raw_rows})
+    by_ip = {row["ip"]: row for row in addresses["addresses"]}
+    for row in raw_rows:
+        if row["health"] != "pending":
+            continue
+        place = next((by_ip[ip] for ip in row["requested_ips"] if ip in by_ip), None)
+        if place and place["state"] in ("unrouted", "unannounced"):
+            row["reason"] = place["reason"]
+            row["health"] = "unreachable" if place["state"] == "unrouted" else row["health"]
+    for row in vip_rows:
+        place = by_ip.get(row["ip"]) or {}
+        row.update(node=place.get("node", ""), state=place.get("state", ""), reason=place.get("reason", ""),
+                   kind=place.get("kind", "vip"))
+
     return {"services": sorted(raw_rows, key=lambda row: (row["system"], row["namespace"], row["name"])),
             "vips": vip_rows, "conflicts": conflicts, "pools": pools,
             "platform_addresses": platform, "foreign_addresses": foreign,
@@ -417,6 +441,7 @@ def inventory():
             "node_ips": sorted(node_ips), "node_names": node_names, "controller": controller,
             "workloads": sorted(deployment_rows, key=lambda row: (row["namespace"], row["name"])),
             "ingresses": _ingress_inventory(ingresses),
+            "addresses": addresses,
             "summary": {"services": len(raw_rows), "app_services": sum(not row["system"] for row in raw_rows),
                         "load_balancers": sum(row["type"] == "LoadBalancer" for row in raw_rows),
                         "vips": len(vip_rows), "listeners": sum(len(row["listeners"]) for row in vip_rows),

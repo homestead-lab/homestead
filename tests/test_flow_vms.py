@@ -80,8 +80,8 @@ class FlowVmTests(unittest.TestCase):
         self.assertEqual([{"port": 22, "name": "ssh", "vip": "192.168.1.217"}], ubuntu["ports"])
         self.assertEqual(("192.168.1.61", "node2", True), (ubuntu["ip"], ubuntu["node"], ubuntu["running"]))
         self.assertEqual((0.25, 1024.0), (ubuntu["cpu"], ubuntu["mem_mb"]))
-        self.assertIn({"id": "i:192.168.1.217", "ip": "192.168.1.217", "ports": [{"port": 22, "app": "ubuntu"}]},
-                      self.flow["vips"])
+        vip = next(v for v in self.flow["vips"] if v["ip"] == "192.168.1.217")
+        self.assertEqual(("i:192.168.1.217", [{"port": 22, "app": "ubuntu"}], "vip"), (vip["id"], vip["ports"], vip["kind"]))
 
     def test_a_stopped_vm_still_shows_its_disks(self):
         router = self.by["w:vm-router"]
