@@ -24,7 +24,10 @@ Warning levels (temperatures, disk errors, CPU and memory) are set in
 
 **Nodes** has a card per host: its role, CPU, memory, pods, temperature and
 every disk on it - the system disk, the disks Longhorn stores data on (with
-how full each is), and any disk nothing uses yet.
+how full each is), and any disk nothing uses yet. **Addresses** lists the
+node's own IP and each VIP it currently answers for; those VIPs move to
+another node if it goes down. [Networking](Networking#nodes--addresses) shows
+the same addresses with the ports and apps on each.
 
 ![Nodes](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-nodes.jpg)
 
@@ -186,7 +189,8 @@ pressure, core services, and platform warnings from the last day.
 ### Platform versions
 
 **Platform versions** lists what runs under your apps: the cluster itself
-(k3s or RKE2), Longhorn, KubeVirt and CDI. For each it shows the version
+(k3s or RKE2), Longhorn, KubeVirt, CDI, and the network components kube-vip
+and Multus. For each it shows the version
 running and the newest release, with a link to the release notes. Homestead
 checks for releases twice a day; **Check** asks now.
 
@@ -202,5 +206,9 @@ step is offered once that one is done.
 - **Longhorn, KubeVirt and CDI** that Homestead installed (Settings > Cluster >
   Add-ons) move on through their HelmChart. Installed another way, they are
   shown with their notes: upgrade them the way they were installed.
-- **On Harvester**, Longhorn and KubeVirt come with Harvester and are upgraded
-  with it, so they are shown but not upgraded apart from it.
+- **kube-vip and Multus** that Homestead installed are listed by chart
+  version, with the version the chart runs (kube-vip chart 0.11.1 is kube-vip
+  v1.2.3), and upgraded one minor chart version at a time. The chart's values -
+  kube-vip's settings, Multus's CNI paths - are kept.
+- **On Harvester**, Longhorn, KubeVirt, kube-vip and Multus come with Harvester
+  and are upgraded with it, so they are shown but not upgraded apart from it.

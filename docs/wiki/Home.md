@@ -49,12 +49,12 @@ probe - and your first sign-in.
 - [Storage](Storage) - volumes, Longhorn allocation, adding disks, changing a storage class
 - [Data protection](Data-protection) - snapshots, backups, backup storage, restores
 - [Network shares](Network-shares) - Samba shares from any volume
-- [Networking](Networking) - your VIPs, services, IP address management
+- [Networking](Networking) - VIPs, which node answers for each address, services, IP address management
 - [Virtual machines](Virtual-machines) - create, edit, console, move
 - [Linked clusters](Linked-clusters) - several clusters from one sign-in, switched or shown together
 - [Moving between clusters](Moving-between-clusters) - bring workloads from one cluster to another
 - [Helm and Resources](Helm-and-resources) - charts, and every Kubernetes object
-- [Settings](Settings) - cluster, hardware, users, MQTT, redundancy, Homestead's own health
+- [Settings](Settings) - cluster add-ons, hardware, users, MQTT, Homestead updates and health
 - [Troubleshooting](Troubleshooting) - the problems people actually hit
 
 The [reference](https://github.com/wjcloudy/homestead/blob/main/docs/reference.md) covers every feature in depth; this wiki is the guided

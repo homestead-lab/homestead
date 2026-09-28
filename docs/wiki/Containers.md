@@ -32,7 +32,7 @@ The form asks, in order:
   `deploy.resources.limits.memory` into Memory max.
 - **Network.** Which ports are reachable from your LAN, and on which address:
   automatic (the next free VIP), a **Specific VIP** you picked out under
-  [Networking](Networking#your-vips), or shared with other apps on one address.
+  [Networking](Networking#add-default-and-choose-workload-vips), or shared with other apps on one address.
   Ports that stay inside the cluster need nothing.
 - **Storage.** Each path the app writes to becomes a folder in a volume: a new
   one, one that exists, a folder inside another app's volume, or a RAM disk for
@@ -293,7 +293,9 @@ container and a count at the top of the page.
 ![Image updates](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-image-updates.jpg)
 
 **Update** pins the new image, watches the rollout (pulling, starting, ready),
-and keeps the previous image so **Roll back** returns to exactly it. A registry
+and keeps the previous image so **Roll back** returns to exactly it.
+Homestead's own updates are not listed here: they are on the top bar's
+**Homestead** button and under [Settings → About](Settings#homestead-updates). A registry
 that cannot be checked is shown on that container only; the rest still show
 their updates. **Settings → Updates** sets the policy: notify only, apply when
 approved, or apply in a maintenance window. Updates never jump a major version
@@ -493,6 +495,12 @@ the same way: the ports of any Service that selects them
 (such as Harvester's load balancers), their disks and those disks' replicas,
 with their host and address. A stopped VM is shown faded, since its disks are
 still there. Homestead's temporary browser, copy and import pods are hidden.
+
+Each address is marked **VIP** or **node** (a node's own address) with the
+node answering for it, and an address no connection reaches is outlined in
+red with the reason (see [Nodes & addresses](Networking#nodes--addresses)).
+Each node lists its own address and the VIPs it answers for; hovering a node
+highlights its addresses, and hovering an address highlights its node.
 
 A volume no container or VM definition references is **disconnected**. Those
 retained and old volumes are hidden by default; **Show disconnected** reveals a

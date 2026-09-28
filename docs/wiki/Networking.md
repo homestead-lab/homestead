@@ -157,8 +157,9 @@ LAN like any other machine. **＋ LAN network** makes one:
   (`eth0`) carries containers only, through macvlan, each with a MAC address of
   its own. A VM needs a bridge. On a VLAN, a NIC needs the host's VLAN
   interface (`eth0.20`) first. These networks need Multus, which k3s and RKE2
-  leave out: install it from **Settings → Cluster → Add-ons**, or from the
-  form, which offers it when it is missing.
+  leave out: Homestead installs it after it starts on a new installation, and
+  an older one shows **Required components not installed** under
+  **Settings → Cluster → Add-ons** and here, with **Install components**.
 
 ## IP addresses
 

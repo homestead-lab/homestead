@@ -16,7 +16,7 @@ an Unraid share does - `\\192.168.1.245\media`.
 ## The first share
 
 The first share installs Samba. It asks which address Samba answers on - one of
-[your VIPs](Networking#your-vips), or the next free one - because a share needs
+[your VIPs](Networking#add-default-and-choose-workload-vips), or the next free one - because a share needs
 an address of its own on port 445. Samba is put in place before anything else,
 so a share that could not be served leaves nothing behind.
 

@@ -715,7 +715,7 @@ Longhorn host packages (open-iscsi, NFS client) are installed first." k8s
 add_to_cluster() {
   if [ "$DIST" = rke2 ]; then kcmd="/var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml"; else kcmd="k3s kubectl"; fi
   if $kcmd -n lab get deployment homestead >/dev/null 2>&1; then
-    msg "Homestead Already Installed" "Homestead is already running on this cluster at http://$(default_ip):8088. Update it from Settings > Updates."
+    msg "Homestead Already Installed" "Homestead is already running on this cluster at http://$(default_ip):8088. Update it from Settings > About > Homestead updates."
     exit 0
   fi
   comps="homestead"; storage="Longhorn (already installed)"
@@ -755,7 +755,7 @@ flow_harvester() {
   $KC get nodes >/dev/null 2>&1 || [ "$DRY" = 1 ] \
     || fail "kubectl cannot reach the Harvester cluster. Run the installer as root on a Harvester management node."
   if $KC -n lab get deployment homestead >/dev/null 2>&1; then
-    msg "Homestead Already Installed" "Homestead is already running on this Harvester cluster. Update it from Settings > Updates."
+    msg "Homestead Already Installed" "Homestead is already running on this Harvester cluster. Update it from Settings > About > Homestead updates."
     exit 0
   fi
   REPORT=""; FAILED=0
