@@ -72,6 +72,17 @@ anywhere. The other cluster records what you do as `name@cluster`.
 Linking itself is an admin decision: every linked Homestead can act as admin
 on the others, to relay for people and to move workloads.
 
+## Moves out
+
+Each cluster in **Settings → Linked clusters** has a **Moves out** switch: whether
+workloads can move from that cluster to another. On runs that cluster's backup
+storage - an S3 store (RustFS) on a Longhorn volume, on its shared address at
+port 9000 - which a move copies volumes through; the first time, it asks how
+big to make it. Off stops the store and keeps its volume and the backups on
+it, so turning it on again starts it as it was. If that cluster's Longhorn
+also backs up there, those backups pause while it is off - the switch says
+so. You can switch any linked cluster from any other.
+
 ## Unlink
 
 **Settings → Linked clusters** (or **Manage clusters** in the switch) lists
