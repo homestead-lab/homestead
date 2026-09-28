@@ -4734,6 +4734,7 @@ import homestead_probe as PROBE
 import homestead_objectstore as OBJECTS
 import homestead_move as MOVE
 import homestead_fleet as FLEET
+import homestead_signins as SIGNINS
 import homestead_config_backup as CONFIG
 import homestead_move_source as MOVE_SOURCE
 import homestead_move_engine as MOVE_ENGINE
@@ -6012,6 +6013,9 @@ def _config_restored(parts):
     IMP._cache.clear()
 
 
+SIGNINS.bind(DATA_DIR)
+
+
 # Homestead's own configuration, part by part, for its backup and restore.
 # Linked clusters are not a part: restoring an old shared key cuts the links.
 CONFIG.bind(kget, ksend, HOMESTEAD_VERSION, [
@@ -6339,6 +6343,8 @@ def is_app_identity(path):
 # but a viewer who hand-crafts the request still gets a 403.
 ADMIN_ROUTES = {
     "/api/auth/users", "/api/auth/users/delete", "/api/auth/role",
+    # Who signed in, from where: other people's addresses and devices.
+    "/api/auth/history",
     "/api/node/power", "/api/node/drain", "/api/node/cordon", "/api/node/hardware",
     "/api/sources", "/api/sources/delete", "/api/sources/browse",
     "/api/sources/scan", "/api/sources/trust",
@@ -6723,6 +6729,11 @@ class H(BaseHTTPRequestHandler):
             self._raw = self.rfile.read(n) if 0 < n <= MAX_BODY else b""
         return self._raw
 
+    def _signin(self, event, user, ok=True, detail=""):
+        """One line in the sign-in history, with where it came from."""
+        SIGNINS.record(event, user, self._client_ip(), ok, detail, self.headers.get("User-Agent", ""),
+                       "Cloudflare" if self._via_cloudflare() else "")
+
     def _body(self):
         raw = self._raw_body()
         return json.loads(raw.decode()) if raw else {}
@@ -6908,6 +6919,9 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, rows)
             if p == "/api/auth/users":
                 return self._send(200, AUTH.list_users())
+            if p == "/api/auth/history":
+                return self._send(200, SIGNINS.history((q.get("user") or [""])[0],
+                                                       (q.get("failures") or [""])[0] == "1"))
             if p == "/api/settings":
                 return self._send(200, app_settings_payload())
             if p == "/api/overview":
@@ -7322,20 +7336,26 @@ class H(BaseHTTPRequestHandler):
                     return self._send(403, {"error": "finish setting Homestead up from your LAN; "
                                                      "setup is not offered through the tunnel"})
                 AUTH.create_user(b.get("username"), b.get("password"), first_only=True)
+                self._signin("setup", (b.get("username") or "").strip().lower(), detail="the first administrator")
                 remember = bool(b.get("remember"))
                 tok = AUTH.issue_token((b.get("username") or "").strip().lower(), remember)
                 self._set_cookie(tok, max_age=AUTH.idle_ttl(remember))
                 return self._send(200, {"ok": True, "user": b.get("username")})
             if p == "/api/auth/login":
+                tried = (b.get("username") or "").strip().lower()
                 try:
                     remember = bool(b.get("remember"))
                     tok = AUTH.login(b.get("username"), b.get("password"), addr, remember)
                 except PermissionError as e:
+                    blocked = "too many" in str(e)
+                    self._signin("signin-blocked" if blocked else "signin-failed", tried, ok=False, detail=str(e))
                     return self._send(401, {"error": str(e)})
+                self._signin("signin", tried, detail="kept signed in" if remember else "")
                 self._set_cookie(tok, max_age=AUTH.idle_ttl(remember))
                 return self._send(200, {"ok": True, "remember": remember,
                                         "user": (b.get("username") or "").strip().lower()})
             if p == "/api/auth/logout":
+                self._signin("signout", self.user)
                 self._set_cookie("", clear=True)
                 return self._send(200, {"ok": True})
             if p == "/api/push/subscribe":
@@ -7376,21 +7396,31 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/alerts/pending":
                 return self._send(200, alerts_pending(self.user, str(b.get("endpoint") or "")))
             if p == "/api/auth/password":
-                AUTH.change_password(self.user, b.get("old"), b.get("new"))
+                try:
+                    AUTH.change_password(self.user, b.get("old"), b.get("new"))
+                except (PermissionError, ValueError) as error:
+                    self._signin("password-failed", self.user, ok=False, detail=str(error))
+                    raise
+                self._signin("password", self.user)
                 self._set_cookie(AUTH.issue_token(self.user))
                 return self._send(200, {"ok": True})
             if p == "/api/auth/users":
                 AUTH.create_user(b.get("username"), b.get("password"),
                                  role=b.get("role", "operator"))
+                self._signin("user-added", (b.get("username") or "").strip().lower(),
+                             detail=f"as {b.get('role', 'operator')}, by {self.user}")
                 return self._send(200, {"ok": True, "users": AUTH.list_users()})
             if p == "/api/auth/role":
                 AUTH.set_role(b["username"], b["role"], self.user)
+                self._signin("role", b["username"], detail=f"now {b['role']}, by {self.user}")
                 return self._send(200, {"ok": True, "users": AUTH.list_users()})
             if p == "/api/auth/users/delete":
                 AUTH.delete_user(b.get("username"), self.user)
+                self._signin("user-removed", b.get("username"), detail=f"by {self.user}")
                 return self._send(200, {"ok": True, "users": AUTH.list_users()})
             if p == "/api/auth/signout-everywhere":
                 AUTH.logout_everywhere(self.user)
+                self._signin("signout-everywhere", self.user)
                 self._set_cookie("", clear=True)
                 return self._send(200, {"ok": True})
             if p == "/api/settings":

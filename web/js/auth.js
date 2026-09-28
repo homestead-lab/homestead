@@ -178,6 +178,16 @@ window.doPwChange = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
+/* One person's sign-ins, under Events. */
+window.userSignins = name => {
+  closeModal();
+  STATE.eventsTab = "signins";
+  STATE.q = name;
+  const search = $("#globalSearch");
+  if (search) search.value = name;
+  go("events", { keepSearch: true });
+};
+
 window.manageUsers = async () => {
   modal("Users", `<div class="empty"><span class="spin2"></span>loading</div>`);
   try {
@@ -193,7 +203,8 @@ window.manageUsers = async () => {
             ${["viewer", "operator", "admin"].map(r =>
               `<option value="${r}" ${u.role === r ? "selected" : ""}>${r}</option>`).join("")}
           </select></td>
-          <td class="dim small mono">${esc(u.last_login || "never")}</td>
+          <td class="dim small mono">${esc(u.last_login || "never")}
+            <div><a class="linkish xs" onclick="userSignins('${esc(u.name)}')">Sign-in history</a></div></td>
           <td>${u.name === ME || us.length === 1 ? '<span class="dim xs">—</span>'
             : `<button class="btn sm danger" onclick="delUser('${esc(u.name)}')">Remove</button>`}</td>
         </tr>`).join("")}</tbody></table></div></div>

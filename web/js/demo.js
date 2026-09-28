@@ -1777,6 +1777,16 @@ ssh_pwauth: true
         state: id === "vmstore" ? "empty" : ["ipam", "vips", "portal"].includes(id) ? "differs" : "same", restorable: id !== "vmstore" })) },
     "/api/config/restore": { ok: true, restored: ["ipam", "vips", "portal"], skipped: [], detail: "restored IP addresses, VIPs, Portal" },
   });
+  const ago = minutes => Math.floor(Date.now() / 1000) - minutes * 60;
+  responses["/api/auth/users"] = [{ name: "demo", role: "admin", last_login: "2026-09-28 07:40" },
+    { name: "alex", role: "operator", last_login: "2026-09-28 07:06" }, { name: "kiosk", role: "viewer", last_login: "" }];
+  responses["/api/auth/history"] = [
+    { at: ago(4), event: "signin", user: "demo", ok: true, ip: "192.168.1.20", device: "Chrome on Windows", via: "", detail: "kept signed in" },
+    { at: ago(38), event: "signin", user: "alex", ok: true, ip: "172.70.4.18", device: "Safari on iOS", via: "Cloudflare", detail: "" },
+    { at: ago(41), event: "signin-failed", user: "alex", ok: false, ip: "172.70.4.18", device: "Safari on iOS", via: "Cloudflare", detail: "incorrect username or password" },
+    { at: ago(180), event: "role", user: "alex", ok: true, ip: "192.168.1.20", device: "Chrome on Windows", via: "", detail: "now operator, by demo" },
+    { at: ago(600), event: "signin-blocked", user: "admin", ok: false, ip: "203.0.113.7", device: "a script", via: "", detail: "too many attempts — wait a few minutes" },
+    { at: ago(1440), event: "password", user: "demo", ok: true, ip: "192.168.1.20", device: "Chrome on Windows", via: "", detail: "" }];
   window.fetch = async function (input, init) {
     const url = new URL(typeof input === "string" ? input : input.url, location.origin);
     if (!url.pathname.startsWith("/api/")) return original(input, init);
