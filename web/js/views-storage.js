@@ -1255,12 +1255,12 @@ const eventTime = x => (eventTab() === "signins" ? x.at * 1000 : Date.parse(x.ti
 function eventTabs(tab) {
   if (!can("admin")) return "";
   const button = (id, label) => `<button type="button" class="${tab === id ? "on" : ""}" aria-pressed="${tab === id}"
-    onclick="STATE.eventsTab='${id}';viewEvents()">${label}</button>`;
+    onclick="STATE.eventsTab=${jsq(id)};viewEvents()">${label}</button>`;
   return `<div class="seg event-tabs" role="group" aria-label="Which events">${button("cluster", "Cluster")}${button("signins", "Sign-ins")}</div>`;
 }
 
 function eventSelect(key, label, options, value) {
-  return `<select class="evf" aria-label="${esc(label)}" onchange="eventFilterSet('${key}', this.value)">
+  return `<select class="evf" aria-label="${esc(label)}" onchange="eventFilterSet(${jsq(key)}, this.value)">
     ${options.map(([v, text]) => `<option value="${esc(v)}" ${v === value ? "selected" : ""}>${esc(text)}</option>`).join("")}</select>`;
 }
 

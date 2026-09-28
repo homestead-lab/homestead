@@ -204,7 +204,7 @@ window.manageUsers = async () => {
               `<option value="${r}" ${u.role === r ? "selected" : ""}>${r}</option>`).join("")}
           </select></td>
           <td class="dim small mono">${esc(u.last_login || "never")}
-            <div><a class="linkish xs" onclick="userSignins('${esc(u.name)}')">Sign-in history</a></div></td>
+            <div><a class="linkish xs" onclick="userSignins(${jsq(u.name)})">Sign-in history</a></div></td>
           <td>${u.name === ME || us.length === 1 ? '<span class="dim xs">—</span>'
             : `<button class="btn sm danger" onclick="delUser(${jsq(u.name)})">Remove</button>`}</td>
         </tr>`).join("")}</tbody></table></div></div>
