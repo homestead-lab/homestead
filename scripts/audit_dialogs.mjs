@@ -101,6 +101,7 @@ const DIALOGS = [
   ["vm-delete", "vms", "vmDelete('default','home-assistant-os')"],
   ["k3s-cluster", "vms", "k3sCluster()"],
   ["image-updates", "workloads", "imageUpdateCenter()"],
+  ["homestead-updates", "workloads", "homesteadUpdateDialog()"],
   ["image-update-review", "workloads", "imageUpdateReview('lab','frigate')"],
   ["image-update-batch", "workloads", "imageUpdateCenter()", "text:Stage selected"],
   ["workload-group", "workloads", "wlGroup('lab','frigate')"],

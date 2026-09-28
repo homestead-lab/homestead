@@ -210,6 +210,16 @@ class AlertTests(unittest.TestCase):
         fresh = alerts.observe({"updates": alerts.update_facts(report("sha256:b"))}, self.now + 2)
         self.assertEqual(["Update for web"], [a["title"] for a in fresh])
 
+    def test_homesteads_own_release_is_named_and_sent_to_about(self):
+        facts = alerts.update_facts({"workloads": [
+            {"ns": "lab", "name": "homestead", "homestead": "self", "available": True,
+             "images": [{"available": True, "remote_digest": "sha256:h", "candidate_tag": "2.9.0"}]},
+            {"ns": "lab", "name": "homestead-nfs", "homestead": "nfs", "available": True,
+             "images": [{"available": True, "remote_digest": "sha256:n", "candidate_tag": "3.21"}]}]})
+        self.assertEqual([("Homestead 2.9.0 is available", "/settings?tab=about"),
+                          ("Update for homestead-nfs", "/settings?tab=about")],
+                         [(f["title"], f["href"]) for f in facts])
+
 
 class DeliveryTests(unittest.TestCase):
     """What a device's service worker is handed after a push wakes it."""

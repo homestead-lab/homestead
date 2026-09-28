@@ -12,8 +12,17 @@
     return Number.isFinite(current) && Number.isFinite(next) && next < current;
   }
 
+  // Apps' updates. Homestead's own - itself and the helpers it runs - are
+  // updated apart, from the top bar's Homestead button and Settings › About.
   function availableWorkloads(report) {
-    return (report?.workloads || []).filter(workload => workload?.available);
+    return (report?.workloads || []).filter(workload => workload?.available && !workload.homestead);
+  }
+
+  // Homestead and its helpers, Homestead first: what each runs and whether a
+  // newer release or image is waiting.
+  function homesteadWorkloads(report) {
+    return (report?.workloads || []).filter(workload => workload?.homestead)
+      .sort((left, right) => Number(right.homestead === "self") - Number(left.homestead === "self"));
   }
 
   function orderApply(workloads, controlPlaneNames = ["homestead"]) {
@@ -22,5 +31,5 @@
       Number(names.has(left?.name)) - Number(names.has(right?.name)));
   }
 
-  return { isStale, availableWorkloads, orderApply };
+  return { isStale, availableWorkloads, homesteadWorkloads, orderApply };
 });

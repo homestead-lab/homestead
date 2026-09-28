@@ -329,14 +329,18 @@ Groups gather containers under a heading - Media, Home, Monitoring - that folds
 away. **Group** in a container's menu puts it in one; **Groups** at the top of
 the page ticks several at once. A chip per group shows that group alone.
 
-Homestead's own containers - Homestead, the Samba that serves your shares, and
-the backup storage for moves - start in a **Homestead** group, out of the way of
-your apps.
+Homestead's own containers - Homestead, the SMB and NFS servers that serve your
+shares, and the object store moves use - are platform containers: hidden until
+**show N platform containers** at the top of the page, and tagged **Homestead**
+when shown. They offer **Logs**, **Restart** and where each is looked after
+(Settings › About, Network Shares, Linked clusters). Their updates are not app
+updates: they are not counted on the Containers page or its update button, and
+are installed from the **Homestead** button on the top bar or
+**Settings › About › Homestead updates**.
 
 On k3s and RKE2, the platform Homestead's add-ons install - KubeVirt, CDI, the
-upgrade controller - runs as containers too. They go in the **Homestead** group
-and are hidden until **show N platform containers** at the top of the page, as
-Harvester's own always are. Each is tagged with what it belongs to and offers
+upgrade controller - runs as containers too. They are hidden with Homestead's,
+as Harvester's own always are. Each is tagged with what it belongs to and offers
 only **Logs** and **Restart**: its operator puts back anything changed by hand,
 so it is not updated on its own but upgraded with KubeVirt (or CDI) under
 **System → Cluster → Platform versions**.

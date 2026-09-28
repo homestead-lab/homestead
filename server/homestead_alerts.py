@@ -215,9 +215,14 @@ def update_facts(report):
                          for i in workload.get("images") or [] if i.get("available"))
         tags = ", ".join(sorted({i.get("candidate_tag") for i in workload.get("images") or []
                                  if i.get("available") and i.get("candidate_tag")}))
+        # Homestead's own release, and the helpers it runs, are updated from
+        # Settings > About rather than as an app.
+        own = workload.get("homestead")
         facts.append({"key": f"updates:{workload['ns']}/{workload['name']}:{'|'.join(targets)[:200]}",
                       "category": "updates", "severity": "info", "event": True,
-                      "title": f"Update for {workload['name']}",
-                      "body": f"A newer image is available{f' ({tags})' if tags else ''}",
-                      "href": "/containers"})
+                      "title": (f"Homestead {tags} is available" if own == "self" and tags
+                                else f"Update for {workload['name']}"),
+                      "body": ("Update it from Settings › About" if own
+                               else f"A newer image is available{f' ({tags})' if tags else ''}"),
+                      "href": "/settings?tab=about" if own else "/containers"})
     return facts
