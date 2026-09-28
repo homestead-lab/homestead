@@ -20,6 +20,72 @@ function networkVipCard(v, data) {
     </div></article>`;
 }
 
+/* Nodes & addresses: each node with its own address and the VIPs it answers
+   for, and on every address the ports, the Services behind them and what
+   they run. An address works only when a node answers for it and its
+   Services carry it; each state says in words which half is missing. */
+const ADDRESS_STATE = {
+  ok: ["ok", "working"], unrouted: ["bad", "not reachable"], unannounced: ["bad", "no node answers"],
+  idle: ["", "nothing running"], pending: ["warn", "port taken"],
+};
+
+function addressListeners(row) {
+  if (!row.listeners.length) return '<div class="dim xs addr-none">Nothing listens here</div>';
+  return `<div class="addr-listeners">${row.listeners.map(l => {
+    const [href, browser] = networkOpenUrl(row.ip, l.port);
+    return `<div class="addr-listener"><span class="addr-port mono">${l.port}<span class="dim">/${esc(l.protocol)}</span></span>
+      <span class="addr-arrow" aria-hidden="true">→</span>
+      <span class="addr-svc"><b>${esc(l.workloads.length ? l.workloads.map(w => w.replace(/^VirtualMachine\//, "VM ")).join(", ") : l.service)}</b>
+        <span class="dim xs mono">${esc(l.namespace)}/${esc(l.service)}${l.ready ? "" : " · not running"}</span></span>
+      ${browser && row.state === "ok" ? `<a class="tag info addr-open" href="${safeHref(href)}" target="_blank" rel="noopener">Open ${icon("ext")}</a>` : ""}</div>`;
+  }).join("")}</div>`;
+}
+
+function networkOpenUrl(ip, port) {
+  const secure = [443, 8443, 9443].includes(+port);
+  const web = secure || [80, 3000, 5000, 8000, 8080, 8088, 8096, 8123, 9001, 32400].includes(+port);
+  return [`${secure ? "https" : "http"}://${ip}:${port}`, web];
+}
+
+function addressRow(row, data) {
+  const [tone, words] = ADDRESS_STATE[row.state] || ["", row.state];
+  const label = (data.vip_labels || {})[row.ip];
+  const kind = row.kind === "node" ? "Node address" : "VIP";
+  const tip = row.kind === "node"
+    ? "The node's own address. k3s's ServiceLB publishes Services here; it does not move if the node goes down."
+    : "A virtual address one node answers for at a time; it moves to another node if that one goes down.";
+  return `<div class="addr-row ${row.state === "ok" ? "" : "addr-" + esc(row.state)}" data-ip="${esc(row.ip)}">
+    <div class="addr-head"><b class="mono">${esc(row.ip)}</b>
+      <span class="tag ${row.kind === "node" ? "" : "info"}" data-tip="${esc(tip)}">${kind}</span>
+      ${label ? `<span class="dim xs">${esc(label)}</span>` : ""}
+      ${row.listeners.length || row.kind === "vip" ? `<span class="tag ${tone} addr-state">${esc(words)}</span>` : ""}</div>
+    ${row.reason ? `<div class="addr-reason small">${esc(row.reason)}</div>` : ""}
+    ${addressListeners(row)}</div>`;
+}
+
+function networkAddressesHtml(data) {
+  const map = data.addresses || { nodes: [], addresses: [] };
+  const byIp = Object.fromEntries(map.addresses.map(row => [row.ip, row]));
+  const placed = new Set();
+  const nodes = map.nodes.map(n => {
+    const rows = [...n.ips, ...n.vips].map(ip => byIp[ip]).filter(Boolean);
+    rows.forEach(row => placed.add(row.ip));
+    return `<article class="addr-node" data-node="${esc(n.name)}">
+      <div class="addr-node-head"><div><b>${esc(n.name)}</b><span class="dim xs">${n.control_plane ? "control plane" : "worker"}</span></div>
+        <span class="pill ${n.ready ? "low" : "crit"}">${n.ready ? "Ready" : "Not ready"}</span></div>
+      ${rows.map(row => addressRow(row, data)).join("")}
+      ${n.vips.length ? "" : '<div class="dim xs addr-none">Answers for no VIP right now</div>'}</article>`;
+  });
+  const loose = map.addresses.filter(row => !placed.has(row.ip) && row.kind === "vip");
+  if (loose.length) nodes.push(`<article class="addr-node addr-loose">
+      <div class="addr-node-head"><div><b>No node</b><span class="dim xs">addresses nothing answers for</span></div></div>
+      ${loose.map(row => addressRow(row, data)).join("")}</article>`);
+  const kept = (map.kept || []).slice(-3);
+  return `<div class="between"><div class="sec">Nodes &amp; addresses ${tip("Which node answers for each address, and what is reached there. An address works when a node answers for it on the LAN and the Services on it carry it - kube-proxy forwards only addresses a Service carries.")}</div></div>
+    ${kept.length ? `<div class="note small addr-kept">${kept.map(k => `kube-vip answered for <span class="mono">${esc(k.ips.join(", "))}</span> on ${esc(k.node)} but left it off <span class="mono">${esc(k.namespace)}/${esc(k.name)}</span>, so its ports were refused. Homestead recorded it ${esc(fmtAgo(Math.max(1, Math.round(Date.now() / 1000 - k.at))))}.`).join("<br>")}</div>` : ""}
+    <div class="addr-nodes">${nodes.join("") || '<div class="card flat empty">No nodes</div>'}</div>`;
+}
+
 async function viewNetworking() {
   if (networkTab() === "ip") return viewIpam();
   const data = await api("/api/network");
@@ -48,8 +114,9 @@ async function viewNetworking() {
         sub: `${controller.name} agents ready · ${controller.mode}` },
       { title: "Virtual IPs", value: data.summary.vips, sub: `${data.summary.listeners} LAN listeners · ${data.available_vip_count} unused in pools` },
       { title: "Application services", value: data.summary.app_services, sub: `${data.summary.ready_endpoints} ready endpoints` },
-      { title: "Attention", value: data.summary.unhealthy, tone: data.summary.unhealthy || data.conflicts.length ? "warn" : "",
-        sub: data.conflicts.length ? `${data.conflicts.length} listener conflict(s)` : "no VIP/port conflicts" },
+      { title: "Attention", value: data.summary.unhealthy, tone: data.summary.unhealthy || data.conflicts.length || data.addresses?.problems ? "warn" : "",
+        sub: data.addresses?.problems ? `${data.addresses.problems} address${data.addresses.problems === 1 ? "" : "es"} not reachable - see Nodes & addresses`
+          : data.conflicts.length ? `${data.conflicts.length} listener conflict(s)` : "no VIP/port conflicts" },
     ])}
     ${(data.platform_clashes || []).length ? `<div class="note bad" style="margin-bottom:14px"><b>${data.platform_clashes.length === 1 ? "An app is" : `${data.platform_clashes.length} apps are`} on the cluster's own address.</b>
       ${esc(data.platform_clashes.map(c => `${c.namespace}/${c.service}`).join(", "))} ${data.platform_clashes.length === 1 ? "uses" : "use"}
@@ -70,14 +137,7 @@ async function viewNetworking() {
     <div class="between"><div class="sec">LAN networks ${tip("Networks bridged to the LAN - Harvester calls them VM networks. A VM, or a container given an address of its own, joins one to be on the LAN like any machine there.")}</div>
       <button class="btn sm" data-need="admin" onclick="vmNetworkAdd()">＋ LAN network</button></div>
     <div id="netVmNets">${window.__vmCreateOptions ? networkVmNetsHtml(window.__vmCreateOptions) : '<div class="dim small">reading LAN networks…</div>'}</div>
-    <div class="between"><div class="sec">Virtual IPs &amp; port ownership</div><div class="row">${data.available_vips.filter(ip => !(data.vip_labels || {}).hasOwnProperty(ip)).slice(0, 6).map(ip => `<span class="tag ok" title="Unused address in a ready Harvester IP pool">${esc(ip)} available</span>`).join("")}</div></div>
-    <div class="cardlist network-vips">${data.vips.map(vip => `<div class="card flat">
-      <div class="between"><div><div class="dim xs">${vip.shared ? "SHARED VIP" : "VIRTUAL IP"}</div><b class="mono">${esc(vip.ip)}</b></div>
-        <span class="tag ${vip.listeners.some(x => x.health !== "healthy") ? "warn" : "ok"}">${vip.services} service${vip.services === 1 ? "" : "s"}</span></div>
-      <div class="netlisteners">${vip.listeners.map(item => `<div class="drow"><div class="dl"><b>${item.port}/${esc(item.protocol)}</b>
-        <span class="dim">${esc(item.namespace)}/${esc(item.service)}</span></div><div class="dv">${item.browser
-          ? `<a class="tag info" href="${safeHref(item.access)}" target="_blank" rel="noopener">Open ${icon("ext")}</a>`
-          : `<span class="tag">${esc(item.access)}</span>`}</div></div>`).join("")}</div></div>`).join("") || '<div class="card flat empty">No external VIPs</div>'}</div>
+    ${networkAddressesHtml(data)}
     <div class="sec" style="margin-top:22px">Services &amp; endpoint paths</div>
     ${orphans ? `<div class="note" style="margin-bottom:12px">${orphans === 1
       ? "<b>1 Service no longer points at a workload.</b> It still owns its VIP and port, so that number stays taken until the Service is removed."

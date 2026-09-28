@@ -166,40 +166,76 @@ if (typeof MutationObserver === "function" && typeof document.querySelector === 
 }
 
 /* A "…" menu opens against the screen, not its row: below its button when
-   there is room, above when not, so a table's scroll box never clips it.
-   One open menu at a time; a click elsewhere, a scroll or Escape closes it. */
+   there is room, above when not. A card's blur or overflow still clips a
+   fixed box inside it - the card, not the screen, is what it is placed in -
+   so an open menu moves to the page itself, in an open <details> of its own
+   so its items' this.closest('details').open=false still closes it, and goes
+   back when it closes. One open menu at a time; a click elsewhere, a scroll
+   or Escape closes it. */
 if (typeof document !== "undefined" && typeof document.addEventListener === "function"
     && typeof window !== "undefined" && typeof window.addEventListener === "function") {
-  const place = details => {
-    const pop = details.querySelector(".actionmenu-pop"), button = details.querySelector("summary");
-    if (!pop || !button) return;
+  const place = (button, pop) => {
     const at = button.getBoundingClientRect();
     pop.style.position = "fixed";
     pop.style.bottom = "auto";
+    pop.style.right = "auto";
     const width = pop.offsetWidth, height = pop.offsetHeight;
     const below = at.bottom + 6 + height <= window.innerHeight - 8;
-    const top = below ? at.bottom + 6 : Math.max(8, at.top - 6 - height);
-    const left = Math.max(8, Math.min(at.right - width, window.innerWidth - width - 8));
-    pop.style.right = "auto";
-    pop.style.top = `${top}px`;
-    pop.style.left = `${left}px`;
-    // A card's blur makes it, not the screen, what "fixed" is measured from:
-    // correct by however far the menu actually landed from where it should.
-    const landed = pop.getBoundingClientRect();
-    pop.style.top = `${top - (landed.top - top)}px`;
-    pop.style.left = `${left - (landed.left - left)}px`;
+    pop.style.top = `${below ? at.bottom + 6 : Math.max(8, at.top - 6 - height)}px`;
+    pop.style.left = `${Math.max(8, Math.min(at.right - width, window.innerWidth - width - 8))}px`;
   };
+  const lift = details => {
+    const pop = details.querySelector(":scope > .actionmenu-pop"), button = details.querySelector("summary");
+    if (!pop || !button) return;
+    const shell = document.createElement("details");
+    shell.className = "actionmenu-portal";
+    shell.appendChild(document.createElement("summary"));
+    shell.appendChild(pop);
+    shell.open = true;
+    shell.owner = details;
+    details.shell = shell;
+    document.body.appendChild(shell);
+    place(button, pop);
+  };
+  const lower = details => {
+    const shell = details.shell;
+    if (!shell) return;
+    details.shell = null;
+    const pop = shell.querySelector(".actionmenu-pop");
+    if (pop && details.isConnected) {
+      ["position", "top", "left", "right", "bottom"].forEach(key => { pop.style[key] = ""; });
+      details.appendChild(pop);
+    }
+    shell.remove();
+    if (details.open) details.open = false;
+  };
+  // A page repaint can take a row away with its menu open.
+  const sweep = () => document.querySelectorAll("details.actionmenu-portal").forEach(shell => {
+    if (!shell.owner?.isConnected || !shell.owner.open) { if (shell.owner) shell.owner.shell = null; shell.remove(); }
+  });
   document.addEventListener("toggle", event => {
     const details = event.target;
-    if (!details.matches?.("details.actionmenu") || !details.open) return;
+    if (details.matches?.("details.actionmenu-portal")) {
+      if (!details.open && details.owner) lower(details.owner);
+      return;
+    }
+    if (!details.matches?.("details.actionmenu")) return;
+    if (!details.open) return lower(details);
     document.querySelectorAll("details.actionmenu[open]").forEach(other => { if (other !== details) other.open = false; });
-    place(details);
+    sweep();
+    if (!details.shell) lift(details);
   }, true);
   document.addEventListener("click", event => {
-    document.querySelectorAll("details.actionmenu[open]").forEach(d => { if (!d.contains(event.target)) d.open = false; });
+    document.querySelectorAll("details.actionmenu[open]").forEach(d => {
+      if (!d.contains(event.target) && !d.shell?.contains(event.target)) d.open = false;
+    });
   });
   document.addEventListener("keydown", event => {
     if (event.key === "Escape") document.querySelectorAll("details.actionmenu[open]").forEach(d => { d.open = false; });
   });
-  window.addEventListener("scroll", () => document.querySelectorAll("details.actionmenu[open]").forEach(d => { d.open = false; }), { passive: true, capture: true });
+  window.addEventListener("scroll", event => {
+    if (event.target?.closest?.(".actionmenu-portal")) return;
+    document.querySelectorAll("details.actionmenu[open]").forEach(d => { d.open = false; });
+  }, { passive: true, capture: true });
+  setInterval(sweep, 1000);
 }

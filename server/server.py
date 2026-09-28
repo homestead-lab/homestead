@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.218")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.219")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -750,24 +750,15 @@ def node_duties(pods):
     except Exception:
         network = {}
     platform = network.get("platform_addresses") or {}
-    by_service = {}
-    for row in network.get("services") or []:
-        if row.get("type") == "LoadBalancer":
-            by_service.setdefault(row["name"], []).extend(row.get("external_ips") or [])
     for lease in leases:
-        name = lease["metadata"]["name"]
         holder = str((lease.get("spec") or {}).get("holderIdentity") or "")
-        if not holder:
-            continue
-        if name == "plndr-cp-lock":
+        if holder and lease["metadata"]["name"] == "plndr-cp-lock":
             duties.setdefault(holder, {"vips": [], "rwx": [], "control_plane_vip": False})["control_plane_vip"] = True
-        elif name == "plndr-svcs-lock":
-            for ips in by_service.values():
-                for ip in ips:
-                    note(holder, "vips", ip)
-        elif name.startswith("kubevip-"):
-            for ip in by_service.get(name[len("kubevip-"):], []):
-                note(holder, "vips", ip)
+    # The addresses each node answers for, from the leases kube-vip keeps
+    # beside each Service as well as its cluster-wide one (homestead_vips.py).
+    for row in (network.get("addresses") or {}).get("addresses") or []:
+        if row.get("kind") == "vip" and row.get("node") and row.get("announced"):
+            note(row["node"], "vips", row["ip"])
     for node in duties.values():
         node["management_vip"] = [ip for ip in node["vips"] if ip in platform]
     try:
@@ -1674,14 +1665,27 @@ def get_flow2():
                 nodes.setdefault(v["attached"], []).append(
                     {"vol": v["name"], "vid": v["id"], "running": True})
 
-    # --- ports & VIPs per app
+    # --- ports & VIPs per app. The address a Service asks for, not only the
+    # one it carries: a VIP kube-vip answers for but never recorded is where
+    # the app is meant to be, and the page says why it is not reachable there.
+    try:
+        network = cached("network", 5, NETWORK.inventory)
+    except Exception:
+        network = {}
+    places = network.get("addresses") or {"nodes": [], "addresses": []}
+    wanted = {(row["namespace"], row["name"]): (row.get("requested_ips") or row.get("assigned_ips") or [None])[0]
+              for row in network.get("services") or [] if row.get("type") == "LoadBalancer"}
+
+    def address_of(s):
+        ing = s.get("status", {}).get("loadBalancer", {}).get("ingress", []) or []
+        return wanted.get((s["metadata"]["namespace"], s["metadata"]["name"])) or (ing[0].get("ip") if ing else None)
+
     ports_by_app, vips = {}, {}
     for s in svcs:
         app = (s["spec"].get("selector") or {}).get("app")
         if not app:
             continue
-        ing = s.get("status", {}).get("loadBalancer", {}).get("ingress", []) or []
-        vip = ing[0].get("ip") if ing else None
+        vip = address_of(s)
         for prt in s["spec"].get("ports", []) or []:
             rec = {"port": prt.get("port"), "name": prt.get("name") or "tcp", "vip": vip}
             ports_by_app.setdefault(app, []).append(rec)
@@ -1698,8 +1702,7 @@ def get_flow2():
             if (s["metadata"]["namespace"] != ns or not selector or "app" in selector
                     or any(labels.get(k) != v for k, v in selector.items())):
                 continue
-            ing = s.get("status", {}).get("loadBalancer", {}).get("ingress", []) or []
-            vip = ing[0].get("ip") if ing else None
+            vip = address_of(s)
             for prt in s["spec"].get("ports", []) or []:
                 out.append({"port": prt.get("port"), "name": prt.get("name") or "tcp", "vip": vip})
                 if vip:
@@ -1789,13 +1792,23 @@ def get_flow2():
             "ports": vm_ports(ns, nm, pod_labels),
         })
 
+    # Every node, with its own addresses and the VIPs it answers for - a node
+    # holding no replica still holds addresses.
+    place = {row["ip"]: row for row in places["addresses"]}
+    hosts = {row["name"]: row for row in places["nodes"]}
+    names = sorted(set(nodes) | set(hosts))
     return {
-        "nodes": [{"id": "n:" + k, "name": k, "copies": sorted(v, key=lambda x: x["vol"])}
-                  for k, v in sorted(nodes.items())],
+        "nodes": [{"id": "n:" + k, "name": k, "copies": sorted(nodes.get(k, []), key=lambda x: x["vol"]),
+                   "ips": (hosts.get(k) or {}).get("ips", []), "vips": (hosts.get(k) or {}).get("vips", [])}
+                  for k in names],
         "volumes": sorted(vols, key=lambda x: x["name"]),
         "workloads": sorted(wls, key=lambda x: x["name"]),
-        "vips": [{"id": "i:" + ip, "ip": ip, "ports": sorted(p, key=lambda x: x["port"])}
-                 for ip, p in vips.items()],
+        "vips": [{"id": "i:" + ip, "ip": ip, "ports": sorted(p, key=lambda x: x["port"]),
+                  "kind": (place.get(ip) or {}).get("kind", "vip"), "node": (place.get(ip) or {}).get("node", ""),
+                  "state": (place.get(ip) or {}).get("state", "ok"), "reason": (place.get(ip) or {}).get("reason", "")}
+                 for ip, p in sorted(vips.items(), key=lambda item: (
+                     (place.get(item[0]) or {}).get("kind") != "node",
+                     tuple(int(x) if x.isdigit() else 999 for x in item[0].split("."))))],
     }
 
 
@@ -4800,6 +4813,7 @@ import homestead_vmconsole as VMCONSOLE
 import homestead_shared as SHARED
 import homestead_leader as LEADER
 import homestead_ipam as IPAM
+import homestead_vips as VIPS
 import homestead_helm as HELM
 import homestead_mqtt as MQTT
 import homestead_history as HISTORY
@@ -5141,6 +5155,7 @@ def _alert_sources():
     take("health", lambda: ALERTS.health_facts(cached("ov", 10, get_overview)))
     take("jobs", lambda: ALERTS.job_facts(OPS.list_operations()))
     take("joins", lambda: ALERTS.join_facts(kget("/api/v1/nodes").get("items", [])))
+    take("addresses", lambda: VIPS.alert_facts(cached("network", 5, NETWORK.inventory).get("addresses")))
     take("capacity", lambda: LHCAP.alert_facts(cached("lhcap", 15, LHCAP.status)))
     take("disks", lambda: DISKS.alert_facts(cached("disks", 15, DISKS.inventory)))
     take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
@@ -5195,6 +5210,24 @@ def _alerts_loop():
                 beat("alerts", 20, error, leader_only=True)
                 print(f"alerts: {str(error)[:160]}", flush=True)
         time.sleep(20)
+
+
+def _vip_loop():
+    """kube-vip can answer for an address and leave it off the Services that
+    ask for it, and then every port there is refused. The leader records it
+    for kube-vip, as it would have (homestead_vips.py)."""
+    while True:
+        if LEADER.is_leader():
+            try:
+                if VIPS.keep(PLATFORM.detect()):
+                    with _lock:
+                        _cache.pop("network", None)
+                        _cache.pop("flow2", None)
+                beat("vips", 30, leader_only=True)
+            except Exception as error:
+                beat("vips", 30, error, leader_only=True)
+                print(f"VIPs: {str(error)[:160]}", flush=True)
+        time.sleep(30)
 
 
 def _history_loop():
@@ -5601,7 +5634,7 @@ def _data_move_status(item):
 OPS.RESOLVERS["self-data-move"] = _data_move_status
 
 
-LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats",
+LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "vips": "VIP keeper",
               "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares"}
 
 
@@ -6045,6 +6078,7 @@ VOLUMES.bind(kget, ksend, LH.snapshots, LH.backups, _cache, SYS_NS, DEFAULT_NS)
 SHARES.bind(kget, ksend, create_pvc, SMB_NAMESPACE, _cache)
 SHARES.install = install_samba
 NETWORK.bind(kget, ksend, SYS_NS, DEFAULT_NS, LB_IP)
+VIPS.bind(kget, ksend)
 
 
 def _config_restored(parts):
@@ -8459,6 +8493,7 @@ def start_background_tasks():
     # Older join plans each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
+    threading.Thread(target=_vip_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()
     threading.Thread(target=_history_loop, daemon=True).start()
     threading.Thread(target=fit_own_strategy, daemon=True).start()

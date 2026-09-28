@@ -121,7 +121,9 @@ Homestead is a working tool: show more at once, pad less.
   one, then `…` (`details.actionmenu`) for the rest. Delete always lives in
   `…`, never as a full button in a row. On a phone, secondary buttons carry
   `sm-more` and a copy in the menu carries `sm-only`, so the row keeps one or
-  two buttons plus `…`.
+  two buttons plus `…`. An open `…` menu is lifted to the page (`ui.js`), so a
+  card's blur or overflow never clips it; items close it with
+  `this.closest('details').open=false`, which still works there.
 - **A list is shorter than its cards.** A table a page offers as the
   "rows" layout is marked `compact` (`tbl stack compact`): on a phone each
   row is the name with its status beside it, then its figures inline with

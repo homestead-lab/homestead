@@ -57,8 +57,11 @@ async function viewFlow() {
     <div class="arch2wrap"><svg id="archsvg" aria-hidden="true"></svg><div class="arch2">
 
       <section class="a2col"><h4>Access</h4>
-      ${f.vips.map(v => `<div class="a2item a2vip" data-kind="access" data-id="${esc(v.id)}">
-          <div class="a2vipip mono">${esc(v.ip)}</div>
+      ${f.vips.map(v => `<div class="a2item a2vip ${v.state && !["ok", "idle"].includes(v.state) ? "a2broken" : ""}" data-kind="access" data-id="${esc(v.id)}"
+          data-node="${esc(v.node || "")}" title="${esc(archAddressWords(v))}">
+          <div class="a2vipip"><span class="mono">${esc(v.ip)}</span>
+            <span class="a2meta">${v.kind === "node" ? "node" : "VIP"}${v.node ? ` · ${esc(v.node.replace(/^harvester-/, ""))}` : ""}</span></div>
+          ${v.state && !["ok", "idle"].includes(v.state) ? `<div class="a2why">${esc(v.state === "unrouted" ? "not reachable" : v.state === "pending" ? "port taken" : "no node answers")}</div>` : ""}
           <div class="a2ports">${v.ports.map(p => `<span class="a2port" id="${esc(portId(v.ip, p.port))}" data-kind="access"
             data-id="${esc(portId(v.ip, p.port))}" title="${esc(p.app)} · open ${esc(v.ip)}:${p.port}"
             onclick="openSvc(${jsq(v.ip)},${p.port})">${p.port}</span>`).join("")}</div></div>`).join("")
@@ -82,6 +85,7 @@ async function viewFlow() {
       <section class="a2col"><h4>Nodes &amp; replica copies</h4>
       ${f.nodes.map(n => `<div class="a2item a2node" data-kind="node" data-id="${esc(n.id)}">
           <div class="a2nodehead"><b>${esc(n.name)}</b><span class="dim xs">${n.copies.length} cop${n.copies.length === 1 ? "y" : "ies"}</span></div>
+          ${(n.ips || []).length || (n.vips || []).length ? `<div class="a2addrs">${(n.ips || []).map(ip => `<span class="a2addr mono" title="${esc(n.name)}'s own address">${esc(ip)}</span>`).join("")}${(n.vips || []).map(ip => `<span class="a2addr vip mono" title="${esc(n.name)} answers for VIP ${esc(ip)}">VIP ${esc(ip)}</span>`).join("")}</div>` : ""}
           <div class="a2copies">${n.copies.map(c => `<span class="a2copy ${c.running ? "" : "stopped"}" id="${esc(`${n.id}|${c.vid}`)}"
             data-kind="copy" data-id="${esc(`${n.id}|${c.vid}`)}" title="${esc(c.vol)} on ${esc(n.name)}${c.running ? "" : " · not running"}">${esc(c.vol)}</span>`).join("")
             || '<span class="dim xs">no replicas here</span>'}</div></div>`).join("")}
@@ -91,6 +95,13 @@ async function viewFlow() {
   if (STATE.data.archHover) archHighlight(STATE.data.archHover);
   else drawArch();
   archWatch();
+}
+
+/* What an address is, where it lives, and why it is not reachable if not. */
+function archAddressWords(v) {
+  const what = v.kind === "node" ? `${v.ip} is ${v.node || "a node"}'s own address`
+    : v.node ? `VIP ${v.ip} · ${v.node} answers for it` : `VIP ${v.ip} · no node answers for it`;
+  return v.reason ? `${what} · ${v.reason}` : what;
 }
 
 /* Hover and resize, wired once for the page rather than per element, so a
@@ -129,6 +140,11 @@ function archRelated(id) {
   // A VIP or a node stands for all of its ports or copies.
   if (id.startsWith("i:")) links.forEach(([a]) => { if (a.startsWith("p:" + id.slice(2) + ":")) start.push(a); });
   if (id.startsWith("n:")) links.forEach(([, b]) => { if (b.startsWith(id + "|")) start.push(b); });
+  // Where an address lives: its node, and a node's addresses - not followed
+  // further, or a node would light every app it answers for.
+  const places = (STATE.data.flow?.vips || []).filter(v => v.node);
+  const beside = id.startsWith("i:") ? places.filter(v => v.id === id).map(v => "n:" + v.node)
+    : id.startsWith("n:") ? places.filter(v => "n:" + v.node === id).map(v => v.id) : [];
   const keep = new Set(start);
   const walk = (from, forward) => {
     links.forEach(([a, b]) => {
@@ -137,6 +153,7 @@ function archRelated(id) {
     });
   };
   start.forEach(item => { walk(item, true); walk(item, false); });
+  beside.forEach(item => keep.add(item));
   return keep;
 }
 

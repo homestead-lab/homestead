@@ -23,6 +23,36 @@ on the LAN. On the LAN it takes an address:
 
 Every change shows its plan and checks for clashes before anything is made.
 
+### Nodes & addresses
+
+One card per node: its own address, then each VIP it answers for right now,
+and under every address the ports on it, the Service behind each port and
+the app or VM it reaches. A VIP with no running app behind it is under
+**No node** - nothing answers for it until one starts.
+
+An address works only when both halves are there: a node answers for it on
+the LAN (kube-vip adds it to one node, ServiceLB listens on every node's own
+address), and the Services on it carry it - kube-proxy forwards only the
+addresses a Service lists. Each address says which half is missing:
+
+| State | Means |
+|---|---|
+| working | A node answers and its Services carry it |
+| not reachable | A node answers - ping works - but a Service does not carry it, so its ports are refused |
+| no node answers | Its apps are running but the load balancer is not announcing it |
+| nothing running | Nothing behind it is running, so nothing announces it; not a fault |
+| port taken | ServiceLB could not publish a Service on the nodes' addresses because another holds the port |
+
+**Not reachable** is a kube-vip fault: with several Services sharing one
+address it can announce the address and never record it on them. Homestead
+checks every 30 seconds and records it itself - what kube-vip would have
+written - and says so above the cards. If it stays unreachable for a minute,
+you get an alert.
+
+Node cards (Overview, Nodes) list the same addresses, and the Architecture
+view marks each address as a VIP or a node's own, with the node answering for
+it; hovering a node lights its addresses, and an address its node.
+
 ### Container and VM editors
 
 Container **Edit → Service VIP → Configure default / selected VIP** opens the same
