@@ -28,6 +28,12 @@ function settingsTab(pick) {
     $$(".settings-tabs button").forEach(b => { b.classList.toggle("on", b.dataset.tab === pick); b.setAttribute("aria-selected", b.dataset.tab === pick); });
     return pick;
   }
+  // A link can name the tab - /settings?tab=about - and it is then kept.
+  const asked = typeof location !== "undefined" ? new URLSearchParams(location.search).get("tab") : "";
+  if (asked && SETTINGS_TABS.some(([id]) => id === asked)) {
+    try { localStorage.setItem("homestead.settings.tab", asked); } catch (e) { /* this visit only */ }
+    return asked;
+  }
   let saved = "";
   try { saved = localStorage.getItem("homestead.settings.tab") || ""; } catch (e) { /* default */ }
   return SETTINGS_TABS.some(([id]) => id === saved) ? saved : "health";
@@ -188,6 +194,7 @@ async function viewSettings() {
         </div>
       </section>
 
+      <section class="card flat settings-wide" data-tab="about" id="homesteadUpdateCard"></section>
       <section class="card flat settings-wide" data-tab="about" id="configCard">${window.configCardHtml ? configCardHtml() : ""}</section>
       <section class="card flat settings-wide" data-tab="about" id="selfHealthCard"><div class="empty small"><span class="spin2"></span> checking Homestead</div></section>
       <section class="card flat settings-wide" data-tab="about" id="replicaCard">${STATE.data.replicaHtml || ""}</section>
@@ -199,6 +206,10 @@ async function viewSettings() {
   lhSettingsPaint();
   if (window.addonsPaint) addonsPaint();
   if (window.fleetSettingsPaint) fleetSettingsPaint();
+  if (window.homesteadUpdateCardPaint) {
+    homesteadUpdateCardPaint();
+    if (!STATE.data.imageUpdates) loadImageUpdates(false, true);
+  }
   selfHealthPaint();
   // The UniFi card needs the IPAM record, which Settings does not otherwise load.
   api("/api/ipam").then(data => { STATE.data.ipam = data; const host = $("#unifiCard"); if (host) host.outerHTML = ipamUnifiCard(); }).catch(() => {});

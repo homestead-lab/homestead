@@ -99,6 +99,7 @@ async function loadImageUpdates(force = false, quiet = false) {
     STATE.data.imageUpdateMap = Object.fromEntries((report.workloads || [])
       .map(x => [updateKey(x.ns, x.name), x]));
     paintUpdateBadge(report.updates || 0, report.errors || 0);
+    if (window.paintHomesteadNotice) paintHomesteadNotice();
     const previous = +(localStorage.getItem("homestead.update-count") || 0);
     const preferences = STATE.data.appSettings?.updates || {};
     if (!quiet && preferences.notify_available !== false && report.updates > previous)
@@ -147,7 +148,7 @@ window.imageUpdateCenter = async () => {
     return;
   }
   // Updates first: a failed check beside them is a note, not the headline.
-  const affected = (report.workloads || []).filter(w => w.available || w.images?.some(image => image.error))
+  const affected = (report.workloads || []).filter(w => !w.homestead && (w.available || w.images?.some(image => image.error)))
     .sort((a, b) => Number(!!b.available) - Number(!!a.available));
   const available = HomesteadUpdateState.availableWorkloads(report);
   const policy = report.policy || {};
@@ -347,11 +348,11 @@ function renderWorkloads() {
   const platformKeys = new Set(platform.map(w => `${w.ns}/${w.name}`));
   const updateCount = (report?.workloads || []).filter(w => w.available && !platformKeys.has(`${w.ns}/${w.name}`)).length;
   const updateErrors = report?.errors || 0;
-  const unchecked = (report?.workloads || []).filter(w => w.unchecked).length;
+  const unchecked = (report?.workloads || []).filter(w => w.unchecked && !w.homestead).length;
   const layout = viewLayout("containers");
   paint(`<div class="phead">
       <div><h2>Containers</h2><p>${rows.length} workload${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""}${group ? ` in ${esc(group === NO_GROUP ? "no group" : group)}` : ""} · ${platform.length
-        ? `<a class="linkish" onclick="togglePlatformContainers()" data-tip="KubeVirt, CDI and the like: installed by Homestead's add-ons, run by their own operators, and upgraded with them under System → Cluster">${platformShown() ? "hide" : "show"} ${platform.length} platform container${platform.length === 1 ? "" : "s"}</a>`
+        ? `<a class="linkish" onclick="togglePlatformContainers()" data-tip="Homestead and the helpers it runs - updated under Settings › About - and KubeVirt, CDI and the like, run by their own operators and upgraded under System → Cluster">${platformShown() ? "hide" : "show"} ${platform.length} platform container${platform.length === 1 ? "" : "s"}</a>`
         : "system pods hidden"}${unchecked ? ` · <span data-tip="Marked ? in the list: stopped since Homestead started, so not yet compared with their registries">${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? " · images current" : ""}</p></div>
       <div class="row"><span class="dim xs scanprogress" id="scanprogress"></span>
       <span class="dim xs hide-sm" title="When the registries were last asked">${checkedAgo()}</span>
@@ -395,6 +396,7 @@ function imagePullNote(ref) {
 
 /* What a platform container belongs to, and where that is upgraded. */
 function platformTag(w) {
+  if (w.homestead) return `<span class="pill slim info" data-tip="Part of Homestead, which keeps it in step. It is updated with Homestead under Settings › About, not as an app." onclick="homesteadPartManage('self')" style="cursor:pointer">Homestead</span>`;
   return `<span class="pill slim info" data-tip="Part of ${esc(w.platform)}, run by its operator, which puts back anything changed here. It is upgraded with ${esc(w.platform)} under System → Cluster → Platform versions." onclick="go('cluster')" style="cursor:pointer">${esc(w.platform)}</span>`;
 }
 
@@ -405,6 +407,14 @@ function workloadActions(w, update, off, compact = false) {
   if (w.managed_smb || w.managed_nfs) {
     return `<button class="${cls}" title="View managed share server logs" aria-label="Logs for ${esc(w.name)}" onclick="wlLogs(${jsq(w.ns)},${jsq(w.pods[0] ? w.pods[0].name : "")},${jsq(w.name)})">${label("Logs", "log")}</button>
       <button class="${cls}" title="Manage shares and server settings" aria-label="Manage ${esc(w.name)} in Network Shares" onclick="go('shares')">${label("Network Shares", "edit")}</button>`;
+  }
+  // Homestead and its object store: logs, a fresh start, and where each is
+  // looked after. Updates are Homestead's, on the top bar and under About.
+  if (w.homestead === "self" || w.homestead === "objectstore") {
+    const self = w.homestead === "self";
+    return `<button class="${cls}" title="View live container logs" aria-label="Logs for ${esc(w.name)}" onclick="wlLogs(${jsq(w.ns)},${jsq(w.pods[0] ? w.pods[0].name : "")},${jsq(w.name)})">${label("Logs", "log")}</button>
+      <button class="${cls}" title="${self ? "Restart Homestead: this page reconnects when it is back" : "Restart: replace every pod with a fresh one"}" aria-label="Restart ${esc(w.name)}" data-need="operator" onclick="wlRestart(${jsq(w.ns)},${jsq(w.name)})">${label("Restart", "restart")}</button>
+      <button class="${cls}" title="${self ? "Version, updates, copies and data: Settings › About" : "Migration from this cluster: Settings › Linked clusters"}" aria-label="Manage ${esc(w.name)}" onclick="homesteadPartManage(${jsq(w.homestead)})">${label(self ? "Settings" : "Migration", "gear")}</button>`;
   }
   // A platform container's operator owns it: logs and a fresh start only.
   if (w.platform) {
@@ -859,7 +869,7 @@ window.checkImageUpdates = async () => {
   try {
     const report = await loadImageUpdates(true, false);
     if (!report) return;      // the failure has been said already
-    const updates = (report?.workloads || []).filter(x => x.available).length;
+    const updates = HomesteadUpdateState.availableWorkloads(report).length;
     const errors = report?.errors || 0;
     toast(updates ? `${updates} update${updates === 1 ? "" : "s"} available${errors ? `; ${errors} image${errors === 1 ? "" : "s"} could not be checked` : ""}`
       : errors ? `no updates found; ${errors} image${errors === 1 ? "" : "s"} could not be checked`

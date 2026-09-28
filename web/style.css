@@ -2335,3 +2335,18 @@ html[data-theme="light"] .modalbox[data-context="smb-access"]{background:var(--s
 .fleet-mig{gap:7px}
 .fleet-mig .fleet-dot{background:var(--dim)}.fleet-mig.on .fleet-dot{background:var(--ok)}
 .move-sources{margin-top:12px}
+
+/* Homestead's own update: its mark and the new release on the top bar, apart
+   from apps' image updates; the same parts in its dialog and on About. */
+.hs-notice{display:inline-flex;flex-direction:row;align-items:center;width:auto;gap:6px;padding:0 10px 0 8px;border:1px solid rgba(61,220,145,.45);color:var(--ok);font:650 11.5px "JetBrains Mono",monospace;position:relative}
+.hs-notice img{width:18px;height:18px}
+.hs-notice>i{position:absolute;right:-3px;top:-3px;width:9px;height:9px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 2px var(--surf)}
+.hs-release{display:flex;flex-direction:column;gap:3px;padding:12px 14px;border:1px solid rgba(61,220,145,.4);border-radius:12px;background:rgba(61,220,145,.06)}
+.hs-release.current{border-color:var(--line);background:transparent}
+.hs-release b{font-size:17px}
+.hs-parts{display:flex;flex-direction:column;border-top:1px solid var(--line)}
+.hs-part{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);min-width:0}
+.hs-part>div{display:flex;flex-direction:column;gap:2px;min-width:0}
+.hs-part>div span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hs-actions{gap:8px;flex-wrap:wrap}
+@media (max-width:560px){.hs-notice{padding:0 8px}}

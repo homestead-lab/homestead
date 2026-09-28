@@ -462,6 +462,30 @@ class ImageUpdateTests(unittest.TestCase):
         self.assertEqual(1, report["errors"])
         self.assertEqual(["odd", "plex"], [w["name"] for w in report["workloads"]])
 
+    def test_homesteads_own_updates_are_counted_apart_from_apps(self):
+        original, original_get, original_part = updates._check_deployment, updates.kget, updates.PART
+
+        def check(dep, pods, force=False):
+            name = dep["metadata"]["name"]
+            return {"ns": "lab", "name": name, "available": True, "can_rollback": False, "last_action": "",
+                    "images": [{"container": name, "available": True,
+                                **({"error": "registry returned HTTP 500"} if name == "homestead-nfs" else {})}]}
+
+        deployments = [{"metadata": {"name": name, "namespace": "lab"}}
+                       for name in ("plex", "homestead", "homestead-nfs")]
+        try:
+            updates._check_deployment = check
+            updates.kget = lambda path: {"items": deployments} if "deployments" in path else {"items": []}
+            updates.PART = lambda ns, name: {"homestead": "self", "homestead-nfs": "nfs"}.get(name, "")
+            report = updates.scan()
+        finally:
+            updates._check_deployment, updates.kget, updates.PART = original, original_get, original_part
+
+        self.assertEqual((1, 0), (report["updates"], report["errors"]), "only plex is an app update")
+        self.assertEqual({"updates": 2, "errors": 1}, report["homestead"])
+        self.assertEqual({"plex": "", "homestead": "self", "homestead-nfs": "nfs"},
+                         {w["name"]: w["homestead"] for w in report["workloads"]})
+
     def test_progress_is_readable_before_any_scan_has_run(self):
         updates.SCAN.update({"running": False, "done": 0, "total": 0, "current": "",
                              "started_at": 0.0, "finished_at": 0.0, "updates": 0})
