@@ -115,8 +115,10 @@ disks, with a console, power actions and live migration.
 **Data protection** - snapshots, recurring backups, restores, and moving
 containers and VMs between clusters.
 
-**Networking** - a virtual IP per app, collision-free port exposure, and IP
-address management with scanning and UniFi sync.
+**Networking** - a virtual IP per app, collision-free port exposure, which
+node answers for each address and whether it is reachable (with kube-vip's
+missed addresses recorded for it), and IP address management with scanning
+and UniFi sync.
 
 **Imports** - from an Unraid server, a Docker Compose file, or a VM disk image
 (qcow2, VMDK).
