@@ -1230,21 +1230,127 @@ window.rmShare = async name => {
 };
 
 /* ---------------- events ---------------- */
+/* Events: the cluster's, and - for admins - Homestead's sign-ins. One filter
+   bar for each; the filters narrow the table in place, so typing in the
+   text filter keeps its focus. */
+const SIGNIN_WORDS = {
+  signin: ["Signed in", "ok"], "signin-failed": ["Sign-in failed", "med"], "signin-blocked": ["Blocked: too many tries", "crit"],
+  signout: ["Signed out", "low"], "signout-everywhere": ["Signed out everywhere", "low"], password: ["Password changed", "low"],
+  "password-failed": ["Password change refused", "med"], setup: ["Set Homestead up", "low"], "user-added": ["User added", "low"],
+  "user-removed": ["User removed", "med"], role: ["Role changed", "low"],
+};
+const SIGNIN_GROUPS = {
+  signins: x => x.event === "signin", failures: x => !x.ok,
+  signouts: x => ["signout", "signout-everywhere"].includes(x.event),
+  account: x => ["password", "password-failed", "setup", "user-added", "user-removed", "role"].includes(x.event),
+};
+const EVENT_SINCE = { "1h": 3600, "24h": 86400, "7d": 604800 };
+
+const eventTab = () => (STATE.eventsTab === "signins" && can("admin") ? "signins" : "cluster");
+const eventFilter = () => (eventTab() === "signins"
+  ? (STATE.signinFilter ||= { what: "", user: "", since: "" })
+  : (STATE.eventFilter ||= { type: STATE.eventWarnings ? "Warning" : "", kind: "", ns: "", since: "" }));
+const eventTime = x => (eventTab() === "signins" ? x.at * 1000 : Date.parse(x.time || "") || 0);
+
+function eventTabs(tab) {
+  if (!can("admin")) return "";
+  const button = (id, label) => `<button type="button" class="${tab === id ? "on" : ""}" aria-pressed="${tab === id}"
+    onclick="STATE.eventsTab='${id}';viewEvents()">${label}</button>`;
+  return `<div class="seg event-tabs" role="group" aria-label="Which events">${button("cluster", "Cluster")}${button("signins", "Sign-ins")}</div>`;
+}
+
+function eventSelect(key, label, options, value) {
+  return `<select class="evf" aria-label="${esc(label)}" onchange="eventFilterSet('${key}', this.value)">
+    ${options.map(([v, text]) => `<option value="${esc(v)}" ${v === value ? "selected" : ""}>${esc(text)}</option>`).join("")}</select>`;
+}
+
+function eventFilterBar(rows) {
+  const f = eventFilter();
+  const since = eventSelect("since", "When", [["", "Any time"], ["1h", "Last hour"], ["24h", "Last day"], ["7d", "Last week"]], f.since);
+  const text = `<input class="evf evf-text" type="search" placeholder="Filter…" aria-label="Filter the events" value="${esc(STATE.q)}"
+    oninput="eventText(this.value)">`;
+  const distinct = key => [...new Set(rows.map(x => x[key]).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const selects = eventTab() === "signins"
+    ? eventSelect("what", "What", [["", "Everything"], ["signins", "Sign-ins"], ["failures", "Failures"], ["signouts", "Sign-outs"],
+        ["account", "Account changes"]], f.what)
+      + eventSelect("user", "User", [["", "All users"], ...distinct("user").map(u => [u, u])], f.user)
+    : eventSelect("type", "Type", [["", "All types"], ["Warning", "Warnings"], ["Normal", "Normal"]], f.type)
+      + eventSelect("kind", "Kind", [["", "All kinds"], ...distinct("kind").map(k => [k, k])], f.kind)
+      + eventSelect("ns", "Namespace", [["", "All namespaces"], ...distinct("ns").map(n => [n, n])], f.ns);
+  return `<div class="evfilters" role="group" aria-label="Filters">${text}${selects}${since}
+    <button type="button" class="btn sm evf-clear" id="evClear" onclick="eventFiltersClear()">Clear</button></div>`;
+}
+
+function eventMatches(x) {
+  const f = eventFilter(), q = STATE.q.toLowerCase();
+  const age = f.since ? (Date.now() - eventTime(x)) / 1000 : 0;
+  if (f.since && age > EVENT_SINCE[f.since]) return false;
+  if (eventTab() === "signins") {
+    return (!q || [x.user, x.ip, x.device, x.detail, x.via].join(" ").toLowerCase().includes(q))
+      && (!f.what || SIGNIN_GROUPS[f.what](x)) && (!f.user || x.user === f.user);
+  }
+  return (!q || [x.obj, x.ns, x.kind, x.reason, x.msg].join(" ").toLowerCase().includes(q))
+    && (!f.type || x.type === f.type) && (!f.kind || x.kind === f.kind) && (!f.ns || x.ns === f.ns);
+}
+
+function eventRowHtml(x) {
+  const ago = fmtAgo(Math.max(0, (Date.now() - eventTime(x)) / 1000));
+  if (eventTab() === "signins") {
+    const [word, tone] = SIGNIN_WORDS[x.event] || [x.event, "low"];
+    const when = new Date(x.at * 1000);
+    return `<tr><td><b>${esc(x.user || "—")}</b><div class="dim xs">${x.detail ? `${esc(x.detail)}` : ""}<span class="ev-when-sm">${x.detail ? " · " : ""}${esc(ago)}</span></div></td>
+      <td data-status><span class="pill slim ${tone}">${esc(word)}</span></td>
+      <td class="small ev-from"><span class="mono">${esc(x.ip || "—")}</span>${x.device || x.via ? ` <span class="dim xs">${esc([x.device, x.via && `via ${x.via}`].filter(Boolean).join(" · "))}</span>` : ""}</td>
+      <td class="dim xs mono nowrap" data-sm-hide title="${esc(when.toLocaleString())}">${esc(ago)}</td></tr>`;
+  }
+  return `<tr><td><b>${esc(x.obj)}</b><div class="dim xs">${esc(x.ns)} · ${esc(x.kind)}<span class="ev-when-sm"> · ${esc(ago)}</span></div></td>
+    <td data-status><span class="pill slim ${x.type === "Warning" ? "med" : "low"}">${esc(x.reason)}</span></td>
+    <td class="small muted ev-msg">${esc(x.msg)}${x.count > 1 ? ` <span class="tag">×${x.count}</span>` : ""}</td>
+    <td class="dim xs mono nowrap" data-sm-hide title="${esc((x.time || "").replace("T", " ").replace("Z", ""))}">${esc(ago)}</td></tr>`;
+}
+
+/* The table and the count, from the rows already read. */
+function eventsRender() {
+  const all = STATE.data.eventRows || [];
+  const rows = all.filter(eventMatches);
+  const f = eventFilter();
+  const filtered = !!STATE.q || Object.values(f).some(Boolean);
+  const body = $("#evRows"), count = $("#evCount"), clear = $("#evClear");
+  if (count) count.textContent = eventTab() === "signins"
+    ? `${rows.length} of ${all.length} sign-ins and account changes · newest first`
+    : `${rows.length} of ${all.length} recent events · newest first`;
+  if (clear) clear.hidden = !filtered;
+  if (body) body.innerHTML = rows.map(eventRowHtml).join("")
+    || `<tr><td colspan=4 class="empty">${filtered ? "Nothing matches these filters." : eventTab() === "signins" ? "No sign-ins recorded yet." : "No events."}</td></tr>`;
+}
+
+window.eventFilterSet = (key, value) => { eventFilter()[key] = value; eventsRender(); };
+window.eventText = value => {
+  STATE.q = value.trim();
+  const search = $("#globalSearch");
+  if (search) search.value = STATE.q;
+  eventsRender();
+};
+window.eventFiltersClear = () => {
+  const f = eventFilter();
+  Object.keys(f).forEach(k => { f[k] = ""; });
+  STATE.eventWarnings = false;
+  STATE.q = "";
+  const search = $("#globalSearch");
+  if (search) search.value = "";
+  viewEvents();
+};
+
 async function viewEvents() {
-  const e = await api("/api/events");
-  const q = STATE.q.toLowerCase();
-  // The count says what the table shows, so the warnings filter counts too.
-  const rows = e.filter(x => (!q || [x.obj, x.ns, x.kind, x.reason, x.msg].join(" ").toLowerCase().includes(q))
-    && (!STATE.eventWarnings || x.type === "Warning"));
-  paint(`<div class="phead"><div><h2>Events</h2><p>${rows.length} of ${e.length} recent events · newest first</p></div>
-    <div class="row"><button class="btn sm ${STATE.eventWarnings ? "pri" : ""}" onclick="STATE.eventWarnings=!STATE.eventWarnings;viewEvents()">Warnings only</button></div></div>
-  <div class="card flat pad0 eventtable"><div class="tblwrap"><table data-sort="events" class="tbl stack dense"><thead><tr>
-    <th>Object</th><th>Reason</th><th>Message</th><th data-nosort>When</th></tr></thead><tbody>
-  ${rows.map(x => `<tr><td><b>${esc(x.obj)}</b><div class="dim xs">${esc(x.ns)} · ${esc(x.kind)}</div></td>
-    <td><span class="pill ${x.type === "Warning" ? "med" : "low"}">${esc(x.reason)}</span></td>
-    <td class="small muted">${esc(x.msg)}${x.count > 1 ? ` <span class="tag">×${x.count}</span>` : ""}</td>
-    <td class="dim xs mono" title="${esc((x.time || "").replace("T", " ").replace("Z", ""))}">${esc(fmtAgo(ageSecs(x.time)))}</td></tr>`).join("")
-    || `<tr><td colspan=4 class="empty">no events</td></tr>`}</tbody></table></div></div>`);
+  const tab = eventTab();
+  const rows = await api(tab === "signins" ? "/api/auth/history" : "/api/events");
+  STATE.data.eventRows = rows;
+  const heads = tab === "signins" ? ["Who", "What", "From", "When"] : ["Object", "Reason", "Message", "When"];
+  paint(`<div class="phead"><div><h2>Events</h2><p id="evCount"></p></div>${eventTabs(tab)}</div>
+  ${eventFilterBar(rows)}
+  <div class="card flat pad0 eventtable"><div class="tblwrap"><table data-sort="${tab === "signins" ? "signins" : "events"}" class="tbl stack compact evtable"><thead><tr>
+    ${heads.map((h, i) => `<th${i === 3 ? " data-nosort" : ""}>${h}</th>`).join("")}</tr></thead><tbody id="evRows"></tbody></table></div></div>`);
+  eventsRender();
 }
 
 /* ---------------- Longhorn allocation ----------------
