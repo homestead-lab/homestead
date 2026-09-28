@@ -66,6 +66,17 @@ opens the same reviewed rollout an app gets, helpers first and Homestead last;
 the page reconnects when Homestead is back. **Check now** asks the registries
 again. How updates are approved is set under **Updates**.
 
+**Linked clusters** are listed below this one's parts, each with the version
+it runs and whether an update is waiting, asked through this Homestead's
+relay. Tick **Include** on the ones to update as well: the same review then
+covers them, each rollout checked and applied on its own cluster, the linked
+clusters first and this Homestead last, since the others are reached through
+it. A Homestead restarting mid-update is waited for rather than counted as a
+failure. Nothing is ticked by default. Keeping every linked Homestead on one
+release keeps moves between them working. A cluster that is not answering is
+shown, not offered; one older than 2.8.220 is recognised by its `homestead`
+Deployment.
+
 A notification about a new Homestead release links here: `/settings?tab=about`
 opens this tab, as `?tab=` does for any of them.
 

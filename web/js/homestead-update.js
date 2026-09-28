@@ -45,6 +45,86 @@ function homesteadPartRows(parts) {
   }).join("");
 }
 
+/* ---------- linked clusters ----------
+   Each linked Homestead's own parts, asked through this one's relay, so one
+   review can update them all. A cluster from before 2.8.220 does not tag its
+   parts: its Homestead is the Deployment named homestead. Nothing is picked
+   until someone ticks it. */
+const FLEET_UPDATES = { rows: {}, picked: new Set(), loading: false, at: 0 };
+
+function linkedMembers() {
+  return (window.FLEET?.view?.linked ? FLEET.view.members || [] : []).filter(m => !m.self);
+}
+
+function remoteParts(report) {
+  return (report?.workloads || []).map(w => ({ ...w, homestead: w.homestead || (w.name === "homestead" ? "self" : "") }))
+    .filter(w => w.homestead)
+    .sort((a, b) => Number(b.homestead === "self") - Number(a.homestead === "self"));
+}
+
+async function fleetUpdatesLoad(force = false) {
+  const members = linkedMembers();
+  if (!members.length || FLEET_UPDATES.loading || (!force && Date.now() - FLEET_UPDATES.at < 60000)) return;
+  FLEET_UPDATES.loading = true;
+  homesteadUpdateRepaint();
+  await Promise.all(members.map(async m => {
+    if (!m.reachable) { FLEET_UPDATES.rows[m.id] = { member: m, error: m.error || "not answering" }; return; }
+    try {
+      const report = await api(`/api/image-updates${force ? "?force=1" : ""}`, { headers: { "X-Homestead-Cluster": m.id }, keep: true });
+      FLEET_UPDATES.rows[m.id] = { member: m, parts: remoteParts(report) };
+    } catch (error) {
+      FLEET_UPDATES.rows[m.id] = { member: m, error: error.message };
+    }
+  }));
+  for (const id of [...FLEET_UPDATES.picked]) if (!(FLEET_UPDATES.rows[id]?.parts || []).some(w => w.available)) FLEET_UPDATES.picked.delete(id);
+  FLEET_UPDATES.loading = false;
+  FLEET_UPDATES.at = Date.now();
+  homesteadUpdateRepaint();
+}
+
+function fleetUpdateRows() {
+  const members = linkedMembers();
+  if (!members.length) return "";
+  const rows = members.map(m => {
+    const row = FLEET_UPDATES.rows[m.id];
+    const self = row?.parts?.find(w => w.homestead === "self");
+    const release = (self?.images || []).find(i => i.available && i.candidate_tag)?.candidate_tag || "";
+    const waiting = (row?.parts || []).filter(w => w.available);
+    const state = !row ? '<span class="pill neutral">checking…</span>'
+      : row.error ? `<span class="pill crit" data-tip="${esc(row.error)}">not answering</span>`
+      : waiting.length ? `<span class="pill warn">${esc(release ? `${m.version || "?"} → ${release}` : `${waiting.length} helper update${waiting.length === 1 ? "" : "s"}`)}</span>`
+      : '<span class="pill ok">current</span>';
+    const pick = waiting.length ? `<label class="hs-pick" title="Update ${esc(m.name)} too"><input type="checkbox" ${FLEET_UPDATES.picked.has(m.id) ? "checked" : ""}
+        onchange="fleetUpdatePick(${jsq(m.id)}, this.checked)"><span>Include</span></label>` : "";
+    return `<div class="hs-part"><div><b>${esc(m.name)}</b><span class="dim xs mono">${m.version ? `v${esc(m.version)}` : "version unknown"}${m.url ? ` · ${esc(m.url)}` : ""}</span></div>
+      <div class="row hs-part-end">${state}${pick}</div></div>`;
+  }).join("");
+  return `<div class="hs-fleet"><div class="between"><span class="dim xs">LINKED CLUSTERS</span>
+      <button class="btn sm" onclick="fleetUpdatesLoad(true)" ${FLEET_UPDATES.loading ? "disabled" : ""}>${FLEET_UPDATES.loading ? "Checking…" : "↻ Check"}</button></div>
+    <div class="hs-parts">${rows}</div>
+    <p class="dim xs">Ticked clusters are updated in the same review, before this one. Keeping every linked Homestead on one release keeps moves between them working.</p></div>`;
+}
+
+window.fleetUpdatePick = (id, on) => {
+  if (on) FLEET_UPDATES.picked.add(id); else FLEET_UPDATES.picked.delete(id);
+  homesteadUpdateRepaint();
+};
+window.fleetUpdatesLoad = fleetUpdatesLoad;
+
+function pickedFleetItems() {
+  return [...FLEET_UPDATES.picked].flatMap(id => {
+    const row = FLEET_UPDATES.rows[id];
+    return (row?.parts || []).filter(w => w.available)
+      .map(w => ({ ns: w.ns, name: w.name, part: w.homestead, cluster: id, clusterName: row.member.name }));
+  });
+}
+
+function homesteadUpdateRepaint() {
+  const body = $("#hsUpdateBody");
+  if (body) { body.innerHTML = homesteadUpdateBody(); if (window.applyRole) applyRole(); }
+  homesteadUpdateCardPaint();
+}
+
 function homesteadUpdateBody(inCard = false) {
   const { report, parts, release, waiting, failed } = homesteadUpdates();
   if (!report) return '<div class="empty small"><span class="spin2"></span> Asking the registries…</div>';
@@ -54,28 +134,38 @@ function homesteadUpdateBody(inCard = false) {
         <span class="dim small">You run v${esc(HOMESTEAD_VERSION)} · <a href="${safeHref(`${HOMESTEAD_RELEASES}/tag/v${release}`)}" target="_blank" rel="noopener">what's new ${icon("ext")}</a></span></div>`
     : `<div class="hs-release current"><span class="dim xs">RELEASE</span><b>Homestead v${esc(HOMESTEAD_VERSION)}</b>
         <span class="dim small">${waiting.length ? "Current; a helper has an update" : "Up to date"}${checked ? ` · ${esc(checked)}` : ""} · <a href="${safeHref(HOMESTEAD_RELEASES)}" target="_blank" rel="noopener">releases ${icon("ext")}</a></span></div>`;
+  const others = [...FLEET_UPDATES.picked].filter(id => FLEET_UPDATES.rows[id]);
+  const label = waiting.length
+    ? (release ? `Update to ${release}` : `Update ${waiting.length === 1 ? "helper" : "helpers"}`)
+      + (others.length ? ` and ${others.length} linked cluster${others.length === 1 ? "" : "s"}` : "")
+    : others.length ? `Update ${others.length} linked cluster${others.length === 1 ? "" : "s"}` : "";
   return `${head}
     ${parts.length ? `<div class="hs-parts">${homesteadPartRows(parts)}</div>` : ""}
     ${failed.length ? '<p class="dim small">A part whose check failed is compared with its registry again on the next check.</p>' : ""}
-    ${waiting.length ? `<p class="dim small">${inCard ? "" : "Each part restarts while it changes, Homestead last; this page reconnects when it is back. "}Nothing changes until you review and accept it.</p>` : ""}
-    <div class="row hs-actions">${waiting.length ? `<button class="btn pri" data-need="operator" onclick="homesteadUpdateReview()">${release ? `Update to ${esc(release)}` : `Update ${waiting.length === 1 ? "helper" : "helpers"}`}</button>` : ""}
+    ${fleetUpdateRows()}
+    ${label ? `<p class="dim small">${inCard ? "" : "Each part restarts while it changes, this Homestead last; this page reconnects when it is back. "}Nothing changes until you review and accept it.</p>` : ""}
+    <div class="row hs-actions">${label ? `<button class="btn pri" data-need="operator" onclick="homesteadUpdateReview()">${esc(label)}</button>` : ""}
       <button class="btn" onclick="homesteadUpdateCheck(this)">↻ Check now</button></div>`;
 }
 
 window.homesteadUpdateDialog = async () => {
   modal("Homestead updates", `<div class="ui-stack hs-update" id="hsUpdateBody">${homesteadUpdateBody()}</div>`);
+  fleetUpdatesLoad();
   if (!STATE.data.imageUpdates) {
     await loadImageUpdates(false, true);
-    const body = $("#hsUpdateBody");
-    if (body) body.innerHTML = homesteadUpdateBody();
+    homesteadUpdateRepaint();
   }
   if (window.applyRole) applyRole();
 };
 
+/* One review for everything ticked: the linked clusters first, each
+   helpers-then-Homestead, and this Homestead last, since the others are
+   reached through it. */
 window.homesteadUpdateReview = () => {
   const { waiting } = homesteadUpdates();
-  if (!waiting.length) return toast("Homestead is up to date", "ok");
-  return reviewImageActions(waiting.map(w => ({ ns: w.ns, name: w.name })));
+  const items = [...pickedFleetItems(), ...waiting.map(w => ({ ns: w.ns, name: w.name, part: w.homestead }))];
+  if (!items.length) return toast("Homestead is up to date", "ok");
+  return reviewImageActions(items);
 };
 
 window.homesteadUpdateCheck = async button => {
@@ -85,9 +175,8 @@ window.homesteadUpdateCheck = async button => {
     const { release, waiting } = homesteadUpdates();
     toast(release ? `Homestead ${release} is available` : waiting.length ? "A Homestead helper has an update" : "Homestead is up to date", "ok");
   } else if (button) { button.disabled = false; button.textContent = "↻ Check now"; }
-  const body = $("#hsUpdateBody");
-  if (body) { body.innerHTML = homesteadUpdateBody(); if (window.applyRole) applyRole(); }
-  homesteadUpdateCardPaint();
+  if (linkedMembers().length) await fleetUpdatesLoad(true);
+  homesteadUpdateRepaint();
 };
 
 /* Settings › About: always there, current or not. */
@@ -99,6 +188,7 @@ function homesteadUpdateCardPaint() {
       ${tip("The SMB and NFS servers and the object store moves use are part of Homestead: hidden with the platform on the Containers page, and updated from here. How updates are approved is under Settings › Updates.")}</div>
     <div class="ui-stack">${homesteadUpdateBody(true)}</div>`;
   if (window.applyRole) applyRole();
+  fleetUpdatesLoad();
 }
 window.homesteadUpdateCardPaint = homesteadUpdateCardPaint;
 

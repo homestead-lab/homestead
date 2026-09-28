@@ -27,6 +27,9 @@ window.fleetAll = fleetAll;
    the view of all of them; an action taken on another cluster's row - or a
    dialog opened from one - goes to that cluster. */
 window.fleetRoute = (path, opts = {}) => {
+  // A request that names its cluster itself - updating every linked
+  // Homestead from one dialog - goes where it says.
+  if (opts.headers?.["X-Homestead-Cluster"]) return { path, opts };
   const method = String(opts.method || "GET").toUpperCase();
   if (method === "GET" && FLEET_LISTS[path] === STATE.view && fleetAll()) return { path: `/api/fleet/all/${path.slice(5)}`, opts };
   const target = FLEET.target;
