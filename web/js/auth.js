@@ -32,7 +32,7 @@ async function authState() {
 
 /* Homestead is up but its cluster is not answering: say so, and keep trying. */
 function clusterUnavailable(error) {
-  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.213" alt="">
+  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.214" alt="">
     <h2>Homestead</h2><p class="sub">Waiting for the cluster</p>
     <div class="gateerr">${esc(error || "The Kubernetes API did not answer.")}</div>
     <p class="dim small">This page tries again every few seconds.</p>
@@ -88,7 +88,7 @@ function ungate() { $("#gate").classList.add("hidden"); }
 
 function loginForm(err, setup) {
   gate(`
-    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.213" alt="">
+    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.214" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}
@@ -178,6 +178,16 @@ window.doPwChange = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
+/* One person's sign-ins, under Events. */
+window.userSignins = name => {
+  closeModal();
+  STATE.eventsTab = "signins";
+  STATE.q = name;
+  const search = $("#globalSearch");
+  if (search) search.value = name;
+  go("events", { keepSearch: true });
+};
+
 window.manageUsers = async () => {
   modal("Users", `<div class="empty"><span class="spin2"></span>loading</div>`);
   try {
@@ -193,7 +203,8 @@ window.manageUsers = async () => {
             ${["viewer", "operator", "admin"].map(r =>
               `<option value="${r}" ${u.role === r ? "selected" : ""}>${r}</option>`).join("")}
           </select></td>
-          <td class="dim small mono">${esc(u.last_login || "never")}</td>
+          <td class="dim small mono">${esc(u.last_login || "never")}
+            <div><a class="linkish xs" onclick="userSignins('${esc(u.name)}')">Sign-in history</a></div></td>
           <td>${u.name === ME || us.length === 1 ? '<span class="dim xs">—</span>'
             : `<button class="btn sm danger" onclick="delUser(${jsq(u.name)})">Remove</button>`}</td>
         </tr>`).join("")}</tbody></table></div></div>
