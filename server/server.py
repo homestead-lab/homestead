@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.223")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.224")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -3214,6 +3214,9 @@ def _class_made_for(name, parameters):
         return "restore"
     if parameters.get("backingImage") or name.startswith("longhorn-image-"):
         return "image"
+    if name == NAMES.object_name("isos"):
+        # Homestead's ISO copies: one replica, not a class to put data on.
+        return "iso"
     return ""
 
 
@@ -5156,6 +5159,9 @@ def _vmstore_loop():
             try:
                 with self_data_activity():
                     VMSTORE.refresh()
+                    # ISO copies no VM has used for a while (homestead_isos.py).
+                    for name in ISOS.tidy():
+                        print(f"ISO library: removed {name}, unused for {ISOS.keep_days()} days", flush=True)
                 beat("vmstore", 3600, leader_only=True)
             except Exception as error:
                 beat("vmstore", 3600, error, leader_only=True)
@@ -6255,13 +6261,40 @@ VM_CONSOLE = VMCONSOLE.VmConsole(CONSOLE_PROXY, SYS_NS, kget)
 FILES.bind(kget, ksend, urllib.parse.urlparse(API), TOKEN, CTX, SYS_NS)
 
 
+ISO_CLASS = NAMES.object_name("isos")
+
+
 def iso_storage_class():
-    """Where ISO volumes go: a class every node can mount at once, so one
-    copy serves VMs anywhere; else the VM default, one node at a time."""
+    """Where ISO volumes go. On Longhorn, a class of Homestead's own: one
+    replica, since the original is on the share and a lost copy is made again
+    in one click, and no data locality, so the replica is not moved towards
+    whichever node serves it. Like the class it is copied from it serves
+    ReadWriteMany, so VMs on any node read the one copy. Elsewhere, a class
+    every node can mount; else the VM default, one node at a time."""
     rows = storage_classes()
     shared = shared_storage_classes(rows)
-    if shared:
-        return (STORAGE_CLASS if STORAGE_CLASS in shared else shared[0]), True
+    base = STORAGE_CLASS if STORAGE_CLASS in shared else (shared[0] if shared else "")
+    row = next((r for r in rows if r["name"] == base), None)
+    if row and row["provisioner"] == "driver.longhorn.io":
+        if not any(r["name"] == ISO_CLASS for r in rows):
+            parameters = {key: value for key, value in (row["parameters"] or {}).items()
+                          if key not in ("migratable", "backingImage", "backingImageDataSourceType",
+                                         "backingImageDataSourceParameters", "recurringJobSelector")}
+            parameters.update(numberOfReplicas="1", dataLocality="disabled")
+            body = {"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
+                    "metadata": {"name": ISO_CLASS, "labels": {NAMES.key("managed"): "true"},
+                                 "annotations": {"field.cattle.io/description":
+                                                 "Homestead's ISO copies: one replica; the originals are on the shares"}},
+                    "provisioner": "driver.longhorn.io", "parameters": parameters,
+                    "reclaimPolicy": "Delete", "allowVolumeExpansion": True, "volumeBindingMode": "Immediate"}
+            try:
+                ksend("POST", "/apis/storage.k8s.io/v1/storageclasses", body)
+            except urllib.error.HTTPError as error:
+                if error.code != 409:      # another replica made it first
+                    raise
+        return ISO_CLASS, True
+    if base:
+        return base, True
     return vm_default_class(rows), False
 
 
@@ -6622,7 +6655,7 @@ ADMIN_ROUTES = {
     "/api/addons/multus", "/api/addons/multus/repair", "/api/addons/kube-vip",
     "/api/platform/baseline/install",
     # Which share folders the ISO library reads, and deleting an ISO's volume.
-    "/api/vm/isos/folders", "/api/vm/isos/delete", "/api/vm/isos/browse",
+    "/api/vm/isos/folders", "/api/vm/isos/delete", "/api/vm/isos/browse", "/api/vm/isos/keep",
     # Upgrading the platform: the cluster, Longhorn, KubeVirt, CDI.
     "/api/cluster/components/upgrade", "/api/cluster/upgrades/start",
     # The VM image store downloads gigabytes into the cluster.
@@ -7741,6 +7774,8 @@ class H(BaseHTTPRequestHandler):
                 result = ISOS.prepare(str(b.get("share") or ""), str(b.get("path") or ""))
                 _cache.pop("vms", None)
                 return self._send(200, result)
+            if p == "/api/vm/isos/keep":
+                return self._send(200, ISOS.set_keep_days(b.get("days")))
             if p == "/api/vm/isos/delete":
                 return self._send(200, ISOS.delete(str(b.get("name") or "")))
             if p == "/api/platform/baseline/install":

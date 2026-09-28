@@ -254,6 +254,18 @@ class every node can mount where there is one, so one copy serves every VM on
 any node. Its progress shows in the library; a file replaced by a new one of
 another size is copied again under a new name.
 
+On Longhorn the copies go on a class Homestead makes for them,
+`homestead-isos`: **one replica**, since the original stays on the share, and
+no data locality. VMs on any node still read the one copy - it is served over
+the network, so nothing is tied to the node holding the replica. If that node
+is down, a VM with the ISO still in a drive waits until it is back, or until
+the ISO is ejected or made ready again; a VM whose install is done and ISO
+ejected is not affected.
+
+Copies are kept only while wanted: one no VM has in a drive is removed after
+the days set at the foot of the library (7 by default, **0** keeps them), and
+the library says how long each has left. It comes back with **Make ready**.
+
 A ready ISO is offered as a CD-ROM's contents in **Edit → Disks → ＋ CD-ROM**,
 attached read-only, and **Detach** ejects it. A new VM can **Install from an
 ISO**: it gets a blank disk and the ISO in a CD-ROM drive that boots first,

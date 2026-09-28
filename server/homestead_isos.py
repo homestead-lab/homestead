@@ -11,7 +11,13 @@ The copy is a Job beside the share's volume; the ISO volume says where it
 came from (share, path, size) so a changed file is copied again under a new
 name, and it is ready once the Job has finished. An ISO volume a VM still
 uses is not deleted.
+
+Copies are cheap to make again, so they are kept only while wanted: one no
+VM has in a drive is marked with when it stopped being used, and after the
+library's keep_days (7 by default, 0 keeps them) the leader deletes it
+(tidy). The file on the share is never touched.
 """
+import time
 import hashlib
 import json
 import posixpath
@@ -34,6 +40,8 @@ SOURCE = "homestead.io/iso-source"
 SIZE = "homestead.io/iso-size"
 FILE = "homestead.io/iso-file"
 READY = "homestead.io/iso-ready"
+UNUSED = "homestead.io/iso-unused-since"
+KEEP_DAYS = 7
 QEMU = "107"             # the user KubeVirt's launcher runs QEMU as
 DNS = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 GIB = 1024 ** 3
@@ -68,15 +76,54 @@ def _clean(path):
 
 
 # ------------------------------------------------------------------ folders
+def _settings():
+    cm = _optional(f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/{CONFIGMAP}") or {}
+    return dict(cm.get("data") or {})
+
+
+def _save_settings(**changes):
+    """Write one setting without losing the other."""
+    data = _settings()
+    data.update(changes)
+    body = {"apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {"name": CONFIGMAP, "namespace": DEFAULT_NS, "labels": {NAMES.key("managed"): "true"}},
+            "data": data}
+    path = f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/{CONFIGMAP}"
+    if _optional(path) is None:
+        ksend("POST", f"/api/v1/namespaces/{DEFAULT_NS}/configmaps", body)
+    else:
+        ksend("PUT", path, body)
+
+
 def folders():
     """The share folders the library reads: [{share, path}]."""
-    cm = _optional(f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/{CONFIGMAP}") or {}
     try:
-        rows = json.loads((cm.get("data") or {}).get("folders") or "[]")
+        rows = json.loads(_settings().get("folders") or "[]")
     except ValueError:
         rows = []
     return [{"share": str(r.get("share") or ""), "path": _clean(r.get("path"))}
             for r in rows if isinstance(r, dict) and r.get("share")]
+
+
+def keep_days():
+    """How long a copy no VM uses is kept; 0 keeps them."""
+    try:
+        return max(0, min(365, int(_settings().get("keep_days", KEEP_DAYS))))
+    except ValueError:
+        return KEEP_DAYS
+
+
+def set_keep_days(days):
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        raise ValueError("days is a whole number") from None
+    if not 0 <= days <= 365:
+        raise ValueError("between 0 (keep them) and 365 days")
+    _save_settings(keep_days=str(days))
+    return {"ok": True, "keep_days": days,
+            "detail": "ISO copies no VM uses are kept" if days == 0
+                      else f"ISO copies no VM uses are removed after {days} day{'' if days == 1 else 's'}"}
 
 
 def set_folders(rows):
@@ -91,14 +138,7 @@ def set_folders(rows):
             clean.append({"share": share, "path": path})
     if len(clean) > 20:
         raise ValueError("at most 20 ISO folders")
-    body = {"apiVersion": "v1", "kind": "ConfigMap",
-            "metadata": {"name": CONFIGMAP, "namespace": DEFAULT_NS, "labels": {NAMES.key("managed"): "true"}},
-            "data": {"folders": json.dumps(clean)}}
-    path = f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/{CONFIGMAP}"
-    if _optional(path) is None:
-        ksend("POST", f"/api/v1/namespaces/{DEFAULT_NS}/configmaps", body)
-    else:
-        ksend("PUT", path, body)
+    _save_settings(folders=json.dumps(clean))
     return {"ok": True, "folders": clean,
             "detail": f"{len(clean)} ISO folder{'' if len(clean) == 1 else 's'} saved"}
 
@@ -196,6 +236,8 @@ def volumes(ns=None):
         out.append({"name": meta["name"], "namespace": ns, "file": annotations.get(FILE, ""),
                     "source": annotations.get(SOURCE, ""), "size": int(annotations.get(SIZE) or 0),
                     "state": state, "problem": problem, "used_by": sorted(users.get(meta["name"], [])),
+                    "unused_since": _stamp(annotations.get(UNUSED)),
+                    "storage_class": (pvc.get("spec") or {}).get("storageClassName") or "",
                     "rwx": "ReadWriteMany" in ((pvc.get("spec") or {}).get("accessModes") or [])})
     return sorted(out, key=lambda row: row["file"].lower())
 
@@ -217,7 +259,7 @@ def library(ns=None):
         volume = by_source.get(f"{row['share']}/{row['path']}")
         row["volume"] = volume["name"] if volume and volume["size"] == row["size"] else ""
         row["state"] = (volume or {}).get("state", "") if row["volume"] else ""
-    return {"folders": folders(), "files": files, "problems": problems, "volumes": vols,
+    return {"folders": folders(), "files": files, "problems": problems, "volumes": vols, "keep_days": keep_days(),
             "shares": [{"name": s["name"], "pvc": s.get("pvc", ""), "sub_path": s.get("sub_path", "")}
                        for s in shares()]}
 
@@ -320,3 +362,37 @@ def delete(name, ns=None):
     ksend("DELETE", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}")
     return {"ok": True, "detail": f"{(pvc['metadata'].get('annotations') or {}).get(FILE, name)}'s volume deleted; "
                                   "the file on the share is kept"}
+
+
+def _stamp(value):
+    try:
+        return int(value or 0)
+    except ValueError:
+        return 0
+
+
+def tidy(ns=None, now=None):
+    """Mark when each copy stopped being used, clear the mark once a VM has
+    it again, and delete one unused for longer than keep_days. Copies still
+    being made are left alone. Returns the names deleted."""
+    ns, now = ns or DEFAULT_NS, int(time.time() if now is None else now)
+    days = keep_days()
+    deleted = []
+    for volume in volumes(ns):
+        path = f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{volume['name']}"
+        if volume["used_by"]:
+            if volume["unused_since"]:
+                ksend("PATCH", path, {"metadata": {"annotations": {UNUSED: None}}}, ctype="application/merge-patch+json")
+            continue
+        if volume["state"] == "copying":
+            continue
+        if not volume["unused_since"]:
+            ksend("PATCH", path, {"metadata": {"annotations": {UNUSED: str(now)}}}, ctype="application/merge-patch+json")
+            continue
+        if days and now - volume["unused_since"] >= days * 86400:
+            try:
+                delete(volume["name"], ns)
+                deleted.append(volume["name"])
+            except ValueError:
+                pass            # taken into a drive since it was read
+    return deleted
