@@ -2297,3 +2297,20 @@ html[data-theme="light"] .modalbox[data-context="smb-access"]{background:var(--s
   .fleet-list li>:last-child:not(.fleet-row){grid-column:2}
   .fleet-row-acts{justify-content:space-between}
 }
+
+/* Configuration backup: the parts, one line each (config-backup.js). */
+.cfg-parts{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:12px}
+.cfg-parts li+li{border-top:1px solid var(--line)}
+.cfg-part{display:flex;align-items:flex-start;gap:10px;margin:0;padding:10px 12px;cursor:pointer}
+.cfg-part.off{cursor:default;opacity:.55}
+.cfg-part input{margin-top:3px;flex:0 0 auto}
+.cfg-part-text{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;min-width:0}
+.cfg-part-text .ui-help{flex-basis:100%;margin:0}
+.cfg-part-note{flex-basis:100%;font-size:11.5px;color:var(--med)}
+/* Backing up needs only the names: two to a line, the details on hover. */
+.cfg-parts.compact{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+.cfg-parts.compact li+li{border-top:0}
+.cfg-parts.compact li{border-bottom:1px solid var(--line)}
+.cfg-parts.compact li:nth-last-child(-n+2){border-bottom:0}
+.cfg-parts.compact .cfg-part{padding:8px 12px}
+.cfg-parts.compact .ui-help{display:none}
