@@ -52,8 +52,9 @@
 #   2. installs k3s with an embedded etcd, so more servers can join later
 #      (or RKE2, which always has one, with its ServiceLB turned on so apps
 #      get the nodes' addresses as they do on k3s);
-#   3. drops a HelmChart for Longhorn and Homestead's manifest into the
-#      manifests folder, which k3s or RKE2 applies itself - nothing else to run;
+#   3. applies a HelmChart for Longhorn and Homestead's manifest, once - kept
+#      in /var/lib/homestead/install, not k3s's auto-deploy folder, which k3s
+#      re-applies at every start and so would undo later upgrades;
 #   4. asks Homestead, in its manifest, to install kube-vip (VIPs) and Multus
 #      (a VM's or container's own LAN address) once it is up - Homestead
 #      installs and upgrades them, as it does from Settings > Cluster > Add-ons;
@@ -122,6 +123,8 @@ install_kubevirt() {
     || fail "Could not download KubeVirt $KV."
   curl -sfL "$CDI_RELEASES/download/$CDI/cdi-operator.yaml" -o "$MANIFESTS/cdi-operator.yaml" \
     || fail "Could not download CDI $CDI."
+  apply "$MANIFESTS/kubevirt-operator.yaml"
+  apply "$MANIFESTS/cdi-operator.yaml"
   modprobe kvm_intel 2>/dev/null || modprobe kvm_amd 2>/dev/null || true
   EMULATION=""
   if [ ! -e /dev/kvm ]; then
@@ -145,6 +148,7 @@ spec:
       featureGates: []
 $EMULATION
 KUBEVIRT_CR
+  apply "$MANIFESTS/kubevirt-cr.yaml"
   wait_crd cdis.cdi.kubevirt.io
   cat > "$MANIFESTS/cdi-cr.yaml" <<'CDI_CR'
 apiVersion: cdi.kubevirt.io/v1beta1
@@ -156,6 +160,7 @@ spec:
   config:
     featureGates: [HonorWaitForFirstConsumer]
 CDI_CR
+  apply "$MANIFESTS/cdi-cr.yaml"
 }
 
 wait_crd() {
@@ -244,11 +249,11 @@ done
 
 if [ "$DIST" = rke2 ]; then
   [ "$LONGHORN" = 1 ] || fail "RKE2 has no built-in storage, so --no-longhorn is not supported. Longhorn stores Homestead's data."
-  MANIFESTS=/var/lib/rancher/rke2/server/manifests
+  AUTODEPLOY=/var/lib/rancher/rke2/server/manifests
   KUBECTL="/var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml"
   SERVICE=rke2-server
 else
-  MANIFESTS=/var/lib/rancher/k3s/server/manifests
+  AUTODEPLOY=/var/lib/rancher/k3s/server/manifests
   KUBECTL="k3s kubectl"
   SERVICE=k3s
 fi
@@ -268,10 +273,23 @@ i=0; until $KUBECTL get nodes 2>/dev/null | grep -q " Ready"; do
   i=$((i+1)); [ $i -gt 180 ] && fail "The node did not become ready. See: journalctl -u $SERVICE"; sleep 2; done
 IP=$($KUBECTL get node "$(hostname)" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || true)
 [ -n "$IP" ] || IP=$($KUBECTL get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+# What this script installs is applied once from here. k3s's auto-deploy
+# folder ($AUTODEPLOY) is applied again at every start, which would take
+# Homestead, Longhorn and KubeVirt back to these versions after each reboot.
+MANIFESTS=/var/lib/homestead/install
 mkdir -p "$MANIFESTS"
+apply() { # file: server-side, so large CRDs fit; retried while the API settles
+  i=0; until $KUBECTL apply --server-side --force-conflicts -f "$1" >/dev/null 2>&1; do
+    i=$((i+1)); [ $i -gt 60 ] && fail "Could not apply $1. See: $KUBECTL apply --server-side -f $1"; sleep 5; done
+}
+# An earlier run of this script left files in the auto-deploy folder: k3s
+# leaves a file with a .skip beside it alone, and removes nothing it applied.
+for f in homestead.yaml longhorn.yaml kubevirt-operator.yaml kubevirt-cr.yaml cdi-operator.yaml cdi-cr.yaml; do
+  [ -f "$AUTODEPLOY/$f" ] && [ ! -e "$AUTODEPLOY/$f.skip" ] && touch "$AUTODEPLOY/$f.skip"
+done
 
 if [ "$LONGHORN" = 1 ] && [ "$MODE" = addons ] && $KUBECTL get crd volumes.longhorn.io >/dev/null 2>&1 \
-   && [ ! -f "$MANIFESTS/longhorn.yaml" ]; then
+   && ! $KUBECTL -n kube-system get helmchart longhorn >/dev/null 2>&1; then
   # Installed another way already: used as it is.
   say "Longhorn is already installed"
   CLASS=longhorn; MODE_RW=ReadWriteMany
@@ -300,6 +318,7 @@ $CHART_VERSION
     defaultSettings:
       defaultReplicaCount: 1
 EOF
+  apply "$MANIFESTS/longhorn.yaml"
   CLASS=longhorn; MODE_RW=ReadWriteMany
 else
   CLASS=local-path; MODE_RW=ReadWriteOnce
@@ -343,7 +362,7 @@ data:
 EOF
 [ "$KUBE_VIP" = 1 ] && echo "  kube-vip will be installed by Homestead after it starts."
 [ "$MULTUS" = 1 ] && echo "  Multus will be installed by Homestead after it starts."
-true
+apply "$MANIFESTS/homestead.yaml"
 
 say "Waiting for Homestead to start (this takes several minutes when Longhorn is being installed)"
 i=0; until $KUBECTL -n lab rollout status deployment/homestead --timeout=10s >/dev/null 2>&1; do

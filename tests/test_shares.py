@@ -255,7 +255,9 @@ class ShareTests(unittest.TestCase):
         self.assertFalse(result["shares"][0]["has_password"])
         dep = self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-smb"]
         args = dep["spec"]["template"]["spec"]["containers"][0]["args"]
-        self.assertIn("secure;/shares/secure;yes;no;yes;lab", args)
+        # "all": a user named here becomes Samba's "valid users", which
+        # would shut out the guests the share is now for.
+        self.assertIn("secure;/shares/secure;yes;no;yes;all", args)
         self.assertNotIn("-u", args)
 
     def test_claim_cannot_shrink(self):
