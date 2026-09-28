@@ -355,9 +355,7 @@ def upgrade(component, target):
         # Multus's CNI paths stay as Homestead set them.
         helm_upgrade({"namespace": HELM_NS, "name": CHARTS[component], "version": target})
         app = app_version(component, target)
-        detail = (f"{found['name']} is moving to chart {target}{f' ({app})' if app else ''}; "
-                  + ("each node's agent restarts in turn, and a VIP pauses for a moment as it moves"
-                     if component == "kube-vip" else "each node's agent restarts; running pods keep their networks"))
+        detail = f"Upgrading {found['name']} to chart {target}{f' ({app})' if app else ''}"
     else:
         detail = _start_operator(component, target)
     return {"ok": True, "component": component, "name": found["name"], "from": found["installed"],

@@ -29,8 +29,8 @@ DATA_DIR = "/data"
 REQUEST = "homestead-install"
 PARTS = ("kube-vip", "multus")
 NAMES = {"kube-vip": "kube-vip", "multus": "Multus"}
-WHY = {"kube-vip": "VIPs: an address per app that moves to another node if its node goes down",
-       "multus": "LAN addresses of their own for VMs and containers, on a bridged network"}
+WHY = {"kube-vip": "Virtual IP addresses for applications, with failover between nodes",
+       "multus": "Dedicated LAN addresses for virtual machines and containers"}
 _lock = threading.Lock()
 
 
@@ -147,8 +147,8 @@ def tick():
         return []
     results = install(pending, wanted, reason="installer")
     for row in results:
-        print(f"platform: {'installing' if row['ok'] else 'could not install'} {NAMES[row['id']]} "
-              f"as the installer asked: {row['detail']}", flush=True)
+        print(f"platform: {NAMES[row['id']]} (requested at installation): "
+              f"{'installing' if row['ok'] else 'installation failed'}: {row['detail']}", flush=True)
     # Marked as seen even when already there, so it is not asked again.
     state = _load()
     for part in pending:

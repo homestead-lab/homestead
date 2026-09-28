@@ -164,6 +164,10 @@ const COMPONENT_EFFECT = {
     each volume's engine is upgraded as it next detaches or live, depending on Longhorn's settings. A backup of anything precious first is wise.`,
   kubevirt: (c, to) => `KubeVirt's operator rolls ${to} out. Running VMs carry on, and move to the new version as they restart or live-migrate.`,
   cdi: (c, to) => `CDI's operator rolls ${to} out. Disk imports under way may restart.`,
+  "kube-vip": (c, to) => `The kube-vip chart is upgraded to ${to} with its current values. The agent restarts on each node in turn;
+    each virtual IP is unavailable for a few seconds while it moves to another node.`,
+  multus: (c, to) => `The Multus chart is upgraded to ${to} with its current values. The agent restarts on each node. Running pods are not affected;
+    pods scheduled during the restart may start a few seconds later.`,
 };
 
 window.componentUpgrade = async id => {

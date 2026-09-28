@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.220")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.221")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -7646,8 +7646,8 @@ class H(BaseHTTPRequestHandler):
                 done = [BASELINE.NAMES[row["id"]] for row in results if row["ok"]]
                 failed = [f"{BASELINE.NAMES[row['id']]}: {row['detail']}" for row in results if not row["ok"]]
                 return self._send(200, {"ok": not failed, "results": results,
-                                        "detail": (f"Installing {' and '.join(done)}" if done else "Nothing was missing")
-                                                  + (f"; could not install {'; '.join(failed)}" if failed else "")})
+                                        "detail": (f"Installing {' and '.join(done)}" if done else "All required components are installed")
+                                                  + (f". Failed: {'; '.join(failed)}" if failed else "")})
             if p == "/api/addons/kubevirt/emulation":
                 _cache.pop("platform", None)
                 return self._send(200, ADDONS.set_kubevirt_emulation(bool(b.get("enabled"))))
