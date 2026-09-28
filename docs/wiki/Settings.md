@@ -65,6 +65,15 @@ working, refreshed every 15 seconds:
   installs it if needed;
 - the permissions check, backup storage and MQTT.
 
+## Sign-in history
+
+Every sign-in to Homestead, failed attempt, sign-out, password change and
+change to an account is kept, with the address and device it came from.
+Admins read it under **Events → Sign-ins**, filtered by what happened, by
+user, by time, or by any text; **Settings → Users** links each person to
+their own. A failed attempt records the name tried, never the password. The
+most recent 5,000 entries are kept.
+
 ## Configuration backup
 
 **Settings → About → Configuration backup** saves Homestead's own setup to a
