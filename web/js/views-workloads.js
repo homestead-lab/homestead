@@ -926,6 +926,15 @@ function groupedConcerns(rows) {
 }
 
 let IMAGE_REVIEW = null, IMAGE_REVIEW_SEQUENCE = 0;
+/* An update can be for a linked cluster (the Homestead updates dialog
+   updates them too): its requests carry that cluster, and its rollout is
+   keyed by it, since the same app can run on two clusters. */
+const clusterHeaders = item => item?.cluster ? { "X-Homestead-Cluster": item.cluster } : {};
+const rolloutKey = item => `${item?.cluster ? `${item.cluster}|` : ""}${updateKey(item.ns, item.name)}`;
+const rolloutBody = config => { const { cluster, clusterName, part, ...rest } = config; return rest; };
+// Homestead replacing itself: its API is away for a minute, which is not a failure.
+const restartsHomestead = item => item?.part === "self" || (!item?.part && item?.name === "homestead");
+
 async function reviewImageActions(items, action = "update") {
   const sequence = ++IMAGE_REVIEW_SEQUENCE;
   IMAGE_REVIEW = null;
@@ -936,8 +945,11 @@ async function reviewImageActions(items, action = "update") {
   try {
     const rows = [];
     for (const item of HomesteadUpdateState.orderApply(items)) {
-      const config = {ns: item.ns, name: item.name, action, approved: true};
-      const preview = await api("/api/image-updates/preview", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(config)});
+      const config = {ns: item.ns, name: item.name, action, approved: true,
+        ...(item.cluster ? {cluster: item.cluster, clusterName: item.clusterName || item.cluster} : {}),
+        ...(item.part ? {part: item.part} : {})};
+      const preview = await api("/api/image-updates/preview", {method: "POST",
+        headers: {"Content-Type": "application/json", ...clusterHeaders(config)}, body: JSON.stringify(rolloutBody(config))});
       if (sequence !== IMAGE_REVIEW_SEQUENCE || !$("#imageReviewLoading")) return;
       if (!preview.capacity || !preview.capacity_token || !Array.isArray(preview.images)) throw new Error("Image capacity review unavailable; no update was started");
       rows.push({config, preview});
@@ -952,7 +964,7 @@ async function reviewImageActions(items, action = "update") {
     const apps = rows.map(({config, preview}) => {
       const flagged = preview.capacity.blocked || (preview.capacity.warnings || []).length;
       const change = preview.images.map(i => `<span class="upd-change" title="${esc(i.before)} → ${esc(i.after)}">${preview.images.length > 1 ? `${esc(i.container)} ` : ""}${(([was, now]) => `<code>${esc(was)}</code> → <code>${esc(now)}</code>`)(imageChangeWords(i.before, i.after, i.before_tag, i.after_tag))}</span>`).join("");
-      return `<li><span class="upd-name">${flagged ? `<span class="upd-flag ${preview.capacity.blocked ? "bad" : "warn"}" title="See the notes above">!</span>` : ""}<b>${esc(config.name)}</b> <span class="dim">${esc(config.ns)}</span></span>${change}</li>`;
+      return `<li><span class="upd-name">${flagged ? `<span class="upd-flag ${preview.capacity.blocked ? "bad" : "warn"}" title="See the notes above">!</span>` : ""}<b>${esc(config.name)}</b> <span class="dim">${config.clusterName ? `${esc(config.clusterName)} · ` : ""}${esc(config.ns)}</span></span>${change}</li>`;
     }).join("");
     $("#mbody").innerHTML = `<div class="update-review ui-stack">
       <p class="ui-lead">${many ? `One at a time, Homestead last. ` : ""}${many ? "Each restarts" : "It restarts"} while it changes${rollback ? `, back to the image ${many ? "each" : "it"} ran before` : ""}.</p>
@@ -986,26 +998,37 @@ window.imageReviewedApply = async () => {
   const rows = IMAGE_REVIEW; IMAGE_REVIEW = null;
   const sequence = ++IMAGE_REVIEW_SEQUENCE;
   const items = rows.map(r => r.config);
-  const states = Object.fromEntries(items.map(item => [updateKey(item.ns, item.name), {phase: "queued", ready: 0, desired: 1}]));
+  const states = Object.fromEntries(items.map(item => [rolloutKey(item), {phase: "queued", ready: 0, desired: 1}]));
   const failures = [];
   modal("Reviewed image rollouts", '<div id="imageQueue"></div>', true);
   const active = () => sequence === IMAGE_REVIEW_SEQUENCE && $("#imageQueue") && !$("#modal").classList.contains("hidden");
   const paint = () => {if (active()) $("#imageQueue").innerHTML = batchUpdateMarkup(items, states, failures, false, true);};
   paint();
   for (let index = 0; index < rows.length; index++) {
-    const {config, preview} = rows[index], key = updateKey(config.ns, config.name);
+    const {config, preview} = rows[index], key = rolloutKey(config);
     if (!active()) break;
     try {
       const result = await api(config.action === "rollback" ? "/api/image-updates/rollback" : "/api/image-updates/apply",
-        {method: "POST", headers: {"Content-Type": "application/json"},
-         body: JSON.stringify({...config, capacity_token: preview.capacity_token, confirm_capacity: true})});
+        {method: "POST", headers: {"Content-Type": "application/json", ...clusterHeaders(config)},
+         body: JSON.stringify({...rolloutBody(config), capacity_token: preview.capacity_token, confirm_capacity: true})});
       states[key] = result; paint();
       // Never start the next workload until this exact accepted generation is ready.
       if (!result.uid || !Number.isInteger(result.generation)) throw new Error("Rollout identity unavailable; check Jobs before continuing");
       const deadline = Date.now() + 15 * 60 * 1000;
       while (true) {
         if (!active()) return;
-        const state = await api(`/api/image-updates/progress?ns=${encodeURIComponent(config.ns)}&name=${encodeURIComponent(config.name)}`);
+        let state;
+        try {
+          state = await api(`/api/image-updates/progress?ns=${encodeURIComponent(config.ns)}&name=${encodeURIComponent(config.name)}`,
+            config.cluster ? {headers: clusterHeaders(config)} : undefined);
+        } catch (error) {
+          // Homestead is replacing itself - here, or on a linked cluster the
+          // relay cannot reach for that minute: wait for it to answer again.
+          if (!restartsHomestead(config) || Date.now() > deadline) throw error;
+          states[key] = {...(states[key] || {}), phase: "restarting"}; paint();
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          continue;
+        }
         states[key] = state; paint();
         if (state.uid !== result.uid || state.generation !== result.generation) throw new Error("Workload changed during monitoring; review remaining updates again");
         if (state.phase === "failed") throw new Error("Rollout failed; remaining updates were not started");
@@ -1015,7 +1038,7 @@ window.imageReviewedApply = async () => {
       }
     } catch (error) {
       failures.push({...config, error: error.message + " No automatic retry: check Jobs for this rollout before reviewing again."});
-      for (const remaining of rows.slice(index + 1)) states[updateKey(remaining.config.ns, remaining.config.name)] = {phase: "not started", ready: 0, desired: 1};
+      for (const remaining of rows.slice(index + 1)) states[rolloutKey(remaining.config)] = {phase: "not started", ready: 0, desired: 1};
       paint();
       return;
     }
@@ -1024,19 +1047,19 @@ window.imageReviewedApply = async () => {
 };
 
 function batchUpdateMarkup(items, states, startFailures = [], reconnecting = false, queueMode = false) {
-  const failureMap = Object.fromEntries(startFailures.map(item => [updateKey(item.ns, item.name), item.error]));
-  const complete = items.filter(item => failureMap[updateKey(item.ns, item.name)] ||
-    ["ready", "failed"].includes(states[updateKey(item.ns, item.name)]?.phase)).length;
+  const failureMap = Object.fromEntries(startFailures.map(item => [rolloutKey(item), item.error]));
+  const complete = items.filter(item => failureMap[rolloutKey(item)] ||
+    ["ready", "failed"].includes(states[rolloutKey(item)]?.phase)).length;
   return `<div class="batch-rollout">
     <div class="between"><div><b>${complete}/${items.length} rollouts complete</b>
       <div class="dim xs">Each workload is tracked independently and keeps its own rollback image.</div></div>
       ${queueMode && startFailures.length ? '<span class="pill warn">queue stopped</span>' : complete === items.length ? '<span class="pill ok">finished</span>' : reconnecting ? '<span class="pill warn">reconnecting</span>' : '<span class="pill ok">monitoring</span>'}</div>
     <div class="rollout-meter"><span style="width:${items.length ? Math.round(complete / items.length * 100) : 100}%"></span></div>
     <div class="batch-rollout-list">${items.map(item => {
-      const key = updateKey(item.ns, item.name), state = states[key], startError = failureMap[key];
+      const key = rolloutKey(item), state = states[key], startError = failureMap[key];
       const phase = startError ? "needs attention" : state?.phase || "starting";
       const tone = phase === "ready" ? "ok" : phase === "failed" || startError ? "crit" : "warn";
-      return `<div><span><b>${esc(item.name)}</b><small>${esc(item.ns)}${state ? ` · ${state.ready}/${state.desired} ready` : ""}</small></span>
+      return `<div><span><b>${esc(item.name)}</b><small>${item.clusterName ? `${esc(item.clusterName)} · ` : ""}${esc(item.ns)}${state && state.desired != null ? ` · ${state.ready || 0}/${state.desired} ready` : ""}</small></span>
         <span class="pill ${tone}">${esc(phase)}</span>${startError ? `<div class="updateerror">${esc(startError)}</div>` : ""}</div>`;
     }).join("")}</div>
     ${queueMode ? '<p class="small dim">Closing stops unstarted updates. Submitted rollouts continue and can be monitored in Jobs. A stopped queue always needs a new review.</p>' : ""}
@@ -1060,10 +1083,10 @@ window.monitorImageRollouts = (items, startFailures = [], initialStates = {}, al
     }));
     const successful = results.filter(result => result.state);
     misses = successful.length ? 0 : misses + 1;
-    successful.forEach(result => { states[updateKey(result.item.ns, result.item.name)] = result.state; });
+    successful.forEach(result => { states[rolloutKey(result.item)] = result.state; });
     if ($("#mbody")) $("#mbody").innerHTML = batchUpdateMarkup(allItems, states, startFailures, misses > 0);
     if (window.applyRole) window.applyRole();
-    const terminal = items.every(item => ["ready", "failed"].includes(states[updateKey(item.ns, item.name)]?.phase));
+    const terminal = items.every(item => ["ready", "failed"].includes(states[rolloutKey(item)]?.phase));
     if (terminal) {
       clearInterval(window.__updateTimer); window.__updateTimer = null;
       if ($("#mbody")) $("#mbody").insertAdjacentHTML("beforeend", '<button class="btn pri" onclick="closeModal();go(\'workloads\')">Done</button>');
