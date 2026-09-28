@@ -621,7 +621,8 @@
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     // shed is ready to move from; barn has no backup storage yet.
     "/api/move/clusters/readiness": (url, init) => JSON.parse(init?.body || "{}").name === "barn"
-      ? { version: { compatible: true }, storage: { deployed: false }, target: { configured: false, error: "no backup target" }, ready: false }
+      ? { version: { compatible: true }, storage: { deployed: false }, target: { configured: false, error: "no backup target" }, ready: false,
+          shared_vip: "192.168.1.245", free_vips: [{ ip: "192.168.1.246", label: "spare", from: "vips" }, { ip: "192.168.1.230", label: "", from: "pool" }] }
       : { version: { compatible: true }, storage: { deployed: true, ready: true, reachable_off_cluster: true },
           target: { configured: true, reachable_off_cluster: true, url: "s3://homestead-backups@us-east-1/" }, ready: true },
     "/api/move/clusters/storage": { ok: true, detail: "backup storage is starting on barn at http://192.168.1.244:9000" },

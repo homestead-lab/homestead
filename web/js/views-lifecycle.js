@@ -1771,39 +1771,41 @@ window.clusterReady = async name => {
 window.clusterStorage = (name, addressOnly = false, after = null) => {
   window.__clusterStorageAfter = after;
   window.__clusterStorageAddressOnly = addressOnly;
-  const free = (window.__clusterReady?.[name]?.free_vips) || [];
-  childModal(`Backup storage on ${name}`, `
-    <p class="small">${addressOnly
-      ? `The backup storage on <b>${esc(name)}</b> runs, but only inside that cluster. Give it an address on your LAN - one nothing else uses - and this cluster reads the backups from there.`
-      : `Homestead puts an S3 store (RustFS) on a Longhorn volume on <b>${esc(name)}</b> and points that cluster's Longhorn backups at it.
-        A move backs each volume up there, then restores it here. It shares ${esc(name)}'s disks, so it is for moving, not your only copy of anything.`}</p>
-    <div class="f2">
-      ${addressOnly ? "" : '<div class="f"><label>Size (GB)</label><input id="cs_size" type="number" min="5" value="100"></div>'}
-      <div class="f"><label>Address for ${esc(name)}'s backup storage</label>
-        ${free.length ? `<select id="cs_pick" onchange="$('#cs_ip').hidden = this.value !== '__typed'; if (this.value !== '__typed') $('#cs_ip').value = this.value">
-            ${free.some(v => v.from === "vips") ? `<optgroup label="${esc(name)}'s VIPs (its Networking › Your VIPs)">${free.filter(v => v.from === "vips").map(v =>
-              `<option value="${esc(v.ip)}">${esc(v.ip)}${v.label ? ` · ${esc(v.label)}` : ""}</option>`).join("")}</optgroup>` : ""}
-            ${free.some(v => v.from !== "vips") ? `<optgroup label="Free in ${esc(name)}'s Harvester IP pools">${free.filter(v => v.from !== "vips").map(v =>
-              `<option value="${esc(v.ip)}">${esc(v.ip)}</option>`).join("")}</optgroup>` : ""}
-            <option value="__typed">Type an address…</option></select>
-          <input id="cs_ip" class="mono" value="${esc(free[0].ip)}" hidden style="margin-top:6px">`
-          : `<input id="cs_ip" class="mono" placeholder="e.g. 192.168.1.243">
-            <div class="dim xs">${esc(name)} has no VIPs of its own and no free IP-pool address. Type one nothing else on your LAN uses,
-              or add some under Networking › Your VIPs on ${esc(name)}'s Homestead.</div>`}</div></div>
-    <div class="note" style="margin-top:10px"><b>This address belongs to ${esc(name)}</b>, the cluster sending the workloads: its backup store answers on it,
-      announced by ${esc(name)}'s load balancer. This cluster never takes the address - it only connects to it to read the backups during a move.
-      Both clusters share your LAN, so it just has to be one nothing else uses, outside your router's DHCP range.</div>
-    <div class="row" style="margin-top:14px"><button class="btn pri" id="cs_go" onclick="clusterStorageGo('${esc(name)}')">${addressOnly ? "Set the address" : "Set it up"}</button>
-      <button class="btn" onclick="modalBack()">Cancel</button></div>`);
+  const ready = window.__clusterReady?.[name] || {};
+  const free = ready.free_vips || [];
+  const shared = ready.shared_vip || "";
+  // Its shared address first: the store answers on its own port there, beside
+  // the apps that share it, so no address of its own is needed.
+  childModal(`Backup storage on ${name}`, `<div class="ui-stack">
+    ${UI.lead(addressOnly
+      ? `The backup storage on <b>${esc(name)}</b> runs, but only inside that cluster. Give it an address on your LAN and this cluster reads the backups from there.`
+      : `Puts an S3 store (RustFS) on a Longhorn volume on <b>${esc(name)}</b> and points its Longhorn backups at it. A move backs each volume up there, then restores it here.`)}
+    ${UI.fields(
+      addressOnly ? "" : UI.field("Size (GB)", '<input id="cs_size" type="number" min="5" value="100">'),
+      UI.field("Address", `<select id="cs_pick" onchange="$('#cs_ip').hidden = this.value !== '__typed'">
+          <option value="__shared" selected>${shared ? `Its shared address · ${esc(shared)}:9000` : "Its nodes' own addresses · port 9000"}</option>
+          ${free.some(v => v.from === "vips") ? `<optgroup label="An address of its own: ${esc(name)}'s VIPs">${free.filter(v => v.from === "vips").map(v =>
+            `<option value="${esc(v.ip)}">${esc(v.ip)}${v.label ? ` · ${esc(v.label)}` : ""}</option>`).join("")}</optgroup>` : ""}
+          ${free.some(v => v.from !== "vips") ? `<optgroup label="An address of its own: free in ${esc(name)}'s IP pools">${free.filter(v => v.from !== "vips").map(v =>
+            `<option value="${esc(v.ip)}">${esc(v.ip)}</option>`).join("")}</optgroup>` : ""}
+          <option value="__typed">Type an address…</option></select>
+        <input id="cs_ip" class="mono" placeholder="192.168.1.243" hidden style="margin-top:6px">`,
+        { help: `${shared ? `${esc(name)}'s shared address is the one its apps share; the store answers on port 9000 there.` : `${esc(name)} puts Services on its nodes' own addresses; the store answers on port 9000 there.`} Choose an address of its own only to keep its traffic apart.` }))}
+    ${UI.more("Whose address this is", `<p>The address belongs to ${esc(name)}, the cluster sending the workloads: its backup store answers on it.
+      This cluster never takes it - it only connects to it to read the backups during a move. It shares ${esc(name)}'s disks, so it is for moving, not your only copy of anything.</p>`)}
+    ${UI.actions(UI.button("Cancel", "modalBack()") + UI.button(addressOnly ? "Set the address" : "Set it up", `clusterStorageGo('${esc(name)}')`, { kind: "pri", id: "cs_go" }))}
+  </div>`);
 };
 window.clusterStorageGo = async name => {
-  if (window.__clusterStorageAddressOnly && !$("#cs_ip").value.trim())
-    return toast("choose the address this cluster should reach it at", "bad");
+  const pick = $("#cs_pick")?.value || "__shared";
+  const address = pick === "__typed" ? $("#cs_ip").value.trim() : pick === "__shared" ? "" : pick;
+  if (pick === "__typed" && !address) return toast("type the address this cluster should reach it at", "bad");
   const button = $("#cs_go");
   if (button) { button.disabled = true; button.textContent = "Working…"; }
   try {
     const r = await api("/api/move/clusters/storage", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, size_gb: +($("#cs_size")?.value || 100), lb_ip: $("#cs_ip").value.trim() }) });
+      body: JSON.stringify({ name, size_gb: +($("#cs_size")?.value || 100), lb_ip: address,
+        vip_mode: pick === "__shared" ? "shared" : "" }) });
     toast(r.detail, "ok");
     modalBack();
     const after = window.__clusterStorageAfter;

@@ -7723,7 +7723,8 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/move/clusters/readiness":
                 return self._move(lambda: MOVE.readiness(b.get("name")))
             if p == "/api/move/clusters/storage":
-                return self._move(lambda: MOVE.setup_storage(b.get("name"), b.get("size_gb") or 100, b.get("lb_ip") or ""))
+                return self._move(lambda: MOVE.setup_storage(b.get("name"), b.get("size_gb") or 100, b.get("lb_ip") or "",
+                                                             b.get("vip_mode") or ""))
             if p == "/api/cluster/remove-node":
                 return self._move(lambda: ONBOARD.remove_node(b.get("node"), bool(b.get("accept_loss")),
                                                               bool(b.get("gone"))))

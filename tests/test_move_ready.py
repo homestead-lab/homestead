@@ -57,6 +57,19 @@ class MoveReadinessTests(unittest.TestCase):
                        "secret": "homestead-backup-credentials", "poll": "5m"}), calls)
         self.assertIn("192.168.1.244:9000", r["detail"])
 
+    def test_storage_can_go_on_the_far_clusters_shared_address(self):
+        calls = []
+
+        def remote(name, path, body=None):
+            calls.append((name, path, body))
+            if path == "/api/objectstore":
+                return {"ready": False}
+            return {"endpoint": "http://192.168.1.242:9000"}
+        with mock.patch.object(move, "remote", remote),                 mock.patch.object(move, "answers", lambda endpoint, timeout=3: True),                 mock.patch.object(move, "check_cluster", lambda name: {"version": "2.8.210"}):
+            move.setup_storage("shed", 50, "", "shared")
+        self.assertIn(("shed", "/api/objectstore/deploy",
+                       {"size_gb": 50, "lb_ip": "", "point_longhorn": True, "vip_mode": "shared"}), calls)
+
     def test_an_older_homestead_is_asked_to_update_before_it_makes_storage_that_cannot_start(self):
         calls = []
         with mock.patch.object(move, "remote", lambda *a, **k: calls.append(a)), \

@@ -56,7 +56,7 @@ const DIALOGS = [
   ["import-recovery-active", "imports", "window.__demoOps=[...(window.__demoOps||[]).filter(x=>x.id!=='import-active'),{id:'import-active',kind:'import-create',mutation_recovery:true,demo_dispatching:true,resource:{namespace:'lab',name:'photos'}}];powerRecoveryReview('import-active','import')"],
   ["import-job-remove", "imports", "importRemove('homestead-import-photos','done')"],
   ["cluster-browse", "settings", "settingsTab('fleet')", "clusterBrowse('shed')"],
-  ["cluster-storage", "settings", "settingsTab('fleet')", "clusterStorage('barn')"],
+  ["cluster-storage", "settings", "settingsTab('fleet')", "clusterReady('barn')", "clusterStorage('barn')"],
   ["move-review", "settings", "settingsTab('fleet')", "moveReview('shed','container','frigate')"],
   ["vip-add", "network", "vipAdd()"],
   ["node-detail", "nodes", "nodeDetail('harvester-node1')"],

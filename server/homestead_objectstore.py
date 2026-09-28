@@ -206,15 +206,50 @@ def _apply(path, name, body):
         return ksend("POST", path, body)
 
 
+VIP_KEYS = ("kube-vip.io/loadbalancerIPs", "metallb.universe.tf/loadBalancerIPs")
+
+
+def shared_address():
+    """Homestead's shared address for the store, checked as an app sharing it
+    would be: its ports free there, and not the cluster's own address. Empty
+    where Services go on the nodes' own addresses instead (k3s's ServiceLB)."""
+    try:
+        plan = NETWORK.service_plan({
+            "namespace": NS, "name": f"{NAME}-plan", "workload": NAME, "type": "LoadBalancer",
+            "vip_mode": "shared",
+            "ports": [{"port": PORT, "target_port": "s3", "name": "s3"},
+                      {"port": CONSOLE_PORT, "target_port": "console", "name": "console"}]},
+            require_workload=False)
+    except (ValueError, PermissionError) as error:
+        raise ValueError(f"The backup storage cannot share Homestead's address: {error}. "
+                         "Give it an address of its own.") from error
+    return plan["vip"]
+
+
+def _current_address(service):
+    annotations = ((service or {}).get("metadata") or {}).get("annotations") or {}
+    return next((annotations[key] for key in VIP_KEYS if annotations.get(key)), "")
+
+
 def deploy(cfg=None):
-    """Create the bucket store, and point Longhorn at it unless told not to."""
+    """Create the bucket store, and point Longhorn at it unless told not to.
+
+    Its address: the one asked for; else, for a store already running, the
+    one it has; else Homestead's shared address, beside the apps that share
+    it - the store answers on its own port there.
+    """
     cfg = cfg or {}
     size_gb = int(cfg.get("size_gb") or 100)
     if not 5 <= size_gb <= 16384:
         raise ValueError("object storage size must be between 5 and 16384 GiB")
     address = str(cfg.get("lb_ip") or "").strip()
+    existing = _get(f"/api/v1/namespaces/{NS}/services/{NAME}")
     if address:
         NETWORK.check_address(address)
+    elif existing and cfg.get("vip_mode") != "shared":
+        address = _current_address(existing)
+    else:
+        address = shared_address()
     keys = credentials()
 
     _apply(f"/api/v1/namespaces/{NS}/secrets", SECRET,
