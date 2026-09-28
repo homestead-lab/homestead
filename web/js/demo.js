@@ -1747,6 +1747,27 @@ ssh_pwauth: true
     { cidr: "192.168.1.0/24", name: "Home LAN", free: ["192.168.1.231", "192.168.1.232", "192.168.1.233", "192.168.1.236",
       "192.168.1.237", "192.168.1.238", "192.168.1.241", "192.168.1.247", "192.168.1.248", "192.168.1.249", "192.168.1.251", "192.168.1.253"] },
     { cidr: "10.20.0.0/24", name: "Lab VLAN", free: ["10.20.0.10", "10.20.0.11", "10.20.0.12", "10.20.0.13"] }];
+  const demoConfigParts = [
+    ["settings", "Settings", "Site name, health thresholds, update policy, App Store feed", true],
+    ["users", "Users and roles", "Every account, its role and password", false, "Replaces every account and password with the backup's, and signs everyone out - sign in again with an account from the backup."],
+    ["hardware", "Hardware features", "Device mappings: iGPU, Coral, USB and the rest", true],
+    ["vips", "VIPs", "Your saved VIPs, their labels and the default workload VIP", true],
+    ["ipam", "IP addresses", "Subnets, documented addresses, and the UniFi connection", true],
+    ["mqtt", "MQTT", "The broker, its credentials and what is published", true],
+    ["portal", "Portal", "Its sections and tiles", true],
+    ["shares", "Network shares", "Shares, their options, and SMB users", true, "Brings back share definitions and SMB users; the volumes they point at must still exist."],
+    ["sources", "Import sources", "Unraid and Docker hosts to import from", true],
+    ["vmstore", "VM image store", "The cloud images kept, and whether they refresh", false]];
+  Object.assign(responses, {
+    "/api/config/parts": demoConfigParts.map(([id, label, detail, dflt, caution]) => ({ id, label, detail, caution: caution || "",
+      default: id !== "users", present: id !== "vmstore" })),
+    "/api/config/backup": { format: "homestead-config-backup", version: 1, homestead: "2.8.212", site: "Loft rack",
+      created: new Date().toISOString(), parts: [] },
+    "/api/config/inspect": { homestead: "2.8.209", site: "Loft rack", created: "2026-09-26T21:40:00Z",
+      parts: demoConfigParts.map(([id, label, detail, , caution], i) => ({ id, label, detail, caution: caution || "", default: id !== "users",
+        state: id === "vmstore" ? "empty" : ["ipam", "vips", "portal"].includes(id) ? "differs" : "same", restorable: id !== "vmstore" })) },
+    "/api/config/restore": { ok: true, restored: ["ipam", "vips", "portal"], skipped: [], detail: "restored IP addresses, VIPs, Portal" },
+  });
   window.fetch = async function (input, init) {
     const url = new URL(typeof input === "string" ? input : input.url, location.origin);
     if (!url.pathname.startsWith("/api/")) return original(input, init);

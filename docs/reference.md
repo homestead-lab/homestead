@@ -102,7 +102,7 @@ RKE2 run, and the pages that need one offer the same install.
 | **Hardware** | Host device browser and reusable mappings for iGPU, Coral, USB/PCIe and other devices |
 | **Import** | Docker Compose files checked as you type, Unraid/Docker workload and appdata import, several folders across several volumes, measured sizing with a per-volume capacity preflight, byte-weighted progress, named failures, editable seed configuration |
 | **Resources** | Every kind the cluster serves, custom resources included, with the API server's own columns; any object as YAML with its events, edited, deleted or created from YAML - what a Headlamp user reaches for |
-| **Administration** | Direct URLs/breadcrumbs, persistent activity tray with cancel and roll back for every job, viewer/operator/admin roles, namespaces for your apps, appearance, thresholds and version details |
+| **Administration** | Direct URLs/breadcrumbs, persistent activity tray with cancel and roll back for every job, viewer/operator/admin roles, namespaces for your apps, appearance, thresholds and version details, and a configuration backup - settings, users, VIPs, IP addresses, shares and more in a passphrase-encrypted file - restored part by part |
 | **App & alerts** | Installable on phones and desktops over HTTPS, with push notifications for outages, degraded storage and workloads, failed jobs, joining hosts and image updates |
 
 ## Install with Helm
