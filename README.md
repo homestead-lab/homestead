@@ -110,8 +110,10 @@ volumes, ports, hardware and updates handled for you.
 placement; update checks with a monitored rollout and one-click rollback.
 Homestead updates itself from its own button on the top bar.
 
-**Virtual machines** - KubeVirt VMs from a store of cloud images or your own
-disks, with a console, power actions and live migration.
+**Virtual machines** - KubeVirt VMs from a store of cloud images, your own
+disks, or ISOs from your shares; hardware settings with Windows and Linux
+presets (UEFI, Secure Boot, TPM, CPU model and pinning); a console, power
+actions and live migration.
 
 **Data protection** - snapshots, recurring backups, restores, and moving
 containers and VMs between clusters.

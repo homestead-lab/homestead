@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.222")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.223")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -3497,6 +3497,7 @@ def vm_create_options():
     """What the New VM form can offer on this cluster."""
     platform = PLATFORM.detect()
     rows = storage_classes()
+    nodes = kget("/api/v1/nodes").get("items", [])
     return {"harvester": platform.get("harvester", False), "cdi": platform.get("cdi", False),
             "distribution": platform.get("distribution", ""),
             "storage_classes": selectable_storage_classes(rows),
@@ -3508,7 +3509,21 @@ def vm_create_options():
             "network_details": vm_network_details(),
             "vm_network_options": NETWORK.vm_network_options(node_temps()),
             "subnets": vm_subnets(),
-            "nodes": sorted(n["metadata"]["name"] for n in kget("/api/v1/nodes").get("items", []))}
+            "nodes": sorted(n["metadata"]["name"] for n in nodes),
+            # The Hardware tab: CPU models every node offers, and KubeVirt's features.
+            "cpu_models": VM_HARDWARE.cpu_models(nodes),
+            "kubevirt_gates": kubevirt_gates(),
+            # ISOs a CD-ROM can hold now.
+            "isos": [{"name": v["name"], "file": v["file"]} for v in ISOS.volumes() if v["state"] == "ready"]}
+
+
+def kubevirt_gates():
+    try:
+        kv = (kget("/apis/kubevirt.io/v1/kubevirts").get("items") or [{}])[0]
+    except Exception:
+        return []
+    return sorted(((((kv.get("spec") or {}).get("configuration") or {}).get("developerConfiguration") or {})
+                   .get("featureGates") or []))
 
 
 def vm_networks():
@@ -4840,6 +4855,8 @@ import homestead_baseline as BASELINE
 import homestead_components as COMPONENTS
 import homestead_resources as RESOURCES
 import homestead_vms as VMS
+import homestead_isos as ISOS
+import homestead_vm_hardware as VM_HARDWARE
 import homestead_lhcapacity as LHCAP
 import homestead_disks as DISKS
 import homestead_power as POWER
@@ -6177,6 +6194,22 @@ VM_CONSOLE = VMCONSOLE.VmConsole(CONSOLE_PROXY, SYS_NS, kget)
 FILES.bind(kget, ksend, urllib.parse.urlparse(API), TOKEN, CTX, SYS_NS)
 
 
+def iso_storage_class():
+    """Where ISO volumes go: a class every node can mount at once, so one
+    copy serves VMs anywhere; else the VM default, one node at a time."""
+    rows = storage_classes()
+    shared = shared_storage_classes(rows)
+    if shared:
+        return (STORAGE_CLASS if STORAGE_CLASS in shared else shared[0]), True
+    return vm_default_class(rows), False
+
+
+ISOS.bind(kget, ksend, SHARES.list_shares, FILES.list_files, iso_storage_class, SHARES._samba_node,
+          SMB_NAMESPACE, DEFAULT_NS, FILES.IMAGE)
+VMS.iso_ready = ISOS.ready_volume
+IMP.iso_ready = ISOS.ready_volume
+
+
 # Logos whose cached file is missing here - a workload moved from another
 # cluster before moves brought logos, or a data volume that was replaced -
 # fetched again in the background: reference -> what it is cached as now.
@@ -6527,6 +6560,8 @@ ADMIN_ROUTES = {
     "/api/addons/longhorn", "/api/addons/kubevirt", "/api/addons/kubevirt/emulation",
     "/api/addons/multus", "/api/addons/multus/repair", "/api/addons/kube-vip",
     "/api/platform/baseline/install",
+    # Which share folders the ISO library reads, and deleting an ISO's volume.
+    "/api/vm/isos/folders", "/api/vm/isos/delete", "/api/vm/isos/browse",
     # Upgrading the platform: the cluster, Longhorn, KubeVirt, CDI.
     "/api/cluster/components/upgrade", "/api/cluster/upgrades/start",
     # The VM image store downloads gigabytes into the cluster.
@@ -7280,6 +7315,10 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("vms", 5, VMS.list_vms))
             if p == "/api/vm":
                 return self._send(200, VMS.detail((q.get("ns") or [""])[0], (q.get("name") or [""])[0]))
+            if p == "/api/vm/isos":
+                return self._send(200, ISOS.library())
+            if p == "/api/vm/isos/browse":
+                return self._send(200, ISOS.browse((q.get("share") or [""])[0], (q.get("path") or [""])[0]))
             if p == "/api/vm/create-options":
                 return self._send(200, vm_create_options())
             if p == "/api/vmimages":
@@ -7635,6 +7674,14 @@ class H(BaseHTTPRequestHandler):
                                                               "action": "install"},
                                                 "Waiting for the Helm controller")
                 return self._send(200, result)
+            if p == "/api/vm/isos/folders":
+                return self._send(200, ISOS.set_folders(b.get("folders") or []))
+            if p == "/api/vm/isos/prepare":
+                result = ISOS.prepare(str(b.get("share") or ""), str(b.get("path") or ""))
+                _cache.pop("vms", None)
+                return self._send(200, result)
+            if p == "/api/vm/isos/delete":
+                return self._send(200, ISOS.delete(str(b.get("name") or "")))
             if p == "/api/platform/baseline/install":
                 which = [str(x) for x in (b.get("parts") or []) if str(x) in BASELINE.PARTS] or None
                 results = BASELINE.install(which)

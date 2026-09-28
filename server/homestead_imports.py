@@ -33,6 +33,9 @@ import homestead_capacity_review as SOURCE_REVIEW
 
 kget = ksend = create_pvc = build_deployment = None
 NS = "lab"
+# An ISO volume a new VM can install from (homestead_isos.ready_volume), set
+# by the server; None where ISOs are not offered.
+iso_ready = None
 _cache = {}
 hardware_features = lambda: []
 
@@ -2352,7 +2355,11 @@ def prepare_vm(cfg, platform=None, default_class=""):
     image_url = str(cfg.get("image_url") or "").strip()
     dv = imported_dv or f"{name}-disk"
     password = str(cfg.get("password") or "")
-    if not imported_dv and not cfg.get("cloud_init") and len(password) < 10:
+    install_iso = str(cfg.get("install_iso") or "").strip()
+    if install_iso and (imported_dv or cfg.get("image_url") or cfg.get("image_id") or cfg.get("store_id")):
+        raise ValueError("a VM installed from an ISO starts on a blank disk")
+    # An installer asks for its own password; cloud-init is for cloud images.
+    if not imported_dv and not install_iso and not cfg.get("cloud_init") and len(password) < 10:
         raise ValueError("root password must be at least 10 characters")
     if image_url:
         parsed = urllib.parse.urlparse(image_url)
@@ -2378,7 +2385,7 @@ def prepare_vm(cfg, platform=None, default_class=""):
         if users:
             raise ValueError(f"imported disk is already attached to VM {users[0]}")
 
-    cloudinit = cfg.get("cloud_init") or (password and (
+    cloudinit = cfg.get("cloud_init") or (password and not install_iso and (
         "#cloud-config\n"
         f"hostname: {name}\n"
         "ssh_pwauth: true\n"
@@ -2460,6 +2467,15 @@ def prepare_vm(cfg, platform=None, default_class=""):
 
     disks = [{"name": "root", "disk": {"bus": "virtio"}, "bootOrder": 1}]
     volumes = [root]
+    if install_iso:
+        # The installer boots first, from its ISO held read-only; the blank
+        # disk it installs onto boots once the ISO is ejected or empty.
+        if not callable(iso_ready):
+            raise ValueError("ISO images are not offered on this cluster")
+        iso_ready(ns, install_iso)
+        disks = [{"name": "root", "disk": {"bus": "virtio"}, "bootOrder": 2},
+                 {"name": "install", "cdrom": {"bus": "sata"}, "bootOrder": 1}]
+        volumes = [root, {"name": "install", "persistentVolumeClaim": {"claimName": install_iso, "readOnly": True}}]
     secret_name = ""
     if cloudinit or network_data:
         # In a Secret, as Harvester keeps them: a password or a join token is
@@ -2523,6 +2539,10 @@ def prepare_vm(cfg, platform=None, default_class=""):
             },
         },
     }
+    if cfg.get("hardware"):
+        # Firmware, TPM and the rest, as the Hardware tab sets them later.
+        import homestead_vm_hardware as HARDWARE
+        HARDWARE.apply(vm, cfg["hardware"])
     return {"namespace": ns, "name": name, "vm": vm, "claims": claims, "secrets": secrets,
             "downloads": downloads, "secret_name": secret_name,
             "result": {"ok": True, "vm": name, "datavolume": dv, "address": address,

@@ -2401,3 +2401,25 @@ html[data-theme="light"] .modalbox[data-context="smb-access"]{background:var(--s
 .hs-part>div:first-child{flex:1 1 auto}
 .hs-part .pill{white-space:nowrap}
 @media (max-width:560px){.hs-part{flex-wrap:wrap}.hs-part-end{margin-left:auto}}
+
+/* VM Hardware tab: folded sections, each summarised on one line. */
+.vh{display:flex;flex-direction:column;gap:2px}
+.vh-presets{gap:8px;flex-wrap:wrap;margin-bottom:6px}
+.vh-sec summary{justify-content:flex-start}
+.vh-sec summary>span:first-child{color:var(--tx)}
+.vh-sum{margin-left:auto;font-weight:500;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:65%}
+.vh-body{display:grid;gap:8px;padding:6px 0 10px}
+.vh-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.vh-check{display:flex;align-items:center;gap:8px;font-size:13px}
+#vh_notes{display:grid;gap:6px;margin-top:8px}
+@media (max-width:560px){.vh-sum{max-width:55%}.vh-3{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}}
+
+/* ISO library */
+.iso-lib .iso-folders,.iso-lib .iso-files{display:flex;flex-direction:column;gap:6px}
+.iso-folder,.iso-file{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);min-width:0}
+.iso-file>div:first-child{display:flex;flex-direction:column;gap:2px;min-width:0}
+.iso-file>div:first-child span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.iso-dirs{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.iso-crumb{font-size:12px;color:var(--mut)}
+.iso-lib{grid-template-columns:minmax(0,1fr)}
+.iso-lib>*{min-width:0}
