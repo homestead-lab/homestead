@@ -270,3 +270,15 @@ class IpamTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FreeAddressTests(unittest.TestCase):
+    """What an address field's IPAM button offers: each subnet's free list, not the whole table."""
+
+    def test_each_subnet_offers_its_free_addresses_and_nothing_else(self):
+        from unittest import mock
+        view = {"subnets": [{"cidr": "192.168.1.0/24", "name": "Home", "rows": [{"ip": "192.168.1.1"}],
+                             "free_list": ["192.168.1.231", "192.168.1.232"], "next_free": ["192.168.1.231"]}]}
+        with mock.patch.object(IPAM, "view", return_value=view):
+            self.assertEqual([{"cidr": "192.168.1.0/24", "name": "Home", "free": ["192.168.1.231", "192.168.1.232"]}],
+                             IPAM.free_addresses())

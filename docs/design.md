@@ -97,6 +97,15 @@ dialog opened from the row goes to the row's cluster, and shows
 A record kept by this cluster alone (an image update, say) is not shown on a
 row where `remoteRow(row)` is true. See `docs/multi-cluster.md`.
 
+### Address fields
+
+A field that gives something an IP address - a VIP, a Service's address, a
+VM's static address, backup storage - is marked `data-ipam` (or
+`data-ipam="multi"` for a comma-separated list). It then gets a small button
+inside its box that offers the free addresses from Networking › IP addresses
+(`web/js/ipam-picker.js`), so nobody has to go and look one up. A field for
+an address that already exists - a gateway, a broker, a NAS - is not marked.
+
 ### Density
 
 Homestead is a working tool: show more at once, pad less.

@@ -300,6 +300,13 @@ def _cover_nodes(data, facts):
     return data
 
 
+def free_addresses():
+    """Each subnet's free addresses, for an address field's IPAM button: not
+    documented, not answering a scan, outside DHCP and the VIP pools."""
+    return [{"cidr": s.get("cidr", ""), "name": s.get("name", ""), "free": s.get("free_list", [])}
+            for s in view().get("subnets", [])]
+
+
 def view():
     data, _ = load()
     facts = cluster_facts() or {}
