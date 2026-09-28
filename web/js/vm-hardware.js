@@ -219,8 +219,14 @@ window.vmIsoLibrary = async () => {
     ? (f.state === "ready" ? `<span class="pill ok">ready</span>` : f.state === "copying" ? '<span class="pill med">copying</span>' : '<span class="pill crit">failed</span>')
     : `<button class="btn sm" data-need="operator" onclick="vmIsoPrepare(${jsq(f.share)},${jsq(f.path)})">Make ready</button>`;
   const orphans = lib.volumes.filter(v => !lib.files.some(f => f.volume === v.name));
+  // A copy no VM has in a drive: how long until the tidy-up removes it.
+  const unused = v => {
+    if (!v || v.used_by.length || !v.unused_since || v.state === "copying") return "";
+    const left = lib.keep_days ? Math.max(0, Math.ceil((v.unused_since + lib.keep_days * 86400 - Date.now() / 1000) / 86400)) : null;
+    return ` · unused${left === null ? "" : left ? `, removed in ${left} day${left === 1 ? "" : "s"}` : ", removed soon"}`;
+  };
   $("#mbody").innerHTML = `<div class="ui-stack iso-lib">
-    ${UI.lead("ISO images for VMs' CD-ROM drives, from folders on your Network Shares - drop them there from your PC. Each is copied once into a volume every VM can use; <b>Make ready</b> starts that.")}
+    ${UI.lead("ISO images for VMs' CD-ROM drives, from folders on your Network Shares - drop them there from your PC. Each is copied once into a volume every VM can use; <b>Make ready</b> starts that. Copies keep one replica: the originals stay on your shares, and a lost copy is made ready again.")}
     <div class="iso-folders"><div class="between"><b>Folders</b><button class="btn sm" data-need="admin" onclick="vmIsoAddFolder()">＋ Folder</button></div>
       ${lib.folders.length ? lib.folders.map((f, i) => `<div class="iso-folder"><span class="mono">${esc(f.share)}${f.path ? ` / ${esc(f.path)}` : ""}</span>
         <button class="btn sm" data-need="admin" onclick="vmIsoRemoveFolder(${i})">Remove</button></div>`).join("")
@@ -228,14 +234,26 @@ window.vmIsoLibrary = async () => {
       ${(lib.problems || []).map(p => `<div class="note small bad">${esc(p.share)}${p.path ? ` / ${esc(p.path)}` : ""}: ${esc(p.error)}</div>`).join("")}</div>
     ${lib.files.length ? `<div class="iso-files">${lib.files.map(f => `<div class="iso-file"><div><b>${esc(f.name)}</b>
         <span class="dim xs mono">${esc(f.share)}${f.folder ? ` / ${esc(f.folder)}` : ""} · ${size(f.size)}${f.volume && (lib.volumes.find(v => v.name === f.volume)?.used_by || []).length
-          ? ` · in ${esc(lib.volumes.find(v => v.name === f.volume).used_by.join(", "))}` : ""}</span></div>
+          ? ` · in ${esc(lib.volumes.find(v => v.name === f.volume).used_by.join(", "))}` : esc(unused(lib.volumes.find(v => v.name === f.volume)))}</span></div>
         <div class="row">${state(f)}${f.volume ? `<button class="btn sm" data-need="admin" title="Delete its volume; the file on the share is kept" onclick="vmIsoDelete(${jsq(f.volume)})">${icon("trash")}</button>` : ""}</div></div>`).join("")}</div>`
       : lib.folders.length ? '<div class="dim small">No .iso files in these folders yet.</div>' : ""}
     ${orphans.length ? `<div class="iso-files"><div class="dim xs">VOLUMES WHOSE FILE HAS GONE OR CHANGED</div>${orphans.map(v => `<div class="iso-file"><div><b>${esc(v.file || v.name)}</b>
-        <span class="dim xs mono">${esc(v.name)}${v.used_by.length ? ` · in ${esc(v.used_by.join(", "))}` : ""}</span></div>
+        <span class="dim xs mono">${esc(v.name)}${v.used_by.length ? ` · in ${esc(v.used_by.join(", "))}` : esc(unused(v))}</span></div>
         <button class="btn sm" data-need="admin" onclick="vmIsoDelete(${jsq(v.name)})">${icon("trash")}Delete</button></div>`).join("")}</div>` : ""}
+    <div class="iso-keep"><label for="iso_keep">Remove copies no VM uses after</label>
+      <input id="iso_keep" type="number" min="0" max="365" value="${esc(lib.keep_days ?? 7)}" ${can("admin") ? "" : "disabled"}> <span class="dim small">days (0 keeps them)</span>
+      <button class="btn sm" data-need="admin" onclick="vmIsoKeep()">Save</button></div>
     ${UI.actions(UI.cancel("Close") + UI.button("↻ Refresh", "vmIsoLibrary()"))}</div>`;
   if (window.applyRole) applyRole();
+};
+
+window.vmIsoKeep = async () => {
+  try {
+    const r = await api("/api/vm/isos/keep", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ days: +$("#iso_keep").value }) });
+    toast(r.detail, "ok");
+    vmIsoLibrary();
+  } catch (e) { toast(e.message, "bad"); }
 };
 
 window.vmIsoPrepare = async (share, path) => {
