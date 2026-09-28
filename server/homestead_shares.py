@@ -5,6 +5,7 @@ The public inventory deliberately exposes only whether a password exists.  The
 legacy deployment/ConfigMap formats are read so existing installations migrate
 without losing access the next time a share is changed.
 """
+import homestead_specs as SPECS
 import base64
 import homestead_names as NAMES
 import homestead_smb_recovery as RECOVERY
@@ -571,7 +572,9 @@ def configured_deployment(deployment, rows, credentials):
         # is keyed by claim and the folder becomes the mount's subPath.
         volume_name = attached.get(row["pvc"]) or _volume_name("claim:" + row["pvc"])
         readonly = bool(row.get("read_only", False))
-        mount = {"name": volume_name, "mountPath": path, "readOnly": readonly}
+        mount = {"name": volume_name, "mountPath": path}
+        if readonly:
+            mount["readOnly"] = True
         if row.get("sub_path"):
             mount["subPath"] = row["sub_path"]
         mounts.append(mount)
@@ -635,9 +638,11 @@ def reconcile_samba(image="", retry_recovery=False):
     if image:
         desired_container["image"] = image
     fields = ("args", "volumeMounts", "image", "startupProbe", "readinessProbe")
-    changed = any(actual_container.get(field) != desired_container.get(field) for field in fields)
-    changed |= actual_spec.get("volumes", []) != desired_spec.get("volumes", [])
-    changed |= deployment["spec"].get("strategy") != desired["spec"].get("strategy")
+    # Compared without the zero values Kubernetes leaves out when it stores
+    # a spec, or every check finds drift and restarts SMB (homestead_specs).
+    changed = any(not SPECS.same(actual_container.get(field), desired_container.get(field)) for field in fields)
+    changed |= not SPECS.same(actual_spec.get("volumes", []), desired_spec.get("volumes", []))
+    changed |= not SPECS.same(deployment["spec"].get("strategy"), desired["spec"].get("strategy"))
     if not changed:
         if RECOVERY.read(deployment) != recovery:
             # Top-level annotation only: observations must not restart SMB.

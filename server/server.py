@@ -3440,6 +3440,36 @@ def v2_engine_status():
             "longhorn_ok": bool(COMPONENTS.parse(longhorn)) and COMPONENTS.parse(longhorn)[:2] >= (1, 8)}
 
 
+def _chosen_default_path():
+    return os.path.join(DATA_DIR, "default-class.json")
+
+
+def chosen_default_class():
+    """The class someone made the default here, if anyone has."""
+    try:
+        with open(_chosen_default_path(), encoding="utf-8") as handle:
+            return str((json.load(handle) or {}).get("name") or "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+def reconcile_default_class():
+    """k3s marks its local-path class as the default again every time it
+    starts, and Longhorn's chart marks its own; with two defaults a claim
+    that names no class lands on either. Keep one: the class chosen here,
+    else a Longhorn one over local-path. Returns (kept, demoted) or None."""
+    rows = storage_classes()
+    defaults = [row for row in rows if row["default"]]
+    if len(defaults) < 2:
+        return None
+    names = [row["name"] for row in defaults]
+    chosen = chosen_default_class()
+    keep = (chosen if chosen in names
+            else next((row["name"] for row in defaults if row["provisioner"] == LONGHORN_PROVISIONER), names[0]))
+    _clear_default_class(keep)
+    return keep, [name for name in names if name != keep]
+
+
 def _clear_default_class(keep):
     for row in storage_classes():
         if row["default"] and row["name"] != keep:
@@ -3459,6 +3489,8 @@ def set_default_storage_class(name):
     ksend("PATCH", f"/apis/storage.k8s.io/v1/storageclasses/{name}",
           {"metadata": {"annotations": {DEFAULT_CLASS_ANNOTATION: "true"}}},
           ctype="application/merge-patch+json")
+    # Kept, so a class k3s marks as default again at its next start is put back.
+    SHARED.write_json(_chosen_default_path(), {"name": name, "at": int(time.time())})
     return {"ok": True, "classes": storage_class_inventory(),
             "message": f"{name} is now the default storage class"}
 
@@ -5025,6 +5057,8 @@ def storage_legacy_cancel(item, options):
 
 import homestead_vmstore as VMSTORE
 import homestead_nodeshell as NODESHELL
+import homestead_hostrun as HOSTRUN
+import homestead_manifests as MANIFESTS
 import homestead_hvimage as HVIMAGE
 import homestead_revert as REVERT
 OPS.RESOLVERS["reclass"] = storage_move_progress
@@ -5097,6 +5131,8 @@ LHCAP.bind(kget, ksend, v2_engine_status)
 RECLASS.bind(kget, ksend, raw_get, storage_classes, LHCAP.status, _own_namespace())
 REVERT.bind(kget, ksend, RECLASS, is_self)
 NODESHELL.bind(kget, ksend, DEFAULT_NS)
+HOSTRUN.bind(kget, ksend, lambda *a, **k: FILES._exec(*a, **k), DEFAULT_NS)
+MANIFESTS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 
 
 def _vm_image_disks():
@@ -5297,6 +5333,31 @@ def _baseline_loop():
                 beat("baseline", 300, error, leader_only=True)
                 print(f"platform: {str(error)[:160]}", flush=True)
         time.sleep(60)
+
+
+def _host_fix_loop():
+    """On the leader, what k3s and RKE2 undo at each start: the installer's
+    auto-deploy files (homestead_manifests.py), and a second default storage
+    class. Checked a minute after starting, then every ten minutes."""
+    time.sleep(60)
+    while True:
+        if LEADER.is_leader():
+            try:
+                with self_data_activity():
+                    for node, marked in MANIFESTS.tick().items():
+                        print(f"platform: {node}: k3s no longer re-applies "
+                              f"{', '.join(marked) or 'no installer files (none left)'} at start", flush=True)
+                    fixed = reconcile_default_class()
+                    if fixed:
+                        print(f"storage: {fixed[0]} kept as the default class; "
+                              f"{', '.join(fixed[1])} no longer default", flush=True)
+                        with _lock:
+                            _cache.pop("classes", None)
+                beat("host-fixes", 600, leader_only=True)
+            except Exception as error:
+                beat("host-fixes", 600, error, leader_only=True)
+                print(f"platform: {str(error)[:200]}", flush=True)
+        time.sleep(600)
 
 
 def _history_loop():
@@ -5703,7 +5764,7 @@ def _data_move_status(item):
 OPS.RESOLVERS["self-data-move"] = _data_move_status
 
 
-LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "baseline": "Platform installs", "vips": "VIP keeper",
+LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "host-fixes": "Host fixes", "baseline": "Platform installs", "vips": "VIP keeper",
               "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares"}
 
 
@@ -8608,6 +8669,7 @@ def start_background_tasks():
     # Older join plans each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
+    threading.Thread(target=_host_fix_loop, daemon=True).start()
     threading.Thread(target=_baseline_loop, daemon=True).start()
     threading.Thread(target=_vip_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()

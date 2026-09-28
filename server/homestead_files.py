@@ -110,7 +110,7 @@ def open_session(namespace, pvc):
         "spec": {"restartPolicy": "Never", "activeDeadlineSeconds": SESSION_SECONDS,
                  "terminationGracePeriodSeconds": 0,
                  "containers": [{"name": "files", "image": IMAGE,
-                                 "command": ["sh", "-c", f"sleep {SESSION_SECONDS}"],
+                                 "command": ["sh", "-c", f"trap 'exit 0' TERM; sleep {SESSION_SECONDS} & wait"],
                                  "resources": {"requests": {"cpu": "10m", "memory": "32Mi"}},
                                  "volumeMounts": [{"name": "data", "mountPath": MOUNT}]}],
                  "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": pvc}}]},
@@ -153,9 +153,9 @@ def close_session(namespace, pvc):
 
 
 # --------------------------------------------------------------------- exec
-def _exec(namespace, pod, argv, stdin=b"", timeout=30):
+def _exec(namespace, pod, argv, stdin=b"", timeout=30, container="files"):
     """Run one command in the helper pod and read all of its output."""
-    query = [("container", "files"), ("stdout", "true"), ("stderr", "true")]
+    query = [("container", container), ("stdout", "true"), ("stderr", "true")]
     if stdin:
         query.append(("stdin", "true"))
     query.extend(("command", part) for part in argv)
