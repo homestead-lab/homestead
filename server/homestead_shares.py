@@ -582,8 +582,10 @@ def configured_deployment(deployment, rows, credentials):
             attached[row["pvc"]] = volume_name
             volumes.append({"name": volume_name,
                             "persistentVolumeClaim": {"claimName": row["pvc"]}})
+        # A guest share names no users: the image turns a name here into
+        # "valid users", which shut guests out of a share marked for them.
         args += ["-s", f"{row['name']};{path};yes;{'yes' if readonly else 'no'};"
-                       f"{'yes' if row.get('public') else 'no'};{_user(row.get('user'))}"]
+                       f"{'yes' if row.get('public') else 'no'};{'all' if row.get('public') else _user(row.get('user'))}"]
     for user, password in sorted(users.items()):
         args += ["-u", f"{user};{password}"]
     args += ["-g", "server min protocol = SMB2"]
@@ -762,7 +764,17 @@ def create_share(name, size_gb, user, password, public, read_only=False,
                 warnings.append(f"{user} is also used by {', '.join(shared_with)}; Samba keeps one "
                                 "password per account, so those shares now use this password too.")
     _validate_access(rows, credentials)
-    result = _commit(rows, credentials, config_obj, secret_obj, deployment)
+    try:
+        result = _commit(rows, credentials, config_obj, secret_obj, deployment)
+    except Exception:
+        if not reuse:
+            # The volume made for this share is empty: gone with it, so trying
+            # again is not refused with "already exists".
+            try:
+                ksend("DELETE", f"/api/v1/namespaces/{NAMESPACE}/persistentvolumeclaims/{pvc_name}")
+            except Exception:
+                pass
+        raise
     _clear_cache()
     return {"shares": [_public(item, credentials) for item in rows], "warnings": warnings,
             "deployment": result,

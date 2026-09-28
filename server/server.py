@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.224")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.225")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -1003,6 +1003,34 @@ def _references_for(refs, ns, claim):
         if key[0] == "__prefix__" and key[1] == ns and claim.startswith(key[2]):
             found.extend(owners)
     return sorted(set(found))
+
+
+def other_volumes():
+    """Claims on classes that are not Longhorn - k3s's local-path, NFS and
+    the like - which Longhorn's list leaves out: each with its state, and why
+    one is stuck when its provisioner has said."""
+    longhorn = {row["name"] for row in storage_classes() if row["provisioner"] == LONGHORN_PROVISIONER}
+    try:
+        reasons = {}
+        for event in kget("/api/v1/events?fieldSelector=reason%3DProvisioningFailed").get("items", []):
+            obj = event.get("involvedObject") or {}
+            if obj.get("kind") == "PersistentVolumeClaim":
+                reasons[(obj.get("namespace"), obj.get("name"))] = (event.get("message") or "")[:300]
+    except Exception:
+        reasons = {}
+    out = []
+    for pvc in kget("/api/v1/persistentvolumeclaims").get("items", []):
+        meta, spec, status = pvc["metadata"], pvc.get("spec") or {}, pvc.get("status") or {}
+        klass = spec.get("storageClassName") or ""
+        if klass in longhorn or meta["namespace"] in SYS_NS:
+            continue
+        phase = status.get("phase", "")
+        out.append({"namespace": meta["namespace"], "name": meta["name"], "storage_class": klass or "(none)",
+                    "phase": phase, "access_modes": spec.get("accessModes") or [],
+                    "size": (status.get("capacity") or {}).get("storage")
+                            or ((spec.get("resources") or {}).get("requests") or {}).get("storage", ""),
+                    "reason": reasons.get((meta["namespace"], meta["name"]), "") if phase != "Bound" else ""})
+    return sorted(out, key=lambda row: (row["phase"] == "Bound", row["namespace"], row["name"]))
 
 
 def get_volumes():
@@ -4108,16 +4136,32 @@ def storage_class_facts(rows=None):
             for row in (rows if rows is not None else storage_classes()) if class_selectable(row)}
 
 
+# Provisioners that can serve one volume to pods on several nodes at once.
+# k3s's local-path and most block CSI drivers cannot: a ReadWriteMany claim on
+# them stays Pending for good.
+SHARED_DRIVERS = {"driver.longhorn.io", "nfs.csi.k8s.io", "efs.csi.aws.com", "file.csi.azure.com", "smb.csi.k8s.io"}
+
+
+def serves_many(row):
+    provisioner = str(row.get("provisioner") or "")
+    return provisioner in SHARED_DRIVERS or provisioner.endswith(".cephfs.csi.ceph.com")
+
+
 def shared_storage_classes(rows=None):
     """Classes that can actually serve ReadWriteMany to a pod."""
     return [row["name"] for row in (rows if rows is not None else storage_classes())
-            if class_selectable(row) and not row["migratable"]]
+            if class_selectable(row) and not row["migratable"] and serves_many(row)]
 
 
 def create_pvc(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce", send=None):
     sc = sc or STORAGE_CLASS
     if access_mode == "ReadWriteMany":
         chosen = next((row for row in storage_classes() if row["name"] == sc), None)
+        if chosen and not serves_many(chosen):
+            usable = ", ".join(shared_storage_classes()) or "none in this cluster"
+            raise ValueError(f"storage class {sc} ({chosen['provisioner']}) serves one node at a time, so a shared "
+                             f"(ReadWriteMany) volume on it would never be made. Use one node's access, or a class "
+                             f"that shares: {usable}")
         if chosen and chosen["migratable"]:
             usable = ", ".join(shared_storage_classes()) or "none in this cluster"
             raise ValueError(
@@ -5482,9 +5526,7 @@ def homestead_data_volume(dep=None):
     # Do not request RWX merely because a non-Longhorn class has no
     # migratable flag. k3s local-path (and many block CSI drivers) cannot
     # provision it. Unknown drivers get the conservative single-node mode.
-    shared_drivers = {"driver.longhorn.io", "nfs.csi.k8s.io", "efs.csi.aws.com", "file.csi.azure.com"}
-    shared = shared_storage_classes([r for r in rows if r.get("provisioner") in shared_drivers
-                                     or r.get("provisioner", "").endswith(".cephfs.csi.ceph.com")])
+    shared = shared_storage_classes(rows)
     # Every class it could move to, and whether copies on several nodes could
     # then share it: the move is not only for redundancy.
     classes = [{"name": r["name"], "shareable": r["name"] in shared} for r in rows
@@ -7315,6 +7357,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, OPS.list_operations())
             if p == "/api/operations/log":
                 return self._send(200, OPS.log((q.get("id") or [""])[0]))
+            if p == "/api/volumes/other":
+                return self._send(200, cached("volother", 10, other_volumes))
             if p == "/api/volumes":
                 return self._send(200, cached("vol", 8, get_volumes))
             if p == "/api/volumes/delete-plan":
@@ -7983,11 +8027,16 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/storage/classes/delete":
                 return self._send(200, delete_storage_class(b.get("name")))
             if p == "/api/shares":
+                access = b.get("access_mode")
+                if access == "ReadWriteMany" and (b.get("storage_class") or STORAGE_CLASS) not in shared_storage_classes():
+                    # One SMB server mounts every share: a class that cannot
+                    # serve many nodes (k3s's local-path) still serves it.
+                    access = "ReadWriteOnce"
                 result = SHARES.create_share(
                     b["name"], b.get("size_gb", 10), b.get("user", "lab"),
                     b.get("password"), b.get("public", False), b.get("read_only", False),
                     b.get("pvc"), b.get("sub_path", ""), b.get("storage_class"),
-                    b.get("access_mode"), b.get("new_name", ""), str(b.get("samba_ip") or "").strip(), b.get("account_mode"))
+                    access, b.get("new_name", ""), str(b.get("samba_ip") or "").strip(), b.get("account_mode"))
                 deployment = result.pop("deployment", None)
                 if deployment:
                     result["operation"] = OPS.start(

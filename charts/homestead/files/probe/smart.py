@@ -314,8 +314,4 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(400, {"error": str(error)[:500]})
 
 if __name__ == "__main__":
-    # PID 1 in its container ignores SIGTERM unless it says otherwise, so a
-    # host shutting down would wait out its whole stop timeout for this.
-    import signal
-    signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
     ThreadingHTTPServer(("0.0.0.0", 9100), H).serve_forever()
