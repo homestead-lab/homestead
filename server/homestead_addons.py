@@ -42,6 +42,11 @@ CHARTS = {"longhorn": "longhorn", "kubevirt": "homestead-kubevirt", "cdi": "home
 KUBE_VIP_REPO = "https://kube-vip.github.io/helm-charts"
 VIP_CLASS = "kube-vip.io/kube-vip-class"
 MULTUS_VERSION = "v4.3.102"
+# The kube-vip chart Homestead installs and has tested: 0.11.1 is kube-vip
+# v1.2.3. Newer ones are offered under System > Cluster > Platform versions.
+KUBE_VIP_CHART = "0.11.1"
+KUBE_VIP_APP = "v1.2.3"
+VERSION_WORD = re.compile(r"v?\d+\.\d+\.\d+")
 MULTUS_CRD_VERSION = "4.3.102"
 NAD_API = "/apis/k8s.cni.cncf.io/v1"
 KUBEVIRT_CR = "/apis/kubevirt.io/v1/namespaces/kubevirt/kubevirts/kubevirt"
@@ -306,9 +311,12 @@ def install_multus(cfg=None):
     distribution = p.get("distribution", "")
     if distribution not in ("k3s", "rke2"):
         raise ValueError("Homestead installs Multus on k3s and RKE2; elsewhere install it with its own instructions")
+    version = str((cfg or {}).get("version") or MULTUS_VERSION)
+    if not VERSION_WORD.fullmatch(version):
+        raise ValueError(f"{version} is not a Multus chart version")
     _ensure_multus_crd()
     _post_chart(CHARTS["multus"], {"repo": RKE2_CHARTS, "chart": "rke2-multus", "targetNamespace": CONTROLLER_NS,
-                                   "version": MULTUS_VERSION,
+                                   "version": version,
                                    "valuesContent": K3S_MULTUS_VALUES if distribution == "k3s" else RKE2_MULTUS_VALUES})
     return {"ok": True, "name": CHARTS["multus"], "job": f"helm-install-{CHARTS['multus']}",
             "detail": "Multus is being installed on every node; pods already running are left as they are. "
@@ -354,7 +362,11 @@ def install_kube_vip(cfg=None):
     if interface and not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", interface):
         raise ValueError(f"{interface} is not a network interface name")
     class_only = bool(p.get("servicelb"))
+    version = str(cfg.get("version") or KUBE_VIP_CHART).lstrip("v")
+    if not VERSION_WORD.fullmatch(version):
+        raise ValueError(f"{version} is not a kube-vip chart version")
     _post_chart(CHARTS["kube-vip"], {"repo": KUBE_VIP_REPO, "chart": "kube-vip", "targetNamespace": CONTROLLER_NS,
+                                     "version": version,
                                      "valuesContent": kube_vip_values(interface, class_only)})
     return {"ok": True, "name": CHARTS["kube-vip"], "job": f"helm-install-{CHARTS['kube-vip']}",
             "interface": interface, "class_only": class_only,

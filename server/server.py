@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.220")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.221")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -4836,6 +4836,7 @@ import homestead_mqtt as MQTT
 import homestead_history as HISTORY
 import homestead_platform as PLATFORM
 import homestead_addons as ADDONS
+import homestead_baseline as BASELINE
 import homestead_components as COMPONENTS
 import homestead_resources as RESOURCES
 import homestead_vms as VMS
@@ -5041,6 +5042,7 @@ MQTT.bind(kget, ksend, DEFAULT_NS, lambda: mqtt_snapshot(), LEADER.is_leader)
 HISTORY.bind(DATA_DIR)
 PLATFORM.bind(kget)
 ADDONS.bind(kget, ksend, PLATFORM.detect, node_temps)
+BASELINE.bind(kget, ADDONS, PLATFORM.detect, DEFAULT_NS, DATA_DIR)
 COMPONENTS.bind(kget, ksend, PLATFORM.detect, lambda cfg: HELM.upgrade(cfg), ADDONS)
 OPS.RESOLVERS["platform-upgrade"] = COMPONENTS.status
 OPS.CANCELLERS["platform-upgrade"] = (COMPONENTS.cancel_plan, COMPONENTS.cancel_run)
@@ -5246,6 +5248,38 @@ def _vip_loop():
                 beat("vips", 30, error, leader_only=True)
                 print(f"VIPs: {str(error)[:160]}", flush=True)
         time.sleep(30)
+
+
+def baseline_operation(row, verb):
+    """The job-tray entry for installing kube-vip or Multus, as Add-ons makes one."""
+    name = BASELINE.NAMES[row["id"]]
+    return OPS.start("multus" if row["id"] == "multus" else "helm", f"{verb} {name}",
+                     {"kind": "HelmChart", "name": ADDONS.CHARTS[row["id"]], "namespace": ADDONS.CONTROLLER_NS},
+                     "/settings", {"namespace": ADDONS.CONTROLLER_NS, "name": row["job"], "action": "install"},
+                     "Waiting for the Helm controller")
+
+
+def _baseline_loop():
+    """What the installer asked Homestead to put under it - kube-vip and
+    Multus on k3s and RKE2 - installed by the leader once the cluster can
+    say what it has (homestead_baseline.py). Asked for once: nothing to do
+    after that, so it checks rarely."""
+    time.sleep(20)
+    while True:
+        if LEADER.is_leader():
+            try:
+                with self_data_activity():
+                    for row in BASELINE.tick():
+                        if row["ok"] and row.get("job"):
+                            baseline_operation(row, "Install")
+                        with _lock:
+                            for key in ("helm", "platform", "baseline", "components"):
+                                _cache.pop(key, None)
+                beat("baseline", 300, leader_only=True)
+            except Exception as error:
+                beat("baseline", 300, error, leader_only=True)
+                print(f"platform: {str(error)[:160]}", flush=True)
+        time.sleep(60)
 
 
 def _history_loop():
@@ -5652,7 +5686,7 @@ def _data_move_status(item):
 OPS.RESOLVERS["self-data-move"] = _data_move_status
 
 
-LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "vips": "VIP keeper",
+LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "baseline": "Platform installs", "vips": "VIP keeper",
               "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares"}
 
 
@@ -6492,6 +6526,7 @@ ADMIN_ROUTES = {
     # Installing Longhorn or KubeVirt changes the cluster itself.
     "/api/addons/longhorn", "/api/addons/kubevirt", "/api/addons/kubevirt/emulation",
     "/api/addons/multus", "/api/addons/multus/repair", "/api/addons/kube-vip",
+    "/api/platform/baseline/install",
     # Upgrading the platform: the cluster, Longhorn, KubeVirt, CDI.
     "/api/cluster/components/upgrade", "/api/cluster/upgrades/start",
     # The VM image store downloads gigabytes into the cluster.
@@ -7079,6 +7114,8 @@ class H(BaseHTTPRequestHandler):
                                                             (q.get("uid") or [""])[0]))
             if p == "/api/platform":
                 return self._send(200, PLATFORM.detect(force=(q.get("force") or [""])[0] == "1"))
+            if p == "/api/platform/baseline":
+                return self._send(200, cached("baseline", 10, BASELINE.report))
             if p == "/api/addons":
                 return self._send(200, ADDONS.status())
             if p == "/api/platform/join":
@@ -7598,6 +7635,19 @@ class H(BaseHTTPRequestHandler):
                                                               "action": "install"},
                                                 "Waiting for the Helm controller")
                 return self._send(200, result)
+            if p == "/api/platform/baseline/install":
+                which = [str(x) for x in (b.get("parts") or []) if str(x) in BASELINE.PARTS] or None
+                results = BASELINE.install(which)
+                for key in ("helm", "platform", "baseline", "components"):
+                    _cache.pop(key, None)
+                for row in results:
+                    if row["ok"] and row.get("job"):
+                        row["operation"] = baseline_operation(row, "Install")
+                done = [BASELINE.NAMES[row["id"]] for row in results if row["ok"]]
+                failed = [f"{BASELINE.NAMES[row['id']]}: {row['detail']}" for row in results if not row["ok"]]
+                return self._send(200, {"ok": not failed, "results": results,
+                                        "detail": (f"Installing {' and '.join(done)}" if done else "All required components are installed")
+                                                  + (f". Failed: {'; '.join(failed)}" if failed else "")})
             if p == "/api/addons/kubevirt/emulation":
                 _cache.pop("platform", None)
                 return self._send(200, ADDONS.set_kubevirt_emulation(bool(b.get("enabled"))))
@@ -8511,6 +8561,7 @@ def start_background_tasks():
     # Older join plans each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
+    threading.Thread(target=_baseline_loop, daemon=True).start()
     threading.Thread(target=_vip_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()
     threading.Thread(target=_history_loop, daemon=True).start()

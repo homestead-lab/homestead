@@ -67,6 +67,41 @@ const ADDONS = {
     needs: "The newest KubeVirt and CDI releases are installed. VMs run at full speed where a node has hardware virtualisation (/dev/kvm); without it KubeVirt emulates, many times slower." },
 };
 
+/* What Homestead needs under it on k3s and RKE2 - kube-vip for VIPs, Multus
+   for a VM's or container's own LAN address - and one button for whatever is
+   missing. A new installation gets them by itself; an older one is asked
+   here, on Add-ons and on Networking. Empty when nothing is missing. */
+function baselineHtml(r, where = "addons") {
+  if (!r?.applies || !(r.missing || []).length) return "";
+  const missing = r.parts.filter(p => p.missing);
+  return `<div class="note warn baseline-note" style="margin-bottom:12px"><b>Required components not installed</b>
+    <ul class="baseline-list">${missing.map(p => `<li><b>${esc(p.name)}</b> · ${esc(p.why)}</li>`).join("")}</ul>
+    <div class="dim xs">Installed with the ${esc(platformName({ distribution: r.distribution }))} Helm controller at tested versions. Upgrades are available under System → Cluster → Platform versions.
+      ${where === "network" ? "Until installed, applications are published on node addresses only." : ""}</div>
+    ${can("admin") ? `<div class="row" style="margin-top:8px"><button class="btn sm pri" onclick="baselineInstall()">Install components</button></div>` : '<div class="dim xs">Installation requires the admin role.</div>'}</div>`;
+}
+window.baselineHtml = baselineHtml;
+
+window.baselineInstall = async () => {
+  const r = await api("/api/platform/baseline").catch(() => null);
+  const missing = (r?.parts || []).filter(p => p.missing);
+  if (!missing.length) return toast("All required components are installed", "ok");
+  const words = missing.map(p => p.id === "multus"
+    ? "Multus is added to the CNI configuration on every node. Running pods are not affected."
+    : "kube-vip runs on every node and announces each virtual IP from one node. Existing services are not changed.").join(" ");
+  if (!confirm(`Install ${missing.map(p => p.name).join(" and ")}?
+
+${words}`)) return;
+  try {
+    const out = await api("/api/platform/baseline/install", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ parts: missing.map(p => p.id) }) });
+    toast(out.detail, out.ok ? "ok" : "bad");
+    if (window.refreshOperations) refreshOperations(true);
+    if ($("#addonsCard")) addonsPaint();
+    if (STATE.view === "network") viewNetworking();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
 window.nfsRecovery = (state, expanded = false) => {
   const recovery = state?.recovery;
   if (!recovery) return '<div class="dim xs">Node-failure recovery has not been checked.</div>';
@@ -79,9 +114,9 @@ window.nfsRecovery = (state, expanded = false) => {
 window.addonsPaint = async () => {
   const card = $("#addonsCard");
   if (!card) return;
-  let s, health, nfs;
-  try { [s, health, nfs] = await Promise.all([api("/api/addons"), api("/api/self/health").catch(() => ({})),
-    api("/api/shares/nfs/server").catch(error => ({ error: error.message }))]); }
+  let s, health, nfs, baseline;
+  try { [s, health, nfs, baseline] = await Promise.all([api("/api/addons"), api("/api/self/health").catch(() => ({})),
+    api("/api/shares/nfs/server").catch(error => ({ error: error.message })), api("/api/platform/baseline").catch(() => null)]); }
   catch (e) { card.hidden = true; return; }
   card.hidden = false;
   const probe = health.probe || {}, smb = health.samba || {};
@@ -148,7 +183,7 @@ window.addonsPaint = async () => {
   card.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">Add-ons</div>
       <div class="csub">${s.harvester ? "Optional Homestead services; Harvester already provides storage, VM and network add-ons"
         : `What this ${esc(platformName(STATE.platform || { distribution: s.distribution }))} cluster can add`}</div></div></div>
-    ${probeRow}${smbRow}${nfsRow}${clusterRows}`;
+    ${baselineHtml(baseline)}${probeRow}${smbRow}${nfsRow}${clusterRows}`;
   if (window.applyRole) applyRole();
 };
 

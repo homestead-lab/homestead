@@ -1,7 +1,10 @@
 """What the platform runs, what is newer, and moving it on.
 
-Four parts make the platform under the apps: the cluster itself (Harvester,
-k3s or RKE2), Longhorn, KubeVirt, and CDI beside it. For each this reads the
+The platform under the apps: the cluster itself (Harvester, k3s or RKE2),
+Longhorn, KubeVirt and CDI beside it, and on k3s and RKE2 the two network
+parts Homestead installs - kube-vip for VIPs, Multus for a VM's or
+container's own LAN address. The last two are Helm charts, so their versions
+are the charts', read from each chart repository's index. For each this reads the
 version running and the releases published, and works out the next version
 to go to - one minor version at a time, as each project supports: the newest
 patch of the minor it is on, else the newest of the next minor. Going
@@ -45,7 +48,13 @@ NOTES = {"longhorn": "https://github.com/longhorn/longhorn/releases/tag/{}",
          "k3s": "https://github.com/k3s-io/k3s/releases/tag/{}",
          "rke2": "https://github.com/rancher/rke2/releases/tag/{}"}
 HELM_NS = "kube-system"
-CHARTS = {"longhorn": "longhorn", "kubevirt": "homestead-kubevirt", "cdi": "homestead-cdi"}
+CHARTS = {"longhorn": "longhorn", "kubevirt": "homestead-kubevirt", "cdi": "homestead-cdi",
+          "kube-vip": "kube-vip", "multus": "multus"}
+# Charts whose releases are read from their repository's index: (index, chart).
+CHART_INDEX = {"kube-vip": ("https://kube-vip.github.io/helm-charts/index.yaml", "kube-vip"),
+               "multus": ("https://rke2-charts.rancher.io/index.yaml", "rke2-multus")}
+NOTES.update({"kube-vip": "https://github.com/kube-vip/helm-charts/releases/tag/kube-vip-{}",
+              "multus": "https://github.com/rancher/rke2-charts/tree/main/packages/rke2-multus"})
 SUC_CHART = "homestead-system-upgrade"
 SUC_NS = "system-upgrade"
 SUC = "https://github.com/rancher/system-upgrade-controller/releases"
@@ -89,6 +98,25 @@ def next_step(current, available):
     return max(following, key=parse) if following else None
 
 
+def chart_index(text, chart):
+    """[(chart version, app version)] for one chart in a Helm repository's
+    index.yaml, as the index lists them. Read without a YAML library: an
+    index maps each chart's name, two spaces in, to a list of entries."""
+    start = text.find(f"\n  {chart}:\n")
+    if start < 0:
+        return []
+    block = text[start + len(chart) + 5:]
+    end = re.search(r"\n  [^\s-]", block)
+    block = block[:end.start()] if end else block
+    out = []
+    for entry in re.split(r"\n  - ", "\n" + block)[1:]:
+        version = re.search(r"(?m)^\s*version:\s*[\"']?([^\"'\s]+)", entry)
+        app = re.search(r"(?m)^\s*appVersion:\s*[\"']?([^\"'\s]+)", entry)
+        if version:
+            out.append((version.group(1), app.group(1) if app else ""))
+    return out
+
+
 def releases(kind, force=False):
     """Published releases, stable only, cached for half a day: ([versions], error)."""
     cached = _releases.get(kind)
@@ -96,7 +124,12 @@ def releases(kind, force=False):
         return cached["value"], cached["error"]
     value, error = [], ""
     try:
-        if kind in CHANNELS:
+        if kind in CHART_INDEX:
+            url, chart = CHART_INDEX[kind]
+            pairs = chart_index(addons.fetch(url)[0], chart)
+            _apps[kind] = dict(pairs)
+            value = [version for version, _ in pairs]
+        elif kind in CHANNELS:
             data = fetch_json(CHANNELS[kind]).get("data") or []
             # One channel per minor (v1.31, v1.32 ...), each naming its newest.
             value = [row.get("latest", "") for row in data
@@ -110,6 +143,14 @@ def releases(kind, force=False):
         value = (cached or {}).get("value") or []
     _releases[kind] = {"at": time.time(), "value": value, "error": error}
     return value, error
+
+
+_apps = {}
+
+
+def app_version(kind, chart_version):
+    """What a chart version installs: kube-vip chart 0.11.1 is kube-vip v1.2.3."""
+    return _apps.get(kind, {}).get(chart_version, "")
 
 
 # ------------------------------------------------------------------ installed
@@ -166,6 +207,56 @@ def node_versions():
 
 def _helmchart(name):
     return _get(f"/apis/helm.cattle.io/v1/namespaces/{HELM_NS}/helmcharts/{name}")
+
+
+def _image_tag(path):
+    ds = _get(path) or {}
+    containers = (((ds.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []
+    return _tag(containers[0].get("image")) if containers else ""
+
+
+NETWORK_PARTS = (
+    ("kube-vip", "kube-vip", ("/apis/apps/v1/namespaces/kube-system/daemonsets/kube-vip",
+                              "/apis/apps/v1/namespaces/kube-system/daemonsets/kube-vip-ds",
+                              "/apis/apps/v1/namespaces/harvester-system/daemonsets/kube-vip")),
+    ("multus", "Multus", ("/apis/apps/v1/namespaces/kube-system/daemonsets/multus",
+                          "/apis/apps/v1/namespaces/kube-system/daemonsets/rke2-multus",
+                          "/apis/apps/v1/namespaces/kube-system/daemonsets/kube-multus-ds")),
+)
+
+
+def network_rows(p):
+    """kube-vip and Multus: on k3s and RKE2 the charts Homestead installed,
+    at their chart versions; on Harvester, its own."""
+    rows = []
+    harvester = bool(p.get("harvester"))
+    present = {"kube-vip": p.get("load_balancer") == "kube-vip", "multus": bool(p.get("multus"))}
+    for component, name, daemonsets in NETWORK_PARTS:
+        chart = None if harvester else _helmchart(CHARTS[component])
+        if not present[component] and not chart:
+            continue
+        running = next((tag for tag in (_image_tag(path) for path in daemonsets) if tag), "")
+        if harvester:
+            rows.append({"id": component, "name": name, "how": "harvester", "installed": running,
+                         "note": "Comes with Harvester, and is upgraded with it."})
+            continue
+        spec = (chart or {}).get("spec") or {}
+        if not chart or spec.get("chart") not in ("kube-vip", "rke2-multus"):
+            rows.append({"id": component, "name": name, "how": "manual", "installed": running,
+                         "note": "Installed outside Homestead: upgrade it the way it was installed."})
+            continue
+        installed = str(spec.get("version") or "")
+        available, _ = releases(component)
+        if not installed:
+            # Installed before Homestead pinned a version: the chart whose
+            # app is the image running now.
+            bare = running.lstrip("v").split("-")[0]
+            installed = next((v for v in available if app_version(component, v).lstrip("v") == bare), "")
+        app = app_version(component, installed) or running
+        rows.append(_row(component, name, installed, component, "helmchart",
+                         f"{name} {app} · chart {installed}" if app and installed else "",
+                         {"app": app, "chart": True}))
+    return rows
 
 
 # ------------------------------------------------------------------ the report
@@ -228,6 +319,7 @@ def report(force=False):
                          harvester_note if p.get("harvester") else
                          "" if managed else "Installed outside Homestead: upgrade it the way it was installed.",
                          {"phase": phase}))
+    rows.extend(network_rows(p))
     return {"distribution": distribution, "harvester": bool(p.get("harvester")), "components": rows,
             "checked": max((entry["at"] for entry in _releases.values()), default=0)}
 
@@ -258,6 +350,12 @@ def upgrade(component, target):
     elif component == "longhorn":
         helm_upgrade({"namespace": "longhorn-system", "name": CHARTS["longhorn"], "version": target.lstrip("v")})
         detail = f"Longhorn is moving to {target}; its volumes stay attached while its parts restart"
+    elif component in CHART_INDEX:
+        # The chart's own version, its values kept: kube-vip's settings and
+        # Multus's CNI paths stay as Homestead set them.
+        helm_upgrade({"namespace": HELM_NS, "name": CHARTS[component], "version": target})
+        app = app_version(component, target)
+        detail = f"Upgrading {found['name']} to chart {target}{f' ({app})' if app else ''}"
     else:
         detail = _start_operator(component, target)
     return {"ok": True, "component": component, "name": found["name"], "from": found["installed"],

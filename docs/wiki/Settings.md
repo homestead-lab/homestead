@@ -45,6 +45,13 @@ on Harvester too:
   ServiceLB and takes only the Services given a VIP. It announces addresses
   on the interface each node's default route uses.
 
+kube-vip and Multus are required components on k3s and RKE2: a new
+installation gets both after Homestead starts, at tested chart versions
+(kube-vip 0.11.1, which is kube-vip v1.2.3; Multus v4.3.102). When either is
+missing, **Required components not installed** at the top of Add-ons, and on
+Networking, installs it. Their chart versions are listed and upgraded under
+**System → Cluster → Platform versions**.
+
 A page or form that needs one offers the same install. Harvester has the
 storage, VM and network add-ons built in, so its card shows only the node probe.
 

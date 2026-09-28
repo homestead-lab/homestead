@@ -39,6 +39,15 @@ class KubeVipAddonTests(unittest.TestCase):
                      'svc_enable: "true"', 'cp_enable: "false"', 'vip_arp: "true"'):
             self.assertIn(line, values)
         self.assertEqual(("eth0", True), (result["interface"], result["class_only"]))
+        self.assertEqual(ADDONS.KUBE_VIP_CHART, chart["spec"]["version"], "installed at the tested chart")
+
+    def test_a_chart_version_can_be_chosen_and_must_be_one(self):
+        self.setup()
+        ADDONS.install_kube_vip({"version": "0.12.0"})
+        self.assertEqual("0.12.0", self.sent[0][2]["spec"]["version"])
+        self.setup()
+        with self.assertRaisesRegex(ValueError, "not a kube-vip chart version"):
+            ADDONS.install_kube_vip({"version": "latest; rm"})
 
     def test_rke2_has_no_servicelb_so_it_takes_every_service(self):
         self.setup({"distribution": "rke2", "servicelb": False, "load_balancer": ""})
