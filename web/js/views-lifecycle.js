@@ -1740,7 +1740,10 @@ window.clusterReady = async name => {
   (window.__clusterReady ||= {})[name] = r;
   const step = (ok, text, action = "") => `<div class="clstep ${ok ? "done" : "todo"}"><span>${ok ? "✓" : "•"}</span><div>${text}${action}</div></div>`;
   host.innerHTML = step(true, "Connected")
-    + (target.configured && target.reachable_off_cluster && !target.answers
+    + (store.stopped
+      ? step(false, `Moves out of ${esc(name)} are turned off: its backup storage is stopped`,
+          `<div><button class="btn sm pri" data-need="admin" onclick="clusterTransfersOn('${esc(name)}')">Turn them on</button></div>`)
+      : target.configured && target.reachable_off_cluster && !target.answers
       ? step(false, `Backup storage on ${esc(name)} is at <span class="mono">${esc(target.endpoint || "")}</span>, but this cluster cannot reach it`,
           `<div class="dim xs">It may still be starting. Otherwise the address is taken by something else or firewalled - give it another.</div>
            <div><button class="btn sm" data-need="admin" onclick="clusterStorage('${esc(name)}',true)">Give it another address</button></div>`)
@@ -1763,7 +1766,17 @@ window.clusterReady = async name => {
   if (window.applyRole) applyRole();
   clearTimeout(window["__clready_" + name]);
   if (store.deployed && !store.ready)
-    window["__clready_" + name] = setTimeout(() => { if (STATE.view === "imports") clusterReady(name); }, 15000);
+    window["__clready_" + name] = setTimeout(() => { if ($("#clready_" + name)) clusterReady(name); }, 15000);
+};
+
+window.clusterTransfersOn = async name => {
+  try {
+    const r = await api("/api/move/clusters/transfers", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, allow: true }) });
+    toast(`${name}: ${r.detail}`, "ok");
+    clusterReady(name);
+    if (window.fleetTransfersPaint) fleetTransfersPaint();
+  } catch (e) { toast(e.message, "bad"); }
 };
 
 /* Backup storage on the other cluster, made from here with the account

@@ -231,6 +231,37 @@ class ObjectStoreTests(unittest.TestCase):
         self.assertIn("/api/v1/namespaces/lab/persistentvolumeclaims/homestead-objectstore",
                       deleted)
 
+    def _deployment(self, replicas):
+        self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-objectstore"] = {
+            "metadata": {"name": "homestead-objectstore"}, "spec": {"replicas": replicas, "template": {"spec": {"containers": [{}]}}},
+            "status": {"readyReplicas": replicas}}
+
+    def test_moves_out_are_off_until_the_store_exists(self):
+        self.assertFalse(store.transfers()["allowed"])
+
+    def test_turning_moves_out_on_sets_the_store_up_the_first_time(self):
+        with mock.patch.object(store.NETWORK, "service_plan", return_value={"vip": "192.168.1.242"}),                 mock.patch.object(store, "point_longhorn", return_value={}) as point:
+            store.set_transfers(True, 50)
+        point.assert_called_once()
+        self.assertIn("/apis/apps/v1/namespaces/lab/deployments", [p for _, p, _ in self.sent])
+        self.assertEqual([("lab", "homestead-objectstore", 50, None, "ReadWriteOnce")], self.claims)
+
+    def test_turning_moves_out_off_stops_the_store_and_keeps_its_volume(self):
+        self._deployment(1)
+        result = store.set_transfers(False)
+        self.assertIn(("PATCH", "/apis/apps/v1/namespaces/lab/deployments/homestead-objectstore", {"spec": {"replicas": 0}}), self.sent)
+        self.assertFalse(result["allowed"])
+        self.assertFalse(any(m == "DELETE" for m, _, _ in self.sent))
+
+    def test_a_stopped_store_says_so_and_starts_again(self):
+        self._deployment(0)
+        self.assertTrue(store.status()["stopped"])
+        self.assertFalse(store.transfers()["allowed"])
+        result = store.set_transfers(True)
+        self.assertIn(("PATCH", "/apis/apps/v1/namespaces/lab/deployments/homestead-objectstore", {"spec": {"replicas": 1}}), self.sent)
+        self.assertTrue(result["allowed"])
+        self.assertEqual([], self.claims)
+
     def test_a_silly_size_is_refused(self):
         for size in (1, 99999):
             with self.subTest(size=size):
