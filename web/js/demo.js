@@ -218,8 +218,8 @@
     // Homestead itself: its Stop asks first, since it takes this page with it.
     { name: "homestead", ns: "lab", kind: "Deployment", group: "Homestead", self: true, desired: 1, ready: 1, uptime: 86400,
       cpu: 0.04, mem_mb: 88, nodes: ["harvester-node1"], hardware: [],
-      images: ["ghcr.io/wjcloudy/homestead:2.8.215"], ports: [{ port: 8088, ip: "192.0.2.242" }],
-      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/wjcloudy/homestead:2.8.215")] },
+      images: ["ghcr.io/wjcloudy/homestead:2.8.216"], ports: [{ port: 8088, ip: "192.0.2.242" }],
+      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/wjcloudy/homestead:2.8.216")] },
     { name: "homestead-smb", ns: "lab", kind: "Deployment", group: "Homestead", managed_smb: true,
       desired: 1, ready: 1, uptime: 86400, cpu: 0.01, mem_mb: 40, nodes: ["harvester-node2"], hardware: [],
       images: ["dperson/samba:latest"], ports: [{ port: 445, ip: "192.0.2.245" }],
@@ -495,7 +495,7 @@
       uid: "demo-probe", resource_version: "1", detail: "Placement checks are disabled (demo; no host changes)",
       capacity: {blocked:false, blockers:[], warnings:[], nodes:[], fingerprint:"demo"}},
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.215", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.216", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
@@ -610,25 +610,28 @@
       { name: "barn", url: "http://192.0.2.252:8088", user: "admin", added: "2026-05-02 18:40" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "garage") return { name, version: "", protocol: null, local_version: "2.8.215", local_protocol: 1,
+      if (name === "garage") return { name, version: "", protocol: null, local_version: "2.8.216", local_protocol: 1,
         state: "unreachable", message: "could not reach garage: no answer from http://192.0.2.251:8088" };
-      if (name === "barn") return { name, version: "2.8.190", protocol: 1, local_version: "2.8.215",
+      if (name === "barn") return { name, version: "2.8.190", protocol: 1, local_version: "2.8.216",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "barn runs 2.8.190 and this one 2.8.215. Moves work between them; this Homestead is the newer of the two." };
-      return { name, version: "2.8.215", protocol: 1, local_version: "2.8.215", local_protocol: 1,
-        state: "same", compatible: true, message: "Both run Homestead 2.8.215." };
+        message: "barn runs 2.8.190 and this one 2.8.216. Moves work between them; this Homestead is the newer of the two." };
+      return { name, version: "2.8.216", protocol: 1, local_version: "2.8.216", local_protocol: 1,
+        state: "same", compatible: true, message: "Both run Homestead 2.8.216." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     // shed is ready to move from; barn has no backup storage yet.
-    "/api/move/clusters/readiness": (url, init) => JSON.parse(init?.body || "{}").name === "barn"
+    "/api/move/clusters/readiness": (url, init) => JSON.parse(init?.body || "{}").name === "garage"
+      ? { version: { state: "unreachable", message: "could not reach garage" }, storage: {}, target: {}, ready: false }
+      : JSON.parse(init?.body || "{}").name === "barn"
       ? { version: { compatible: true }, storage: { deployed: false }, target: { configured: false, error: "no backup target" }, ready: false,
           shared_vip: "192.0.2.245", free_vips: [{ ip: "192.0.2.246", label: "spare", from: "vips" }, { ip: "192.0.2.230", label: "", from: "pool" }] }
       : { version: { compatible: true }, storage: { deployed: true, ready: true, reachable_off_cluster: true },
-          target: { configured: true, reachable_off_cluster: true, url: "s3://homestead-backups@us-east-1/" }, ready: true },
+          target: { configured: true, reachable_off_cluster: true, answers: true, url: "s3://homestead-backups@us-east-1/",
+            endpoint: "http://192.0.2.250:9000" }, ready: true },
     "/api/move/clusters/storage": { ok: true, detail: "backup storage is starting on barn at http://192.0.2.244:9000" },
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "shed", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.215", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.216", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -1185,7 +1188,7 @@ ssh_pwauth: true
     "/api/volumes/reclass/start": { ok: true, operation: { id: "op4" } },
     "/api/self/health": () => {
       const now = Date.now() / 1000;
-      return { version: "2.8.215", leader: true, identity: "homestead-6d9f-abcde",
+      return { version: "2.8.216", leader: true, identity: "homestead-6d9f-abcde",
         api: { ok: true, ms: 38 },
         replicas: { desired: 1, pods: [{ name: "homestead-6d9f-abcde", node: "harvester-node1", ready: true, leader: true, this: true }] },
         loops: [{ name: "sampler", label: "Live charts", state: "ok", last_ok: now - 12, error: "", every: 30 },
@@ -1688,7 +1691,7 @@ ssh_pwauth: true
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       { ns: "lab", name: "homestead", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.215", candidate_tag: "2.8.215", remote_digest: "sha256:ghi", available: true }] },
+        images: [{ container: "homestead", deployed: "ghcr.io/wjcloudy/homestead:2.8.29", candidate: "ghcr.io/wjcloudy/homestead:2.8.216", candidate_tag: "2.8.216", remote_digest: "sha256:ghi", available: true }] },
       { ns: "lab", name: "paperless", available: false, can_rollback: false,
         images: [{ container: "paperless", deployed: "registry.lan/paperless-ngx:2.11", candidate: "registry.lan/paperless-ngx:2.11", available: false, error: "registry authentication required" }] }] },
     "/api/flow": {
@@ -1738,11 +1741,13 @@ ssh_pwauth: true
     "/api/fleet/remove": { ok: true, told: true, missed: [] },
     "/api/objectstore/transfers": (url, init) => init?.method === "POST"
       ? { allowed: JSON.parse(init.body || "{}").allow, deployed: true, detail: JSON.parse(init.body || "{}").allow ? "moves out are on" : "moves out are off: backup storage is stopped, its volume kept" }
-      : { allowed: true, deployed: true, ready: true, stopped: false, endpoint: "http://192.0.2.242:9000", backups_here: true },
+      : { allowed: true, deployed: true, ready: true, stopped: false, endpoint: "http://192.0.2.242:9000", reachable_off_cluster: true,
+          size_gb: 100, backups_here: true },
     "/api/move/clusters/transfers": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       if (body.allow !== undefined) return { allowed: body.allow, deployed: true, detail: body.allow ? "moves out are on" : "moves out are off" };
-      return body.name === "shed" ? { allowed: true, deployed: true, ready: true, stopped: false }
+      return body.name === "shed" ? { allowed: true, deployed: true, ready: true, stopped: false, endpoint: "http://192.0.2.250:9000",
+          reachable_off_cluster: true, size_gb: 100, backups_here: true }
         : { allowed: false, deployed: false, ready: false, stopped: false };
     },
     "/api/fleet/legacy": [{ name: "barn", url: "http://192.0.2.252:8088", user: "admin", added: "2026-05-02 18:40", linked_as: null }],
@@ -1770,7 +1775,7 @@ ssh_pwauth: true
   Object.assign(responses, {
     "/api/config/parts": demoConfigParts.map(([id, label, detail, dflt, caution]) => ({ id, label, detail, caution: caution || "",
       default: id !== "users", present: id !== "vmstore" })),
-    "/api/config/backup": { format: "homestead-config-backup", version: 1, homestead: "2.8.215", site: "Loft rack",
+    "/api/config/backup": { format: "homestead-config-backup", version: 1, homestead: "2.8.216", site: "Loft rack",
       created: new Date().toISOString(), parts: [] },
     "/api/config/inspect": { homestead: "2.8.209", site: "Loft rack", created: "2026-09-26T21:40:00Z",
       parts: demoConfigParts.map(([id, label, detail, , caution], i) => ({ id, label, detail, caution: caution || "", default: id !== "users",

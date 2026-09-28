@@ -179,9 +179,10 @@ function fleetMembersHtml(view) {
       : UI.button("Unlink", `fleetUnlink(${jsArg(m.id)},${jsArg(m.name)})`, { attrs: 'data-need="admin"' })}</div></li>`).join("");
 }
 
-/* Moves out of each cluster: on while its backup storage runs, which other
-   clusters restore its workloads' volumes from. Off stops the store and
-   keeps its volume. */
+/* Migration from each cluster: workloads can move from it to another linked
+   cluster while its backup storage runs - a move backs their volumes up
+   there and restores them where they go. Each cluster's row has one button
+   saying whether it is on, which opens everything about it. */
 FLEET.transfers = {};
 function fleetTransferCall(m, body = null) {
   if (m.self) return api("/api/objectstore/transfers", body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
@@ -189,11 +190,12 @@ function fleetTransferCall(m, body = null) {
     body: JSON.stringify({ name: m.handle, ...(body || {}) }) });
 }
 
-function fleetOutHtml(m, state) {
-  if (!state) return '<span class="dim xs">moves out: ?</span>';
-  return `<label class="switch fleet-out-switch" title="${state.allowed ? "Other clusters can move workloads out of here" : "Workloads cannot move out of here"}">
-    <input type="checkbox" data-need="admin" ${state.allowed ? "checked" : ""} onchange="fleetTransfersSet(${jsq(m.id)}, this.checked, this)">
-    <span>Moves out</span></label>`;
+function fleetMigrationButton(m, state) {
+  const on = !!state?.allowed;
+  const label = !state ? "Migration" : on ? "Migration on" : "Migration off";
+  return `<button type="button" class="btn sm fleet-mig${on ? " on" : ""}" onclick="fleetMigration(${jsq(m.id)})"
+    title="${esc(on ? `Workloads can move from ${m.name} to another cluster` : `Workloads cannot move from ${m.name} yet`)}">
+    <span class="fleet-dot ${on ? "ok" : ""}" aria-hidden="true"></span>${esc(label)}</button>`;
 }
 
 window.fleetTransfersPaint = () => {
@@ -205,46 +207,122 @@ window.fleetTransfersPaint = () => {
     try { state = await fleetTransferCall(m); } catch (e) { state = null; }
     FLEET.transfers[m.id] = state;
     const now = document.getElementById(`fout_${m.id}`);
-    if (now) now.innerHTML = fleetOutHtml(m, state);
+    if (now) now.innerHTML = fleetMigrationButton(m, state);
     if (window.applyRole) applyRole();
   });
 };
 
-window.fleetTransfersSet = async (id, allow, box) => {
+/* Everything about migration from one cluster: on or off, its backup
+   storage, and what, if anything, needs fixing. */
+window.fleetMigration = async id => {
   const m = (FLEET.view?.members || []).find(x => x.id === id);
-  const state = FLEET.transfers[id] || {};
   if (!m) return;
-  if (allow && !state.deployed) {
-    box.checked = false;
-    return modal(`Allow moves out · ${m.name}`, `<div class="ui-stack">
-      ${UI.lead(`Runs backup storage - an S3 store (RustFS) on a Longhorn volume - on ${esc(m.name)}, on its shared address at port 9000. A workload moving out is backed up there, and the cluster it goes to restores it from there.`)}
-      ${UI.field("Size (GB)", '<input id="fo_size" type="number" min="5" value="100">', { help: "Holds the backups a move makes. Longhorn backups are incremental, so this is usually far less than the volumes." })}
-      ${UI.more("Turning it off later", `<p>Stops the store and keeps its volume, and the backups on it. Turning it on again starts it as it was.</p>`)}
-      ${UI.actions(UI.cancel() + UI.button("Allow moves out", `fleetTransfersGo(${jsArg(id)}, true)`, { kind: "pri", id: "fo_go" }))}</div>`);
-  }
-  if (!allow && !confirm(`Turn off moves out of ${m.name}?${String.fromCharCode(10, 10)}Its backup storage stops; its volume and the backups on it are kept.`
-      + (state.backups_here ? " Longhorn on " + m.name + " backs up there too, so those backups pause until it is on again." : ""))) {
-    box.checked = true;
+  modal(`Migration from ${m.name}`, '<div class="empty"><span class="spin2"></span> Asking about its backup storage…</div>', true);
+  let state, ready = null;
+  try { state = await fleetTransferCall(m); FLEET.transfers[id] = state; }
+  catch (e) {
+    $("#mbody").innerHTML = UI.callout("bad", `Could not ask ${m.name}.`, esc(e.message)) + UI.actions(UI.cancel("Close"));
     return;
   }
-  fleetTransfersGo(id, allow);
+  if (!m.self) {
+    ready = await api("/api/move/clusters/readiness", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: m.handle }) }).catch(() => null);
+    if (ready) (window.__clusterReady ||= {})[m.handle] = ready;
+  }
+  if (!$("#mbody")) return;
+  const lead = UI.lead(`Lets workloads move from ${esc(m.name)} to another linked cluster. Each one's volumes are backed up to
+    ${esc(m.name)}'s backup storage - an S3 store (RustFS) on a Longhorn volume - and restored where it goes.`);
+  const target = ready?.target || {};
+  let body;
+  if (state.allowed) {
+    const problems = [];
+    if (!state.ready) problems.push(["warn", "Its backup storage is starting.", "Its first start downloads the S3 server; this takes a minute or two.", ""]);
+    else if (!state.reachable_off_cluster) problems.push(["warn", "It has no LAN address, so no other cluster can read it.", "",
+      m.self ? "" : UI.button("Give it an address", `clusterStorage(${jsArg(m.handle)},true,()=>fleetMigration(${jsArg(id)}))`)]);
+    else if (ready && target.configured && !target.answers) problems.push(["warn", `This cluster cannot reach it at ${target.endpoint}.`,
+      "It may still be starting; otherwise the address is taken or firewalled.",
+      UI.button("Give it another address", `clusterStorage(${jsArg(m.handle)},true,()=>fleetMigration(${jsArg(id)}))`)]);
+    else if (ready && !target.configured) problems.push(["warn", `${m.name}'s Longhorn is not pointed at it yet.`, "",
+      UI.button("Finish setting it up", `clusterStorage(${jsArg(m.handle)},false,()=>fleetMigration(${jsArg(id)}))`)]);
+    body = `${lead}
+      ${UI.facts([["Migration", "On"], ["Backup storage", `<span class="mono">${esc((state.endpoint || "—").replace(/^https?:\/\//, ""))}</span>`],
+        ...(m.self ? [] : [["Reachable from here", ready ? (target.answers ? "Yes" : "No") : "—"]]), ["Size", state.size_gb ? `${state.size_gb} GB` : "—"]])}
+      ${problems.map(([tone, title, detail, fix]) => UI.callout(tone, title, `${detail ? `<p>${esc(detail)}</p>` : ""}${fix}`)).join("")}
+      ${state.backups_here ? UI.callout("info", `${m.name}'s Longhorn backs up here too.`, "Disabling migration pauses those backups until it is enabled again.") : ""}
+      ${UI.actions(UI.cancel("Close") + UI.button("Disable migration", `fleetMigrationSet(${jsArg(id)}, false)`, { kind: "danger", id: "fm_go", attrs: 'data-need="admin"' }))}`;
+  } else if (state.deployed) {
+    body = `${lead}
+      ${UI.callout("info", "Its backup storage is stopped.", "Enabling migration starts it again as it was, with the backups on it.")}
+      ${UI.actions(UI.cancel() + UI.button("Enable migration", `fleetMigrationSet(${jsArg(id)}, true)`, { kind: "pri", id: "fm_go", attrs: 'data-need="admin"' }))}`;
+  } else {
+    const shared = ready?.shared_vip;
+    body = `${lead}
+      ${UI.fields(
+        UI.field("Size (GB)", '<input id="fm_size" type="number" min="5" value="100">', { help: "Holds the backups moves make; they are incremental." }),
+        UI.field("Address", `<select id="fm_pick" onchange="$('#fm_ip').hidden = this.value !== '__typed'">
+            <option value="__shared">${shared ? `Its shared address · ${esc(shared)}:9000` : "Its shared address · port 9000"}</option>
+            <option value="__typed">An address of its own…</option></select>
+          <input id="fm_ip" class="mono" placeholder="192.0.2.243" hidden data-ipam>`,
+          { help: "Shared with its apps, on its own port. Choose an address of its own only to keep its traffic apart." }))}
+      ${UI.actions(UI.cancel() + UI.button("Enable migration", `fleetMigrationSet(${jsArg(id)}, true)`, { kind: "pri", id: "fm_go", attrs: 'data-need="admin"' }))}`;
+  }
+  $("#mbody").innerHTML = `<div class="ui-stack">${body}</div>`;
+  if (window.applyRole) applyRole();
 };
 
-window.fleetTransfersGo = async (id, allow) => {
+window.fleetMigrationSet = async (id, allow) => {
   const m = (FLEET.view?.members || []).find(x => x.id === id);
-  const go = $("#fo_go");
-  if (go) { go.disabled = true; go.textContent = "Starting…"; }
+  const state = FLEET.transfers[id] || {};
+  if (!allow && !confirm(`Disable migration from ${m.name}?${String.fromCharCode(10, 10)}Its backup storage stops; its volume and the backups on it are kept.`
+      + (state.backups_here ? ` Longhorn on ${m.name} backs up there too, so those backups pause until it is enabled again.` : ""))) return;
+  const pick = $("#fm_pick")?.value || "__shared";
+  const address = pick === "__typed" ? ($("#fm_ip")?.value || "").trim() : "";
+  if (pick === "__typed" && !address) return toast("Type the address for its backup storage", "bad");
+  const go = $("#fm_go");
+  if (go) { go.disabled = true; go.textContent = allow ? "Enabling…" : "Disabling…"; }
   try {
-    const r = await fleetTransferCall(m, { allow, size_gb: +($("#fo_size")?.value || 100) });
+    const r = await fleetTransferCall(m, { allow, size_gb: +($("#fm_size")?.value || 100), lb_ip: address,
+      vip_mode: pick === "__shared" ? "shared" : "" });
     toast(`${m.name}: ${r.detail}`, "ok");
-    closeModal();
+    fleetTransfersPaint();
+    if (window.fleetMovesPaint) fleetMovesPaint();
+    fleetMigration(id);
   } catch (e) {
     toast(e.message, "bad");
-    if (go) { go.disabled = false; go.textContent = "Allow moves out"; }
+    if (go) { go.disabled = false; go.textContent = allow ? "Enable migration" : "Disable migration"; }
   }
-  fleetTransfersPaint();
-  if (window.fleetMovesPaint) fleetMovesPaint();
 };
+
+/* A cluster a move can come from, on one line: whether a move can come
+   from it now, and its workloads. */
+function moveSourceRow(c) {
+  return `<li><span class="fleet-dot" id="msd_${esc(c.name)}" aria-hidden="true"></span>
+    <div class="fleet-row"><b>${esc(c.label || c.name)}</b><span class="fleet-sub" id="mss_${esc(c.name)}">checking…</span></div>
+    ${UI.button("Browse workloads", `clusterBrowse(${jsArg(c.name)})`)}</li>`;
+}
+
+async function moveSourceCheck(c) {
+  const dot = document.getElementById(`msd_${c.name}`), text = document.getElementById(`mss_${c.name}`);
+  let r = null, error = "";
+  try {
+    r = await api("/api/move/clusters/readiness", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: c.name }) });
+  } catch (e) { error = e.message; }
+  if (!text) return;
+  (window.__clusterReady ||= {})[c.name] = r;
+  const member = (FLEET.view?.members || []).find(m => m.handle === c.name);
+  const fix = member ? ` - <a class="linkish" onclick="fleetMigration(${jsq(member.id)})">migration…</a>`
+    : ` - <a class="linkish" data-need="admin" onclick="clusterStorage(${jsq(c.name)})">set it up</a>`;
+  const [tone, words] = error ? ["bad", esc(error)]
+    : r.version?.compatible === false ? ["warn", esc(r.version.message || "a release too far from this one")]
+    : r.version?.state === "unreachable" ? ["bad", "not answering"]
+    : r.ready ? ["ok", "ready to move from"]
+    : r.storage?.stopped || !r.storage?.deployed ? ["", `migration from it is off${fix}`]
+    : ["warn", `its backup storage needs attention${fix}`];
+  if (dot) dot.className = `fleet-dot ${tone}`;
+  text.innerHTML = words;
+  if (window.applyRole) applyRole();
+}
 
 // Clusters added for moves with a stored account, before linking existed.
 function fleetLegacyHtml(rows) {
@@ -270,7 +348,6 @@ window.fleetSettingsPaint = async () => {
       <div class="csub">Other Homesteads managed from this one - even when only this one is reachable from outside.</div></div>
       ${UI.button("Link a cluster", "fleetLink()", { kind: "pri", attrs: 'data-need="admin"' })}</div>
     ${view ? `<ul class="fleet-list">${fleetMembersHtml(view)}</ul>` : UI.callout("bad", "Could not read the linked clusters.")}
-    ${view ? `<p class="ui-help fleet-out-help">Moves out: whether workloads can move from that cluster to another. On runs its backup storage, which a move copies volumes through.</p>` : ""}
     ${view?.linked ? UI.section("How they show", `<div class="seg fleet-mode" role="group" aria-label="How linked clusters show">
         ${mode("one", "One cluster at a time")}${mode("all", "All clusters together")}</div>
       <p class="ui-help">${all
@@ -300,13 +377,13 @@ window.fleetMovesPaint = async () => {
   if (!$("#fleetMovesCard")) return;
   host.hidden = !moves.length && !clusters.length;
   host.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">Moving workloads</div>
-      <div class="csub">Bring containers and VMs here from another cluster. Their volumes travel through backup storage on the cluster they leave; each cluster's card sets it up.</div></div>
+      <div class="csub">Bring containers and VMs here from another cluster. A cluster's <b>Migration</b> button above lets workloads move from it.</div></div>
       ${moves.some(m => ["succeeded", "cancelled"].includes(m.status)) ? UI.button("Clear finished", "moveDismiss()", { attrs: 'data-need="admin"' }) : ""}</div>
     <div id="movesList">${moves.length ? movesHtml(moves) : ""}</div>
-    ${clusters.length ? `<div class="grid g3 fleet-movegrid">${clusters.map(clusterCardHtml).join("")}</div>` : ""}`;
+    ${clusters.length ? `<ul class="fleet-list move-sources">${clusters.map(moveSourceRow).join("")}</ul>` : ""}`;
   if (window.applyRole) applyRole();
   // Each check waits on the other Homestead answering, so after the card is up.
-  clusters.forEach(c => clusterCheck(c.name));
+  clusters.forEach(moveSourceCheck);
   clearTimeout(window.__moveTimer);
   if (moves.some(m => m.status === "running")) window.__moveTimer = setTimeout(watchMoves, 4000);
   fleetPendingMove();

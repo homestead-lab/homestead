@@ -39,9 +39,9 @@ workloads** lists what is still needed, with a button beside each:
   says so and the destination is pointed at the source's for the move.
 - **It has none** - **Set it up** runs an S3 server (RustFS) on the source, on a
   Longhorn volume, makes the bucket and points the source's Longhorn at it. The
-  **Moves out** switch beside the source under Linked clusters does the same.
-- **Moves out are turned off** - the source's store is stopped; **Turn them on**
-  starts it again.
+  **Migration** button beside the source under Linked clusters does the same.
+- **Migration from it is off** - the source's store is stopped; its
+  **Migration** button enables it again.
 
 That S3 server needs an address on your LAN that the destination can reach. By
 default it shares the source's **shared address** - the one its apps share -

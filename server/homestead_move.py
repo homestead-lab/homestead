@@ -616,12 +616,13 @@ def _needs_update(name):
     return version if release and release < RUSTFS_SINCE else ""
 
 
-def transfers(name, allow=None, size_gb=100):
-    """Whether moves out of another cluster are on, or turn them on or off."""
+def transfers(name, allow=None, size_gb=100, lb_ip="", vip_mode=""):
+    """Whether migration from another cluster is on, or turn it on or off."""
     try:
         if allow is None:
             return remote(name, "/api/objectstore/transfers")
-        return remote(name, "/api/objectstore/transfers", {"allow": bool(allow), "size_gb": int(size_gb or 100)})
+        return remote(name, "/api/objectstore/transfers", {"allow": bool(allow), "size_gb": int(size_gb or 100),
+                                                           "lb_ip": str(lb_ip or ""), "vip_mode": str(vip_mode or "")})
     except Missing as error:
         raise ValueError(f"{name} runs a Homestead too old to turn moves out on and off; update it first") from error
 

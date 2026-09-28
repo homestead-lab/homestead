@@ -16,8 +16,8 @@ it relays everything, consoles included, to the others.
 - **Move to cluster** in a container's or VM's `…` menu. It opens the other
   cluster at its review of the move; nothing stops until you start it there.
 - **Moving workloads** under Settings → Linked clusters: moves under way, and
-  a card per cluster with the backup storage a move needs and **Browse
-  workloads**. See [Moving between clusters](Moving-between-clusters).
+  each cluster a move can come from with **Browse workloads**. See
+  [Moving between clusters](Moving-between-clusters).
 
 ## Link a cluster
 
@@ -72,16 +72,27 @@ anywhere. The other cluster records what you do as `name@cluster`.
 Linking itself is an admin decision: every linked Homestead can act as admin
 on the others, to relay for people and to move workloads.
 
-## Moves out
+## Migration
 
-Each cluster in **Settings → Linked clusters** has a **Moves out** switch: whether
-workloads can move from that cluster to another. On runs that cluster's backup
-storage - an S3 store (RustFS) on a Longhorn volume, on its shared address at
-port 9000 - which a move copies volumes through; the first time, it asks how
-big to make it. Off stops the store and keeps its volume and the backups on
-it, so turning it on again starts it as it was. If that cluster's Longhorn
-also backs up there, those backups pause while it is off - the switch says
-so. You can switch any linked cluster from any other.
+Each cluster in **Settings → Linked clusters** has a **Migration** button that
+says whether workloads can move from that cluster to another. It opens
+**Migration from** that cluster:
+
+- **Enable migration** runs that cluster's backup storage - an S3 store
+  (RustFS) on a Longhorn volume - which a move backs volumes up to and the
+  cluster they go to restores them from. The first time, choose its size;
+  it goes on that cluster's shared address at port 9000 unless you give it an
+  address of its own.
+- While it is on, the dialog shows the store's address, whether this cluster
+  can reach it, its size, and a fix for anything wrong - an address no other
+  cluster can reach, say.
+- **Disable migration** stops the store and keeps its volume and the backups
+  on it; enabling it again starts it as it was. If that cluster's Longhorn
+  backs up there too, those backups pause while it is off - the dialog says so.
+
+You can manage migration from any linked cluster, for any of them. Below,
+**Moving workloads** lists moves under way and each cluster a move can come
+from, with whether it is ready and **Browse workloads**.
 
 ## Unlink
 
