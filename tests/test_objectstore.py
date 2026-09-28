@@ -5,6 +5,7 @@ import sys
 import unittest
 import urllib.error
 from pathlib import Path
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -18,6 +19,12 @@ class ObjectStoreTests(unittest.TestCase):
         self.claims = []
         store.bind(self._get, self._send, self._create_pvc, "lab")
         store.LH.bind(self._get, self._send, {}, "longhorn-r2")
+        # Homestead's shared address, as Networking would plan it.
+        self.plans = []
+        plan = mock.patch.object(store.NETWORK, "service_plan",
+                                 side_effect=lambda cfg, **kw: self.plans.append(cfg) or {"vip": "192.168.1.242"})
+        plan.start()
+        self.addCleanup(plan.stop)
 
     def _get(self, path):
         key = path.split("?")[0]
@@ -34,7 +41,7 @@ class ObjectStoreTests(unittest.TestCase):
 
     def _service(self, ip=None, annotation=None):
         self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"] = {
-            "metadata": {"name": "homestead-objectstore",
+            "metadata": {"name": "homestead-objectstore", "resourceVersion": "1",
                          "annotations": {"kube-vip.io/loadbalancerIPs": annotation}
                          if annotation else {}},
             "status": {"loadBalancer": {"ingress": [{"ip": ip}] if ip else []}},
@@ -58,6 +65,39 @@ class ObjectStoreTests(unittest.TestCase):
         self.assertEqual("LoadBalancer", service["spec"]["type"])
         self.assertEqual("192.168.1.243",
                          service["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
+
+    def _sent_service(self):
+        return [b for _, p, b in self.sent if "/services" in p][-1]
+
+    def test_with_no_address_asked_for_it_shares_homesteads(self):
+        store.deploy({"point_longhorn": False})
+        self.assertEqual("192.168.1.242", self._sent_service()["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
+        # Checked as an app sharing the address would be: both its ports, on the shared address.
+        self.assertEqual("shared", self.plans[0]["vip_mode"])
+        self.assertEqual([9000, 9001], [p["port"] for p in self.plans[0]["ports"]])
+
+    def test_where_services_go_on_the_nodes_it_goes_there_too(self):
+        store.NETWORK.service_plan.side_effect = lambda cfg, **kw: {"vip": ""}
+        store.deploy({"point_longhorn": False})
+        self.assertEqual({}, self._sent_service()["metadata"]["annotations"])
+
+    def test_a_port_taken_on_the_shared_address_says_so(self):
+        store.NETWORK.service_plan.side_effect = ValueError("192.168.1.242:9000/TCP is already used by lab/minio")
+        with self.assertRaises(ValueError) as caught:
+            store.deploy({"point_longhorn": False})
+        self.assertIn("lab/minio", str(caught.exception))
+        self.assertIn("address of its own", str(caught.exception))
+
+    def test_a_store_already_running_keeps_its_address(self):
+        self._service("192.168.1.244", "192.168.1.244")
+        store.deploy({"point_longhorn": False})
+        self.assertEqual("192.168.1.244", self._sent_service()["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
+        self.assertEqual([], self.plans)
+
+    def test_a_store_can_be_moved_to_the_shared_address_on_purpose(self):
+        self._service()
+        store.deploy({"point_longhorn": False, "vip_mode": "shared"})
+        self.assertEqual("192.168.1.242", self._sent_service()["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
 
     def test_the_writer_replaces_rather_than_surges(self):
         """One pod, one ReadWriteOnce volume: a surge would deadlock on it."""

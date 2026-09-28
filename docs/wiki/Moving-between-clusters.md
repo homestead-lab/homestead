@@ -40,11 +40,14 @@ workloads** lists what is still needed, with a button beside each:
 - **It has none** - **Set it up** runs an S3 server (RustFS) on the source, on a
   Longhorn volume, makes the bucket and points the source's Longhorn at it.
 
-That S3 server needs a **LAN address on the source**: the source cluster's load
-balancer announces it there, and the destination connects to it. The addresses
-offered are the source's own [VIPs](Networking#your-vips), then free addresses
-in its Harvester IP pools. After it is set, Homestead checks from the
-destination that the address answers.
+That S3 server needs an address on your LAN that the destination can reach. By
+default it shares the source's **shared address** - the one its apps share -
+and answers on port 9000 there, so no address of its own is needed. On k3s it
+answers on the nodes' own addresses instead. If port 9000 is already taken
+there, the setup says which Service has it. You can also give it an address of
+its own - one of the source's [VIPs](Networking#your-vips) or a free address in
+its IP pools - to keep its traffic apart. After it is set, Homestead checks from
+the destination that the address answers.
 
 The in-cluster store shares the fate of the cluster it is on: it is for moving
 workloads, not your only backup.

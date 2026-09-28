@@ -2011,7 +2011,7 @@ div.ipam-line.dim{display:block}
 #mbody label>input[type=checkbox][id*="onfirm" i]{width:17px;height:17px;margin:1px 0 0}
 
 .ui-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 16px}
-.ui-field{display:grid;gap:6px;min-width:0}.ui-field.wide{grid-column:1/-1}
+.ui-field{display:grid;gap:6px;min-width:0;align-content:start}.ui-field.wide{grid-column:1/-1}
 .ui-field label{margin:0}
 .ui-help{font-size:12px;color:var(--mut);line-height:1.5}
 .ui-stack{display:grid;gap:14px}

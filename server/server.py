@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.209")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.210")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -7723,7 +7723,8 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/move/clusters/readiness":
                 return self._move(lambda: MOVE.readiness(b.get("name")))
             if p == "/api/move/clusters/storage":
-                return self._move(lambda: MOVE.setup_storage(b.get("name"), b.get("size_gb") or 100, b.get("lb_ip") or ""))
+                return self._move(lambda: MOVE.setup_storage(b.get("name"), b.get("size_gb") or 100, b.get("lb_ip") or "",
+                                                             b.get("vip_mode") or ""))
             if p == "/api/cluster/remove-node":
                 return self._move(lambda: ONBOARD.remove_node(b.get("node"), bool(b.get("accept_loss")),
                                                               bool(b.get("gone"))))
