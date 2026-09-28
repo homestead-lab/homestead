@@ -66,6 +66,9 @@ class InspectTests(unittest.TestCase):
 
 
 class SetupTests(unittest.TestCase):
+    def setUp(self):
+        self.addCleanup(SETUP.bind, SETUP.hostrun)
+
     def test_formatting_needs_the_device_typed(self):
         SETUP.bind(Host(seen()))
         with self.assertRaisesRegex(ValueError, "type /dev/nvme0n1 to confirm"):
@@ -111,11 +114,17 @@ class LonghornTests(unittest.TestCase):
         self.patched = []
         self.node = {"spec": {"disks": {"disk-mnt-nvme0n1": {"path": "/mnt/nvme0n1", "allowScheduling": True}}},
                      "status": {"diskStatus": {"disk-mnt-nvme0n1": {"conditions": [{"type": "Ready", "status": "False"}]}}}}
-        DISKS.kget = lambda path: copy.deepcopy(self.node)
-        DISKS._patch = lambda path, body, what: self.patched.append(body)
-        DISKS.autotag_state = lambda: str(Path(self.tmp.name, "tags.json"))
-        DISKS.setup_module = SETUP
-        SETUP.bind(Host(seen()))
+        # Patched for this test only: other tests use the same modules.
+        for name, value in (("kget", lambda path: copy.deepcopy(self.node)),
+                            ("_patch", lambda path, body, what: self.patched.append(body)),
+                            ("autotag_state", lambda: str(Path(self.tmp.name, "tags.json"))),
+                            ("setup_module", SETUP)):
+            patcher = mock.patch.object(DISKS, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(SETUP, "hostrun", Host(seen()))
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self):
         self.tmp.cleanup()

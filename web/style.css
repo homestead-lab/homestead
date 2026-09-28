@@ -2432,5 +2432,5 @@ html[data-theme="light"] .modalbox[data-context="smb-access"]{background:var(--s
 /* Setting up a disk: the choices, one line each. */
 .disk-choices{display:flex;flex-direction:column;gap:8px}
 .disk-choice{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line);border-radius:10px;cursor:pointer}
-.disk-choice span{display:flex;flex-direction:column;gap:2px}
+.disk-choice>span{display:flex;flex-direction:column;gap:2px}
 .disk-choice small{color:var(--mut);font-size:12px}
