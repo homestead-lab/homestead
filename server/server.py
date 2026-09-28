@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.210")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.211")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -6900,6 +6900,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(503 if status["status"] == "unknown" else 200, status)
             if p == "/api/ipam":
                 return self._send(200, IPAM.view())
+            if p == "/api/ipam/free":
+                return self._send(200, IPAM.free_addresses())
             if p == "/api/vm/store":
                 return self._send(200, VMSTORE.view(check=(q.get("check") or [""])[0] == "1"))
             if p == "/api/images/vm":

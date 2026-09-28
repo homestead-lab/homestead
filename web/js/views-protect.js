@@ -81,7 +81,7 @@ window.objectStoreSetup = () => modal("Set up backup storage", `
   <div class="f2"><div class="f"><label>Size (GB) ${tip("Holds every volume backup this cluster keeps. Longhorn backups are incremental, so this is usually far smaller than the volumes themselves.")}</label>
     <input id="os_size" type="number" min="5" max="16384" value="100"></div>
     <div class="f"><label>LAN address ${tip("Another cluster reads backups over this address. Left blank, the store shares Homestead's address and answers on port 9000 there; give it one of its own to keep its traffic apart.")}</label>
-      <input id="os_ip" type="text" placeholder="Homestead's shared address"></div></div>
+      <input id="os_ip" type="text" class="mono" placeholder="Homestead's shared address" data-ipam></div></div>
   <div class="note"><b>It shares fate with what it protects.</b> Storage inside this cluster is the right
     place to stage a migration and the wrong place for your only copy. Keep anything you cannot lose
     somewhere else as well.</div>

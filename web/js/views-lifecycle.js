@@ -650,7 +650,7 @@ function vmAddressFields(p, opts, count = 1) {
         <select id="${p}_subnet" onchange="vmSubnetPicked('${p}', ${count})">${subnets.map(s => `<option value="${esc(s.cidr)}">${esc(s.cidr)}${s.name ? ` · ${esc(s.name)}` : ""} · ${s.free.length} free</option>`).join("")}
           <option value="">another - type it in</option></select></div>
       <div class="f"><label>${count > 1 ? "Addresses, one per node" : "Address"}</label>
-        <input id="${p}_ip" class="mono" placeholder="${count > 1 ? "192.0.2.60, 192.0.2.61" : "192.0.2.60"}" list="${p}_free">
+        <input id="${p}_ip" class="mono" placeholder="${count > 1 ? "192.0.2.60, 192.0.2.61" : "192.0.2.60"}" list="${p}_free" data-ipam="${count > 1 ? "multi" : ""}">
         <datalist id="${p}_free"></datalist></div></div>
     <div class="f2">
       <div class="f"><label>Prefix length</label><input id="${p}_prefix" type="number" min="8" max="30" value="${first ? esc(first.cidr.split("/")[1]) : 24}"></div>
@@ -1789,7 +1789,7 @@ window.clusterStorage = (name, addressOnly = false, after = null) => {
           ${free.some(v => v.from !== "vips") ? `<optgroup label="An address of its own: free in ${esc(name)}'s IP pools">${free.filter(v => v.from !== "vips").map(v =>
             `<option value="${esc(v.ip)}">${esc(v.ip)}</option>`).join("")}</optgroup>` : ""}
           <option value="__typed">Type an address…</option></select>
-        <input id="cs_ip" class="mono" placeholder="192.0.2.243" hidden style="margin-top:6px">`,
+        <input id="cs_ip" class="mono" placeholder="192.0.2.243" hidden data-ipam>`,
         { help: `${shared ? `${esc(name)}'s shared address is the one its apps share; the store answers on port 9000 there.` : `${esc(name)} puts Services on its nodes' own addresses; the store answers on port 9000 there.`} Choose an address of its own only to keep its traffic apart.` }))}
     ${UI.more("Whose address this is", `<p>The address belongs to ${esc(name)}, the cluster sending the workloads: its backup store answers on it.
       This cluster never takes it - it only connects to it to read the backups during a move. It shares ${esc(name)}'s disks, so it is for moving, not your only copy of anything.</p>`)}
@@ -1873,7 +1873,7 @@ window.moveReview = (cluster, kind, name) => {
         <option value="shared">This cluster's shared address</option>
         <option value="automatic">Next free pool address</option>
         <option value="manual">A specific address</option></select></div>`}</div>
-  <div class="f" id="mv_ip_wrap" hidden><label>Specific address</label><input id="mv_ip" placeholder="192.0.2.245"></div>
+  <div class="f" id="mv_ip_wrap" hidden><label>Specific address</label><input id="mv_ip" class="mono" placeholder="192.0.2.245" data-ipam></div>
   <div id="mv_plan"></div>
   <div class="row" style="margin-top:16px">
     <button class="btn" onclick="movePlan('${esc(cluster)}','${esc(kind)}','${esc(name)}')">Check again</button>

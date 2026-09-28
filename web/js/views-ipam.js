@@ -281,7 +281,7 @@ window.ipamEdit = (ip = "") => {
     return modal(ip, `<p class="muted small">${row.cluster === "node" ? "A cluster node's address, read from Kubernetes." : `A cluster VIP, used by ${esc((row.services || []).join(", "))}.`} It is shown here so nothing else is given it, and is changed where it is set, not here.</p>`);
   }
   modal(ip ? `Address · ${ip}` : "Document an address", `
-    <div class="f2"><div class="f"><label>Address</label><input id="ia_ip" class="mono" value="${esc(row.ip)}" ${ip ? "readonly" : ""}></div>
+    <div class="f2"><div class="f"><label>Address</label><input id="ia_ip" class="mono" value="${esc(row.ip)}" ${ip ? "readonly" : "data-ipam"}></div>
       <div class="f"><label>Kind</label><select id="ia_kind"><option value="">not set</option>${Object.entries(IPAM_KIND_LABELS).map(([k, l]) =>
         `<option value="${k}" ${row.kind === k ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></div></div>
     <div class="f2"><div class="f"><label>Name</label><input id="ia_name" value="${esc(row.name || "")}" maxlength="60" placeholder="${esc(row.unifi?.name || "e.g. Office printer")}"></div>

@@ -1607,7 +1607,7 @@ function vipPicker(prefix, current, choices) {
       ${choices.used.length ? `<optgroup label="In use - shared with what is there">${choices.used.map(v =>
         option(v.ip, `${v.ip}${labels[v.ip] ? ` · ${labels[v.ip]}` : ""} · ${v.services} service${v.services === 1 ? "" : "s"} · ports ${v.listeners.map(l => l.port).slice(0, 5).join(", ")}`)).join("")}</optgroup>` : ""}
       <option value="__typed" ${typed ? "selected" : ""}>Type an address…</option></select>
-    <input id="${prefix}_lb_ip" value="${esc(current || "")}" placeholder="192.0.2.250" ${typed ? "" : 'style="display:none"'}>`;
+    <input id="${prefix}_lb_ip" class="mono" value="${esc(current || "")}" placeholder="192.0.2.250" data-ipam ${typed ? "" : 'style="display:none"'}>`;
 }
 
 window.vipPicked = prefix => {
