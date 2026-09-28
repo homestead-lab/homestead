@@ -548,6 +548,12 @@ def _set_harvester_target(setting, url, poll, keys):
     return {"ok": True, "url": url, "harvester": True}
 
 
+def on_harvester():
+    """Whether the backup target is Harvester's setting, which holds the keys
+    itself, rather than Longhorn's own, which names a Secret."""
+    return _harvester_setting() is not None
+
+
 def set_backup_target(url, secret="", poll="5m", keys=None):
     url, secret = str(url or "").strip(), str(secret or "").strip()
     if url and not url.startswith(SCHEMES):
