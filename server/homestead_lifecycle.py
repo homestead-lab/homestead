@@ -753,7 +753,7 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None):
     return {"ok": True, "node": node, "evicted": evicted, "skipped": skipped}
 
 
-def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=None, progress=None):
+def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=None, progress=None, force=False):
     """Reboot or shut down a host.
 
     Kubernetes cannot do this. We schedule a one-shot privileged pod pinned to
@@ -767,14 +767,24 @@ def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=N
             "Deployment to turn it on. Cordon and drain work regardless.")
     if action not in ("reboot", "poweroff"):
         raise ValueError("action must be reboot or poweroff")
-    if before_send is None or reviewed_pods is None or not drain_first:
+    if before_send is None or (not force and (reviewed_pods is None or not drain_first)):
         raise ValueError("A reviewed drain and fresh pre-power check are required; power was not sent")
     report = progress or (lambda *args, **kwargs: None)
+    steps = []
+    if force:
+        # Overridden by an admin: no cordon or drain - which on a one-node
+        # cluster would evict Homestead before it could send anything, and
+        # leave the host cordoned after it came back. The host's own systemd
+        # still stops everything in order.
+        rep = quorum_report()
+        report("verifying", 15, "Forced: checking the host has not changed since the review")
+        before_send()
+        steps.append("forced: no cordon or drain")
+        return _send_power(node, action, steps, rep, report)
     ok, why, rep = node_action_check(node, action)
     if not ok:
         raise PermissionError(why)
 
-    steps = []
     report("cordoning", 5, "Cordoning host; power has not been sent")
     set_cordon(node, True)
     steps.append("cordoned")
@@ -805,6 +815,10 @@ def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=N
     if not ok:
         raise PermissionError("Host remains cordoned; power was not sent: " + why)
     before_send()
+    return _send_power(node, action, steps, rep, report)
+
+
+def _send_power(node, action, steps, rep, report):
     cmd = "systemctl reboot" if action == "reboot" else "systemctl poweroff"
     pod_name = f"homestead-{action}-{node.split('.')[0][-12:]}-{int(time.time()) % 100000}"
     body = {

@@ -7454,7 +7454,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("impact:" + node, 5, lambda: PLACE.impact(node)))
             if p == "/api/node/power/plan":
                 return self._send(200, POWER.plan((q.get("node") or [""])[0],
-                                                  (q.get("action") or [""])[0]))
+                                                  (q.get("action") or [""])[0],
+                                                  force=(q.get("force") or [""])[0] == "1"))
             if p == "/api/workloads/start-plan":
                 return self._send(200, workload_start_plan(
                     (q.get("ns") or [""])[0], (q.get("name") or [""])[0],
@@ -8247,7 +8248,8 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/node/power":
                 if b.get("confirm") != b.get("node"):
                     return self._send(400, {"error": "confirmation must repeat the node name"})
-                power_plan = POWER.plan(b["node"], b["action"])
+                force = b.get("force") is True
+                power_plan = POWER.plan(b["node"], b["action"], force=force)
                 if not power_plan["ready"]:
                     return self._send(409, {"error": "; ".join(power_plan["blockers"]), "plan": power_plan})
                 if b.get("review_token") != power_plan["review_token"]:
@@ -8264,7 +8266,7 @@ class H(BaseHTTPRequestHandler):
                     {"node": b["node"], "node_uid": power_plan["node_uid"], "action": b["action"], "boot_id": power_plan["boot_id"],
                      "volumes": [v["name"] for v in power_plan["volumes"]],
                      "phase": "reviewed", "phase_at": time.time(), "started_epoch": time.time()},
-                    "Host impact reviewed; preparing cordon and drain")
+                    "Forced by an admin; sending without cordon or drain" if force else "Host impact reviewed; preparing cordon and drain")
                 phase_state = {"phase": "reviewed"}
                 def power_progress(phase, percent, message, **details):
                     updated = OPS.record_phase(operation["id"], phase, percent, message, **details)
@@ -8272,8 +8274,9 @@ class H(BaseHTTPRequestHandler):
                     return updated
                 try:
                     result = LC.node_power(b["node"], b["action"], True,
-                                           before_send=lambda: POWER.recheck_after_drain(power_plan),
-                                           reviewed_pods=power_plan["drain_pods"], progress=power_progress)
+                                           before_send=(lambda: POWER.recheck_forced(power_plan)) if force
+                                           else (lambda: POWER.recheck_after_drain(power_plan)),
+                                           reviewed_pods=power_plan["drain_pods"], progress=power_progress, force=force)
                     result["operation"] = operation
                     return self._send(200, result)
                 except Exception as e:

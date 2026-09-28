@@ -1293,6 +1293,7 @@ ssh_pwauth: true
     // single copy elsewhere while the host is down.
     "/api/node/power/plan": url => ({ node: url.searchParams.get("node"), action: url.searchParams.get("action"), review_token: "demo-power",
       boot_id: "demo", pods: 14, vms: [], storage_unknown: false, ready: true, requires_data_ack: true, blockers: [],
+      overridable: [], hard_blockers: [], force: url.searchParams.get("force") === "1",
       workloads: [{ ns: "lab", name: "frigate", stranded: true, eligible: [] },
         { ns: "lab", name: "home-assistant", stranded: false, eligible: ["harvester-node2", "harvester-node3"] },
         { ns: "lab", name: "paperless", stranded: false, eligible: ["harvester-node2"] }],
