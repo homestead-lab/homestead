@@ -188,6 +188,7 @@ async function viewSettings() {
         </div>
       </section>
 
+      <section class="card flat settings-wide" data-tab="about" id="configCard">${window.configCardHtml ? configCardHtml() : ""}</section>
       <section class="card flat settings-wide" data-tab="about" id="selfHealthCard"><div class="empty small"><span class="spin2"></span> checking Homestead</div></section>
       <section class="card flat settings-wide" data-tab="about" id="replicaCard">${STATE.data.replicaHtml || ""}</section>
     </div>`);
