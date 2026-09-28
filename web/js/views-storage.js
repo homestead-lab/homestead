@@ -36,7 +36,7 @@ async function viewFlow() {
           ${appAvatar(w.name, w.icon)}<span class="a2name">${esc(w.name)}</span>
           <span class="a2meta">${esc(kind(w))}</span>
           ${w.kind === "vm" && !w.running ? "" : `<button class="a2act" data-need="operator" title="${w.kind === "vm" ? "Migrate" : "Move to another host"}"
-            onclick="event.stopPropagation();${w.kind === "vm" ? `vmMove('${esc(w.ns || "lab")}','${esc(w.name)}')` : `moveWorkload('${esc(w.name)}','${esc(w.ns || "lab")}')`}">⇄</button>`}
+            onclick="event.stopPropagation();${w.kind === "vm" ? `vmMove(${jsq(w.ns || "lab")},${jsq(w.name)})` : `moveWorkload(${jsq(w.name)},${jsq(w.ns || "lab")})`}">⇄</button>`}
         </div>`;
   const volumeCard = (v, disconnected = false) => `<div class="a2item a2vol ${used.has(v.id) ? "" : "a2alone"} ${disconnected ? "a2disconnected" : ""}" id="${esc(v.id)}" data-kind="volume" data-id="${esc(v.id)}"
           title="${esc(v.name)} · ${v.size_gb} GB · ${v.replicas} replicas · ${esc(v.robustness)}${v.attached ? ` · attached on ${esc(v.attached)}` : ""}">
@@ -61,7 +61,7 @@ async function viewFlow() {
           <div class="a2vipip mono">${esc(v.ip)}</div>
           <div class="a2ports">${v.ports.map(p => `<span class="a2port" id="${esc(portId(v.ip, p.port))}" data-kind="access"
             data-id="${esc(portId(v.ip, p.port))}" title="${esc(p.app)} · open ${esc(v.ip)}:${p.port}"
-            onclick="openSvc('${esc(v.ip)}',${p.port})">${p.port}</span>`).join("")}</div></div>`).join("")
+            onclick="openSvc(${jsq(v.ip)},${p.port})">${p.port}</span>`).join("")}</div></div>`).join("")
         || '<div class="dim xs">No load-balancer addresses</div>'}
       </section>
 
@@ -309,12 +309,12 @@ async function viewStorage() {
      <td data-label="Usage" class="volusage">${volumeUsageCell(x)}</td>
      <td data-label="Last used" class="small dim">${x.state === "attached" ? '<span class="tag ok">in use</span>' : esc(fmtAgo(x.last_used_secs))}</td>
      <td class="volactions"><div class="row">
-       <button class="iconbtn" data-tip="Snapshots and backups of this volume: take one now, or restore" onclick="lhSnaps('${esc(x.name)}','${esc(x.pvc_name || x.name)}')">${icon("snapshot")}</button>
+       <button class="iconbtn" data-tip="Snapshots and backups of this volume: take one now, or restore" onclick="lhSnaps(${jsq(x.name)},${jsq(x.pvc_name || x.name)})">${icon("snapshot")}</button>
        <button class="iconbtn" data-need="operator" data-tip="Resize or change replicas" onclick='volumeEdit(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("edit")}</button>
        <details class="actionmenu"><summary class="iconbtn" title="More actions" aria-label="More actions for ${esc(x.pvc_name || x.name)}">⋯</summary><div class="actionmenu-pop">
-         <button data-need="admin" title="Browse and edit the files on this volume" onclick="this.closest('details').open=false;volumeFiles('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}',${x.state === "attached"})">${icon("list")}Browse files</button>
+         <button data-need="admin" title="Browse and edit the files on this volume" onclick="this.closest('details').open=false;volumeFiles(${jsq(x.namespace || "lab")},${jsq(x.pvc_name || x.name)},${x.state === "attached"})">${icon("list")}Browse files</button>
          <button data-need="admin" title="Copy it to a volume on another class, under the same name" onclick='this.closest("details").open=false;volumeReclass(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("move")}Change storage class</button>
-         <button data-need="admin" title="Hand this volume's files to the user the container runs as" onclick="this.closest('details').open=false;volumeChown('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}')">${icon("shield")}Fix ownership</button>
+         <button data-need="admin" title="Hand this volume's files to the user the container runs as" onclick="this.closest('details').open=false;volumeChown(${jsq(x.namespace || "lab")},${jsq(x.pvc_name || x.name)})">${icon("shield")}Fix ownership</button>
          <button class="danger" data-need="admin" title="Review attachment and data-loss impact before deleting" onclick='this.closest("details").open=false;volumeDelete(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("trash")}Delete</button>
        </div></details>
      </div></td>
@@ -323,7 +323,7 @@ async function viewStorage() {
   ${oldCopies.length ? `<div class="sec">Old copies ${tip("The original of a volume moved to another storage class, kept in case the new copy disappoints. Remove each once its app works on the new one.")}</div>
     <div class="card flat pad0"><div class="tblwrap"><table class="tbl dense"><thead><tr><th>Was</th><th>Class</th><th>Size</th><th></th></tr></thead><tbody>
     ${oldCopies.map(o => `<tr><td><b>${esc(o.was)}</b><div class="dim xs mono">${esc(o.pv)}</div></td><td>${esc(o.storage_class)}</td><td class="mono">${esc(o.size)}</td>
-      <td><button class="btn sm danger" data-need="admin" onclick="reclassRemoveOld('${esc(o.pv)}')">Remove</button></td></tr>`).join("")}</tbody></table></div></div>` : ""}
+      <td><button class="btn sm danger" data-need="admin" onclick="reclassRemoveOld(${jsq(o.pv)})">Remove</button></td></tr>`).join("")}</tbody></table></div></div>` : ""}
   ${storageClassCard(classes, v2)}`);
   volumeProgressWatch();
 }
@@ -356,7 +356,7 @@ window.volumeEdit = (x, fromRoute = false) => {
   <div class="f"><label>Replica count</label><input id="ve_reps" type="number" min="1" max="5" value="${x.replicas}"></div></div>
   <div class="note"><b>${esc((x.access_modes || []).join(", ") || "Access mode unknown")}</b> · ${esc(x.storage_class || "storage class unknown")}<br>
   Kubernetes locks access mode and storage class after a claim is bound. To change RWO ↔ RWX, create a new volume and migrate the data.</div>
-  <div class="row" style="margin-top:16px"><button class="btn pri" onclick="volumeEditNow('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}')">Save</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+  <div class="row" style="margin-top:16px"><button class="btn pri" onclick="volumeEditNow(${jsq(x.namespace || "lab")},${jsq(x.pvc_name || x.name)})">Save</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
 };
 window.volumeEditNow = async (namespace, name) => {
   const body = { namespace, name, size_gb: +$("#ve_size").value, replicas: +$("#ve_reps").value };
@@ -424,7 +424,7 @@ window.volumeDelete = async x => {
     ])),
     UI.section("3. Confirm", UI.field(`Type ${name} to confirm`,
       `<input id="vd_confirm" autocomplete="off" placeholder="${esc(name)}" oninput="volumeDeleteGate()">`)),
-    UI.actions(UI.cancel() + UI.button("Delete selected", `volumeDeleteNow('${esc(namespace)}','${esc(name)}','${esc(p.uid)}')`,
+    UI.actions(UI.cancel() + UI.button("Delete selected", `volumeDeleteNow(${jsArg(namespace)},${jsArg(name)},${jsArg(p.uid)})`,
       { kind: "danger", id: "vd_go", disabled: true, attrs: 'data-need="admin"' })),
   ].join("");
 };
@@ -558,8 +558,8 @@ function storageClassCard(classes, v2 = null) {
       <td data-label="Expansion">${row.expandable ? '<span class="tag ok">can grow</span>' : '<span class="tag">fixed size</span>'}</td>
       <td class="mono" data-label="Volumes">${row.in_use ?? 0}</td>
       <td><div class="row" style="gap:6px;flex-wrap:nowrap">
-        ${row.default || row.internal || row.made_for ? "" : `<button class="btn sm" data-need="admin" title="Use this class when nothing else is chosen" onclick="storageClassDefault('${esc(row.name)}')">Make default</button>`}
-        ${row.internal || row.default || row.in_use ? "" : `<button class="btn sm danger" data-need="admin" onclick="storageClassDelete('${esc(row.name)}')">${icon("trash")}Delete</button>`}
+        ${row.default || row.internal || row.made_for ? "" : `<button class="btn sm" data-need="admin" title="Use this class when nothing else is chosen" onclick="storageClassDefault(${jsq(row.name)})">Make default</button>`}
+        ${row.internal || row.default || row.in_use ? "" : `<button class="btn sm danger" data-need="admin" onclick="storageClassDelete(${jsq(row.name)})">${icon("trash")}Delete</button>`}
       </div></td></tr>`).join("")}</tbody></table></div>${specialLine}</div>`;
 }
 window.storageClassCleanup = async () => {
@@ -801,7 +801,7 @@ function fileCrumbs(path) {
   const crumbs = [`<button class="linkish" onclick="fileBrowse('')">${esc(FILEVIEW.pvc)}</button>`];
   parts.forEach((part, index) => {
     const upto = parts.slice(0, index + 1).join("/");
-    crumbs.push(`<span class="dim">/</span><button class="linkish" onclick="fileBrowse('${esc(upto)}')">${esc(part)}</button>`);
+    crumbs.push(`<span class="dim">/</span><button class="linkish" onclick="fileBrowse(${jsq(upto)})">${esc(part)}</button>`);
   });
   return crumbs.join("");
 }
@@ -810,12 +810,12 @@ function fileBrowserMarkup(listing) {
   const parent = String(listing.path || "").split("/").slice(0, -1).join("/");
   return `<div class="filecrumbs">${fileCrumbs(listing.path)}</div>
     <div class="filelist">
-      ${listing.path ? `<button class="filerow" onclick="fileBrowse('${esc(parent)}')"><span class="fileicon">↩</span><span>..</span><span class="dim xs">up one level</span></button>` : ""}
+      ${listing.path ? `<button class="filerow" onclick="fileBrowse(${jsq(parent)})"><span class="fileicon">↩</span><span>..</span><span class="dim xs">up one level</span></button>` : ""}
       ${listing.entries.map(entry => {
         const full = (listing.path ? listing.path + "/" : "") + entry.name;
         return entry.kind === "dir"
-          ? `<button class="filerow" onclick="fileBrowse('${esc(full)}')"><span class="fileicon">▸</span><span>${esc(entry.name)}</span><span class="dim xs">folder</span></button>`
-          : `<button class="filerow" ${entry.editable ? `onclick="fileOpen('${esc(full)}')"` : "disabled"}><span class="fileicon">·</span><span>${esc(entry.name)}</span><span class="dim xs">${fileSize(entry.size)}${entry.editable ? "" : " · too large to edit"}</span></button>`;
+          ? `<button class="filerow" onclick="fileBrowse(${jsq(full)})"><span class="fileicon">▸</span><span>${esc(entry.name)}</span><span class="dim xs">folder</span></button>`
+          : `<button class="filerow" ${entry.editable ? `onclick="fileOpen(${jsq(full)})"` : "disabled"}><span class="fileicon">·</span><span>${esc(entry.name)}</span><span class="dim xs">${fileSize(entry.size)}${entry.editable ? "" : " · too large to edit"}</span></button>`;
       }).join("") || '<div class="empty small">this folder is empty</div>'}
     </div>
     ${listing.truncated ? '<div class="dim xs">Only the first 500 entries are listed.</div>' : ""}
@@ -836,7 +836,7 @@ window.fileOpen = async (path) => {
       <div id="file_editor" class="fileeditor"></div>
       <div class="row" style="margin-top:14px">
         <button class="btn pri" id="file_save" data-need="admin" onclick="fileSave()">Save</button>
-        <button class="btn" onclick="fileBrowse('${esc(FILEVIEW.path)}')">Back</button>
+        <button class="btn" onclick="fileBrowse(${jsq(FILEVIEW.path)})">Back</button>
         <button class="btn" onclick="closeFiles()">Close browser</button></div>`;
     FILEVIEW.editor = null;
     try {
@@ -928,7 +928,7 @@ window.volumeChown = async (namespace, name) => {
     <div class="note">Homestead runs a short job that mounts the volume and changes ownership. The workload
       should be stopped first: a ReadWriteOnce volume cannot attach to the job while its pod holds it.</div>
     <div class="row" style="margin-top:16px">
-      <button class="btn pri" data-need="admin" onclick="volumeChownNow('${esc(namespace)}','${esc(name)}',this)">Set ownership</button>
+      <button class="btn pri" data-need="admin" onclick="volumeChownNow(${jsq(namespace)},${jsq(name)},this)">Set ownership</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div>`;
   if (window.applyRole) window.applyRole();
 };
@@ -993,9 +993,9 @@ async function viewShares() {
         ${s.read_only ? '<span class="tag">read only</span>' : '<span class="tag">read/write</span>'}
         ${s.nfs_clients ? `<span class="pill slim info" data-tip="NFS ${s.nfs_read_only === false ? "read/write" : "read only"} for ${esc(s.nfs_clients)}">NFS</span>` : ""}</span></td>
       <td class="small muted mono" data-label="UNC path">${smb.address ? `\\\\${esc(ip)}\\${esc(s.name)}` : "Waiting for SMB address"}</td>
-      <td class="shareactions"><div class="row"><button class="btn sm" data-need="admin" title="Configure this share's NFSv4 export and allowed clients" onclick="nfsExport('${esc(s.name)}')">NFS</button>
-        <button class="btn sm" data-need="admin" title="Grow this share or change its access policy" onclick="editShare('${esc(s.name)}')">${icon("edit")}Edit</button>
-        <button class="btn sm danger" data-need="admin" onclick="rmShare('${esc(s.name)}')">${icon("trash")}Remove</button></div></td></tr>`).join("")
+      <td class="shareactions"><div class="row"><button class="btn sm" data-need="admin" title="Configure this share's NFSv4 export and allowed clients" onclick="nfsExport(${jsq(s.name)})">NFS</button>
+        <button class="btn sm" data-need="admin" title="Grow this share or change its access policy" onclick="editShare(${jsq(s.name)})">${icon("edit")}Edit</button>
+        <button class="btn sm danger" data-need="admin" onclick="rmShare(${jsq(s.name)})">${icon("trash")}Remove</button></div></td></tr>`).join("")
       || `<tr><td colspan=6 class="empty">no shares yet — create one with ＋ New share</td></tr>`}</tbody></table></div></div>`);
 }
 window.nfsExport = name => {
@@ -1008,7 +1008,7 @@ window.nfsExport = name => {
       <input id="nfs_clients" value="${esc(share.nfs_clients || "")}" placeholder="192.0.2.0/24" autocomplete="off"></div>
     <label class="switch"><input type="checkbox" id="nfs_ro" ${share.nfs_read_only !== false ? "checked" : ""}> Read only</label>
     <div class="dim xs" style="margin-top:8px">NFSv4 clients mount ${esc(STATE.data.nfs?.address || "<server-ip>")}:/${esc(name)} on TCP port 2049. The server and its VIP are enabled in Settings → Cluster → Add-ons. Longhorn RWX re-export adds an extra NFS layer.</div>
-    <div class="modalactions"><button class="btn pri" onclick="nfsExportSave('${esc(name)}',this)">Save export</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    <div class="modalactions"><button class="btn pri" onclick="nfsExportSave(${jsq(name)},this)">Save export</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
 };
 window.nfsExportSave = async (name, button) => {
   const clients = $("#nfs_clients")?.value.trim() || "";
@@ -1035,8 +1035,8 @@ window.smbUsers = async () => {
     $("#mbody").innerHTML = UI.lead("One password per SMB user, shared across their private shares.")
       + UI.table([{ label: "User" }, { label: "Shares" }, { label: "Actions" }], users.map(user => [esc(user.user),
         esc(user.shares.join(", ") || "No shares"),
-        UI.button("Change password", `smbUserEdit('${user.user}')`, { small: true })
-        + (!user.shares.length ? UI.button("Remove", `smbUserRemove('${user.user}')`, { small: true }) : "")]))
+        UI.button("Change password", `smbUserEdit(${jsArg(user.user)})`, { small: true })
+        + (!user.shares.length ? UI.button("Remove", `smbUserRemove(${jsArg(user.user)})`, { small: true }) : "")]))
       + UI.more("About SMB users", "These accounts are separate from Homestead sign-ins. Saved passwords are never displayed. Remove a user only after reassigning their private shares; unused users remain available for new shares.")
       + UI.actions(UI.cancel("Close") + UI.button("Add user", "smbUserEdit()", { kind: "pri" }));
   } catch (error) {
@@ -1051,7 +1051,7 @@ window.smbUserEdit = (name = "") => {
     + (user?.shares.length ? UI.callout("warn", "SMB connections will restart", `This changes access to ${esc(user.shares.join(", "))}. Reconnect clients with the new password.`) : "")
     + UI.fields(UI.field("Username", `<input id="su_user" value="${esc(name)}" ${name ? "readonly" : ""} autocomplete="username" maxlength="32">`)
       + UI.field("New password", '<input id="su_password" type="password" autocomplete="new-password">'))
-    + UI.actions(UI.button("Back", "smbUsers()") + UI.button(name ? "Change password" : "Add user", `smbUserSave('${name ? "password" : "create"}',this)`, { kind: "pri" })), false, "smb-access");
+    + UI.actions(UI.button("Back", "smbUsers()") + UI.button(name ? "Change password" : "Add user", `smbUserSave(${jsArg(name ? "password" : "create")},this)`, { kind: "pri" })), false, "smb-access");
 };
 window.smbUserSave = async (action, button) => {
   const user = $("#su_user").value.trim(), password = $("#su_password").value;
@@ -1067,7 +1067,7 @@ window.smbUserSave = async (action, button) => {
 };
 window.smbUserRemove = name => {
   modal(`Remove SMB user · ${esc(name)}`, UI.lead("Remove this unused account and its saved password. Shares and their data are kept.")
-    + UI.actions(UI.button("Back", "smbUsers()") + UI.button("Remove user", `smbUserDelete('${name}',this)`, { kind: "danger" })), false, "smb-access");
+    + UI.actions(UI.button("Back", "smbUsers()") + UI.button("Remove user", `smbUserDelete(${jsArg(name)},this)`, { kind: "danger" })), false, "smb-access");
 };
 window.smbUserDelete = async (user, button) => {
   button.disabled = true;
@@ -1197,7 +1197,7 @@ window.editShare = name => {
         <input type="password" id="she_pass" autocomplete="new-password" placeholder="${s.has_password ? "Leave blank to keep current password" : "Required for private access"}">
         ${shareAccountSiblings(s).length ? `<span class="dim xs">${esc(s.user)} is also used by ${esc(shareAccountSiblings(s).join(", "))}. Samba keeps one password per account, so a new one changes those too.</span>` : ""}</div></div>
     <label class="switch"><input type="checkbox" id="she_ro" ${s.read_only ? "checked" : ""}> Read only · clients can browse and download but cannot change files</label>
-    <div class="row" style="margin-top:18px"><button class="btn pri" data-need="admin" onclick="saveShareEdit('${esc(s.name)}',this)">${icon("edit")}Save changes</button>
+    <div class="row" style="margin-top:18px"><button class="btn pri" data-need="admin" onclick="saveShareEdit(${jsq(s.name)},this)">${icon("edit")}Save changes</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div>`);
 };
 window.saveShareEdit = async (name, button) => {
@@ -1255,12 +1255,12 @@ const eventTime = x => (eventTab() === "signins" ? x.at * 1000 : Date.parse(x.ti
 function eventTabs(tab) {
   if (!can("admin")) return "";
   const button = (id, label) => `<button type="button" class="${tab === id ? "on" : ""}" aria-pressed="${tab === id}"
-    onclick="STATE.eventsTab='${id}';viewEvents()">${label}</button>`;
+    onclick="STATE.eventsTab=${jsq(id)};viewEvents()">${label}</button>`;
   return `<div class="seg event-tabs" role="group" aria-label="Which events">${button("cluster", "Cluster")}${button("signins", "Sign-ins")}</div>`;
 }
 
 function eventSelect(key, label, options, value) {
-  return `<select class="evf" aria-label="${esc(label)}" onchange="eventFilterSet('${key}', this.value)">
+  return `<select class="evf" aria-label="${esc(label)}" onchange="eventFilterSet(${jsq(key)}, this.value)">
     ${options.map(([v, text]) => `<option value="${esc(v)}" ${v === value ? "selected" : ""}>${esc(text)}</option>`).join("")}</select>`;
 }
 
@@ -1476,25 +1476,25 @@ function diskRowsHtml(node, disks, harvester) {
         <div class="row disk-tags">${(x.tags || []).map(t => `<span class="tag info">${esc(t)}</span>`).join("")
           || '<span class="dim xs">no tags</span>'}
           <button class="linkish xs" data-need="admin" data-tags="${esc(JSON.stringify(x.tags || []))}"
-            onclick="diskTags('${esc(node)}','${esc(x.id)}',JSON.parse(this.dataset.tags))">${(x.tags || []).length ? "Edit tags" : "Add tags"}</button></div>
+            onclick="diskTags(${jsq(node)},${jsq(x.id)},JSON.parse(this.dataset.tags))">${(x.tags || []).length ? "Edit tags" : "Add tags"}</button></div>
         <div class="row disk-lh-acts">
           ${!x.ready ? `<span class="tag bad" data-tip="${esc(x.problem)}">${x.missing ? "drive missing" : "failed"}</span>
-            <button class="btn sm pri" data-need="admin" onclick="diskRetire('${esc(node)}','${esc(x.id)}')"
+            <button class="btn sm pri" data-need="admin" onclick="diskRetire(${jsq(node)},${jsq(x.id)})"
               title="Let go of its failed replicas so they rebuild from healthy copies, and take it out of Longhorn for a new drive">Replace failed disk</button>` : ""}
           ${x.evicting ? '<span class="tag warn">moving replicas off</span>' : !x.scheduling ? '<span class="tag">no new replicas</span>' : ""}
-          <button class="btn sm" data-need="admin" onclick="diskAction('scheduling','${esc(node)}','${esc(x.id)}',${!x.scheduling})">${x.scheduling ? "Stop new replicas" : "Allow new replicas"}</button>
-          ${x.ready && x.replicas && !x.evicting ? `<button class="btn sm" data-need="admin" onclick="diskAction('evict','${esc(node)}','${esc(x.id)}',true)" title="Rebuild every replica on this disk somewhere else">Move replicas off</button>` : ""}
-          ${x.evicting ? `<button class="btn sm" data-need="admin" onclick="diskAction('evict','${esc(node)}','${esc(x.id)}',false)">Stop moving</button>` : ""}
-          ${!x.replicas && !x.scheduling ? `<button class="btn sm danger" data-need="admin" onclick="diskAction('remove','${esc(node)}','${esc(x.id)}')">Remove from Longhorn</button>` : ""}</div></div>`;
+          <button class="btn sm" data-need="admin" onclick="diskAction('scheduling',${jsq(node)},${jsq(x.id)},${!x.scheduling})">${x.scheduling ? "Stop new replicas" : "Allow new replicas"}</button>
+          ${x.ready && x.replicas && !x.evicting ? `<button class="btn sm" data-need="admin" onclick="diskAction('evict',${jsq(node)},${jsq(x.id)},true)" title="Rebuild every replica on this disk somewhere else">Move replicas off</button>` : ""}
+          ${x.evicting ? `<button class="btn sm" data-need="admin" onclick="diskAction('evict',${jsq(node)},${jsq(x.id)},false)">Stop moving</button>` : ""}
+          ${!x.replicas && !x.scheduling ? `<button class="btn sm danger" data-need="admin" onclick="diskAction('remove',${jsq(node)},${jsq(x.id)})">Remove from Longhorn</button>` : ""}</div></div>`;
     }).join("");
     return `<div class="disk-card">
       <div class="between"><div><b class="mono">${esc(d.device || "Longhorn")}</b> <span class="dim xs">${esc(d.model || "")}</span>
           <div class="dim xs">${esc(sizeText(d.size_gb))}${d.kind ? ` · ${esc(d.kind)}` : ""}${d.mounts.length ? ` · ${esc(d.mounts.slice(0, 3).join(", "))}` : ""}</div></div>
         <div class="row">${d.system ? '<span class="tag">system</span>' : ""}<span class="tag ${tone}">${esc(word)}</span>
-          ${d.can_add ? `<button class="btn sm pri" data-need="admin" onclick="diskAdd('${esc(node)}','${esc(d.blockdevice.name)}','${esc(d.path)}',${d.needs_wipe})">Add to Longhorn</button>` : ""}
-          ${!harvester && d.role === "unused" && d.device ? `<button class="btn sm pri" data-need="admin" onclick="diskAdd('${esc(node)}','','/dev/${esc(d.device)}')">Add to Longhorn</button>` : ""}</div></div>
+          ${d.can_add ? `<button class="btn sm pri" data-need="admin" onclick="diskAdd(${jsq(node)},${jsq(d.blockdevice.name)},${jsq(d.path)},${d.needs_wipe})">Add to Longhorn</button>` : ""}
+          ${!harvester && d.role === "unused" && d.device ? `<button class="btn sm pri" data-need="admin" onclick="diskAdd(${jsq(node)},'',${jsq("/dev/" + d.device)})">Add to Longhorn</button>` : ""}</div></div>
       ${lh}</div>`;
-  }).join("") + (harvester ? "" : `<button class="btn sm" data-need="admin" style="margin-top:8px" onclick="diskAdd('${esc(node)}')">＋ Add a disk to Longhorn</button>`)
+  }).join("") + (harvester ? "" : `<button class="btn sm" data-need="admin" style="margin-top:8px" onclick="diskAdd(${jsq(node)})">＋ Add a disk to Longhorn</button>`)
     + (harvester && !disks.some(d => d.can_add) ? '<div class="dim xs" style="margin-top:8px">Every disk Harvester found here is in use. A new disk shows up once it is plugged in and Harvester has scanned it.</div>' : "");
 }
 
@@ -1505,7 +1505,7 @@ function nodeTagsLine(node, inv) {
   return `<div class="row disk-tags node-tags"><span class="dim xs">Node tags</span>
     ${tags.map(t => `<span class="tag">${esc(t)}</span>`).join("") || '<span class="dim xs">none</span>'}
     <button class="linkish xs" data-need="admin" data-tags="${esc(JSON.stringify(tags))}"
-      onclick="nodeTags('${esc(node)}',JSON.parse(this.dataset.tags))">${tags.length ? "Edit" : "Add"}</button></div>`;
+      onclick="nodeTags(${jsq(node)},JSON.parse(this.dataset.tags))">${tags.length ? "Edit" : "Add"}</button></div>`;
 }
 
 /* Tags are words Longhorn matches a storage class against: a class that
@@ -1517,7 +1517,7 @@ function tagEditor(title, about, current, known, save) {
     <div class="f"><label>Tags</label>
       <input type="text" id="tg_text" value="${esc(current.join(", "))}" placeholder="ssd, fast" autocomplete="off"></div>
     ${ideas.length ? `<div class="row" style="gap:6px;flex-wrap:wrap;margin:-4px 0 14px"><span class="dim xs">Add</span>${ideas.map(t =>
-      `<button class="tag linkish" onclick="tagAdd('${esc(t)}')">＋ ${esc(t)}</button>`).join("")}</div>` : ""}
+      `<button class="tag linkish" onclick="tagAdd(${jsq(t)})">＋ ${esc(t)}</button>`).join("")}</div>` : ""}
     <div class="row"><button class="btn pri" id="tg_save">Save tags</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
   $("#tg_save").onclick = () => save($("#tg_text").value.split(/[\s,]+/).filter(Boolean));
   $("#tg_text").focus();
@@ -1615,7 +1615,7 @@ window.diskAdd = (node, blockdevice = "", path = "", needsWipe = false) => {
       ${v2 ? "" : '<div class="dim xs">The V2 engine is off; switch it on in Settings › Cluster to add a V2 disk.</div>'}</div>
     ${blockdevice ? `<label class="switch"><input type="checkbox" id="da_wipe" ${needsWipe ? "" : "disabled"}> Erase it first
       ${needsWipe ? '<span class="badtext xs">— it already holds a filesystem or partitions, which are destroyed</span>' : '<span class="dim xs">— it is blank</span>'}</label>` : ""}
-    <div class="row" style="margin-top:14px"><button class="btn pri" onclick="diskAddGo('${esc(node)}','${esc(blockdevice)}')">Add</button>
+    <div class="row" style="margin-top:14px"><button class="btn pri" onclick="diskAddGo(${jsq(node)},${jsq(blockdevice)})">Add</button>
       <button class="btn" onclick="modalBack()">Cancel</button></div>`);
 };
 /* Off Harvester, a disk is mounted on the host by hand before Longhorn is
@@ -1664,7 +1664,7 @@ window.diskRetire = async (node, disk) => {
       unless you give ${p.only_copies === 1 ? "it" : "them"} up:
       <label class="switch" style="margin-top:8px"><input type="checkbox" id="dr_force" onchange="$('#dr_confirm_row').hidden=!this.checked"> Give ${p.only_copies === 1 ? "it" : "them"} up - the data is lost</label>
       <div id="dr_confirm_row" hidden class="f" style="margin-top:8px"><label>Type <span class="mono">${esc(disk)}</span> to confirm</label><input id="dr_confirm" class="mono"></div></div>` : ""}
-    <div class="row" style="margin-top:14px"><button class="btn pri" data-need="admin" onclick="diskRetireGo('${esc(node)}','${esc(disk)}')">Replace it</button>
+    <div class="row" style="margin-top:14px"><button class="btn pri" data-need="admin" onclick="diskRetireGo(${jsq(node)},${jsq(disk)})">Replace it</button>
       <button class="btn" onclick="modalBack()">Cancel</button></div>`;
   if (window.applyRole) applyRole();
 };
@@ -1703,10 +1703,10 @@ window.volumeReclass = async x => {
   const pick = classes.find(c => c.default) || classes[0];
   modal(`Change storage class · ${x.pvc_name || x.name}`, UI.lead("Copy this volume to another storage class, keeping its name. Workloads using it stop during the move; the original data is kept afterward.") +
     UI.fields(UI.field("From", `<input value="${esc(x.storage_class || "unknown")}" disabled>`),
-      UI.field("To", `<select id="rc_to" onchange="volumeReclassPlan('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}')">${classes.map(c => `<option value="${esc(c.name)}" ${c.name === pick.name ? "selected" : ""}>${esc(c.name)}${c.replicas ? ` · ${esc(c.replicas)} copies` : ""}</option>`).join("")}</select>`)) +
+      UI.field("To", `<select id="rc_to" onchange="volumeReclassPlan(${jsq(x.namespace || "lab")},${jsq(x.pvc_name || x.name)})">${classes.map(c => `<option value="${esc(c.name)}" ${c.name === pick.name ? "selected" : ""}>${esc(c.name)}${c.replicas ? ` · ${esc(c.replicas)} copies` : ""}</option>`).join("")}</select>`)) +
     '<div id="rc_plan"></div>' +
     UI.ack("rc_ack", "I approve the downtime and the storage warnings shown above.", {onchange:"volumeReclassReady()"}) +
-    UI.actions(UI.cancel() + UI.button("Move volume", `volumeReclassStart('${esc(x.namespace || "lab")}','${esc(x.pvc_name || x.name)}')`, {kind:"pri",id:"rc_go",disabled:true})), false, "operation-review");
+    UI.actions(UI.cancel() + UI.button("Move volume", `volumeReclassStart(${jsArg(x.namespace || "lab")},${jsArg(x.pvc_name || x.name)})`, {kind:"pri",id:"rc_go",disabled:true})), false, "operation-review");
   volumeReclassPlan(x.namespace || "lab", x.pvc_name || x.name);
 };
 
@@ -1777,9 +1777,9 @@ window.reclassWatch = async id => {
         ${s.state === "active" && (s.id === "copy" || s.id === "verify") ? `<div class="rc-copy">${meter(s.id === "verify" ? 100 : copy.percent || 0, "", "cpu")}
           <span class="mono xs">${s.id === "verify" ? "comparing with the original" : copy.unavailable ? "waiting for reported progress" : `${copy.percent || 0}%${copy.speed ? ` · ${esc(copy.speed)}` : ""}`}</span></div>` : ""}</div>`).join("")}</div>
       <div class="note ${op.status === "failed" ? "bad" : op.status === "succeeded" ? "good" : ""}" style="margin-top:12px">${esc(op.message || "")}</div>
-      ${op.storage_recovery ? `<div class="row"><button class="btn pri" data-need="admin" onclick="storageRecoveryReview('${esc(op.id)}')">Review storage move</button></div>` : ""}
-      ${op.status === "failed" && op.resumable ? `<div class="row" style="margin-top:12px"><button class="btn pri" data-need="admin" onclick="resumeOperation('${esc(op.id)}')">Carry on from this step</button></div>` : ""}
-      ${op.status === "succeeded" && op.old_pv ? `<div class="row" style="margin-top:12px"><button class="btn danger" data-need="admin" onclick="reclassRemoveOld('${esc(op.old_pv)}')">Remove the old copy</button>
+      ${op.storage_recovery ? `<div class="row"><button class="btn pri" data-need="admin" onclick="storageRecoveryReview(${jsq(op.id)})">Review storage move</button></div>` : ""}
+      ${op.status === "failed" && op.resumable ? `<div class="row" style="margin-top:12px"><button class="btn pri" data-need="admin" onclick="resumeOperation(${jsq(op.id)})">Carry on from this step</button></div>` : ""}
+      ${op.status === "succeeded" && op.old_pv ? `<div class="row" style="margin-top:12px"><button class="btn danger" data-need="admin" onclick="reclassRemoveOld(${jsq(op.old_pv)})">Remove the old copy</button>
         <span class="dim xs">Keep it until the app is working on the new one.</span></div>` : ""}
       <div class="row" style="margin-top:12px"><button class="btn" onclick="closeModal()">${op.status === "running" ? "Keep going in the background" : "Close"}</button></div>`;
     if (window.applyRole) applyRole();

@@ -12,7 +12,7 @@ function setup({blocked=false,running=false,missing=false,fail=false}={}) {
         warnings:['Memory warning'],blockers:blocked?['Request outcome unknown']:[],message:'Retained'}};
       if(fail)throw Error('Lost response');return {ok:true,detail:'Queued'};
     }};
-  ctx.window=ctx;vm.createContext(ctx);
+  ctx.window=ctx;vm.createContext(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));
   for(const file of ['ui','operations'])vm.runInContext(fs.readFileSync(`web/js/${file}.js`,'utf8'),ctx);
   ctx.refreshOperations=()=>{refreshes++;};
   return {ctx,fields,calls,get refreshes(){return refreshes;},get closed(){return closed;}};

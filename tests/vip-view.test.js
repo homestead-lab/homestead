@@ -23,6 +23,7 @@ function setup() {
   };
   ctx.window = ctx;
   vm.createContext(ctx);
+  ctx.jsArg = s => JSON.stringify(String(s ?? "")); ctx.jsq = s => (ctx.esc || String)(ctx.jsArg(s));
   vm.runInContext(fs.readFileSync("web/js/views-network.js", "utf8"), ctx);
   ctx.viewNetworking = async () => { ctx.refreshed = true; };
   return { ctx, elements, requests, notices };

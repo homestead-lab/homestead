@@ -7,6 +7,7 @@ const vm = require("node:vm");
 
 const context = { window: {} };
 vm.createContext(context);
+context.jsArg = s => JSON.stringify(String(s ?? "")); context.jsq = s => (context.esc || String)(context.jsArg(s));
 vm.runInContext(fs.readFileSync("web/js/appstore-utils.js", "utf8"), context);
 const label = value => context.window.appCategoryLabel(value);
 

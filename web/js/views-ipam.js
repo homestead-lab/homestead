@@ -111,7 +111,7 @@ function renderIpam() {
   if (!data.subnets.length) {
     return paint(`${head}<div class="empty ipam-empty"><b>No subnets yet.</b> Add the LAN the cluster sits on, with its DHCP range, and Homestead fills in what the cluster uses.
       <div class="row" style="justify-content:center;margin-top:12px">${(data.suggested || []).map(cidr =>
-        `<button class="btn pri" data-need="operator" onclick="ipamSubnets('${esc(cidr)}')">Add ${esc(cidr)}</button>`).join("")}
+        `<button class="btn pri" data-need="operator" onclick="ipamSubnets(${jsq(cidr)})">Add ${esc(cidr)}</button>`).join("")}
         <button class="btn" data-need="operator" onclick="ipamSubnets()">Add a subnet</button></div></div>`);
   }
   const subnet = ipamSubnetPick(data.subnets);
@@ -120,16 +120,16 @@ function renderIpam() {
   const scanning = subnet.scan.state === "running";
   const u = data.unifi || {};
   paint(`${head}
-    ${data.subnets.length > 1 ? `<div class="seg ipam-subnets">${data.subnets.map(s => `<button class="${s.id === subnet.id ? "on" : ""}" onclick="ipamPickSubnet('${esc(s.id)}')">${esc(s.name || s.cidr)} <span class="dim">${s.used}</span></button>`).join("")}</div>` : ""}
+    ${data.subnets.length > 1 ? `<div class="seg ipam-subnets">${data.subnets.map(s => `<button class="${s.id === subnet.id ? "on" : ""}" onclick="ipamPickSubnet(${jsq(s.id)})">${esc(s.name || s.cidr)} <span class="dim">${s.used}</span></button>`).join("")}</div>` : ""}
     <div class="grid g4 statgrid ipam-stats" style="margin:12px 0 16px">
       <div class="card flat"><div class="ctitle">${esc(subnet.name || "Subnet")}</div><div class="bignum" style="margin-top:8px">${subnet.used}<span class="unit">/${subnet.usable}</span></div>
         <div class="csub mono">${esc(subnet.cidr)}${subnet.vlan ? ` · VLAN ${subnet.vlan}` : ""}${subnet.gateway ? ` · gw ${esc(subnet.gateway)}` : ""}</div></div>
       <div class="card flat"><div class="ctitle">DHCP range</div><div class="bignum" style="margin-top:8px">${subnet.dhcp_size || "—"}</div>
         <div class="csub mono">${subnet.dhcp_start ? `${esc(subnet.dhcp_start)} – ${esc(subnet.dhcp_end)}` : "not set: add it under Subnets"}</div></div>
       <div class="card flat"><div class="ctitle">Free for static use</div><div class="bignum" style="margin-top:8px">${subnet.free_static}</div>
-        <div class="csub">${subnet.next_free.length ? `next: ${subnet.next_free.slice(0, 3).map(ip => `<a class="mono" style="cursor:pointer" onclick="ipamCopy('${ip}')" title="Copy">${esc(ip)}</a>`).join(", ")}` : "none outside DHCP and the VIP pools"}</div></div>
+        <div class="csub">${subnet.next_free.length ? `next: ${subnet.next_free.slice(0, 3).map(ip => `<a class="mono" style="cursor:pointer" onclick="ipamCopy(${jsq(ip)})" title="Copy">${esc(ip)}</a>`).join(", ")}` : "none outside DHCP and the VIP pools"}</div></div>
       <div class="card flat"><div class="ctitle">Last scan</div><div class="bignum" style="margin-top:8px;font-size:20px">${scanning ? `${subnet.scan.progress}%` : subnet.scan.at ? esc(fmtAgo(Date.now() / 1000 - subnet.scan.at)) : "never"}</div>
-        <div class="csub"><button class="btn sm" data-need="operator" onclick="ipamScan('${esc(subnet.id)}')" ${scanning ? "disabled" : ""}>${scanning ? "Scanning…" : "Scan now"}</button>
+        <div class="csub"><button class="btn sm" data-need="operator" onclick="ipamScan(${jsq(subnet.id)})" ${scanning ? "disabled" : ""}>${scanning ? "Scanning…" : "Scan now"}</button>
           ${u.configured ? `<button class="btn sm" data-need="operator" onclick="ipamSync()">Sync UniFi</button>` : ""}</div></div>
     </div>
     ${(subnet.pool_clash || []).length ? `<div class="note bad"><b>Harvester's ${esc(subnet.pool_clash.join(", "))} VIP pool overlaps the DHCP range.</b> A VIP it hands out may already be leased to a device; move the pool or shrink the DHCP range.</div>` : ""}
@@ -178,7 +178,7 @@ function ipamRow(row) {
   // row is a short card - they take no room.
   return `<tr class="ipam-row ${row.flags.some(f => f.level === "warn") ? "ipam-warn" : ""}">
     <td class="ip-pick">${row.cluster ? "" : `<input type="checkbox" class="ipam-pick" value="${esc(row.ip)}" aria-label="Select ${esc(row.ip)}" onchange="ipamPicked(this)" ${ipamPicks().has(row.ip) ? "checked" : ""}>`}</td>
-    <td class="ip-addr mono nowrap" data-sort="${ipNum(row.ip)}"><a style="cursor:pointer" onclick="ipamEdit('${esc(row.ip)}')">${esc(row.ip)}</a>${row.in_dhcp ? ' <span class="dim xs" data-tip="Inside the DHCP range">dhcp</span>' : ""}</td>
+    <td class="ip-addr mono nowrap" data-sort="${ipNum(row.ip)}"><a style="cursor:pointer" onclick="ipamEdit(${jsq(row.ip)})">${esc(row.ip)}</a>${row.in_dhcp ? ' <span class="dim xs" data-tip="Inside the DHCP range">dhcp</span>' : ""}</td>
     <td data-label="Name" class="ip-name ipam-name">${name || row.category || second ? `<div class="ipam-line">${ipamCategoryIcon(row.category)}${name}</div>
       ${second ? `<div class="ipam-line dim xs mono" title="${esc(second)}">${esc(second)}</div>` : ""}` : ""}</td>
     <td data-label="MAC" class="ip-mac mono xs nowrap">${esc(row.mac || "")}</td>
@@ -221,9 +221,9 @@ function ipamGap(from, to, subnet) {
     const ip = ipStr(n), dhcp = n >= d1 && n <= d2, gw = subnet.gateway === ip;
     return `<tr class="ipam-free"><td></td><td class="mono nowrap">${ip}</td>
       <td colspan="4" class="dim xs">${gw ? "the gateway" : dhcp ? "free · inside the DHCP range, so the DHCP server may lease it" : "free"}</td>
-      <td class="nowrap">${gw ? "" : `<a class="ipam-doc" data-need="operator" onclick="ipamEdit('${ip}')">＋ Document</a>`}</td></tr>`;
+      <td class="nowrap">${gw ? "" : `<a class="ipam-doc" data-need="operator" onclick="ipamEdit(${jsq(ip)})">＋ Document</a>`}</td></tr>`;
   }).join("") : "";
-  return `<tbody class="grouphead ipam-gap"><tr><td colspan="7"><button type="button" class="ipam-gap-head" aria-expanded="${open}" onclick="ipamToggleGap('${key}')">
+  return `<tbody class="grouphead ipam-gap"><tr><td colspan="7"><button type="button" class="ipam-gap-head" aria-expanded="${open}" onclick="ipamToggleGap(${jsq(key)})">
       <span class="wgroup-chevron">›</span><span class="mono">${esc(range)}</span>
       <span class="dim xs">${count} free${inDhcp ? ` · ${inDhcp === count ? "all" : inDhcp} in the DHCP range` : ""}</span></button></td></tr>${addresses}</tbody>`;
 }
@@ -294,7 +294,7 @@ window.ipamEdit = (ip = "") => {
     ${(row.flags || []).map(f => `<div class="note ${f.level === "warn" ? "bad" : ""}">${esc(f.text)}</div>`).join("")}
     ${row.scan?.up ? `<div class="dim xs">Last scan: answering${row.scan.ports?.length ? ` on ${row.scan.ports.join(", ")}` : ""}${row.scan.rdns ? ` · ${esc(row.scan.rdns)}` : ""}</div>` : ""}
     <div class="row" style="margin-top:14px"><button class="btn pri" onclick="ipamSave()">Save</button><button class="btn" onclick="closeModal()">Cancel</button>
-      ${ip && ipamRows(subnet).some(r => r.ip === ip) ? `<button class="btn danger" style="margin-left:auto" data-need="operator" onclick="ipamRemove('${esc(ip)}')">Remove</button>` : ""}</div>`);
+      ${ip && ipamRows(subnet).some(r => r.ip === ip) ? `<button class="btn danger" style="margin-left:auto" data-need="operator" onclick="ipamRemove(${jsq(ip)})">Remove</button>` : ""}</div>`);
 };
 window.ipamRemove = async ip => {
   if (!confirm(ipamRemoveQuestion(1))) return;
@@ -335,7 +335,7 @@ window.ipamSubnets = (add = "") => {
   modal("Subnets", `<p class="muted small">The networks Homestead keeps addresses for, each up to a /22. Give each its DHCP range so static addresses and VIPs inside it are flagged, and the next free address is found outside it.</p>
     <div id="is_rows">${data.subnets.map(ipamSubnetRow).join("")}${add ? ipamSubnetRow({ cidr: add, name: "LAN", gateway: add.replace(/\.0\/24$/, ".1") }) : ""}</div>
     <div class="row" style="margin-top:10px"><button class="btn" onclick="$('#is_rows').insertAdjacentHTML('beforeend', ipamSubnetRow())">＋ Subnet</button>
-      ${(data.suggested || []).map(c => `<button class="btn" onclick="$('#is_rows').insertAdjacentHTML('beforeend', ipamSubnetRow({cidr:'${esc(c)}'}))">＋ ${esc(c)} <span class="dim">(cluster nodes)</span></button>`).join("")}
+      ${(data.suggested || []).map(c => `<button class="btn" onclick="$('#is_rows').insertAdjacentHTML('beforeend', ipamSubnetRow({cidr:${jsq(c)}}))">＋ ${esc(c)} <span class="dim">(cluster nodes)</span></button>`).join("")}
       ${(ipamUnifiOn() ? data.unifi_networks || [] : []).map((n, i) => `<button class="btn" onclick="$('#is_rows').insertAdjacentHTML('beforeend', ipamSubnetRow(STATE.data.ipam.unifi_networks[${i}]))">＋ ${esc(n.name || n.cidr)} <span class="dim">(UniFi${n.vlan ? ` · VLAN ${n.vlan}` : ""})</span></button>`).join("")}</div>
     <div class="row" style="margin-top:14px"><button class="btn pri" onclick="ipamSubnetsSave()">Save subnets</button><button class="btn" onclick="closeModal()">Cancel</button></div>`, true);
 };

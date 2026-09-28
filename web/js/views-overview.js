@@ -67,8 +67,8 @@ async function viewDash() {
   ${(o.health_issues || []).length ? `<div class="clusteralert ${o.health === "critical" ? "critical" : ""}">
     <div><b>${o.health === "critical" ? "Cluster needs attention" : "Cluster is degraded"}</b>
       <span>${esc(o.health_summary)}</span></div>
-    <button class="btn sm" onclick="go('${o.health_issues.some(x => ["Node", "Disk"].includes(x.kind)) ? "nodes" :
-      o.health_issues.some(x => x.kind === "Volume") ? "storage" : o.health_issues.every(x => x.kind === "Backup") ? "protect" : "workloads"}')">Review</button>
+    <button class="btn sm" onclick="go(${jsq(o.health_issues.some(x => ["Node", "Disk"].includes(x.kind)) ? "nodes" :
+      o.health_issues.some(x => x.kind === "Volume") ? "storage" : o.health_issues.every(x => x.kind === "Backup") ? "protect" : "workloads")})">Review</button>
   </div>` : ""}
 
   <div class="grid g3 stagger">
@@ -221,7 +221,7 @@ function nodeCard(n) {
   const up = nodeUpFor(n);
   const net = ratePair(n.rx_mbps, n.tx_mbps);
   return `<div class="card glow ${bad ? "g-bad" : health} clickable nodecard"${clusterAttr(n)}
-       onclick="nodeDetail('${esc(n.name)}')">
+       onclick="nodeDetail(${jsq(n.name)})">
     <div class="between nodehead">
       <div class="row" style="gap:10px">
         <div class="av n2">${esc(n.name.replace(/[^0-9a-z]/gi, "").slice(-2).toUpperCase())}</div>
@@ -231,7 +231,7 @@ function nodeCard(n) {
       <div class="row nodehead-acts" style="gap:7px">
         ${n.schedulable === false ? '<span class="pill med">cordoned</span>' : ""}
         <span class="pill ${bad ? "crit" : "low"}">${n.status}</span>
-        <button class="btn sm" onclick="event.stopPropagation();nodeActions('${esc(n.name)}')">⋯</button>
+        <button class="btn sm" onclick="event.stopPropagation();nodeActions(${jsq(n.name)})">⋯</button>
       </div>
     </div>
     ${nodeUptimeStrip(n)}
@@ -259,7 +259,7 @@ function nodeCard(n) {
       <div class="badgegroup"><span class="badgecap">WORKLOADS</span>
         ${n.workloads.length ? n.workloads.slice(0, 5).map(w =>
             `<span class="tag movable" title="Move ${esc(w)} to another host"
-               onclick="event.stopPropagation();moveWorkload('${esc(w)}')">${esc(w)} <span class="mv">⇄</span></span>`).join("")
+               onclick="event.stopPropagation();moveWorkload(${jsq(w)})">${esc(w)} <span class="mv">⇄</span></span>`).join("")
             + (n.workloads.length > 5 ? `<span class="tag more" data-tip="${esc(n.workloads.slice(5).join(", "))}">+${n.workloads.length - 5}</span>` : "")
           : '<span class="dim xs">none</span>'}</div>
     </div></div>`;
@@ -318,7 +318,7 @@ window.nodeDetail = async (name, fromRoute = false) => {
       <div><span class="disklabel">TEMP</span><b class="mono ${tempCls(s?.temperature_c)}">${s?.temperature_c == null ? "—" : esc(s.temperature_c) + "°C"}</b></div>
       <div><span class="disklabel">READ</span><b class="mono diskrate read">↓ ${Number(d.read_mbps || 0).toFixed(2)} MB/s</b></div>
       <div><span class="disklabel">WRITE</span><b class="mono diskrate write">↑ ${Number(d.write_mbps || 0).toFixed(2)} MB/s</b></div>
-      <button class="btn sm" ${s ? "" : "disabled"} onclick="smartDisk('${esc(n.name)}','${esc(d.name)}')" title="${s ? "Drive health, history, and self-tests" : "SMART helper is not available on this host"}">Details</button>
+      <button class="btn sm" ${s ? "" : "disabled"} onclick="smartDisk(${jsq(n.name)},${jsq(d.name)})" title="${s ? "Drive health, history, and self-tests" : "SMART helper is not available on this host"}">Details</button>
     </div>`; }).join("");
     $("#mbody").innerHTML = `<div class="node-detail">
       <div class="card flat" id="nodeUptime" style="margin-bottom:16px"><div class="ctitle">Uptime</div><div class="dim small"><span class="spin2"></span></div></div>
@@ -394,16 +394,16 @@ window.nodeDetail = async (name, fromRoute = false) => {
         <div class="between node-section-head"><div><div class="ctitle">Workloads on this host</div>
           <div class="csub">${n.pods_wl} of yours · ${n.pods_sys} system pods</div></div>
           ${n.workloads.length ? `<button class="btn sm" data-need="admin"
-            onclick="evacuateNode('${esc(n.name)}')">Evacuate all</button>` : ""}</div>
+            onclick="evacuateNode(${jsq(n.name)})">Evacuate all</button>` : ""}</div>
         <div style="margin-top:12px">${n.workloads.length
           ? n.workloads.map(w => `<span class="tag movable"
-              onclick="moveWorkload('${esc(w)}')">${esc(w)} <span class="mv">⇄</span></span>`).join("")
+              onclick="moveWorkload(${jsq(w)})">${esc(w)} <span class="mv">⇄</span></span>`).join("")
           : '<span class="dim xs">nothing of yours is scheduled here</span>'}</div>
         ${n.workloads.length ? '<div class="dim xs" style="margin-top:10px">Click a workload to move it to another host.</div>' : ""}
       </div>
       <div class="row" style="margin-top:16px">
-        <button class="btn" onclick="nodeActions('${esc(n.name)}')">Host actions…</button>
-        <button class="btn" data-need="admin" onclick="nodeShell('${esc(n.name)}')" title="A root shell on the host itself, as SSH would give">${icon("console")}Terminal</button></div>
+        <button class="btn" onclick="nodeActions(${jsq(n.name)})">Host actions…</button>
+        <button class="btn" data-need="admin" onclick="nodeShell(${jsq(n.name)})" title="A root shell on the host itself, as SSH would give">${icon("console")}Terminal</button></div>
       </div>`;
     window.__disksModal = false;
     nodeDisksPaint(n.name);
@@ -461,8 +461,8 @@ window.smartDisk = async (node, disk) => {
       <div class="sec">Self-test history</div>
       ${tests.length ? `<div class="tblwrap"><table class="tbl dense"><thead><tr><th>Test</th><th>Result</th><th>Drive hours</th></tr></thead><tbody>${tests.map(t => `<tr><td>${esc(t.type || "Self-test")}</td><td><span class="tag ${smartTestTone(t.status)}">${esc(t.status || "Unknown")}</span></td><td class="mono">${esc(t.lifetime_hours ?? "—")}</td></tr>`).join("")}</tbody></table></div>` : '<div class="empty small">The drive has no self-test history.</div>'}
       <div class="smart-actions"><div><b>Run a drive self-test</b><div class="dim xs">Tests run inside the drive. A long test can reduce disk performance while active.</div></div><div class="row">
-        <button class="btn" data-need="admin" ${!s.available || active || !(s.supported_tests || []).includes("short") ? "disabled" : ""} onclick="smartStartConfirm('${esc(node)}','${esc(disk)}','short')">Short test</button>
-        <button class="btn" data-need="admin" ${!s.available || active || !(s.supported_tests || []).includes("long") ? "disabled" : ""} onclick="smartStartConfirm('${esc(node)}','${esc(disk)}','long')">Long test</button>
+        <button class="btn" data-need="admin" ${!s.available || active || !(s.supported_tests || []).includes("short") ? "disabled" : ""} onclick="smartStartConfirm(${jsq(node)},${jsq(disk)},'short')">Short test</button>
+        <button class="btn" data-need="admin" ${!s.available || active || !(s.supported_tests || []).includes("long") ? "disabled" : ""} onclick="smartStartConfirm(${jsq(node)},${jsq(disk)},'long')">Long test</button>
       </div></div>
       <div class="note"><b>USB and NVMe caveat.</b> Some USB bridges hide SMART commands; NVMe exposes different counters from ATA/SATA. Homestead shows unsupported values explicitly instead of treating them as zero.</div>`;
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
@@ -571,7 +571,7 @@ window.allocationProbeSave = async (enabled, button) => {
 window.smartStartConfirm = (node, disk, type) => childModal(`Start ${type} SMART test?`, `
   <p>This asks <b>${esc(node)} / ${esc(disk)}</b> to run its built-in ${esc(type)} self-test.</p>
   <div class="note">The test does not erase data, but a long test can reduce storage performance and may take hours. Progress and the final drive result remain in Activity.</div>
-  <div class="row" style="margin-top:16px"><button class="btn pri" onclick="smartStart('${esc(node)}','${esc(disk)}','${esc(type)}')">Start ${esc(type)} test</button><button class="btn" onclick="modalBack()">Cancel</button></div>`);
+  <div class="row" style="margin-top:16px"><button class="btn pri" onclick="smartStart(${jsq(node)},${jsq(disk)},${jsq(type)})">Start ${esc(type)} test</button><button class="btn" onclick="modalBack()">Cancel</button></div>`);
 
 window.smartStart = async (node, disk, type) => {
   try {
@@ -585,7 +585,7 @@ window.hardwareEdit = n => modal("Hardware · " + n.name, `
   <p class="muted small">Choose which configured features workloads may use on this node. Saving writes explicit Kubernetes labels; unchecked features are explicitly disabled even if detected.</p>
   <div class="hwchoices">${hardwareChoices("hw_node", nodeHardwareIds(n))}</div>
   <div class="note">${(n.hardware_inventory || []).map(x => `<div><b>${esc(x.name)}</b> · ${x.detected ? "detected" : "not detected"} · ${x.explicit == null ? "automatic" : x.explicit ? "enabled" : "disabled"}</div>`).join("") || "The node probe has not reported hardware inventory yet."}</div>
-  <div class="row" style="margin-top:16px"><button class="btn pri" onclick="hardwareSave('${esc(n.name)}')">Save</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+  <div class="row" style="margin-top:16px"><button class="btn pri" onclick="hardwareSave(${jsq(n.name)})">Save</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
 window.hardwareSave = async node => {
   const body = { node, features: selectedHardware("hw_node") };
   try { await api("/api/node/hardware", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -599,7 +599,7 @@ window.hardwareFeatureSettings = async () => {
       <div class="row"><button class="btn pri sm" data-need="admin" onclick="hardwareFeatureEdit()">＋ Add feature</button></div></div>
     <div class="featurelist" style="margin-top:14px">${defs.map(f => `<div class="card flat featurecard">
       <div class="between"><div><b>${esc(f.name)}</b> ${f.builtin ? '<span class="tag">built in</span>' : ""}<div class="dim xs mono">${esc(f.id)} · ${esc(f.label)}</div></div>
-      ${f.builtin ? "" : `<div class="row"><button class="btn sm" onclick="hardwareFeatureEdit('${esc(f.id)}')">Edit</button><button class="btn sm danger" onclick="hardwareFeatureDelete('${esc(f.id)}')">Delete</button></div>`}</div>
+      ${f.builtin ? "" : `<div class="row"><button class="btn sm" onclick="hardwareFeatureEdit(${jsq(f.id)})">Edit</button><button class="btn sm danger" onclick="hardwareFeatureDelete(${jsq(f.id)})">Delete</button></div>`}</div>
       <div class="small" style="margin-top:9px"><span class="tag hw">${esc(f.host_path)} → ${esc(f.container_path)}</span> <span class="tag">${esc(f.path_type)}</span></div>
       ${f.usb_ids?.length ? `<div class="dim xs" style="margin-top:7px">USB IDs: ${esc(f.usb_ids.join(", "))}</div>` : ""}
       ${f.description ? `<div class="dim small" style="margin-top:7px">${esc(f.description)}</div>` : ""}</div>`).join("")}</div>
@@ -635,7 +635,7 @@ window.hardwareFeatureEdit = async id => {
       <div id="hf_browse_results"></div>
     </div>
     <div class="note">Device passthrough makes the container privileged. Use the narrowest stable /dev path available. For a USB VID:PID, /dev/bus/usb is commonly required because bus addresses can change after reboot.</div>
-    <div class="row" style="margin-top:16px"><button class="btn pri" onclick="hardwareFeatureSave('${esc(id || "")}' )">Save feature</button><button class="btn" onclick="modalBack()">Cancel</button></div>`, true);
+    <div class="row" style="margin-top:16px"><button class="btn pri" onclick="hardwareFeatureSave(${jsq(id || "")} )">Save feature</button><button class="btn" onclick="modalBack()">Cancel</button></div>`, true);
   hardwareBrowseRender();
 };
 window.hardwareBrowseRender = () => {
@@ -705,7 +705,7 @@ async function viewNodes() {
    ${layout === "cards" ? `<div class="nodegrid stagger">${n.map(nodeCard).join("")}</div>` : `
    <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack" data-sort="nodes"><thead><tr>
      <th>Node</th><th>CPU</th><th>Memory</th><th>Network</th><th>Temp</th><th>Disk</th><th>Pods</th><th>Hardware</th><th>Workloads</th></tr></thead><tbody>
-   ${n.map(x => `<tr class="clickable"${clusterAttr(x)} onclick="nodeDetail('${esc(x.name)}')">
+   ${n.map(x => `<tr class="clickable"${clusterAttr(x)} onclick="nodeDetail(${jsq(x.name)})">
      <td class="cell-name" data-sort="${esc(x.name)}"><b title="${esc(x.name)} · kernel ${esc(x.kernel)}">${esc(x.name)}</b> ${clusterTag(x)}<div class="dim xs" title="${esc(x.roles.join(" · "))}">${esc(x.roles.join(" · "))}</div></td>
       <td style="min-width:120px" data-sort="${+x.cpu_pct || 0}">${meter(x.cpu_pct, "", "cpu")}<div class="dim xs mono nowrap" style="margin-top:4px">${x.cpu_pct}% of ${x.cpu_cap}</div></td>
       <td style="min-width:120px" data-sort="${+x.mem_pct || 0}">${meter(x.mem_pct, "", "memory")}<div class="dim xs mono nowrap" style="margin-top:4px">${sizePair(x.mem_used_gb, x.mem_cap_gb)}</div></td>
@@ -716,7 +716,7 @@ async function viewNodes() {
      <td class="cell-tags">${hardwareTags(nodeHardwareIds(x)) || '<span class="dim">—</span>'}</td>
      <td class="cell-tags" data-sort="${x.workloads.length}" onclick="event.stopPropagation()">${x.workloads.length
         ? x.workloads.slice(0, 2).map(w => `<span class="tag movable"
-            onclick="moveWorkload('${esc(w)}')">${esc(w)} <span class="mv">⇄</span></span>`).join("")
+            onclick="moveWorkload(${jsq(w)})">${esc(w)} <span class="mv">⇄</span></span>`).join("")
           + (x.workloads.length > 2 ? `<span class="tag more" data-tip="${esc(x.workloads.slice(2).join(", "))}">+${x.workloads.length - 2}</span>` : "")
         : '<span class="dim xs">—</span>'}</td></tr>`).join("")}
    </tbody></table></div></div>`}`);
@@ -750,7 +750,7 @@ window.nodeShell = async name => {
       audited; commands and output are not recorded.</div>
     <div class="consolestate" id="nodeShellState"><span class="spin2"></span> starting a helper on ${esc(name)}…</div>
     <div class="nodeterm" id="nodeTerm"></div>
-    <div class="row" style="margin-top:8px"><button class="btn sm" id="nodeShellAgain" onclick="nodeShell('${esc(name)}')" hidden>${icon("restart")}Reconnect</button></div>`, true);
+    <div class="row" style="margin-top:8px"><button class="btn sm" id="nodeShellAgain" onclick="nodeShell(${jsq(name)})" hidden>${icon("restart")}Reconnect</button></div>`, true);
   const state = text => { const el = $("#nodeShellState"); if (el) el.innerHTML = text; };
   try {
     await Promise.all([loadXterm(), api("/api/node/shell/prepare", { method: "POST", headers: { "Content-Type": "application/json" },

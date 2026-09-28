@@ -229,7 +229,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       <div class="note" id="e_ports_note" hidden></div>
       <div class="sec">Service VIP</div><div class="note small">A Service VIP exposes ports on the default workload address or a VIP you select. It is separate from the direct LAN interface above.
         <p>Save container/port changes first, then configure its Service. VIP changes are applied separately and do not restart the pod.</p>
-        <button class="btn" data-need="operator" onclick="networkManage('${esc(ns)}','${esc(name)}')">Configure default / selected VIP</button></div>
+        <button class="btn" data-need="operator" onclick="networkManage(${jsq(ns)},${jsq(name)})">Configure default / selected VIP</button></div>
       ${seeds.length ? `<div class="sec">Startup seed config ${tip("This ConfigMap is copied into the container's persistent storage by an init container before every start. It is authoritative: editing only the mounted file will be overwritten on restart.")}</div>
         <div class="note seed-note"><b>Authoritative startup configuration.</b> Saving here updates the ConfigMap and restarts the workload so the init container copies the new value into appdata.</div>
         ${seeds.map((s, i) => `<div class="seed-editor card flat">
@@ -240,7 +240,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
           ${s.command ? `<div class="dim xs mono seed-command">${esc(s.command)}</div>` : ""}
         </div>`).join("")}` : ""}
       <div class="row" style="margin-top:22px">
-        <button class="btn pri" id="e_save" onclick="editSave('${esc(ns)}','${esc(name)}')">Save &amp; restart</button>
+        <button class="btn pri" id="e_save" onclick="editSave(${jsq(ns)},${jsq(name)})">Save &amp; restart</button>
         <button class="btn" onclick="closeModal()">Cancel</button>
       </div>
       <div class="note" style="margin-top:14px">Saving rolls the pod. Renaming is a separate, reviewed action with a short outage; volumes and service addresses are kept. If it stops part-way, inspect the job before restarting either workload.</div>`;
@@ -406,7 +406,7 @@ window.wlMoveLegacy = async (ns, name) => {
       ${nodes.map(n => `<option value="${esc(n.name)}">${esc(n.name)} · ${n.cpu_pct}% cpu, ${n.mem_pct}% ram${n.igpu ? " · iGPU" : ""}</option>`).join("")}
     </select></div>
     <div class="row" style="margin-top:18px">
-      <button class="btn pri" onclick="doMove('${esc(ns)}','${esc(name)}')">Move</button>
+      <button class="btn pri" onclick="doMove(${jsq(ns)},${jsq(name)})">Move</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div>
     <div class="note" style="margin-top:14px">This is a stop-then-start, not a live move —
     a ReadWriteOnce volume can only attach to one node at a time.</div>`);
@@ -433,10 +433,10 @@ window.nodeActions = async name => {
         <p class="muted small" style="margin:6px 0 14px">Cordon stops new pods landing here.
         Drain evicts the ones already running.</p>
         <div class="row">
-          <button class="btn" onclick="nodeCordon('${esc(name)}',true)">Cordon</button>
-          <button class="btn" onclick="nodeCordon('${esc(name)}',false)">Uncordon</button>
-          <button class="btn" onclick="nodeDrain('${esc(name)}')">Drain</button>
-          <button class="btn" onclick="evacuateNode('${esc(name)}')">Move all off</button>
+          <button class="btn" onclick="nodeCordon(${jsq(name)},true)">Cordon</button>
+          <button class="btn" onclick="nodeCordon(${jsq(name)},false)">Uncordon</button>
+          <button class="btn" onclick="nodeDrain(${jsq(name)})">Drain</button>
+          <button class="btn" onclick="evacuateNode(${jsq(name)})">Move all off</button>
         </div></div>
       <div class="card flat"><div class="ctitle">Quorum</div>
         <div class="drow"><div class="dl">etcd members</div><div class="dv mono">${qr.total || "?"}</div></div>
@@ -453,7 +453,7 @@ window.nodeActions = async name => {
     <div class="sec">Leaving the cluster</div>
     <div class="row between removal-entry"><p class="muted small">Take this host out for good: Homestead checks quorum and
       volume copies first, then removes it in Harvester's order.</p>
-      <button class="btn danger" data-need="admin" onclick="nodeRemoval('${esc(name)}')">Remove from cluster…</button></div>
+      <button class="btn danger" data-need="admin" onclick="nodeRemoval(${jsq(name)})">Remove from cluster…</button></div>
     <div class="sec">Power</div>
     ${off ? `<div class="note"><b>Host power control is disabled.</b> Rebooting needs a privileged
         helper pod that enters the host namespaces. This installation has disabled it. Set
@@ -464,8 +464,8 @@ window.nodeActions = async name => {
         ${qr.quorum_needs}. Taking this host down would lose the cluster. Bring the other members back first.</div>`
       : `<p class="muted small">Review fresh workload, VM, quorum and Longhorn replica impacts before either action. Homestead will cordon and wait for drained pods to leave before sending host power.</p>
       <div class="row">
-        <button class="btn danger" onclick="nodePowerReview('${esc(name)}','reboot')">Review reboot…</button>
-        <button class="btn danger" onclick="nodePowerReview('${esc(name)}','poweroff')">Review shutdown…</button>
+        <button class="btn danger" onclick="nodePowerReview(${jsq(name)},'reboot')">Review reboot…</button>
+        <button class="btn danger" onclick="nodePowerReview(${jsq(name)},'poweroff')">Review shutdown…</button>
       </div>`}`, true);
 };
 window.nodeCordon = async (node, cordon) => {
@@ -516,7 +516,7 @@ window.nodePowerReview = async (node, action) => {
     plan.ready && plan.stranded?.length ? UI.ack("pw_allow", `I understand ${plan.stranded.length} workload${plan.stranded.length === 1 ? "" : "s"} may remain down`) : "",
     plan.ready && plan.requires_data_ack ? UI.ack("pw_data", "I understand the volume copies or storage visibility risk") : "",
     UI.more("After the request", "Follow Recent jobs for the helper's events, logs and host status. Reboot checks use a changed boot ID; shutdown cannot be confirmed from NotReady alone. The host stays cordoned until you inspect it and allow scheduling."),
-    UI.actions(plan.ready ? UI.cancel() + UI.button(`${verb} host`, `nodePower('${esc(node)}','${esc(action)}')`, { kind: "danger", id: "pw_execute" }) : UI.cancel("Close")),
+    UI.actions(plan.ready ? UI.cancel() + UI.button(`${verb} host`, `nodePower(${jsArg(node)},${jsArg(action)})`, { kind: "danger", id: "pw_execute" }) : UI.cancel("Close")),
   ].join(""), true);
 };
 window.nodePower = async (node, action) => {
@@ -558,7 +558,7 @@ window.vmMove = (ns, name) => {
       <option value="">let KubeVirt choose</option>
       ${nodes.map(n => `<option value="${esc(n.name)}">${esc(n.name)}</option>`).join("")}</select></div>
     <div class="row" style="margin-top:16px">
-      <button class="btn pri" onclick="doVmMove('${esc(ns)}','${esc(name)}')">Migrate</button>
+      <button class="btn pri" onclick="doVmMove(${jsq(ns)},${jsq(name)})">Migrate</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div>`);
 };
 window.doVmMove = async (ns, name) => {
@@ -647,7 +647,7 @@ function vmAddressFields(p, opts, count = 1) {
   const first = subnets[0];
   return `<div class="f2">
       <div class="f"><label>Subnet ${tip("From Networking › IP addresses: the addresses offered are free there, outside the DHCP range and the VIP pools.")}</label>
-        <select id="${p}_subnet" onchange="vmSubnetPicked('${p}', ${count})">${subnets.map(s => `<option value="${esc(s.cidr)}">${esc(s.cidr)}${s.name ? ` · ${esc(s.name)}` : ""} · ${s.free.length} free</option>`).join("")}
+        <select id="${p}_subnet" onchange="vmSubnetPicked(${jsq(p)}, ${count})">${subnets.map(s => `<option value="${esc(s.cidr)}">${esc(s.cidr)}${s.name ? ` · ${esc(s.name)}` : ""} · ${s.free.length} free</option>`).join("")}
           <option value="">another - type it in</option></select></div>
       <div class="f"><label>${count > 1 ? "Addresses, one per node" : "Address"}</label>
         <input id="${p}_ip" class="mono" placeholder="${count > 1 ? "192.0.2.60, 192.0.2.61" : "192.0.2.60"}" list="${p}_free" data-ipam="${count > 1 ? "multi" : ""}">
@@ -875,7 +875,7 @@ async function viewImages() {
     ${(d.pulls || []).map(pull => `<div class="note warn between prepull-note" style="margin-bottom:12px">
       <span>Pre-pulling <span class="mono">${esc(pull.image)}</span> · ${pull.ready} of ${pull.desired} node${pull.desired === 1 ? "" : "s"} done.
         It runs until every node has the image; its pods come straight back if you delete them.</span>
-      <button class="btn sm danger" data-need="admin" onclick="prepullStop('${esc(pull.name)}')">Stop</button></div>`).join("")}
+      <button class="btn sm danger" data-need="admin" onclick="prepullStop(${jsq(pull.name)})">Stop</button></div>`).join("")}
     ${(d.pulls_finished || []).length ? `<div class="note good" style="margin-bottom:12px">Finished pre-pulling
       ${d.pulls_finished.map(pull => `<span class="mono">${esc(pull.image)}</span>`).join(", ")} — cleared away.</div>` : ""}
     <div class="card flat pad0"><div class="tblwrap"><table data-sort="images" class="tbl stack imgtable"><thead><tr>
@@ -885,15 +885,15 @@ async function viewImages() {
         const retained = i.retained_by || [];
         const retention = retained.length ? retained.slice(0, 3).map(r => `<span class="tag ${IMAGE_REASONS[r.reason]?.tone ?? "ok"}"
           data-tip="${esc(`${r.namespace} · ${r.workload} · ${r.container}`)}${IMAGE_REASONS[r.reason]?.tip ? esc(" - " + IMAGE_REASONS[r.reason].tip) : ""}">${esc(r.reason)} · ${esc(r.workload)}</span>${r.reason === "rollback"
-          ? `<button class="btn sm" data-need="admin" data-tip="Stop keeping this image for ${esc(r.workload)}'s Roll back, so it can be cleaned up" onclick="forgetRollback('${esc(r.namespace)}','${esc(r.workload)}')">Forget</button>` : ""}`).join("") +
+          ? `<button class="btn sm" data-need="admin" data-tip="Stop keeping this image for ${esc(r.workload)}'s Roll back, so it can be cleaned up" onclick="forgetRollback(${jsq(r.namespace)},${jsq(r.workload)})">Forget</button>` : ""}`).join("") +
           (retained.length > 3 ? `<span class="tag">+${retained.length - 3}</span>` : "") : '<span class="tag">unreferenced</span>';
         return `<tr><td class="mono small imgname">${esc(i.name)}</td>
         <td class="mono">${i.size_mb >= 1024 ? (i.size_mb / 1024).toFixed(1) + " GB" : i.size_mb + " MB"}</td>
         <td>${i.nodes.map(n => `<span class="tag ok">${esc(n.replace("harvester-", ""))}</span>`).join("")}
             ${missing.map(n => `<span class="tag">${esc(n.replace("harvester-", ""))} ✕</span>`).join("")}</td>
         <td><div class="row" style="gap:5px">${retention}</div></td>
-        <td><div class="row" style="gap:6px">${missing.length ? `<button class="btn sm" onclick="prepull('${esc(i.name)}')">Pre-pull</button>` : '<span class="dim xs">everywhere</span>'}
-          ${!i.protected && !i.system && i.digest ? `<button class="btn sm danger" data-need="admin" onclick="imageCleanupReview('${esc(i.digest)}')">Clean up</button>` : ""}</div></td></tr>`;
+        <td><div class="row" style="gap:6px">${missing.length ? `<button class="btn sm" onclick="prepull(${jsq(i.name)})">Pre-pull</button>` : '<span class="dim xs">everywhere</span>'}
+          ${!i.protected && !i.system && i.digest ? `<button class="btn sm danger" data-need="admin" onclick="imageCleanupReview(${jsq(i.digest)})">Clean up</button>` : ""}</div></td></tr>`;
       }).join("") || `<tr><td colspan=5 class="empty">none</td></tr>`}
     </tbody></table></div></div>
     ${vmImagesSection(vm, d.node_names)}`);
@@ -929,7 +929,7 @@ function vmImagesSection(vm, nodeNames) {
           <td>${i.nodes.map(n => `<span class="tag ok">${esc(n.replace("harvester-", ""))}</span>`).join("")}
             ${missing.map(n => `<span class="tag">${esc(n.replace("harvester-", ""))} ✕</span>`).join("")}</td>
           <td><div class="row" style="gap:5px">${used}</div></td>
-          <td>${!i.disks.length && !i.deleting ? `<button class="btn sm danger" data-need="admin" onclick="vmImageDelete('${esc(i.namespace)}','${esc(i.name)}')">Delete</button>` : ""}</td></tr>`;
+          <td>${!i.disks.length && !i.deleting ? `<button class="btn sm danger" data-need="admin" onclick="vmImageDelete(${jsq(i.namespace)},${jsq(i.name)})">Delete</button>` : ""}</td></tr>`;
       }).join("") || `<tr><td colspan=5 class="empty">No VM images: an image is kept here when a VM is made from a download address.</td></tr>`}
     </tbody></table></div></div>`;
 }
@@ -939,7 +939,7 @@ window.vmImageDelete = (namespace, name) => {
   modal(`Delete · ${i.display}`, `<p>The image is deleted, with its copies on ${i.nodes.length} node${i.nodes.length === 1 ? "" : "s"}
       (${esc(i.nodes.join(", ") || "none")}). No disk was made from it. A VM made from the same download address later downloads it again.</p>
     <div class="f" style="margin-top:12px"><label>Type <b class="mono">${esc(i.display)}</b> to confirm</label><input id="vmi_confirm" autocomplete="off"></div>
-    <div class="row"><button class="btn danger" onclick="vmImageDeleteGo('${esc(namespace)}','${esc(name)}')">Delete</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    <div class="row"><button class="btn danger" onclick="vmImageDeleteGo(${jsq(namespace)},${jsq(name)})">Delete</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
 };
 window.vmImageDeleteGo = async (namespace, name) => {
   try {
@@ -997,9 +997,9 @@ async function viewSchedules() {
         <td>${j.suspend ? '<span class="pill low">paused</span>'
             : j.active ? '<span class="pill med">running</span>' : '<span class="pill ok">active</span>'}</td>
         <td><div class="row" style="gap:6px">
-          <button class="btn sm" onclick="jobRun('${esc(j.name)}')">Run now</button>
+          <button class="btn sm" onclick="jobRun(${jsq(j.name)})">Run now</button>
           <button class="btn sm" onclick='jobEdit(${JSON.stringify(j).replace(/'/g, "&#39;")})'>Edit</button>
-          <button class="btn sm danger" onclick="jobDel('${esc(j.name)}')">✕</button>
+          <button class="btn sm danger" onclick="jobDel(${jsq(j.name)})">✕</button>
         </div></td></tr>`).join("") || `<tr><td colspan=6 class="empty">no schedules yet</td></tr>`}
     </tbody></table></div></div>`);
 }
@@ -1081,18 +1081,18 @@ async function viewImport() {
         <td><span class="pill ${done ? "ok" : failed ? "crit" : "med"}">${esc(d.phase.replace(/([a-z])([A-Z])/g, "$1 $2"))}</span>${d.message ? `<div class="dim xs" style="margin-top:5px;max-width:320px">${esc(d.message)}</div>` : ""}</td>
         <td style="min-width:130px"><div class="jobmeter"><span class="${failed ? "failed" : ""}" style="width:${Math.max(2, done ? 100 : d.progress || 0)}%"></span></div><div class="dim xs mono">${done ? "ready" : `${esc(d.progress || 0)}%`}</div></td>
         <td class="small">${d.in_use ? esc((d.used_by || []).join(", ")) : '<span class="dim">not attached</span>'}</td>
-        <td>${done && !d.in_use ? `<button class="btn sm" onclick="vmNew('${esc(d.name)}','${esc(d.namespace)}')">Create VM</button>` : ""}</td></tr>`; }).join("")}
+        <td>${done && !d.in_use ? `<button class="btn sm" onclick="vmNew(${jsq(d.name)},${jsq(d.namespace)})">Create VM</button>` : ""}</td></tr>`; }).join("")}
       </tbody></table></div></div>` : `<div class="empty">No managed VM disk imports yet. Import an HTTP(S) qcow2, vmdk, raw, vdi, vhd or vhdx image into a new PVC.</div>`}
 
     <div class="sec">Container sources</div>
     <div class="grid g3">${srcs.map(s => `<div class="card flat">
       <div class="between"><div><div class="ctitle">${esc(s.name)}</div>
         <div class="csub">${esc(s.kind)} · ${esc(s.user)}@${esc(s.host)}</div></div>
-        <button class="btn sm danger" onclick="srcDel('${esc(s.name)}')">✕</button></div>
+        <button class="btn sm danger" onclick="srcDel(${jsq(s.name)})">✕</button></div>
       <div class="drow"><div class="dl">Base path</div><div class="dv mono small">${esc(s.base_path)}</div></div>
       <div class="drow"><div class="dl">SSH identity</div><div class="dv">${s.ssh_trust ? 'Key pinned' : 'Verification needed'}</div></div>
-      <div class="row" style="margin-top:12px"><button class="btn" data-need="admin" onclick="srcVerify('${esc(s.name)}')">Verify source</button>
-      <button class="btn" ${s.ssh_trust ? '' : 'disabled'} onclick="srcBrowse('${esc(s.name)}')">Browse appdata</button></div>
+      <div class="row" style="margin-top:12px"><button class="btn" data-need="admin" onclick="srcVerify(${jsq(s.name)})">Verify source</button>
+      <button class="btn" ${s.ssh_trust ? '' : 'disabled'} onclick="srcBrowse(${jsq(s.name)})">Browse appdata</button></div>
     </div>`).join("") || `<div class="empty">No import sources yet. Add the host you want to pull from.</div>`}</div>
 
     ${jobs.length ? `<div class="sec">Transfers</div>
@@ -1103,8 +1103,8 @@ async function viewImport() {
         <td><span class="pill ${j.state === "done" ? "ok" : j.state === "failed" ? "crit" : "med"}">${esc(j.state)}</span></td>
         <td style="min-width:150px">${importProgressCell(j)}</td>
         <td class="small dim">${esc((j.start || "").replace("T", " ").replace("Z", ""))}</td>
-        <td><div class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn sm" onclick="jobLogs('lab','${esc(j.name)}')">Logs</button>
-          <button class="btn sm ${j.state === "failed" ? "danger" : ""}" data-need="admin" title="${j.state === "running" ? "Stop this copy and remove its job" : "Remove this job; it keeps referencing the volume until it is gone"}" onclick="importRemove('${esc(j.name)}','${esc(j.state)}')">${j.state === "running" ? "Cancel" : "Remove"}</button></div></td></tr>`).join("")}
+        <td><div class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn sm" onclick="jobLogs('lab',${jsq(j.name)})">Logs</button>
+          <button class="btn sm ${j.state === "failed" ? "danger" : ""}" data-need="admin" title="${j.state === "running" ? "Stop this copy and remove its job" : "Remove this job; it keeps referencing the volume until it is gone"}" onclick="importRemove(${jsq(j.name)},${jsq(j.state)})">${j.state === "running" ? "Cancel" : "Remove"}</button></div></td></tr>`).join("")}
     </tbody></table></div></div>` : ""}
 
     <div class="note" style="margin-top:20px">
@@ -1121,7 +1121,7 @@ window.importRemove = async (name, state) => {
   if (plan.journalled) {
     modal(`Remove import Job · ${name}`, UI.lead("Remove the copy Job after a verified successful import. The app, Services and all volumes stay in place.") +
       UI.callout("info", "Incomplete import?", "Open Recent jobs → Inspect import. An active or uncertain copy cannot be removed here.") +
-      UI.actions(UI.cancel("Keep it") + UI.button("Remove completed Job", `importRemoveNow('${esc(name)}',this)`, {kind:"danger",id:"imr_go"})));
+      UI.actions(UI.cancel("Keep it") + UI.button("Remove completed Job", `importRemoveNow(${jsArg(name)},this)`, {kind:"danger",id:"imr_go"})));
     return;
   }
   // An import can have filled several volumes; every one it created is offered.
@@ -1151,7 +1151,7 @@ window.importRemove = async (name, state) => {
     </div>
     ${plan.known === false ? '<div class="note">This import predates the record of what it created, so only the job is removed.</div>' : ""}
     <div class="row" style="margin-top:18px">
-      <button class="btn danger" id="imr_go" data-need="admin" onclick="importRemoveNow('${esc(name)}',this)">${running ? "Cancel import" : "Remove"}</button>
+      <button class="btn danger" id="imr_go" data-need="admin" onclick="importRemoveNow(${jsq(name)},this)">${running ? "Cancel import" : "Remove"}</button>
       <button class="btn" onclick="closeModal()">Keep it</button></div>`);
   if (window.applyRole) window.applyRole();
 };
@@ -1300,14 +1300,14 @@ window.srcBrowse = async name => {
       <div class="apps importapps" style="margin-top:14px">${dc.containers.map(c => `<div class="card flat importapp">
         <div class="between"><b>${esc(c.name)}</b><span class="pill ${c.state === "running" ? "ok" : "low"}">${esc(c.state || "unknown")}</span></div>
         <div class="mono xs dim" style="margin-top:7px;word-break:break-all">${esc(c.image)}</div>
-        <button class="btn pri wide sm" style="margin-top:10px" onclick="inspectImport('${esc(name)}','${esc(c.name)}')">Import container</button></div>`).join("")}</div>
+        <button class="btn pri wide sm" style="margin-top:10px" onclick="inspectImport(${jsq(name)},${jsq(c.name)})">Import container</button></div>`).join("")}</div>
       <div class="sec">Appdata folders</div>` : ""}` + (entries.length
       ? `<p class="muted small">${entries.length} directories under <span class="mono">${esc(src.base_path)}</span>. Use this when Docker metadata is unavailable.</p>
          <div class="apps" style="margin-top:14px;grid-template-columns:repeat(auto-fill,minmax(200px,1fr))">
          ${entries.map(e => `<div class="card flat" style="padding:13px">
            <div style="font-weight:660;word-break:break-all">${esc(e)}</div>
            <button class="btn wide sm" style="margin-top:10px"
-             onclick="importSetup('${esc(name)}','${esc(e)}')">Import</button></div>`).join("")}</div>`
+             onclick="importSetup(${jsq(name)},${jsq(e)})">Import</button></div>`).join("")}</div>`
       : `<div class="empty">No appdata folders returned. Check the credentials and that
          <span class="mono">${esc(src.base_path)}</span> exists on ${esc(src.host)}.</div>`);
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
@@ -1326,7 +1326,7 @@ window.imageCleanupReview = digest => {
     <div class="f"><label>Remove from nodes</label><div class="cleanup-nodes">${image.nodes.map(node =>
       `<label class="switch"><input class="cleanup-node" type="checkbox" value="${esc(node)}" checked onchange="imageCleanupGate()"> ${esc(node)}</label>`).join("")}</div></div>
     <div class="f"><label>Type CLEAN to confirm</label><input id="cleanupConfirm" autocomplete="off" oninput="imageCleanupGate()" placeholder="CLEAN"></div>
-    <div class="row"><button id="cleanupGo" class="btn danger" data-need="admin" disabled onclick="imageCleanupApply('${esc(digest)}')">Remove cached image</button>
+    <div class="row"><button id="cleanupGo" class="btn danger" data-need="admin" disabled onclick="imageCleanupApply(${jsq(digest)})">Remove cached image</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div></div>`, true);
   if (window.applyRole) window.applyRole();
 };
@@ -1629,7 +1629,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <div id="im_maps">${importMappingRows(cfg, src).map(importMappingRow).join("")}</div>
     <div class="row"><button class="btn sm" onclick="imAddMap()">＋ add folder</button>
       <button class="btn sm" onclick="imAddScratch()">＋ add RAM scratch</button>
-      <button class="btn sm" id="im_measure" onclick="imMeasure('${esc(source)}')">Measure sizes</button></div>
+      <button class="btn sm" id="im_measure" onclick="imMeasure(${jsq(source)})">Measure sizes</button></div>
     <div class="dim xs" id="im_maps_note" style="margin-top:8px"></div>
     <details class="import-advanced"><summary class="dim small">Override file ownership (rarely needed)</summary>
       <div class="note">The copy keeps the ownership the files already had on the source, so the app finds
@@ -1659,7 +1659,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
       <div class="f"><label>Memory max ${tip("Optional hard ceiling. Exceeding it can cause an OOM kill. Must be at least the reserved memory; blank means unlimited.")}</label><input id="im_memory_limit" value="${esc(cfg.memory_limit || '')}" placeholder="No limit · e.g. 1Gi"></div></div>
     <div class="note">The application is created stopped. After copying, use Start in Containers for a fresh capacity review. The copy helper reserves 128 MiB and is limited to 512 MiB.</div>
     <div class="row" style="margin-top:16px">
-      <button class="btn pri" onclick="doImport('${esc(source)}')">Review import</button>
+      <button class="btn pri" onclick="doImport(${jsq(source)})">Review import</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div>
     <div class="note" style="margin-top:14px">The copy runs as a Job — you can close this and watch it
     on the Import page, folder by folder. Large appdata directories can take a while.</div>`, true);
@@ -1678,10 +1678,10 @@ function clusterCardHtml(c) {
       <div class="csub mono clurl" title="${esc(c.url)}">${c.fleet ? "linked" : "added before linking"} · ${esc(c.url)}</div></div>
     <div class="clver"><span class="dim xs">Version</span>
       <span id="clver_${esc(c.name)}"><span class="dim xs"><span class="spin2"></span> checking…</span></span>
-      <button class="iconbtn clrecheck" data-tip="Check the version again" onclick="clusterCheck('${esc(c.name)}')">${icon("refresh")}</button></div>
+      <button class="iconbtn clrecheck" data-tip="Check the version again" onclick="clusterCheck(${jsq(c.name)})">${icon("refresh")}</button></div>
     <div id="clvermsg_${esc(c.name)}"></div>
     <div class="clsteps" id="clready_${esc(c.name)}"></div>
-    <div class="row" style="margin-top:12px"><button class="btn sm" onclick="clusterBrowse('${esc(c.name)}')">Browse workloads</button></div>
+    <div class="row" style="margin-top:12px"><button class="btn sm" onclick="clusterBrowse(${jsq(c.name)})">Browse workloads</button></div>
     <div class="dim xs" id="cluster_${esc(c.name)}" style="margin-top:10px"></div>
   </div>`;
 }
@@ -1742,11 +1742,11 @@ window.clusterReady = async name => {
   host.innerHTML = step(true, "Connected")
     + (store.stopped
       ? step(false, `Moves out of ${esc(name)} are turned off: its backup storage is stopped`,
-          `<div><button class="btn sm pri" data-need="admin" onclick="clusterTransfersOn('${esc(name)}')">Turn them on</button></div>`)
+          `<div><button class="btn sm pri" data-need="admin" onclick="clusterTransfersOn(${jsq(name)})">Turn them on</button></div>`)
       : target.configured && target.reachable_off_cluster && !target.answers
       ? step(false, `Backup storage on ${esc(name)} is at <span class="mono">${esc(target.endpoint || "")}</span>, but this cluster cannot reach it`,
           `<div class="dim xs">It may still be starting. Otherwise the address is taken by something else or firewalled - give it another.</div>
-           <div><button class="btn sm" data-need="admin" onclick="clusterStorage('${esc(name)}',true)">Give it another address</button></div>`)
+           <div><button class="btn sm" data-need="admin" onclick="clusterStorage(${jsq(name)},true)">Give it another address</button></div>`)
       : r.update_first
       ? step(false, `${esc(name)} runs Homestead v${esc(r.version?.version || "?")}, which sets up backup storage with MinIO - whose images can no longer be downloaded`,
           `<div class="dim xs">Update it to 2.8.111 or later, then set it up from here:</div><div class="mono xs">kubectl -n lab set image deployment/homestead homestead=ghcr.io/wjcloudy/homestead:2.8.111</div>`)
@@ -1754,14 +1754,14 @@ window.clusterReady = async name => {
       ? step(true, `Backup storage on ${esc(name)}`, `<div class="dim xs mono">${esc(target.url || "")} · ${esc(target.endpoint || "")}</div>`)
       : target.configured
         ? step(false, `Backup storage on ${esc(name)} has no LAN address, so this cluster cannot read it${target.endpoint ? ` - it is at <span class="mono">${esc(target.endpoint)}</span>, inside that cluster` : ""}`,
-            `<div><button class="btn sm" data-need="admin" onclick="clusterStorage('${esc(name)}',true)">Give it an address</button></div>`)
+            `<div><button class="btn sm" data-need="admin" onclick="clusterStorage(${jsq(name)},true)">Give it an address</button></div>`)
         : store.deployed && !store.ready
           ? step(false, `Backup storage on ${esc(name)} is starting`, '<div class="dim xs">Its first start downloads the S3 server; this checks again every 15 seconds.</div>')
         : store.deployed
           ? step(false, `Backup storage is running on ${esc(name)}, but its Longhorn is not pointed at it yet`,
-              `<div><button class="btn sm pri" data-need="admin" onclick="clusterStorage('${esc(name)}')">Finish setting it up</button></div>`)
+              `<div><button class="btn sm pri" data-need="admin" onclick="clusterStorage(${jsq(name)})">Finish setting it up</button></div>`)
         : step(false, `${esc(name)} has no backup storage yet`,
-            `<div><button class="btn sm pri" data-need="admin" onclick="clusterStorage('${esc(name)}')">Set it up on ${esc(name)}</button></div>`))
+            `<div><button class="btn sm pri" data-need="admin" onclick="clusterStorage(${jsq(name)})">Set it up on ${esc(name)}</button></div>`))
     + step(r.ready, "Browse its workloads and move them here");
   if (window.applyRole) applyRole();
   clearTimeout(window["__clready_" + name]);
@@ -1806,7 +1806,7 @@ window.clusterStorage = (name, addressOnly = false, after = null) => {
         { help: `${shared ? `${esc(name)}'s shared address is the one its apps share; the store answers on port 9000 there.` : `${esc(name)} puts Services on its nodes' own addresses; the store answers on port 9000 there.`} Choose an address of its own only to keep its traffic apart.` }))}
     ${UI.more("Whose address this is", `<p>The address belongs to ${esc(name)}, the cluster sending the workloads: its backup store answers on it.
       This cluster never takes it - it only connects to it to read the backups during a move. It shares ${esc(name)}'s disks, so it is for moving, not your only copy of anything.</p>`)}
-    ${UI.actions(UI.button("Cancel", "modalBack()") + UI.button(addressOnly ? "Set the address" : "Set it up", `clusterStorageGo('${esc(name)}')`, { kind: "pri", id: "cs_go" }))}
+    ${UI.actions(UI.button("Cancel", "modalBack()") + UI.button(addressOnly ? "Set the address" : "Set it up", `clusterStorageGo(${jsArg(name)})`, { kind: "pri", id: "cs_go" }))}
   </div>`);
 };
 window.clusterStorageGo = async name => {
@@ -1865,7 +1865,7 @@ window.clusterInventory = report => {
         : '<span class="dim">none</span>'}</td>
       <td><span class="tag ${w.running ? "ok" : ""}">${w.running ? "running" : "stopped"}</span></td>
       <td>${w.movable
-        ? `<button class="btn sm" data-need="admin" onclick="moveReview('${esc(report.cluster)}','${esc(w.kind)}','${esc(w.name)}')">Move to this cluster</button>`
+        ? `<button class="btn sm" data-need="admin" onclick="moveReview(${jsq(report.cluster)},${jsq(w.kind)},${jsq(w.name)})">Move to this cluster</button>`
           + ((w.warnings || []).length ? `<div class="dim xs" style="max-width:240px;margin-top:4px">${w.warnings.map(esc).join("; ")}</div>` : "")
         : `<span class="tag bad">cannot move</span><div class="dim xs" style="max-width:240px">${w.blockers.map(esc).join("; ")}</div>`}</td>
     </tr>`).join("")}</tbody></table></div>`
@@ -1889,9 +1889,9 @@ window.moveReview = (cluster, kind, name) => {
   <div class="f" id="mv_ip_wrap" hidden><label>Specific address</label><input id="mv_ip" class="mono" placeholder="192.0.2.245" data-ipam></div>
   <div id="mv_plan"></div>
   <div class="row" style="margin-top:16px">
-    <button class="btn" onclick="movePlan('${esc(cluster)}','${esc(kind)}','${esc(name)}')">Check again</button>
+    <button class="btn" onclick="movePlan(${jsq(cluster)},${jsq(kind)},${jsq(name)})">Check again</button>
     <button class="btn pri" id="mv_go" data-need="admin" disabled
-      onclick="moveStart('${esc(cluster)}','${esc(kind)}','${esc(name)}')">Start move</button>
+      onclick="moveStart(${jsq(cluster)},${jsq(kind)},${jsq(name)})">Start move</button>
     <button class="btn" onclick="modalBack()">Cancel</button></div>`);
   movePlan(cluster, kind, name);
 };
@@ -1917,7 +1917,7 @@ window.movePlan = async (cluster, kind, name) => {
     const fix = (plan.fixes || [])[0];
     host.innerHTML = `
       ${plan.blockers?.length ? `<div class="note bad"><b>This move would fail.</b><ul>${plan.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>
-        ${fix ? `<button class="btn sm pri" data-need="admin" onclick="clusterStorage('${esc(cluster)}',${fix.kind === "source-address"},() => movePlan('${esc(cluster)}','${esc(kind)}','${esc(name)}'))">${fix.kind === "source-address"
+        ${fix ? `<button class="btn sm pri" data-need="admin" onclick="clusterStorage(${jsq(cluster)},${fix.kind === "source-address"},() => movePlan(${jsq(cluster)},${jsq(kind)},${jsq(name)}))">${fix.kind === "source-address"
           ? `Give ${esc(cluster)}'s backup storage an address` : `Set up backup storage on ${esc(cluster)}`}</button>` : ""}</div>` : ""}
       ${plan.warnings?.length ? `<div class="note warn"><b>Worth knowing first.</b><ul>${plan.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
       ${plan.ok ? `<div class="note good"><b>Ready to move.</b>
@@ -1959,14 +1959,14 @@ function movesHtml(moves) {
       return `<div class="${state}"><i></i><span><b>${esc(MOVE_PHASE_WORDS[phase] || phase)}</b></span></div>`;
     }).join("");
     const actions = [
-      m.status === "failed" ? `<button class="btn sm" data-need="admin" onclick="moveAct('retry','${m.id}')">Retry</button>` : "",
+      m.status === "failed" ? `<button class="btn sm" data-need="admin" onclick="moveAct('retry',${jsq(m.id)})">Retry</button>` : "",
       m.status === "succeeded" && !m.source_removed
-        ? `<button class="btn sm" data-need="admin" onclick="moveFinish('${m.id}','${esc(m.name)}','${esc(m.cluster)}')">Remove from ${esc(m.cluster)}</button>` : "",
+        ? `<button class="btn sm" data-need="admin" onclick="moveFinish(${jsq(m.id)},${jsq(m.name)},${jsq(m.cluster)})">Remove from ${esc(m.cluster)}</button>` : "",
       ["running", "failed", "succeeded"].includes(m.status) && !m.source_removed
-        ? `<button class="btn sm danger" data-need="admin" onclick="moveBack('${m.id}','${esc(m.name)}','${esc(m.cluster)}','${m.status}')">Put back</button>` : "",
+        ? `<button class="btn sm danger" data-need="admin" onclick="moveBack(${jsq(m.id)},${jsq(m.name)},${jsq(m.cluster)},${jsq(m.status)})">Put back</button>` : "",
       ["succeeded", "cancelled"].includes(m.status)
         ? `<button class="btn sm" data-need="admin" data-tip="${m.status === "succeeded" && !m.source_removed ? `Clear it from this list. ${esc(m.cluster)} keeps its stopped copy until you remove it there.` : "Clear it from this list"}"
-            onclick="moveDismiss('${m.id}')">Dismiss</button>` : "",
+            onclick="moveDismiss(${jsq(m.id)})">Dismiss</button>` : "",
     ].join("");
     const started = Math.max(0, (Date.now() - Date.parse(m.created_at)) / 1000);
     return `<div class="card flat moveitem">
@@ -2018,7 +2018,7 @@ window.moveFinish = (id, name, cluster) => modal(`Remove ${name} from ${cluster}
   <div class="note">Leaving the volumes costs space on ${esc(cluster)} but keeps a copy of the data as it
     was at the moment of the move. Their backups stay in the backup storage either way.</div>
   <div class="row" style="margin-top:16px">
-    <button class="btn danger" data-need="admin" onclick="moveFinishNow('${id}')">Remove from ${esc(cluster)}</button>
+    <button class="btn danger" data-need="admin" onclick="moveFinishNow(${jsq(id)})">Remove from ${esc(cluster)}</button>
     <button class="btn" onclick="closeModal()">Not yet</button></div>`);
 
 window.moveFinishNow = async id => {

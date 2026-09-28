@@ -360,7 +360,8 @@ class RelayTests(unittest.TestCase):
 
         class Handler:
             command, path = "GET", "/api/vm/console?vm=x&hs_cluster=b"
-            headers = {"Upgrade": "websocket", "Connection": "Upgrade", "Sec-WebSocket-Key": "k"}
+            headers = {"Upgrade": "websocket", "Connection": "Upgrade", "Sec-WebSocket-Key": "k",
+                       "Origin": "https://homestead.example", "Host": "homestead.example"}
             rfile = io.BufferedReader(io.BytesIO(b"ls -la"))
             wfile = io.BytesIO()
         handler = Handler()
@@ -372,6 +373,17 @@ class RelayTests(unittest.TestCase):
         self.assertIn("Connection: Upgrade", answer)
         self.assertTrue(answer.endswith("echo:ls -la"))
         self.assertIn("Sec-WebSocket-Key: k", received["head"])
+        # The member checks its own origin; the browser's was checked here.
+        self.assertIn(f"Origin: http://127.0.0.1:{port}", received["head"])
+        self.assertNotIn("homestead.example", received["head"].split("Host:")[0])
+
+    def test_a_console_from_another_site_is_refused_before_relaying(self):
+        class Handler:
+            command, path = "GET", "/api/console?pod=x"
+            headers = {"Upgrade": "websocket", "Origin": "https://evil.example", "Host": "homestead.example"}
+            wfile = io.BytesIO()
+        with self.assertRaises(PermissionError):
+            self.a.fleet.forward(Handler(), "shed", b"")
 
     def test_a_cluster_that_does_not_answer_raises_before_anything_is_sent(self):
         class Handler:

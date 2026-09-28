@@ -15,6 +15,7 @@ function setup(response) {
       sent.push(JSON.parse(options.body)); return result;
     } };
   vm.createContext(c);
+  c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => (c.esc || String)(c.jsArg(s));
   vm.runInContext(fs.readFileSync("web/js/compose.js", "utf8"), c);
   return { c, fields, sent, notices, html: () => html, result: r => { result = r; } };
 }

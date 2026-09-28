@@ -61,7 +61,7 @@ async function viewSettings() {
   paint(`<div class="phead"><div><h2>Settings</h2><p>Cluster policy, hardware, access, and installation information</p></div>
     <button class="btn" onclick="document.getElementById('drawer').classList.add('open')">Appearance</button></div>
     <div class="seg settings-tabs" role="tablist">${SETTINGS_TABS.map(([id, label]) =>
-      `<button role="tab" data-tab="${id}" class="${id === tab ? "on" : ""}" aria-selected="${id === tab}" onclick="settingsTab('${id}')">${label}</button>`).join("")}</div>
+      `<button role="tab" data-tab="${id}" class="${id === tab ? "on" : ""}" aria-selected="${id === tab}" onclick="settingsTab(${jsq(id)})">${label}</button>`).join("")}</div>
 
     <div class="settings-grid" data-tab="${tab}">
       <section class="card flat settings-wide" data-tab="health">
@@ -228,7 +228,7 @@ async function replicasPaint() {
       ${(r.data.kept || []).length ? `<div class="note" style="margin-top:8px">Other Homestead data volumes:
         ${r.data.kept.map(k => `<span class="mono">${esc(k)}</span>`).join(", ")}. These may be prepared destinations or recovery copies.
         Check their jobs before deleting anything.
-        <div class="row" style="margin-top:6px">${r.data.kept.map(k => `<button class="btn sm" onclick="openOperation('/volumes?find=${esc(k)}')">Show ${esc(k)}</button>`).join("")}</div></div>` : ""}
+        <div class="row" style="margin-top:6px">${r.data.kept.map(k => `<button class="btn sm" onclick="openOperation(${jsq("/volumes?find=" + k)})">Show ${esc(k)}</button>`).join("")}</div></div>` : ""}
       <div class="dim xs" style="margin-top:4px">Prepare a destination first, then review the move. Homestead must stop while its data is copied and verified.
         Both volumes are kept. Preparation alone does not move your data.</div>` : ""}
     <table class="tbl dense stack" style="margin-top:10px"><thead><tr><th>Copy</th><th>Node</th><th>State</th></tr></thead><tbody>
@@ -410,7 +410,7 @@ async function namespacesPaint() {
       <td class="dim xs">${r.created ? esc(new Date(r.created).toLocaleDateString()) : ""}</td>
       <td class="right">${can("admin") ? (r.protected ? `<span class="dim xs" title="${esc(r.protected)}">kept</span>`
         : `<button class="btn sm danger" ${r.empty ? "" : `disabled title="Move or delete what it holds first"`}
-            onclick="namespaceDelete('${esc(r.name)}')">Delete</button>`) : ""}</td></tr>`).join("")}</tbody></table></div>
+            onclick="namespaceDelete(${jsq(r.name)})">Delete</button>`) : ""}</td></tr>`).join("")}</tbody></table></div>
     <div class="dim xs" style="margin-top:8px">${inv.system_hidden} platform namespace${inv.system_hidden === 1 ? "" : "s"} hidden.</div>`;
   sortTables(host);
 }

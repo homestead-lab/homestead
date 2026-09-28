@@ -13,10 +13,10 @@ function networkVipCard(v, data) {
     ${isDefault ? '<div class="vip-card-default"><span class="tag ok">Default workload VIP</span><span class="dim xs">Suggested for new workloads; existing services stay where they are.</span></div>' : ""}
     ${blocked || (v.used_by || []).length ? `<div class="vip-card-usage small">${blocked ? esc(blocked) : `<span class="dim">Used by</span> ${(v.used_by || []).map(n => `<span class="mono">${esc(n)}</span>`).join("")}`}</div>` : ""}
     <div class="vip-card-actions">
-      ${canUse ? `<button class="btn sm" data-need="operator" onclick="networkExpose('','','Deployment','${esc(v.ip)}')">Use this VIP</button>` : ""}
-      ${canUse && !isDefault ? `<button class="btn sm" data-need="admin" onclick="vipDefault('${esc(v.ip)}')">Make default</button>` : ""}
-      <button class="btn sm" data-need="admin" onclick="vipLabel('${esc(v.ip)}')">Edit label</button>
-      ${!isDefault && (v.free || blocked) ? `<button class="btn sm" data-need="admin" onclick="vipRemove('${esc(v.ip)}')">Remove</button>` : ""}
+      ${canUse ? `<button class="btn sm" data-need="operator" onclick="networkExpose('','','Deployment',${jsq(v.ip)})">Use this VIP</button>` : ""}
+      ${canUse && !isDefault ? `<button class="btn sm" data-need="admin" onclick="vipDefault(${jsq(v.ip)})">Make default</button>` : ""}
+      <button class="btn sm" data-need="admin" onclick="vipLabel(${jsq(v.ip)})">Edit label</button>
+      ${!isDefault && (v.free || blocked) ? `<button class="btn sm" data-need="admin" onclick="vipRemove(${jsq(v.ip)})">Remove</button>` : ""}
     </div></article>`;
 }
 
@@ -76,7 +76,7 @@ async function viewNetworking() {
         <span class="tag ${vip.listeners.some(x => x.health !== "healthy") ? "warn" : "ok"}">${vip.services} service${vip.services === 1 ? "" : "s"}</span></div>
       <div class="netlisteners">${vip.listeners.map(item => `<div class="drow"><div class="dl"><b>${item.port}/${esc(item.protocol)}</b>
         <span class="dim">${esc(item.namespace)}/${esc(item.service)}</span></div><div class="dv">${item.browser
-          ? `<a class="tag info" href="${esc(item.access)}" target="_blank" rel="noopener">Open ${icon("ext")}</a>`
+          ? `<a class="tag info" href="${safeHref(item.access)}" target="_blank" rel="noopener">Open ${icon("ext")}</a>`
           : `<span class="tag">${esc(item.access)}</span>`}</div></div>`).join("")}</div></div>`).join("") || '<div class="card flat empty">No external VIPs</div>'}</div>
     <div class="sec" style="margin-top:22px">Services &amp; endpoint paths</div>
     ${orphans ? `<div class="note" style="margin-bottom:12px">${orphans === 1
@@ -88,7 +88,7 @@ async function viewNetworking() {
         <td class="netpathcell"><div class="netpath"><span title="${esc(row.external_ips.join(", ") || "cluster only")}">${esc(row.external_ips[0] || row.cluster_ip || "pending")}${row.external_ips.length > 1 ? ` +${row.external_ips.length - 1}` : ""}</span><i>→</i><span>${esc(row.name)}</span><i>→</i><span>${row.ready_endpoints} endpoint${row.ready_endpoints === 1 ? "" : "s"}</span></div>
           <div class="dim xs">${row.endpoints.ready.map(e => `${esc(e.target || e.addresses[0] || "endpoint")} @ ${esc(e.node || "unknown node")}`).join(" · ") || "No ready target"}</div></td>
         <td><span class="pill ${networkPill(row.health)}">${esc(row.health)}</span><div class="dim xs" style="margin-top:5px">${esc(row.reason)}</div></td>
-        <td>${row.system ? "" : `<button class="btn sm ${row.orphaned ? "danger" : ""}" data-need="admin" title="${row.orphaned ? "Release this listener" : "Remove this Service and take its workload off the LAN"}" onclick="networkServiceDelete('${esc(row.namespace)}','${esc(row.name)}')">${icon("trash")}${row.orphaned ? "Release" : "Remove"}</button>`}</td></tr>`).join("") || '<tr><td colspan="5" class="empty">No matching services</td></tr>'}</tbody></table></div></div>
+        <td>${row.system ? "" : `<button class="btn sm ${row.orphaned ? "danger" : ""}" data-need="admin" title="${row.orphaned ? "Release this listener" : "Remove this Service and take its workload off the LAN"}" onclick="networkServiceDelete(${jsq(row.namespace)},${jsq(row.name)})">${icon("trash")}${row.orphaned ? "Release" : "Remove"}</button>`}</td></tr>`).join("") || '<tr><td colspan="5" class="empty">No matching services</td></tr>'}</tbody></table></div></div>
     ${data.ingresses.length ? `<div class="sec" style="margin-top:22px">Ingress routes</div><div class="card flat pad0"><div class="tblwrap"><table data-sort="ingresses" class="tbl stack dense"><thead><tr><th>Ingress</th><th>Address</th><th>Route</th><th>Backend</th></tr></thead><tbody>${data.ingresses.filter(x => showSystem || !x.system).flatMap(row => row.rules.map(rule => `<tr><td>${esc(row.namespace)}/${esc(row.name)}</td><td class="mono">${esc(row.addresses.join(", ") || "pending")}</td><td>${esc(rule.host)}${esc(rule.path)}</td><td>${esc(rule.service)}:${esc(rule.port)}</td></tr>`)).join("")}</tbody></table></div></div>` : ""}`);
   networkVmNetsPaint();
 }

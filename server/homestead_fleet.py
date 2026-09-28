@@ -619,16 +619,22 @@ def _read_head(sock, limit=65536):
     return head, rest
 
 
-def request_head(method, target, host, headers, body, signature, websocket=False):
+def request_head(method, target, host, headers, body, signature, websocket=False, origin=""):
     """The request as the other member gets it: the person's own headers,
     less their cookies and anything about this one connection, plus the
-    signature that says who they are."""
+    signature that says who they are. A console's Origin, already checked
+    against this Homestead, is presented as the member's own, which it checks
+    as it would for any console."""
     lines = [f"{method} {target} HTTP/1.1", f"Host: {host}"]
     for name, value in headers.items():
         low = name.lower()
         if low in HOP or low.startswith("cf-") or low.startswith("x-homestead-fleet") or low.startswith("x-forwarded"):
             continue
+        if low == "origin" and origin:
+            continue
         lines.append(f"{name}: {value}")
+    if origin:
+        lines.append(f"Origin: {origin}")
     lines += ["Upgrade: websocket", "Connection: Upgrade"] if websocket else ["Connection: close"]
     if body or method in ("POST", "PUT", "PATCH", "DELETE"):
         lines.append(f"Content-Length: {len(body)}")
@@ -660,6 +666,11 @@ def forward(handler, ref, body, user="", role="", cookies=()):
     if not target:
         raise Unreachable("that cluster is no longer linked")
     websocket = (handler.headers.get("Upgrade") or "").lower() == "websocket"
+    if websocket:
+        # A console from another site is refused here, as it would be anywhere.
+        origin = urllib.parse.urlparse(handler.headers.get("Origin") or "").netloc.lower()
+        if not origin or origin != (handler.headers.get("Host") or "").lower():
+            raise PermissionError("console websocket origin rejected")
     try:
         sock, parsed = _connect(target["url"])
     except Exception as error:
@@ -667,7 +678,8 @@ def forward(handler, ref, body, user="", role="", cookies=()):
     path = parsed.path.rstrip("/") + handler.path
     try:
         sock.sendall(request_head(handler.command, path, parsed.netloc, handler.headers, body,
-                                  sign(handler.command, path, body, user, role), websocket) + body)
+                                  sign(handler.command, path, body, user, role), websocket,
+                                  f"{parsed.scheme}://{parsed.netloc}" if websocket else "") + body)
         sock.settimeout(None if websocket else 900)
         head, rest = _read_head(sock)
     except Unreachable:

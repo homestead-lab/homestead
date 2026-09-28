@@ -58,8 +58,8 @@ window.clusterOnboarding = async () => {
       itself; everything else is below, with this cluster's answers.</p>
     <section class="guide-step"><h4><span>1</span>Boot the installer</h4>
       ${g.iso ? `<p>This cluster runs <b>Harvester v${esc(g.version)}</b>; the new host needs the same release.</p>
-        <div class="row"><a class="btn sm pri" href="${esc(g.iso)}" target="_blank" rel="noopener">Harvester v${esc(g.version)} ISO (${esc(g.arch)})</a>
-          <a class="btn sm" href="${esc(g.checksums)}" target="_blank" rel="noopener">Checksums</a></div>`
+        <div class="row"><a class="btn sm pri" href="${safeHref(g.iso)}" target="_blank" rel="noopener">Harvester v${esc(g.version)} ISO (${esc(g.arch)})</a>
+          <a class="btn sm" href="${safeHref(g.checksums)}" target="_blank" rel="noopener">Checksums</a></div>`
         : '<p>Homestead could not read this cluster\'s Harvester version - use the ISO matching the version on the Cluster page.</p>'}
       <p class="dim xs">Write it to a USB stick with Rufus (in DD mode) or balenaEtcher, or mount it as virtual media from the
         server's BMC (iDRAC, iLO, IPMI). Boot from it and choose <b>Harvester Installer</b>.</p></section>
@@ -112,26 +112,26 @@ function cleanupRows(report, withDead = true) {
   return [
     ...(withDead ? report.dead_nodes : []).map(n => `<div class="cleanup-row bad"><div><b>${esc(n.name)} is not ready</b>
       <span>${esc((n.roles || []).join(" · ") || "worker")}${n.since ? ` · since ${esc(new Date(n.since).toLocaleString())}` : ""}</span></div>
-      <button class="btn sm danger" data-need="admin" onclick="nodeRemoval('${esc(n.name)}')">Remove…</button></div>`),
+      <button class="btn sm danger" data-need="admin" onclick="nodeRemoval(${jsq(n.name)})">Remove…</button></div>`),
     ...report.stale_machines.map(m => `<div class="cleanup-row"><div><b>Leftover machine ${esc(m.name)}</b>
       <span>${m.stuck ? `Being deleted, but waiting on ${esc(m.node || "its host")}, which will not answer`
         : `Cluster API still lists it${m.node ? ` for ${esc(m.node)}, which is gone` : ` (${esc(m.phase)})`}`}</span></div>
-      <button class="btn sm ${m.stuck ? "danger" : ""}" data-need="admin" onclick="clusterCleanup('machine','${esc(m.name)}',${m.stuck})">${m.stuck ? "Force" : "Delete"}</button></div>`),
+      <button class="btn sm ${m.stuck ? "danger" : ""}" data-need="admin" onclick="clusterCleanup('machine',${jsq(m.name)},${m.stuck})">${m.stuck ? "Force" : "Delete"}</button></div>`),
     ...report.stale_longhorn.map(n => `<div class="cleanup-row"><div><b>Longhorn still lists ${esc(n.name)}</b>
       <span>${n.replicas ? `${n.replicas} replica${n.replicas === 1 ? "" : "s"} still recorded there. They rebuild elsewhere on their own; force it if the host is gone for good` : "No replicas left; safe to delete"}</span></div>
-      <button class="btn sm ${n.replicas ? "danger" : ""}" data-need="admin" onclick="clusterCleanup('longhorn','${esc(n.name)}',${!!n.replicas})">${n.replicas ? "Force" : "Delete"}</button></div>`),
+      <button class="btn sm ${n.replicas ? "danger" : ""}" data-need="admin" onclick="clusterCleanup('longhorn',${jsq(n.name)},${!!n.replicas})">${n.replicas ? "Force" : "Delete"}</button></div>`),
     ...(report.passwords || []).map(s => `<div class="cleanup-row"><div><b>${esc(s.node)}'s node password</b>
       <span>A Secret k3s/RKE2 keeps for a host that is gone. While it is there, a rebuilt host called ${esc(s.node)} cannot join</span></div>
-      <button class="btn sm" data-need="admin" onclick="clusterCleanup('password','${esc(s.name)}')">Delete</button></div>`),
+      <button class="btn sm" data-need="admin" onclick="clusterCleanup('password',${jsq(s.name)})">Delete</button></div>`),
     ...(report.pinned_workloads || []).map(w => `<div class="cleanup-row"><div><b>${esc(w.name)} is pinned to ${esc(w.node)}</b>
       <span>That host is gone, so ${esc(w.name)} waits for it. Unpinning lets it run on any host that suits it</span></div>
-      <button class="btn sm" data-need="admin" onclick="clusterCleanup('pin','${esc(`${w.namespace}/${w.name}`)}')">Unpin</button></div>`),
+      <button class="btn sm" data-need="admin" onclick="clusterCleanup('pin',${jsq(`${w.namespace}/${w.name}`)})">Unpin</button></div>`),
     ...(report.pinned_volumes || []).map(v => `<div class="cleanup-row bad"><div><b>${esc(`${v.namespace}/${v.claim}`)} was kept on ${esc(v.node)}</b>
       <span>Its data went with that host${v.users?.length ? `, so ${esc(v.users.join(", "))} cannot start` : ""}. Making it again empty lets ${v.users?.length === 1 ? "it" : "them"} start elsewhere</span></div>
-      <button class="btn sm danger" data-need="admin" onclick="clusterCleanup('pinned-volume','${esc(`${v.namespace}/${v.claim}`)}',true)">Make it empty</button></div>`),
+      <button class="btn sm danger" data-need="admin" onclick="clusterCleanup('pinned-volume',${jsq(`${v.namespace}/${v.claim}`)},true)">Make it empty</button></div>`),
     ...(report.attachments || []).map(a => `<div class="cleanup-row"><div><b>A volume is still attached to ${esc(a.node)}</b>
       <span>${esc(a.name)} - that host is gone, so the volume cannot attach anywhere else until it is released</span></div>
-      <button class="btn sm" data-need="admin" onclick="clusterCleanup('attachment','${esc(a.name)}')">Release</button></div>`),
+      <button class="btn sm" data-need="admin" onclick="clusterCleanup('attachment',${jsq(a.name)})">Release</button></div>`),
   ];
 }
 
@@ -187,12 +187,12 @@ window.clusterRemovePick = async () => {
       removing it costs first: etcd quorum, volumes whose only copy it held, apps and volumes tied to it. Nothing changes until you confirm.</p>
     ${down.length ? `<div class="sec">Not ready</div><div class="cleanup-card card flat">${down.map(n => `<div class="cleanup-row bad"><div>
         <b>${esc(n.name)}</b><span>${esc((n.roles || []).join(" · ") || "worker")} · ${esc(n.status || "not ready")}</span></div>
-        <button class="btn sm danger" onclick="nodeRemoval('${esc(n.name)}')">Check and remove…</button></div>`).join("")}</div>`
+        <button class="btn sm danger" onclick="nodeRemoval(${jsq(n.name)})">Check and remove…</button></div>`).join("")}</div>`
       : '<div class="note good">Every host is Ready: none has failed.</div>'}
     ${up.length ? `<div class="sec">Running ${tip("A running host re-registers itself, so it cannot simply be deleted. Drain it, stop Kubernetes on it (or uninstall it), power it off, and it shows here as Not ready.")}</div>
       <div class="cleanup-card card flat">${up.map(n => `<div class="cleanup-row"><div><b>${esc(n.name)}</b>
         <span>${esc((n.roles || []).join(" · ") || "worker")} · Ready - stop it first to retire it</span></div>
-        <button class="btn sm" onclick="nodeRemoval('${esc(n.name)}')">What it takes…</button></div>`).join("")}</div>` : ""}
+        <button class="btn sm" onclick="nodeRemoval(${jsq(n.name)})">What it takes…</button></div>`).join("")}</div>` : ""}
     <div class="modalactions"><button class="btn" onclick="closeModal()">Close</button></div>`;
 };
 
@@ -229,7 +229,7 @@ window.nodeRemoval = async name => {
       onchange="nodeRemovalMode()"> <span id="rm_loss_text"></span></label>` : ""}
     <div class="modalactions"><button class="btn" onclick="modalBack()">Cancel</button>
       ${plan.ok ? `<button class="btn danger" id="rm_go" data-need="admin"
-        onclick="nodeRemove('${esc(name)}')">Remove ${esc(name)}</button>` : ""}</div>`;
+        onclick="nodeRemove(${jsq(name)})">Remove ${esc(name)}</button>` : ""}</div>`;
   window.__removalPlan = plan;
   nodeRemovalMode();
   if (window.applyRole) window.applyRole();

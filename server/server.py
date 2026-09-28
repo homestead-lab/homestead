@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.214")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.215")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -168,8 +168,23 @@ def _sampler():
         time.sleep(30)
 
 
+# A dot segment, plain or percent-encoded, anywhere in a path.
+_DOT_SEGMENT = re.compile(r"(^|/)(\.|%2e){1,2}(/|$)", re.I)
+
+
+def api_path(path):
+    """A Kubernetes API path, refused if a name in it could step out of the
+    object it names. Names come from requests - ?name=, a body - and the API
+    server is asked as Homestead, so "../" in one must never reach it."""
+    head = str(path).split("?", 1)[0]
+    if (_DOT_SEGMENT.search(head) or "%2f" in head.lower() or "%5c" in head.lower()
+            or any(c in head for c in ("\\", " ", "\t", "\r", "\n", "#"))):
+        raise ValueError("that is not a valid Kubernetes name")
+    return path
+
+
 def kget(path, timeout=10):
-    req = urllib.request.Request(API + path, headers={"Authorization": f"Bearer {TOKEN}"})
+    req = urllib.request.Request(API + api_path(path), headers={"Authorization": f"Bearer {TOKEN}"})
     with urllib.request.urlopen(req, context=CTX, timeout=timeout) as r:
         return json.loads(r.read().decode())
 
@@ -183,7 +198,7 @@ def ksend(method, path, body=None, ctype="application/json", timeout=15):
 
 def _ksend(method, path, body=None, ctype="application/json", timeout=15):
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(API + path, data=data, method=method,
+    req = urllib.request.Request(API + api_path(path), data=data, method=method,
                                  headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": ctype})
     with urllib.request.urlopen(req, context=CTX, timeout=timeout) as r:
         raw = r.read().decode()
@@ -2603,6 +2618,14 @@ def deploy_capacity_plan(config, existing=None):
                                threshold, planned_claims=claims)
 
 
+def hardware_device_paths():
+    """The host paths an admin has offered as hardware features."""
+    try:
+        return {f.get("host_path") for f in HW.features() if f.get("host_path")}
+    except Exception:
+        return set()
+
+
 def edit_capacity_plan(config):
     """Build the exact edit before seed/PVC/icon or workload writes."""
     ns, name = LC.dns_label(config["ns"], "namespace"), LC.dns_label(config["name"], "workload name")
@@ -2625,6 +2648,7 @@ def edit_capacity_plan(config):
     context = {"action": "edit", **rollout_review_context(current),
                "seeds": [(path, cm.get("metadata", {}).get("resourceVersion")) for path, cm in prepared["seeds"]]}
     proposed = copy.deepcopy(prepared["deployment"])
+    HOSTACCESS.require_edit(current, proposed, hardware_device_paths())
     if proposed["spec"].get("paused") and proposed["spec"].get("replicas", 1) > current["spec"].get("replicas", 1):
         raise ValueError("Increasing replicas of a paused Deployment needs a separate capacity review; resume it before editing replicas")
     if prepared["name"] != name:
@@ -2698,6 +2722,7 @@ def copy_admission(dep):
 def reviewed_deploy(b):
     """Deploy/App Store endpoint guard; Compose needs a whole-batch review."""
     b = ensure_profile_compatible(analyze_deploy_intent(copy.deepcopy(b)))
+    HOSTACCESS.require_cfg([b])
     if b.get("target_mode", "new") not in ("new", "existing"):
         raise ValueError("deployment target must be new or existing")
     current = None
@@ -2868,6 +2893,7 @@ def compose_capacity(entries, claims, created=None):
 
 def compose_preview(b):
     configs, entries, claims = compose_preparation(b)
+    HOSTACCESS.require_cfg(configs)
     return {"capacity": compose_capacity(entries, claims),
             "capacity_token": CAPACITY_REVIEW.issue(b, {"action": "compose", "configs": configs})}
 
@@ -2875,6 +2901,7 @@ def compose_preview(b):
 def compose_apply(b):
     """Guard the entire batch before any writes, then recheck its remainder."""
     configs, entries, claims = compose_preparation(b)
+    HOSTACCESS.require_cfg(configs)
     plan = compose_capacity(entries, claims)
     if plan["status"] == "unknown":
         raise CAPACITY_REVIEW.Rejected("Complete batch placement could not be verified; split the batch and review again", plan)
@@ -4734,6 +4761,7 @@ import homestead_probe as PROBE
 import homestead_objectstore as OBJECTS
 import homestead_move as MOVE
 import homestead_fleet as FLEET
+import homestead_host_access as HOSTACCESS
 import homestead_signins as SIGNINS
 import homestead_config_backup as CONFIG
 import homestead_move_source as MOVE_SOURCE
@@ -6547,8 +6575,12 @@ class H(BaseHTTPRequestHandler):
 
     def _client_ip(self):
         """Who is asking. X-Forwarded-For is whatever the client wrote, so it is not
-        used; Cloudflare's own header is, and it replaces anything sent in it."""
-        if self._via_cloudflare() and self.headers.get("Cf-Connecting-Ip"):
+        used. Cloudflare's own header is - but only when Cloudflare Access is set
+        up, since then a request claiming to come through Cloudflare must also
+        carry Access's signature. Without Access, anyone could send the header
+        to dodge the per-address sign-in limit, or write any address into the
+        sign-in history."""
+        if CFACCESS.enabled() and self._via_cloudflare() and self.headers.get("Cf-Connecting-Ip"):
             return self.headers.get("Cf-Connecting-Ip").strip()
         return self.client_address[0] if self.client_address else ""
 
@@ -6706,6 +6738,7 @@ class H(BaseHTTPRequestHandler):
                 self._send(403, {"error": "missing X-Homestead-Auth header"})
                 return True
         self.user, self.role = who["user"], who["role"]
+        HOSTACCESS.set_role(self.role)
         if not enforce_role:
             return None
         need = needed_role(path, self.command)
@@ -6721,6 +6754,7 @@ class H(BaseHTTPRequestHandler):
         self._raw = None
         self._fleet_who = False
         self._fleet_from = None
+        HOSTACCESS.set_role(None)
 
     def _raw_body(self):
         """The request body, read once: a signature covers it before it is parsed."""
@@ -6767,6 +6801,8 @@ class H(BaseHTTPRequestHandler):
         try:
             FLEET.forward(self, target, self._raw_body(), who["user"] if who else "",
                           who["role"] if who else "", cookies)
+        except PermissionError as error:
+            return self._send(403, {"error": str(error)})
         except FLEET.Unreachable as error:
             known = FLEET.member(target) or {}
             if self.command == "GET" and "text/html" in (self.headers.get("Accept") or ""):
