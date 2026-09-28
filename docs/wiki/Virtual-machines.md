@@ -197,8 +197,11 @@ on disposable resources before relying on them for production recovery.
 **Edit** covers what a VM is made of:
 
 - **General** - cores, memory, run strategy, description, a host to keep it on;
+- **Hardware** - the virtual machine's hardware, in folded sections that each
+  show what they are set to (see [Hardware](#hardware));
 - **Disks** - boot order, bus, growing a disk, detaching one (its volume is
-  kept), adding a disk or CD-ROM, and a new source for a disk that failed to
+  kept), adding a disk or CD-ROM - from the [ISO library](#iso-library), a
+  Harvester image or a URL - and a new source for a disk that failed to
   download;
 - **Network** - model, network, MAC, adding and removing cards;
 - **Cloud-init** - user and network data.
@@ -206,6 +209,57 @@ on disposable resources before relying on them for production recovery.
 Changes apply at the next boot, or at once with **Restart now so the changes
 take effect**. **Edit
 YAML** opens the VM in the Resources editor for anything else.
+
+## Hardware
+
+The **Hardware** tab keeps each group folded, with its settings on one line:
+
+- **Processor** - sockets, cores per socket and threads; the CPU model
+  (host-model, host-passthrough, or a named model every node offers, which
+  keeps the VM movable across mixed hardware); dedicated CPUs, pinned one to
+  one as Proxmox's affinity does; and an isolated emulator thread.
+- **Firmware and security** - BIOS or UEFI, Secure Boot, kept EFI variables,
+  a virtual TPM 2.0 (on, or with its state kept), and the machine type.
+- **Guest tuning** - Hyper-V enlightenments for Windows, hiding KVM from GPU
+  drivers that refuse to run in a VM, and the clock's time zone (UTC, or local
+  time for Windows).
+- **Devices** - the display the web console shows, the serial console, a
+  tablet pointer, a random-number device, the memory balloon, a sound card.
+- **Memory and placement** - hugepages, and what happens when its node is
+  drained: live-migrate, try to, or stop.
+
+**Guest type** applies a preset, as Proxmox's OS type does: **Windows 11 /
+Server 2022+** (UEFI with Secure Boot, a kept TPM, Hyper-V enlightenments, a
+tablet pointer, local time), **Windows 10 / Server 2019**, **Linux server**,
+**Linux desktop**, **Linux cloud image (BIOS)** and **Headless appliance**. A
+preset only fills in the fields; nothing changes until the edit is reviewed
+and saved, and only the fields that changed are written. The same presets are
+the **Guest type** of a new VM.
+
+What a setting needs from the cluster is said as it is chosen: dedicated CPUs
+need the kubelet's static CPU manager policy, hugepages must be reserved on
+the node, host-passthrough limits live migration to identical CPUs, and kept
+EFI or TPM state needs KubeVirt's VMPersistentState feature before KubeVirt 1.5.
+Settings KubeVirt would refuse - Secure Boot on BIOS, say - are refused before
+anything is saved.
+
+## ISO library
+
+**ISO library** (on the VMs page) lists the `.iso` files in folders you pick
+on your [Network shares](Network-shares) - copy installers there from your PC
+over SMB. **＋ Folder** chooses a share, then a folder on it; nothing else is
+set up. A CD-ROM cannot read one file on a shared volume, so each ISO is made
+ready once: **Make ready** copies it into a volume of its own, on a storage
+class every node can mount where there is one, so one copy serves every VM on
+any node. Its progress shows in the library; a file replaced by a new one of
+another size is copied again under a new name.
+
+A ready ISO is offered as a CD-ROM's contents in **Edit → Disks → ＋ CD-ROM**,
+attached read-only, and **Detach** ejects it. A new VM can **Install from an
+ISO**: it gets a blank disk and the ISO in a CD-ROM drive that boots first,
+with no root password - the installer asks for its own. An ISO's volume a VM
+still has in a drive cannot be deleted; deleting one keeps the file on the
+share.
 
 ## Delete
 

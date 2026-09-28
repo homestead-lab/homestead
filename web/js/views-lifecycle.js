@@ -714,7 +714,13 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
         ${(opts.store || []).length ? `<optgroup label="Image store - the publisher's newest build">${opts.store.map(s => `<option value="store:${esc(s.id)}" data-size="${s.min_gb}"
           ${window.__vmPreset === `store:${s.id}` ? "selected" : ""}>${esc(s.name)} · ${esc(s.variant)}${opts.harvester ? (s.kept ? (s.ready ? " · kept" : " · downloading") : " · downloads now") : ""}</option>`).join("")}</optgroup>` : ""}
         ${opts.cdi || opts.harvester ? `<option value="url">${opts.harvester ? "Download from a URL (as a Harvester image)" : "Download from HTTP(S) URL"}</option>` : ""}
-      </select></div>
+        ${(opts.isos || []).length ? `<optgroup label="Install from an ISO - a blank disk, the ISO in its CD-ROM drive">${opts.isos.map(i => `<option value="iso:${esc(i.name)}">${esc(i.file)}</option>`).join("")}</optgroup>` : ""}
+      </select>
+      <div class="dim xs" style="margin-top:6px">Installing from an ISO? Make one ready in the <a class="linkish" onclick="vmIsoLibrary()">ISO library</a> first.</div></div>
+    <div class="f"><label>Guest type ${tip("Firmware, TPM, clock and devices for the kind of guest, as Proxmox's OS type sets them. Every setting can be changed later in the VM's Hardware tab.")}</label>
+      <select id="v_preset" onchange="$('#v_preset_about').textContent = VM_PRESETS[this.value]?.about || 'KubeVirt defaults: BIOS, UTC, a display and serial console'">
+        <option value="">Default</option>${Object.entries(VM_PRESETS).map(([id, p]) => `<option value="${esc(id)}">${esc(p.name)}</option>`).join("")}</select>
+      <div class="dim xs" id="v_preset_about" style="margin-top:4px">KubeVirt defaults: BIOS, UTC, a display and serial console</div></div>
     <div class="f" id="v_url_row" hidden><label>Image URL</label><input type="url" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img"></div>
     <div class="note small">A <b>Service VIP</b> forwards selected ports to a VM on the pod network. A <b>direct LAN interface</b> gets its address from DHCP or guest configuration; a MAC address only identifies that interface.</div>
     <div class="f"><label>Network ${tip("The pod network: reached through a Service, like a container. A LAN network (bridged): a machine there like any other, with an address from DHCP or one of its own.")}</label>
@@ -748,6 +754,8 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
 };
 window.vmBootChanged = () => {
   const boot = $("#v_boot")?.value || "";
+  // An installer asks for its own password; cloud-init is for cloud images.
+  if ($("#v_pass")) $("#v_pass").placeholder = boot.startsWith("iso:") ? "Not used: the installer asks" : "Set an initial password";
   if ($("#v_url_row")) $("#v_url_row").hidden = boot !== "url";
   // An import brings its own disk; a Harvester image brings its own class.
   if ($("#v_sc_row")) $("#v_sc_row").hidden = boot.startsWith("disk:") || boot.startsWith("image:");
@@ -765,6 +773,7 @@ window.doVmCreate = async () => {
     image_id: boot.startsWith("image:") ? boot.slice(6) : "",
     image_url: boot === "url" ? $("#v_url").value.trim() : "",
     store_id: boot.startsWith("store:") ? boot.slice(6) : "",
+    install_iso: boot.startsWith("iso:") ? boot.slice(4) : "",
     storage_class: $("#v_sc")?.value || "", network: $("#v_net")?.value || "pod" };
   if (body.network !== "pod" && $("#v_addr_mode")?.value === "static") {
     body.static_ip = Object.assign(vmReadAddress("v"), { address: $("#v_ip").value.trim() });
@@ -774,7 +783,10 @@ window.doVmCreate = async () => {
   const serviceMode = body.network === "pod" ? $("#v_service")?.value || "" : "";
   const selectedVip = serviceMode === "manual" ? $("#vsvc_lb_ip").value.trim() : "";
   if (serviceMode === "manual" && !selectedVip) return toast("Choose the VM's Service VIP", "bad");
-  if (!body.disk_import && body.password.length < 10) return toast("root password must be at least 10 characters", "bad");
+  const preset = vmPresetSettings($("#v_preset")?.value || "");
+  if (preset) body.hardware = preset;
+  if (body.install_iso) body.password = "";
+  if (!body.disk_import && !body.install_iso && body.password.length < 10) return toast("root password must be at least 10 characters", "bad");
   if (boot === "url" && !body.image_url) return toast("image URL is required", "bad");
   if (boot === "url" && !/^https?:\/\/[^/\s]+/i.test(body.image_url)) {
     // A file name here is usually a Harvester image, which is picked from the list instead.

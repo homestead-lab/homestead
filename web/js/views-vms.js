@@ -36,6 +36,7 @@ async function viewVMs() {
       <p>${vms.length} VM${vms.length === 1 ? "" : "s"} · ${running} running · ${STATE.platform?.harvester === false ? `KubeVirt on ${esc(platformName(STATE.platform))}${STATE.platform.cdi ? "" : " · no CDI"}` : "KubeVirt on Harvester"}</p></div>
       <div class="row">${layoutSwitch("vms", "viewVMs")}
       <button class="btn" onclick="vmStore()" title="Cloud images from their publishers - Ubuntu, Debian, Fedora, Rocky and more - to start VMs from">${icon("store")}Image store</button>
+      <button class="btn" onclick="vmIsoLibrary()" title="ISO images from folders on your Network Shares, for VMs' CD-ROM drives">${icon("disk")}ISO library</button>
       <button class="btn" data-need="operator" onclick="k3sCluster()" title="A k3s cluster made of VMs here, each with an address of its own">＋ k3s cluster</button>
       <button class="btn pri" data-need="operator" onclick="vmNew()">＋ New VM</button></div></div>
     ${!rows.length ? `<div class="empty">${q ? "Nothing matches that search." : "No virtual machines yet — create one to get started."}</div>`
@@ -381,15 +382,20 @@ const vmNet = n => n.network === "pod network" ? "pod" : n.network;
 const vmOpt = (value, label, chosen) => `<option value="${esc(value)}" ${value === chosen ? "selected" : ""}>${esc(label)}</option>`;
 
 /* Where a disk's contents come from: blank, a download, or a Harvester image. */
-function vmSourceSelect(cls, o, current = "") {
+function vmSourceSelect(cls, o, current = "", cdrom = false) {
+  const isos = cdrom ? (o.isos || []) : [];
   return `<select class="${cls}" onchange="vmSourceChanged(this)">
-    ${vmOpt("blank", "blank disk", current)}
+    ${isos.length ? `<optgroup label="ISO library">${isos.map(i => vmOpt(`iso:${i.name}`, i.file, current)).join("")}</optgroup>` : ""}
+    ${cdrom ? "" : vmOpt("blank", "blank disk", current)}
     ${o.cdi || o.harvester ? vmOpt("url", o.harvester ? "download from a URL (as a Harvester image)" : "download from a URL", current) : ""}
     ${(o.images || []).filter(i => i.storage_class).map(i => vmOpt(`image:${i.namespace}/${i.name}`, `Harvester image · ${i.display}`, current)).join("")}</select>`;
 }
 window.vmSourceChanged = select => {
-  const url = select.closest("[data-disk],.vd-add")?.querySelector(".vd_url,.va_url");
+  const box = select.closest("[data-disk],.vd-add");
+  const url = box?.querySelector(".vd_url,.va_url");
   if (url) url.hidden = select.value !== "url";
+  // An ISO from the library is its own shared volume: no size or class to give.
+  box?.querySelectorAll(".va-sized").forEach(el => { el.hidden = select.value.startsWith("iso:"); });
 };
 
 function vmDiskRow(d, o) {
@@ -443,7 +449,7 @@ window.vmEdit = async (ns, name) => {
   const tab = (id, label) => `<button class="${id === "general" ? "on" : ""}" onclick="vmEditTab(this,${jsq(id)})">${label}</button>`;
   const disks = v.disks.filter(d => d.kind === "disk" || d.kind === "cd-rom");
   const ci = v.cloud_init || {};
-  $("#mbody").innerHTML = `<div class="between vm-edit-tabs"><div class="seg">${tab("general", "General")}${tab("disks", `Disks · ${disks.length}`)}${tab("network", `Network · ${v.nics.length}`)}${tab("cloud", "Cloud-init")}</div>
+  $("#mbody").innerHTML = `<div class="between vm-edit-tabs"><div class="seg">${tab("general", "General")}${v.hardware ? tab("hardware", "Hardware") : ""}${tab("disks", `Disks · ${disks.length}`)}${tab("network", `Network · ${v.nics.length}`)}${tab("cloud", "Cloud-init")}</div>
       <button class="btn sm" data-need="admin" onclick="vmYaml(${jsq(ns)},${jsq(name)})" title="Every field, as YAML">${icon("edit")}Edit YAML</button></div>
     <div class="ve-pane" data-pane="general" style="margin-top:12px">
       ${vmEditResourceFields(v)}
@@ -452,6 +458,7 @@ window.vmEdit = async (ns, name) => {
         <div class="f"><label>Host ${tip("Keep the VM on one host, or let Kubernetes choose. A VM on a disk only one host can reach stays there anyway.")}</label>
         <select id="ve_node">${vmOpt("", "any host", v.node_selector || "")}${(o.nodes || []).map(n => vmOpt(n, n, v.node_selector || "")).join("")}</select></div></div>
       <div class="f"><label>Description</label><input id="ve_desc" value="${esc(v.description || "")}" maxlength="300"></div></div>
+    ${v.hardware ? `<div class="ve-pane" data-pane="hardware" hidden style="margin-top:12px">${vmHardwareFields(v.hardware, o, !!v.resource_profile?.name)}</div>` : ""}
     <div class="ve-pane" data-pane="disks" hidden style="margin-top:12px">
       <div class="tblwrap"><table class="tbl dense stack ve-table"><thead><tr><th>Disk</th><th>Boot</th><th>Bus</th><th>Size</th><th>Source</th><th></th></tr></thead>
         <tbody>${disks.map(d => vmDiskRow(d, o)).join("")}</tbody></table></div>
@@ -474,6 +481,7 @@ window.vmEdit = async (ns, name) => {
     ${v.status === "Running" ? `<label class="switch" style="margin-top:12px"><input type="checkbox" id="ve_restart"> Review a restart after saving</label>
       <div class="dim xs">Some changes can apply live through KubeVirt; a restart is a separate reviewed action.</div>` : ""}
     <div class="row" style="margin-top:14px"><button class="btn pri" onclick="vmEditSave()">Review changes</button><button class="btn" onclick="closeModal()">Cancel</button></div>`;
+  if (v.hardware) vmHardwareChanged();
   if (window.applyRole) applyRole();
 };
 window.vmEditTab = (button, pane) => {
@@ -489,10 +497,11 @@ window.vmAddDisk = kind => {
   const classes = o.storage_classes || [];
   $("#ve_adds").insertAdjacentHTML("beforeend", `<div class="vd-add card flat" data-kind="${kind}">
     <div class="between"><b>New ${cdrom ? "CD-ROM" : "disk"}</b><button class="btn sm" onclick="this.closest('.vd-add').remove()">✕</button></div>
-    <div class="f2"><div class="f"><label>Contents</label>${vmSourceSelect("va_src", o, cdrom ? ((o.images || [])[0] ? `image:${o.images[0].namespace}/${o.images[0].name}` : "url") : "blank")}
-        <input class="va_url mono" type="url" placeholder="https://…/image.iso" ${cdrom && !(o.images || []).length ? "" : "hidden"} style="margin-top:6px"></div>
-      <div class="f"><label>Size</label><input class="va_size mono" value="${cdrom ? "10Gi" : "20Gi"}"></div></div>
-    <div class="f2">${classes.length ? `<div class="f"><label>Storage class</label><select class="va_class">${classes.map(c => vmOpt(c, c, o.default_class)).join("")}</select></div>` : ""}
+    <div class="f2"><div class="f"><label>Contents</label>${vmSourceSelect("va_src", o, cdrom ? ((o.isos || [])[0] ? `iso:${o.isos[0].name}` : (o.images || [])[0] ? `image:${o.images[0].namespace}/${o.images[0].name}` : "url") : "blank", cdrom)}
+        <input class="va_url mono" type="url" placeholder="https://…/image.iso" ${cdrom && !(o.images || []).length && !(o.isos || []).length ? "" : "hidden"} style="margin-top:6px">
+        ${cdrom && !(o.isos || []).length ? '<div class="dim xs" style="margin-top:6px">ISOs from your shares appear here once made ready in the <a class="linkish" onclick="vmIsoLibrary()">ISO library</a>.</div>' : ""}</div>
+      <div class="f va-sized" ${cdrom && (o.isos || []).length ? "hidden" : ""}><label>Size</label><input class="va_size mono" value="${cdrom ? "10Gi" : "20Gi"}"></div></div>
+    <div class="f2">${classes.length ? `<div class="f va-sized" ${cdrom && (o.isos || []).length ? "hidden" : ""}><label>Storage class</label><select class="va_class">${classes.map(c => vmOpt(c, c, o.default_class)).join("")}</select></div>` : ""}
       <div class="f"><label>Bus · boot order</label><div class="row" style="flex-wrap:nowrap"><select class="va_bus">${(cdrom ? ["sata", "scsi"] : VM_BUSES).map(b => vmOpt(b, b, cdrom ? "sata" : "virtio")).join("")}</select>
         <input class="va_boot mono" type="number" min="1" max="64" placeholder="boot #" style="width:80px"></div></div></div></div>`);
 };
@@ -509,7 +518,8 @@ window.vmEditSave = async () => {
     && !/^https?:\/\/[^/\s]+/i.test(box.querySelector(".vd_url,.va_url").value.trim()));
   if (badUrl) return toast("a disk's URL must start with http:// or https://", "bad");
   const sourceOf = (select, url) => select.value === "url" ? { url: url.value.trim() }
-    : select.value.startsWith("image:") ? { image: select.value.slice(6) } : {};
+    : select.value.startsWith("image:") ? { image: select.value.slice(6) }
+    : select.value.startsWith("iso:") ? { iso: select.value.slice(4) } : {};
   const disks = $$("#mbody tr[data-disk]").map(row => {
     const edit = { name: row.dataset.disk, boot: row.querySelector(".vd_boot").value, bus: row.querySelector(".vd_bus").value,
       remove: row.querySelector(".vd_rm").checked };
@@ -535,6 +545,12 @@ window.vmEditSave = async () => {
   if ($("#ve_cores") && +$("#ve_cores").value !== v.cores) body.cores = +$("#ve_cores").value;
   if ($("#ve_mem") && $("#ve_mem").value.trim() !== v.memory) body.memory = $("#ve_mem").value.trim();
   if ($("#ve_user")) body.cloud_init = { user_data: $("#ve_user").value, network_data: $("#ve_netdata").value };
+  const hardware = v.hardware ? vmHardwareChanges(v.hardware) : null;
+  if (hardware) {
+    body.hardware = hardware;
+    // The topology sets the count: the General tab's figure is not sent too.
+    if (hardware.cpu && ["sockets", "cores", "threads"].some(k => k in hardware.cpu)) delete body.cores;
+  }
   return vmEditReview(body, !!$("#ve_restart")?.checked);
 };
 

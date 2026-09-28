@@ -25,6 +25,7 @@ import time
 import urllib.error
 import urllib.parse
 
+import homestead_vm_hardware as HARDWARE
 import homestead_hvimage as HVIMAGE
 import homestead_vmusage as VMUSAGE
 import homestead_vm_profiles as PROFILES
@@ -39,6 +40,9 @@ OS_LABEL = "harvesterhci.io/os"
 CLAIM_TEMPLATES = "harvesterhci.io/volumeClaimTemplates"
 HOST = "kubernetes.io/hostname"
 BUSES = ("virtio", "sata", "scsi")
+# An ISO volume a CD-ROM can hold now (homestead_isos.ready_volume), set by
+# the server; None where ISOs are not offered.
+iso_ready = None
 MODELS = ("virtio", "e1000", "e1000e", "rtl8139")
 # Bound by the server: what the cluster is, and Harvester's images.
 platform = lambda: {}
@@ -400,6 +404,7 @@ def detail(ns, name):
         disk.update(_disk_source(vm, ns, disk["claim"], claims))
     row["cloud_init"] = _read_cloud_init(vm, ns)
     row["node_selector"] = ((vm["spec"]["template"].get("spec") or {}).get("nodeSelector") or {}).get(HOST, "")
+    row["hardware"] = HARDWARE.read(vm)
     return row
 
 
@@ -640,12 +645,21 @@ def _edit_disks(vm, ns, edits, adds, claims, to_create, resize, dropped, effects
         while claim in claim_names:
             claim += "-x"
         source = {"url": a["url"]} if a.get("url") else {"image": a["image"]} if a.get("image") else {}
-        if cdrom and not source:
+        if cdrom and not source and not a.get("iso"):
             raise ValueError("a CD-ROM needs an image to hold")
         bus = a.get("bus") or ("sata" if cdrom else "virtio")
         if bus not in BUSES or (cdrom and bus == "virtio"):
             raise ValueError(f"{bus} is not a bus for a {'CD-ROM' if cdrom else 'disk'}")
-        volume = _disk_volume(vm, ns, claim, _size(a.get("size") or "20Gi"), a.get("storage_class") or "", source, to_create, effects)
+        if a.get("iso"):
+            # An ISO from the library: its one shared copy, held read-only.
+            if not cdrom:
+                raise ValueError("an ISO goes in a CD-ROM drive")
+            if not callable(iso_ready):
+                raise ValueError("ISO images are not offered on this cluster")
+            iso_ready(ns, str(a["iso"]))
+            volume = {"persistentVolumeClaim": {"claimName": str(a["iso"]), "readOnly": True}}
+        else:
+            volume = _disk_volume(vm, ns, claim, _size(a.get("size") or "20Gi"), a.get("storage_class") or "", source, to_create, effects)
         device = {"name": disk_name, ("cdrom" if cdrom else "disk"): {"bus": bus}}
         if a.get("boot"):
             device["bootOrder"] = int(a["boot"])
@@ -888,6 +902,10 @@ def prepare_edit(ns, name, cfg, current=None):
         changed_hardware |= _edit_nics(tspec, cfg.get("nics") or [], cfg.get("add_nics") or [])
     if cfg.get("cloud_init") is not None:
         changed_hardware |= _edit_cloud_init(vm, ns, cfg["cloud_init"], effects)
+    if cfg.get("hardware"):
+        if "cores" in cfg and any(k in (cfg["hardware"].get("cpu") or {}) for k in ("sockets", "cores", "threads")):
+            raise ValueError("set the CPU count or its topology, not both")
+        changed_hardware |= HARDWARE.apply(vm, cfg["hardware"], locked_cpu=bool(spec.get("instancetype")))
     if "cores" in cfg:
         cores = int(cfg["cores"])
         if not 1 <= cores <= 128:
