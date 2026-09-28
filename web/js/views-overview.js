@@ -198,13 +198,21 @@ function nodeDutyTags(n) {
   const d = n.duties || {};
   const tags = [];
   if ((d.management_vip || []).length) tags.push(`<span class="tag info" data-tip="This node answers for the cluster's management address - the dashboard and hosts joining. If it fails, another node takes the address within seconds.">management VIP ${esc(d.management_vip.join(", "))}</span>`);
-  const others = (d.vips || []).filter(ip => !(d.management_vip || []).includes(ip));
-  if (others.length) tags.push(`<span class="tag" data-tip="kube-vip has this node announce these load-balanced addresses: ${esc(others.join(", "))}">${others.length} VIP${others.length === 1 ? "" : "s"}</span>`);
   if (d.control_plane_vip) tags.push('<span class="tag info" data-tip="This node holds the control-plane address the Kubernetes API answers on">API VIP</span>');
   if ((d.rwx || []).length) tags.push(`<span class="tag" data-tip="Longhorn serves these shared (RWX) volumes from this node: ${esc(d.rwx.join(", "))}. If it fails they pause until their share manager starts elsewhere">serves ${d.rwx.length} shared volume${d.rwx.length === 1 ? "" : "s"}</span>`);
   return tags.join("");
 }
 window.nodeDutyTags = nodeDutyTags;
+
+/* The node's own address and each VIP it answers for right now - the ones
+   that move to another node if this one goes down. */
+function nodeAddressTags(n) {
+  const own = [...new Set([n.addresses?.InternalIP, n.addresses?.ExternalIP].filter(Boolean))];
+  const d = n.duties || {};
+  const vips = (d.vips || []).filter(ip => !(d.management_vip || []).includes(ip));
+  return own.map(ip => `<span class="tag mono" data-tip="${esc(n.name)}'s own address. Services k3s's ServiceLB publishes answer here too">${esc(ip)}</span>`).join("")
+    + vips.map(ip => `<span class="tag info mono" data-tip="${esc(n.name)} answers for VIP ${esc(ip)} now. If it goes down another node takes the address over">VIP ${esc(ip)}</span>`).join("");
+}
 
 /* A node at a glance. The head is the same shape on every card - name, roles
    and how long it has been up on two lines, then thirty days of uptime - so
@@ -253,6 +261,7 @@ function nodeCard(n) {
       <b>${n.pods}</b> <span class="dim">pods${n.vms ? ` · <b>${n.vms}</b> VM${n.vms === 1 ? "" : "s"}` : ""}</span></span>
       <div class="podgrid">${dots}</div></div>
     <div class="nodebadges">
+      ${nodeAddressTags(n) ? `<div class="badgegroup"><span class="badgecap">ADDRESSES</span>${nodeAddressTags(n)}</div>` : ""}
       ${duties ? `<div class="badgegroup"><span class="badgecap">DUTIES</span>${duties}</div>` : ""}
       <div class="badgegroup"><span class="badgecap">HARDWARE</span>
         ${hardwareTags(nodeHardwareIds(n)) || '<span class="dim xs">none defined</span>'}</div>
