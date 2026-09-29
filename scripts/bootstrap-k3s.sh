@@ -47,13 +47,19 @@
 #                        Settings > Cluster > Add-ons
 # Options for every mode:
 #   --rke2                   RKE2 instead of k3s
+#   --longhorn-volume auto|none|200   where the system is on LVM, give
+#                            Longhorn a volume of its own at /var/lib/longhorn,
+#                            of that many GB (auto: the volume group's free
+#                            space, less a tenth kept for the system), so it
+#                            can never fill the system's filesystem
 #   --node-ip 192.168.1.50   the address the cluster registers this machine
 #                            by, when it has more than one
 #
 # What "server" does:
-#   1. raises the host's inotify limits, installs what Longhorn needs on
-#      the host (open-iscsi, NFS client), and keeps multipathd off the
-#      devices Longhorn makes;
+#   1. raises the host's inotify limits and caps its journal, installs
+#      what Longhorn needs on the host (open-iscsi, NFS client), keeps
+#      multipathd off the devices Longhorn makes, and - where the system is
+#      on LVM with room - gives Longhorn a volume of its own;
 #   2. installs k3s with an embedded etcd, so more servers can join later
 #      (or RKE2, which always has one, with its ServiceLB turned on so apps
 #      get the nodes' addresses as they do on k3s);
@@ -85,6 +91,7 @@ MULTUS=1
 KUBE_VIP_VERSION=""
 MULTUS_VERSION=""
 NODE_PROBE=1
+LONGHORN_VOLUME=auto
 NODE_IP=""
 RAW=https://raw.githubusercontent.com/wjcloudy/homestead
 
@@ -110,6 +117,64 @@ host_packages() {
   systemctl enable --now iscsid >/dev/null 2>&1 || true
   modprobe iscsi_tcp 2>/dev/null || true
   host_multipath
+  host_longhorn_volume
+}
+
+# Longhorn's data in a filesystem of its own, so a volume filling up can
+# never fill the system's: where the root filesystem is on LVM and the group
+# has room, a logical volume mounted at /var/lib/longhorn - the folder
+# Longhorn uses - before Longhorn first starts. A tenth of the group (at
+# least 10 GB) stays free for the system to grow into; asked for less, the
+# rest stays free for the V2 engine too. As Homestead mounts disks: fstab by
+# UUID with nofail, and the empty folder locked, so a machine whose volume
+# will not mount still starts and nothing lands on the system disk instead.
+host_longhorn_volume() {
+  [ "$LONGHORN_VOLUME" = none ] && return 0
+  mountpoint -q /var/lib/longhorn 2>/dev/null && return 0
+  if [ -n "$(ls -A /var/lib/longhorn 2>/dev/null)" ]; then
+    echo "  /var/lib/longhorn holds data already; Longhorn stays where it is."
+    return 0
+  fi
+  command -v lvcreate >/dev/null 2>&1 || return 0
+  root=$(findmnt -n -o SOURCE / 2>/dev/null || true)
+  vg=$(lvs --noheadings -o vg_name,lv_path,lv_dm_path 2>/dev/null </dev/null | awk -v r="$root" '$2 == r || $3 == r {print $1; exit}')
+  [ -n "$vg" ] || return 0
+  if lvs "$vg/longhorn" >/dev/null 2>&1 </dev/null; then
+    echo "  $vg/longhorn exists already; it is left as it is."
+    return 0
+  fi
+  size=$(vgs --noheadings --units g --nosuffix -o vg_size "$vg" </dev/null | awk '{print int($1)}')
+  free=$(vgs --noheadings --units g --nosuffix -o vg_free "$vg" </dev/null | awk '{print int($1)}')
+  reserve=$((size / 10)); [ "$reserve" -lt 10 ] && reserve=10
+  usable=$((free - reserve))
+  want=$LONGHORN_VOLUME; [ "$want" = auto ] && want=$usable
+  [ "$want" -gt "$usable" ] && want=$usable
+  if [ "$want" -lt 20 ]; then
+    echo "  $vg has $free GB free, $reserve GB of it kept for the system: too little for a Longhorn volume of its own."
+    return 0
+  fi
+  echo "  Longhorn gets a volume of its own: $vg/longhorn, $want GB, at /var/lib/longhorn ($((free - want)) GB left free in $vg)"
+  # Anything failing here leaves Longhorn on the root filesystem, as before,
+  # rather than stopping the installation.
+  if ! lvcreate -y -L "${want}G" -n longhorn "$vg" >/dev/null </dev/null; then
+    echo "  Could not make $vg/longhorn; Longhorn stays on the root filesystem."
+    return 0
+  fi
+  udevadm settle 2>/dev/null || true
+  if ! mkfs.ext4 -q -F -L hs-longhorn "/dev/$vg/longhorn"; then
+    echo "  Could not format $vg/longhorn; Longhorn stays on the root filesystem."
+    return 0
+  fi
+  uuid=$(blkid -s UUID -o value "/dev/$vg/longhorn")
+  mkdir -p /var/lib/longhorn
+  chattr +i /var/lib/longhorn 2>/dev/null || true
+  cp /etc/fstab /etc/fstab.homestead-backup
+  echo "UUID=$uuid /var/lib/longhorn ext4 defaults,nofail,x-systemd.device-timeout=10s 0 2" >> /etc/fstab
+  if ! mount /var/lib/longhorn; then
+    cp /etc/fstab.homestead-backup /etc/fstab
+    chattr -i /var/lib/longhorn 2>/dev/null || true
+    echo "  $vg/longhorn would not mount; fstab is as it was and Longhorn stays on the root filesystem."
+  fi
 }
 
 # Longhorn's volumes reach a host as plain /dev/sd* disks, and multipathd -
@@ -156,6 +221,18 @@ host_limits() {
   [ "$w" -lt 524288 ] && w=524288
   printf 'fs.inotify.max_user_instances = %s\nfs.inotify.max_user_watches = %s\n' "$i" "$w" > /etc/sysctl.d/90-homestead.conf
   sysctl -q -w fs.inotify.max_user_instances="$i" fs.inotify.max_user_watches="$w" || true
+  host_journal
+}
+
+# The systemd journal, capped at 1 GB unless someone set a cap already:
+# journald's own default is a tenth of the filesystem, up to 4 GB, and a
+# chatty node's logs are not what should fill the system disk.
+host_journal() {
+  grep -qs '^SystemMaxUse=' /etc/systemd/journald.conf /etc/systemd/journald.conf.d/*.conf && return 0
+  [ -d /etc/systemd ] || return 0
+  mkdir -p /etc/systemd/journald.conf.d
+  printf '[Journal]\nSystemMaxUse=1G\n' > /etc/systemd/journald.conf.d/90-homestead.conf
+  systemctl restart systemd-journald 2>/dev/null || true
 }
 
 # KubeVirt and CDI from their newest releases, dropped into the manifests
@@ -258,6 +335,10 @@ parse_common() { # sets DIST, NODE_IP, versions; leaves the rest to the caller
     --node-ip) NODE_IP="$2"; return 2 ;;
     --k3s-version) K3S_VERSION="$2"; return 2 ;;
     --rke2-version) RKE2_VERSION="$2"; return 2 ;;
+    --longhorn-volume)
+      case "$2" in auto|none) LONGHORN_VOLUME="$2" ;; 0) LONGHORN_VOLUME=none ;;
+        *[!0-9]*|"") fail "--longhorn-volume is auto, none or a size in GB" ;; *) LONGHORN_VOLUME="$2" ;; esac
+      return 2 ;;
   esac
   return 0
 }

@@ -32,6 +32,7 @@ nothing else changes. A disk in an LVM volume group, a RAID array or an
 encrypted volume is refused, naming what holds it.
 """
 import re
+import time
 
 hostrun = None          # homestead_hostrun
 DEVICE = re.compile(r"/dev/(?:[a-z]+|nvme\d+n\d+|mmcblk\d+|vd[a-z]+|xvd[a-z]+)")
@@ -234,12 +235,28 @@ def setup(node, device, mode, fstype="ext4", confirm=""):
 # volume only part of the drive (100 GB by default), leaving the rest of the
 # volume group free. That space can hold Longhorn without repartitioning
 # anything: a new logical volume, formatted and mounted the same safe way as a
-# whole disk. A reserve is kept free in the group, for the system to grow into
-# (lvextend) - and a filesystem of its own means Longhorn filling it cannot
-# fill the system's. Partitions of a running system are never resized.
+# whole disk for the V1 engine, or given raw to the V2 engine. A reserve is
+# kept free in the group, for the system to grow into (lvextend) - and a
+# filesystem of its own means Longhorn filling it cannot fill the system's.
+#
+# A disk can also have space no partition covers - past the last one, where
+# an installer was told to leave some. A new partition there is made live:
+# the partition table gets one more entry, written without asking the kernel
+# to re-read the disk, and the kernel is told of that one partition alone
+# (partx --add --nr), so nothing mounted is touched. The table is saved
+# first, and the space is checked to be free again right before the write.
+# Only GPT disks: an MBR table has four entries, often an extended one.
+#
+# What is never done: shrinking or moving a partition, or a filesystem, of a
+# running system. ext4 cannot shrink while mounted and XFS cannot shrink at
+# all; that is a job for a rescue boot, not for Homestead.
 
 OS_LV = "longhorn"
+OS_LV_V2 = "longhorn-v2"
 OS_POINT = "/mnt/longhorn-os"
+MIN_REGION_GB = 10
+LINUX_DATA = "0FC63DAF-8483-4772-8E79-3D69D8477DE4"
+DISK_NAME = re.compile(r"(?:sd[a-z]+|vd[a-z]+|xvd[a-z]+|nvme\d+n\d+|mmcblk\d+)")
 VG_NAME = re.compile(r"[A-Za-z0-9+_.-]{1,64}")
 
 OS_SPACE_SCRIPT = r"""R=$(findmnt -n -o SOURCE /)
@@ -256,14 +273,26 @@ if command -v lvs >/dev/null 2>&1; then
 else
   echo "NOLVMTOOLS"
 fi
-for c in lvcreate mkfs.ext4 chattr findmnt; do command -v $c >/dev/null && echo "TOOL $c"; done
+# Space on each GPT disk that no partition covers.
+if command -v sfdisk >/dev/null 2>&1; then
+  for d in $(lsblk -dn -o NAME,TYPE 2>/dev/null | awk '$2 == "disk" {print $1}'); do
+    case "$d" in loop*|zram*|ram*|sr*) continue;; esac
+    T=$(lsblk -dn -o PTTYPE "/dev/$d" 2>/dev/null)
+    [ -n "$T" ] || continue
+    echo "PT $d $T $(blockdev --getss "/dev/$d" 2>/dev/null)"
+    ls /sys/block/$d/holders 2>/dev/null | grep -q . && echo "HELD $d"
+    sfdisk -F "/dev/$d" 2>/dev/null | awk -v d="$d" 'NF == 4 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ {print "REGION " d " " $1 " " $3}'
+  done
+fi
+for c in lvcreate mkfs.ext4 chattr findmnt sfdisk partx; do command -v $c >/dev/null && echo "TOOL $c"; done
 echo END"""
 
 
 def parse_os_space(out):
     gb = lambda value: round(int(value) / 1024 ** 3, 1) if value.isdigit() else 0
     facts = {"root": "", "root_free_gb": 0, "vg": "", "size_gb": 0, "free_gb": 0, "lvs": {}, "pvs": [], "tools": [],
-             "lvm_tools": True}
+             "lvm_tools": True, "regions": []}
+    tables, held = {}, set()
     for line in out.splitlines():
         key, _, value = line.partition(" ")
         if key == "ROOT":
@@ -285,12 +314,27 @@ def parse_os_space(out):
             facts["tools"].append(value)
         elif key == "NOLVMTOOLS":
             facts["lvm_tools"] = False
+        elif key == "PT":
+            parts = value.split()
+            if len(parts) == 3 and DISK_NAME.fullmatch(parts[0]) and parts[2].isdigit():
+                tables[parts[0]] = (parts[1], int(parts[2]))
+        elif key == "HELD":
+            held.add(value)
+        elif key == "REGION":
+            parts = value.split()
+            if len(parts) == 3 and parts[0] in tables and parts[1].isdigit() and parts[2].isdigit():
+                table, sector = tables[parts[0]]
+                size = int(parts[2]) * sector
+                if table == "gpt" and parts[0] not in held and size >= MIN_REGION_GB * 1024 ** 3:
+                    facts["regions"].append({"disk": parts[0], "start": int(parts[1]), "sectors": int(parts[2]),
+                                             "sector": sector, "size_gb": int(size / 1024 ** 3)})
     if "END" not in out.split():
         facts["error"] = "the host did not finish looking at its OS drive"
     # Kept free for the system: a tenth of the group, and never under 10 GB.
     facts["reserve_gb"] = max(10, round(facts["size_gb"] * 0.1)) if facts["vg"] else 0
     facts["usable_gb"] = max(0, int(facts["free_gb"] - facts["reserve_gb"])) if facts["vg"] else 0
     facts["exists"] = OS_LV in facts["lvs"]
+    facts["taken"] = {"v1": OS_LV in facts["lvs"], "v2": OS_LV_V2 in facts["lvs"]}
     facts["mount_point"] = OS_POINT
     return facts
 
@@ -300,18 +344,21 @@ def os_space(node):
     facts = parse_os_space(out)
     if not out.strip() and err:
         facts["error"] = err[:300]
-    facts["problem"] = os_space_problem(facts)
+    facts["lvm_problems"] = {engine: os_space_problem(facts, engine) for engine in ("v1", "v2")}
+    # Unallocated space on a disk is a way in without LVM, and V2 has a volume of its own.
+    usable = facts["regions"] or not all(facts["lvm_problems"].values())
+    facts["problem"] = "" if usable and not facts.get("error") else facts["lvm_problems"]["v1"]
     return facts
 
 
-def os_space_problem(facts):
+def os_space_problem(facts, engine="v1"):
     if facts.get("error"):
         return facts["error"]
     if not facts["vg"]:
         return ("its system is not on LVM, so there is no free space Homestead can use without resizing partitions, "
                 "which it does not do to a running system" if facts["lvm_tools"] else "the host has no LVM tools")
-    if facts["exists"]:
-        return f"{facts['vg']}/{OS_LV} already exists"
+    if facts["taken"].get(engine):
+        return f"{facts['vg']}/{OS_LV if engine == 'v1' else OS_LV_V2} already exists"
     for tool in ("lvcreate", "mkfs.ext4", "chattr", "findmnt"):
         if tool not in facts["tools"]:
             return f"the host has no {tool}"
@@ -321,20 +368,37 @@ def os_space_problem(facts):
     return ""
 
 
-def use_os_space(node, size_gb):
-    """Make a logical volume of size_gb in the OS drive's free space, format
-    and mount it, ready for Longhorn. The drive is looked at again first."""
-    facts = os_space(node)
-    if facts["problem"]:
-        raise ValueError(facts["problem"])
+def _size(size_gb):
     try:
-        size = int(size_gb)
+        return int(size_gb)
     except (TypeError, ValueError):
         raise ValueError("give the size in whole GB") from None
+
+
+def use_os_space(node, size_gb, engine="v1"):
+    """Make a logical volume of size_gb in the OS drive's free space: for V1
+    formatted and mounted, for V2 left raw. The drive is looked at again first."""
+    facts = os_space(node)
+    problem = os_space_problem(facts, engine)
+    if problem:
+        raise ValueError(problem)
+    size = _size(size_gb)
     if not 5 <= size <= facts["usable_gb"]:
         raise ValueError(f"choose from 5 to {facts['usable_gb']} GB: {facts['reserve_gb']} GB of {facts['vg']} "
                          "is kept free for the system")
     vg = facts["vg"]
+    if engine == "v2":
+        device = f"/dev/{vg}/{OS_LV_V2}"
+        out, err = hostrun.run(node, f"""set -e
+lvs "{vg}/{OS_LV_V2}" >/dev/null 2>&1 && {{ echo "ERR {vg}/{OS_LV_V2} already exists"; exit 1; }}
+lvcreate -y -L {size}G -n {OS_LV_V2} "{vg}" >/dev/null
+udevadm settle 2>/dev/null || true
+[ -b "{device}" ] && echo "OK {device}"
+""", timeout=120)
+        if not any(line.startswith("OK ") for line in out.splitlines()):
+            problem = next((line[4:] for line in out.splitlines() if line.startswith("ERR ")), "") or (err or out)[-300:]
+            raise ValueError(f"making {vg}/{OS_LV_V2} on {node} stopped: {problem}")
+        return {"path": device, "vg": vg, "size_gb": size, "device": device, "engine": "v2"}
     device = f"/dev/{vg}/{OS_LV}"
     script = f"""set -e
 lvs "{vg}/{OS_LV}" >/dev/null 2>&1 && {{ echo "ERR {vg}/{OS_LV} already exists"; exit 1; }}
@@ -346,7 +410,77 @@ mkfs.ext4 -F -L hs-longhorn "{device}" >/dev/null
     if not any(line.startswith("OK ") for line in out.splitlines()):
         problem = next((line[4:] for line in out.splitlines() if line.startswith("ERR ")), "") or (err or out)[-300:]
         raise ValueError(f"making {vg}/{OS_LV} on {node} stopped: {problem}")
-    return {"path": OS_POINT, "vg": vg, "size_gb": size, "device": device}
+    return {"path": OS_POINT, "vg": vg, "size_gb": size, "device": device, "engine": "v1"}
+
+
+def region_plan(region, size_gb):
+    """Where the new partition goes: its first sector on a 1 MiB boundary,
+    its length whole MiB, inside the free region."""
+    sector, start, sectors = region["sector"], region["start"], region["sectors"]
+    align = max(1, 1024 ** 2 // sector)
+    first = -(-start // align) * align
+    room = (start + sectors - first) // align * align
+    want = _size(size_gb) * 1024 ** 3 // sector // align * align
+    length = min(want, room)
+    if length * sector < 5 * 1024 ** 3:
+        raise ValueError("that leaves less than 5 GB; choose a larger size")
+    return first, length
+
+
+def partition_script(disk, region, first, length, stamp):
+    """One partition appended in free space, on a disk in use: saved, checked
+    free again, written without a re-read, and only it told to the kernel."""
+    if not DISK_NAME.fullmatch(disk):
+        raise ValueError(f"{disk} is not a disk Homestead partitions")
+    last = first + length - 1
+    return f"""set -e
+D=/dev/{disk}
+command -v sfdisk >/dev/null && command -v partx >/dev/null || {{ echo "ERR the host has no sfdisk or partx"; exit 1; }}
+[ "$(lsblk -dn -o PTTYPE "$D")" = gpt ] || {{ echo "ERR $D has no GPT partition table"; exit 1; }}
+mkdir -p /var/lib/homestead
+sfdisk --dump "$D" > /var/lib/homestead/partitions-{disk}-{stamp}.sfdisk
+sfdisk -F "$D" 2>/dev/null | awk 'NF == 4 && $1 <= {first} && $2 >= {last} {{ok = 1}} END {{exit !ok}}' ||
+  {{ echo "ERR the space on $D changed since it was looked at; nothing was written"; exit 1; }}
+echo 'start={first}, size={length}, type={LINUX_DATA}, name="homestead-longhorn"' |
+  sfdisk --append --no-reread --no-tell-kernel -q "$D" >/dev/null
+NEWP=$(sfdisk --dump "$D" | awk -F' : ' '$2 ~ /start= *{first},/ {{print $1; exit}}')
+[ -n "$NEWP" ] || {{ echo "ERR the new partition is not in $D's table"; exit 1; }}
+N=${{NEWP##*[!0-9]}}
+# udev may have told the kernel already; if not, partx adds this one only.
+udevadm settle 2>/dev/null || true
+[ -b "$NEWP" ] || partx --add --nr "$N" "$D" || true
+udevadm settle 2>/dev/null || true
+[ -b "$NEWP" ] || {{ echo "ERR the kernel does not show $NEWP; the table is saved in /var/lib/homestead"; exit 1; }}
+echo "PART $NEWP $(blkid -s PARTUUID -o value "$NEWP" 2>/dev/null)"
+"""
+
+
+def use_region(node, disk, start, size_gb, engine="v1", confirm=""):
+    """A new partition in a disk's unallocated space, live: for V1 formatted
+    and mounted, for V2 given raw by its PARTUUID."""
+    facts = os_space(node)
+    region = next((r for r in facts["regions"] if r["disk"] == disk and r["start"] == int(start)), None)
+    if region is None:
+        raise ValueError(f"that free space on {disk} is not there any more; look again")
+    if confirm.strip() != f"/dev/{disk}":
+        raise ValueError(f"type /dev/{disk} to confirm: its partition table is changed")
+    for tool in ("sfdisk", "partx") + (("mkfs.ext4", "chattr", "findmnt") if engine == "v1" else ()):
+        if tool not in facts["tools"]:
+            raise ValueError(f"{node} has no {tool}")
+    first, length = region_plan(region, size_gb)
+    point = f"/mnt/{disk}-longhorn"
+    script = partition_script(disk, region, first, length, time.strftime("%Y%m%d-%H%M%S"))
+    if engine == "v1":
+        script += 'mkfs.ext4 -F -L hs-longhorn "$NEWP" >/dev/null\n' + setup_script('"$NEWP"', "mount", "ext4", point)
+    out, err = hostrun.run(node, script, timeout=600)
+    made = next((line.split() for line in out.splitlines() if line.startswith("PART ")), None)
+    problem = next((line[4:] for line in out.splitlines() if line.startswith("ERR ")), "") or (err or out)[-300:]
+    if not made or engine == "v1" and not any(line.startswith("OK ") for line in out.splitlines()):
+        where = f" (made {made[1]}, which is kept)" if made else ""
+        raise ValueError(f"the new partition on {disk} of {node} stopped{where}: {problem}")
+    partition = made[1]
+    path = point if engine == "v1" else (f"/dev/disk/by-partuuid/{made[2]}" if len(made) > 2 and made[2] else partition)
+    return {"path": path, "device": partition, "size_gb": length * region["sector"] // 1024 ** 3, "engine": engine}
 
 
 def refusal(facts, mode):

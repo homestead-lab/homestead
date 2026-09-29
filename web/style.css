@@ -2462,3 +2462,7 @@ html[data-theme="light"] .modalbox[data-context="smb-access"]{background:var(--s
 .pmap-key{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px}
 .pmap-key .pmap-seg{display:inline-block;width:12px;min-width:12px;height:12px;padding:0;border-radius:3px}
 .hos-updates{display:flex;flex-wrap:wrap;gap:4px;max-height:220px;overflow:auto}
+
+/* OS updates across the hosts (host-os.js). */
+.osu-days{display:flex;flex-wrap:wrap;gap:6px 14px;margin:8px 0}
+.osu-results{margin:8px 0 0;padding-left:18px}

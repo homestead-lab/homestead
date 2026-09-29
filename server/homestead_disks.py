@@ -634,16 +634,31 @@ def os_space(node):
 
 
 def use_os_space(cfg):
-    """Free space on the OS drive given to Longhorn: a logical volume of its
-    own, formatted and mounted, tagged os like the drive's default disk."""
+    """Space nothing uses given to Longhorn: a logical volume of its own in
+    the OS drive's volume group, or a new partition in a disk's unallocated
+    space - formatted and mounted for V1, raw for V2. Tagged os on the
+    system's drive, like its default disk; by kind elsewhere."""
     node = str(cfg.get("node") or "")
-    done = setup_module.use_os_space(node, cfg.get("size_gb"))
+    engine = "v2" if str(cfg.get("engine") or "v1").lower() in ("v2", "longhornv2") else "v1"
+    source = str(cfg.get("source") or "lvm")
+    if source == "lvm":
+        done, tags = setup_module.use_os_space(node, cfg.get("size_gb"), engine), ["os"]
+        where = f"{done['size_gb']} GB volume in {done['vg']}"
+    else:
+        kind, _, rest = source.partition(":")
+        disk, _, start = rest.partition(":")
+        if kind != "part" or not start.isdigit():
+            raise ValueError("choose where the space comes from")
+        done = setup_module.use_region(node, disk, int(start), cfg.get("size_gb"), engine, str(cfg.get("confirm") or ""))
+        tags = kind_tags(_row(node, f"/dev/{disk}"))
+        where = f"{done['size_gb']} GB partition {done['device']}"
     path = done["path"]
-    added = _give_longhorn(node, path, "v1", ["os"], done["device"])
+    added = _give_longhorn(node, path, engine, tags, done["device"])
     if added:
         return added
-    return {"ok": True, "path": path, "tags": ["os"],
-            "detail": f"{done['size_gb']} GB of {done['vg']} is mounted at {path}; Longhorn is adding it on {node}, tagged os"}
+    how = "given to the V2 engine" if engine == "v2" else f"mounted at {path}"
+    return {"ok": True, "path": path, "tags": tags,
+            "detail": f"A {where} is {how}; Longhorn is adding it on {node}" + (f", tagged {', '.join(tags)}" if tags else "")}
 
 
 def _give_longhorn(node, path, engine, tags, device):

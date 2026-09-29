@@ -38,6 +38,7 @@ function hostOsBody(node, f) {
     ["Restart", f.reboot ? `${UI.chip("needed", "warn")} <span class="dim xs">${esc(f.reboot_for || "to finish an update")}</span>` : "not needed"],
     ["Services", failed.length ? `${UI.chip(`${failed.length} failed`, "bad")} <span class="mono xs">${esc(failed.join(", "))}</span>` : "all running"],
     ["Clock", f.ntp === false ? UI.chip("not synchronised", "warn") : f.ntp ? "synchronised" : "—"],
+    ["Automatic updates", hostOsAuto(f.auto)],
     ["Root filesystem", `${UI.meter({ now: f.root_used_pct || 0, warnAt: 90 })}<span class="dim xs">${f.root_used_pct || 0}% of ${sizeText(f.root_total_gb || 0)}</span>`],
   ]);
   const list = updates.length ? UI.more(`The ${updates.length} update${updates.length === 1 ? "" : "s"}`,
@@ -52,7 +53,19 @@ function hostOsBody(node, f) {
       UI.button("Check now", `hostOsCheck(${jsArg(node)})`, { id: "hosCheck", attrs: 'data-need="admin"' }),
       updates.length && !f.upgrading ? UI.button(`Install ${updates.length} update${updates.length === 1 ? "" : "s"}`,
         `hostOsUpgrade(${jsArg(node)})`, { kind: "pri", attrs: 'data-need="admin"' }) : "",
-    ].join(""))}`;
+    ].join(""))}
+    <div class="dim xs" style="margin-top:8px">Every host, one at a time, or in a weekly window:
+      <a class="linkish" onclick="osUpdates()">OS updates</a>.</div>`;
+}
+
+/* What the host installs by itself: Ubuntu's unattended-upgrades, and
+   whether Homestead holds it off. */
+function hostOsAuto(auto) {
+  auto = auto || {};
+  if (!auto.tool) return "none";
+  if (auto.held) return `${esc(auto.tool)} · ${UI.chip("held off by Homestead", "info")}`;
+  if (!auto.on) return `${esc(auto.tool)} · off`;
+  return `${esc(auto.tool)} · on${auto.reboots ? ` ${UI.chip("restarts the host by itself", "warn")}` : ""}`;
 }
 
 window.nodeHostOsPaint = async (node, force = false) => {
@@ -138,4 +151,91 @@ window.nodePartitionsPaint = async node => {
      <div class="pmap-key dim xs"><span class="pmap-seg sys"></span>system <span class="pmap-seg data"></span>Longhorn and data
        <span class="pmap-seg lvm"></span>LVM or RAID <span class="pmap-seg other"></span>other <span class="pmap-seg free"></span>unallocated
        · as read ${hostOsAge(f.at)}</div>`, true)}</div>`);
+};
+
+/* ---------- every host: one at a time, now or in a weekly window ----------
+   homestead_os_rollout.py: each Ready host in turn - the one Homestead's
+   leader runs on last - gets its updates, and a restart through the same
+   review, drain and wait as Host actions when an update asks for one. */
+const OSU_DAYS = [["mon", "Mon"], ["tue", "Tue"], ["wed", "Wed"], ["thu", "Thu"], ["fri", "Fri"], ["sat", "Sat"], ["sun", "Sun"]];
+
+window.osUpdates = async (child = false) => {
+  (child ? childModal : modal)("OS updates", '<div class="empty"><span class="spin2"></span> reading every host</div>', true);
+  let r;
+  try { r = await api("/api/os-updates"); }
+  catch (e) { $("#mbody").innerHTML = UI.callout("bad", "OS updates could not be read.", esc(e.message)); return; }
+  if (!r.applies) {
+    $("#mbody").innerHTML = UI.callout("info", "Harvester updates its own hosts.", "Upgrade Harvester from System → Cluster; its hosts' OS comes with it.");
+    return;
+  }
+  const s = r.settings, run = r.rollout && r.rollout.status === "running" ? r.rollout : null, last = r.rollout && !run ? r.rollout : null;
+  const hosts = Object.entries(r.hosts || {}).sort(([a], [b]) => a.localeCompare(b));
+  const rows = hosts.map(([name, f]) => [
+    `<b>${esc(name)}</b><div class="dim xs">${esc(f.os || "")}</div>`,
+    (f.updates || []).length ? `${f.updates.length}${f.security ? ` ${UI.chip(`${f.security} security`, "warn")}` : ""}` : "up to date",
+    f.reboot ? UI.chip("needed", "warn") : "—",
+    hostOsAuto(f.auto),
+  ]);
+  const results = rollout => (rollout.results || []).map(x => `<li><b>${esc(x.node)}</b> · ${esc(x.note)}</li>`).join("");
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "this browser's time";
+  $("#mbody").innerHTML = `<div class="ui-stack">
+    ${run ? `${UI.progress(Math.round((run.index || 0) * 100 / Math.max(1, run.nodes.length)), { label: `Updating ${run.nodes.length} hosts, one at a time`, detail: run.message || "" })}
+      ${results(run) ? `<ul class="osu-results small">${results(run)}</ul>` : ""}` : ""}
+    ${last ? `<div class="note ${last.status === "failed" ? "bad" : ""} small"><b>Last run ${esc(last.status)}</b>${last.finished ? ` · ${esc(hostOsAge(last.finished))}` : ""}<br>${esc(last.message || "")}</div>` : ""}
+    ${rows.length ? UI.table([{ label: "Host" }, { label: "Updates" }, { label: "Restart" }, { label: "Automatic updates" }], rows)
+      : UI.lead("No host has been read yet; the leader reads each within ten minutes of starting.")}
+    ${UI.section("Settings", `
+      <div class="f"><label>Who installs updates ${tip("Ubuntu's unattended-upgrades installs security updates on each host by itself, and with Automatic-Reboot restarts it without a drain; Homestead then holds it off only while it updates every host. Chosen, Homestead switches it off on every host and installs updates itself, one host at a time, restarting through its review and drain.")}</label>
+        <select id="osu_manage">
+          <option value="ubuntu" ${s.manage === "ubuntu" ? "selected" : ""}>Each host, by itself (Ubuntu's automatic updates)</option>
+          <option value="homestead" ${s.manage === "homestead" ? "selected" : ""}>Homestead, one host at a time</option></select></div>
+      <label class="switch"><input type="checkbox" id="osu_on" ${s.schedule.enabled ? "checked" : ""} onchange="osUpdatesWindow()"> <span>A weekly window</span></label>
+      <div id="osu_window" ${s.schedule.enabled ? "" : "hidden"}>
+        <div class="osu-days">${OSU_DAYS.map(([id, label]) => `<label class="check"><input type="checkbox" value="${id}" ${s.schedule.days.includes(id) ? "checked" : ""}> ${label}</label>`).join("")}</div>
+        <div class="f"><label>Starting at (${esc(tz)})</label><select id="osu_hour">${Array.from({ length: 24 }, (_, h) =>
+          `<option value="${h}" ${s.schedule.hour === h ? "selected" : ""}>${String(h).padStart(2, "0")}:00</option>`).join("")}</select></div></div>
+      <div class="f"><label>Restarts</label><select id="osu_reboot">
+        <option value="when-needed" ${s.reboot === "when-needed" ? "selected" : ""}>When an update needs one, drained first</option>
+        <option value="never" ${s.reboot === "never" ? "selected" : ""}>Never - I restart hosts myself</option></select></div>
+      <label class="check"><input type="checkbox" id="osu_single" ${s.single_copy ? "checked" : ""}> Restart a host even when a volume has its only healthy copy there - that volume is unavailable until the host is back</label>
+      ${UI.actions(UI.button("Save settings", "osUpdatesSave()", { id: "osu_save", attrs: 'data-need="admin"' }))}`)}
+    ${UI.more("What an update of every host does", `<p class="small">Each Ready host in turn - the one Homestead's leader runs on last - refreshes its
+      package lists and installs what is waiting. When an update asks for a restart, the host gets the same review as Host actions:
+      running VMs, the cluster's only etcd member or a volume's only copy stop the restart, and that host is listed as needing one.
+      Otherwise it is cordoned, drained through disruption budgets, restarted, and uncordoned once it is Ready and its Longhorn volumes
+      are healthy; only then is the next host touched. A failed install stops the run. Ubuntu's automatic updates are held off on every
+      host while it runs.</p>`)}
+    ${UI.actions([
+      run ? UI.button("Stop after this host", "osUpdatesStop()", { attrs: 'data-need="admin"' }) : "",
+      !run ? UI.button("Update every host now", "osUpdatesStart()", { kind: "pri", attrs: 'data-need="admin"' }) : "",
+    ].join(""))}</div>`;
+  if (window.applyRole) applyRole();
+};
+window.osUpdatesWindow = () => { $("#osu_window").hidden = !$("#osu_on").checked; };
+window.osUpdatesSave = async () => {
+  const body = { manage: $("#osu_manage").value, reboot: $("#osu_reboot").value, single_copy: $("#osu_single").checked,
+    schedule: { enabled: $("#osu_on").checked, hour: +$("#osu_hour").value,
+      days: [...document.querySelectorAll(".osu-days input:checked")].map(x => x.value),
+      tz: Intl.DateTimeFormat().resolvedOptions().timeZone || "", offset_min: -new Date().getTimezoneOffset() } };
+  try {
+    await api("/api/os-updates/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    toast("OS update settings saved", "ok");
+  } catch (e) { toast(e.message, "bad"); }
+};
+window.osUpdatesStart = async () => {
+  if (!(await ask("Update every host now, one at a time? Each installs what is waiting; a host whose update asks for a restart is drained and restarted before the next is touched. Workloads move off each host while it restarts.",
+    { title: "Update every host", ok: "Update every host" }))) return;
+  try {
+    const r = await api("/api/os-updates/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    if (r.operation && window.noteOperation) noteOperation(r.operation);
+    toast(r.detail, "ok");
+    osUpdates();
+  } catch (e) { toast(e.message, "bad"); }
+};
+window.osUpdatesStop = async () => {
+  try {
+    const r = await api("/api/os-updates/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    toast(r.detail, "ok");
+    osUpdates();
+  } catch (e) { toast(e.message, "bad"); }
 };

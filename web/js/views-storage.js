@@ -1573,7 +1573,7 @@ function diskRowsHtml(node, disks, harvester) {
         <div class="row">${d.system ? '<span class="tag">system</span>' : ""}<span class="tag ${tone}">${esc(word)}</span>
           ${d.can_add ? `<button class="btn sm pri" data-need="admin" onclick="diskAdd(${jsq(node)},${jsq(d.blockdevice.name)},${jsq(d.path)},${d.needs_wipe})">Add to Longhorn</button>` : ""}
           ${!harvester && d.role === "unused" && d.device ? `<button class="btn sm pri" data-need="admin" onclick="diskSetup(${jsq(node)},${jsq("/dev/" + d.device)})">Add to Longhorn</button>` : ""}
-          ${!harvester && d.system ? `<button class="btn sm" data-need="admin" onclick="diskOsSpace(${jsq(node)})" title="Give Longhorn space the system is not using, as a volume of its own">Use its free space</button>` : ""}</div></div>
+          ${!harvester && d.system ? `<button class="btn sm" data-need="admin" onclick="diskOsSpace(${jsq(node)})" title="Give Longhorn space nothing uses - free LVM space, or unallocated space on a disk - for V1 or V2">Use free space</button>` : ""}</div></div>
       ${lh}</div>`;
   }).join("") + (harvester ? "" : `<button class="btn sm" data-need="admin" style="margin-top:8px" onclick="diskAdd(${jsq(node)})">＋ Add a disk to Longhorn</button>`)
     + (harvester && !disks.some(d => d.can_add) ? '<div class="dim xs" style="margin-top:8px">Every disk Harvester found here is in use. A new disk shows up once it is plugged in and Harvester has scanned it.</div>' : "");
@@ -1747,30 +1747,72 @@ window.diskSetup = async (node, device) => {
 };
 
 /* The OS drive's unused LVM space, as a Longhorn disk of its own. */
+/* Space nothing uses, given to Longhorn without touching what is there: a
+   logical volume in the OS drive's volume group, or a new partition in a
+   disk's unallocated space - made live, the table saved first. V1 gets a
+   filesystem of its own; V2 the raw volume or partition. */
 window.diskOsSpace = async node => {
-  childModal(`Free space on the OS drive · ${node}`, '<div class="empty"><span class="spin2"></span> Looking at the OS drive…</div>');
+  childModal(`Free space · ${node}`, '<div class="empty"><span class="spin2"></span> Looking at the host\'s disks…</div>');
   let f;
   try {
     f = await api("/api/disks/os-space", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node }) });
-  } catch (e) { $("#mbody").innerHTML = UI.callout("bad", "The OS drive could not be looked at.", esc(e.message)) + UI.actions(UI.button("Back", "modalBack()")); return; }
-  const facts = f.vg ? UI.facts([["Volume group", `<span class="mono">${esc(f.vg)}</span> · ${f.size_gb} GB`],
-    ["Free in it", `${f.free_gb} GB`], ["Kept for the system", `${f.reserve_gb} GB`], ["Root filesystem free", `${f.root_free_gb} GB`]]) : "";
-  $("#mbody").innerHTML = `<div class="ui-stack">${facts}
-    ${f.problem ? UI.callout("warn", "Nothing to use", `${esc(f.problem[0].toUpperCase() + f.problem.slice(1))}.`) + UI.actions(UI.button("Back", "modalBack()")) : `
-      <p class="small">A logical volume of its own, <span class="mono">${esc(f.vg)}/longhorn</span>, formatted ext4 and mounted at
-        <span class="mono">${esc(f.mount_point)}</span> the same safe way as a new disk, then given to Longhorn tagged <span class="mono">os</span>.
-        Nothing existing is resized, and Longhorn filling it cannot fill the system's own filesystem.</p>
-      <div class="f"><label>Size (GB)</label><input id="os_size" type="number" min="5" max="${f.usable_gb}" value="${f.usable_gb}"></div>
-      <p class="dim xs">It shares the drive with the system, so a copy here and one on the system's Longhorn folder are not two drives. Pair it with another disk or host for redundancy.</p>
-      ${UI.actions(UI.button("Back", "modalBack()") + UI.button("Create and add", `diskOsSpaceGo(${jsArg(node)})`, { kind: "pri", id: "os_go", attrs: 'data-need="admin"' }))}`}</div>`;
+  } catch (e) { $("#mbody").innerHTML = UI.callout("bad", "The disks could not be looked at.", esc(e.message)) + UI.actions(UI.button("Back", "modalBack()")); return; }
+  STATE.data.osSpace = f;
+  const v2 = !!STATE.data.lhcap?.v2?.enabled;
+  const lvmFree = f.vg && !f.error && f.usable_gb >= 5;
+  const sources = [
+    ...(lvmFree && (!f.taken?.v1 || (v2 && !f.taken?.v2))
+      ? [["lvm", `${f.vg} · ${f.usable_gb} GB free, ${f.reserve_gb} GB kept for the system`, f.usable_gb]] : []),
+    ...(f.regions || []).map(r => [`part:${r.disk}:${r.start}`, `/dev/${r.disk} · ${r.size_gb} GB unallocated - a new partition`, r.size_gb]),
+  ];
+  if (f.problem || !sources.length) {
+    $("#mbody").innerHTML = `<div class="ui-stack">${UI.callout("warn", "Nothing to use",
+      `${esc(((f.problem || f.lvm_problems?.v1 || "no free space") + "").replace(/^./, c => c.toUpperCase()))}.`)}
+      ${UI.more("What Homestead will and will not do", `<p class="small">It uses space nothing else does: free space in the
+        system's LVM volume group, or space past a GPT disk's last partition. It never shrinks or moves a partition or
+        filesystem of a running system - ext4 cannot shrink while mounted and XFS not at all; that needs a rescue boot.</p>`)}
+      ${UI.actions(UI.button("Back", "modalBack()"))}</div>`;
+    return;
+  }
+  $("#mbody").innerHTML = `<div class="ui-stack">
+    ${UI.facts([["Root filesystem free", `${f.root_free_gb} GB`], f.vg ? ["Volume group", `<span class="mono">${esc(f.vg)}</span> · ${f.size_gb} GB`] : null])}
+    <div class="f"><label>Space</label><select id="os_source" onchange="diskOsSpaceChanged(true)">${sources.map(([value, label]) =>
+      `<option value="${esc(value)}">${esc(label)}</option>`).join("")}</select></div>
+    ${v2 ? `<div class="f"><label>Engine</label><select id="os_engine" onchange="diskOsSpaceChanged()">
+      <option value="v1">V1 - a filesystem of its own, mounted</option><option value="v2">V2 (SPDK) - the raw volume or partition</option></select></div>` : ""}
+    <div class="f"><label>Size (GB)</label><input id="os_size" type="number" min="5"></div>
+    <p class="small" id="os_what"></p>
+    <div class="f" id="os_confirm_row" hidden><label id="os_confirm_label"></label><input id="os_confirm" class="mono" autocomplete="off"></div>
+    <p class="dim xs">On the system's drive it shares a drive with the system, so a copy here and one on another folder of that drive are not two drives.</p>
+    ${UI.actions(UI.button("Back", "modalBack()") + UI.button("Create and add", `diskOsSpaceGo(${jsArg(node)})`, { kind: "pri", id: "os_go", attrs: 'data-need="admin"' }))}</div>`;
+  window.__osSources = Object.fromEntries(sources.map(([value, , max]) => [value, max]));
+  diskOsSpaceChanged(true);
   if (window.applyRole) applyRole();
+};
+window.diskOsSpaceChanged = (first = false) => {
+  const f = STATE.data.osSpace || {}, source = $("#os_source").value, engine = $("#os_engine")?.value || "v1";
+  const max = (window.__osSources || {})[source] || 5, size = $("#os_size");
+  size.max = max;
+  if (first || +size.value > max || !+size.value) size.value = max;
+  const part = source.startsWith("part:"), disk = part ? source.split(":")[1] : "";
+  const taken = !part && f.taken?.[engine];
+  $("#os_what").innerHTML = taken ? `<b>${esc(f.vg)}/${engine === "v2" ? "longhorn-v2" : "longhorn"}</b> exists already; choose the other engine or unallocated space.`
+    : part ? `A new GPT partition after the last one on <span class="mono">/dev/${esc(disk)}</span>, made while the system runs: the
+      partition table is saved to <span class="mono">/var/lib/homestead</span>, the space is checked free again, and only the new
+      partition is shown to the kernel. ${engine === "v2" ? "It is given raw to the V2 engine by its PARTUUID." : `Formatted ext4 and mounted at <span class="mono">/mnt/${esc(disk)}-longhorn</span> the safe way.`}`
+    : `A logical volume of its own, <span class="mono">${esc(f.vg)}/${engine === "v2" ? "longhorn-v2" : "longhorn"}</span>, ${engine === "v2"
+      ? "given raw to the V2 engine" : `formatted ext4 and mounted at <span class="mono">${esc(f.mount_point)}</span> the safe way`}. Nothing existing is resized.`;
+  $("#os_confirm_row").hidden = !part;
+  if (part) $("#os_confirm_label").innerHTML = `Type <span class="mono">/dev/${esc(disk)}</span> to confirm - its partition table gets a new entry`;
+  if ($("#os_go")) $("#os_go").disabled = !!taken;
 };
 window.diskOsSpaceGo = async node => {
   const go = $("#os_go");
   if (go) { go.disabled = true; go.textContent = "Creating…"; }
   try {
     const r = await api("/api/disks/os-space/use", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ node, size_gb: +$("#os_size").value }) });
+      body: JSON.stringify({ node, size_gb: +$("#os_size").value, source: $("#os_source").value,
+        engine: $("#os_engine")?.value || "v1", confirm: $("#os_confirm")?.value || "" }) });
     toast(r.detail, "ok"); STATE.data.disks = null; modalBack(); setTimeout(() => disksRepaint(node), 800);
   } catch (e) {
     toast(e.message, "bad");

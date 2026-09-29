@@ -54,6 +54,34 @@ review. Security updates, a restart needed, failed services and a root
 filesystem over 90% are also [notifications](Settings#notifications), and the node's card shows a
 **host OS** chip.
 
+#### Every host at once
+
+**Nodes → OS updates** updates every host, one at a time - now, or in a weekly
+window (days and an hour, in your browser's time zone). Each Ready host in
+turn, the one Homestead's leader runs on last, refreshes its package lists and
+installs what is waiting. When an update needs a restart, the host gets the
+same review as **Host actions**; if nothing stops it, it is cordoned, drained
+through disruption budgets, restarted, and uncordoned once it is Ready and its
+Longhorn volumes are healthy. Only then is the next host touched.
+
+- A restart the review refuses - running VMs, the cluster's only etcd member,
+  or a volume whose only healthy copy is on that host (unless the settings
+  accept that) - is skipped: the host keeps its updates and is listed as
+  needing a restart, and the run goes on.
+- A failed install stops the run before the next host.
+- **Stop after this host** finishes the host in hand first.
+- The run is kept on disk, so it carries on if Homestead itself is moved off a
+  host it drains; a restart cut short that way is tried once more.
+- **Restarts: Never** installs updates without restarting anything.
+
+**Ubuntu's automatic updates.** Each host's Host OS card says whether
+`unattended-upgrades` is on, and whether it restarts the host by itself
+(`Automatic-Reboot`) - which it does without a drain, and which is an alert.
+Homestead holds it off on every host while an update of every host runs, with
+`/etc/apt/apt.conf.d/99-homestead-hold`, and removes that file after. Choose
+**Who installs updates: Homestead** to keep it off for good, and let the
+weekly window install updates instead.
+
 The node's **Disks** card draws each disk's partition table to scale - each
 partition's size, filesystem and mount, what sits on it (LVM, RAID) and space
 left unallocated.
