@@ -1535,13 +1535,41 @@ window.previewYaml = async () => {
 let DEPLOY_REVIEW = null;
 let DEPLOY_REVIEW_SEQUENCE = 0;
 let DEPLOY_SUBMITTING = false;
+/* The capacity review's notes, split: what needs someone, and the caveats
+   every new VM or pod has - its disks not made yet, its launcher's memory
+   not limited, the estimate a lower bound. Those are true of every review, so
+   they sit under "How this is estimated" instead of a warning each time:
+   a standard Windows 11 VM listed a dozen of them as needing review. */
+const CAPACITY_ROUTINE = [
+  /is planned, not provisioned; storage capacity and attachment remain unverified$/,
+  /^VM disk \S+ is planned; provisioning/, /^disk import \S+ is planned; provisioning/,
+  /^RAM projection includes /, /^VM launcher memory is not explicitly limited$/,
+  /^memory is not limited for vm-launcher-estimate$/, /^unrecognised\/injected helpers, admission defaults/,
+  /^Image import\/provisioning may start before the guest/, /^If a later step fails, created images/,
+];
+function capacityNotes(plan) {
+  const warnings = plan?.warnings || [];
+  const planned = new Set(warnings.map(w => (w.match(/^PVC (\S+) is planned, not provisioned/) || [])[1]).filter(Boolean));
+  const creating = plan?.vm?.action === "create";
+  const routine = w => CAPACITY_ROUTINE.some(re => re.test(w))
+    // A claim this review makes is unbound until it is made.
+    || planned.has((w.match(/^PVC (\S+) is not bound; provisioning and topology need review$/) || [])[1])
+    // A new VM has no TPM or EFI state to keep.
+    || (creating && /^No persisted TPM\/EFI\/CBT state was found/.test(w));
+  return { concerns: warnings.filter(w => !routine(w)), caveats: warnings.filter(routine) };
+}
+window.capacityNotes = capacityNotes;
+
 function deployCapacityHtml(plan, overlap = false, imageChange = false) {
   if (!plan) return "";
+  const { concerns: needs, caveats } = capacityNotes(plan);
   const title = overlap ? "New pods alongside current pods" : plan.rollout ? "Updated pod: capacity after old pods stop" : "Placement and memory";
   const blocked = overlap ? "This overlap does not fit while old pods remain. Progress may depend on old-pod removal within the rollout policy."
     : plan.rollout?.start_blocked ? "The rollout cannot start within its current availability policy. Review the overlap blockers below."
     : "This deployment cannot fit the checked placement constraints. Change its resources, volumes or host selection before deploying.";
-  const concerns = plan.warnings?.length ? `<ul class="ui-list">${plan.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : "";
+  // Blocked, everything shows: the reason may be among them.
+  const shown = plan.blocked ? plan.warnings || [] : needs;
+  const concerns = shown.length ? `<ul class="ui-list">${shown.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : "";
   const rollout = plan.rollout ? `<p>${esc(plan.rollout.strategy)} · ${esc(plan.rollout.replicas)} desired replica(s) · ${plan.rollout.ownership_known
       ? `${esc(plan.rollout.owned_pods.length)} existing pod(s) identified by controller ownership; ${esc(plan.rollout.release_request_gb)} GiB of requests would be released only after termination.`
       : "Pod ownership is unverified; released capacity is unknown."}</p>
@@ -1556,6 +1584,7 @@ function deployCapacityHtml(plan, overlap = false, imageChange = false) {
         reserved: plan.rollout ? "Reserved RAM after planned termination" : "Reserved RAM" }),
     ].join(""))}
     ${UI.more("How this is estimated", `${rollout}
+      ${caveats.length && !plan.blocked ? `<p>What it cannot check yet, as for any new ${plan.vm ? "VM" : "workload"}:</p><ul class="ui-list">${caveats.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
       ${!overlap && !plan.blocked ? "<p>Capacity warnings can be overridden, including high projected RAM and missing usage metrics. Proceeding may cause memory pressure, OOM restarts or downtime; it does not change resource requests or limits.</p>" : ""}
       <p>This is a snapshot, not a reservation or an OOM guarantee. ${plan.vm ? "The server checks again before sending the VM action. Guest readiness and successful rescheduling are not guaranteed." : imageChange ? "The server checks again before changing the workload or its recovery metadata." : "The server checks again before creating anything. Planned volumes have not been provisioned."}</p>`, !!plan.blocked)}
     ${plan.rollout?.overlap ? UI.more(`Overlap while old pods remain${plan.rollout.start_blocked ? " - rollout cannot start" : ""}`, deployCapacityHtml(plan.rollout.overlap, true), !!plan.rollout.start_blocked) : ""}
