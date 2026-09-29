@@ -14,6 +14,7 @@ Longhorn's own model, used as-is rather than reinvented:
 That label model is what makes "groups" cheap here — assigning a volume is one
 label patch, not a controller.
 """
+import base64
 import json
 import homestead_names as NAMES
 import homestead_snapshot_delete as SNAPSHOT_DELETE
@@ -548,6 +549,22 @@ def _set_harvester_target(setting, url, poll, keys):
     return {"ok": True, "url": url, "harvester": True}
 
 
+def _secret_keys(name):
+    """S3 keys, and the endpoint, from a Secret in Longhorn's namespace."""
+    secret = _get_or_none(f"/api/v1/namespaces/{LHNS}/secrets/{name}") or {}
+    data = secret.get("data") or {}
+
+    def read(key):
+        try:
+            return base64.b64decode(data.get(key) or "").decode().strip()
+        except Exception:
+            return ""
+    keys = {"access_key": read("AWS_ACCESS_KEY_ID"), "secret_key": read("AWS_SECRET_ACCESS_KEY")}
+    if read("AWS_ENDPOINTS"):
+        keys["endpoint"] = read("AWS_ENDPOINTS")
+    return keys
+
+
 def on_harvester():
     """Whether the backup target is Harvester's setting, which holds the keys
     itself, rather than Longhorn's own, which names a Secret."""
@@ -561,6 +578,10 @@ def set_backup_target(url, secret="", poll="5m", keys=None):
     keys = {k: str(v or "").strip() for k, v in (keys or {}).items()}
     setting = _harvester_setting()
     if setting is not None:
+        # Harvester's setting holds the keys themselves, not a Secret's name:
+        # given only the name (backup storage, a move), read them from it.
+        if not (keys.get("access_key") and keys.get("secret_key")) and secret:
+            keys = {**_secret_keys(secret), **{k: v for k, v in keys.items() if v}}
         return _set_harvester_target(setting, url, poll, keys)
     if keys.get("access_key") or keys.get("secret_key"):
         if not (keys.get("access_key") and keys.get("secret_key")):
