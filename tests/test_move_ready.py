@@ -9,6 +9,18 @@ import homestead_move_engine as engine
 
 
 class MoveReadinessTests(unittest.TestCase):
+    def test_pending_storage_setup_does_not_bypass_the_sources_readiness_checks(self):
+        calls = []
+        def remote(name, path, body=None):
+            calls.append(path)
+            if path == "/api/objectstore":
+                return {"ready": True}
+            return {"endpoint": "http://store:9070", "longhorn": {"pending": True}}
+        with mock.patch.object(move, "remote", side_effect=remote):
+            result = move.setup_storage("source-cluster", lb_ip="192.0.2.20", port=9070)
+        self.assertTrue(result["pending"])
+        self.assertEqual(["/api/objectstore", "/api/objectstore/deploy"], calls)
+
     def test_a_cluster_without_backup_storage_says_what_is_missing(self):
         def remote(name, path, body=None):
             if path == "/api/objectstore":
@@ -19,7 +31,8 @@ class MoveReadinessTests(unittest.TestCase):
             r = move.readiness("oldcluster")
         self.assertFalse(r["ready"])
         self.assertFalse(r["target"]["configured"])
-        self.assertEqual({"deployed": False, "ready": False, "endpoint": None, "reachable_off_cluster": None}, r["storage"])
+        self.assertEqual({"deployed": False, "ready": False, "stopped": None, "endpoint": None,
+                          "reachable_off_cluster": None, "longhorn": None}, r["storage"])
 
     def test_a_ready_cluster_keeps_its_keys_to_itself(self):
         def remote(name, path, body=None):
