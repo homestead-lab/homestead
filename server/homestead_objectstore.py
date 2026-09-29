@@ -429,7 +429,19 @@ def set_transfers(allow, size_gb=100, lb_ip="", vip_mode="", port=0):
                              "point_longhorn": True})
             return {**transfers(), "detail": f"moves out are on: backup storage is starting at {result.get('endpoint') or 'its address'}"}
         ksend("PATCH", path, {"spec": {"replicas": 1}}, ctype="application/merge-patch+json")
-        return {**transfers(), "allowed": True, "detail": "moves out are on: backup storage is starting again"}
+        # Longhorn pointed at it again: a first setup can have made the store
+        # and then failed to point Longhorn (Harvester refusing a target
+        # without keys, before 2.8.239), leaving backups going to an old
+        # address. A target somewhere else - NFS - is still left alone.
+        detail = "moves out are on: backup storage is starting again"
+        if _get(f"/api/v1/namespaces/{NS}/services/{NAME}"):
+            try:
+                pointed = point_longhorn()
+            except (ValueError, urllib.error.HTTPError) as error:
+                raise ValueError(f"backup storage is starting again, but Longhorn was not pointed at it: {error}") from error
+            if not pointed.get("kept_target"):
+                detail += f"; Longhorn backs up to {pointed.get('endpoint') or 'it'}"
+        return {**transfers(), "allowed": True, "detail": detail}
     if deployment:
         ksend("PATCH", path, {"spec": {"replicas": 0}}, ctype="application/merge-patch+json")
     state = transfers()

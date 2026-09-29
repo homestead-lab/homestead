@@ -337,6 +337,19 @@ class ObjectStoreTests(unittest.TestCase):
         self.assertTrue(result["allowed"])
         self.assertEqual([], self.claims)
 
+    def test_enabling_again_points_longhorn_at_the_store(self):
+        # wingbury: the store made at .211:9060, pointing Longhorn failed, so
+        # its target stayed on an old .108:9000 until enabled again.
+        self._deployment(1)
+        self._service("192.168.1.211", "192.168.1.211")
+        with mock.patch.object(store, "point_longhorn", return_value={"endpoint": "http://192.168.1.211:9060", "kept_target": ""}) as point:
+            result = store.set_transfers(True)
+        point.assert_called_once_with()
+        self.assertIn("Longhorn backs up to http://192.168.1.211:9060", result["detail"])
+        with mock.patch.object(store, "point_longhorn", side_effect=ValueError("an S3 target needs its access key and secret key")):
+            with self.assertRaisesRegex(ValueError, "Longhorn was not pointed at it"):
+                store.set_transfers(True)
+
     def test_a_silly_size_is_refused(self):
         for size in (1, 99999):
             with self.subTest(size=size):
