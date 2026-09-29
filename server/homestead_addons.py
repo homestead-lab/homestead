@@ -413,15 +413,20 @@ def chart_archive(name, version, manifests, extra):
     return base64.b64encode(raw.getvalue()).decode()
 
 
-def kubevirt_cr(emulation):
+def kubevirt_cr(emulation, network=None):
+    """The KubeVirt resource the chart carries. network - its network
+    bindings, macvtap's among them - is carried over on an upgrade."""
     developer = {"featureGates": []}
     if emulation:
         developer["useEmulation"] = True
+    configuration = {"developerConfiguration": developer}
+    if network:
+        configuration["network"] = network
     return json.dumps({"apiVersion": "kubevirt.io/v1", "kind": "KubeVirt",
                        "metadata": {"name": "kubevirt", "namespace": "kubevirt"},
                        "spec": {"certificateRotateStrategy": {}, "customizeComponents": {},
                                 "imagePullPolicy": "IfNotPresent", "workloadUpdateStrategy": {},
-                                "configuration": {"developerConfiguration": developer}}}, indent=1) + "\n"
+                                "configuration": configuration}}, indent=1) + "\n"
 
 
 def cdi_cr():

@@ -1,9 +1,11 @@
 """What Homestead needs under it on k3s and RKE2, installed when it is not there.
 
-Harvester brings the two network parts Homestead builds on: kube-vip, which
-gives apps VIPs that move between nodes, and Multus, which gives a VM or a
-container an address of its own on the LAN. k3s and RKE2 bring neither, so
-Homestead installs them - the same HelmCharts as Settings > Cluster >
+Harvester brings the network parts Homestead builds on: kube-vip, which
+gives apps VIPs that move between nodes, Multus, which gives a VM or a
+container an address of its own on the LAN, and host bridges VMs join. k3s
+and RKE2 bring none of them, so Homestead installs the first two, and - once
+KubeVirt is there - macvtap, which puts a VM on the LAN through a host's NIC
+(homestead_macvtap). kube-vip and Multus are - the same HelmCharts as Settings > Cluster >
 Add-ons, at the chart versions Homestead has tested (homestead_addons), and
 upgraded afterwards under System > Cluster > Platform versions.
 
@@ -27,16 +29,19 @@ platform = None          # force -> homestead_platform.detect
 DEFAULT_NS = "lab"
 DATA_DIR = "/data"
 REQUEST = "homestead-install"
-PARTS = ("kube-vip", "multus")
-NAMES = {"kube-vip": "kube-vip", "multus": "Multus"}
+PARTS = ("kube-vip", "multus", "macvtap")
+NAMES = {"kube-vip": "kube-vip", "multus": "Multus", "macvtap": "macvtap"}
 WHY = {"kube-vip": "Virtual IP addresses for applications, with failover between nodes",
-       "multus": "Dedicated LAN addresses for virtual machines and containers"}
+       "multus": "Dedicated LAN addresses for virtual machines and containers",
+       "macvtap": "LAN addresses for virtual machines on a host's own network interface"}
+macvtap = None           # homestead_macvtap
 _lock = threading.Lock()
 
 
-def bind(_kget, _addons, _platform, default_ns="lab", data_dir="/data"):
-    global kget, addons, platform, DEFAULT_NS, DATA_DIR
+def bind(_kget, _addons, _platform, default_ns="lab", data_dir="/data", _macvtap=None):
+    global kget, addons, platform, DEFAULT_NS, DATA_DIR, macvtap
     kget, addons, platform, DEFAULT_NS, DATA_DIR = _kget, _addons, _platform, default_ns, data_dir
+    macvtap = _macvtap
 
 
 def _path():
@@ -63,16 +68,24 @@ def applies(p):
             and bool(p.get("helm_controller")))
 
 
+def _needed(p):
+    """The parts this cluster needs: macvtap only where VMs run."""
+    return [part for part in PARTS if part != "macvtap" or (p.get("kubevirt") and macvtap is not None)]
+
+
 def parts(p, status):
     """Each part: whether it is there, on its way, or missing."""
     out = []
     kube_vip, multus = status.get("kube_vip") or {}, status.get("multus") or {}
-    for part in PARTS:
+    for part in _needed(p):
         if part == "kube-vip":
             # MetalLB gives VIPs too: then kube-vip is not needed.
             installed = p.get("load_balancer") in ("kube-vip", "metallb")
             installing = bool(kube_vip.get("installing"))
             by = "MetalLB" if p.get("load_balancer") == "metallb" else "kube-vip"
+        elif part == "macvtap":
+            state = macvtap.inspect()
+            installed, installing, by = state["ready"], state["installed"] and not state["ready"], "macvtap"
         else:
             installed = bool(multus.get("ready") or multus.get("installed"))
             installing = bool(multus.get("installing"))
@@ -112,16 +125,18 @@ def install(which=None, versions=None, reason="asked"):
     with _lock:
         p = platform(True) or {}
         if not applies(p):
-            raise ValueError("Homestead installs kube-vip and Multus on k3s and RKE2; this cluster "
+            raise ValueError("Homestead installs kube-vip, Multus and macvtap on k3s and RKE2; this cluster "
                              + ("has them from Harvester" if p.get("harvester") else "needs them installed by hand"))
         rows = {row["id"]: row for row in parts(p, addons.status())}
         wanted = [part for part in (which or PARTS) if part in rows and rows[part]["missing"]]
+        installers = {"kube-vip": addons.install_kube_vip, "multus": addons.install_multus,
+                      "macvtap": getattr(macvtap, "install", None)}
         state = _load()
         done, results = state.setdefault("done", {}), []
         for part in wanted:
             cfg = {"version": versions[part]} if versions.get(part) else {}
             try:
-                result = (addons.install_kube_vip if part == "kube-vip" else addons.install_multus)(cfg)
+                result = installers[part](cfg)
                 done[part] = {"at": int(time.time()), "version": cfg.get("version", ""), "reason": reason, "error": ""}
                 results.append({"id": part, "ok": True, "detail": result.get("detail", ""), "job": result.get("job", "")})
             except Exception as error:
@@ -142,7 +157,11 @@ def tick():
     if not applies(p):
         return []
     done = _load().get("done", {})
-    pending = [part for part in wanted if part not in done]
+    # macvtap waits for KubeVirt: asked for with Multus, done once VMs can run.
+    if "multus" in wanted and "macvtap" not in wanted:
+        wanted["macvtap"] = ""
+    needed = _needed(p)
+    pending = [part for part in wanted if part not in done and part in needed]
     if not pending:
         return []
     results = install(pending, wanted, reason="installer")

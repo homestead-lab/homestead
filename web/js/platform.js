@@ -88,7 +88,9 @@ window.baselineInstall = async () => {
   if (!missing.length) return toast("All required components are installed", "ok");
   const words = missing.map(p => p.id === "multus"
     ? "Multus is added to the CNI configuration on every node. Running pods are not affected."
-    : "kube-vip runs on every node and announces each virtual IP from one node. Existing services are not changed.").join(" ");
+    : p.id === "macvtap"
+      ? "macvtap runs on every node and lets VMs join the LAN through the node's network interface. The nodes' own network is not changed."
+      : "kube-vip runs on every node and announces each virtual IP from one node. Existing services are not changed.").join(" ");
   if (!confirm(`Install ${missing.map(p => p.name).join(" and ")}?
 
 ${words}`)) return;

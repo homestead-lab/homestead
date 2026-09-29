@@ -473,9 +473,60 @@ async function networkVmNetsPaint() {
 }
 
 function networkVmNetsHtml(opts) {
+  return networkVmNetsList(opts) + networkHostBridgesHtml(opts);
+}
+
+/* Off Harvester: hosts whose LAN is a plain NIC, which a bridge would let
+   VMs and containers share with the host itself (homestead_host_bridge). */
+function networkHostBridgesHtml(opts) {
+  const o = opts.vm_network_options || {};
+  if (o.harvester || !o.interfaces) return "";
+  const bridged = n => o.interfaces.some(i => i.kind === "bridge" && !["cni0", "docker0", "virbr0"].includes(i.name) && i.nodes.includes(n));
+  const plain = (opts.nodes || []).filter(n => !bridged(n));
+  if (!plain.length) return "";
+  return `<div class="dim xs" style="margin-top:10px">No host bridge on ${plain.map(n => `<b class="mono">${esc(n)}</b>
+      <button class="btn sm" data-need="admin" onclick="nodeBridge(${jsq(n)})">Move into a bridge…</button>`).join(" ")}
+    ${tip("VMs reach the LAN through macvtap without one, but then their own host cannot reach them. A bridge (br0) carries VMs, containers and the host alike, as Proxmox's vmbr0 does.")}</div>`;
+}
+
+window.nodeBridge = async node => {
+  modal(`Host bridge · ${node}`, '<div class="empty"><span class="spin2"></span> Looking at the host\'s network…</div>');
+  let f;
+  try {
+    f = await api("/api/node/bridge/inspect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node }) });
+  } catch (e) { $("#mbody").innerHTML = UI.callout("bad", "The host's network could not be read.", esc(e.message)) + UI.actions(UI.cancel("Close")); return; }
+  const facts = f.interface ? UI.facts([["Interface", `<span class="mono">${esc(f.interface)}</span> · ${esc(f.mac)}`],
+    ["Address", `${esc(f.address)} · ${f.dhcp ? "from DHCP" : "static"}`], ["Gateway", esc(f.gateway)],
+    ["Set up in", `<span class="mono">${esc(f.file || "?")}</span>`]]) : "";
+  $("#mbody").innerHTML = `<div class="ui-stack">${facts}
+    ${f.problem ? UI.callout("warn", "Not converted", `${esc(f.problem[0].toUpperCase() + f.problem.slice(1))}.`) + UI.actions(UI.cancel("Close")) : `
+      <p class="small"><span class="mono">${esc(f.interface)}</span>'s address, routes and DNS move to a new bridge, <span class="mono">${esc(f.bridge)}</span>,
+        which takes ${esc(f.interface)}'s MAC address${f.dhcp ? " and asks DHCP as that MAC, so your router gives it the same address" : ""}.</p>
+      ${UI.callout("warn", `${esc(node)} drops off the network for a few seconds`,
+        `netplan's files are copied aside first, and a rollback is armed on the host: unless Homestead sees ${esc(f.address)} on ${esc(f.bridge)}
+         with the gateway answering, the host puts its old network back by itself after ${Math.round(f.rollback_seconds / 60)} minutes.
+         kube-vip then starts again on ${esc(f.bridge)}${(f.services || []).length ? `, and on a cluster of several hosts ${esc(f.services[0])} restarts so flannel follows` : ""}. Containers keep running.`)}
+      <div class="f"><label>Type <span class="mono">${esc(node)}</span> to confirm</label><input id="nb_confirm" class="mono" autocomplete="off"></div>
+      ${UI.actions(UI.cancel() + UI.button(`Move into ${f.bridge}`, `nodeBridgeGo(${jsArg(node)})`, { kind: "danger", id: "nb_go", attrs: 'data-need="admin"' }))}`}</div>`;
+  if (window.applyRole) applyRole();
+};
+window.nodeBridgeGo = async node => {
+  const go = $("#nb_go");
+  if (go) { go.disabled = true; go.textContent = "Moving…"; }
+  try {
+    const r = await api("/api/node/bridge", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node, confirm: $("#nb_confirm").value }) });
+    toast(r.detail, "ok"); closeModal();
+  } catch (e) {
+    toast(e.message, "bad");
+    if (go) { go.disabled = false; go.textContent = "Move into br0"; }
+  }
+};
+
+function networkVmNetsList(opts) {
   const rows = opts.network_details || [];
   return rows.length ? `<div class="vip-own">${rows.map(n => `<div class="vip-chip ${n.lan ? "free" : "used"}">
       <div class="vip-name"><b class="mono">${esc(n.name)}</b><span class="dim xs">${n.vlan ? `VLAN ${esc(n.vlan)}` : n.lan ? "untagged" : esc(n.type || "network")}${n.bridge ? ` · ${esc(n.bridge)}` : ""}</span></div>
-      <span class="tag ${n.lan ? "ok" : ""}" ${n.type === "macvlan" ? 'data-tip="macvlan: containers only - a VM needs a network on a host bridge"' : ""}>${n.lan ? (n.type === "macvlan" ? "LAN · containers" : "LAN") : "not bridged"}</span></div>`).join("")}</div>`
+      <span class="tag ${n.lan ? "ok" : ""}" ${n.type === "macvlan" ? 'data-tip="macvlan: containers only - a VM needs a macvtap network or one on a host bridge"' : n.type === "macvtap" ? 'data-tip="macvtap: VMs only, each with its own address on the LAN; a VM cannot be reached from its own host this way"' : ""}>${n.lan ? (n.type === "macvlan" ? "LAN · containers" : n.type === "macvtap" ? "LAN · VMs" : "LAN") : "not bridged"}</span></div>`).join("")}</div>`
     : `<div class="card flat empty small">No LAN networks yet. <b>＋ LAN network</b> makes one on your LAN, untagged like the hosts or on a VLAN.</div>`;
 }

@@ -153,13 +153,52 @@ LAN like any other machine. **＋ LAN network** makes one:
   untagged, or on a VLAN. It is the same object Harvester's dashboard makes, so
   it shows there too.
 - **On k3s, RKE2 and other clusters**, on a host interface, which the node
-  probe lists. A **bridge** (`br0`) carries VMs and containers. A plain **NIC**
-  (`eth0`) carries containers only, through macvlan, each with a MAC address of
-  its own. A VM needs a bridge. On a VLAN, a NIC needs the host's VLAN
-  interface (`eth0.20`) first. These networks need Multus, which k3s and RKE2
-  leave out: Homestead installs it after it starts on a new installation, and
-  an older one shows **Required components not installed** under
-  **Settings → Cluster → Add-ons** and here, with **Install components**.
+  probe lists. A **bridge** (`br0`) carries VMs and containers. On a plain
+  **NIC** (`eth0`) a network is **For** one or the other:
+  - **Virtual machines (macvtap)** - each VM with its own MAC and address on
+    the LAN, through the NIC itself. A VM's own host cannot reach it this way;
+    every other machine on the LAN can. Untagged only: for a VLAN, use a bridge.
+  - **Containers (macvlan)** - each container with a MAC address of its own. On
+    a VLAN, the NIC needs the host's VLAN interface (`eth0.20`) first.
+
+  A VM cannot use a macvlan network - macvlan passes only frames for the
+  address it made itself, so the VM never hears DHCP - and Homestead no longer
+  offers one to a VM. These networks need Multus, and VMs on a NIC need
+  macvtap. k3s and RKE2 bring neither: Homestead installs Multus when it
+  starts on a new installation, and macvtap once KubeVirt is there. An older
+  installation shows **Required components not installed** under **Settings →
+  Cluster → Add-ons** and here, with **Install components**. macvtap is
+  upgraded under **System → Cluster → Platform versions**.
+
+### A host bridge
+
+When a host must reach its own VMs, or a network should carry VMs and
+containers together, put the host's NIC into a bridge, as Proxmox's `vmbr0`
+does. Under the LAN networks, **Move into a bridge…** beside a host without
+one looks at its network first and says what it would change: the interface
+the default route leaves by, its address (from DHCP or static), its gateway
+and the netplan file that sets it up. Only a plain wired NIC that netplan sets
+up through systemd-networkd - Ubuntu Server's way - is converted; anything
+else is refused and left as it is. Then, with the host's name typed to confirm:
+
+1. `/etc/netplan` is copied to `/var/lib/homestead/netplan-<time>`;
+2. the NIC's addresses, routes, DNS and DHCP move to `br0` in the same file;
+   `br0` takes the NIC's MAC address, and asks DHCP as that MAC, so the router
+   gives it the same address. `netplan generate` must accept the result;
+3. a rollback is armed on the host - a systemd timer that puts the copied
+   files back and applies them four minutes later - and only then is the new
+   configuration applied;
+4. Homestead checks the host's address is on `br0`, its default route leaves
+   by `br0` and its gateway answers, and only then disarms the rollback. A host
+   that never answers puts its old network back by itself;
+5. kube-vip starts again on the host, to announce VIPs on `br0`; with more than
+   one host, k3s (or RKE2) restarts on it so flannel follows. Containers keep
+   running throughout.
+
+The host drops off the network for a few seconds. Follow it in the job tray,
+then make a LAN network on `br0` for VMs and containers. A host whose DHCP
+reservation is by client ID rather than MAC may be given another address; the
+check then fails, and the host puts itself back.
 
 ## IP addresses
 

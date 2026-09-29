@@ -678,7 +678,7 @@ def _edit_disks(vm, ns, edits, adds, claims, to_create, resize, dropped, effects
 
 
 def _set_network(iface, net, network):
-    for binding in ("masquerade", "bridge"):
+    for binding in ("masquerade", "bridge", "binding"):
         iface.pop(binding, None)
     net.pop("pod", None)
     net.pop("multus", None)
@@ -688,19 +688,25 @@ def _set_network(iface, net, network):
     else:
         if not re.fullmatch(r"[a-z0-9-]+/[a-z0-9.-]+", network or ""):
             raise ValueError("a network is 'pod' or namespace/name of a network attachment")
-        _refuse_macvlan(network)
+        kind = _network_kind(network)
         net["multus"] = {"networkName": network}
-        iface["bridge"] = {}
+        if kind == "macvtap":
+            iface["binding"] = {"name": "macvtap"}
+        else:
+            iface["bridge"] = {}
 
 
-def _refuse_macvlan(network):
+def _network_kind(network):
     # macvlan passes only frames for the address it made itself; a VM bridged
-    # onto it has its own, so it never hears DHCP or anything else.
+    # onto it has its own, so it never hears DHCP or anything else. macvtap
+    # is joined through KubeVirt's binding for it; anything else is bridged.
     ns, name = network.split("/", 1)
     found = _optional(f"/apis/k8s.cni.cncf.io/v1/namespaces/{ns}/network-attachment-definitions/{urllib.parse.quote(name)}")
-    if found and '"macvlan"' in ((found.get("spec") or {}).get("config") or ""):
+    config = ((found or {}).get("spec") or {}).get("config") or ""
+    if '"macvlan"' in config:
         raise ValueError(f"{network} is a macvlan network, which carries containers only: "
-                         "a VM needs a LAN network on a host bridge")
+                         "a VM needs a macvtap network or one on a host bridge")
+    return "macvtap" if '"macvtap"' in config else "bridge"
 
 
 def _edit_nics(tspec, edits, adds):
