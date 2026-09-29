@@ -1038,6 +1038,14 @@ MULTUS_HELP = ("Multus is not installed, so pods cannot join a second network. O
                "install it from Settings > Cluster > Add-ons. Elsewhere, install Multus with its own instructions")
 
 
+def _macvtap():
+    try:
+        import homestead_macvtap as MACVTAP
+        return MACVTAP.inspect()["ready"]
+    except Exception:
+        return False
+
+
 def _multus():
     import homestead_multus as MULTUS
     return MULTUS.inspect(kget)["ready"]
@@ -1068,7 +1076,7 @@ def vm_network_options(probes=None):
         items = kget(CLUSTER_NETWORKS).get("items", [])
     except Exception:
         return {"harvester": False, "cluster_networks": [], "multus": _multus(),
-                "interfaces": host_interfaces(probes), "multus_help": MULTUS_HELP}
+                "interfaces": host_interfaces(probes), "multus_help": MULTUS_HELP, "macvtap": _macvtap()}
     names = sorted(item["metadata"]["name"] for item in items)
     return {"harvester": True, "cluster_networks": names or ["mgmt"], "multus": True}
 
@@ -1097,20 +1105,31 @@ def _host_network_config(cfg, options, name):
         config = {"cniVersion": "0.3.1", "name": name, "type": "bridge", "bridge": iface, "promiscMode": True, "ipam": {}}
         if vlan:
             config["vlan"] = int(vlan)
-        return config, iface, True
+        return config, iface, True, {}
+    if str(cfg.get("for") or "") == "vms":
+        # A VM on the NIC itself: macvtap, which carries the VM's own address
+        # (homestead_macvtap). Its device plugin offers physical links and
+        # bonds, not VLAN interfaces - a VLAN for VMs wants a host bridge.
+        if not options.get("macvtap"):
+            raise ValueError("VMs join a LAN on a network interface through macvtap: install it under "
+                             "Settings → Cluster → Add-ons (Required components) first, or use a host bridge")
+        if vlan:
+            raise ValueError("a VM network on a VLAN needs a host bridge; macvtap is offered on the untagged LAN only")
+        import homestead_macvtap as MACVTAP
+        return MACVTAP.nad_config(name), iface, True, {"k8s.v1.cni.cncf.io/resourceName": MACVTAP.resource(iface)}
     master = f"{iface}.{vlan}" if vlan else iface
     if vlan and known and master not in known:
         # macvlan rides a host interface; a VLAN needs the host's own for it.
         raise ValueError(f"the hosts have no {master} interface for VLAN {vlan} on {iface}: add it on each host "
                          f"(ip link add link {iface} name {master} type vlan id {vlan}), or use a host bridge")
-    return {"cniVersion": "0.3.1", "name": name, "type": "macvlan", "master": master, "mode": "bridge", "ipam": {}}, master, False
+    return {"cniVersion": "0.3.1", "name": name, "type": "macvlan", "master": master, "mode": "bridge", "ipam": {}}, master, False, {}
 
 
 def create_vm_network(cfg):
     options = vm_network_options(cfg.get("_probes"))
     name = _name(cfg.get("name"), "network name")
     namespace = _name(cfg.get("namespace") or "default", "namespace")
-    labels = {}
+    labels, annotations = {}, {}
     if options["harvester"]:
         cluster = str(cfg.get("cluster_network") or "mgmt")
         if cluster not in options["cluster_networks"]:
@@ -1127,10 +1146,11 @@ def create_vm_network(cfg):
         where = f"VLAN {vlan} on {cluster}" if vlan else f"the untagged LAN of {cluster}"
         joins = "VMs and containers"
     else:
-        config, carrier, vms = _host_network_config(cfg, options, name)
+        config, carrier, vms, annotations = _host_network_config(cfg, options, name)
         vlan = _vlan(cfg)
         where = f"{'VLAN ' + vlan + ' on ' if vlan and config['type'] == 'bridge' else ''}{carrier}"
-        joins = "VMs and containers" if vms else "containers (a VM needs a host bridge)"
+        joins = ("VMs (macvtap)" if config["type"] == "macvtap" else "VMs and containers" if vms
+                 else "containers (a VM needs a macvtap network or a host bridge)")
     path = f"{NAD_API}/namespaces/{namespace}/network-attachment-definitions"
     try:
         kget(f"{path}/{name}")
@@ -1139,7 +1159,8 @@ def create_vm_network(cfg):
         if error.code != 404:
             raise
     ksend("POST", path, {"apiVersion": "k8s.cni.cncf.io/v1", "kind": "NetworkAttachmentDefinition",
-                         "metadata": {"name": name, "namespace": namespace, "labels": labels},
+                         "metadata": {"name": name, "namespace": namespace, "labels": labels,
+                                      **({"annotations": annotations} if annotations else {})},
                          "spec": {"config": json.dumps(config)}})
     return {"ok": True, "name": f"{namespace}/{name}",
             "detail": f"LAN network {namespace}/{name} made, on {where}; {joins} can join it now"}

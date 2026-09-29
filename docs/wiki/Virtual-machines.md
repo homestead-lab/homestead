@@ -73,11 +73,14 @@ guest calls it), checked against everything already on the network, and
 recorded in IP addresses under the VM's name. Cloud-init - the password
 included - is kept in a Secret, not in the VM's own definition.
 
-No VM network yet? **Networking → ＋ VM network** makes one on Harvester:
+No VM network yet? **Networking → ＋ LAN network** makes one. On Harvester:
 untagged, on the same LAN as the hosts, or on a VLAN your switch carries to
-them. Any form that needs one offers to make it, and comes back once it is
-made. It is the same network Harvester's dashboard makes under *Networks → VM
-Networks*, so it shows there too.
+them - the same network Harvester's dashboard makes under *Networks → VM
+Networks*, so it shows there too. On k3s or RKE2: on a host bridge, or on the
+hosts' NIC **For: Virtual machines**, through macvtap - see
+[LAN networks](Networking#lan-networks) and
+[A host bridge](Networking#a-host-bridge). Any form that needs one offers to
+make it, and comes back once it is made.
 
 ## Image store
 

@@ -40,16 +40,18 @@ RELEASES_TTL = 12 * 3600
 _releases = {}
 GITHUB = "https://api.github.com/repos/{}/releases?per_page=60"
 REPOS = {"longhorn": "longhorn/longhorn", "kubevirt": "kubevirt/kubevirt",
-         "cdi": "kubevirt/containerized-data-importer", "harvester": "harvester/harvester"}
+         "cdi": "kubevirt/containerized-data-importer", "harvester": "harvester/harvester",
+         "macvtap": "kubevirt/macvtap-cni"}
 CHANNELS = {"k3s": "https://update.k3s.io/v1-release/channels", "rke2": "https://update.rke2.io/v1-release/channels"}
 NOTES = {"longhorn": "https://github.com/longhorn/longhorn/releases/tag/{}",
          "kubevirt": "https://github.com/kubevirt/kubevirt/releases/tag/{}",
          "cdi": "https://github.com/kubevirt/containerized-data-importer/releases/tag/{}",
          "k3s": "https://github.com/k3s-io/k3s/releases/tag/{}",
-         "rke2": "https://github.com/rancher/rke2/releases/tag/{}"}
+         "rke2": "https://github.com/rancher/rke2/releases/tag/{}",
+         "macvtap": "https://github.com/kubevirt/macvtap-cni/releases/tag/{}"}
 HELM_NS = "kube-system"
 CHARTS = {"longhorn": "longhorn", "kubevirt": "homestead-kubevirt", "cdi": "homestead-cdi",
-          "kube-vip": "kube-vip", "multus": "multus"}
+          "kube-vip": "kube-vip", "multus": "multus", "macvtap": "homestead-macvtap"}
 # Charts whose releases are read from their repository's index: (index, chart).
 CHART_INDEX = {"kube-vip": ("https://kube-vip.github.io/helm-charts/index.yaml", "kube-vip"),
                "multus": ("https://rke2-charts.rancher.io/index.yaml", "rke2-multus")}
@@ -320,6 +322,13 @@ def report(force=False):
                          "" if managed else "Installed outside Homestead: upgrade it the way it was installed.",
                          {"phase": phase}))
     rows.extend(network_rows(p))
+    if p.get("kubevirt") and not p.get("harvester"):
+        import homestead_macvtap as MACVTAP
+        state = MACVTAP.inspect()
+        if state["installed"]:
+            managed = bool(_helmchart(CHARTS["macvtap"]))
+            rows.append(_row("macvtap", "macvtap", state["version"], "macvtap", "helmchart" if managed else "manual",
+                             "" if managed else "Installed outside Homestead: upgrade it the way it was installed."))
     return {"distribution": distribution, "harvester": bool(p.get("harvester")), "components": rows,
             "checked": max((entry["at"] for entry in _releases.values()), default=0)}
 
@@ -350,6 +359,9 @@ def upgrade(component, target):
     elif component == "longhorn":
         helm_upgrade({"namespace": "longhorn-system", "name": CHARTS["longhorn"], "version": target.lstrip("v")})
         detail = f"Longhorn is moving to {target}; its volumes stay attached while its parts restart"
+    elif component == "macvtap":
+        import homestead_macvtap as MACVTAP
+        detail = MACVTAP.upgrade(target)
     elif component in CHART_INDEX:
         # The chart's own version, its values kept: kube-vip's settings and
         # Multus's CNI paths stay as Homestead set them.
@@ -372,9 +384,9 @@ def _start_operator(component, target):
     manifest = addons.fetch(f"{base}/download/{target}/{'kubevirt' if component == 'kubevirt' else 'cdi'}-operator.yaml")[0]
     if component == "kubevirt":
         current = (_items("/apis/kubevirt.io/v1/kubevirts") or [{}])[0]
-        emulation = bool((((current.get("spec") or {}).get("configuration") or {})
-                          .get("developerConfiguration") or {}).get("useEmulation"))
-        switch_on = addons.kubevirt_cr(emulation)
+        configuration = (current.get("spec") or {}).get("configuration") or {}
+        emulation = bool((configuration.get("developerConfiguration") or {}).get("useEmulation"))
+        switch_on = addons.kubevirt_cr(emulation, configuration.get("network"))
     else:
         switch_on = addons.cdi_cr()
     chart.setdefault("spec", {})["chartContent"] = addons.chart_archive(component, target, manifest, switch_on)
@@ -516,6 +528,10 @@ def status(item):
         now = longhorn_version()
     elif component == "kubevirt":
         now = kubevirt_version()[0]
+    elif component == "macvtap":
+        import homestead_macvtap as MACVTAP
+        state = MACVTAP.inspect()
+        now = state["version"] if state["ready"] else ""
     else:
         now = cdi_version()[0]
     if now == target:

@@ -214,7 +214,7 @@ function volumeCopiesTip(x) {
   const where = copies.map(c => `${c.node} · ${c.disk}${c.healthy ? "" : ` (${c.state || "not running"})`}`).join(", ");
   if (!copies.length) return want === 1 ? "One copy: if its host or disk fails, this volume is gone until they come back" : `${want} copies`;
   const hosts = new Set(copies.map(c => c.node)).size;
-  if (copies.length < want) return `${want} copies wanted, ${copies.length} placed (${where}). Longhorn puts each copy on a different host unless the storage class allows the same one, so on ${hosts} host${hosts === 1 ? "" : "s"} the rest cannot be placed.`;
+  if (copies.length < want) return `${want} copies wanted, ${copies.length} placed (${where}). The rest wait for a host or disk Longhorn may use - its health says why. By default each copy needs a host of its own; a class with "Copies go on: Different disks" lets them share one.`;
   if (want === 1) return `One copy, on ${where}: if that disk or host fails, this volume is gone until it comes back`;
   if (hosts === 1) return `${want} copies, all on ${copies[0].node} (${copies.map(c => c.disk).join(", ")}): a failed disk is survived, a failed host is not`;
   return `${want} copies: ${where}`;

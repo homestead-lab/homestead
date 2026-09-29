@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.228")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.229")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -3670,12 +3670,15 @@ def vm_network_details():
         labels = item["metadata"].get("labels") or {}
         out.append({"name": f"{item['metadata']['namespace']}/{item['metadata']['name']}",
                     "type": config.get("type", ""), "vlan": config.get("vlan"),
-                    "bridge": config.get("bridge", "") or config.get("master", ""),
+                    "bridge": config.get("bridge", "") or config.get("master", "")
+                              or ((item["metadata"].get("annotations") or {}).get("k8s.v1.cni.cncf.io/resourceName") or "").rsplit("/", 1)[-1],
                     "kind": labels.get("network.harvesterhci.io/type", ""),
                     # On the LAN: a bridge carries VMs and containers; macvlan
-                    # gives containers a MAC of their own but cannot carry a VM.
-                    "lan": config.get("type") in ("bridge", "macvlan"),
-                    "vms": config.get("type") == "bridge"})
+                    # gives containers a MAC of their own but cannot carry a
+                    # VM; macvtap carries VMs only.
+                    "lan": config.get("type") in ("bridge", "macvlan", "macvtap"),
+                    "vms": config.get("type") in ("bridge", "macvtap"),
+                    "containers": config.get("type") in ("bridge", "macvlan")})
     return sorted(out, key=lambda row: row["name"])
 
 
@@ -4988,6 +4991,7 @@ import homestead_platform as PLATFORM
 import homestead_addons as ADDONS
 import homestead_baseline as BASELINE
 import homestead_components as COMPONENTS
+import homestead_macvtap as MACVTAP
 import homestead_resources as RESOURCES
 import homestead_vms as VMS
 import homestead_isos as ISOS
@@ -5161,6 +5165,7 @@ def storage_legacy_cancel(item, options):
 import homestead_vmstore as VMSTORE
 import homestead_nodeshell as NODESHELL
 import homestead_hostrun as HOSTRUN
+import homestead_host_bridge as HOST_BRIDGE
 import homestead_manifests as MANIFESTS
 import homestead_disk_setup as DISK_SETUP
 import homestead_hvimage as HVIMAGE
@@ -5197,7 +5202,8 @@ MQTT.bind(kget, ksend, DEFAULT_NS, lambda: mqtt_snapshot(), LEADER.is_leader)
 HISTORY.bind(DATA_DIR)
 PLATFORM.bind(kget)
 ADDONS.bind(kget, ksend, PLATFORM.detect, node_temps)
-BASELINE.bind(kget, ADDONS, PLATFORM.detect, DEFAULT_NS, DATA_DIR)
+MACVTAP.bind(kget, ksend, ADDONS, PLATFORM.detect)
+BASELINE.bind(kget, ADDONS, PLATFORM.detect, DEFAULT_NS, DATA_DIR, MACVTAP)
 COMPONENTS.bind(kget, ksend, PLATFORM.detect, lambda cfg: HELM.upgrade(cfg), ADDONS)
 OPS.RESOLVERS["platform-upgrade"] = COMPONENTS.status
 OPS.CANCELLERS["platform-upgrade"] = (COMPONENTS.cancel_plan, COMPONENTS.cancel_run)
@@ -5238,6 +5244,8 @@ NODESHELL.bind(kget, ksend, DEFAULT_NS)
 HOSTRUN.bind(kget, ksend, lambda *a, **k: FILES._exec(*a, **k), DEFAULT_NS)
 MANIFESTS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 DISK_SETUP.bind(HOSTRUN)
+HOST_BRIDGE.bind(HOSTRUN, kget, ksend)
+OPS.RESOLVERS["host-bridge"] = HOST_BRIDGE.status
 DISKS.setup_module = DISK_SETUP
 DISKS.autotag_state = lambda: os.path.join(DATA_DIR, "disk-autotags.json")
 
@@ -5416,10 +5424,11 @@ def _vip_loop():
 
 
 def baseline_operation(row, verb):
-    """The job-tray entry for installing kube-vip or Multus, as Add-ons makes one."""
+    """The job-tray entry for installing kube-vip, Multus or macvtap, as Add-ons makes one."""
     name = BASELINE.NAMES[row["id"]]
+    chart = MACVTAP.CHART if row["id"] == "macvtap" else ADDONS.CHARTS[row["id"]]
     return OPS.start("multus" if row["id"] == "multus" else "helm", f"{verb} {name}",
-                     {"kind": "HelmChart", "name": ADDONS.CHARTS[row["id"]], "namespace": ADDONS.CONTROLLER_NS},
+                     {"kind": "HelmChart", "name": chart, "namespace": ADDONS.CONTROLLER_NS},
                      "/settings", {"namespace": ADDONS.CONTROLLER_NS, "name": row["job"], "action": "install"},
                      "Waiting for the Helm controller")
 
@@ -6800,6 +6809,8 @@ def needed_role(path, method):
                 "/api/longhorn/settings", "/api/disks/add", "/api/disks/scheduling", "/api/disks/evict", "/api/disks/remove",
                 # Looking at a disk on its host, and formatting and mounting it there.
                 "/api/disks/inspect", "/api/disks/setup", "/api/disks/os-space", "/api/disks/os-space/use",
+                # Moving a host's network interface into a bridge.
+                "/api/node/bridge/inspect", "/api/node/bridge",
                 "/api/disks/tags", "/api/disks/node-tags",
                 # Replacing a failed disk deletes replicas and takes the disk out.
                 "/api/disks/retire", "/api/disks/retire/plan",
@@ -8374,6 +8385,16 @@ class H(BaseHTTPRequestHandler):
                 for key in ("disks", "lhcap", "nodes", "ov"):
                     _cache.pop(key, None)
                 return self._send(200, {"ok": True, "operation": op})
+            if p == "/api/node/bridge/inspect":
+                return self._send(200, HOST_BRIDGE.inspect(str(b.get("node") or "")))
+            if p == "/api/node/bridge":
+                node = str(b.get("node") or "")
+                if not node or str(b.get("confirm") or "").strip() != node:
+                    raise ValueError(f"type the host's name, {node}, to confirm")
+                op = HOST_BRIDGE.start(node, OPS)
+                _cache.pop("network", None)
+                return self._send(200, {"ok": True, "operation": op,
+                                        "detail": f"{node} is moving to {HOST_BRIDGE.BRIDGE}; follow it in the job tray"})
             if p == "/api/disks/os-space":
                 return self._send(200, DISKS.os_space(str(b.get("node") or "")))
             if p == "/api/disks/os-space/use":

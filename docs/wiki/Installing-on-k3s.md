@@ -19,7 +19,8 @@ Everything Homestead does, with nothing Harvester-specific needed:
 - **Addresses** - k3s's built-in load balancer (ServiceLB) publishes apps on the
   machines' own addresses. kube-vip, for a virtual IP per app, and Multus, for a
   VM's or container's own LAN address, are installed by Homestead after it
-  starts - see [below](#4-addresses-for-apps).
+  starts, and macvtap - a VM's LAN address through the machine's NIC - once
+  KubeVirt is there - see [below](#4-addresses-for-apps).
 - **Helm** - charts install through the Helm controller k3s already runs.
 - **Adding and removing machines** - **Cluster → Add a host** gives this
   cluster's join lines; removing one gives k3s's uninstall steps.
@@ -200,7 +201,10 @@ port. Two apps cannot both take port 80. The script does not install MetalLB,
 and nothing in Homestead needs it.
 
 For an address per app, Homestead installs **kube-vip**, as Harvester uses,
-and **Multus**, which [LAN networks](Networking#lan-networks) need. The script
+and **Multus**, which [LAN networks](Networking#lan-networks) need - and, once
+KubeVirt is installed, **macvtap**, which puts VMs on the LAN through the
+machines' own NIC without changing their network (or move a machine's NIC
+into a [host bridge](Networking#a-host-bridge)). The script
 requests both in Homestead's manifest (a `homestead-install` ConfigMap) and
 Homestead installs them through the Helm controller once it starts, at the
 chart versions it has tested; progress is shown in its job tray. Leave either
