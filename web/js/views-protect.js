@@ -83,7 +83,7 @@ window.objectStoreSetup = () => modal("Set up backup storage", `
     <div class="f"><label>LAN address ${tip("Another cluster reads backups over this address. Left blank, the store shares Homestead's address and answers on its own port there; give it one of its own to keep its traffic apart.")}</label>
       <input id="os_ip" type="text" class="mono" placeholder="Homestead's shared address" data-ipam></div>
     <div class="f"><label>Port ${tip("Where the store answers. Pick another if an app on that address already uses 9000; the next port up is its console.")}</label>
-      <input id="os_port" type="number" min="1" max="65534" value="9000" class="mono"></div></div>
+      <input id="os_port" type="number" min="1" max="65534" placeholder="9000" class="mono"></div></div>
   <div class="note"><b>It shares fate with what it protects.</b> Storage inside this cluster is the right
     place to stage a migration and the wrong place for your only copy. Keep anything you cannot lose
     somewhere else as well.</div>
