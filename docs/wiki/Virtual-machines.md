@@ -257,6 +257,47 @@ EFI or TPM state needs KubeVirt's VMPersistentState feature before KubeVirt 1.5.
 Settings KubeVirt would refuse - Secure Boot on BIOS, say - are refused before
 anything is saved.
 
+## PCI and USB passthrough
+
+A VM can have a host's own PCI device - a GPU, a NIC, an HBA - or a USB device.
+Two steps: the host hands the device over, then the VM asks for it.
+
+**On the host** - its node page, **Devices for VMs → Look at its devices**:
+
+- **IOMMU** has to be on. On k3s and RKE2, **Switch IOMMU on** adds
+  `intel_iommu=on iommu=pt` (`iommu=pt` on AMD, whose IOMMU is on by default)
+  to the kernel command line - a copy of `/etc/default/grub` is kept - and it
+  is on from the host's next restart, from Host actions. The firmware needs
+  VT-d or AMD-Vi enabled too.
+- **Give to VMs** hands a PCI device to `vfio-pci` at once and at every boot,
+  with every device in its IOMMU group (a GPU's audio function, say; PCI
+  bridges stay), and lists it with KubeVirt as `homestead.io/pci-<vendor>-<device>`.
+  A device carrying the host's network, or with a disk the host has mounted, is
+  refused. **Give back** returns it to its own driver.
+- **Offer to VMs** on a USB device lists it with KubeVirt by vendor and product
+  (`homestead.io/usb-<vendor>-<product>`), on any host that has one; nothing on
+  the host changes.
+- On **Harvester**, the same buttons make and remove Harvester's own
+  PCIDeviceClaims and USBDeviceClaims, as its Devices page does. Its
+  pcidevices-controller add-on must be enabled.
+
+**On the VM** - **Edit → Devices**: **＋ Device** from what the hosts offer,
+each shown with the hosts that have it. A VM with a host device runs only on
+such a host and cannot live-migrate; the change applies at its next start.
+
+### A GPU's ROM (vBIOS)
+
+Some GPUs need their ROM given to the VM - a card the host booted from, which
+hides its ROM afterwards, or one that needs a patched ROM. On the device's row,
+choose the ROM file: up to 640 KB, starting with the PCI ROM signature `55 AA`
+(a dump from GPU-Z or `nvflash` may carry a header to trim first). KubeVirt has
+no field for this, so Homestead uses its hook sidecar: a small script in a
+ConfigMap of the VM's (`<vm>-vbios`), with the ROM inside, runs as KubeVirt
+defines the VM, writes the ROM where the VM's QEMU can read it, and names it as
+that device's ROM - changing nothing if anything goes wrong. It switches on
+KubeVirt's `Sidecar` feature. **clear** removes it; removing the device removes
+its ROM.
+
 ## ISO library
 
 **ISO library** (on the VMs page) lists the `.iso` files in folders you pick

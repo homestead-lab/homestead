@@ -154,6 +154,18 @@ def save(cfg):
         done.append("pods on a failed node: " + cfg["node_down"])
     if "v2" in cfg and bool(cfg["v2"]) != bool(current["v2"].get("enabled")):
         value = "true" if cfg["v2"] else "false"
+        if not cfg["v2"]:
+            # Off with V2 data on the cluster would stop every V2 volume and
+            # disk: refused here, whatever Longhorn's own checks say.
+            volumes = kget(f"{LH}/volumes").get("items", [])
+            nodes = kget(f"{LH}/nodes").get("items", [])
+            v2_volumes = [v["metadata"]["name"] for v in volumes if (v.get("spec") or {}).get("dataEngine") == "v2"]
+            v2_disks = [f"{n['metadata']['name']}:{d.get('path')}" for n in nodes
+                        for d in ((n.get("spec") or {}).get("disks") or {}).values() if d.get("diskType") == "block"]
+            if v2_volumes or v2_disks:
+                raise ValueError("the V2 engine stays on while it holds data: "
+                                 + ", ".join((v2_volumes + v2_disks)[:5])
+                                 + " - move those volumes to V1 and remove the V2 disks first")
         if current["v2"].get("harvester_setting") is not None:
             # Harvester's setting drives Longhorn's and prepares each host;
             # writing Longhorn's alone would be put back.

@@ -119,7 +119,8 @@ class StateTests(unittest.TestCase):
         HOST_OS.upgrade_start("k3s-1", ops)
         started = host.scripts[-1]
         self.assertIn("systemd-run --unit=homestead-os-upgrade", started)
-        self.assertIn("--force-confold dist-upgrade", started)
+        self.assertIn("--force-confold upgrade --with-new-pkgs", started)
+        self.assertNotIn("dist-upgrade", started, "no package is ever removed")
         self.assertEqual(("host-os", "Install 3 updates on k3s-1"), ops.started[0][:2])
 
     def test_a_finished_upgrade_says_whether_a_restart_is_needed(self):

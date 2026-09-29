@@ -145,6 +145,32 @@ already saved are retained if setting the default fails.
   refused. A VIP can be removed only while nothing uses it; choose another default
   before removing the current default.
 
+### Homestead itself on a VIP
+
+Homestead's page (port 8088; it listens on 8080 inside its container), its
+backup storage and its SMB shares are services too. On Harvester they start on
+a VIP. On a new k3s or RKE2 cluster they start on the nodes' own addresses,
+which stop answering when that node is down. The **Homestead itself** card
+above the VIPs shows where each answers. **Put Homestead on a VIP** gives each
+a second connection on the VIP with the same ports (`homestead-vip`,
+`homestead-objectstore-vip`, `homestead-smb-vip`). Their node addresses keep
+working and nothing restarts. Longhorn's backup target moves to the backup
+storage's VIP address. **＋ Add VIP** offers the same as **Put Homestead itself
+here** while Homestead has no VIP. NFS always has a VIP of its own already.
+
+The installer asks for this address when it makes a new k3s or RKE2 cluster.
+Homestead then reserves it, makes it the apps' default, and puts itself on it
+once kube-vip is running.
+
+### Changing a VIP's address
+
+**Change address** on a VIP's card gives it a new address and moves every
+Service on it with it: apps, and Homestead's own if they are there. The review
+lists what moves before anything changes. Each Service keeps its name, ports
+and type; only its address changes, so open connections drop for a moment. The
+VIP keeps its label and stays the default if it was. A new address that is a
+node's, or that a Service already uses, is refused.
+
 On k3s, ServiceLB puts every Service on the hosts' own addresses, so the forms
 offer **Every node's own address**. What must be free there is the port: two
 Services cannot share one, and Traefik already has 80 and 443. Homestead

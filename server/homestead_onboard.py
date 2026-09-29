@@ -157,10 +157,19 @@ def _roles(node):
                   if k.startswith("node-role.kubernetes.io/") and labels[k] in ("true", ""))
 
 
-def _replicas_by_node():
+def _replicas_by_node(strict=False):
+    """Each volume's replicas by node. strict: removing a node decides what
+    is lost from this, so a failed read is not "no replicas" - unless Longhorn
+    is not installed at all (404)."""
     try:
         replicas = kget("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/replicas").get("items", [])
-    except Exception:
+    except urllib.error.HTTPError as error:
+        if strict and error.code != 404:
+            raise ValueError("Longhorn's replicas could not be read, so what the node holds is unknown; try again") from error
+        return {}, {}
+    except Exception as error:
+        if strict:
+            raise ValueError("Longhorn's replicas could not be read, so what the node holds is unknown; try again") from error
         return {}, {}
     by_volume, by_node = {}, {}
     for r in replicas:
@@ -407,7 +416,7 @@ def removal_plan(name):
             warnings.append(f"Plain Kubernetes keeps {name}'s etcd member after the node goes, and still counts it "
                             f"toward quorum: remove it on another control-plane host with "
                             f"etcdctl member list, then etcdctl member remove <its id>.")
-    by_volume, by_node = _replicas_by_node()
+    by_volume, by_node = _replicas_by_node(strict=True)
     lost, degraded = [], []
     for volume in sorted(by_node.get(name, ())):
         healthy_elsewhere = [n for n, ok in by_volume.get(volume, []) if ok and n != name]

@@ -20,6 +20,13 @@ def seen(**lines):
     return "\n".join(parts) + "\n" + TOOLS
 
 
+def no_v2(case):
+    """Longhorn has no V2 devices here - whatever another test bound."""
+    patcher = mock.patch.object(SETUP, "longhorn_block_paths", lambda node: [])
+    patcher.start()
+    case.addCleanup(patcher.stop)
+
+
 class Host:
     """What the host says: inspect output, then what set-up printed."""
 
@@ -32,6 +39,9 @@ class Host:
 
 
 class InspectTests(unittest.TestCase):
+    def setUp(self):
+        no_v2(self)
+
     def facts(self, out):
         return SETUP.parse("/dev/nvme0n1", out)
 
@@ -67,6 +77,7 @@ class InspectTests(unittest.TestCase):
 
 class SetupTests(unittest.TestCase):
     def setUp(self):
+        no_v2(self)
         self.addCleanup(SETUP.bind, SETUP.hostrun)
 
     def test_formatting_needs_the_device_typed(self):
@@ -120,6 +131,26 @@ class SetupTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, f"in use by {word}"):
                     SETUP.setup("k3s", "/dev/nvme0n1", "erase", "ext4", "/dev/nvme0n1")
 
+    def test_a_disk_longhorns_v2_engine_uses_raw_is_never_formatted(self):
+        # No filesystem, no partitions: it would look blank.
+        host = Host(seen(LHBLOCK="/dev/disk/by-id/nvme-Samsung_990_S123"))
+        SETUP.bind(host)
+        paths = mock.patch.object(SETUP, "longhorn_block_paths", lambda node: ["/dev/disk/by-id/nvme-Samsung_990_S123"])
+        with paths:
+            facts = SETUP.inspect("k3s", "/dev/nvme0n1")
+            self.assertEqual(("longhorn-v2", []), (facts["state"], facts["choices"]))
+            self.assertIn('readlink -f "/dev/disk/by-id/nvme-Samsung_990_S123"', host.scripts[-1])
+            for mode in ("format", "erase"):
+                with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, "V2 engine keeps data"):
+                    SETUP.setup("k3s", "/dev/nvme0n1", mode, "ext4", "/dev/nvme0n1")
+        self.assertFalse(any("mkfs.ext4 -F" in s or "wipefs -a" in s for s in host.scripts), "only looked at")
+
+    def test_nothing_is_changed_when_longhorn_cannot_be_read(self):
+        SETUP.bind(Host(seen()))
+        with mock.patch.object(SETUP, "longhorn_block_paths", lambda node: None), \
+                self.assertRaisesRegex(ValueError, "could not be read"):
+            SETUP.setup("k3s", "/dev/nvme0n1", "format", "ext4", "/dev/nvme0n1")
+
     def test_a_mount_that_is_not_this_disk_stops_it(self):
         SETUP.bind(Host(seen(), setup_out="ERR /mnt/nvme0n1 is not /dev/nvme0n1 after mounting (/dev/sda1)\n"))
         with self.assertRaisesRegex(ValueError, "is not /dev/nvme0n1"):
@@ -137,6 +168,7 @@ def lvm(free_gb=135, size_gb=235, lvs=("ubuntu-lv 107374182400",), vg="ubuntu-vg
 
 class OsSpaceTests(unittest.TestCase):
     def setUp(self):
+        no_v2(self)
         self.addCleanup(SETUP.bind, SETUP.hostrun)
 
     def test_free_space_in_the_system_volume_group_is_offered_less_a_reserve(self):
@@ -192,6 +224,7 @@ G = 1024 ** 3 // 512       # sectors in a GiB
 
 class RegionTests(unittest.TestCase):
     def setUp(self):
+        no_v2(self)
         self.addCleanup(SETUP.bind, SETUP.hostrun)
 
     def test_unallocated_space_on_a_gpt_disk_is_offered_without_lvm(self):
@@ -238,6 +271,15 @@ class RegionTests(unittest.TestCase):
         self.assertEqual("/dev/disk/by-partuuid/6f1c-44", done["path"])
         self.assertNotIn("mkfs", host.scripts[-1])
 
+    def test_a_disk_under_a_v2_device_is_not_partitioned(self):
+        out = regions(f"sda 209717248 {200 * G}") + "\nLHBLOCK /dev/sda\n"
+        host = Host(out, setup_out=out)
+        SETUP.bind(host)
+        with mock.patch.object(SETUP, "longhorn_block_paths", lambda node: ["/dev/sda"]), \
+                self.assertRaisesRegex(ValueError, "V2 engine keeps data"):
+            SETUP.use_region("k3s", "sda", 209717248, 100, "v1", "/dev/sda")
+        self.assertFalse(any("sfdisk --append" in s for s in host.scripts))
+
     def test_free_space_that_moved_is_not_written(self):
         SETUP.bind(Host(regions(f"sda 209717248 {200 * G}")))
         with self.assertRaisesRegex(ValueError, "not there any more"):
@@ -246,6 +288,7 @@ class RegionTests(unittest.TestCase):
 
 class LonghornTests(unittest.TestCase):
     def setUp(self):
+        no_v2(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.patched = []
         self.node = {"spec": {"disks": {"disk-mnt-nvme0n1": {"path": "/mnt/nvme0n1", "allowScheduling": True}}},

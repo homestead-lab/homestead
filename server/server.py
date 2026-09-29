@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.236")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.237")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -3816,6 +3816,33 @@ def operation_item(operation_id):
     return next((item for item in OPS.list_operations() if item.get("id") == operation_id), None) if operation_id else None
 
 
+def welcome_state(role="admin"):
+    """The first-run checklist: the few settings a new cluster wants, each
+    with whether it is done. Shown to an admin until one says it is done."""
+    try:
+        with open(os.path.join(DATA_DIR, "welcome.json"), encoding="utf-8") as handle:
+            done = bool(json.load(handle).get("done"))
+    except (OSError, ValueError):
+        done = False
+    p = PLATFORM.detect() or {}
+    steps = {}
+    try:
+        address = SELF_ADDRESS.report(cached("network", 5, NETWORK.inventory))
+        steps["address"] = {"done": address["on_vip"], "url": address["url"], "shared_vip": address["shared_vip"],
+                            "vips": len(NETWORK.registered())}
+    except Exception as error:
+        steps["address"] = {"done": False, "error": str(error)[:160]}
+    steps["probe"] = {"done": bool(PROBE.installed())}
+    try:
+        steps["backups"] = {"done": bool(LH.backup_target().get("configured"))}
+    except Exception:
+        steps["backups"] = {"done": False}
+    steps["updates"] = {"applies": not p.get("harvester") and p.get("distribution") in ("k3s", "rke2"),
+                        "done": bool((OS_ROLLOUT.settings().get("schedule") or {}).get("enabled"))}
+    return {"show": role == "admin" and not done, "done": done, "harvester": bool(p.get("harvester")),
+            "load_balancer": p.get("load_balancer", ""), "steps": steps}
+
+
 def own_node():
     """The node this Homestead pod runs on."""
     try:
@@ -5247,6 +5274,8 @@ import homestead_node_parity as NODE_PARITY
 import homestead_host_os as HOST_OS
 import homestead_root_guard as ROOT_GUARD
 import homestead_os_rollout as OS_ROLLOUT
+import homestead_passthrough as PASSTHROUGH
+import homestead_self_address as SELF_ADDRESS
 import homestead_host_bridge as HOST_BRIDGE
 import homestead_manifests as MANIFESTS
 import homestead_disk_setup as DISK_SETUP
@@ -5330,6 +5359,22 @@ NODE_PARITY.bind(kget, ksend, HOSTRUN, PLATFORM.detect, node_temps, DATA_DIR)
 HOST_OS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 OPS.RESOLVERS["host-os"] = HOST_OS.status
 ROOT_GUARD.bind(kget, ksend, PLATFORM.detect, node_temps, DATA_DIR)
+PASSTHROUGH.bind(kget, ksend, HOSTRUN, PLATFORM.detect, DATA_DIR)
+SELF_ADDRESS.bind(kget, NETWORK, OBJECTS, SELF.NS, os.environ.get("PORT", "8080"), SMB_NAMESPACE, SMB_NAME)
+
+
+def installer_vip(vip):
+    """The VIP the installer was given: reserved, the apps' default, and
+    Homestead's own services on it beside the nodes' addresses."""
+    NETWORK.add_vips({"ip": vip, "label": "Homestead and apps"}, IPAM.load()[0].get("records") or {})
+    NETWORK.set_default_vip(vip)
+    moved = SELF_ADDRESS.move(vip)
+    for key in ("network", "ov"):
+        _cache.pop(key, None)
+    return "; ".join(f"{s['label']}: {s['action']} ({s['detail']})" for s in moved["steps"]) or f"{vip} reserved"
+
+
+BASELINE.vip_setup = installer_vip
 OS_ROLLOUT.bind(kget, PLATFORM.detect, HOST_OS, rollout_reboot, operation_item, LC.set_cordon, own_node, DATA_DIR,
                 lambda rollout: OPS.start("os-rollout", f"Update every host's OS ({len(rollout['nodes'])} hosts)",
                                           {"kind": "Node", "name": ", ".join(rollout["nodes"])[:200]}, "/nodes",
@@ -5340,6 +5385,8 @@ DISK_SETUP.bind(HOSTRUN)
 HOST_BRIDGE.bind(HOSTRUN, kget, ksend)
 OPS.RESOLVERS["host-bridge"] = HOST_BRIDGE.status
 DISKS.setup_module = DISK_SETUP
+DISK_SETUP.longhorn_block_paths = DISKS.longhorn_block_paths
+PASSTHROUGH.longhorn_block_paths = DISKS.longhorn_block_paths
 DISKS.autotag_state = lambda: os.path.join(DATA_DIR, "disk-autotags.json")
 
 
@@ -6944,6 +6991,10 @@ def needed_role(path, method):
                 "/api/node/os/check", "/api/node/os/upgrade",
                 # Every host's OS, one at a time: updates, drains and restarts.
                 "/api/os-updates/settings", "/api/os-updates/start", "/api/os-updates/stop",
+                # A host's devices to VMs: vfio-pci, IOMMU in GRUB, KubeVirt's permitted devices.
+                "/api/passthrough/inspect", "/api/passthrough/iommu", "/api/passthrough/pci", "/api/passthrough/usb",
+                # Homestead's own services onto a VIP, and a VIP moved with everything on it.
+                "/api/self/address/plan", "/api/self/address", "/api/network/vips/change", "/api/welcome/done",
                 "/api/disks/tags", "/api/disks/node-tags",
                 # Replacing a failed disk deletes replicas and takes the disk out.
                 "/api/disks/retire", "/api/disks/retire/plan",
@@ -7612,6 +7663,12 @@ class H(BaseHTTPRequestHandler):
                                                 if n["name"] == (q.get("name") or [""])[0]), {})))
             if p == "/api/os-updates":
                 return self._send(200, OS_ROLLOUT.report())
+            if p == "/api/passthrough/resources":
+                return self._send(200, PASSTHROUGH.resources())
+            if p == "/api/self/address":
+                return self._send(200, SELF_ADDRESS.report())
+            if p == "/api/welcome":
+                return self._send(200, welcome_state(self.role))
             if p == "/api/node/os":
                 return self._send(200, HOST_OS.report((q.get("name") or [""])[0] or None))
             if p == "/api/node/smart":
@@ -8523,6 +8580,19 @@ class H(BaseHTTPRequestHandler):
                 for key in ("disks", "lhcap", "nodes", "ov"):
                     _cache.pop(key, None)
                 return self._send(200, {"ok": True, "operation": op})
+            if p == "/api/passthrough/inspect":
+                return self._send(200, PASSTHROUGH.inspect(str(b.get("node") or "")))
+            if p == "/api/passthrough/iommu":
+                return self._send(200, PASSTHROUGH.enable_iommu(str(b.get("node") or "")))
+            if p == "/api/passthrough/pci":
+                node, address = str(b.get("node") or ""), str(b.get("address") or "")
+                return self._send(200, PASSTHROUGH.give(node, address) if b.get("give", True)
+                                  else PASSTHROUGH.take_back(node, address))
+            if p == "/api/passthrough/usb":
+                if b.get("harvester_name"):
+                    return self._send(200, PASSTHROUGH.harvester_usb(str(b.get("node") or ""), str(b["harvester_name"]),
+                                                                     b.get("allow", True) is not False))
+                return self._send(200, PASSTHROUGH.allow_usb(b.get("vendor"), b.get("product"), b.get("allow", True) is not False))
             if p == "/api/os-updates/settings":
                 return self._send(200, {"ok": True, "settings": OS_ROLLOUT.save_settings(b)})
             if p == "/api/os-updates/start":
@@ -8673,6 +8743,37 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/network/vips/remove":
                 _cache.pop("network", None)
                 return self._send(200, NETWORK.remove_vip(b.get("ip", "")))
+            if p == "/api/network/vips/change":
+                result = NETWORK.change_vip(b.get("old", ""), b.get("new", ""), apply=b.get("apply") is True)
+                if b.get("apply") is True:
+                    for key in ("network", "ov"):
+                        _cache.pop(key, None)
+                    # Backups follow the store to its new address.
+                    if any(s["name"].startswith(OBJECTS.NAME) and s["namespace"] == OBJECTS.NS for s in result["services"]):
+                        try:
+                            OBJECTS.point_longhorn()
+                            result["detail"] += "; Longhorn's backup target follows the backup storage"
+                        except Exception as error:
+                            result["detail"] += f"; Longhorn's backup target was not changed: {str(error)[:120]}"
+                return self._send(200, result)
+            if p == "/api/self/address/plan":
+                return self._send(200, SELF_ADDRESS.plan(str(b.get("vip") or "").strip()))
+            if p == "/api/self/address":
+                vip = str(b.get("vip") or "").strip()
+                result = SELF_ADDRESS.move(vip)
+                if b.get("default"):
+                    try:
+                        NETWORK.set_default_vip(vip)
+                        result["default"] = True
+                    except ValueError as error:
+                        result["default_error"] = str(error)
+                for key in ("network", "ov"):
+                    _cache.pop(key, None)
+                return self._send(200, result)
+            if p == "/api/welcome/done":
+                SHARED.write_json(os.path.join(DATA_DIR, "welcome.json"),
+                                  {"done": True, "by": str(self.user or ""), "at": int(time.time())})
+                return self._send(200, {"ok": True})
             if p == "/api/network/vips/label":
                 _cache.pop("network", None)
                 return self._send(200, NETWORK.set_vip_label(b.get("ip", ""), b.get("label", "")))

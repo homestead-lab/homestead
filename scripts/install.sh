@@ -38,7 +38,8 @@
 #   HS_K8S_VERSION=v1.33.4+k3s1                 k3s or RKE2 version
 #   HS_LONGHORN_VERSION=v1.9.1  HS_KUBEVIRT_VERSION=v1.6.0  HS_CDI_VERSION=v1.62.0
 #   HS_VERSION=2.8.184                          Homestead version
-#   HS_VIP=192.168.1.242  HS_CLASS=harvester-longhorn   Harvester: address and storage class
+#   HS_VIP=192.168.1.242                        the VIP for Homestead and apps (k3s/RKE2: optional)
+#   HS_CLASS=harvester-longhorn                 Harvester: storage class
 #   HS_YES=1                                    install without the summary
 # Versions not set are the current recommended releases.
 #
@@ -540,6 +541,28 @@ network_line() {
   elif [ "$mu" = yes ]; then echo "Multus"
   else echo "Not installed"; fi
 }
+# The address Homestead and apps answer on: a VIP, which kube-vip moves to
+# another node when one goes down, rather than one node's own address. Left
+# empty, everything stays on the nodes' addresses and a VIP can come later.
+pick_vip() {
+  VIP=""
+  case "$(given HS_KUBEVIP)" in n*|N*|0|false) return 0 ;; esac
+  if [ -z "$(given HS_VIP)" ] && ! interactive; then return 0; fi
+  VIP=$(ask HS_VIP "Homestead and Apps Address" "Enter an unused address on your LAN, outside your router's DHCP range, for Homestead and your apps (for example, 192.168.1.200). It is a VIP: it moves to another node if one goes down.
+
+Homestead will be at http://VIP:8088, as well as on each node's address, and apps share the VIP on their own ports. Its backup storage and network shares go there too.
+
+Leave it empty to use the nodes' own addresses for now; add a VIP later under Networking." "")
+  [ -n "$VIP" ] || return 0
+  printf '%s' "$VIP" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || fail "'$VIP' is not a valid IPv4 address."
+  [ "$VIP" = "${NODE_IP:-}" ] && fail "$VIP is this machine's own address; a VIP must be an unused one."
+  if [ "$DRY" = 0 ] && ping -c 1 -W 1 "$VIP" >/dev/null 2>&1; then
+    yesno HS_TAKEN "Address In Use" "A device already responds at $VIP. Use this address anyway?" no || fail "Installation cancelled. Choose an unused address."
+  fi
+}
+vip_args() { [ -n "${VIP:-}" ] && printf -- ' --vip %s' "$VIP"; true; }
+homestead_url() { if [ -n "${VIP:-}" ]; then echo "http://$VIP:8088 (and http://$1:8088)"; else echo "http://$1:8088"; fi; }
+
 network_args() {
   case "$(given HS_KUBEVIP)" in n*|N*|0|false) printf ' --no-kube-vip' ;; esac
   case "$(given HS_MULTUS)" in n*|N*|0|false) printf ' --no-multus' ;; esac
@@ -638,7 +661,7 @@ pick_dist() {
 # The cluster to join: its address and distribution. An RKE2 server answers
 # on port 9345, a k3s server on port 6443.
 find_cluster() {
-  server=$(ask HS_SERVER "Join Cluster" "Enter the IP address or hostname of an existing server node:" "")
+  server=$(ask HS_SERVER "Join Cluster" "Enter the IP address or hostname of an existing server node - the machine's own address, not the VIP Homestead and apps use (that one carries apps, not the cluster):" "")
   [ -n "$server" ] || fail "No server address was entered."
   host=${server#https://}; host=${host%%/*}; host=${host%%:*}
   given_dist=$(given HS_DIST)
@@ -713,6 +736,7 @@ Longhorn replicates volumes across nodes and provides snapshots and backups. The
 It reports temperatures, disk SMART health and each node's network interfaces to Homestead, and keeps kube-vip announcing on the right interface as nodes join. It runs a privileged container on each node to read them." yes || NODEPROBE=no
   fi
   yesno HS_KUBEVIRT "Virtual Machines" "Install KubeVirt and CDI to run virtual machines alongside containers?$(kvm || printf '\n\nHardware virtualisation is not available on this machine. Virtual machines would run in emulation mode, with reduced performance.')" "$kubevirt" && kubevirt=yes || kubevirt=no
+  pick_vip
   comps="k8s"
   [ "$longhorn" = yes ] && comps="$comps longhorn"
   [ "$kubevirt" = yes ] && comps="$comps kubevirt cdi"
@@ -727,13 +751,14 @@ It reports temperatures, disk SMART health and each node's network interfaces to
   Virtual machines     $([ "$kubevirt" = yes ] && echo "KubeVirt and CDI" || echo "Not installed")
   Networking           $(network_line)
   Node probe           $([ "$NODEPROBE" = yes ] && echo "Installed by Homestead" || echo "Not installed")
-  Homestead URL        http://$NODE_IP:8088" $comps
+  Apps VIP             $([ -n "${VIP:-}" ] && echo "$VIP - Homestead, its storage and shares, and apps" || echo "None yet - the nodes' own addresses")
+  Homestead URL        $(homestead_url "$NODE_IP")" $comps
   args="server --node-ip $NODE_IP"
   [ "$longhorn" = no ] && args="$args --no-longhorn"
   [ "$kubevirt" = yes ] && args="$args --kubevirt"
   [ "$DIST" = rke2 ] && args="$args --rke2"
   # shellcheck disable=SC2086
-  args="$args$(version_args $comps)$(network_args)$(volume_args)"
+  args="$args$(version_args $comps)$(network_args)$(volume_args)$(vip_args)"
   stages=6; [ "$longhorn" = yes ] && stages=$((stages + 2)); [ "$kubevirt" = yes ] && stages=$((stages + 1)); [ "$DIST" = rke2 ] && stages=$((stages + 1))
   # shellcheck disable=SC2086
   bootstrap "$stages" $args
@@ -770,15 +795,17 @@ add_to_cluster() {
   fi
   comps="homestead"; storage="Longhorn (already installed)"
   if ! $kcmd get crd volumes.longhorn.io >/dev/null 2>&1; then comps="longhorn homestead"; storage="Longhorn (to be installed)"; fi
+  pick_vip
   # shellcheck disable=SC2086
   summary "Review the settings below. Select a component to change its version, or select Install to begin.
 
   Installation mode    Install on this $(dist_name) cluster
   Storage              $storage
   Networking           $(network_line)
-  Homestead URL        http://$(default_ip):8088" $comps
+  Apps VIP             $([ -n "${VIP:-}" ] && echo "$VIP - Homestead, its storage and shares, and apps" || echo "None yet - the nodes' own addresses")
+  Homestead URL        $(homestead_url "$(default_ip)")" $comps
   # shellcheck disable=SC2086,SC2046
-  bootstrap 5 addons $(dist_flag) $(version_args $comps) $(network_args)
+  bootstrap 5 addons $(dist_flag) $(version_args $comps) $(network_args)$(vip_args)
   finish_new
 }
 
@@ -786,11 +813,11 @@ finish_new() {
   ip="${NODE_IP:-$(default_ip)}"
   msg "Installation Complete" "Homestead is available at:
 
-  http://$ip:8088
+  http://$ip:8088$([ -n "${VIP:-}" ] && printf '\n  http://%s:8088 - once kube-vip is up, a minute or two after Homestead' "$VIP")
 
 Open this address to create the administrator account.
 
-To add a node, run the installer on the new machine and select Join an existing cluster. Provide this server's address ($ip) and the cluster token, which this command displays:
+To add a node, run the installer on the new machine and select Join an existing cluster. Give it this server's own address ($ip)$([ -n "${VIP:-}" ] && printf ', not the apps VIP (%s): the VIP carries apps, not the cluster' "$VIP") - and the cluster token, which this command displays:
 
   sudo cat $(token_file)
 

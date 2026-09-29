@@ -2466,3 +2466,12 @@ html[data-theme="light"] .modalbox[data-context="smb-access"]{background:var(--s
 /* OS updates across the hosts (host-os.js). */
 .osu-days{display:flex;flex-wrap:wrap;gap:6px 14px;margin:8px 0}
 .osu-results{margin:8px 0 0;padding-left:18px}
+
+/* The first-run checklist (welcome.js) and Homestead's own address (views-network.js). */
+.welcome-steps{list-style:none;margin:0;padding:0;display:grid;gap:12px}
+.welcome-step{display:grid;grid-template-columns:26px 1fr;gap:10px;align-items:start;padding:12px;border:1px solid var(--line);border-radius:12px}
+.welcome-step.done{opacity:.75}
+.welcome-mark{width:22px;height:22px;border-radius:50%;border:2px solid var(--line);display:grid;place-items:center;font-weight:700;color:var(--ok)}
+.welcome-step.done .welcome-mark{border-color:var(--ok)}
+.welcome-act{margin-top:8px}
+.self-address{margin:0 0 14px}

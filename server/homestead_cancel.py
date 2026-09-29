@@ -300,7 +300,14 @@ def restore_plan(item):
 
 def restore_cancel(item, _options):
     ref = item["ref"]
-    gone = _delete(f"/api/v1/namespaces/{_q(ref['namespace'])}/persistentvolumeclaims/{_q(ref['name'])}")
+    path = f"/api/v1/namespaces/{_q(ref['namespace'])}/persistentvolumeclaims/{_q(ref['name'])}"
+    claim = _get(path)
+    # Only the claim this restore made: one of the same name made since - the
+    # restore removed and the name used again - is someone's data.
+    made_by = (((claim or {}).get("metadata") or {}).get("annotations") or {}).get("homestead.io/restored-from-backup")
+    if claim and ref.get("backup") and made_by != ref["backup"]:
+        return f"Restore stopped; {ref['name']} is no longer the claim it made, so it is kept"
+    gone = _delete(path)
     if tidy_restore:
         try:
             tidy_restore()

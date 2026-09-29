@@ -35,6 +35,11 @@ import re
 import time
 
 hostrun = None          # homestead_hostrun
+# The raw devices Longhorn's V2 engine uses on a node (their paths as Longhorn
+# has them), bound by homestead_disks; None when Longhorn could not be read.
+# Such a disk has no filesystem and would look blank: it is refused instead.
+longhorn_block_paths = lambda node: []
+BLOCK_PATH = re.compile(r"/dev/[A-Za-z0-9/_.:+@-]+")
 DEVICE = re.compile(r"/dev/(?:[a-z]+|nvme\d+n\d+|mmcblk\d+|vd[a-z]+|xvd[a-z]+)")
 SYSTEM_POINTS = {"/", "/boot", "/boot/efi", "/usr", "/var", "/var/lib/rancher", "/var/lib/kubelet", "/home"}
 FSTYPES = ("ext4", "xfs")
@@ -56,7 +61,22 @@ def mount_point(device):
     return "/mnt/" + device.rsplit("/", 1)[-1]
 
 
-def inspect_script(device):
+def claimed_script(paths):
+    """Which of Longhorn's V2 devices sit on $D: the device itself, a partition
+    of it, or a volume on it - whatever lsblk lists beneath the device."""
+    safe = [p for p in paths if BLOCK_PATH.fullmatch(p)]
+    return "".join(f'r=$(readlink -f "{p}" 2>/dev/null); [ -b "$r" ] && lsblk -snro NAME "$r" 2>/dev/null | '
+                   f'grep -qx "${{D##*/}}" && echo "LHBLOCK {p}"\n' for p in safe)
+
+
+def _claimed(node):
+    paths = longhorn_block_paths(node)
+    if paths is None:
+        raise ValueError(f"Longhorn's disks on {node} could not be read, so nothing is changed on its drives")
+    return paths
+
+
+def inspect_script(device, claimed=()):
     # Only reads. A filesystem is mounted read-only, without replaying its
     # journal, into a temporary folder, and unmounted again.
     return f"""D={device}
@@ -85,13 +105,13 @@ if [ -n "$FS" ] && ! grep -q "^$D " /proc/mounts; then
   rmdir "$T"
 fi
 for c in mkfs.ext4 mkfs.xfs wipefs chattr findmnt; do command -v $c >/dev/null && echo "TOOL $c"; done
-echo END"""
+""" + claimed_script(claimed) + "echo END"
 
 
 def parse(device, out):
     facts = {"device": device, "size_gb": 0, "partitions": [], "mounts": [], "fstype": "", "uuid": "",
              "by_id": "", "longhorn": None, "replicas": 0, "entries": 0, "tools": [], "error": "",
-             "holders": []}
+             "holders": [], "longhorn_block": []}
     for line in out.splitlines():
         key, _, value = line.partition(" ")
         if key == "ERR":
@@ -118,6 +138,8 @@ def parse(device, out):
             facts["entries"] = int(value) if value.isdigit() else 0
         elif key == "TOOL":
             facts["tools"].append(value)
+        elif key == "LHBLOCK":
+            facts["longhorn_block"].append(value)
         elif key == "HOLDER":
             name, dm_name, uuid = (value.split("|") + ["", "", ""])[:3]
             kind = ("multipath" if uuid.startswith("mpath-") else "LVM" if uuid.startswith("LVM-")
@@ -131,6 +153,7 @@ def parse(device, out):
     held = [h for h in facts["holders"] if h["kind"] != "multipath"]
     facts["multipath"] = [h for h in facts["holders"] if h["kind"] == "multipath" and h["wwid"]]
     facts["state"] = ("missing" if facts["error"] else "system" if facts["system"]
+                      else "longhorn-v2" if facts["longhorn_block"]
                       else "mounted" if facts["mounts"] else "held" if held
                       else "partitioned" if facts["partitions"]
                       else "longhorn" if facts["longhorn"] else "data" if facts["fstype"] else "blank")
@@ -139,7 +162,7 @@ def parse(device, out):
 
 def inspect(node, device):
     device = _device(device)
-    out, err = hostrun.run(node, inspect_script(device), timeout=60)
+    out, err = hostrun.run(node, inspect_script(device, _claimed(node)), timeout=60)
     facts = parse(device, out)
     if not out.strip() and err:
         facts.update(error=err[:300], state="missing")
@@ -151,7 +174,7 @@ def inspect(node, device):
 def choices(facts):
     """What can be done with it, in the order offered."""
     state = facts["state"]
-    if state in ("missing", "system", "mounted", "held"):
+    if state in ("missing", "system", "mounted", "held", "longhorn-v2"):
         return []
     if state == "blank":
         return ["format"]
@@ -462,6 +485,11 @@ def use_region(node, disk, start, size_gb, engine="v1", confirm=""):
     region = next((r for r in facts["regions"] if r["disk"] == disk and r["start"] == int(start)), None)
     if region is None:
         raise ValueError(f"that free space on {disk} is not there any more; look again")
+    # Longhorn's V2 engine may keep a raw device here with a stale GPT header
+    # still readable: writing a table would overwrite its data.
+    claimed = inspect(node, f"/dev/{disk}")
+    if claimed["longhorn_block"]:
+        raise ValueError(refusal(claimed, "partition"))
     if confirm.strip() != f"/dev/{disk}":
         raise ValueError(f"type /dev/{disk} to confirm: its partition table is changed")
     for tool in ("sfdisk", "partx") + (("mkfs.ext4", "chattr", "findmnt") if engine == "v1" else ()):
@@ -489,6 +517,9 @@ def refusal(facts, mode):
         return f"{device} is not there: {facts['error']}"
     if state == "system":
         return f"{device} is this host's system disk ({', '.join(facts['mounts'])}); Longhorn keeps its default disk there already"
+    if state == "longhorn-v2":
+        return (f"Longhorn's V2 engine keeps data on {device} ({', '.join(facts['longhorn_block'])}); "
+                "move its replicas off and remove it from Longhorn first")
     if state == "held":
         what = ", ".join(f"{h['kind']} ({h['name']})" for h in facts["holders"] if h["kind"] != "multipath")
         return f"{device} is in use by {what}; take it out of that on the host first"
