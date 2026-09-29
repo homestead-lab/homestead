@@ -67,6 +67,11 @@ address on your LAN.
 </tr>
 </table>
 
+<p align="center">
+  <img src="docs/images/converged-blend.svg" width="100%"
+       alt="Each node is a house: the VIP in the gable, apps and VMs above Longhorn data inside, the host as the foundation. One node holds everything and one copy of every volume. Three nodes all run apps behind one VIP and keep three copies of every volume, so any one can fail.">
+</p>
+
 **It feels like a NAS, not a cluster.** Homestead speaks in apps, volumes,
 shares and VMs - the words you know from Unraid or Docker - and looks after
 the Kubernetes underneath. When you want the raw objects, every resource is a
