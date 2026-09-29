@@ -120,6 +120,40 @@ class BootTests(unittest.TestCase):
                 self.assertEqual(200, h._send.call_args.args[0])
                 self.assertTrue(h._send.call_args.args[1]["recovery"])
 
+    def test_a_signed_out_admin_can_sign_in_to_recover_without_anything_written(self):
+        self.fence.inspect.return_value = {"mode": "recovery", "writable": False, "operation": "a" * 24}
+        h = object.__new__(server.H)
+        h.command, h.path, h.headers = "POST", "/api/auth/login", {"X-Homestead-Auth": "1", "Content-Length": "40"}
+        h._send, h._who, h._set_cookie = mock.Mock(), mock.Mock(return_value=None), mock.Mock()
+        h._body = mock.Mock(return_value={"username": "admin", "password": "right"})
+        h._client_ip, h._cookies = mock.Mock(return_value="192.0.2.7"), mock.Mock(return_value={})
+        with mock.patch.object(server.CFACCESS, "enabled", return_value=False), \
+                mock.patch.object(server.AUTH, "login_read_only", return_value="token") as login, \
+                mock.patch.object(server.AUTH, "login", side_effect=AssertionError("the writing login")), \
+                mock.patch.object(server.HISTORY, "add", side_effect=AssertionError("a sign-in log write"), create=True):
+            self.assertTrue(h._guard("/api/auth/login"))
+        login.assert_called_once_with("admin", "right", "192.0.2.7", False)
+        h._set_cookie.assert_called_once()
+        self.assertEqual(200, h._send.call_args.args[0])
+        h.headers = {}
+        with mock.patch.object(server.CFACCESS, "enabled", return_value=False):
+            h._guard("/api/auth/login")
+        self.assertEqual(403, h._send.call_args.args[0], "the same cross-site guard as the normal sign-in")
+        self.fence.inspect.return_value = {"mode": "start", "writable": False}
+        h, _ = self.handler("/api/auth/login", "POST")
+        self.assertEqual(503, h._send.call_args.args[0], "only while recovering an unstarted move")
+
+    def test_read_only_sign_in_checks_the_password_and_saves_nothing(self):
+        salt = "c2FsdHNhbHRzYWx0c2FsdA=="
+        users = {"users": {"admin": {"salt": salt, "hash": server.AUTH._hash("right", salt), "role": "admin"}}}
+        with mock.patch.object(server.AUTH, "_load", return_value=users), \
+                mock.patch.object(server.AUTH, "_save", side_effect=AssertionError("saved")), \
+                mock.patch.object(server.AUTH, "issue_token", return_value="token"), \
+                mock.patch.dict(server.AUTH._attempts, clear=True):
+            self.assertEqual("token", server.AUTH.login_read_only("Admin", "right", "192.0.2.8"))
+            with self.assertRaisesRegex(PermissionError, "incorrect"):
+                server.AUTH.login_read_only("admin", "wrong", "192.0.2.8")
+
     def test_recovery_action_requires_real_admin_and_csrf_not_status_capability(self):
         self.fence.inspect.return_value = {"mode": "recovery", "writable": False, "operation": "a" * 24}
         path = "/api/self/data/abandon"

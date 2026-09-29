@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.229")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.230")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -7053,7 +7053,29 @@ class H(BaseHTTPRequestHandler):
                 return True
             if self.command == "GET" and path == "/api/auth/state":
                 detail = {"recovery": True, "operation": boot_state["operation"]} if boot_state.get("mode") == "recovery" else {}
+                if detail:
+                    detail["signed_in"] = bool(AUTH.verify_token(self._cookies().get(AUTH.COOKIE)))
                 self._send(200, {"data_handoff": True, "setup": False, **detail})
+                return True
+            if self.command == "POST" and path == "/api/auth/login" and boot_state.get("mode") == "recovery":
+                # Giving an unstarted move up needs an admin, and a browser
+                # without a session must be able to become one. Nothing is
+                # written: not the sign-in time, not the sign-in log.
+                if self.headers.get("X-Homestead-Auth") != "1":
+                    self._send(403, {"error": "missing X-Homestead-Auth header"})
+                    return True
+                if int(self.headers.get("Content-Length") or 0) > 4096:
+                    self._send(413, {"error": "that request is larger than Homestead accepts"})
+                    return True
+                b = self._body()
+                remember = bool(b.get("remember"))
+                try:
+                    token = AUTH.login_read_only(b.get("username"), b.get("password"), self._client_ip(), remember)
+                except PermissionError as error:
+                    self._send(401, {"error": str(error)})
+                    return True
+                self._set_cookie(token, max_age=AUTH.idle_ttl(remember))
+                self._send(200, {"ok": True, "recovery": True})
                 return True
             recovery_action = self.command == "POST" and path == "/api/self/data/abandon" and boot_state.get("mode") == "recovery"
             if not recovery_action and (self.command != "GET" or not re.fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}(?:/view)?", path)):
