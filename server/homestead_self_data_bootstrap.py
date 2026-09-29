@@ -9,7 +9,7 @@ import urllib.error
 
 import homestead_self_data_kube as K
 import homestead_self_data_launch as L
-from homestead_storage_journal import Held, digest, identity, shape
+from homestead_storage_journal import Held, digest, identity, pod_annotations, shape
 
 
 def targets(namespace, deployment, operation):
@@ -69,6 +69,11 @@ def fingerprint(obj):
     value.pop("status", None)
     value["metadata"] = {key: meta.get(key) for key in ("labels", "annotations", "ownerReferences", "finalizers")}
     if value.get("kind") == "Pod":
+        # The network plugin reports on a Pod after it starts; the receipt was
+        # taken before that, so what it reports is left out of both. Kubernetes
+        # keeps no empty map, so none left is the same as none sent.
+        value["metadata"]["annotations"] = pod_annotations(obj) or None
+    if value.get("kind") == "Pod":
         # Scheduling may assign this after creation. observe() separately
         # verifies it matches the one reviewed host; all other spec changes hold.
         value["spec"].pop("nodeName", None)
@@ -93,7 +98,7 @@ def admitted(body, obj, target, *, dry_run=False):
         identity(obj)
     if meta.get("labels", {}) != body.get("metadata", {}).get("labels", {}):
         raise Held("Admission changed helper labels; it must not join another workload's service")
-    if meta.get("annotations", {}) != body.get("metadata", {}).get("annotations", {}):
+    if pod_annotations(obj) != body.get("metadata", {}).get("annotations", {}):
         raise Held("Admission added unreviewed helper annotations")
     if not _subset(body, obj):
         raise Held("Admission changed a reviewed helper setting; inspect it before continuing")

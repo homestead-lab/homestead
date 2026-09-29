@@ -67,6 +67,15 @@ class StorageClassTests(unittest.TestCase):
         self.assertTrue(body["allowVolumeExpansion"])
         self.assertEqual("false", body["parameters"]["migratable"])
 
+    def test_data_is_kept_unless_asked_and_copies_can_share_a_host_but_not_a_disk(self):
+        server.create_storage_class({"name": "longhorn-pair", "replicas": 2, "copies": "disks"})
+        body = self.sent[-1][2]
+        self.assertEqual("Retain", body["reclaimPolicy"])
+        self.assertEqual(("enabled", "disabled"), (body["parameters"]["replicaSoftAntiAffinity"],
+                                                   body["parameters"]["replicaDiskSoftAntiAffinity"]))
+        with self.assertRaisesRegex(ValueError, "different hosts or different disks"):
+            server.create_storage_class({"name": "longhorn-x", "copies": "anywhere"})
+
     def test_a_migratable_class_says_so_explicitly_too(self):
         server.create_storage_class({"name": "longhorn-vm", "replicas": 2, "migratable": True})
 

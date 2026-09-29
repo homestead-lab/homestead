@@ -614,6 +614,36 @@ def set_up(cfg):
     else:
         done = setup_module.setup(node, device, mode, str(cfg.get("fstype") or "ext4"), confirm)
         path, kept = done["path"], done["kept_data"]
+    tags = kind_tags(row)
+    added = _give_longhorn(node, path, engine, tags, device)
+    if added:
+        return added
+    words = (f"{device} kept its Longhorn data and is mounted at {path}" if kept
+             else f"{device} is {'given to the V2 engine' if engine == 'v2' else f'formatted and mounted at {path}'}")
+    return {"ok": True, "path": path, "tags": tags,
+            "detail": f"{words}; Longhorn is adding it on {node}" + (f", tagged {', '.join(tags)}" if tags else "")}
+
+
+def os_space(node):
+    return setup_module.os_space(str(node or ""))
+
+
+def use_os_space(cfg):
+    """Free space on the OS drive given to Longhorn: a logical volume of its
+    own, formatted and mounted, tagged os like the drive's default disk."""
+    node = str(cfg.get("node") or "")
+    done = setup_module.use_os_space(node, cfg.get("size_gb"))
+    path = done["path"]
+    added = _give_longhorn(node, path, "v1", ["os"], done["device"])
+    if added:
+        return added
+    return {"ok": True, "path": path, "tags": ["os"],
+            "detail": f"{done['size_gb']} GB of {done['vg']} is mounted at {path}; Longhorn is adding it on {node}, tagged os"}
+
+
+def _give_longhorn(node, path, engine, tags, device):
+    """Add the folder (or V2 device) to Longhorn on node. Returns a result
+    when Longhorn already uses it, else None once it has been added."""
     lh = kget(f"{LH}/nodes/{node}")
     for disk_id, d in ((lh.get("spec") or {}).get("disks") or {}).items():
         if d.get("path") != path:
@@ -628,15 +658,11 @@ def set_up(cfg):
         _patch(f"{LH}/nodes/{node}", {"spec": {"disks": {disk_id: {"allowScheduling": False}}}}, "clearing the old entry")
         _patch(f"{LH}/nodes/{node}", {"spec": {"disks": {disk_id: None}}}, "clearing the old entry")
     disk_id = "disk-" + re.sub(r"[^a-z0-9]+", "-", path.lower()).strip("-")[:50]
-    tags = kind_tags(row)
     _patch(f"{LH}/nodes/{node}", {"spec": {"disks": {disk_id: {
         "path": path, "allowScheduling": True, "diskType": "block" if engine == "v2" else "filesystem",
         "storageReserved": 0, "tags": tags}}}}, f"adding {path}")
     _note_tagged(f"{node}/{disk_id}")
-    words = (f"{device} kept its Longhorn data and is mounted at {path}" if kept
-             else f"{device} is {'given to the V2 engine' if engine == 'v2' else f'formatted and mounted at {path}'}")
-    return {"ok": True, "path": path, "tags": tags,
-            "detail": f"{words}; Longhorn is adding it on {node}" + (f", tagged {', '.join(tags)}" if tags else "")}
+    return None
 
 
 def _tagged():

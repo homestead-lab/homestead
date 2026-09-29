@@ -181,6 +181,127 @@ def setup(node, device, mode, fstype="ext4", confirm=""):
     return {"path": point, "facts": facts, "kept_data": mode == "import"}
 
 
+# ---- free space on the OS drive ---------------------------------------------
+#
+# Ubuntu's installer, among others, puts the system on LVM and gives the root
+# volume only part of the drive (100 GB by default), leaving the rest of the
+# volume group free. That space can hold Longhorn without repartitioning
+# anything: a new logical volume, formatted and mounted the same safe way as a
+# whole disk. A reserve is kept free in the group, for the system to grow into
+# (lvextend) - and a filesystem of its own means Longhorn filling it cannot
+# fill the system's. Partitions of a running system are never resized.
+
+OS_LV = "longhorn"
+OS_POINT = "/mnt/longhorn-os"
+VG_NAME = re.compile(r"[A-Za-z0-9+_.-]{1,64}")
+
+OS_SPACE_SCRIPT = r"""R=$(findmnt -n -o SOURCE /)
+echo "ROOT $R"
+echo "ROOTFREE $(df -B1 --output=avail / | tail -n 1 | tr -d ' ')"
+if command -v lvs >/dev/null 2>&1; then
+  VG=$(lvs --noheadings -o vg_name,lv_path,lv_dm_path 2>/dev/null </dev/null | awk -v r="$R" '$2 == r || $3 == r {print $1; exit}')
+  if [ -n "$VG" ]; then
+    echo "VG $VG"
+    vgs --noheadings --units b --nosuffix -o vg_size,vg_free "$VG" </dev/null | awk '{print "SIZE " $1; print "FREE " $2}'
+    lvs --noheadings --units b --nosuffix -o lv_name,lv_size "$VG" </dev/null | awk '{print "LV " $1 " " $2}'
+    pvs --noheadings -o pv_name --select "vg_name=$VG" </dev/null | awk '{print "PV " $1}'
+  fi
+else
+  echo "NOLVMTOOLS"
+fi
+for c in lvcreate mkfs.ext4 chattr findmnt; do command -v $c >/dev/null && echo "TOOL $c"; done
+echo END"""
+
+
+def parse_os_space(out):
+    gb = lambda value: round(int(value) / 1024 ** 3, 1) if value.isdigit() else 0
+    facts = {"root": "", "root_free_gb": 0, "vg": "", "size_gb": 0, "free_gb": 0, "lvs": {}, "pvs": [], "tools": [],
+             "lvm_tools": True}
+    for line in out.splitlines():
+        key, _, value = line.partition(" ")
+        if key == "ROOT":
+            facts["root"] = value
+        elif key == "ROOTFREE":
+            facts["root_free_gb"] = gb(value)
+        elif key == "VG" and VG_NAME.fullmatch(value):
+            facts["vg"] = value
+        elif key == "SIZE":
+            facts["size_gb"] = gb(value)
+        elif key == "FREE":
+            facts["free_gb"] = gb(value)
+        elif key == "LV":
+            name, _, size = value.partition(" ")
+            facts["lvs"][name] = gb(size)
+        elif key == "PV":
+            facts["pvs"].append(value)
+        elif key == "TOOL":
+            facts["tools"].append(value)
+        elif key == "NOLVMTOOLS":
+            facts["lvm_tools"] = False
+    if "END" not in out.split():
+        facts["error"] = "the host did not finish looking at its OS drive"
+    # Kept free for the system: a tenth of the group, and never under 10 GB.
+    facts["reserve_gb"] = max(10, round(facts["size_gb"] * 0.1)) if facts["vg"] else 0
+    facts["usable_gb"] = max(0, int(facts["free_gb"] - facts["reserve_gb"])) if facts["vg"] else 0
+    facts["exists"] = OS_LV in facts["lvs"]
+    facts["mount_point"] = OS_POINT
+    return facts
+
+
+def os_space(node):
+    out, err = hostrun.run(node, OS_SPACE_SCRIPT, timeout=60)
+    facts = parse_os_space(out)
+    if not out.strip() and err:
+        facts["error"] = err[:300]
+    facts["problem"] = os_space_problem(facts)
+    return facts
+
+
+def os_space_problem(facts):
+    if facts.get("error"):
+        return facts["error"]
+    if not facts["vg"]:
+        return ("its system is not on LVM, so there is no free space Homestead can use without resizing partitions, "
+                "which it does not do to a running system" if facts["lvm_tools"] else "the host has no LVM tools")
+    if facts["exists"]:
+        return f"{facts['vg']}/{OS_LV} already exists"
+    for tool in ("lvcreate", "mkfs.ext4", "chattr", "findmnt"):
+        if tool not in facts["tools"]:
+            return f"the host has no {tool}"
+    if facts["usable_gb"] < 5:
+        return (f"{facts['vg']} has {facts['free_gb']} GB free; {facts['reserve_gb']} GB of that is kept for the "
+                "system, which leaves too little for Longhorn")
+    return ""
+
+
+def use_os_space(node, size_gb):
+    """Make a logical volume of size_gb in the OS drive's free space, format
+    and mount it, ready for Longhorn. The drive is looked at again first."""
+    facts = os_space(node)
+    if facts["problem"]:
+        raise ValueError(facts["problem"])
+    try:
+        size = int(size_gb)
+    except (TypeError, ValueError):
+        raise ValueError("give the size in whole GB") from None
+    if not 5 <= size <= facts["usable_gb"]:
+        raise ValueError(f"choose from 5 to {facts['usable_gb']} GB: {facts['reserve_gb']} GB of {facts['vg']} "
+                         "is kept free for the system")
+    vg = facts["vg"]
+    device = f"/dev/{vg}/{OS_LV}"
+    script = f"""set -e
+lvs "{vg}/{OS_LV}" >/dev/null 2>&1 && {{ echo "ERR {vg}/{OS_LV} already exists"; exit 1; }}
+lvcreate -y -L {size}G -n {OS_LV} "{vg}" >/dev/null
+udevadm settle 2>/dev/null || true
+mkfs.ext4 -F -L hs-longhorn "{device}" >/dev/null
+""" + setup_script(device, "mount", "ext4", OS_POINT)
+    out, err = hostrun.run(node, script, timeout=600)
+    if not any(line.startswith("OK ") for line in out.splitlines()):
+        problem = next((line[4:] for line in out.splitlines() if line.startswith("ERR ")), "") or (err or out)[-300:]
+        raise ValueError(f"making {vg}/{OS_LV} on {node} stopped: {problem}")
+    return {"path": OS_POINT, "vg": vg, "size_gb": size, "device": device}
+
+
 def refusal(facts, mode):
     state, device = facts["state"], facts["device"]
     if state == "missing":

@@ -205,6 +205,38 @@ def _users(ns):
     return users
 
 
+def unlock(ns=None):
+    """VMs made before 2.8.228 hold their ISO read-only, which KubeVirt
+    cannot start (it sets the owner of the volume's folder first). Drop the
+    flag on those that are stopped. Returns the VMs changed."""
+    ns = ns or DEFAULT_NS
+    try:
+        isos = {p["metadata"]["name"] for p in
+                kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims?labelSelector={LABEL}%3Dtrue").get("items", [])}
+        vms = kget(f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines").get("items", []) if isos else []
+    except Exception:
+        return []
+    changed = []
+    for vm in vms:
+        if ((vm.get("status") or {}).get("printableStatus") or "Stopped") not in ("Stopped", "Stopping", "ErrorUnschedulable", "CrashLoopBackOff"):
+            continue
+        volumes = ((vm.get("spec") or {}).get("template", {}).get("spec") or {}).get("volumes") or []
+        ops = [{"op": "remove", "path": f"/spec/template/spec/volumes/{i}/persistentVolumeClaim/readOnly"}
+               for i, v in enumerate(volumes)
+               if (v.get("persistentVolumeClaim") or {}).get("claimName") in isos and v["persistentVolumeClaim"].get("readOnly")]
+        if not ops:
+            continue
+        name = vm["metadata"]["name"]
+        try:
+            ksend("PATCH", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}",
+                  [{"op": "test", "path": "/metadata/resourceVersion", "value": vm["metadata"]["resourceVersion"]}] + ops,
+                  ctype="application/json-patch+json")
+            changed.append(name)
+        except Exception:
+            pass
+    return changed
+
+
 def _state(pvc, job):
     annotations = (pvc.get("metadata") or {}).get("annotations") or {}
     if annotations.get(READY) == "true":

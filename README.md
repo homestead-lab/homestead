@@ -89,6 +89,21 @@ curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/inst
 - **Node doctor.** On any node, the same line checks the node and the cluster
   and offers a fix for each problem it finds.
 
+**Disks on a k3s or RKE2 machine.** Give the system 64-128 GB and keep the
+rest for Longhorn:
+
+- **A second drive is best.** Leave it blank: **Nodes → Disks → Add to
+  Longhorn** formats and mounts it safely, or keeps Longhorn data already on it.
+- **One drive?** Install the OS on LVM (Ubuntu Server's default) and leave the
+  volume group's spare space unallocated - Ubuntu gives the root volume 100 GB
+  and leaves the rest free. **Use its free space** on the system disk turns it
+  into a Longhorn disk of its own, keeping a tenth (at least 10 GB) for the
+  system to grow into. Homestead does not resize the partitions of a running
+  system, so plain partitions without LVM leave nothing it can use.
+- Longhorn's V2 engine needs a whole drive of its own.
+
+See [Installing on k3s](https://github.com/wjcloudy/homestead/wiki/Installing-on-k3s#disks).
+
 Then open `http://<your machine>:8088` and create the administrator account.
 Already running a cluster? Install with
 [Helm or the manifest](docs/reference.md#install-with-helm). The wiki walks

@@ -380,6 +380,10 @@ window.vmTab = (button, pane) => {
 const VM_BUSES = ["virtio", "sata", "scsi"], VM_MODELS = ["virtio", "e1000", "e1000e", "rtl8139"];
 const vmNet = n => n.network === "pod network" ? "pod" : n.network;
 const vmOpt = (value, label, chosen) => `<option value="${esc(value)}" ${value === chosen ? "selected" : ""}>${esc(label)}</option>`;
+/* Networks a VM can join: not a macvlan one, which carries containers only. */
+const vmJoinable = o => (o.networks || ["pod"]).filter(x => (o.network_details || []).find(d => d.name === x)?.vms !== false);
+const vmNetLabel = (o, x) => x === "pod" ? "pod network (NAT)"
+  : (o.network_details || []).find(d => d.name === x)?.vms === false ? `${x} (macvlan - containers only)` : x;
 
 /* Where a disk's contents come from: blank, a download, or a Harvester image. */
 function vmSourceSelect(cls, o, current = "", cdrom = false) {
@@ -415,11 +419,11 @@ function vmDiskRow(d, o) {
 }
 
 function vmNicRow(n, o) {
-  const nets = [...new Set([...(o.networks || ["pod"]), vmNet(n)].filter(Boolean))];
+  const nets = [...new Set([...vmJoinable(o), vmNet(n)].filter(Boolean))];
   return `<tr data-nic="${esc(n.name)}" data-model="${esc(n.model)}" data-net="${esc(vmNet(n))}" data-mac="${esc(n.mac || "")}">
     <td><b>${esc(n.name)}</b><div class="dim xs mono">${esc(n.ips.join(", "))}</div></td>
     <td><select class="vn_model">${VM_MODELS.map(m => vmOpt(m, m, n.model)).join("")}</select></td>
-    <td><select class="vn_net">${nets.map(x => vmOpt(x, x === "pod" ? "pod network (NAT)" : x, vmNet(n))).join("")}</select></td>
+    <td><select class="vn_net">${nets.map(x => vmOpt(x, vmNetLabel(o, x), vmNet(n))).join("")}</select></td>
     <td><input class="vn_mac mono" value="${esc(n.mac || "")}" placeholder="automatic" style="width:150px"></td>
     <td><label class="switch"><input type="checkbox" class="vn_rm"> remove</label></td></tr>`;
 }
@@ -509,7 +513,7 @@ window.vmAddNic = () => {
   const { o } = window.__vmEdit;
   $("#ve_nics").insertAdjacentHTML("beforeend", `<tr class="vn-add"><td><b>new</b></td>
     <td><select class="vn_model">${VM_MODELS.map(m => vmOpt(m, m, "virtio")).join("")}</select></td>
-    <td><select class="vn_net">${(o.networks || ["pod"]).map(x => vmOpt(x, x === "pod" ? "pod network (NAT)" : x, (o.networks || [])[1] || "pod")).join("")}</select></td>
+    <td><select class="vn_net">${vmJoinable(o).map(x => vmOpt(x, vmNetLabel(o, x), vmJoinable(o)[1] || "pod")).join("")}</select></td>
     <td class="dim xs">automatic</td><td><button class="btn sm" onclick="this.closest('tr').remove()">✕</button></td></tr>`);
 };
 window.vmEditSave = async () => {
