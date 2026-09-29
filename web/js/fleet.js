@@ -276,8 +276,8 @@ window.fleetMigration = async id => {
 window.fleetMigrationSet = async (id, allow) => {
   const m = (FLEET.view?.members || []).find(x => x.id === id);
   const state = FLEET.transfers[id] || {};
-  if (!allow && !confirm(`Disable migration from ${m.name}?${String.fromCharCode(10, 10)}Its backup storage stops; its volume and the backups on it are kept.`
-      + (state.backups_here ? ` Longhorn on ${m.name} backs up there too, so those backups pause until it is enabled again.` : ""))) return;
+  if (!allow && !(await ask(`Disable migration from ${m.name}?${String.fromCharCode(10, 10)}Its backup storage stops; its volume and the backups on it are kept.`
+      + (state.backups_here ? ` Longhorn on ${m.name} backs up there too, so those backups pause until it is enabled again.` : "")))) return;
   const pick = $("#fm_pick")?.value || "__shared";
   const address = pick === "__typed" ? ($("#fm_ip")?.value || "").trim() : "";
   if (pick === "__typed" && !address) return toast("Type the address for its backup storage", "bad");
@@ -414,7 +414,7 @@ window.fleetLinkLegacy = async name => {
 };
 
 window.fleetForgetLegacy = async name => {
-  if (!confirm(`Forget ${name}?${String.fromCharCode(10, 10)}Its stored account is deleted. Nothing on that cluster is touched.`)) return;
+  if (!(await ask(`Forget ${name}?${String.fromCharCode(10, 10)}Its stored account is deleted. Nothing on that cluster is touched.`))) return;
   try {
     await api("/api/move/clusters/remove", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }) });
@@ -460,7 +460,7 @@ window.fleetLinkSave = async () => {
 };
 
 window.fleetUnlink = async (id, name) => {
-  if (!confirm(`Unlink ${name}?${String.fromCharCode(10, 10)}It keeps running as it is. The linked clusters get a new key, so ${name} can no longer act for them.`)) return;
+  if (!(await ask(`Unlink ${name}?${String.fromCharCode(10, 10)}It keeps running as it is. The linked clusters get a new key, so ${name} can no longer act for them.`))) return;
   try {
     const result = await api("/api/fleet/remove", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id }) });
@@ -470,7 +470,7 @@ window.fleetUnlink = async (id, name) => {
 };
 
 window.fleetLeave = async () => {
-  if (!confirm("Stop linking this Homestead to the others?" + String.fromCharCode(10, 10) + "The others stay linked to each other.")) return;
+  if (!(await ask("Stop linking this Homestead to the others?" + String.fromCharCode(10, 10) + "The others stay linked to each other."))) return;
   try {
     await api("/api/fleet/leave", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     setFleetMode("one");

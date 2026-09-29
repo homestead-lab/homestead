@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.230")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.231")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -5272,8 +5272,6 @@ def _vmstore_loop():
                 with self_data_activity():
                     VMSTORE.refresh()
                     # ISO copies no VM has used for a while (homestead_isos.py).
-                    for name in ISOS.unlock():
-                        print(f"ISO library: {name} no longer holds its ISO read-only", flush=True)
                     for name in ISOS.tidy():
                         print(f"ISO library: removed {name}, unused for {ISOS.keep_days()} days", flush=True)
                 beat("vmstore", 3600, leader_only=True)
@@ -5459,7 +5457,8 @@ def _baseline_loop():
 def _host_fix_loop():
     """On the leader, what k3s and RKE2 undo at each start: the installer's
     auto-deploy files (homestead_manifests.py), and a second default storage
-    class. Checked a minute after starting, then every ten minutes."""
+    class; and VMs still holding an ISO read-only. Checked a minute after
+    starting, then every ten minutes."""
     time.sleep(60)
     while True:
         if LEADER.is_leader():
@@ -5470,6 +5469,9 @@ def _host_fix_loop():
                               f"{', '.join(marked) or 'no installer files (none left)'} at start", flush=True)
                     for node, disk, tags in DISKS.auto_tag():
                         print(f"storage: {node} {disk} tagged {', '.join(tags)}", flush=True)
+                    # VMs made before 2.8.228 hold their ISO read-only and cannot start.
+                    for name in ISOS.unlock():
+                        print(f"ISO library: {name} no longer holds its ISO read-only", flush=True)
                     fixed = reconcile_default_class()
                     if fixed:
                         print(f"storage: {fixed[0]} kept as the default class; "
@@ -8871,6 +8873,13 @@ def _samba_loop():
                     print("network shares: restored NFS exports from the share inventory", flush=True)
             except Exception as error:
                 print(f"NFS exports: {str(error)[:180]}", flush=True)
+            try:
+                with self_data_activity():
+                    moved = OBJECTS.keep_in_step()
+                if moved:
+                    print(f"object store: moved to {moved}", flush=True)
+            except Exception as error:
+                print(f"object store: {str(error)[:180]}", flush=True)
         time.sleep(60)
 
 

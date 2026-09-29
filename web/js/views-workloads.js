@@ -675,7 +675,7 @@ window.wlFailoverSave = async () => {
     .map(s => ({ ns: s.dataset.ns, name: s.dataset.name, mode: s.value }));
   if (!items.length) return closeModal();
   if (items.some(i => (STATE.data.wl || []).some(w => w.self && w.ns === i.ns && w.name === i.name))
-      && !confirm("Homestead itself is among them: it restarts, and this page reconnects when it is back.")) return;
+      && !(await ask("Homestead itself is among them: it restarts, and this page reconnects when it is back."))) return;
   try {
     const r = await api("/api/workloads/failover", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ items }) });
@@ -683,7 +683,7 @@ window.wlFailoverSave = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.wlFailoverPolicy = async () => {
-  if (!confirm("Let Longhorn delete the pods of a node that stops answering, so their volumes can attach elsewhere?\n\nThis is Longhorn's \"Pod Deletion Policy When Node is Down\" set to delete-both-statefulset-and-deployment-pod.")) return;
+  if (!(await ask("Let Longhorn delete the pods of a node that stops answering, so their volumes can attach elsewhere?\n\nThis is Longhorn's \"Pod Deletion Policy When Node is Down\" set to delete-both-statefulset-and-deployment-pod."))) return;
   try {
     await api("/api/longhorn/settings", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ node_down: "delete-both-statefulset-and-deployment-pod" }) });

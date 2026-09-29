@@ -18,6 +18,7 @@ import base64
 import datetime
 import hashlib
 import hmac
+import re
 import secrets
 import urllib.error
 import urllib.parse
@@ -35,7 +36,8 @@ BUCKET = "homestead-backups"
 REGION = "us-east-1"
 PORT = 9000
 CONSOLE_PORT = 9001
-IMAGE = "rustfs/rustfs:1.0.0-rc.6"
+IMAGE = "rustfs/rustfs:1.0.0"
+RUSTFS = "rustfs/rustfs:"
 # MinIO's images stopped being published; one already running with backups in
 # it is left as it is rather than swapped for a server that may not read its
 # files. Anything else - a fresh store, or a MinIO that cannot start - gets
@@ -115,6 +117,39 @@ def status():
         "backup_url": backup_url(),
         "image": IMAGE,
     }
+
+
+def _rustfs_version(image):
+    """(1, 0, 0, rc) of a RustFS image tag - a release sorts after its
+    release candidates - or None for anything else (MinIO, a digest, latest)."""
+    if not str(image or "").startswith(RUSTFS):
+        return None
+    tag = image[len(RUSTFS):].lstrip("v")
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?(?:-glibc)?", tag)
+    if not match:
+        return None
+    major, minor, patch, rc = match.groups()
+    return (int(major), int(minor), int(patch), int(rc) if rc else 10 ** 6)
+
+
+def keep_in_step():
+    """The store runs the RustFS Homestead pins, as its SMB and NFS servers
+    do: an older RustFS moves on - only the image changes; its keys, volume
+    and address stay - and nothing else is touched: MinIO, a newer or
+    unrecognised tag, or a store that is off. Returns the image moved to, or ""."""
+    current = _get(f"/apis/apps/v1/namespaces/{NS}/deployments/{NAME}")
+    if not current or not int((current.get("spec") or {}).get("replicas", 1) or 0):
+        return ""
+    containers = (((current.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []
+    if len(containers) != 1:
+        return ""
+    running, wanted = _rustfs_version(containers[0].get("image")), _rustfs_version(IMAGE)
+    if not running or running >= wanted:
+        return ""
+    ksend("PATCH", f"/apis/apps/v1/namespaces/{NS}/deployments/{NAME}",
+          {"spec": {"template": {"spec": {"containers": [{"name": containers[0]["name"], "image": IMAGE}]}}}},
+          ctype="application/strategic-merge-patch+json")
+    return IMAGE
 
 
 def _claim_size(claim):

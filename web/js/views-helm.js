@@ -77,7 +77,7 @@ window.helmUpgrade = async (namespace, name) => {
     toast(r.detail, "ok"); closeModal(); setTimeout(viewHelm, 1500); } catch (e) { toast(e.message, "bad"); }
 };
 window.helmUninstall = async (namespace, name) => {
-  if (!confirm(`Uninstall ${name} from ${namespace}?\n\nThe Helm controller removes what the chart made. Volumes the chart marked to keep are left.`)) return;
+  if (!(await ask(`Uninstall ${name} from ${namespace}?\n\nThe Helm controller removes what the chart made. Volumes the chart marked to keep are left.`))) return;
   try { const r = await helmPost("/api/helm/uninstall", { namespace, name }); toast(r.detail, "ok"); closeModal(); setTimeout(viewHelm, 1500); }
   catch (e) { toast(e.message, "bad"); }
 };

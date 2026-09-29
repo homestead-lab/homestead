@@ -42,7 +42,7 @@ async function copyText(text) {
 async function readClipboard() {
   try { return navigator.clipboard?.readText ? await navigator.clipboard.readText() : null; } catch (_) { return null; }
 }
-const HOMESTEAD_VERSION = "2.8.230";
+const HOMESTEAD_VERSION = "2.8.231";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -337,14 +337,60 @@ window.setViewLayout = (page, redraw, layout) => {
 };
 window.modalBack = modalBack;
 window.pushModal = pushModal;
+/* Homestead's own confirm and prompt, in place of the browser's: a browser
+   can silence its dialogs for a page, and an installed app window may not
+   show them at all - then a button seemed to do nothing. These open above
+   any dialog already open, leave it as it is, and resolve to the answer:
+   ask() to true or false, askText() to the text or null. Escape cancels,
+   Enter answers. */
+const ASK_DANGER = /^(delete|remove|erase|force|stop|uninstall|disable|forget|unlink|disconnect|discard|cancel|clear|turning)/i;
+function askDialog(message, { title = "", ok = "", danger = null, input = null } = {}) {
+  return new Promise(resolve => {
+    const layer = document.createElement("div");
+    layer.className = "askdlg";
+    layer.setAttribute("role", "dialog");
+    layer.setAttribute("aria-modal", "true");
+    const risky = danger === null ? ASK_DANGER.test(String(message).trim()) : danger;
+    layer.innerHTML = `<div class="askbox">${title ? `<h3>${esc(title)}</h3>` : ""}<p class="askmsg"></p>
+      ${input ? `<input class="askin mono" autocomplete="off">` : ""}
+      <div class="row askbtns"><button class="btn" data-a="no">Cancel</button>
+        <button class="btn ${risky ? "danger" : "pri"}" data-a="yes">${esc(ok || (input ? "OK" : "Continue"))}</button></div></div>`;
+    layer.querySelector(".askmsg").textContent = String(message);
+    const field = layer.querySelector(".askin");
+    if (field) {
+      field.value = input.value || "";
+      field.placeholder = input.placeholder || "";
+    }
+    const done = answer => {
+      document.removeEventListener("keydown", key, true);
+      layer.remove();
+      resolve(input ? (answer ? field.value : null) : answer);
+    };
+    const key = event => {
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); done(false); }
+      else if (event.key === "Enter" && (field || document.activeElement?.closest?.(".askdlg"))) { event.preventDefault(); event.stopPropagation(); done(true); }
+    };
+    layer.addEventListener("click", event => {
+      const a = event.target.closest("[data-a]")?.dataset.a;
+      if (a) done(a === "yes");
+      else if (event.target === layer) done(false);
+    });
+    document.addEventListener("keydown", key, true);
+    document.body.appendChild(layer);
+    (field || layer.querySelector('[data-a="yes"]')).focus();
+  });
+}
+window.ask = (message, options = {}) => askDialog(message, options);
+window.askText = (message, value = "", options = {}) => askDialog(message, { ...options, input: { value, placeholder: options.placeholder } });
+
 /* The X and Escape are the only ways a person dismisses a modal, and either can
    land on unsaved work, so both ask a modal that has something at stake first.
    Code that closes a modal after finishing its job calls closeModal directly. */
-function dismissModal() {
+async function dismissModal() {
   const guard = window.__modalGuard;
   if (typeof guard === "function") {
     const question = guard();
-    if (question && !confirm(question)) return;
+    if (question && !(await ask(question))) return;
   }
   if (MODAL_STACK.length) return modalBack();
   closeModal();

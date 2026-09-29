@@ -82,26 +82,47 @@ function baselineHtml(r, where = "addons") {
 }
 window.baselineHtml = baselineHtml;
 
-window.baselineInstall = async () => {
-  const r = await api("/api/platform/baseline").catch(() => null);
-  const missing = (r?.parts || []).filter(p => p.missing);
-  if (!missing.length) return toast("All required components are installed", "ok");
-  const words = missing.map(p => p.id === "multus"
-    ? "Multus is added to the CNI configuration on every node. Running pods are not affected."
-    : p.id === "macvtap"
-      ? "macvtap runs on every node and lets VMs join the LAN through the node's network interface. The nodes' own network is not changed."
-      : "kube-vip runs on every node and announces each virtual IP from one node. Existing services are not changed.").join(" ");
-  if (!confirm(`Install ${missing.map(p => p.name).join(" and ")}?
+const BASELINE_WORDS = {
+  multus: "Added to the CNI configuration on every node. Running pods are not affected.",
+  macvtap: "Runs on every node and lets VMs join the LAN through the node's network interface. The nodes' own network is not changed.",
+  "kube-vip": "Runs on every node and announces each virtual IP from one node. Existing services are not changed.",
+};
 
-${words}`)) return;
+/* In Homestead's own dialog, not the browser's: a browser can silence its
+   confirm boxes, and then the button did nothing at all. */
+window.baselineInstall = async () => {
+  const open = window.childModal && !$("#modal").classList.contains("hidden") ? childModal : modal;
+  open("Install required components", '<div class="empty"><span class="spin2"></span> Checking what is missing…</div>');
+  const r = await api("/api/platform/baseline").catch(e => ({ error: e.message }));
+  const missing = (r?.parts || []).filter(p => p.missing);
+  if (r?.error || !missing.length) {
+    $("#mbody").innerHTML = (r?.error ? UI.callout("bad", "Could not check the components.", esc(r.error)) : UI.callout("ok", "All required components are installed.", ""))
+      + UI.actions(UI.cancel("Close"));
+    return;
+  }
+  $("#mbody").innerHTML = `<div class="ui-stack">
+    <ul class="ui-list">${missing.map(p => `<li><b>${esc(p.name)}</b> - ${esc(BASELINE_WORDS[p.id] || p.why)}</li>`).join("")}</ul>
+    <p class="dim xs">Installed through the Helm controller at the versions Homestead has tested; follow each in the job tray.</p>
+    <div id="bl_result"></div>
+    ${UI.actions(UI.cancel() + UI.button("Install", "baselineInstallGo()", { kind: "pri", id: "bl_go", attrs: 'data-need="admin"' }))}</div>`;
+  window.__baselineMissing = missing.map(p => p.id);
+};
+window.baselineInstallGo = async () => {
+  const go = $("#bl_go");
+  if (go) { go.disabled = true; go.textContent = "Installing…"; }
   try {
     const out = await api("/api/platform/baseline/install", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ parts: missing.map(p => p.id) }) });
+      body: JSON.stringify({ parts: window.__baselineMissing || [] }) });
+    $("#bl_result").innerHTML = (out.results || []).map(row => UI.callout(row.ok ? "ok" : "bad",
+      `${esc(row.id)}: ${row.ok ? "installing" : "not installed"}`, esc(row.detail || ""))).join("") || UI.callout("ok", esc(out.detail || "Done"), "");
+    if (go) { go.textContent = out.ok ? "Started" : "Try again"; go.disabled = out.ok; }
     toast(out.detail, out.ok ? "ok" : "bad");
     if (window.refreshOperations) refreshOperations(true);
     if ($("#addonsCard")) addonsPaint();
-    if (STATE.view === "network") viewNetworking();
-  } catch (e) { toast(e.message, "bad"); }
+  } catch (e) {
+    $("#bl_result").innerHTML = UI.callout("bad", "The install request failed.", esc(e.message));
+    if (go) { go.disabled = false; go.textContent = "Try again"; }
+  }
 };
 
 window.nfsRecovery = (state, expanded = false) => {
@@ -190,7 +211,7 @@ window.addonsPaint = async () => {
 };
 
 window.kubevirtEmulation = async enabled => {
-  if (enabled && !confirm("Allow KubeVirt's software fallback? VMs can then start on nodes without /dev/kvm, but run much more slowly there. Running VMs are not restarted.")) return;
+  if (enabled && !(await ask("Allow KubeVirt's software fallback? VMs can then start on nodes without /dev/kvm, but run much more slowly there. Running VMs are not restarted."))) return;
   try {
     const result = await api("/api/addons/kubevirt/emulation", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled }) });
@@ -200,7 +221,7 @@ window.kubevirtEmulation = async enabled => {
 };
 
 window.multusRepair = async () => {
-  if (!confirm("Correct Multus's k3s CNI directory? This rolls its node agents. Existing workloads are not restarted; new pod networking may briefly pause during the rollout.")) return;
+  if (!(await ask("Correct Multus's k3s CNI directory? This rolls its node agents. Existing workloads are not restarted; new pod networking may briefly pause during the rollout."))) return;
   try {
     const r = await api("/api/addons/multus/repair", { method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
     toast(r.detail, "ok");
@@ -213,14 +234,14 @@ window.addonInstall = async key => {
   let body = {};
   if (key === "kubevirt") {
     const s = await api("/api/addons").catch(() => ({}));
-    if (s.kvm_nowhere && !confirm("No node has hardware virtualisation (/dev/kvm), so KubeVirt will emulate: VMs work, but many times slower. Install anyway?")) return;
+    if (s.kvm_nowhere && !(await ask("No node has hardware virtualisation (/dev/kvm), so KubeVirt will emulate: VMs work, but many times slower. Install anyway?"))) return;
     body = {};
   } else if (key === "kube-vip") {
     const s = await api("/api/addons").catch(() => ({}));
     const where = s.kube_vip?.interface ? `It announces VIPs on ${s.kube_vip.interface}, the interface each node's default route uses.`
       : "The nodes did not agree on one network interface (or the node probe has not said), so kube-vip finds it itself.";
-    if (!confirm(`Install kube-vip? ${a.needs} ${where}`)) return;
-  } else if (!confirm(`Install ${a.name}? ${a.needs}`)) return;
+    if (!(await ask(`Install kube-vip? ${a.needs} ${where}`))) return;
+  } else if (!(await ask(`Install ${a.name}? ${a.needs}`))) return;
   try {
     const r = await api(`/api/addons/${key}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(r.detail || `${a.name} is being installed`, "ok");

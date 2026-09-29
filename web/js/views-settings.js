@@ -438,9 +438,9 @@ window.namespaceCreate = async () => {
 };
 
 window.namespaceDelete = async name => {
-  const typed = prompt(`Delete the namespace ${name}? It is empty, and this cannot be undone.
+  const typed = (await askText(`Delete the namespace ${name}? It is empty, and this cannot be undone.
 
-Type its name to confirm:`);
+Type its name to confirm:`));
   if (typed === null) return;
   try {
     await api("/api/namespaces/delete", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -634,7 +634,7 @@ window.sambaToggle = async box => {
       <div class="f">${vipPicker("smb", own ? own.ip : (choices.free[0] || ""), choices)}</div>
       <div class="row" style="margin-top:14px"><button class="btn pri" onclick="sambaInstallGo()">Install</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
   }
-  if (!on && !confirm("Stop Samba? Every share stops being served until it is switched on again; their volumes, settings and passwords are kept.")) {
+  if (!on && !(await ask("Stop Samba? Every share stops being served until it is switched on again; their volumes, settings and passwords are kept."))) {
     box.checked = true; return;
   }
   box.disabled = true;
@@ -690,7 +690,7 @@ window.nfsToggle = async box => {
       <div class="f">${vipPicker("nfs", own ? own.ip : (choices.free[0] || ""), choices)}</div>
       <div class="modalactions"><button class="btn pri" onclick="nfsInstallGo()">Install NFS server</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
   }
-  if (!on && !confirm("Stop NFS? Exported shares become unavailable until it is switched on again. Their definitions and volumes are kept.")) {
+  if (!on && !(await ask("Stop NFS? Exported shares become unavailable until it is switched on again. Their definitions and volumes are kept."))) {
     box.checked = true; return;
   }
   box.disabled = true;
