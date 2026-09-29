@@ -80,8 +80,10 @@ window.objectStoreSetup = () => modal("Set up backup storage", `
     and moving a workload to another cluster, both read and write here.</p>
   <div class="f2"><div class="f"><label>Size (GB) ${tip("Holds every volume backup this cluster keeps. Longhorn backups are incremental, so this is usually far smaller than the volumes themselves.")}</label>
     <input id="os_size" type="number" min="5" max="16384" value="100"></div>
-    <div class="f"><label>LAN address ${tip("Another cluster reads backups over this address. Left blank, the store shares Homestead's address and answers on port 9000 there; give it one of its own to keep its traffic apart.")}</label>
-      <input id="os_ip" type="text" class="mono" placeholder="Homestead's shared address" data-ipam></div></div>
+    <div class="f"><label>LAN address ${tip("Another cluster reads backups over this address. Left blank, the store shares Homestead's address and answers on its own port there; give it one of its own to keep its traffic apart.")}</label>
+      <input id="os_ip" type="text" class="mono" placeholder="Homestead's shared address" data-ipam></div>
+    <div class="f"><label>Port ${tip("Where the store answers. Pick another if an app on that address already uses 9000; the next port up is its console.")}</label>
+      <input id="os_port" type="number" min="1" max="65534" value="9000" class="mono"></div></div>
   <div class="note"><b>It shares fate with what it protects.</b> Storage inside this cluster is the right
     place to stage a migration and the wrong place for your only copy. Keep anything you cannot lose
     somewhere else as well.</div>
@@ -90,7 +92,7 @@ window.objectStoreSetup = () => modal("Set up backup storage", `
     <button class="btn" onclick="closeModal()">Cancel</button></div>`);
 
 window.objectStoreDeploy = async () => {
-  const body = { size_gb: +$("#os_size").value || 100, lb_ip: $("#os_ip").value.trim() };
+  const body = { size_gb: +$("#os_size").value || 100, lb_ip: $("#os_ip").value.trim(), port: +($("#os_port")?.value || 0) || undefined };
   try {
     const result = await api("/api/objectstore/deploy", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });

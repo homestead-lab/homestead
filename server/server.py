@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.237")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.238")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -5119,9 +5119,19 @@ OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
 MOVE.bind(kget, ksend, DEFAULT_NS, HOMESTEAD_VERSION)
 # Linked clusters: each knows the others by the address they reach it at,
 # which is its own VIP unless an admin says otherwise.
+def fleet_address():
+    """Homestead's web page on its VIP where it has one; else the address
+    it started with (on k3s, a node's own)."""
+    try:
+        url = SELF_ADDRESS.report(cached("network", 5, NETWORK.inventory)).get("url") or ""
+    except Exception:
+        url = ""
+    return url or (f"http://{LB_IP}:8088" if LB_IP else "")
+
+
 FLEET.bind(kget, ksend, DEFAULT_NS, HOMESTEAD_VERSION,
            site=lambda: (cached("settings", 15, get_app_settings) or {}).get("site_name", ""),
-           address=lambda: f"http://{LB_IP}:8088" if LB_IP else "")
+           address=fleet_address, earlier=lambda: (f"http://{LB_IP}:8088",) if LB_IP else ())
 MOVE.FLEET = FLEET
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
 def _resolve_storage_class():
@@ -5371,7 +5381,17 @@ def installer_vip(vip):
     moved = SELF_ADDRESS.move(vip)
     for key in ("network", "ov"):
         _cache.pop(key, None)
+    _follow_fleet_address()
     return "; ".join(f"{s['label']}: {s['action']} ({s['detail']})" for s in moved["steps"]) or f"{vip} reserved"
+
+
+def _follow_fleet_address():
+    """Linked clusters reach this one on its VIP once it is there."""
+    try:
+        return FLEET.follow_address()
+    except Exception as error:
+        print(f"linked clusters: were not told the new address: {str(error)[:160]}", flush=True)
+        return ""
 
 
 BASELINE.vip_setup = installer_vip
@@ -8457,7 +8477,7 @@ class H(BaseHTTPRequestHandler):
                 return self._move(lambda: MOVE.readiness(b.get("name")))
             if p == "/api/move/clusters/storage":
                 return self._move(lambda: MOVE.setup_storage(b.get("name"), b.get("size_gb") or 100, b.get("lb_ip") or "",
-                                                             b.get("vip_mode") or ""))
+                                                             b.get("vip_mode") or "", int(b.get("port") or 0)))
             if p == "/api/cluster/remove-node":
                 return self._move(lambda: ONBOARD.remove_node(b.get("node"), bool(b.get("accept_loss")),
                                                               bool(b.get("gone"))))
@@ -8493,10 +8513,12 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, OBJECTS.deploy(b))
             if p == "/api/objectstore/transfers":
                 return self._move(lambda: OBJECTS.set_transfers(bool(b.get("allow")), int(b.get("size_gb") or 100),
-                                                                str(b.get("lb_ip") or ""), str(b.get("vip_mode") or "")))
+                                                                str(b.get("lb_ip") or ""), str(b.get("vip_mode") or ""),
+                                                                int(b.get("port") or 0)))
             if p == "/api/move/clusters/transfers":
                 return self._move(lambda: MOVE.transfers(b.get("name"), b.get("allow"), b.get("size_gb") or 100,
-                                                         b.get("lb_ip") or "", b.get("vip_mode") or ""))
+                                                         b.get("lb_ip") or "", b.get("vip_mode") or "",
+                                                         int(b.get("port") or 0)))
             if p == "/api/objectstore/longhorn":
                 return self._send(200, OBJECTS.point_longhorn(replace=bool(b.get("replace", True))))
             if p == "/api/objectstore/remove":
@@ -8755,6 +8777,12 @@ class H(BaseHTTPRequestHandler):
                             result["detail"] += "; Longhorn's backup target follows the backup storage"
                         except Exception as error:
                             result["detail"] += f"; Longhorn's backup target was not changed: {str(error)[:120]}"
+                    # Linked clusters reach this one at its new VIP, where it was on the old.
+                    try:
+                        if FLEET.follow_address((f"http://{str(b.get('old') or '').strip()}:{SELF_ADDRESS.WEB_PORT}",)):
+                            result["detail"] += "; linked clusters were told the new address"
+                    except Exception:
+                        pass
                 return self._send(200, result)
             if p == "/api/self/address/plan":
                 return self._send(200, SELF_ADDRESS.plan(str(b.get("vip") or "").strip()))
@@ -8769,6 +8797,7 @@ class H(BaseHTTPRequestHandler):
                         result["default_error"] = str(error)
                 for key in ("network", "ov"):
                     _cache.pop(key, None)
+                result["fleet_address"] = _follow_fleet_address()
                 return self._send(200, result)
             if p == "/api/welcome/done":
                 SHARED.write_json(os.path.join(DATA_DIR, "welcome.json"),
