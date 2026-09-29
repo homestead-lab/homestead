@@ -124,6 +124,14 @@ async function viewSettings() {
         <div class="note"><b>No silent upgrades.</b> Every install still shows the exact current and candidate image and requires an operator acknowledgement. Semantic-version discovery stays within the current major release.</div>
       </section>
 
+      <section class="card flat settings-wide" data-tab="cluster">
+        <div class="settings-card-head"><div><div class="ctitle">Host consoles</div>
+          <div class="csub">Install, update or disable each host's local status screen from Homestead</div></div>
+          <button class="btn sm" onclick="loadHostConsoles()">Refresh</button></div>
+        <p class="dim small">Console updates are bundled with Homestead. After updating the application, use Install / update here to apply its console to a host. Current console and login sessions stay open; changes appear after logout or reboot. Harvester keeps its native console.</p>
+        <div id="hostConsoles"><div class="empty small"><span class="spin2"></span></div></div>
+      </section>
+
       <section class="card flat" data-tab="hardware">
         <div class="settings-card-head"><div><div class="ctitle">Hardware features</div><div class="csub">Reusable passthrough paths and automatic host detection</div></div>
           <div class="row">${can("operator") ? '<button class="btn sm" onclick="hardwareRescan(this)" title="Look for devices plugged in since the last check">Rescan hosts</button>' : ""}
@@ -214,7 +222,36 @@ async function viewSettings() {
   selfHealthPaint();
   // The UniFi card needs the IPAM record, which Settings does not otherwise load.
   api("/api/ipam").then(data => { STATE.data.ipam = data; const host = $("#unifiCard"); if (host) host.outerHTML = ipamUnifiCard(); }).catch(() => {});
+  loadHostConsoles();
 }
+
+/* Host console management uses the release bundled in the container. */
+async function loadHostConsoles() {
+  const host = $("#hostConsoles");
+  if (!host) return;
+  if (!can("admin")) { host.innerHTML = '<div class="dim small">An administrator manages host consoles.</div>'; return; }
+  try {
+    const data = await api("/api/host-console");
+    if (host !== $("#hostConsoles")) return;
+    host.innerHTML = `<p class="small">Bundled console: <b>v${esc(data.version)}</b></p>` + data.nodes.map(n =>
+      `<div class="settings-list-row"><div><b>${esc(n.name)}</b><div class="dim xs">${esc(n.detail || "Not checked yet")}${n.checked_at ? ` · ${esc(n.checked_at)}` : ""}</div></div>
+       <div class="row">${n.native ? '<span class="pill neutral">Harvester console</span>' :
+         `<button class="btn sm" ${n.ready ? "" : "disabled"} onclick="hostConsoleAction(${jsq(n.name)},'inspect',this)">Check</button>
+          <button class="btn sm pri" ${n.ready ? "" : "disabled"} onclick="hostConsoleAction(${jsq(n.name)},'enable',this)">Install / update</button>
+          <button class="btn sm" ${n.ready ? "" : "disabled"} onclick="hostConsoleAction(${jsq(n.name)},'disable',this)">Disable</button>`}</div></div>`).join("");
+  } catch (e) { host.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; }
+}
+
+window.hostConsoleAction = async (node, action, button) => {
+  if (button) button.disabled = true;
+  try {
+    const result = await api("/api/host-console", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node, action }) });
+    if (window.noteOperation) noteOperation(result.operation);
+    toast("Host console job queued; follow it in Activity, then refresh this panel", "ok");
+  } catch (e) { toast(e.message, "bad"); }
+  finally { if (button) button.disabled = false; }
+};
 
 /* ---------------- Homestead's own redundancy ----------------
    More than one copy: a node failure leaves another already serving, and

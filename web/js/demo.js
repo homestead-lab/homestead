@@ -767,11 +767,16 @@
         { name: "harvester-node3", ok: false, current: false, pods_wl: 1, score: 0, cpu_after: 24, mem_after: 49,
           hardware: {}, temp_c: 36, why: ["no Intel/AMD iGPU on this host"] }] } : {
       ok: true, blockers: [], cluster: "shed", kind: "container", name: "frigate",
+      storage_class: JSON.parse(init.body || "{}").storage_class || "longhorn-r2", storage_classes: ["longhorn-r2", "longhorn-r3"],
       namespace: "lab", joined: false, will_run: true, addresses: ["frigate on 192.0.2.242"],
       warnings: ["this cluster's Longhorn backup target changes from (none) to s3://homestead-backups@us-east-1/; backups already written to the old one stay there"],
       claims: [{ claim: "frigate-config", size_gb: 10, access_mode: "ReadWriteOnce",
         volume_mode: "Filesystem", backing_image: "" }], total_gb: 10 },
     "/api/move/start": { id: "d1", status: "running" },
+    "/api/host-console": { version: "2.8.244", nodes: [
+      { name: "node-1", ready: true, enabled: true, version: "2.8.243", current: false, detail: "Installed 2.8.243; update available" },
+      { name: "node-2", ready: true, enabled: true, current: true, version: "2.8.244", detail: "Installed 2.8.244; matches this release" },
+      { name: "node-3", ready: true, native: true, detail: "Native Harvester console" }] },
     "/api/compose/preview": () => ({ capacity_token: "demo-compose-review", capacity: {
       status: "fits", blocked: false, requires_confirmation: true, pods: 3,
       services: ["broker", "db", "webserver"].map(name => ({ name, replicas: 1, pod_request_gb: 0.25, pod_memory_gb: 0.5, pod_cpu_request_percent: 10 })),

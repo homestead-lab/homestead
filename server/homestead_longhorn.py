@@ -630,10 +630,15 @@ def set_backup_target(url, secret="", poll="5m", keys=None):
     return {"ok": True, "url": url}
 
 
-def backups(volume=None):
+def backups(volume=None, strict=False):
     try:
-        items = kget(f"{API}/namespaces/{LHNS}/backups").get("items", [])
+        listing = kget(f"{API}/namespaces/{LHNS}/backups")
+        if strict and (not isinstance(listing, dict) or not isinstance(listing.get("items"), list)):
+            raise ValueError("backup inventory is incomplete; retry after Longhorn responds")
+        items = listing.get("items", [])
     except Exception:
+        if strict:
+            raise
         return []
     out = []
     for b in items:
@@ -668,6 +673,65 @@ def create_backup(volume, name=None):
     _bust("lhbackups")
     return {"ok": True, "backup": out.get("metadata", {}).get("name", ""),
             "snapshot": snap, "volume": volume}
+
+
+def move_snapshot_error(snapshot):
+    """Longhorn reports attachment waits as errors while creating a snapshot."""
+    status = (snapshot or {}).get("status") or {}
+    if status.get("markRemoved") or (snapshot or {}).get("metadata", {}).get("deletionTimestamp"):
+        return "Snapshot was removed"
+    error = str(status.get("error") or "")
+    if (not status.get("creationTime") and
+            error.startswith("failed to take snapshot because the volume engine ") and
+            error.endswith(". Waiting for the volume to be attached")):
+        return ""
+    return error
+
+
+def ensure_move_backup(volume, snapshot, backup):
+    """Advance a persisted migration request without waiting in an HTTP call."""
+    if not all(_valid_k8s_name(n) for n in (volume, snapshot, backup)):
+        raise ValueError("migration backup identity is invalid")
+    path = f"{API}/namespaces/{LHNS}/backups/{backup}"
+    existing = _get_or_none(path)
+    if existing:
+        if ((existing.get("spec") or {}).get("snapshotName") != snapshot or
+                (existing.get("metadata", {}).get("labels") or {}).get("backup-volume") != volume):
+            raise ValueError("migration backup exists with a different snapshot or volume")
+        return {"backup": backup}
+    snap = _get_or_none(f"{API}/namespaces/{LHNS}/snapshots/{snapshot}")
+    if not snap:
+        try:
+            create_snapshot(volume, snapshot)
+        except urllib.error.HTTPError as error:
+            if error.code != 409:
+                raise
+        return {"backup": backup, "pending": True}
+    if (snap.get("spec") or {}).get("volume") != volume:
+        raise ValueError("migration snapshot belongs to a different volume")
+    status = snap.get("status") or {}
+    problem = move_snapshot_error(snap)
+    if problem:
+        raise ValueError(f"migration snapshot is unavailable: {problem}; retry the move for a fresh snapshot")
+    if not status.get("readyToUse"):
+        return {"backup": backup, "pending": True}
+    if not backup_target().get("configured"):
+        raise ValueError("no backup target configured")
+    body = {"apiVersion": "longhorn.io/v1beta2", "kind": "Backup",
+            "metadata": {"name": backup, "namespace": LHNS,
+                         "labels": {"backup-volume": volume, NAMES.key("managed"): "true"}},
+            "spec": {"snapshotName": snapshot, "labels": {"homestead": "migration"}}}
+    try:
+        ksend("POST", f"{API}/namespaces/{LHNS}/backups", body)
+    except urllib.error.HTTPError as error:
+        if error.code != 409:
+            raise
+        existing = kget(path)
+        if ((existing.get("spec") or {}).get("snapshotName") != snapshot or
+                (existing.get("metadata", {}).get("labels") or {}).get("backup-volume") != volume):
+            raise ValueError("migration backup exists with a different snapshot or volume")
+    _bust("lhbackups")
+    return {"backup": backup}
 
 
 K8S_LABEL = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
@@ -761,7 +825,16 @@ def restore_backup(cfg):
     access_mode = str(cfg.get("access_mode") or "ReadWriteOnce")
     if access_mode not in ("ReadWriteOnce", "ReadWriteMany"):
         raise ValueError("access mode must be ReadWriteOnce or ReadWriteMany")
-    replicas = int(cfg.get("replicas", 2) or 2)
+    base_name = str(cfg.get("storage_class") or STORAGE_CLASS)
+    if not _valid_k8s_name(base_name):
+        raise ValueError("storage class name is invalid")
+    base = kget(f"/apis/storage.k8s.io/v1/storageclasses/{base_name}")
+    if base.get("provisioner") != "driver.longhorn.io":
+        raise ValueError(f"storage class {base_name} is not managed by Longhorn")
+    parameters = dict(base.get("parameters", {}) or {})
+    if cfg.get("storage_class") and any(parameters.get(k) for k in ("fromBackup", "backingImage")):
+        raise ValueError("choose a regular Longhorn storage class")
+    replicas = int(cfg.get("replicas") or (parameters.get("numberOfReplicas", 2) if cfg.get("storage_class") else 2))
     if replicas < 1 or replicas > 5:
         raise ValueError("replicas must be between 1 and 5")
     size_gb = int(cfg.get("size_gb") or plan["minimum_size_gb"])
@@ -770,10 +843,6 @@ def restore_backup(cfg):
 
     item = _backup(backup)
     status, url, _ = _restore_source(item)
-    base = kget(f"/apis/storage.k8s.io/v1/storageclasses/{STORAGE_CLASS}")
-    if base.get("provisioner") != "driver.longhorn.io":
-        raise ValueError(f"storage class {STORAGE_CLASS} is not managed by Longhorn")
-    parameters = dict(base.get("parameters", {}) or {})
     volume_mode = str(cfg.get("volume_mode") or "Filesystem")
     if volume_mode not in ("Filesystem", "Block"):
         raise ValueError("volume mode must be Filesystem or Block")
@@ -781,7 +850,8 @@ def restore_backup(cfg):
     # VM-oriented class may say migratable=true, which is valid only for block
     # volumes. A VM disk is one, and one built on a Harvester image needs that
     # image named, since its backup holds only what changed on top of it.
-    migratable = bool(cfg.get("migratable")) and volume_mode == "Block"
+    migratable = (str(parameters.get("migratable", "false")).lower() == "true"
+                  if cfg.get("storage_class") else bool(cfg.get("migratable"))) and volume_mode == "Block"
     backing_image = str(cfg.get("backing_image") or "")
     parameters.update(fromBackup=url, numberOfReplicas=str(replicas),
                       migratable="true" if migratable else "false",
@@ -790,6 +860,10 @@ def restore_backup(cfg):
         parameters["backingImage"] = backing_image
     plain = (volume_mode, migratable, backing_image) == ("Filesystem", False, "")
     extra = "" if plain else f"{volume_mode}|{migratable}|{backing_image}"
+    if cfg.get("storage_class"):
+        extra += "|" + base_name + "|" + json.dumps({"parameters": parameters,
+                    "mountOptions": base.get("mountOptions", []),
+                    "allowedTopologies": base.get("allowedTopologies", [])}, sort_keys=True)
     class_name = _restore_class_name(url, replicas, extra)
     storage_class = {
         "apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
@@ -797,7 +871,7 @@ def restore_backup(cfg):
                      "labels": {"app.kubernetes.io/managed-by": "homestead",
                                 "homestead.io/restore-class": "true"},
                      "annotations": {"homestead.io/source-backup": backup,
-                                     "homestead.io/base-storage-class": STORAGE_CLASS}},
+                                     "homestead.io/base-storage-class": base_name}},
         "provisioner": "driver.longhorn.io", "allowVolumeExpansion": True,
         "reclaimPolicy": "Delete", "volumeBindingMode": "Immediate",
         "parameters": parameters,
@@ -810,6 +884,8 @@ def restore_backup(cfg):
     if existing_class:
         if (existing_class.get("provisioner") != "driver.longhorn.io" or
                 (existing_class.get("parameters", {}) or {}) != parameters or
+                (existing_class.get("mountOptions") or []) != (storage_class.get("mountOptions") or []) or
+                (existing_class.get("allowedTopologies") or []) != (storage_class.get("allowedTopologies") or []) or
                 (existing_class.get("metadata", {}).get("labels", {}) or {}).get(
                     "app.kubernetes.io/managed-by") != "homestead"):
             raise ValueError(f"restore storage class {class_name} exists with different settings")

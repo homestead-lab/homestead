@@ -1956,7 +1956,9 @@ window.clusterInventory = report => {
 
 /* Before anything stops: where it lands, what address it gets, and every
    reason it would fail or surprise someone - asked of both clusters. */
+let MOVE_PLAN_SEQUENCE = 0;
 window.moveReview = (cluster, kind, name) => {
+  ++MOVE_PLAN_SEQUENCE;
   childModal(`Move ${name} from ${cluster}`, `
   <p class="muted small">Stops ${esc(name)} on ${esc(cluster)}, backs up its volumes to the shared backup
     storage, restores them here, and starts it here. The original stays on ${esc(cluster)}, stopped,
@@ -1968,6 +1970,8 @@ window.moveReview = (cluster, kind, name) => {
         <option value="automatic">Next free pool address</option>
         <option value="manual">A specific address</option></select></div>`}</div>
   <div class="f" id="mv_ip_wrap" hidden><label>Specific address</label><input id="mv_ip" class="mono" placeholder="192.0.2.245" data-ipam></div>
+  <div class="f"><label>Destination storage class</label><select id="mv_sc" disabled><option value="">Loading destination classes…</option></select>
+    <div class="dim xs">Restored volumes inherit this class's replica count, disk tags and other storage settings.</div></div>
   <div id="mv_plan"></div>
   <div class="row" style="margin-top:16px">
     <button class="btn" onclick="movePlan(${jsq(cluster)},${jsq(kind)},${jsq(name)})">Check again</button>
@@ -1975,26 +1979,45 @@ window.moveReview = (cluster, kind, name) => {
       onclick="moveStart(${jsq(cluster)},${jsq(kind)},${jsq(name)})">Start move</button>
     <button class="btn" onclick="modalBack()">Cancel</button></div>`);
   movePlan(cluster, kind, name);
+  for (const id of ["#mv_ns", "#mv_ip"]) {
+    const field = $(id);
+    if (field) field.oninput = () => { ++MOVE_PLAN_SEQUENCE; $("#mv_go").disabled = true; };
+  }
 };
 
 window.moveAddressMode = value => {
+  ++MOVE_PLAN_SEQUENCE;
+  if ($("#mv_go")) $("#mv_go").disabled = true;
   const wrap = $("#mv_ip_wrap");
   if (wrap) wrap.hidden = value !== "manual";
 };
 
 const moveBody = (cluster, kind, name) => ({
   cluster, kind, name, namespace: $("#mv_ns")?.value.trim() || "lab",
-  address_mode: $("#mv_mode")?.value || "shared", address: $("#mv_ip")?.value.trim() || "" });
+  address_mode: $("#mv_mode")?.value || "shared", address: $("#mv_ip")?.value.trim() || "",
+  storage_class: $("#mv_sc")?.value || "" });
 
 window.movePlan = async (cluster, kind, name) => {
   const host = $("#mv_plan"), go = $("#mv_go");
   if (!host) return;
+  const sequence = ++MOVE_PLAN_SEQUENCE;
   host.innerHTML = '<div class="empty"><span class="spin2"></span> asking both clusters…</div>';
   if (go) go.disabled = true;
   try {
     const plan = await api("/api/move/plan", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(moveBody(cluster, kind, name)) });
+    if (sequence !== MOVE_PLAN_SEQUENCE || $("#mv_plan") !== host) return;
     const volumes = plan.claims || [];
+    const classes = $("#mv_sc");
+    if (classes && plan.storage_classes) {
+      const selected = classes.value || plan.storage_class;
+      classes.innerHTML = plan.storage_classes.map(c => `<option value="${esc(c)}" ${c === selected ? "selected" : ""}>${esc(c)}</option>`).join("");
+      classes.disabled = !plan.storage_classes.length;
+      classes.onchange = () => { if (go) go.disabled = true; movePlan(cluster, kind, name); };
+      // A cluster without Homestead's old default can still choose another
+      // valid class. Review the actual selection before enabling Start.
+      if (classes.value && classes.value !== plan.storage_class) return movePlan(cluster, kind, name);
+    }
     const fix = (plan.fixes || [])[0];
     host.innerHTML = `
       ${plan.blockers?.length ? `<div class="note bad"><b>This move would fail.</b><ul>${plan.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>
@@ -2008,9 +2031,10 @@ window.movePlan = async (cluster, kind, name) => {
         ${plan.addresses?.length ? `<br>Reachable here at ${plan.addresses.map(esc).join(", ")}.` : ""}
         ${plan.will_run ? "" : `<br>It is stopped on ${esc(cluster)}, and will arrive stopped.`}</div>` : ""}
       ${volumes.length ? `<div class="drow"><div class="dl">Volumes</div><div class="dv mono xs">${volumes.map(c =>
-        `${esc(c.claim)} · ${c.size_gb} GB${c.volume_mode === "Block" ? " · disk" : ""}`).join("<br>")}</div></div>` : ""}`;
+        `${esc(c.claim)} · ${c.size_gb} GB${c.volume_mode === "Block" ? " · disk" : ""}`).join("<br>")}<br>Storage class: ${esc(plan.storage_class || "cluster default")}</div></div>` : ""}`;
     if (go) go.disabled = !plan.ok;
   } catch (e) {
+    if (sequence !== MOVE_PLAN_SEQUENCE || $("#mv_plan") !== host) return;
     host.innerHTML = `<div class="note bad">${esc(e.message)}</div>`;
   }
 };
@@ -2040,7 +2064,7 @@ function movesHtml(moves) {
       return `<div class="${state}"><i></i><span><b>${esc(MOVE_PHASE_WORDS[phase] || phase)}</b></span></div>`;
     }).join("");
     const actions = [
-      m.status === "failed" ? `<button class="btn sm" data-need="admin" onclick="moveAct('retry',${jsq(m.id)})">Retry</button>` : "",
+      m.status === "failed" ? `<button class="btn sm" data-need="admin" onclick="moveAct('retry',${jsq(m.id)})">${m.phase === "backing-up" ? "Retry failed backups" : "Retry"}</button>` : "",
       m.status === "succeeded" && !m.source_removed
         ? `<button class="btn sm" data-need="admin" onclick="moveFinish(${jsq(m.id)},${jsq(m.name)},${jsq(m.cluster)})">Remove from ${esc(m.cluster)}</button>` : "",
       ["running", "failed", "succeeded"].includes(m.status) && !m.source_removed

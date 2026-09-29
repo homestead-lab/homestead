@@ -67,6 +67,17 @@ sudo sh install.sh --console
 sudo sh install.sh --no-console
 ```
 
+Administrators can also manage each host under **Settings → Cluster → Host
+consoles**. **Check** reads its installed console; **Install / update** enables
+the console bundled with the running Homestead release, and **Disable** restores
+the normal login screen. Each action has a job in Activity. Refresh the panel
+after it finishes. Harvester hosts keep their native console.
+
+Updating Homestead through the web supplies the new console to these controls.
+Apply **Install / update** to each host afterwards; the container update does
+not automatically change the host's console. Previously checked hosts show
+**update available** when their installed console differs from the new bundle.
+
 Changes take effect on the next boot or logout, so installation does not
 interrupt a logged-in administrator. The console needs systemd, agetty and
 Python 3 with curses; the installer installs Python if needed. It reads local

@@ -27,6 +27,7 @@ RUN apk add --no-cache smartmontools rsync \
     && chown -R homestead:homestead /data
 
 COPY --chown=homestead:homestead server/*.py /srv/
+COPY --chown=homestead:homestead scripts/host-console.py scripts/install-console.sh /srv/host-console/
 # The licence and the notices for what the image carries travel with it.
 COPY --chown=homestead:homestead LICENSE THIRD_PARTY_NOTICES.md /srv/
 COPY --chown=homestead:homestead licenses /srv/licenses/

@@ -97,7 +97,7 @@ def _public(move):
     return {key: move.get(key) for key in (
         "id", "cluster", "kind", "name", "source_namespace", "namespace", "status", "phase",
         "progress", "message", "created_at", "updated_at", "finished_at", "previous_target",
-        "source_removed", "address", "address_mode")} | {
+        "source_removed", "address", "address_mode", "storage_class")} | {
         # Nothing has stopped on the source yet: undoing it is a cancel, not a
         # "put back".
         "source_stopped": bool((move.get("flags") or {}).get("quiesced")),
@@ -210,7 +210,14 @@ def _plan_service(service, definition, namespace, name, mode, address, chosen=No
 
 
 # -------------------------------------------------------------------- the plan
-def plan(cluster, kind, name, namespace=None, address_mode="shared", address=""):
+def storage_choices():
+    items = kget("/apis/storage.k8s.io/v1/storageclasses").get("items", [])
+    return sorted(c["metadata"]["name"] for c in items
+                  if c.get("provisioner") == "driver.longhorn.io"
+                  and not any((c.get("parameters") or {}).get(k) for k in ("fromBackup", "backingImage")))
+
+
+def plan(cluster, kind, name, namespace=None, address_mode="shared", address="", storage_class=""):
     """Everything that would stop a move, or surprise someone, before it starts.
 
     Asks both clusters, and reports blockers and warnings separately: a blocker
@@ -262,9 +269,12 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="")
                 f"{LH_API}/namespaces/{LHNS}/backingimages/{claim['backing_image']}"):
             warnings.append(f"disk {claim['claim']} is built on the {claim['backing_image']} image, "
                             "which will be restored from its backup first")
-    base = _get(f"/apis/storage.k8s.io/v1/storageclasses/{LH.STORAGE_CLASS}")
+    chosen_class = storage_class or LH.STORAGE_CLASS
+    base = _get(f"/apis/storage.k8s.io/v1/storageclasses/{urllib.parse.quote(chosen_class, safe='')}")
     if not base or base.get("provisioner") != "driver.longhorn.io":
-        blockers.append(f"storage class {LH.STORAGE_CLASS} is missing here or is not Longhorn")
+        blockers.append(f"storage class {chosen_class} is missing here or is not Longhorn")
+    elif any((base.get("parameters") or {}).get(k) for k in ("fromBackup", "backingImage")):
+        blockers.append("choose a regular Longhorn storage class, not an existing restore or image class")
 
     selector = definition.get("node_selector") or {}
     if selector:
@@ -311,6 +321,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="")
         "cluster": cluster, "kind": kind, "name": name, "namespace": namespace,
         "joined": joined, "will_run": bool(will_run), "addresses": addresses,
         "versions": versions,
+        "storage_class": chosen_class, "storage_classes": storage_choices(),
         "claims": [{k: c.get(k) for k in ("claim", "size_gb", "access_mode", "volume_mode",
                                           "backing_image")}
                    for c in definition.get("claims", [])],
@@ -318,9 +329,9 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="")
     }
 
 
-def start(cluster, kind, name, namespace=None, address_mode="shared", address=""):
+def start(cluster, kind, name, namespace=None, address_mode="shared", address="", storage_class=""):
     namespace = namespace or NS
-    checked = plan(cluster, kind, name, namespace, address_mode, address)
+    checked = plan(cluster, kind, name, namespace, address_mode, address, storage_class)
     if not checked["ok"]:
         raise ValueError(checked["blockers"][0])
     active = [m for m in _read() if m.get("status") == "running"
@@ -332,6 +343,7 @@ def start(cluster, kind, name, namespace=None, address_mode="shared", address=""
         "id": secrets.token_hex(6), "cluster": cluster, "kind": kind, "name": name,
         "source_namespace": definition.get("namespace", ""), "namespace": namespace,
         "address_mode": address_mode, "address": address,
+        "storage_class": storage_class,
         "status": "running", "phase": "joining", "progress": 1,
         "message": "Queued", "claims": [dict(c, backup="", created=False, restored=False)
                                         for c in definition.get("claims", [])],
@@ -418,18 +430,20 @@ def _quiescing(move):
 
 def _backing_up(move):
     flags = move.setdefault("flags", {})
-    if not flags.get("backed_up"):
-        made = _source_action(move, "backup")
-        by_claim = {row["claim"]: row["backup"] for row in made.get("backups", [])}
-        for claim in move["claims"]:
-            claim["backup"] = by_claim.get(claim["claim"], claim.get("backup", ""))
-        flags["backed_up"] = True
+    # A new move may follow a dismissed/cleared attempt while the source still
+    # remembers its backups. Repair failed references on the first pass too.
+    made = _source_action(move, "backup", retry_failed=bool(flags.get("retry_backups")) or not flags.get("backed_up"))
+    by_claim = {row["claim"]: row["backup"] for row in made.get("backups", [])}
+    for claim in move["claims"]:
+        claim["backup"] = by_claim.get(claim["claim"], claim.get("backup", ""))
+    flags["backed_up"] = True
+    flags.pop("retry_backups", None)
     rows = _source_status(move).get("backups", [])
     for row in rows:
         state = str(row.get("state", "")).lower()
         if state in ("error", "failed") or row.get("error"):
             raise ValueError(f"backup of {row['claim']} failed on {move['cluster']}: "
-                             f"{row.get('error') or state}")
+                             f"{row.get('error') or state}. Retry the move to take a fresh snapshot; completed backups are kept")
         image = row.get("image") or {}
         if str(image.get("state", "")).lower() in ("error", "failed") or image.get("error"):
             raise ValueError(f"backup of the {row.get('backing_image')} image failed: "
@@ -530,7 +544,7 @@ def _ensure_image(move, name):
         "apiVersion": "longhorn.io/v1beta2", "kind": "BackingImage",
         "metadata": {"name": name, "namespace": LHNS,
                      "annotations": {NAMES.key(MOVE_ID): move["id"],
-                                     HARVESTER_IMAGE_CLASS: _image_class()}},
+                                     HARVESTER_IMAGE_CLASS: move.get("storage_class") or _image_class()}},
         "spec": {"sourceType": "restore",
                  "sourceParameters": {"backup-url": url, "concurrent-limit": "2"}}})
 
@@ -581,7 +595,9 @@ def _restoring(move):
         LH.restore_backup({
             "backup": claim["backup"], "namespace": namespace, "name": claim["claim"],
             "size_gb": claim.get("size_gb"), "access_mode": claim.get("access_mode"),
-            "replicas": claim.get("replicas") or 2, "volume_mode": claim.get("volume_mode"),
+            "storage_class": move.get("storage_class") or "",
+            "replicas": None if move.get("storage_class") else claim.get("replicas") or 2,
+            "volume_mode": claim.get("volume_mode"),
             "migratable": claim.get("migratable"), "backing_image": claim.get("backing_image"),
             "annotations": {NAMES.key(MOVE_ID): move["id"],
                             NAMES.key(MOVED_FROM): f"{move['cluster']}/{move['name']}"}})
@@ -825,6 +841,8 @@ def retry(move_id):
         raise ValueError("no such move")
     if move["status"] != "failed":
         raise ValueError("only a failed move can be retried")
+    if move.get("phase") == "backing-up":
+        move.setdefault("flags", {})["retry_backups"] = True
     move.update(status="running", failures=0, finished_at="",
                 message=f"Retrying from {move['phase']}", updated_at=_now())
     move["op"] = _operation(move)

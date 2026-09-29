@@ -106,6 +106,26 @@ You can manage migration from any linked cluster, for any of them. Below,
 **Moving workloads** lists moves under way and each cluster a move can come
 from, with whether it is ready and **Browse workloads**.
 
+The move review includes a **Destination storage class** picker. It offers
+regular Longhorn classes on the destination and uses the selected class's
+replica count, disk and node tags, filesystem and mount settings when restoring
+the volumes. Restore-specific classes are created from that selection so
+Longhorn can read the backup. Their binding is immediate so the restore can
+finish before the workload starts.
+
+If a backup fails, use **Retry failed backups** on the failed move. Homestead
+requests a fresh snapshot and backup for failed or missing recorded backups,
+while keeping completed backups and waiting for backups still in progress.
+It waits for each new snapshot to be ready before requesting its backup. Old
+backups are retained. Stable request names survive a lost reply or reboot.
+
+The same recovery runs when starting a new attempt after dismissing the old
+Activity job, including when an older destination's migration record was
+cleared. Source workload annotations are checked even without that old record.
+Update Homestead on **both clusters** for this recovery behavior. If destination
+objects from a later phase already exist, review the old move and use **Put
+back** before starting another; a new move does not overwrite those objects.
+
 ## Unlink
 
 **Settings → Linked clusters** (or **Manage clusters** in the switch) lists

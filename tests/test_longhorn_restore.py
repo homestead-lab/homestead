@@ -91,6 +91,22 @@ class LonghornRestoreTests(unittest.TestCase):
                                      "name": "restored-data", "size_gb": 4})
         self.assertFalse(any(path.endswith("persistentvolumeclaims") for _, path, _, _ in self.sent))
 
+    def test_chosen_class_keeps_its_replica_count_tags_and_options(self):
+        self.objects["/apis/storage.k8s.io/v1/storageclasses/fast"] = {
+            "metadata": {"name": "fast"}, "provisioner": "driver.longhorn.io",
+            "parameters": {"numberOfReplicas": "3", "diskSelector": "ssd", "nodeSelector": "storage", "fsType": "xfs"},
+            "mountOptions": ["noatime"], "allowedTopologies": [{"matchLabelExpressions": []}]}
+        longhorn.restore_backup({"backup": "backup-123", "namespace": "lab", "name": "copy-a", "storage_class": "fast"})
+        first = self.sent[-2][2]
+        self.assertEqual("3", first["parameters"]["numberOfReplicas"])
+        self.assertEqual("ssd", first["parameters"]["diskSelector"])
+        self.assertEqual("storage", first["parameters"]["nodeSelector"])
+        self.assertEqual(["noatime"], first["mountOptions"])
+        self.assertEqual("fast", first["metadata"]["annotations"]["homestead.io/base-storage-class"])
+        self.objects["/apis/storage.k8s.io/v1/storageclasses/fast"]["parameters"]["diskSelector"] = "hdd"
+        longhorn.restore_backup({"backup": "backup-123", "namespace": "lab", "name": "copy-b", "storage_class": "fast"})
+        self.assertNotEqual(first["metadata"]["name"], self.sent[-2][2]["metadata"]["name"])
+
     def test_restore_refuses_incomplete_backup(self):
         self.objects[
             "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/backups/backup-123"

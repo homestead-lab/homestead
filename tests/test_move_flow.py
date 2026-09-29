@@ -99,9 +99,15 @@ class FakeLonghorn:
         self.made.append({"name": name, "volume": volume})
         return {"backup": name, "volume": volume}
 
-    def backups(self, volume=None):
-        return [{"name": b["name"], "volume": b["volume"], "state": "Completed",
-                 "progress": 100, "error": "", "restorable": True} for b in self.made]
+    def ensure_move_backup(self, volume, snapshot, backup):
+        if not any(b["name"] == backup for b in self.made):
+            self.made.append({"name": backup, "volume": volume})
+        return {"backup": backup}
+
+    def backups(self, volume=None, strict=False):
+        return [{"name": b["name"], "volume": b["volume"], "state": b.get("state", "Completed"),
+                 "progress": 100, "error": b.get("error", ""),
+                 "restorable": b.get("state", "Completed") == "Completed"} for b in self.made]
 
     def restore_backup(self, cfg):
         self.restored.append(cfg)
@@ -152,6 +158,7 @@ def seed_frigate(cluster):
     cluster.put("/api/v1/persistentvolumes/pv-frigate", {
         "spec": {"csi": {"driver": "driver.longhorn.io", "volumeHandle": "pv-frigate"}}})
     cluster.put("/apis/storage.k8s.io/v1/storageclasses/longhorn-r2", {
+        "metadata": {"name": "longhorn-r2"},
         "provisioner": "driver.longhorn.io", "parameters": {"numberOfReplicas": "2"}})
     cluster.put("/api/v1/namespaces/lab/services/frigate", {
         "metadata": {"name": "frigate", "annotations": {"kube-vip.io/loadbalancerIPs": "192.0.2.242"}},
@@ -361,6 +368,8 @@ class EngineTests(unittest.TestCase):
             if route == "/api/move/source-status":
                 return source.status(query["kind"], query["name"])
             if route == "/api/move/source":
+                if body["action"] == "backup":
+                    return source.backup(body["kind"], body["name"], body.get("retry_failed", False))
                 action = {"quiesce": source.quiesce, "backup": source.backup,
                           "release": source.release}.get(body["action"])
                 if body["action"] == "remove":
@@ -376,9 +385,9 @@ class EngineTests(unittest.TestCase):
         # this pair counts as already sharing backup storage.
         engine._here_endpoint = lambda target: ""
 
-    def run_until_settled(self, limit=40):
+    def run_until_settled(self, limit=40, move_id=None):
         for _ in range(limit):
-            move = engine.moves()[0]
+            move = next((m for m in engine.moves() if m["id"] == move_id), engine.moves()[0])
             if move["status"] != "running":
                 return move
             if move["phase"] == "quiescing":
@@ -388,7 +397,83 @@ class EngineTests(unittest.TestCase):
                 if path in self.cluster.objects:
                     self.cluster.objects[path].setdefault("status", {})["readyReplicas"] = 1
             engine.tick_all()
-        return engine.moves()[0]
+        return next((m for m in engine.moves() if m["id"] == move_id), engine.moves()[0])
+
+    def fail_backup(self):
+        move = engine.start("shed", "container", "frigate", "moved", "automatic")
+        self.cluster.objects.pop("/api/v1/namespaces/lab/pods/frigate-1", None)
+        create = self.lh.ensure_move_backup
+        def pending(*args):
+            result = create(*args)
+            self.lh.made[-1]["state"] = "InProgress"
+            return result
+        with mock.patch.object(self.lh, "ensure_move_backup", side_effect=pending):
+            for _ in range(10):
+                engine.tick_all()
+                if self.lh.made:
+                    break
+        self.assertEqual(1, len(self.lh.made))
+        self.lh.made[0].update(state="Error", error="cannot find matched snapshot in longhorn engine")
+        engine.tick_all()
+        failed = engine._find(move["id"])
+        self.assertEqual(("failed", "backing-up"), (failed["status"], failed["phase"]))
+        return failed
+
+    def test_retry_after_restart_replaces_failed_backup_and_restores_new_one(self):
+        failed = self.fail_backup()
+        old = self.lh.made[0]["name"]
+        engine.bind(self.cluster.get, self.cluster.send, self.lh, client, FakeNetwork(),
+                    self.ops, self.tmp.name, "lab")
+        engine.retry(failed["id"])
+        move = self.run_until_settled(move_id=failed["id"])
+        self.assertEqual("succeeded", move["status"], move["message"])
+        self.assertEqual(2, len(self.lh.made))
+        self.assertNotEqual(old, self.lh.restored[0]["backup"])
+        self.assertEqual(old, self.lh.made[0]["name"], "old backups are retained")
+
+    def test_dismissed_activity_then_new_attempt_recovers_source_backup_references(self):
+        import homestead_operations as operations
+        operations.bind(self.cluster.get, self.tmp.name, lambda *args: {})
+        with mock.patch.object(engine, "OPS", operations), \
+             mock.patch.dict(operations.RESOLVERS, {"move": engine.op_state}):
+            failed = self.fail_backup()
+            item = next(o for o in operations.list_operations() if o["id"] == failed["op"])
+            self.assertEqual("failed", item["status"])
+            operations.dismiss(item["id"])
+            self.assertEqual([], operations.list_operations())
+            # Dismissal clears Activity, leaving the source's annotations and
+            # the failed migration journal intact across a restart.
+            engine.bind(self.cluster.get, self.cluster.send, self.lh, client, FakeNetwork(),
+                        operations, self.tmp.name, "lab")
+            new = engine.start("shed", "container", "frigate", "moved", "automatic")
+            move = self.run_until_settled(move_id=new["id"])
+            self.assertEqual("succeeded", move["status"], move["message"])
+            self.assertEqual(2, len(self.lh.made))
+            self.assertNotEqual(self.lh.made[0]["name"], self.lh.restored[0]["backup"])
+            self.assertEqual("failed", engine._find(failed["id"])["status"])
+
+    def test_new_attempt_recovers_when_old_destination_journal_was_cleared(self):
+        self.fail_backup()
+        engine._write([])
+        new = engine.start("shed", "container", "frigate", "moved", "automatic")
+        move = self.run_until_settled(move_id=new["id"])
+        self.assertEqual("succeeded", move["status"], move["message"])
+        self.assertEqual(2, len(self.lh.made))
+        self.assertNotEqual(self.lh.made[0]["name"], self.lh.restored[0]["backup"])
+
+    def test_selected_destination_class_is_persisted_and_used_on_restore(self):
+        self.cluster.put("/apis/storage.k8s.io/v1/storageclasses/fast", {
+            "metadata": {"name": "fast"}, "provisioner": "driver.longhorn.io",
+            "parameters": {"numberOfReplicas": "3", "diskSelector": "ssd"}})
+        planned = engine.plan("shed", "container", "frigate", "moved", "automatic", "", "fast")
+        self.assertTrue(planned["ok"], planned["blockers"])
+        self.assertEqual(["fast", "longhorn-r2"], planned["storage_classes"])
+        engine.start("shed", "container", "frigate", "moved", "automatic", "", "fast")
+        move = self.run_until_settled()
+        self.assertEqual("succeeded", move["status"], move["message"])
+        self.assertEqual("fast", move["storage_class"])
+        self.assertEqual("fast", self.lh.restored[0]["storage_class"])
+        self.assertIsNone(self.lh.restored[0]["replicas"], "chosen class supplies replicas")
 
     def test_a_clean_plan_has_no_blockers(self):
         planned = engine.plan("shed", "container", "frigate", "moved", "automatic")
