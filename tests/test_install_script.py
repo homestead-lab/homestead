@@ -32,6 +32,24 @@ def run(args, env=None, path_extra=None):
 
 @unittest.skipUnless(SH, "no POSIX shell here")
 class InstallerTests(unittest.TestCase):
+    def test_console_defaults_on_and_can_be_disabled(self):
+        env = {"HS_ROLE": "agent", "HS_NODE_IP": "192.0.2.11", "HS_SERVER": "192.0.2.10",
+               "HS_TOKEN": "example-token", "HS_YES": "1"}
+        code, out = run(["--dry-run", "--skip-checks"], env)
+        self.assertEqual(0, code, out)
+        self.assertIn("install-console.sh enable", out)
+        code, out = run(["--dry-run", "--skip-checks"], dict(env, HS_CONSOLE="no"))
+        self.assertEqual(0, code, out)
+        self.assertIn("install-console.sh disable", out)
+        self.assertNotIn("scripts/host-console.py", out)
+
+    def test_console_can_be_configured_without_installing_a_cluster(self):
+        for flag, action in (("--console", "enable"), ("--no-console", "disable")):
+            code, out = run(["--dry-run", flag])
+            self.assertEqual(0, code, out)
+            self.assertIn("install-console.sh " + action, out)
+            self.assertNotIn("bootstrap-k3s.sh", out)
+
     def test_it_is_plain_posix_shell(self):
         text = SCRIPT.read_text(encoding="utf-8").replace("\r\n", "\n")
         with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False, newline="\n", encoding="utf-8") as f:
