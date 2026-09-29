@@ -239,8 +239,12 @@ window.fleetMigration = async id => {
   let body;
   if (state.allowed) {
     const problems = [];
+    const retryTarget = UI.button("Retry target switch", `fleetTargetRetry(${jsArg(id)})`, { attrs: 'data-need="admin"' });
     const same = (a, b) => String(a || "").replace(/\/+$/, "") === String(b || "").replace(/\/+$/, "");
-    if (!state.ready && state.volume_problem) problems.push(["bad", "Its backup storage cannot start: Longhorn has no room for its volume.",
+    if (["pending", "applying"].includes(state.longhorn?.state)) problems.push(["info", "Longhorn's backup target is switching.",
+      `${state.longhorn.detail}. Homestead retries automatically for up to ten minutes, even with this dialog closed.`, retryTarget]);
+    else if (state.longhorn?.state === "failed") problems.push(["warn", "Longhorn's backup target needs attention.", state.longhorn.detail, retryTarget]);
+    else if (!state.ready && state.volume_problem) problems.push(["bad", "Its backup storage cannot start: Longhorn has no room for its volume.",
       `Longhorn says: ${state.volume_problem}. Disable migration, remove the backup storage under ${m.name}'s Data protection, and enable migration again with a smaller size.`, ""]);
     else if (!state.ready) problems.push(["warn", "Its backup storage is starting.", "Its first start downloads the S3 server; this takes a minute or two.", ""]);
     else if (!state.reachable_off_cluster) problems.push(["warn", "It has no LAN address, so no other cluster can read it.", "",
@@ -248,12 +252,14 @@ window.fleetMigration = async id => {
     else if (ready && target.configured && target.endpoint && state.endpoint && !same(target.endpoint, state.endpoint))
       problems.push(["warn", `${m.name}'s Longhorn backs up to ${target.endpoint}, not to its backup storage at ${state.endpoint}.`,
         "Pointing Longhorn at the store sends moves' backups where this cluster can read them.",
-        UI.button("Point Longhorn at it", `clusterStorage(${jsArg(m.handle)},false,()=>fleetMigration(${jsArg(id)}))`)]);
+        retryTarget]);
+    else if (state.longhorn?.pointed === false) problems.push(["warn", "Longhorn is not writing to this backup storage.",
+      state.longhorn.endpoint ? `Current endpoint: ${state.longhorn.endpoint}` : "", retryTarget]);
     else if (ready && target.configured && !target.answers) problems.push(["warn", `This cluster cannot reach it at ${target.endpoint}.`,
       "It may still be starting; otherwise the address is taken or firewalled.",
       UI.button("Give it another address", `clusterStorage(${jsArg(m.handle)},true,()=>fleetMigration(${jsArg(id)}))`)]);
     else if (ready && !target.configured) problems.push(["warn", `${m.name}'s Longhorn is not pointed at it yet.`, "",
-      UI.button("Finish setting it up", `clusterStorage(${jsArg(m.handle)},false,()=>fleetMigration(${jsArg(id)}))`)]);
+      retryTarget]);
     body = `${lead}
       ${UI.facts([["Migration", "On"], ["Backup storage", `<span class="mono">${esc((state.endpoint || "—").replace(/^https?:\/\//, ""))}</span>`],
         ...(m.self ? [] : [["Reachable from here", ready ? (target.answers ? "Yes" : "No") : "—"]]), ["Size", state.size_gb ? `${state.size_gb} GB` : "—"]])}
@@ -280,6 +286,16 @@ window.fleetMigration = async id => {
   }
   $("#mbody").innerHTML = `<div class="ui-stack">${body}</div>`;
   if (window.applyRole) applyRole();
+};
+
+window.fleetTargetRetry = async id => {
+  const m = (FLEET.view?.members || []).find(x => x.id === id);
+  if (!m) return;
+  if (!m.self) return clusterPointTarget(m.handle, () => fleetMigration(id));
+  try {
+    const r = await api("/api/objectstore/longhorn", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    toast(r.detail, "ok"); fleetMigration(id);
+  } catch (e) { toast(e.message, "bad"); }
 };
 
 window.fleetMigrationSet = async (id, allow) => {

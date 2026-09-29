@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.241")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.242")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -6949,7 +6949,7 @@ ADMIN_ROUTES = {
     "/api/objectstore/transfers", "/api/move/clusters/transfers",
     # A cluster's credentials, and what they reach.
     "/api/move/clusters/add", "/api/move/clusters/remove", "/api/move/remote",
-    "/api/move/clusters/check", "/api/move/clusters/readiness", "/api/move/clusters/storage",
+    "/api/move/clusters/check", "/api/move/clusters/readiness", "/api/move/clusters/storage", "/api/move/clusters/target",
     # Homestead's configuration: every password hash and key it holds.
     "/api/config/parts", "/api/config/backup", "/api/config/inspect", "/api/config/restore",
     # Linking clusters hands every linked Homestead admin over this one.
@@ -8520,7 +8520,9 @@ class H(BaseHTTPRequestHandler):
                                                          b.get("lb_ip") or "", b.get("vip_mode") or "",
                                                          int(b.get("port") or 0)))
             if p == "/api/objectstore/longhorn":
-                return self._send(200, OBJECTS.point_longhorn(replace=bool(b.get("replace", True))))
+                return self._send(200, OBJECTS.request_target(replace=bool(b.get("replace", True))))
+            if p == "/api/move/clusters/target":
+                return self._move(lambda: MOVE.remote(b.get("name"), "/api/objectstore/longhorn", {"replace": True}))
             if p == "/api/objectstore/remove":
                 return self._send(200, OBJECTS.remove(bool(b.get("keep_data", True))))
             if p == "/api/node/probe/install":
@@ -8773,8 +8775,8 @@ class H(BaseHTTPRequestHandler):
                     # Backups follow the store to its new address.
                     if any(s["name"].startswith(OBJECTS.NAME) and s["namespace"] == OBJECTS.NS for s in result["services"]):
                         try:
-                            OBJECTS.point_longhorn()
-                            result["detail"] += "; Longhorn's backup target follows the backup storage"
+                            pointed = OBJECTS.request_target()
+                            result["detail"] += "; " + pointed["detail"]
                         except Exception as error:
                             result["detail"] += f"; Longhorn's backup target was not changed: {str(error)[:120]}"
                     # Linked clusters reach this one at its new VIP, where it was on the old.
@@ -9141,6 +9143,7 @@ def _samba_loop():
             try:
                 with self_data_activity():
                     moved = OBJECTS.keep_in_step()
+                    OBJECTS.reconcile_target()
                 if moved:
                     print(f"object store: moved to {moved}", flush=True)
             except Exception as error:

@@ -54,8 +54,9 @@ class Objects:
     def __init__(self):
         self.pointed = 0
 
-    def point_longhorn(self):
+    def request_target(self):
         self.pointed += 1
+        return {"detail": "Longhorn's backup target switch is queued"}
 
 
 class SelfAddressTests(unittest.TestCase):

@@ -51,7 +51,8 @@ function objectStoreCard(store, target) {
       provides one — so backups, and moving a workload to another cluster, have nowhere to go.</span>
       <button class="btn sm pri" data-need="admin" onclick="objectStoreSetup()">Set up storage</button></div>`;
   }
-  const pointed = (target.url || "") === store.backup_url;
+  const pointed = store.longhorn?.pointed === true;
+  const switching = ["pending", "applying"].includes(store.longhorn?.state);
   return `<div class="card flat" style="margin-bottom:18px">
     <div class="between node-section-head"><div><div class="ctitle">Backup storage</div>
       <div class="csub">An S3 server (RustFS) on a Longhorn volume, holding every backup this cluster writes</div></div>
@@ -61,11 +62,14 @@ function objectStoreCard(store, target) {
       <div><span>Endpoint</span><b class="mono">${esc(store.endpoint || "—")}</b></div>
       <div><span>Bucket</span><b class="mono">${esc(store.bucket)}</b></div>
       <div><span>Size</span><b>${store.size_gb ? store.size_gb + " GB" : "—"}</b></div>
-      <div><span>Longhorn target</span><b>${pointed ? "pointed here" : "not pointed here"}</b></div>
+      <div><span>Longhorn target</span><b>${pointed ? "pointed here" : switching ? "switching" : "not pointed here"}</b></div>
     </div>
     ${pointed ? "" : `<div class="note warn" style="margin-top:12px"><b>Longhorn is not writing here.</b>
-      Backups will not reach this bucket until it is.
-      <button class="btn sm" data-need="admin" onclick="objectStorePoint()">Point Longhorn at it</button></div>`}
+      ${store.longhorn?.endpoint ? `Its current endpoint is <span class="mono">${esc(store.longhorn.endpoint)}</span>. ` : ""}
+      ${esc(store.longhorn?.detail || "Backups will not reach this bucket until the target is changed.")}
+      ${switching ? '<div class="dim xs">Homestead retries automatically for up to ten minutes, even with this page closed.</div>' : ""}
+      <div class="row"><button class="btn sm" data-need="admin" onclick="objectStorePoint()">${switching || store.longhorn?.state === "failed" ? "Retry target switch" : "Point Longhorn at it"}</button>
+        <button class="btn sm" data-need="admin" onclick="objectStoreSetup()">Storage settings</button></div></div>`}
     ${store.reachable_off_cluster ? "" : `<div class="note" style="margin-top:12px">
       <b>Only this cluster can read it.</b> The store has no LAN address, so another cluster cannot
       restore from these backups. Give its Service an address to migrate workloads elsewhere.</div>`}
@@ -75,28 +79,31 @@ function objectStoreCard(store, target) {
   </div>`;
 }
 
-window.objectStoreSetup = () => modal("Set up backup storage", `
+window.objectStoreSetup = () => {
+  const store = STATE.data.objectStore || {};
+  modal(store.deployed ? "Backup storage settings" : "Set up backup storage", `
   <p>Runs an S3 server (RustFS) on a Longhorn volume and points Longhorn's backups at it. Volume backups,
     and moving a workload to another cluster, both read and write here.</p>
   <div class="f2"><div class="f"><label>Size (GB) ${tip("Holds every volume backup this cluster keeps. Longhorn backups are incremental, so this is usually far smaller than the volumes themselves.")}</label>
-    <input id="os_size" type="number" min="5" max="16384" value="100"></div>
+    <input id="os_size" type="number" min="5" max="16384" value="${store.size_gb || 100}" ${store.deployed ? "disabled" : ""}></div>
     <div class="f"><label>LAN address ${tip("Another cluster reads backups over this address. Left blank, the store shares Homestead's address and answers on its own port there; give it one of its own to keep its traffic apart.")}</label>
-      <input id="os_ip" type="text" class="mono" placeholder="Homestead's shared address" data-ipam></div>
+      <input id="os_ip" type="text" class="mono" value="${esc(store.reachable_off_cluster && store.endpoint ? new URL(store.endpoint).hostname : "")}" placeholder="Homestead's shared address" data-ipam></div>
     <div class="f"><label>Port ${tip("Where the store answers. Pick another if an app on that address already uses 9000; the next port up is its console.")}</label>
-      <input id="os_port" type="number" min="1" max="65534" placeholder="9000" class="mono"></div></div>
+      <input id="os_port" type="number" min="1" max="65534" value="${store.port || 9000}" class="mono"></div></div>
   <div class="note"><b>It shares fate with what it protects.</b> Storage inside this cluster is the right
     place to stage a migration and the wrong place for your only copy. Keep anything you cannot lose
     somewhere else as well.</div>
   <div class="row" style="margin-top:16px">
-    <button class="btn pri" data-need="admin" onclick="objectStoreDeploy()">Set up storage</button>
+    <button class="btn pri" data-need="admin" onclick="objectStoreDeploy()">${store.deployed ? "Save storage settings" : "Set up storage"}</button>
     <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+};
 
 window.objectStoreDeploy = async () => {
   const body = { size_gb: +$("#os_size").value || 100, lb_ip: $("#os_ip").value.trim(), port: +($("#os_port")?.value || 0) || undefined };
   try {
     const result = await api("/api/objectstore/deploy", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    toast(`backup storage ready at ${result.endpoint}`, "ok");
+    toast(result.longhorn?.detail || `backup storage is starting at ${result.endpoint}`, "ok");
     closeModal(); resetPaint(); viewProtect();
   } catch (e) { toast(e.message, "bad"); }
 };
@@ -105,7 +112,7 @@ window.objectStorePoint = async () => {
   try {
     const result = await api("/api/objectstore/longhorn", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: "{}" });
-    toast(result.detail || "Longhorn pointed at the bucket", result.reachable_off_cluster ? "ok" : "warn");
+    toast(result.detail || "Backup target switch requested", result.pending ? "info" : "ok");
     resetPaint(); viewProtect();
   } catch (e) { toast(e.message, "bad"); }
 };

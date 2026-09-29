@@ -544,7 +544,26 @@ def _set_harvester_target(setting, url, poll, keys):
     value = harvester_target_value(url, keys, poll, current)
     setting["value"] = json.dumps(value) if value else ""
     setting.get("metadata", {}).pop("managedFields", None)
-    ksend("PUT", f"{HARVESTER_TARGET}", setting)
+    try:
+        ksend("PUT", f"{HARVESTER_TARGET}", setting)
+    except urllib.error.HTTPError as error:
+        # Kubernetes includes Harvester's validation reason in the response.
+        # str(HTTPError) loses it, particularly when enabling moves wraps it.
+        message = str(error)
+        try:
+            response = json.loads(error.read().decode("utf-8", "replace"))
+            if isinstance(response, dict) and isinstance(response.get("message"), str):
+                message = response["message"] or message
+        except (ValueError, OSError):
+            pass
+        # Validation errors may echo the submitted setting, including keys.
+        for target in (value, current):
+            for field in ("accessKeyId", "secretAccessKey"):
+                credential = target.get(field)
+                if credential:
+                    message = message.replace(json.dumps(credential)[1:-1], "[redacted]")
+                    message = message.replace(credential, "[redacted]")
+        raise ValueError(f"Harvester refused the backup target (HTTP {error.code}): {message[:1200]}") from error
     _bust("lhtarget")
     return {"ok": True, "url": url, "harvester": True}
 

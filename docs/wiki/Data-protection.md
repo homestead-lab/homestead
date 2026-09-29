@@ -1,5 +1,14 @@
 # Data protection
 
+When setting up backup storage or changing its address, Homestead saves the
+requested Longhorn target switch and retries while the store starts. Progress
+and the last error appear on Data protection and in the linked cluster's
+migration controls. The request survives a Homestead restart. After ten minutes
+it stops retrying and offers **Retry target switch**; **Storage settings** lets
+you correct the address and port. Retrying the target switch does not redeploy
+the store. Homestead verifies the actual S3 endpoint, as well as the bucket URL,
+before showing that Longhorn is pointed at the store.
+
 ## Snapshot timeline and cleanup
 
 The snapshot dialog shows local creation times, relative ages, and separate

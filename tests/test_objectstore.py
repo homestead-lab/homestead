@@ -151,8 +151,8 @@ class ObjectStoreTests(unittest.TestCase):
     def test_a_taken_port_names_a_free_one(self):
         def plan(cfg, **kw):
             if cfg["ports"][0]["port"] == 9000:
-                raise ValueError("192.0.2.211:9000/TCP is already used by lab/home-assistant-core")
-            return {"vip": "192.0.2.211"}
+                raise ValueError("192.0.2.20:9000/TCP is already used by lab/home-assistant-core")
+            return {"vip": "192.0.2.20"}
         store.NETWORK.service_plan.side_effect = plan
         with self.assertRaises(ValueError) as caught:
             store.deploy({"point_longhorn": False})
@@ -160,23 +160,23 @@ class ObjectStoreTests(unittest.TestCase):
         self.assertIn("Choose another port", str(caught.exception))
         self.assertIn("Port 9010 is free there", str(caught.exception))
         store.deploy({"point_longhorn": False, "port": 9010})
-        self.assertEqual("192.0.2.211", self._sent_service()["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
+        self.assertEqual("192.0.2.20", self._sent_service()["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
 
     def test_an_address_chosen_for_the_store_beats_its_older_copy_on_the_vip(self):
-        # harvester-site: the store given 192.0.2.211:9060, a copy left on .108:9000.
+        # A chosen store address supersedes a legacy Service on another address.
         self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"] = {
-            "metadata": {"name": "homestead-objectstore", "annotations": {"kube-vip.io/loadbalancerIPs": "192.0.2.211"}},
+            "metadata": {"name": "homestead-objectstore", "annotations": {"kube-vip.io/loadbalancerIPs": "192.0.2.20"}},
             "spec": {"ports": [{"name": "s3", "port": 9060}]},
-            "status": {"loadBalancer": {"ingress": [{"ip": "192.0.2.211"}]}}}
+            "status": {"loadBalancer": {"ingress": [{"ip": "192.0.2.20"}]}}}
         self.objects["/api/v1/namespaces/lab/services/homestead-objectstore-vip"] = {
-            "metadata": {"name": "homestead-objectstore-vip", "annotations": {"kube-vip.io/loadbalancerIPs": "192.0.2.108"}},
+            "metadata": {"name": "homestead-objectstore-vip", "annotations": {"kube-vip.io/loadbalancerIPs": "192.0.2.10"}},
             "spec": {"ports": [{"name": "s3", "port": 9000}]},
-            "status": {"loadBalancer": {"ingress": [{"ip": "192.0.2.108"}]}}}
-        self.assertEqual("http://192.0.2.211:9060", store.endpoint())
+            "status": {"loadBalancer": {"ingress": [{"ip": "192.0.2.10"}]}}}
+        self.assertEqual("http://192.0.2.20:9060", store.endpoint())
         # On the nodes' own addresses (k3s ServiceLB) the VIP copy is the one to use.
         self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"]["metadata"]["annotations"] = {}
         self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"]["status"]["loadBalancer"]["ingress"] = [{"ip": "192.0.2.203"}]
-        self.assertEqual("http://192.0.2.108:9000", store.endpoint())
+        self.assertEqual("http://192.0.2.10:9000", store.endpoint())
 
     def test_a_store_already_running_keeps_its_port(self):
         self._service("192.0.2.244", "192.0.2.244")
@@ -196,6 +196,22 @@ class ObjectStoreTests(unittest.TestCase):
         store.deploy({"point_longhorn": False})
         self.assertEqual("192.0.2.244", self._sent_service()["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
         self.assertEqual([], self.plans)
+
+    def test_the_requested_vip_wins_over_a_stale_node_address(self):
+        self._service("192.0.2.10", "192.0.2.20")
+        self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"]["spec"] = {
+            "ports": [{"name": "s3", "port": 9070, "targetPort": 9000}]}
+        self.assertEqual("http://192.0.2.20:9070", store.endpoint())
+        self.assertEqual("http://192.0.2.20:9070", store.status()["endpoint"])
+
+    def test_status_and_target_use_the_same_vip_service_and_its_published_port(self):
+        self._service("192.0.2.10")
+        self.objects["/api/v1/namespaces/lab/services/homestead-objectstore-vip"] = {
+            "metadata": {"annotations": {"kube-vip.io/loadbalancerIPs": "192.0.2.20"}},
+            "spec": {"ports": [{"name": "s3", "port": 9070, "targetPort": 9000}]}}
+        self.assertEqual("http://192.0.2.20:9070", store.endpoint())
+        self.assertEqual(store.endpoint(), store.status()["endpoint"])
+        self.assertEqual(9070, store.status()["port"])
 
     def test_a_store_can_be_moved_to_the_shared_address_on_purpose(self):
         self._service()
@@ -280,6 +296,53 @@ class ObjectStoreTests(unittest.TestCase):
         self.assertEqual(("s3://homestead-backups@us-east-1/", "homestead-backup-credentials"),
                          (target["spec"]["backupTargetURL"], target["spec"]["credentialSecret"]))
 
+    def test_harvester_waits_for_the_store_before_changing_the_target(self):
+        self._service("192.0.2.20", "192.0.2.20")
+        self._deployment(0)
+        with mock.patch.object(store.LH, "on_harvester", return_value=True), \
+                mock.patch.object(store, "ensure_bucket") as bucket:
+            with self.assertRaisesRegex(ValueError, "still starting.*waiting"):
+                store.point_longhorn(replace=True)
+        bucket.assert_not_called()
+        self.assertEqual([], self.sent, "no credentials or target changed while starting")
+
+    def test_harvester_gets_a_readable_bucket_at_the_chosen_port_before_its_target(self):
+        self._service("192.0.2.20", "192.0.2.20")
+        self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"]["spec"] = {
+            "ports": [{"name": "s3", "port": 9070}]}
+        self._deployment(1)
+        events = []
+        with mock.patch.object(store.LH, "on_harvester", return_value=True), \
+                mock.patch.object(store, "ensure_bucket", side_effect=lambda **kw: events.append(("bucket", kw)) or True), \
+                mock.patch.object(store.LH, "set_backup_target", side_effect=lambda *args: events.append(("target", args))):
+            result = store.point_longhorn(replace=True)
+        self.assertEqual(("bucket", {"base": "http://192.0.2.20:9070", "refresh": True}), events[0])
+        self.assertEqual("target", events[1][0])
+        self.assertEqual("http://192.0.2.20:9070", result["endpoint"])
+
+    def test_an_unreachable_or_unusable_bucket_keeps_the_old_target_and_credentials(self):
+        self._service("192.0.2.20", "192.0.2.20")
+        self._deployment(1)
+        for failure, expected in ((urllib.error.URLError("connection refused"), "not reachable yet"),
+                                  (False, "bucket.*not ready")):
+            with self.subTest(failure=failure), \
+                    mock.patch.object(store.LH, "on_harvester", return_value=True), \
+                    mock.patch.object(store, "ensure_bucket", side_effect=failure if isinstance(failure, Exception) else None,
+                                      return_value=failure):
+                with self.assertRaisesRegex(ValueError, expected):
+                    store.point_longhorn(replace=True)
+            self.assertEqual([], self.sent)
+
+    def test_a_cached_bucket_does_not_skip_validation_at_a_new_address(self):
+        old = dict(store._bucket)
+        self.addCleanup(store._bucket.update, old)
+        store._bucket["ok"] = True
+        with mock.patch.object(store, "_s3", side_effect=[404, 200]) as s3:
+            self.assertTrue(store.ensure_bucket("http://192.0.2.20:9070", refresh=True))
+        self.assertEqual(["HEAD", "PUT"], [call.args[0] for call in s3.call_args_list])
+        self.assertTrue(all(call.args[1] == "http://192.0.2.20:9070/homestead-backups"
+                            for call in s3.call_args_list))
+
     def test_a_target_already_elsewhere_is_left_alone_unless_asked(self):
         self._service(ip="192.0.2.243")
         self.objects["/apis/longhorn.io/v1beta2/namespaces/longhorn-system/backuptargets"] = {"items": [
@@ -343,7 +406,7 @@ class ObjectStoreTests(unittest.TestCase):
         self.assertFalse(store.transfers()["allowed"])
 
     def test_turning_moves_out_on_sets_the_store_up_the_first_time(self):
-        with mock.patch.object(store.NETWORK, "service_plan", return_value={"vip": "192.0.2.242"}),                 mock.patch.object(store, "point_longhorn", return_value={}) as point:
+        with mock.patch.object(store.NETWORK, "service_plan", return_value={"vip": "192.0.2.242"}),                 mock.patch.object(store, "request_target", return_value={}) as point:
             store.set_transfers(True, 50)
         point.assert_called_once()
         self.assertIn("/apis/apps/v1/namespaces/lab/deployments", [p for _, p, _ in self.sent])
@@ -366,15 +429,15 @@ class ObjectStoreTests(unittest.TestCase):
         self.assertEqual([], self.claims)
 
     def test_enabling_again_points_longhorn_at_the_store(self):
-        # harvester-site: the store made at .211:9060, pointing Longhorn failed, so
-        # its target stayed on an old .108:9000 until enabled again.
+        # The store was created, but pointing Longhorn failed, so
+        # its target stayed on the old address until enabled again.
         self._deployment(1)
-        self._service("192.0.2.211", "192.0.2.211")
-        with mock.patch.object(store, "point_longhorn", return_value={"endpoint": "http://192.0.2.211:9060", "kept_target": ""}) as point:
+        self._service("192.0.2.20", "192.0.2.20")
+        with mock.patch.object(store, "request_target", return_value={"pending": True, "detail": "Waiting for backup storage"}) as point:
             result = store.set_transfers(True)
         point.assert_called_once_with()
-        self.assertIn("Longhorn backs up to http://192.0.2.211:9060", result["detail"])
-        with mock.patch.object(store, "point_longhorn", side_effect=ValueError("an S3 target needs its access key and secret key")):
+        self.assertIn("Waiting for backup storage", result["detail"])
+        with mock.patch.object(store, "request_target", side_effect=ValueError("an S3 target needs its access key and secret key")):
             with self.assertRaisesRegex(ValueError, "Longhorn was not pointed at it"):
                 store.set_transfers(True)
 
@@ -383,6 +446,92 @@ class ObjectStoreTests(unittest.TestCase):
             with self.subTest(size=size):
                 with self.assertRaisesRegex(ValueError, "between 5 and"):
                     store.deploy({"size_gb": size})
+
+    def _target_fixture(self):
+        self._service("192.0.2.20", "192.0.2.20")
+        self._deployment(1)
+        deployment = self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-objectstore"]
+        actual = {"url": store.backup_url(), "secret": "harvester-backup-target-secret",
+                  "endpoint": "http://192.0.2.10:9000"}
+        def save(dep, request):
+            dep["metadata"]["annotations"] = {store.TARGET_REQUEST: json.dumps(request)} if request else {}
+        for patch in (mock.patch.object(store, "_save_target_request", side_effect=save),
+                      mock.patch.object(store, "_target_location", side_effect=lambda: dict(actual))):
+            patch.start()
+            self.addCleanup(patch.stop)
+        return deployment, actual
+
+    def test_a_pending_switch_survives_startup_and_waits_for_the_effective_endpoint(self):
+        deployment, actual = self._target_fixture()
+        with mock.patch.object(store, "point_longhorn", side_effect=ValueError("storage is still starting")) as point:
+            self.assertTrue(store.request_target()["pending"])
+            point.assert_not_called()
+            store.reconcile_target()
+        self.assertEqual("pending", store.target_status(deployment)["state"])
+        self.assertFalse(store.target_status(deployment)["pointed"], "the same bucket URL on another server is not this store")
+        # No in-memory queue: reload the serialized Kubernetes annotation.
+        deployment["metadata"]["annotations"] = json.loads(json.dumps(deployment["metadata"]["annotations"]))
+        with mock.patch.object(store, "point_longhorn") as point:
+            store.reconcile_target()
+            point.assert_called_once_with(replace=False)
+        self.assertEqual("applying", store.target_status(deployment)["state"])
+        actual["endpoint"] = store.endpoint()
+        with mock.patch.object(store, "point_longhorn") as point:
+            store.reconcile_target()
+            point.assert_not_called()
+        self.assertEqual("complete", store.target_status(deployment)["state"])
+        self.assertTrue(store.target_status(deployment)["pointed"])
+
+    def test_a_failed_switch_can_be_retried_without_redeploying_storage(self):
+        deployment, _ = self._target_fixture()
+        store.request_target(replace=True)
+        with mock.patch.object(store.time, "time", return_value=store.time.time() + 601), \
+                mock.patch.object(store, "point_longhorn") as point:
+            store.reconcile_target()
+            point.assert_not_called()
+        self.assertEqual("failed", store.target_status(deployment)["state"])
+        store.request_target(replace=True)
+        self.assertEqual("pending", store.target_status(deployment)["state"])
+        self.assertEqual([], self.claims)
+        self.assertEqual([], self.sent, "only the annotation is changed by a retry")
+
+    def test_a_pending_switch_does_not_overwrite_a_later_target_choice(self):
+        deployment, actual = self._target_fixture()
+        store.request_target(replace=True)
+        actual["endpoint"] = "http://another-store:9000"
+        with mock.patch.object(store, "point_longhorn") as point:
+            store.reconcile_target()
+            point.assert_not_called()
+        self.assertEqual("failed", store.target_status(deployment)["state"])
+        self.assertIn("changed after", store.target_status(deployment)["detail"])
+
+    def test_a_changed_store_address_requires_a_new_request(self):
+        deployment, _ = self._target_fixture()
+        store.request_target()
+        self._service("192.0.2.21", "192.0.2.21")
+        with mock.patch.object(store, "point_longhorn") as point:
+            store.reconcile_target()
+            point.assert_not_called()
+        self.assertEqual("failed", store.target_status(deployment)["state"])
+
+    def test_a_store_without_a_request_does_not_change_longhorn(self):
+        self._target_fixture()
+        with mock.patch.object(store, "point_longhorn") as point:
+            store.reconcile_target()
+            point.assert_not_called()
+
+    def test_stopping_moves_clears_a_pending_switch(self):
+        deployment, _ = self._target_fixture()
+        store.request_target()
+        store.set_transfers(False)
+        self.assertEqual({}, store._target_request(deployment))
+
+    def test_an_external_target_needs_explicit_replacement(self):
+        deployment, actual = self._target_fixture()
+        actual.update(url="nfs://nas:/backups", endpoint="")
+        self.assertEqual(actual["url"], store.request_target()["kept_target"])
+        self.assertEqual({}, store._target_request(deployment))
+        self.assertTrue(store.request_target(replace=True)["pending"])
 
 
 if __name__ == "__main__":
