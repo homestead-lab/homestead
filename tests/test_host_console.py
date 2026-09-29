@@ -90,13 +90,16 @@ class ConsoleDataTests(unittest.TestCase):
 
 class DashboardTests(unittest.TestCase):
     def test_ascii_logo_is_complete_and_does_not_overlap_metrics(self):
-        for width, height, expected in ((79, 24, ("  /\\  ", " /  \\ ", "| -- |", "|_--_|")),
-                                       (99, 32, ("   /\\   ", "  /  \\  ", " /    \\ ", " | -- | ", " |_--_| "))):
+        for width, height, expected in ((79, 24, ("    /\\    ", "  /    \\  ", "| ------ |", "|_------_|")),
+                                       (99, 32, ("     /\\     ", "  /      \\  ", "/          \\", "| -------- |", "|_--------_|"))):
             with self.subTest(width=width, height=height):
                 frame = console.dashboard(console.demo_data(), width, height)
                 text = frame.text()
                 for row, art in enumerate(expected):
                     self.assertEqual(art, text[row][1:1 + len(art)])
+                    for x, char in enumerate(art):
+                        if char == "-":
+                            self.assertEqual("text", frame.rows[row][x + 1][1], "both layers must be entirely white")
                 self.assertIn("CPU / history", text[len(expected)])
                 self.assertTrue(all(ord(c) < 128 for row in text for c in row))
 

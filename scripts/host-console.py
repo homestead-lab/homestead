@@ -237,8 +237,8 @@ def usage_style(value):
 
 # The house and two infrastructure layers from web/assets/homestead-mark.svg.
 # Plain ASCII keeps the mark intact on the Linux console's default font/locale.
-LOGO = ("   /\\   ", "  /  \\  ", " /    \\ ", " | -- | ", " |_--_| ")
-COMPACT_LOGO = ("  /\\  ", " /  \\ ", "| -- |", "|_--_|")
+LOGO = ("     /\\     ", "  /      \\  ", "/          \\", "| -------- |", "|_--------_|")
+COMPACT_LOGO = ("    /\\    ", "  /    \\  ", "| ------ |", "|_------_|")
 
 
 class Frame:
@@ -292,22 +292,23 @@ def dashboard(data, width, height):
     cluster_h = max(7, len(nodes) * (1 if wide else 2) + 4, height - 1 - cluster_y)
     frame = Frame(width, cluster_y + cluster_h)
     frame.header = header_h
+    header_x = max(len(row) for row in logo) + 4
     for y, row in enumerate(logo):
         frame.put(y, 1, row, "brand")
-        layers = row.find("--")
-        if layers >= 0:
-            frame.put(y, 1 + layers, "--", "text")
-    frame.put(0, 10, "HOMESTEAD / host & cluster" if width >= 60 else "HOMESTEAD", "accent")
+        layer = re.search(r"-+", row)
+        if layer:
+            frame.put(y, 1 + layer.start(), layer.group(), "text")
+    frame.put(0, header_x, "HOMESTEAD / host & cluster" if width >= 60 else "HOMESTEAD", "accent")
     if width >= 64:
         frame.put(0, width - 9, time.strftime("%H:%M:%S"), "muted")
     host_y = 1
     if header_h == 5:
-        frame.put(1, 10, "Live resources + Kubernetes readiness", "muted")
+        frame.put(1, header_x, "Live resources + Kubernetes readiness", "muted")
         host_y = 2
-    frame.put(host_y, 10, f"{local['hostname']}   up {local.get('uptime', '--')}")
-    frame.put(host_y + 1, 10, local.get("addresses", ""), "muted")
+    frame.put(host_y, header_x, f"{local['hostname']}   up {local.get('uptime', '--')}")
+    frame.put(host_y + 1, header_x, local.get("addresses", ""), "muted")
     service = ", ".join(local.get("services", []))
-    frame.put(host_y + 2, 10, "[OK] " + service if service else "[!] No active Kubernetes service",
+    frame.put(host_y + 2, header_x, "[OK] " + service if service else "[!] No active Kubernetes service",
               "ok" if service else "warn")
 
     frame.box(cpu_y, 0, cpu_h, width, "CPU / history")
