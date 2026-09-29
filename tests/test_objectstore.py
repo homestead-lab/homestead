@@ -134,6 +134,22 @@ class ObjectStoreTests(unittest.TestCase):
         store.deploy({"point_longhorn": False, "port": 9010})
         self.assertEqual("192.168.1.211", self._sent_service()["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
 
+    def test_an_address_chosen_for_the_store_beats_its_older_copy_on_the_vip(self):
+        # wingbury: the store given 192.168.1.211:9060, a copy left on .108:9000.
+        self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"] = {
+            "metadata": {"name": "homestead-objectstore", "annotations": {"kube-vip.io/loadbalancerIPs": "192.168.1.211"}},
+            "spec": {"ports": [{"name": "s3", "port": 9060}]},
+            "status": {"loadBalancer": {"ingress": [{"ip": "192.168.1.211"}]}}}
+        self.objects["/api/v1/namespaces/lab/services/homestead-objectstore-vip"] = {
+            "metadata": {"name": "homestead-objectstore-vip", "annotations": {"kube-vip.io/loadbalancerIPs": "192.168.1.108"}},
+            "spec": {"ports": [{"name": "s3", "port": 9000}]},
+            "status": {"loadBalancer": {"ingress": [{"ip": "192.168.1.108"}]}}}
+        self.assertEqual("http://192.168.1.211:9060", store.endpoint())
+        # On the nodes' own addresses (k3s ServiceLB) the VIP copy is the one to use.
+        self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"]["metadata"]["annotations"] = {}
+        self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"]["status"]["loadBalancer"]["ingress"] = [{"ip": "192.168.1.203"}]
+        self.assertEqual("http://192.168.1.108:9000", store.endpoint())
+
     def test_a_store_already_running_keeps_its_port(self):
         self._service("192.168.1.244", "192.168.1.244")
         self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"]["spec"] = {

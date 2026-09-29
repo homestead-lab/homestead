@@ -88,11 +88,15 @@ def _console_port(port):
 
 
 def endpoint(service=None):
-    """Where the bucket answers, preferring the address another cluster can use
-    - its VIP, where Homestead moved it onto one (homestead_self_address)."""
+    """Where the bucket answers, as another cluster reaches it. An address
+    chosen for the store itself wins; else its copy on Homestead's VIP
+    (homestead_self_address), made where the store sat on the nodes' own
+    addresses. The copy keeps the port it was made with, so preferring it
+    over a chosen address would send backups to an old address and port."""
     if service is None:
+        main = _get(f"/api/v1/namespaces/{NS}/services/{NAME}")
         vip = _get(f"/api/v1/namespaces/{NS}/services/{NAME}-vip")
-        service = vip if vip else _get(f"/api/v1/namespaces/{NS}/services/{NAME}")
+        service = main if (main and _current_address(main)) or not vip else vip
     if not service:
         return ""
     ingress = ((service.get("status", {}) or {}).get("loadBalancer", {}) or {}).get("ingress", [])
