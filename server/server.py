@@ -5272,8 +5272,6 @@ def _vmstore_loop():
                 with self_data_activity():
                     VMSTORE.refresh()
                     # ISO copies no VM has used for a while (homestead_isos.py).
-                    for name in ISOS.unlock():
-                        print(f"ISO library: {name} no longer holds its ISO read-only", flush=True)
                     for name in ISOS.tidy():
                         print(f"ISO library: removed {name}, unused for {ISOS.keep_days()} days", flush=True)
                 beat("vmstore", 3600, leader_only=True)
@@ -5459,7 +5457,8 @@ def _baseline_loop():
 def _host_fix_loop():
     """On the leader, what k3s and RKE2 undo at each start: the installer's
     auto-deploy files (homestead_manifests.py), and a second default storage
-    class. Checked a minute after starting, then every ten minutes."""
+    class; and VMs still holding an ISO read-only. Checked a minute after
+    starting, then every ten minutes."""
     time.sleep(60)
     while True:
         if LEADER.is_leader():
@@ -5470,6 +5469,9 @@ def _host_fix_loop():
                               f"{', '.join(marked) or 'no installer files (none left)'} at start", flush=True)
                     for node, disk, tags in DISKS.auto_tag():
                         print(f"storage: {node} {disk} tagged {', '.join(tags)}", flush=True)
+                    # VMs made before 2.8.228 hold their ISO read-only and cannot start.
+                    for name in ISOS.unlock():
+                        print(f"ISO library: {name} no longer holds its ISO read-only", flush=True)
                     fixed = reconcile_default_class()
                     if fixed:
                         print(f"storage: {fixed[0]} kept as the default class; "
