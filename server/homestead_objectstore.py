@@ -72,6 +72,21 @@ def _decode(secret, key):
         return ""
 
 
+def _port(service=None):
+    """The port the store answers on: what its Service says, 9000 unless an
+    admin chose another because 9000 was taken on the shared address."""
+    if service is None:
+        service = _get(f"/api/v1/namespaces/{NS}/services/{NAME}")
+    for row in ((service or {}).get("spec") or {}).get("ports") or []:
+        if row.get("name") == "s3" and row.get("port"):
+            return int(row["port"])
+    return PORT
+
+
+def _console_port(port):
+    return CONSOLE_PORT if port == PORT else port + 1
+
+
 def endpoint(service=None):
     """Where the bucket answers, preferring the address another cluster can use
     - its VIP, where Homestead moved it onto one (homestead_self_address)."""
@@ -85,10 +100,11 @@ def endpoint(service=None):
                     if row.get("ip") or row.get("hostname")), "")
     address = address or (service.get("metadata", {}).get("annotations", {})
                           or {}).get(VIP_ANNOTATION, "")
+    port = _port(service)
     if address:
-        return f"http://{address}:{PORT}"
+        return f"http://{address}:{port}"
     # In-cluster only: usable by Longhorn here, not by another cluster.
-    return f"http://{NAME}.{NS}.svc:{PORT}"
+    return f"http://{NAME}.{NS}.svc:{port}"
 
 
 def status():
@@ -114,6 +130,7 @@ def status():
         "deployed": bool(deployment),
         "ready": bool(deployment) and ready > 0,
         "endpoint": where,
+        "port": _port(service) if service else PORT,
         "reachable_off_cluster": bool(where) and ".svc:" not in where,
         "bucket": BUCKET,
         "size_gb": _claim_size(claim),
@@ -207,7 +224,7 @@ def ensure_bucket(base=None):
     if _bucket["ok"]:
         return True
     keys = credentials()
-    url = f"{base or f'http://{NAME}.{NS}.svc:{PORT}'}/{BUCKET}"
+    url = f"{base or f'http://{NAME}.{NS}.svc:{_port()}'}/{BUCKET}"
     if _s3("HEAD", url, keys["access_key"], keys["secret_key"]) == 200:
         _bucket["ok"] = True
         return True
@@ -250,21 +267,35 @@ def _apply(path, name, body):
 VIP_KEYS = ("kube-vip.io/loadbalancerIPs", "metallb.universe.tf/loadBalancerIPs")
 
 
-def shared_address():
+def _shared_plan(port):
+    return NETWORK.service_plan({
+        "namespace": NS, "name": f"{NAME}-plan", "workload": NAME, "type": "LoadBalancer",
+        "vip_mode": "shared",
+        "ports": [{"port": port, "target_port": "s3", "name": "s3"},
+                  {"port": _console_port(port), "target_port": "console", "name": "console"}]},
+        require_workload=False)
+
+
+def shared_address(port=PORT):
     """Homestead's shared address for the store, checked as an app sharing it
     would be: its ports free there, and not the cluster's own address. Empty
-    where Services go on the nodes' own addresses instead (k3s's ServiceLB)."""
+    where Services go on the nodes' own addresses instead (k3s's ServiceLB).
+    A taken port is refused with a free one named, so the admin can pick it."""
     try:
-        plan = NETWORK.service_plan({
-            "namespace": NS, "name": f"{NAME}-plan", "workload": NAME, "type": "LoadBalancer",
-            "vip_mode": "shared",
-            "ports": [{"port": PORT, "target_port": "s3", "name": "s3"},
-                      {"port": CONSOLE_PORT, "target_port": "console", "name": "console"}]},
-            require_workload=False)
+        return _shared_plan(port)["vip"]
     except (ValueError, PermissionError) as error:
-        raise ValueError(f"The backup storage cannot share Homestead's address: {error}. "
-                         "Give it an address of its own.") from error
-    return plan["vip"]
+        free = ""
+        for candidate in (9000, 9010, 9020, 9100, 19000, 29000):
+            if candidate == port:
+                continue
+            try:
+                _shared_plan(candidate)
+                free = f" Port {candidate} is free there."
+                break
+            except (ValueError, PermissionError):
+                continue
+        raise ValueError(f"The backup storage cannot share Homestead's address on port {port}: {error}. "
+                         f"Choose another port for it, or give it an address of its own.{free}") from error
 
 
 def _current_address(service):
@@ -285,12 +316,19 @@ def deploy(cfg=None):
         raise ValueError("object storage size must be between 5 and 16384 GiB")
     address = str(cfg.get("lb_ip") or "").strip()
     existing = _get(f"/api/v1/namespaces/{NS}/services/{NAME}")
+    # The port asked for; else the one a running store has; else 9000.
+    try:
+        port = int(cfg.get("port") or 0) or (_port(existing) if existing else PORT)
+    except (TypeError, ValueError):
+        raise ValueError("the backup storage port is a number")
+    if not 1 <= port <= 65534:
+        raise ValueError("the backup storage port is between 1 and 65534 (the one above it is its console)")
     if address:
         NETWORK.check_address(address)
-    elif existing and cfg.get("vip_mode") != "shared":
+    elif existing and cfg.get("vip_mode") != "shared" and port == _port(existing):
         address = _current_address(existing)
     else:
-        address = shared_address()
+        address = shared_address(port)
     keys = credentials()
 
     _apply(f"/api/v1/namespaces/{NS}/secrets", SECRET,
@@ -349,8 +387,8 @@ def deploy(cfg=None):
         "metadata": {"name": NAME, "namespace": NS, "labels": labels,
                      "annotations": PLATFORM.vip_annotations(address)},
         "spec": {"type": "LoadBalancer", "selector": {"app": NAME}, **PLATFORM.vip_spec(address),
-                 "ports": [{"name": "s3", "port": PORT, "targetPort": "s3"},
-                           {"name": "console", "port": CONSOLE_PORT,
+                 "ports": [{"name": "s3", "port": port, "targetPort": "s3"},
+                           {"name": "console", "port": _console_port(port),
                             "targetPort": "console"}]},
     }
     _apply(f"/api/v1/namespaces/{NS}/services", NAME, service)
@@ -375,7 +413,7 @@ def transfers():
             "backups_here": backups_here}
 
 
-def set_transfers(allow, size_gb=100, lb_ip="", vip_mode=""):
+def set_transfers(allow, size_gb=100, lb_ip="", vip_mode="", port=0):
     """Turn moves out of this cluster on or off: start the store (setting it
     up the first time) or stop it. Stopping keeps its volume, and with it the
     backups already made; they are there when it starts again."""
@@ -383,7 +421,8 @@ def set_transfers(allow, size_gb=100, lb_ip="", vip_mode=""):
     deployment = _get(path)
     if allow:
         if not deployment:
-            result = deploy({"size_gb": size_gb, "lb_ip": lb_ip, "vip_mode": vip_mode, "point_longhorn": True})
+            result = deploy({"size_gb": size_gb, "lb_ip": lb_ip, "vip_mode": vip_mode, "port": port,
+                             "point_longhorn": True})
             return {**transfers(), "detail": f"moves out are on: backup storage is starting at {result.get('endpoint') or 'its address'}"}
         ksend("PATCH", path, {"spec": {"replicas": 1}}, ctype="application/merge-patch+json")
         return {**transfers(), "allowed": True, "detail": "moves out are on: backup storage is starting again"}

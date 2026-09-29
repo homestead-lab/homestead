@@ -616,18 +616,19 @@ def _needs_update(name):
     return version if release and release < RUSTFS_SINCE else ""
 
 
-def transfers(name, allow=None, size_gb=100, lb_ip="", vip_mode=""):
+def transfers(name, allow=None, size_gb=100, lb_ip="", vip_mode="", port=0):
     """Whether migration from another cluster is on, or turn it on or off."""
     try:
         if allow is None:
             return remote(name, "/api/objectstore/transfers")
         return remote(name, "/api/objectstore/transfers", {"allow": bool(allow), "size_gb": int(size_gb or 100),
-                                                           "lb_ip": str(lb_ip or ""), "vip_mode": str(vip_mode or "")})
+                                                           "lb_ip": str(lb_ip or ""), "vip_mode": str(vip_mode or ""),
+                                                           **({"port": int(port)} if port else {})})
     except Missing as error:
         raise ValueError(f"{name} runs a Homestead too old to turn moves out on and off; update it first") from error
 
 
-def setup_storage(name, size_gb=100, lb_ip="", vip_mode=""):
+def setup_storage(name, size_gb=100, lb_ip="", vip_mode="", port=0):
     """Put backup storage on the far cluster, as its own Data protection page
     would: MinIO on a Longhorn volume, with Longhorn's backups pointed at it.
     Done as the stored account, which a move already needs to be admin."""
@@ -646,6 +647,7 @@ def setup_storage(name, size_gb=100, lb_ip="", vip_mode=""):
     # No address asked for: the far cluster's shared address, where it has one.
     result = remote(name, "/api/objectstore/deploy",
                     {"size_gb": size_gb, "lb_ip": str(lb_ip or "").strip(), "point_longhorn": True,
+                     **({"port": int(port)} if port else {}),
                      **({"vip_mode": "shared"} if vip_mode == "shared" and not str(lb_ip or "").strip() else {})})
     where = result.get("endpoint") or ""
     wanted = str(lb_ip or "").strip()
@@ -668,6 +670,9 @@ def setup_storage(name, size_gb=100, lb_ip="", vip_mode=""):
     if wanted and wanted not in endpoint:
         raise ValueError(f"{name} did not take the address: its backups still go to {endpoint or 'nothing'}. "
                          "Its Homestead may be too old to set one - update it and try again.")
+    if port and endpoint and not endpoint.rstrip("/").endswith(f":{int(port)}"):
+        raise ValueError(f"{name} did not take port {port}: its backups still go to {endpoint}. "
+                         "Its Homestead may be too old to choose one - update it and try again.")
     reachable = False
     for _ in range(6):
         if answers(endpoint):
