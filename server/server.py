@@ -5363,6 +5363,9 @@ RECLASS.bind(kget, ksend, raw_get, storage_classes, LHCAP.status, _own_namespace
 REVERT.bind(kget, ksend, RECLASS, is_self)
 NODESHELL.bind(kget, ksend, DEFAULT_NS)
 HOSTRUN.bind(kget, ksend, lambda *a, **k: FILES._exec(*a, **k), DEFAULT_NS)
+import homestead_host_console as HOST_CONSOLE
+HOST_CONSOLE.bind(kget, HOSTRUN, OPS, HOMESTEAD_VERSION, DATA_DIR)
+OPS.RESOLVERS["host-console"] = HOST_CONSOLE.status
 MANIFESTS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 HOST_LIMITS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 NODE_PARITY.bind(kget, ksend, HOSTRUN, PLATFORM.detect, node_temps, DATA_DIR)
@@ -7009,6 +7012,7 @@ def needed_role(path, method):
                 "/api/node/bridge/inspect", "/api/node/bridge",
                 # A host's package manager: refreshing its lists, installing updates.
                 "/api/node/os/check", "/api/node/os/upgrade",
+                "/api/host-console",
                 # Every host's OS, one at a time: updates, drains and restarts.
                 "/api/os-updates/settings", "/api/os-updates/start", "/api/os-updates/stop",
                 # A host's devices to VMs: vfio-pci, IOMMU in GRUB, KubeVirt's permitted devices.
@@ -7540,6 +7544,8 @@ class H(BaseHTTPRequestHandler):
                                                        (q.get("failures") or [""])[0] == "1"))
             if p == "/api/settings":
                 return self._send(200, app_settings_payload())
+            if p == "/api/host-console":
+                return self._send(200, HOST_CONSOLE.inventory())
             if p == "/api/overview":
                 return self._send(200, cached("ov", 5, get_overview))
             if p == "/api/nodes":
@@ -8486,7 +8492,7 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/move/source":
                 action, kind, name = b.get("action"), b.get("kind"), b.get("name")
                 actions = {"quiesce": lambda: MOVE_SOURCE.quiesce(kind, name),
-                           "backup": lambda: MOVE_SOURCE.backup(kind, name),
+                           "backup": lambda: MOVE_SOURCE.backup(kind, name, bool(b.get("retry_failed"))),
                            "release": lambda: MOVE_SOURCE.release(kind, name),
                            "remove": lambda: MOVE_SOURCE.remove(kind, name,
                                                                 bool(b.get("volumes")))}
@@ -8500,7 +8506,7 @@ class H(BaseHTTPRequestHandler):
                 return self._move(lambda: call(
                     b.get("cluster"), b.get("kind") or "container", b.get("name"),
                     b.get("namespace") or DEFAULT_NS, b.get("address_mode") or "shared",
-                    b.get("address") or ""))
+                    b.get("address") or "", b.get("storage_class") or ""))
             if p == "/api/move/moves/retry":
                 return self._move(lambda: MOVE_ENGINE.retry(b.get("id")))
             if p == "/api/move/moves/abandon":
@@ -8632,6 +8638,9 @@ class H(BaseHTTPRequestHandler):
                     raise ValueError("which host?")
                 facts = HOST_OS.read(node, refresh=True)
                 return self._send(200, {"ok": True, "facts": {**facts, "summary": HOST_OS.summary(facts)}})
+            if p == "/api/host-console":
+                return self._send(200, {"ok": True, "operation": HOST_CONSOLE.start(
+                    str(b.get("node") or ""), str(b.get("action") or "inspect"))})
             if p == "/api/node/os/upgrade":
                 node = str(b.get("node") or "")
                 if not node:

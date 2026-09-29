@@ -264,7 +264,7 @@ def _public(item):
         out["batch_name"] = item["ref"]["name"]
     if item.get("kind") == "snapshot-delete":
         out["cancellable"] = False  # Longhorn merging cannot be undone or safely interrupted.
-    if item.get("kind") == "self-data-prepare":
+    if item.get("kind") in ("self-data-prepare", "host-console"):
         out["cancellable"] = out["cleanable"] = False
     if item.get("kind") == "workload-rename":
         out["tracking_only"] = True
