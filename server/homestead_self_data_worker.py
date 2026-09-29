@@ -274,9 +274,9 @@ try{const r=await fetch('/api/self/data/abandon',{method:'POST',credentials:'sam
 catch(e){error.textContent=e.message;error.hidden=false;this.disabled=false}};
 async function refresh(){try{const r=await fetch('/api/self/data/handoff/OPERATION',{credentials:'same-origin',cache:'no-store'});
 if(r.status===401||r.status===403){document.querySelector('#message').textContent='Open the browser where you confirmed this move to view its progress. No new login is needed.';return;}
-const s=await r.json();if(!s.operation)throw Error();document.querySelector('#message').textContent=s.message;
+const s=await r.json().catch(()=>({}));if(!s.operation)throw Error(s.error||'');document.querySelector('#message').textContent=s.message;
 document.querySelector('#abandon').hidden=s.can_abandon!==true;document.querySelector('#return').hidden=s.live!==true;
 document.querySelector('#stages').replaceChildren(...(s.stages||[]).map(x=>{const li=document.createElement('li');li.textContent=x.label;li.dataset.state=x.state;return li}));
 if(s.status==='done'||s.status==='cancelled'){document.querySelector('#return').hidden=false;setTimeout(()=>location.replace('/settings'),5000);return;}}
-catch(e){document.querySelector('#message').textContent='Reconnecting… The last shown stage is not confirmation of completion.'}setTimeout(refresh,3000)}refresh();
+catch(e){document.querySelector('#message').textContent=(e.message?'Homestead says: '+e.message+' - trying again. ':'Reconnecting… Homestead may be restarting. ')+'The last shown stage is not confirmation of completion.'}setTimeout(refresh,3000)}refresh();
 </script></html>'''.replace("OPERATION", operation)

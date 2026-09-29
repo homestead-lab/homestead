@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.230")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.231")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -8871,6 +8871,13 @@ def _samba_loop():
                     print("network shares: restored NFS exports from the share inventory", flush=True)
             except Exception as error:
                 print(f"NFS exports: {str(error)[:180]}", flush=True)
+            try:
+                with self_data_activity():
+                    moved = OBJECTS.keep_in_step()
+                if moved:
+                    print(f"object store: moved to {moved}", flush=True)
+            except Exception as error:
+                print(f"object store: {str(error)[:180]}", flush=True)
         time.sleep(60)
 
 
