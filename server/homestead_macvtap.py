@@ -166,31 +166,63 @@ def inspect():
     desired, available = status.get("desiredNumberScheduled", 0), status.get("numberAvailable", 0)
     current = (status.get("observedGeneration", 0) >= (ds.get("metadata") or {}).get("generation", 1)
                and status.get("updatedNumberScheduled", 0) == desired)
-    binding = binding_registered()
+    kv = _kubevirt()
+    binding = binding_registered(kv) and nad_lookup(kv)
     ready = desired > 0 and available == desired and current and binding
     out.update(installed=True, ready=ready, binding=binding, version=_tag(containers[0].get("image")),
                desired=desired, available=available, state="ready" if ready else "not-ready",
                detail=(f"macvtap ready on {available} of {desired} nodes" if binding
-                       else "macvtap runs, but KubeVirt's macvtap binding is not registered"))
+                       else "macvtap runs, but KubeVirt is not set up for it yet (its binding, or reading a network's device)"))
     return out
 
 
+def _version(kv):
+    match = re.match(r"v?(\d+)\.(\d+)", str(((kv or {}).get("status") or {}).get("observedKubeVirtVersion") or ""))
+    return (int(match.group(1)), int(match.group(2))) if match else None
+
+
+def nad_lookup(kv=None):
+    """Whether KubeVirt reads a network attachment's device resource and asks
+    for it in the VM's pod. From 1.8 its ExternalNetResourceInjection gate
+    (Beta, so on unless disabled) leaves that to a webhook; without one the
+    pod never gets its macvtap device and Multus fails: "deviceID is required"."""
+    kv = kv if kv is not None else _kubevirt()
+    version = _version(kv)
+    developer = ((((kv or {}).get("spec") or {}).get("configuration") or {}).get("developerConfiguration") or {})
+    if "ExternalNetResourceInjection" in (developer.get("featureGates") or []):
+        return False
+    return not version or version < (1, 8) or GATE in (developer.get("disabledFeatureGates") or [])
+
+
+GATE = "ExternalNetResourceInjection"
+
+
 def register_binding():
-    """KubeVirt's macvtap binding, beside any others. KubeVirt before 1.5
-    also needs its NetworkBindingPlugins feature switched on."""
+    """KubeVirt's macvtap binding, beside any others, and KubeVirt reading
+    the devices macvtap networks name (nad_lookup). KubeVirt before 1.5 also
+    needs its NetworkBindingPlugins feature switched on."""
     kv = _kubevirt()
     if not kv:
         raise ValueError("KubeVirt is not installed")
     meta = kv["metadata"]
     path = f"/apis/kubevirt.io/v1/namespaces/{meta['namespace']}/kubevirts/{meta['name']}"
     patch = {"spec": {"configuration": {"network": {"binding": BINDING}}}}
-    version = str((kv.get("status") or {}).get("observedKubeVirtVersion") or "")
-    match = re.match(r"v?(\d+)\.(\d+)", version)
-    if match and (int(match.group(1)), int(match.group(2))) < (1, 5):
-        developer = ((kv["spec"].get("configuration") or {}).get("developerConfiguration") or {})
+    version = _version(kv)
+    developer = ((kv["spec"].get("configuration") or {}).get("developerConfiguration") or {})
+    changes = {}
+    if version and version < (1, 5):
         gates = list(developer.get("featureGates") or [])
         if "NetworkBindingPlugins" not in gates:
-            patch["spec"]["configuration"]["developerConfiguration"] = {"featureGates": gates + ["NetworkBindingPlugins"]}
+            changes["featureGates"] = gates + ["NetworkBindingPlugins"]
+    if version and version >= (1, 8):
+        gates = [g for g in developer.get("featureGates") or [] if g != GATE]
+        if gates != list(developer.get("featureGates") or []):
+            changes["featureGates"] = gates
+        disabled = list(developer.get("disabledFeatureGates") or [])
+        if GATE not in disabled:
+            changes["disabledFeatureGates"] = disabled + [GATE]
+    if changes:
+        patch["spec"]["configuration"]["developerConfiguration"] = changes
     ksend("PATCH", path, patch, ctype="application/merge-patch+json")
 
 
@@ -206,12 +238,22 @@ def install(cfg=None):
         raise ValueError("this cluster has no Helm controller, so Homestead cannot install macvtap")
     version = str(cfg.get("version") or VERSION)
     if inspect()["installed"]:
-        if not binding_registered():
+        if not (binding_registered() and nad_lookup()):
             register_binding()
             return {"ok": True, "name": CHART, "detail": "KubeVirt's macvtap binding is registered"}
         raise ValueError("macvtap is installed already")
-    addons._post_chart(CHART, {"chartContent": addons.chart_archive("macvtap", version, manifests(p.get("distribution", ""), version), ""),
-                               "targetNamespace": NS})
+    content = addons.chart_archive("macvtap", version, manifests(p.get("distribution", ""), version), "")
+    try:
+        chart = kget(f"/apis/helm.cattle.io/v1/namespaces/{NS}/helmcharts/{CHART}")
+    except Exception:
+        chart = None
+    if chart:
+        # An earlier try that Helm could not apply: its chart is replaced,
+        # which runs the install again.
+        chart.setdefault("spec", {})["chartContent"] = content
+        ksend("PUT", f"/apis/helm.cattle.io/v1/namespaces/{NS}/helmcharts/{CHART}", chart)
+    else:
+        addons._post_chart(CHART, {"chartContent": content, "targetNamespace": NS})
     register_binding()
     return {"ok": True, "name": CHART, "job": f"helm-install-{CHART}", "version": version,
             "detail": f"macvtap {version} is being installed, and KubeVirt's macvtap binding registered"}

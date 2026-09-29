@@ -168,7 +168,12 @@ LAN like any other machine. **＋ LAN network** makes one:
   starts on a new installation, and macvtap once KubeVirt is there. An older
   installation shows **Required components not installed** under **Settings →
   Cluster → Add-ons** and here, with **Install components**. macvtap is
-  upgraded under **System → Cluster → Platform versions**.
+  upgraded under **System → Cluster → Platform versions**. Installing it also
+  switches off KubeVirt's `ExternalNetResourceInjection` feature (on by default
+  from KubeVirt 1.8), so KubeVirt asks for the macvtap device a VM's network
+  names - without it the VM's pod never gets one and Multus reports
+  `deviceID is required`. macvtap's device plugin watches files, so Homestead
+  also raises each host's inotify limits (below).
 
 ### A host bridge
 
