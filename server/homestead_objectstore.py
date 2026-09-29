@@ -437,7 +437,8 @@ def remove(keep_data=True):
     """Take the store away. The volume stays unless it is explicitly released."""
     removed = []
     for path in (f"/apis/apps/v1/namespaces/{NS}/deployments/{NAME}",
-                 f"/api/v1/namespaces/{NS}/services/{NAME}"):
+                 f"/api/v1/namespaces/{NS}/services/{NAME}",
+                 f"/api/v1/namespaces/{NS}/services/{NAME}-vip"):
         try:
             ksend("DELETE", path)
             removed.append(path.rsplit("/", 2)[-2])

@@ -49,7 +49,7 @@ if command -v apt-get >/dev/null 2>&1; then
   echo "PKG apt"
   [ "$REFRESH" = 1 ] && DEBIAN_FRONTEND=noninteractive apt-get -qq -o DPkg::Lock::Timeout=60 update >/dev/null 2>&1 && echo "REFRESHED"
   echo "LISTS $(ls -t /var/lib/apt/lists/*_Packages 2>/dev/null | head -n 1 | xargs -r stat -c %Y 2>/dev/null)"
-  apt-get -s -o Debug::NoLocking=1 dist-upgrade 2>/dev/null | awk '/^Inst /{s=($0 ~ /-security/) ? "security" : ""; print "UPD " $2 "|" s}' | head -n 800
+  apt-get -s -o Debug::NoLocking=1 upgrade --with-new-pkgs 2>/dev/null | awk '/^Inst /{s=($0 ~ /-security/) ? "security" : ""; print "UPD " $2 "|" s}' | head -n 800
 elif command -v dnf >/dev/null 2>&1; then
   echo "PKG dnf"
   [ "$REFRESH" = 1 ] && dnf -q makecache >/dev/null 2>&1 && echo "REFRESHED"
@@ -91,10 +91,12 @@ HOLD_TEXT = ('// Homestead installs updates on this host itself (Nodes > OS upda
              'Unattended-Upgrade::Automatic-Reboot "false";\n')
 
 # The whole upgrade runs on the host, detached: a systemd unit of its own,
-# which a helper pod being deleted cannot stop halfway through dpkg.
+# which a helper pod being deleted cannot stop halfway through dpkg. apt's
+# upgrade --with-new-pkgs, not dist-upgrade: new kernels come in, but no
+# package is ever removed - open-iscsi, say, which Longhorn cannot do without.
 UPGRADE = {
     "apt": ("apt-get -o DPkg::Lock::Timeout=300 update && DEBIAN_FRONTEND=noninteractive apt-get -y "
-            "-o DPkg::Lock::Timeout=300 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade"),
+            "-o DPkg::Lock::Timeout=300 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade --with-new-pkgs"),
     "dnf": "dnf -y upgrade --refresh",
     "zypper": "zypper --non-interactive refresh && zypper --non-interactive update",
 }

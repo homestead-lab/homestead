@@ -83,7 +83,7 @@ class PassthroughTests(unittest.TestCase):
                          (gpu["name"], gpu["driver"], gpu["boot_vga"], gpu["offered"]))
         self.assertEqual(["0000:01:00.1", "0000:00:01.0"], gpu["group_members"])
         self.assertIn("carries this host's network", rows["0000:03:00.0"]["problems"][0])
-        self.assertIn("mounted", rows["0000:04:00.0"]["problems"][0])
+        self.assertIn("in use", rows["0000:04:00.0"]["problems"][0])
         self.assertFalse(rows["0000:00:00.0"]["offered"], "the chipset is not offered")
         self.assertEqual({"0bda:8153", "1a6e:089a"}, {f"{u['vendor']}:{u['product']}" for u in facts["usb"]},
                          "root hubs are left out")
@@ -102,7 +102,7 @@ class PassthroughTests(unittest.TestCase):
         self.assertIn("HostDevices", self.cluster.kv["spec"]["configuration"]["developerConfiguration"]["featureGates"])
 
     def test_the_hosts_network_and_system_disk_are_refused(self):
-        for address, words in (("0000:03:00.0", "network"), ("0000:04:00.0", "mounted")):
+        for address, words in (("0000:03:00.0", "network"), ("0000:04:00.0", "in use")):
             with self.subTest(words=words), self.assertRaisesRegex(ValueError, words):
                 PASS.give("k3s-1", address)
         self.assertFalse(any("driver_override" in s for s in self.host.scripts), "nothing was unbound")

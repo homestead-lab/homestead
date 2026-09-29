@@ -191,9 +191,8 @@ host_longhorn_volume() {
 host_multipath() {
   systemctl is-active --quiet multipathd 2>/dev/null || return 0
   grep -qs 'devnode "\^sd\[a-z0-9\]+"' /etc/multipath.conf && return 0
-  root=$(findmnt -n -o SOURCE / 2>/dev/null || true)
-  if [ -n "$root" ] && lsblk -s -n -o TYPE "$root" 2>/dev/null | grep -q mpath; then
-    echo "  This machine boots from a multipath device; /etc/multipath.conf is left as it is."
+  if for m in $(findmnt -rn -o SOURCE 2>/dev/null | grep '^/dev/'); do lsblk -s -n -o TYPE "$m" 2>/dev/null; done | grep -q mpath; then
+    echo "  A filesystem here is mounted from a multipath device; /etc/multipath.conf is left as it is."
     return 0
   fi
   echo "  Keeping multipathd off Longhorn's devices (/etc/multipath.conf)"

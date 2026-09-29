@@ -142,6 +142,31 @@ class VmTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 VMS.edit("default", "win11", bad)
 
+    def test_deleting_with_its_disks_spares_the_iso_library_and_other_vms_disks(self):
+        c = self.use()
+        vol = c.vm["spec"]["template"]["spec"]
+        vol["domain"]["devices"]["disks"] += [{"name": "cd", "cdrom": {"bus": "sata"}}, {"name": "data", "disk": {"bus": "virtio"}}]
+        vol["volumes"] += [{"name": "cd", "persistentVolumeClaim": {"claimName": "iso-win11-1"}},
+                           {"name": "data", "persistentVolumeClaim": {"claimName": "shared-data"}}]
+        other = {"metadata": {"name": "other"}, "spec": {"template": {"spec": {"volumes": [
+            {"name": "d", "persistentVolumeClaim": {"claimName": "shared-data"}}]}}}}
+        pvcs = {"items": PVCS["items"] + [
+            {"metadata": {"name": "iso-win11-1", "labels": {"homestead.io/iso": "true"}}},
+            {"metadata": {"name": "shared-data"}}]}
+        get = c.get
+        c.get = lambda path: ({"items": [copy.deepcopy(c.vm), other]} if path.endswith("/virtualmachines")
+                              else pvcs if path.endswith("/persistentvolumeclaims")
+                              else {"metadata": {}} if path.endswith(("/persistentvolumeclaims/shared-data", "/persistentvolumeclaims/iso-win11-1"))
+                              else get(path))
+        VMS.bind(c.get, c.send, lambda *a, **k: [])
+        result = VMS.delete("default", "win11", with_disks=True)
+        deleted = [p for m, p, b in c.sent if m == "DELETE"]
+        self.assertFalse(any("iso-win11-1" in p or "shared-data" in p for p in deleted), deleted)
+        put = next(b for m, p, b in c.sent if m == "PUT")
+        self.assertEqual("win11-disk-0", put["metadata"]["annotations"]["harvesterhci.io/removedPVCs"],
+                         "Harvester is not asked to remove them either")
+        self.assertIn("iso-win11-1, shared-data kept", result["detail"])
+
     def test_deleting_with_its_disks(self):
         c = self.use()
         VMS.delete("default", "win11", with_disks=True)

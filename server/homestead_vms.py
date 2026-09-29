@@ -1125,12 +1125,32 @@ def delete(ns, name, with_disks=False):
     its instance and the disks it owns are gone."""
     vm = _get(ns, name)
     every = [d["claim"] for d in _row(vm, {})["disks"] if d["claim"] and d["kind"] in ("disk", "cd-rom")]
+    if with_disks:
+        # Never a disk that is not this VM's alone: an ISO from the library (or
+        # the drivers CD) other VMs share, or any claim another VM also uses.
+        # Unreadable, nothing is taken as this VM's alone.
+        try:
+            others = kget(f"{API}/namespaces/{ns}/virtualmachines")
+            if not isinstance(others.get("items"), list) or (others.get("metadata") or {}).get("continue"):
+                raise ValueError("incomplete")
+        except Exception:
+            raise ValueError("the other VMs could not be read, so no disk is deleted with it; "
+                             "delete the VM alone, or try again") from None
+        shared = {_volume_claim(v) for other in others["items"] if other["metadata"]["name"] != name
+                  for v in ((other.get("spec") or {}).get("template") or {}).get("spec", {}).get("volumes") or []}
+        claims_now = _claims(ns, strict=True)
+        library = {c for c in every if ((claims_now.get(c) or {}).get("metadata", {}).get("labels") or {})
+                   .get("homestead.io/iso") == "true"}
+        spared = sorted((shared | library) & set(every))
+        every = [c for c in every if c not in spared]
+    else:
+        spared = []
     dvs = _datavolumes(ns)
     unfinished = [c for c in every if ((dvs.get((ns, c)) or {}).get("status") or {}).get("phase") not in (None, "", "Succeeded")
                   and (ns, c) in dvs]
     claims = every if with_disks else unfinished
     uid = vm["metadata"].get("uid", "")
-    for claim in ([] if with_disks else [c for c in every if c not in unfinished]):
+    for claim in (spared if with_disks else [c for c in every if c not in unfinished]):
         if uid:
             _release(ns, claim, uid)
     if claims:
@@ -1164,6 +1184,8 @@ def delete(ns, name, with_disks=False):
     detail = f"{name} is being deleted"
     if with_disks:
         detail += f" with {len(removed)} disk{'s' if len(removed) != 1 else ''}"
+        if spared:
+            detail += f"; {', '.join(spared)} kept, as other VMs or the ISO library use {'it' if len(spared) == 1 else 'them'}"
     else:
         kept = [c for c in every if c not in unfinished]
         if unfinished:

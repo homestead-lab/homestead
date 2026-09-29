@@ -5385,6 +5385,8 @@ DISK_SETUP.bind(HOSTRUN)
 HOST_BRIDGE.bind(HOSTRUN, kget, ksend)
 OPS.RESOLVERS["host-bridge"] = HOST_BRIDGE.status
 DISKS.setup_module = DISK_SETUP
+DISK_SETUP.longhorn_block_paths = DISKS.longhorn_block_paths
+PASSTHROUGH.longhorn_block_paths = DISKS.longhorn_block_paths
 DISKS.autotag_state = lambda: os.path.join(DATA_DIR, "disk-autotags.json")
 
 

@@ -41,6 +41,11 @@ import re
 import homestead_shared as SHARED
 
 kget = ksend = hostrun = platform = None
+# The raw devices Longhorn's V2 engine uses on a node (homestead_disks); None
+# when unreadable. They are not mounted, so they are looked for by name: the
+# controller under one holds Longhorn's data and never goes to a VM.
+longhorn_block_paths = lambda node: []
+BLOCK_PATH = re.compile(r"/dev/[A-Za-z0-9/_.:+@-]+")
 DATA_DIR = "/data"
 KUBEVIRTS = "/apis/kubevirt.io/v1/kubevirts"
 HV = "/apis/devices.harvesterhci.io/v1beta1"
@@ -177,7 +182,7 @@ def parse(out):
         if default_ifaces & set(row["nets"]):
             problems.append("it carries this host's network")
         if any(f"/{address}/" in path for path in mounted):
-            problems.append("a disk on it is mounted by the host")
+            problems.append("a disk on it is in use by the host or by Longhorn")
         row["problems"] = problems
         # Worth giving a VM: storage, network, display, multimedia, USB
         # controllers and accelerators - not bridges or the chipset's own.
@@ -201,7 +206,13 @@ def inspect(node):
     """A host's devices, as it sees them now."""
     if _harvester():
         return _harvester_inventory(node)
-    out, err = hostrun.run(node, INSPECT, timeout=90)
+    claimed = longhorn_block_paths(node)
+    if claimed is None:
+        raise ValueError(f"Longhorn's disks on {node} could not be read, so its devices are not offered")
+    extra = "".join(f'r=$(readlink -f "{p}" 2>/dev/null); [ -b "$r" ] && for n in $(lsblk -snro NAME "$r" 2>/dev/null); '
+                    f'do echo "MOUNTED $(readlink -f /sys/class/block/$n)"; done\n'
+                    for p in claimed if BLOCK_PATH.fullmatch(p))
+    out, err = hostrun.run(node, INSPECT.replace("echo END\n", extra + "echo END\n"), timeout=90)
     facts = parse(out)
     if not facts["complete"]:
         raise ValueError(f"could not look at {node}'s devices: {(err or out)[-200:]}")

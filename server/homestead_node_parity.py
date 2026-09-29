@@ -10,7 +10,7 @@ machine do not:
   multipathd off sd devices in /etc/multipath.conf; the installer does that
   on each machine it sets up, and the leader does it once on any node that
   joined without it - unless the host itself boots from a multipath device,
-  which is then left alone. iscsid, installed but stopped, is started too;
+  and one with any mounted filesystem on a multipath device is left alone. iscsid, installed but stopped, is started too;
 - kube-vip: installed on one machine, it was told that machine's network
   interface. A node whose interface is named differently cannot announce a
   VIP there, so once the nodes' probes disagree the name is taken out and
@@ -57,7 +57,7 @@ elif [ -d /etc/systemd ]; then
 fi
 [ "$LONGHORN" = 1 ] || { echo END; exit 0; }
 if systemctl is-active --quiet multipathd 2>/dev/null; then
-  if [ -n "$R" ] && lsblk -s -n -o TYPE "$R" 2>/dev/null | grep -q mpath; then echo "MULTIPATH root"
+  if for m in $(findmnt -rn -o SOURCE 2>/dev/null | grep '^/dev/'); do lsblk -s -n -o TYPE "$m" 2>/dev/null; done | grep -q mpath; then echo "MULTIPATH root"
   elif grep -qs 'devnode "\^sd\[a-z0-9\]+"' /etc/multipath.conf; then echo "MULTIPATH kept"
   else
     [ -f /etc/multipath.conf ] && cp /etc/multipath.conf /etc/multipath.conf.homestead-backup
