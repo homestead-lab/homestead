@@ -51,6 +51,43 @@ import homestead_networking as NETWORK
 import homestead_longhorn as LH
 
 
+SINGLE_CLASS = "homestead-single-copy"
+SC_PATH = "/apis/storage.k8s.io/v1/storageclasses"
+
+
+def single_copy_class():
+    """A Longhorn class keeping one copy, for the store's volume.
+
+    The store stages backups for moves; three copies of it cost three times
+    the space for nothing a move needs, and on a small cluster a volume the
+    size of the store may not fit three times at all. Made from Homestead's
+    own class, so disks, engine and the rest match; "" where that class is
+    not Longhorn's, or a class of this name exists that Homestead did not make.
+    """
+    base = _get(f"{SC_PATH}/{LH.STORAGE_CLASS}")
+    if not base or base.get("provisioner") != "driver.longhorn.io":
+        return ""
+    parameters = dict(base.get("parameters") or {})
+    # Harvester's class makes live-migratable VM disks, which a pod cannot mount.
+    parameters.update(numberOfReplicas="1", migratable="false")
+    existing = _get(f"{SC_PATH}/{SINGLE_CLASS}")
+    if existing:
+        mine = ((existing.get("metadata") or {}).get("labels") or {}).get("app.kubernetes.io/managed-by") == "homestead"
+        return SINGLE_CLASS if mine and existing.get("provisioner") == "driver.longhorn.io" else ""
+    body = {"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
+            "metadata": {"name": SINGLE_CLASS,
+                         "labels": {"app.kubernetes.io/managed-by": "homestead"},
+                         "annotations": {"homestead.io/base-storage-class": LH.STORAGE_CLASS,
+                                         "homestead.io/purpose": "backup storage for moves: one copy"}},
+            "provisioner": "driver.longhorn.io", "allowVolumeExpansion": True,
+            "reclaimPolicy": "Delete", "volumeBindingMode": "Immediate", "parameters": parameters}
+    for key in ("mountOptions", "allowedTopologies"):
+        if base.get(key):
+            body[key] = list(base[key])
+    ksend("POST", SC_PATH, body)
+    return SINGLE_CLASS
+
+
 def bind(_kget, _ksend, _create_pvc, namespace):
     global kget, ksend, create_pvc, NS
     kget, ksend, create_pvc, NS = _kget, _ksend, _create_pvc, namespace
@@ -111,6 +148,19 @@ def endpoint(service=None):
     return f"http://{NAME}.{NS}.svc:{port}"
 
 
+def _volume_problem(claim):
+    """Why Longhorn cannot give the store its volume, in Longhorn's words:
+    no room for its copies, say. Empty when it can, or cannot tell."""
+    volume = ((claim or {}).get("spec") or {}).get("volumeName")
+    if not volume:
+        return ""
+    item = _get(f"/apis/longhorn.io/v1beta2/namespaces/{LHNS}/volumes/{volume}") or {}
+    for condition in (item.get("status") or {}).get("conditions") or []:
+        if condition.get("type") == "Scheduled" and condition.get("status") == "False":
+            return condition.get("message") or condition.get("reason") or "Longhorn cannot place its copies"
+    return ""
+
+
 def status():
     """What exists, whether it is serving, and whether Longhorn is pointed at it."""
     deployment = _get(f"/apis/apps/v1/namespaces/{NS}/deployments/{NAME}")
@@ -138,6 +188,7 @@ def status():
         "reachable_off_cluster": bool(where) and ".svc:" not in where,
         "bucket": BUCKET,
         "size_gb": _claim_size(claim),
+        "volume_problem": _volume_problem(claim) if deployment and not ready else "",
         "backup_url": backup_url(),
         "image": IMAGE,
     }
@@ -339,7 +390,7 @@ def deploy(cfg=None):
            _secret_body(SECRET, NS, {"accesskey": keys["access_key"],
                                      "secretkey": keys["secret_key"]}))
     if not _get(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{NAME}"):
-        create_pvc(NS, NAME, size_gb, cfg.get("storage_class") or None, "ReadWriteOnce")
+        create_pvc(NS, NAME, size_gb, cfg.get("storage_class") or single_copy_class() or None, "ReadWriteOnce")
 
     labels = {"app": NAME, NAMES.key("managed"): "true"}
     current = _get(f"/apis/apps/v1/namespaces/{NS}/deployments/{NAME}")
@@ -414,6 +465,7 @@ def transfers():
     return {"allowed": state["deployed"] and not state["stopped"], "deployed": state["deployed"],
             "ready": state["ready"], "stopped": state["stopped"], "endpoint": state["endpoint"],
             "reachable_off_cluster": state["reachable_off_cluster"], "size_gb": state["size_gb"],
+            "volume_problem": state.get("volume_problem", ""),
             "backups_here": backups_here}
 
 
