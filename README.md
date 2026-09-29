@@ -209,10 +209,10 @@ Homestead checks what the cluster has, and each page works with that.
 | **Containers, App Store, Compose, Portal, Networking, IP addresses, Resources, dashboard** | yes | yes | yes |
 | **Volumes, data protection, disks** | yes, with Longhorn - the installer adds it, or Settings → Cluster → Add-ons | yes, Longhorn is built in | yes, with Longhorn - Settings → Cluster → Add-ons installs it on RKE2 |
 | **Virtual machines** | yes, with [KubeVirt](https://kubevirt.io) - the installer adds it, or Add-ons | built in | yes, with KubeVirt - Add-ons installs it on RKE2 |
-| **Addresses for apps** | a VIP per app with kube-vip, and LAN addresses with Multus - both installed by Homestead - beside the nodes' own addresses (ServiceLB) | a VIP per app (kube-vip), LAN addresses (Multus) | RKE2 from the installer: as k3s; others: MetalLB or kube-vip |
+| **Addresses for apps** | a VIP per app with kube-vip, and LAN addresses with Multus (and macvtap for VMs, or a host bridge Homestead can make) - installed by Homestead - beside the nodes' own addresses (ServiceLB) | a VIP per app (kube-vip), LAN addresses (Multus) | RKE2 from the installer: as k3s; others: MetalLB or kube-vip |
 | **Helm charts** | yes (k3s's Helm controller) | yes (RKE2's Helm controller) | yes on RKE2; listing only without a Helm controller |
 | **Adding a host** | the join command for a worker or a server | a guide to Harvester's installer | RKE2's join commands |
-| **Platform upgrades** | k3s, Longhorn, KubeVirt, CDI, kube-vip and Multus, a step at a time | followed on the Cluster page | RKE2: as k3s; others: shown |
+| **Platform upgrades** | k3s, Longhorn, KubeVirt, CDI, kube-vip, Multus and macvtap, a step at a time | followed on the Cluster page | RKE2: as k3s; others: shown |
 
 ## Documentation
 

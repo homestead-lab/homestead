@@ -591,14 +591,15 @@ window.doVmMove = async (ns, name) => {
 /* LAN networks a container can join; for a VM, only those on a bridge -
    macvlan cannot carry a VM's own MAC. */
 function vmLanNetworks(opts, forVm = false) {
-  return (opts.network_details || []).filter(n => n.lan && (!forVm || n.vms !== false));
+  // macvlan carries containers only, macvtap VMs only; a bridge both.
+  return (opts.network_details || []).filter(n => n.lan && (forVm ? n.vms !== false : n.containers !== false));
 }
 function vmNetworkNote(opts, forVm = false) {
   if (vmLanNetworks(opts, forVm).length) return "";
   const other = forVm && vmLanNetworks(opts).length;
   return `<div class="note" style="margin-top:8px"><b>${other ? "No LAN network a VM can join yet." : "No LAN network yet."}</b>
-    ${other ? "The ones there use macvlan, which carries containers only; a VM needs one on a host bridge."
-      : `A LAN network puts ${opts.harvester ? "VMs and containers" : "containers (and, on a host bridge, VMs)"} on your LAN, untagged like the hosts or on a VLAN.`}
+    ${other ? "The ones there use macvlan, which carries containers only; a VM needs a macvtap network or one on a host bridge."
+      : `A LAN network puts ${opts.harvester ? "VMs and containers" : "VMs or containers"} on your LAN, untagged like the hosts or on a VLAN.`}
     <button class="btn sm pri" data-need="admin" style="margin-top:6px" onclick="vmNetworkAdd()">＋ Make one</button></div>`;
 }
 
@@ -622,29 +623,50 @@ window.vmNetworkAdd = async (reopen = null) => {
   }
   const clusters = o.cluster_networks?.length ? o.cluster_networks : ["mgmt"];
   const ifaces = o.interfaces || [];
-  const ifaceWord = i => `${i.name} · ${i.kind === "bridge" ? "bridge - VMs and containers" : `${i.kind}${i.master ? ` in ${i.master}` : ""} - containers`}${i.everywhere ? "" : ` · only on ${i.nodes.join(", ")}`}`;
+  const ifaceWord = i => `${i.name} · ${i.kind === "bridge" ? "bridge - VMs and containers" : `${i.kind}${i.master ? ` in ${i.master}` : ""}`}${i.everywhere ? "" : ` · only on ${i.nodes.join(", ")}`}`;
   const carrier = o.harvester
     ? `<div class="f"><label>Cluster network ${tip("Which of Harvester's cluster networks it rides on. mgmt is the hosts' own network - the usual choice.")}</label>
         <select id="vn_cluster">${clusters.map(c => `<option ${c === "mgmt" ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></div>`
-    : `<div class="f"><label>Host interface ${tip("The interface on each host that your LAN is on. A bridge (br0) carries VMs and containers. A plain NIC (eth0) carries containers through macvlan, each with a MAC of its own - a VM needs a bridge. Every host needs one of the same name.")}</label>
-        ${ifaces.length ? `<select id="vn_iface">${ifaces.map(i => `<option value="${esc(i.name)}">${esc(ifaceWord(i))}</option>`).join("")}</select>`
-          : `<input id="vn_iface" class="mono" placeholder="eth0 or br0">`}</div>`;
+    : `<div class="f"><label>Host interface ${tip("The interface on each host that your LAN is on. A bridge (br0) carries VMs and containers. On a plain NIC (eth0), a network carries VMs (macvtap) or containers (macvlan), not both. Every host needs one of the same name.")}</label>
+        ${ifaces.length ? `<select id="vn_iface" onchange="vmNetworkForChanged()">${ifaces.map(i => `<option value="${esc(i.name)}" data-kind="${esc(i.kind)}">${esc(ifaceWord(i))}</option>`).join("")}</select>`
+          : `<input id="vn_iface" class="mono" placeholder="eth0 or br0" oninput="vmNetworkForChanged()">`}</div>`;
+  const forVms = back === "vm" || back === "k3s";
+  const usedBy = o.harvester ? "" : `<div class="f" id="vn_for_row"><label>For ${tip("A plain NIC can carry VMs, through macvtap, or containers, through macvlan - each with an address of its own on your LAN. Make one network of each to have both. Through macvtap a VM cannot be reached from its own host; other machines on the LAN reach it.")}</label>
+      <select id="vn_for" onchange="vmNetworkForChanged()"><option value="vms" ${forVms ? "selected" : ""}>Virtual machines (macvtap)</option>
+        <option value="containers" ${forVms ? "" : "selected"}>Containers (macvlan)</option></select>
+      <div id="vn_for_note"></div></div>`;
   open("New LAN network", `
-    <p class="small" style="margin-top:0">${o.harvester ? "VMs and containers" : "Containers - and VMs, on a host bridge -"} on it are on your LAN, with addresses from your router's DHCP or ones of their own.</p>
+    <p class="small" style="margin-top:0">VMs and containers on it are on your LAN, with addresses from your router's DHCP or ones of their own.</p>
     <div class="f2"><div class="f"><label>Name ${tip("How it is listed wherever a network is chosen, like lan or vlan20.")}</label><input id="vn_name" value="lan"></div>
       ${carrier}</div>
     ${!o.harvester && !ifaces.length ? '<div class="dim xs">The node probe has not reported the hosts\' interfaces, so type the name - <span class="mono">ip link</span> on a host lists them.</div>' : ""}
+    ${usedBy}
     <div class="f"><label>VLAN ${tip("Empty: untagged - the same LAN the hosts are on. A number: that VLAN, which your switch must carry to the hosts.")}</label>
       <input id="vn_vlan" type="number" min="1" max="4094" placeholder="empty - untagged, the hosts' own LAN"></div>
     <div class="row" style="margin-top:14px"><button class="btn pri" onclick="vmNetworkAddGo()">Make it</button>
       <button class="btn" onclick="modalBack()">Cancel</button></div>`);
   window.__vmNetworkReopen = back;
+  window.__vmNetworkOptions = o;
+  vmNetworkForChanged();
+};
+/* A bridge carries both; on a NIC the choice is made, and macvtap must be there. */
+window.vmNetworkForChanged = () => {
+  const o = window.__vmNetworkOptions || {}, row = $("#vn_for_row");
+  if (!row) return;
+  const picked = $("#vn_iface")?.selectedOptions?.[0];
+  const bridge = picked ? picked.dataset.kind === "bridge" : /^(br|vmbr|virbr)/.test($("#vn_iface")?.value || "");
+  row.hidden = bridge;
+  const vms = $("#vn_for").value === "vms";
+  $("#vn_for_note").innerHTML = !bridge && vms && !o.macvtap
+    ? `<div class="note small" style="margin-top:6px"><b>macvtap is not installed yet.</b> It is one of Homestead's required components where VMs run.
+        <button class="btn sm pri" data-need="admin" onclick="baselineInstall()">Install components</button></div>` : "";
 };
 window.vmNetworkAddGo = async () => {
   try {
     const r = await api("/api/network/vm-networks", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: $("#vn_name").value.trim(), cluster_network: $("#vn_cluster")?.value || "",
-        interface: $("#vn_iface")?.value.trim() || "", vlan: $("#vn_vlan").value.trim() }) });
+        interface: $("#vn_iface")?.value.trim() || "", vlan: $("#vn_vlan").value.trim(),
+        for: $("#vn_for_row") && !$("#vn_for_row").hidden ? $("#vn_for").value : "" }) });
     toast(r.detail, "ok");
     window.__vmCreateOptions = null;
     const reopen = window.__vmNetworkReopen;

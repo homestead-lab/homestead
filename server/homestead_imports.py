@@ -2456,10 +2456,13 @@ def prepare_vm(cfg, platform=None, default_class=""):
         found = _get_or_none(f"/apis/k8s.cni.cncf.io/v1/namespaces/{nad_ns}/network-attachment-definitions/{nad}")
         if not found:
             raise ValueError(f"there is no LAN network {network}")
-        if '"macvlan"' in ((found.get("spec") or {}).get("config") or ""):
+        config_text = (found.get("spec") or {}).get("config") or ""
+        if '"macvlan"' in config_text:
             raise ValueError(f"{network} is a macvlan network, which carries containers only: "
-                             "a VM needs a LAN network on a host bridge")
-        interface = {"name": "default", "bridge": {}, "model": "virtio", "macAddress": mac}
+                             "a VM needs a macvtap network or one on a host bridge")
+        # macvtap is joined through KubeVirt's binding for it, a bridge directly.
+        binding = {"binding": {"name": "macvtap"}} if '"macvtap"' in config_text else {"bridge": {}}
+        interface = {"name": "default", **binding, "model": "virtio", "macAddress": mac}
         net = {"name": "default", "multus": {"networkName": network}}
     network_data, address = ("", "")
     if cfg.get("static_ip"):
