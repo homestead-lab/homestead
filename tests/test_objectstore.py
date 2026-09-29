@@ -89,6 +89,34 @@ class ObjectStoreTests(unittest.TestCase):
         self.assertEqual("192.0.2.243",
                          service["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
 
+    def test_the_store_keeps_one_copy_on_a_class_of_its_own(self):
+        self.objects["/apis/storage.k8s.io/v1/storageclasses/longhorn-r2"] = {
+            "provisioner": "driver.longhorn.io",
+            "parameters": {"numberOfReplicas": "3", "migratable": "true", "diskSelector": "ssd"}}
+        store.deploy({"size_gb": 100, "lb_ip": "192.0.2.243", "point_longhorn": False})
+        made = next(b for m, p, b in self.sent if p == "/apis/storage.k8s.io/v1/storageclasses")
+        self.assertEqual("homestead-single-copy", made["metadata"]["name"])
+        self.assertEqual({"numberOfReplicas": "1", "migratable": "false", "diskSelector": "ssd"}, made["parameters"])
+        self.assertEqual([("lab", "homestead-objectstore", 100, "homestead-single-copy", "ReadWriteOnce")], self.claims)
+
+    def test_a_volume_longhorn_cannot_place_is_explained(self):
+        self._deployment(1)
+        self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-objectstore"]["status"] = {"readyReplicas": 0}
+        self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/homestead-objectstore"] = {
+            "spec": {"volumeName": "pvc-3a8d", "resources": {"requests": {"storage": "500Gi"}}}}
+        self.objects["/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/pvc-3a8d"] = {"status": {"conditions": [
+            {"type": "Scheduled", "status": "False", "reason": "ReplicaSchedulingFailure",
+             "message": "precheck new replica failed: insufficient storage"}]}}
+        self.assertEqual("precheck new replica failed: insufficient storage", store.transfers()["volume_problem"])
+
+    def test_a_class_of_that_name_homestead_did_not_make_is_not_used(self):
+        self.objects["/apis/storage.k8s.io/v1/storageclasses/longhorn-r2"] = {"provisioner": "driver.longhorn.io", "parameters": {}}
+        self.objects["/apis/storage.k8s.io/v1/storageclasses/homestead-single-copy"] = {
+            "metadata": {"name": "homestead-single-copy"}, "provisioner": "driver.longhorn.io"}
+        store.deploy({"lb_ip": "192.0.2.243", "point_longhorn": False})
+        self.assertEqual(None, self.claims[0][3], "the cluster's default instead")
+        self.assertFalse(any(p.endswith("/storageclasses") for _, p, _ in self.sent))
+
     def _sent_service(self):
         return [b for _, p, b in self.sent if "/services" in p][-1]
 

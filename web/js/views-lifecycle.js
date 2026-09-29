@@ -1868,8 +1868,8 @@ window.clusterStorage = (name, addressOnly = false, after = null) => {
           <option value="__typed">Type an address…</option></select>
         <input id="cs_ip" class="mono" placeholder="192.0.2.243" hidden data-ipam>`,
         { help: `${shared ? `${esc(name)}'s shared address is the one its apps share; the store answers on its own port there.` : `${esc(name)} puts Services on its nodes' own addresses; the store answers on its own port there.`} Choose an address of its own only to keep its traffic apart.` }),
-      addressOnly ? "" : UI.field("Port", '<input id="cs_port" type="number" min="1" max="65534" value="9000" class="mono">',
-        { help: "Where the store answers. Pick another if an app there already uses 9000; the next port up is its console." }))}
+      addressOnly ? "" : UI.field("Port", '<input id="cs_port" type="number" min="1" max="65534" placeholder="9000" class="mono">',
+        { help: "Where the store answers: 9000, or the port it already has, when left blank. Pick another if an app there already uses it; the next port up is its console." }))}
     ${UI.more("Whose address this is", `<p>The address belongs to ${esc(name)}, the cluster sending the workloads: its backup store answers on it.
       This cluster never takes it - it only connects to it to read the backups during a move. It shares ${esc(name)}'s disks, so it is for moving, not your only copy of anything.</p>`)}
     ${UI.actions(UI.button("Cancel", "modalBack()") + UI.button(addressOnly ? "Set the address" : "Set it up", `clusterStorageGo(${jsArg(name)})`, { kind: "pri", id: "cs_go" }))}

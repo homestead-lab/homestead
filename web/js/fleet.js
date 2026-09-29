@@ -239,9 +239,16 @@ window.fleetMigration = async id => {
   let body;
   if (state.allowed) {
     const problems = [];
-    if (!state.ready) problems.push(["warn", "Its backup storage is starting.", "Its first start downloads the S3 server; this takes a minute or two.", ""]);
+    const same = (a, b) => String(a || "").replace(/\/+$/, "") === String(b || "").replace(/\/+$/, "");
+    if (!state.ready && state.volume_problem) problems.push(["bad", "Its backup storage cannot start: Longhorn has no room for its volume.",
+      `Longhorn says: ${state.volume_problem}. Disable migration, remove the backup storage under ${m.name}'s Data protection, and enable migration again with a smaller size.`, ""]);
+    else if (!state.ready) problems.push(["warn", "Its backup storage is starting.", "Its first start downloads the S3 server; this takes a minute or two.", ""]);
     else if (!state.reachable_off_cluster) problems.push(["warn", "It has no LAN address, so no other cluster can read it.", "",
       m.self ? "" : UI.button("Give it an address", `clusterStorage(${jsArg(m.handle)},true,()=>fleetMigration(${jsArg(id)}))`)]);
+    else if (ready && target.configured && target.endpoint && state.endpoint && !same(target.endpoint, state.endpoint))
+      problems.push(["warn", `${m.name}'s Longhorn backs up to ${target.endpoint}, not to its backup storage at ${state.endpoint}.`,
+        "Pointing Longhorn at the store sends moves' backups where this cluster can read them.",
+        UI.button("Point Longhorn at it", `clusterStorage(${jsArg(m.handle)},false,()=>fleetMigration(${jsArg(id)}))`)]);
     else if (ready && target.configured && !target.answers) problems.push(["warn", `This cluster cannot reach it at ${target.endpoint}.`,
       "It may still be starting; otherwise the address is taken or firewalled.",
       UI.button("Give it another address", `clusterStorage(${jsArg(m.handle)},true,()=>fleetMigration(${jsArg(id)}))`)]);
@@ -267,7 +274,7 @@ window.fleetMigration = async id => {
             <option value="__typed">An address of its own…</option></select>
           <input id="fm_ip" class="mono" placeholder="192.0.2.243" hidden data-ipam>`,
           { help: "Shared with its apps, on its own port. Choose an address of its own only to keep its traffic apart." }),
-        UI.field("Port", '<input id="fm_port" type="number" min="1" max="65534" value="9000" class="mono">',
+        UI.field("Port", '<input id="fm_port" type="number" min="1" max="65534" placeholder="9000" class="mono">',
           { help: "Where the store answers. Pick another if an app there already uses 9000; the next port up is its console." }))}
       ${UI.actions(UI.cancel() + UI.button("Enable migration", `fleetMigrationSet(${jsArg(id)}, true)`, { kind: "pri", id: "fm_go", attrs: 'data-need="admin"' }))}`;
   }
