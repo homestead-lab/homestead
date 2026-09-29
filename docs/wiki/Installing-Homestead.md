@@ -33,6 +33,40 @@ Both install the same objects - the chart is generated from the manifest.
 
 Updates are the same either way: Homestead updates itself, below.
 
+## Local host console
+
+The interactive installer enables a **Host Console** by default on k3s and RKE2
+servers and workers. It replaces the first local console's login screen with
+live CPU, RAM, uptime, IP addresses and local disk usage. Server nodes also show
+cluster members, readiness, Kubernetes versions and Homestead's service address.
+Workers show local health; cluster details require a server's local kubeconfig.
+Harvester keeps its native console.
+
+Press **Enter**, **Q** or **Escape** for the normal authenticated login prompt.
+Use the arrow keys or Page Up/Down to scroll. The screen returns after logout.
+SSH and other consoles work as usual. Host metrics refresh every two seconds;
+cluster status refreshes every fifteen seconds and shows API failures.
+
+Choose **No** at the Host Console question, or set `HS_CONSOLE=no` for unattended
+installation. To enable or disable it later, use **Configure host status console**
+in the installer menu, or run the downloaded installer:
+
+```sh
+sudo sh install.sh --console
+sudo sh install.sh --no-console
+```
+
+Changes take effect on the next boot or logout, so installation does not
+interrupt a logged-in administrator. The console needs systemd, agetty and
+Python 3 with curses; the installer installs Python if needed. It reads local
+metrics and Kubernetes status without displaying credentials or providing an
+unauthenticated shell. The screen is visible to anyone with physical or remote
+console access.
+
+For manual removal, delete only
+`/etc/systemd/system/getty@tty1.service.d/50-homestead-console.conf`, then run
+`sudo systemctl daemon-reload`. Normal login returns on the next boot or logout.
+
 ## First sign-in
 
 Open `http://<address>:8088`. The first visit asks for an administrator's name
