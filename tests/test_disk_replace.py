@@ -174,6 +174,25 @@ class ReplaceFailedDiskTests(unittest.TestCase):
         self.assertEqual([], c.bds)                     # the dead drive's inactive record
         self.assertIn("Add the new drive", item["message"])
 
+    def test_a_copy_that_became_the_last_since_the_review_is_kept(self):
+        c = Cluster()
+        item = DISKS.retire_start({"node": "node3", "disk": "bd-sdb"}, OPS())
+        # jellyfin's copy on node1 fails after the review: node3's is its last.
+        next(r for r in c.replicas if r["metadata"]["name"] == "r-else-1")["spec"]["failedAt"] = "2026-09-29T00:00:00Z"
+        run(item)
+        deleted = [p.rsplit("/", 1)[1] for m, p, b in c.sent if m == "DELETE" and "/replicas/" in p]
+        self.assertEqual(["r-waits"], deleted)
+        self.assertIn("r-else", item["ref"]["keep"])
+
+    def test_nothing_is_deleted_when_the_replicas_cannot_be_read(self):
+        c = Cluster()
+        get = c.get
+        c.get = lambda path: (_ for _ in ()).throw(urllib.error.HTTPError(path, 500, "busy", None, None))             if path.endswith("/replicas") else get(path)
+        DISKS.bind(c.get, c.send, lambda: c.probe)
+        with self.assertRaises(urllib.error.HTTPError):
+            DISKS.retire_plan("node3", "bd-sdb")
+        self.assertFalse([m for m, p, b in c.sent if m == "DELETE"])
+
     def test_healthy_copies_elsewhere_are_never_touched(self):
         c = Cluster()
         run(DISKS.retire_start({"node": "node3", "disk": "bd-sdb", "force": True, "confirm": "bd-sdb"}, OPS()))

@@ -58,14 +58,20 @@ try {
   }
   await page.evaluate(() => closeModal());
   await page.locator(".vip-card").nth(1).getByRole("button", { name: "Use this VIP" }).click();
+  // Nothing is picked for the address until someone chooses the app.
+  await page.getByText("Use 192.0.2.109", {exact:true}).waitFor();
+  assert.equal(await page.locator("#net_workload").inputValue(), "");
+  assert.equal(await page.locator("#net_rest").isHidden(), true);
+  await page.locator("#net_workload").selectOption("lab/guest/VirtualMachine");
   assert.equal(await page.locator("#net_mode").inputValue(), "manual");
   assert.equal(await page.locator("#net_lb_ip").inputValue(), "192.0.2.109");
   assert.equal(await page.evaluate(() => networkConfig().vip), "192.0.2.109");
   await page.evaluate(() => closeModal());
   await page.getByRole("button", { name: "Expose workload" }).click();
-  await page.getByText("Connect a workload to your network", {exact:true}).waitFor();
+  await page.getByText("Connect an app to your network", {exact:true}).waitFor();
   await page.locator("#net_workload").waitFor({state: "attached"});
-  assert.equal(await page.locator("#net_workload").inputValue(), "lab/guest/VirtualMachine");
+  assert.equal(await page.locator("#net_workload").inputValue(), "");
+  await page.locator("#net_workload").selectOption("lab/guest/VirtualMachine");
   assert.equal(await page.locator("#net_mode").inputValue(), "shared");
   await page.locator("input[name=net_access][value=manual]").check();
   await page.locator('input[name=net_address][value="192.0.2.109"]').check();

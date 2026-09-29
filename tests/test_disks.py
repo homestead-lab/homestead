@@ -36,6 +36,7 @@ class Cluster:
     def __init__(self, harvester=True, lh=None):
         self.bds = [copy.deepcopy(BD_SDB)] if harvester else None
         self.lh = copy.deepcopy(lh or LH_NODE)
+        self.replicas = []
         self.sent = []
         DISKS.bind(self.get, self.send, lambda: PROBE)
 
@@ -50,6 +51,8 @@ class Cluster:
             return {"items": [self.lh]}
         if path.endswith("/nodes/node1"):
             return self.lh
+        if path.endswith("/replicas"):
+            return {"items": self.replicas}
         raise AssertionError(path)
 
     def send(self, method, path, body=None, **kw):
@@ -106,6 +109,12 @@ class DiskTests(unittest.TestCase):
                          c.sent[-1][2]["spec"]["disks"]["default-disk"])
         c.lh["status"]["diskStatus"]["default-disk"]["scheduledReplica"] = {}
         c.lh["spec"]["disks"]["default-disk"]["allowScheduling"] = False
+        # A disk whose status forgot its replicas still has them: they say so.
+        c.replicas = [{"metadata": {"name": "r3"}, "spec": {"nodeID": "node1", "diskPath": "/var/lib/harvester/defaultdisk",
+                                                            "volumeName": "pvc-1"}}]
+        with self.assertRaisesRegex(ValueError, "1 replica"):
+            DISKS.remove("node1", "default-disk")
+        c.replicas = []
         DISKS.remove("node1", "default-disk")
         self.assertEqual({"spec": {"disks": {"default-disk": None}}}, c.sent[-1][2])
 

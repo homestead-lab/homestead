@@ -43,6 +43,10 @@ macvtap = None           # homestead_macvtap
 probe = None             # homestead_probe
 probe_version = "dev"
 PROBE = "node-probe"
+# The address the installer was given for Homestead and apps: reserved, made
+# the apps' default, and Homestead's own services put on it (bound by the
+# server: vip -> what happened) - once kube-vip is there to answer on it.
+vip_setup = None
 YES = ("yes", "true", "1", "install")
 _lock = threading.Lock()
 
@@ -119,6 +123,30 @@ def requested():
             if str(data.get(part, "")).lower() in YES}
 
 
+def vip_tick():
+    """The installer's VIP set up once, after kube-vip (or MetalLB) is serving.
+    Returns what happened, or None when there was nothing to do yet."""
+    vip = str(_request().get("vip") or "").strip()
+    if not vip or vip_setup is None:
+        return None
+    p = platform(True) or {}
+    if p.get("harvester") or p.get("load_balancer") not in ("kube-vip", "metallb"):
+        return None
+    with _lock:
+        state = _load()
+        done = state.setdefault("done", {})
+        if "vip" in done:
+            return None
+        row = {"at": int(time.time()), "version": vip, "reason": "installer", "error": ""}
+        try:
+            detail = vip_setup(vip)
+        except Exception as error:
+            row["error"] = detail = str(error)[:240]
+        done["vip"] = row
+        _save(state)
+    return {"id": "vip", "ok": not row["error"], "detail": detail}
+
+
 def probe_tick():
     """The node probe, installed once if the installer asked. Returns what
     happened, or None when there was nothing to do."""
@@ -193,6 +221,10 @@ def tick():
     if asked:
         print(f"platform: node probe (requested at installation): "
               f"{'installing' if asked['ok'] else 'installation failed'}: {asked['detail']}", flush=True)
+    placed = vip_tick()
+    if placed:
+        print(f"platform: VIP (requested at installation): {'set up' if placed['ok'] else 'not set up'}: "
+              f"{placed['detail']}", flush=True)
     wanted = requested()
     if not wanted:
         return []

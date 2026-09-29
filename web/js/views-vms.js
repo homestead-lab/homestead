@@ -444,16 +444,17 @@ function vmEditResourceFields(v) {
 
 window.vmEdit = async (ns, name) => {
   modal(`Edit · ${name}`, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
-  let v, o;
+  let v, o, res;
   try {
-    [v, o] = await Promise.all([api(`/api/vm?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`),
-      api("/api/vm/create-options").catch(() => ({ cdi: true, images: [], storage_classes: [], networks: ["pod"], nodes: [] }))]);
+    [v, o, res] = await Promise.all([api(`/api/vm?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`),
+      api("/api/vm/create-options").catch(() => ({ cdi: true, images: [], storage_classes: [], networks: ["pod"], nodes: [] })),
+      api("/api/passthrough/resources").catch(() => ({ resources: [] }))]);
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   window.__vmEdit = { ns, name, v, o };
   const tab = (id, label) => `<button class="${id === "general" ? "on" : ""}" onclick="vmEditTab(this,${jsq(id)})">${label}</button>`;
   const disks = v.disks.filter(d => d.kind === "disk" || d.kind === "cd-rom");
   const ci = v.cloud_init || {};
-  $("#mbody").innerHTML = `<div class="between vm-edit-tabs"><div class="seg">${tab("general", "General")}${v.hardware ? tab("hardware", "Hardware") : ""}${tab("disks", `Disks · ${disks.length}`)}${tab("network", `Network · ${v.nics.length}`)}${tab("cloud", "Cloud-init")}</div>
+  $("#mbody").innerHTML = `<div class="between vm-edit-tabs"><div class="seg">${tab("general", "General")}${v.hardware ? tab("hardware", "Hardware") : ""}${tab("disks", `Disks · ${disks.length}`)}${tab("network", `Network · ${v.nics.length}`)}${tab("devices", `Devices · ${(v.host_devices || []).length}`)}${tab("cloud", "Cloud-init")}</div>
       <button class="btn sm" data-need="admin" onclick="vmYaml(${jsq(ns)},${jsq(name)})" title="Every field, as YAML">${icon("edit")}Edit YAML</button></div>
     <div class="ve-pane" data-pane="general" style="margin-top:12px">
       ${vmEditResourceFields(v)}
@@ -476,6 +477,7 @@ window.vmEdit = async (ns, name) => {
         <tbody id="ve_nics">${v.nics.map(n => vmNicRow(n, o)).join("")}</tbody></table></div>
       <div class="row" style="margin-top:10px"><button class="btn sm" onclick="vmAddNic()">＋ Interface</button></div>
       <div class="note small" style="margin-top:8px"><b>Direct LAN interface</b><p>A bridge/VLAN interface gets its IP from the LAN's DHCP server or the guest OS. The MAC field only identifies the NIC: it does not set an IP. For a stable guest IP, reserve the MAC in your DHCP server or configure networking inside the guest. Cloud-init network data is for initial provisioning and may not rerun on an existing VM.</p></div></div>
+    <div class="ve-pane" data-pane="devices" hidden style="margin-top:12px">${window.vmDevicesPane ? window.vmDevicesPane(v, res) : ""}</div>
     <div class="ve-pane" data-pane="cloud" hidden style="margin-top:12px">
       ${ci.source === "unreadable" ? `<div class="note bad">This VM's cloud-init is in a secret Homestead cannot read, so it is left as it is.</div>` : `
       ${ci.source === "secret" ? '<div class="dim xs" style="margin-bottom:8px">Kept in the VM\'s own secret, as Harvester does.</div>' : ""}
@@ -549,6 +551,10 @@ window.vmEditSave = async () => {
   if ($("#ve_cores") && +$("#ve_cores").value !== v.cores) body.cores = +$("#ve_cores").value;
   if ($("#ve_mem") && $("#ve_mem").value.trim() !== v.memory) body.memory = $("#ve_mem").value.trim();
   if ($("#ve_user")) body.cloud_init = { user_data: $("#ve_user").value, network_data: $("#ve_netdata").value };
+  try {
+    const devices = window.vmDevicesChanges ? await window.vmDevicesChanges() : null;
+    if (devices) body.host_devices = devices;
+  } catch (e) { return toast(`the ROM file could not be read: ${e.message}`, "bad"); }
   const hardware = v.hardware ? vmHardwareChanges(v.hardware) : null;
   if (hardware) {
     body.hardware = hardware;

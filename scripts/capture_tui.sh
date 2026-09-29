@@ -55,7 +55,8 @@ key Enter; shot kubernetes "Select the Kubernetes distribution"   # k3s or RKE2
 key Enter; shot checks "Results for"             # system checks, before any change
 key Enter; shot longhorn "Install Longhorn"      # components for the new cluster
 key Enter; shot nodeprobe "Install the node probe"   # the node probe, installed by Homestead
-key Enter; sleep 1; key Enter; shot ready "Review the settings"   # the installation summary
+key Enter; sleep 1; key Enter; shot vip "Homestead and Apps Address"   # a VIP for Homestead and apps
+key Enter; shot ready "Review the settings"   # the installation summary
 key Down; key Enter; shot versions "Select the k3s version"       # a component's releases
 key Escape; sleep 1; key Escape
 

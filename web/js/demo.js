@@ -220,8 +220,8 @@
     // Homestead itself: its Stop asks first, since it takes this page with it.
     { name: "homestead", ns: "lab", kind: "Deployment", group: "Homestead", self: true, platform: "Homestead", homestead: "self", desired: 1, ready: 1, uptime: 86400,
       cpu: 0.04, mem_mb: 88, nodes: ["harvester-node1"], hardware: [],
-      images: ["ghcr.io/wjcloudy/homestead:2.8.236"], ports: [{ port: 8088, ip: "192.0.2.242" }],
-      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/wjcloudy/homestead:2.8.236")] },
+      images: ["ghcr.io/wjcloudy/homestead:2.8.237"], ports: [{ port: 8088, ip: "192.0.2.242" }],
+      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/wjcloudy/homestead:2.8.237")] },
     { name: "homestead-smb", ns: "lab", kind: "Deployment", group: "Homestead", managed_smb: true, platform: "Homestead", homestead: "smb",
       desired: 1, ready: 1, uptime: 86400, cpu: 0.01, mem_mb: 40, nodes: ["harvester-node2"], hardware: [],
       images: ["dperson/samba:latest"], ports: [{ port: 445, ip: "192.0.2.245" }],
@@ -525,7 +525,7 @@
       uid: "demo-probe", resource_version: "1", detail: "Placement checks are disabled (demo; no host changes)",
       capacity: {blocked:false, blockers:[], warnings:[], nodes:[], fingerprint:"demo"}},
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.236", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.237", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
@@ -537,6 +537,40 @@
     "/api/history": history, "/api/storage": storage, "/api/volumes": volumes,
     "/api/nodes": nodes, "/api/nodes/uptime": demoUptime, "/api/node": url => nodes.find(n => n.name === url.searchParams.get("name")) || {},
     // A host's own OS, as the leader reads it on k3s and RKE2 (host-os.js).
+    // Homestead's own services, on node addresses until put on a VIP (views-network.js).
+    "/api/self/address": { on_vip: false, url: "", shared_vip: "192.0.2.242", components: [
+      { id: "web", label: "Homestead's web page", namespace: "lab", workload: "homestead", present: true, vip: "", vip_service: "",
+        node_addresses: ["192.0.2.207", "192.0.2.208"], ports: [{ name: "http", port: 8088, target_port: 8080, protocol: "TCP" }] },
+      { id: "objectstore", label: "Backup storage (S3)", namespace: "lab", workload: "homestead-objectstore", present: true, vip: "192.0.2.242", vip_service: "homestead-objectstore",
+        node_addresses: [], ports: [{ name: "s3", port: 9000, target_port: "s3", protocol: "TCP" }, { name: "console", port: 9001, target_port: "console", protocol: "TCP" }] },
+      { id: "smb", label: "Network shares (SMB)", namespace: "lab", workload: "homestead-smb", present: true, vip: "", vip_service: "",
+        node_addresses: ["192.0.2.207"], ports: [{ name: "smb", port: 445, target_port: 445, protocol: "TCP" }] }] },
+    "/api/self/address/plan": { vip: "192.0.2.242", steps: [
+      { id: "web", label: "Homestead's web page", action: "add", detail: "8088 on 192.0.2.242, as homestead-vip" },
+      { id: "objectstore", label: "Backup storage (S3)", action: "kept", detail: "already on 192.0.2.242" },
+      { id: "smb", label: "Network shares (SMB)", action: "add", detail: "445 on 192.0.2.242, as homestead-smb-vip" }] },
+    "/api/network/vips/change": { old: "192.0.2.242", new: "192.0.2.210", default: true, label: "Main VIP",
+      services: [{ namespace: "lab", name: "homestead-vip", ports: ["8088/TCP"], targets: ["homestead"] },
+        { namespace: "lab", name: "frigate", ports: ["5000/TCP"], targets: ["frigate"] }], detail: "192.0.2.242 is now 192.0.2.210; 2 Services moved with it" },
+    "/api/welcome": { show: false, done: false, harvester: false, load_balancer: "kube-vip", steps: {
+      address: { done: false, url: "", shared_vip: "192.0.2.242", vips: 2 }, probe: { done: true }, backups: { done: false },
+      updates: { applies: true, done: false } } },
+    // A host's devices for VMs (passthrough.js): a GPU handed over, a NIC the host needs.
+    "/api/passthrough/inspect": { node: "harvester-node1", harvester: false, iommu: true, cmdline_iommu: true, cpu: "intel", complete: true, kubevirt: true,
+      pci: [
+        { address: "0000:01:00.0", vendor: "10de", device: "1e87", class: "0300", class_name: "VGA compatible controller", name: "NVIDIA Corporation TU104 [GeForce RTX 2080]",
+          driver: "vfio-pci", group: "12", boot_vga: false, nets: [], vfio: true, listed: true, permitted: true, problems: [], group_members: ["0000:01:00.1"], offered: true, resource: "homestead.io/pci-10de-1e87" },
+        { address: "0000:01:00.1", vendor: "10de", device: "10f8", class: "0403", class_name: "Audio device", name: "NVIDIA Corporation TU104 HD Audio",
+          driver: "vfio-pci", group: "12", boot_vga: false, nets: [], vfio: true, listed: true, permitted: true, problems: [], group_members: ["0000:01:00.0"], offered: true, resource: "homestead.io/pci-10de-10f8" },
+        { address: "0000:03:00.0", vendor: "8086", device: "1533", class: "0200", class_name: "Ethernet controller", name: "Intel Corporation I210 Gigabit",
+          driver: "igb", group: "15", boot_vga: false, nets: ["enp3s0"], vfio: false, listed: false, permitted: false, problems: ["it carries this host's network"], group_members: [], offered: true, resource: "homestead.io/pci-8086-1533" },
+        { address: "0000:00:00.0", vendor: "8086", device: "3e30", class: "0600", class_name: "Host bridge", name: "Intel Corporation 8th Gen Core Host Bridge",
+          driver: "skl_uncore", group: "0", boot_vga: false, nets: [], vfio: false, listed: false, permitted: false, problems: [], group_members: [], offered: false, resource: "" }],
+      usb: [{ vendor: "1a6e", product: "089a", name: "Google Coral TPU (unflashed)", port: "1-4", resource: "homestead.io/usb-1a6e-089a", permitted: true },
+        { vendor: "1cf1", product: "0030", name: "dresden elektronik ConBee II", port: "1-2", resource: "homestead.io/usb-1cf1-0030", permitted: false }], listed: [] },
+    "/api/passthrough/resources": { sidecar: true, resources: [
+      { resource: "homestead.io/pci-10de-1e87", kind: "pci", label: "10DE:1E87", nodes: ["harvester-node1"] },
+      { resource: "homestead.io/usb-1a6e-089a", kind: "usb", label: "1a6e:089a", nodes: ["harvester-node1", "harvester-node3"] }] },
     // Every host's OS, one at a time (host-os.js): one host done, one restarting.
     "/api/os-updates": () => {
       const host = name => ({ os: "Ubuntu 24.04.3 LTS", updates: name === "harvester-node3" ? [{ name: "openssl", security: true }] : [],
@@ -676,13 +710,13 @@
       { name: "barn", url: "http://192.0.2.252:8088", user: "admin", added: "2026-05-02 18:40" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "garage") return { name, version: "", protocol: null, local_version: "2.8.236", local_protocol: 1,
+      if (name === "garage") return { name, version: "", protocol: null, local_version: "2.8.237", local_protocol: 1,
         state: "unreachable", message: "could not reach garage: no answer from http://192.0.2.251:8088" };
-      if (name === "barn") return { name, version: "2.8.190", protocol: 1, local_version: "2.8.236",
+      if (name === "barn") return { name, version: "2.8.190", protocol: 1, local_version: "2.8.237",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "barn runs 2.8.190 and this one 2.8.236. Moves work between them; this Homestead is the newer of the two." };
-      return { name, version: "2.8.236", protocol: 1, local_version: "2.8.236", local_protocol: 1,
-        state: "same", compatible: true, message: "Both run Homestead 2.8.236." };
+        message: "barn runs 2.8.190 and this one 2.8.237. Moves work between them; this Homestead is the newer of the two." };
+      return { name, version: "2.8.237", protocol: 1, local_version: "2.8.237", local_protocol: 1,
+        state: "same", compatible: true, message: "Both run Homestead 2.8.237." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     // shed is ready to move from; barn has no backup storage yet.
@@ -697,7 +731,7 @@
     "/api/move/clusters/storage": { ok: true, detail: "backup storage is starting on barn at http://192.0.2.244:9000" },
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "shed", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.236", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.237", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -1289,7 +1323,7 @@ ssh_pwauth: true
     "/api/volumes/reclass/start": { ok: true, operation: { id: "op4" } },
     "/api/self/health": () => {
       const now = Date.now() / 1000;
-      return { version: "2.8.236", leader: true, identity: "homestead-6d9f-abcde",
+      return { version: "2.8.237", leader: true, identity: "homestead-6d9f-abcde",
         api: { ok: true, ms: 38 },
         replicas: { desired: 1, pods: [{ name: "homestead-6d9f-abcde", node: "harvester-node1", ready: true, leader: true, this: true }] },
         loops: [{ name: "sampler", label: "Live charts", state: "ok", last_ok: now - 12, error: "", every: 30 },
@@ -1813,7 +1847,7 @@ ssh_pwauth: true
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       // Homestead's own release, offered on the top bar and under Settings › About.
       { ns: "lab", name: "homestead", homestead: "self", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: `ghcr.io/wjcloudy/homestead:${typeof HOMESTEAD_VERSION === "string" ? HOMESTEAD_VERSION : "2.8.236"}`, candidate: "ghcr.io/wjcloudy/homestead:2.9.0", candidate_tag: "2.9.0", remote_digest: "sha256:ghi", available: true }] },
+        images: [{ container: "homestead", deployed: `ghcr.io/wjcloudy/homestead:${typeof HOMESTEAD_VERSION === "string" ? HOMESTEAD_VERSION : "2.8.237"}`, candidate: "ghcr.io/wjcloudy/homestead:2.9.0", candidate_tag: "2.9.0", remote_digest: "sha256:ghi", available: true }] },
       { ns: "lab", name: "paperless", available: false, can_rollback: false,
         images: [{ container: "paperless", deployed: "registry.lan/paperless-ngx:2.11", candidate: "registry.lan/paperless-ngx:2.11", available: false, error: "registry authentication required" }] }] },
     // The demo is a Harvester cluster: kube-vip and Multus come with it.
@@ -1900,7 +1934,7 @@ ssh_pwauth: true
   Object.assign(responses, {
     "/api/config/parts": demoConfigParts.map(([id, label, detail, dflt, caution]) => ({ id, label, detail, caution: caution || "",
       default: id !== "users", present: id !== "vmstore" })),
-    "/api/config/backup": { format: "homestead-config-backup", version: 1, homestead: "2.8.236", site: "Loft rack",
+    "/api/config/backup": { format: "homestead-config-backup", version: 1, homestead: "2.8.237", site: "Loft rack",
       created: new Date().toISOString(), parts: [] },
     "/api/config/inspect": { homestead: "2.8.209", site: "Loft rack", created: "2026-09-26T21:40:00Z",
       parts: demoConfigParts.map(([id, label, detail, , caution], i) => ({ id, label, detail, caution: caution || "", default: id !== "users",

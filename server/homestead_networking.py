@@ -1011,6 +1011,63 @@ def remove_vip(ip):
     return {"ok": True, "detail": f"{ip} is no longer reserved for Homestead"}
 
 
+VIP_KEYS = ("kube-vip.io/loadbalancerIPs", "kube-vip.io/leaseName",
+            "metallb.universe.tf/loadBalancerIPs", "metallb.universe.tf/allow-shared-ip")
+
+
+def change_vip(old, new, apply=False):
+    """A reserved VIP given a new address, and - with it - every Service on it,
+    so nothing attached is left behind on the old one. Only its annotations
+    change: a Service keeps its name, ports and load-balancer class, and
+    kube-vip (or MetalLB) moves it to the new address, with a moment's gap for
+    open connections. Checked first as a whole: nothing moves if any Service
+    could not, or the new address is not free. Returns what moves."""
+    old, new = _ipv4(old, "current address"), _ipv4(new, "new address")
+    if old == new:
+        raise ValueError("the new address is the same as the current one")
+    state = inventory()
+    rows = registered()
+    entry = next((row for row in rows if row["ip"] == old), None)
+    if entry is None:
+        raise ValueError(f"{old} is not one of Your VIPs")
+    if new in state["node_ips"]:
+        raise ValueError(f"{new} is a node's own address")
+    if any(row["ip"] == new for row in rows):
+        raise ValueError(f"{new} is already one of Your VIPs; move the Services with Edit on each instead")
+    check_address(new, state)
+    if any(new in (row.get("external_ips") or []) for row in state["services"]):
+        raise ValueError(f"{new} is already used by a Service")
+    moving = [row for row in state["services"]
+              if old in (row.get("requested_ips") or []) + (row.get("external_ips") or [])]
+    system = [f"{row['namespace']}/{row['name']}" for row in moving if row.get("system")]
+    if system:
+        raise ValueError(f"{', '.join(system)} on {old} belong to the cluster; Homestead does not move them")
+    plan = {"old": old, "new": new, "default": bool(entry.get("default")), "label": entry.get("label", ""),
+            "services": [{"namespace": row["namespace"], "name": row["name"],
+                          "ports": [f"{p['port']}/{p['protocol']}" for p in row.get("ports") or []],
+                          "targets": row.get("targets") or []} for row in moving]}
+    if not apply:
+        return plan
+    annotations = PLATFORM.vip_annotations(new)
+    for row in moving:
+        path = f"/api/v1/namespaces/{row['namespace']}/services/{row['name']}"
+        service = kget(path)
+        meta = service.setdefault("metadata", {})
+        current = meta.setdefault("annotations", {})
+        for key in VIP_KEYS:
+            current.pop(key, None)
+        current.update(annotations)
+        if (service.get("spec") or {}).get("loadBalancerIP") == old:
+            service["spec"]["loadBalancerIP"] = new
+        ksend("PUT", path, service)
+    entry["ip"] = new
+    entry["previous"] = old
+    _save_registered(rows)
+    plan["detail"] = (f"{old} is now {new}" + (f"; {len(moving)} Service{'s' if len(moving) != 1 else ''} moved with it"
+                                               if moving else "") + ("; still the default workload VIP" if entry.get("default") else ""))
+    return plan
+
+
 def set_vip_label(ip, label):
     ip = _ipv4(ip, "address")
     rows = registered()

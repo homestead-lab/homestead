@@ -44,6 +44,19 @@ def _blockdevices():
         return None              # not Harvester
 
 
+def longhorn_block_paths(node):
+    """The raw devices Longhorn's V2 engine uses on node; None if unreadable.
+    No Longhorn, or no such node in it, is no devices."""
+    try:
+        lh = kget(f"{LH}/nodes/{node}")
+    except urllib.error.HTTPError as error:
+        return [] if error.code == 404 else None
+    except Exception:
+        return None
+    return [d.get("path") for d in ((lh.get("spec") or {}).get("disks") or {}).values()
+            if d.get("diskType") == "block" and d.get("path")]
+
+
 def _lh_nodes():
     try:
         return {n["metadata"]["name"]: n for n in kget(f"{LH}/nodes").get("items", [])}
@@ -360,6 +373,12 @@ def remove(node, disk_id):
     disk, status = _lh_disk(node, disk_id)
     if status.get("scheduledReplica"):
         raise ValueError(f"{disk_id} still holds {len(status['scheduledReplica'])} replica(s); evict it first")
+    # The disk's own status can be empty while it is not ready; the replicas
+    # themselves say what is on it.
+    on_it = [r for r in _replicas(strict=True)
+             if _on_disk(r, node, disk, status.get("diskUUID", ""), status.get("scheduledReplica") or {})]
+    if on_it:
+        raise ValueError(f"{disk_id} still holds {len(on_it)} replica(s); evict it first")
     if disk.get("allowScheduling", True) is not False:
         raise ValueError("stop scheduling on the disk before removing it")
     bds = _blockdevices()
@@ -384,11 +403,22 @@ def remove(node, disk_id):
 # A volume whose only copy was on it is never touched unless asked: a drive
 # that is merely unplugged comes back with its data.
 
-def _replicas():
+def _replicas(strict=False):
+    """Longhorn's replicas. strict: anything that decides what to delete must
+    know them all - a failed read is not "no replicas"."""
     try:
         return kget(f"{LH}/replicas").get("items", [])
     except Exception:
+        if strict:
+            raise
         return []
+
+
+def _copy_elsewhere(replica, replicas, node, disk, uuid, scheduled):
+    """A healthy replica of the same volume that is not on this disk."""
+    name = (replica.get("spec") or {}).get("volumeName", "")
+    return any((r.get("spec") or {}).get("volumeName") == name and r["metadata"]["name"] != replica["metadata"]["name"]
+               and _healthy(r) and not _on_disk(r, node, disk, uuid, scheduled) for r in replicas)
 
 
 def _on_disk(replica, node, disk, uuid, scheduled):
@@ -413,7 +443,7 @@ def retire_plan(node, disk_id):
     ready = next((c for c in status.get("conditions") or [] if c.get("type") == "Ready"), {})
     if ready.get("status", "True") == "True":
         raise ValueError(f"{disk.get('path')} on {node} is working: move its replicas off and remove it instead")
-    replicas = _replicas()
+    replicas = _replicas(strict=True)
     mine = [r for r in replicas if _on_disk(r, node, disk, uuid, scheduled)]
     try:
         volumes = {v["metadata"]["name"]: v for v in kget(f"{LH}/volumes").get("items", [])}
@@ -496,8 +526,17 @@ def retire_step(item):
         uuid = status.get("diskUUID", "")
         scheduled = status.get("scheduledReplica") or {}
         keep = set(ref.get("keep") or [])
-        left = [r for r in _replicas() if _on_disk(r, node, disk, uuid, scheduled)
+        replicas = _replicas(strict=True)
+        left = [r for r in replicas if _on_disk(r, node, disk, uuid, scheduled)
                 and r["metadata"]["name"] not in keep]
+        # Checked again at each step, not only at review: a volume whose other
+        # copies failed since then has its last one here, and it stays.
+        if not ref.get("force"):
+            last = [r for r in left if not _copy_elsewhere(r, replicas, node, disk, uuid, scheduled)]
+            if last:
+                keep |= {r["metadata"]["name"] for r in last}
+                ref["keep"] = sorted(keep)
+                left = [r for r in left if r["metadata"]["name"] not in keep]
         for replica in left:
             try:
                 ksend("DELETE", f"{LH}/replicas/{replica['metadata']['name']}")
@@ -602,7 +641,7 @@ def set_up(cfg):
     row = _row(node, device)
     if engine == "v2":
         facts = setup_module.inspect(node, device)
-        if facts["state"] in ("missing", "system", "mounted", "held"):
+        if facts["state"] in ("missing", "system", "mounted", "held", "longhorn-v2"):
             raise ValueError(setup_module.refusal(facts, "erase"))
         # The V2 engine opens the raw device, which a multipath map holds as
         # surely as wipefs finds it busy: let go of it either way.

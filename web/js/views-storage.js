@@ -1721,6 +1721,7 @@ window.diskSetup = async (node, device) => {
     partitioned: `It has ${f.partitions.length} partition${f.partitions.length === 1 ? "" : "s"} (${esc(f.partitions.map(p => `${p.name}${p.fstype ? ` ${p.fstype}` : ""}`).join(", "))}).`,
     system: `It is this host's system disk (${esc(f.mounts.join(", "))}).`,
     mounted: `It is mounted at ${esc(f.mounts.join(", "))}.`,
+    "longhorn-v2": `Longhorn's V2 engine keeps data on it (${esc((f.longhorn_block || []).join(", "))}): move its replicas off and remove it from Longhorn before setting it up again.`,
     held: `It is in use by ${esc((f.holders || []).filter(h => h.kind !== "multipath").map(h => `${h.kind} (${h.name})`).join(", "))}: take it out of that on the host first.`,
     missing: esc(f.error || "It is not there."),
   }[f.state];
@@ -1728,7 +1729,7 @@ window.diskSetup = async (node, device) => {
     <span><b>${label}</b><small>${detail}</small></span></label>`;
   const modes = f.choices || [];
   $("#mbody").innerHTML = `<div class="ui-stack">
-    <div class="note ${["system", "mounted", "missing", "held"].includes(f.state) ? "bad" : ""}"><b class="mono">${esc(device)}</b> · ${f.size_gb} GB${f.by_id ? ` · <span class="mono dim xs">${esc(f.by_id.replace("/dev/disk/by-id/", ""))}</span>` : ""}<br>${what}${(f.multipath || []).length ? `<br><span class="small">multipathd has claimed it (${esc(f.multipath.map(m => m.name).join(", "))}). Setting it up releases that and adds its WWID to the blacklist in /etc/multipath.conf, so multipathd leaves this disk alone; nothing else changes.</span>` : ""}</div>
+    <div class="note ${["system", "mounted", "missing", "held", "longhorn-v2"].includes(f.state) ? "bad" : ""}"><b class="mono">${esc(device)}</b> · ${f.size_gb} GB${f.by_id ? ` · <span class="mono dim xs">${esc(f.by_id.replace("/dev/disk/by-id/", ""))}</span>` : ""}<br>${what}${(f.multipath || []).length ? `<br><span class="small">multipathd has claimed it (${esc(f.multipath.map(m => m.name).join(", "))}). Setting it up releases that and adds its WWID to the blacklist in /etc/multipath.conf, so multipathd leaves this disk alone; nothing else changes.</span>` : ""}</div>
     ${modes.length ? `
       ${v2 ? `<div class="f"><label>Engine</label><select id="ds_engine" onchange="diskSetupChanged()"><option value="v1">V1 - formatted and mounted</option><option value="v2">V2 (SPDK) - the raw device</option></select></div>` : ""}
       <div class="disk-choices" id="ds_modes">

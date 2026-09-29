@@ -72,6 +72,13 @@ It asks which address the other machines reach this one on, when it has more
 than one, and whether to install Longhorn, the node probe and KubeVirt. Where
 the system is on LVM with room, it asks how much of the free space Longhorn
 gets as a volume of its own (see [Room for the system](Storage#room-for-the-system)).
+It also asks for **an address for Homestead and apps**: an unused LAN address
+outside your router's DHCP range. Once kube-vip is running, Homestead reserves
+it, makes it the apps' default, and puts itself, its backup storage and shares
+on it. Homestead is then at `http://<VIP>:8088` as well as on each node's
+address. Leave it empty to keep the nodes' own addresses and add a VIP later
+(see [Networking](Networking#homestead-itself-on-a-vip)). `--vip 192.0.2.200`
+does the same for `bootstrap-k3s.sh`.
 The installation summary then shows the settings and the version of each component:
 
 ![The installation summary](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-ready.png)
@@ -160,7 +167,10 @@ curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/boot
 ```
 
 Use `192.0.2.10` as the first machine's address, and your token. **Cluster →
-Add a host** in Homestead shows these lines already filled in.
+Add a host** in Homestead shows these lines already filled in. Give it a server
+machine's **own address**, not the VIP for Homestead and apps: that VIP carries
+apps, not the cluster, so the machine joins through a server's address on
+6443 (k3s) or 9345 (RKE2).
 
 **How many servers?** etcd needs more than half of its servers up. One server
 is fine for a homelab; three survive one failing; two are worse than one,
