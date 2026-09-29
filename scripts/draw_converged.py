@@ -1,4 +1,4 @@
-"""Draws the README 'converged' graphics into docs/images: three options,
+"""Draws the README 'converged' graphics into docs/images: four options,
 each showing one node and three nodes. Self-contained SVG on a dark panel
 (reads on GitHub's light and dark themes), system fonts only (an <img> SVG
 cannot load web fonts). Run: python scripts/draw_converged.py"""
@@ -231,7 +231,75 @@ def houses():
     return svg(P, W, H, "Each Homestead node is a whole house: apps, VMs and data under one roof. Three houses share one VIP and keep three copies of every volume", "".join(b))
 
 
-# ---------------------------------------------------------------- C: story
+# ---------------------------------------------------------------- C: blend
+def blend():
+    """The houses of B with the labelled layers of A: the gable is the
+    network, the rooms are compute and storage, the foundation is the host."""
+    P, W, H = "d", 1200, 640
+    NW, PEAK, WALL, BASE = 200, 150, 240, 518
+    GABLE, COMP, STOR, HOST = (PEAK, WALL), (254, 148), (410, 96), (524, 30)
+    b = []
+
+    def house(x, name, holder, apps, copies):
+        cx = x + NW / 2
+        o = [rect(x - 6, HOST[0], NW + 12, HOST[1], 8, EDGE, fo=0.8)]
+        o.append(t(cx, HOST[0] + 20, "Linux · k3s / RKE2", 13, MUTED, 500, "middle", family=MONO))
+        o.append(path(f"M{x} {WALL}L{cx} {PEAK}L{x + NW} {WALL}V{BASE}H{x}Z", f"url(#{P}-sky)", 7, fill=PANEL))
+        gy = WALL - 10
+        o.append(t(cx, WALL - 34, name, 16, CREAM, 650, "middle"))
+        if holder:
+            o.append(f'<circle cx="{cx - 50}" cy="{gy - 5}" r="5.5" fill="{BLUE}"/>')
+            o.append(t(cx - 38, gy, "holds the VIP", 14, CREAM, 500))
+            o.append(f'<circle cx="{cx}" cy="{PEAK - 20}" r="6" fill="{BLUE}"/>')
+            for r in (13, 21):
+                o.append(path(f"M{cx - r} {PEAK - 20 - r * 0.2}A{r} {r} 0 0 1 {cx + r} {PEAK - 20 - r * 0.2}", BLUE, 2, opacity=0.8))
+        else:
+            o.append(f'<circle cx="{cx - 30}" cy="{gy - 5}" r="5" fill="none" stroke="{BLUE}" stroke-width="1.5"/>')
+            o.append(t(cx - 18, gy, "standby", 14, MUTED))
+            o.append(f'<circle cx="{cx}" cy="{PEAK - 20}" r="5" fill="none" stroke="{BLUE}" stroke-width="1.5" opacity="0.7"/>')
+        for (y, h), c in ((COMP, AMBER), (STOR, GREEN)):
+            o.append(rect(x + 14, y, NW - 28, h, 10, c, c, 1, fo=0.07, so=0.28))
+        for i, (n, k) in enumerate(apps):
+            o.append(chip(x + 22, COMP[0] + 10 + i * 34, NW - 44, 28, n, k))
+        o.append(t(x + 24, STOR[0] + 22, "Longhorn", 13, GREEN, 650))
+        o.append(t(x + NW - 24, STOR[0] + 22, copies, 13, MUTED, 400, "end"))
+        o.append(replicas(x + 24, STOR[0] + 36, 46, 44, 7, size=12))
+        return "".join(o)
+
+    for (y, h), label, c in (((WALL - 24, 20), "NETWORK", BLUE), (COMP, "COMPUTE", AMBER),
+                             (STOR, "STORAGE", GREEN), (HOST, "HOST", MUTED)):
+        b.append(t(40, y + h / 2 + 4.5, label, 12.5, c, 700, ls=1.6))
+
+    lx = 160
+    b.append(t(lx + NW / 2, 34, "ONE NODE", 13, MUTED, 700, "middle", ls=2))
+    b.append(vip_pill(lx + NW / 2, 50, 210))
+    b.append(path(f"M{lx + NW / 2} 88V{PEAK - 48}", BLUE, 2))
+    b.append(house(lx, "node-1", True, APPS_ONE, "1 copy each"))
+
+    b.append(join_arrow(P, 386, 500, 340))
+
+    xs = [520, 740, 960]
+    mid = xs[1] + NW / 2
+    b.append(t(mid, 34, "THREE NODES", 13, MUTED, 700, "middle", ls=2))
+    b.append(vip_pill(mid, 50))
+    b.append(path(f"M{mid} 88V100H{xs[0] + NW / 2}V{PEAK - 46}", BLUE, 2))
+    b.append(path(f"M{mid} 100V{PEAK - 26}", BLUE, 1.5, dash="4 6", opacity=0.7))
+    b.append(path(f"M{mid} 100H{xs[2] + NW / 2}V{PEAK - 26}", BLUE, 1.5, dash="4 6", opacity=0.7))
+    for i, x in enumerate(xs):
+        b.append(house(x, f"node-{i + 1}", i == 0, APPS_THREE[i], "3 copies each"))
+    for x in xs[:2]:
+        y = STOR[0] + 58
+        b.append(path(f"M{x + NW - 12} {y}H{x + NW + 32}", GREEN, 2, marker=f"{P}-garr"))
+        b.append(f'<circle cx="{x + NW - 12}" cy="{y}" r="2.5" fill="{GREEN}"/>')
+
+    b.append(t(lx + NW / 2, 594, "Everything under one roof", 16, CREAM, 650, "middle"))
+    b.append(t(lx + NW / 2, 617, "one copy of your data", 14, MUTED, 400, "middle"))
+    b.append(t(mid, 594, "Any node can go dark", 16, CREAM, 650, "middle"))
+    b.append(t(mid, 617, "the VIP moves next door, apps restart there, and every volume still has two copies", 14, MUTED, 400, "middle"))
+    return svg(P, W, H, "Every Homestead node is a house with the network in its gable, apps and VMs and Longhorn data in its rooms and the host as its foundation; three houses share one VIP and keep three copies of every volume", "".join(b))
+
+
+# ---------------------------------------------------------------- D: story
 def story():
     P, W, H = "c", 1200, 500
     FW, GAP, X0 = 250, 34, 40
@@ -327,7 +395,8 @@ def story():
     return svg(P, W, H, "Homestead from one node to three: add two nodes, lose one, and the VIP, apps and data carry on while the missing copies are rebuilt", "".join(b))
 
 
-for name, fn in (("converged-layers", layers), ("converged-houses", houses), ("converged-story", story)):
+for name, fn in (("converged-layers", layers), ("converged-houses", houses),
+                 ("converged-blend", blend), ("converged-story", story)):
     with open(os.path.join(OUT, name + ".svg"), "w", encoding="utf-8") as fh:
         fh.write(fn())
 print("ok")
