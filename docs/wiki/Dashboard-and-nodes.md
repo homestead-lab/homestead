@@ -103,6 +103,16 @@ evicting a replacement under a reused name. Before power, Homestead rechecks
 quorum, VMs, replicas and remaining pods. A changed risk or incomplete drain
 leaves the host cordoned, with no power command sent.
 
+**Override.** Some stops can be overridden by an administrator: the host being
+the cluster's only etcd member (every single-node k3s or RKE2 cluster), running
+VMs, disruption budgets and inventories that cannot be read. Tick **Override**
+in the host's power section, or in the review, for a forced review that lists
+what the override means. A forced reboot or shutdown sends no cordon or drain:
+the host's own systemd stops everything in order, as its power button would,
+and pods start again when it is back, with nothing left cordoned. It is still
+refused when power control is off, the host is not Ready, an earlier helper is
+active, or the host's identity or boot ID changed since the review.
+
 Interrupted pre-power work times out without automatically resuming. The helper
 identity is saved before submission; an uncertain submission is observed, never
 automatically resent. An existing active helper blocks another request. A new
