@@ -399,10 +399,14 @@ def chart_archive(name, version, manifests, extra):
         f"{name}/Chart.yaml": "\n".join(["apiVersion: v2", f"name: {name}", f"version: {version.lstrip('v')}",
                                          f"appVersion: {json.dumps(version)}",
                                          "description: Made by Homestead from the project's release manifests", ""]),
-        f"{name}/crds/crds.yaml": "\n---\n".join(crds) + "\n",
         f"{name}/templates/release.yaml": _escape("\n---\n".join(rest)) + "\n",
-        f"{name}/templates/switch-on.yaml": _escape(extra),
     }
+    # Helm refuses a CRD file with nothing in it: macvtap brings no CRDs,
+    # nor a switch-on resource.
+    if crds:
+        files[f"{name}/crds/crds.yaml"] = "\n---\n".join(crds) + "\n"
+    if extra.strip():
+        files[f"{name}/templates/switch-on.yaml"] = _escape(extra)
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode="w:gz") as tar:
         for path, text in files.items():
@@ -413,10 +417,14 @@ def chart_archive(name, version, manifests, extra):
     return base64.b64encode(raw.getvalue()).decode()
 
 
-def kubevirt_cr(emulation, network=None):
+def kubevirt_cr(emulation, network=None, disabled=None):
     """The KubeVirt resource the chart carries. network - its network
-    bindings, macvtap's among them - is carried over on an upgrade."""
+    bindings, macvtap's among them - and the feature gates switched off (the
+    one macvtap needs off: homestead_macvtap.nad_lookup) are carried over on
+    an upgrade."""
     developer = {"featureGates": []}
+    if disabled:
+        developer["disabledFeatureGates"] = list(disabled)
     if emulation:
         developer["useEmulation"] = True
     configuration = {"developerConfiguration": developer}

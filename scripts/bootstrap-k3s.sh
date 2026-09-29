@@ -48,7 +48,8 @@
 #                            by, when it has more than one
 #
 # What "server" does:
-#   1. installs what Longhorn needs on the host (open-iscsi, NFS client);
+#   1. raises the host's inotify limits, and installs what Longhorn needs on
+#      the host (open-iscsi, NFS client);
 #   2. installs k3s with an embedded etcd, so more servers can join later
 #      (or RKE2, which always has one, with its ServiceLB turned on so apps
 #      get the nodes' addresses as they do on k3s);
@@ -100,6 +101,19 @@ host_packages() {
   fi
   systemctl enable --now iscsid >/dev/null 2>&1 || true
   modprobe iscsi_tcp 2>/dev/null || true
+}
+
+# Every file watcher is an inotify instance, and a host allows each user 128:
+# on a Kubernetes node nearly everything runs as root, so a busy node runs
+# out and the next thing that watches files fails to start (macvtap did).
+# Raised - never lowered - now and for every boot. Homestead does the same
+# on nodes that joined before this.
+host_limits() {
+  i=$(cat /proc/sys/fs/inotify/max_user_instances); w=$(cat /proc/sys/fs/inotify/max_user_watches)
+  [ "$i" -lt 8192 ] && i=8192
+  [ "$w" -lt 524288 ] && w=524288
+  printf 'fs.inotify.max_user_instances = %s\nfs.inotify.max_user_watches = %s\n' "$i" "$w" > /etc/sysctl.d/90-homestead.conf
+  sysctl -q -w fs.inotify.max_user_instances="$i" fs.inotify.max_user_watches="$w" || true
 }
 
 # KubeVirt and CDI from their newest releases, dropped into the manifests
@@ -215,6 +229,7 @@ case "$MODE" in
       [ "$used" = 0 ] && fail "Unknown option: $1"
       shift "$used"
     done
+    host_limits
     host_packages
     if [ "$DIST" = rke2 ]; then
       if [ "$MODE" = agent ]; then install_rke2 agent "$URL" "$TOKEN"; else install_rke2 server "$URL" "$TOKEN"; fi
@@ -258,6 +273,7 @@ else
   SERVICE=k3s
 fi
 
+host_limits
 [ "$LONGHORN" = 1 ] && host_packages
 if [ "$MODE" = addons ]; then
   # The cluster is running already: only what goes on top of it.

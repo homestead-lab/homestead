@@ -386,7 +386,8 @@ def _start_operator(component, target):
         current = (_items("/apis/kubevirt.io/v1/kubevirts") or [{}])[0]
         configuration = (current.get("spec") or {}).get("configuration") or {}
         emulation = bool((configuration.get("developerConfiguration") or {}).get("useEmulation"))
-        switch_on = addons.kubevirt_cr(emulation, configuration.get("network"))
+        switch_on = addons.kubevirt_cr(emulation, configuration.get("network"),
+                                       (configuration.get("developerConfiguration") or {}).get("disabledFeatureGates"))
     else:
         switch_on = addons.cdi_cr()
     chart.setdefault("spec", {})["chartContent"] = addons.chart_archive(component, target, manifest, switch_on)
