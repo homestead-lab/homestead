@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.231")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.232")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -5165,6 +5165,7 @@ def storage_legacy_cancel(item, options):
 import homestead_vmstore as VMSTORE
 import homestead_nodeshell as NODESHELL
 import homestead_hostrun as HOSTRUN
+import homestead_host_limits as HOST_LIMITS
 import homestead_host_bridge as HOST_BRIDGE
 import homestead_manifests as MANIFESTS
 import homestead_disk_setup as DISK_SETUP
@@ -5243,6 +5244,7 @@ REVERT.bind(kget, ksend, RECLASS, is_self)
 NODESHELL.bind(kget, ksend, DEFAULT_NS)
 HOSTRUN.bind(kget, ksend, lambda *a, **k: FILES._exec(*a, **k), DEFAULT_NS)
 MANIFESTS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
+HOST_LIMITS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 DISK_SETUP.bind(HOSTRUN)
 HOST_BRIDGE.bind(HOSTRUN, kget, ksend)
 OPS.RESOLVERS["host-bridge"] = HOST_BRIDGE.status
@@ -5455,7 +5457,8 @@ def _baseline_loop():
 
 
 def _host_fix_loop():
-    """On the leader, what k3s and RKE2 undo at each start: the installer's
+    """On the leader, what k3s and RKE2 hosts need or undo at each start: inotify
+    limits a busy node outgrows (homestead_host_limits.py), the installer's
     auto-deploy files (homestead_manifests.py), and a second default storage
     class; and VMs still holding an ISO read-only. Checked a minute after
     starting, then every ten minutes."""
@@ -5464,6 +5467,8 @@ def _host_fix_loop():
         if LEADER.is_leader():
             try:
                 with self_data_activity():
+                    for node, change in HOST_LIMITS.tick().items():
+                        print(f"platform: {node}: inotify limits raised ({change})", flush=True)
                     for node, marked in MANIFESTS.tick().items():
                         print(f"platform: {node}: k3s no longer re-applies "
                               f"{', '.join(marked) or 'no installer files (none left)'} at start", flush=True)

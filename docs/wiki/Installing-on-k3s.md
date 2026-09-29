@@ -164,6 +164,15 @@ volume a single failed disk would lose - and
 [Changing a volume's storage class](Storage#changing-a-volumes-storage-class)
 moves an existing one onto the new class.
 
+### Host limits
+
+A busy Kubernetes node runs out of inotify instances - each file watcher is
+one, a Linux host allows each user 128 by default, and on a node nearly
+everything runs as root - and whatever starts next cannot watch files. The
+script raises them to 8192 instances and 524288 watches in
+`/etc/sysctl.d/90-homestead.conf`, and Homestead does the same, once, on
+every k3s or RKE2 node that joined before (never lowering a higher value).
+
 ### Disks
 
 Longhorn starts on each machine's system disk, in `/var/lib/longhorn`, and
