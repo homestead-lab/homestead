@@ -152,5 +152,26 @@ class HarvesterTargetTests(unittest.TestCase):
             LH.set_backup_target("s3://homelab@us-east-1/longhorn", keys={"access_key": "A", "secret_key": "S"})
 
 
+    def test_a_secret_named_alone_gives_its_keys_to_harvesters_setting(self):
+        # Backup storage for a move names the Secret it wrote; Harvester's
+        # setting has nowhere to put a name, so the keys are read from it.
+        import base64
+        enc = lambda v: base64.b64encode(v.encode()).decode()
+        secret = {"data": {"AWS_ACCESS_KEY_ID": enc("homestead"), "AWS_SECRET_ACCESS_KEY": enc("s3cret"),
+                           "AWS_ENDPOINTS": enc("http://192.0.2.211:9010")}}
+
+        def get(path):
+            if path == LH.HARVESTER_TARGET:
+                return self.setting
+            if path.endswith("/secrets/homestead-backup-credentials"):
+                return secret
+            raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+        LH.bind(get, lambda m, p, b=None, **k: self.sent.append((m, p, b)), {})
+        LH.set_backup_target("s3://homestead-backups@us-east-1/", secret="homestead-backup-credentials")
+        value = json.loads(self.sent[-1][2]["value"])
+        self.assertEqual(("homestead", "s3cret", "http://192.0.2.211:9010", "homestead-backups"),
+                         (value["accessKeyId"], value["secretAccessKey"], value["endpoint"], value["bucketName"]))
+
+
 if __name__ == "__main__":
     unittest.main()
