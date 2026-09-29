@@ -102,6 +102,24 @@ class SetupTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "system disk"):
             SETUP.setup("k3s", "/dev/nvme0n1", "erase", "ext4", "/dev/nvme0n1")
 
+    def test_a_disk_multipathd_claimed_is_released_and_only_it_blacklisted(self):
+        host = Host(seen(HOLDER="dm-0|mpatha|mpath-36001405b1a2c3d4e"))
+        SETUP.bind(host)
+        facts = SETUP.inspect("k3s", "/dev/nvme0n1")
+        self.assertEqual(("blank", ["format"]), (facts["state"], facts["choices"]))
+        SETUP.setup("k3s", "/dev/nvme0n1", "format", "ext4", "/dev/nvme0n1")
+        script = host.scripts[-1]
+        self.assertIn('wwid "36001405b1a2c3d4e"', script)
+        self.assertNotIn("devnode", script, "no blanket blacklist of every sd disk")
+        self.assertLess(script.index("multipath -f mpatha"), script.index("wipefs -a"))
+
+    def test_a_disk_in_lvm_or_raid_is_refused_naming_what_holds_it(self):
+        for holder, word in (("dm-1|data-vg--lv|LVM-abc", "LVM"), ("md0||", "RAID")):
+            with self.subTest(word=word):
+                SETUP.bind(Host(seen(FS="ext4", HOLDER=holder)))
+                with self.assertRaisesRegex(ValueError, f"in use by {word}"):
+                    SETUP.setup("k3s", "/dev/nvme0n1", "erase", "ext4", "/dev/nvme0n1")
+
     def test_a_mount_that_is_not_this_disk_stops_it(self):
         SETUP.bind(Host(seen(), setup_out="ERR /mnt/nvme0n1 is not /dev/nvme0n1 after mounting (/dev/sda1)\n"))
         with self.assertRaisesRegex(ValueError, "is not /dev/nvme0n1"):

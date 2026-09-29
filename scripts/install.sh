@@ -33,6 +33,7 @@
 #   HS_LONGHORN=yes|no  HS_KUBEVIRT=yes|no      components for a new cluster
 #   HS_KUBEVIP=yes|no  HS_MULTUS=yes|no         kube-vip and Multus, installed by Homestead (default yes)
 #   HS_KUBEVIP_VERSION=0.11.1  HS_MULTUS_VERSION=v4.3.102   their chart versions (default: tested)
+#   HS_NODEPROBE=yes|no                         the node probe, installed by Homestead (default yes)
 #   HS_K8S_VERSION=v1.33.4+k3s1                 k3s or RKE2 version
 #   HS_LONGHORN_VERSION=v1.9.1  HS_KUBEVIRT_VERSION=v1.6.0  HS_CDI_VERSION=v1.62.0
 #   HS_VERSION=2.8.184                          Homestead version
@@ -74,7 +75,7 @@ while [ $# -gt 0 ]; do
     --skip-checks) SKIP_CHECKS=1; shift ;;
     --text) UI=text; shift ;;
     --ref) REF="$2"; shift 2 ;;
-    -h|--help) sed -n '2,50p' "$0" 2>/dev/null; exit 0 ;;
+    -h|--help) sed -n '2,51p' "$0" 2>/dev/null; exit 0 ;;
     *) printf 'Unknown option: %s (see --help)\n' "$1" >&2; exit 2 ;;
   esac
 done
@@ -541,6 +542,7 @@ network_line() {
 network_args() {
   case "$(given HS_KUBEVIP)" in n*|N*|0|false) printf ' --no-kube-vip' ;; esac
   case "$(given HS_MULTUS)" in n*|N*|0|false) printf ' --no-multus' ;; esac
+  case "${NODEPROBE:-$(given HS_NODEPROBE)}" in n*|N*|0|false) printf ' --no-node-probe' ;; esac
   v=$(given HS_KUBEVIP_VERSION); [ -n "$v" ] && printf ' --kube-vip-version %s' "$v"
   v=$(given HS_MULTUS_VERSION); [ -n "$v" ] && printf ' --multus-version %s' "$v"
   true
@@ -562,7 +564,9 @@ progress() { # title stages command...
   job=$!
   {
     while [ ! -s "$status" ]; do
-      done_stages=$(grep -c '^==> ' "$LOG" 2>/dev/null || echo 0)
+      # grep -c prints 0 and fails before the first stage; "|| echo 0" made
+      # that "0 0", the arithmetic below failed, and the gauge closed at once.
+      done_stages=$(grep -c '^==> ' "$LOG" 2>/dev/null); done_stages=${done_stages:-0}
       stage=$(grep '^==> ' "$LOG" 2>/dev/null | tail -n 1 | cut -c5-)
       pct=$(( done_stages * 95 / stages )); [ "$pct" -gt 95 ] && pct=95
       printf 'XXX\n%d\n%s\n\n%s\nXXX\n' "$pct" "${stage:-Starting}" "$(tail -n 1 "$LOG" 2>/dev/null | cut -c1-70)"
@@ -665,6 +669,13 @@ new_cluster() {
 
 Longhorn replicates volumes across nodes and provides snapshots and backups. The Homestead Volumes and Data Protection pages require it. Without Longhorn, k3s local-path storage keeps each volume on a single node." yes || longhorn=no
   fi
+  # Unattended, it is installed unless HS_NODEPROBE says no, as kube-vip and Multus are.
+  NODEPROBE=yes
+  if [ -n "$(given HS_NODEPROBE)" ] || interactive; then
+    yesno HS_NODEPROBE "Node Probe" "Install the node probe on every node?
+
+It reports temperatures, disk SMART health and each node's network interfaces to Homestead, and keeps kube-vip announcing on the right interface as nodes join. It runs a privileged container on each node to read them." yes || NODEPROBE=no
+  fi
   yesno HS_KUBEVIRT "Virtual Machines" "Install KubeVirt and CDI to run virtual machines alongside containers?$(kvm || printf '\n\nHardware virtualisation is not available on this machine. Virtual machines would run in emulation mode, with reduced performance.')" "$kubevirt" && kubevirt=yes || kubevirt=no
   comps="k8s"
   [ "$longhorn" = yes ] && comps="$comps longhorn"
@@ -679,6 +690,7 @@ Longhorn replicates volumes across nodes and provides snapshots and backups. The
   Storage              $([ "$longhorn" = yes ] && echo Longhorn || echo "k3s local-path")
   Virtual machines     $([ "$kubevirt" = yes ] && echo "KubeVirt and CDI" || echo "Not installed")
   Networking           $(network_line)
+  Node probe           $([ "$NODEPROBE" = yes ] && echo "Installed by Homestead" || echo "Not installed")
   Homestead URL        http://$NODE_IP:8088" $comps
   args="server --node-ip $NODE_IP"
   [ "$longhorn" = no ] && args="$args --no-longhorn"
@@ -686,7 +698,7 @@ Longhorn replicates volumes across nodes and provides snapshots and backups. The
   [ "$DIST" = rke2 ] && args="$args --rke2"
   # shellcheck disable=SC2086
   args="$args$(version_args $comps)$(network_args)"
-  stages=5; [ "$longhorn" = yes ] && stages=$((stages + 2)); [ "$kubevirt" = yes ] && stages=$((stages + 1)); [ "$DIST" = rke2 ] && stages=$((stages + 1))
+  stages=6; [ "$longhorn" = yes ] && stages=$((stages + 2)); [ "$kubevirt" = yes ] && stages=$((stages + 1)); [ "$DIST" = rke2 ] && stages=$((stages + 1))
   # shellcheck disable=SC2086
   bootstrap "$stages" $args
   finish_new
@@ -744,7 +756,7 @@ To add a node, run the installer on the new machine and select Join an existing 
 
   sudo cat $(token_file)
 
-kube-vip and Multus are installed by Homestead after it starts; their progress is shown in its job tray. Optional components such as the node probe are available under Settings > Cluster > Add-ons."
+kube-vip, Multus$(case "${NODEPROBE:-$(given HS_NODEPROBE)}" in n*|N*|0|false) ;; *) printf ' and the node probe' ;; esac) are installed by Homestead after it starts; their progress is shown in its job tray. Anything left out can be added under Settings > Cluster > Add-ons."
 }
 
 flow_harvester() {

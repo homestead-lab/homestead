@@ -1,0 +1,123 @@
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_node_parity as PARITY
+
+HELM = PARITY.HELMCHARTS
+INSTALLER_LONGHORN = "persistence:\n  defaultClassReplicaCount: 1\ndefaultSettings:\n  defaultReplicaCount: 1\n"
+KUBE_VIP = 'env:\n  vip_arp: "true"\n  vip_interface: "enp1s0"\n  svc_enable: "true"\n'
+
+
+def node(name, ready=True):
+    return {"metadata": {"name": name}, "status": {"conditions": [{"type": "Ready", "status": "True" if ready else "False"}]}}
+
+
+class Cluster:
+    def __init__(self, nodes, objects=None, probes=None, host_out="MULTIPATH set\nISCSI kept\nEND\n"):
+        self.objects = {"/api/v1/nodes": {"items": nodes}, **(objects or {})}
+        self.probes, self.host_out, self.sent, self.ran = probes or {}, host_out, [], []
+
+    def kget(self, path):
+        if path not in self.objects:
+            raise KeyError(path)
+        return self.objects[path]
+
+    def ksend(self, method, path, body=None, ctype=""):
+        self.sent.append((method, path, body))
+
+    def run(self, name, script, timeout=60):
+        self.ran.append(name)
+        return self.host_out, ""
+
+
+class NodeParityTests(unittest.TestCase):
+    def setUp(self):
+        self.data = tempfile.mkdtemp()
+
+    def bind(self, cluster, longhorn=True):
+        hostrun = type("H", (), {"run": staticmethod(cluster.run)})
+        PARITY.bind(cluster.kget, cluster.ksend, hostrun, lambda force=False: {"distribution": "k3s", "longhorn": longhorn},
+                    lambda: cluster.probes, self.data)
+
+    def test_each_new_host_is_kept_off_multipathd_once(self):
+        cluster = Cluster([node("k3s-1"), node("k3s-2"), node("k3s-3", ready=False)])
+        self.bind(cluster)
+        changes = PARITY.tick()
+        self.assertEqual(["k3s-1", "k3s-2"], cluster.ran, "a node that is not Ready waits")
+        self.assertIn(("k3s-2", "multipathd kept off Longhorn's devices"), changes)
+        PARITY.tick()
+        self.assertEqual(["k3s-1", "k3s-2"], cluster.ran, "done once per node")
+
+    def test_a_host_that_boots_from_multipath_is_left_alone(self):
+        self.assertIn('grep -q mpath; then echo "MULTIPATH root"', PARITY.HOST_SCRIPT)
+        cluster = Cluster([node("san")], host_out="MULTIPATH root\nISCSI kept\nEND\n")
+        self.bind(cluster)
+        self.assertEqual([], PARITY.tick())
+
+    def test_a_host_that_cannot_be_reached_is_tried_again(self):
+        cluster = Cluster([node("k3s-1")], host_out="")
+        self.bind(cluster)
+        self.assertIn("could not check", PARITY.tick()[0][1])
+        cluster.host_out = "MULTIPATH kept\nISCSI kept\nEND\n"
+        PARITY.tick()
+        self.assertEqual(["k3s-1", "k3s-1"], cluster.ran)
+
+    def test_kube_vip_finds_each_nodes_interface_once_they_differ(self):
+        chart = {"spec": {"valuesContent": KUBE_VIP}}
+        cluster = Cluster([node("a")], {f"{HELM}/kube-vip": chart},
+                          probes={"a": {"default_interface": "enp1s0"}, "b": {"default_interface": "eno1"}})
+        self.bind(cluster, longhorn=False)
+        PARITY.tick()
+        method, path, body = cluster.sent[0]
+        self.assertEqual(("PATCH", f"{HELM}/kube-vip"), (method, path))
+        self.assertNotIn("vip_interface", body["spec"]["valuesContent"])
+        self.assertIn("svc_enable", body["spec"]["valuesContent"])
+
+    def test_kube_vip_stays_pinned_while_the_nodes_agree_or_have_not_said(self):
+        for probes in ({"a": {"default_interface": "enp1s0"}, "b": {"default_interface": "enp1s0"}}, {}):
+            with self.subTest(probes=probes):
+                cluster = Cluster([node("a")], {f"{HELM}/kube-vip": {"spec": {"valuesContent": KUBE_VIP}}}, probes=probes)
+                self.bind(cluster, longhorn=False)
+                PARITY.tick()
+                self.assertEqual([], cluster.sent)
+
+    def test_the_installers_one_copy_rises_with_the_nodes(self):
+        setting = {"value": "1"}
+        cluster = Cluster([node("a"), node("b"), node("c"), node("d")],
+                          {f"{HELM}/longhorn": {"spec": {"valuesContent": INSTALLER_LONGHORN}},
+                           PARITY.LONGHORN_SETTING: setting}, host_out="MULTIPATH none\nISCSI kept\nEND\n")
+        self.bind(cluster)
+        PARITY.tick()
+        chart = next(body for _, path, body in cluster.sent if path == f"{HELM}/longhorn")
+        self.assertIn("defaultReplicaCount: 3", chart["spec"]["valuesContent"])
+        self.assertIn(("PATCH", PARITY.LONGHORN_SETTING, {"value": "3"}), cluster.sent)
+
+    def test_copies_someone_chose_are_kept(self):
+        for values in ("persistence:\n  defaultClassReplicaCount: 2\ndefaultSettings:\n  defaultReplicaCount: 2\n",
+                       INSTALLER_LONGHORN + "longhornUI:\n  replicas: 1\n"):
+            with self.subTest(values=values):
+                cluster = Cluster([node("a"), node("b")], {f"{HELM}/longhorn": {"spec": {"valuesContent": values}}},
+                                  host_out="MULTIPATH none\nISCSI kept\nEND\n")
+                self.bind(cluster)
+                PARITY.tick()
+                self.assertEqual([], cluster.sent)
+
+    def test_one_node_keeps_one_copy(self):
+        cluster = Cluster([node("a")], {f"{HELM}/longhorn": {"spec": {"valuesContent": INSTALLER_LONGHORN}}},
+                          host_out="MULTIPATH none\nISCSI kept\nEND\n")
+        self.bind(cluster)
+        PARITY.tick()
+        self.assertEqual([], cluster.sent)
+
+    def test_harvester_is_not_touched(self):
+        cluster = Cluster([node("a")])
+        PARITY.bind(cluster.kget, cluster.ksend, None, lambda force=False: {"harvester": True, "distribution": "rke2"},
+                    lambda: {}, self.data)
+        self.assertEqual([], PARITY.tick())
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1731,7 +1731,11 @@ html[data-theme="light"] .compose-editor{background:#fff}
 @media (max-width:560px){.addon-row{flex-direction:column}}
 .vmc-paste{margin-bottom:8px}.vmc-paste textarea{width:100%;min-height:64px;resize:vertical;font-family:"JetBrains Mono",monospace}
 .vmc-screen{width:100%;height:max(240px,min(calc(88vh - 300px),720px));background:#000;border-radius:10px;overflow:hidden;border:1px solid var(--line)}
-.vmc-screen:fullscreen{height:100vh;border-radius:0;border:0}
+.vmc-wrap{position:relative}
+.vmc-wrap:fullscreen .vmc-screen{height:100vh;border-radius:0;border:0}
+/* The field a phone's keyboard types into: there to be focused, not seen.
+   16px, or iOS zooms the page when it takes focus. */
+.vmc-keys{position:absolute;left:0;top:0;width:1px;height:1px;padding:0;border:0;opacity:0;resize:none;font-size:16px;pointer-events:none}
 
 /* IP addresses (IPAM) on the Networking page. */
 .network-tabs{margin:0 0 14px}
@@ -2443,3 +2447,18 @@ html[data-theme="light"] .modalbox[data-context="smb-access"]{background:var(--s
 .disk-choice{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line);border-radius:10px;cursor:pointer}
 .disk-choice>span{display:flex;flex-direction:column;gap:2px}
 .disk-choice small{color:var(--mut);font-size:12px}
+
+/* A host's partition tables, drawn to scale (host-os.js). */
+.pmaps{margin-top:12px}
+.pmap-disk{margin:10px 0}
+.pmap{display:flex;gap:2px;height:30px;margin-top:6px;border-radius:8px;overflow:hidden;border:1px solid var(--line)}
+.pmap-seg{min-width:6px;display:flex;align-items:center;padding:0 6px;overflow:hidden;font:600 10.5px/1 "JetBrains Mono",monospace;
+  color:#fff;background:var(--mut)}
+.pmap-seg>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pmap-seg.sys{background:#5b7cc4}.pmap-seg.data{background:#3f9d73}.pmap-seg.lvm{background:#8a6cc4}
+.pmap-seg.other{background:#a07a3c}.pmap-seg.free{background:transparent;color:var(--mut);
+  background-image:repeating-linear-gradient(135deg,transparent 0 6px,rgba(127,127,127,.18) 6px 8px)}
+.pmap-list{margin-top:5px;line-height:1.5}
+.pmap-key{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px}
+.pmap-key .pmap-seg{display:inline-block;width:12px;min-width:12px;height:12px;padding:0;border-radius:3px}
+.hos-updates{display:flex;flex-wrap:wrap;gap:4px;max-height:220px;overflow:auto}

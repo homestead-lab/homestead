@@ -69,7 +69,7 @@ that would make the install fail, saying what to put right.
 ![The checks](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-checks.png)
 
 It asks which address the other machines reach this one on, when it has more
-than one, and whether to install Longhorn and KubeVirt. The installation
+than one, and whether to install Longhorn, the node probe and KubeVirt. The installation
 summary then shows the settings and the version of each component:
 
 ![The installation summary](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-ready.png)
@@ -86,11 +86,15 @@ Select **Install**, and it takes 5-10 minutes, with a progress bar.
 
 It then:
 
-1. installs what Longhorn needs on the host (`open-iscsi` and an NFS client);
+1. installs what Longhorn needs on the host (`open-iscsi` and an NFS client),
+   and keeps `multipathd` off the devices Longhorn makes (below);
 2. installs k3s with an embedded etcd, so more servers can join later;
 3. asks k3s to install Longhorn (one copy of each volume, while there is one
    machine) and Homestead's own manifest;
-4. waits for Homestead and prints its address - `http://<this machine>:8088`.
+4. asks Homestead to install kube-vip, Multus and the node probe once it is up;
+5. waits for Homestead, takes the first etcd snapshot - k3s takes one only every
+   12 hours, and until then there is nothing to restore the cluster from - and
+   prints its address, `http://<this machine>:8088`.
 
 Open that address and create the first administrator.
 
@@ -112,6 +116,7 @@ Options go after `server`:
 | `--kubevirt-version v1.6.0`, `--cdi-version v1.62.0` | pin KubeVirt and CDI instead of their current releases |
 | `--homestead-version 2.8.118` | pins Homestead instead of the newest release |
 | `--node-ip 192.168.1.10` | the address k3s registers this machine by, when it has more than one |
+| `--no-node-probe` | leaves out the node probe (temperatures, drive health, each host's network interfaces); add it later under **Settings → Cluster → Add-ons** |
 
 The script is safe to run again: each step finds what the last run left.
 
@@ -157,12 +162,31 @@ is fine for a homelab; three survive one failing; two are worse than one,
 since losing either stops the cluster.
 
 The script sets Longhorn up with one copy of each volume, which is all one
-machine can hold. Once there are three machines, make new volumes keep three:
-**Volumes → Storage classes** creates a class with three copies and makes it
-the default. **Volumes** shows each volume's copies - `×1` in orange is a
+machine can hold. As machines join, Homestead raises the default for new
+volumes with them, up to three - while it is still the installer's one copy, so
+a number you chose is kept. Existing volumes keep their count: **Volumes →
+Storage classes** makes a class with three copies the default. **Volumes** shows each volume's copies - `×1` in orange is a
 volume a single failed disk would lose - and
 [Changing a volume's storage class](Storage#changing-a-volumes-storage-class)
 moves an existing one onto the new class.
+
+### A machine that joins later
+
+The node probe, Longhorn, Multus, macvtap and KubeVirt run as DaemonSets and
+reach a new machine by themselves. What was set up when the cluster was one
+machine does not, so the leader brings each new one into line within ten
+minutes of it being Ready:
+
+- **multipathd.** Ubuntu Server runs it, and it claims every plain `/dev/sd*`
+  disk - Longhorn's volumes among them, whose mounts then fail as "already
+  mounted or mount point busy". As Longhorn asks, `/etc/multipath.conf` gets
+  `devnode "^sd[a-z0-9]+"` in its blacklist (a copy of the file is kept), unless
+  the machine boots from a multipath device. `iscsid`, installed but stopped, is
+  started.
+- **kube-vip's interface.** Installed on one machine, kube-vip was told that
+  machine's interface. Once the node probes report machines whose interfaces are
+  named differently, the name is taken out and kube-vip finds each machine's own.
+- **Longhorn's copies**, as above.
 
 ### Host limits
 

@@ -182,6 +182,14 @@ only what is safe for what it found:
 - **Erase it and format** (a disk holding anything else) - typed to confirm;
 - the **V2 engine** is given the raw device by its `/dev/disk/by-id` name.
 
+A disk something else holds open is found first, rather than failing in
+`wipefs` as "Device or resource busy". `multipathd`, which Ubuntu Server runs,
+claims plain SATA and SAS disks as maps of its own: setting such a disk up
+releases the map and adds that disk's WWID to the blacklist in
+`/etc/multipath.conf` (a copy is kept), so `multipathd` leaves that one disk
+alone. A disk in an LVM volume group, a RAID array or an encrypted volume is
+refused, naming what holds it.
+
 The system disk, and a disk that is mounted, are refused. A V1 disk is mounted
 at `/mnt/<device>`: the folder is locked while empty, fstab names the
 filesystem by UUID with `nofail` (a copy of fstab is kept first as

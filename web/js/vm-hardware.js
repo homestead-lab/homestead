@@ -12,13 +12,18 @@
 
 /* Presets for common guests, as Proxmox's OS types set them: each sets only
    what matters for that guest and leaves the rest as it is. "LOCAL" is this
-   browser's time zone, since Windows keeps its clock in local time. */
+   browser's time zone, since Windows keeps its clock in local time. `nic` is
+   the network card a new VM of that type gets: Windows has no VirtIO network
+   driver of its own, so a Windows guest installed from an ISO came up with no
+   network. Proxmox gives its Windows types an Intel e1000; an e1000e is the
+   one Windows 10 and 11 drive out of the box, and virtio stays a choice once
+   the guest tools from virtio-win.iso are in. */
 const VM_PRESETS = {
-  windows11: { name: "Windows 11 / Server 2022+", about: "UEFI with Secure Boot, a kept TPM, Hyper-V enlightenments, a tablet pointer, local time",
-    hw: { firmware: "uefi", secure_boot: true, efi_persistent: true, tpm: "persistent", machine: "q35", hyperv: true,
+  windows11: { name: "Windows 11 / Server 2022+", about: "UEFI with Secure Boot, a kept TPM, Hyper-V enlightenments, a tablet pointer, local time, an Intel e1000e network card Windows drives without extra drivers",
+    nic: "e1000e", hw: { firmware: "uefi", secure_boot: true, efi_persistent: true, tpm: "persistent", machine: "q35", hyperv: true,
       tablet: true, graphics: true, sound: false, rng: false, timezone: "LOCAL" } },
-  windows10: { name: "Windows 10 / Server 2019", about: "UEFI, Hyper-V enlightenments, a tablet pointer, local time",
-    hw: { firmware: "uefi", secure_boot: false, efi_persistent: true, tpm: "off", machine: "q35", hyperv: true,
+  windows10: { name: "Windows 10 / Server 2019", about: "UEFI, Hyper-V enlightenments, a tablet pointer, local time, an Intel e1000e network card Windows drives without extra drivers",
+    nic: "e1000e", hw: { firmware: "uefi", secure_boot: false, efi_persistent: true, tpm: "off", machine: "q35", hyperv: true,
       tablet: true, graphics: true, sound: false, rng: false, timezone: "LOCAL" } },
   linux: { name: "Linux server", about: "UEFI and a random-number device; UTC",
     hw: { firmware: "uefi", secure_boot: false, efi_persistent: true, tpm: "off", hyperv: false, rng: true,
@@ -219,6 +224,7 @@ window.vmCreatePreset = id => {
   vhSet(Object.fromEntries(Object.keys(VH_FIELDS).map(key => [key, base[key]])));
   vhSet(vmPresetSettings(id) || {});
   if ($("#v_preset_about")) $("#v_preset_about").textContent = VM_PRESETS[id]?.about || "KubeVirt defaults: BIOS, UTC, a display and serial console";
+  if ($("#v_nic_model")) $("#v_nic_model").value = VM_PRESETS[id]?.nic || "virtio";
   vmHardwareChanged();
 };
 

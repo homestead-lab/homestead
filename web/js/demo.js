@@ -536,6 +536,25 @@
       top_mem: [{ name: "frigate", ns: "lab", nodes: ["harvester-node2"], mem_mb: 1840 }, { name: "home-assistant", ns: "lab", nodes: ["harvester-node1"], mem_mb: 738 }, { name: "paperless", ns: "lab", nodes: ["harvester-node3"], mem_mb: 512 }] },
     "/api/history": history, "/api/storage": storage, "/api/volumes": volumes,
     "/api/nodes": nodes, "/api/nodes/uptime": demoUptime, "/api/node": url => nodes.find(n => n.name === url.searchParams.get("name")) || {},
+    // A host's own OS, as the leader reads it on k3s and RKE2 (host-os.js).
+    "/api/node/os": url => {
+      const name = url.searchParams.get("name") || "harvester-node1", at = Math.floor(Date.now() / 1000) - 5400, gb = 1024 ** 3;
+      const updates = [["libc6", true], ["openssl", true], ["linux-image-6.8.0-86-generic", true], ["tzdata", false], ["curl", false], ["python3.12", false]]
+        .map(([pkg, security]) => ({ name: pkg, security }));
+      const facts = { os: "Ubuntu 24.04.3 LTS", id: "ubuntu", version: "24.04", kernel: "6.8.0-85-generic", uptime_s: 1728000,
+        package_manager: "apt", lists_at: at - 30000, updates, security: 3, reboot: name === "harvester-node2",
+        reboot_for: name === "harvester-node2" ? "linux-image-6.8.0-85-generic" : "", failed_units: [], ntp: true,
+        root_total_gb: 97.9, root_used_pct: 41, upgrading: false, last_upgrade: { ok: true, code: "0", at: at - 86400 * 9 }, at,
+        disks: [{ name: "nvme0n1", size: 512 * gb, table: "gpt", fstype: "", mount: "", free: 0, partitions: [
+            { name: "nvme0n1p1", start: 1024 ** 2, size: 1.05 * gb, fstype: "vfat", label: "", mounts: ["/boot/efi"], holds: [] },
+            { name: "nvme0n1p2", start: 1.05 * gb, size: 2 * gb, fstype: "ext4", label: "", mounts: ["/boot"], holds: [] },
+            { name: "nvme0n1p3", start: 3.05 * gb, size: 508.9 * gb, fstype: "LVM2_member", label: "", mounts: ["/"], holds: ["lvm"] }] },
+          { name: "sda", size: 4000 * gb, table: "gpt", fstype: "", mount: "", free: 0, partitions: [
+            { name: "sda1", start: 1024 ** 2, size: 3999 * gb, fstype: "ext4", label: "", mounts: ["/var/lib/longhorn"], holds: [] }] },
+          { name: "sdb", size: 2000 * gb, table: "", fstype: "", mount: "", free: 0, partitions: [] }] };
+      return { applies: true, every_s: 21600, hosts: { [name]: { ...facts,
+        summary: { tone: "warn", text: `3 security updates${facts.reboot ? ", restart needed" : ""}` } } } };
+    },
     "/api/node/smart": url => {
       const node = nodes.find(n => n.name === url.searchParams.get("node"));
       const disk = node?.temps?.disks?.find(d => d.name === url.searchParams.get("disk"));
