@@ -187,8 +187,22 @@ A disk something else holds open is found first, rather than failing in
 claims plain SATA and SAS disks as maps of its own: setting such a disk up
 releases the map and adds that disk's WWID to the blacklist in
 `/etc/multipath.conf` (a copy is kept), so `multipathd` leaves that one disk
-alone. A disk in an LVM volume group, a RAID array or an encrypted volume is
-refused, naming what holds it.
+alone. A disk in a RAID array or an encrypted volume is refused, naming what
+holds it.
+
+A disk from an earlier install, such as an old Ubuntu drive with its
+`ubuntu-vg`, which the host may have switched on at boot, offers **Wipe and
+prepare it**. You confirm by typing the device path. Homestead switches the
+old volume groups off and removes them, wipes the LVM labels, filesystem
+signatures and partition table, has the host re-read the disk, and looks at it
+again. It formats the disk only once it's blank. The wipe is refused, with
+each reason listed, when:
+
+- anything on the disk is mounted or used as swap
+- one of its volumes is open
+- its volume group is the one the running system's root is on, matched by
+  UUID because the old drive and the system can both call theirs `ubuntu-vg`
+- the volume group also spans another disk, which wiping this one would break
 
 The system disk, and a disk that is mounted, are refused. A V1 disk is mounted
 at `/mnt/<device>`: the folder is locked while empty, fstab names the
