@@ -964,7 +964,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.230/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.231/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -975,7 +975,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.230 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.231 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1080,7 +1080,10 @@ destination.
    up** once the cluster is added (it uses the admin account you gave), or on
    that cluster Data Protection ▸ **Set up storage** does the same: it runs
    an S3 server (RustFS - MinIO's images are no longer published) on a Longhorn
-   volume, creates the bucket, and points Longhorn's backups at it.
+   volume, creates the bucket, and points Longhorn's backups at it. Homestead
+   keeps it on the RustFS release it pins (1.0.0), as it does its SMB and NFS
+   servers: an older RustFS moves on by its image alone, keeping its keys,
+   volume and address; a MinIO store, or one turned off, is left as it is.
    It needs a LAN address the other cluster can read from, and by default shares
    the source's shared address - the one its apps share - answering on port
    9000 there (on k3s, the nodes' own addresses). The address belongs to the
@@ -1833,10 +1836,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.230`, the workflow publishes:
+For a release such as `v2.8.231`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.230
+ghcr.io/wjcloudy/homestead:2.8.231
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -1847,8 +1850,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.230
-git push origin v2.8.230
+git tag v2.8.231
+git push origin v2.8.231
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.

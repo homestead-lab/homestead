@@ -47,6 +47,29 @@ class ObjectStoreTests(unittest.TestCase):
             "status": {"loadBalancer": {"ingress": [{"ip": ip}] if ip else []}},
         }
 
+    def store_running(self, image, replicas=1):
+        self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-objectstore"] = {
+            "spec": {"replicas": replicas, "template": {"spec": {"containers": [{"name": "s3", "image": image}]}}}}
+
+    def test_an_older_rustfs_moves_on_to_the_pinned_release_and_nothing_else_is_touched(self):
+        self.assertEqual("rustfs/rustfs:1.0.0", store.IMAGE)
+        self.store_running("rustfs/rustfs:1.0.0-rc.6")
+        self.assertEqual(store.IMAGE, store.keep_in_step())
+        method, path, body = self.sent[-1]
+        self.assertEqual(("PATCH", "/apis/apps/v1/namespaces/lab/deployments/homestead-objectstore"), (method, path))
+        self.assertEqual({"spec": {"template": {"spec": {"containers": [{"name": "s3", "image": "rustfs/rustfs:1.0.0"}]}}}}, body,
+                         "only the image: keys, volume and address stay")
+        for image in ("rustfs/rustfs:1.0.0", "rustfs/rustfs:1.0.1", "minio/minio:RELEASE.2025-04-22T22-12-26Z",
+                      "rustfs/rustfs:latest", "rustfs/rustfs@sha256:" + "a" * 64):
+            with self.subTest(image=image):
+                self.sent.clear()
+                self.store_running(image)
+                self.assertEqual("", store.keep_in_step())
+                self.assertEqual([], self.sent)
+        self.store_running("rustfs/rustfs:1.0.0-rc.6", replicas=0)
+        self.assertEqual("", store.keep_in_step(), "a store turned off stays off")
+        self.assertLess(store._rustfs_version("rustfs/rustfs:1.0.0-rc.6"), store._rustfs_version("rustfs/rustfs:1.0.0"))
+
     def test_nothing_is_deployed_to_start_with(self):
         state = store.status()
 

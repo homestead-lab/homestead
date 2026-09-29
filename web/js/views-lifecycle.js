@@ -320,7 +320,7 @@ window.editSave = async (ns, name) => {
   const nodeSelect = $("#e_node");
   if (nodeSelect.value !== (nodeSelect.dataset.current || "")) body.node = nodeSelect.value || null;
   if ((STATE.data.wl || []).some(x => x.self && x.ns === ns && x.name === name) && !body.autostart) {
-    if (!confirm(`Turning autostart off stops Homestead, and this page with it. Nothing here can start it again - it stays down until someone runs\n\n  kubectl -n ${ns} scale deployment/${name} --replicas=1\n\non the cluster. Stop it anyway?`)) return;
+    if (!(await ask(`Turning autostart off stops Homestead, and this page with it. Nothing here can start it again - it stays down until someone runs\n\n  kubectl -n ${ns} scale deployment/${name} --replicas=1\n\non the cluster. Stop it anyway?`))) return;
     body.confirm_self = true;
   }
   await window.editReview(body);
@@ -1009,7 +1009,7 @@ window.imageScan = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.forgetRollback = async (namespace, name) => {
-  if (!confirm(`Stop keeping ${name}'s previous image? Roll back for its last update goes, and the image can be cleaned up.`)) return;
+  if (!(await ask(`Stop keeping ${name}'s previous image? Roll back for its last update goes, and the image can be cleaned up.`))) return;
   try {
     const r = await api("/api/images/forget-rollback", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ namespace, name }) });
@@ -1083,7 +1083,7 @@ window.jobRun = async name => {
     toast(`${name} started`, "ok"); } catch (e) { toast(e.message, "bad"); }
 };
 window.jobDel = async name => {
-  if (!confirm(`Delete schedule "${name}"?`)) return;
+  if (!(await ask(`Delete schedule "${name}"?`))) return;
   try { await api("/api/schedules/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
     toast("deleted", "ok"); resetPaint(); viewSchedules(); } catch (e) { toast(e.message, "bad"); }
 };
@@ -1212,8 +1212,8 @@ window.importRemoveNow = async (name, button) => {
   const volumes = $$(".imr-volume").filter(box => box.checked).map(box => box.value);
   const body = { name, remove_workload: !!$("#imr_workload")?.checked,
     remove_volume: volumes.length > 0, remove_volumes: volumes };
-  if (volumes.length && !confirm(`Delete ${volumes.length === 1 ? volumes[0] : volumes.join(" and ")} `
-      + "and everything copied into " + (volumes.length === 1 ? "it" : "them") + "?\n\nThis cannot be undone.")) return;
+  if (volumes.length && !(await ask(`Delete ${volumes.length === 1 ? volumes[0] : volumes.join(" and ")} `
+      + "and everything copied into " + (volumes.length === 1 ? "it" : "them") + "?\n\nThis cannot be undone."))) return;
   if (button) { button.disabled = true; button.textContent = "Removing…"; }
   try {
     const result = await api("/api/imports/delete", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -1334,7 +1334,7 @@ window.sourceKeyTrust = async () => {
   } finally { SOURCE_KEY_BUSY = false; }
 };
 window.srcDel = async name => {
-  if (!confirm(`Remove import source "${name}"? Existing copy Jobs and their credentials are retained; this does not stop or revoke them.`)) return;
+  if (!(await ask(`Remove import source "${name}"? Existing copy Jobs and their credentials are retained; this does not stop or revoke them.`))) return;
   try { await api("/api/sources/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
     toast("removed", "ok"); resetPaint(); viewImport(); } catch (e) { toast(e.message, "bad"); }
 };
@@ -1988,8 +1988,8 @@ window.movePlan = async (cluster, kind, name) => {
 };
 
 window.moveStart = async (cluster, kind, name) => {
-  if (!confirm(`Stop ${name} on ${cluster} and bring it here?` + String.fromCharCode(10, 10)
-      + "It is unavailable from the moment it stops there until it starts here.")) return;
+  if (!(await ask(`Stop ${name} on ${cluster} and bring it here?` + String.fromCharCode(10, 10)
+      + "It is unavailable from the moment it stops there until it starts here."))) return;
   try {
     await api("/api/move/start", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(moveBody(cluster, kind, name)) });
@@ -2056,17 +2056,17 @@ window.moveAct = async (action, id) => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
-window.moveBack = (id, name, cluster, status, stopped = true) => {
+window.moveBack = async (id, name, cluster, status, stopped = true) => {
   // Nothing has stopped on the source yet: undoing it only cancels the move.
   if (!stopped) {
-    if (!confirm(`Cancel moving ${name}?` + String.fromCharCode(10, 10)
-        + `Nothing has stopped on ${cluster}; anything this move set up here is removed.`)) return;
+    if (!(await ask(`Cancel moving ${name}?` + String.fromCharCode(10, 10)
+        + `Nothing has stopped on ${cluster}; anything this move set up here is removed.`))) return;
     return moveAct("abandon", id);
   }
   const landed = status === "succeeded";
-  if (!confirm(`Put ${name} back on ${cluster}?` + String.fromCharCode(10, 10)
+  if (!(await ask(`Put ${name} back on ${cluster}?` + String.fromCharCode(10, 10)
       + "It starts again there, as it was, and what this move created here is removed"
-      + (landed ? ", including anything written to it here since it arrived." : "."))) return;
+      + (landed ? ", including anything written to it here since it arrived." : ".")))) return;
   moveAct("abandon", id);
 };
 
@@ -2145,8 +2145,8 @@ window.doImport = async source => {
   if (absent) return toast(`${absent.remote_path} does not exist on the source — fix the path or untick it`, "bad");
   body.remote_path = copied[0]?.remote_path || "";
   body.mount_path = copied[0]?.mount_path || "/config";
-  if (reused.length && !confirm(`Import into existing volume${reused.length === 1 ? "" : "s"} ${reused.join(", ")}?` +
-      "\n\nThe current data is kept, but imported files with the same names may be replaced.")) return;
+  if (reused.length && !(await ask(`Import into existing volume${reused.length === 1 ? "" : "s"} ${reused.join(", ")}?` +
+      "\n\nThe current data is kept, but imported files with the same names may be replaced."))) return;
   await importReview(body);
 };
 
@@ -2198,9 +2198,9 @@ window.confirmImport = async () => {
 /* Finished moves off the list, leaving the source's stopped copy where it is. */
 window.moveDismiss = async (id = "") => {
   const rows = (await api("/api/move/moves").catch(() => [])).filter(m => (!id || m.id === id) && m.status === "succeeded" && !m.source_removed);
-  if (rows.length && !confirm(`Clear ${id ? "this move" : "finished moves"} from the list?` + String.fromCharCode(10, 10)
+  if (rows.length && !(await ask(`Clear ${id ? "this move" : "finished moves"} from the list?` + String.fromCharCode(10, 10)
       + `${[...new Set(rows.map(m => m.cluster))].join(", ")} keeps the stopped original of ${rows.map(m => m.name).join(", ")} - `
-      + "nothing is removed there, and Put back is no longer offered here.")) return;
+      + "nothing is removed there, and Put back is no longer offered here."))) return;
   try {
     const r = await api("/api/move/moves/dismiss", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
     toast(r.detail, "ok");

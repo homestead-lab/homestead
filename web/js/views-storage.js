@@ -744,9 +744,9 @@ window.storageClassDefault = async name => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.storageClassDelete = async name => {
-  if (!confirm(`Delete storage class "${name}"?
+  if (!(await ask(`Delete storage class "${name}"?
 
-Volumes already built from it keep working and keep their data. New volumes can no longer use it.`)) return;
+Volumes already built from it keep working and keep their data. New volumes can no longer use it.`))) return;
   try {
     const result = await api("/api/storage/classes/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }) });
@@ -850,7 +850,7 @@ async function mountEditor(host, content, filename) {
 window.volumeFiles = async (namespace, pvc, attached) => {
   Object.assign(FILEVIEW, { namespace, pvc, path: "", file: "", dirty: false });
   modal(`Files · ${pvc}`, `<div class="empty"><span class="spin2"></span>starting a file browser on ${esc(pvc)}</div>`, true);
-  if (attached && !confirm(`${pvc} is attached to a running workload.\n\nA ReadWriteOnce volume can only mount in one place, so the browser will not start until the workload is stopped. Continue anyway?`)) {
+  if (attached && !(await ask(`${pvc} is attached to a running workload.\n\nA ReadWriteOnce volume can only mount in one place, so the browser will not start until the workload is stopped. Continue anyway?`))) {
     return closeModal();
   }
   fileBrowse("");
@@ -858,7 +858,7 @@ window.volumeFiles = async (namespace, pvc, attached) => {
 
 window.fileBrowse = async (path) => {
   const { namespace, pvc } = FILEVIEW;
-  if (FILEVIEW.dirty && !confirm("Discard unsaved changes?")) return;
+  if (FILEVIEW.dirty && !(await ask("Discard unsaved changes?"))) return;
   disposeEditor();
   try {
     const listing = await api(`/api/files/list?namespace=${encodeURIComponent(namespace)}&pvc=${encodeURIComponent(pvc)}&path=${encodeURIComponent(path || "")}`);
@@ -963,7 +963,7 @@ window.fileSave = async (ignoreSyntax = false) => {
     toast(result.message || "saved", "ok");
   } catch (e) {
     // A syntax complaint is a warning, not a refusal: it is your file.
-    if (/^(JSON is invalid|YAML cannot)/.test(e.message) && confirm(`${e.message}\n\nSave it anyway?`)) {
+    if (/^(JSON is invalid|YAML cannot)/.test(e.message) && (await ask(`${e.message}\n\nSave it anyway?`))) {
       return fileSave(true);
     }
     toast(e.message, "bad");
@@ -974,7 +974,7 @@ window.fileSave = async (ignoreSyntax = false) => {
 
 window.closeFiles = async () => {
   const { namespace, pvc, dirty } = FILEVIEW;
-  if (dirty && !confirm("Discard unsaved changes?")) return;
+  if (dirty && !(await ask("Discard unsaved changes?"))) return;
   disposeEditor();
   closeModal();
   try {
@@ -1299,7 +1299,7 @@ window.saveShareEdit = async (name, button) => {
   } catch (e) { if (button) { button.disabled = false; button.innerHTML = `${icon("edit")}Save changes`; } toast(e.message, "bad"); }
 };
 window.rmShare = async name => {
-  if (!confirm(`Remove share "${name}" from SMB?\n\nThe volume and data are kept. Its mount is removed after the SMB restart unless another configured share uses the same PVC. Other workloads may also keep the volume attached.`)) return;
+  if (!(await ask(`Remove share "${name}" from SMB?\n\nThe volume and data are kept. Its mount is removed after the SMB restart unless another configured share uses the same PVC. Other workloads may also keep the volume attached.`))) return;
   try {
     const result = await api("/api/shares/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }) });
@@ -1527,9 +1527,9 @@ window.lhSettingsSave = async () => {
   const cap = STATE.data.lhcap || {};
   const body = { over_provisioning: +$("#lh_over").value, minimal_available: +$("#lh_min").value, v2: $("#lh_v2").checked,
     node_down: $("#lh_nodedown")?.value || "" };
-  if (body.v2 !== !!cap.v2?.enabled && !confirm(body.v2
+  if (body.v2 !== !!cap.v2?.enabled && !(await ask(body.v2
     ? "Enable Longhorn's V2 data engine? Longhorn starts V2 instance managers on every node, which reserve CPU and hugepages even before any V2 volume exists."
-    : "Disable the V2 data engine? Longhorn refuses while V2 volumes exist.")) return;
+    : "Disable the V2 data engine? Longhorn refuses while V2 volumes exist."))) return;
   try {
     const r = await api("/api/longhorn/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(r.detail, "ok"); lhSettingsPaint();
@@ -1671,8 +1671,8 @@ function disksRepaint(node) {
 }
 
 window.diskAction = async (action, node, disk, value) => {
-  if (action === "remove" && !confirm(`Remove ${disk} on ${node} from Longhorn? Nothing is on it, and its files are left where they are.`)) return;
-  if (action === "evict" && value && !confirm(`Move every replica off ${disk}? Longhorn rebuilds each one on another disk first, which copies their data.`)) return;
+  if (action === "remove" && !(await ask(`Remove ${disk} on ${node} from Longhorn? Nothing is on it, and its files are left where they are.`))) return;
+  if (action === "evict" && value && !(await ask(`Move every replica off ${disk}? Longhorn rebuilds each one on another disk first, which copies their data.`))) return;
   const body = { node, disk };
   if (action === "scheduling") body.allow = value;
   if (action === "evict") body.on = value;
@@ -1865,7 +1865,7 @@ window.diskAddGo = async (node, blockdevice) => {
   const body = { node, engine: $("#da_engine").value };
   if (blockdevice) {
     body.blockdevice = blockdevice; body.wipe = !!$("#da_wipe")?.checked;
-    if (body.wipe && !confirm("Erase everything on this disk? This cannot be undone.")) return;
+    if (body.wipe && !(await ask("Erase everything on this disk? This cannot be undone."))) return;
   } else body.path = $("#da_path").value.trim();
   try {
     const r = await api("/api/disks/add", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -1981,7 +1981,7 @@ window.reclassWatch = async id => {
 };
 
 window.reclassRemoveOld = async pv => {
-  if (!confirm(`Remove the old copy ${pv}? Its data is deleted.`)) return;
+  if (!(await ask(`Remove the old copy ${pv}? Its data is deleted.`))) return;
   try {
     const r = await api("/api/volumes/old-copies/remove", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pv }) });

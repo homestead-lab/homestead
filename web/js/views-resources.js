@@ -105,7 +105,7 @@ window.resSave = async (ns, name) => {
 };
 window.resDelete = async (ns, name) => {
   const k = RES.pick;
-  const typed = prompt(`Delete ${k.kind} ${name}${ns ? ` in ${ns}` : ""}? Whatever controls it may make it again; whatever depends on it may stop.\n\nType its name to delete it:`);
+  const typed = (await askText(`Delete ${k.kind} ${name}${ns ? ` in ${ns}` : ""}? Whatever controls it may make it again; whatever depends on it may stop.\n\nType its name to delete it:`));
   if (typed !== name) { if (typed !== null) toast("The name did not match; nothing was deleted", "bad"); return; }
   try { const r = await resPost("/api/resources/delete", { group: k.group, version: k.version, resource: k.resource, ns, name });
     toast(r.detail, "ok"); closeModal(); viewResources(); } catch (e) { toast(e.message, "bad"); }

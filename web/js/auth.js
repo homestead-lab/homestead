@@ -32,7 +32,7 @@ async function authState() {
 
 /* Homestead is up but its cluster is not answering: say so, and keep trying. */
 function clusterUnavailable(error) {
-  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.230" alt="">
+  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.231" alt="">
     <h2>Homestead</h2><p class="sub">Waiting for the cluster</p>
     <div class="gateerr">${esc(error || "The Kubernetes API did not answer.")}</div>
     <p class="dim small">This page tries again every few seconds.</p>
@@ -92,8 +92,8 @@ window.sessionSummary = (state = {}) => {
 };
 
 window.signOutEverywhere = async () => {
-  if (!confirm("Sign out of every device, including this one?" + String.fromCharCode(10, 10)
-      + "Every session for your account stops working immediately.")) return;
+  if (!(await ask("Sign out of every device, including this one?" + String.fromCharCode(10, 10)
+      + "Every session for your account stops working immediately."))) return;
   try {
     await _fetch("/api/auth/signout-everywhere", { method: "POST",
       headers: { "Content-Type": "application/json", "X-Homestead-Auth": "1" } });
@@ -109,7 +109,7 @@ function ungate() { $("#gate").classList.add("hidden"); }
 
 function loginForm(err, setup) {
   gate(`
-    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.230" alt="">
+    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.231" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}
@@ -255,7 +255,7 @@ window.addUser = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.delUser = async name => {
-  if (!confirm(`Remove user "${name}"?`)) return;
+  if (!(await ask(`Remove user "${name}"?`))) return;
   try {
     await api("/api/auth/users/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username: name }) });

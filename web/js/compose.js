@@ -235,8 +235,8 @@ window.composeToForm = name => {
   toast(`${name} is in the Deploy form. The Compose file is kept until you clear it.`, "ok");
 };
 
-window.composeClear = () => {
-  if (COMPOSE.text && !confirm("Clear the Compose file and variables?")) return;
+window.composeClear = async () => {
+  if (COMPOSE.text && !(await ask("Clear the Compose file and variables?"))) return;
   ++COMPOSE.asked;
   ++COMPOSE.reviewSequence;
   Object.assign(COMPOSE, { text: "", variables: "", report: null, review: null });
