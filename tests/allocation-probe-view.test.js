@@ -4,7 +4,7 @@ function setup(fail=false) {
   const calls=[], notices=[], fields={"#allocationProbeConsent":{checked:false}, "#allocationProbeDirectory":{value:"/custom/pod-resources"}};
   let html="", context="";
   const ctx={console, STATE:{data:{}}, $:key=>fields[key], esc:v=>String(v).replaceAll("<","&lt;").replaceAll('"',"&quot;"), tip:()=>"",
-    childModal:(_title,body,_wide,style)=>{html=body;context=style;}, modalBack(){}, toast:m=>notices.push(m), confirm:()=>true,
+    childModal:(_title,body,_wide,style)=>{html=body;context=style;}, modalBack(){}, toast:m=>notices.push(m), ask:async()=>true,
     api:async(path,options)=>{calls.push({path,options});if(!options) return {installed:true,enabled:true,uid:"uid",resource_version:"12",detail:"<private>",directory:"/custom/pod-resources",capacity:{blocked:false,blockers:[],warnings:[],fingerprint:"review"}};
       if(fail) throw new Error("lost response");return {detail:"saved"};}};
   ctx.window=ctx;vm.createContext(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(fs.readFileSync("web/js/views-overview.js","utf8"),ctx);
@@ -27,9 +27,9 @@ test("uncertain collector save cannot be replayed without reloading",async()=>{
   assert.equal(t.calls.length,2);assert.match(t.notices.join(" "),/Reopen VM allocation/);
 });
 test("disable requires confirmation but not enable-access consent",async()=>{
-  const t=setup();await t.ctx.allocationProbeSettings();t.ctx.confirm=()=>false;
+  const t=setup();await t.ctx.allocationProbeSettings();t.ctx.ask=async()=>false;
   await t.ctx.allocationProbeSave(false,{});assert.equal(t.calls.length,1);
-  t.ctx.confirm=()=>true;await t.ctx.allocationProbeSave(false,{});
+  t.ctx.ask=async()=>true;await t.ctx.allocationProbeSave(false,{});
   assert.equal(JSON.parse(t.calls[1].options.body).enabled,false);
 });
 test("advanced details are collapsed and RAM acknowledgement cannot bypass blockers",async()=>{

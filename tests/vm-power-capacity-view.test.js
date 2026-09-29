@@ -14,7 +14,7 @@ function setup({blocked=false, missing=false, fail=false, cpuEstimate=false, sta
   const ctx={console, URLSearchParams, Map, Date, Promise, encodeURIComponent,
     document:{addEventListener(){}}, STATE:{data:{}},
     $:key=>fields[key], $$:()=>[], esc:v=>String(v).replaceAll("<","&lt;"),
-    modal:open, childModal:open, modalBack(){}, refresh(){}, setTimeout:fn=>fn(), confirm:()=>true,
+    modal:open, childModal:open, modalBack(){}, refresh(){}, setTimeout:fn=>fn(), ask:async()=>true,
     toast:msg=>notices.push(msg), deployCapacityHtml:p=>`<div>${p.warnings.join(" ")}</div>`,
     api:async(path, options)=>{
       sent.push({path, body:JSON.parse(options.body)});

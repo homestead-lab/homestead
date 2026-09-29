@@ -92,8 +92,8 @@ window.sessionSummary = (state = {}) => {
 };
 
 window.signOutEverywhere = async () => {
-  if (!confirm("Sign out of every device, including this one?" + String.fromCharCode(10, 10)
-      + "Every session for your account stops working immediately.")) return;
+  if (!(await ask("Sign out of every device, including this one?" + String.fromCharCode(10, 10)
+      + "Every session for your account stops working immediately."))) return;
   try {
     await _fetch("/api/auth/signout-everywhere", { method: "POST",
       headers: { "Content-Type": "application/json", "X-Homestead-Auth": "1" } });
@@ -255,7 +255,7 @@ window.addUser = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.delUser = async name => {
-  if (!confirm(`Remove user "${name}"?`)) return;
+  if (!(await ask(`Remove user "${name}"?`))) return;
   try {
     await api("/api/auth/users/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username: name }) });
