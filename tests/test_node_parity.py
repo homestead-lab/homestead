@@ -65,6 +65,17 @@ class NodeParityTests(unittest.TestCase):
         PARITY.tick()
         self.assertEqual(["node-1", "node-1"], cluster.ran)
 
+    def test_a_host_done_by_an_older_release_gets_the_journal_cap_too(self):
+        import json
+        Path(self.data, "node-parity.json").write_text(json.dumps({"hosts": {"node-1": {"at": 1, "multipath": "set"}}}))
+        cluster = Cluster([node("node-1")], host_out="JOURNAL capped\nMULTIPATH kept\nISCSI kept\nEND\n")
+        self.bind(cluster, longhorn=False)
+        self.assertIn(("node-1", "journal capped at 1 GB"), PARITY.tick())
+        self.assertEqual([], PARITY.tick(), "then done")
+        self.assertIn("grep -qs '^SystemMaxUse='", PARITY.HOST_SCRIPT, "a cap someone set is kept")
+        self.assertIn('[ "$LONGHORN" = 1 ] || { echo END; exit 0; }', PARITY.HOST_SCRIPT,
+                      "without Longhorn, multipathd is left alone")
+
     def test_kube_vip_finds_each_nodes_interface_once_they_differ(self):
         chart = {"spec": {"valuesContent": KUBE_VIP}}
         cluster = Cluster([node("a")], {f"{HELM}/kube-vip": chart},

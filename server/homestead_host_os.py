@@ -68,10 +68,27 @@ echo "NTP $(timedatectl show -p NTPSynchronized --value 2>/dev/null)"
 df -Pk / 2>/dev/null | awk 'NR==2 {print "ROOT " $2 " " $3}'
 [ -f "$STATUS" ] && echo "LAST $(cat "$STATUS" 2>/dev/null) $(stat -c %Y "$STATUS" 2>/dev/null)"
 systemctl is-active --quiet __UNIT__ 2>/dev/null && echo "UPGRADING"
+# Updates the host installs by itself, and whether Homestead holds them off.
+if command -v unattended-upgrade >/dev/null 2>&1; then
+  U=$(apt-config dump 2>/dev/null | awk -F'"' '/^APT::Periodic::Unattended-Upgrade /{v=$2} END{print v}')
+  B=$(apt-config dump 2>/dev/null | awk -F'"' '/^Unattended-Upgrade::Automatic-Reboot /{v=$2} END{print v}')
+  echo "AUTO unattended-upgrades ${U:-0} ${B:-false} $(systemctl is-enabled apt-daily-upgrade.timer 2>/dev/null || echo unknown)"
+elif systemctl is-enabled --quiet dnf-automatic-install.timer 2>/dev/null || systemctl is-enabled --quiet dnf-automatic.timer 2>/dev/null; then
+  echo "AUTO dnf-automatic 1 unknown enabled"
+fi
+[ -f __HOLD__ ] && echo "HELD"
 lsblk -P -b -o NAME,PKNAME,TYPE,SIZE,FSTYPE,MOUNTPOINT,PTTYPE,PARTLABEL,LABEL 2>/dev/null | sed 's/^/BLK /'
 for p in /sys/class/block/*/partition; do [ -e "$p" ] || continue; d=${p%/partition}; echo "START ${d##*/} $(cat "$d/start" 2>/dev/null)"; done
 echo END
-""".replace("$STATUS", STATUS).replace("__UNIT__", UNIT)
+""".replace("$STATUS", STATUS).replace("__UNIT__", UNIT).replace("__HOLD__", "/etc/apt/apt.conf.d/99-homestead-hold")
+
+# Ubuntu's automatic updates, held off: this file switches them off, and
+# removing it gives the host back its own settings.
+HOLD = "/etc/apt/apt.conf.d/99-homestead-hold"
+HOLD_TEXT = ('// Homestead installs updates on this host itself (Nodes > OS updates), one host at a time.\n'
+             '// Remove this file, or choose Ubuntu in those settings, to let unattended-upgrades run again.\n'
+             'APT::Periodic::Unattended-Upgrade "0";\n'
+             'Unattended-Upgrade::Automatic-Reboot "false";\n')
 
 # The whole upgrade runs on the host, detached: a systemd unit of its own,
 # which a helper pod being deleted cannot stop halfway through dpkg.
@@ -120,7 +137,8 @@ def parse(out, now=None):
     facts = {"os": "", "id": "", "version": "", "kernel": "", "uptime_s": None, "package_manager": "",
              "lists_at": None, "refreshed": False, "updates": [], "security": 0, "reboot": False, "reboot_for": "",
              "failed_units": [], "ntp": None, "root_total_gb": 0, "root_used_pct": 0, "upgrading": False,
-             "last_upgrade": None, "disks": [], "complete": False}
+             "last_upgrade": None, "disks": [], "complete": False,
+             "auto": {"tool": "", "on": False, "reboots": False, "held": False}}
     blocks, starts, security_names, security_patches = [], {}, set(), 0
     for line in out.splitlines():
         key, _, value = line.partition(" ")
@@ -160,6 +178,12 @@ def parse(out, now=None):
         elif key == "LAST":
             code, _, at = value.partition(" ")
             facts["last_upgrade"] = {"ok": code == "0", "code": code, "at": int(at) if at.isdigit() else None}
+        elif key == "AUTO":
+            parts = (value.split() + ["", "", "", ""])[:4]
+            facts["auto"].update(tool=parts[0], on=parts[1] not in ("0", "") and parts[3] not in ("disabled", "masked"),
+                                 reboots=parts[2].lower() == "true")
+        elif key == "HELD":
+            facts["auto"]["held"] = True
         elif key == "UPGRADING":
             facts["upgrading"] = True
         elif key == "BLK":
@@ -219,6 +243,11 @@ def read(node, refresh=False, now=None):
     return facts
 
 
+def stored(node):
+    """What was last read of node's OS, without looking again."""
+    return _load().get(node)
+
+
 def summary(facts):
     """The one line and tone a host's OS gets in a list."""
     if not facts:
@@ -275,9 +304,26 @@ def tick(now=None):
     return read_now
 
 
-def upgrade_start(node, ops):
-    """Install every waiting update on node, detached on the host, as a job."""
-    facts = read(node)
+def set_hold(node, hold):
+    """Hold Ubuntu's automatic updates off on node, or let them go again."""
+    if hold:
+        script = f"mkdir -p /etc/apt/apt.conf.d && printf '%s' '{HOLD_TEXT}' > {HOLD} && echo DONE"
+    else:
+        script = f"rm -f {HOLD} && echo DONE"
+    out, err = hostrun.run(node, script, timeout=45)
+    if "DONE" not in out:
+        raise ValueError(f"could not {'hold' if hold else 'release'} {node}'s automatic updates: {(err or out)[-160:]}")
+    with _lock:
+        state = _load()
+        if node in state:
+            auto = state[node].setdefault("auto", {})
+            auto["held"] = bool(hold)
+            _save(state)
+
+
+def upgrade_begin(node, facts=None):
+    """Start installing every waiting update on node, detached on the host."""
+    facts = facts or read(node)
     manager = facts.get("package_manager")
     if manager not in UPGRADE:
         raise ValueError(f"{node} has no package manager Homestead knows (apt, dnf or zypper)")
@@ -290,6 +336,26 @@ def upgrade_start(node, ops):
     out, err = hostrun.run(node, script, timeout=60)
     if "STARTED" not in out:
         raise ValueError(f"updates on {node} did not start: {(err or out)[-200:]}")
+    return manager
+
+
+def upgrade_state(node):
+    """{running, code, last}: whether node is still installing, and how it ended."""
+    out, _ = hostrun.run(node, f"systemctl is-active --quiet {UNIT} && echo RUNNING; "
+                               f"[ -f {STATUS} ] && echo \"CODE $(cat {STATUS})\"; tail -n 1 {LOG} 2>/dev/null | cut -c1-160",
+                         timeout=45)
+    lines = out.splitlines()
+    code = next((line[5:].strip() for line in lines if line.startswith("CODE ")), None)
+    last = next((line for line in reversed(lines) if line != "RUNNING" and not line.startswith("CODE ")), "")
+    # No exit code written yet is still running, whatever systemd says: the
+    # unit writes it as its last act.
+    return {"running": code is None, "code": code, "last": last}
+
+
+def upgrade_start(node, ops):
+    """Install every waiting update on node, detached on the host, as a job."""
+    facts = read(node)
+    manager = upgrade_begin(node, facts)
     count = len(facts.get("updates") or [])
     return ops.start("host-os", f"Install {count or 'the'} update{'s' if count != 1 else ''} on {node}",
                      {"kind": "Node", "name": node}, "/nodes", {"node": node, "since": time.time(), "manager": manager},
@@ -302,18 +368,13 @@ def status(item, now=None):
     node = ref["node"]
     if now - ref.get("since", now) < 20:
         return "running", 10, f"Installing updates on {node}"
-    out, _ = hostrun.run(node, f"systemctl is-active --quiet {UNIT} && echo RUNNING; "
-                               f"[ -f {STATUS} ] && echo \"CODE $(cat {STATUS})\"; tail -n 1 {LOG} 2>/dev/null | cut -c1-160",
-                         timeout=45)
-    lines = out.splitlines()
-    if "RUNNING" in lines:
-        last = next((line for line in reversed(lines) if line not in ("RUNNING",) and not line.startswith("CODE ")), "")
-        return "running", 50, (f"Installing on {node}: {last}" if last else f"Installing updates on {node}")
-    code = next((line[5:].strip() for line in lines if line.startswith("CODE ")), None)
+    now_state = upgrade_state(node)
+    code = now_state["code"]
     if code is None:
         if now - ref.get("since", now) > 7200:
             return "failed", 100, f"No result from {node}'s update after two hours; see {LOG} there"
-        return "running", 60, f"Waiting for {node} to report"
+        last = now_state["last"]
+        return "running", 50, f"Installing on {node}: {last}" if last else f"Installing updates on {node}"
     try:
         facts = read(node)
     except Exception:
@@ -334,6 +395,14 @@ def alert_facts(state=None):
                           "title": f"{node} has {host['security']} security update{'s' if host['security'] != 1 else ''}",
                           "resolved": f"{node}'s security updates are installed",
                           "body": "Install them from the host's Host OS card", "href": "/nodes"})
+        auto = host.get("auto") or {}
+        if auto.get("on") and auto.get("reboots") and not auto.get("held"):
+            facts.append({"key": f"hostos:{node}:autoreboot", "category": "updates", "severity": "info",
+                          "title": f"{node} restarts itself for updates",
+                          "resolved": f"{node} no longer restarts itself for updates",
+                          "body": ("unattended-upgrades has Automatic-Reboot on, so it restarts without a drain. "
+                                   "Nodes > OS updates can install them one host at a time instead"),
+                          "href": "/nodes"})
         if host.get("reboot"):
             facts.append({"key": f"hostos:{node}:reboot", "category": "updates", "severity": "info",
                           "title": f"{node} needs a restart to finish an update", "resolved": f"{node} has restarted",

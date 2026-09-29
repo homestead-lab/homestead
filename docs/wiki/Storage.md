@@ -198,17 +198,50 @@ Longhorn is told. A failed, empty Longhorn entry for the same folder - left by
 adding the folder before the disk was mounted - is cleared first. The work is
 done by a short-lived privileged helper on that host, admins only.
 
-**Use its free space** on the system disk gives Longhorn the part of the OS
-drive the system is not using, when the system is on LVM with space left in
-its volume group (Ubuntu Server gives its root volume 100 GB and leaves the
-rest free). It makes a logical volume `<group>/longhorn`, formats it ext4,
-mounts it at `/mnt/longhorn-os` the same safe way, and adds it tagged `os`. A
-tenth of the group (at least 10 GB) stays unallocated for the system to grow
-into, nothing existing is resized, and Longhorn filling that volume cannot fill
-the system's own filesystem. Without LVM there is nothing to offer: Homestead
-does not repartition a running system. A copy there shares the drive with the
-system's own Longhorn folder, so pair it with another drive or host for
-redundancy.
+**Use free space** on the system disk gives Longhorn space nothing else
+uses, from one of two places:
+
+- **The system's LVM volume group**, when it has room (Ubuntu Server gives its
+  root volume 100 GB and leaves the rest free). For V1, a logical volume
+  `<group>/longhorn`, formatted ext4 and mounted at `/mnt/longhorn-os` the same
+  safe way; for V2, `<group>/longhorn-v2`, given to the V2 engine raw. A tenth
+  of the group (at least 10 GB) stays unallocated for the system to grow into.
+- **Unallocated space on a GPT disk** - past its last partition, where an
+  installer was told to leave some. A new partition is made there while the
+  system runs: the partition table is saved to `/var/lib/homestead` first, the
+  space is checked free again right before the write, the table gets one more
+  entry without the disk being re-read, and only the new partition is shown to
+  the kernel - nothing mounted is touched. For V1 it is formatted ext4 and
+  mounted at `/mnt/<disk>-longhorn`; for V2 it is given raw by its PARTUUID.
+  Typing the disk's name confirms it.
+
+What Homestead never does is shrink or move a partition or filesystem of a
+running system: ext4 cannot shrink while mounted and XFS cannot shrink at all.
+Making room that way needs a rescue boot. MBR disks are not partitioned either
+(four entries, often one of them extended).
+
+On the system's drive a copy there shares the drive with the system's own
+Longhorn folder, so pair it with another drive or host for redundancy.
+
+### Room for the system
+
+Longhorn's first disk, `/var/lib/longhorn`, is a folder on the system's root
+filesystem unless it is a volume of its own. Longhorn keeps 30% of that
+filesystem out of its sums, but that only decides where *new* copies go:
+copies already there, and their snapshots, keep growing. Three things keep the
+system's space the system's:
+
+- **A volume of its own.** Where the system is on LVM with room, the installer
+  mounts a logical volume at `/var/lib/longhorn` before Longhorn starts - on
+  every machine it sets up, joining ones too - so Longhorn can never fill the
+  root filesystem. It asks how big; space left out stays free for the system or
+  for V2.
+- **A capped journal.** The systemd journal is capped at 1 GB on every host
+  (journald's own default is up to 4 GB), unless a cap is set already.
+- **A floor.** When a root filesystem holding a Longhorn disk falls under 15%
+  free (never under 10 GB), Homestead stops Longhorn placing new copies there,
+  and says so as an alert; above 20% (15 GB) it may again. Copies already there
+  stay: **Move replicas off** moves them, or give Longhorn a volume of its own.
 
 ### Disk tags
 

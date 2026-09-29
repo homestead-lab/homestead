@@ -69,8 +69,10 @@ that would make the install fail, saying what to put right.
 ![The checks](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-checks.png)
 
 It asks which address the other machines reach this one on, when it has more
-than one, and whether to install Longhorn, the node probe and KubeVirt. The installation
-summary then shows the settings and the version of each component:
+than one, and whether to install Longhorn, the node probe and KubeVirt. Where
+the system is on LVM with room, it asks how much of the free space Longhorn
+gets as a volume of its own (see [Room for the system](Storage#room-for-the-system)).
+The installation summary then shows the settings and the version of each component:
 
 ![The installation summary](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-ready.png)
 
@@ -87,7 +89,9 @@ Select **Install**, and it takes 5-10 minutes, with a progress bar.
 It then:
 
 1. installs what Longhorn needs on the host (`open-iscsi` and an NFS client),
-   and keeps `multipathd` off the devices Longhorn makes (below);
+   keeps `multipathd` off the devices Longhorn makes (below), caps the systemd
+   journal at 1 GB, and - where the system is on LVM with room - mounts a
+   logical volume of Longhorn's own at `/var/lib/longhorn`;
 2. installs k3s with an embedded etcd, so more servers can join later;
 3. asks k3s to install Longhorn (one copy of each volume, while there is one
    machine) and Homestead's own manifest;
@@ -116,6 +120,7 @@ Options go after `server`:
 | `--kubevirt-version v1.6.0`, `--cdi-version v1.62.0` | pin KubeVirt and CDI instead of their current releases |
 | `--homestead-version 2.8.118` | pins Homestead instead of the newest release |
 | `--node-ip 192.0.2.10` | the address k3s registers this machine by, when it has more than one |
+| `--longhorn-volume 200` | the size in GB of Longhorn's own LVM volume at `/var/lib/longhorn`; `auto` (the default) takes the volume group's free space less a tenth kept for the system, `none` keeps Longhorn on the root filesystem. Works for `agent` and `join` too |
 | `--no-node-probe` | leaves out the node probe (temperatures, drive health, each host's network interfaces); add it later under **Settings → Cluster → Add-ons** |
 
 The script is safe to run again: each step finds what the last run left.
@@ -206,15 +211,17 @@ installing the OS:
 | The machine has | At OS install | Then in Homestead |
 |---|---|---|
 | A second drive | Install on the first; leave the second blank | **Nodes → Disks → Add to Longhorn** on it: formatted (ext4 or XFS) and mounted safely, or kept as it is when it already holds Longhorn data |
-| One drive | Choose LVM (Ubuntu Server's default) and give the root volume 64-128 GB; leave the rest of the volume group unallocated | **Use its free space** on the system disk: a logical volume of its own (`<group>/longhorn`, mounted at `/mnt/longhorn-os`), tagged `os` |
-| One drive, plain partitions | Nothing more to do | Longhorn stays in `/var/lib/longhorn` on the root filesystem |
+| One drive | Choose LVM (Ubuntu Server's default) and give the root volume 64-128 GB; leave the rest of the volume group unallocated | Nothing: the installer mounts a volume of Longhorn's own at `/var/lib/longhorn`. Keep some of the group free for V2 and add it later with **Use free space** |
+| One drive, plain partitions | Leave space unpartitioned after the last partition | **Use free space** makes a partition there, live, for V1 or V2 |
+| One drive, one root partition filling it | Nothing more to do | Longhorn stays in `/var/lib/longhorn` on the root filesystem, kept from filling it (see [Room for the system](Storage#room-for-the-system)) |
 
 - **Why a filesystem of its own.** Longhorn filling a separate volume cannot
-  fill the system's filesystem. **Use its free space** keeps a tenth of the
+  fill the system's filesystem. **Use free space** keeps a tenth of the
   volume group (at least 10 GB) unallocated, so the root volume can still grow
   (`lvextend -r`).
-- **What Homestead will not do.** It never resizes or repartitions a running
-  system's disk.
+- **What Homestead will not do.** It never shrinks or moves a partition or
+  filesystem of a running system; it only adds a partition in space nothing
+  uses.
 - **Copies on one drive are not redundancy.** A copy on the system's folder and
   one on `/mnt/longhorn-os` share a drive. For two copies on one machine, add a
   second drive and choose **Copies go on: Different disks** for the class - see

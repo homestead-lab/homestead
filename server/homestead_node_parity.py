@@ -15,6 +15,8 @@ machine do not:
   interface. A node whose interface is named differently cannot announce a
   VIP there, so once the nodes' probes disagree the name is taken out and
   kube-vip finds each node's own from its default route;
+- the journal: capped at 1 GB, as the installer caps it, unless a cap is
+  set already - journald's own default is up to 4 GB of the system disk;
 - Longhorn's copies: a one-machine cluster keeps one copy of each volume,
   since it can hold no more. Once more nodes are Ready, the default for new
   volumes rises with them, up to three - only while it is still the
@@ -22,7 +24,8 @@ machine do not:
   volumes keep their count; the Volumes page raises those.
 
 Each node's host is done once, and recorded in /data, like the inotify
-limits (homestead_host_limits).
+limits (homestead_host_limits); a host done by an older release, with fewer
+steps, is done again (HOST_STEPS), which each step allows.
 """
 import json
 import os
@@ -42,7 +45,17 @@ VIP_INTERFACE = re.compile(r'(?m)^  vip_interface: "?([A-Za-z0-9_.:-]{1,15})"?\n
 INSTALLER_COPIES = re.compile(r"\s*persistence:\s*\n\s+defaultClassReplicaCount:\s*(\d+)\s*\n"
                               r"\s*defaultSettings:\s*\n\s+defaultReplicaCount:\s*(\d+)\s*")
 
+# The host steps this release takes; a host done with fewer is done again.
+HOST_STEPS = 2
 HOST_SCRIPT = r"""R=$(findmnt -n -o SOURCE / 2>/dev/null)
+if grep -qs '^SystemMaxUse=' /etc/systemd/journald.conf /etc/systemd/journald.conf.d/*.conf; then echo "JOURNAL kept"
+elif [ -d /etc/systemd ]; then
+  mkdir -p /etc/systemd/journald.conf.d
+  printf '[Journal]\nSystemMaxUse=1G\n' > /etc/systemd/journald.conf.d/90-homestead.conf
+  systemctl restart systemd-journald 2>/dev/null || true
+  echo "JOURNAL capped"
+fi
+[ "$LONGHORN" = 1 ] || { echo END; exit 0; }
 if systemctl is-active --quiet multipathd 2>/dev/null; then
   if [ -n "$R" ] && lsblk -s -n -o TYPE "$R" 2>/dev/null | grep -q mpath; then echo "MULTIPATH root"
   elif grep -qs 'devnode "\^sd\[a-z0-9\]+"' /etc/multipath.conf; then echo "MULTIPATH kept"
@@ -94,24 +107,25 @@ def _ready_nodes():
                    for c in (n.get("status") or {}).get("conditions") or [])]
 
 
-def hosts(ready, state):
+def hosts(ready, state, longhorn=True):
     """Each Ready node's host, once: {node: [what changed]}."""
     done = state.setdefault("hosts", {})
     changed = {}
     for node in ready:
-        if node in done:
+        if (done.get(node) or {}).get("steps", 1) >= HOST_STEPS:
             continue
         try:
-            out, err = hostrun.run(node, HOST_SCRIPT, timeout=90)
+            out, err = hostrun.run(node, f"LONGHORN={1 if longhorn else 0}\n" + HOST_SCRIPT, timeout=90)
         except Exception as error:
             out, err = "", str(error)
         words = dict(line.split(" ", 1) for line in out.splitlines() if " " in line)
         if "END" not in out.split():
             # Tried again next time; the other nodes are not held up by it.
-            changed[node] = [f"could not check its host for Longhorn: {(err or out)[:200]}"]
+            changed[node] = [f"could not check its host: {(err or out)[:200]}"]
             continue
-        done[node] = {"at": int(time.time()), "multipath": words.get("MULTIPATH", ""), "iscsi": words.get("ISCSI", "")}
-        notes = []
+        done[node] = {"at": int(time.time()), "steps": HOST_STEPS, "multipath": words.get("MULTIPATH", ""),
+                      "iscsi": words.get("ISCSI", ""), "journal": words.get("JOURNAL", "")}
+        notes = ["journal capped at 1 GB"] if words.get("JOURNAL") == "capped" else []
         if words.get("MULTIPATH") == "set":
             notes.append("multipathd kept off Longhorn's devices")
         if words.get("ISCSI") == "started":
@@ -179,9 +193,8 @@ def tick():
     ready = _ready_nodes()
     out = []
     try:
-        if p.get("longhorn"):
-            for node, notes in hosts(ready, state).items():
-                out.extend((node, note) for note in notes)
+        for node, notes in hosts(ready, state, bool(p.get("longhorn"))).items():
+            out.extend((node, note) for note in notes)
     finally:
         SHARED.write_json(_path(), state, indent=1, sort_keys=True)
     was = kube_vip()

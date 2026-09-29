@@ -34,6 +34,7 @@
 #   HS_KUBEVIP=yes|no  HS_MULTUS=yes|no         kube-vip and Multus, installed by Homestead (default yes)
 #   HS_KUBEVIP_VERSION=0.11.1  HS_MULTUS_VERSION=v4.3.102   their chart versions (default: tested)
 #   HS_NODEPROBE=yes|no                         the node probe, installed by Homestead (default yes)
+#   HS_LONGHORN_VOLUME=200|0                    GB for Longhorn's own LVM volume where there is room (0: none)
 #   HS_K8S_VERSION=v1.33.4+k3s1                 k3s or RKE2 version
 #   HS_LONGHORN_VERSION=v1.9.1  HS_KUBEVIRT_VERSION=v1.6.0  HS_CDI_VERSION=v1.62.0
 #   HS_VERSION=2.8.184                          Homestead version
@@ -656,6 +657,40 @@ find_cluster() {
     | sed -n 's/.*"gitVersion": *"\([^"]*\)".*/\1/p' | head -n 1)
 }
 
+# Room for Longhorn in a volume of its own: "vg usable reserve" in GB, when
+# the system is on LVM and its group has 20 GB or more past the reserve.
+lvm_room() {
+  have lvs || return 0
+  root=$(findmnt -n -o SOURCE / 2>/dev/null)
+  vg=$(lvs --noheadings -o vg_name,lv_path,lv_dm_path 2>/dev/null </dev/null | awk -v r="$root" '$2 == r || $3 == r {print $1; exit}')
+  [ -n "$vg" ] || return 0
+  lvs "$vg/longhorn" >/dev/null 2>&1 </dev/null && return 0
+  mountpoint -q /var/lib/longhorn 2>/dev/null && return 0
+  vgs --noheadings --units g --nosuffix -o vg_size,vg_free "$vg" 2>/dev/null </dev/null |
+    awk -v vg="$vg" '{s = int($1); f = int($2); r = int(s / 10); if (r < 10) r = 10; if (f - r >= 20) print vg, f - r, r}'
+}
+
+# How much of it Longhorn gets; LH_VOLUME is a size in GB, "none", or empty
+# where there is no room (the bootstrap script then looks for itself).
+pick_longhorn_volume() {
+  LH_VOLUME=""; LH_LINE=""
+  room=$(lvm_room)
+  given_size=$(given HS_LONGHORN_VOLUME)
+  [ -n "$room" ] || { [ "$given_size" = 0 ] && LH_VOLUME=none; return 0; }
+  set -- $room
+  # Unattended, the bootstrap script's own default: all the room there is.
+  if [ -z "$given_size" ] && ! interactive; then LH_VOLUME=auto; LH_LINE="$1/longhorn, $2 GB of its own"; return 0; fi
+  size=$(ask HS_LONGHORN_VOLUME "Longhorn Volume" "This machine's system is on LVM, and $1 has $2 GB free beyond $3 GB kept for the system.
+
+Longhorn can have a volume of its own there, mounted at /var/lib/longhorn, so its data can never fill the system's filesystem. Space left out stays free: for the system, or later for Longhorn's V2 engine (Nodes > Disks > Use free space).
+
+Size in GB (0 keeps Longhorn on the system's filesystem):" "$2")
+  case "$size" in ''|*[!0-9]*) fail "The Longhorn volume size must be a number of GB." ;; esac
+  if [ "$size" = 0 ]; then LH_VOLUME=none; LH_LINE="on the system's filesystem"
+  else [ "$size" -gt "$2" ] && size=$2; LH_VOLUME=$size; LH_LINE="$1/longhorn, $size GB of its own"; fi
+}
+volume_args() { [ -n "${LH_VOLUME:-}" ] && printf -- ' --longhorn-volume %s' "$LH_VOLUME"; true; }
+
 dist_name() { if [ "$DIST" = rke2 ]; then echo RKE2; else echo k3s; fi; }
 token_file() { echo "/var/lib/rancher/$DIST/server/node-token"; }
 dist_flag() { [ "$DIST" = rke2 ] && printf -- '--rke2'; true; }
@@ -671,6 +706,7 @@ Longhorn replicates volumes across nodes and provides snapshots and backups. The
   fi
   # Unattended, it is installed unless HS_NODEPROBE says no, as kube-vip and Multus are.
   NODEPROBE=yes
+  [ "$longhorn" = yes ] && pick_longhorn_volume
   if [ -n "$(given HS_NODEPROBE)" ] || interactive; then
     yesno HS_NODEPROBE "Node Probe" "Install the node probe on every node?
 
@@ -687,7 +723,7 @@ It reports temperatures, disk SMART health and each node's network interfaces to
   Installation mode    New cluster (first server node)
   Distribution         $(dist_name)
   Node IP address      $NODE_IP
-  Storage              $([ "$longhorn" = yes ] && echo Longhorn || echo "k3s local-path")
+  Storage              $([ "$longhorn" = yes ] && echo "Longhorn${LH_LINE:+, $LH_LINE}" || echo "k3s local-path")
   Virtual machines     $([ "$kubevirt" = yes ] && echo "KubeVirt and CDI" || echo "Not installed")
   Networking           $(network_line)
   Node probe           $([ "$NODEPROBE" = yes ] && echo "Installed by Homestead" || echo "Not installed")
@@ -697,7 +733,7 @@ It reports temperatures, disk SMART health and each node's network interfaces to
   [ "$kubevirt" = yes ] && args="$args --kubevirt"
   [ "$DIST" = rke2 ] && args="$args --rke2"
   # shellcheck disable=SC2086
-  args="$args$(version_args $comps)$(network_args)"
+  args="$args$(version_args $comps)$(network_args)$(volume_args)"
   stages=6; [ "$longhorn" = yes ] && stages=$((stages + 2)); [ "$kubevirt" = yes ] && stages=$((stages + 1)); [ "$DIST" = rke2 ] && stages=$((stages + 1))
   # shellcheck disable=SC2086
   bootstrap "$stages" $args
@@ -710,17 +746,19 @@ join_cluster() { # server|agent
   sudo cat $(token_file)" "" secret)
   [ -n "$token" ] || fail "No cluster token was entered."
   mode=agent; [ "$1" = server ] && mode=join
+  pick_longhorn_volume
   summary "Review the settings below. Select a component to change its version, or select Install to begin.
 
   Installation mode    Join an existing cluster as a $([ "$1" = server ] && echo "server node" || echo "worker node")
   Distribution         $(dist_name)
   Cluster              $url
   Node name            $(hostname)
-  Node IP address      $NODE_IP
+  Node IP address      $NODE_IP${LH_LINE:+
+  Longhorn data        $LH_LINE}
 
 Longhorn host packages (open-iscsi, NFS client) are installed first." k8s
   # shellcheck disable=SC2046
-  bootstrap 3 "$mode" "$url" "$token" --node-ip "$NODE_IP" $(dist_flag) $(version_args k8s)
+  bootstrap 3 "$mode" "$url" "$token" --node-ip "$NODE_IP" $(dist_flag) $(version_args k8s)$(volume_args)
   msg "Installation Complete" "$(hostname) has joined the cluster. It appears on the Homestead Nodes page within a few minutes."
 }
 

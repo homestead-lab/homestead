@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.235")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.236")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -3753,6 +3753,77 @@ def create_vm_with_address(cfg):
     return result
 
 
+class PowerNotSent(Exception):
+    """A reviewed power request that stopped; the job it made says how far it got."""
+
+    def __init__(self, message, operation):
+        super().__init__(message)
+        self.operation = operation
+
+
+def send_reviewed_power(power_plan, force=False):
+    """Cordon, drain and send a reviewed reboot or shutdown, as a job - what
+    Host actions does once its review is accepted, and what an OS update of
+    every host does for each host that needs a restart."""
+    node, action = power_plan["node"], power_plan["action"]
+    operation = OPS.start(
+        "node-power", f"{action} {node}", {"kind": "Node", "name": node},
+        "/nodes?node=" + urllib.parse.quote(node),
+        {"node": node, "node_uid": power_plan["node_uid"], "action": action, "boot_id": power_plan["boot_id"],
+         "volumes": [v["name"] for v in power_plan["volumes"]],
+         "phase": "reviewed", "phase_at": time.time(), "started_epoch": time.time()},
+        "Forced by an admin; sending without cordon or drain" if force else "Host impact reviewed; preparing cordon and drain")
+    phase_state = {"phase": "reviewed"}
+
+    def power_progress(phase, percent, message, **details):
+        updated = OPS.record_phase(operation["id"], phase, percent, message, **details)
+        phase_state["phase"] = phase
+        return updated
+    try:
+        result = LC.node_power(node, action, True,
+                               before_send=(lambda: POWER.recheck_forced(power_plan)) if force
+                               else (lambda: POWER.recheck_after_drain(power_plan)),
+                               reviewed_pods=power_plan["drain_pods"], progress=power_progress, force=force)
+        result["operation"] = operation
+        return result
+    except Exception as e:
+        uncertain = phase_state["phase"] in ("sending", "observing")
+        message = ("Power submission outcome is uncertain; inspect the existing job/helper before retrying" if uncertain else
+                   "Power was not sent. Inspect the host's cordon state: " + str(e))
+        power_progress("observing" if uncertain else "failed", 20 if uncertain else 10, message)
+        raise PowerNotSent(message, operation) from e
+
+
+def rollout_reboot(node, allow_single_copy=False):
+    """A restart for an OS update: the same review Host actions shows, with
+    nobody to accept its warnings - so what a person would have to accept
+    stops it, except a volume's only copy when the settings accept that."""
+    power_plan = POWER.plan(node, "reboot")
+    if not power_plan["ready"]:
+        raise ValueError("; ".join(power_plan["blockers"]))
+    if power_plan["stranded"]:
+        raise ValueError("some workloads have no other host to run on")
+    if power_plan["requires_data_ack"] and not allow_single_copy:
+        raise ValueError("a volume has its only healthy copy on this host (the settings do not accept that)")
+    try:
+        return send_reviewed_power(power_plan)["operation"]["id"]
+    except PowerNotSent as e:
+        raise ValueError(str(e)) from e
+
+
+def operation_item(operation_id):
+    """A job-tray item as it stands now, or None."""
+    return next((item for item in OPS.list_operations() if item.get("id") == operation_id), None) if operation_id else None
+
+
+def own_node():
+    """The node this Homestead pod runs on."""
+    try:
+        return kget(f"/api/v1/namespaces/{SELF.NS}/pods/{os.environ.get('HOSTNAME', '')}")["spec"]["nodeName"]
+    except Exception:
+        return ""
+
+
 def vm_power_capacity_plan(body):
     ns = _dns_name(body.get("ns", DEFAULT_NS), "namespace")
     name = _dns_name(body.get("name"), "VM name")
@@ -5174,6 +5245,8 @@ import homestead_hostrun as HOSTRUN
 import homestead_host_limits as HOST_LIMITS
 import homestead_node_parity as NODE_PARITY
 import homestead_host_os as HOST_OS
+import homestead_root_guard as ROOT_GUARD
+import homestead_os_rollout as OS_ROLLOUT
 import homestead_host_bridge as HOST_BRIDGE
 import homestead_manifests as MANIFESTS
 import homestead_disk_setup as DISK_SETUP
@@ -5256,6 +5329,13 @@ HOST_LIMITS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 NODE_PARITY.bind(kget, ksend, HOSTRUN, PLATFORM.detect, node_temps, DATA_DIR)
 HOST_OS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 OPS.RESOLVERS["host-os"] = HOST_OS.status
+ROOT_GUARD.bind(kget, ksend, PLATFORM.detect, node_temps, DATA_DIR)
+OS_ROLLOUT.bind(kget, PLATFORM.detect, HOST_OS, rollout_reboot, operation_item, LC.set_cordon, own_node, DATA_DIR,
+                lambda rollout: OPS.start("os-rollout", f"Update every host's OS ({len(rollout['nodes'])} hosts)",
+                                          {"kind": "Node", "name": ", ".join(rollout["nodes"])[:200]}, "/nodes",
+                                          {"rollout": rollout["id"]},
+                                          "In the weekly window" if rollout["reason"] == "schedule" else "Starting"))
+OPS.RESOLVERS["os-rollout"] = OS_ROLLOUT.status
 DISK_SETUP.bind(HOSTRUN)
 HOST_BRIDGE.bind(HOSTRUN, kget, ksend)
 OPS.RESOLVERS["host-bridge"] = HOST_BRIDGE.status
@@ -5363,6 +5443,7 @@ def _alert_sources():
     take("capacity", lambda: LHCAP.alert_facts(cached("lhcap", 15, LHCAP.status)))
     take("disks", lambda: DISKS.alert_facts(cached("disks", 15, DISKS.inventory)))
     take("hostos", HOST_OS.alert_facts)
+    take("rootguard", ROOT_GUARD.alert_facts)
     take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
         ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", ""))))
     # Twice a day whether or not anyone is looking - the Containers header and
@@ -5487,6 +5568,9 @@ def _host_fix_loop():
                         print(f"platform: {node + ': ' if node else ''}{change}", flush=True)
                     # Each host's OS - updates, restarts, failed services - every six hours.
                     HOST_OS.tick()
+                    # Longhorn kept from filling a host's root filesystem.
+                    for node, change in ROOT_GUARD.tick():
+                        print(f"storage: {node}: {change}", flush=True)
                     for node, marked in MANIFESTS.tick().items():
                         print(f"platform: {node}: k3s no longer re-applies "
                               f"{', '.join(marked) or 'no installer files (none left)'} at start", flush=True)
@@ -5506,6 +5590,26 @@ def _host_fix_loop():
                 beat("host-fixes", 600, error, leader_only=True)
                 print(f"platform: {str(error)[:200]}", flush=True)
         time.sleep(600)
+
+
+def _os_updates_loop():
+    """OS updates across the hosts (homestead_os_rollout.py), on the leader:
+    Ubuntu's automatic updates held off or let go as the settings say, the
+    weekly window opened, and a running update moved on a step. Its state is
+    on disk, so a new leader carries on where the last one was."""
+    time.sleep(45)
+    while True:
+        if LEADER.is_leader():
+            try:
+                with self_data_activity():
+                    moved = OS_ROLLOUT.tick()
+                if moved:
+                    print(f"OS updates: {moved.get('message', '')[:200]}", flush=True)
+                beat("os-updates", 20, leader_only=True)
+            except Exception as error:
+                beat("os-updates", 20, error, leader_only=True)
+                print(f"OS updates: {str(error)[:200]}", flush=True)
+        time.sleep(20)
 
 
 def _history_loop():
@@ -5915,7 +6019,7 @@ def _data_move_status(item):
 OPS.RESOLVERS["self-data-move"] = _data_move_status
 
 
-LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "host-fixes": "Host fixes", "baseline": "Platform installs", "vips": "VIP keeper",
+LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "host-fixes": "Host fixes", "os-updates": "OS updates", "baseline": "Platform installs", "vips": "VIP keeper",
               "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares"}
 
 
@@ -6838,6 +6942,8 @@ def needed_role(path, method):
                 "/api/node/bridge/inspect", "/api/node/bridge",
                 # A host's package manager: refreshing its lists, installing updates.
                 "/api/node/os/check", "/api/node/os/upgrade",
+                # Every host's OS, one at a time: updates, drains and restarts.
+                "/api/os-updates/settings", "/api/os-updates/start", "/api/os-updates/stop",
                 "/api/disks/tags", "/api/disks/node-tags",
                 # Replacing a failed disk deletes replicas and takes the disk out.
                 "/api/disks/retire", "/api/disks/retire/plan",
@@ -7504,6 +7610,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("node:" + (q.get("name") or [""])[0], 5,
                                   lambda: next((n for n in get_nodes()
                                                 if n["name"] == (q.get("name") or [""])[0]), {})))
+            if p == "/api/os-updates":
+                return self._send(200, OS_ROLLOUT.report())
             if p == "/api/node/os":
                 return self._send(200, HOST_OS.report((q.get("name") or [""])[0] or None))
             if p == "/api/node/smart":
@@ -8380,31 +8488,10 @@ class H(BaseHTTPRequestHandler):
                 if power_plan["requires_data_ack"] and not b.get("allow_data_risk"):
                     return self._send(409, {"error": "acknowledge the volume risk before host power control",
                                             "plan": power_plan})
-                operation = OPS.start(
-                    "node-power", f"{b['action']} {b['node']}", {"kind": "Node", "name": b["node"]},
-                    "/nodes?node=" + urllib.parse.quote(b["node"]),
-                    {"node": b["node"], "node_uid": power_plan["node_uid"], "action": b["action"], "boot_id": power_plan["boot_id"],
-                     "volumes": [v["name"] for v in power_plan["volumes"]],
-                     "phase": "reviewed", "phase_at": time.time(), "started_epoch": time.time()},
-                    "Forced by an admin; sending without cordon or drain" if force else "Host impact reviewed; preparing cordon and drain")
-                phase_state = {"phase": "reviewed"}
-                def power_progress(phase, percent, message, **details):
-                    updated = OPS.record_phase(operation["id"], phase, percent, message, **details)
-                    phase_state["phase"] = phase
-                    return updated
                 try:
-                    result = LC.node_power(b["node"], b["action"], True,
-                                           before_send=(lambda: POWER.recheck_forced(power_plan)) if force
-                                           else (lambda: POWER.recheck_after_drain(power_plan)),
-                                           reviewed_pods=power_plan["drain_pods"], progress=power_progress, force=force)
-                    result["operation"] = operation
-                    return self._send(200, result)
-                except Exception as e:
-                    uncertain = phase_state["phase"] in ("sending", "observing")
-                    message = ("Power submission outcome is uncertain; inspect the existing job/helper before retrying" if uncertain else
-                               "Power was not sent. Inspect the host's cordon state: " + str(e))
-                    power_progress("observing" if uncertain else "failed", 20 if uncertain else 10, message)
-                    return self._send(409, {"error": message, "operation": operation})
+                    return self._send(200, send_reviewed_power(power_plan, force))
+                except PowerNotSent as e:
+                    return self._send(409, {"error": str(e), "operation": e.operation})
             if p == "/api/vm/migrate":
                 ns = b.get("ns", DEFAULT_NS)
                 result = LC.vm_migrate(ns, b["name"], b.get("target"))
@@ -8436,6 +8523,15 @@ class H(BaseHTTPRequestHandler):
                 for key in ("disks", "lhcap", "nodes", "ov"):
                     _cache.pop(key, None)
                 return self._send(200, {"ok": True, "operation": op})
+            if p == "/api/os-updates/settings":
+                return self._send(200, {"ok": True, "settings": OS_ROLLOUT.save_settings(b)})
+            if p == "/api/os-updates/start":
+                rollout = OS_ROLLOUT.start("asked")
+                return self._send(200, {"ok": True, "rollout": rollout, "operation": rollout.get("operation"),
+                                        "detail": f"Updating {len(rollout['nodes'])} hosts one at a time; follow it in the job tray"})
+            if p == "/api/os-updates/stop":
+                return self._send(200, {"ok": True, "rollout": OS_ROLLOUT.stop(),
+                                        "detail": "Stopping once the host being updated is done"})
             if p == "/api/node/os/check":
                 node = str(b.get("node") or "")
                 if not node:
@@ -8937,6 +9033,7 @@ def start_background_tasks():
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=_host_fix_loop, daemon=True).start()
+    threading.Thread(target=_os_updates_loop, daemon=True).start()
     threading.Thread(target=_baseline_loop, daemon=True).start()
     threading.Thread(target=_vip_loop, daemon=True).start()
     threading.Thread(target=MQTT.run, daemon=True).start()
