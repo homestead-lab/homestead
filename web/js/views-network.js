@@ -236,7 +236,8 @@ window.networkExpose = async (namespace = "", name = "", kind = "Deployment", se
     <select id="net_mode" hidden><option value="shared">Default VIP</option><option value="manual">Selected VIP</option><option value="nodes">Node addresses</option><option value="automatic">Unused VIP</option></select>
     <div class="f hidden" id="net_vip_wrap">${networkVipCards(selectedVip, choices)}</div>
     <div id="net_change_note" class="net-change-note" role="status"></div>
-    <div class="sec">Ports</div><p class="net-help">Devices connect to the LAN port; traffic is forwarded to the port inside the app or VM.</p>
+    <div class="sec">Ports</div><p class="net-help">Devices connect to the LAN port; traffic is forwarded to the port inside the app or VM.
+      <span id="net_ports_from"></span></p>
     <div id="net_ports">${networkModalPort(first.ports[0] || {}, true)}</div>
     <button class="btn sm" type="button" onclick="$('#net_ports').insertAdjacentHTML('beforeend',networkModalPort());networkInvalidateReview()">＋ Add port</button>
     <details class="net-advanced"><summary>Advanced · Kubernetes Service</summary>
@@ -281,6 +282,7 @@ window.networkServicePicked = () => {
   if (row) {
     $("#net_type").value = row.type;
     $("#net_ports").innerHTML = row.ports.map((p, i) => networkModalPort(p, i === 0)).join("");
+    $("#net_ports_from").textContent = "";
     const ip = networkIsNodeAccess(row, STATE.data.network) ? "" : row.requested_ips?.[0] || row.external_ips?.[0] || "";
     // Preserve the selected address on open, even if today's default has changed.
     $("#net_mode").value = ip && !nodeAddressesOnly() ? (row.vip_mode === "shared" && ip === STATE.data.network.shared_vip?.ip ? "shared" : "manual") : "nodes";
@@ -289,6 +291,16 @@ window.networkServicePicked = () => {
     $("#net_type").value = "LoadBalancer";
     $("#net_mode").value = window.__networkChoices.shared ? "shared" : nodeAddressesOnly() ? "nodes" : "automatic";
     $("#net_vip_wrap").innerHTML = networkVipCards("", window.__networkChoices);
+    // Another connection starts with the ports the app is already reached
+    // on - Homestead's 8088, say - not the port it listens on inside.
+    const target = STATE.data.network.services.find(s => s.namespace === ns && s.type === "LoadBalancer" && !s.system
+      && (s.targets || []).includes(name) && (s.ports || []).length);
+    const workload = STATE.data.network.workloads.find(w => w.namespace === ns && w.name === name);
+    $("#net_ports").innerHTML = target ? target.ports.map((p, i) => networkModalPort(p, i === 0)).join("")
+      : networkModalPort(workload?.ports?.[0] || {}, true);
+    $("#net_ports_from").textContent = target
+      ? `The same ports as its current connection, ${target.name}: ${target.ports.map(p => `${p.port} → ${p.target_port || p.port}`).join(", ")}.`
+      : "";
   }
   const node = networkIsNodeAccess(row, STATE.data.network);
   $("#net_current_access").innerHTML = row ? `<span class="net-eyebrow">Current connection</span><b>${node ? "Node address — not a VIP" : row.type === "ClusterIP" ? "Cluster only" : "VIP access"}</b><span class="mono">${esc((row.external_ips || []).map(ip => row.ports.map(p => `${ip}:${p.port} (${p.protocol})`).join(" · ")).join(" · ") || "No LAN address")}</span>${node ? '<small>k3s exposes these ports on the host itself. This address does not move to another host if it goes offline.</small>' : ""}` : '<span class="net-eyebrow">New connection</span><b>Choose how to reach this app or VM</b>';
