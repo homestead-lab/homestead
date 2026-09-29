@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Read-only physical console. No web server, credentials or shell shortcuts."""
 import argparse
+from collections import deque
 import json
 import os
 from pathlib import Path
@@ -43,6 +44,22 @@ def cpu_ticks(text):
     return (sum(values), sum(values[3:5])) if len(values) >= 4 else None
 
 
+def cpu_samples(text):
+    return {line.split()[0]: cpu_ticks("cpu " + " ".join(line.split()[1:]))
+            for line in text.splitlines() if re.match(r"^cpu(?:\d+)?\s", line)}
+
+
+def cpu_percent(current, previous):
+    if not current or not previous or current[0] <= previous[0]:
+        return None
+    return max(0, min(100, 100 * (1 - (current[1] - previous[1]) /
+                                  (current[0] - previous[0]))))
+
+
+def percent(used, total):
+    return max(0, min(100, 100 * used / total)) if total else None
+
+
 def memory(text):
     values = dict((key, int(value)) for key, value in
                   re.findall(r"^(\w+):\s+(\d+)", text, re.M))
@@ -69,8 +86,7 @@ def disk_stats():
                 continue
             usage = shutil.disk_usage(path)
             seen.add(device)
-            rows.append(f"{clean(path):<22} {gib(usage.used)} / {gib(usage.total)}"
-                        f"  {100 * usage.used / max(1, usage.total):.0f}%")
+            rows.append({"path": clean(path), "used": usage.used, "total": usage.total})
         except OSError:
             continue
     return rows
@@ -103,24 +119,28 @@ def node_rows(data):
         state = "Ready" if good else "NotReady"
         if node.get("spec", {}).get("unschedulable"):
             state += "/cordoned"
-        rows.append(clean(f"{meta.get('name', '?'):<20} {state:<18} {role:<7} {address}"
-                          f"  {status.get('nodeInfo', {}).get('kubeletVersion', '')}"))
+        rows.append({"name": clean(meta.get("name", "?")), "state": state,
+                     "health": "bad" if not good else "warn" if node.get("spec", {}).get("unschedulable") else "ok",
+                     "role": role, "address": clean(address),
+                     "version": clean(status.get("nodeInfo", {}).get("kubeletVersion", ""))})
     return f"{ready}/{len(rows)} nodes Ready", rows
 
 
 def cluster_stats():
     prefix = kube_command()
     if not prefix:
-        return ["Cluster: no local server kubeconfig (worker or not yet installed).",
-                "View cluster health in Homestead on a server node."]
+        return {"health": "muted", "summary": "Local view: worker or no server kubeconfig",
+                "detail": "View cluster health in Homestead on a server node.", "nodes": []}
     raw = command(prefix + ["get", "nodes", "-o", "json"])
     if raw is None:
-        return ["Cluster: API unavailable; retrying automatically."]
+        return {"health": "bad", "summary": "API unavailable", "detail": "Retrying automatically", "nodes": []}
     try:
         status, rows = node_rows(json.loads(raw))
     except (ValueError, TypeError, AttributeError):
-        return ["Cluster: could not read node status; retrying automatically."]
-    result = ["Cluster: " + status, *rows]
+        return {"health": "warn", "summary": "Could not read node status",
+                "detail": "Retrying automatically", "nodes": []}
+    health = "bad" if any(n["health"] == "bad" for n in rows) else "warn" if not rows or any(n["health"] == "warn" for n in rows) else "ok"
+    result = {"health": health, "summary": status, "nodes": rows}
     # Only request the public Service address, never Secrets or kubeconfig data.
     raw = command(prefix + ["-n", "lab", "get", "service", "homestead", "-o", "json"])
     if raw:
@@ -132,7 +152,7 @@ def cluster_stats():
             ports = svc.get("spec", {}).get("ports", [])
             if host and ports:
                 host = f"[{host}]" if ":" in host else host
-                result.insert(1, clean(f"Homestead: http://{host}:{ports[0]['port']}"))
+                result["url"] = clean(f"http://{host}:{ports[0]['port']}")
         except (ValueError, TypeError, KeyError, AttributeError):
             pass
     return result
@@ -141,19 +161,23 @@ def cluster_stats():
 class Monitor:
     def __init__(self):
         self.lock = threading.Lock()
-        self.local = ["Reading host statistics..."]
-        self.cluster = ["Reading cluster status..."]
+        self.local = {"hostname": clean(socket.gethostname()), "cpu": None,
+                      "cores": [], "history": [], "ram_used": 0, "ram_total": 0,
+                      "disks": [], "services": [], "addresses": "Reading host statistics..."}
+        self.cluster = {"health": "muted", "summary": "Reading cluster status...", "nodes": []}
         self.updated = None
         self.stop = threading.Event()
 
     def collect_local(self):
-        previous = None
+        previous = {}
+        history = deque(maxlen=180)
         while not self.stop.is_set():
-            ticks = cpu_ticks(read("/proc/stat"))
-            cpu = "sampling"
-            if ticks and previous and ticks[0] > previous[0]:
-                busy = 100 * (1 - (ticks[1] - previous[1]) / (ticks[0] - previous[0]))
-                cpu = f"{max(0, min(100, busy)):.0f}%"
+            ticks = cpu_samples(read("/proc/stat"))
+            cpu = cpu_percent(ticks.get("cpu"), previous.get("cpu"))
+            cores = [(key[3:], cpu_percent(value, previous.get(key)))
+                     for key, value in ticks.items() if key != "cpu"]
+            if cpu is not None:
+                history.append(cpu)
             previous = ticks
             used, total = memory(read("/proc/meminfo"))
             uptime = read("/proc/uptime").split()
@@ -164,14 +188,13 @@ class Monitor:
                 state = command(["systemctl", "is-active", service])
                 if state:
                     services.append(f"{service}: {clean(state)}")
-            rows = [f"Host: {clean(socket.gethostname())}    Uptime: {hours // 24}d {hours % 24}h",
-                    f"Addresses: {addresses}",
-                    "Kubernetes: " + (", ".join(services) or "no active service"), "",
-                    f"CPU: {cpu} of {os.cpu_count() or 1} cores    "
-                    f"RAM: {gib(used)} / {gib(total)}  {100 * used / max(1, total):.0f}%",
-                    "Disk usage (local filesystems):", *disk_stats()]
+            data = {"hostname": clean(socket.gethostname()), "uptime": f"{hours // 24}d {hours % 24}h",
+                    "addresses": addresses, "services": services, "cpu": cpu,
+                    "cores": cores, "history": list(history),
+                    "load": " ".join(read("/proc/loadavg").split()[:3]),
+                    "ram_used": used, "ram_total": total, "disks": disk_stats()}
             with self.lock:
-                self.local = rows
+                self.local = data
             self.stop.wait(2)
 
     def collect_cluster(self):
@@ -184,28 +207,204 @@ class Monitor:
 
     def snapshot(self):
         with self.lock:
-            return self.local + ["", "CLUSTER STATUS" +
-                                   (f"  checked {self.updated}" if self.updated else ""),
-                                   *self.cluster]
+            return {"local": self.local, "cluster": self.cluster, "updated": self.updated}
 
 
-DEMO = ["Host: node-1    Uptime: 12d 6h", "Addresses: 192.0.2.10",
-        "Kubernetes: k3s: active", "", "CPU: 24% of 8 cores    RAM: 12.4 GiB / 32.0 GiB  39%",
-        "Disk usage (local filesystems):", "/                      28.0 GiB / 120.0 GiB  23%",
-        "/var/lib/longhorn      360.0 GiB / 960.0 GiB  38%", "", "CLUSTER STATUS  checked 12:30:00",
-        "Cluster: 3/3 nodes Ready", "Homestead: http://192.0.2.100:8088",
-        "node-1               Ready              server  192.0.2.10  v1.34.1+k3s1",
-        "node-2               Ready              server  192.0.2.11  v1.34.1+k3s1",
-        "node-3               Ready              worker  192.0.2.12  v1.34.1+k3s1"]
+def demo_data(unhealthy=False):
+    unit = 1024 ** 3
+    return {"local": {"hostname": "node-1", "uptime": "12d 6h", "addresses": "192.0.2.10",
+                      "services": ["k3s: active"], "cpu": 83 if unhealthy else 24,
+                      "cores": [(str(i), x) for i, x in enumerate([75, 91, 83, 67, 94, 80, 89, 85] if unhealthy else [22, 31, 12, 40, 18, 27, 20, 22])],
+                      "history": [18, 23, 16, 35, 42, 66, 78, 62, 54, 33, 29, 18, 24, 40, 56, 68,
+                                  83, 57, 41, 26, 22, 19, 24, 20, 24] * 3 + ([83] if unhealthy else []), "load": "1.39 1.44 1.47",
+                      "ram_used": (30 if unhealthy else 12.4) * unit, "ram_total": 32 * unit,
+                      "disks": [{"path": "/", "used": 28 * unit, "total": 120 * unit},
+                                {"path": "/var/lib/longhorn", "used": (912 if unhealthy else 360) * unit,
+                                 "total": 960 * unit}]},
+            "cluster": {"health": "bad" if unhealthy else "ok",
+                        "summary": "2/3 nodes Ready" if unhealthy else "3/3 nodes Ready",
+                        "url": "http://192.0.2.100:8088",
+                        "nodes": [{"name": f"node-{i+1}", "state": "NotReady" if unhealthy and i == 2 else "Ready",
+                                   "health": "bad" if unhealthy and i == 2 else "ok",
+                                   "role": "worker" if i == 2 else "server",
+                                   "address": f"192.0.2.{10+i}", "version": "v1.34.1+k3s1"}
+                                  for i in range(3)]}, "updated": "12:30:00"}
 
 
-def screen(window, monitor, demo=False):
+def usage_style(value):
+    return "muted" if value is None else "bad" if value >= 90 else "warn" if value >= 75 else "ok"
+
+
+# The house and two infrastructure layers from web/assets/homestead-mark.svg.
+# Plain ASCII keeps the mark intact on the Linux console's default font/locale.
+LOGO = ("   /\\   ", "  /  \\  ", " /    \\ ", " | -- | ", " |_--_| ")
+COMPACT_LOGO = ("  /\\  ", " /  \\ ", "| -- |", "|_--_|")
+
+
+class Frame:
+    """Clipped cells, with semantic styles independent of terminal colour support."""
+    def __init__(self, width, height):
+        self.width = max(1, width)
+        self.rows = [[(" ", "text") for _ in range(self.width)] for _ in range(height)]
+        self.header = 0
+
+    def put(self, y, x, text, style="text", limit=None):
+        if 0 <= y < len(self.rows):
+            for i, char in enumerate(clean(text)[:limit]):
+                if 0 <= x + i < self.width:
+                    self.rows[y][x + i] = (char, style)
+
+    def box(self, y, x, height, width, title):
+        if width < 3 or height < 3:
+            return
+        for row in (y, y + height - 1):
+            self.put(row, x, "+" + "-" * (width - 2) + "+", "border")
+        for row in range(y + 1, y + height - 1):
+            self.put(row, x, "|", "border")
+            self.put(row, x + width - 1, "|", "border")
+        self.put(y, x + 2, " " + title + " ", "accent", max(0, width - 4))
+
+    def bar(self, y, x, width, value):
+        if width < 2:
+            return
+        value = None if value is None else max(0, min(100, value))
+        fill = round((width - 2) * (value or 0) / 100)
+        self.put(y, x, "[" + " " * (width - 2) + "]", "muted")
+        self.put(y, x + 1, "|" * fill, usage_style(value))
+
+    def text(self):
+        return ["".join(char for char, _ in row) for row in self.rows]
+
+
+def dashboard(data, width, height):
+    """Panels fit an 80x24 host console; narrow screens stack and scroll."""
+    local, cluster = data["local"], data["cluster"]
+    disks, nodes = local.get("disks", []), cluster.get("nodes", [])
+    wide = width >= 72
+    logo = LOGO if height >= 28 and width >= 60 else COMPACT_LOGO
+    header_h = len(logo)
+    cpu_h = max(6, (height - header_h - 1) // 3) if wide else 8
+    metrics_h = max(6, 2 + 2 * len(disks))
+    cpu_y = header_h
+    ram_y = cpu_y + cpu_h
+    disk_y = ram_y if wide else ram_y + 6
+    cluster_y = ram_y + metrics_h if wide else disk_y + metrics_h
+    cluster_h = max(7, len(nodes) * (1 if wide else 2) + 4, height - 1 - cluster_y)
+    frame = Frame(width, cluster_y + cluster_h)
+    frame.header = header_h
+    for y, row in enumerate(logo):
+        frame.put(y, 1, row, "brand")
+        layers = row.find("--")
+        if layers >= 0:
+            frame.put(y, 1 + layers, "--", "text")
+    frame.put(0, 10, "HOMESTEAD / host & cluster" if width >= 60 else "HOMESTEAD", "accent")
+    if width >= 64:
+        frame.put(0, width - 9, time.strftime("%H:%M:%S"), "muted")
+    host_y = 1
+    if header_h == 5:
+        frame.put(1, 10, "Live resources + Kubernetes readiness", "muted")
+        host_y = 2
+    frame.put(host_y, 10, f"{local['hostname']}   up {local.get('uptime', '--')}")
+    frame.put(host_y + 1, 10, local.get("addresses", ""), "muted")
+    service = ", ".join(local.get("services", []))
+    frame.put(host_y + 2, 10, "[OK] " + service if service else "[!] No active Kubernetes service",
+              "ok" if service else "warn")
+
+    frame.box(cpu_y, 0, cpu_h, width, "CPU / history")
+    inner = max(1, width - 4)
+    graph_w = (inner // 2) if wide else inner
+    cpu = local.get("cpu")
+    frame.put(cpu_y + 1, 2, "sampling" if cpu is None else f"{cpu:.0f}% busy", usage_style(cpu), graph_w)
+    frame.put(cpu_y + 1, 13, "load " + local.get("load", "--"), "muted", max(0, graph_w - 11))
+    frame.bar(cpu_y + 2, 2, graph_w, cpu)
+    graph_h = cpu_h - 4
+    samples = local.get("history", [])[-graph_w:]
+    for col, sample in enumerate(samples):
+        for row in range(graph_h):
+            if sample > (graph_h - row - 1) * 100 / graph_h:
+                frame.put(cpu_y + 3 + row, 2 + graph_w - len(samples) + col, "#", usage_style(sample))
+    if wide:
+        cores = local.get("cores", [])
+        core_x = graph_w + 4
+        core_w = max(1, (width - core_x - 2) // 2)
+        frame.put(cpu_y, core_x, f" {len(cores) or os.cpu_count() or 1} CORES ", "accent")
+        capacity = (cpu_h - 2) * 2
+        for i, (name, value) in enumerate(cores[:capacity]):
+            y = cpu_y + 1 + i // 2
+            x = core_x + (i % 2) * core_w
+            frame.put(y, x, "C" + name, "muted", 4)
+            frame.bar(y, x + 4, max(2, core_w - 10), value)
+            frame.put(y, x + core_w - 5, " --%" if value is None else f"{value:3.0f}%", usage_style(value))
+        if len(cores) > capacity:
+            frame.put(cpu_y + cpu_h - 1, core_x, f" +{len(cores) - capacity} cores ", "muted", width - core_x - 2)
+
+    ram_w = width // 2 if wide else width
+    disk_x = ram_w if wide else 0
+    disk_w = width - disk_x
+    frame.box(ram_y, 0, metrics_h if wide else 6, ram_w, "MEMORY")
+    used, total = local.get("ram_used", 0), local.get("ram_total", 0)
+    ram = percent(used, total)
+    frame.put(ram_y + 1, 2, f"{gib(used)} / {gib(total)}", limit=max(0, ram_w - 4))
+    frame.bar(ram_y + 2, 2, max(0, ram_w - 11), ram)
+    frame.put(ram_y + 2, ram_w - 7, " --%" if ram is None else f"{ram:3.0f}%", usage_style(ram))
+    frame.put(ram_y + 3, 2, "Available " + gib(max(0, total - used)), "muted", max(0, ram_w - 4))
+    frame.put(ram_y + 4, 2, "High memory usage" if ram is not None and ram >= 90 else "Usage elevated" if ram is not None and ram >= 75 else "Memory available" if ram is not None else "Waiting for metrics",
+              usage_style(ram), max(0, ram_w - 4))
+    frame.box(disk_y, disk_x, metrics_h, disk_w, "DISKS / used")
+    if not disks:
+        frame.put(disk_y + 1, disk_x + 2, "Waiting for metrics", "muted", max(0, disk_w - 4))
+    for i, disk in enumerate(disks):
+        y = disk_y + 1 + i * 2
+        usage = percent(disk["used"], disk["total"])
+        frame.put(y, disk_x + 2, disk["path"], limit=max(0, disk_w - 4))
+        bar_w = max(2, disk_w - 22)
+        frame.bar(y + 1, disk_x + 2, bar_w, usage)
+        frame.put(y + 1, disk_x + 3 + bar_w,
+                  f"{disk['used'] / 1024 ** 3:.0f}/{disk['total'] / 1024 ** 3:.0f}G {usage:.0f}%" if usage is not None else "--%",
+                  usage_style(usage), max(0, disk_w - bar_w - 5))
+
+    frame.box(cluster_y, 0, cluster_h, width, "CLUSTER / readiness")
+    health = cluster.get("health", "muted")
+    badge = {"ok": "[OK]", "warn": "[!]", "bad": "[FAIL]", "muted": "[--]"}[health]
+    frame.put(cluster_y + 1, 2, badge + " " + cluster["summary"], health,
+              max(0, width - (22 if data.get("updated") and wide else 4)))
+    if data.get("updated") and width >= 72:
+        frame.put(cluster_y + 1, width - 20, "checked " + data["updated"], "muted")
+    frame.put(cluster_y + 2, 2, cluster.get("url") or cluster.get("detail", ""), "accent", max(0, width - 4))
+    for i, node in enumerate(nodes):
+        badge = {"ok": "[OK]", "warn": "[!]", "bad": "[FAIL]"}[node["health"]]
+        if wide:
+            text = f"{badge:<6} {node['name']:<14.14} {node['state']:<18} {node['role']:<6} {node['address']}"
+            if width >= 96:
+                text += "  " + node["version"]
+            frame.put(cluster_y + 3 + i, 2, text, node["health"], max(0, width - 4))
+        else:
+            frame.put(cluster_y + 3 + i * 2, 2, f"{badge:<6} {node['name']:<10.10} {node['state']}",
+                      node["health"], max(0, width - 4))
+            frame.put(cluster_y + 4 + i * 2, 2, f"{node['role']} {node['address']} {node['version']}",
+                      "muted", max(0, width - 4))
+    return frame
+
+
+def screen(window, monitor, demo=False, unhealthy=False):
     import curses
-    title_style = curses.A_BOLD
+    styles = {name: curses.A_BOLD if name in {"ok", "bad", "warn", "accent", "brand"} else
+              curses.A_DIM if name == "muted" else 0
+              for name in ("ok", "bad", "warn", "accent", "border", "muted", "text", "brand")}
     if curses.has_colors():
         curses.start_color()
-        curses.init_pair(1, curses.COLOR_WHITE, curses.COLOR_BLUE)
-        title_style |= curses.color_pair(1)
+        background = curses.COLOR_BLACK
+        try:
+            curses.use_default_colors()
+            background = -1
+        except curses.error:
+            pass
+        for pair, (name, color) in enumerate((("ok", curses.COLOR_GREEN), ("bad", curses.COLOR_RED),
+                                             ("warn", curses.COLOR_YELLOW), ("accent", curses.COLOR_CYAN),
+                                             ("border", curses.COLOR_BLUE), ("muted", curses.COLOR_WHITE),
+                                             ("brand", curses.COLOR_YELLOW)), 1):
+            curses.init_pair(pair, color, background)
+            styles[name] |= curses.color_pair(pair)
     try:
         curses.curs_set(0)
     except curses.error:
@@ -215,23 +414,32 @@ def screen(window, monitor, demo=False):
     offset = 0
     while True:
         height, width = window.getmaxyx()
-        rows = DEMO if demo else monitor.snapshot()
-        capacity = max(1, height - 5)
-        offset = min(offset, max(0, len(rows) - capacity))
+        # Reserve the last terminal column: curses wraps at the bottom-right cell.
+        frame = dashboard(demo_data(unhealthy) if demo else monitor.snapshot(), max(1, width - 1), height)
+        capacity = max(1, height - frame.header - 1)
+        offset = min(offset, max(0, len(frame.rows) - frame.header - capacity))
         window.erase()
-
-        def line(y, value, attr=0):
-            if 0 <= y < height and width > 1:
+        visible = frame.rows[:frame.header] + frame.rows[frame.header + offset:frame.header + offset + capacity]
+        for y, row in enumerate(visible[:max(0, height - 1)]):
+            x = 0
+            while x < len(row):
+                style = row[x][1]
+                end = x + 1
+                while end < len(row) and row[end][1] == style:
+                    end += 1
                 try:
-                    window.addnstr(y, 0, clean(value), width - 1, attr)
+                    window.addnstr(y, x, "".join(char for char, _ in row[x:end]),
+                                   max(0, width - x - 1), styles[style])
                 except curses.error:
                     pass
-
-        line(0, "HOMESTEAD  |  Host & cluster status".ljust(width - 1), title_style)
-        line(1, "Read-only console  -  refreshes automatically")
-        for y, value in enumerate(rows[offset:offset + capacity], 3):
-            line(y, value, curses.A_BOLD if value.startswith("CLUSTER STATUS") else 0)
-        line(height - 1, "Enter / Q / Esc: login   Up/Down: scroll   PgUp/PgDn: page", curses.A_REVERSE)
+                x = end
+        footer = "Enter/Q/Esc: login  Up/Down: scroll  PgUp/PgDn: page" if width >= 60 else "Q/Enter/Esc: login  Up/Dn"
+        if len(frame.rows) - frame.header > capacity:
+            footer += f"  {offset + 1}/{len(frame.rows) - frame.header - capacity + 1}"
+        try:
+            window.addnstr(height - 1, 0, footer, max(0, width - 1), curses.A_REVERSE)
+        except curses.error:
+            pass
         window.refresh()
         key = window.getch()
         if key in (ord("q"), ord("Q"), 27, 10, 13, curses.KEY_ENTER):
@@ -245,14 +453,15 @@ def screen(window, monitor, demo=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--demo", action="store_true", help="show fictional example data")
+    parser.add_argument("--demo-unhealthy", action="store_true", help="show fictional warnings and a failed node")
     args = parser.parse_args()
     monitor = Monitor()
-    if not args.demo:
+    if not (args.demo or args.demo_unhealthy):
         for target in (monitor.collect_local, monitor.collect_cluster):
             threading.Thread(target=target, daemon=True).start()
     try:
         import curses
-        curses.wrapper(screen, monitor, args.demo)
+        curses.wrapper(screen, monitor, args.demo or args.demo_unhealthy, args.demo_unhealthy)
     except (ImportError, OSError, KeyboardInterrupt):
         pass  # The getty wrapper always proceeds to the authenticated login.
     finally:
