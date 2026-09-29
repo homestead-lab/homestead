@@ -32,7 +32,7 @@ async function authState() {
 
 /* Homestead is up but its cluster is not answering: say so, and keep trying. */
 function clusterUnavailable(error) {
-  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.229" alt="">
+  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.230" alt="">
     <h2>Homestead</h2><p class="sub">Waiting for the cluster</p>
     <div class="gateerr">${esc(error || "The Kubernetes API did not answer.")}</div>
     <p class="dim small">This page tries again every few seconds.</p>
@@ -41,12 +41,33 @@ function clusterUnavailable(error) {
   window.__authRetry = setTimeout(boot, 5000);
 }
 
+/* While a paused data move holds every write, a signed-out admin can still
+   sign in - the server writes nothing for it - and go on to the review. */
+window.recoverySignIn = async () => {
+  const err = document.getElementById("rg_err");
+  try {
+    const r = await fetch("/api/auth/login", { method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-Homestead-Auth": "1" },
+      body: JSON.stringify({ username: document.getElementById("rg_user").value.trim(), password: document.getElementById("rg_pass").value }) });
+    const out = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(out.error || "Sign-in failed");
+    location.assign(window.__recoveryReview);
+  } catch (e) { err.textContent = e.message; err.hidden = false; }
+};
+
 function dataHandoffStarting(state = {}) {
   if (state.recovery && /^[a-f0-9]{24}$/.test(state.operation || "")) {
+    const review = window.__recoveryReview = `/api/self/data/handoff/${state.operation}/view`;
     gate(`<img class="mark" src="/assets/homestead-mark.svg" alt="">
       <h2>Data move paused</h2><p>Homestead is still on its original volume. No copy or shutdown has been authorized.</p>
       <p class="dim small">Review the preparation or keep using the original volume. Both volumes will be retained.</p>
-      <a class="btn wide" href="/api/self/data/handoff/${state.operation}/view">Review preparation</a>`);
+      ${state.signed_in === false ? `<p class="small">Sign in as an administrator to review it.</p>
+        <input id="rg_user" autocomplete="username" placeholder="Username">
+        <input id="rg_pass" type="password" autocomplete="current-password" placeholder="Password" style="margin-top:8px"
+          onkeydown="if (event.key === 'Enter') recoverySignIn()">
+        <div class="gateerr" id="rg_err" hidden></div>
+        <button class="btn wide" style="margin-top:10px" onclick="recoverySignIn()">Sign in and review</button>`
+      : `<a class="btn wide" href="${review}">Review preparation</a>`}`);
     return;
   }
   gate(`<img class="mark" src="/assets/homestead-mark.svg" alt="">
@@ -88,7 +109,7 @@ function ungate() { $("#gate").classList.add("hidden"); }
 
 function loginForm(err, setup) {
   gate(`
-    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.229" alt="">
+    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.230" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}
