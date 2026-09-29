@@ -73,8 +73,11 @@ def _decode(secret, key):
 
 
 def endpoint(service=None):
-    """Where the bucket answers, preferring the address another cluster can use."""
-    service = service if service is not None else _get(f"/api/v1/namespaces/{NS}/services/{NAME}")
+    """Where the bucket answers, preferring the address another cluster can use
+    - its VIP, where Homestead moved it onto one (homestead_self_address)."""
+    if service is None:
+        vip = _get(f"/api/v1/namespaces/{NS}/services/{NAME}-vip")
+        service = vip if vip else _get(f"/api/v1/namespaces/{NS}/services/{NAME}")
     if not service:
         return ""
     ingress = ((service.get("status", {}) or {}).get("loadBalancer", {}) or {}).get("ingress", [])
@@ -403,7 +406,7 @@ def point_longhorn(replace=False):
     service = _get(f"/api/v1/namespaces/{NS}/services/{NAME}")
     if not service:
         raise ValueError("the object store is not deployed yet")
-    where = endpoint(service)
+    where = endpoint()
     _apply(f"/api/v1/namespaces/{LHNS}/secrets", LONGHORN_SECRET,
            _secret_body(LONGHORN_SECRET, LHNS, {
                "AWS_ACCESS_KEY_ID": keys["access_key"],

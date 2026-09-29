@@ -537,6 +537,24 @@
     "/api/history": history, "/api/storage": storage, "/api/volumes": volumes,
     "/api/nodes": nodes, "/api/nodes/uptime": demoUptime, "/api/node": url => nodes.find(n => n.name === url.searchParams.get("name")) || {},
     // A host's own OS, as the leader reads it on k3s and RKE2 (host-os.js).
+    // Homestead's own services, on node addresses until put on a VIP (views-network.js).
+    "/api/self/address": { on_vip: false, url: "", shared_vip: "192.168.1.242", components: [
+      { id: "web", label: "Homestead's web page", namespace: "lab", workload: "homestead", present: true, vip: "", vip_service: "",
+        node_addresses: ["192.168.1.207", "192.168.1.208"], ports: [{ name: "http", port: 8088, target_port: 8080, protocol: "TCP" }] },
+      { id: "objectstore", label: "Backup storage (S3)", namespace: "lab", workload: "homestead-objectstore", present: true, vip: "192.168.1.242", vip_service: "homestead-objectstore",
+        node_addresses: [], ports: [{ name: "s3", port: 9000, target_port: "s3", protocol: "TCP" }, { name: "console", port: 9001, target_port: "console", protocol: "TCP" }] },
+      { id: "smb", label: "Network shares (SMB)", namespace: "lab", workload: "homestead-smb", present: true, vip: "", vip_service: "",
+        node_addresses: ["192.168.1.207"], ports: [{ name: "smb", port: 445, target_port: 445, protocol: "TCP" }] }] },
+    "/api/self/address/plan": { vip: "192.168.1.242", steps: [
+      { id: "web", label: "Homestead's web page", action: "add", detail: "8088 on 192.168.1.242, as homestead-vip" },
+      { id: "objectstore", label: "Backup storage (S3)", action: "kept", detail: "already on 192.168.1.242" },
+      { id: "smb", label: "Network shares (SMB)", action: "add", detail: "445 on 192.168.1.242, as homestead-smb-vip" }] },
+    "/api/network/vips/change": { old: "192.168.1.242", new: "192.168.1.210", default: true, label: "Main VIP",
+      services: [{ namespace: "lab", name: "homestead-vip", ports: ["8088/TCP"], targets: ["homestead"] },
+        { namespace: "lab", name: "frigate", ports: ["5000/TCP"], targets: ["frigate"] }], detail: "192.168.1.242 is now 192.168.1.210; 2 Services moved with it" },
+    "/api/welcome": { show: false, done: false, harvester: false, load_balancer: "kube-vip", steps: {
+      address: { done: false, url: "", shared_vip: "192.168.1.242", vips: 2 }, probe: { done: true }, backups: { done: false },
+      updates: { applies: true, done: false } } },
     // A host's devices for VMs (passthrough.js): a GPU handed over, a NIC the host needs.
     "/api/passthrough/inspect": { node: "harvester-node1", harvester: false, iommu: true, cmdline_iommu: true, cpu: "intel", complete: true, kubevirt: true,
       pci: [

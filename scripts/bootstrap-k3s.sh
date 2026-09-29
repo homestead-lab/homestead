@@ -42,6 +42,10 @@
 #   --kube-vip-version 0.11.1    pin kube-vip's chart (default: the one
 #                                Homestead has tested)
 #   --multus-version v4.3.102    pin RKE2's Multus chart (default: likewise)
+#   --vip 192.168.1.200  an unused LAN address for Homestead and apps: once
+#                        kube-vip is up, Homestead reserves it, makes it the
+#                        apps' default, and puts itself, its backup storage
+#                        and shares on it beside the nodes' own addresses
 #   --no-node-probe      leave out the node probe: no temperatures, SMART,
 #                        or per-node network facts until it is added under
 #                        Settings > Cluster > Add-ons
@@ -91,6 +95,7 @@ MULTUS=1
 KUBE_VIP_VERSION=""
 MULTUS_VERSION=""
 NODE_PROBE=1
+VIP=""
 LONGHORN_VOLUME=auto
 NODE_IP=""
 RAW=https://raw.githubusercontent.com/wjcloudy/homestead
@@ -380,6 +385,9 @@ while [ $# -gt 0 ]; do
     --kube-vip-version) KUBE_VIP_VERSION="$2"; shift 2; continue ;;
     --multus-version) MULTUS_VERSION="$2"; shift 2; continue ;;
     --no-node-probe) NODE_PROBE=0; shift; continue ;;
+    --vip)
+      printf '%s' "${2:-}" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || fail "--vip needs an IPv4 address"
+      VIP="$2"; shift 2; continue ;;
   esac
   set +e; parse_common "$@"; used=$?; set -e
   [ "$used" = 0 ] && fail "Unknown option: $1"
@@ -500,6 +508,7 @@ data:
   multus: "$(flag_word "$MULTUS")"
   multus-version: "$MULTUS_VERSION"
   node-probe: "$(flag_word "$NODE_PROBE")"
+  vip: "$VIP"
 EOF
 [ "$KUBE_VIP" = 1 ] && echo "  kube-vip will be installed by Homestead after it starts."
 [ "$MULTUS" = 1 ] && echo "  Multus will be installed by Homestead after it starts."
