@@ -134,6 +134,22 @@ class ObjectStoreTests(unittest.TestCase):
         store.deploy({"point_longhorn": False, "port": 9010})
         self.assertEqual("192.0.2.211", self._sent_service()["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
 
+    def test_an_address_chosen_for_the_store_beats_its_older_copy_on_the_vip(self):
+        # harvester-site: the store given 192.0.2.211:9060, a copy left on .108:9000.
+        self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"] = {
+            "metadata": {"name": "homestead-objectstore", "annotations": {"kube-vip.io/loadbalancerIPs": "192.0.2.211"}},
+            "spec": {"ports": [{"name": "s3", "port": 9060}]},
+            "status": {"loadBalancer": {"ingress": [{"ip": "192.0.2.211"}]}}}
+        self.objects["/api/v1/namespaces/lab/services/homestead-objectstore-vip"] = {
+            "metadata": {"name": "homestead-objectstore-vip", "annotations": {"kube-vip.io/loadbalancerIPs": "192.0.2.108"}},
+            "spec": {"ports": [{"name": "s3", "port": 9000}]},
+            "status": {"loadBalancer": {"ingress": [{"ip": "192.0.2.108"}]}}}
+        self.assertEqual("http://192.0.2.211:9060", store.endpoint())
+        # On the nodes' own addresses (k3s ServiceLB) the VIP copy is the one to use.
+        self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"]["metadata"]["annotations"] = {}
+        self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"]["status"]["loadBalancer"]["ingress"] = [{"ip": "192.0.2.203"}]
+        self.assertEqual("http://192.0.2.108:9000", store.endpoint())
+
     def test_a_store_already_running_keeps_its_port(self):
         self._service("192.0.2.244", "192.0.2.244")
         self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"]["spec"] = {
@@ -320,6 +336,19 @@ class ObjectStoreTests(unittest.TestCase):
         self.assertIn(("PATCH", "/apis/apps/v1/namespaces/lab/deployments/homestead-objectstore", {"spec": {"replicas": 1}}), self.sent)
         self.assertTrue(result["allowed"])
         self.assertEqual([], self.claims)
+
+    def test_enabling_again_points_longhorn_at_the_store(self):
+        # harvester-site: the store made at .211:9060, pointing Longhorn failed, so
+        # its target stayed on an old .108:9000 until enabled again.
+        self._deployment(1)
+        self._service("192.0.2.211", "192.0.2.211")
+        with mock.patch.object(store, "point_longhorn", return_value={"endpoint": "http://192.0.2.211:9060", "kept_target": ""}) as point:
+            result = store.set_transfers(True)
+        point.assert_called_once_with()
+        self.assertIn("Longhorn backs up to http://192.0.2.211:9060", result["detail"])
+        with mock.patch.object(store, "point_longhorn", side_effect=ValueError("an S3 target needs its access key and secret key")):
+            with self.assertRaisesRegex(ValueError, "Longhorn was not pointed at it"):
+                store.set_transfers(True)
 
     def test_a_silly_size_is_refused(self):
         for size in (1, 99999):

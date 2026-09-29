@@ -88,11 +88,15 @@ def _console_port(port):
 
 
 def endpoint(service=None):
-    """Where the bucket answers, preferring the address another cluster can use
-    - its VIP, where Homestead moved it onto one (homestead_self_address)."""
+    """Where the bucket answers, as another cluster reaches it. An address
+    chosen for the store itself wins; else its copy on Homestead's VIP
+    (homestead_self_address), made where the store sat on the nodes' own
+    addresses. The copy keeps the port it was made with, so preferring it
+    over a chosen address would send backups to an old address and port."""
     if service is None:
+        main = _get(f"/api/v1/namespaces/{NS}/services/{NAME}")
         vip = _get(f"/api/v1/namespaces/{NS}/services/{NAME}-vip")
-        service = vip if vip else _get(f"/api/v1/namespaces/{NS}/services/{NAME}")
+        service = main if (main and _current_address(main)) or not vip else vip
     if not service:
         return ""
     ingress = ((service.get("status", {}) or {}).get("loadBalancer", {}) or {}).get("ingress", [])
@@ -425,7 +429,19 @@ def set_transfers(allow, size_gb=100, lb_ip="", vip_mode="", port=0):
                              "point_longhorn": True})
             return {**transfers(), "detail": f"moves out are on: backup storage is starting at {result.get('endpoint') or 'its address'}"}
         ksend("PATCH", path, {"spec": {"replicas": 1}}, ctype="application/merge-patch+json")
-        return {**transfers(), "allowed": True, "detail": "moves out are on: backup storage is starting again"}
+        # Longhorn pointed at it again: a first setup can have made the store
+        # and then failed to point Longhorn (Harvester refusing a target
+        # without keys, before 2.8.239), leaving backups going to an old
+        # address. A target somewhere else - NFS - is still left alone.
+        detail = "moves out are on: backup storage is starting again"
+        if _get(f"/api/v1/namespaces/{NS}/services/{NAME}"):
+            try:
+                pointed = point_longhorn()
+            except (ValueError, urllib.error.HTTPError) as error:
+                raise ValueError(f"backup storage is starting again, but Longhorn was not pointed at it: {error}") from error
+            if not pointed.get("kept_target"):
+                detail += f"; Longhorn backs up to {pointed.get('endpoint') or 'it'}"
+        return {**transfers(), "allowed": True, "detail": detail}
     if deployment:
         ksend("PATCH", path, {"spec": {"replicas": 0}}, ctype="application/merge-patch+json")
     state = transfers()
