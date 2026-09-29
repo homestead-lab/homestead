@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.234")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.235")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -795,6 +795,11 @@ def get_nodes():
     except Exception:
         disk_lines = {}
     smart_cfg = get_app_settings().get("smart") or DEFAULT_APP_SETTINGS["smart"]
+    try:
+        # Each host's OS, as the leader last read it (homestead_host_os.py).
+        host_os = HOST_OS.report()["hosts"]
+    except Exception:
+        host_os = {}
     out = []
     for n in nodes.get("items", []):
         name = n["metadata"]["name"]
@@ -869,6 +874,7 @@ def get_nodes():
             "disk_issues": disk_issues,
             "smart_notify": smart_cfg.get("notify_failures", True),
             "duties": duties.get(name) or {"vips": [], "rwx": [], "control_plane_vip": False, "management_vip": []},
+            "host_os": (host_os.get(name) or {}).get("summary"),
         })
     return out
 
@@ -5166,6 +5172,8 @@ import homestead_vmstore as VMSTORE
 import homestead_nodeshell as NODESHELL
 import homestead_hostrun as HOSTRUN
 import homestead_host_limits as HOST_LIMITS
+import homestead_node_parity as NODE_PARITY
+import homestead_host_os as HOST_OS
 import homestead_host_bridge as HOST_BRIDGE
 import homestead_manifests as MANIFESTS
 import homestead_disk_setup as DISK_SETUP
@@ -5204,7 +5212,7 @@ HISTORY.bind(DATA_DIR)
 PLATFORM.bind(kget)
 ADDONS.bind(kget, ksend, PLATFORM.detect, node_temps)
 MACVTAP.bind(kget, ksend, ADDONS, PLATFORM.detect)
-BASELINE.bind(kget, ADDONS, PLATFORM.detect, DEFAULT_NS, DATA_DIR, MACVTAP)
+BASELINE.bind(kget, ADDONS, PLATFORM.detect, DEFAULT_NS, DATA_DIR, MACVTAP, PROBE, HOMESTEAD_VERSION)
 COMPONENTS.bind(kget, ksend, PLATFORM.detect, lambda cfg: HELM.upgrade(cfg), ADDONS)
 OPS.RESOLVERS["platform-upgrade"] = COMPONENTS.status
 OPS.CANCELLERS["platform-upgrade"] = (COMPONENTS.cancel_plan, COMPONENTS.cancel_run)
@@ -5245,6 +5253,9 @@ NODESHELL.bind(kget, ksend, DEFAULT_NS)
 HOSTRUN.bind(kget, ksend, lambda *a, **k: FILES._exec(*a, **k), DEFAULT_NS)
 MANIFESTS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 HOST_LIMITS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
+NODE_PARITY.bind(kget, ksend, HOSTRUN, PLATFORM.detect, node_temps, DATA_DIR)
+HOST_OS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
+OPS.RESOLVERS["host-os"] = HOST_OS.status
 DISK_SETUP.bind(HOSTRUN)
 HOST_BRIDGE.bind(HOSTRUN, kget, ksend)
 OPS.RESOLVERS["host-bridge"] = HOST_BRIDGE.status
@@ -5351,6 +5362,7 @@ def _alert_sources():
     take("addresses", lambda: VIPS.alert_facts(cached("network", 5, NETWORK.inventory).get("addresses")))
     take("capacity", lambda: LHCAP.alert_facts(cached("lhcap", 15, LHCAP.status)))
     take("disks", lambda: DISKS.alert_facts(cached("disks", 15, DISKS.inventory)))
+    take("hostos", HOST_OS.alert_facts)
     take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
         ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", ""))))
     # Twice a day whether or not anyone is looking - the Containers header and
@@ -5458,7 +5470,8 @@ def _baseline_loop():
 
 def _host_fix_loop():
     """On the leader, what k3s and RKE2 hosts need or undo at each start: inotify
-    limits a busy node outgrows (homestead_host_limits.py), the installer's
+    limits a busy node outgrows (homestead_host_limits.py), what a node that
+    joined later needs to match the others (homestead_node_parity.py), the installer's
     auto-deploy files (homestead_manifests.py), and a second default storage
     class; and VMs still holding an ISO read-only. Checked a minute after
     starting, then every ten minutes."""
@@ -5469,6 +5482,11 @@ def _host_fix_loop():
                 with self_data_activity():
                     for node, change in HOST_LIMITS.tick().items():
                         print(f"platform: {node}: inotify limits raised ({change})", flush=True)
+                    # A node that joined later, set up as the others are.
+                    for node, change in NODE_PARITY.tick():
+                        print(f"platform: {node + ': ' if node else ''}{change}", flush=True)
+                    # Each host's OS - updates, restarts, failed services - every six hours.
+                    HOST_OS.tick()
                     for node, marked in MANIFESTS.tick().items():
                         print(f"platform: {node}: k3s no longer re-applies "
                               f"{', '.join(marked) or 'no installer files (none left)'} at start", flush=True)
@@ -6818,6 +6836,8 @@ def needed_role(path, method):
                 "/api/disks/inspect", "/api/disks/setup", "/api/disks/os-space", "/api/disks/os-space/use",
                 # Moving a host's network interface into a bridge.
                 "/api/node/bridge/inspect", "/api/node/bridge",
+                # A host's package manager: refreshing its lists, installing updates.
+                "/api/node/os/check", "/api/node/os/upgrade",
                 "/api/disks/tags", "/api/disks/node-tags",
                 # Replacing a failed disk deletes replicas and takes the disk out.
                 "/api/disks/retire", "/api/disks/retire/plan",
@@ -7484,6 +7504,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, cached("node:" + (q.get("name") or [""])[0], 5,
                                   lambda: next((n for n in get_nodes()
                                                 if n["name"] == (q.get("name") or [""])[0]), {})))
+            if p == "/api/node/os":
+                return self._send(200, HOST_OS.report((q.get("name") or [""])[0] or None))
             if p == "/api/node/smart":
                 node = (q.get("node") or [""])[0]
                 disk = (q.get("disk") or [""])[0]
@@ -8414,6 +8436,18 @@ class H(BaseHTTPRequestHandler):
                 for key in ("disks", "lhcap", "nodes", "ov"):
                     _cache.pop(key, None)
                 return self._send(200, {"ok": True, "operation": op})
+            if p == "/api/node/os/check":
+                node = str(b.get("node") or "")
+                if not node:
+                    raise ValueError("which host?")
+                facts = HOST_OS.read(node, refresh=True)
+                return self._send(200, {"ok": True, "facts": {**facts, "summary": HOST_OS.summary(facts)}})
+            if p == "/api/node/os/upgrade":
+                node = str(b.get("node") or "")
+                if not node:
+                    raise ValueError("which host?")
+                return self._send(200, {"ok": True, "operation": HOST_OS.upgrade_start(node, OPS),
+                                        "detail": f"Installing updates on {node}; follow it in the job tray"})
             if p == "/api/node/bridge/inspect":
                 return self._send(200, HOST_BRIDGE.inspect(str(b.get("node") or "")))
             if p == "/api/node/bridge":

@@ -242,6 +242,19 @@ class InstallTests(unittest.TestCase):
                 imports.prepare_vm({"name": "w11", "install_iso": "iso-win11-1", "drivers_iso": "iso-win11-1"},
                                    {"harvester": False, "cdi": True}, "longhorn")
 
+    def test_a_windows_guest_gets_a_network_card_it_has_a_driver_for(self):
+        with mock.patch.object(imports, "iso_ready", lambda ns, name: {}):
+            plan = imports.prepare_vm({"name": "w11", "install_iso": "iso-win11-1", "disk_gb": 64, "nic_model": "e1000e"},
+                                      {"harvester": False, "cdi": True}, "longhorn")
+            plain = imports.prepare_vm({"name": "deb", "install_iso": "iso-debian-1", "disk_gb": 20},
+                                       {"harvester": False, "cdi": True}, "longhorn")
+        nic = plan["vm"]["spec"]["template"]["spec"]["domain"]["devices"]["interfaces"][0]
+        self.assertEqual(("e1000e", {}), (nic["model"], nic["masquerade"]))
+        self.assertEqual("virtio", plain["vm"]["spec"]["template"]["spec"]["domain"]["devices"]["interfaces"][0]["model"])
+        with self.assertRaisesRegex(ValueError, "network card"):
+            imports.prepare_vm({"name": "w11", "install_iso": "iso-win11-1", "nic_model": "ne2k"},
+                               {"harvester": False, "cdi": True}, "longhorn")
+
     def test_a_vm_installs_from_an_iso_onto_a_blank_disk_with_its_preset(self):
         with mock.patch.object(imports, "iso_ready", lambda ns, name: {}):
             plan = imports.prepare_vm({"name": "win", "install_iso": "iso-win11-1", "disk_gb": 64,

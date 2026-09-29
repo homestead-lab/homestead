@@ -34,6 +34,30 @@ the same addresses with the ports and apps on each.
 Clicking a node opens it: its hardware, the pods and VMs on it, per-disk read
 and write speed, and each drive's health.
 
+### Host OS
+
+On k3s and RKE2 the hosts are ordinary Linux machines, so Homestead looks after
+their OS as Harvester does its own. The leader reads each host every six
+hours, through the same short-lived helper disk set-up uses, and the node's
+**Host OS** card shows:
+
+- the distribution, kernel, and how full the root filesystem is;
+- updates waiting, and which are security fixes, from the package lists the
+  host keeps (Ubuntu refreshes them daily; **Check now** refreshes them first);
+- whether it needs a restart to finish an update, and any failed services;
+- whether its clock is synchronised.
+
+**Install updates** runs the host's own package manager (apt, dnf or zypper)
+detached on the host, followed in the job tray; workloads keep running. A kernel
+update then asks for a restart, which **Host actions** does with its drain
+review. Security updates, a restart needed, failed services and a root
+filesystem over 90% are also [notifications](Settings#notifications), and the node's card shows a
+**host OS** chip.
+
+The node's **Disks** card draws each disk's partition table to scale - each
+partition's size, filesystem and mount, what sits on it (LVM, RAID) and space
+left unallocated.
+
 ![Node detail](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-node-detail.jpg)
 
 ### Uptime

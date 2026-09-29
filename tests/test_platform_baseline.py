@@ -178,6 +178,23 @@ class BaselineTests(unittest.TestCase):
         self.addons._status["multus"]["installing"] = True
         self.assertEqual(["kube-vip"], BASELINE.report()["missing"])
 
+    def test_the_node_probe_the_installer_asked_for_is_installed_once(self):
+        made = []
+        probe = type("P", (), {"installed": staticmethod(lambda: "homestead-nodeprobe" if made else ""),
+                               "install": staticmethod(lambda version: made.append(version) or {"detail": "installed"})})
+        BASELINE.bind(self.get, self.addons, lambda force=False: self.platform, "lab", self.tmp.name, None, probe, "2.8.235")
+        self.request["data"]["node-probe"] = "yes"
+        BASELINE.tick()
+        BASELINE.tick()
+        self.assertEqual(["2.8.235"], made, "asked once: a probe removed later stays removed")
+
+    def test_no_node_probe_unless_asked(self):
+        made = []
+        probe = type("P", (), {"installed": staticmethod(lambda: ""), "install": staticmethod(made.append)})
+        BASELINE.bind(self.get, self.addons, lambda force=False: self.platform, "lab", self.tmp.name, None, probe)
+        BASELINE.tick()
+        self.assertEqual([], made)
+
     def test_a_failed_install_is_recorded_with_its_reason(self):
         def refuse(cfg):
             raise ValueError("kube-vip is already being installed")

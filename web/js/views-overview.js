@@ -238,6 +238,7 @@ function nodeCard(n) {
       </div>
       <div class="row nodehead-acts" style="gap:7px">
         ${n.schedulable === false ? '<span class="pill med">cordoned</span>' : ""}
+        ${n.host_os && ["warn", "bad"].includes(n.host_os.tone) ? `<span class="pill ${n.host_os.tone === "bad" ? "crit" : "med"}" data-tip="${esc(n.host_os.text)}">host OS</span>` : ""}
         <span class="pill ${bad ? "crit" : "low"}">${n.status}</span>
         <button class="btn sm" onclick="event.stopPropagation();nodeActions(${jsq(n.name)})">⋯</button>
       </div>
@@ -373,6 +374,9 @@ window.nodeDetail = async (name, fromRoute = false) => {
         ${row("Kubelet", esc(i.kubeletVersion || "—"))}
         ${row("Image storage", (n.img_used_gb || 0) + " GB")}
       </div>
+      <div class="card flat" id="nodeHostOs" style="margin-top:16px"><div class="ctitle">Host OS</div>
+        <div class="csub">Updates, restarts and services on the host itself</div>
+        <div class="hos-body" style="margin-top:10px"><div class="dim small"><span class="spin2"></span> reading</div></div></div>
       <div class="card flat" style="margin-top:16px"><div class="ctitle">Conditions</div>
         <div style="margin-top:10px">${(n.conditions || []).map(c =>
           `<span class="tag ${c.type === "Ready" ? (c.status === "True" ? "ok" : "bad")
@@ -417,6 +421,7 @@ window.nodeDetail = async (name, fromRoute = false) => {
     window.__disksModal = false;
     nodeDisksPaint(n.name);
     nodeUptimePaint(n);
+    if (window.nodeHostOsPaint) nodeHostOsPaint(n.name, true);
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
 

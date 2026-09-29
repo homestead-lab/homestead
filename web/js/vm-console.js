@@ -5,7 +5,9 @@
    port in the same terminal view as container consoles - the one to use for
    a VM that boots without a display, or when the screen is stuck. */
 
-const VMC = { rfb: null, socket: null, watch: 0, ns: "", name: "", kind: "vnc" };
+const VMC = { rfb: null, socket: null, watch: 0, ns: "", name: "", kind: "vnc", keyboard: false };
+// A phone or tablet: its on-screen keyboard only opens for a text field.
+const VMC_TOUCH = () => !!window.matchMedia?.("(pointer: coarse)").matches;
 
 function vmConsoleUrl(kind) {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
@@ -22,13 +24,14 @@ function vmConsoleState(text) { const el = $("#vmcState"); if (el) el.textConten
 
 window.vmConsole = (ns, name, kind = "vnc") => {
   vmConsoleStop();
-  Object.assign(VMC, { ns, name, kind });
+  Object.assign(VMC, { ns, name, kind, keyboard: false });
   modal("Console · " + name, `<div class="vmc-bar">
       <div class="seg" role="tablist">
         <button class="${kind === "vnc" ? "on" : ""}" onclick="vmConsole(${jsq(ns)},${jsq(name)},'vnc')">Screen</button>
         <button class="${kind === "serial" ? "on" : ""}" onclick="vmConsole(${jsq(ns)},${jsq(name)},'serial')">Serial</button></div>
       <span class="dim xs" id="vmcState">connecting…</span>
       ${kind === "vnc" ? `<span class="vmc-tools">
+        ${VMC_TOUCH() ? `<button class="btn sm" id="vmcKeyboard" onclick="vmConsoleKeyboard()" title="Open this device's keyboard to type into the VM">Keyboard</button>` : ""}
         <button class="btn sm" onclick="vmConsoleKeys()" title="Send Ctrl+Alt+Del to the VM">Ctrl+Alt+Del</button>
         <button class="btn sm" onclick="vmConsolePaste()" title="Paste text into the VM - it is typed key by key (Ctrl+Shift+V on the screen)">${icon("copy")}Paste</button>
         <button class="btn sm" id="vmcCopy" hidden onclick="vmConsoleCopyGuest()" title="Copy what the VM last put on its clipboard (Ctrl+Shift+C)">Copy from VM</button>
@@ -45,7 +48,9 @@ window.vmConsole = (ns, name, kind = "vnc") => {
           <button class="btn sm pri" onclick="vmConsoleTypePasted()">Type into the VM</button>
           <label class="switch" style="margin:0"><input type="checkbox" id="vmcPasteEnter"> <span>Press Enter after</span></label>
           <button class="btn sm" onclick="vmConsolePasteClose()">Cancel</button></div></div>
-      <div class="vmc-screen" id="vmcScreen" tabindex="0"></div>`
+      <div class="vmc-wrap" id="vmcWrap"><div class="vmc-screen" id="vmcScreen" tabindex="0"></div>
+        <textarea class="vmc-keys" id="vmcKeys" aria-label="Type into the VM" autocapitalize="off" autocomplete="off"
+          autocorrect="off" spellcheck="false" enterkeyhint="send"></textarea></div>`
       : `<pre class="consoleview" id="consoleView" tabindex="0" aria-label="Serial console output">Waiting for the serial port… press Enter below if it stays quiet: a login prompt only appears after a key.</pre>
         <div class="consoleinput"><textarea id="consoleInput" rows="1" spellcheck="false" autocomplete="off" placeholder="Type · Enter sends · Shift+Enter adds a line"></textarea>
         <button class="btn" onclick="consoleSend()">Send</button></div>`}`, true);
@@ -64,9 +69,15 @@ async function vmConsoleScreen() {
   const rfb = new RFB(target, vmConsoleUrl("vnc"), { wsProtocols: ["binary"] });
   rfb.scaleViewport = true;
   rfb.resizeSession = false;
-  rfb.focusOnClick = true;
+  // On a touch screen a tap would move focus to the screen and close the
+  // keyboard; the keyboard's own field keeps it while it is open.
+  rfb.focusOnClick = !VMC_TOUCH();
   VMC.rfb = rfb;
-  rfb.addEventListener("connect", () => { vmConsoleState("connected · click the screen to type"); rfb.focus({ preventScroll: true }); });
+  vmConsoleKeyInput(rfb);
+  rfb.addEventListener("connect", () => {
+    if (VMC_TOUCH()) return vmConsoleState("connected · tap Keyboard to type");
+    vmConsoleState("connected · click the screen to type"); rfb.focus({ preventScroll: true });
+  });
   rfb.addEventListener("desktopname", event => vmConsoleState(`connected · ${event.detail.name}`));
   rfb.addEventListener("disconnect", event => {
     if (VMC.rfb !== rfb) return;
@@ -106,7 +117,59 @@ function vmConsoleSerial() {
 }
 
 window.vmConsoleKeys = () => { if (VMC.rfb) { VMC.rfb.sendCtrlAltDel(); VMC.rfb.focus({ preventScroll: true }); } };
-window.vmConsoleFull = () => { const el = $("#vmcScreen"); if (el && el.requestFullscreen) el.requestFullscreen().catch(() => {}); };
+// The screen and the keyboard's field together, so typing works full screen.
+window.vmConsoleFull = () => { const el = $("#vmcWrap"); if (el && el.requestFullscreen) el.requestFullscreen().catch(() => {}); };
+
+/* ---------- a touch screen's keyboard ----------
+   noVNC reads key presses from the screen, but a phone opens its keyboard
+   only for a text field, and then reports words rather than keys: Android
+   sends most of them as edits to the field, with no key code. So the field
+   keeps a little text of its own, each edit is compared with what it held,
+   and the difference is typed - Backspace for each character removed, the
+   characters added - which works however the keyboard composes. */
+const VMC_FILL = "  ";
+const VMC_SPECIAL = { Enter: 0xff0d, Tab: 0xff09, Escape: 0xff1b, ArrowLeft: 0xff51, ArrowUp: 0xff52,
+  ArrowRight: 0xff53, ArrowDown: 0xff54, Home: 0xff50, End: 0xff57, Delete: 0xffff, PageUp: 0xff55, PageDown: 0xff56 };
+function vmConsoleKeyInput(rfb) {
+  const field = $("#vmcKeys"), screen = $("#vmcScreen");
+  if (!field) return;
+  let held = VMC_FILL, composing = false;
+  const reset = () => { field.value = held = VMC_FILL; field.setSelectionRange(VMC_FILL.length, VMC_FILL.length); };
+  reset();
+  const press = keysym => { if (VMC.rfb === rfb) rfb.sendKey(keysym, null); };
+  field.addEventListener("compositionstart", () => { composing = true; });
+  field.addEventListener("compositionend", () => { composing = false; reset(); });
+  field.addEventListener("input", () => {
+    const now = field.value;
+    let same = 0;
+    while (same < held.length && same < now.length && held[same] === now[same]) same++;
+    for (let i = same; i < held.length; i++) press(0xff08);
+    for (const ch of now.slice(same)) press(keysymOf(ch));
+    held = now;
+    // Mid-word the keyboard is still editing its own text; leave it be.
+    if (!composing) reset();
+  });
+  // Keys that edit nothing - Enter, arrows, Escape, from a tablet's keyboard.
+  field.addEventListener("keydown", event => {
+    const keysym = VMC_SPECIAL[event.key];
+    if (!keysym || composing || event.isComposing) return;
+    event.preventDefault();
+    press(keysym);
+  });
+  field.addEventListener("blur", () => {
+    // A tap on the screen clicks in the VM; the keyboard stays open for it.
+    if (VMC.keyboard) setTimeout(() => { if (VMC.keyboard && document.activeElement !== field && $("#vmcKeys") === field) field.focus({ preventScroll: true }); }, 0);
+  });
+  screen?.addEventListener("touchend", () => { if (VMC.keyboard) field.focus({ preventScroll: true }); });
+}
+window.vmConsoleKeyboard = () => {
+  const field = $("#vmcKeys"), button = $("#vmcKeyboard");
+  if (!field) return;
+  VMC.keyboard = !VMC.keyboard;
+  if (button) button.classList.toggle("pri", VMC.keyboard);
+  if (VMC.keyboard) { field.focus({ preventScroll: true }); vmConsoleState("keyboard open · what you type goes to the VM"); }
+  else { field.blur(); vmConsoleState("keyboard closed"); }
+};
 
 /* ---------- the screen: pasting is typing ----------
    A VM's display has no clipboard of its own to paste into, so pasted text
