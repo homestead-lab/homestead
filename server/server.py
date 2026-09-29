@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.227")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.228")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -1033,11 +1033,47 @@ def other_volumes():
     return sorted(out, key=lambda row: (row["phase"] == "Bound", row["namespace"], row["name"]))
 
 
+def volume_copies():
+    """Longhorn volume -> where each copy of it is: host, disk folder, and the
+    disk's name as Homestead set it up (/mnt/<device>), the OS disk said so."""
+    base = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
+    replicas = kget(f"{base}/replicas").get("items", [])
+    tags = {}
+    try:
+        for node in kget(f"{base}/nodes").get("items", []):
+            for name, disk in ((node.get("spec") or {}).get("disks") or {}).items():
+                uuid = (((node.get("status") or {}).get("diskStatus") or {}).get(name) or {}).get("diskUUID")
+                if uuid:
+                    tags[uuid] = disk.get("tags") or []
+    except Exception:
+        pass
+    out = {}
+    for r in replicas:
+        spec, status = r.get("spec") or {}, r.get("status") or {}
+        if not spec.get("volumeName"):
+            continue
+        path = (spec.get("diskPath") or "").rstrip("/")
+        disk_tags = tags.get(spec.get("diskID"), [])
+        os_disk = "os" in disk_tags or path in ("/var/lib/longhorn", "/var/lib/harvester/defaultdisk")
+        label = ("OS disk" if os_disk else path.rsplit("/", 1)[-1] if path.startswith("/mnt/") else path) or "?"
+        out.setdefault(spec["volumeName"], []).append({
+            "node": spec.get("nodeID", ""), "path": path, "disk": label, "os": os_disk,
+            "healthy": status.get("currentState") == "running" and not spec.get("failedAt"),
+            "state": status.get("currentState", "") or ("failed" if spec.get("failedAt") else "stopped")})
+    for rows in out.values():
+        rows.sort(key=lambda c: (c["node"], c["disk"]))
+    return out
+
+
 def get_volumes():
     try:
         vols = kget("/apis/longhorn.io/v1beta2/volumes").get("items", [])
     except Exception:
         return []
+    try:
+        copies = volume_copies()
+    except Exception:
+        copies = {}
     try:
         refs = claim_references()
     except Exception:
@@ -1100,6 +1136,7 @@ def get_volumes():
             "node": st.get("currentNodeID", ""),
             "size_gb": round(int(sp.get("size", 0) or 0) / 1024**3, 1),
             "replicas": sp.get("numberOfReplicas", 0),
+            "copies": copies.get(v["metadata"]["name"], []),
             "engine": str(sp.get("dataEngine") or "v1").lower(),
             "actual_gb": round(int(st.get("actualSize", 0) or 0) / 1024**3, 2),
             "filesystem": filesystem,
@@ -3339,7 +3376,8 @@ def create_storage_class(cfg):
     stale = int(cfg.get("stale_replica_timeout", 30) or 30)
     if not 1 <= stale <= 2880:
         raise ValueError("stale replica timeout must be between 1 and 2880 minutes")
-    reclaim = str(cfg.get("reclaim_policy") or "Delete")
+    # Kept unless asked otherwise: deleting an app should not take its data.
+    reclaim = str(cfg.get("reclaim_policy") or "Retain")
     if reclaim not in ("Delete", "Retain"):
         raise ValueError("reclaim policy must be Delete or Retain")
     # Written explicitly, the way Harvester writes its own classes: a blank
@@ -3351,6 +3389,15 @@ def create_storage_class(cfg):
     engine = str(cfg.get("engine") or "v1").lower()
     if engine not in ("v1", "v2"):
         raise ValueError("the data engine is v1 or v2")
+    # Where the copies go. Longhorn's own default puts each on a different
+    # host, so a one-host cluster can never place a second. "disks" lets
+    # copies share a host but never a disk: a failed disk is survived there,
+    # a failed host is not. (Longhorn 1.6 and later read these per class.)
+    copies = str(cfg.get("copies") or "hosts")
+    if copies not in ("hosts", "disks"):
+        raise ValueError("copies go on different hosts or different disks")
+    if copies == "disks":
+        parameters.update(replicaSoftAntiAffinity="enabled", replicaDiskSoftAntiAffinity="disabled")
     warning = ""
     disk_tags, node_tags = DISKS.clean_tags(cfg.get("disk_tags")), DISKS.clean_tags(cfg.get("node_tags"))
     if disk_tags:
@@ -3581,6 +3628,10 @@ def vm_create_options():
             # The Hardware tab: CPU models every node offers, and KubeVirt's features.
             "cpu_models": VM_HARDWARE.cpu_models(nodes),
             "kubevirt_gates": kubevirt_gates(),
+            # A new VM's hardware as the form starts it: a plain VM, as made here.
+            "hardware_base": VM_HARDWARE.read({"spec": {"template": {"spec": {
+                "domain": {"cpu": {"cores": 1}},
+                **({"evictionStrategy": "LiveMigrate"} if platform.get("harvester") else {})}}}}),
             # ISOs a CD-ROM can hold now.
             "isos": [{"name": v["name"], "file": v["file"]} for v in ISOS.volumes() if v["state"] == "ready"]}
 
@@ -5213,6 +5264,8 @@ def _vmstore_loop():
                 with self_data_activity():
                     VMSTORE.refresh()
                     # ISO copies no VM has used for a while (homestead_isos.py).
+                    for name in ISOS.unlock():
+                        print(f"ISO library: {name} no longer holds its ISO read-only", flush=True)
                     for name in ISOS.tidy():
                         print(f"ISO library: removed {name}, unused for {ISOS.keep_days()} days", flush=True)
                 beat("vmstore", 3600, leader_only=True)
@@ -5615,8 +5668,13 @@ def self_data_handoff_status(operation):
                 ref = job["ref"]
                 if not ref.get("anchor_uid") or ref.get("setup_error"):
                     view = SELF_DATA_WORKER.unavailable_status(operation)
+                    # Setup stopped before anything was handed over: Homestead is
+                    # running on its original volume, and the preparation can be
+                    # given up here, as after a restart.
                     view.update(status="held" if ref.get("setup_error") else "preparing", requires_review=bool(ref.get("setup_error")),
-                        message=ref.get("setup_error") or "Preparing the move. Homestead is still online.")
+                        can_abandon=bool(ref.get("setup_error") and ref.get("anchor_uid")), live=True,
+                        message=("Setup stopped; Homestead is still on its original volume. " + ref["setup_error"]) if ref.get("setup_error")
+                            else "Preparing the move. Homestead is still online.")
                     return view
                 anchor = SELF_DATA_FENCE.A.Anchor(kget, None, SELF.NS, NAMES.BRAND)
                 anchor.load(operation=operation, uid=ref["anchor_uid"])
@@ -6741,7 +6799,7 @@ def needed_role(path, method):
     if path in ("/api/helm/install", "/api/helm/upgrade", "/api/helm/uninstall", "/api/resources/save", "/api/vm/delete",
                 "/api/longhorn/settings", "/api/disks/add", "/api/disks/scheduling", "/api/disks/evict", "/api/disks/remove",
                 # Looking at a disk on its host, and formatting and mounting it there.
-                "/api/disks/inspect", "/api/disks/setup",
+                "/api/disks/inspect", "/api/disks/setup", "/api/disks/os-space", "/api/disks/os-space/use",
                 "/api/disks/tags", "/api/disks/node-tags",
                 # Replacing a failed disk deletes replicas and takes the disk out.
                 "/api/disks/retire", "/api/disks/retire/plan",
@@ -8295,6 +8353,8 @@ class H(BaseHTTPRequestHandler):
                         "/vms", {"namespace": ns, "name": result["migration"]})
                 return self._send(200, result)
             if p == "/api/vm/power/preview":
+                if b.get("action") in ("start", "restart"):
+                    ISOS.unlock(b.get("ns") or DEFAULT_NS)      # before it is reviewed, so the review sees it
                 return self._send(200, preview_vm_power(b))
             if p == "/api/vm/power":
                 _cache.pop("vms", None)
@@ -8314,6 +8374,14 @@ class H(BaseHTTPRequestHandler):
                 for key in ("disks", "lhcap", "nodes", "ov"):
                     _cache.pop(key, None)
                 return self._send(200, {"ok": True, "operation": op})
+            if p == "/api/disks/os-space":
+                return self._send(200, DISKS.os_space(str(b.get("node") or "")))
+            if p == "/api/disks/os-space/use":
+                result = DISKS.use_os_space(b)
+                with _lock:
+                    for key in [k for k in _cache if k.startswith(("disk", "stor", "lhcap"))]:
+                        _cache.pop(key, None)
+                return self._send(200, result)
             if p == "/api/disks/inspect":
                 return self._send(200, DISKS.inspect_disk(str(b.get("node") or ""), str(b.get("device") or "")))
             if p == "/api/disks/setup":

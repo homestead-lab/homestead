@@ -72,19 +72,22 @@ function vhSummary(h) {
 }
 
 /* The fields, grouped. `h` is the VM's hardware as the server reads it. */
-function vmHardwareFields(h, o = {}, locked = false) {
+function vmHardwareFields(h, o = {}, locked = false, creating = false) {
   const c = h.cpu || {};
+  // What the summaries and notes compare against: this VM, or a new one.
+  window.__vhBase = h;
+  window.__vhOpts = o;
   const models = ["", "host-model", "host-passthrough", ...(o.cpu_models || [])];
   const summary = vhSummary(h);
   const section = (key, body) => `<details class="ui-more vh-sec" data-sec="${key}">
       <summary><span>${esc(VH_SECTIONS[key])}</span><span class="vh-sum dim xs" id="vh_sum_${key}">${esc(summary[key])}</span></summary>
       <div class="vh-body">${body}</div></details>`;
   return `<div class="vh" id="vh">
-    <div class="row vh-presets"><label for="vh_preset" class="dim xs">Guest type</label>
+    ${creating ? "" : `<div class="row vh-presets"><label for="vh_preset" class="dim xs">Guest type</label>
       <select id="vh_preset" onchange="vmHardwarePreset(this.value); this.value = ''"><option value="">Apply a preset…</option>
         ${Object.entries(VM_PRESETS).map(([id, p]) => `<option value="${esc(id)}" title="${esc(p.about)}">${esc(p.name)}</option>`).join("")}</select>
-      <span class="dim xs">Sets the fields below; nothing changes until you review and save.</span></div>
-    ${section("cpu", `${locked ? '<div class="note small">CPU topology is set by this VM\'s instance type.</div>' : `
+      <span class="dim xs">Sets the fields below; nothing changes until you review and save.</span></div>`}
+    ${section("cpu", `${creating ? "" : locked ? '<div class="note small">CPU topology is set by this VM\'s instance type.</div>' : `
       <div class="vh-3"><div class="f"><label>Sockets</label><input id="vh_sockets" type="number" min="1" max="8" value="${c.sockets}" oninput="vmHardwareChanged()"></div>
         <div class="f"><label>Cores per socket</label><input id="vh_cores" type="number" min="1" max="128" value="${c.cores}" oninput="vmHardwareChanged()"></div>
         <div class="f"><label>Threads per core</label><input id="vh_threads" type="number" min="1" max="8" value="${c.threads}" oninput="vmHardwareChanged()"></div></div>`}
@@ -172,14 +175,14 @@ function vmHardwareNotes(h, o = {}) {
 window.vmHardwareChanged = () => {
   if (!$("#vh")) return;
   const h = vmHardwareValues();
-  const base = window.__vmEdit?.v?.hardware || window.__vhBase || {};
+  const base = window.__vhBase || {};
   const full = { ...h, cpu: { ...(base.cpu || {}), ...h.cpu } };
   const summary = vhSummary(full);
   Object.entries(summary).forEach(([key, text]) => { const el = $(`#vh_sum_${key}`); if (el) el.textContent = text; });
   if ($("#vh_secure")) $("#vh_secure").disabled = h.firmware !== "uefi";
   if ($("#vh_efikeep")) $("#vh_efikeep").disabled = h.firmware !== "uefi";
   if ($("#vh_isolate")) $("#vh_isolate").disabled = !h.cpu.dedicated;
-  const notes = vmHardwareNotes(full, window.__vmEdit?.o || window.__vmCreateOptions || {});
+  const notes = vmHardwareNotes(full, window.__vhOpts || {});
   $("#vh_notes").innerHTML = notes.map(([tone, text]) => `<div class="note small ${tone === "bad" ? "bad" : tone === "warn" ? "warn" : ""}">${esc(text)}</div>`).join("");
 };
 
@@ -187,9 +190,7 @@ const VH_FIELDS = { firmware: "vh_firmware", secure_boot: "vh_secure", efi_persi
   machine: "vh_machine", hyperv: "vh_hyperv", kvm_hidden: "vh_kvmhidden", timezone: "vh_tz", graphics: "vh_graphics",
   serial: "vh_serial", tablet: "vh_tablet", rng: "vh_rng", balloon: "vh_balloon", sound: "vh_sound" };
 
-window.vmHardwarePreset = id => {
-  const hw = vmPresetSettings(id);
-  if (!hw) return;
+function vhSet(hw) {
   for (const [key, value] of Object.entries(hw)) {
     const el = $(`#${VH_FIELDS[key]}`);
     if (!el) continue;
@@ -199,10 +200,26 @@ window.vmHardwarePreset = id => {
       el.value = value;
     }
   }
+}
+
+window.vmHardwarePreset = id => {
+  const hw = vmPresetSettings(id);
+  if (!hw) return;
+  vhSet(hw);
   // Show what changed: the sections a preset touches open.
   $$("#vh details.vh-sec").forEach(d => { if (["firmware", "tuning", "devices"].includes(d.dataset.sec)) d.open = true; });
   vmHardwareChanged();
   toast(`${VM_PRESETS[id].name} settings chosen; review before saving`, "ok");
+};
+
+/* New VM: the guest type fills the Hardware fields in, from a plain VM, so
+   switching type leaves nothing of the last one behind. */
+window.vmCreatePreset = id => {
+  const base = window.__vhBase || {};
+  vhSet(Object.fromEntries(Object.keys(VH_FIELDS).map(key => [key, base[key]])));
+  vhSet(vmPresetSettings(id) || {});
+  if ($("#v_preset_about")) $("#v_preset_about").textContent = VM_PRESETS[id]?.about || "KubeVirt defaults: BIOS, UTC, a display and serial console";
+  vmHardwareChanged();
 };
 
 /* ---------------- the ISO library ---------------- */

@@ -651,13 +651,16 @@ def _edit_disks(vm, ns, edits, adds, claims, to_create, resize, dropped, effects
         if bus not in BUSES or (cdrom and bus == "virtio"):
             raise ValueError(f"{bus} is not a bus for a {'CD-ROM' if cdrom else 'disk'}")
         if a.get("iso"):
-            # An ISO from the library: its one shared copy, held read-only.
+            # An ISO from the library: its one shared copy. A CD-ROM is read-only
+            # to the guest; the claim itself is not marked read-only, because
+            # KubeVirt sets the owner of a filesystem volume's folder before
+            # starting and fails on a read-only mount.
             if not cdrom:
                 raise ValueError("an ISO goes in a CD-ROM drive")
             if not callable(iso_ready):
                 raise ValueError("ISO images are not offered on this cluster")
             iso_ready(ns, str(a["iso"]))
-            volume = {"persistentVolumeClaim": {"claimName": str(a["iso"]), "readOnly": True}}
+            volume = {"persistentVolumeClaim": {"claimName": str(a["iso"])}}
         else:
             volume = _disk_volume(vm, ns, claim, _size(a.get("size") or "20Gi"), a.get("storage_class") or "", source, to_create, effects)
         device = {"name": disk_name, ("cdrom" if cdrom else "disk"): {"bus": bus}}
@@ -685,8 +688,19 @@ def _set_network(iface, net, network):
     else:
         if not re.fullmatch(r"[a-z0-9-]+/[a-z0-9.-]+", network or ""):
             raise ValueError("a network is 'pod' or namespace/name of a network attachment")
+        _refuse_macvlan(network)
         net["multus"] = {"networkName": network}
         iface["bridge"] = {}
+
+
+def _refuse_macvlan(network):
+    # macvlan passes only frames for the address it made itself; a VM bridged
+    # onto it has its own, so it never hears DHCP or anything else.
+    ns, name = network.split("/", 1)
+    found = _optional(f"/apis/k8s.cni.cncf.io/v1/namespaces/{ns}/network-attachment-definitions/{urllib.parse.quote(name)}")
+    if found and '"macvlan"' in ((found.get("spec") or {}).get("config") or ""):
+        raise ValueError(f"{network} is a macvlan network, which carries containers only: "
+                         "a VM needs a LAN network on a host bridge")
 
 
 def _edit_nics(tspec, edits, adds):

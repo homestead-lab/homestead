@@ -275,7 +275,7 @@ catch(e){error.textContent=e.message;error.hidden=false;this.disabled=false}};
 async function refresh(){try{const r=await fetch('/api/self/data/handoff/OPERATION',{credentials:'same-origin',cache:'no-store'});
 if(r.status===401||r.status===403){document.querySelector('#message').textContent='Open the browser where you confirmed this move to view its progress. No new login is needed.';return;}
 const s=await r.json();if(!s.operation)throw Error();document.querySelector('#message').textContent=s.message;
-document.querySelector('#abandon').hidden=s.can_abandon!==true;
+document.querySelector('#abandon').hidden=s.can_abandon!==true;document.querySelector('#return').hidden=s.live!==true;
 document.querySelector('#stages').replaceChildren(...(s.stages||[]).map(x=>{const li=document.createElement('li');li.textContent=x.label;li.dataset.state=x.state;return li}));
 if(s.status==='done'||s.status==='cancelled'){document.querySelector('#return').hidden=false;setTimeout(()=>location.replace('/settings'),5000);return;}}
 catch(e){document.querySelector('#message').textContent='Reconnecting… The last shown stage is not confirmation of completion.'}setTimeout(refresh,3000)}refresh();
