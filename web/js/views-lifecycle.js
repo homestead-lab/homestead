@@ -753,6 +753,9 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
         ${(opts.isos || []).length ? `<optgroup label="Install from an ISO - a blank disk, the ISO in its CD-ROM drive">${opts.isos.map(i => `<option value="iso:${esc(i.name)}">${esc(i.file)}</option>`).join("")}</optgroup>` : ""}
       </select>
       <div class="dim xs" style="margin-top:6px">Installing from an ISO? Make one ready in the <a class="linkish" onclick="vmIsoLibrary()">ISO library</a> first.</div></div>
+    <div class="f" id="v_drivers_row" hidden><label>Drivers CD ${tip("A second CD-ROM for the installer's drivers. Windows setup sees no disk until it loads the VirtIO storage driver: attach virtio-win.iso here, and in setup choose Load driver, then vioscsi or viostor for your Windows version.")}</label>
+      <select id="v_drivers"><option value="">none</option>${(opts.isos || []).map(i => `<option value="${esc(i.name)}" ${/virtio/i.test(i.file) ? "selected" : ""}>${esc(i.file)}</option>`).join("")}</select>
+      <div class="dim xs" style="margin-top:4px">${(opts.isos || []).some(i => /virtio/i.test(i.file)) ? "" : "For Windows, make virtio-win.iso (from the Fedora project) ready in the ISO library."}</div></div>
     <div class="f"><label>Guest type ${tip("Firmware, TPM, clock and devices for the kind of guest, as Proxmox's OS type sets them. Adjust them under Hardware, now or later.")}</label>
       <select id="v_preset" onchange="vmCreatePreset(this.value)">
         <option value="">Default</option>${Object.entries(VM_PRESETS).map(([id, p]) => `<option value="${esc(id)}">${esc(p.name)}</option>`).join("")}</select>
@@ -796,6 +799,7 @@ window.vmBootChanged = () => {
   // An installer asks for its own password; cloud-init is for cloud images.
   if ($("#v_pass")) $("#v_pass").placeholder = boot.startsWith("iso:") ? "Not used: the installer asks" : "Set an initial password";
   if ($("#v_url_row")) $("#v_url_row").hidden = boot !== "url";
+  if ($("#v_drivers_row")) $("#v_drivers_row").hidden = !boot.startsWith("iso:");
   // An import brings its own disk; a Harvester image brings its own class.
   if ($("#v_sc_row")) $("#v_sc_row").hidden = boot.startsWith("disk:") || boot.startsWith("image:");
   const size = +($("#v_boot")?.selectedOptions[0]?.dataset.size || 0);
@@ -813,6 +817,7 @@ window.doVmCreate = async () => {
     image_url: boot === "url" ? $("#v_url").value.trim() : "",
     store_id: boot.startsWith("store:") ? boot.slice(6) : "",
     install_iso: boot.startsWith("iso:") ? boot.slice(4) : "",
+    drivers_iso: boot.startsWith("iso:") ? $("#v_drivers")?.value || "" : "",
     storage_class: $("#v_sc")?.value || "", network: $("#v_net")?.value || "pod" };
   if (body.network !== "pod" && $("#v_addr_mode")?.value === "static") {
     body.static_ip = Object.assign(vmReadAddress("v"), { address: $("#v_ip").value.trim() });
