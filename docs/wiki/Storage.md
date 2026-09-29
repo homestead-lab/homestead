@@ -27,7 +27,8 @@ See Longhorn's [space consumption guide](https://longhorn.io/kb/space-consumptio
 | Badge | Means |
 |---|---|
 | **RWO** / **RWX** | one host can mount it (ReadWriteOnce), or many at once (ReadWriteMany, served by Longhorn over NFS) |
-| **×3**, **×2** | how many copies Longhorn keeps, each on a different host. **×1** is orange: one failed disk loses that volume |
+| **×3**, **×2** | how many copies Longhorn keeps. **×1** is orange: one failed disk loses that volume; so is a count with a copy it cannot place |
+| **on k3s: nvme0n1 + OS disk** | where each copy is: its host and disk - the device a disk Homestead set up is named after, **OS disk** for the system drive (its default folder, or its free space). A copy that is not running is orange. Hover for the whole story |
 | **V1** / **V2** | Longhorn's data engine - V1 is the standard one; V2 (SPDK) is faster, with more to set up |
 | healthy / degraded / faulted | degraded usually means a copy is being rebuilt, and the volume still works meanwhile; the row says why |
 
@@ -73,6 +74,19 @@ A storage class is the recipe for new volumes: how many copies, which engine,
 whether VM disks on it can live-migrate. The **Storage classes** card creates
 them and picks the default. Kubernetes cannot edit a class once made, so change
 means create a new one.
+
+**Copies go on** decides where a class's copies may be. **Different hosts**
+(Longhorn's default) puts each on a host of its own, so a host or a disk can
+fail; with fewer hosts than copies, the rest are never placed and the volume
+runs a copy short. **Different disks** lets copies share a host but never a
+disk (Longhorn's `replicaSoftAntiAffinity` on, `replicaDiskSoftAntiAffinity`
+off): on a one-host cluster with two drives, a failed drive is survived, a
+failed host is not. It is offered first on a one-host cluster, and the
+dialog counts the hosts or disks that can hold the copies as you choose.
+
+New classes keep a volume's data when its claim is deleted (**Retain**): the
+volume stays on **Volumes** marked **no claim**, to reuse or delete there.
+Choose **Delete** for a class whose data is disposable.
 
 One trap worth knowing: a **migratable** class (Harvester's default,
 `harvester-longhorn`) makes VM disks that can move between hosts, and a shared
@@ -175,6 +189,18 @@ filesystem by UUID with `nofail` (a copy of fstab is kept first as
 Longhorn is told. A failed, empty Longhorn entry for the same folder - left by
 adding the folder before the disk was mounted - is cleared first. The work is
 done by a short-lived privileged helper on that host, admins only.
+
+**Use its free space** on the system disk gives Longhorn the part of the OS
+drive the system is not using, when the system is on LVM with space left in
+its volume group (Ubuntu Server gives its root volume 100 GB and leaves the
+rest free). It makes a logical volume `<group>/longhorn`, formats it ext4,
+mounts it at `/mnt/longhorn-os` the same safe way, and adds it tagged `os`. A
+tenth of the group (at least 10 GB) stays unallocated for the system to grow
+into, nothing existing is resized, and Longhorn filling that volume cannot fill
+the system's own filesystem. Without LVM there is nothing to offer: Homestead
+does not repartition a running system. A copy there shares the drive with the
+system's own Longhorn folder, so pair it with another drive or host for
+redundancy.
 
 ### Disk tags
 

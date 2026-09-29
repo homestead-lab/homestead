@@ -32,7 +32,7 @@ function setup() {
 
 test("settings separates online preparation from downtime without legacy mutation", async () => {
   const t = setup(); await t.ctx.replicasMoveData(); t.form();
-  assert.match(t.fields["#selfDataFlow"].innerHTML, /First prepare a new volume/);
+  assert.match(t.fields["#selfDataFlow"].innerHTML, /Two steps: make the new volume/);
   assert.match(t.fields["#selfDataFlow"].innerHTML, /node2 · unavailable/);
   await t.ctx.selfDataPrepareReview(); await t.ctx.selfDataPrepare();
   assert.equal(t.sent.length, 2, "unchecked preparation cannot create anything");
@@ -71,13 +71,25 @@ test("reopens completed preparation from jobs and obtains read-only final review
   const t = setup();
   t.state.preparations = [{ id: "job", operation: "a".repeat(24), destination: "target", node: "node1", status: "succeeded", prepared: true, progress: 100 }];
   await t.ctx.replicasMoveData("job");
-  assert.match(t.fields["#selfDataFlow"].innerHTML, /Review downtime/); assert.equal(t.timers.length, 0);
+  assert.match(t.fields["#selfDataFlow"].innerHTML, /Review the move/); assert.equal(t.timers.length, 0);
   Object.assign(t.fields, { "#selfDataFinal": { innerHTML: "" }, "#selfDataWorker": { value: "node1" }, "#selfDataCopy": { value: "node1" } });
   await t.ctx.selfDataFinalReview();
-  assert.match(t.fields["#selfDataFinal"].innerHTML, /Planned downtime/);
-  assert.match(t.fields["#selfDataFinal"].innerHTML, /I accept the downtime/);
+  assert.match(t.fields["#selfDataFinal"].innerHTML, /goes offline/);
+  assert.match(t.fields["#selfDataFinal"].innerHTML, /Take Homestead offline and move its data/);
   assert.deepEqual(t.sent.at(-1).body, { operation: "a".repeat(24), destination: "target", worker_node: "node1", copy_node: "node1" });
   t.ctx.selfDataFinalInvalidate(); assert.equal(t.fields["#selfDataFinal"].innerHTML, "");
+});
+
+test("a volume prepared in this dialog can go on to the move without reopening it", async () => {
+  const t = setup(); await t.ctx.replicasMoveData(); t.form(); await t.ctx.selfDataPrepareReview();
+  t.fields["#selfDataConsent"].checked = true; await t.ctx.selfDataPrepare();
+  t.state.preparations[0] = { ...t.state.preparations[0], status: "succeeded", prepared: true, progress: 100 };
+  await t.timers[0]();
+  Object.assign(t.fields, { "#selfDataFinal": { innerHTML: "" }, "#selfDataWorker": { value: "node1" }, "#selfDataCopy": { value: "node1" },
+    "#selfDataMoveConsent": { checked: true }, "#selfDataMoveStart": { disabled: true } });
+  await t.ctx.selfDataFinalReview();
+  assert.equal(t.ctx.selfDataMoveReady(), true);
+  assert.equal(t.fields["#selfDataMoveStart"].disabled, false);
 });
 
 test("closed dialogs do not resume polling or overwrite another dialog", async () => {

@@ -2475,7 +2475,7 @@ def prepare_vm(cfg, platform=None, default_class=""):
         iso_ready(ns, install_iso)
         disks = [{"name": "root", "disk": {"bus": "virtio"}, "bootOrder": 2},
                  {"name": "install", "cdrom": {"bus": "sata"}, "bootOrder": 1}]
-        volumes = [root, {"name": "install", "persistentVolumeClaim": {"claimName": install_iso, "readOnly": True}}]
+        volumes = [root, {"name": "install", "persistentVolumeClaim": {"claimName": install_iso}}]
     secret_name = ""
     if cloudinit or network_data:
         # In a Secret, as Harvester keeps them: a password or a join token is

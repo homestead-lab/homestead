@@ -38,7 +38,8 @@ Everything Homestead does, with nothing Harvester-specific needed:
 - **A fixed address for each** - static, or a DHCP reservation on your router.
 - **Disk for your data.** Longhorn stores volumes under
   `/var/lib/longhorn` on each machine's system disk to begin with; give it
-  bigger disks later from Homestead.
+  more from Homestead later. Plan the disks before installing the OS - see
+  [Disks](#disks).
 - **Virtual machines are optional.** k3s runs containers. To run VMs too, the
   machines need hardware virtualisation, and KubeVirt added afterwards - see
   [Virtual machines](Virtual-machines).
@@ -162,13 +163,33 @@ volume a single failed disk would lose - and
 [Changing a volume's storage class](Storage#changing-a-volumes-storage-class)
 moves an existing one onto the new class.
 
-### More disks
+### Disks
 
-Longhorn starts on each machine's system disk. To give it another drive,
-**Nodes → Disks → Add to Longhorn** shows the commands to run on that machine
-first. Mount it the way they do - with `nofail` in `/etc/fstab` - or a machine
-whose drive dies stops at an emergency shell when it next starts, instead of
-starting without it. See [Storage](Storage#booting-with-a-dead-or-missing-drive).
+Longhorn starts on each machine's system disk, in `/var/lib/longhorn`, and
+keeps 30% of that filesystem free for the system. Plan the rest before
+installing the OS:
+
+| The machine has | At OS install | Then in Homestead |
+|---|---|---|
+| A second drive | Install on the first; leave the second blank | **Nodes → Disks → Add to Longhorn** on it: formatted (ext4 or XFS) and mounted safely, or kept as it is when it already holds Longhorn data |
+| One drive | Choose LVM (Ubuntu Server's default) and give the root volume 64-128 GB; leave the rest of the volume group unallocated | **Use its free space** on the system disk: a logical volume of its own (`<group>/longhorn`, mounted at `/mnt/longhorn-os`), tagged `os` |
+| One drive, plain partitions | Nothing more to do | Longhorn stays in `/var/lib/longhorn` on the root filesystem |
+
+- **Why a filesystem of its own.** Longhorn filling a separate volume cannot
+  fill the system's filesystem. **Use its free space** keeps a tenth of the
+  volume group (at least 10 GB) unallocated, so the root volume can still grow
+  (`lvextend -r`).
+- **What Homestead will not do.** It never resizes or repartitions a running
+  system's disk.
+- **Copies on one drive are not redundancy.** A copy on the system's folder and
+  one on `/mnt/longhorn-os` share a drive. For two copies on one machine, add a
+  second drive and choose **Copies go on: Different disks** for the class - see
+  [Storage](Storage#storage-classes).
+- **V2 (SPDK)** needs a whole drive of its own, given to it raw.
+- **Safe mounts.** Homestead mounts a drive with `nofail` in `/etc/fstab`, and
+  locks the empty folder, so a machine whose drive dies still starts and nothing
+  lands on the system disk in its place. See
+  [Storage](Storage#booting-with-a-dead-or-missing-drive).
 
 ## 4. Addresses for apps
 

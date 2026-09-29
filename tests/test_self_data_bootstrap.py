@@ -189,6 +189,20 @@ class BootstrapTests(unittest.TestCase):
             pod = copy.deepcopy(body); pod["metadata"].update(uid="worker-uid", resourceVersion="1"); change(pod)
             with self.assertRaises(Held): B.admitted(body, pod, target)
 
+    def test_what_the_network_plugin_reports_is_not_an_edit_but_any_other_annotation_is(self):
+        body, target = self.setup.bodies[-2], self.setup.resources[-2]["target"]
+        created = copy.deepcopy(body); created["metadata"].update(uid="worker-uid", resourceVersion="1")
+        running = copy.deepcopy(created)
+        running["metadata"].setdefault("annotations", {}).update({
+            "k8s.v1.cni.cncf.io/network-status": '[{"name":"cbr0","ips":["10.42.0.9"],"default":true}]',
+            "cni.projectcalico.org/podIP": "10.52.0.9/32"})
+        B.admitted(body, running, target)
+        self.assertEqual(B.fingerprint(created), B.fingerprint(running), "a receipt taken at creation still matches")
+        self.assertEqual(shape(created), shape(running))
+        running["metadata"]["annotations"]["example.com/inject"] = "sidecar"
+        with self.assertRaises(Held): B.admitted(body, running, target)
+        self.assertNotEqual(B.fingerprint(created), B.fingerprint(running))
+
     def test_normal_api_defaults_and_scheduling_are_accepted_but_wrong_node_is_not(self):
         self.all_created()
         pod = self.pod_ready()

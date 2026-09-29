@@ -49,10 +49,28 @@ def identity(obj):
     return result
 
 
+# Written onto a Pod by the network plugin once its sandbox is up - Multus's
+# attachment status, Calico's address (RKE2's Canal). They report what was
+# set up; they neither schedule nor grant anything, so they are not edits.
+CNI_ANNOTATIONS = frozenset({
+    "k8s.v1.cni.cncf.io/network-status", "k8s.v1.cni.cncf.io/networks-status",
+    "cni.projectcalico.org/podIP", "cni.projectcalico.org/podIPs", "cni.projectcalico.org/containerID",
+})
+
+
+def pod_annotations(obj):
+    """A Pod's annotations without what its network plugin reported."""
+    annotations = dict(((obj.get("metadata") or {}).get("annotations")) or {})
+    if obj.get("kind") == "Pod":
+        for key in CNI_ANNOTATIONS:
+            annotations.pop(key, None)
+    return annotations
+
+
 def shape(obj):
     """Ignore status/managedFields, but do not overlook edits to storage or holds."""
     meta = obj.get("metadata") or {}
-    annotations = dict(meta.get("annotations", {}))
+    annotations = pod_annotations(obj)
     if obj.get("kind") in ("Deployment", "ReplicaSet") and obj.get("apiVersion") == "apps/v1":
         # The Deployment controller increments this asynchronously after our
         # acknowledged template update. It is status bookkeeping, not a new

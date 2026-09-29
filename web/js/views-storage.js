@@ -200,6 +200,26 @@ function volumeUse(x) {
   return x.used_by.length ? { kind: "stopped", by: x.used_by } : { kind: "orphaned" };
 }
 
+/* Where a volume's copies are: host and disk, grouped by host. */
+function volumeCopiesLine(x) {
+  const copies = x.copies || [];
+  if (!copies.length) return "";
+  const hosts = {};
+  copies.forEach(c => (hosts[c.node || "?"] ||= []).push(c));
+  return `<span class="dim xs vol-copies" data-tip="${esc(volumeCopiesTip(x))}">on ${Object.entries(hosts).map(([node, rows]) =>
+    `${esc(node.replace(/^harvester-/, ""))}: ${rows.map(c => `<span class="${c.healthy ? "" : "warn"}">${esc(c.disk)}</span>`).join(" + ")}`).join(" · ")}</span>`;
+}
+function volumeCopiesTip(x) {
+  const copies = x.copies || [], want = +x.replicas || 0;
+  const where = copies.map(c => `${c.node} · ${c.disk}${c.healthy ? "" : ` (${c.state || "not running"})`}`).join(", ");
+  if (!copies.length) return want === 1 ? "One copy: if its host or disk fails, this volume is gone until they come back" : `${want} copies`;
+  const hosts = new Set(copies.map(c => c.node)).size;
+  if (copies.length < want) return `${want} copies wanted, ${copies.length} placed (${where}). Longhorn puts each copy on a different host unless the storage class allows the same one, so on ${hosts} host${hosts === 1 ? "" : "s"} the rest cannot be placed.`;
+  if (want === 1) return `One copy, on ${where}: if that disk or host fails, this volume is gone until it comes back`;
+  if (hosts === 1) return `${want} copies, all on ${copies[0].node} (${copies.map(c => c.disk).join(", ")}): a failed disk is survived, a failed host is not`;
+  return `${want} copies: ${where}`;
+}
+
 function volumeUseCell(x) {
   const use = volumeUse(x);
   if (use.kind === "in-use") return attachedWorkloads(x).length
@@ -348,11 +368,12 @@ async function viewStorage() {
    <th>Volume</th><th>Attached to</th><th>Health</th><th>Mode</th><th>Usage</th><th data-nosort>Last used</th><th></th>
    </tr></thead><tbody>${rows.map(x => `<tr data-vol="${esc(x.name)}"${clusterAttr(x)}>
      <td class="volname"><div class="volname-content"><b>${esc(x.pvc_name || x.name.slice(0, 18))}</b> ${clusterTag(x)}
-       <span class="dim xs mono">${esc(x.namespace || "")}${x.node ? ` · ${esc(x.node.replace("harvester-", ""))}` : ""}</span></div></td>
+       <span class="dim xs mono">${esc(x.namespace || "")}${x.node ? ` · ${esc(x.node.replace("harvester-", ""))}` : ""}</span>
+       ${volumeCopiesLine(x)}</div></td>
      <td data-label="Attached to">${volumeUseCell(x)}${x.pod_status ? `<span class="dim xs"> · ${esc(x.pod_status)}</span>` : ""}</td>
      <td data-label="Health" class="volhealth${volumeReason(x) || volumeBusy(x) ? " hasreason" : ""}">${volumeHealthCell(x)}</td>
      <td data-label="Mode"><span class="tag">${esc((x.access_modes || ["?"]).map(m => m === "ReadWriteMany" ? "RWX" : m === "ReadWriteOnce" ? "RWO" : m).join(", "))}</span>
-       <span class="tag ${+x.replicas === 1 ? "warn" : ""}" data-tip="${+x.replicas === 1 ? "One copy: if its node or disk fails, this volume is gone until they come back" : `${esc(x.replicas)} copies, each on a different node`}">×${esc(x.replicas)}</span><span class="tag ${x.engine === "v2" ? "info" : ""}" data-tip="${x.engine === "v2" ? "Longhorn's V2 data engine (SPDK)" : "Longhorn's V1 data engine - the default"}">${x.engine === "v2" ? "V2" : "V1"}</span></td>
+       <span class="tag ${+x.replicas === 1 || (x.copies?.length && x.copies.length < +x.replicas) ? "warn" : ""}" data-tip="${esc(volumeCopiesTip(x))}">×${esc(x.replicas)}</span><span class="tag ${x.engine === "v2" ? "info" : ""}" data-tip="${x.engine === "v2" ? "Longhorn's V2 data engine (SPDK)" : "Longhorn's V1 data engine - the default"}">${x.engine === "v2" ? "V2" : "V1"}</span></td>
      <td data-label="Usage" class="volusage">${volumeUsageCell(x)}</td>
      <td data-label="Last used" class="small dim">${x.state === "attached" ? '<span class="tag ok">in use</span>' : esc(fmtAgo(x.last_used_secs))}</td>
      <td class="volactions"><div class="row">
@@ -624,13 +645,16 @@ window.storageClassCreate = () => {
       claim is deleted. Kubernetes will not let those settings change afterwards, so choose them now.</p>
     <div class="f" style="margin-top:14px"><label>Name</label>
       <input type="text" id="sc_name" placeholder="longhorn-r3" autocomplete="off"></div>
-    <div class="f2"><div class="f"><label>Replicas ${tip("Copies Longhorn keeps on separate disks. Two survives one disk or node loss; one has no redundancy.")}</label>
+    <div class="f2"><div class="f"><label>Replicas ${tip("Copies of each volume Longhorn keeps. One has no redundancy.")}</label>
       <input type="number" id="sc_reps" min="1" max="5" value="2" oninput="storageClassReach()"></div>
-      <div class="f"><label>Reclaim policy ${tip("Delete removes the Longhorn volume with its claim. Retain keeps the data behind after the claim is gone.")}</label>
-        <select id="sc_reclaim"><option>Delete</option><option>Retain</option></select></div></div>
+      <div class="f"><label>Copies go on ${tip("Different hosts: each copy on a host of its own, so a host or a disk can fail - Longhorn's default. Different disks: copies may share a host but never a disk - on one host, a failed disk is survived but a failed host is not.")}</label>
+        <select id="sc_copies" onchange="storageClassReach()"><option value="hosts">Different hosts</option><option value="disks">Different disks, same host allowed</option></select></div></div>
+    <div class="f2">
+      <div class="f"><label>Reclaim policy ${tip("Retain keeps a volume's data when its claim is deleted - with an app, say - and lists it on Volumes as having no claim, to reuse or delete there. Delete removes the data with the claim.")}</label>
+        <select id="sc_reclaim"><option>Retain</option><option>Delete</option></select></div>
     <div class="f"><label>Data engine ${tip("V1 is Longhorn's long-standing engine. V2 (SPDK) is faster and needs the engine switched on, a V2 disk and hugepages on the nodes.")}</label>
-      <select id="sc_engine" onchange="storageClassEngine()"><option value="v1">V1 · the default</option><option value="v2">V2 · SPDK</option></select>
-      <div class="note" id="sc_engine_note" hidden></div></div>
+      <select id="sc_engine" onchange="storageClassEngine()"><option value="v1">V1 · the default</option><option value="v2">V2 · SPDK</option></select></div></div>
+    <div class="note" id="sc_engine_note" hidden></div>
     <div class="f"><label>Only on disks tagged ${tip("Longhorn puts this class's replicas only on disks with every tag chosen - tag your SSDs ssd and pick it here. Tag disks under Nodes, or Volumes → Disks.")}</label>
       <div class="row sc-tags" id="sc_disktags"><span class="dim xs">loading tags…</span></div></div>
     <div class="f"><label>Only on nodes tagged ${tip("And only on nodes with every tag chosen here.")}</label>
@@ -658,21 +682,24 @@ async function storageClassTags() {
   STATE.data.scInv = inv;
   box("#sc_disktags", inv.disk_tags || [], "No disk has a tag yet: add them to disks under Nodes, or Volumes → Disks.");
   box("#sc_nodetags", inv.all_node_tags || [], "No node has a tag yet.");
+  // One host: only "different disks" can place a second copy.
+  if (Object.keys(inv.nodes || {}).length === 1 && $("#sc_copies")) $("#sc_copies").value = "disks";
   storageClassReach();
 }
 window.storageClassReach = () => {
   const inv = STATE.data.scInv, out = $("#sc_reach");
   if (!inv || !out) return;
   const disk = $$("#sc_disktags input:checked").map(b => b.value), node = $$("#sc_nodetags input:checked").map(b => b.value);
-  if (!disk.length && !node.length) { out.textContent = "No tags chosen: replicas go on any disk."; out.className = "dim xs"; return; }
-  const reach = Object.entries(inv.nodes || {}).filter(([name, disks]) =>
-    node.every(t => ((inv.node_tags || {})[name] || []).includes(t))
-    && disks.some(d => d.longhorn.some(x => x.scheduling && disk.every(t => (x.tags || []).includes(t))))).map(([name]) => name);
-  const reps = +($("#sc_reps").value || 1);
-  out.className = reach.length >= reps ? "dim xs" : "xs badtext";
-  out.textContent = reach.length
-    ? `${reach.length} node${reach.length === 1 ? "" : "s"} can hold its replicas: ${reach.join(", ")}${reach.length < reps ? ` - fewer than ${reps} replicas, so volumes would run degraded` : ""}.`
-    : "No node has a disk with those tags, so its volumes would not schedule.";
+  const reps = +($("#sc_reps").value || 1), byDisk = $("#sc_copies")?.value === "disks";
+  const fits = (name, x) => x.scheduling && node.every(t => ((inv.node_tags || {})[name] || []).includes(t)) && disk.every(t => (x.tags || []).includes(t));
+  const places = Object.entries(inv.nodes || {}).flatMap(([name, disks]) =>
+    disks.flatMap(d => d.longhorn.filter(x => fits(name, x)).map(x => ({ name, disk: x.id }))));
+  const hosts = [...new Set(places.map(p => p.name))];
+  const count = byDisk ? places.length : hosts.length, unit = byDisk ? "disk" : "host";
+  out.className = count >= reps ? "dim xs" : "xs badtext";
+  out.textContent = !count ? `No ${disk.length || node.length ? "tagged " : ""}disk can hold its copies, so its volumes would not schedule.`
+    : `${count} ${unit}${count === 1 ? "" : "s"} can hold its copies${byDisk ? ` (on ${hosts.join(", ")})` : `: ${hosts.join(", ")}`}`
+      + (count < reps ? ` - fewer than ${reps}, so volumes would run a copy short${!byDisk && places.length >= reps ? '. Choose "Different disks" to place them on one host' : ""}.` : ".");
 };
 window.storageClassEngine = async () => {
   const note = $("#sc_engine_note");
@@ -701,7 +728,7 @@ window.storageClassSave = async button => {
   if (button) { button.disabled = true; button.textContent = "Creating…"; }
   try {
     const result = await api("/api/storage/classes", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, replicas: +$("#sc_reps").value, reclaim_policy: $("#sc_reclaim").value,
+      body: JSON.stringify({ name, replicas: +$("#sc_reps").value, reclaim_policy: $("#sc_reclaim").value, copies: $("#sc_copies").value,
         expandable: $("#sc_expand").checked, migratable: $("#sc_migratable").checked,
         engine: $("#sc_engine").value, default: $("#sc_default").checked,
         disk_tags: $$("#sc_disktags input:checked").map(b => b.value),
@@ -1545,7 +1572,8 @@ function diskRowsHtml(node, disks, harvester) {
           <div class="dim xs">${esc(sizeText(d.size_gb))}${d.kind ? ` · ${esc(d.kind)}` : ""}${d.mounts.length ? ` · ${esc(d.mounts.slice(0, 3).join(", "))}` : ""}</div></div>
         <div class="row">${d.system ? '<span class="tag">system</span>' : ""}<span class="tag ${tone}">${esc(word)}</span>
           ${d.can_add ? `<button class="btn sm pri" data-need="admin" onclick="diskAdd(${jsq(node)},${jsq(d.blockdevice.name)},${jsq(d.path)},${d.needs_wipe})">Add to Longhorn</button>` : ""}
-          ${!harvester && d.role === "unused" && d.device ? `<button class="btn sm pri" data-need="admin" onclick="diskSetup(${jsq(node)},${jsq("/dev/" + d.device)})">Add to Longhorn</button>` : ""}</div></div>
+          ${!harvester && d.role === "unused" && d.device ? `<button class="btn sm pri" data-need="admin" onclick="diskSetup(${jsq(node)},${jsq("/dev/" + d.device)})">Add to Longhorn</button>` : ""}
+          ${!harvester && d.system ? `<button class="btn sm" data-need="admin" onclick="diskOsSpace(${jsq(node)})" title="Give Longhorn space the system is not using, as a volume of its own">Use its free space</button>` : ""}</div></div>
       ${lh}</div>`;
   }).join("") + (harvester ? "" : `<button class="btn sm" data-need="admin" style="margin-top:8px" onclick="diskAdd(${jsq(node)})">＋ Add a disk to Longhorn</button>`)
     + (harvester && !disks.some(d => d.can_add) ? '<div class="dim xs" style="margin-top:8px">Every disk Harvester found here is in use. A new disk shows up once it is plugged in and Harvester has scanned it.</div>' : "");
@@ -1713,6 +1741,38 @@ window.diskSetup = async (node, device) => {
       : UI.actions(UI.button("Back", "modalBack()"))}</div>`;
   diskSetupChanged();
   if (window.applyRole) applyRole();
+};
+
+/* The OS drive's unused LVM space, as a Longhorn disk of its own. */
+window.diskOsSpace = async node => {
+  childModal(`Free space on the OS drive · ${node}`, '<div class="empty"><span class="spin2"></span> Looking at the OS drive…</div>');
+  let f;
+  try {
+    f = await api("/api/disks/os-space", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node }) });
+  } catch (e) { $("#mbody").innerHTML = UI.callout("bad", "The OS drive could not be looked at.", esc(e.message)) + UI.actions(UI.button("Back", "modalBack()")); return; }
+  const facts = f.vg ? UI.facts([["Volume group", `<span class="mono">${esc(f.vg)}</span> · ${f.size_gb} GB`],
+    ["Free in it", `${f.free_gb} GB`], ["Kept for the system", `${f.reserve_gb} GB`], ["Root filesystem free", `${f.root_free_gb} GB`]]) : "";
+  $("#mbody").innerHTML = `<div class="ui-stack">${facts}
+    ${f.problem ? UI.callout("warn", "Nothing to use", `${esc(f.problem[0].toUpperCase() + f.problem.slice(1))}.`) + UI.actions(UI.button("Back", "modalBack()")) : `
+      <p class="small">A logical volume of its own, <span class="mono">${esc(f.vg)}/longhorn</span>, formatted ext4 and mounted at
+        <span class="mono">${esc(f.mount_point)}</span> the same safe way as a new disk, then given to Longhorn tagged <span class="mono">os</span>.
+        Nothing existing is resized, and Longhorn filling it cannot fill the system's own filesystem.</p>
+      <div class="f"><label>Size (GB)</label><input id="os_size" type="number" min="5" max="${f.usable_gb}" value="${f.usable_gb}"></div>
+      <p class="dim xs">It shares the drive with the system, so a copy here and one on the system's Longhorn folder are not two drives. Pair it with another disk or host for redundancy.</p>
+      ${UI.actions(UI.button("Back", "modalBack()") + UI.button("Create and add", `diskOsSpaceGo(${jsArg(node)})`, { kind: "pri", id: "os_go", attrs: 'data-need="admin"' }))}`}</div>`;
+  if (window.applyRole) applyRole();
+};
+window.diskOsSpaceGo = async node => {
+  const go = $("#os_go");
+  if (go) { go.disabled = true; go.textContent = "Creating…"; }
+  try {
+    const r = await api("/api/disks/os-space/use", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node, size_gb: +$("#os_size").value }) });
+    toast(r.detail, "ok"); STATE.data.disks = null; modalBack(); setTimeout(() => disksRepaint(node), 800);
+  } catch (e) {
+    toast(e.message, "bad");
+    if (go) { go.disabled = false; go.textContent = "Create and add"; }
+  }
 };
 
 window.diskSetupChanged = () => {

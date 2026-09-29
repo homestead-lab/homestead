@@ -154,6 +154,22 @@ class IsoTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "win still has it"):
             ISOS.delete(name)
 
+    def test_a_stopped_vm_holding_its_iso_read_only_is_unlocked(self):
+        name = ISOS.prepare("media", "isos/debian.iso")["name"]
+        vm = lambda status: {"metadata": {"name": "win", "resourceVersion": "7"}, "status": {"printableStatus": status},
+                             "spec": {"template": {"spec": {"volumes": [
+                                 {"name": "root", "persistentVolumeClaim": {"claimName": "win-root", "readOnly": True}},
+                                 {"name": "install", "persistentVolumeClaim": {"claimName": name, "readOnly": True}}]}}}}
+        self.objects["/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/win"] = vm("Running")
+        self.assertEqual([], ISOS.unlock())
+        self.objects["/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/win"] = vm("Stopped")
+        self.sent.clear()
+        self.assertEqual(["win"], ISOS.unlock())
+        patch = next(b for m, p, b in self.sent if m == "PATCH")
+        self.assertEqual([{"op": "test", "path": "/metadata/resourceVersion", "value": "7"},
+                          {"op": "remove", "path": "/spec/template/spec/volumes/1/persistentVolumeClaim/readOnly"}], patch,
+                         "only the ISO's drive; other claims are left as they are")
+
     def test_a_changed_file_gets_a_new_volume(self):
         self.assertNotEqual(ISOS.volume_name("media", "isos/a.iso", 1), ISOS.volume_name("media", "isos/a.iso", 2))
         self.assertTrue(ISOS.volume_name("media", "isos/Windows 11 (x64).iso", 5).startswith("iso-windows-11-x64-"))
@@ -163,14 +179,15 @@ class AttachTests(unittest.TestCase):
     def setUp(self):
         self.cluster = edit_fixtures.Cluster({"harvester": True, "cdi": True})
 
-    def test_an_iso_goes_in_a_cd_rom_read_only(self):
+    def test_an_iso_goes_in_a_cd_rom(self):
         with mock.patch.object(vms, "iso_ready", lambda ns, name: {"metadata": {"name": name}}):
             prepared = vms.prepare_edit("lab", "web", {"add_disks": [{"kind": "cd-rom", "iso": "iso-debian-1", "boot": "1"}]})
         spec = prepared["vm"]["spec"]["template"]["spec"]
         drive = next(d for d in spec["domain"]["devices"]["disks"] if "cdrom" in d)
         volume = next(v for v in spec["volumes"] if v["name"] == drive["name"])
         self.assertEqual(({"bus": "sata"}, 1), (drive["cdrom"], drive["bootOrder"]))
-        self.assertEqual({"claimName": "iso-debian-1", "readOnly": True}, volume["persistentVolumeClaim"])
+        # Not readOnly: KubeVirt cannot start a filesystem volume mounted read-only.
+        self.assertEqual({"claimName": "iso-debian-1"}, volume["persistentVolumeClaim"])
         self.assertEqual([], prepared["to_create"], "the ISO's volume is shared, not made again")
 
     def test_an_iso_not_ready_is_refused(self):
@@ -205,7 +222,7 @@ class InstallTests(unittest.TestCase):
         spec = plan["vm"]["spec"]["template"]["spec"]
         disks = {d["name"]: d for d in spec["domain"]["devices"]["disks"]}
         self.assertEqual((1, 2), (disks["install"]["bootOrder"], disks["root"]["bootOrder"]))
-        self.assertIn({"name": "install", "persistentVolumeClaim": {"claimName": "iso-win11-1", "readOnly": True}}, spec["volumes"])
+        self.assertIn({"name": "install", "persistentVolumeClaim": {"claimName": "iso-win11-1"}}, spec["volumes"])
         self.assertFalse(any("cloudInitNoCloud" in v for v in spec["volumes"]), "no password: the installer asks")
         self.assertEqual({"persistent": True}, spec["domain"]["devices"]["tpm"])
         with self.assertRaisesRegex(ValueError, "blank disk"):

@@ -108,6 +108,47 @@ class SetupTests(unittest.TestCase):
             SETUP.setup("k3s", "/dev/nvme0n1", "format", "ext4", "/dev/nvme0n1")
 
 
+def lvm(free_gb=135, size_gb=235, lvs=("ubuntu-lv 107374182400",), vg="ubuntu-vg"):
+    g = 1024 ** 3
+    lines = ["ROOT /dev/mapper/ubuntu--vg-ubuntu--lv", f"ROOTFREE {70 * g}"]
+    if vg:
+        lines += [f"VG {vg}", f"SIZE {size_gb * g}", f"FREE {free_gb * g}"] + [f"LV {row}" for row in lvs] + ["PV /dev/sda3"]
+    lines += ["TOOL lvcreate", "TOOL mkfs.ext4", "TOOL chattr", "TOOL findmnt", "END"]
+    return "\n".join(lines)
+
+
+class OsSpaceTests(unittest.TestCase):
+    def setUp(self):
+        self.addCleanup(SETUP.bind, SETUP.hostrun)
+
+    def test_free_space_in_the_system_volume_group_is_offered_less_a_reserve(self):
+        SETUP.bind(Host(lvm()))
+        facts = SETUP.os_space("k3s")
+        self.assertEqual(("ubuntu-vg", 24, 111, ""), (facts["vg"], facts["reserve_gb"], facts["usable_gb"], facts["problem"]))
+
+    def test_nothing_is_offered_without_lvm_or_room_or_twice(self):
+        for out, words in ((lvm(vg=""), "not on LVM"), (lvm(free_gb=12), "too little"),
+                           (lvm(lvs=("ubuntu-lv 1", "longhorn 2")), "already exists")):
+            with self.subTest(words=words):
+                SETUP.bind(Host(out))
+                self.assertIn(words, SETUP.os_space("k3s")["problem"])
+                with self.assertRaises(ValueError):
+                    SETUP.use_os_space("k3s", 20)
+
+    def test_a_volume_of_its_own_is_made_and_mounted_the_safe_way_within_the_reserve(self):
+        host = Host(lvm(), setup_out="OK 1234 ext4 /mnt/longhorn-os\n")
+        SETUP.bind(host)
+        with self.assertRaisesRegex(ValueError, "from 5 to 111 GB"):
+            SETUP.use_os_space("k3s", 120)
+        self.assertEqual("/mnt/longhorn-os", SETUP.use_os_space("k3s", 100)["path"])
+        script = host.scripts[-1]
+        for part in ('lvcreate -y -L 100G -n longhorn "ubuntu-vg"', 'mkfs.ext4 -F -L hs-longhorn "/dev/ubuntu-vg/longhorn"',
+                     "chattr +i", "nofail", "findmnt"):
+            self.assertIn(part, script)
+        for never in ("lvextend", "lvresize", "parted", "sgdisk", "wipefs"):
+            self.assertNotIn(never, script, "nothing that exists is resized or wiped")
+
+
 class LonghornTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

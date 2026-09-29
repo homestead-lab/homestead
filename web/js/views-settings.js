@@ -269,20 +269,19 @@ window.replicasMoveData = async (jobId = "") => {
     request.jobs = jobs;
     const selected = jobs.findIndex(j => j.id === jobId);
     if (selected >= 0) return selfDataWatch(selected);
-    $("#selfDataFlow").innerHTML = `${UI.lead(`First prepare a new volume. Homestead stays online and keeps using <b>${esc(state.source)}</b>.`)}
+    $("#selfDataFlow").innerHTML = `${UI.lead(`Two steps: make the new volume (Homestead stays online), then copy to it (a short outage). <b>${esc(state.source)}</b> is kept either way.`)}
       ${jobs.length ? `<div class="ui-stack">${jobs.map((j, i) => `<div class="note"><b>${esc(j.destination)}</b><p class="small">${esc(j.message || j.status)}</p>
         <button class="btn sm" onclick="selfDataWatch(${i})">${j.prepared ? "Review move" : "View progress"}</button></div>`).join("")}</div>` : ""}
       ${UI.fields(UI.field("Destination storage", `<select aria-label="Destination storage" id="selfDataClass" onchange="selfDataInvalidate()">${(state.classes || []).map(c =>
         `<option value="${esc(c.name)}">${esc(c.name)} · ${c.shareable ? "shared between hosts" : "one host at a time"}</option>`).join("")}</select>`),
-        UI.field("Preparation host", `<select aria-label="Preparation host" id="selfDataHost" onchange="selfDataInvalidate()">${selfDataHostOptions(state.nodes || [])}</select>`))}
-      ${UI.more("Choosing a host", "For storage created on demand, this host determines placement. The move review checks whether both volumes can be mounted together.")}
-      <div id="selfDataReview"></div><div id="selfDataActions">${UI.actions(UI.cancel("Close") + UI.button("Check preparation", "selfDataPrepareReview()", { kind: "pri", id: "selfDataCheck", disabled: !(state.classes?.length && state.nodes?.some(n => n.ready)) }))}</div>`;
+        UI.field("Host", `<select aria-label="Preparation host" id="selfDataHost" onchange="selfDataInvalidate()">${selfDataHostOptions(state.nodes || [])}</select>`, { help: "Where a volume only one host can reach is made." }))}
+      <div id="selfDataReview"></div><div id="selfDataActions">${UI.actions(UI.cancel("Close") + UI.button("Check", "selfDataPrepareReview()", { kind: "pri", id: "selfDataCheck", disabled: !(state.classes?.length && state.nodes?.some(n => n.ready)) }))}</div>`;
   } catch (e) { if (selfDataDialog === request && $("#selfDataFlow")) $("#selfDataFlow").innerHTML = `<p role="alert">${esc(e.message)}</p>`; }
 };
 window.selfDataInvalidate = () => {
   if (selfDataDialog) { selfDataDialog.review = null; selfDataDialog.request = null; }
   if ($("#selfDataReview")) $("#selfDataReview").innerHTML = "";
-  if ($("#selfDataActions")) $("#selfDataActions").innerHTML = UI.actions(UI.cancel("Close") + UI.button("Check preparation", "selfDataPrepareReview()", { kind: "pri", id: "selfDataCheck" }));
+  if ($("#selfDataActions")) $("#selfDataActions").innerHTML = UI.actions(UI.cancel("Close") + UI.button("Check", "selfDataPrepareReview()", { kind: "pri", id: "selfDataCheck" }));
 };
 window.selfDataPrepareReview = async () => {
   const flow = selfDataDialog;
@@ -290,15 +289,15 @@ window.selfDataPrepareReview = async () => {
   selfDataInvalidate();
   const body = { operation: selfDataId(), storage_class: $("#selfDataClass").value, node: $("#selfDataHost").value };
   flow.request = body;
-  $("#selfDataReview").innerHTML = '<p>Checking placement and memory…</p>';
+  $("#selfDataReview").innerHTML = '<p>Checking…</p>';
   try {
     const review = await selfDataPost("/api/self/data/prepare/preview", body);
     if (selfDataDialog !== flow || flow.request !== body || !$("#selfDataReview")) return;
     if (!review.capacity_token || !review.capacity || review.capacity.blocked) throw new Error("Preparation could not be approved. Review the storage and host selection.");
     flow.review = { body, review };
-    $("#selfDataReview").innerHTML = `${UI.facts([["New volume size", esc(review.size)], ["Storage", esc(review.storage_class)]])}
-      ${deployCapacityHtml(review.capacity)}<p class="ui-help">Preparation creates a new volume; it does not copy your data.</p>
-      ${UI.ack("selfDataConsent", "I accept these preparation and capacity warnings.", { onchange: "selfDataReady()" })}`;
+    $("#selfDataReview").innerHTML = `${UI.facts([["New volume", `${esc(review.size)} on ${esc(review.storage_class)}`]])}
+      ${UI.more("Capacity check", deployCapacityHtml(review.capacity))}
+      ${UI.ack("selfDataConsent", "Make this volume", { onchange: "selfDataReady()" })}`;
     $("#selfDataActions").innerHTML = UI.actions(UI.cancel("Close") + UI.button("Prepare volume", "selfDataPrepare()", { kind: "pri", id: "selfDataPrepare", disabled: true }), UI.button("Check again", "selfDataPrepareReview()"));
   } catch (e) { if (selfDataDialog === flow && flow.request === body && $("#selfDataReview")) $("#selfDataReview").innerHTML = `<p role="alert">${esc(e.message)}</p>`; }
 };
@@ -317,6 +316,8 @@ window.selfDataPrepare = async () => {
     noteOperation(result.operation);
     if (selfDataDialog !== flow || !$("#selfDataFlow")) return;
     flow.jobs = [{ id: result.operation.id, operation: saved.body.operation, destination: result.destination, node: saved.body.node }];
+    // Prepared: the move review that follows is a new step, not this one still running.
+    flow.busy = false;
     await selfDataWatch(0);
   } catch (e) {
     // A lost response is not permission to resubmit. Reopen the saved jobs.
@@ -338,11 +339,10 @@ window.selfDataWatch = async index => {
       flow.state = state; flow.selected = current;
       $("#selfDataFlow").innerHTML = `<p><b>${esc(current.destination)}</b></p><p role="status">${esc(current.message || current.status)}</p>
         ${current.prepared ? "" : UI.progress(current.progress, { label: "Preparation steps", kind: current.status === "failed" ? "bad" : "info" })}
-        <p class="ui-help">Homestead still uses its original data. Neither volume is deleted by preparation.</p>
-        ${current.prepared ? UI.more("Host placement", UI.fields(
+        ${current.prepared ? UI.more("Hosts", UI.fields(
           UI.field("Move coordinator host", `<select aria-label="Move coordinator host" id="selfDataWorker" onchange="selfDataFinalInvalidate()">${selfDataHostOptions(state.nodes, current.node)}</select>`, { help: "Stays running while Homestead is stopped." }),
           UI.field("Copy host", `<select aria-label="Copy host" id="selfDataCopy" onchange="selfDataFinalInvalidate()">${selfDataHostOptions(state.nodes, current.node)}</select>`, { help: "Must be able to mount both volumes." }))) : ""}
-        <div id="selfDataFinal"></div><div id="selfDataReviewActions">${UI.actions(UI.cancel("Close") + (current.prepared ? UI.button("Review downtime & move", "selfDataFinalReview()", { kind: "pri" }) : UI.button("Back to volumes", "replicasMoveData()")))}</div>`;
+        <div id="selfDataFinal"></div><div id="selfDataReviewActions">${UI.actions(UI.cancel("Close") + (current.prepared ? UI.button("Review the move", "selfDataFinalReview()", { kind: "pri" }) : UI.button("Back", "replicasMoveData()")))}</div>`;
       if (!["succeeded", "failed", "cancelled"].includes(current.status)) setTimeout(paint, 3000);
     } catch (e) { if (selfDataDialog === flow && flow.watch === watch && $("#selfDataFlow")) $("#selfDataFlow").innerHTML = `<p role="alert">${esc(e.message)}</p><button class="btn" onclick="replicasMoveData()">Check again</button>`; }
   };
@@ -351,7 +351,7 @@ window.selfDataWatch = async index => {
 window.selfDataFinalInvalidate = () => {
   if (selfDataDialog) { selfDataDialog.finalRequest = null; selfDataDialog.approvedMove = null; }
   if ($("#selfDataFinal")) $("#selfDataFinal").innerHTML = "";
-  if ($("#selfDataReviewActions")) $("#selfDataReviewActions").innerHTML = UI.actions(UI.cancel("Close") + UI.button("Review downtime & move", "selfDataFinalReview()", { kind: "pri" }));
+  if ($("#selfDataReviewActions")) $("#selfDataReviewActions").innerHTML = UI.actions(UI.cancel("Close") + UI.button("Review the move", "selfDataFinalReview()", { kind: "pri" }));
 };
 window.selfDataFinalReview = async () => {
   const flow = selfDataDialog;
@@ -360,16 +360,16 @@ window.selfDataFinalReview = async () => {
   const request = {}; flow.finalRequest = request;
   flow.approvedMove = null;
   selfDataMoveReady();
-  $("#selfDataFinal").innerHTML = "<p>Checking the complete move…</p>";
+  $("#selfDataFinal").innerHTML = "<p>Checking…</p>";
   try {
     const result = await selfDataPost("/api/self/data/move/preview", body);
     if (selfDataDialog !== flow || flow.finalRequest !== request || !$("#selfDataFinal")) return;
     if (body.worker_node !== $("#selfDataWorker").value || body.copy_node !== $("#selfDataCopy").value) throw new Error("The host selection changed. Review the move again.");
     if (!result.capacity_token || (result.stages || []).some(s => s.capacity?.blocked)) throw new Error("The move needs a new placement review.");
     flow.approvedMove = { body, result };
-    $("#selfDataFinal").innerHTML = `${UI.callout("warn", "Planned downtime", `<p>${esc(result.downtime)}</p><p>Progress stays at this address. Your old volume is kept.</p>`)}
-      ${(result.stages || []).map(s => UI.more(s.label, `<p>${esc(s.detail)}</p>${deployCapacityHtml(s.capacity)}`)).join("")}
-      ${UI.ack("selfDataMoveConsent", "I accept the downtime and capacity warnings.", { onchange: "selfDataMoveReady()" })}`;
+    $("#selfDataFinal").innerHTML = `${UI.callout("warn", "Homestead goes offline while its data is copied", "This page shows progress and comes back by itself. The old volume is kept.")}
+      ${UI.more("Steps and capacity", (result.stages || []).map(s => `<p><b>${esc(s.label)}</b> - ${esc(s.detail)}</p>${deployCapacityHtml(s.capacity)}`).join(""))}
+      ${UI.ack("selfDataMoveConsent", "Take Homestead offline and move its data", { onchange: "selfDataMoveReady()" })}`;
     if ($("#selfDataReviewActions")) $("#selfDataReviewActions").innerHTML = UI.actions(UI.cancel("Close") + UI.button("Move data", "selfDataMoveStart()", { kind: "pri", id: "selfDataMoveStart", disabled: true }));
   } catch (e) { if (selfDataDialog === flow && flow.finalRequest === request && $("#selfDataFinal")) $("#selfDataFinal").innerHTML = `<p role="alert">${esc(e.message)}</p>`; }
 };
