@@ -49,6 +49,14 @@ checks every 30 seconds and records it itself - what kube-vip would have
 written - and says so above the cards. If it stays unreachable for a minute,
 you get an alert.
 
+kube-vip can also stop answering for a shared address altogether: when one
+Service on it loses its pods for a moment - an update, a restart - kube-vip
+gives up the address's lease and does not take it again once they are back,
+and every Service on that address is unreachable. When such a lease has had
+no holder for a minute while a Service on it has pods ready, Homestead
+restarts kube-vip, which elects again as it starts - at most once every ten
+minutes - and logs it.
+
 Node cards (Overview, Nodes) list the same addresses, and the Architecture
 view marks each address as a VIP or a node's own, with the node answering for
 it; hovering a node lights its addresses, and an address its node.

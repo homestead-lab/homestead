@@ -280,13 +280,77 @@ def repairs(services, leases, platform, now=None):
     return out
 
 
+def stranded(services, leases, slices, platform, now=None):
+    """Shared leases nobody holds while a Service on them has pods ready.
+
+    kube-vip elects once per lease. When one Service sharing it loses its
+    last endpoint - a pod restarting - kube-vip gives the lease up and stops
+    that election, and it did not start it again when the pod came back
+    (kube-vip 1.2.3, on k3s-test: SMB, Homestead's VIP and the object store,
+    all on 192.168.1.108, unreachable for an hour). Returns [(namespace,
+    lease, [services])]."""
+    holders = live_holders(leases, now)
+    ready = {(s.get("metadata") or {}).get("namespace", "") + "/" + ((s.get("metadata") or {}).get("labels") or {}).get("kubernetes.io/service-name", "")
+             for s in slices
+             if any((e.get("conditions") or {}).get("ready") for e in s.get("endpoints") or [])}
+    groups = {}
+    for service in services:
+        meta = service.get("metadata") or {}
+        lease = (meta.get("annotations") or {}).get(LEASE_KEY) or ""
+        if (not lease or (service.get("spec") or {}).get("type") != "LoadBalancer"
+                or controller_of(service, platform) != "kube-vip" or not _requested(service)):
+            continue
+        groups.setdefault((meta.get("namespace", ""), lease), []).append(meta.get("name", ""))
+    return [(ns, lease, sorted(names)) for (ns, lease), names in sorted(groups.items())
+            if (ns, lease) not in holders and any(f"{ns}/{name}" in ready for name in names)]
+
+
+_stranded_since = {}
+_restarted = [0.0]
+STRANDED_GRACE = 60          # kube-vip's own followers take over well within this
+RESTART_EVERY = 600
+
+
+def revive(services, leases, slices, platform, now=None):
+    """Restart kube-vip when a lease has been stranded past the grace, at most
+    every ten minutes: it elects again at start. Returns the leases it was for."""
+    now = time.time() if now is None else now
+    current = {(ns, lease): names for ns, lease, names in stranded(services, leases, slices, platform, now)}
+    for key in list(_stranded_since):
+        if key not in current:
+            del _stranded_since[key]
+    for key in current:
+        _stranded_since.setdefault(key, now)
+    due = [key for key, since in _stranded_since.items() if now - since >= STRANDED_GRACE]
+    if not due or now - _restarted[0] < RESTART_EVERY:
+        return []
+    pods = [p for p in _items("/api/v1/namespaces/kube-system/pods")
+            if (p.get("metadata") or {}).get("name", "").startswith("kube-vip")
+            and any(o.get("kind") == "DaemonSet" for o in (p.get("metadata") or {}).get("ownerReferences") or [])]
+    if not pods:
+        return []
+    for pod in pods:
+        ksend("DELETE", f"/api/v1/namespaces/kube-system/pods/{pod['metadata']['name']}")
+    _restarted[0] = now
+    for key in due:
+        print(f"VIPs: lease {key[0]}/{key[1]} had no holder for {int(now - _stranded_since[key])}s while "
+              f"{', '.join(current[key])} had pods ready; restarted kube-vip to elect again", flush=True)
+        del _stranded_since[key]
+    return due
+
+
 def keep(platform):
-    """Record what kube-vip announced and left off its Services. Returns what
-    was recorded."""
+    """Record what kube-vip announced and left off its Services, and restart
+    kube-vip where it stopped electing for a shared lease. Returns what was
+    recorded."""
     if (platform or {}).get("load_balancer") != "kube-vip":
         return []
     services = _items("/api/v1/services")
     leases = _items("/apis/coordination.k8s.io/v1/leases")
+    try:
+        revive(services, leases, _items("/apis/discovery.k8s.io/v1/endpointslices"), platform)
+    except Exception as error:
+        print(f"VIPs: could not restart kube-vip: {str(error)[:160]}", flush=True)
     done = []
     for fix in repairs(services, leases, platform):
         path = f"/api/v1/namespaces/{fix['namespace']}/services/{fix['name']}/status"
