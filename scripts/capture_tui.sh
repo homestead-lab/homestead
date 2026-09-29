@@ -105,4 +105,16 @@ tmux new-session -d -s tui -x 100 -y 24 "python3 scripts/host-console.py --demo;
 shot host-status "3/3 nodes Ready"
 key q
 shot host-status-exit "Console exited to login handoff"
+tmux kill-session -t tui 2>/dev/null
+tmux new-session -d -s tui -x 80 -y 24 "python3 scripts/host-console.py --demo-unhealthy; sleep 30"
+shot host-status-alert "NotReady"
+tmux resize-window -t tui -x 40 -y 20
+shot host-status-narrow "MEMORY"
+key PageDown
+shot host-status-narrow-cluster "node-3"
+key q
+tmux kill-session -t tui 2>/dev/null
+tmux new-session -d -s tui -x 100 -y 32 "python3 scripts/host-console.py --demo; sleep 30"
+shot host-status-logo "3/3 nodes Ready"
+key q
 exit "$MISSED"

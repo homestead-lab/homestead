@@ -33,22 +33,28 @@ class ConsoleDataTests(unittest.TestCase):
             {"metadata": {"name": "node-b"}, "spec": {"unschedulable": True},
              "status": {"conditions": [{"type": "Ready", "status": "Unknown"}]}}]})
         self.assertEqual("1/2 nodes Ready", status)
-        self.assertIn("server", rows[0])
-        self.assertIn("NotReady/cordoned", rows[1])
+        self.assertEqual("server", rows[0]["role"])
+        self.assertEqual("ok", rows[0]["health"])
+        self.assertEqual("NotReady/cordoned", rows[1]["state"])
+        self.assertEqual("bad", rows[1]["health"])
 
     def test_cluster_unavailable_never_shows_raw_errors(self):
         with patch.object(console, "kube_command", return_value=["kubectl"]), \
              patch.object(console, "command", return_value=None):
-            self.assertIn("API unavailable", console.cluster_stats()[0])
+            data = console.cluster_stats()
+            self.assertIn("API unavailable", data["summary"])
+            self.assertEqual("bad", data["health"])
         with patch.object(console, "kube_command", return_value=None):
-            self.assertIn("worker", console.cluster_stats()[0])
+            data = console.cluster_stats()
+            self.assertIn("worker", data["summary"])
+            self.assertEqual("muted", data["health"])
 
     def test_homestead_uses_service_port_and_vip(self):
         service = {"status": {"loadBalancer": {"ingress": [{"ip": "192.0.2.100"}]}},
                    "spec": {"ports": [{"port": 8088, "targetPort": 8080}]}}
         with patch.object(console, "kube_command", return_value=["kubectl"]), \
              patch.object(console, "command", side_effect=['{"items": []}', json.dumps(service)]):
-            self.assertIn("Homestead: http://192.0.2.100:8088", console.cluster_stats())
+            self.assertEqual("http://192.0.2.100:8088", console.cluster_stats()["url"])
 
     def test_subprocesses_are_bounded_and_cannot_read_console_input(self):
         with patch.object(console.subprocess, "run", side_effect=subprocess.TimeoutExpired("kubectl", 5)) as run:
@@ -68,9 +74,175 @@ class ConsoleDataTests(unittest.TestCase):
             self.assertEqual(1, len(console.disk_stats()))
             self.assertEqual(1, usage.call_count)
 
+    def test_cpu_hotplug_and_counter_resets_are_unknown_not_busy(self):
+        samples = console.cpu_samples("cpu 20 0 20 50 10 0 0 0\ncpu0 5 0 5 20 0 0 0 0\n")
+        self.assertEqual({"cpu": (100, 60), "cpu0": (30, 20)}, samples)
+        self.assertIsNone(console.cpu_percent((1, 1), (100, 60)))
+        self.assertIsNone(console.cpu_percent((100, 60), None))
+        self.assertEqual(40, console.cpu_percent((200, 120), (100, 60)))
+
+    def test_ready_cordoned_node_is_a_warning(self):
+        _, rows = console.node_rows({"items": [{"metadata": {"name": "node-a"},
+            "spec": {"unschedulable": True}, "status": {"conditions": [{"type": "Ready", "status": "True"}]}}]})
+        self.assertEqual("warn", rows[0]["health"])
+        self.assertEqual("Ready/cordoned", rows[0]["state"])
+
+
+class DashboardTests(unittest.TestCase):
+    def test_braille_dot_order_matches_unicode(self):
+        # Unicode numbers the bottom pair 7/8, rather than row-major order.
+        for x, y, bit in ((0, 0, 1), (0, 1, 2), (0, 2, 4), (1, 0, 8),
+                          (1, 1, 16), (1, 2, 32), (0, 3, 64), (1, 3, 128)):
+            canvas = console.DotCanvas(1, 1)
+            canvas.dot(x, y, "brand")
+            self.assertEqual(chr(0x2800 + bit), canvas.cells()[0][0][0])
+
+    def test_logo_is_symmetric_with_two_separated_white_layers(self):
+        for large, width, height in ((False, 12, 5), (True, 16, 7)):
+            cells = console.logo_cells(large)
+            self.assertEqual(height, len(cells))
+            dots = []
+            for row in cells:
+                self.assertEqual(width, len(row))
+                for dy in range(4):
+                    dots.append([bool((ord(char) - 0x2800 if char != " " else 0) & console.DOT_BITS[dy][dx])
+                                 for char, _ in row for dx in range(2)])
+            self.assertTrue(all(row == row[::-1] for row in dots), "roof and walls must be symmetric")
+            centre = [row[width] for row in dots]
+            # A roof peak, two layer strokes, and the bottom of the house.
+            self.assertEqual(4, sum(on and (y == 0 or not centre[y - 1]) for y, on in enumerate(centre)))
+            self.assertTrue(any(style == "text" and char != " " for row in cells for char, style in row))
+            frame = console.dashboard(console.demo_data(), 99 if large else 79, 32 if large else 24)
+            self.assertIn("CPU / history", frame.text()[height])
+            for y, row in enumerate(cells):
+                self.assertEqual(row, frame.rows[y][1:1 + width])
+
+    def test_graph_has_subcell_resolution_and_correct_endpoints(self):
+        frame = console.Frame(4, 2)
+        frame.graph(0, 0, 4, 2, [0, 0, 12.5, 25, 50, 75, 100, 100])
+        self.assertEqual(" ", frame.rows[1][0][0], "zero usage must leave an empty column")
+        self.assertEqual("\u28e0", frame.rows[1][1][0], "one/two dots high in adjacent samples")
+        self.assertEqual("\u28ff", frame.rows[0][3][0])
+        self.assertEqual("\u28ff", frame.rows[1][3][0])
+        self.assertEqual("bad", frame.rows[0][3][1])
+
+    def test_plain_character_fallback_preserves_the_dashboard(self):
+        frame = console.dashboard(console.demo_data(), 80, 24, braille=False)
+        self.assertTrue(all(ord(c) < 128 for row in frame.text() for c in row))
+        self.assertIn("node-3", "\n".join(frame.text()))
+        self.assertIn("#", "\n".join(frame.text()))
+
+    def test_standard_host_console_shows_metrics_and_all_three_nodes(self):
+        frame = console.dashboard(console.demo_data(), 80, 24)
+        text = "\n".join(frame.text())
+        self.assertEqual(23, len(frame.rows), "one row is reserved for the login key")
+        for label in ("CPU / history", "MEMORY", "DISKS / used", "CLUSTER / readiness",
+                      "3/3 nodes Ready", "node-1", "node-2", "node-3", "360/960G 38%"):
+            self.assertIn(label, text)
+
+    def test_failed_nodes_and_usage_bars_have_semantic_red_styles(self):
+        data = console.demo_data(True)
+        frame = console.dashboard(data, 80, 24)
+        red_text = "".join(c for row in frame.rows for c, style in row if style == "bad")
+        green_text = "".join(c for row in frame.rows for c, style in row if style == "ok")
+        self.assertIn("NotReady", red_text)
+        self.assertIn("node-3", red_text)
+        self.assertIn("node-1", green_text)
+        self.assertIn("High memory usage", red_text)
+        self.assertIn("\u28ff", red_text, "high usage colours the filled bar")
+
+    def test_unknown_metrics_have_no_green_health_claim(self):
+        frame = console.dashboard(console.Monitor().snapshot(), 80, 24)
+        text = "\n".join(frame.text())
+        green_text = "".join(c for row in frame.rows for c, style in row if style == "ok")
+        self.assertIn("sampling", text)
+        self.assertIn("--%", text)
+        self.assertIn("Waiting for metrics", text)
+        self.assertEqual("", green_text)
+
+    def test_long_cluster_and_disk_lists_remain_in_scrollable_frame(self):
+        data = console.demo_data()
+        data["cluster"]["nodes"] *= 20
+        data["local"]["disks"] = [dict(data["local"]["disks"][0], path=f"/data/{i}") for i in range(20)]
+        frame = console.dashboard(data, 80, 24)
+        self.assertGreater(len(frame.rows), 24)
+        self.assertEqual(20, sum("/data/" in row for row in frame.text()))
+        self.assertEqual(20, sum("node-3" in row for row in frame.text()))
+
+    def test_narrow_terminal_stacks_panels_without_losing_data(self):
+        frame = console.dashboard(console.demo_data(), 40, 20)
+        text = "\n".join(frame.text())
+        for label in ("MEMORY", "DISKS", "CLUSTER", "/var/lib/longhorn", "node-3"):
+            self.assertIn(label, text)
+        self.assertGreater(len(frame.rows), 20)
+        for row in frame.rows:
+            self.assertEqual(40, len(row))
+
+    def test_bars_clamp_values_and_zero_capacity_is_unknown(self):
+        frame = console.Frame(20, 3)
+        frame.bar(0, 0, 10, -20)
+        frame.bar(1, 0, 10, 120)
+        frame.bar(2, 0, 10, None)
+        self.assertEqual("[        ]", frame.text()[0][:10])
+        self.assertEqual("[" + "\u28ff" * 8 + "]", frame.text()[1][:10])
+        self.assertIsNone(console.percent(10, 0))
+        self.assertEqual("muted", console.usage_style(None))
+
 
 @unittest.skipIf(sys.platform == "win32", "requires a Linux pseudo-terminal")
 class ConsoleTerminalTests(unittest.TestCase):
+    def test_unicode_ascii_switch_and_non_unicode_locale(self):
+        import fcntl
+        import pty
+        import select
+        import struct
+        import termios
+
+        def collect(master, marker):
+            output = b""
+            deadline = time.monotonic() + 5
+            while marker not in output and time.monotonic() < deadline:
+                if select.select([master], [], [], .2)[0]:
+                    output += os.read(master, 65536)
+            self.assertIn(marker, output)
+            return output
+
+        for ascii_only, unicode_locale in ((False, True), (True, True), (False, False)):
+            with self.subTest(ascii_only=ascii_only, unicode_locale=unicode_locale):
+                master, slave = pty.openpty()
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+                args = [sys.executable, str(ROOT / "scripts/host-console.py"), "--demo"]
+                if ascii_only:
+                    args.append("--ascii")
+                process = subprocess.Popen(args, stdin=slave, stdout=slave, stderr=slave,
+                    env=dict(os.environ, TERM="xterm", LC_ALL="C.UTF-8" if unicode_locale else "C",
+                             PYTHONUTF8="0", PYTHONCOERCECLOCALE="0"))
+                try:
+                    output = collect(master, b"A: glyphs")
+                    dotted = "\u28ff".encode("utf-8")
+                    if unicode_locale and not ascii_only:
+                        self.assertIn(dotted, output)
+                    else:
+                        self.assertNotIn(dotted, output)
+                        self.assertIn(b"#", output)
+                    if unicode_locale:
+                        os.write(master, b"a")
+                        output = collect(master, dotted if ascii_only else b"#")
+                        if ascii_only:
+                            self.assertIn(dotted, output)
+                        else:
+                            self.assertNotIn(dotted, output)
+                            self.assertIn(b"#", output)
+                    os.write(master, b"q")
+                    self.assertEqual(0, process.wait(timeout=3))
+                    self.assertTrue(termios.tcgetattr(slave)[3] & termios.ECHO)
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
+                    os.close(master)
+                    os.close(slave)
+
     def test_exit_does_not_wait_for_a_stuck_cluster_collector(self):
         import pty
         import select
@@ -109,13 +281,14 @@ module.main()
         import select
         import struct
         import termios
-        for key in (b"q", b"\r", b"\x1b", b"\x03"):
-            with self.subTest(key=key):
+        for key, terminal in ((b"q", "xterm"), (b"\r", "xterm"), (b"\x1b", "xterm"),
+                              (b"\x03", "xterm"), (b"q", "vt100")):
+            with self.subTest(key=key, terminal=terminal):
                 master, slave = pty.openpty()
                 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
                 process = subprocess.Popen([sys.executable, str(ROOT / "scripts/host-console.py"), "--demo"],
                                            stdin=slave, stdout=slave, stderr=slave,
-                                           env=dict(os.environ, TERM="xterm"))
+                                           env=dict(os.environ, TERM=terminal))
                 try:
                     output = b""
                     deadline = time.monotonic() + 5
