@@ -18,8 +18,11 @@ import base64
 import datetime
 import hashlib
 import hmac
+import json
 import re
 import secrets
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -46,6 +49,8 @@ MINIO = "minio/minio"
 UID = 10001                      # RustFS runs as this user, and needs its volume
 _bucket = {"ok": False}
 VIP_ANNOTATION = "kube-vip.io/loadbalancerIPs"
+TARGET_REQUEST = "homestead.io/backup-target-request"
+_target_lock = threading.RLock()
 import homestead_platform as PLATFORM
 import homestead_networking as NETWORK
 import homestead_longhorn as LH
@@ -137,10 +142,10 @@ def endpoint(service=None):
     if not service:
         return ""
     ingress = ((service.get("status", {}) or {}).get("loadBalancer", {}) or {}).get("ingress", [])
-    address = next((row.get("ip") or row.get("hostname") for row in ingress
-                    if row.get("ip") or row.get("hostname")), "")
-    address = address or (service.get("metadata", {}).get("annotations", {})
-                          or {}).get(VIP_ANNOTATION, "")
+    # Status may still publish a node address while a requested VIP is
+    # being assigned. Never save that transient address as the backup target.
+    address = _current_address(service) or next((row.get("ip") or row.get("hostname") for row in ingress
+                                                if row.get("ip") or row.get("hostname")), "")
     port = _port(service)
     if address:
         return f"http://{address}:{port}"
@@ -167,7 +172,7 @@ def status():
     service = _get(f"/api/v1/namespaces/{NS}/services/{NAME}")
     claim = _get(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{NAME}")
     ready = int(((deployment or {}).get("status", {}) or {}).get("readyReplicas", 0) or 0)
-    where = endpoint(service)
+    where = endpoint()
     bucket = False
     if deployment and ready:
         try:
@@ -184,12 +189,13 @@ def status():
         "deployed": bool(deployment),
         "ready": bool(deployment) and ready > 0,
         "endpoint": where,
-        "port": _port(service) if service else PORT,
+        "port": urllib.parse.urlsplit(where).port or PORT,
         "reachable_off_cluster": bool(where) and ".svc:" not in where,
         "bucket": BUCKET,
         "size_gb": _claim_size(claim),
         "volume_problem": _volume_problem(claim) if deployment and not ready else "",
         "backup_url": backup_url(),
+        "longhorn": target_status(deployment),
         "image": IMAGE,
     }
 
@@ -272,12 +278,13 @@ def _s3(method, url, access, secret):
         return error.code
 
 
-def ensure_bucket(base=None):
+def ensure_bucket(base=None, refresh=False):
     """Make the bucket Longhorn writes to, if it is not there. Longhorn does
     not make it, and neither does the server; a target without one only
     ever reports itself unavailable."""
-    if _bucket["ok"]:
+    if _bucket["ok"] and not refresh:
         return True
+    _bucket["ok"] = False
     keys = credentials()
     url = f"{base or f'http://{NAME}.{NS}.svc:{_port()}'}/{BUCKET}"
     if _s3("HEAD", url, keys["access_key"], keys["secret_key"]) == 200:
@@ -319,7 +326,7 @@ def _apply(path, name, body):
         return ksend("POST", path, body)
 
 
-VIP_KEYS = ("kube-vip.io/loadbalancerIPs", "metallb.universe.tf/loadBalancerIPs")
+VIP_KEYS = ("kube-vip.io/loadbalancerIPs", "metallb.io/loadBalancerIPs", "metallb.universe.tf/loadBalancerIPs")
 
 
 def _shared_plan(port):
@@ -355,7 +362,9 @@ def shared_address(port=PORT):
 
 def _current_address(service):
     annotations = ((service or {}).get("metadata") or {}).get("annotations") or {}
-    return next((annotations[key] for key in VIP_KEYS if annotations.get(key)), "")
+    address = next((annotations[key] for key in VIP_KEYS if annotations.get(key)), "")
+    address = address or ((service or {}).get("spec") or {}).get("loadBalancerIP", "")
+    return str(address).split(",")[0].strip()
 
 
 def deploy(cfg=None):
@@ -451,7 +460,7 @@ def deploy(cfg=None):
     result = {"ok": True, "endpoint": endpoint(), "bucket": BUCKET,
               "access_key": keys["access_key"], "server": running_image if keep_minio else IMAGE}
     if cfg.get("point_longhorn", True):
-        result["longhorn"] = point_longhorn()
+        result["longhorn"] = request_target()
     return result
 
 
@@ -459,17 +468,22 @@ def transfers():
     """Whether workloads may move out of this cluster: its store running."""
     state = status()
     try:
-        backups_here = (LH.backup_target() or {}).get("url") == backup_url()
+        backups_here = state["longhorn"]["pointed"]
     except Exception:
         backups_here = False
     return {"allowed": state["deployed"] and not state["stopped"], "deployed": state["deployed"],
             "ready": state["ready"], "stopped": state["stopped"], "endpoint": state["endpoint"],
             "reachable_off_cluster": state["reachable_off_cluster"], "size_gb": state["size_gb"],
             "volume_problem": state.get("volume_problem", ""),
-            "backups_here": backups_here}
+            "backups_here": backups_here, "longhorn": state["longhorn"]}
 
 
 def set_transfers(allow, size_gb=100, lb_ip="", vip_mode="", port=0):
+    with _target_lock:
+        return _set_transfers(allow, size_gb, lb_ip, vip_mode, port)
+
+
+def _set_transfers(allow, size_gb=100, lb_ip="", vip_mode="", port=0):
     """Turn moves out of this cluster on or off: start the store (setting it
     up the first time) or stop it. Stopping keeps its volume, and with it the
     backups already made; they are there when it starts again."""
@@ -488,18 +502,107 @@ def set_transfers(allow, size_gb=100, lb_ip="", vip_mode="", port=0):
         detail = "moves out are on: backup storage is starting again"
         if _get(f"/api/v1/namespaces/{NS}/services/{NAME}"):
             try:
-                pointed = point_longhorn()
+                pointed = request_target()
             except (ValueError, urllib.error.HTTPError) as error:
                 raise ValueError(f"backup storage is starting again, but Longhorn was not pointed at it: {error}") from error
-            if not pointed.get("kept_target"):
-                detail += f"; Longhorn backs up to {pointed.get('endpoint') or 'it'}"
+            detail += "; " + pointed.get("detail", "")
         return {**transfers(), "allowed": True, "detail": detail}
     if deployment:
+        _save_target_request(deployment, None)
         ksend("PATCH", path, {"spec": {"replicas": 0}}, ctype="application/merge-patch+json")
     state = transfers()
     return {**state, "allowed": False,
             "detail": "moves out are off: backup storage is stopped, its volume kept"
                       + ("; Longhorn backs up here, so its backups pause until it starts again" if state["backups_here"] else "")}
+
+
+def _target_request(deployment):
+    try:
+        value = json.loads((((deployment or {}).get("metadata") or {}).get("annotations") or {}).get(TARGET_REQUEST) or "{}")
+        return value if isinstance(value, dict) else {}
+    except ValueError:
+        return {}
+
+
+def _save_target_request(deployment, request):
+    metadata = {"annotations": {TARGET_REQUEST: json.dumps(request) if request else None}}
+    if deployment.get("metadata", {}).get("resourceVersion"):
+        metadata["resourceVersion"] = deployment["metadata"]["resourceVersion"]
+    ksend("PATCH", f"/apis/apps/v1/namespaces/{NS}/deployments/{NAME}",
+          {"metadata": metadata}, ctype="application/merge-patch+json")
+
+
+def _target_location():
+    target = LH.backup_target()
+    keys = LH._secret_keys(target["secret"]) if target.get("secret") else {}
+    return {"url": target.get("url", ""), "secret": target.get("secret", ""),
+            "endpoint": keys.get("endpoint", "")}
+
+
+def target_status(deployment=None):
+    """The effective S3 endpoint matters even when the bucket URL is unchanged."""
+    try:
+        actual = _target_location()
+        pointed = actual["url"].rstrip("/") == backup_url().rstrip("/") and actual["endpoint"].rstrip("/") == endpoint().rstrip("/")
+    except Exception:
+        actual, pointed = {}, False
+    request = _target_request(deployment)
+    return {"pointed": pointed, "endpoint": actual.get("endpoint", ""),
+            "state": request.get("state", ""), "detail": request.get("detail", "")}
+
+
+def request_target(replace=False):
+    """Persist the user's intent before startup can interrupt the switch."""
+    with _target_lock:
+        path = f"/apis/apps/v1/namespaces/{NS}/deployments/{NAME}"
+        deployment = kget(path)
+        actual = _target_location()
+        if actual["url"] and actual["url"].rstrip("/") != backup_url().rstrip("/") and not replace:
+            return {"kept_target": actual["url"], "detail": f"Longhorn still backs up to {actual['url']}"}
+        if (deployment.get("spec") or {}).get("replicas", 1) == 0:
+            raise ValueError("backup storage is stopped; enable moves out before pointing Longhorn at it")
+        where = endpoint()
+        if not where:
+            raise ValueError("the backup storage Service is missing; open Storage settings to restore it")
+        request = {"state": "pending", "endpoint": where, "replace": replace,
+                   "previous": actual, "since": time.time(),
+                   "detail": "Waiting for backup storage; Homestead will point Longhorn at it when ready"}
+        _save_target_request(deployment, request)
+        return {"pending": True, "endpoint": request["endpoint"], "secret": LONGHORN_SECRET,
+                "detail": request["detail"]}
+
+
+def reconcile_target():
+    """Advance only an explicit, saved request; never adopt a store on sight."""
+    with _target_lock:
+        path = f"/apis/apps/v1/namespaces/{NS}/deployments/{NAME}"
+        deployment = _get(path)
+        request = _target_request(deployment)
+        if request.get("state") not in ("pending", "applying"):
+            return
+        if (deployment.get("spec") or {}).get("replicas", 1) == 0:
+            request.update(state="failed", detail="Backup storage was stopped; enable it and retry the target switch")
+        elif request["endpoint"] != endpoint():
+            request.update(state="failed", detail="The store's address changed; review its current address and retry")
+        else:
+            try:
+                actual = _target_location()
+                pointed = actual["url"].rstrip("/") == backup_url().rstrip("/") and actual["endpoint"].rstrip("/") == request["endpoint"].rstrip("/")
+                if pointed:
+                    request.update(state="complete", detail=f"Longhorn backs up to {request['endpoint']}")
+                elif actual != request["previous"]:
+                    request.update(state="failed", detail="Longhorn's target changed after this request; review it and retry")
+                elif time.time() - request["since"] > 600:
+                    request.update(state="failed", detail="The target switch did not finish within ten minutes. " + request.get("detail", "") + "; resolve the problem and retry")
+                else:
+                    point_longhorn(replace=request["replace"])
+                    request.update(state="applying", detail="Waiting for Longhorn to confirm the backup storage endpoint")
+            except (ValueError, OSError) as error:
+                request.update(detail=str(error)[:1400])
+                if time.time() - request["since"] > 600:
+                    request.update(state="failed", detail=request["detail"] + "; resolve the problem and retry")
+        # Compare-and-swap prevents an old worker from erasing a newer request.
+        _save_target_request(deployment, request)
 
 
 def point_longhorn(replace=False):
@@ -514,6 +617,24 @@ def point_longhorn(replace=False):
     if not service:
         raise ValueError("the object store is not deployed yet")
     where = endpoint()
+    current = LH.backup_target()
+    kept = ""
+    if current.get("configured") and current.get("url", "").rstrip("/") != backup_url().rstrip("/") and not replace:
+        kept = current.get("url", "")
+    if not kept and LH.on_harvester():
+        # Harvester validates the bucket by listing it during the settings
+        # update. A newly started pod or an absent bucket makes that update
+        # fail with 422, leaving Longhorn on its previous endpoint.
+        deployment = _get(f"/apis/apps/v1/namespaces/{NS}/deployments/{NAME}") or {}
+        if not int((deployment.get("status") or {}).get("readyReplicas") or 0):
+            raise ValueError("backup storage is still starting; waiting for it to become ready")
+        try:
+            ready = ensure_bucket(base=where, refresh=True)
+        except (OSError, urllib.error.URLError) as error:
+            raise ValueError(f"backup storage at {where} is not reachable yet; check its address and port") from error
+        if not ready:
+            raise ValueError(f"the backup bucket at {where} is not ready; check the store's credentials "
+                             "and bucket permissions")
     _apply(f"/api/v1/namespaces/{LHNS}/secrets", LONGHORN_SECRET,
            _secret_body(LONGHORN_SECRET, LHNS, {
                "AWS_ACCESS_KEY_ID": keys["access_key"],
@@ -526,11 +647,7 @@ def point_longhorn(replace=False):
     # The keys alone are not enough: Longhorn backs up wherever its target
     # says. A target already pointing somewhere else - an NFS share - is left
     # alone unless asked, since changing it moves where every backup goes.
-    current = LH.backup_target()
-    kept = ""
-    if current.get("configured") and current.get("url") != backup_url() and not replace:
-        kept = current.get("url", "")
-    else:
+    if not kept:
         LH.set_backup_target(backup_url(), LONGHORN_SECRET)
     # Backups work either way; only the far cluster cares which address this is.
     return {"url": backup_url(), "secret": LONGHORN_SECRET, "endpoint": where, "kept_target": kept,

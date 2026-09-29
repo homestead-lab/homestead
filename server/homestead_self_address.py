@@ -115,8 +115,8 @@ def move(vip):
         step.pop("config", None)
         if step["id"] == "objectstore" and step["action"] == "added":
             try:
-                objects.point_longhorn()
-                step["detail"] += "; Longhorn's backup target follows it"
+                result = objects.request_target()
+                step["detail"] += "; " + result["detail"]
             except Exception as error:
                 step["detail"] += f"; Longhorn's backup target was not changed: {str(error)[:120]}"
     for step in done["steps"]:

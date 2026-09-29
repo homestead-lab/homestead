@@ -1804,7 +1804,13 @@ window.clusterReady = async name => {
   (window.__clusterReady ||= {})[name] = r;
   const step = (ok, text, action = "") => `<div class="clstep ${ok ? "done" : "todo"}"><span>${ok ? "✓" : "•"}</span><div>${text}${action}</div></div>`;
   host.innerHTML = step(true, "Connected")
-    + (store.stopped
+    + (["pending", "applying"].includes(store.longhorn?.state)
+      ? step(false, `Backup target on ${esc(name)} is switching`, `<div class="dim xs">${esc(store.longhorn.detail)}. Homestead retries automatically.</div>`)
+      : store.longhorn?.state === "failed" || (store.ready && store.longhorn?.pointed === false)
+      ? step(false, `Longhorn on ${esc(name)} is not writing to its backup storage`,
+          `<div class="dim xs">${esc(store.longhorn.detail || `Current endpoint: ${store.longhorn.endpoint || "none"}`)}</div>
+           <div><button class="btn sm" data-need="admin" onclick="clusterPointTarget(${jsq(name)})">Retry target switch</button></div>`)
+      : store.stopped
       ? step(false, `Migration from ${esc(name)} is off: its backup storage is stopped`,
           `<div><button class="btn sm pri" data-need="admin" onclick="clusterTransfersOn(${jsq(name)})">Enable it</button></div>`)
       : target.configured && target.reachable_off_cluster && !target.answers
@@ -1829,8 +1835,17 @@ window.clusterReady = async name => {
     + step(r.ready, "Browse its workloads and move them here");
   if (window.applyRole) applyRole();
   clearTimeout(window["__clready_" + name]);
-  if (store.deployed && !store.ready)
+  if (store.deployed && (!store.ready || ["pending", "applying"].includes(store.longhorn?.state)))
     window["__clready_" + name] = setTimeout(() => { if ($("#clready_" + name)) clusterReady(name); }, 15000);
+};
+
+window.clusterPointTarget = async (name, after = null) => {
+  try {
+    const r = await api("/api/move/clusters/target", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }) });
+    toast(r.detail, "ok");
+    if (after) after(); else clusterReady(name);
+  } catch (e) { toast(e.message, "bad"); }
 };
 
 window.clusterTransfersOn = async name => {

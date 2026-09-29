@@ -571,7 +571,7 @@ def readiness(name):
     out = {"version": check_cluster(name), "storage": {}, "target": {}}
     try:
         store = remote(name, "/api/objectstore")
-        out["storage"] = {k: store.get(k) for k in ("deployed", "ready", "endpoint", "reachable_off_cluster")}
+        out["storage"] = {k: store.get(k) for k in ("deployed", "ready", "stopped", "endpoint", "reachable_off_cluster", "longhorn")}
     except Exception as error:
         out["storage"] = {"error": str(error)[:200]}
     try:
@@ -650,6 +650,9 @@ def setup_storage(name, size_gb=100, lb_ip="", vip_mode="", port=0):
                      **({"port": int(port)} if port else {}),
                      **({"vip_mode": "shared"} if vip_mode == "shared" and not str(lb_ip or "").strip() else {})})
     where = result.get("endpoint") or ""
+    if (result.get("longhorn") or {}).get("pending"):
+        return {"ok": True, "pending": True, "endpoint": where,
+                "detail": f"backup storage is starting on {name}; Homestead will point Longhorn at it when ready"}
     wanted = str(lb_ip or "").strip()
     # Releases before 2.8.110 gave Longhorn the keys but never its target, so
     # a move still found "no backup target". It is set here too, through a
