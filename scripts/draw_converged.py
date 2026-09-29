@@ -254,8 +254,10 @@ def blend():
             for r in (13, 21):
                 o.append(path(f"M{cx - r} {PEAK - 20 - r * 0.2}A{r} {r} 0 0 1 {cx + r} {PEAK - 20 - r * 0.2}", BLUE, 2, opacity=0.8))
         else:
-            o.append(f'<circle cx="{cx - 30}" cy="{gy - 5}" r="5" fill="none" stroke="{BLUE}" stroke-width="1.5"/>')
-            o.append(t(cx - 18, gy, "standby", 14, MUTED))
+            # every node runs apps; one answers ARP for the VIP and hands
+            # traffic to wherever the app is
+            o.append(f'<circle cx="{cx - 62}" cy="{gy - 5}" r="5" fill="none" stroke="{BLUE}" stroke-width="1.5"/>')
+            o.append(t(cx - 50, gy, "reached via the VIP", 14, CREAM, 500))
             o.append(f'<circle cx="{cx}" cy="{PEAK - 20}" r="5" fill="none" stroke="{BLUE}" stroke-width="1.5" opacity="0.7"/>')
         for (y, h), c in ((COMP, AMBER), (STOR, GREEN)):
             o.append(rect(x + 14, y, NW - 28, h, 10, c, c, 1, fo=0.07, so=0.28))
@@ -283,8 +285,8 @@ def blend():
     b.append(t(mid, 34, "THREE NODES", 13, MUTED, 700, "middle", ls=2))
     b.append(vip_pill(mid, 50))
     b.append(path(f"M{mid} 88V100H{xs[0] + NW / 2}V{PEAK - 46}", BLUE, 2))
-    b.append(path(f"M{mid} 100V{PEAK - 26}", BLUE, 1.5, dash="4 6", opacity=0.7))
-    b.append(path(f"M{mid} 100H{xs[2] + NW / 2}V{PEAK - 26}", BLUE, 1.5, dash="4 6", opacity=0.7))
+    b.append(path(f"M{mid} 100V{PEAK - 26}", BLUE, 1.5, opacity=0.8))
+    b.append(path(f"M{mid} 100H{xs[2] + NW / 2}V{PEAK - 26}", BLUE, 1.5, opacity=0.8))
     for i, x in enumerate(xs):
         b.append(house(x, f"node-{i + 1}", i == 0, APPS_THREE[i], "3 copies each"))
     for x in xs[:2]:

@@ -68,8 +68,8 @@ address on your LAN.
 </table>
 
 <p align="center">
-  <img src="docs/images/converged-layers.svg" width="100%"
-       alt="One node runs Homestead, apps, VMs and one copy of every volume behind one VIP. Three nodes spread the apps, keep three copies of every volume and move the VIP when a node fails.">
+  <img src="docs/images/converged-blend.svg" width="100%"
+       alt="Each node is a house: the VIP in the gable, apps and VMs above Longhorn data inside, the host as the foundation. One node holds everything and one copy of every volume. Three nodes all run apps behind one VIP and keep three copies of every volume, so any one can fail.">
 </p>
 
 **It feels like a NAS, not a cluster.** Homestead speaks in apps, volumes,
