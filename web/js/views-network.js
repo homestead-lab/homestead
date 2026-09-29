@@ -223,14 +223,22 @@ window.networkExpose = async (namespace = "", name = "", kind = "Deployment", se
   if (!data?.workloads?.length) return toast("No Deployments or pod-network VMs are available to expose", "bad");
   if (name && !data.workloads.some(row => row.namespace === namespace && row.name === name && (row.kind || "Deployment") === kind)) return toast(kind === "VirtualMachine" ? "VM exists but is not eligible for Service exposure yet. It needs a masquerade pod interface and unique template labels; bridged VMs use their guest LAN address. Try Edit → Network after saving." : "This workload is not available for Service exposure. Save it first, then retry.", "bad");
   if (name) data.workloads.sort((a, b) => Number(b.namespace === namespace && b.name === name && (b.kind || "Deployment") === kind) - Number(a.namespace === namespace && a.name === name && (a.kind || "Deployment") === kind));
-  const options = data.workloads.map(row => `<option value="${esc(row.namespace + "/" + row.name + "/" + (row.kind || "Deployment"))}">${esc(row.kind || "Deployment")} · ${esc(row.namespace)}/${esc(row.name)}</option>`).join("");
-  const first = data.workloads[0];
+  // Opened without an app - from a VIP's Use this VIP, or Expose workload -
+  // nothing is picked for you: the first app in the list (often Homestead
+  // itself) is not a guess worth making about someone's address.
+  const choose = !name;
+  window.__netSelectedVip = selectedVip;
+  const options = (choose ? '<option value="" selected>Choose an app or VM…</option>' : "")
+    + data.workloads.map(row => `<option value="${esc(row.namespace + "/" + row.name + "/" + (row.kind || "Deployment"))}">${esc(row.kind || "Deployment")} · ${esc(row.namespace)}/${esc(row.name)}${row.name === "homestead" ? " (Homestead itself)" : ""}</option>`).join("");
+  const first = choose ? { name: "", ports: [] } : data.workloads[0];
   const choices = await vipChoices(data);
   window.__networkChoices = choices;
   const open = editing && modalIsOpen() ? childModal : modal;
-  open(editing ? `Network access · ${name}` : "Connect a workload to your network", `<div id="net_editor" data-nested="${editing ? "1" : "0"}">
-    <p class="net-intro">Choose the address and ports devices on your LAN use to reach this app. Nothing changes until you review and apply.</p>
-    <div class="f" ${editing ? "hidden" : ""}><label for="net_workload">App or VM</label><select id="net_workload" onchange="networkWorkloadChanged()">${options}</select></div>
+  open(editing ? `Network access · ${name}` : selectedVip ? `Use ${selectedVip}` : "Connect an app to your network", `<div id="net_editor" data-nested="${editing ? "1" : "0"}">
+    <p class="net-intro">${selectedVip && choose ? `Choose the app or VM that devices on your LAN will reach at <b class="mono">${esc(selectedVip)}</b>, then its ports.`
+      : "Choose the address and ports devices on your LAN use to reach this app."} Nothing changes until you review and apply.</p>
+    <div class="f" ${editing ? "hidden" : ""}><label for="net_workload">Which app or VM?</label><select id="net_workload" onchange="networkWorkloadChanged()">${options}</select></div>
+    <div id="net_rest" ${choose ? "hidden" : ""}>
     <div id="net_current_access" class="net-current-access"></div>
     <div id="net_mode_wrap">${networkAccessChoices(data, choices)}</div>
     <select id="net_mode" hidden><option value="shared">Default VIP</option><option value="manual">Selected VIP</option><option value="nodes">Node addresses</option><option value="automatic">Unused VIP</option></select>
@@ -245,14 +253,13 @@ window.networkExpose = async (namespace = "", name = "", kind = "Deployment", se
       <div class="f"><label for="net_existing">Connection to edit</label><select id="net_existing" onchange="networkServicePicked()"></select></div>
       <div class="f2"><div class="f"><label for="net_name">Kubernetes Service name</label><input id="net_name" type="text" value="${esc(first.name)}"></div>
       <div class="f"><label for="net_type">Reachability</label><select id="net_type" onchange="networkModeChanged()"><option value="LoadBalancer">LAN access</option><option value="ClusterIP">Cluster only</option></select></div></div></details>
-    <div id="net_review"></div><div class="modalactions"><button class="btn" onclick="modalBack()">Cancel</button><button class="btn pri" onclick="networkReview()">Review changes</button></div></div>`, true);
-  networkServiceOptions(editing);
+    <div id="net_review"></div><div class="modalactions"><button class="btn" onclick="modalBack()">Cancel</button><button class="btn pri" onclick="networkReview()">Review changes</button></div></div></div>`, true);
   $("#net_workload").disabled = editing;
-  if (selectedVip && !nodeAddressesOnly()) {
-    $("#net_mode").value = "manual";
-    $("#net_vip_wrap").innerHTML = networkVipCards(selectedVip, choices);
+  if (!choose) {
+    networkServiceOptions(editing);
+    networkUseSelectedVip();
+    networkModeChanged();
   }
-  networkModeChanged();
   // A changed form always requires a fresh review.
   $("#net_editor").addEventListener("input", networkInvalidateReview);
   $("#net_editor").addEventListener("change", networkInvalidateReview);
@@ -303,7 +310,7 @@ window.networkServicePicked = () => {
       : "";
   }
   const node = networkIsNodeAccess(row, STATE.data.network);
-  $("#net_current_access").innerHTML = row ? `<span class="net-eyebrow">Current connection</span><b>${node ? "Node address — not a VIP" : row.type === "ClusterIP" ? "Cluster only" : "VIP access"}</b><span class="mono">${esc((row.external_ips || []).map(ip => row.ports.map(p => `${ip}:${p.port} (${p.protocol})`).join(" · ")).join(" · ") || "No LAN address")}</span>${node ? '<small>k3s exposes these ports on the host itself. This address does not move to another host if it goes offline.</small>' : ""}` : '<span class="net-eyebrow">New connection</span><b>Choose how to reach this app or VM</b>';
+  $("#net_current_access").innerHTML = row ? `<span class="net-eyebrow">Current connection</span><b>${node ? "Node address — not a VIP" : row.type === "ClusterIP" ? "Cluster only" : "VIP access"}</b><span class="mono">${esc((row.external_ips || []).map(ip => row.ports.map(p => `${ip}:${p.port} (${p.protocol})`).join(" · ")).join(" · ") || "No LAN address")}</span>${node ? '<small>k3s exposes these ports on the host itself. This address does not move to another host if it goes offline.</small>' : ""}` : `<span class="net-eyebrow">New connection</span><b>How devices on your LAN reach ${esc(name)}${name === "homestead" ? " - Homestead itself" : ""}</b>`;
   networkModeChanged(); networkInvalidateReview();
 };
 let NETWORK_REVIEW = null;
@@ -314,13 +321,26 @@ function networkInvalidateReview() {
   if (actions) actions.innerHTML = '<button class="btn" onclick="modalBack()">Cancel</button><button class="btn pri" onclick="networkReview()">Review changes</button>';
 }
 
+/* The VIP the dialog was opened for, on a new connection. */
+function networkUseSelectedVip() {
+  const vip = window.__netSelectedVip;
+  if (!vip || nodeAddressesOnly() || $("#net_existing").value) return;
+  $("#net_mode").value = "manual";
+  $("#net_vip_wrap").innerHTML = networkVipCards(vip, window.__networkChoices);
+}
+
 window.networkWorkloadChanged = () => {
+  const picked = !!$("#net_workload").value;
+  $("#net_rest").hidden = !picked;
+  if (!picked) return;
   const [namespace, name, kind] = $("#net_workload").value.split("/");
   $("#net_name").value = name;
   const workload = STATE.data.network.workloads.find(row => row.namespace === namespace && row.name === name && (row.kind || "Deployment") === kind);
   $("#net_ports").innerHTML = networkModalPort(workload?.ports?.[0] || {}, true);
   $("#net_name").disabled = false; $("#net_type").disabled = false;
   networkServiceOptions();
+  networkUseSelectedVip();
+  networkModeChanged();
 };
 
 window.networkModeChanged = () => {
