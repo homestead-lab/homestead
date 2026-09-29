@@ -29,7 +29,16 @@ def _ready(node):
                for c in ((node.get("status") or {}).get("conditions") or []))
 
 
-def plan(node, action):
+def plan(node, action, force=False):
+    """What rebooting or shutting a host down would do, and what stops it.
+
+    Some stops are checks an admin may override - quorum on a one-node
+    cluster, VMs still running, a disruption budget, storage that cannot be
+    read - and some are not: without the host's identity, with power control
+    off, with an earlier helper still at work, or on a host that is not Ready,
+    nothing can be sent safely. force turns the first kind into listed
+    consequences; a forced action then skips cordon and drain and asks the
+    host's own systemd to reboot or power off, as its power button would."""
     if action not in ("reboot", "poweroff"):
         raise ValueError("action must be reboot or poweroff")
     node_obj = kget(f"/api/v1/nodes/{node}")
@@ -68,30 +77,36 @@ def plan(node, action):
                       (v.get("metadata") or {}).get("name", "") for v in vmis
                       if (v.get("status") or {}).get("nodeName") == node})
     pods_here = [p for p in pods if (p.get("spec") or {}).get("nodeName") == node]
-    blockers = []
+    hard, soft = [], []            # soft: checks an admin may override
     node_uid = (node_obj.get("metadata") or {}).get("uid", "")
     if not node_uid:
-        blockers.append("Host identity is unavailable; refresh before issuing power control")
+        hard.append("Host identity is unavailable; refresh before issuing power control")
     if any((p.get("metadata", {}).get("labels") or {}).get("homestead.io/task") == "node-power" and
            p.get("status", {}).get("phase") not in ("Succeeded", "Failed") for p in pods_here):
-        blockers.append("An earlier power helper is still active on this host; inspect it before retrying")
-    maintenance = {"budgets": [], "local_storage": []}
+        hard.append("An earlier power helper is still active on this host; inspect it before retrying")
+    maintenance = {"budgets": [], "local_storage": [], "blockers": []}
     try:
         maintenance = MAINTENANCE.inventory(kget, pods_here)
-        blockers.extend(maintenance["blockers"])
+        soft.extend(maintenance["blockers"])
     except Exception:
-        blockers.append("Drain/PDB or attached-storage inventory is unavailable or incomplete; review cannot be verified")
+        soft.append("Drain/PDB or attached-storage inventory is unavailable or incomplete; review cannot be verified")
     if not power_enabled():
-        blockers.append("Host power control is disabled (ENABLE_NODE_POWER is off)")
-    if node in control.get("members", []) and control.get("can_lose", 0) < 1:
-        blockers.append("Shutting down this etcd member would lose quorum")
+        hard.append("Host power control is disabled (ENABLE_NODE_POWER is off)")
+    members = control.get("members", [])
+    if node in members and control.get("can_lose", 0) < 1:
+        soft.append("This host is the cluster's only etcd member: the cluster, Homestead with it, is away until it is back"
+                    if len(members) == 1 else "Shutting down this etcd member would lose quorum")
     if not _ready(node_obj):
-        blockers.append("The host is not Ready; investigate it before issuing a new power command")
+        hard.append("The host is not Ready; investigate it before issuing a new power command")
     if vm_rows:
-        blockers.append("Running VMs are on this host; migrate or stop them and review again")
+        soft.append("Running VMs are on this host; migrate or stop them and review again")
     if storage_unknown:
-        blockers.append("Storage replica inventory is unavailable; volume impact cannot be verified")
+        soft.append("Storage replica inventory is unavailable; volume impact cannot be verified")
+    blockers = hard if force else hard + soft
     warnings = []
+    if force and soft:
+        warnings.append("Forced: no cordon or drain - pods and VMs on it stop with the host, and come back when it does "
+                        "(or, on other hosts, once Kubernetes gives up on this one). Overridden: " + "; ".join(soft))
     warnings.append("DaemonSets and static pods remain on the host; their services stop during the outage. Survivor capacity and external storage dependencies are not fully simulated")
     if storage_unknown:
         warnings.append("Longhorn replica inventory is unavailable; volume safety cannot be confirmed")
@@ -114,7 +129,7 @@ def plan(node, action):
               "storage_unknown": storage_unknown, "vms": vm_rows,
               "maintenance": maintenance,
               "drain_pods": drain_pods,
-              "quorum": control.get("can_lose", 0)}
+              "quorum": control.get("can_lose", 0), "force": bool(force)}
     token = hashlib.sha256(json.dumps(review, sort_keys=True).encode()).hexdigest()[:20]
     return {"node": node, "node_uid": node_uid, "action": action, "review_token": token, "boot_id": boot_id,
             "quorum": control, "workloads": place.get("workloads", []),
@@ -123,7 +138,18 @@ def plan(node, action):
             "maintenance": maintenance,
             "drain_pods": drain_pods,
             "requires_data_ack": storage_unknown or bool(maintenance["local_storage"]) or any(v["risk"] in ("unavailable", "single-copy") for v in affected),
-            "blockers": blockers, "warnings": warnings, "ready": not blockers}
+            "blockers": blockers, "warnings": warnings, "ready": not blockers,
+            "overridable": soft, "hard_blockers": hard, "force": bool(force)}
+
+
+def recheck_forced(original):
+    """A forced action sends no drain, but still never to a host that changed
+    identity, rebooted, or grew a new hard stop since it was reviewed."""
+    fresh = plan(original["node"], original["action"], force=True)
+    if not fresh["ready"]:
+        raise ValueError("Power was not sent: " + "; ".join(fresh["blockers"]))
+    if fresh["boot_id"] != original["boot_id"] or fresh["node_uid"] != original["node_uid"]:
+        raise ValueError("Host identity changed since the review; power was not sent")
 
 
 def recheck_after_drain(original):
