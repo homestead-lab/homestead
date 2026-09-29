@@ -342,6 +342,23 @@ def login(username, password, addr, remember=False):
     return issue_token(username, remember=remember)
 
 
+def login_read_only(username, password, addr, remember=False):
+    """Sign in without writing: while a data move holds every write, an admin
+    must still be able to sign in to give the move up. The last sign-in time
+    is not recorded; attempts are limited as always (they are kept in memory)."""
+    username = (username or "").strip().lower()
+    if not _rate_ok(f"ip:{addr}") or not _rate_ok(f"user:{username}", MAX_USER_ATTEMPTS):
+        raise PermissionError("too many attempts — wait a few minutes")
+    u = _load(force=True).get("users", {}).get(username)
+    salt = u["salt"] if u else base64.b64encode(b"\0" * 16).decode()
+    calc = _hash(password or "", salt)
+    if not u or not hmac.compare_digest(calc, u["hash"]):
+        _rate_hit(f"ip:{addr}")
+        _rate_hit(f"user:{username}")
+        raise PermissionError("incorrect username or password")
+    return issue_token(username, remember=remember)
+
+
 def logout_everywhere(username):
     data = _load(force=True)
     u = data.get("users", {}).get(username)
