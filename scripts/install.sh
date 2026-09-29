@@ -34,6 +34,7 @@
 #   HS_KUBEVIP=yes|no  HS_MULTUS=yes|no         kube-vip and Multus, installed by Homestead (default yes)
 #   HS_KUBEVIP_VERSION=0.11.1  HS_MULTUS_VERSION=v4.3.102   their chart versions (default: tested)
 #   HS_NODEPROBE=yes|no                         the node probe, installed by Homestead (default yes)
+#   HS_CONSOLE=yes|no                           local host status screen (default yes; native on Harvester)
 #   HS_LONGHORN_VOLUME=200|0                    GB for Longhorn's own LVM volume where there is room (0: none)
 #   HS_K8S_VERSION=v1.33.4+k3s1                 k3s or RKE2 version
 #   HS_LONGHORN_VERSION=v1.9.1  HS_KUBEVIRT_VERSION=v1.6.0  HS_CDI_VERSION=v1.62.0
@@ -44,6 +45,7 @@
 # Versions not set are the current recommended releases.
 #
 # Options: --install / --doctor   open the installer or the node doctor directly
+#          --console / --no-console   enable/disable the local host status screen only
 #          --report      run the health checks, print the results and exit
 #                        (0 healthy, 1 warnings, 2 failures)
 #          --fix-safe    run the health checks and apply every safe fix
@@ -72,12 +74,14 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY=1; shift ;;
     --install) ACTION=install; shift ;;
     --doctor) ACTION=doctor; shift ;;
+    --console) ACTION=console; HS_CONSOLE=yes; shift ;;
+    --no-console) ACTION=console; HS_CONSOLE=no; shift ;;
     --report) ACTION=report; UI=text; shift ;;
     --fix-safe) ACTION=fix-safe; UI=text; shift ;;
     --skip-checks) SKIP_CHECKS=1; shift ;;
     --text) UI=text; shift ;;
     --ref) REF="$2"; shift 2 ;;
-    -h|--help) sed -n '2,51p' "$0" 2>/dev/null; exit 0 ;;
+    -h|--help) sed -n '2,/^set -u/{ /^set -u/d; p; }' "$0" 2>/dev/null; exit 0 ;;
     *) printf 'Unknown option: %s (see --help)\n' "$1" >&2; exit 2 ;;
   esac
 done
@@ -616,6 +620,43 @@ bootstrap() { # stages, then args for bootstrap-k3s.sh
 }
 
 # ------------------------------------------------------------------ flows
+pick_console() {
+  CONSOLE=yes
+  [ -n "$(given HS_CONSOLE)" ] || interactive || return 0
+  yesno HS_CONSOLE "Host Console" "Show a live status screen on this host's first local console?
+
+It shows cluster status, node addresses, CPU, RAM and disk usage. Enter, Q or Escape opens the normal authenticated login prompt. SSH and other consoles stay available. Enabled by default; takes effect on the next boot or logout." yes || CONSOLE=no
+}
+
+console_line() { [ "${CONSOLE:-yes}" = yes ] && echo "Status screen on tty1 (exit to login)" || echo "Normal login prompt"; }
+
+install_console() {
+  # Use a private directory: the installer runs as root on multi-user hosts.
+  if [ "$DRY" = 1 ]; then console_tmp=/tmp/homestead-console-dry-run
+  else console_tmp=$(mktemp -d) || return 1; fi
+  console_action=enable
+  [ "${CONSOLE:-yes}" = yes ] || console_action=disable
+  console_ok=yes
+  run curl -sfL --connect-timeout 10 --max-time 60 "$RAW/$REF/scripts/install-console.sh" -o "$console_tmp/install-console.sh" || console_ok=no
+  if [ "$console_action" = enable ]; then
+    run curl -sfL --connect-timeout 10 --max-time 60 "$RAW/$REF/scripts/host-console.py" -o "$console_tmp/host-console.py" || console_ok=no
+  fi
+  if [ "$console_ok" = yes ]; then
+    run sh "$console_tmp/install-console.sh" "$console_action" "$console_tmp/host-console.py" || console_ok=no
+  fi
+  [ "$DRY" = 1 ] || rm -rf "$console_tmp"
+  if [ "$console_ok" != yes ]; then
+    msg "Host Console" "The host console could not be configured. Retry with: sudo sh install.sh --console"
+    return 1
+  fi
+}
+
+configure_console() {
+  if is_harvester; then msg "Host Console" "Harvester provides its own host status console."; return; fi
+  pick_console
+  install_console
+}
+
 flow_new() {
   ROLE=$(choose HS_ROLE "Installation Mode" "Select how to install this machine:" \
     new "Create a new cluster" \
@@ -737,6 +778,7 @@ It reports temperatures, disk SMART health and each node's network interfaces to
   fi
   yesno HS_KUBEVIRT "Virtual Machines" "Install KubeVirt and CDI to run virtual machines alongside containers?$(kvm || printf '\n\nHardware virtualisation is not available on this machine. Virtual machines would run in emulation mode, with reduced performance.')" "$kubevirt" && kubevirt=yes || kubevirt=no
   pick_vip
+  pick_console
   comps="k8s"
   [ "$longhorn" = yes ] && comps="$comps longhorn"
   [ "$kubevirt" = yes ] && comps="$comps kubevirt cdi"
@@ -751,6 +793,7 @@ It reports temperatures, disk SMART health and each node's network interfaces to
   Virtual machines     $([ "$kubevirt" = yes ] && echo "KubeVirt and CDI" || echo "Not installed")
   Networking           $(network_line)
   Node probe           $([ "$NODEPROBE" = yes ] && echo "Installed by Homestead" || echo "Not installed")
+  Host console         $(console_line)
   Apps VIP             $([ -n "${VIP:-}" ] && echo "$VIP - Homestead, its storage and shares, and apps" || echo "None yet - the nodes' own addresses")
   Homestead URL        $(homestead_url "$NODE_IP")" $comps
   args="server --node-ip $NODE_IP"
@@ -762,6 +805,7 @@ It reports temperatures, disk SMART health and each node's network interfaces to
   stages=6; [ "$longhorn" = yes ] && stages=$((stages + 2)); [ "$kubevirt" = yes ] && stages=$((stages + 1)); [ "$DIST" = rke2 ] && stages=$((stages + 1))
   # shellcheck disable=SC2086
   bootstrap "$stages" $args
+  install_console
   finish_new
 }
 
@@ -772,11 +816,13 @@ join_cluster() { # server|agent
   [ -n "$token" ] || fail "No cluster token was entered."
   mode=agent; [ "$1" = server ] && mode=join
   pick_longhorn_volume
+  pick_console
   summary "Review the settings below. Select a component to change its version, or select Install to begin.
 
   Installation mode    Join an existing cluster as a $([ "$1" = server ] && echo "server node" || echo "worker node")
   Distribution         $(dist_name)
   Cluster              $url
+  Host console         $(console_line)
   Node name            $(hostname)
   Node IP address      $NODE_IP${LH_LINE:+
   Longhorn data        $LH_LINE}
@@ -784,6 +830,7 @@ join_cluster() { # server|agent
 Longhorn host packages (open-iscsi, NFS client) are installed first." k8s
   # shellcheck disable=SC2046
   bootstrap 3 "$mode" "$url" "$token" --node-ip "$NODE_IP" $(dist_flag) $(version_args k8s)$(volume_args)
+  install_console
   msg "Installation Complete" "$(hostname) has joined the cluster. It appears on the Homestead Nodes page within a few minutes."
 }
 
@@ -796,16 +843,19 @@ add_to_cluster() {
   comps="homestead"; storage="Longhorn (already installed)"
   if ! $kcmd get crd volumes.longhorn.io >/dev/null 2>&1; then comps="longhorn homestead"; storage="Longhorn (to be installed)"; fi
   pick_vip
+  pick_console
   # shellcheck disable=SC2086
   summary "Review the settings below. Select a component to change its version, or select Install to begin.
 
   Installation mode    Install on this $(dist_name) cluster
+  Host console         $(console_line)
   Storage              $storage
   Networking           $(network_line)
   Apps VIP             $([ -n "${VIP:-}" ] && echo "$VIP - Homestead, its storage and shares, and apps" || echo "None yet - the nodes' own addresses")
   Homestead URL        $(homestead_url "$(default_ip)")" $comps
   # shellcheck disable=SC2086,SC2046
   bootstrap 5 addons $(dist_flag) $(version_args $comps) $(network_args)$(vip_args)
+  install_console
   finish_new
 }
 
@@ -1400,6 +1450,7 @@ kind_name() {
 [ "$(id -u)" = 0 ] || [ "$DRY" = 1 ] || fail "The installer must run as root: curl ... | sudo sh"
 banner() { say "Homestead installer ($REF)$([ "$DRY" = 1 ] && printf ', dry run: no changes will be made')"; }
 case "$ACTION" in
+  console) banner; configure_console; exit $? ;;
   install) banner; do_install; exit 0 ;;
   doctor) doctor menu; exit 0 ;;
   report) UI=text; doctor report ;;
@@ -1424,6 +1475,7 @@ while :; do
     [ "$HOMESTEAD_PRESENT" = no ] && set -- "$@" install "Install Homestead on this cluster"
     [ "$CLUSTER_PAGES" -le 1 ] || set -- "$@" addresses "More member/VIP addresses ($CLUSTER_PAGE/$CLUSTER_PAGES)"
     set -- "$@" details "Cluster details (members, VIPs and versions)"
+    [ "$KIND" = harvester ] || set -- "$@" console "Configure host status console"
     set -- "$@" clean "Clean up disk space"
     case "$KIND" in k3s-server|rke2-server) set -- "$@" snapshot "Take an etcd snapshot" restore "Restore from an etcd snapshot" ;; esac
     set -- "$@" report "Save a health report"
@@ -1436,6 +1488,7 @@ Select an option:" "$@") || exit 0
   case "$pick" in
     addresses) CLUSTER_PAGE=$((CLUSTER_PAGE % CLUSTER_PAGES + 1)) ;;
     details) cluster_details ;;
+    console) configure_console ;;
     install) do_install ;;
     checks) ( prechecks new ) ;;
     doctor) doctor menu ;;

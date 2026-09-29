@@ -56,6 +56,7 @@ key Enter; shot checks "Results for"             # system checks, before any cha
 key Enter; shot longhorn "Install Longhorn"      # components for the new cluster
 key Enter; shot nodeprobe "Install the node probe"   # the node probe, installed by Homestead
 key Enter; sleep 1; key Enter; shot vip "Homestead and Apps Address"   # a VIP for Homestead and apps
+key Enter; shot console "Show a live status screen"   # default-on physical console
 key Enter; shot ready "Review the settings"   # the installation summary
 key Down; key Enter; shot versions "Select the k3s version"       # a component's releases
 key Escape; sleep 1; key Escape
@@ -99,4 +100,9 @@ key Down; key Enter; shot node-menu-addresses "192.0.2.246"
 key Escape
 
 # A screen that never showed is a menu that broke: say so.
+tmux kill-session -t tui 2>/dev/null
+tmux new-session -d -s tui -x 100 -y 24 "python3 scripts/host-console.py --demo; printf 'Console exited to login handoff'; sleep 30"
+shot host-status "3/3 nodes Ready"
+key q
+shot host-status-exit "Console exited to login handoff"
 exit "$MISSED"

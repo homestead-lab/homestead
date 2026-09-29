@@ -40,7 +40,7 @@ jobs:
             [ "$(grep '^+' /tmp/lines | cut -c2- | sort)" != "$(grep '^-' /tmp/lines | cut -c2- | sort)" ] && echo true || echo false
           }
           ui=$(touches web scripts/audit_dialogs.mjs scripts/audit_pages.mjs .github/workflows/ci.yml)
-          installer=$(touches scripts/install.sh scripts/capture_tui.sh scripts/render_tui.mjs .github/workflows/ci.yml)
+          installer=$(touches scripts/install.sh scripts/install-console.sh scripts/host-console.py scripts/capture_tui.sh scripts/render_tui.mjs .github/workflows/ci.yml)
           echo "ui=$ui installer=$installer"
           echo "ui=$ui" >> "$GITHUB_OUTPUT"; echo "installer=$installer" >> "$GITHUB_OUTPUT"
           echo "self_data=$(touches server/homestead_self_data_*.py server/homestead_storage_journal.py server/server.py tests/integration/self_data_cluster.py tests/integration/self-data-http.py .github/workflows/ci.yml)" >> "$GITHUB_OUTPUT"
