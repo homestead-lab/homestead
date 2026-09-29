@@ -39,6 +39,17 @@ The interactive installer enables a **Host Console** by default on k3s and RKE2
 servers and workers. It replaces the first local console's login screen with
 live CPU, RAM, uptime, IP addresses and local disk usage. Server nodes also show
 cluster members, readiness, Kubernetes versions and Homestead's service address.
+The dashboard uses green for healthy nodes, amber for warnings or cordoned
+nodes, and red for unavailable APIs, failed nodes or high resource usage.
+CPU, per-core load, memory and disk usage have coloured bars, with a rolling
+CPU history graph. Usage turns amber at 75% and red at 90%. Narrow terminals
+stack the panels and keep the full view available by scrolling.
+The logo, history graph and usage bars use Unicode Braille dots, like btop.
+The house outline and two white infrastructure layers are rasterised from
+Homestead's logo, sized for tall terminal cells. Press **A** to switch between
+dots and plain characters if the console font lacks Braille glyphs. Non-Unicode
+locales use plain characters automatically; `host-console.py --ascii` also
+forces that view.
 Workers show local health; cluster details require a server's local kubeconfig.
 Harvester keeps its native console.
 
