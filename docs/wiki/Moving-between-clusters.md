@@ -47,7 +47,8 @@ That S3 server needs an address on your LAN that the destination can reach. By
 default it shares the source's **shared address** - the one its apps share -
 and answers on port 9000 there, so no address of its own is needed. On k3s it
 answers on the nodes' own addresses instead. If port 9000 is already taken
-there, the setup says which Service has it. You can also give it an address of
+there, the setup says which Service has it and names a free port; choose that
+one in **Port** (the port above it is the store's console). You can also give it an address of
 its own - one of the source's [VIPs](Networking#add-default-and-choose-workload-vips) or a free address in
 its IP pools - to keep its traffic apart. After it is set, Homestead checks from
 the destination that the address answers.

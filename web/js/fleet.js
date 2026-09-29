@@ -263,10 +263,12 @@ window.fleetMigration = async id => {
       ${UI.fields(
         UI.field("Size (GB)", '<input id="fm_size" type="number" min="5" value="100">', { help: "Holds the backups moves make; they are incremental." }),
         UI.field("Address", `<select id="fm_pick" onchange="$('#fm_ip').hidden = this.value !== '__typed'">
-            <option value="__shared">${shared ? `Its shared address · ${esc(shared)}:9000` : "Its shared address · port 9000"}</option>
+            <option value="__shared">${shared ? `Its shared address · ${esc(shared)}` : "Its shared address"}</option>
             <option value="__typed">An address of its own…</option></select>
           <input id="fm_ip" class="mono" placeholder="192.168.1.243" hidden data-ipam>`,
-          { help: "Shared with its apps, on its own port. Choose an address of its own only to keep its traffic apart." }))}
+          { help: "Shared with its apps, on its own port. Choose an address of its own only to keep its traffic apart." }),
+        UI.field("Port", '<input id="fm_port" type="number" min="1" max="65534" value="9000" class="mono">',
+          { help: "Where the store answers. Pick another if an app there already uses 9000; the next port up is its console." }))}
       ${UI.actions(UI.cancel() + UI.button("Enable migration", `fleetMigrationSet(${jsArg(id)}, true)`, { kind: "pri", id: "fm_go", attrs: 'data-need="admin"' }))}`;
   }
   $("#mbody").innerHTML = `<div class="ui-stack">${body}</div>`;
@@ -285,7 +287,7 @@ window.fleetMigrationSet = async (id, allow) => {
   if (go) { go.disabled = true; go.textContent = allow ? "Enabling…" : "Disabling…"; }
   try {
     const r = await fleetTransferCall(m, { allow, size_gb: +($("#fm_size")?.value || 100), lb_ip: address,
-      vip_mode: pick === "__shared" ? "shared" : "" });
+      vip_mode: pick === "__shared" ? "shared" : "", port: +($("#fm_port")?.value || 0) || undefined });
     toast(`${m.name}: ${r.detail}`, "ok");
     fleetTransfersPaint();
     if (window.fleetMovesPaint) fleetMovesPaint();

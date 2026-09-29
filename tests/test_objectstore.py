@@ -111,6 +111,42 @@ class ObjectStoreTests(unittest.TestCase):
         self.assertIn("lab/minio", str(caught.exception))
         self.assertIn("address of its own", str(caught.exception))
 
+    def test_a_chosen_port_is_where_it_answers(self):
+        store.deploy({"point_longhorn": False, "port": 9100})
+        service = self._sent_service()
+        self.assertEqual({"s3": 9100, "console": 9101}, {p["name"]: p["port"] for p in service["spec"]["ports"]})
+        self.assertEqual([9100, 9101], [p["port"] for p in self.plans[0]["ports"]])
+        self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"] = dict(
+            service, status={"loadBalancer": {"ingress": [{"ip": "192.168.1.242"}]}})
+        self.assertEqual("http://192.168.1.242:9100", store.endpoint())
+
+    def test_a_taken_port_names_a_free_one(self):
+        def plan(cfg, **kw):
+            if cfg["ports"][0]["port"] == 9000:
+                raise ValueError("192.168.1.211:9000/TCP is already used by lab/home-assistant-core")
+            return {"vip": "192.168.1.211"}
+        store.NETWORK.service_plan.side_effect = plan
+        with self.assertRaises(ValueError) as caught:
+            store.deploy({"point_longhorn": False})
+        self.assertIn("home-assistant-core", str(caught.exception))
+        self.assertIn("Choose another port", str(caught.exception))
+        self.assertIn("Port 9010 is free there", str(caught.exception))
+        store.deploy({"point_longhorn": False, "port": 9010})
+        self.assertEqual("192.168.1.211", self._sent_service()["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
+
+    def test_a_store_already_running_keeps_its_port(self):
+        self._service("192.168.1.244", "192.168.1.244")
+        self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"]["spec"] = {
+            "ports": [{"name": "s3", "port": 9100}, {"name": "console", "port": 9101}]}
+        store.deploy({"point_longhorn": False})
+        self.assertEqual(9100, self._sent_service()["spec"]["ports"][0]["port"])
+        self.assertEqual("192.168.1.244", self._sent_service()["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
+
+    def test_a_silly_port_is_refused(self):
+        for port in (70000, -1, "x"):
+            with self.subTest(port=port), self.assertRaises(ValueError):
+                store.deploy({"point_longhorn": False, "port": port})
+
     def test_a_store_already_running_keeps_its_address(self):
         self._service("192.168.1.244", "192.168.1.244")
         store.deploy({"point_longhorn": False})

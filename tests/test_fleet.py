@@ -236,6 +236,25 @@ class LinkingTests(unittest.TestCase):
         self.assertEqual(3, len(view["members"]))
         self.assertTrue(all(m["reachable"] for m in view["members"]))
 
+    def test_the_address_follows_homestead_onto_its_vip(self):
+        where = {"url": self.a.url}
+        self.a.fleet.bind(self.a.kube.get, self.a.kube.send, "lab", "2.8.300", site=lambda: "Loft",
+                          address=lambda: where["url"], earlier=lambda: ("http://10.0.0.1:8088",))
+        self.a.fleet.join(self.b.url, "admin", "secret")
+        self.assertEqual("http://10.0.0.1:8088", self.b.fleet.member("loft")["url"])
+        # Homestead moved onto its VIP: the node's address it was given gives way.
+        where["url"] = "http://10.0.0.200:8088"
+        self.assertEqual("http://10.0.0.200:8088", self.a.fleet.summary()["address"])
+        self.assertEqual("http://10.0.0.200:8088", self.b.fleet.member("loft")["url"], "the others are told")
+        # An address an admin typed is theirs.
+        self.a.fleet.set_address("http://loft.lan:8088")
+        where["url"] = "http://10.0.0.201:8088"
+        self.assertEqual("", self.a.fleet.follow_address())
+        self.assertEqual("http://loft.lan:8088", self.a.fleet.summary()["address"])
+        # A VIP changed under it: the old VIP gives way to the new one.
+        self.a.fleet.set_address("http://10.0.0.200:8088")
+        self.assertEqual("http://10.0.0.201:8088", self.a.fleet.follow_address(("http://10.0.0.200:8088",)))
+
     def test_the_summary_says_who_answers(self):
         self.a.fleet.join(self.b.url, "admin", "secret")
         self.b.down = True

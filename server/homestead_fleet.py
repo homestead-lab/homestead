@@ -78,11 +78,15 @@ class Unreachable(Exception):
     """The other Homestead could not be asked. Worth trying again."""
 
 
-def bind(_kget, _ksend, namespace, version="", site=None, address=None):
-    global kget, ksend, NS, VERSION, _site, _address
+def bind(_kget, _ksend, namespace, version="", site=None, address=None, earlier=None):
+    """address: where this Homestead is reached now - its VIP once it has
+    one. earlier: addresses it gave out before that (the node's own), which
+    a stored address still showing is moved on from."""
+    global kget, ksend, NS, VERSION, _site, _address, _earlier
     kget, ksend, NS, VERSION = _kget, _ksend, namespace, version
     _site = site or (lambda: "")
     _address = address or (lambda: "")
+    _earlier = earlier or (lambda: ())
     _cache.update(at=0.0, state=None, key=None)
 
 
@@ -360,11 +364,32 @@ def check(target):
     return row
 
 
+def follow_address(previous=()):
+    """Move this Homestead's stored address onto its VIP when the stored one
+    is only the address it was given before it had one - the node's own, or
+    none, or a VIP it has just left (previous). An address an admin typed
+    is theirs and stays. Returns the new one, told to the other members."""
+    state, _ = _load()
+    mine = next((m for m in state.get("members", []) if m.get("id") == state.get("self")), None)
+    now = _address()
+    if not mine or not now or mine.get("url") == now:
+        return ""
+    if mine.get("url") and mine["url"] not in set(_earlier() or ()) | set(previous):
+        return ""
+    set_address(now)
+    return now
+
+
 def summary(via=None):
     """Every linked cluster, with whether it answers here and what it runs."""
     state, _ = _load()
     if not state.get("self"):
         state, _ = _ensure()
+    try:
+        if follow_address():
+            state, _ = _load(fresh=True)
+    except Exception:
+        pass
     me = state["self"]
     rows = [m for m in state.get("members", []) if m.get("id") != me]
     checks = {}

@@ -30,7 +30,10 @@ same release (or one close to it).
    the port, e.g. `http://192.168.1.250:8088` - and the admin username and
    password there.
 3. Check **This Homestead's address**: how the other one reaches this one. It
-   starts as this cluster's VIP on port 8088.
+   starts as this cluster's VIP on port 8088. Until Homestead is on a VIP it
+   is the node's own address; when Homestead moves onto a VIP, or its VIP
+   changes, the linked clusters are told the new one. An address you typed
+   yourself is left as it is.
 4. **Link**.
 
 The password is used once, to sign in and exchange a shared key, and is not
@@ -89,8 +92,9 @@ says whether workloads can move from that cluster to another. It opens
 - **Enable migration** runs that cluster's backup storage - an S3 store
   (RustFS) on a Longhorn volume - which a move backs volumes up to and the
   cluster they go to restores them from. The first time, choose its size;
-  it goes on that cluster's shared address at port 9000 unless you give it an
-  address of its own.
+  it goes on that cluster's shared address at port 9000 unless you choose
+  another port - when an app there already uses 9000 - or give it an address
+  of its own.
 - While it is on, the dialog shows the store's address, whether this cluster
   can reach it, its size, and a fix for anything wrong - an address no other
   cluster can reach, say.

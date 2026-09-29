@@ -1860,14 +1860,16 @@ window.clusterStorage = (name, addressOnly = false, after = null) => {
     ${UI.fields(
       addressOnly ? "" : UI.field("Size (GB)", '<input id="cs_size" type="number" min="5" value="100">'),
       UI.field("Address", `<select id="cs_pick" onchange="$('#cs_ip').hidden = this.value !== '__typed'">
-          <option value="__shared" selected>${shared ? `Its shared address · ${esc(shared)}:9000` : "Its nodes' own addresses · port 9000"}</option>
+          <option value="__shared" selected>${shared ? `Its shared address · ${esc(shared)}` : "Its nodes' own addresses"}</option>
           ${free.some(v => v.from === "vips") ? `<optgroup label="An address of its own: ${esc(name)}'s VIPs">${free.filter(v => v.from === "vips").map(v =>
             `<option value="${esc(v.ip)}">${esc(v.ip)}${v.label ? ` · ${esc(v.label)}` : ""}</option>`).join("")}</optgroup>` : ""}
           ${free.some(v => v.from !== "vips") ? `<optgroup label="An address of its own: free in ${esc(name)}'s IP pools">${free.filter(v => v.from !== "vips").map(v =>
             `<option value="${esc(v.ip)}">${esc(v.ip)}</option>`).join("")}</optgroup>` : ""}
           <option value="__typed">Type an address…</option></select>
         <input id="cs_ip" class="mono" placeholder="192.168.1.243" hidden data-ipam>`,
-        { help: `${shared ? `${esc(name)}'s shared address is the one its apps share; the store answers on port 9000 there.` : `${esc(name)} puts Services on its nodes' own addresses; the store answers on port 9000 there.`} Choose an address of its own only to keep its traffic apart.` }))}
+        { help: `${shared ? `${esc(name)}'s shared address is the one its apps share; the store answers on its own port there.` : `${esc(name)} puts Services on its nodes' own addresses; the store answers on its own port there.`} Choose an address of its own only to keep its traffic apart.` }),
+      addressOnly ? "" : UI.field("Port", '<input id="cs_port" type="number" min="1" max="65534" value="9000" class="mono">',
+        { help: "Where the store answers. Pick another if an app there already uses 9000; the next port up is its console." }))}
     ${UI.more("Whose address this is", `<p>The address belongs to ${esc(name)}, the cluster sending the workloads: its backup store answers on it.
       This cluster never takes it - it only connects to it to read the backups during a move. It shares ${esc(name)}'s disks, so it is for moving, not your only copy of anything.</p>`)}
     ${UI.actions(UI.button("Cancel", "modalBack()") + UI.button(addressOnly ? "Set the address" : "Set it up", `clusterStorageGo(${jsArg(name)})`, { kind: "pri", id: "cs_go" }))}
@@ -1882,7 +1884,7 @@ window.clusterStorageGo = async name => {
   try {
     const r = await api("/api/move/clusters/storage", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, size_gb: +($("#cs_size")?.value || 100), lb_ip: address,
-        vip_mode: pick === "__shared" ? "shared" : "" }) });
+        vip_mode: pick === "__shared" ? "shared" : "", port: +($("#cs_port")?.value || 0) || undefined }) });
     toast(r.detail, "ok");
     modalBack();
     const after = window.__clusterStorageAfter;
