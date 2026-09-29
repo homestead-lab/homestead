@@ -237,8 +237,9 @@ def usage_style(value):
 
 # The house and two infrastructure layers from web/assets/homestead-mark.svg.
 # Plain ASCII keeps the mark intact on the Linux console's default font/locale.
-LOGO = ("     /\\     ", "  /      \\  ", "/          \\", "| -------- |", "|_--------_|")
-COMPACT_LOGO = ("    /\\    ", "  /    \\  ", "| ------ |", "|_------_|")
+LOGO = ("       /\\       ", "     //  \\\\     ", "  ///      \\\\\\  ",
+        "//            \\\\", "|  ----------  |", "|  ----------  |", "+--------------+")
+COMPACT_LOGO = ("     /\\     ", "  ///  \\\\\\  ", "//        \\\\", "| -------- |", "|_--------_|")
 
 
 class Frame:
@@ -289,7 +290,11 @@ def dashboard(data, width, height):
     ram_y = cpu_y + cpu_h
     disk_y = ram_y if wide else ram_y + 6
     cluster_y = ram_y + metrics_h if wide else disk_y + metrics_h
-    cluster_h = max(7, len(nodes) * (1 if wide else 2) + 4, height - 1 - cluster_y)
+    badge = {"ok": "[OK]", "warn": "[!]", "bad": "[FAIL]", "muted": "[--]"}[cluster.get("health", "muted")]
+    summary = badge + " " + cluster["summary"]
+    compact_cluster = wide and height < 28 and bool(cluster.get("url")) and len(summary) + len(cluster["url"]) + 3 <= width - 4
+    node_start = 2 if compact_cluster else 3
+    cluster_h = max(4, len(nodes) * (1 if wide else 2) + node_start + 1, height - 1 - cluster_y)
     frame = Frame(width, cluster_y + cluster_h)
     frame.header = header_h
     header_x = max(len(row) for row in logo) + 4
@@ -302,7 +307,7 @@ def dashboard(data, width, height):
     if width >= 64:
         frame.put(0, width - 9, time.strftime("%H:%M:%S"), "muted")
     host_y = 1
-    if header_h == 5:
+    if header_h >= 5:
         frame.put(1, header_x, "Live resources + Kubernetes readiness", "muted")
         host_y = 2
     frame.put(host_y, header_x, f"{local['hostname']}   up {local.get('uptime', '--')}")
@@ -366,23 +371,25 @@ def dashboard(data, width, height):
 
     frame.box(cluster_y, 0, cluster_h, width, "CLUSTER / readiness")
     health = cluster.get("health", "muted")
-    badge = {"ok": "[OK]", "warn": "[!]", "bad": "[FAIL]", "muted": "[--]"}[health]
-    frame.put(cluster_y + 1, 2, badge + " " + cluster["summary"], health,
+    frame.put(cluster_y + 1, 2, summary, health,
               max(0, width - (22 if data.get("updated") and wide else 4)))
-    if data.get("updated") and width >= 72:
+    if compact_cluster:
+        frame.put(cluster_y + 1, len(summary) + 5, cluster["url"], "accent", width - len(summary) - 7)
+    elif data.get("updated") and width >= 72:
         frame.put(cluster_y + 1, width - 20, "checked " + data["updated"], "muted")
-    frame.put(cluster_y + 2, 2, cluster.get("url") or cluster.get("detail", ""), "accent", max(0, width - 4))
+    if not compact_cluster:
+        frame.put(cluster_y + 2, 2, cluster.get("url") or cluster.get("detail", ""), "accent", max(0, width - 4))
     for i, node in enumerate(nodes):
         badge = {"ok": "[OK]", "warn": "[!]", "bad": "[FAIL]"}[node["health"]]
         if wide:
             text = f"{badge:<6} {node['name']:<14.14} {node['state']:<18} {node['role']:<6} {node['address']}"
             if width >= 96:
                 text += "  " + node["version"]
-            frame.put(cluster_y + 3 + i, 2, text, node["health"], max(0, width - 4))
+            frame.put(cluster_y + node_start + i, 2, text, node["health"], max(0, width - 4))
         else:
-            frame.put(cluster_y + 3 + i * 2, 2, f"{badge:<6} {node['name']:<10.10} {node['state']}",
+            frame.put(cluster_y + node_start + i * 2, 2, f"{badge:<6} {node['name']:<10.10} {node['state']}",
                       node["health"], max(0, width - 4))
-            frame.put(cluster_y + 4 + i * 2, 2, f"{node['role']} {node['address']} {node['version']}",
+            frame.put(cluster_y + node_start + 1 + i * 2, 2, f"{node['role']} {node['address']} {node['version']}",
                       "muted", max(0, width - 4))
     return frame
 

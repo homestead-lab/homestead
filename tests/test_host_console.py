@@ -90,8 +90,9 @@ class ConsoleDataTests(unittest.TestCase):
 
 class DashboardTests(unittest.TestCase):
     def test_ascii_logo_is_complete_and_does_not_overlap_metrics(self):
-        for width, height, expected in ((79, 24, ("    /\\    ", "  /    \\  ", "| ------ |", "|_------_|")),
-                                       (99, 32, ("     /\\     ", "  /      \\  ", "/          \\", "| -------- |", "|_--------_|"))):
+        for width, height, expected in ((79, 24, ("     /\\     ", "  ///  \\\\\\  ", "//        \\\\", "| -------- |", "|_--------_|")),
+                                       (99, 32, ("       /\\       ", "     //  \\\\     ", "  ///      \\\\\\  ",
+                                                 "//            \\\\", "|  ----------  |", "|  ----------  |", "+--------------+"))):
             with self.subTest(width=width, height=height):
                 frame = console.dashboard(console.demo_data(), width, height)
                 text = frame.text()
