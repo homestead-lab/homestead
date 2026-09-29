@@ -537,6 +537,18 @@
     "/api/history": history, "/api/storage": storage, "/api/volumes": volumes,
     "/api/nodes": nodes, "/api/nodes/uptime": demoUptime, "/api/node": url => nodes.find(n => n.name === url.searchParams.get("name")) || {},
     // A host's own OS, as the leader reads it on k3s and RKE2 (host-os.js).
+    // Every host's OS, one at a time (host-os.js): one host done, one restarting.
+    "/api/os-updates": () => {
+      const host = name => ({ os: "Ubuntu 24.04.3 LTS", updates: name === "harvester-node3" ? [{ name: "openssl", security: true }] : [],
+        security: name === "harvester-node3" ? 1 : 0, reboot: false,
+        auto: { tool: "unattended-upgrades", on: name !== "harvester-node1", reboots: name === "harvester-node3", held: name === "harvester-node1" } });
+      return { applies: true, hosts: Object.fromEntries(["harvester-node1", "harvester-node2", "harvester-node3"].map(n => [n, host(n)])),
+        settings: { schedule: { enabled: true, days: ["sun"], hour: 3, tz: "Europe/London", offset_min: 60 }, reboot: "when-needed", single_copy: false, manage: "ubuntu" },
+        rollout: { id: "os-1", status: "running", nodes: ["harvester-node2", "harvester-node3", "harvester-node1"], index: 1,
+          message: "harvester-node3: draining and restarting",
+          results: [{ node: "harvester-node2", ok: true, note: "updates installed", updates: 4, security: 2, restarted: false }] },
+        last: null };
+    },
     "/api/node/os": url => {
       const name = url.searchParams.get("name") || "harvester-node1", at = Math.floor(Date.now() / 1000) - 5400, gb = 1024 ** 3;
       const updates = [["libc6", true], ["openssl", true], ["linux-image-6.8.0-86-generic", true], ["tzdata", false], ["curl", false], ["python3.12", false]]
@@ -544,7 +556,8 @@
       const facts = { os: "Ubuntu 24.04.3 LTS", id: "ubuntu", version: "24.04", kernel: "6.8.0-85-generic", uptime_s: 1728000,
         package_manager: "apt", lists_at: at - 30000, updates, security: 3, reboot: name === "harvester-node2",
         reboot_for: name === "harvester-node2" ? "linux-image-6.8.0-85-generic" : "", failed_units: [], ntp: true,
-        root_total_gb: 97.9, root_used_pct: 41, upgrading: false, last_upgrade: { ok: true, code: "0", at: at - 86400 * 9 }, at,
+        root_total_gb: 97.9, root_used_pct: 41, upgrading: false,
+        auto: { tool: "unattended-upgrades", on: true, reboots: name === "harvester-node2", held: false }, last_upgrade: { ok: true, code: "0", at: at - 86400 * 9 }, at,
         disks: [{ name: "nvme0n1", size: 512 * gb, table: "gpt", fstype: "", mount: "", free: 0, partitions: [
             { name: "nvme0n1p1", start: 1024 ** 2, size: 1.05 * gb, fstype: "vfat", label: "", mounts: ["/boot/efi"], holds: [] },
             { name: "nvme0n1p2", start: 1.05 * gb, size: 2 * gb, fstype: "ext4", label: "", mounts: ["/boot"], holds: [] },

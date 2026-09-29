@@ -715,6 +715,7 @@ async function viewNodes() {
   paint(`<div class="phead"><div><h2>Nodes</h2>
       <p>${n.length} node${n.length === 1 ? "" : "s"} · click any ${layout === "rows" ? "row" : "card"} for detail</p></div>
       <div class="row">${layoutSwitch("nodes", "viewNodes")}
+      ${STATE.platform && !STATE.platform.harvester ? '<button class="btn" onclick="osUpdates()">OS updates</button>' : ""}
       <button class="btn" data-need="admin" onclick="hardwareFeatureSettings()">Hardware features</button></div></div>
    ${layout === "cards" ? `<div class="nodegrid stagger">${n.map(nodeCard).join("")}</div>` : `
    <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack" data-sort="nodes"><thead><tr>

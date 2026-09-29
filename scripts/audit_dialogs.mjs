@@ -64,6 +64,8 @@ const DIALOGS = [
   ["probe-install", "nodes", "probeInstallConfirm()"],
   ["vm-placement-checks", "nodes", "allocationProbeSettings()"],
   ["hardware-features", "nodes", "hardwareFeatureSettings()"],
+  ["os-updates", "nodes", "osUpdates()"],
+  ["os-space", "nodes", "diskOsSpace('harvester-node1')"],
   ["portal-edit", "portal", "portalEdit()"],
   ["backup-storage-setup", "protect", "objectStoreSetup()"],
   ["protect-job-new", "protect", "lhJob()"],
