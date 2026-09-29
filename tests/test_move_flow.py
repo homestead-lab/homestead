@@ -273,6 +273,70 @@ class SourceTests(unittest.TestCase):
             source.target()
 
 
+class VolumeSourceTests(unittest.TestCase):
+    """A volume moves on its own only while nothing mounts it."""
+
+    def setUp(self):
+        self.cluster = FakeCluster()
+        self.lh = FakeLonghorn(self.cluster)
+        seed_frigate(self.cluster)
+        self.cluster.put("/api/v1/namespaces/lab/pods/frigate-1", {
+            "metadata": {"name": "frigate-1", "labels": {"app": "frigate"}},
+            "spec": {"volumes": [{"name": "c", "persistentVolumeClaim": {"claimName": "frigate-config"}}]},
+            "status": {"phase": "Running"}})
+        source.bind(self.cluster.get, self.cluster.send, self.lh, "lab")
+
+    def claim(self):
+        return self.cluster.objects["/api/v1/namespaces/lab/persistentvolumeclaims/frigate-config"]
+
+    def test_a_volume_in_use_is_refused_naming_what_uses_it(self):
+        with self.assertRaisesRegex(ValueError, "in use by frigate-1"):
+            source.quiesce("volume", "frigate-config")
+        self.assertNotIn("annotations", self.claim()["metadata"])
+
+    def test_an_unused_volume_is_held_backed_up_put_back_and_removed(self):
+        self.cluster.objects.pop("/api/v1/namespaces/lab/pods/frigate-1")
+        source.quiesce("volume", "frigate-config")
+        self.assertIn("homestead.io/move-origin", self.claim()["metadata"]["annotations"])
+        described = source.definition("volume", "frigate-config")
+        self.assertEqual(["frigate-config"], [c["claim"] for c in described["claims"]])
+        self.assertEqual([], described["services"])
+        made = source.backup("volume", "frigate-config")
+        self.assertEqual(1, len(made["backups"]))
+        spec = copy.deepcopy(self.claim()["spec"])
+        source.release("volume", "frigate-config")
+        self.assertEqual(spec, self.claim()["spec"], "putting it back leaves the claim itself alone")
+        self.assertNotIn("homestead.io/move-origin", self.claim()["metadata"].get("annotations") or {})
+        source.quiesce("volume", "frigate-config")
+        source.remove("volume", "frigate-config")
+        self.assertNotIn("/api/v1/namespaces/lab/persistentvolumeclaims/frigate-config", self.cluster.objects)
+        self.assertIn("/apis/apps/v1/namespaces/lab/deployments/frigate", self.cluster.objects,
+                      "the app that named it is not touched")
+
+    def test_a_size_in_plain_bytes_is_read_as_gib(self):
+        # Harvester writes claim sizes in bytes: esphome-appdata showed 32212254720 GB.
+        self.claim()["spec"]["resources"]["requests"]["storage"] = "32212254720"
+        self.cluster.objects.pop("/api/v1/namespaces/lab/pods/frigate-1")
+        self.assertEqual(30, source.definition("volume", "frigate-config")["claims"][0]["size_gb"])
+        with mock.patch.object(client, "kget", self.cluster.get), mock.patch.object(client, "NS", "lab"):
+            self.assertEqual(30, client._volume_rows([])[0]["size_gb"])
+
+    def test_the_inventory_lists_volumes_with_what_uses_them(self):
+        with mock.patch.object(client, "kget", self.cluster.get), mock.patch.object(client, "NS", "lab"):
+            rows = client._volume_rows([{"name": "frigate", "running": True,
+                                         "volumes": [{"claim": "frigate-config"}]}])
+            self.assertEqual(["frigate-config"], [r["name"] for r in rows])
+            self.assertFalse(rows[0]["movable"])
+            self.assertIn("in use by frigate", rows[0]["blockers"][0])
+            rows = client._volume_rows([{"name": "frigate", "running": False,
+                                         "volumes": [{"claim": "frigate-config"}]}])
+            self.assertTrue(rows[0]["movable"])
+            self.assertIn("frigate uses it and stays here", rows[0]["warnings"][0])
+            self.cluster.put("/api/v1/namespaces/lab/persistentvolumeclaims/homestead-data", {
+                "metadata": {"name": "homestead-data"}, "spec": {}})
+            self.assertNotIn("homestead-data", [r["name"] for r in client._volume_rows([])])
+
+
 class VmSourceTests(unittest.TestCase):
     def setUp(self):
         self.cluster = FakeCluster()
@@ -664,6 +728,30 @@ class EngineTests(unittest.TestCase):
         self.assertTrue(engine.moves()[0]["source_removed"])
         with self.assertRaisesRegex(ValueError, "nothing to put back"):
             engine.abandon(move["id"])
+
+    def test_a_volume_moves_on_its_own_and_lands_restored(self):
+        self.cluster.objects.pop("/api/v1/namespaces/lab/pods/frigate-1", None)
+        engine.start("shed", "volume", "frigate-config", "moved")
+        move = self.run_until_settled()
+        self.assertEqual("succeeded", move["status"], move["message"])
+        self.assertEqual(list(engine.VOLUME_PHASES), move["phases"])
+        self.assertEqual("frigate-config", self.lh.restored[0]["name"])
+        self.assertIn("/api/v1/namespaces/moved/persistentvolumeclaims/frigate-config", self.cluster.objects)
+        self.assertNotIn("/apis/apps/v1/namespaces/moved/deployments/frigate", self.cluster.objects)
+        self.assertEqual(1, self.cluster.objects["/apis/apps/v1/namespaces/lab/deployments/frigate"]["spec"]["replicas"],
+                         "the app that names it is left running as it was")
+        engine.finish(move["id"])
+        self.assertNotIn("/api/v1/namespaces/lab/persistentvolumeclaims/frigate-config", self.cluster.objects)
+
+    def test_putting_a_volume_back_removes_only_its_restored_copy(self):
+        self.cluster.objects.pop("/api/v1/namespaces/lab/pods/frigate-1", None)
+        engine.start("shed", "volume", "frigate-config", "moved")
+        move = self.run_until_settled()
+        engine.abandon(move["id"])
+        self.assertNotIn("/api/v1/namespaces/moved/persistentvolumeclaims/frigate-config", self.cluster.objects)
+        source_claim = self.cluster.objects["/api/v1/namespaces/lab/persistentvolumeclaims/frigate-config"]
+        self.assertNotIn("homestead.io/move-origin", source_claim["metadata"].get("annotations") or {})
+        self.assertEqual("cancelled", engine.moves()[0]["status"])
 
     def test_the_browser_never_sees_definitions_or_keys(self):
         engine.start("shed", "container", "frigate", "moved", "automatic")

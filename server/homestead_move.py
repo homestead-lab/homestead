@@ -23,6 +23,7 @@ import urllib.parse
 import urllib.request
 
 import homestead_names as NAMES
+from homestead_pod_resources import storage_gib
 
 kget = ksend = None
 NS = "lab"
@@ -61,8 +62,7 @@ def _claim(namespace, name):
 def _size_gb(claim):
     request = (((claim or {}).get("spec", {}) or {}).get("resources", {}) or {}
                ).get("requests", {}).get("storage", "")
-    digits = "".join(ch for ch in str(request) if ch.isdigit())
-    return int(digits) if digits else 0
+    return storage_gib(request)
 
 
 def _workload_row(deployment):
@@ -188,9 +188,61 @@ def inventory():
     except Exception:
         machines, running = [], set()     # no KubeVirt: a cluster with no VMs
     vms = sorted((_vm_row(vm, running) for vm in machines), key=lambda row: row["name"])
-    return {"namespace": NS, "workloads": rows, "vms": vms, "version": VERSION,
+    volumes = _volume_rows(rows + vms)
+    return {"namespace": NS, "workloads": rows, "vms": vms, "volumes": volumes, "version": VERSION,
             "protocol": PROTOCOL,
             "movable": sum(1 for row in rows + vms if row["movable"])}
+
+
+# Homestead's own: its data, and the backup storage a move travels through.
+OWN_CLAIMS = {"homestead-data", "harvui-data", "homestead-objectstore", "harvui-objectstore"}
+
+
+def _volume_rows(users):
+    """Every volume that could move on its own: on Longhorn, and not in use.
+
+    One that a running app or VM mounts is listed but refused - moving it
+    under a writer would bring a torn copy - with that app or VM named, since
+    moving it brings the volume along. One a stopped app mounts can move; the
+    app stays behind, still naming it.
+    """
+    try:
+        claims = kget(f"/api/v1/namespaces/{NS}/persistentvolumeclaims").get("items", [])
+    except Exception:
+        return []
+    by_claim = {}
+    for row in users:
+        for volume in row.get("volumes") or []:
+            by_claim.setdefault(volume["claim"], []).append(row)
+    out = []
+    for claim in claims:
+        meta, spec = claim.get("metadata") or {}, claim.get("spec") or {}
+        name = meta.get("name", "")
+        if name in OWN_CLAIMS or meta.get("deletionTimestamp"):
+            continue
+        blockers, warnings = [], []
+        volume_name = spec.get("volumeName", "")
+        try:
+            pv = kget(f"/api/v1/persistentvolumes/{volume_name}") if volume_name else {}
+        except Exception:
+            pv = {}
+        if ((pv.get("spec") or {}).get("csi") or {}).get("driver") != "driver.longhorn.io":
+            blockers.append("not on Longhorn, so it has no backup to travel in")
+        mounted_by = by_claim.get(name, [])
+        running = [row["name"] for row in mounted_by if row.get("running")]
+        stopped = [row["name"] for row in mounted_by if not row.get("running")]
+        if running:
+            blockers.append(f"in use by {', '.join(running)}; stop it, or move it instead, "
+                            "which brings this volume with it")
+        if stopped:
+            warnings.append(f"{', '.join(stopped)} uses it and stays here, stopped")
+        out.append({"name": name, "namespace": NS, "kind": "volume", "size_gb": _size_gb(claim),
+                    "storage_class": spec.get("storageClassName", ""),
+                    "access_modes": spec.get("accessModes", []),
+                    "volume_mode": spec.get("volumeMode") or "Filesystem",
+                    "used_by": [row["name"] for row in mounted_by],
+                    "movable": not blockers, "blockers": blockers, "warnings": warnings})
+    return sorted(out, key=lambda row: row["name"])
 
 
 def hello():

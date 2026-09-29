@@ -750,7 +750,16 @@
         memory: "4Gi", replicas: 1, containers: [], ports: [], hardware: [], movable: true, blockers: [],
         warnings: ["uses the lab/vlan20 network, which must exist on the destination"],
         volumes: [{ claim: "haos-disk-0", path: "rootdisk", sub_path: "", read_only: false,
-          size_gb: 32, storage_class: "longhorn-haos", access_modes: ["ReadWriteMany"] }] }] },
+          size_gb: 32, storage_class: "longhorn-haos", access_modes: ["ReadWriteMany"] }] }],
+      volumes: [
+        { name: "frigate-config", namespace: "lab", kind: "volume", size_gb: 10, storage_class: "longhorn-r2",
+          access_modes: ["ReadWriteOnce"], volume_mode: "Filesystem", used_by: ["frigate"], movable: false,
+          blockers: ["in use by frigate; stop it, or move it instead, which brings this volume with it"], warnings: [] },
+        { name: "media-archive", namespace: "lab", kind: "volume", size_gb: 500, storage_class: "longhorn-r2",
+          access_modes: ["ReadWriteOnce"], volume_mode: "Filesystem", used_by: [], movable: true, blockers: [], warnings: [] },
+        { name: "mosquitto-appdata", namespace: "lab", kind: "volume", size_gb: 10, storage_class: "longhorn-r2",
+          access_modes: ["ReadWriteOnce"], volume_mode: "Filesystem", used_by: ["mosquitto"], movable: true, blockers: [],
+          warnings: ["mosquitto uses it and stays here, stopped"] }] },
     // One path, two questions: where this can move within the cluster (GET),
     // and what bringing it from another cluster involves (POST).
     "/api/move/plan": (url, init) => (init?.method || "GET") !== "GET" && JSON.parse(init.body || "{}").cluster === "garage"

@@ -1918,8 +1918,9 @@ window.clusterBrowse = async name => {
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
     STATE.data.remoteInventory = report;
     clusterInventory(report);
+    const volumeCount = (report.volumes || []).length;
     if (host) host.textContent = `${report.workloads.length} workload${report.workloads.length === 1 ? "" : "s"}`
-      + ` · ${report.movable} movable`;
+      + ` · ${report.movable} movable` + (volumeCount ? ` · ${volumeCount} volume${volumeCount === 1 ? "" : "s"}` : "");
   } catch (e) {
     if (host) host.innerHTML = `<span class="bad">${esc(e.message)}</span>`;
     toast(e.message, "bad");
@@ -1951,8 +1952,30 @@ window.clusterInventory = report => {
         : `<span class="tag bad">cannot move</span><div class="dim xs" style="max-width:240px">${w.blockers.map(esc).join("; ")}</div>`}</td>
     </tr>`).join("")}</tbody></table></div>`
     : '<div class="empty">That cluster is running nothing Homestead can see.</div>'}
+  ${clusterVolumesHtml(report)}
   <div class="row" style="margin-top:16px"><button class="btn" onclick="closeModal()">Close</button></div>`);
 };
+
+/* Volumes that can move on their own. One a running app or VM uses is
+   listed but refused, naming what uses it: moving that brings the volume. */
+function clusterVolumesHtml(report) {
+  const volumes = report.volumes || [];
+  if (!volumes.length) return "";
+  return `<h3 style="margin:18px 0 8px">Volumes</h3>
+  <div class="dim xs" style="margin-bottom:8px">A volume moves on its own when nothing is using it. Moving an app or VM brings its volumes with it.</div>
+  <div class="tblwrap"><table class="tbl dense"><thead><tr>
+    <th>Volume</th><th>Size</th><th>Used by</th><th></th></tr></thead><tbody>
+    ${volumes.map(v => `<tr>
+      <td><b class="mono">${esc(v.name)}</b>${v.volume_mode === "Block" ? ' <span class="tag">disk</span>' : ""}
+        <div class="dim xs mono">${esc(v.namespace)}${v.storage_class ? ` · ${esc(v.storage_class)}` : ""}</div></td>
+      <td class="mono small">${v.size_gb} GB</td>
+      <td class="small">${v.used_by.length ? v.used_by.map(esc).join(", ") : '<span class="dim">nothing</span>'}</td>
+      <td>${v.movable
+        ? `<button class="btn sm" data-need="admin" onclick="moveReview(${jsq(report.cluster)},'volume',${jsq(v.name)})">Move to this cluster</button>`
+          + ((v.warnings || []).length ? `<div class="dim xs" style="max-width:240px;margin-top:4px">${v.warnings.map(esc).join("; ")}</div>` : "")
+        : `<span class="tag bad">cannot move</span><div class="dim xs" style="max-width:240px">${v.blockers.map(esc).join("; ")}</div>`}</td>
+    </tr>`).join("")}</tbody></table></div>`;
+}
 
 /* Before anything stops: where it lands, what address it gets, and every
    reason it would fail or surprise someone - asked of both clusters. */
@@ -1960,11 +1983,15 @@ let MOVE_PLAN_SEQUENCE = 0;
 window.moveReview = (cluster, kind, name) => {
   ++MOVE_PLAN_SEQUENCE;
   childModal(`Move ${name} from ${cluster}`, `
-  <p class="muted small">Stops ${esc(name)} on ${esc(cluster)}, backs up its volumes to the shared backup
-    storage, restores them here, and starts it here. The original stays on ${esc(cluster)}, stopped,
-    until you remove it, so it can be put back at any point before then.</p>
+  <p class="muted small">${kind === "volume"
+    ? `Holds ${esc(name)} on ${esc(cluster)} while nothing uses it, backs it up to the shared backup storage,
+      and restores it here. The original stays on ${esc(cluster)} until you remove it, so nothing is lost if
+      you change your mind.`
+    : `Stops ${esc(name)} on ${esc(cluster)}, backs up its volumes to the shared backup
+      storage, restores them here, and starts it here. The original stays on ${esc(cluster)}, stopped,
+      until you remove it, so it can be put back at any point before then.`}</p>
   <div class="f2"><div class="f"><label>Namespace here</label><input id="mv_ns" value="lab"></div>
-    ${kind === "vm" ? "" : `<div class="f"><label>Address ${tip("The LAN address its Services get on this cluster. Shared uses this Homestead's own address; automatic takes a free one from the Harvester IP pool.")}</label>
+    ${kind !== "container" ? "" : `<div class="f"><label>Address ${tip("The LAN address its Services get on this cluster. Shared uses this Homestead's own address; automatic takes a free one from the Harvester IP pool.")}</label>
       <select id="mv_mode" onchange="moveAddressMode(this.value)">
         <option value="shared">This cluster's shared address</option>
         <option value="automatic">Next free pool address</option>
@@ -2025,11 +2052,12 @@ window.movePlan = async (cluster, kind, name) => {
           ? `Give ${esc(cluster)}'s backup storage an address` : `Set up backup storage on ${esc(cluster)}`}</button>` : ""}</div>` : ""}
       ${plan.warnings?.length ? `<div class="note warn"><b>Worth knowing first.</b><ul>${plan.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
       ${plan.ok ? `<div class="note good"><b>Ready to move.</b>
-        ${volumes.length ? `${volumes.length === 1 ? "Its volume" : `Its ${volumes.length} volumes`} (${plan.total_gb} GB) ${volumes.length === 1 ? "goes" : "go"}
+        ${kind === "volume" ? `${esc(name)} (${plan.total_gb} GB) goes through ${plan.joined ? "the backup storage both clusters already share" : `the backup storage on ${esc(cluster)}, which this cluster will be pointed at`}.`
+          : volumes.length ? `${volumes.length === 1 ? "Its volume" : `Its ${volumes.length} volumes`} (${plan.total_gb} GB) ${volumes.length === 1 ? "goes" : "go"}
           through ${plan.joined ? "the backup storage both clusters already share" : `the backup storage on ${esc(cluster)}, which this cluster will be pointed at`}.`
           : "It has no volumes, so only its definition travels."}
         ${plan.addresses?.length ? `<br>Reachable here at ${plan.addresses.map(esc).join(", ")}.` : ""}
-        ${plan.will_run ? "" : `<br>It is stopped on ${esc(cluster)}, and will arrive stopped.`}</div>` : ""}
+        ${plan.will_run || kind === "volume" ? "" : `<br>It is stopped on ${esc(cluster)}, and will arrive stopped.`}</div>` : ""}
       ${volumes.length ? `<div class="drow"><div class="dl">Volumes</div><div class="dv mono xs">${volumes.map(c =>
         `${esc(c.claim)} · ${c.size_gb} GB${c.volume_mode === "Block" ? " · disk" : ""}`).join("<br>")}<br>Storage class: ${esc(plan.storage_class || "cluster default")}</div></div>` : ""}`;
     if (go) go.disabled = !plan.ok;
@@ -2040,8 +2068,12 @@ window.movePlan = async (cluster, kind, name) => {
 };
 
 window.moveStart = async (cluster, kind, name) => {
-  if (!(await ask(`Stop ${name} on ${cluster} and bring it here?` + String.fromCharCode(10, 10)
-      + "It is unavailable from the moment it stops there until it starts here."))) return;
+  const question = kind === "volume"
+    ? `Bring the volume ${name} here from ${cluster}?` + String.fromCharCode(10, 10)
+      + `Nothing on ${cluster} can use it until the move finishes or is put back.`
+    : `Stop ${name} on ${cluster} and bring it here?` + String.fromCharCode(10, 10)
+      + "It is unavailable from the moment it stops there until it starts here.";
+  if (!(await ask(question))) return;
   try {
     await api("/api/move/start", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(moveBody(cluster, kind, name)) });
@@ -2066,7 +2098,7 @@ function movesHtml(moves) {
     const actions = [
       m.status === "failed" ? `<button class="btn sm" data-need="admin" onclick="moveAct('retry',${jsq(m.id)})">${m.phase === "backing-up" ? "Retry failed backups" : "Retry"}</button>` : "",
       m.status === "succeeded" && !m.source_removed
-        ? `<button class="btn sm" data-need="admin" onclick="moveFinish(${jsq(m.id)},${jsq(m.name)},${jsq(m.cluster)})">Remove from ${esc(m.cluster)}</button>` : "",
+        ? `<button class="btn sm" data-need="admin" onclick="moveFinish(${jsq(m.id)},${jsq(m.name)},${jsq(m.cluster)},${jsq(m.kind)})">Remove from ${esc(m.cluster)}</button>` : "",
       ["running", "failed", "succeeded"].includes(m.status) && !m.source_removed
         ? `<button class="btn sm danger" data-need="admin" onclick="moveBack(${jsq(m.id)},${jsq(m.name)},${jsq(m.cluster)},${jsq(m.status)},${m.source_stopped === false ? "false" : "true"})">${m.source_stopped === false ? "Cancel" : "Put back"}</button>` : "",
       ["succeeded", "cancelled"].includes(m.status)
@@ -2122,7 +2154,10 @@ window.moveBack = async (id, name, cluster, status, stopped = true) => {
   moveAct("abandon", id);
 };
 
-window.moveFinish = (id, name, cluster) => modal(`Remove ${name} from ${cluster}`, `
+window.moveFinish = (id, name, cluster, kind) => modal(`Remove ${name} from ${cluster}`, kind === "volume" ? `
+  <p>${esc(name)} is here now. Removing the original from ${esc(cluster)} deletes that copy and makes the move
+    permanent: after this it cannot be put back.</p>
+  <div class="note">Its backup stays in the backup storage.</div>` : `
   <p>${esc(name)} is running here. Removing the stopped original from ${esc(cluster)} makes the move
     permanent: after this it cannot be put back.</p>
   <label class="switch"><input type="checkbox" id="mv_vols"> Also delete its volumes on ${esc(cluster)}</label>
