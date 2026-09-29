@@ -2479,6 +2479,15 @@ def prepare_vm(cfg, platform=None, default_class=""):
         disks = [{"name": "root", "disk": {"bus": "virtio"}, "bootOrder": 2},
                  {"name": "install", "cdrom": {"bus": "sata"}, "bootOrder": 1}]
         volumes = [root, {"name": "install", "persistentVolumeClaim": {"claimName": install_iso}}]
+        drivers_iso = str(cfg.get("drivers_iso") or "").strip()
+        if drivers_iso:
+            # Windows setup sees no disk on the virtio bus until it loads the
+            # VirtIO drivers: their ISO in a second drive, as on Proxmox.
+            if drivers_iso == install_iso:
+                raise ValueError("the drivers ISO is the installer itself; choose the VirtIO drivers ISO")
+            iso_ready(ns, drivers_iso)
+            disks.append({"name": "drivers", "cdrom": {"bus": "sata"}})
+            volumes.append({"name": "drivers", "persistentVolumeClaim": {"claimName": drivers_iso}})
     secret_name = ""
     if cloudinit or network_data:
         # In a Secret, as Harvester keeps them: a password or a join token is
