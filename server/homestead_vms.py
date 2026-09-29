@@ -999,7 +999,12 @@ def _recheck_edit(prepared):
     for claim in new_names:
         for path in (f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(claim)}",
                      f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{urllib.parse.quote(claim)}"):
-            if _optional(path) is not None:
+            found = _optional(path)
+            # An ISO from the library is one shared copy that exists before
+            # any VM holds it; attaching it is the point, not an adoption.
+            if found is not None and ((found.get("metadata") or {}).get("labels") or {}).get("homestead.io/iso") == "true":
+                break
+            if found is not None:
                 raise ValueError(f"New disk {claim} already exists; it cannot be adopted by this edit")
 
 

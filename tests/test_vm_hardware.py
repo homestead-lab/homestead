@@ -190,6 +190,21 @@ class AttachTests(unittest.TestCase):
         self.assertEqual({"claimName": "iso-debian-1"}, volume["persistentVolumeClaim"])
         self.assertEqual([], prepared["to_create"], "the ISO's volume is shared, not made again")
 
+    def test_a_library_iso_is_attached_not_refused_as_an_existing_new_disk(self):
+        # "New disk iso-virtio-win-0-1-285-bf0e959b already exists; it cannot be adopted by this edit"
+        vm = lambda claims: {"metadata": {"uid": "u", "resourceVersion": "1"}, "spec": {"template": {"spec": {
+            "volumes": [{"name": f"v{i}", "persistentVolumeClaim": {"claimName": c}} for i, c in enumerate(claims)]}}}}
+        prepared = {"namespace": "lab", "name": "w11", "identity": {"uid": "u", "resourceVersion": "1"}, "effects": [], "resize": [],
+                    "claims": {}, "current": vm(["w11-disk"]), "vm": vm(["w11-disk", "iso-virtio"])}
+        found = {"iso-virtio": {"metadata": {"labels": {"homestead.io/iso": "true"}}}}
+        with mock.patch.object(vms, "_get", lambda ns, name: prepared["current"]), \
+                mock.patch.object(vms, "_identity", lambda obj: {"uid": "u", "resourceVersion": "1"}), \
+                mock.patch.object(vms, "_optional", lambda path: found.get(path.rsplit("/", 1)[-1])):
+            vms._recheck_edit(prepared)
+            found["iso-virtio"] = {"metadata": {"labels": {}}}
+            with self.assertRaisesRegex(ValueError, "cannot be adopted"):
+                vms._recheck_edit(prepared)
+
     def test_an_iso_not_ready_is_refused(self):
         def refuse(ns, name):
             raise ValueError("iso-debian-1 is still being copied")
@@ -213,6 +228,19 @@ class InstallTests(unittest.TestCase):
             raise urllib.error.HTTPError(path, 404, "missing", {}, None)
 
         imports.kget, imports.ksend, imports.NS, imports._cache = get, lambda *a, **k: None, "lab", {}
+
+    def test_windows_gets_its_virtio_drivers_in_a_second_drive(self):
+        with mock.patch.object(imports, "iso_ready", lambda ns, name: {}):
+            plan = imports.prepare_vm({"name": "w11", "install_iso": "iso-win11-1", "drivers_iso": "iso-virtio-win-1", "disk_gb": 64},
+                                      {"harvester": False, "cdi": True}, "longhorn")
+            spec = plan["vm"]["spec"]["template"]["spec"]
+            drivers = next(d for d in spec["domain"]["devices"]["disks"] if d["name"] == "drivers")
+            self.assertEqual({"bus": "sata"}, drivers["cdrom"])
+            self.assertNotIn("bootOrder", drivers, "the installer boots, not the drivers")
+            self.assertIn({"name": "drivers", "persistentVolumeClaim": {"claimName": "iso-virtio-win-1"}}, spec["volumes"])
+            with self.assertRaisesRegex(ValueError, "installer itself"):
+                imports.prepare_vm({"name": "w11", "install_iso": "iso-win11-1", "drivers_iso": "iso-win11-1"},
+                                   {"harvester": False, "cdi": True}, "longhorn")
 
     def test_a_vm_installs_from_an_iso_onto_a_blank_disk_with_its_preset(self):
         with mock.patch.object(imports, "iso_ready", lambda ns, name: {}):
