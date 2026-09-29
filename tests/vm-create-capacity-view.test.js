@@ -1,12 +1,12 @@
 "use strict";
 const test=require("node:test"), assert=require("node:assert/strict"), fs=require("node:fs"), vm=require("node:vm");
-function setup({blocked=false,missing=false,fail=false}={}) {
+function setup({blocked=false,missing=false,fail=false,routine=false}={}) {
   const fields={"#vmCreateApprove":{checked:false},"#vmCreateApply":{},"#mbody":{innerHTML:"",insertAdjacentHTML(_where,html){this.innerHTML=html+this.innerHTML;}}};
   const sent=[],exposed=[];
   const ctx={console, URLSearchParams, Map, Date, Promise, encodeURIComponent,
     document:{addEventListener(){}},STATE:{data:{}},$:key=>fields[key],$$:()=>[],esc:v=>String(v).replaceAll("<","&lt;"),
     toast(){},go(){},closeModal(){},modalBack(){},childModal:(_title,html)=>fields["#mbody"].innerHTML=html,
-    deployCapacityHtml:p=>`<div>${p.warnings.join(" ")}</div>`,networkExpose:async(...args)=>exposed.push(args),
+    deployCapacityHtml:p=>`<div>${p.warnings.join(" ")}</div>`,capacityNotes:p=>routine ? {concerns:[],caveats:p.warnings} : {concerns:p.warnings,caveats:[]},networkExpose:async(...args)=>exposed.push(args),
     api:async(path,options)=>{
       const body=JSON.parse(options.body);sent.push({path,body});
       if(path.endsWith("/preview"))return {config:missing ? null : {...body,mac:"52:54:00:11:22:33"},capacity_token:"signed-create",volumes:[],
@@ -30,6 +30,14 @@ test("create review freezes generated MAC and user input, with explicit consent"
   assert.equal(t.sent[1].body.mac,"52:54:00:11:22:33");
   assert.equal(t.sent[1].body.capacity_token,"signed-create");
   await t.ctx.vmCreateReviewedApply();assert.equal(t.sent.length,2);
+});
+test("a review with only routine caveats needs no tickbox",async()=>{
+  const t=setup({routine:true});
+  delete t.fields["#vmCreateApprove"];
+  await t.ctx.vmCreateReview({name:"guest",namespace:"lab"});
+  assert.doesNotMatch(t.fields["#mbody"].innerHTML,/vmCreateApprove/);
+  await t.ctx.vmCreateReviewedApply();
+  assert.equal(t.sent.length,2);assert.equal(t.sent[1].body.confirm_capacity,true);
 });
 test("blocked and missing create reviews cannot submit",async()=>{
   for(const options of [{blocked:true},{missing:true}]){

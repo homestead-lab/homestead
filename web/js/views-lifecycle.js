@@ -855,13 +855,16 @@ window.vmCreateReview = async (body, network = {}) => {
       <div class="reviewbox"><b>Disks to create</b>${review.volumes?.length ? review.volumes.map(v=>`<p class="small"><b>${esc(v.name)}</b> · ${esc(v.size)} · ${esc(v.access_mode)} · ${esc(v.volume_mode)}<br><span class="muted">${esc(v.storage_class)}</span></p>`).join("") : '<p class="small muted">Uses the selected existing imported disk; no new disk claim.</p>'}</div>
       ${review.capacity.blockers?.length ? `<div class="note bad">${review.capacity.blockers.map(esc).join(" · ")}</div>` : ""}
       ${deployCapacityHtml(review.capacity)}
-      ${!review.capacity.blocked ? '<label class="check"><input id="vmCreateApprove" type="checkbox" onchange="vmCreateReviewReady()"> Create this VM and accept the displayed capacity, storage and partial-creation risks</label>' : ""}
-      <div class="modalactions"><button class="btn" onclick="vmCreateReviewBack()">Back to configuration</button><button id="vmCreateApply" class="btn pri" disabled onclick="vmCreateReviewedApply()">Create reviewed VM</button></div></div>`,true);
+      ${!review.capacity.blocked && capacityNotes(review.capacity).concerns.length ? '<label class="check"><input id="vmCreateApprove" type="checkbox" onchange="vmCreateReviewReady()"> Create it anyway, accepting the warnings above</label>' : ""}
+      <div class="modalactions"><button class="btn" onclick="vmCreateReviewBack()">Back to configuration</button><button id="vmCreateApply" class="btn pri" disabled onclick="vmCreateReviewedApply()">Create VM</button></div></div>`,true);
+    vmCreateReviewReady();
   } catch (error) { if(sequence === VM_CREATE_SEQUENCE) toast(error.message,"bad"); }
 };
 window.vmCreateReviewBack = () => { if (!VM_CREATE_BUSY) { VM_CREATE_REVIEW = null; ++VM_CREATE_SEQUENCE; modalBack(); } };
 window.vmCreateReviewReady = () => {
-  const ready = !!(VM_CREATE_REVIEW && !VM_CREATE_BUSY && !VM_CREATE_REVIEW.capacity.blocked && $("#vmCreateApprove")?.checked);
+  // Nothing needing attention: no tickbox to tick, only the button.
+  const accepted = $("#vmCreateApprove") ? $("#vmCreateApprove").checked : true;
+  const ready = !!(VM_CREATE_REVIEW && !VM_CREATE_BUSY && !VM_CREATE_REVIEW.capacity.blocked && accepted);
   if($("#vmCreateApply")) $("#vmCreateApply").disabled = !ready;
   return ready;
 };
