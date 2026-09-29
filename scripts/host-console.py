@@ -2,6 +2,7 @@
 """Read-only physical console. No web server, credentials or shell shortcuts."""
 import argparse
 from collections import deque
+from functools import lru_cache
 import json
 import os
 from pathlib import Path
@@ -235,19 +236,71 @@ def usage_style(value):
     return "muted" if value is None else "bad" if value >= 90 else "warn" if value >= 75 else "ok"
 
 
-# The house and two infrastructure layers from web/assets/homestead-mark.svg.
-# Plain ASCII keeps the mark intact on the Linux console's default font/locale.
-LOGO = ("       /\\       ", "     //  \\\\     ", "  ///      \\\\\\  ",
-        "//            \\\\", "|  ----------  |", "|  ----------  |", "+--------------+")
-COMPACT_LOGO = ("     /\\     ", "  ///  \\\\\\  ", "//        \\\\", "| -------- |", "|_--------_|")
+# Unicode Braille uses a 2x4 raster per character, with dots 7/8 below 1-6.
+# Mapping reference: github.com/agvxov/braille-art-conversions.
+DOT_BITS = ((1, 8), (2, 16), (4, 32), (64, 128))
+
+
+class DotCanvas:
+    def __init__(self, width, height):
+        self.width, self.height = width, height
+        self.dots = [[None] * (width * 2) for _ in range(height * 4)]
+
+    def dot(self, x, y, style):
+        if 0 <= x < self.width * 2 and 0 <= y < self.height * 4:
+            self.dots[y][x] = style
+
+    def cells(self, braille=True):
+        rows = []
+        for y in range(self.height):
+            row = []
+            for x in range(self.width):
+                mask, styles = 0, []
+                for dy in range(4):
+                    for dx in range(2):
+                        style = self.dots[y * 4 + dy][x * 2 + dx]
+                        if style:
+                            mask |= DOT_BITS[dy][dx]
+                            styles.append(style)
+                # One terminal cell has one foreground colour. White logo
+                # layers take priority; graphs use the hottest sample.
+                style = next((s for s in ("text", "bad", "warn", "ok", "brand") if s in styles), "muted")
+                row.append((chr(0x2800 + mask) if braille and mask else "#" if mask else " ", style))
+            rows.append(row)
+        return rows
+
+
+def segment_distance(x, y, a, b):
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    t = max(0, min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / (dx * dx + dy * dy)))
+    return ((x - a[0] - t * dx) ** 2 + (y - a[1] - t * dy) ** 2) ** .5
+
+
+@lru_cache(maxsize=4)
+def logo_cells(large=False, braille=True):
+    # Rasterise the actual SVG strokes, rather than approximate the roof with
+    # slashes. Twice as many columns as rows accounts for tall terminal cells.
+    width, height = (16, 7) if large else (12, 5)
+    canvas = DotCanvas(width, height)
+    house = ((12, 29), (32, 13), (52, 29), (52, 52), (12, 52), (12, 29))
+    layers = (((20, 34), (44, 34)), ((20, 43), (44, 43)))
+    for y in range(height * 4):
+        for x in range(width * 2):
+            sx, sy = 8 + (x + .5) * 48 / (width * 2), 8 + (y + .5) * 48 / (height * 4)
+            if any(segment_distance(sx, sy, a, b) <= 2.75 for a, b in zip(house, house[1:])):
+                canvas.dot(x, y, "brand")
+            if any(segment_distance(sx, sy, a, b) <= 2.75 for a, b in layers):
+                canvas.dot(x, y, "text")
+    return canvas.cells(braille)
 
 
 class Frame:
     """Clipped cells, with semantic styles independent of terminal colour support."""
-    def __init__(self, width, height):
+    def __init__(self, width, height, braille=True):
         self.width = max(1, width)
         self.rows = [[(" ", "text") for _ in range(self.width)] for _ in range(height)]
         self.header = 0
+        self.braille = braille
 
     def put(self, y, x, text, style="text", limit=None):
         if 0 <= y < len(self.rows):
@@ -269,20 +322,38 @@ class Frame:
         if width < 2:
             return
         value = None if value is None else max(0, min(100, value))
-        fill = round((width - 2) * (value or 0) / 100)
         self.put(y, x, "[" + " " * (width - 2) + "]", "muted")
-        self.put(y, x + 1, "|" * fill, usage_style(value))
+        canvas = DotCanvas(width - 2, 1)
+        fill = round((width - 2) * 2 * (value or 0) / 100)
+        for col in range(fill):
+            for row in range(4):
+                canvas.dot(col, row, usage_style(value))
+        for col, (char, style) in enumerate(canvas.cells(self.braille)[0]):
+            self.put(y, x + 1 + col, char, style)
+
+    def graph(self, y, x, width, height, samples):
+        canvas = DotCanvas(width, height)
+        samples = samples[-width * 2:]
+        for col, sample in enumerate(samples):
+            if sample is None:
+                continue
+            fill = round(max(0, min(100, sample)) * height * 4 / 100)
+            for row in range(height * 4 - fill, height * 4):
+                canvas.dot(width * 2 - len(samples) + col, row, usage_style(sample))
+        for row, cells in enumerate(canvas.cells(self.braille)):
+            for col, (char, style) in enumerate(cells):
+                self.put(y + row, x + col, char, style)
 
     def text(self):
         return ["".join(char for char, _ in row) for row in self.rows]
 
 
-def dashboard(data, width, height):
+def dashboard(data, width, height, braille=True):
     """Panels fit an 80x24 host console; narrow screens stack and scroll."""
     local, cluster = data["local"], data["cluster"]
     disks, nodes = local.get("disks", []), cluster.get("nodes", [])
     wide = width >= 72
-    logo = LOGO if height >= 28 and width >= 60 else COMPACT_LOGO
+    logo = logo_cells(height >= 28 and width >= 60, braille)
     header_h = len(logo)
     cpu_h = max(6, (height - header_h - 1) // 3) if wide else 8
     metrics_h = max(6, 2 + 2 * len(disks))
@@ -295,14 +366,12 @@ def dashboard(data, width, height):
     compact_cluster = wide and height < 28 and bool(cluster.get("url")) and len(summary) + len(cluster["url"]) + 3 <= width - 4
     node_start = 2 if compact_cluster else 3
     cluster_h = max(4, len(nodes) * (1 if wide else 2) + node_start + 1, height - 1 - cluster_y)
-    frame = Frame(width, cluster_y + cluster_h)
+    frame = Frame(width, cluster_y + cluster_h, braille)
     frame.header = header_h
     header_x = max(len(row) for row in logo) + 4
     for y, row in enumerate(logo):
-        frame.put(y, 1, row, "brand")
-        layer = re.search(r"-+", row)
-        if layer:
-            frame.put(y, 1 + layer.start(), layer.group(), "text")
+        for x, (char, style) in enumerate(row):
+            frame.put(y, 1 + x, char, style)
     frame.put(0, header_x, "HOMESTEAD / host & cluster" if width >= 60 else "HOMESTEAD", "accent")
     if width >= 64:
         frame.put(0, width - 9, time.strftime("%H:%M:%S"), "muted")
@@ -324,11 +393,7 @@ def dashboard(data, width, height):
     frame.put(cpu_y + 1, 13, "load " + local.get("load", "--"), "muted", max(0, graph_w - 11))
     frame.bar(cpu_y + 2, 2, graph_w, cpu)
     graph_h = cpu_h - 4
-    samples = local.get("history", [])[-graph_w:]
-    for col, sample in enumerate(samples):
-        for row in range(graph_h):
-            if sample > (graph_h - row - 1) * 100 / graph_h:
-                frame.put(cpu_y + 3 + row, 2 + graph_w - len(samples) + col, "#", usage_style(sample))
+    frame.graph(cpu_y + 3, 2, graph_w, graph_h, local.get("history", []))
     if wide:
         cores = local.get("cores", [])
         core_x = graph_w + 4
@@ -394,7 +459,7 @@ def dashboard(data, width, height):
     return frame
 
 
-def screen(window, monitor, demo=False, unhealthy=False):
+def screen(window, monitor, demo=False, unhealthy=False, ascii_only=False):
     import curses
     styles = {name: curses.A_BOLD if name in {"ok", "bad", "warn", "accent", "brand"} else
               curses.A_DIM if name == "muted" else 0
@@ -419,11 +484,17 @@ def screen(window, monitor, demo=False, unhealthy=False):
         pass
     window.timeout(250)
     window.keypad(True)
+    try:
+        "\u28ff".encode(window.encoding)
+        unicode_supported = True
+    except (UnicodeError, LookupError):
+        unicode_supported = False
+    braille = unicode_supported and not ascii_only
     offset = 0
     while True:
         height, width = window.getmaxyx()
         # Reserve the last terminal column: curses wraps at the bottom-right cell.
-        frame = dashboard(demo_data(unhealthy) if demo else monitor.snapshot(), max(1, width - 1), height)
+        frame = dashboard(demo_data(unhealthy) if demo else monitor.snapshot(), max(1, width - 1), height, braille)
         capacity = max(1, height - frame.header - 1)
         offset = min(offset, max(0, len(frame.rows) - frame.header - capacity))
         window.erase()
@@ -441,7 +512,7 @@ def screen(window, monitor, demo=False, unhealthy=False):
                 except curses.error:
                     pass
                 x = end
-        footer = "Enter/Q/Esc: login  Up/Down: scroll  PgUp/PgDn: page" if width >= 60 else "Q/Enter/Esc: login  Up/Dn"
+        footer = "Enter/Q/Esc: login  Up/Down: scroll  PgUp/PgDn: page  A: glyphs" if width >= 60 else "Q: login  Up/Dn  A: glyphs"
         if len(frame.rows) - frame.header > capacity:
             footer += f"  {offset + 1}/{len(frame.rows) - frame.header - capacity + 1}"
         try:
@@ -452,6 +523,8 @@ def screen(window, monitor, demo=False, unhealthy=False):
         key = window.getch()
         if key in (ord("q"), ord("Q"), 27, 10, 13, curses.KEY_ENTER):
             return
+        if key in (ord("a"), ord("A")):
+            braille = unicode_supported and not braille
         if key in (curses.KEY_DOWN, curses.KEY_NPAGE):
             offset += capacity if key == curses.KEY_NPAGE else 1
         elif key in (curses.KEY_UP, curses.KEY_PPAGE):
@@ -462,6 +535,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--demo", action="store_true", help="show fictional example data")
     parser.add_argument("--demo-unhealthy", action="store_true", help="show fictional warnings and a failed node")
+    parser.add_argument("--ascii", action="store_true", help="use plain characters for fonts without Braille glyphs")
     args = parser.parse_args()
     monitor = Monitor()
     if not (args.demo or args.demo_unhealthy):
@@ -469,7 +543,7 @@ def main():
             threading.Thread(target=target, daemon=True).start()
     try:
         import curses
-        curses.wrapper(screen, monitor, args.demo or args.demo_unhealthy, args.demo_unhealthy)
+        curses.wrapper(screen, monitor, args.demo or args.demo_unhealthy, args.demo_unhealthy, args.ascii)
     except (ImportError, OSError, KeyboardInterrupt):
         pass  # The getty wrapper always proceeds to the authenticated login.
     finally:

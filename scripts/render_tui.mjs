@@ -17,6 +17,9 @@ const cube = n => {
   return `rgb(${level(Math.floor(i / 36))},${level(Math.floor(i / 6) % 6)},${level(i % 6)})`;
 };
 const escape = text => text.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+// Browser font fallback can give Braille a wider advance than terminal text.
+// Terminals allocate exactly one cell; keep the preview on that same grid.
+const terminalText = text => escape(text).replace(/[\u2800-\u28ff]/g, char => `<span class="dot">${char}</span>`);
 
 /* Just the box: blank rows above and below dropped (their colour codes kept,
    as later rows rely on them), and the margin every row shares taken off. */
@@ -45,7 +48,7 @@ function toHtml(ans) {
       if (state.reverse) [fg, bg] = [bg === "transparent" ? "#101014" : bg, fg];
       const style = `color:${fg};background:${bg};${state.bold ? "font-weight:700;" : ""}`;
       const lines = part.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").split("\n");
-      html += lines.map(line => line ? `<span style="${style}">${escape(line)}</span>` : "").join("</div><div class=row>");
+      html += lines.map(line => line ? `<span style="${style}">${terminalText(line)}</span>` : "").join("</div><div class=row>");
       continue;
     }
     const codes = (sgr[1] || "0").split(";").map(Number);
@@ -83,6 +86,7 @@ for (const file of files) {
         font:14px 'DejaVu Sans Mono',Menlo,Consolas,monospace;color:#c8c8c8}
       .row{height:18px;line-height:18px;white-space:pre}
       .row span{display:inline-block;height:18px;vertical-align:top}
+      .row .dot{width:1ch;text-align:center}
     </style></head><body><div id="term">${toHtml(crop(ans))}</div></body></html>`);
   const name = `homestead-${file.replace(/\.ans$/, "")}.png`;
   await page.locator("#term").screenshot({ path: `${dir}/${name}` });

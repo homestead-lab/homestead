@@ -89,20 +89,48 @@ class ConsoleDataTests(unittest.TestCase):
 
 
 class DashboardTests(unittest.TestCase):
-    def test_ascii_logo_is_complete_and_does_not_overlap_metrics(self):
-        for width, height, expected in ((79, 24, ("     /\\     ", "  ///  \\\\\\  ", "//        \\\\", "| -------- |", "|_--------_|")),
-                                       (99, 32, ("       /\\       ", "     //  \\\\     ", "  ///      \\\\\\  ",
-                                                 "//            \\\\", "|  ----------  |", "|  ----------  |", "+--------------+"))):
-            with self.subTest(width=width, height=height):
-                frame = console.dashboard(console.demo_data(), width, height)
-                text = frame.text()
-                for row, art in enumerate(expected):
-                    self.assertEqual(art, text[row][1:1 + len(art)])
-                    for x, char in enumerate(art):
-                        if char == "-":
-                            self.assertEqual("text", frame.rows[row][x + 1][1], "both layers must be entirely white")
-                self.assertIn("CPU / history", text[len(expected)])
-                self.assertTrue(all(ord(c) < 128 for row in text for c in row))
+    def test_braille_dot_order_matches_unicode(self):
+        # Unicode numbers the bottom pair 7/8, rather than row-major order.
+        for x, y, bit in ((0, 0, 1), (0, 1, 2), (0, 2, 4), (1, 0, 8),
+                          (1, 1, 16), (1, 2, 32), (0, 3, 64), (1, 3, 128)):
+            canvas = console.DotCanvas(1, 1)
+            canvas.dot(x, y, "brand")
+            self.assertEqual(chr(0x2800 + bit), canvas.cells()[0][0][0])
+
+    def test_logo_is_symmetric_with_two_separated_white_layers(self):
+        for large, width, height in ((False, 12, 5), (True, 16, 7)):
+            cells = console.logo_cells(large)
+            self.assertEqual(height, len(cells))
+            dots = []
+            for row in cells:
+                self.assertEqual(width, len(row))
+                for dy in range(4):
+                    dots.append([bool((ord(char) - 0x2800 if char != " " else 0) & console.DOT_BITS[dy][dx])
+                                 for char, _ in row for dx in range(2)])
+            self.assertTrue(all(row == row[::-1] for row in dots), "roof and walls must be symmetric")
+            centre = [row[width] for row in dots]
+            # A roof peak, two layer strokes, and the bottom of the house.
+            self.assertEqual(4, sum(on and (y == 0 or not centre[y - 1]) for y, on in enumerate(centre)))
+            self.assertTrue(any(style == "text" and char != " " for row in cells for char, style in row))
+            frame = console.dashboard(console.demo_data(), 99 if large else 79, 32 if large else 24)
+            self.assertIn("CPU / history", frame.text()[height])
+            for y, row in enumerate(cells):
+                self.assertEqual(row, frame.rows[y][1:1 + width])
+
+    def test_graph_has_subcell_resolution_and_correct_endpoints(self):
+        frame = console.Frame(4, 2)
+        frame.graph(0, 0, 4, 2, [0, 0, 12.5, 25, 50, 75, 100, 100])
+        self.assertEqual(" ", frame.rows[1][0][0], "zero usage must leave an empty column")
+        self.assertEqual("\u28e0", frame.rows[1][1][0], "one/two dots high in adjacent samples")
+        self.assertEqual("\u28ff", frame.rows[0][3][0])
+        self.assertEqual("\u28ff", frame.rows[1][3][0])
+        self.assertEqual("bad", frame.rows[0][3][1])
+
+    def test_plain_character_fallback_preserves_the_dashboard(self):
+        frame = console.dashboard(console.demo_data(), 80, 24, braille=False)
+        self.assertTrue(all(ord(c) < 128 for row in frame.text() for c in row))
+        self.assertIn("node-3", "\n".join(frame.text()))
+        self.assertIn("#", "\n".join(frame.text()))
 
     def test_standard_host_console_shows_metrics_and_all_three_nodes(self):
         frame = console.dashboard(console.demo_data(), 80, 24)
@@ -121,7 +149,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("node-3", red_text)
         self.assertIn("node-1", green_text)
         self.assertIn("High memory usage", red_text)
-        self.assertIn("|", red_text, "high usage colours the filled bar")
+        self.assertIn("\u28ff", red_text, "high usage colours the filled bar")
 
     def test_unknown_metrics_have_no_green_health_claim(self):
         frame = console.dashboard(console.Monitor().snapshot(), 80, 24)
@@ -156,13 +184,65 @@ class DashboardTests(unittest.TestCase):
         frame.bar(1, 0, 10, 120)
         frame.bar(2, 0, 10, None)
         self.assertEqual("[        ]", frame.text()[0][:10])
-        self.assertEqual("[||||||||]", frame.text()[1][:10])
+        self.assertEqual("[" + "\u28ff" * 8 + "]", frame.text()[1][:10])
         self.assertIsNone(console.percent(10, 0))
         self.assertEqual("muted", console.usage_style(None))
 
 
 @unittest.skipIf(sys.platform == "win32", "requires a Linux pseudo-terminal")
 class ConsoleTerminalTests(unittest.TestCase):
+    def test_unicode_ascii_switch_and_non_unicode_locale(self):
+        import fcntl
+        import pty
+        import select
+        import struct
+        import termios
+
+        def collect(master, marker):
+            output = b""
+            deadline = time.monotonic() + 5
+            while marker not in output and time.monotonic() < deadline:
+                if select.select([master], [], [], .2)[0]:
+                    output += os.read(master, 65536)
+            self.assertIn(marker, output)
+            return output
+
+        for ascii_only, unicode_locale in ((False, True), (True, True), (False, False)):
+            with self.subTest(ascii_only=ascii_only, unicode_locale=unicode_locale):
+                master, slave = pty.openpty()
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+                args = [sys.executable, str(ROOT / "scripts/host-console.py"), "--demo"]
+                if ascii_only:
+                    args.append("--ascii")
+                process = subprocess.Popen(args, stdin=slave, stdout=slave, stderr=slave,
+                    env=dict(os.environ, TERM="xterm", LC_ALL="C.UTF-8" if unicode_locale else "C",
+                             PYTHONUTF8="0", PYTHONCOERCECLOCALE="0"))
+                try:
+                    output = collect(master, b"A: glyphs")
+                    dotted = "\u28ff".encode("utf-8")
+                    if unicode_locale and not ascii_only:
+                        self.assertIn(dotted, output)
+                    else:
+                        self.assertNotIn(dotted, output)
+                        self.assertIn(b"#", output)
+                    if unicode_locale:
+                        os.write(master, b"a")
+                        output = collect(master, dotted if ascii_only else b"#")
+                        if ascii_only:
+                            self.assertIn(dotted, output)
+                        else:
+                            self.assertNotIn(dotted, output)
+                            self.assertIn(b"#", output)
+                    os.write(master, b"q")
+                    self.assertEqual(0, process.wait(timeout=3))
+                    self.assertTrue(termios.tcgetattr(slave)[3] & termios.ECHO)
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
+                    os.close(master)
+                    os.close(slave)
+
     def test_exit_does_not_wait_for_a_stuck_cluster_collector(self):
         import pty
         import select
