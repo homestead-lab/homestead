@@ -5174,6 +5174,7 @@ import homestead_hostrun as HOSTRUN
 import homestead_host_limits as HOST_LIMITS
 import homestead_node_parity as NODE_PARITY
 import homestead_host_os as HOST_OS
+import homestead_root_guard as ROOT_GUARD
 import homestead_host_bridge as HOST_BRIDGE
 import homestead_manifests as MANIFESTS
 import homestead_disk_setup as DISK_SETUP
@@ -5256,6 +5257,7 @@ HOST_LIMITS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 NODE_PARITY.bind(kget, ksend, HOSTRUN, PLATFORM.detect, node_temps, DATA_DIR)
 HOST_OS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 OPS.RESOLVERS["host-os"] = HOST_OS.status
+ROOT_GUARD.bind(kget, ksend, PLATFORM.detect, node_temps, DATA_DIR)
 DISK_SETUP.bind(HOSTRUN)
 HOST_BRIDGE.bind(HOSTRUN, kget, ksend)
 OPS.RESOLVERS["host-bridge"] = HOST_BRIDGE.status
@@ -5363,6 +5365,7 @@ def _alert_sources():
     take("capacity", lambda: LHCAP.alert_facts(cached("lhcap", 15, LHCAP.status)))
     take("disks", lambda: DISKS.alert_facts(cached("disks", 15, DISKS.inventory)))
     take("hostos", HOST_OS.alert_facts)
+    take("rootguard", ROOT_GUARD.alert_facts)
     take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
         ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", ""))))
     # Twice a day whether or not anyone is looking - the Containers header and
@@ -5487,6 +5490,9 @@ def _host_fix_loop():
                         print(f"platform: {node + ': ' if node else ''}{change}", flush=True)
                     # Each host's OS - updates, restarts, failed services - every six hours.
                     HOST_OS.tick()
+                    # Longhorn kept from filling a host's root filesystem.
+                    for node, change in ROOT_GUARD.tick():
+                        print(f"storage: {node}: {change}", flush=True)
                     for node, marked in MANIFESTS.tick().items():
                         print(f"platform: {node}: k3s no longer re-applies "
                               f"{', '.join(marked) or 'no installer files (none left)'} at start", flush=True)

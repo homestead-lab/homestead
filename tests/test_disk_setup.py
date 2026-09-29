@@ -146,12 +146,23 @@ class OsSpaceTests(unittest.TestCase):
 
     def test_nothing_is_offered_without_lvm_or_room_or_twice(self):
         for out, words in ((lvm(vg=""), "not on LVM"), (lvm(free_gb=12), "too little"),
-                           (lvm(lvs=("ubuntu-lv 1", "longhorn 2")), "already exists")):
+                           (lvm(lvs=("ubuntu-lv 1", "longhorn 2", "longhorn-v2 3")), "already exists")):
             with self.subTest(words=words):
                 SETUP.bind(Host(out))
                 self.assertIn(words, SETUP.os_space("k3s")["problem"])
                 with self.assertRaises(ValueError):
                     SETUP.use_os_space("k3s", 20)
+
+    def test_v2_gets_a_raw_volume_of_its_own_beside_v1s(self):
+        host = Host(lvm(lvs=("ubuntu-lv 1", "longhorn 2")), setup_out="OK /dev/ubuntu-vg/longhorn-v2\n")
+        SETUP.bind(host)
+        facts = SETUP.os_space("k3s")
+        self.assertEqual(("", ""), (facts["problem"], facts["lvm_problems"]["v2"]))
+        self.assertIn("already exists", facts["lvm_problems"]["v1"])
+        done = SETUP.use_os_space("k3s", 50, "v2")
+        self.assertEqual(("/dev/ubuntu-vg/longhorn-v2", "v2"), (done["path"], done["engine"]))
+        self.assertIn('lvcreate -y -L 50G -n longhorn-v2 "ubuntu-vg"', host.scripts[-1])
+        self.assertNotIn("mkfs", host.scripts[-1], "V2 takes the device raw")
 
     def test_a_volume_of_its_own_is_made_and_mounted_the_safe_way_within_the_reserve(self):
         host = Host(lvm(), setup_out="OK 1234 ext4 /mnt/longhorn-os\n")
@@ -165,6 +176,72 @@ class OsSpaceTests(unittest.TestCase):
             self.assertIn(part, script)
         for never in ("lvextend", "lvresize", "parted", "sgdisk", "wipefs"):
             self.assertNotIn(never, script, "nothing that exists is resized or wiped")
+
+
+def regions(*rows, table="gpt", held=""):
+    """The OS drive with no LVM, and the free space on each disk."""
+    lines = ["ROOT /dev/sda2", "ROOTFREE 1", f"PT sda {table} 512", "PT nvme0n1 gpt 512"]
+    lines += [f"HELD {held}"] if held else []
+    lines += [f"REGION {row}" for row in rows]
+    lines += ["TOOL mkfs.ext4", "TOOL chattr", "TOOL findmnt", "TOOL sfdisk", "TOOL partx", "END"]
+    return "\n".join(lines)
+
+
+G = 1024 ** 3 // 512       # sectors in a GiB
+
+
+class RegionTests(unittest.TestCase):
+    def setUp(self):
+        self.addCleanup(SETUP.bind, SETUP.hostrun)
+
+    def test_unallocated_space_on_a_gpt_disk_is_offered_without_lvm(self):
+        SETUP.bind(Host(regions(f"sda 209717248 {200 * G}", f"sda 34 2014", f"nvme0n1 2048 {5 * G}")))
+        facts = SETUP.os_space("k3s")
+        self.assertEqual("", facts["problem"])
+        self.assertEqual([("sda", 209717248, 200)], [(r["disk"], r["start"], r["size_gb"]) for r in facts["regions"]],
+                         "slivers and small gaps are not offered")
+
+    def test_mbr_and_held_disks_are_not_partitioned(self):
+        for out in (regions(f"sda 2048 {200 * G}", table="dos"), regions(f"sda 2048 {200 * G}", held="sda")):
+            SETUP.bind(Host(out))
+            self.assertEqual([], SETUP.os_space("k3s")["regions"])
+
+    def test_the_new_partition_is_aligned_and_inside_the_free_space(self):
+        first, length = SETUP.region_plan({"sector": 512, "start": 209717249, "sectors": 100 * G}, 500)
+        self.assertEqual(0, first % 2048)
+        self.assertGreaterEqual(first, 209717249)
+        self.assertLessEqual(first + length, 209717249 + 100 * G)
+        self.assertEqual((0, 60 * G), (0, SETUP.region_plan({"sector": 512, "start": 2048, "sectors": 100 * G}, 60)[1]))
+        with self.assertRaisesRegex(ValueError, "less than 5 GB"):
+            SETUP.region_plan({"sector": 512, "start": 2048, "sectors": 100 * G}, 2)
+
+    def test_a_partition_is_added_live_without_touching_the_others(self):
+        out = regions(f"sda 209717248 {200 * G}") + "\nPART /dev/sda4 6f1c-44\nOK 1234 ext4 /mnt/sda-longhorn\n"
+        host = Host(out, setup_out=out)
+        SETUP.bind(host)
+        with self.assertRaisesRegex(ValueError, "type /dev/sda"):
+            SETUP.use_region("k3s", "sda", 209717248, 100, "v1", "")
+        done = SETUP.use_region("k3s", "sda", 209717248, 100, "v1", "/dev/sda")
+        self.assertEqual(("/mnt/sda-longhorn", "/dev/sda4"), (done["path"], done["device"]))
+        script = host.scripts[-1]
+        for part in ("sfdisk --dump", "--append --no-reread --no-tell-kernel", 'partx --add --nr "$N"',
+                     "changed since it was looked at", 'mkfs.ext4 -F -L hs-longhorn "$NEWP"', "nofail"):
+            self.assertIn(part, script)
+        for never in ("resize2fs", "xfs_growfs", "sfdisk --delete", "wipefs", "partprobe", "--move-data"):
+            self.assertNotIn(never, script, "nothing existing is changed")
+
+    def test_v2_is_given_the_new_partition_raw_by_its_partuuid(self):
+        out = regions(f"sda 209717248 {200 * G}") + "\nPART /dev/sda4 6f1c-44\n"
+        host = Host(out, setup_out=out)
+        SETUP.bind(host)
+        done = SETUP.use_region("k3s", "sda", 209717248, 100, "v2", "/dev/sda")
+        self.assertEqual("/dev/disk/by-partuuid/6f1c-44", done["path"])
+        self.assertNotIn("mkfs", host.scripts[-1])
+
+    def test_free_space_that_moved_is_not_written(self):
+        SETUP.bind(Host(regions(f"sda 209717248 {200 * G}")))
+        with self.assertRaisesRegex(ValueError, "not there any more"):
+            SETUP.use_region("k3s", "sda", 1234, 100, "v1", "/dev/sda")
 
 
 class LonghornTests(unittest.TestCase):
@@ -196,6 +273,18 @@ class LonghornTests(unittest.TestCase):
         added = self.patched[2]["spec"]["disks"]["disk-mnt-nvme0n1"]
         self.assertEqual(("/mnt/nvme0n1", "filesystem", ["ssd"]), (added["path"], added["diskType"], added["tags"]))
         self.assertEqual(["ssd"], result["tags"])
+
+    def test_a_new_v2_partition_on_the_system_disk_is_added_raw_and_tagged_os(self):
+        made = {"path": "/dev/disk/by-partuuid/6f1c", "device": "/dev/sda4", "size_gb": 100, "engine": "v2"}
+        with mock.patch.object(SETUP, "use_region", return_value=made) as use, \
+             mock.patch.object(DISKS, "_row", return_value={"device": "sda", "kind": "SSD", "system": True}):
+            result = DISKS.use_os_space({"node": "k3s", "source": "part:sda:209717248", "size_gb": 100,
+                                         "engine": "v2", "confirm": "/dev/sda"})
+        use.assert_called_once_with("k3s", "sda", 209717248, 100, "v2", "/dev/sda")
+        added = self.patched[-1]["spec"]["disks"]
+        disk = next(iter(added.values()))
+        self.assertEqual(("/dev/disk/by-partuuid/6f1c", "block", ["os"]), (disk["path"], disk["diskType"], disk["tags"]))
+        self.assertIn("given to the V2 engine", result["detail"])
 
     def test_the_system_disk_is_tagged_os_only(self):
         self.assertEqual(["os"], DISKS.kind_tags({"system": True, "kind": "SSD"}))
