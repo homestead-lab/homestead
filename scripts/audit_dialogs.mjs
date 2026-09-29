@@ -65,6 +65,7 @@ const DIALOGS = [
   ["vm-placement-checks", "nodes", "allocationProbeSettings()"],
   ["hardware-features", "nodes", "hardwareFeatureSettings()"],
   ["os-updates", "nodes", "osUpdates()"],
+  ["node-devices", "nodes", "nodeDetail('harvester-node1')", "nodeDevicesLook('harvester-node1')"],
   ["os-space", "nodes", "diskOsSpace('harvester-node1')"],
   ["portal-edit", "portal", "portalEdit()"],
   ["backup-storage-setup", "protect", "objectStoreSetup()"],

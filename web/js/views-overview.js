@@ -377,6 +377,9 @@ window.nodeDetail = async (name, fromRoute = false) => {
       <div class="card flat" id="nodeHostOs" style="margin-top:16px"><div class="ctitle">Host OS</div>
         <div class="csub">Updates, restarts and services on the host itself</div>
         <div class="hos-body" style="margin-top:10px"><div class="dim small"><span class="spin2"></span> reading</div></div></div>
+      <div class="card flat" id="nodeDevices" style="margin-top:16px"><div class="ctitle">Devices for VMs</div>
+        <div class="csub">PCI and USB devices this host can give to its virtual machines</div>
+        <div class="pt-body" style="margin-top:10px"></div></div>
       <div class="card flat" style="margin-top:16px"><div class="ctitle">Conditions</div>
         <div style="margin-top:10px">${(n.conditions || []).map(c =>
           `<span class="tag ${c.type === "Ready" ? (c.status === "True" ? "ok" : "bad")
@@ -422,6 +425,7 @@ window.nodeDetail = async (name, fromRoute = false) => {
     nodeDisksPaint(n.name);
     nodeUptimePaint(n);
     if (window.nodeHostOsPaint) nodeHostOsPaint(n.name, true);
+    if (window.nodeDevicesPaint) nodeDevicesPaint(n.name);
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
 

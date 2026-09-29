@@ -403,6 +403,8 @@ def detail(ns, name):
     for disk in row["disks"]:
         disk.update(_disk_source(vm, ns, disk["claim"], claims))
     row["cloud_init"] = _read_cloud_init(vm, ns)
+    import homestead_passthrough as PASSTHROUGH
+    row["host_devices"] = PASSTHROUGH.vm_devices(vm)
     row["node_selector"] = ((vm["spec"]["template"].get("spec") or {}).get("nodeSelector") or {}).get(HOST, "")
     row["hardware"] = HARDWARE.read(vm)
     return row
@@ -922,6 +924,10 @@ def prepare_edit(ns, name, cfg, current=None):
         changed_hardware |= _edit_nics(tspec, cfg.get("nics") or [], cfg.get("add_nics") or [])
     if cfg.get("cloud_init") is not None:
         changed_hardware |= _edit_cloud_init(vm, ns, cfg["cloud_init"], effects)
+    if cfg.get("host_devices"):
+        # PCI and USB devices of a host, and a GPU's ROM (homestead_passthrough).
+        import homestead_passthrough as PASSTHROUGH
+        changed_hardware |= PASSTHROUGH.edit_vm(vm, ns, cfg["host_devices"], effects, PASSTHROUGH.current_roms(vm, ns))
     if cfg.get("hardware"):
         if "cores" in cfg and any(k in (cfg["hardware"].get("cpu") or {}) for k in ("sockets", "cores", "threads")):
             raise ValueError("set the CPU count or its topology, not both")
@@ -981,7 +987,7 @@ def _recheck_edit(prepared):
     if _identity(_get(ns, name)) != prepared["identity"]:
         raise ValueError("The VM changed; review its edit again")
     for effect in prepared["effects"]:
-        if effect["kind"] == "image-download":
+        if effect["kind"] in ("image-download", "configmap", "kubevirt-gates"):
             continue
         current = _optional(effect["path"])
         if (None if current is None else _identity(current)) != effect.get("identity"):
@@ -1040,6 +1046,12 @@ def commit_edit(prepared, before_save=None, send=None):
         if effect["kind"] == "secret":
             send("PATCH", effect["path"], {"metadata": effect["identity"], "data": effect["data"]},
                   ctype="application/merge-patch+json")
+        elif effect["kind"] in ("configmap", "kubevirt-gates"):
+            import homestead_passthrough as PASSTHROUGH
+            if effect["kind"] == "configmap":
+                PASSTHROUGH.write_configmap(effect, send)
+            else:
+                PASSTHROUGH.ensure_gates(*effect["gates"], send=send)
     for claim in to_create:
         try:
             send("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", claim)

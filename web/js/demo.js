@@ -537,6 +537,22 @@
     "/api/history": history, "/api/storage": storage, "/api/volumes": volumes,
     "/api/nodes": nodes, "/api/nodes/uptime": demoUptime, "/api/node": url => nodes.find(n => n.name === url.searchParams.get("name")) || {},
     // A host's own OS, as the leader reads it on k3s and RKE2 (host-os.js).
+    // A host's devices for VMs (passthrough.js): a GPU handed over, a NIC the host needs.
+    "/api/passthrough/inspect": { node: "harvester-node1", harvester: false, iommu: true, cmdline_iommu: true, cpu: "intel", complete: true, kubevirt: true,
+      pci: [
+        { address: "0000:01:00.0", vendor: "10de", device: "1e87", class: "0300", class_name: "VGA compatible controller", name: "NVIDIA Corporation TU104 [GeForce RTX 2080]",
+          driver: "vfio-pci", group: "12", boot_vga: false, nets: [], vfio: true, listed: true, permitted: true, problems: [], group_members: ["0000:01:00.1"], offered: true, resource: "homestead.io/pci-10de-1e87" },
+        { address: "0000:01:00.1", vendor: "10de", device: "10f8", class: "0403", class_name: "Audio device", name: "NVIDIA Corporation TU104 HD Audio",
+          driver: "vfio-pci", group: "12", boot_vga: false, nets: [], vfio: true, listed: true, permitted: true, problems: [], group_members: ["0000:01:00.0"], offered: true, resource: "homestead.io/pci-10de-10f8" },
+        { address: "0000:03:00.0", vendor: "8086", device: "1533", class: "0200", class_name: "Ethernet controller", name: "Intel Corporation I210 Gigabit",
+          driver: "igb", group: "15", boot_vga: false, nets: ["enp3s0"], vfio: false, listed: false, permitted: false, problems: ["it carries this host's network"], group_members: [], offered: true, resource: "homestead.io/pci-8086-1533" },
+        { address: "0000:00:00.0", vendor: "8086", device: "3e30", class: "0600", class_name: "Host bridge", name: "Intel Corporation 8th Gen Core Host Bridge",
+          driver: "skl_uncore", group: "0", boot_vga: false, nets: [], vfio: false, listed: false, permitted: false, problems: [], group_members: [], offered: false, resource: "" }],
+      usb: [{ vendor: "1a6e", product: "089a", name: "Google Coral TPU (unflashed)", port: "1-4", resource: "homestead.io/usb-1a6e-089a", permitted: true },
+        { vendor: "1cf1", product: "0030", name: "dresden elektronik ConBee II", port: "1-2", resource: "homestead.io/usb-1cf1-0030", permitted: false }], listed: [] },
+    "/api/passthrough/resources": { sidecar: true, resources: [
+      { resource: "homestead.io/pci-10de-1e87", kind: "pci", label: "10DE:1E87", nodes: ["harvester-node1"] },
+      { resource: "homestead.io/usb-1a6e-089a", kind: "usb", label: "1a6e:089a", nodes: ["harvester-node1", "harvester-node3"] }] },
     // Every host's OS, one at a time (host-os.js): one host done, one restarting.
     "/api/os-updates": () => {
       const host = name => ({ os: "Ubuntu 24.04.3 LTS", updates: name === "harvester-node3" ? [{ name: "openssl", security: true }] : [],

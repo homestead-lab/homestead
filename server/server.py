@@ -5247,6 +5247,7 @@ import homestead_node_parity as NODE_PARITY
 import homestead_host_os as HOST_OS
 import homestead_root_guard as ROOT_GUARD
 import homestead_os_rollout as OS_ROLLOUT
+import homestead_passthrough as PASSTHROUGH
 import homestead_host_bridge as HOST_BRIDGE
 import homestead_manifests as MANIFESTS
 import homestead_disk_setup as DISK_SETUP
@@ -5330,6 +5331,7 @@ NODE_PARITY.bind(kget, ksend, HOSTRUN, PLATFORM.detect, node_temps, DATA_DIR)
 HOST_OS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 OPS.RESOLVERS["host-os"] = HOST_OS.status
 ROOT_GUARD.bind(kget, ksend, PLATFORM.detect, node_temps, DATA_DIR)
+PASSTHROUGH.bind(kget, ksend, HOSTRUN, PLATFORM.detect, DATA_DIR)
 OS_ROLLOUT.bind(kget, PLATFORM.detect, HOST_OS, rollout_reboot, operation_item, LC.set_cordon, own_node, DATA_DIR,
                 lambda rollout: OPS.start("os-rollout", f"Update every host's OS ({len(rollout['nodes'])} hosts)",
                                           {"kind": "Node", "name": ", ".join(rollout["nodes"])[:200]}, "/nodes",
@@ -6944,6 +6946,8 @@ def needed_role(path, method):
                 "/api/node/os/check", "/api/node/os/upgrade",
                 # Every host's OS, one at a time: updates, drains and restarts.
                 "/api/os-updates/settings", "/api/os-updates/start", "/api/os-updates/stop",
+                # A host's devices to VMs: vfio-pci, IOMMU in GRUB, KubeVirt's permitted devices.
+                "/api/passthrough/inspect", "/api/passthrough/iommu", "/api/passthrough/pci", "/api/passthrough/usb",
                 "/api/disks/tags", "/api/disks/node-tags",
                 # Replacing a failed disk deletes replicas and takes the disk out.
                 "/api/disks/retire", "/api/disks/retire/plan",
@@ -7612,6 +7616,8 @@ class H(BaseHTTPRequestHandler):
                                                 if n["name"] == (q.get("name") or [""])[0]), {})))
             if p == "/api/os-updates":
                 return self._send(200, OS_ROLLOUT.report())
+            if p == "/api/passthrough/resources":
+                return self._send(200, PASSTHROUGH.resources())
             if p == "/api/node/os":
                 return self._send(200, HOST_OS.report((q.get("name") or [""])[0] or None))
             if p == "/api/node/smart":
@@ -8523,6 +8529,19 @@ class H(BaseHTTPRequestHandler):
                 for key in ("disks", "lhcap", "nodes", "ov"):
                     _cache.pop(key, None)
                 return self._send(200, {"ok": True, "operation": op})
+            if p == "/api/passthrough/inspect":
+                return self._send(200, PASSTHROUGH.inspect(str(b.get("node") or "")))
+            if p == "/api/passthrough/iommu":
+                return self._send(200, PASSTHROUGH.enable_iommu(str(b.get("node") or "")))
+            if p == "/api/passthrough/pci":
+                node, address = str(b.get("node") or ""), str(b.get("address") or "")
+                return self._send(200, PASSTHROUGH.give(node, address) if b.get("give", True)
+                                  else PASSTHROUGH.take_back(node, address))
+            if p == "/api/passthrough/usb":
+                if b.get("harvester_name"):
+                    return self._send(200, PASSTHROUGH.harvester_usb(str(b.get("node") or ""), str(b["harvester_name"]),
+                                                                     b.get("allow", True) is not False))
+                return self._send(200, PASSTHROUGH.allow_usb(b.get("vendor"), b.get("product"), b.get("allow", True) is not False))
             if p == "/api/os-updates/settings":
                 return self._send(200, {"ok": True, "settings": OS_ROLLOUT.save_settings(b)})
             if p == "/api/os-updates/start":
