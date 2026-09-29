@@ -2445,10 +2445,15 @@ def prepare_vm(cfg, platform=None, default_class=""):
     mac = str(cfg.get("mac") or _vm_mac()).lower()
     if not re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", mac) or int(mac.split(":")[0], 16) & 1:
         raise ValueError("MAC must be a unicast hardware address like 52:54:00:12:34:56")
+    # The card the guest sees: VirtIO unless asked, but a Windows guest has
+    # no driver for it until its guest tools are in, so it came up offline.
+    nic_model = str(cfg.get("nic_model") or "virtio").strip()
+    if nic_model not in ("virtio", "e1000", "e1000e", "rtl8139"):
+        raise ValueError("the network card is one of virtio, e1000, e1000e, rtl8139")
     if network == "pod":
         if cfg.get("static_ip"):
             raise ValueError("an address of its own needs a LAN network (bridged), not the pod network")
-        interface, net = {"name": "default", "masquerade": {}, "macAddress": mac}, {"name": "default", "pod": {}}
+        interface, net = {"name": "default", "masquerade": {}, "model": nic_model, "macAddress": mac}, {"name": "default", "pod": {}}
     else:
         if not re.fullmatch(r"[a-z0-9-]+/[a-z0-9.-]+", network):
             raise ValueError(f"{network} is not a LAN network like default/vlan1")
@@ -2462,7 +2467,7 @@ def prepare_vm(cfg, platform=None, default_class=""):
                              "a VM needs a macvtap network or one on a host bridge")
         # macvtap is joined through KubeVirt's binding for it, a bridge directly.
         binding = {"binding": {"name": "macvtap"}} if '"macvtap"' in config_text else {"bridge": {}}
-        interface = {"name": "default", **binding, "model": "virtio", "macAddress": mac}
+        interface = {"name": "default", **binding, "model": nic_model, "macAddress": mac}
         net = {"name": "default", "multus": {"networkName": network}}
     network_data, address = ("", "")
     if cfg.get("static_ip"):

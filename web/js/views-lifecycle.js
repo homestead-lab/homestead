@@ -768,6 +768,8 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
       <select id="v_net" onchange="vmNetChanged()"><option value="pod">Pod network - reached through a Service</option>
         ${(opts.network_details || []).filter(n => n.vms !== false).map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.lan ? ` · LAN${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}` : ""}</option>`).join("")}</select>
       ${vmNetworkNote(opts, true)}</div>
+    <div class="f"><label>Network card ${tip("The virtual card the guest sees. VirtIO is fastest but needs its driver: Linux has it, Windows needs the guest tools from virtio-win.iso. An Intel e1000e works in Windows with no extra drivers, which is what the Windows guest types choose.")}</label>
+      <select id="v_nic_model"><option value="virtio">VirtIO</option><option value="e1000e">Intel e1000e</option><option value="e1000">Intel e1000</option><option value="rtl8139">Realtek RTL8139</option></select></div>
     <div id="v_service_wrap"><div class="f"><label>Service VIP</label><select id="v_service" onchange="vmNetChanged()"><option value="">Cluster only / configure later</option>${nodeAddressesOnly() ? "" : `${vipOptions.shared ? `<option value="shared">Default workload VIP · ${esc(vipOptions.shared)}</option>` : ""}<option value="manual">Selected VIP</option>`}</select></div>
       ${nodeAddressesOnly() ? '<p class="note small">ServiceLB uses node addresses, not movable VIPs. Install kube-vip or MetalLB before choosing a Service VIP.</p>' : ""}
       <div id="v_service_pick" class="f" hidden><label>Selected VIP</label>${vipPicker("vsvc", "", vipOptions)}</div>
@@ -818,7 +820,8 @@ window.doVmCreate = async () => {
     store_id: boot.startsWith("store:") ? boot.slice(6) : "",
     install_iso: boot.startsWith("iso:") ? boot.slice(4) : "",
     drivers_iso: boot.startsWith("iso:") ? $("#v_drivers")?.value || "" : "",
-    storage_class: $("#v_sc")?.value || "", network: $("#v_net")?.value || "pod" };
+    storage_class: $("#v_sc")?.value || "", network: $("#v_net")?.value || "pod",
+    nic_model: $("#v_nic_model")?.value || "virtio" };
   if (body.network !== "pod" && $("#v_addr_mode")?.value === "static") {
     body.static_ip = Object.assign(vmReadAddress("v"), { address: $("#v_ip").value.trim() });
     if (!body.static_ip.address) return toast("give the VM its address", "bad");

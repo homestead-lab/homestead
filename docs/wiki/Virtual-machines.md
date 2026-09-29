@@ -24,7 +24,9 @@ download has not started after three minutes says why.
 **Console** has two views:
 
 - **Screen** - the VM's display (VNC) in the page, scaled to fit, with
-  Ctrl+Alt+Del and full screen. **Paste** (or Ctrl+Shift+V on the screen)
+  Ctrl+Alt+Del and full screen. On a phone or tablet, **Keyboard** opens the
+  device's on-screen keyboard and types into the VM; it stays open while you tap
+  the screen to click. **Paste** (or Ctrl+Shift+V on the screen)
   types the clipboard into the VM key by key - a VM's display has no clipboard
   of its own - with Enter for each new line. Over HTTPS it types straight
   away; on a plain `http://` address the browser does not let the page read
@@ -55,6 +57,15 @@ and a boot disk:
   own class, and every disk can live-migrate between hosts. On other clusters
   the disk goes on the class you pick; on local-path the VM stays on the host
   its disk is on.
+
+**Guest type** sets the firmware, TPM, clock and devices as Proxmox's OS type
+does, and the **network card**: VirtIO for Linux, an Intel e1000e for Windows.
+Windows has no VirtIO network driver of its own, so a Windows guest on VirtIO
+comes up with no network until the guest tools from `virtio-win.iso` are
+installed; Windows drives an e1000e out of the box (Proxmox gives its Windows
+types an Intel e1000 for the same reason). For a Windows VM made before this,
+**Edit → Network** changes its card to e1000e, or install the guest tools from
+its drivers CD and keep VirtIO.
 
 The VM starts on the pod network; **Edit → Network** puts it on a bridged
 network (Harvester's VM networks, or any Multus network), where it gets an

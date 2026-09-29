@@ -15,6 +15,11 @@ leader installs whatever is missing once the cluster can say what it has.
 What was done is kept in /data, so a part someone removes on purpose is not
 put back. An installation from before this asks once, on Add-ons and the
 Networking page, rather than changing every node's network by itself.
+
+The node probe is asked for the same way. It is not a chart and needs no
+Helm controller: its DaemonSet is made as Settings > Cluster > Add-ons makes
+it (homestead_probe), once, when the installer asked - the person installing
+chose it there, since its SMART reader runs privileged.
 """
 import json
 import os
@@ -35,13 +40,17 @@ WHY = {"kube-vip": "Virtual IP addresses for applications, with failover between
        "multus": "Dedicated LAN addresses for virtual machines and containers",
        "macvtap": "LAN addresses for virtual machines on a host's own network interface"}
 macvtap = None           # homestead_macvtap
+probe = None             # homestead_probe
+probe_version = "dev"
+PROBE = "node-probe"
+YES = ("yes", "true", "1", "install")
 _lock = threading.Lock()
 
 
-def bind(_kget, _addons, _platform, default_ns="lab", data_dir="/data", _macvtap=None):
-    global kget, addons, platform, DEFAULT_NS, DATA_DIR, macvtap
+def bind(_kget, _addons, _platform, default_ns="lab", data_dir="/data", _macvtap=None, _probe=None, version="dev"):
+    global kget, addons, platform, DEFAULT_NS, DATA_DIR, macvtap, probe, probe_version
     kget, addons, platform, DEFAULT_NS, DATA_DIR = _kget, _addons, _platform, default_ns, data_dir
-    macvtap = _macvtap
+    macvtap, probe, probe_version = _macvtap, _probe, version
 
 
 def _path():
@@ -96,14 +105,44 @@ def parts(p, status):
     return out
 
 
-def requested():
-    """What the installer asked for, from its ConfigMap: {part: version or ""}."""
+def _request():
     try:
-        data = (kget(f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/{REQUEST}") or {}).get("data") or {}
+        return (kget(f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/{REQUEST}") or {}).get("data") or {}
     except Exception:
         return {}
+
+
+def requested():
+    """What the installer asked for, from its ConfigMap: {part: version or ""}."""
+    data = _request()
     return {part: str(data.get(f"{part}-version") or "") for part in PARTS
-            if str(data.get(part, "")).lower() in ("yes", "true", "1", "install")}
+            if str(data.get(part, "")).lower() in YES}
+
+
+def probe_tick():
+    """The node probe, installed once if the installer asked. Returns what
+    happened, or None when there was nothing to do."""
+    if probe is None or str(_request().get(PROBE, "")).lower() not in YES:
+        return None
+    p = platform(True) or {}
+    if p.get("harvester") or p.get("distribution") not in ("k3s", "rke2"):
+        return None
+    with _lock:
+        state = _load()
+        done = state.setdefault("done", {})
+        if PROBE in done:
+            return None
+        row = {"at": int(time.time()), "version": probe_version, "reason": "installer", "error": ""}
+        try:
+            if probe.installed():
+                row["reason"], detail = "present", "the node probe is installed already"
+            else:
+                detail = probe.install(probe_version).get("detail", "")
+        except Exception as error:
+            row["error"] = detail = str(error)[:240]
+        done[PROBE] = row
+        _save(state)
+    return {"id": PROBE, "ok": not row["error"], "detail": detail}
 
 
 def report():
@@ -150,6 +189,10 @@ def install(which=None, versions=None, reason="asked"):
 def tick():
     """The installer asked, and something asked for is neither there nor
     tried: install it. A part tried before, or already there, is left be."""
+    asked = probe_tick()
+    if asked:
+        print(f"platform: node probe (requested at installation): "
+              f"{'installing' if asked['ok'] else 'installation failed'}: {asked['detail']}", flush=True)
     wanted = requested()
     if not wanted:
         return []

@@ -42,24 +42,31 @@
 #   --kube-vip-version 0.11.1    pin kube-vip's chart (default: the one
 #                                Homestead has tested)
 #   --multus-version v4.3.102    pin RKE2's Multus chart (default: likewise)
+#   --no-node-probe      leave out the node probe: no temperatures, SMART,
+#                        or per-node network facts until it is added under
+#                        Settings > Cluster > Add-ons
 # Options for every mode:
 #   --rke2                   RKE2 instead of k3s
 #   --node-ip 192.0.2.50   the address the cluster registers this machine
 #                            by, when it has more than one
 #
 # What "server" does:
-#   1. raises the host's inotify limits, and installs what Longhorn needs on
-#      the host (open-iscsi, NFS client);
+#   1. raises the host's inotify limits, installs what Longhorn needs on
+#      the host (open-iscsi, NFS client), and keeps multipathd off the
+#      devices Longhorn makes;
 #   2. installs k3s with an embedded etcd, so more servers can join later
 #      (or RKE2, which always has one, with its ServiceLB turned on so apps
 #      get the nodes' addresses as they do on k3s);
 #   3. applies a HelmChart for Longhorn and Homestead's manifest, once - kept
 #      in /var/lib/homestead/install, not k3s's auto-deploy folder, which k3s
 #      re-applies at every start and so would undo later upgrades;
-#   4. asks Homestead, in its manifest, to install kube-vip (VIPs) and Multus
-#      (a VM's or container's own LAN address) once it is up - Homestead
-#      installs and upgrades them, as it does from Settings > Cluster > Add-ons;
-#   5. waits for Homestead and prints its address.
+#   4. asks Homestead, in its manifest, to install kube-vip (VIPs), Multus
+#      (a VM's or container's own LAN address) and the node probe once it is
+#      up - Homestead installs and upgrades them, as it does from Settings >
+#      Cluster > Add-ons;
+#   5. waits for Homestead, takes the first etcd snapshot - k3s takes one
+#      only every 12 hours, and a cluster with none cannot be restored - and
+#      prints its address.
 # It is safe to run again: each step finds what the last run left.
 set -eu
 
@@ -77,6 +84,7 @@ KUBE_VIP=1
 MULTUS=1
 KUBE_VIP_VERSION=""
 MULTUS_VERSION=""
+NODE_PROBE=1
 NODE_IP=""
 RAW=https://raw.githubusercontent.com/wjcloudy/homestead
 
@@ -101,6 +109,40 @@ host_packages() {
   fi
   systemctl enable --now iscsid >/dev/null 2>&1 || true
   modprobe iscsi_tcp 2>/dev/null || true
+  host_multipath
+}
+
+# Longhorn's volumes reach a host as plain /dev/sd* disks, and multipathd -
+# on by default on Ubuntu Server - claims every one it sees, after which the
+# volume's mount fails as "already mounted or mount point busy". Longhorn
+# asks for sd devices to be kept from it; a host that boots from a multipath
+# device is left as it is. Homestead does the same on nodes that joined
+# before this.
+host_multipath() {
+  systemctl is-active --quiet multipathd 2>/dev/null || return 0
+  grep -qs 'devnode "\^sd\[a-z0-9\]+"' /etc/multipath.conf && return 0
+  root=$(findmnt -n -o SOURCE / 2>/dev/null || true)
+  if [ -n "$root" ] && lsblk -s -n -o TYPE "$root" 2>/dev/null | grep -q mpath; then
+    echo "  This machine boots from a multipath device; /etc/multipath.conf is left as it is."
+    return 0
+  fi
+  echo "  Keeping multipathd off Longhorn's devices (/etc/multipath.conf)"
+  [ -f /etc/multipath.conf ] && cp /etc/multipath.conf /etc/multipath.conf.homestead-backup
+  grep -qs '^blacklist *{' /etc/multipath.conf || printf 'blacklist {\n}\n' >> /etc/multipath.conf
+  sed -i '/^blacklist *{/a\    devnode "^sd[a-z0-9]+"' /etc/multipath.conf
+  systemctl restart multipathd 2>/dev/null || true
+  # Maps it made already, on disks nothing has mounted, are let go.
+  multipath -F >/dev/null 2>&1 || true
+}
+
+# The first etcd snapshot, now: k3s and RKE2 take one only every 12 hours,
+# and until then there is nothing to restore the cluster from.
+first_snapshot() {
+  [ -d "/var/lib/rancher/$DIST/server/db/etcd" ] || return 0
+  ls "/var/lib/rancher/$DIST/server/db/snapshots" 2>/dev/null | grep -q . && return 0
+  say "Taking the first etcd snapshot"
+  "$DIST" etcd-snapshot save --name homestead-install >/dev/null 2>&1 \
+    || echo "  The snapshot did not complete; $DIST takes one within 12 hours, or run: $DIST etcd-snapshot save"
 }
 
 # Every file watcher is an inotify instance, and a host allows each user 128:
@@ -241,7 +283,7 @@ case "$MODE" in
     say "Node joined the cluster. It appears on the Homestead Nodes page within a few minutes."
     exit 0 ;;
   server|addons) ;;
-  *) sed -n '2,55p' "$0" 2>/dev/null || true; fail "Specify a mode: server, agent, join or addons." ;;
+  *) sed -n '2,70p' "$0" 2>/dev/null || true; fail "Specify a mode: server, agent, join or addons." ;;
 esac
 
 while [ $# -gt 0 ]; do
@@ -256,6 +298,7 @@ while [ $# -gt 0 ]; do
     --no-multus) MULTUS=0; shift; continue ;;
     --kube-vip-version) KUBE_VIP_VERSION="$2"; shift 2; continue ;;
     --multus-version) MULTUS_VERSION="$2"; shift 2; continue ;;
+    --no-node-probe) NODE_PROBE=0; shift; continue ;;
   esac
   set +e; parse_common "$@"; used=$?; set -e
   [ "$used" = 0 ] && fail "Unknown option: $1"
@@ -375,14 +418,18 @@ data:
   kube-vip-version: "$KUBE_VIP_VERSION"
   multus: "$(flag_word "$MULTUS")"
   multus-version: "$MULTUS_VERSION"
+  node-probe: "$(flag_word "$NODE_PROBE")"
 EOF
 [ "$KUBE_VIP" = 1 ] && echo "  kube-vip will be installed by Homestead after it starts."
 [ "$MULTUS" = 1 ] && echo "  Multus will be installed by Homestead after it starts."
+[ "$NODE_PROBE" = 1 ] && echo "  The node probe will be installed by Homestead after it starts."
 apply "$MANIFESTS/homestead.yaml"
 
 say "Waiting for Homestead to start (this takes several minutes when Longhorn is being installed)"
 i=0; until $KUBECTL -n lab rollout status deployment/homestead --timeout=10s >/dev/null 2>&1; do
   i=$((i+1)); [ $i -gt 90 ] && fail "Homestead did not start. See: $KUBECTL -n lab get pods"; sleep 10; done
+
+first_snapshot
 
 say "Homestead is running at http://$IP:8088. Open this address to create the administrator account."
 echo "   To add nodes, see Cluster > Add a host in Homestead."

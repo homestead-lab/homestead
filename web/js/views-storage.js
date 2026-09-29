@@ -1646,6 +1646,8 @@ window.nodeDisksPaint = async node => {
     const disks = inv.nodes[node] || [];
     host.innerHTML = nodeTagsLine(node, inv) + (disks.length ? diskRowsHtml(node, disks, inv.harvester)
       : '<div class="dim small">No disks reported yet: the node probe tells Homestead which disks this host has.</div>');
+    // Each disk's partition table, where the host's OS has been read.
+    if (window.nodePartitionsPaint) nodePartitionsPaint(node);
     if (window.applyRole) applyRole();
   } catch (e) { host.innerHTML = `<div class="dim small">${esc(e.message)}</div>`; }
 };
@@ -1719,13 +1721,14 @@ window.diskSetup = async (node, device) => {
     partitioned: `It has ${f.partitions.length} partition${f.partitions.length === 1 ? "" : "s"} (${esc(f.partitions.map(p => `${p.name}${p.fstype ? ` ${p.fstype}` : ""}`).join(", "))}).`,
     system: `It is this host's system disk (${esc(f.mounts.join(", "))}).`,
     mounted: `It is mounted at ${esc(f.mounts.join(", "))}.`,
+    held: `It is in use by ${esc((f.holders || []).filter(h => h.kind !== "multipath").map(h => `${h.kind} (${h.name})`).join(", "))}: take it out of that on the host first.`,
     missing: esc(f.error || "It is not there."),
   }[f.state];
   const choice = (value, label, detail, checked) => `<label class="disk-choice"><input type="radio" name="ds_mode" value="${value}" ${checked ? "checked" : ""} onchange="diskSetupChanged()">
     <span><b>${label}</b><small>${detail}</small></span></label>`;
   const modes = f.choices || [];
   $("#mbody").innerHTML = `<div class="ui-stack">
-    <div class="note ${["system", "mounted", "missing"].includes(f.state) ? "bad" : ""}"><b class="mono">${esc(device)}</b> · ${f.size_gb} GB${f.by_id ? ` · <span class="mono dim xs">${esc(f.by_id.replace("/dev/disk/by-id/", ""))}</span>` : ""}<br>${what}</div>
+    <div class="note ${["system", "mounted", "missing", "held"].includes(f.state) ? "bad" : ""}"><b class="mono">${esc(device)}</b> · ${f.size_gb} GB${f.by_id ? ` · <span class="mono dim xs">${esc(f.by_id.replace("/dev/disk/by-id/", ""))}</span>` : ""}<br>${what}${(f.multipath || []).length ? `<br><span class="small">multipathd has claimed it (${esc(f.multipath.map(m => m.name).join(", "))}). Setting it up releases that and adds its WWID to the blacklist in /etc/multipath.conf, so multipathd leaves this disk alone; nothing else changes.</span>` : ""}</div>
     ${modes.length ? `
       ${v2 ? `<div class="f"><label>Engine</label><select id="ds_engine" onchange="diskSetupChanged()"><option value="v1">V1 - formatted and mounted</option><option value="v2">V2 (SPDK) - the raw device</option></select></div>` : ""}
       <div class="disk-choices" id="ds_modes">

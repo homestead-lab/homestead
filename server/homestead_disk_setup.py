@@ -22,6 +22,14 @@ and the mount is checked to be this device before Longhorn is told. A V2
 disk is not formatted: Longhorn is given the raw device by its stable
 /dev/disk/by-id name. The system disk, and a disk that is mounted, are
 refused.
+
+A disk something else holds open is found first, from the kernel's holders,
+where wipefs could only say "Device or resource busy". Ubuntu runs
+multipathd, which claims every plain SCSI or SATA disk it sees as a map of
+its own; setting such a disk up releases the map and adds the disk's WWID to
+multipath.conf's blacklist, so multipathd leaves that one disk alone and
+nothing else changes. A disk in an LVM volume group, a RAID array or an
+encrypted volume is refused, naming what holds it.
 """
 import re
 
@@ -58,6 +66,12 @@ FS=$(blkid -s TYPE -o value "$D" 2>/dev/null)
 echo "FS $FS"
 echo "UUID $(blkid -s UUID -o value "$D" 2>/dev/null)"
 for l in /dev/disk/by-id/*; do case "$l" in *-part*) continue;; esac; [ "$(readlink -f "$l")" = "$D" ] && {{ echo "BYID $l"; break; }}; done
+# What holds it or its partitions open: a multipath map, LVM, RAID, dm-crypt.
+B=${{D##*/}}
+for h in /sys/block/$B/holders/* /sys/block/$B/$B*/holders/*; do
+  [ -e "$h" ] || continue; n=${{h##*/}}
+  echo "HOLDER $n|$(cat /sys/block/$n/dm/name 2>/dev/null)|$(cat /sys/block/$n/dm/uuid 2>/dev/null)"
+done
 if [ -n "$FS" ] && ! grep -q "^$D " /proc/mounts; then
   case "$FS" in ext*) O=ro,noload;; xfs) O=ro,norecovery;; *) O=ro;; esac
   T=$(mktemp -d)
@@ -75,7 +89,8 @@ echo END"""
 
 def parse(device, out):
     facts = {"device": device, "size_gb": 0, "partitions": [], "mounts": [], "fstype": "", "uuid": "",
-             "by_id": "", "longhorn": None, "replicas": 0, "entries": 0, "tools": [], "error": ""}
+             "by_id": "", "longhorn": None, "replicas": 0, "entries": 0, "tools": [], "error": "",
+             "holders": []}
     for line in out.splitlines():
         key, _, value = line.partition(" ")
         if key == "ERR":
@@ -102,11 +117,21 @@ def parse(device, out):
             facts["entries"] = int(value) if value.isdigit() else 0
         elif key == "TOOL":
             facts["tools"].append(value)
+        elif key == "HOLDER":
+            name, dm_name, uuid = (value.split("|") + ["", "", ""])[:3]
+            kind = ("multipath" if uuid.startswith("mpath-") else "LVM" if uuid.startswith("LVM-")
+                    else "encryption" if uuid.startswith("CRYPT-") else "RAID" if name.startswith("md")
+                    else "device-mapper")
+            facts["holders"].append({"name": dm_name or name, "kind": kind,
+                                     "wwid": uuid[6:] if kind == "multipath" else ""})
     if "END" not in out.split() and not facts["error"]:
         facts["error"] = "the host did not finish looking at the disk"
     facts["system"] = any(m in SYSTEM_POINTS or m.startswith("/boot") for m in facts["mounts"])
+    held = [h for h in facts["holders"] if h["kind"] != "multipath"]
+    facts["multipath"] = [h for h in facts["holders"] if h["kind"] == "multipath" and h["wwid"]]
     facts["state"] = ("missing" if facts["error"] else "system" if facts["system"]
-                      else "mounted" if facts["mounts"] else "partitioned" if facts["partitions"]
+                      else "mounted" if facts["mounts"] else "held" if held
+                      else "partitioned" if facts["partitions"]
                       else "longhorn" if facts["longhorn"] else "data" if facts["fstype"] else "blank")
     return facts
 
@@ -125,7 +150,7 @@ def inspect(node, device):
 def choices(facts):
     """What can be done with it, in the order offered."""
     state = facts["state"]
-    if state in ("missing", "system", "mounted"):
+    if state in ("missing", "system", "mounted", "held"):
         return []
     if state == "blank":
         return ["format"]
@@ -134,12 +159,34 @@ def choices(facts):
     return ["erase"]
 
 
-def setup_script(device, mode, fstype, point):
+SAFE_NAME = re.compile(r"[A-Za-z0-9_.:-]+")
+
+
+def release_script(maps):
+    """Let go of multipath maps over the disk and keep multipathd off it: its
+    WWID in the blacklist, not every sd device, so a disk that really is
+    multipathed stays as it is."""
+    lines = ['command -v multipath >/dev/null || { echo "ERR multipathd holds $D but the multipath tool is missing"; exit 1; }',
+             'C=/etc/multipath.conf', '[ -f "$C" ] && cp "$C" "$C.homestead-backup"',
+             'grep -qs "^blacklist *{" "$C" || printf \'blacklist {\\n}\\n\' >> "$C"']
+    for row in maps:
+        wwid, name = row["wwid"], row["name"]
+        if not SAFE_NAME.fullmatch(wwid) or not SAFE_NAME.fullmatch(name):
+            raise ValueError(f"multipath map {name!r} has a name Homestead will not put in a command")
+        lines.append(f'grep -qs \'wwid "{wwid}"\' "$C" || sed -i \'/^blacklist *{{/a\\    wwid "{wwid}"\' "$C"')
+    lines.append("multipathd reconfigure >/dev/null 2>&1 || systemctl restart multipathd 2>/dev/null || true")
+    lines += [f"multipath -f {row['name']} >/dev/null 2>&1 || true" for row in maps]
+    lines.append('B=${D##*/}; ls /sys/block/$B/holders/ 2>/dev/null | grep -q . && '
+                 '{ echo "ERR multipathd still holds $D after releasing it; see multipath -ll on the host"; exit 1; }')
+    return "\n".join(lines) + "\n"
+
+
+def setup_script(device, mode, fstype, point, multipath=()):
     label = ("hs-" + device.rsplit("/", 1)[-1])[:12]
-    make = ""
+    make = release_script(multipath) if multipath and mode in ("format", "erase") else ""
     if mode in ("format", "erase"):
         mkfs = f'mkfs.ext4 -F -L {label} "$D"' if fstype == "ext4" else f'mkfs.xfs -f -L {label} "$D"'
-        make = f'grep -q "^$D" /proc/mounts && {{ echo "ERR $D is mounted"; exit 1; }}\nwipefs -a "$D"\n{mkfs}\n'
+        make += f'grep -q "^$D" /proc/mounts && {{ echo "ERR $D is mounted"; exit 1; }}\nwipefs -a "$D"\n{mkfs}\n'
     return f"""set -e
 D={device}; P={point}
 [ -b "$D" ] || {{ echo "ERR $D is not there"; exit 1; }}
@@ -173,7 +220,7 @@ def setup(node, device, mode, fstype="ext4", confirm=""):
     if mode in ("format", "erase") and f"mkfs.{fstype}" not in facts["tools"]:
         raise ValueError(f"{node} has no mkfs.{fstype}; install {'xfsprogs' if fstype == 'xfs' else 'e2fsprogs'} there, or choose the other filesystem")
     point = mount_point(device)
-    out, err = hostrun.run(node, setup_script(device, mode, fstype, point), timeout=600)
+    out, err = hostrun.run(node, setup_script(device, mode, fstype, point, facts.get("multipath") or ()), timeout=600)
     done = next((line for line in out.splitlines() if line.startswith("OK ")), "")
     if not done:
         problem = next((line[4:] for line in out.splitlines() if line.startswith("ERR ")), "") or (err or out)[-300:]
@@ -308,6 +355,9 @@ def refusal(facts, mode):
         return f"{device} is not there: {facts['error']}"
     if state == "system":
         return f"{device} is this host's system disk ({', '.join(facts['mounts'])}); Longhorn keeps its default disk there already"
+    if state == "held":
+        what = ", ".join(f"{h['kind']} ({h['name']})" for h in facts["holders"] if h["kind"] != "multipath")
+        return f"{device} is in use by {what}; take it out of that on the host first"
     if state == "mounted":
         return (f"{device} is mounted at {', '.join(facts['mounts'])}; unmount it first, or give Longhorn that "
                 "folder with Add a folder")
