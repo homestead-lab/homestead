@@ -11,10 +11,12 @@ therefore loses nothing, and the workload can always be put back as it was.
 """
 import base64
 import json
+import secrets
 import time
 import urllib.error
 
 import homestead_names as NAMES
+from homestead_longhorn import move_snapshot_error
 
 kget = ksend = None
 LH = None
@@ -316,7 +318,7 @@ def _backup_backing_image(image):
             raise
 
 
-def backup(kind, name):
+def backup(kind, name, retry_failed=False):
     """Back up every claim the workload mounts. Refuses while it still runs."""
     kind = _kind(kind)
     obj = _object(kind, name)
@@ -325,20 +327,44 @@ def backup(kind, name):
     if _remaining(kind, obj):
         raise ValueError(f"{name} is still running; its data is not at rest yet")
     recorded = _recorded_backups(obj)
-    have = {row.get("claim") for row in recorded}
+    states = {row["claim"]: row for row in status(kind, name)["backups"]} if recorded else {}
+    def save():
+        patch = {"metadata": {"annotations": {
+            NAMES.key(BACKUPS): json.dumps(recorded, separators=(",", ":"))}}}
+        version = obj.get("metadata", {}).get("resourceVersion")
+        if version:
+            patch["metadata"]["resourceVersion"] = version
+        updated = _merge(kind, name, patch)
+        if updated:
+            obj["metadata"] = updated.get("metadata", obj.get("metadata", {}))
     for claim in _claims_of(kind, obj):
-        if claim in have:
-            continue            # asked twice: the first request's backup stands
-        row = _claim_row(claim)
-        made = LH.create_backup(row["volume"])
+        previous = next((r for r in recorded if r.get("claim") == claim), None)
+        state = states.get(claim, {})
+        failed = str(state.get("state", "")).lower() in ("error", "failed", "missing") or state.get("error")
+        if previous and not (retry_failed and failed):
+            # Legacy requests already have a Backup CR; new requests may still
+            # be waiting for their Snapshot to become usable.
+            if previous.get("snapshot"):
+                LH.ensure_move_backup(previous["volume"], previous["snapshot"], previous["backup"])
+            if previous.get("backing_image"):
+                _backup_backing_image(previous["backing_image"])
+            continue
+        source = _claim_row(claim)
+        token = secrets.token_hex(8)
+        row = {"claim": claim, "volume": source["volume"], "backup": f"homestead-move-{token}",
+               "snapshot": f"homestead-move-{token}-snapshot", "backing_image": source["backing_image"],
+               "requested_at": time.time(), "previous_backups": (previous or {}).get("previous_backups", [])
+               + ([previous["backup"]] if previous else [])}
+        if previous:
+            recorded[recorded.index(previous)] = row
+        else:
+            recorded.append(row)
+        # Save stable names BEFORE either create. A lost reply or reboot then
+        # resumes the same request; completed backups are never deleted.
+        save()
+        LH.ensure_move_backup(row["volume"], row["snapshot"], row["backup"])
         if row["backing_image"]:
             _backup_backing_image(row["backing_image"])
-        recorded.append({"claim": claim, "volume": row["volume"], "backup": made["backup"],
-                         "backing_image": row["backing_image"]})
-        # Recorded as each is made: a retry after a failure part-way carries
-        # on from there instead of backing up the first volumes again.
-        _merge(kind, name, {"metadata": {"annotations": {
-            NAMES.key(BACKUPS): json.dumps(recorded, separators=(",", ":"))}}})
     return {"ok": True, "backups": recorded}
 
 
@@ -347,10 +373,16 @@ def status(kind, name):
     kind = _kind(kind)
     obj = _object(kind, name)
     recorded = _recorded_backups(obj)
-    by_name = {row["name"]: row for row in LH.backups()} if recorded else {}
+    by_name = {row["name"]: row for row in LH.backups(strict=True)} if recorded else {}
     backups = []
     for row in recorded:
         found = by_name.get(row["backup"], {})
+        if not found:
+            snap = _get(f"{LH_API}/namespaces/{LHNS}/snapshots/{row['snapshot']}") if row.get("snapshot") else None
+            problem = move_snapshot_error(snap)
+            if not row.get("snapshot"):
+                problem = "Recorded backup no longer exists; retry the move to take a fresh snapshot"
+            found = {"state": "Error" if problem else "Pending", "error": problem}
         image_state = {}
         if row.get("backing_image"):
             image = _get(f"{LH_API}/namespaces/{LHNS}/backupbackingimages/{row['backing_image']}")

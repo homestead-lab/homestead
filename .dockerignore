@@ -8,7 +8,9 @@ tests
 docs
 deploy
 !deploy/deploy.yaml
-scripts
+scripts/*
+!scripts/host-console.py
+!scripts/install-console.sh
 PLAN.md
 plan.md
 CLAUDE.md
