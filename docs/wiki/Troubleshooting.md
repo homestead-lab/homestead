@@ -54,6 +54,16 @@ questions. Every fix is written to `/var/log/homestead-doctor.log`.
 store from Kubernetes - usually the API server is restarting (an upgrade, a host
 rebooting). It retries by itself; the page comes back when the API does.
 
+**Through a Cloudflare tunnel, Homestead shows Cloudflare's "502 Bad gateway ·
+Host Error" while other apps work.** The browser is set to show another
+linked cluster (the switch in the top bar), and that cluster isn't answering
+this one. Cloudflare swaps Homestead's own "is not answering · Back to this
+cluster" page for its error page. Open `/api/fleet/home` on the same address
+to come back to this cluster. Since 2.8.253, a cluster choice this Homestead
+doesn't know, such as one left over from a Homestead that used to answer at
+the address, is forgotten by itself. The "not answering" page is served as a
+503, which Cloudflare shows as it is.
+
 **An update is stuck with "invalid controller count".** Longhorn refuses a
 second pod mounting Homestead's data volume on a migratable class while the old
 pod still has it. Scale to zero, let the volume detach, then back to one:

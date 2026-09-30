@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.252")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.253")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -7372,9 +7372,19 @@ class H(BaseHTTPRequestHandler):
         if FLEET.signed(headers) or FLEET.local_path(path):
             return ""
         query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-        target = (headers.get("X-Homestead-Cluster") or (query.get("hs_cluster") or [""])[0]
-                  or (self._cookies().get(FLEET.COOKIE, "") if headers else ""))
-        return target if target and target != FLEET.self_id() else ""
+        named = headers.get("X-Homestead-Cluster") or (query.get("hs_cluster") or [""])[0]
+        target = named or (self._cookies().get(FLEET.COOKIE, "") if headers else "")
+        if not target or target == FLEET.self_id():
+            return ""
+        # A browser's choice of a cluster this one does not know - left by the
+        # Homestead that used to answer at this address, or unlinked since -
+        # is forgotten, and the page served here, not a 502 for every request.
+        if not named and not FLEET.member(target):
+            if isinstance(getattr(self, "_extra_headers", None), list):
+                self._extra_headers.append(
+                    ("Set-Cookie", f"{FLEET.COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"))
+            return ""
+        return target
 
     def _fleet_forward(self, target, path):
         """Relay this request to the linked cluster picked in the top bar.
@@ -7394,7 +7404,9 @@ class H(BaseHTTPRequestHandler):
         except FLEET.Unreachable as error:
             known = FLEET.member(target) or {}
             if self.command == "GET" and "text/html" in (self.headers.get("Accept") or ""):
-                return self._send(502, FLEET.unreachable_page(known.get("name") or "That cluster", error),
+                # 503, not 502: Cloudflare puts its own "Host Error" page in
+                # place of an origin's 502, hiding the way back to this cluster.
+                return self._send(503, FLEET.unreachable_page(known.get("name") or "That cluster", error),
                                   "text/html; charset=utf-8")
             return self._send(502, {"error": str(error), "cluster": known.get("name", ""), "unreachable": True})
 
