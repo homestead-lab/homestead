@@ -144,7 +144,10 @@ const browser = await chromium.launch({ headless: true });
 // working through every item in turn took most of CI's time.
 const WORKERS = Number(process.env.AUDIT_WORKERS || 4);
 const WIDTHS = [["desktop", 1440, 900, false], ["mobile", 390, 844, true]];
-const todo = DIALOGS.filter(([name]) => !only || name.includes(only));
+// CI splits the list across runners: AUDIT_SHARD of AUDIT_SHARDS, each every Nth dialog.
+const SHARDS = Math.max(1, Number(process.env.AUDIT_SHARDS || 1));
+const SHARD = Number(process.env.AUDIT_SHARD || 0) % SHARDS;
+const todo = DIALOGS.filter(([name]) => !only || name.includes(only)).filter((_, j) => j % SHARDS === SHARD);
 const shares = Array.from({ length: WORKERS }, (_, i) => todo.filter((_, j) => j % WORKERS === i)).filter((share) => share.length);
 await Promise.all(WIDTHS.flatMap((width) => shares.map((share) => audit(width, share))));
 await browser.close();
