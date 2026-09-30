@@ -22,6 +22,7 @@ function renderOperations() {
     tray.classList.add("hidden");
     $("#jobList").innerHTML = "";
     if (window.paintBell) paintBell();
+    if (window.uvmCopiesPaint) uvmCopiesPaint();
     return;
   }
   tray.classList.remove("hidden");
@@ -66,6 +67,7 @@ function renderOperations() {
   const open = $("#jobsDialogList");
   if (open) open.innerHTML = list || '<div class="empty small">No jobs.</div>';
   if (window.paintBell) paintBell();
+  if (window.uvmCopiesPaint) uvmCopiesPaint();
   if (window.applyRole) window.applyRole();
 }
 

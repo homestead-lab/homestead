@@ -32,6 +32,7 @@
     schedules: Object.freeze({ path: "/schedules",       label: "Schedules",       section: "Apps", parent: "workloads" }),
     imports:   Object.freeze({ path: "/import",          label: "Import",          section: "Apps", parent: "workloads" }),
     vms:       Object.freeze({ path: "/vms",             label: "Virtual Machines", section: "Apps" }),
+    vmimport:  Object.freeze({ path: "/vms/import",      label: "Import",          section: "Apps", parent: "vms" }),
     store:     Object.freeze({ path: "/app-store",       label: "App Store",       section: "Apps" }),
     helm:      Object.freeze({ path: "/helm",            label: "Helm",            section: "Apps", parent: "store" }),
     storage:   Object.freeze({ path: "/volumes",         label: "Volumes",         section: "Storage" }),
@@ -48,6 +49,7 @@
   const TABS = Object.freeze({
     dash: [["dash", "Overview"], ["flow", "Architecture"]],
     workloads: [["workloads", "Running"], ["images", "Images"], ["schedules", "Schedules"], ["imports", "Import"]],
+    vms: [["vms", "Machines"], ["vmimport", "Import"]],
     store: [["store", "Apps"], ["helm", "Helm"]],
     cluster: [["cluster", "Health"], ["events", "Events"], ["resources", "Resources"]],
   });

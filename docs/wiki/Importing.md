@@ -1,7 +1,9 @@
 # Importing
 
 **Import** (a tab of **Containers**) brings things in from elsewhere: containers and their data from an
-Unraid (or any Docker) server, a Docker Compose file, or a VM disk image.
+Unraid (or any Docker) server, or a Docker Compose file. VMs have an **Import**
+tab of their own under **Virtual machines**: VMs from Unraid, and disk images
+from a web address.
 Workloads from another Homestead cluster move under **Settings → Linked
 clusters**.
 
@@ -188,12 +190,48 @@ satisfied `depends_on` references before reviewing the remainder (or deploy the
 remaining services individually). Drafts and `.env` values stay in browser
 memory only; save your original file somewhere safe before refreshing.
 
-## A VM disk
+## VMs from Unraid
 
-**Import → VM disk** downloads a disk image from a URL - qcow2, vmdk, raw, vdi,
-vhd(x) - into a new volume, converting it as it goes, and can check its
-SHA-256. When it finishes, **Create VM** boots from it. This needs CDI, which
-Harvester includes. See [Virtual machines](Virtual-machines).
+**Virtual machines → Import** lists every VM on each Unraid server you have
+added (the same servers, and the same verified SSH login, the container import
+uses), with its state, cores, memory, firmware and disks.
+
+**Import** opens three steps - Settings, Disks, Network - under a live picture
+of what maps across:
+
+- **Cores, memory and firmware** come across as they are: UEFI or BIOS, a TPM,
+  Hyper-V enlightenments. The machine type becomes q35, the one KubeVirt runs.
+- **Each vdisk** becomes a disk here, the size of the vdisk, on the storage
+  class you choose; a second disk can be left behind. Each keeps the bus it had
+  on Unraid - Windows installed on SATA cannot find its disk on VirtIO.
+- **The network card** joins the LAN network you pick (br0 on Unraid), keeping
+  its MAC address, so a DHCP reservation still gives it the same address.
+- **What cannot come across** stays behind, and the picture says why:
+  GPU and USB passthrough (add Homestead's own hardware devices in Edit VM),
+  ISOs in its CD-ROM, CPU pinning, and any disk that is a whole physical disk
+  rather than a file. A TPM comes across as a new one, so BitLocker, if it is
+  on, asks once for its recovery key.
+
+A VM that is **running** on Unraid shows **Shut down** instead of Import: it
+asks Unraid for a clean shutdown (the power button), so the disk is copied as
+it was left. The copy checks again that it is still shut off before it starts.
+
+The disks are read over SSH and streamed into CDI's upload proxy, which turns
+raw or qcow2 into a VM disk as it arrives. The whole disk crosses the network,
+empty space too - about 15 minutes for 80 GB on gigabit. Progress shows in the
+bell and under **Copying**. When every disk has arrived the VM is made,
+**stopped**, for you to start. The VM on Unraid is never changed or deleted; if
+a copy fails, its part-copied disks are removed so it can simply be run again.
+
+This needs CDI, which Harvester includes.
+
+## A VM disk image
+
+**Virtual machines → Import → ＋ Import → A disk image from a URL** downloads a
+disk image - qcow2, vmdk, raw, vdi, vhd(x) - into a new volume, converting it as
+it goes, and can check its SHA-256. When it finishes, **Create VM** boots from
+it. This needs CDI, which Harvester includes. See
+[Virtual machines](Virtual-machines).
 
 ## From another Homestead
 

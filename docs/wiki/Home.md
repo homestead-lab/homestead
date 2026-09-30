@@ -49,7 +49,7 @@ probe - and your first sign-in.
 - [Dashboard and nodes](Dashboard-and-nodes) - health, every disk, hardware, drive health
 - [Containers](Containers) - deploy, edit, groups, updates, privileges, placement
 - [App Store](App-Store) - Unraid's Community Applications, deployed properly
-- [Importing](Importing) - from an Unraid server, a Docker Compose file, or a VM disk image
+- [Importing](Importing) - containers and VMs from an Unraid server, a Docker Compose file, or a VM disk image
 - [Storage](Storage) - volumes, Longhorn allocation, adding disks, changing a storage class
 - [Data protection](Data-protection) - snapshots, backups, backup storage, restores
 - [Network shares](Network-shares) - Samba shares from any volume

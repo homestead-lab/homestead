@@ -8,6 +8,7 @@ const VIEWS = {
   portal:    ["Portal",         "overview",  viewPortal,    true],
   workloads: ["Containers",     "workloads", viewWorkloads, true],
   vms:       ["Virtual Machines","workloads", viewVMs,       true],
+  vmimport:  ["Import",         "workloads", () => viewVmImport(), false],
   deploy:    ["Deploy",         "workloads", () => viewDeploy(), false],
   store:     ["App Store",      "workloads", viewStore,     false],
   helm:      ["Helm",           "workloads", viewHelm,      true],

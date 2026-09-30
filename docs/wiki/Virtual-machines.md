@@ -4,6 +4,10 @@
 Harvester, and something you can add to k3s or RKE2. The page appears when the
 cluster has KubeVirt.
 
+It has two tabs: **Machines**, the VMs here, and **Import**, which brings VMs
+across [from an Unraid server](Importing#vms-from-unraid), settings and disks,
+and [disk images](Importing#a-vm-disk-image) from a web address.
+
 ![VMs](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-vms.jpg)
 
 ## Each VM
@@ -49,7 +53,7 @@ and a boot disk:
 
 - **Boot disk** - an image from the [image store](#image-store), a Harvester
   image, an image downloaded from a URL, a disk you
-  [imported](Importing#a-vm-disk), or blank, to install from an ISO added
+  [imported](Importing#a-vm-disk-image), or blank, to install from an ISO added
   later as a CD-ROM.
 - **Root password** - set through cloud-init, so a cloud image has a login
   from its first boot. Optional for an imported disk that already has one.
@@ -134,7 +138,7 @@ On k3s and RKE2, CDI fills each VM's disk straight from the publisher, so a
 new VM always starts from the newest build and there is nothing to keep.
 
 Your own disk image (qcow2, vmdk, raw, vdi, vhd or vhdx) is
-[imported](Importing#a-vm-disk) from a web address.
+[imported](Importing#a-vm-disk-image) from a web address.
 
 ## The list
 

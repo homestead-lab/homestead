@@ -1139,17 +1139,18 @@ function importProgressCell(job) {
 async function viewImport() {
   const [, nodes] = await Promise.all([loadHardwareFeatures(), api("/api/nodes").catch(() => [])]);
   if (nodes.length) STATE.data.nodes = nodes;
-  const [srcs, jobs, disks, namespaces, storageClasses] = await Promise.all([
-    api("/api/sources"), api("/api/imports").catch(() => []), api("/api/vm-disks").catch(() => []),
+  const [srcs, jobs, namespaces, storageClasses] = await Promise.all([
+    api("/api/sources"), api("/api/imports").catch(() => []),
     api("/api/namespaces").catch(() => ["lab"]), api("/api/storageclasses").catch(() => ["longhorn-r2"]),
   ]);
   STATE.data.classFacts = (await api("/api/storageclasses?facts=1").catch(() => ({}))).facts || {};
   STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
   paint(`<div class="phead"><div><h2>Import</h2>
-      <p>Bring apps in from an Unraid or Docker server, a Docker Compose file, or a VM disk image</p></div>
+      <p>Bring apps in from an Unraid or Docker server, or a Docker Compose file. VMs are imported under Virtual machines.</p></div>
       <div class="row">${menuButton("＋ Import", [{ label: "From an Unraid or Docker server", icon: "import", run: "srcAdd()", need: "admin" },
         { label: "From a Docker Compose file", icon: "box", run: "composeImport()", need: "operator" },
-        { label: "A VM disk image", icon: "vm", run: "vmDiskImport()", need: "admin" }])}</div></div>
+        // VM imports moved to their own page; this points there for a release or so.
+        { label: "A VM, from Unraid or a disk image", icon: "vm", run: "go('vmimport')", tip: "Now under Virtual machines › Import" }])}</div></div>
 
     <div class="sec">Unraid and Docker servers ${tip("Containers on another server - Unraid, or any Linux host running Docker - with their settings and appdata. Homestead reaches the server over SSH.")}</div>
     ${srcs.length ? `<div class="grid g3">${srcs.map(importSourceCard).join("")}</div>
@@ -1169,21 +1170,12 @@ async function viewImport() {
           <button class="btn sm ${j.state === "failed" ? "danger" : ""}" data-need="admin" title="${j.state === "running" ? "Stop this copy and remove its job" : "Remove this job; it keeps referencing the volume until it is gone"}" onclick="importRemove(${jsq(j.name)},${jsq(j.state)})">${j.state === "running" ? "Cancel" : "Remove"}</button></div></td></tr>`).join("")}
     </tbody></table></div></div>` : ""}
 
-    <div class="sec">VM disk images ${tip("CDI downloads supported QEMU disk formats, including qcow2 and vmdk, converts them into a VM-ready disk, and writes the result into a new Longhorn PVC.")}</div>
-    ${disks.length ? `<div class="card flat pad0"><div class="tblwrap"><table data-sort="vm-disks" class="tbl stack"><thead><tr>
-      <th>Disk / PVC</th><th>Capacity</th><th>Status</th><th>Progress</th><th>Attached to</th><th></th></tr></thead><tbody>
-      ${disks.map(d => { const done = d.phase === "Succeeded", failed = ["Failed","Error","Unknown"].includes(d.phase); return `<tr>
-        <td><b>${esc(d.name)}</b><div class="dim xs mono">${esc(d.namespace)} · ${esc(d.storage_class || "storage class unknown")}</div></td>
-        <td class="mono small">${esc(d.capacity || "—")}<div class="dim xs">${esc((d.access_modes || []).join(", "))}</div></td>
-        <td><span class="pill ${done ? "ok" : failed ? "crit" : "med"}">${esc(d.phase.replace(/([a-z])([A-Z])/g, "$1 $2"))}</span>${d.message ? `<div class="dim xs" style="margin-top:5px;max-width:320px">${esc(d.message)}</div>` : ""}</td>
-        <td style="min-width:130px"><div class="jobmeter"><span class="${failed ? "failed" : ""}" style="width:${Math.max(2, done ? 100 : d.progress || 0)}%"></span></div><div class="dim xs mono">${done ? "ready" : `${esc(d.progress || 0)}%`}</div></td>
-        <td class="small">${d.in_use ? esc((d.used_by || []).join(", ")) : '<span class="dim">not attached</span>'}</td>
-        <td>${done && !d.in_use ? `<button class="btn sm" onclick="vmNew(${jsq(d.name)},${jsq(d.namespace)})">Create VM</button>` : ""}</td></tr>`; }).join("")}
-      </tbody></table></div></div>` : `<div class="empty">No managed VM disk imports yet. Import an HTTP(S) qcow2, vmdk, raw, vdi, vhd or vhdx image into a new PVC.</div>`}
 `);
 }
 
 const SOURCE_KINDS = { unraid: "Unraid", proxmox: "Proxmox", ssh: "Docker host" };
+/* Servers are shared by both Import tabs: after a change, draw the one that is open. */
+const importRepaint = () => { resetPaint(); STATE.view === "vmimport" && window.viewVmImport ? viewVmImport() : viewImport(); };
 
 /* A server to import from: what it is, and the one thing to do next -
    verify its SSH key, or pick its containers. */
@@ -1311,7 +1303,7 @@ window.doVmDiskImport = async () => {
     const plan = await api(`/api/vm-disks/import-plan?ns=${encodeURIComponent(body.namespace)}&name=${encodeURIComponent(body.name)}`);
     if (!plan.ready) return toast(plan.message, "bad");
     const result = await api("/api/vm-disks/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    toast(result.message, "ok"); closeModal(); resetPaint(); viewImport();
+    toast(result.message, "ok"); closeModal(); importRepaint();
   } catch (e) { toast(e.message, "bad"); }
 };
 window.srcAdd = () => modal("Add an Unraid or Docker server", UI.lead("Homestead reaches the server over SSH, lists its Docker containers, and copies each one's appdata. Save it, then verify its SSH fingerprint: no login is attempted until you trust it.") +
@@ -1377,7 +1369,7 @@ window.sourceKeyTrust = async () => {
     await api("/api/sources/trust", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
       name:review.name,key:review.key,capacity_token:review.capacity_token,confirm_fingerprint:true})});
     toast("Source key pinned", "ok");
-    if ($("#sourceKeyApply") === button) { closeModal(); resetPaint(); viewImport(); }
+    if ($("#sourceKeyApply") === button) { closeModal(); importRepaint(); }
   } catch(e) {
     if ($("#sourceKeyApply") === button) $("#mbody").innerHTML = UI.callout("bad", "Trust save not confirmed", esc(e.message) + " Refresh and scan again; nothing was retried.") + UI.actions(UI.cancel("Close"));
     else toast("Trust save not confirmed. Refresh Sources before retrying.", "bad");
@@ -1386,7 +1378,7 @@ window.sourceKeyTrust = async () => {
 window.srcDel = async name => {
   if (!(await ask(`Remove import source "${name}"? Existing copy Jobs and their credentials are retained; this does not stop or revoke them.`))) return;
   try { await api("/api/sources/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
-    toast("removed", "ok"); resetPaint(); viewImport(); } catch (e) { toast(e.message, "bad"); }
+    toast("removed", "ok"); importRepaint(); } catch (e) { toast(e.message, "bad"); }
 };
 window.srcBrowse = async name => {
   modal("Import from · " + name, `<div class="empty"><span class="spin2"></span>connecting to ${esc(name)} and listing its containers - this runs a

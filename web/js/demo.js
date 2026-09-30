@@ -662,6 +662,39 @@
         pvc: body.name, size_gb: body.size_gb,
         message: `CDI import into ${body.namespace || "lab"}/${body.name} started` };
     },
+    // An Unraid server's VMs, as homestead_unraid_vms.plan() maps them.
+    "/api/sources/vms": (url, init) => {
+      const disk = (path, gb, format, bus, usedGb) => ({ index: 0, path, target: "hdc", unraid_bus: bus, bus: bus === "ide" ? "sata" : bus,
+        format, virtual: gb * 2 ** 30, size: format === "raw" ? gb * 2 ** 30 : usedGb * 2 ** 30, used: usedGb * 2 ** 30, size_gb: gb, found: true });
+      const vm = (name, state, os, cores, memory, firmware, disks, nic, extra = {}) => ({
+        name, slug: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"), state, shut_off: state === "shut off", os, cores, memory, firmware,
+        secure_boot: false, tpm: false, hyperv: false, cpu_model: "host-passthrough", machine: "pc-q35-9.2",
+        disks: disks.map((d, index) => ({ ...d, index })), nic: { bridge: "br0", model: "virtio-net", nic_model: "virtio", ...nic },
+        dropped: [], notes: [], ready: true, problem: "", ...extra });
+      return { source: JSON.parse(init?.body || "{}").name || "unraid", virsh: true, vms: [
+        vm("home-assistant", "shut off", "linux", 2, "4Gi", "uefi", [disk("/mnt/user/domains/home-assistant/haos_ova-16.2.qcow2", 32, "qcow2", "virtio", 6)],
+          { mac: "52:54:00:4b:21:9e" }),
+        vm("ubuntu-dev", "shut off", "ubuntu", 4, "6Gi", "bios", [disk("/mnt/user/domains/ubuntu-dev/vdisk1.img", 40, "raw", "virtio", 11)],
+          { mac: "52:54:00:18:c3:5d" }),
+        vm("win11-desk", "running", "windows11", 4, "8Gi", "uefi",
+          [disk("/mnt/user/domains/win11-desk/vdisk1.img", 80, "raw", "sata", 18), disk("/mnt/user/domains/win11-desk/vdisk2.img", 100, "qcow2", "virtio", 2)],
+          { mac: "52:54:00:3a:1c:07" },
+          { tpm: true, hyperv: true,
+            dropped: [{ what: "GPU or PCI device", detail: "0000:01:00.0", hardware: true, reason: "passthrough is tied to Unraid's hardware; add it from Homestead's hardware devices in Edit VM" },
+              { what: "CD-ROM", detail: "virtio-win-0.1.262.iso", reason: "an ISO is only needed to install; add one in Edit VM if you still need it" },
+              { what: "CPU pinning", detail: "vcpupin", reason: "Unraid's own tuning for its cores; the core count comes across" }],
+            notes: ["its TPM comes across as a new one - Unraid keeps the old one's contents - so BitLocker, if it is on, asks once for its recovery key"] }),
+      ] };
+    },
+    "/api/sources/vms/shutdown": (url, init) => {
+      const body = JSON.parse(init?.body || "{}");
+      return { ok: true, message: `Asked ${body.source} to shut ${body.vm} down; it shows as shut off once the guest has stopped` };
+    },
+    "/api/vms/import-unraid": (url, init) => {
+      const body = JSON.parse(init?.body || "{}");
+      return { ok: true, operation: { id: "demo-uvm", kind: "unraid-vm-import", title: `Import ${body.vm} from ${body.source}`,
+        status: "running", progress: 3, message: `Copying from ${body.source}`, href: "/vms/import" } };
+    },
     "/api/images": () => ({ distinct: 4, protected: 3, retained: 3, complete: true, scanning: [],
       node_names: ["harvester-node1", "harvester-node2", "harvester-node3"],
       nodes: [{ node: "harvester-node1", total_gb: 14.2, count: 38, scanned_at: Date.now() / 1000 - 240 },

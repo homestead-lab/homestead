@@ -231,7 +231,7 @@ the whole cluster.
 
 ### Import qcow2 and vmdk VM disks
 
-Import → **VM disk** uses KubeVirt CDI to stream an HTTP(S) disk image into a
+Virtual machines → Import → **A disk image from a URL** uses KubeVirt CDI to stream an HTTP(S) disk image into a
 new Longhorn PVC. CDI auto-detects and converts common QEMU formats including
 qcow2, vmdk, raw, vdi, vhd, and vhdx. Homestead checks both the DataVolume and
 PVC name before starting and never overwrites an existing disk. Optional
