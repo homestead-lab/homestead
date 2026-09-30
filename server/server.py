@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.259")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.260")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -5804,17 +5804,6 @@ def mqtt_snapshot():
             "nodes": nodes}
 
 
-def hv_exporter_present():
-    """hv-exporter, if it still runs: it publishes the same topics."""
-    for ns in (DEFAULT_NS, "lab"):
-        try:
-            kget(f"/apis/apps/v1/namespaces/{ns}/deployments/hv-exporter")
-            return ns
-        except Exception:
-            continue
-    return ""
-
-
 MAX_REPLICAS = 3
 
 
@@ -7674,7 +7663,7 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/platform/join":
                 return self._send(200, PLATFORM.join_guide())
             if p == "/api/mqtt":
-                return self._send(200, {**MQTT.public(), "hv_exporter": hv_exporter_present(),
+                return self._send(200, {**MQTT.public(),
                                         "sensors": {"cluster": len(MQTT.CLUSTER_SENSORS), "node": len(MQTT.NODE_SENSORS)}})
             if p == "/api/mqtt/preview":
                 snap = mqtt_snapshot()

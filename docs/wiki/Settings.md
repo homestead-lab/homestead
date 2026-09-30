@@ -142,7 +142,7 @@ and restarts Homestead once onto it.
 
 **MQTT** publishes cluster and node stats to a broker, with Home Assistant
 discovery: nodes ready, volumes degraded, pods, VMs, CPU and memory per node.
-The topics and entity ids match the older hv-exporter, so Home Assistant keeps
+The entity ids stay the same from release to release, so Home Assistant keeps
 its entities and history. **Test connection** checks the broker.
 
 ## Notifications

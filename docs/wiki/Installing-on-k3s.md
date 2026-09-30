@@ -109,6 +109,12 @@ It then:
 
 Open that address and create the first administrator.
 
+The machine's own screen (not SSH) now shows a live status console in place of
+the login prompt - press Enter for the usual login. See
+[Local host console](Installing-Homestead#local-host-console).
+
+![The host console](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-host-status.png)
+
 The installer runs [`bootstrap-k3s.sh`](https://github.com/wjcloudy/homestead/blob/main/scripts/bootstrap-k3s.sh)
 to do this. You can run it yourself instead, with no questions:
 
