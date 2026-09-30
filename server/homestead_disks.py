@@ -712,13 +712,28 @@ autotag_state = None    # () -> path of the auto-tag record
 
 
 def kind_tags(row):
-    """What a disk is, as a tag: "os" for the one the system runs from - only
-    that, so a class choosing "ssd" does not take the system disk - else
-    "ssd" (SSD or NVMe) or "hdd". [] when the probe has not said."""
+    """What a disk is, as tags: "hdd", "ssd", or "nvme" and "ssd" (a class
+    asking for SSDs takes NVMe too), with "os" as well on the one the system
+    runs from. The system disk was once "os" alone, to keep SSD classes off
+    it - but a machine whose only drive is the system one then had nowhere
+    for them at all; "os" still lets a class leave it out. [] - or "os"
+    alone - when the probe has not said what it is."""
+    kind = str(row.get("kind") or "").upper()
+    by_kind = ["hdd"] if kind == "HDD" else ["nvme", "ssd"] if kind == "NVME" else ["ssd"] if kind == "SSD" else []
+    return (["os"] if row.get("system") else []) + by_kind
+
+
+def _earlier_tags(row):
+    """What an earlier release tagged a disk: "os" alone on the system disk,
+    and NVMe as plain "ssd"."""
     if row.get("system"):
         return ["os"]
     kind = str(row.get("kind") or "").upper()
     return ["hdd"] if kind == "HDD" else ["ssd"] if kind in ("SSD", "NVME") else []
+
+
+def _system_row(node):
+    return next((r for r in (inventory()["nodes"].get(node) or []) if r.get("system")), {"system": True})
 
 
 def _row(node, device):
@@ -776,12 +791,12 @@ def use_os_space(cfg):
     """Space nothing uses given to Longhorn: a logical volume of its own in
     the OS drive's volume group, or a new partition in a disk's unallocated
     space - formatted and mounted for V1, raw for V2. Tagged os on the
-    system's drive, like its default disk; by kind elsewhere."""
+    system's drive (and its kind), like its default disk; by kind elsewhere."""
     node = str(cfg.get("node") or "")
     engine = "v2" if str(cfg.get("engine") or "v1").lower() in ("v2", "longhornv2") else "v1"
     source = str(cfg.get("source") or "lvm")
     if source == "lvm":
-        done, tags = setup_module.use_os_space(node, cfg.get("size_gb"), engine), ["os"]
+        done, tags = setup_module.use_os_space(node, cfg.get("size_gb"), engine), kind_tags(_system_row(node))
         where = f"{done['size_gb']} GB volume in {done['vg']}"
     else:
         kind, _, rest = source.partition(":")
@@ -844,6 +859,8 @@ def _note_tagged(key):
 def auto_tag():
     """Each Longhorn disk with no tags, seen for the first time: tagged by
     what it is. Once only - tags someone removes or changes are theirs.
+    A disk still carrying exactly what an earlier release gave it ("os" on
+    the system disk, "ssd" on NVMe) is brought up to today's tags, once.
     Returns [(node, disk id, tags)]."""
     done, tagged = _tagged(), []
     for node, rows in inventory()["nodes"].items():
@@ -852,14 +869,23 @@ def auto_tag():
             for disk in row["longhorn"]:
                 key = f"{node}/{disk['id']}"
                 if key in done:
+                    again = "kinds:" + key
+                    if again in done or not disk["ready"] or sorted(tags) == sorted(_earlier_tags(row)):
+                        continue
+                    if sorted(disk["tags"]) == sorted(_earlier_tags(row)):
+                        set_disk_tags(node, disk["id"], tags)
+                        tagged.append((node, disk["id"], tags))
+                    _note_tagged(again)         # changed, or theirs: either way once
+                    done.add(again)
                     continue
                 if disk["tags"]:
                     pass                        # someone tagged it: theirs
-                elif tags and disk["ready"]:
+                elif tags and tags != ["os"] and disk["ready"]:
                     set_disk_tags(node, disk["id"], tags)
                     tagged.append((node, disk["id"], tags))
                 else:
                     continue                    # not known yet: looked at again later
                 _note_tagged(key)
-                done.add(key)
+                _note_tagged("kinds:" + key)
+                done |= {key, "kinds:" + key}
     return tagged
