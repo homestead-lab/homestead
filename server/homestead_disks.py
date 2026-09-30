@@ -96,9 +96,22 @@ def _lh_disks(node):
                     "size_gb": _gb(maximum - (d.get("storageReserved") or 0)), "used_gb": _gb(maximum - available),
                     "allocated_gb": _gb(st.get("storageScheduled")), "free_gb": _gb(available),
                     "replicas": len(st.get("scheduledReplica") or {}),
+                    "replica_names": sorted(st.get("scheduledReplica") or {}),
                     "tags": [t for t in d.get("tags") or [] if not str(t).startswith(INTERNAL_TAG)],
                     "ready": ready.get("status", "True") == "True", "problem": ready.get("message", "") if ready.get("status") == "False" else ""})
     return out
+
+
+def _replica_sizes():
+    """{replica: bytes it holds}: its volume's actual size, which every copy of
+    a volume holds. None when Longhorn's volumes or replicas cannot be read."""
+    try:
+        volumes = {v["metadata"]["name"]: int((v.get("status") or {}).get("actualSize") or 0)
+                   for v in kget(f"{LH}/volumes").get("items", [])}
+        replicas = kget(f"{LH}/replicas").get("items", [])
+    except Exception:
+        return None
+    return {r["metadata"]["name"]: volumes.get((r.get("spec") or {}).get("volumeName"), 0) for r in replicas}
 
 
 # Harvester marks a disk it is taking out of Longhorn with a tag of its own;
@@ -217,7 +230,7 @@ def inventory():
     probed, lh, bds = temps() or {}, _lh_nodes(), _blockdevices()
     harvester = bds is not None
     names = sorted(set(probed) | set(lh) | {b["spec"].get("nodeName", "") for b in bds or []} - {""})
-    out = {}
+    out, sizes = {}, []
     for name in names:
         probe = probed.get(name) or {}
         mounts = probe.get("mounts") or []
@@ -255,6 +268,14 @@ def inventory():
             # A folder on / (Longhorn's default /var/lib/longhorn): its data is
             # counted in the root filesystem's use as well.
             disk["on_root"] = disk["type"] != "block" and _mount_point(disk["path"], mounts) == "/"
+            # Longhorn's "used" there is the whole filesystem's, the system's
+            # own files too; its data is what its replicas hold.
+            disk["data_gb"] = disk["used_gb"]
+            if disk["on_root"]:
+                if not sizes:
+                    sizes.append(_replica_sizes())
+                if sizes[0] is not None:
+                    disk["data_gb"] = _gb(sum(sizes[0].get(r, 0) for r in disk["replica_names"]))
             disk["failed"] = not disk["ready"]
             if dev in rows:
                 rows[dev]["longhorn"].append(disk)
@@ -350,9 +371,9 @@ def summary():
     return {node: [{"device": d["device"] or "longhorn", "name": d.get("name", ""), "size_gb": d["size_gb"],
                     "role": d["role"], "system": bool(d.get("system")), "model": d.get("model", ""),
                     "lh_paths": [x.get("path", "") for x in d["longhorn"]],
-                    "lh_used_gb": round(sum(x["used_gb"] for x in d["longhorn"]), 1),
+                    "lh_used_gb": round(sum(x["data_gb"] for x in d["longhorn"]), 1),
                     "lh_size_gb": round(sum(x["size_gb"] for x in d["longhorn"]), 1),
-                    "lh_root_used_gb": round(sum(x["used_gb"] for x in d["longhorn"] if x.get("on_root")), 1)}
+                    "lh_root_used_gb": round(sum(x["data_gb"] for x in d["longhorn"] if x.get("on_root")), 1)}
                    for d in disks]
             for node, disks in inv["nodes"].items()}
 

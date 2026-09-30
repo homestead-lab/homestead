@@ -318,7 +318,9 @@ function nodeDiskLines(n) {
     // filesystem's use too, so it is taken out of the system's share.
     const drive = Math.max(d.size_gb || 0, d.lh_size_gb || 0, system ? (n.fs_cap_gb || 0) : 0);
     const sysGb = system ? Math.max(0, (n.fs_used_gb || 0) - (d.lh_root_used_gb || 0)) : 0;
-    const lhUsed = lh ? d.lh_used_gb || 0 : 0, lhRoom = lh ? Math.max(0, (d.lh_size_gb || 0) - lhUsed) : 0;
+    const lhUsed = lh ? d.lh_used_gb || 0 : 0;
+    // Longhorn's room on a shared filesystem is only what the system leaves free.
+    const lhRoom = lh ? Math.max(0, Math.min((d.lh_size_gb || 0) - lhUsed, drive - sysGb - lhUsed)) : 0;
     const pct = drive ? Math.round((sysGb + lhUsed) / drive * 100) : 0;
     const used = lh || system ? sizePair(sysGb + lhUsed, drive) : sizeText(d.size_gb);
     const folder = d.device === "longhorn";
