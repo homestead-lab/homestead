@@ -233,6 +233,26 @@ data:
             del disk["write_sectors"]
         return sorted(disks, key=lambda d: d["name"])
 
+    def physical_disk(device, depth=0):
+        """The first physical disk under a stacked block device (dm-*, md*),
+        following /sys/class/block/<dev>/slaves; "" when there is none."""
+        if depth > 8:
+            return ""
+        try:
+            below = sorted(os.listdir(os.path.join(SYS, "class/block", device, "slaves")))
+        except OSError:
+            below = []
+        for name in below:
+            if name.startswith(("dm-", "md")):
+                found = physical_disk(name, depth + 1)
+                if found:
+                    return found
+                continue
+            if os.path.exists(os.path.join(SYS, "class/block", name, "partition")):
+                return os.path.basename(os.path.dirname(os.path.realpath(os.path.join(SYS, "class/block", name))))
+            return name
+        return ""
+
     def mounts():
         """Which disk each host filesystem lives on, from PID 1's mount table:
         lets Homestead tell which physical disk a Longhorn disk folder is on,
@@ -257,6 +277,11 @@ data:
             device = parts[-1] if parts else ""
             partition = os.path.exists(os.path.join(SYS, "class/block", device, "partition"))
             disk = parts[-2] if partition and len(parts) > 1 else device
+            # LVM, dm-crypt and RAID sit on a device-mapper (dm-0) or md device,
+            # not a disk: follow what it is built on down to the physical disk, so
+            # a root filesystem on Ubuntu's LVM is known to be on its NVMe.
+            if device.startswith(("dm-", "md")):
+                disk = physical_disk(device) or disk
             after = [disk, device]
             key = (disk, mountpoint)
             if not disk or key in seen or mountpoint.startswith(("/var/lib/kubelet/pods", "/run/", "/proc", "/sys")):
@@ -867,7 +892,7 @@ spec:
               mountPath: "/host/proc"
               readOnly: true
         - name: smart
-          image: ghcr.io/wjcloudy/homestead:2.8.251
+          image: ghcr.io/wjcloudy/homestead:2.8.252
           imagePullPolicy: IfNotPresent
           command:
             - python3

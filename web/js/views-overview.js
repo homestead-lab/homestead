@@ -293,8 +293,9 @@ function nodeUptimeStrip(n) {
     <b class="small mono uptime-${uptimeTone(month)}">${month == null ? "—" : uptimePct(month)}</b><span class="dim xs">30d</span></div>`;
 }
 
-/* A line per disk: the system disk's use as Kubernetes sees it, and each
-   Longhorn disk's own. A disk nothing uses says so. */
+/* A line per disk: its name, or its device; what it is - the system drive,
+   Longhorn's, both, or nothing yet - and its use. A Longhorn folder on the
+   system drive shows on that drive's line, not as a disk of its own. */
 function nodeDiskLines(n) {
   const disks = n.disks || [];
   if (!disks.length) return `<div><div class="between"><span class="dim xs">DISK</span>
@@ -303,11 +304,30 @@ function nodeDiskLines(n) {
   return disks.map(d => {
     const lh = d.lh_size_gb > 0, pct = lh ? Math.round(d.lh_used_gb / d.lh_size_gb * 100) : d.role === "system" ? (n.fs_pct || 0) : 0;
     const used = lh ? sizePair(d.lh_used_gb, d.lh_size_gb) : d.role === "system" ? sizePair(n.fs_used_gb, n.fs_cap_gb) : sizeText(d.size_gb);
-    return `<div><div class="between"><span class="dim xs disklabel-row"><span title="${esc(d.device)}">${esc(d.device.toUpperCase())}</span> ${lh ? '<span class="tag ok slimtag">Longhorn</span>' : d.role === "system" ? '<span class="tag slimtag">system</span>' : `<span class="tag slimtag ${d.role === "unused" ? "info" : ""}">${esc(d.role)}</span>`}</span>
+    const folder = d.device === "longhorn";
+    const label = d.name || (folder ? "Longhorn folder" : d.device.toUpperCase());
+    const where = [d.name && !folder ? d.device : "", d.model, ...(d.lh_paths || [])].filter(Boolean).join(" · ");
+    const tags = [d.system ? '<span class="tag slimtag">system</span>' : "",
+      lh ? '<span class="tag ok slimtag">Longhorn</span>' : "",
+      !lh && !d.system ? `<span class="tag slimtag ${d.role === "unused" ? "info" : ""}">${esc(d.role)}</span>` : ""].join("");
+    return `<div><div class="between diskline-head"><span class="dim xs disklabel-row"><span title="${esc(where || d.device)}">${esc(label)}</span>${tags}</span>
       <span class="small mono">${lh || d.role === "system" ? `<b>${pct}%</b> ` : ""}<span class="dim">${esc(used)}</span></span></div>
       ${lh || d.role === "system" ? meter(pct, "", "disk") : ""}</div>`;
   }).join("");
 }
+
+/* A drive's name, shown on the node card instead of its device. Kept by its
+   serial, so it follows the drive to another port. */
+window.diskRename = async (node, device, current) => {
+  const name = await askText(`Name ${device} on ${node}`, current, { placeholder: "Media 3TB, System NVMe…" });
+  if (name === null) return;
+  try {
+    const r = await api("/api/disks/name", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node, device, name }) });
+    toast(r.detail, "ok");
+    nodeDetail(node, true);
+  } catch (e) { toast(e.message, "bad"); }
+};
 
 window.nodeDetail = async (name, fromRoute = false) => {
   if (!fromRoute && window.setModalRoute) setModalRoute({ node: name }, name);
@@ -317,8 +337,10 @@ window.nodeDetail = async (name, fromRoute = false) => {
     const i = n.info || {};
     const row = (l, v) => `<div class="drow"><div class="dl">${l}</div><div class="dv mono">${v}</div></div>`;
     const disks = (n.temps && n.temps.disks) || [];
+    const given = Object.fromEntries((n.disks || []).map(x => [x.device, x.name || ""]));
     const diskRows = disks.map(d => { const s = d.smart || null; return `<div class="diskrow ${d.health?.state === "critical" ? "smart-failed" : ""}">
-      <div class="diskidentity"><b class="mono">${esc(d.name)} <span class="tag">${esc(d.kind || "Disk")}</span></b><span>${esc(s?.model || d.model || d.name)}</span><span class="mono">${esc(s?.serial || d.serial || "serial unavailable")}</span></div>
+      <div class="diskidentity"><b class="mono">${given[d.name] ? `${esc(given[d.name])} <span class="dim">${esc(d.name)}</span>` : esc(d.name)} <span class="tag">${esc(d.kind || "Disk")}</span>
+        ${can("admin") ? `<button class="btn sm" data-tip="Name this drive" onclick="diskRename(${jsq(n.name)},${jsq(d.name)},${jsq(given[d.name] || "")})">${given[d.name] ? "Rename" : "Name"}</button>` : ""}</b><span>${esc(s?.model || d.model || d.name)}</span><span class="mono">${esc(s?.serial || d.serial || "serial unavailable")}</span></div>
       <div><span class="disklabel">CAPACITY</span><b class="mono">${Number(d.size_gb || 0).toFixed(1)} GB</b></div>
       <div><span class="disklabel">HEALTH</span><b><span class="tag ${diskHealthTone(d.health?.state)}"
         data-tip="${esc(d.health?.summary || "no SMART data for this drive")}">${esc(diskHealthWord(d.health?.state))}</span></b>
