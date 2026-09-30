@@ -283,9 +283,12 @@ h1{margin:2px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em}
 .nodemetrics .between>.dim{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .nodemetrics .between>.small{flex:0 0 auto}
 /* A disk's name gives way before its role does: which disk is Longhorn's matters more. */
-.nodemetrics .disklabel-row{display:flex;align-items:center;gap:5px}
+.nodemetrics .disklabel-row{display:flex;align-items:center;gap:5px;min-width:0;flex-wrap:wrap}
+/* Label and tags first; the use moves under them when the card is narrow,
+   rather than cutting the Longhorn tag off. */
+.nodemetrics .diskline-head{flex-wrap:wrap;column-gap:8px;row-gap:2px}
 .nodemetrics .disklabel-row>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
-.nodemetrics .disklabel-row>.tag{flex:0 0 auto}
+.nodemetrics .disklabel-row>.tag{flex:0 0 auto;margin-left:0}
 .nodemetrics .meter{margin-top:4px}
 .nodepods{display:flex;align-items:center;gap:12px;margin-top:12px}
 .nodepods>span{flex:0 0 auto;white-space:nowrap}

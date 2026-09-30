@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.251")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.252")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -7023,7 +7023,7 @@ def needed_role(path, method):
                 "/api/passthrough/inspect", "/api/passthrough/iommu", "/api/passthrough/pci", "/api/passthrough/usb",
                 # Homestead's own services onto a VIP, and a VIP moved with everything on it.
                 "/api/self/address/plan", "/api/self/address", "/api/network/vips/change", "/api/welcome/done",
-                "/api/disks/tags", "/api/disks/node-tags",
+                "/api/disks/tags", "/api/disks/node-tags", "/api/disks/name",
                 # Replacing a failed disk deletes replicas and takes the disk out.
                 "/api/disks/retire", "/api/disks/retire/plan",
                 "/api/resources/delete", "/api/resources/create", "/api/resources/reveal"):
@@ -8691,6 +8691,10 @@ class H(BaseHTTPRequestHandler):
                           else DISKS.remove(b.get("node", ""), b.get("disk", "")))
                 for key in ("disks", "lhcap", "nodes", "ov"):
                     _cache.pop(key, None)
+                return self._send(200, result)
+            if p == "/api/disks/name":
+                result = DISKS.set_disk_name(b.get("node", ""), b.get("device", ""), b.get("name", ""))
+                _cache.pop("disks", None)
                 return self._send(200, result)
             if p in ("/api/disks/tags", "/api/disks/node-tags"):
                 result = (DISKS.set_disk_tags(b.get("node", ""), b.get("disk", ""), b.get("tags") or [])
