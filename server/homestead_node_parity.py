@@ -27,11 +27,14 @@ Each node's host is done once, and recorded in /data, like the inotify
 limits (homestead_host_limits); a host done by an older release, with fewer
 steps, is done again (HOST_STEPS), which each step allows.
 """
+import calendar
 import json
 import os
 import re
 import time
+import urllib.error
 
+import homestead_addons as addons
 import homestead_shared as SHARED
 
 kget = ksend = hostrun = platform = probes = None
@@ -161,6 +164,165 @@ def kube_vip():
     return match.group(1)
 
 
+ENV_LINE = re.compile(r'^  ([A-Za-z_]+): "?([^"\n]*)"?$')
+
+
+def _ours(values):
+    """The env and extras of kube-vip values Homestead wrote, or None for
+    values someone else wrote - which are left as they are."""
+    env, rest = {}, values
+    if not values.startswith("env:\n"):
+        return None
+    lines = values.split("\n")[1:]
+    index = 0
+    while index < len(lines) and lines[index].startswith("  "):
+        match = ENV_LINE.match(lines[index])
+        if not match:
+            return None
+        env[match.group(1)] = match.group(2)
+        index += 1
+    rest = "\n".join(lines[index:]).strip("\n")
+    if rest and rest + "\n" != addons.KUBE_VIP_SECURITY:
+        return None
+    return env, bool(rest)
+
+
+def _local_traffic_vips():
+    """Services whose VIP must follow their own pod (externalTrafficPolicy
+    Local - NFS shares): they need kube-vip's per-Service election. None
+    when the Services cannot be read."""
+    try:
+        services = kget("/api/v1/services").get("items", [])
+    except Exception:
+        return None
+    return [f"{s['metadata'].get('namespace')}/{s['metadata'].get('name')}" for s in services
+            if (s.get("spec") or {}).get("type") == "LoadBalancer"
+            and (s.get("spec") or {}).get("externalTrafficPolicy") == "Local"]
+
+
+def kube_vip_settings():
+    """Homestead's kube-vip brought to the settings that hold across reboots:
+    one leader for every VIP, the interface named where every node agrees,
+    and NET_ADMIN and NET_RAW. Only values Homestead wrote are changed, and
+    per-Service election stays where a Local-traffic Service needs it.
+    Returns what changed, or ""."""
+    chart = _get(f"{HELMCHARTS}/kube-vip")
+    if not chart:
+        return ""
+    values = str((chart.get("spec") or {}).get("valuesContent") or "")
+    parsed = _ours(values)
+    if parsed is None:
+        return ""
+    env, secured = parsed
+    local = _local_traffic_vips()
+    if local is None:
+        return ""
+    election = "service" if local else "global"
+    interface = env.get("vip_interface", "")
+    if not interface:
+        try:
+            found = {str(data.get("default_interface") or "") for data in (probes() or {}).values()}
+        except Exception:
+            found = set()
+        found.discard("")
+        interface = found.pop() if len(found) == 1 else ""
+    wanted = addons.kube_vip_values(interface, env.get("lb_class_only") == "true", election)
+    if wanted == values:
+        return ""
+    ksend("PATCH", f"{HELMCHARTS}/kube-vip", {"spec": {"valuesContent": wanted}},
+          ctype="application/merge-patch+json")
+    notes = []
+    if election == "global" and env.get("svc_election") != "false":
+        notes.append("one leader now holds every VIP (global election), so VIPs come back after a reboot")
+    if interface and not env.get("vip_interface"):
+        notes.append(f"it announces on {interface}")
+    if not secured:
+        notes.append("it has NET_ADMIN and NET_RAW")
+    if election == "service" and env.get("svc_election") != "true":
+        notes.append(f"per-Service election kept for {', '.join(local[:3])}")
+    return "; ".join(notes) or "its settings were brought up to date"
+
+
+WORKLOADS = {"Deployment": "/apis/apps/v1/namespaces/{ns}/deployments",
+             "StatefulSet": "/apis/apps/v1/namespaces/{ns}/statefulsets",
+             "DaemonSet": "/apis/apps/v1/namespaces/{ns}/daemonsets",
+             "VirtualMachine": "/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines"}
+STALE_AFTER = 600
+
+
+def _namespace_workloads(ns):
+    """Every workload in a namespace and the pod labels each makes, plus the
+    pods: None when any of it could not be read - nothing is removed on a
+    guess."""
+    found = {}
+    for kind, path in WORKLOADS.items():
+        try:
+            items = kget(path.format(ns=ns)).get("items", [])
+        except urllib.error.HTTPError as error:
+            if kind == "VirtualMachine" and error.code == 404:
+                items = []          # no KubeVirt: no VMs
+            else:
+                return None
+        except Exception:
+            return None
+        found[kind] = {i["metadata"]["name"]: ((((i.get("spec") or {}).get("template") or {}).get("metadata") or {})
+                                               .get("labels") or {}) for i in items}
+    try:
+        pods = kget(f"/api/v1/namespaces/{ns}/pods").get("items", [])
+    except Exception:
+        return None
+    found["Pod"] = {p["metadata"]["name"]: (p["metadata"].get("labels") or {}) for p in pods}
+    return found
+
+
+def stale_services(now=None):
+    """Remove LoadBalancer Services Homestead made whose workload no longer
+    exists. One left behind still asks kube-vip for its VIP, and a VIP two
+    Services ask for can stay <pending> after a reboot. A Service stays while
+    anything - a workload stopped at zero included - could still use it.
+    Returns the names removed."""
+    now = now or time.time()
+    try:
+        services = kget("/api/v1/services").get("items", [])
+    except Exception:
+        return []
+    removed, cache = [], {}
+    for service in services:
+        meta, spec = service.get("metadata") or {}, service.get("spec") or {}
+        if spec.get("type") != "LoadBalancer" or (meta.get("labels") or {}).get("homestead.io/managed") != "true":
+            continue
+        try:
+            born = calendar.timegm(time.strptime(meta.get("creationTimestamp", ""), "%Y-%m-%dT%H:%M:%SZ"))
+        except (ValueError, OverflowError):
+            continue
+        if now - born < STALE_AFTER:
+            continue
+        ns, name = meta.get("namespace", ""), meta.get("name", "")
+        if ns not in cache:
+            cache[ns] = _namespace_workloads(ns)
+        found = cache[ns]
+        if found is None:
+            continue
+        annotations = meta.get("annotations") or {}
+        kind, workload = annotations.get("homestead.io/workload-kind"), annotations.get("homestead.io/workload")
+        if kind and workload:
+            if workload in found.get(kind, {}) or kind not in WORKLOADS:
+                continue
+        selector = spec.get("selector") or {}
+        if not selector:
+            continue            # no selector: its endpoints are someone's by hand
+        if any(all(labels.get(k) == v for k, v in selector.items())
+               for kind_rows in found.values() for labels in kind_rows.values()):
+            continue
+        try:
+            ksend("DELETE", f"/api/v1/namespaces/{ns}/services/{name}")
+            removed.append(f"{ns}/{name}")
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+    return removed
+
+
 def longhorn_copies(ready):
     """The default copies raised with the nodes, while it is the installer's
     one. Returns (from, to), or None."""
@@ -200,6 +362,12 @@ def tick():
     was = kube_vip()
     if was:
         out.append(("", f"kube-vip no longer pinned to {was}: the nodes' interfaces differ, so each announces on its own"))
+    else:
+        settled = kube_vip_settings()
+        if settled:
+            out.append(("", f"kube-vip: {settled}"))
+    for name in stale_services():
+        out.append(("", f"removed the LoadBalancer Service {name}: its workload is gone, and it still asked for its VIP"))
     if p.get("longhorn"):
         raised = longhorn_copies(ready)
         if raised:

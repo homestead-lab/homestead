@@ -95,6 +95,81 @@ class NodeParityTests(unittest.TestCase):
                 PARITY.tick()
                 self.assertEqual([], cluster.sent)
 
+    OLD_KUBE_VIP = ('env:\n  vip_arp: "true"\n  cp_enable: "false"\n  lb_enable: "false"\n  svc_enable: "true"\n'
+                    '  svc_election: "true"\n  vip_leaderelection: "false"\n  lb_class_only: "true"\n'
+                    '  lb_class_name: "kube-vip.io/kube-vip-class"\n')
+
+    def kube_vip_cluster(self, values, services=(), probes=None):
+        return Cluster([node("node-3")], {f"{HELM}/kube-vip": {"spec": {"valuesContent": values}},
+                                         "/api/v1/services": {"items": list(services)}},
+                       probes=probes if probes is not None else {"node-3": {"default_interface": "enp2s0"}})
+
+    def test_kube_vip_moves_to_one_leader_its_interface_and_its_capabilities(self):
+        cluster = self.kube_vip_cluster(self.OLD_KUBE_VIP)
+        self.bind(cluster, longhorn=False)
+        changes = PARITY.tick()
+        method, path, body = cluster.sent[0]
+        values = body["spec"]["valuesContent"]
+        self.assertEqual(("PATCH", f"{HELM}/kube-vip"), (method, path))
+        for line in ('svc_election: "false"', 'vip_leaderelection: "true"', 'vip_interface: "enp2s0"',
+                     'lb_class_only: "true"', "- NET_ADMIN", "- NET_RAW"):
+            self.assertIn(line, values)
+        self.assertTrue(any("global election" in note for _, note in changes), changes)
+        cluster.objects[f"{HELM}/kube-vip"]["spec"]["valuesContent"] = values
+        cluster.sent.clear()
+        PARITY.tick()
+        self.assertEqual([], cluster.sent, "done once")
+
+    def test_kube_vip_keeps_per_service_election_for_a_local_traffic_service(self):
+        nfs = {"metadata": {"namespace": "lab", "name": "nfs"},
+               "spec": {"type": "LoadBalancer", "externalTrafficPolicy": "Local"}}
+        cluster = self.kube_vip_cluster(self.OLD_KUBE_VIP, [nfs])
+        self.bind(cluster, longhorn=False)
+        PARITY.tick()
+        values = cluster.sent[0][2]["spec"]["valuesContent"]
+        self.assertIn('svc_election: "true"', values)
+        self.assertIn("- NET_RAW", values)
+
+    def test_kube_vip_values_someone_else_wrote_are_left_alone(self):
+        cluster = self.kube_vip_cluster('env:\n  svc_election: "true"\nextraArgs:\n  - --foo\n')
+        self.bind(cluster, longhorn=False)
+        PARITY.tick()
+        self.assertEqual([], cluster.sent)
+
+    def stale_cluster(self, deployments=(), created="2026-09-01T00:00:00Z", labels=None, missing=()):
+        service = {"metadata": {"namespace": "lab", "name": "homestead-objectstore", "creationTimestamp": created,
+                                "labels": {"homestead.io/managed": "true"} if labels is None else labels},
+                   "spec": {"type": "LoadBalancer", "selector": {"app": "homestead-objectstore"}}}
+        objects = {"/api/v1/services": {"items": [service]},
+                   "/apis/apps/v1/namespaces/lab/deployments": {"items": list(deployments)},
+                   "/apis/apps/v1/namespaces/lab/statefulsets": {"items": []},
+                   "/apis/apps/v1/namespaces/lab/daemonsets": {"items": []},
+                   "/apis/kubevirt.io/v1/namespaces/lab/virtualmachines": {"items": []},
+                   "/api/v1/namespaces/lab/pods": {"items": []}}
+        for path in missing:
+            objects.pop(path)
+        cluster = Cluster([node("node-3")], objects)
+        self.bind(cluster, longhorn=False)
+        return cluster
+
+    def test_a_service_whose_workload_is_gone_is_removed(self):
+        cluster = self.stale_cluster()
+        self.assertEqual(["lab/homestead-objectstore"], PARITY.stale_services())
+        self.assertEqual([("DELETE", "/api/v1/namespaces/lab/services/homestead-objectstore", None)], cluster.sent)
+
+    def test_a_service_that_could_still_be_used_is_kept(self):
+        stopped = {"metadata": {"name": "homestead-objectstore"}, "spec": {"replicas": 0, "template": {
+            "metadata": {"labels": {"app": "homestead-objectstore"}}}}}
+        cases = {"its workload is stopped, not gone": self.stale_cluster([stopped]),
+                 "made minutes ago": self.stale_cluster(created="2999-01-01T00:00:00Z"),
+                 "not Homestead's": self.stale_cluster(labels={}),
+                 "a read failed": self.stale_cluster(missing=("/api/v1/namespaces/lab/pods",))}
+        for why, cluster in cases.items():
+            with self.subTest(why=why):
+                self.bind(cluster, longhorn=False)
+                self.assertEqual([], PARITY.stale_services())
+                self.assertEqual([], cluster.sent)
+
     def test_the_installers_one_copy_rises_with_the_nodes(self):
         setting = {"value": "1"}
         cluster = Cluster([node("a"), node("b"), node("c"), node("d")],

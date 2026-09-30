@@ -336,17 +336,29 @@ def vip_interface():
     return found.pop() if len(found) == 1 and "" not in found else ""
 
 
-def kube_vip_values(interface, class_only):
-    """kube-vip for apps' Services only - not the Kubernetes API - with ARP,
-    each VIP led by one node. Beside k3s's ServiceLB it takes only Services
-    of its class, so the two never claim the same one."""
+# ARP on a pinned interface needs both to put an address on it and answer for it.
+KUBE_VIP_SECURITY = "securityContext:\n  capabilities:\n    add:\n    - NET_ADMIN\n    - NET_RAW\n"
+
+
+def kube_vip_values(interface, class_only, election="global"):
+    """kube-vip for apps' Services only - not the Kubernetes API - with ARP.
+
+    One leader holds every VIP (the plndr-svcs-lock lease): after a reboot it
+    takes the lock and puts each VIP on its interface. Per-Service election -
+    each Service's own lease - left a VIP two Services asked for unassigned
+    and <pending> after a reboot; it is kept only where a Service with Local
+    traffic (an NFS share) needs its VIP to follow its own pod. Beside k3s's
+    ServiceLB it takes only Services of its class, so the two never claim the
+    same one."""
+    per_service = election == "service"
     env = {"vip_arp": "true", "cp_enable": "false", "lb_enable": "false", "svc_enable": "true",
-           "svc_election": "true", "vip_leaderelection": "false"}
+           "svc_election": "true" if per_service else "false",
+           "vip_leaderelection": "false" if per_service else "true"}
     if interface:
         env["vip_interface"] = interface
     if class_only:
         env.update(lb_class_only="true", lb_class_name=VIP_CLASS)
-    return "env:\n" + "".join(f"  {key}: {json.dumps(value)}\n" for key, value in env.items())
+    return "env:\n" + "".join(f"  {key}: {json.dumps(value)}\n" for key, value in env.items()) + KUBE_VIP_SECURITY
 
 
 def install_kube_vip(cfg=None):
