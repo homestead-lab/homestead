@@ -30,6 +30,13 @@ beside them. Nothing wraps onto a second line of buttons.
 **Summary first, detail on tap.** A page opens with what matters - one status
 line - and keeps the tiles and breakdowns behind it, a tap away.
 
+**Draw, don't describe.** Where a paragraph would explain a picture - what a
+node holds, where a VIP leads, where each folder goes - draw it
+(`diagrams.js`), from live data, in the README graphic's vocabulary: a node
+is a column, a VIP a blue pill, an app an amber block and a VM an outlined
+one, a volume green, and dashed for whatever is moving, empty or not there
+yet. It redraws as the fields change.
+
 **Say it once.** A warning appears once. A sentence that would be repeated on
 every card ("saved for use...") is said once, above the cards, and each card
 shows a chip.
@@ -87,6 +94,14 @@ column headings are the one small upper-case label.
 - **The top bar** is search, the bell (a new Homestead, container updates,
   failed image checks - what wants attention, in one place), the gear (your
   own settings: Settings › You) and the account.
+
+### Detail pages
+
+Something with a lot to say about it - a node - is a page of its own, not a
+dialog: `/nodes?node=<name>`, laid out as Settings is, a column of sections
+each with its state under its name, one shown at a time (a list first on a
+phone). A node's are Overview (its picture, uptime and facts), Workloads,
+Storage, Hardware, Network and Host OS. A drive opens inside Storage.
 
 ### Settings
 
@@ -228,6 +243,17 @@ Top to bottom, leaving out what a dialog does not need:
    risky or cannot be undone.
 7. **Actions** (`UI.actions`) - always last.
 
+**Long forms go in steps** (`stepper()`): Edit container, Import, New VM
+and New share. Numbered chips across the top, one pane at a time, Back and
+Next at the foot. Every pane is drawn at once and only hidden, so the form's
+save reads every field; an edit keeps its Save on every step.
+
+**One explanation box at most**, and only for a risk. A field's explanation
+is a `tip()` beside its label; what the whole dialog needs you to know is one
+`UI.more("How this works", …)` at the foot. `foldDialogNotes()` enforces it
+as a dialog draws: a second plain note and any after it fold into that
+expand; warnings, errors and notes with controls stay.
+
 **Buttons.** The actions bar is the last thing in the dialog, pinned to its
 bottom edge while the content scrolls. Cancel (or Close) comes first and the
 main action last, on the right; on a phone they stack full width, main action
@@ -260,6 +286,8 @@ tables become cards and field grids one column on their own.
 | `moreMenu(items)` | A header's secondary actions, behind `⋯` | The main action |
 | `menuButton(label, items)` | A main action that is a choice - ＋ Import and its kinds | A single action |
 | `actionBar(items, { shown })` | A card's or a row's buttons: `shown` (2) as buttons, the rest in `⋯` | A dialog's buttons |
+| `stepper(id, steps, finish, { always })` | A long form, one step at a time | A short form |
+| `Diagram.node(n)`, `Diagram.vip(ip, rows)`, `Diagram.mapping(rows)` | What a node holds, where a VIP leads, where each folder goes - drawn live | Decoration |
 | `settingRow(label, help, control)` | One setting: label and help left, its control right | A form of many fields (use a dialog) |
 | `serviceRow(name, state, detail, actions)` | Something Homestead runs or connects to, with its state and buttons | A list of like items |
 | `UI.ack(id, sentence)` | The one checkbox a risky action needs | Settings |

@@ -741,7 +741,7 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
   const facts = opts.storage_class_facts || {};
   const classLabel = c => `${c}${facts[c]?.default ? " (default)" : ""}${facts[c]?.replicas ? ` · ${facts[c].replicas} copies` : ""}`;
   window.__vmCreateOptions = opts;
-  modal("New virtual machine", `
+  const vmMachine = `
     <div class="f"><label>Name</label><input type="text" id="v_name" placeholder="ubuntu-test"></div>
     <div class="f2">
       <div class="f"><label>CPU cores</label><input type="number" id="v_cores" value="2" min="1" max="16"></div>
@@ -751,6 +751,8 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
       <div class="f"><label>Disk (GB)</label><input type="number" id="v_disk" value="20" min="5"></div>
       <div class="f"><label>Root password ${tip("Required when Homestead provisions a new disk. Optional for an imported disk that already has login access configured.")}</label><input type="password" id="v_pass" autocomplete="new-password" placeholder="Set an initial password"></div>
     </div>
+`;
+  const vmDisk = `
     <div class="f"><label>Boot disk ${tip(opts.harvester
       ? "Attach a completed import as it is, start from one of Harvester's images, or download an image while the VM is created."
       : "Attach a completed import as it is, or download an image while the VM is created.")}</label>
@@ -774,7 +776,9 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
     ${opts.hardware_base ? `<details class="ui-more" id="v_hw"><summary>Hardware - CPU model, firmware, TPM, devices, memory</summary>
       ${vmHardwareFields(opts.hardware_base, opts, false, true)}</details>` : ""}
     <div class="f" id="v_url_row" hidden><label>Image URL</label><input type="url" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img"></div>
-    <div class="note small">A <b>Service VIP</b> forwards selected ports to a VM on the pod network. A <b>direct LAN interface</b> gets its address from DHCP or guest configuration; a MAC address only identifies that interface.</div>
+`;
+  const vmNetwork = `
+
     <div class="f"><label>Network ${tip("The pod network: reached through a Service, like a container. A LAN network (bridged): a machine there like any other, with an address from DHCP or one of its own.")}</label>
       <select id="v_net" onchange="vmNetChanged()"><option value="pod">Pod network - reached through a Service</option>
         ${(opts.network_details || []).filter(n => n.vms !== false).map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.lan ? ` · LAN${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}` : ""}</option>`).join("")}</select>
@@ -789,20 +793,22 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
       <div class="f"><label>Address</label><select id="v_addr_mode" onchange="vmNetChanged();vmSubnetPicked('v')">
         <option value="dhcp">From the network's DHCP</option><option value="static">One of its own</option></select></div>
       <div id="v_static" hidden>${vmAddressFields("v", opts)}</div></div>
+`;
+  const vmStorage = `
     ${(opts.storage_classes || []).length ? `<div class="f" id="v_sc_row"><label>Storage class ${tip(opts.harvester
       ? "Where a blank or downloaded disk lives. A disk from a Harvester image always lives on that image's own class."
       : "Where the disk lives. The cluster's default class is chosen for you.")}</label>
       <select id="v_sc">${opts.storage_classes.map(c => `<option value="${esc(c)}" ${c === opts.default_class ? "selected" : ""}>${esc(classLabel(c))}</option>`).join("")}</select></div>` : ""}
-    <div class="row" style="margin-top:18px">
-      <button class="btn pri" onclick="doVmCreate()">Review VM</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>
-    <div class="note" style="margin-top:14px">${opts.harvester
+    ${UI.more("How the disk is made", `<p>${opts.harvester
       ? "New disks are made the way Harvester makes them: shared block volumes, so the VM can move between hosts. A URL is downloaded as a Harvester image, kept in its image list for the next VM."
       : opts.cdi ? `New disks are CDI DataVolumes on the class above, with the access mode that class supports.
         A VM on a disk only one host can reach stays on that host.`
       : `<b>CDI is not installed</b>, so a VM here starts from a blank disk that KubeVirt formats itself.
         To download or import disk images, install CDI (the containerized data importer) from kubevirt.io.`}
-    ${readyDisks.length ? " Imported disks are attached directly and remain visible on the Import page." : ""}</div>`, true);
+    ${readyDisks.length ? " Imported disks are attached directly and remain visible on the Import page." : ""}</p>`)}`;
+  modal("New virtual machine", stepper("v_steps", [{ title: "Machine", html: vmMachine }, { title: "Boot disk", html: vmDisk },
+    { title: "Network", html: vmNetwork }, { title: "Storage", html: vmStorage }],
+    `<button class="btn pri" onclick="doVmCreate()">Review VM</button>`), true);
   window.__vmPreset = "";
   vmBootChanged();
   vmHardwareChanged();

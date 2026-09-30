@@ -406,10 +406,12 @@ async function nodePage(name) {
           : '<span class="dim xs">nothing of yours is scheduled here</span>'}</div>
         ${n.workloads.length ? `<div class="dim xs" style="margin-top:8px">Click one to move it to another host.</div>` : ""}</div>`],
     ["storage", "Storage", `${drives} drive${drives === 1 ? "" : "s"}${unused ? ` · ${unused} unused` : ""}`, `
+      <div class="card flat" id="nodeDrive" hidden></div>
+      <div id="nodeDrives" class="node-pane">
       <div class="card flat"><div class="ctitle">Drives</div><div class="csub">Every drive on this host, and Longhorn's storage on it</div>
         <div id="nodeDisks" style="margin-top:10px"><div class="dim small"><span class="spin2"></span> reading disks</div></div></div>
       <div class="card flat"><div class="ctitle">Disk activity ${tip("Live host block-device throughput and SMART health, from the node probe")}</div>
-        <div class="diskactivity" style="margin-top:10px">${diskRows || '<div class="dim small">No per-disk counters: the node probe provides them.</div>'}</div></div>`],
+        <div class="diskactivity" style="margin-top:10px">${diskRows || '<div class="dim small">No per-disk counters: the node probe provides them.</div>'}</div></div></div>`],
     ["hardware", "Hardware", esc([hwNames.join(", "), n.temps?.cpu_c != null ? `CPU ${n.temps.cpu_c}°C` : ""].filter(Boolean).join(" · ") || "none defined"), `
       <div class="card flat"><div class="settings-card-head"><div><div class="ctitle">Hardware for apps</div>
         <div class="csub">What placement checks look for before a container moves or starts</div></div>
@@ -470,6 +472,11 @@ function nodePageSummary(n) {
     ${n.schedulable ? "" : '<span class="sumitem"><span class="tag warn">cordoned</span></span>'}`;
 }
 /* One section at a time, as in Settings; on a phone the list comes first. */
+window.nodeDriveBack = () => {
+  const box = $("#nodeDrive"), list = $("#nodeDrives");
+  if (box) { box.hidden = true; box.innerHTML = ""; }
+  if (list) list.hidden = false;
+};
 window.nodeSectionGo = id => {
   if (id) STATE.nodeSection = id;
   STATE.nodeSectionOpen = !!id;
@@ -483,14 +490,26 @@ window.nodeSectionGo = id => {
 };
 
 window.smartDisk = async (node, disk) => {
-  childModal(`Drive · ${disk}`, `<div class="empty"><span class="spin2"></span>reading SMART data</div>`, true);
+  // On the node's page a drive opens in its Storage section; elsewhere, a dialog.
+  let target;
+  if (STATE.view === "nodes" && $("#nodePage") && $("#nodeDrive")) {
+    nodeSectionGo("storage");
+    $("#nodeDrives").hidden = true;
+    const box = $("#nodeDrive");
+    box.hidden = false;
+    box.innerHTML = `<a class="linkish node-drive-back" onclick="nodeDriveBack()">‹ All drives</a><div id="nodeDriveBody"><div class="empty"><span class="spin2"></span>reading SMART data</div></div>`;
+    target = $("#nodeDriveBody");
+  } else {
+    childModal(`Drive · ${disk}`, `<div class="empty"><span class="spin2"></span>reading SMART data</div>`, true);
+    target = $("#mbody");
+  }
   try {
     const s = await api(`/api/node/smart?node=${encodeURIComponent(node)}&disk=${encodeURIComponent(disk)}`);
     const tests = s.self_tests || [], active = s.test?.active;
     const health = s.health_assessment || { state: "unavailable", issues: [], summary: "" };
     const nvme = s.nvme || null;
     const stat = (label, value, tone = "") => `<div class="smartstat ${tone}"><span>${label}</span><b class="mono">${esc(smartMetric(value))}</b></div>`;
-    $("#mbody").innerHTML = `
+    target.innerHTML = `
       <div class="between smart-drive-head"><div><div class="ctitle">${esc(s.model || disk)}</div><div class="csub mono">${esc(s.path || "/dev/" + disk)} · ${esc(s.serial || "serial unavailable")} · ${esc(s.protocol || "protocol unknown")}</div></div>
         <span class="pill ${diskHealthTone(health.state)}">${esc(diskHealthWord(health.state))}</span></div>
       ${s.available ? "" : `<div class="note"><b>SMART unavailable.</b> ${esc(s.unavailable_reason || "This drive or USB bridge does not expose SMART data.")}</div>`}
@@ -536,7 +555,7 @@ window.smartDisk = async (node, disk) => {
         <button class="btn" data-need="admin" ${!s.available || active || !(s.supported_tests || []).includes("long") ? "disabled" : ""} onclick="smartStartConfirm(${jsq(node)},${jsq(disk)},'long')">Long test</button>
       </div></div>
       <div class="note"><b>USB and NVMe caveat.</b> Some USB bridges hide SMART commands; NVMe exposes different counters from ATA/SATA. Homestead shows unsupported values explicitly instead of treating them as zero.</div>`;
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { target.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
 
 /* The probe is two containers. One reads sensors with nothing special

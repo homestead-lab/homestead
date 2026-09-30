@@ -70,7 +70,6 @@ const DIALOGS = [
   ["vm-placement-checks", "nodes", "allocationProbeSettings()"],
   ["hardware-features", "nodes", "hardwareFeatureSettings()"],
   ["os-updates", "nodes", "osUpdates()"],
-  ["node-devices", "nodes", "nodeDetail('harvester-node1')", "nodeDevicesLook('harvester-node1')"],
   ["welcome", "dash", "welcomeCheck(true)"],
   ["self-address", "network", "selfAddressMove()"],
   ["vip-change", "network", "vipChange('192.0.2.242')"],

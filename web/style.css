@@ -2693,3 +2693,5 @@ html[data-theme="light"] .savebar{background:rgba(255,255,255,.95)}
 
 .diagram svg{margin:0 auto}
 #im_volumes{margin-top:6px}
+.node-drive-back{display:inline-block;margin-bottom:10px;font-size:13px}
+.dialog-more{margin-top:6px}

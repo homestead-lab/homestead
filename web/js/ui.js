@@ -158,11 +158,34 @@ function normaliseDialogActions(body) {
   body.appendChild(row);
 }
 window.normaliseDialogActions = normaliseDialogActions;
+
+/* One explanation box at most. A dialog's first plain note stays where it
+   is; any further ones fold into a single "How this works" at its foot.
+   Warnings, errors, good news and notes with controls in them are left
+   alone - they need to be seen, or used. */
+function foldDialogNotes(body) {
+  if (!body) return;
+  const plain = [...body.querySelectorAll(".note")].filter(note => !note.matches(".warn, .bad, .good, .crit, .dependency-danger")
+    && !note.id && !note.hidden && !note.closest(".dialog-more, .ui-more, [hidden]")
+    && !note.querySelector("button, input, select, textarea, a[onclick], .btn") && note.textContent.trim());
+  if (plain.length < 2) return;
+  let more = body.querySelector(":scope > details.dialog-more");
+  if (!more) {
+    more = document.createElement("details");
+    more.className = "ui-more dialog-more";
+    more.innerHTML = '<summary>How this works</summary><div class="ui-more-body"></div>';
+    const actions = body.querySelector(":scope > .ui-actions, :scope .stepper-foot");
+    if (actions) actions.parentNode.insertBefore(more, actions); else body.appendChild(more);
+  }
+  const into = more.querySelector(".ui-more-body");
+  plain.slice(1).forEach(note => { const p = document.createElement("p"); p.innerHTML = note.innerHTML; into.appendChild(p); note.remove(); });
+}
+window.foldDialogNotes = foldDialogNotes;
 // Dialogs that draw their body again later (a check finishing, a step
 // moving on) get the same treatment.
 if (typeof MutationObserver === "function" && typeof document.querySelector === "function") {
   const body = document.querySelector("#mbody");
-  if (body) new MutationObserver(() => normaliseDialogActions(body)).observe(body, { childList: true });
+  if (body) new MutationObserver(() => { normaliseDialogActions(body); foldDialogNotes(body); }).observe(body, { childList: true });
 }
 
 /* A page header's ⋯: the actions besides its main one. Each item is
