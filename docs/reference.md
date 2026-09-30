@@ -579,11 +579,9 @@ deeper.
 Home Assistant discovery: nodes ready, volumes degraded or faulted, pods
 running and failing, VMs, cluster health, CPU and RAM for the cluster, and for
 each node its CPU, RAM, network in and out, pods, VMs, workloads and status.
-The topics (`harvester/cluster/state`, `harvester/node/<node>/state`), entity
-names and unique ids are the ones the standalone hv-exporter used, so Home
-Assistant keeps its entities and their history when Homestead takes over; the
-card says when hv-exporter is still running and gives the commands to remove
-it. Availability follows Homestead: the broker marks the entities unavailable
+The topics are `harvester/cluster/state` and `harvester/node/<node>/state`
+by default, and the entity names and unique ids stay the same from release to
+release, so Home Assistant keeps its entities and their history. Availability follows Homestead: the broker marks the entities unavailable
 if Homestead stops without saying goodbye. MQTT 3.1.1 is spoken directly, with
 optional username, password (kept in a Secret) and TLS, and only the leading
 replica publishes. **Test connection** checks the broker, and **What is
@@ -964,7 +962,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.259/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.260/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -975,7 +973,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.259 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.260 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1836,10 +1834,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.259`, the workflow publishes:
+For a release such as `v2.8.260`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.259
+ghcr.io/wjcloudy/homestead:2.8.260
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -1850,8 +1848,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.259
-git push origin v2.8.259
+git tag v2.8.260
+git push origin v2.8.260
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.

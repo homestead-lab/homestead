@@ -11,20 +11,17 @@ async function mqttPaint() {
   const s = m.status || {}, admin = can("admin");
   const state = { publishing: ["ok", "publishing"], standby: ["neutral", "standby"], error: ["crit", "error"], off: ["low", "off"] }[s.state] || ["low", s.state || "off"];
   host.innerHTML = `<div class="settings-card-head between"><div><div class="ctitle">MQTT and Home Assistant</div>
-      <div class="csub">Publishes cluster and node stats to an MQTT broker, with Home Assistant discovery: ${m.sensors.cluster} cluster sensors and ${m.sensors.node} for each node, on the same topics and ids hv-exporter used, so existing entities carry on.</div></div>
+      <div class="csub">Publishes cluster and node stats to an MQTT broker, with Home Assistant discovery: ${m.sensors.cluster} cluster sensors and ${m.sensors.node} for each node.</div></div>
       <span class="pill ${state[0]}">${esc(state[1])}</span></div>
     ${s.state === "publishing" ? `<div class="dim xs">${esc(s.detail)} · last ${Date.now() / 1000 - s.last_publish < 60 ? "under a minute ago" : esc(fmtAgo(Date.now() / 1000 - s.last_publish))}</div>` : ""}
     ${s.error ? `<div class="note bad">${esc(s.error)}</div>` : ""}
-    ${m.hv_exporter ? `<div class="note"><b>hv-exporter is still running</b> in <span class="mono">${esc(m.hv_exporter)}</span> and publishes the same topics. Once this shows <b>publishing</b>, remove it:
-      ${guideCopy(`kubectl -n ${m.hv_exporter} delete deployment/hv-exporter configmap/hv-exporter-script serviceaccount/hv-exporter`)}
-      ${guideCopy("kubectl delete clusterrolebinding/hv-exporter clusterrole/hv-exporter")}</div>` : ""}
     <label class="switch" style="margin-top:10px"><input type="checkbox" id="mq_on" ${m.enabled ? "checked" : ""} ${admin ? "" : "disabled"}> Publish stats to MQTT</label>
     <div class="mqtt-grid">
       <div class="f"><label>Broker</label><input id="mq_host" class="mono" value="${esc(m.host)}" placeholder="192.0.2.177" ${admin ? "" : "disabled"}></div>
       <div class="f"><label>Port</label><input id="mq_port" type="number" min="1" max="65535" value="${m.port}" ${admin ? "" : "disabled"}></div>
       <div class="f"><label>Username</label><input id="mq_user" value="${esc(m.username)}" placeholder="none" autocomplete="off" ${admin ? "" : "disabled"}></div>
       <div class="f"><label>Password</label><input id="mq_pass" type="password" autocomplete="new-password" placeholder="${m.has_password ? "saved · blank keeps it" : "none"}" ${admin ? "" : "disabled"}></div>
-      <div class="f"><label>Base topic ${tip("States go to <base>/cluster/state and <base>/node/<node>/state. hv-exporter used harvester.")}</label><input id="mq_base" class="mono" value="${esc(m.base)}" ${admin ? "" : "disabled"}></div>
+      <div class="f"><label>Base topic ${tip("States go to <base>/cluster/state and <base>/node/<node>/state.")}</label><input id="mq_base" class="mono" value="${esc(m.base)}" ${admin ? "" : "disabled"}></div>
       <div class="f"><label>Discovery prefix ${tip("Home Assistant listens for discovery under homeassistant unless it has been changed.")}</label><input id="mq_disc" class="mono" value="${esc(m.discovery)}" ${admin ? "" : "disabled"}></div>
       <div class="f"><label>Every (seconds)</label><input id="mq_every" type="number" min="10" max="3600" value="${m.interval}" ${admin ? "" : "disabled"}></div>
       <div class="f"><label>Device name</label><input id="mq_name" value="${esc(m.device_name)}" ${admin ? "" : "disabled"}></div>

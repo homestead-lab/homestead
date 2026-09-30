@@ -108,7 +108,10 @@ RKE2's release channels and from GitHub.
 ![The installation summary](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-ready.png)
 
 Select **Install**. The first installation takes 10-15 minutes while RKE2
-downloads its images, with a progress bar. It:
+downloads its images, with a progress bar. Afterwards, each machine's own
+screen (not SSH) shows a live status console in place of the login prompt -
+press Enter for the usual login; see
+[Local host console](Installing-Homestead#local-host-console). The installation:
 
 1. installs what Longhorn needs on the host (`open-iscsi` and an NFS client);
 2. writes `/etc/rancher/rke2/config.yaml` (this machine's address, and
