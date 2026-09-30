@@ -18,7 +18,7 @@ most.
   [Storage](Storage#longhorn-allocation).
 
 Warning levels (temperatures, disk errors, CPU and memory) are set in
-**Settings → General**.
+**Settings → Monitoring**.
 
 ## Nodes
 
@@ -199,9 +199,9 @@ blocks safely until the permission is available; see [updating](Installing-Homes
 
 Kubernetes knows nothing of temperatures, USB devices, which physical disk is
 which, or drive health. The node probe - a small DaemonSet, one pod per host -
-reads them. The Helm chart installs it; otherwise **Settings → Cluster →
+reads them. The Helm chart installs it; otherwise **Settings → Hardware and storage →
 Add-ons → Install node probe**, or **Install node probe** on a node with no
-temperature. **Settings → About** reports its health after it is installed.
+temperature. **Settings → Homestead** reports its health after it is installed.
 
 It has two parts:
 
@@ -217,7 +217,7 @@ Homestead keeps the probe's scripts up to date itself when it updates.
 ### Drive health
 
 Each drive is **healthy**, **needs attention**, **critical** or **not
-reported**, judged from its SMART counters against **Settings → General →
+reported**, judged from its SMART counters against **Settings → Monitoring →
 Drive health policy** - not from the drive's own PASSED/FAILED flag, which
 says PASSED until failure is close. Where a drive reports how much life it
 has left (NVMe endurance, an SSD's life-left attribute) it is shown as a
@@ -226,7 +226,7 @@ unsupported, not failed.
 
 ## Hardware
 
-**Settings → Cluster** names devices on your hosts - a Coral TPU, a Zigbee
+**Settings → Hardware and storage** names devices on your hosts - a Coral TPU, a Zigbee
 stick, an Intel iGPU - as hardware features containers can ask for. Hosts are
 checked every 30 seconds, so a device plugged in later is found without a
 restart; **Rescan hosts** checks at once. A container given a feature is kept
@@ -277,7 +277,7 @@ step is offered once that one is done.
   Homestead installs it the first time. The servers are cordoned and upgraded
   one at a time, then the agents. The job tray shows how many nodes are done.
   Cancelling stops any further node being upgraded.
-- **Longhorn, KubeVirt and CDI** that Homestead installed (Settings > Cluster >
+- **Longhorn, KubeVirt and CDI** that Homestead installed (Settings > Hardware and storage >
   Add-ons) move on through their HelmChart. Installed another way, they are
   shown with their notes: upgrade them the way they were installed.
 - **kube-vip and Multus** that Homestead installed are listed by chart

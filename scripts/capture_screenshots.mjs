@@ -72,7 +72,7 @@ await capture("helm", "helm");
 await capture("resources", "resources");
 await capture("cluster", "cluster");
 await capture("settings", "settings-cluster", () => settingsTab("cluster"));
-await capture("settings", "settings-health", () => settingsTab("about"));
+await capture("settings", "settings-health", () => settingsTab("monitoring"));
 
 await dialog("nodes", "node-detail", () => nodeDetail("harvester-node1"));
 await dialog("storage", "disks", () => lhDisks());

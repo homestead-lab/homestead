@@ -186,7 +186,7 @@ High or unknown RAM usage can be acknowledged. Missing hardware, storage conflic
 changed resource identities and insufficient scheduler capacity cannot be bypassed.
 The server rechecks before writing; the review is not a scheduler reservation.
 
-For NUMA VMs, enable **Settings → Cluster → Add-ons → Node probe → VM placement
+For NUMA VMs, enable **Settings → Hardware and storage → Add-ons → Node probe → VM placement
 checks**. The short dialog explains host access and the monitoring restart; socket
 settings are under **Advanced**. It uses an additional 32–96 MiB per probe node.
 **Check hosts** explains missing or unsupported evidence. Workloads are not
@@ -342,7 +342,7 @@ disks from images. Three ways to get both:
 
 - **A new k3s cluster:** add `--kubevirt` to the k3s script's `server` line -
   see [Installing on k3s](Installing-on-k3s).
-- **A cluster already running:** **Settings → Cluster → Add-ons → Install
+- **A cluster already running:** **Settings → Hardware and storage → Add-ons → Install
   KubeVirt**, or **Install KubeVirt** on the VMs page. Homestead installs the
   newest KubeVirt and CDI releases through the Helm controller k3s and RKE2
   run, and the VMs page appears once they are up.

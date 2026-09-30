@@ -45,7 +45,7 @@ const PAGES = [
   ["schedules", "schedules"],
   ["events", "events"],
   ["events-signins", "events", "STATE.eventsTab='signins';viewEvents()"],
-  ...["health", "updates", "cluster", "fleet", "hardware", "access", "apps", "mqtt", "device", "about"]
+  ...["homestead", "updates", "monitoring", "hardware", "fleet", "connections", "access", "you"]
     .map((tab) => [`settings-${tab}`, "settings", `settingsTab('${tab}')`]),
 ];
 

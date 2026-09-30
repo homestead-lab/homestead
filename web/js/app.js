@@ -1,4 +1,4 @@
-/* Homestead — router, settings drawer, mobile nav, quiet refresh loop */
+/* Homestead — router, appearance, mobile nav, quiet refresh loop */
 
 const VIEWS = {
   dash:      ["Dashboard",      "overview",  viewDash,      true],
@@ -117,6 +117,11 @@ async function applyDeepLink(v, params) {
 }
 
 function go(v, options = {}) {
+  // Leaving Settings with changes not saved asks first.
+  if (STATE.view === "settings" && v !== "settings" && STATE.settingsDirty?.size && !options.leave) {
+    settingsLeave().then(ok => { if (ok) go(v, { ...options, leave: true }); });
+    return;
+  }
   if (!VIEWS[v]) return;
   if (!$("#modal").classList.contains("hidden")) closeModal(false);
   // Anything still loading belongs to the page being left behind.
@@ -189,7 +194,7 @@ function startLoop() {
   timer = setInterval(() => {
     if (document.hidden) return;                       // tab in background
     if (!$("#modal").classList.contains("hidden")) return; // modal open
-    if ($("#drawer").classList.contains("open")) return;   // settings open
+    if (STATE.settingsDirty?.size) return;              // settings being edited
     refresh();
   }, s * 1000);
   window.__loopTimer = timer;
@@ -278,15 +283,15 @@ $("#mclose").onclick = dismissModal;
 // form worth several minutes, and losing it to a stray click is not a feature.
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") {
-    dismissModal(); closeNav(); $("#drawer").classList.remove("open");
+    dismissModal(); closeNav();
     document.body.classList.remove("searching");
   }
   if (e.key === "/" && document.activeElement.tagName !== "INPUT") { e.preventDefault(); $("#globalSearch").focus(); }
 });
 
-/* ---------------- settings drawer ---------------- */
-$("#opensettings").onclick = () => $("#drawer").classList.add("open");
-$("#closedrawer").onclick = () => $("#drawer").classList.remove("open");
+/* ---------------- appearance ----------------
+   Settings › You holds it; the top bar's gear opens it there. */
+$("#opensettings").onclick = () => { settingsTab("you"); go("settings"); };
 
 function bindOpts(id, key, after) {
   const wrap = $("#" + id); if (!wrap) return;
@@ -296,26 +301,26 @@ function bindOpts(id, key, after) {
   });
   sync();
 }
-bindOpts("optTheme", "theme");
-bindOpts("optBg", "bg");
-bindOpts("optMotion", "motion", () => { if (STATE.view === "flow") drawArch(); });
-
-const blur = $("#optBlur");
-if (blur) {
-  blur.value = SET.blur;
-  $("#blurVal").textContent = SET.blur;
-  blur.addEventListener("input", () => {
-    SET.blur = +blur.value; $("#blurVal").textContent = SET.blur; applySettings();
-  });
+/* The controls are drawn with Settings › You; bind them each time. They
+   apply at once and belong to this browser, so they are not on the save bar. */
+function bindAppearance() {
+  bindOpts("optTheme", "theme");
+  bindOpts("optBg", "bg");
+  bindOpts("optMotion", "motion", () => { if (STATE.view === "flow") drawArch(); });
+  const blur = $("#optBlur");
+  if (blur) {
+    blur.value = SET.blur;
+    $("#blurVal").textContent = SET.blur;
+    blur.oninput = () => { SET.blur = +blur.value; $("#blurVal").textContent = SET.blur; applySettings(); };
+  }
+  const rf = $("#optRefresh");
+  if (rf) {
+    rf.value = SET.refresh;
+    $("#refreshVal").textContent = SET.refresh;
+    rf.oninput = () => { SET.refresh = +rf.value; $("#refreshVal").textContent = SET.refresh; applySettings(); startLoop(); };
+  }
 }
-const rf = $("#optRefresh");
-if (rf) {
-  rf.value = SET.refresh;
-  $("#refreshVal").textContent = SET.refresh;
-  rf.addEventListener("input", () => {
-    SET.refresh = +rf.value; $("#refreshVal").textContent = SET.refresh; applySettings(); startLoop();
-  });
-}
+window.bindAppearance = bindAppearance;
 window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => {
   if (SET.theme === "auto") applySettings();
 });

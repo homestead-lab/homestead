@@ -132,7 +132,7 @@ what to do next.
 > **Why ReadWriteOnce?** Harvester's default class is *migratable*, made so VM
 > disks can move between hosts. A shared (ReadWriteMany) volume on it can still
 > only be mounted by one host. That is fine for one copy of Homestead; to run
-> two or three copies later, **Settings → About → Redundancy** moves Homestead's
+> two or three copies later, **Settings → Homestead → Copies** moves Homestead's
 > data to a shareable class for you.
 
 ## 6. After installing
@@ -144,7 +144,7 @@ what to do next.
 - **Give Longhorn your other disks.** Each node's card on **Nodes** lists disks
   nothing uses yet, with **Add to Longhorn**. See [Storage](Storage).
 - **Turn on drive health.** The Helm chart installs the node probe; with the
-  manifest, **Settings → Cluster → Add-ons → Install node probe** does. See
+  manifest, **Settings → Hardware and storage → Add-ons → Install node probe** does. See
   [Dashboard and nodes](Dashboard-and-nodes).
 - **Plan backups.** [Data protection](Data-protection) sets up snapshots and
   backups in one go.

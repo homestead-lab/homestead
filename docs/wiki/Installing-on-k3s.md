@@ -25,10 +25,10 @@ Everything Homestead does, with nothing Harvester-specific needed:
 - **Adding and removing machines** - **Cluster → Add a host** gives this
   cluster's join lines; removing one gives k3s's uninstall steps.
 - **Virtual machines** - with [KubeVirt](https://kubevirt.io) and CDI: add
-  `--kubevirt` to the script, or install them later from **Settings → Cluster →
+  `--kubevirt` to the script, or install them later from **Settings → Hardware and storage →
   Add-ons** (see [Virtual machines](Virtual-machines#vms-on-k3s-or-rke2)). The
   machines need hardware virtualisation for VMs to run at full speed.
-- **Longhorn later** - started with `--no-longhorn`? **Settings → Cluster →
+- **Longhorn later** - started with `--no-longhorn`? **Settings → Hardware and storage →
   Add-ons** installs it once the machines have open-iscsi.
 
 ## 1. What you need
@@ -134,7 +134,7 @@ Options go after `server`:
 | `--homestead-version 2.8.118` | pins Homestead instead of the newest release |
 | `--node-ip 192.0.2.10` | the address k3s registers this machine by, when it has more than one |
 | `--longhorn-volume 200` | the size in GB of Longhorn's own LVM volume at `/var/lib/longhorn`; `auto` (the default) takes the volume group's free space less a tenth kept for the system, `none` keeps Longhorn on the root filesystem. Works for `agent` and `join` too |
-| `--no-node-probe` | leaves out the node probe (temperatures, drive health, each host's network interfaces); add it later under **Settings → Cluster → Add-ons** |
+| `--no-node-probe` | leaves out the node probe (temperatures, drive health, each host's network interfaces); add it later under **Settings → Hardware and storage → Add-ons** |
 
 The script is safe to run again: each step finds what the last run left.
 
@@ -271,7 +271,7 @@ installer: `HS_KUBEVIP=no`, `HS_MULTUS=no`, `HS_KUBEVIP_VERSION`,
 remove later is not reinstalled.
 
 An installation from before 2.8.221 shows **Required components not
-installed** under **Settings → Cluster → Add-ons** and on **Networking**, with
+installed** under **Settings → Hardware and storage → Add-ons** and on **Networking**, with
 **Install components**. Both are upgraded under **System → Cluster → Platform
 versions**, one minor chart version at a time, keeping the values Homestead
 set.
@@ -329,7 +329,7 @@ with version-pinned releases and k3s-specific CNI paths. Add-on readiness requir
 the network-attachment API **and** the current DaemonSet available on its scheduled
 nodes. A completed Helm job alone is not enough.
 
-For older Homestead installs, **Settings → Cluster → Add-ons → Repair configuration**
+For older Homestead installs, **Settings → Hardware and storage → Add-ons → Repair configuration**
 corrects the known missing `multusAutoconfigDir` and installs a missing CRD dependency.
 It only handles Homestead's recognised configuration, not arbitrary customised CNIs.
 The diagnostic command collects both Helm logs and Multus agent errors.

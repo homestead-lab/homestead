@@ -81,12 +81,12 @@ records the result in `/data/baseline.json`, so a component removed later is
 not reinstalled. Opt out with `--no-kube-vip` / `--no-multus` (installer:
 `HS_KUBEVIP=no`, `HS_MULTUS=no`), or pin with `--kube-vip-version` /
 `--multus-version`. An older installation shows **Required components not
-installed** under **Settings → Cluster → Add-ons** and on **Networking**.
+installed** under **Settings → Hardware and storage → Add-ons** and on **Networking**.
 kube-vip runs beside ServiceLB and takes only the Services given a VIP.
 
 **On a cluster you already run** - kubeadm, Talos, a managed one, or a k3s or
 RKE2 cluster you would rather not run the installer on - use Helm or the
-manifest below. **Settings → Cluster → Add-ons** then installs Longhorn and
+manifest below. **Settings → Hardware and storage → Add-ons** then installs Longhorn and
 KubeVirt (with CDI) where they are missing, through the Helm controller k3s and
 RKE2 run, and the pages that need one offer the same install.
 
@@ -221,7 +221,7 @@ Node detail shows drive identity, capacity, temperature, SMART health, error
 counters, power-on hours, and per-disk read/write MB/s. Administrators can run
 short or extended self-tests after an explicit confirmation; tests and their
 progress remain in Activity through browser refreshes and Homestead restarts.
-Settings → General thresholds controls temperature and media-error warnings.
+Settings → Monitoring thresholds controls temperature and media-error warnings.
 USB/SATA bridges and virtual disks that do not expose SMART are labelled as
 unsupported instead of being treated as failed drives.
 
@@ -412,7 +412,7 @@ as a device under IP addresses are refused, and a VIP can be let go only while
 nothing uses it. They appear under IP addresses as VIPs too.
 
 The first network share installs Samba, and asks which address it answers on;
-Settings → Cluster → Add-ons manages the SMB server afterwards. Samba is put in place
+Settings → Hardware and storage → Add-ons manages the SMB server afterwards. Samba is put in place
 before anything of the share is made, so a share that cannot be served leaves
 nothing behind.
 
@@ -443,7 +443,7 @@ is recorded, unknown columns are skipped so an export imports back, and every
 row is checked before anything is written.
 
 **UniFi** is optional: without it the tab works from scans and what you write,
-and shows nothing of UniFi. Connected under **Settings → Integrations → UniFi
+and shows nothing of UniFi. Connected under **Settings → Connections → UniFi
 Network**, it brings in what a UniFi Network controller knows, read-only: its
 clients and devices with their MACs, the reserved (fixed) IPs even for clients
 that are offline, and its networks, whose DHCP range, gateway and VLAN fill in
@@ -575,7 +575,7 @@ deeper.
 
 ## MQTT and Home Assistant
 
-**Settings → Integrations** publishes cluster and node stats to an MQTT broker, with
+**Settings → Monitoring** publishes cluster and node stats to an MQTT broker, with
 Home Assistant discovery: nodes ready, volumes degraded or faulted, pods
 running and failing, VMs, cluster health, CPU and RAM for the cluster, and for
 each node its CPU, RAM, network in and out, pods, VMs, workloads and status.
@@ -630,13 +630,13 @@ install the app; if installation still fails, add an Access **Bypass** policy fo
 
 ## Homestead's own health
 
-**Settings → About** shows whether the parts that work in the background are
+**Settings → Homestead** shows whether the parts that work in the background are
 working, refreshed every 15 seconds while it is open: how quickly the
 Kubernetes API answers, each copy of Homestead and which one leads, every
 background task (live charts, alerts, long-term stats, hardware detection,
 cluster moves) with when it last did its work and its last error, the node
 probe (nodes running it, reporting, and with drive health), SMB status, the
-permissions check, backup storage and MQTT. SMB can be switched off from Settings → Cluster → Add-ons -
+permissions check, backup storage and MQTT. SMB can be switched off from Settings → Hardware and storage → Add-ons -
 shares stop being served, and their volumes, settings and passwords are kept -
 and on again, which installs it if the cluster has none.
 
@@ -645,7 +645,7 @@ says why, from CDI's importer pod and the claims it waits on.
 
 ## Redundancy: more than one Homestead
 
-**Settings → About → Redundancy** sets how many copies of Homestead run, one
+**Settings → Homestead → Copies** sets how many copies of Homestead run, one
 to three. With two or more, spread over different nodes where the scheduler
 can, a node failure leaves another copy already answering: the Service drops
 the dead one, and nothing waits for Kubernetes to start a replacement.
@@ -948,14 +948,13 @@ before requesting a fresh review.
 
 ### Permissions look after themselves
 
-The in-app update (the top bar's **Homestead** button, or **Settings → About
-→ Homestead updates**) replaces Homestead's image, and a new release can need
+The in-app update (the top bar's **Homestead** button, or **Settings → Updates**) replaces Homestead's image, and a new release can need
 permissions the old one did not. Homestead carries its manifest inside the image
 and, on start, makes its own ClusterRole exactly what that release describes -
 adding what new features need and dropping what nothing uses any more - so an
 upgrade needs no `kubectl`. Rules added to that role by hand do not survive
 this; give anything extra its own role and binding.
-**Settings → About this installation → Permissions** says what it last did.
+**Settings → Homestead → About this installation → Permissions** says what it last did.
 
 That needs the right to edit its own role, which an older install does not
 have yet. Grant it once, wherever you use `kubectl` (a Rancher
@@ -990,7 +989,7 @@ TAG=2.8.261 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 - Rollback restores the exact previous digest rather than trusting a mutable tag.
 - Homestead itself and its helpers (SMB, NFS, the object store) are counted
   apart: `report.updates`/`errors` cover apps, `report.homestead` Homestead's
-  parts, which are updated from the top bar and Settings → About.
+  parts, which are updated from the top bar and Settings → Updates.
 
 ## Image cache cleanup
 
@@ -1258,7 +1257,7 @@ console already speaks.
 
 Each node card lists every disk on the host - the system disk, the disks
 Longhorn stores data on, and any nothing uses yet - with each Longhorn disk's
-use. A node's page has **Disks**, and **Volumes** and **Settings → Cluster**
+use. A node's page has **Disks**, and **Volumes** and **Settings → Hardware and storage**
 open every node's at once. On Harvester a disk it has found and not been given
 has **Add to Longhorn**: Harvester formats it (erasing it first, if you say so,
 when it already holds a filesystem) and hands it to Longhorn, as its own UI
@@ -1270,7 +1269,7 @@ node probe, which reads the host's mount table.
 
 Hardware features - a Coral, a Zigbee stick - are checked on every host every
 30 seconds, so one plugged in later is found and labelled without a restart;
-**Rescan hosts** in Settings → Cluster checks at once.
+**Rescan hosts** in Settings → Hardware and storage checks at once.
 
 ### A failed drive
 
@@ -1302,7 +1301,7 @@ fits with one, two or three copies - each copy needs a different node, so the
 tightest node decides. The dashboard names a node past 80%, and it raises a
 notification like any other health problem.
 
-**Settings → Cluster** sets over-provisioning and minimal free space, with a
+**Settings → Hardware and storage** sets over-provisioning and minimal free space, with a
 live preview of what each node's limit becomes, and switches Longhorn's V2
 (SPDK) data engine on or off - on Harvester through Harvester's own setting,
 which prepares each host - showing which nodes are ready for it.
@@ -1444,7 +1443,7 @@ migrates credentials from older Homestead ConfigMaps and the existing Samba
 arguments. Removing a share keeps its PVC and data. An older `samba` Deployment
 and Service are migrated to `homestead-smb`, retaining the SMB address when
 possible. Its container, mounts, image and on/off state are managed from
-Settings → Cluster → Add-ons and Network Shares; ordinary workload edit,
+Settings → Hardware and storage → Add-ons and Network Shares; ordinary workload edit,
 update and delete actions are blocked. Removing the SMB server leaves the
 share inventory, credentials, every PVC and their data intact.
 Homestead compares its live mappings with the saved share list and repairs drift.
@@ -1495,7 +1494,7 @@ says whether its host answers on its port right now - a TCP connection rather
 than a page load, so a login screen or a self-signed certificate still counts.
 The search box filters them.
 
-Links are edited from the Portal page or **Settings → Integrations → Portal** (admins
+Links are edited from the Portal page or **the Portal page** (admins
 only). **From containers** lists every exposed port of every container at the
 address it listens on, ready to tick. An icon is a built-in device glyph
 (router, switch, access point, firewall, NAS, server, printer, camera, UPS),
@@ -1578,7 +1577,7 @@ each editor has it under *Where it runs*. The choice is the pod's tolerations
 for the unreachable and not-ready taints, so it shows for containers made
 elsewhere too. A moved container's single-node volume follows it only if
 Longhorn's *Pod Deletion Policy When Node is Down* lets go of the dead node's
-pods; the dialog says whether it does and sets it, as does Settings > Cluster.
+pods; the dialog says whether it does and sets it, as does Settings > Hardware and storage.
 
 ## Container groups
 
@@ -1737,7 +1736,7 @@ they differ, restarting the DaemonSet — so upgrading Homestead upgrades the
 probe, with no manifest to re-apply. It updates whichever name the probe already
 has, and never installs one that is not there: the SMART sidecar is privileged,
 so installing one is asked for: **Install node probe** on a node with no
-thermal data, or from **Settings → Cluster → Add-ons**. **Settings → About**
+thermal data, or from **Settings → Hardware and storage → Add-ons**. **Settings → Homestead**
 still shows what the last check decided. `kubectl apply -f
 deploy/nodeprobe.yaml` still works for anyone who prefers it.
 
@@ -1750,7 +1749,7 @@ disagree.
 ### Naming an installation
 
 The line under the Homestead wordmark, and the footer on a phone, show whatever
-**Settings → About this installation → Site name** is set to, alongside the
+**Settings → Homestead → About this installation → Site name** is set to, alongside the
 running version. It starts blank, in which case only the version is shown.
 
 ### Sessions

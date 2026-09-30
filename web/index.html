@@ -170,7 +170,7 @@
         <details class="actionmenu bellmenu" id="bell"><summary class="iconbtn" title="Nothing needs you" aria-label="Notifications">
           <svg><use href="#i-bell"/></svg><span id="bellCount" class="hidden">0</span><b id="bellErrors" class="hidden"></b></summary>
           <div class="actionmenu-pop bellpop" id="bellPop"><div class="bell-empty">Nothing needs you</div></div></details>
-        <div class="iconbtn" id="opensettings" title="Appearance"><svg><use href="#i-gear"/></svg></div>
+        <div class="iconbtn" id="opensettings" title="Your settings"><svg><use href="#i-gear"/></svg></div>
         <div class="whoami" id="whoami" title="Account"><div class="av" id="whoav">?</div>
           <span class="nm" id="whonm">—</span><span class="pill neutral rolechip" id="whorole">—</span></div>
       </div>
@@ -190,25 +190,6 @@
   </main>
 </div>
 
-<aside class="drawer" id="drawer">
-  <div class="drawerhd"><h3>Appearance</h3><div class="iconbtn" id="closedrawer"><svg><use href="#i-x"/></svg></div></div>
-  <div class="dsec"><h5>Appearance</h5><p>Light or dark surface treatment</p>
-    <div class="opts" id="optTheme">
-      <div class="opt" data-v="dark">Dark</div><div class="opt" data-v="light">Light</div>
-      <div class="opt" data-v="auto">Auto</div></div></div>
-  <div class="dsec"><h5>Background</h5><p>What the glass blurs behind it</p>
-    <div class="opts" id="optBg">
-      <div class="opt" data-v="soft"><div class="sw sw-soft"></div>Soft</div>
-      <div class="opt" data-v="gold"><div class="sw sw-gold"></div>Gold</div>
-      <div class="opt" data-v="plain"><div class="sw sw-plain"></div>Plain</div></div></div>
-  <div class="dsec"><h5>Glass blur</h5><p><span id="blurVal">26</span>px — how frosted the panels are</p>
-    <input type="range" class="rng" id="optBlur" min="0" max="60" step="2" value="26"></div>
-  <div class="dsec"><h5>Refresh</h5><p>Every <span id="refreshVal">15</span>s — updates patch the page in place, no flashing</p>
-    <input type="range" class="rng" id="optRefresh" min="5" max="60" step="5" value="15"></div>
-  <div class="dsec"><h5>Motion</h5><p>Animated data-flow along connectors</p>
-    <div class="opts" id="optMotion" style="grid-template-columns:repeat(2,1fr)">
-      <div class="opt" data-v="on">On</div><div class="opt" data-v="off">Reduced</div></div></div>
-</aside>
 <section id="jobTray" class="jobtray hidden" aria-label="Background jobs">
   <div id="jobPanel" class="jobpanel"><div class="jobpanelhead"><div><b>Activity</b><span>Running and recent cluster jobs</span></div><button id="jobClear" class="btn sm" type="button" data-need="operator" hidden onclick="dismissFinishedOperations()">Clear finished</button></div><div id="jobList" class="joblist"></div></div>
   <button id="jobSummary" class="jobsummary" type="button" aria-expanded="false" aria-controls="jobPanel"></button>

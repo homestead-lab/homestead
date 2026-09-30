@@ -85,12 +85,33 @@ column headings are the one small upper-case label.
 - **A phone has a bottom bar**: Home, Apps, VMs, Storage, and More, which
   opens the sidebar.
 - **The top bar** is search, the bell (a new Homestead, container updates,
-  failed image checks - what wants attention, in one place), the gear
-  (Appearance) and the account.
-- **Settings is six sections** - General, Cluster, Linked clusters, Access,
-  Integrations, About - a column beside them on a desktop, a list to tap into
-  on a phone. A card names its topic (`data-tab`) and `settingsTab()` takes a
-  section or a topic.
+  failed image checks - what wants attention, in one place), the gear (your
+  own settings: Settings › You) and the account.
+
+### Settings
+
+- **Eight sections, sorted by what you came to change.** Seven change the
+  cluster for everyone - Homestead, Updates, Monitoring, Hardware and
+  storage, Linked clusters, Connections, Users and access - and **You** is
+  yours and this browser's. A column beside them on a desktop; a list to tap
+  into on a phone.
+- **A card names its topic** (`data-tab`); `SETTINGS_SECTIONS` in
+  `views-settings.js` and the rules in `style.css` say which topics a section
+  shows, and `tests/settings-sections.test.js` keeps the two in step and
+  every card in a section. `settingsTab()` takes a section or a topic.
+- **Four kinds of setting, and nothing else**: a setting row
+  (`settingRow()`), a threshold pair (`thresholdEditor()`), a service row
+  (`serviceRow()` - something Homestead runs or talks to, its buttons an
+  `actionBar()`), and lists of things (`tbl stack` with `actionBar()`).
+  Status is a checklist behind a summary line.
+- **A section saves once.** A card whose fields save marks itself
+  `data-save` ("app" for Homestead's own settings, sent as one request); a
+  change shows the section's save bar - Save or Discard - and leaving the
+  section or the page with changes asks first. Appearance applies at once and
+  is not on it.
+- **Many fields open a dialog**: MQTT, UniFi, the update window and the App
+  Store catalogue are a service row or a setting row on the page, their fields
+  in a standard dialog with its own Save.
 
 ### Collections
 
@@ -239,6 +260,8 @@ tables become cards and field grids one column on their own.
 | `moreMenu(items)` | A header's secondary actions, behind `⋯` | The main action |
 | `menuButton(label, items)` | A main action that is a choice - ＋ Import and its kinds | A single action |
 | `actionBar(items, { shown })` | A card's or a row's buttons: `shown` (2) as buttons, the rest in `⋯` | A dialog's buttons |
+| `settingRow(label, help, control)` | One setting: label and help left, its control right | A form of many fields (use a dialog) |
+| `serviceRow(name, state, detail, actions)` | Something Homestead runs or connects to, with its state and buttons | A list of like items |
 | `UI.ack(id, sentence)` | The one checkbox a risky action needs | Settings |
 | `UI.fields(...)` / `UI.field(label, control, { help })` | Forms: two columns on a desktop, one on a phone | - |
 | `UI.chip(label, tone)` | A short status next to a name | Sentences |

@@ -23,7 +23,7 @@ tag correctly resolves to `docker.io/openspeedtest/latest:latest`.
 The form asks, in order:
 
 - **Name and namespace.** Apps go in `lab` unless you make others under
-  **Settings → Integrations → Namespaces**.
+  **Settings → Hardware and storage → Namespaces**.
 - **Memory reserved and Memory max.** Reserved memory is the scheduler's
   request; optional Memory max is the container's enforced limit and must be
   at least the request. Leave max blank for no container memory limit. A limit
@@ -295,9 +295,9 @@ container and a count at the top of the page.
 **Update** pins the new image, watches the rollout (pulling, starting, ready),
 and keeps the previous image so **Roll back** returns to exactly it.
 Homestead's own updates are not listed here: they are on the top bar's
-**Homestead** button and under [Settings → About](Settings#homestead-updates). A registry
+**Homestead** button and under [Settings → Updates](Settings#homestead-updates). A registry
 that cannot be checked is shown on that container only; the rest still show
-their updates. **Settings → General** sets the policy: notify only, apply when
+their updates. **Settings → Updates** sets the policy: notify only, apply when
 approved, or apply in a maintenance window. Updates never jump a major version
 by themselves.
 
@@ -335,10 +335,10 @@ Homestead's own containers - Homestead, the SMB and NFS servers that serve your
 shares, and the object store moves use - are platform containers: hidden until
 **show N platform containers** at the top of the page, and tagged **Homestead**
 when shown. They offer **Logs**, **Restart** and where each is looked after
-(Settings › About, Network Shares, Linked clusters). Their updates are not app
+(Settings › Homestead, Network Shares, Linked clusters). Their updates are not app
 updates: they are not counted on the Containers page or its update button, and
 are installed from the **Homestead** button on the top bar or
-**Settings › About › Homestead updates**.
+**Settings › Updates**.
 
 On k3s and RKE2, the platform Homestead's add-ons install - KubeVirt, CDI, the
 upgrade controller - runs as containers too. They are hidden with Homestead's,
@@ -373,7 +373,7 @@ on import.
 
 A container given a hardware feature - an iGPU for transcoding, a Coral for
 Frigate, a Zigbee stick for Zigbee2MQTT - gets the device, and is kept on a host
-that has it. Features are named under **Settings → Cluster**; see
+that has it. Features are named under **Settings → Hardware and storage**; see
 [Dashboard and nodes](Dashboard-and-nodes#hardware).
 
 ## Placement
@@ -482,7 +482,7 @@ container's editor has it under *Where it runs*:
 A container whose volume one node mounts at a time only really moves if
 Longhorn lets go of the volume on the dead node. The dialog says whether it
 will, and **Let Longhorn release them** sets Longhorn's *Pod Deletion Policy
-When Node is Down* so it does; it is also under **Settings → Cluster**.
+When Node is Down* so it does; it is also under **Settings → Hardware and storage**.
 Changing a container's choice restarts it.
 
 ## Architecture

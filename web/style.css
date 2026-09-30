@@ -1580,17 +1580,23 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .settings-tabs::-webkit-scrollbar{display:none}
 .settings-tabs button{white-space:nowrap}
 .settings-grid[data-tab]>section{display:none;grid-column:1/-1}
-.settings-grid[data-tab="general"]>section[data-tab="health"],
-.settings-grid[data-tab="general"]>section[data-tab="updates"],
-.settings-grid[data-tab="general"]>section[data-tab="device"],
-.settings-grid[data-tab="general"]>section[data-tab="general"],
-.settings-grid[data-tab="cluster"]>section[data-tab="cluster"],
-.settings-grid[data-tab="cluster"]>section[data-tab="hardware"],
+.settings-grid[data-tab="homestead"]>section[data-tab="homestead"],
+.settings-grid[data-tab="homestead"]>section[data-tab="about"],
+.settings-grid[data-tab="updates"]>section[data-tab="updates"],
+.settings-grid[data-tab="monitoring"]>section[data-tab="monitoring"],
+.settings-grid[data-tab="monitoring"]>section[data-tab="health"],
+.settings-grid[data-tab="monitoring"]>section[data-tab="mqtt"],
+.settings-grid[data-tab="hardware"]>section[data-tab="hardware"],
+.settings-grid[data-tab="hardware"]>section[data-tab="cluster"],
+.settings-grid[data-tab="hardware"]>section[data-tab="namespaces"],
 .settings-grid[data-tab="fleet"]>section[data-tab="fleet"],
+.settings-grid[data-tab="connections"]>section[data-tab="connections"],
+.settings-grid[data-tab="connections"]>section[data-tab="apps"],
+.settings-grid[data-tab="connections"]>section[data-tab="integrations"],
 .settings-grid[data-tab="access"]>section[data-tab="access"],
-.settings-grid[data-tab="integrations"]>section[data-tab="mqtt"],
-.settings-grid[data-tab="integrations"]>section[data-tab="apps"],
-.settings-grid[data-tab="about"]>section[data-tab="about"]{display:block}
+.settings-grid[data-tab="you"]>section[data-tab="you"],
+.settings-grid[data-tab="you"]>section[data-tab="device"],
+.settings-grid[data-tab="you"]>section[data-tab="general"]{display:block}
 /* A threshold is one row: its name, then warning and critical side by side. */
 .threshold-card{padding:10px 12px;gap:12px}
 .threshold-values{gap:8px}
@@ -2608,3 +2614,43 @@ html[data-theme="light"] .settings-nav button.on{background:rgba(0,0,0,.06)}
 .vm-meta{grid-template-columns:minmax(0,1fr) minmax(0,1fr);margin-top:8px}
 .vm-meta .vm-copy{width:22px;height:22px;margin-left:4px;vertical-align:middle}
 .vm-meta .vm-copy svg{width:12px;height:12px}
+/* Settings: its groups, setting rows, service rows and the save bar. */
+.settings-nav-group{font:600 10px "JetBrains Mono",monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);padding:12px 12px 4px}
+.settings-nav-group:first-child{padding-top:2px}
+.srows{display:flex;flex-direction:column}
+.srow{display:flex;align-items:center;gap:14px;padding:10px 0;border-top:1px solid var(--line)}
+.srows>.srow:first-child{border-top:0;padding-top:4px}
+.srow-l{flex:1;min-width:0}
+.srow-l b{display:block;font-size:13px;font-weight:620}
+.srow-l small{display:block;color:var(--dim);font-size:11.5px;margin-top:1px}
+.srow-c{display:flex;align-items:center;gap:8px;flex:0 1 auto;min-width:0;justify-content:flex-end}
+.srow-c input[type=text],.srow-c input[type=url],.srow-c select{width:auto;min-width:220px;max-width:340px}
+.srow-c .rng{width:160px}
+.appearance-seg .opt{border:0;background:transparent;color:var(--mut);padding:6px 12px;border-radius:99px;font:inherit;font-size:12px;font-weight:620;cursor:pointer}
+.appearance-seg .opt.on{background:#fff;color:#0a0a0b}
+html[data-theme="light"] .appearance-seg .opt.on{background:#16161a;color:#fff}
+.toggle{position:relative;display:inline-block;width:38px;height:22px;flex:0 0 38px}
+.toggle input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
+.toggle span{position:absolute;inset:0;border-radius:99px;background:var(--surf3);border:1px solid var(--line2);transition:background .2s var(--e);pointer-events:none}
+.toggle span::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:var(--mut);transition:all .2s var(--e)}
+.toggle input:checked+span{background:var(--tx)}
+.toggle input:checked+span::after{left:19px;background:var(--bg)}
+.toggle input:focus-visible+span{outline:2px solid var(--low);outline-offset:2px}
+.svcrow{display:flex;align-items:center;gap:12px;padding:8px 0}
+.svcrow-l{flex:1;min-width:0}
+.svcrow-l b{font-size:13px;font-weight:650}
+.svcrow-l small{display:block;color:var(--dim);font-size:11.5px;margin-top:2px;overflow:hidden;text-overflow:ellipsis}
+.savebar{position:sticky;bottom:12px;z-index:30;display:flex;align-items:center;gap:8px;margin-top:14px;padding:10px 14px;border:1px solid var(--line2);
+  border-radius:var(--r2);background:rgba(20,20,23,.94);backdrop-filter:blur(var(--blur));box-shadow:0 12px 40px rgba(0,0,0,.45)}
+.savebar>span{margin-right:auto;color:var(--med);font-weight:650;font-size:13px}
+html[data-theme="light"] .savebar{background:rgba(255,255,255,.95)}
+.update-days{display:flex;flex-wrap:wrap;gap:6px}
+/* Homestead's own release leads Updates. */
+.settings-grid>#homesteadUpdateCard{order:-1}
+@media(max-width:900px){
+  /* A switch or a button stays beside its label; a wide control takes the next line. */
+  .srow{flex-wrap:wrap}.srow-c{flex:0 0 auto;margin-left:auto}
+  .srow:has(select) .srow-c,.srow:has(input[type=text]) .srow-c,.srow:has(input[type=url]) .srow-c,.srow:has(.rng) .srow-c,.srow:has(.appearance-seg) .srow-c{flex:1 1 100%;margin-left:0;justify-content:flex-start}
+  .srow-c input[type=text],.srow-c input[type=url],.srow-c select{min-width:0;width:100%;max-width:none}
+  .savebar{bottom:calc(76px + env(safe-area-inset-bottom,0px))}
+}

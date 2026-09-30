@@ -38,7 +38,7 @@ Everything Homestead does, with nothing Harvester-specific needed:
 - **Adding and removing machines** - **Cluster → Add a host** gives RKE2's
   join lines; removing one gives RKE2's uninstall steps.
 - **Virtual machines** - with [KubeVirt](https://kubevirt.io) and CDI: say yes
-  when the installer asks, or add them later from **Settings → Cluster →
+  when the installer asks, or add them later from **Settings → Hardware and storage →
   Add-ons** (see [Virtual machines](Virtual-machines#vms-on-k3s-or-rke2)).
 
 ## 1. What you need

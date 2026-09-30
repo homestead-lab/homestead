@@ -1868,7 +1868,7 @@ ssh_pwauth: true
         images: [{ container: "frigate", deployed: "ghcr.io/blakeblackshear/frigate:stable", candidate: "ghcr.io/blakeblackshear/frigate:stable", candidate_tag: "stable", remote_digest: "sha256:abc", available: true }] },
       { ns: "lab", name: "home-assistant", available: true, can_rollback: false,
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
-      // Homestead's own release, offered on the top bar and under Settings › About.
+      // Homestead's own release, offered on the top bar and under Settings › Updates.
       { ns: "lab", name: "homestead", homestead: "self", available: true, can_rollback: true,
         images: [{ container: "homestead", deployed: `ghcr.io/wjcloudy/homestead:${typeof HOMESTEAD_VERSION === "string" ? HOMESTEAD_VERSION : "2.8.261"}`, candidate: "ghcr.io/wjcloudy/homestead:2.9.0", candidate_tag: "2.9.0", remote_digest: "sha256:ghi", available: true }] },
       { ns: "lab", name: "paperless", available: false, can_rollback: false,

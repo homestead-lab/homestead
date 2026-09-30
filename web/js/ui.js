@@ -212,6 +212,18 @@ function actionBar(items, { shown = 2, label = "More actions" } = {}) {
 }
 if (typeof window !== "undefined") window.actionBar = actionBar;
 
+/* A setting: its label and one line of help on the left, its control on
+   the right - a switch, a number and its unit, a choice, a short text. */
+function settingRow(label, help, control) {
+  return `<div class="srow"><div class="srow-l"><b>${label}</b>${help ? `<small>${help}</small>` : ""}</div><div class="srow-c">${control}</div></div>`;
+}
+/* Something Homestead runs or talks to: its name and state, what it is doing,
+   and its buttons (an actionBar) - its settings open in a dialog. */
+function serviceRow(name, state, detail, actions) {
+  return `<div class="svcrow"><div class="svcrow-l"><b>${name}</b>${state ? ` ${state}` : ""}${detail ? `<small>${detail}</small>` : ""}</div>${actions || ""}</div>`;
+}
+if (typeof window !== "undefined") { window.settingRow = settingRow; window.serviceRow = serviceRow; }
+
 /* A main button that opens a choice - ＋ Import and its kinds. */
 const menuButton = (label, items) => moreMenu(items, label, "btn pri");
 if (typeof window !== "undefined") { window.moreMenu = moreMenu; window.menuButton = menuButton; }

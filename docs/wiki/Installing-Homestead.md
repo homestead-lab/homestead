@@ -120,22 +120,22 @@ everywhere.
 
 ## Things worth doing first
 
-1. **Settings → About** - check Homestead's own health: every background task,
+1. **Settings → Homestead** - check Homestead's own health: every background task,
    the node probe, Samba, backup storage. See [Settings](Settings).
-2. **Install the node probe**, if the Helm chart did not: **Settings → Cluster
+2. **Install the node probe**, if the Helm chart did not: **Settings → Hardware and storage
    → Add-ons → Install node probe**. It adds temperatures, host devices (a Coral, a Zigbee
    stick, an iGPU), every disk and SMART drive health.
 3. **Networking → Your VIPs** - keep a few addresses for apps (Harvester, or
    MetalLB). See [Networking](Networking).
 4. **Data protection → Plans** - snapshots and backups in one go. See
    [Data protection](Data-protection).
-5. **Name it** - **Settings → About this installation → Site name** shows under
+5. **Name it** - **Settings → Homestead → About this installation → Site name** shows under
    the logo, handy with more than one cluster.
 
 ## Updating Homestead
 
 When a release comes out, a **Homestead** button with the new version appears
-on the top bar. It, and **Settings → About → Homestead updates**, show the
+on the top bar. It, and **Settings → Updates**, show the
 version you run, the new one with a link to its release notes, and the helpers
 Homestead runs beside it (the SMB and NFS servers and the object store used
 for moves). **Update** opens the same reviewed rollout apps get: helpers

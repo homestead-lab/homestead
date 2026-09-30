@@ -23,7 +23,7 @@ so a share that could not be served leaves nothing behind.
 The SMB server appears as `homestead-smb` in Containers, in the **Homestead**
 group. Its share mappings, mounts and image are managed from **Network Shares**,
 not by editing the container. Enable, stop or remove the SMB server under
-**Settings → Cluster → Add-ons**. Stopping or removing it keeps every share
+**Settings → Hardware and storage → Add-ons**. Stopping or removing it keeps every share
 definition, password, PVC and file; only the server Deployment and Service are
 removed. Older `samba` workloads
 are migrated to `homestead-smb`; the existing SMB address is retained when the
@@ -111,7 +111,7 @@ policy currently applies to SMB, not the separate NFS gateway.
 
 NFS is a **separate container** (`homestead-nfs`), not a service inside Samba.
 It is off until you choose an export on a share and enable **NFSv4 network
-shares** under **Settings → Cluster → Add-ons**. Each export requires a Bound
+shares** under **Settings → Hardware and storage → Add-ons**. Each export requires a Bound
 ReadWriteMany (RWX) claim and an explicit IPv4 client or CIDR; an unrestricted
 export is refused. Exports default to read-only and use root squashing. Enable
 write access per share only when needed. Clients mount `<VIP>:/<share>` over

@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Start with **Settings → About**: it shows which background parts of Homestead are
+Start with **Settings → Homestead**: it shows which background parts of Homestead are
 working and the last error of any that are not. The job tray (bottom right)
 keeps every job's steps and errors across restarts.
 
@@ -137,7 +137,7 @@ handing out addresses: add some under **Networking → Workload VIPs**. See
 
 **New hosts cannot join, though the dashboard works.** Something else is on the
 cluster's own address - the VIP hosts join through on port 9345. Homestead
-names any app sitting there on **Networking** and in **Settings → About →
+names any app sitting there on **Networking** and in **Settings → Homestead →
 Addresses**; give each an address of its own (**Edit → Network**). If
 Homestead's own shared address (`LB_IP` on its Deployment) is the cluster's
 address, change it to a free one. Homestead no longer offers the cluster's
@@ -159,7 +159,7 @@ states each address's condition:
 
 On Harvester, also check the address is not given out by your router's DHCP.
 
-**kube-vip or Multus is missing on k3s or RKE2.** **Settings → Cluster →
+**kube-vip or Multus is missing on k3s or RKE2.** **Settings → Hardware and storage →
 Add-ons** and **Networking** show **Required components not installed** with
 **Install components**. A new installation gets both after Homestead starts;
 the job tray shows the progress.
@@ -200,5 +200,5 @@ itself.
 ## Asking for help
 
 [Open an issue](https://github.com/wjcloudy/homestead/issues) with the
-Homestead version (Settings → About), the cluster type, and the job's steps from
+Homestead version (Settings → Homestead), the cluster type, and the job's steps from
 the job tray.
