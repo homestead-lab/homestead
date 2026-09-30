@@ -35,7 +35,10 @@ const DIALOGS = [
   ["add-host", "cluster", "platformJoinGuide()"],
   ["helm-release", "helm", "click:helmRelease"],
   ["helm-install", "helm", "helmInstall()"],
-  ["ip-edit", "network", "ipamEdit()"],
+  // The addresses load only on the network page's IP tab. Each runner takes
+  // a share of this list, so this may be the first address dialog a tab
+  // opens: it loads them itself rather than rely on what ran before it.
+  ["ip-edit", "network", "api('/api/ipam').then(d => { STATE.data.ipam = d; })", "ipamEdit()"],
   ["ip-subnets", "network", "ipamSubnets()"],
   ["ip-unifi", "network", "ipamUnifi()"],
   ["ip-import", "network", "ipamImport()"],
