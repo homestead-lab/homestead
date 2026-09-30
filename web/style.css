@@ -2501,3 +2501,35 @@ html[data-theme="light"] .modalbox[data-context="smb-access"]{background:var(--s
   border:1px solid var(--line2);color:var(--med)}
 .importsource .ok-t{color:var(--ok)} .importsource .med-t{color:var(--med)}
 @media (max-width:760px){.importstep-row{grid-template-columns:1fr}}
+
+/* A page header: one main button and a ⋯ beside it, on one line. */
+.phead .actionmenu{margin-left:0}
+.phead .actionmenu>summary.btn{font-size:17px;line-height:1;height:auto}
+.phead .actionmenu>summary.btn.pri{font-size:inherit;line-height:inherit}
+.actionmenu-pop{width:auto;min-width:172px;max-width:280px}
+/* The bell: what wants attention, in one place. */
+.bellmenu{margin-left:0}
+.actionmenu.bellmenu>summary.iconbtn{list-style:none;position:relative;display:grid;place-items:center;width:38px;height:38px;padding:0!important;font-size:inherit;line-height:1}
+@media(max-width:900px){.actionmenu.bellmenu>summary.iconbtn{width:34px;height:34px}}
+.bellmenu>summary::-webkit-details-marker{display:none}
+.bellmenu.has-news>summary{color:var(--tx)}
+.bellmenu>summary>span{position:absolute;right:-4px;top:-5px;min-width:18px;height:18px;padding:0 5px;border-radius:99px;display:grid;place-items:center;
+  font:700 10px "Inter Tight",sans-serif;background:var(--med);color:#1a1300;box-shadow:0 0 0 2px var(--surf)}
+.bellmenu>summary>b{position:absolute;right:-4px;bottom:-5px;min-width:16px;height:16px;padding:0 4px;border-radius:99px;display:grid;place-items:center;
+  font:700 9px "Inter Tight",sans-serif;background:var(--crit);color:#fff;box-shadow:0 0 0 2px var(--surf)}
+.bellpop{min-width:230px}
+.bell-head{font:600 10px "JetBrains Mono",monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);padding:6px 9px 4px}
+.bell-empty{padding:10px;color:var(--mut);font-size:12px}
+body.searching .bellmenu{display:none}
+
+/* Colour means state. Green, amber and red say healthy, needs attention and
+   failed; blue marks what opens something (ports, VIPs, links). Everything
+   else - hardware, groups, clusters, avatars, progress - stays neutral. */
+.tag.gpu,.tag.hw,.tag.cluster-tag{color:var(--mut);border-color:var(--line2);background:rgba(255,255,255,.04)}
+.av.n1,.av.n2,.av.n3{background:var(--surf3);color:var(--tx)}
+.g-info,.g-vio{--gc:rgba(255,255,255,.05)}
+.jobmeter span,.rollout-meter span,.livebar>span{background:var(--mut)}
+.meter.split>.seg-sys,.drivesplit .k-sys{background:var(--dim)}
+.meter.split>.seg-lh,.drivesplit .k-lh{background:var(--mut)}
+.meter.split>.seg-lhroom{background:var(--mut);opacity:.25}
+html[data-theme="light"] .tag.gpu,html[data-theme="light"] .tag.hw,html[data-theme="light"] .tag.cluster-tag{background:rgba(0,0,0,.03)}

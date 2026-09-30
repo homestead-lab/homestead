@@ -28,8 +28,37 @@ function paintHomesteadNotice() {
     const label = $("#homesteadNoticeText");
     if (label) label.textContent = release ? `v${release}` : "Helpers";
   }
+  paintBell();
   homesteadUpdateCardPaint();
 }
+
+/* The bell: one count of what wants attention, and a line for each kind -
+   Homestead's own update, container updates, and image checks that failed,
+   which are counted apart so one unreachable registry is not an update. */
+function paintBell() {
+  const bell = $("#bell");
+  if (!bell) return;
+  const { waiting, release } = homesteadUpdates();
+  const images = window.BELL?.images || 0, errors = window.BELL?.errors || 0;
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const row = (run, iconName, text, cls = "") => `<button class="${cls}" onclick="this.closest('details').open=false;${run}">${icon(iconName)}${esc(text)}</button>`;
+  const rows = [
+    waiting.length ? row("homesteadUpdateDialog()", "update", release ? `Homestead ${release} is available` : plural(waiting.length, "Homestead helper update")) : "",
+    images ? row("imageUpdateCenter()", "box", plural(images, "container update")) : "",
+    errors ? row("imageUpdateCenter()", "alert", `${plural(errors, "image check")} failed`, "danger") : "",
+  ].filter(Boolean);
+  const count = images + (waiting.length ? 1 : 0);
+  const words = [waiting.length ? (release ? `Homestead ${release}` : "Homestead helpers") : "", images ? plural(images, "container update") : "",
+    errors ? `${plural(errors, "failed check")}` : ""].filter(Boolean).join(", ") || "Nothing needs you";
+  const badge = $("#bellCount"), dot = $("#bellErrors"), summary = bell.querySelector("summary");
+  if (badge) { badge.textContent = count; badge.classList.toggle("hidden", !count); }
+  if (dot) { dot.textContent = errors; dot.classList.toggle("hidden", !errors); }
+  if (summary) { summary.title = words; summary.setAttribute("aria-label", `Notifications: ${words}`); }
+  bell.classList.toggle("has-news", count > 0 || errors > 0);
+  const pop = $("#bellPop");
+  if (pop) pop.innerHTML = rows.length ? `<div class="bell-head">Needs you</div>${rows.join("")}` : '<div class="bell-empty">Nothing needs you</div>';
+}
+window.paintBell = paintBell;
 window.paintHomesteadNotice = paintHomesteadNotice;
 
 /* One line per part: what it runs and what it would move to. */

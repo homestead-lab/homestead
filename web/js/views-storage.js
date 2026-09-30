@@ -343,9 +343,9 @@ async function viewStorage() {
     (x.pvc_name || "").includes(q) || (x.attached_to || "").toLowerCase().includes(q))
     && (!onlySpare || spare.includes(x)));
   paint(`<div class="phead"><div><h2>Volumes</h2>
-      <p>${v.length} Longhorn volume${v.length === 1 ? "" : "s"} · replicated block storage</p></div>
-      <div class="row">${spare.length ? `<button class="btn ${onlySpare ? "pri" : ""}" onclick="STATE.volSpare=!STATE.volSpare;viewStorage()"
-          data-tip="Volumes nothing is defined to use - no container, VM or job - and ones kept after their claim went: the ones to look at when freeing space">${onlySpare ? "Showing" : "Show"} ${spare.length} unused</button>` : ""}
+      <p>${v.length} Longhorn volume${v.length === 1 ? "" : "s"} · replicated block storage${onlySpare ? ` · <a class="linkish" onclick="STATE.volSpare=false;viewStorage()">showing ${spare.length} unused · show all</a>` : ""}</p></div>
+      <div class="row">${moreMenu([spare.length ? { label: onlySpare ? "Show all volumes" : `Show the ${spare.length} unused`, icon: "list", run: "STATE.volSpare=!STATE.volSpare;viewStorage()",
+          tip: "Volumes nothing is defined to use - no container, VM or job - and ones kept after their claim went: the ones to look at when freeing space" } : null])}
       <button class="btn pri" data-need="operator" onclick="volumeCreate()">＋ Create volume</button></div></div>
   ${st ? `<div class="grid g4 statgrid" style="margin-bottom:18px">
     <div class="card glow g-info"><div class="ctitle">Free space</div>
@@ -375,7 +375,7 @@ async function viewStorage() {
      <td data-label="Mode"><span class="tag">${esc((x.access_modes || ["?"]).map(m => m === "ReadWriteMany" ? "RWX" : m === "ReadWriteOnce" ? "RWO" : m).join(", "))}</span>
        <span class="tag ${+x.replicas === 1 || (x.copies?.length && x.copies.length < +x.replicas) ? "warn" : ""}" data-tip="${esc(volumeCopiesTip(x))}">×${esc(x.replicas)}</span><span class="tag ${x.engine === "v2" ? "info" : ""}" data-tip="${x.engine === "v2" ? "Longhorn's V2 data engine (SPDK)" : "Longhorn's V1 data engine - the default"}">${x.engine === "v2" ? "V2" : "V1"}</span></td>
      <td data-label="Usage" class="volusage">${volumeUsageCell(x)}</td>
-     <td data-label="Last used" class="small dim">${x.state === "attached" ? '<span class="tag ok">in use</span>' : esc(fmtAgo(x.last_used_secs))}</td>
+     <td data-label="Last used" class="small dim">${x.state === "attached" ? '<span class="tag">in use</span>' : esc(fmtAgo(x.last_used_secs))}</td>
      <td class="volactions"><div class="row">
        <button class="iconbtn" data-tip="Snapshots and backups of this volume: take one now, or restore" onclick="lhSnaps(${jsq(x.name)},${jsq(x.pvc_name || x.name)})">${icon("snapshot")}</button>
        <button class="iconbtn" data-need="operator" data-tip="Resize or change replicas" onclick='volumeEdit(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("edit")}</button>
@@ -1043,7 +1043,7 @@ async function viewShares() {
   const ip = smb.address || "address pending";
   paint(`<div class="phead"><div><h2>Network shares</h2>
     <p>SMB shares and optional NFSv4 exports backed by Longhorn volumes</p></div>
-    <div class="row"><button class="btn" data-need="admin" onclick="smbUsers()">SMB users</button><button class="btn pri" data-need="admin" onclick="newShare()">＋ New share</button></div></div>
+    <div class="row">${moreMenu([{ label: "SMB users", icon: "list", run: "smbUsers()", need: "admin" }])}<button class="btn pri" data-need="admin" onclick="newShare()">＋ New share</button></div></div>
   <div class="card" style="margin-bottom:14px"><div class="between"><div><div class="ctitle">SMB server · ${esc(smb.name || "homestead-smb")}</div>
     <div class="dim small">${smb.error ? `Status unavailable: ${esc(smb.error)}` : !smb.installed ? "Not installed · your first share can install it" :
       `${smb.enabled ? `${smb.ready || 0}/${smb.desired || 1} ready` : "Stopped"}${smb.address ? ` · \\\\${esc(smb.address)}` : " · waiting for an address"} · ${smb.served_shares?.length ?? 0}/${sh.length} share mappings${smb.in_sync ? "" : " · out of sync"}`}</div></div>

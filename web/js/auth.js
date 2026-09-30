@@ -274,8 +274,9 @@ window.api = async (path, opts) => {
   }
 };
 
+/* A role is not a state, so it is not coloured: the word says which. */
 function roleClass(r) {
-  return "pill " + (r === "admin" ? "ok" : r === "operator" ? "low" : "neutral");
+  return "pill neutral";
 }
 function paintWho() {
   if (!ME) return;

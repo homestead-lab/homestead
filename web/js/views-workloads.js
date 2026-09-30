@@ -17,6 +17,8 @@ function paintUpdateBadge(count, errors = 0) {
     badge.textContent = count;
     badge.classList.toggle("hidden", !count);
   }
+  window.BELL = { ...(window.BELL || {}), images: count, errors };
+  if (window.paintBell) paintBell();
   const notice = $("#updateNotice"), noticeBadge = $("#updateNoticeBadge"), noticeErrors = $("#updateNoticeErrors");
   if (!notice || !noticeBadge) return;
   // Updates and failed checks are counted apart: one registry that cannot be
@@ -268,12 +270,11 @@ function workloadSections(rows, layout, pick) {
 function workloadGroupBar(all, pick) {
   const names = workloadGroupNames(all);
   const loose = all.filter(w => !w.group).length;
+  if (!names.length) return "";
   const chip = (value, label, count) => `<button type="button" class="${pick === value ? "on" : ""}" aria-pressed="${pick === value}" onclick="pickWorkloadGroup(${groupKeyIndex(value)})">${esc(label)} <span class="dim">${count}</span></button>`;
   return `<div class="wgroup-bar">
     ${names.length ? `<div class="seg wgroup-chips" role="group" aria-label="Show group">${chip("", "All", all.length)}${names.map(name =>
-      chip(name, name, all.filter(w => w.group === name).length)).join("")}${loose ? chip(NO_GROUP, "Ungrouped", loose) : ""}</div>` : ""}
-    <button class="btn sm" data-need="operator" onclick="manageWorkloadGroups()" aria-label="${names.length ? "Groups" : "Group workloads"}">${icon("list")}<span class="hide-sm">${names.length ? "Groups" : "Group workloads"}</span></button>
-    <button class="btn sm" onclick="wlFailover()" aria-label="If a node fails" title="What each container does when its node fails: move, or wait for the node">${icon("node")}<span class="hide-sm">If a node fails</span></button></div>`;
+      chip(name, name, all.filter(w => w.group === name).length)).join("")}${loose ? chip(NO_GROUP, "Ungrouped", loose) : ""}</div>` : ""}</div>`;
 }
 
 /* Put one workload in a group: pick one it could join, or name a new one. */
@@ -359,7 +360,9 @@ function renderWorkloads() {
       ${updateCount ? `<button class="pill warn pillbtn" title="Review and stage image updates" onclick="imageUpdateCenter()">${updateCount} update${updateCount === 1 ? "" : "s"}</button>` : ""}
       ${updateErrors ? `<button class="pill crit pillbtn" data-tip="${updateErrors} image${updateErrors === 1 ? "" : "s"} could not be compared with ${updateErrors === 1 ? "its" : "their"} registry; every other image was" onclick="imageUpdateCenter()">${updateErrors} <span class="hide-sm">check${updateErrors === 1 ? "" : "s"} </span>failed</button>` : ""}
       ${layoutSwitch("containers", "renderWorkloads")}
-      <button class="btn" onclick="checkImageUpdates()" title="Ask the registries for newer images">↻ Check<span class="hide-sm"> images</span></button>
+      ${moreMenu([{ label: "Check for image updates", icon: "refresh", run: "checkImageUpdates()", tip: "Ask the registries for newer images" },
+        { label: workloadGroupNames(all).length ? "Groups" : "Group workloads", icon: "list", run: "manageWorkloadGroups()", need: "operator" },
+        { label: "If a node fails", icon: "node", run: "wlFailover()", tip: "What each container does when its node fails: move, or wait for the node" }])}
       <button class="btn pri hide-sm" data-need="operator" onclick="go('deploy')">＋ Deploy</button></div></div>
 
     ${all.length ? workloadGroupBar(all, group) : ""}

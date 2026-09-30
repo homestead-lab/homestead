@@ -1132,9 +1132,9 @@ async function viewImport() {
   STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
   paint(`<div class="phead"><div><h2>Import</h2>
       <p>Bring apps in from an Unraid or Docker server, a Docker Compose file, or a VM disk image</p></div>
-      <div class="row"><button class="btn pri" data-need="admin" onclick="srcAdd()">＋ Unraid or Docker server</button>
-      <button class="btn" data-need="operator" onclick="composeImport()">＋ Docker Compose</button>
-      <button class="btn" data-need="admin" onclick="vmDiskImport()">＋ VM disk</button></div></div>
+      <div class="row">${menuButton("＋ Import", [{ label: "From an Unraid or Docker server", icon: "import", run: "srcAdd()", need: "admin" },
+        { label: "From a Docker Compose file", icon: "box", run: "composeImport()", need: "operator" },
+        { label: "A VM disk image", icon: "vm", run: "vmDiskImport()", need: "admin" }])}</div></div>
 
     <div class="sec">Unraid and Docker servers ${tip("Containers on another server - Unraid, or any Linux host running Docker - with their settings and appdata. Homestead reaches the server over SSH.")}</div>
     ${srcs.length ? `<div class="grid g3">${srcs.map(importSourceCard).join("")}</div>

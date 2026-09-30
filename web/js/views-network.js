@@ -100,7 +100,7 @@ async function viewNetworking() {
   const orphans = services.filter(row => row.orphaned).length;
   paint(`<div class="phead"><div><h2>Networking</h2>
       <p>Addresses, listeners and the live path from your LAN to each workload</p></div>
-      <div class="row"><button class="btn" onclick="networkToggleSystem()">${showSystem ? "Hide" : "Show"} system</button>
+      <div class="row">${moreMenu([{ label: `${showSystem ? "Hide" : "Show"} system services`, icon: "layers", run: "networkToggleSystem()" }])}
       <button class="btn pri" data-need="operator" onclick="networkExpose()">＋ Expose workload</button></div></div>
     ${networkTabs("services")}
     ${baselineHtml(baseline, "network")}

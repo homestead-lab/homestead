@@ -113,6 +113,7 @@
     <symbol id="i-rollback" viewBox="0 0 24 24"><path d="M9 7H4v-5"/><path d="M4.5 7.2A8.5 8.5 0 1 1 4 16"/></symbol>
     <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.1"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/></symbol>
     <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3.5 2.5 20h19z"/><path d="M12 10v4.5M12 17.3v.1"/></symbol>
   </defs>
 </svg>
@@ -172,13 +173,11 @@
           <span class="sicon"><svg width="14" height="14"><use href="#i-search"/></svg></span>
           <input id="globalSearch" class="search" placeholder="Search workloads, nodes, volumes…">
         </div>
-        <div class="iconbtn hs-notice hidden" id="homesteadNotice" title="Homestead update" role="button" tabindex="0" aria-label="Homestead update">
-          <img src="/assets/homestead-mark.svg?v=2.8.260" alt=""><span id="homesteadNoticeText" class="hide-sm"></span><i aria-hidden="true"></i>
-        </div>
-        <div class="iconbtn update-notice hidden" id="updateNotice" title="Container image updates" role="button" tabindex="0" aria-label="Container image updates">
-          <svg><use href="#i-update"/></svg><span id="updateNoticeBadge">0</span><b id="updateNoticeErrors" class="hidden">0</b>
-        </div>
-        <div class="iconbtn" id="refresh" title="Refresh"><svg><use href="#i-refresh"/></svg></div>
+        <!-- Everything that wants attention, in one place: Homestead's own
+             update, container updates, and image checks that failed. -->
+        <details class="actionmenu bellmenu" id="bell"><summary class="iconbtn" title="Nothing needs you" aria-label="Notifications">
+          <svg><use href="#i-bell"/></svg><span id="bellCount" class="hidden">0</span><b id="bellErrors" class="hidden"></b></summary>
+          <div class="actionmenu-pop bellpop" id="bellPop"><div class="bell-empty">Nothing needs you</div></div></details>
         <div class="iconbtn" id="opensettings" title="Appearance"><svg><use href="#i-gear"/></svg></div>
         <div class="whoami" id="whoami" title="Account"><div class="av" id="whoav">?</div>
           <span class="nm" id="whonm">—</span><span class="pill neutral rolechip" id="whorole">—</span></div>

@@ -207,12 +207,6 @@ function closeNav() { document.body.classList.remove("navopen"); }
 $("#hamburger").onclick = () => document.body.classList.toggle("navopen");
 $("#navscrim").onclick = closeNav;
 
-$("#refresh").onclick = e => {
-  const b = e.currentTarget;
-  b.classList.add("spinning");
-  setTimeout(() => b.classList.remove("spinning"), 900);
-  refresh(true);
-};
 let searchTimer = null;
 async function globalSearch(q) {
   const wrap = $("#searchwrap");

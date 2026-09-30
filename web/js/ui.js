@@ -165,6 +165,22 @@ if (typeof MutationObserver === "function" && typeof document.querySelector === 
   if (body) new MutationObserver(() => normaliseDialogActions(body)).observe(body, { childList: true });
 }
 
+/* A page header's ⋯: the actions besides its main one. Each item is
+   { label, run, icon?, need?, tip?, danger? }; falsy items are left out, and
+   with none left there is no menu. A header shows one main button and this
+   beside it, so it fits on one line at any width. */
+function moreMenu(items, label = "More actions", summaryClass = "btn") {
+  const rows = (items || []).filter(Boolean);
+  if (!rows.length) return "";
+  const dots = summaryClass === "btn";
+  return `<details class="actionmenu headmenu"><summary class="${summaryClass}"${dots ? ` title="${esc(label)}" aria-label="${esc(label)}"` : ""}>${dots ? "⋯" : esc(label)}</summary>
+    <div class="actionmenu-pop">${rows.map(item => `<button type="button"${item.need ? ` data-need="${esc(item.need)}"` : ""}${item.tip ? ` title="${esc(item.tip)}"` : ""}${item.danger ? ' class="danger"' : ""}
+      onclick="this.closest('details').open=false;${esc(item.run)}">${item.icon ? icon(item.icon) : ""}${esc(item.label)}</button>`).join("")}</div></details>`;
+}
+/* A main button that opens a choice - ＋ Import and its kinds. */
+const menuButton = (label, items) => moreMenu(items, label, "btn pri");
+if (typeof window !== "undefined") { window.moreMenu = moreMenu; window.menuButton = menuButton; }
+
 /* A "…" menu opens against the screen, not its row: below its button when
    there is room, above when not. A card's blur or overflow still clips a
    fixed box inside it - the card, not the screen, is what it is placed in -

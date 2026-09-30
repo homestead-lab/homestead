@@ -145,8 +145,7 @@ async function viewProtect() {
       <div><h2>Data protection</h2>
         <p>Longhorn recurring jobs, snapshot groups and backups across ${d.total} volume${d.total === 1 ? "" : "s"}</p></div>
       <div class="row">
-        <button class="btn" data-need="admin" onclick="lhTarget()">Backup target</button>
-        <button class="btn" data-need="operator" onclick="lhPlans()">Plans</button>
+        ${moreMenu([{ label: "Backup target", icon: "shield", run: "lhTarget()", need: "admin" }, { label: "Plans", icon: "clock", run: "lhPlans()", need: "operator" }])}
         <button class="btn pri" data-need="operator" onclick="lhJob()">＋ New job</button>
       </div></div>
 

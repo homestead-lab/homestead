@@ -44,7 +44,7 @@ async function viewCluster() {
   const marginCopy = margin === null || margin === undefined ? "Unknown" : margin === 0 ? "No failure margin" : `${margin} member${margin === 1 ? "" : "s"}`;
   const serviceRows = (report.services || []).filter(service => service.pods || service.required);
   paint(`<div class="phead"><div><h2>Cluster</h2><p>Harvester and Kubernetes platform health, separate from application health</p></div>
-    <div class="row"><button class="btn" data-need="admin" onclick="clusterRemovePick()">${icon("trash")}Remove a host</button>
+    <div class="row">${moreMenu([{ label: "Remove a host", icon: "trash", run: "clusterRemovePick()", need: "admin", danger: true }])}
       <button class="btn pri" data-need="admin" onclick="clusterOnboarding()">${icon("plus")}Add a host</button></div></div>
 
   <section class="cluster-hero ${esc(report.state)}">
