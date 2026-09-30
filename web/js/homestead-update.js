@@ -214,7 +214,7 @@ function homesteadUpdateCardPaint() {
   if (!card) return;
   card.innerHTML = `<div class="ctitle">Homestead updates</div>
     <div class="csub">Homestead's release and the helpers it runs are updated here, not with your apps
-      ${tip("The SMB and NFS servers and the object store moves use are part of Homestead: hidden with the platform on the Containers page, and updated from here. How updates are approved is under Settings › Updates.")}</div>
+      ${tip("The SMB and NFS servers and the object store moves use are part of Homestead: hidden with the platform on the Containers page, and updated from here. How updates are approved is under Settings › General.")}</div>
     <div class="ui-stack">${homesteadUpdateBody(true)}</div>`;
   if (window.applyRole) applyRole();
   fleetUpdatesLoad();

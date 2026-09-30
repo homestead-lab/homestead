@@ -60,7 +60,7 @@ for (const shot of SHOTS) {
   try {
     await page.evaluate((view) => {
       if (!document.querySelector("#modal")?.classList.contains("hidden")) closeModal();
-      document.querySelector(`#nav a[data-view="${view}"]`).click();
+      go(view);
       window.scrollTo(0, 0);
     }, shot.view);
     await page.locator("#views .phead").waitFor();

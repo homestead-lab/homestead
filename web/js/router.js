@@ -19,28 +19,49 @@
     return base().slice(0, -1) + (String(path || "/").startsWith("/") ? path : "/" + path);
   }
 
+  /* A page with a parent is not in the sidebar: it is a tab of its parent's
+     page, and the sidebar marks the parent while it is open. */
   const ROUTES = Object.freeze({
     dash:      Object.freeze({ path: "/",                label: "Dashboard",       section: "Overview" }),
-    flow:      Object.freeze({ path: "/architecture",    label: "Architecture",    section: "Overview" }),
+    flow:      Object.freeze({ path: "/architecture",    label: "Architecture",    section: "Overview", parent: "dash" }),
     nodes:     Object.freeze({ path: "/nodes",           label: "Nodes",           section: "Overview" }),
-    network:   Object.freeze({ path: "/networking",      label: "Networking",      section: "System" }),
     portal:    Object.freeze({ path: "/portal",          label: "Portal",          section: "Overview" }),
-    deploy:    Object.freeze({ path: "/deploy",          label: "Deploy",          section: "Workloads" }),
-    workloads: Object.freeze({ path: "/containers",      label: "Containers",      section: "Workloads" }),
-    vms:       Object.freeze({ path: "/vms",             label: "Virtual Machines", section: "Workloads" }),
-    store:     Object.freeze({ path: "/app-store",       label: "App Store",       section: "Workloads" }),
-    helm:      Object.freeze({ path: "/helm",            label: "Helm",            section: "Workloads" }),
-    shares:    Object.freeze({ path: "/shares",          label: "Network Shares",  section: "Storage" }),
+    workloads: Object.freeze({ path: "/containers",      label: "Containers",      section: "Apps" }),
+    deploy:    Object.freeze({ path: "/deploy",          label: "Deploy",          section: "Apps", parent: "workloads" }),
+    images:    Object.freeze({ path: "/image-cache",     label: "Image Cache",     section: "Apps", parent: "workloads" }),
+    schedules: Object.freeze({ path: "/schedules",       label: "Schedules",       section: "Apps", parent: "workloads" }),
+    imports:   Object.freeze({ path: "/import",          label: "Import",          section: "Apps", parent: "workloads" }),
+    vms:       Object.freeze({ path: "/vms",             label: "Virtual Machines", section: "Apps" }),
+    store:     Object.freeze({ path: "/app-store",       label: "App Store",       section: "Apps" }),
+    helm:      Object.freeze({ path: "/helm",            label: "Helm",            section: "Apps", parent: "store" }),
     storage:   Object.freeze({ path: "/volumes",         label: "Volumes",         section: "Storage" }),
-    images:    Object.freeze({ path: "/image-cache",     label: "Image Cache",     section: "Storage" }),
+    shares:    Object.freeze({ path: "/shares",          label: "Network Shares",  section: "Storage" }),
     protect:   Object.freeze({ path: "/data-protection", label: "Data Protection", section: "Storage" }),
-    schedules: Object.freeze({ path: "/schedules",       label: "Schedules",       section: "System" }),
-    imports:   Object.freeze({ path: "/import",          label: "Import",          section: "System" }),
-    events:    Object.freeze({ path: "/events",          label: "Events",          section: "System" }),
-    resources: Object.freeze({ path: "/resources",       label: "Resources",       section: "System" }),
+    network:   Object.freeze({ path: "/networking",      label: "Networking",      section: "System" }),
     cluster:   Object.freeze({ path: "/system/cluster",  label: "Cluster",         section: "System" }),
+    events:    Object.freeze({ path: "/events",          label: "Events",          section: "System", parent: "cluster" }),
+    resources: Object.freeze({ path: "/resources",       label: "Resources",       section: "System", parent: "cluster" }),
     settings:  Object.freeze({ path: "/settings",        label: "Settings",        section: "System" }),
   });
+
+  /* The tabs across the top of a page and the pages folded into it. */
+  const TABS = Object.freeze({
+    dash: [["dash", "Overview"], ["flow", "Architecture"]],
+    workloads: [["workloads", "Running"], ["images", "Images"], ["schedules", "Schedules"], ["imports", "Import"]],
+    store: [["store", "Apps"], ["helm", "Helm"]],
+    cluster: [["cluster", "Health"], ["events", "Events"], ["resources", "Resources"]],
+  });
+
+  /* The sidebar entry a page belongs to. */
+  function navView(view) {
+    return (ROUTES[view] && ROUTES[view].parent) || view;
+  }
+
+  /* The tabs to show on a page: its family's, when it is one of them. */
+  function tabsFor(view) {
+    const tabs = TABS[navView(view)] || [];
+    return tabs.some(([id]) => id === view) ? tabs : [];
+  }
 
   const BY_PATH = Object.freeze(Object.fromEntries(
     Object.entries(ROUTES).map(([view, route]) => [route.path, view])));
@@ -95,10 +116,11 @@
     const route = ROUTES[view] || ROUTES.dash;
     const items = [];
     if (route.section) items.push({ label: route.section, url: "", current: false });
+    if (route.parent && ROUTES[route.parent]) items.push({ label: ROUTES[route.parent].label, url: href(ROUTES[route.parent].path), current: false });
     items.push({ label: route.label, url: href(route.path), current: !detail });
     if (detail) items.push({ label: String(detail), url: "", current: true });
     return items;
   }
 
-  return Object.freeze({ ROUTES, normalizePath, resolve, urlFor, queryParams, breadcrumbs, href });
+  return Object.freeze({ ROUTES, TABS, normalizePath, resolve, urlFor, queryParams, breadcrumbs, href, navView, tabsFor });
 });

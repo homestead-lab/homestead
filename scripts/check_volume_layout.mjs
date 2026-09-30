@@ -15,7 +15,7 @@ try {
     JSON.stringify({ theme: "dark", bg: "soft", motion: "off", refresh: 60 })));
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("http://127.0.0.1:4173/?demo=1", { waitUntil: "networkidle" });
-  await page.locator('#nav a[data-view="storage"]').click();
+  await page.evaluate(() => go("storage"));
   await page.locator(".voltable tbody tr").first().waitFor();
   await page.evaluate(() => document.fonts.ready);
   await page.addStyleTag({ content: "#jobTray{display:none!important}" });

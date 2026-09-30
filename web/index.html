@@ -129,27 +129,19 @@
     <nav id="nav">
       <div class="navlbl">Overview</div>
       <a href="/" data-view="dash"><svg><use href="#i-dash"/></svg>Dashboard</a>
-      <a href="/architecture" data-view="flow"><svg><use href="#i-flow"/></svg>Architecture</a>
       <a href="/nodes" data-view="nodes"><svg><use href="#i-node"/></svg>Nodes</a>
       <a href="/portal" data-view="portal"><svg><use href="#i-portal"/></svg>Portal</a>
-      <div class="navlbl">Workloads</div>
-      <a href="/deploy" data-view="deploy"><svg><use href="#i-plus"/></svg>Deploy</a>
+      <div class="navlbl">Apps</div>
       <a href="/containers" data-view="workloads"><svg><use href="#i-box"/></svg>Containers<span id="updateBadge" class="navbadge hidden">0</span></a>
       <a href="/vms" data-view="vms"><svg><use href="#i-vm"/></svg>Virtual Machines</a>
       <a href="/app-store" data-view="store"><svg><use href="#i-store"/></svg>App Store</a>
-      <a href="/helm" data-view="helm"><svg><use href="#i-layers"/></svg>Helm</a>
       <div class="navlbl">Storage</div>
-      <a href="/shares" data-view="shares"><svg><use href="#i-share"/></svg>Network Shares</a>
       <a href="/volumes" data-view="storage"><svg><use href="#i-disk"/></svg>Volumes</a>
-      <a href="/image-cache" data-view="images"><svg><use href="#i-layers"/></svg>Image Cache</a>
+      <a href="/shares" data-view="shares"><svg><use href="#i-share"/></svg>Network Shares</a>
       <a href="/data-protection" data-view="protect"><svg><use href="#i-shield"/></svg>Data Protection</a>
       <div class="navlbl">System</div>
-      <a href="/schedules" data-view="schedules"><svg><use href="#i-clock"/></svg>Schedules</a>
-      <a href="/import" data-view="imports"><svg><use href="#i-import"/></svg>Import</a>
-      <a href="/events" data-view="events"><svg><use href="#i-list"/></svg>Events</a>
-      <a href="/resources" data-view="resources"><svg><use href="#i-layers"/></svg>Resources</a>
-      <a href="/system/cluster" data-view="cluster"><svg><use href="#i-node"/></svg>Cluster</a>
       <a href="/networking" data-view="network"><svg><use href="#i-network"/></svg>Networking</a>
+      <a href="/system/cluster" data-view="cluster"><svg><use href="#i-node"/></svg>Cluster</a>
       <a href="/settings" data-view="settings"><svg><use href="#i-gear"/></svg>Settings</a>
     </nav>
     <div class="sidefoot">
@@ -183,7 +175,18 @@
           <span class="nm" id="whonm">—</span><span class="pill neutral rolechip" id="whorole">—</span></div>
       </div>
     </header>
+    <!-- Pages folded into another show its tabs: Containers with Images,
+         Schedules and Import; Cluster with Events and Resources. -->
+    <nav class="pagetabs" id="pagetabs" aria-label="Pages here" hidden></nav>
     <div class="page" id="views"></div>
+    <!-- On a phone, the pages used most, and More for the rest. -->
+    <nav class="bottombar only-sm" id="bottombar" aria-label="Main pages">
+      <a href="/" data-view="dash"><svg><use href="#i-dash"/></svg>Home</a>
+      <a href="/containers" data-view="workloads"><svg><use href="#i-box"/></svg>Apps</a>
+      <a href="/vms" data-view="vms"><svg><use href="#i-vm"/></svg>VMs</a>
+      <a href="/volumes" data-view="storage"><svg><use href="#i-disk"/></svg>Storage</a>
+      <a href="#" data-more="1"><svg><use href="#i-menu"/></svg>More</a>
+    </nav>
     <!-- The sidebar is a drawer on a phone, so what this installation is and
          what it runs would otherwise only be visible behind the menu. -->
     <footer class="appfoot only-sm" id="appfoot"></footer>

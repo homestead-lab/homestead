@@ -384,7 +384,7 @@ async function ipamAfterUnifi() {
   else if (STATE.view === "network") renderIpam();
 }
 
-/* Settings > Apps: where UniFi is connected. */
+/* Settings > Integrations: where UniFi is connected. */
 function ipamUnifiCard() {
   const u = ((STATE.data.ipam || {}).unifi) || {};
   return `<section class="card flat settings-wide" data-tab="apps" id="unifiCard">

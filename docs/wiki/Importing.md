@@ -1,6 +1,6 @@
 # Importing
 
-**Import** brings things in from elsewhere: containers and their data from an
+**Import** (a tab of **Containers**) brings things in from elsewhere: containers and their data from an
 Unraid (or any Docker) server, a Docker Compose file, or a VM disk image.
 Workloads from another Homestead cluster move under **Settings → Linked
 clusters**.

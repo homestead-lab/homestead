@@ -221,7 +221,7 @@ Node detail shows drive identity, capacity, temperature, SMART health, error
 counters, power-on hours, and per-disk read/write MB/s. Administrators can run
 short or extended self-tests after an explicit confirmation; tests and their
 progress remain in Activity through browser refreshes and Homestead restarts.
-Settings → Health thresholds controls temperature and media-error warnings.
+Settings → General thresholds controls temperature and media-error warnings.
 USB/SATA bridges and virtual disks that do not expose SMART are labelled as
 unsupported instead of being treated as failed drives.
 
@@ -344,7 +344,7 @@ tray.
 
 ## Resources
 
-Homestead's own pages cover what a homelab mostly does; **System → Resources**
+Homestead's own pages cover what a homelab mostly does; **Cluster → Resources**
 covers the rest, for anyone used to Headlamp, Lens or kubectl. It lists every
 kind the API server serves - built in, Harvester's, Longhorn's, KubeVirt's and
 any custom resource - grouped as Headlamp groups them (Workloads, Network,
@@ -443,7 +443,7 @@ is recorded, unknown columns are skipped so an export imports back, and every
 row is checked before anything is written.
 
 **UniFi** is optional: without it the tab works from scans and what you write,
-and shows nothing of UniFi. Connected under **Settings → Apps → UniFi
+and shows nothing of UniFi. Connected under **Settings → Integrations → UniFi
 Network**, it brings in what a UniFi Network controller knows, read-only: its
 clients and devices with their MACs, the reserved (fixed) IPs even for clients
 that are offline, and its networks, whose DHCP range, gateway and VLAN fill in
@@ -575,7 +575,7 @@ deeper.
 
 ## MQTT and Home Assistant
 
-**Settings → MQTT** publishes cluster and node stats to an MQTT broker, with
+**Settings → Integrations** publishes cluster and node stats to an MQTT broker, with
 Home Assistant discovery: nodes ready, volumes degraded or faulted, pods
 running and failing, VMs, cluster health, CPU and RAM for the cluster, and for
 each node its CPU, RAM, network in and out, pods, VMs, workloads and status.
@@ -1270,7 +1270,7 @@ node probe, which reads the host's mount table.
 
 Hardware features - a Coral, a Zigbee stick - are checked on every host every
 30 seconds, so one plugged in later is found and labelled without a restart;
-**Rescan hosts** in Settings → Hardware checks at once.
+**Rescan hosts** in Settings → Cluster checks at once.
 
 ### A failed drive
 
@@ -1495,7 +1495,7 @@ says whether its host answers on its port right now - a TCP connection rather
 than a page load, so a login screen or a self-signed certificate still counts.
 The search box filters them.
 
-Links are edited from the Portal page or **Settings → Apps → Portal** (admins
+Links are edited from the Portal page or **Settings → Integrations → Portal** (admins
 only). **From containers** lists every exposed port of every container at the
 address it listens on, ready to tick. An icon is a built-in device glyph
 (router, switch, access point, firewall, NAS, server, printer, camera, UPS),

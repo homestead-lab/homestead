@@ -363,7 +363,7 @@ function renderWorkloads() {
       ${moreMenu([{ label: "Check for image updates", icon: "refresh", run: "checkImageUpdates()", tip: "Ask the registries for newer images" },
         { label: workloadGroupNames(all).length ? "Groups" : "Group workloads", icon: "list", run: "manageWorkloadGroups()", need: "operator" },
         { label: "If a node fails", icon: "node", run: "wlFailover()", tip: "What each container does when its node fails: move, or wait for the node" }])}
-      <button class="btn pri hide-sm" data-need="operator" onclick="go('deploy')">＋ Deploy</button></div></div>
+      <button class="btn pri" data-need="operator" onclick="go('deploy')">＋ Deploy</button></div></div>
 
     ${all.length ? workloadGroupBar(all, group) : ""}
     ${rows.length ? workloadSections(rows, layout, group)
