@@ -83,7 +83,7 @@ async function audit([label, width, height, mobile], items) {
   for (const [name, view, after] of items) {
     try {
       await page.evaluate(() => { try { closeModal(); } catch (e) { /* none open */ } localStorage.removeItem("homestead.fleet.mode"); });
-      await page.evaluate((v) => document.querySelector(`#nav a[data-view="${v}"]`).click(), view);
+      await page.evaluate((v) => go(v), view);
       await page.locator("#views .phead").waitFor();
       await page.waitForTimeout(1200);
       if (after) { await page.evaluate(after); await page.waitForTimeout(900); }

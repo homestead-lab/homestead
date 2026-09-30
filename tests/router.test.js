@@ -46,9 +46,9 @@ test("URL creation encodes filters and repeated values", () => {
 });
 
 test("breadcrumbs place a view under its section, not under the dashboard", () => {
-  // The dashboard is a sibling page. Containers belongs to Workloads.
+  // The dashboard is a sibling page. Containers belongs to Apps.
   assert.deepEqual(router.breadcrumbs("workloads"), [
-    { label: "Workloads", url: "", current: false },
+    { label: "Apps", url: "", current: false },
     { label: "Containers", url: "/containers", current: true },
   ]);
   assert.deepEqual(router.breadcrumbs("settings"), [
@@ -64,6 +64,19 @@ test("breadcrumbs place a view under its section, not under the dashboard", () =
     { label: "Nodes", url: "/nodes", current: false },
     { label: "harvester-node1", url: "", current: true },
   ]);
+});
+
+test("a page folded into another is a tab of it, under it in the breadcrumbs", () => {
+  assert.equal(router.navView("images"), "workloads");
+  assert.equal(router.navView("events"), "cluster");
+  assert.equal(router.navView("nodes"), "nodes");
+  assert.deepEqual(router.tabsFor("schedules").map(([view]) => view), ["workloads", "images", "schedules", "imports"]);
+  assert.deepEqual(router.tabsFor("deploy"), [], "Deploy is a form, not a tab");
+  assert.deepEqual(router.tabsFor("nodes"), []);
+  assert.deepEqual(router.breadcrumbs("helm").map(item => item.label), ["Apps", "App Store", "Helm"]);
+  for (const [parent, tabs] of Object.entries(router.TABS)) {
+    for (const [view] of tabs) assert.ok(view === parent || router.ROUTES[view].parent === parent, `${view} belongs to ${parent}`);
+  }
 });
 
 test("a section is a label rather than a link, having no page of its own", () => {

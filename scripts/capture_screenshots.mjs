@@ -29,7 +29,7 @@ const capture = async (view, name, before) => {
   try {
     if (view) {
       await page.evaluate(() => { if (!document.querySelector("#modal")?.classList.contains("hidden")) closeModal(); });
-      await page.locator(`#nav a[data-view="${view}"]`).click();
+      await page.evaluate(v => go(v), view);
       await page.locator("#views .phead").waitFor();
     }
     if (before) await page.evaluate(before);
@@ -44,7 +44,7 @@ const capture = async (view, name, before) => {
 const dialog = async (view, name, open) => {
   try {
     await page.evaluate(() => { if (!document.querySelector("#modal")?.classList.contains("hidden")) closeModal(); });
-    await page.locator(`#nav a[data-view="${view}"]`).click();
+    await page.evaluate(v => go(v), view);
     await page.locator("#views .phead").waitFor();
     await settle();
     await page.evaluate(open);

@@ -65,10 +65,11 @@ try {
   await page.goto(origin + BASE, { waitUntil: "networkidle" });
   await page.locator("#views .phead").waitFor({ timeout: 20000 });
   if (!await page.locator("#demoBanner").count()) failures.push("the demo banner is not shown");
-  const views = await page.locator("#nav a[data-view]").evaluateAll(links => links.map(a => a.dataset.view));
+  // Every page, sidebar or tab: HomesteadRouter knows them all.
+  const views = await page.evaluate(() => Object.keys(HomesteadRouter.ROUTES));
   for (const view of views) {
     try {
-      await page.locator(`#nav a[data-view="${view}"]`).click();
+      await page.evaluate(v => go(v), view);
       await page.locator("#views .phead").waitFor({ timeout: 15000 });
       await page.waitForTimeout(600);
       if (!new URL(page.url()).pathname.startsWith(BASE)) failures.push(`${view}: left the site for ${page.url()}`);

@@ -23,7 +23,7 @@ tag correctly resolves to `docker.io/openspeedtest/latest:latest`.
 The form asks, in order:
 
 - **Name and namespace.** Apps go in `lab` unless you make others under
-  **Settings → Apps → Namespaces**.
+  **Settings → Integrations → Namespaces**.
 - **Memory reserved and Memory max.** Reserved memory is the scheduler's
   request; optional Memory max is the container's enforced limit and must be
   at least the request. Leave max blank for no container memory limit. A limit
@@ -297,7 +297,7 @@ and keeps the previous image so **Roll back** returns to exactly it.
 Homestead's own updates are not listed here: they are on the top bar's
 **Homestead** button and under [Settings → About](Settings#homestead-updates). A registry
 that cannot be checked is shown on that container only; the rest still show
-their updates. **Settings → Updates** sets the policy: notify only, apply when
+their updates. **Settings → General** sets the policy: notify only, apply when
 approved, or apply in a maintenance window. Updates never jump a major version
 by themselves.
 
@@ -373,7 +373,7 @@ on import.
 
 A container given a hardware feature - an iGPU for transcoding, a Coral for
 Frigate, a Zigbee stick for Zigbee2MQTT - gets the device, and is kept on a host
-that has it. Features are named under **Settings → Hardware**; see
+that has it. Features are named under **Settings → Cluster**; see
 [Dashboard and nodes](Dashboard-and-nodes#hardware).
 
 ## Placement
@@ -487,7 +487,7 @@ Changing a container's choice restarts it.
 
 ## Architecture
 
-**Architecture** draws, for every app, the path from its address through its
+**Architecture** (a tab of the **Dashboard**) draws, for every app, the path from its address through its
 Service to its pods, claims, Longhorn volumes and the replicas on each disk -
 the quickest way to see what a failed disk or host would touch. Virtual
 machines are grouped below containers rather than mixed into them, but drawn

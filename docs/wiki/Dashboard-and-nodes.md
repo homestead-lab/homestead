@@ -18,7 +18,7 @@ most.
   [Storage](Storage#longhorn-allocation).
 
 Warning levels (temperatures, disk errors, CPU and memory) are set in
-**Settings → Health**.
+**Settings → General**.
 
 ## Nodes
 
@@ -217,7 +217,7 @@ Homestead keeps the probe's scripts up to date itself when it updates.
 ### Drive health
 
 Each drive is **healthy**, **needs attention**, **critical** or **not
-reported**, judged from its SMART counters against **Settings → Health →
+reported**, judged from its SMART counters against **Settings → General →
 Drive health policy** - not from the drive's own PASSED/FAILED flag, which
 says PASSED until failure is close. Where a drive reports how much life it
 has left (NVMe endurance, an SSD's life-left attribute) it is shown as a
@@ -226,7 +226,7 @@ unsupported, not failed.
 
 ## Hardware
 
-**Settings → Hardware** names devices on your hosts - a Coral TPU, a Zigbee
+**Settings → Cluster** names devices on your hosts - a Coral TPU, a Zigbee
 stick, an Intel iGPU - as hardware features containers can ask for. Hosts are
 checked every 30 seconds, so a device plugged in later is found without a
 restart; **Rescan hosts** checks at once. A container given a feature is kept

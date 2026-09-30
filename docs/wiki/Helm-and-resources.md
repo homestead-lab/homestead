@@ -27,7 +27,7 @@ cannot install.
 
 ## Resources
 
-**System → Resources** lists every kind the cluster serves - built-in,
+**Cluster → Resources** lists every kind the cluster serves - built-in,
 Harvester's, Longhorn's, KubeVirt's, any custom resource - grouped as Headlamp
 groups them, each with the columns `kubectl get` prints for it.
 

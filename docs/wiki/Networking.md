@@ -285,7 +285,7 @@ start. Widen it, rename it or give it its DHCP range like any other.
 - **Scan now** probes the subnet from inside the cluster and flags hosts that
   answer but are not documented.
 - **Export CSV** and **Import CSV** round-trip a spreadsheet.
-- **UniFi** (optional, **Settings → Apps → UniFi Network**) brings in what a UniFi
+- **UniFi** (optional, **Settings → Integrations → UniFi Network**) brings in what a UniFi
   controller knows: clients, devices, reservations and networks, read-only.
 
 ## Portal

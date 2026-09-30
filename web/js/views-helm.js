@@ -22,7 +22,7 @@ function renderHelm() {
     (!q || [r.name, r.namespace, r.chart, r.chart_version, r.app_version].join(" ").toLowerCase().includes(q)));
   const hidden = all.filter(r => r.system).length;
   paint(`<div class="phead"><div><h2>Helm</h2><p>${rows.length} release${rows.length === 1 ? "" : "s"}${!STATE.helmSystem && hidden ? ` · ${hidden} of the platform's hidden` : ""} · charts from here install through RKE2's Helm controller</p></div>
-      <div class="row"><button class="btn" onclick="helmToggleSystem()">${STATE.helmSystem ? "Hide" : "Show"} platform</button>
+      <div class="row">${moreMenu([{ label: `${STATE.helmSystem ? "Hide" : "Show"} the platform's releases`, icon: "layers", run: "helmToggleSystem()" }])}
       <button class="btn pri" data-need="admin" onclick="helmInstall()">＋ Install chart</button></div></div>
     ${rows.length ? `<div class="card flat pad0"><div class="tblwrap"><table class="tbl dense stack" data-sort="helm"><thead><tr>
       <th>Release</th><th>Chart</th><th>App</th><th>Status</th><th>Revision</th><th data-nosort>Updated</th></tr></thead><tbody>

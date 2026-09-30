@@ -46,7 +46,7 @@ function renderPortal() {
   const rows = links.filter(link => !q || link.title.toLowerCase().includes(q) || link.url.toLowerCase().includes(q) ||
     (link.section || "").toLowerCase().includes(q) || (link.note || "").toLowerCase().includes(q));
   paint(`<div class="phead"><div><h2>Portal</h2><p>${links.length} link${links.length === 1 ? "" : "s"}${q ? ` · ${rows.length} matching “${esc(q)}”` : ""} to apps and devices</p></div>
-      <div class="row"><button class="btn" onclick="portalRecheck()">${icon("refresh")}Check</button>
+      <div class="row">${moreMenu([{ label: "Check links", icon: "refresh", run: "portalRecheck()", tip: "See which links answer" }])}
       <button class="btn pri" data-need="admin" onclick="portalEdit()">${icon("edit")}Edit links</button></div></div>
     ${!links.length ? `<div class="empty portal-empty"><b>No links yet.</b> Add the containers you open most, and the router, switches and NAS around them.
         <div class="row" style="justify-content:center;margin-top:12px"><button class="btn pri" data-need="admin" onclick="portalEdit(true)">Pick from containers</button>

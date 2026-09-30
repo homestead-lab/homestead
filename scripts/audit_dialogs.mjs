@@ -177,7 +177,7 @@ async function audit([label, width, height, mobile], items) {
   for (const [name, view, ...steps] of items) {
     try {
       await page.evaluate(() => { try { closeModal(); } catch (e) { /* none open */ } });
-      await page.evaluate((v) => document.querySelector(`#nav a[data-view="${v}"]`)?.click(), view);
+      await page.evaluate((v) => go(v), view);
       await page.locator("#views .phead").waitFor();
       await page.waitForTimeout(700);
       for (const step of steps) {
