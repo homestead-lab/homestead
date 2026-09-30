@@ -101,6 +101,15 @@ class StateTests(unittest.TestCase):
         self.assertEqual("2 security updates, restart needed, 1 failed service, root 92% full",
                          HOST_OS.report("node-1")["hosts"]["node-1"]["summary"]["text"])
 
+    def test_a_read_cut_short_says_how_far_it_got_not_the_raw_lines(self):
+        # apt-get killed by the helper's memory limit: output stops after PKG.
+        self.bind(Host("OS Ubuntu 26.04.1 LTS\nOSID ubuntu 26.04\nKERNEL 7.0.0-34-generic\nUP 1654\nPKG apt\n"))
+        with self.assertRaises(ValueError) as caught:
+            HOST_OS.read("node-1", refresh=True)
+        self.assertIn("stopped part-way, after PKG", str(caught.exception))
+        self.assertIn("out of memory", str(caught.exception))
+        self.assertNotIn("KERNEL", str(caught.exception))
+
     def test_harvester_hosts_are_left_to_harvester(self):
         self.bind(Host(UBUNTU), {"harvester": True, "distribution": "rke2"})
         self.assertEqual([], HOST_OS.tick())
@@ -135,3 +144,10 @@ class StateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HelperTests(unittest.TestCase):
+    def test_the_host_helper_leaves_room_for_the_tools_it_runs(self):
+        import homestead_hostrun as HOSTRUN
+        limit = HOSTRUN.body("node-1")["spec"]["containers"][0]["resources"]["limits"]["memory"]
+        self.assertEqual("1Gi", limit, "apt-get was killed at 64Mi: nsenter keeps it in the pod's cgroup")
