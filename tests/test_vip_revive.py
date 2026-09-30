@@ -67,3 +67,25 @@ class ReviveTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GlobalElectionTests(unittest.TestCase):
+    """k3s-3, 2026-09-30: with one leader for every VIP (plndr-svcs-lock), no
+    Service's own lease is held, and kube-vip was restarted every ten minutes,
+    dropping 192.168.1.200 each time."""
+
+    def test_under_global_election_nothing_is_stranded_or_restarted(self):
+        deleted = []
+        pods = {"items": [{"metadata": {"name": "kube-vip-24rxl", "ownerReferences": [{"kind": "DaemonSet"}]}}]}
+        VIPS.bind(lambda path: pods, lambda method, path, body=None, **k: deleted.append(path))
+        VIPS._stranded_since.clear()
+        VIPS._restarted[0] = 0.0
+        now = VIPS._when("2026-09-30T06:30:00Z")
+        services = [service("homestead-vip"), service("home-assistant-core")]
+        ready = slices("homestead-vip", "home-assistant-core")
+        for election in (False, None):
+            with self.subTest(svc_election=election):
+                platform = dict(PLATFORM, vip_service_election=election)
+                self.assertEqual([], VIPS.stranded(services, [lease("")], ready, platform, now))
+                self.assertEqual([], VIPS.revive(services, [lease("")], ready, platform, now + 3600))
+        self.assertEqual([], deleted)
