@@ -244,6 +244,11 @@ class LinkingTests(unittest.TestCase):
         self.assertEqual("http://10.0.0.1:8088", self.b.fleet.member("loft")["url"])
         # Homestead moved onto its VIP: the node's address it was given gives way.
         where["url"] = "http://10.0.0.200:8088"
+
+        self.a.fleet.summary()
+        self.assertEqual("http://10.0.0.1:8088", self.b.fleet.member("loft")["url"],
+                         "looking at the list changes nothing; the leader's loop does")
+        self.assertEqual("http://10.0.0.200:8088", self.a.fleet.follow_address())
         self.assertEqual("http://10.0.0.200:8088", self.a.fleet.summary()["address"])
         self.assertEqual("http://10.0.0.200:8088", self.b.fleet.member("loft")["url"], "the others are told")
         # An address an admin typed is theirs.

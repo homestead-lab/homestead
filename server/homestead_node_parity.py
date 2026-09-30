@@ -220,12 +220,16 @@ def kube_vip_settings():
     election = "service" if local else "global"
     interface = env.get("vip_interface", "")
     if not interface:
+        # Pinned only when every Ready node's probe names the same interface:
+        # a node that has not said may have another, and kube-vip leading
+        # from there could not put the VIPs on it.
         try:
-            found = {str(data.get("default_interface") or "") for data in (probes() or {}).values()}
+            reported = probes() or {}
+            ready = _ready_nodes()
         except Exception:
-            found = set()
-        found.discard("")
-        interface = found.pop() if len(found) == 1 else ""
+            reported, ready = {}, []
+        found = {str((reported.get(node) or {}).get("default_interface") or "") for node in ready}
+        interface = found.pop() if ready and len(found) == 1 and "" not in found else ""
     wanted = addons.kube_vip_values(interface, env.get("lb_class_only") == "true", election)
     if wanted == values:
         return ""
@@ -248,6 +252,7 @@ WORKLOADS = {"Deployment": "/apis/apps/v1/namespaces/{ns}/deployments",
              "DaemonSet": "/apis/apps/v1/namespaces/{ns}/daemonsets",
              "VirtualMachine": "/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines"}
 STALE_AFTER = 600
+OBJECTSTORE = "homestead-objectstore"
 
 
 def _namespace_workloads(ns):
@@ -305,15 +310,16 @@ def stale_services(now=None):
             continue
         annotations = meta.get("annotations") or {}
         kind, workload = annotations.get("homestead.io/workload-kind"), annotations.get("homestead.io/workload")
-        if kind and workload:
-            if workload in found.get(kind, {}) or kind not in WORKLOADS:
-                continue
-        selector = spec.get("selector") or {}
-        if not selector:
-            continue            # no selector: its endpoints are someone's by hand
-        if any(all(labels.get(k) == v for k, v in selector.items())
-               for kind_rows in found.values() for labels in kind_rows.values()):
+        if not (kind and workload) and (name == OBJECTSTORE or name.startswith(OBJECTSTORE + "-vip")):
+            kind, workload = "Deployment", OBJECTSTORE      # the backup store's own, which names no workload
+        # Only a Service that says whose it is, and whose that is gone: one
+        # that does not say - an older release's, one made by hand - might
+        # belong to something this cannot see, and is left alone.
+        if not (kind and workload) or kind not in WORKLOADS or workload in found.get(kind, {}):
             continue
+        selector = spec.get("selector") or {}
+        if selector and any(all(labels.get(k) == v for k, v in selector.items()) for labels in found["Pod"].values()):
+            continue            # its pods are still there
         try:
             ksend("DELETE", f"/api/v1/namespaces/{ns}/services/{name}")
             removed.append(f"{ns}/{name}")

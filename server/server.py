@@ -5630,15 +5630,34 @@ def weekly_trim():
     except (OSError, ValueError):
         state = {}
     try:
-        result = LH.ensure_weekly_trim(bool(state.get("created")))
+        result = LH.ensure_weekly_trim(bool(state.get("created")), state.get("groups"))
     except Exception as error:
         return f"weekly trim not checked: {str(error)[:160]}"
     if result is None:
         return ""
-    made, change = result
-    if made:
-        SHARED.write_json(path, {"created": True, "at": int(time.time())}, durable=True)
+    made, change, groups = result
+    # Once someone has chosen its groups (groups is None), the last ones
+    # Homestead wrote stay recorded, so it keeps telling theirs apart.
+    if made or (groups is not None and groups != state.get("groups")):
+        SHARED.write_json(path, {**state, "created": True, "groups": groups,
+                                 "at": state.get("at") or int(time.time())}, durable=True)
     return change
+
+
+def _host_console_loop():
+    """On the leader, the host console add-on brought to its setting, a host
+    or two at a time. Its own loop: each host can take minutes, and the
+    host fixes (the root filesystem's guard among them) do not wait for it."""
+    time.sleep(90)
+    while True:
+        if LEADER.is_leader():
+            try:
+                for node, change in HOST_CONSOLE.tick():
+                    print(f"platform: {node}: {change}", flush=True)
+                beat("host-console", 600, leader_only=True)
+            except Exception as error:
+                beat("host-console", 600, error, leader_only=True)
+        time.sleep(600)
 
 
 def _host_fix_loop():
@@ -5660,9 +5679,13 @@ def _host_fix_loop():
                         print(f"platform: {node + ': ' if node else ''}{change}", flush=True)
                     # Each host's OS - updates, restarts, failed services - every six hours.
                     HOST_OS.tick()
-                    # The host console add-on, installed, updated or removed to match.
-                    for node, change in HOST_CONSOLE.tick():
-                        print(f"platform: {node}: {change}", flush=True)
+                    # Linked clusters told this Homestead's address, once it is on its VIP.
+                    try:
+                        moved = FLEET.follow_address()
+                        if moved:
+                            print(f"linked clusters: told this Homestead is at {moved}", flush=True)
+                    except Exception as error:
+                        print(f"linked clusters: address not checked: {str(error)[:160]}", flush=True)
                     # A weekly trim for every Longhorn volume, unless someone removed it.
                     trimmed = weekly_trim()
                     if trimmed:
@@ -6118,7 +6141,7 @@ def _data_move_status(item):
 OPS.RESOLVERS["self-data-move"] = _data_move_status
 
 
-LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "host-fixes": "Host fixes", "os-updates": "OS updates", "baseline": "Platform installs", "vips": "VIP keeper",
+LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "host-fixes": "Host fixes", "host-console": "Host console add-on", "os-updates": "OS updates", "baseline": "Platform installs", "vips": "VIP keeper",
               "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares"}
 
 
@@ -7404,7 +7427,11 @@ class H(BaseHTTPRequestHandler):
         # A browser's choice of a cluster this one does not know - left by the
         # Homestead that used to answer at this address, or unlinked since -
         # is forgotten, and the page served here, not a 502 for every request.
-        if not named and not FLEET.member(target):
+        try:
+            known = FLEET.member(target)
+        except Exception:
+            known = True        # cannot tell now: relay as before, rather than fail the page
+        if not named and not known:
             if isinstance(getattr(self, "_extra_headers", None), list):
                 self._extra_headers.append(
                     ("Set-Cookie", f"{FLEET.COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"))
@@ -9228,6 +9255,7 @@ def start_background_tasks():
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=_host_fix_loop, daemon=True).start()
+    threading.Thread(target=_host_console_loop, daemon=True).start()
     threading.Thread(target=_os_updates_loop, daemon=True).start()
     threading.Thread(target=_baseline_loop, daemon=True).start()
     threading.Thread(target=_vip_loop, daemon=True).start()

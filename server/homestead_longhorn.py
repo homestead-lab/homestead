@@ -200,13 +200,16 @@ TRIM_CRON = "0 4 * * 6"
 BACKEND = "http://longhorn-backend.longhorn-system:9500/v1"
 
 
-def ensure_weekly_trim(created_before=False):
+def ensure_weekly_trim(created_before=False, last_groups=None):
     """Keep Homestead's weekly trim in place, covering every group.
 
     Made once. One someone deleted is not made again (created_before says it
     was made), and none is made where a trim job already covers the default
-    group. Returns (made_now, what changed) - ("", "") when nothing did, and
-    None when Longhorn's jobs could not be read."""
+    group. Its groups follow the groups in use until someone changes them:
+    groups other than those it last wrote (last_groups) are theirs, and are
+    left as they are. Returns (made_now, what changed, the groups it holds
+    as Homestead wrote them, or None once someone chose them), or None when
+    Longhorn's jobs could not be read."""
     try:
         items = kget(f"{API}/namespaces/{LHNS}/recurringjobs").get("items", [])
     except Exception:
@@ -217,18 +220,21 @@ def ensure_weekly_trim(created_before=False):
         other = [j["metadata"]["name"] for j in items if (j.get("spec") or {}).get("task") == "filesystem-trim"
                  and "default" in ((j.get("spec") or {}).get("groups") or [])]
         if created_before or other:
-            return False, ""
+            return False, "", None
         save_job({"name": TRIM_JOB, "task": "filesystem-trim", "cron": TRIM_CRON, "retain": 0,
                   "concurrency": 1, "groups": wanted})
-        return True, f"weekly trim set up for every volume ({', '.join(wanted)})"
+        return True, f"weekly trim set up for every volume ({', '.join(wanted)})", wanted
     spec = ours.get("spec") or {}
-    if sorted(spec.get("groups") or []) == wanted:
-        return False, ""
+    current = sorted(spec.get("groups") or [])
+    if last_groups is not None and current != sorted(last_groups):
+        return False, "", None          # someone chose its groups: theirs from now on
+    if current == wanted:
+        return False, "", current
     # Only its groups: a schedule someone changed stays theirs.
     save_job({"name": TRIM_JOB, "task": spec.get("task") or "filesystem-trim", "cron": spec.get("cron") or TRIM_CRON,
               "retain": 0, "concurrency": spec.get("concurrency", 1), "groups": wanted,
               "labels": spec.get("labels") or {}})
-    return False, f"weekly trim now covers {', '.join(wanted)}"
+    return False, f"weekly trim now covers {', '.join(wanted)}", wanted
 
 
 def _backend(method, path, body=None):
