@@ -222,14 +222,26 @@ function hostConsoleRow(c) {
     : !c.enabled ? (c.installed ? `<span class="pill med">removing · ${c.installed} left</span>` : '<span class="pill">off</span>')
     : c.settled ? '<span class="pill ok">installed</span>'
     : `<span class="pill med">${c.current} of ${c.hosts} up to date</span>`;
-  const lines = hosts.map(n => `<div class="xs"><b>${esc(n.name)}</b> <span class="dim">${esc(n.detail || (n.ready ? "not checked yet" : "not Ready"))}</span></div>`).join("");
+  // A host behind this release, or one that failed, can be done now rather
+  // than on the next pass (failed hosts wait an hour between tries).
+  const behind = n => c.enabled && n.ready && (!n.enabled || n.current === false || /failed/.test(n.detail || ""));
+  const lines = hosts.map(n => `<div class="xs between" style="gap:8px"><span><b>${esc(n.name)}</b> <span class="dim">${esc(n.detail || (n.ready ? "not checked yet" : "not Ready"))}</span></span>
+    ${behind(n) && can("admin") ? `<button class="btn sm" onclick="hostConsoleNow(${jsq(n.name)},this)">Update now</button>` : ""}</div>`).join("");
   return `<div class="addon-row"><div><b>Host console</b> ${pill}
       <div class="dim small">Each host's local screen: CPU, memory, disks, addresses and the cluster's health, before the login prompt</div>
       <div class="dim xs" style="margin-top:4px">Bundled with Homestead v${esc(c.version)}; installed on new hosts and updated with Homestead, a couple of hosts every ten minutes.
-        Changes show after the host's console logs out or it restarts. Harvester keeps its own console.</div>
+        A host shows the new one at once, or after a logout if someone is signed in on its screen. Harvester keeps its own console.</div>
       <details class="small" style="margin-top:6px"><summary>${hosts.length} host${hosts.length === 1 ? "" : "s"}</summary>${lines}</details></div>
     <div class="row">${can("admin") ? `<label class="switch"><input type="checkbox" ${c.enabled ? "checked" : ""} onchange="hostConsoleSet(this)"> ${c.enabled ? "On" : "Off"}</label>` : ""}</div></div>`;
 }
+
+window.hostConsoleNow = async (node, button) => {
+  button.disabled = true; button.textContent = "Updating…";
+  try {
+    await api("/api/host-console", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node, action: "enable" }) });
+    toast(`Updating the console on ${node}: follow it in the bell`, "ok");
+  } catch (e) { toast(e.message, "bad"); button.disabled = false; button.textContent = "Update now"; }
+};
 
 window.hostConsoleSet = async input => {
   const on = input.checked;
