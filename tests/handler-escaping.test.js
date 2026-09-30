@@ -50,3 +50,21 @@ test("no inline handler puts a value inside a quoted string by hand", () => {
   }
   assert.deepEqual(offenders, [], "use jsq() (or jsArg() inside UI.button) for values in handlers");
 });
+
+/* The shared menus and action bars put a handler into onclick as given; a
+   value passed through jsq() must still arrive unchanged - escaped once. */
+test("actionBar and moreMenu pass a jsq() value through unchanged", () => {
+  const ui = { ...context, icon: () => "", STATE: {} };
+  vm.createContext(ui);
+  vm.runInContext("var esc = this.esc, jsq = this.jsq, icon = this.icon;", ui);
+  vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), ui);
+  for (const value of HOSTILE) {
+    const item = { label: "Go", run: `fn(${ui.jsq(value)})` };
+    for (const html of [ui.actionBar([item]), ui.actionBar([{ label: "a", run: "x()" }, { label: "b", run: "x()" }, item]), ui.moreMenu([item])]) {
+      const attribute = html.match(/onclick="([^"]*fn\([^"]*)"/)[1];
+      let got;
+      new Function("fn", decode(attribute).replace("this.closest('details').open=false;", ""))(v => { got = v; });
+      assert.equal(got, value, html);
+    }
+  }
+});

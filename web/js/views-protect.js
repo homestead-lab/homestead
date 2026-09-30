@@ -219,7 +219,7 @@ async function viewProtect() {
     <div class="dim xs">${esc(j.desc)} · ${j.groups.length ? `groups ${j.groups.map(g => `<span class="tag">${esc(g)}</span>`).join("")}` : "no groups"} · ${j.concurrency} at a time</div>
     <div class="row wacts">${actionBar([
       { label: "Run now", icon: "play", run: `lhRun(${jsq(j.name)})`, need: "operator", disabled: j.running },
-      { label: "Edit", icon: "edit", run: `lhJob(${JSON.stringify(j)})`, need: "operator" },
+      { label: "Edit", icon: "edit", run: `lhJob(${esc(JSON.stringify(j))})`, need: "operator" },
       { label: "Volumes it covers", icon: "disk", run: `lhCovered(${jsq(j.name)})` },
       { label: "Delete", icon: "trash", run: `lhJobDel(${jsq(j.name)})`, need: "admin", danger: true }], { label: `More actions for ${j.name}` })}
     </div></div>`).join("")}</div>`

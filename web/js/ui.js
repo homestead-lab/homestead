@@ -166,7 +166,9 @@ if (typeof MutationObserver === "function" && typeof document.querySelector === 
 }
 
 /* A page header's ⋯: the actions besides its main one. Each item is
-   { label, run, icon?, need?, tip?, danger? }; falsy items are left out, and
+   { label, run, icon?, need?, tip?, danger? }. run goes into the onclick
+   attribute as it is: pass values through jsq(), as every handler does. Falsy
+   items are left out, and
    with none left there is no menu. A header shows one main button and this
    beside it, so it fits on one line at any width. */
 function moreMenu(items, label = "More actions", summaryClass = "btn") {
@@ -175,7 +177,7 @@ function moreMenu(items, label = "More actions", summaryClass = "btn") {
   const dots = summaryClass === "btn";
   return `<details class="actionmenu headmenu"><summary class="${summaryClass}"${dots ? ` aria-label="${esc(label)}"` : ""}>${dots ? "⋯" : esc(label)}</summary>
     <div class="actionmenu-pop">${rows.map(item => `<button type="button"${item.need ? ` data-need="${esc(item.need)}"` : ""}${item.tip ? ` title="${esc(item.tip)}"` : ""}${item.danger ? ' class="danger"' : ""}
-      onclick="this.closest('details').open=false;${esc(item.run)}">${item.icon ? icon(item.icon) : ""}${esc(item.label)}</button>`).join("")}</div></details>`;
+      onclick="this.closest('details').open=false;${item.run}">${item.icon ? icon(item.icon) : ""}${esc(item.label)}</button>`).join("")}</div></details>`;
 }
 /* The top of a page: one line saying how things stand, and the numbers
    behind it a tap away. Items are HTML; the detail stays open across the
@@ -202,11 +204,11 @@ if (typeof window !== "undefined") { window.summaryLine = summaryLine; window.su
 function actionBar(items, { shown = 2, label = "More actions" } = {}) {
   const rows = (items || []).filter(Boolean);
   const button = item => `<button type="button" class="btn sm${item.pri ? " pri" : ""}${item.danger ? " danger" : ""}"${item.need ? ` data-need="${esc(item.need)}"` : ""}${item.tip ? ` title="${esc(item.tip)}"` : ""}${item.disabled ? " disabled" : ""}
-    onclick="${esc(item.run)}">${item.icon ? icon(item.icon) : ""}${esc(item.label)}</button>`;
+    onclick="${item.run}">${item.icon ? icon(item.icon) : ""}${esc(item.label)}</button>`;
   const rest = rows.slice(shown);
   return `<div class="actionbar">${rows.slice(0, shown).map(button).join("")}${rest.length ? `<details class="actionmenu"><summary class="btn sm" aria-label="${esc(label)}">⋯</summary>
     <div class="actionmenu-pop">${rest.map(item => `<button type="button"${item.need ? ` data-need="${esc(item.need)}"` : ""}${item.tip ? ` title="${esc(item.tip)}"` : ""}${item.danger ? ' class="danger"' : ""}${item.disabled ? " disabled" : ""}
-      onclick="this.closest('details').open=false;${esc(item.run)}">${item.icon ? icon(item.icon) : ""}${esc(item.label)}</button>`).join("")}</div></details>` : ""}</div>`;
+      onclick="this.closest('details').open=false;${item.run}">${item.icon ? icon(item.icon) : ""}${esc(item.label)}</button>`).join("")}</div></details>` : ""}</div>`;
 }
 if (typeof window !== "undefined") window.actionBar = actionBar;
 
