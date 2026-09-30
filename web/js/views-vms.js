@@ -35,9 +35,9 @@ async function viewVMs() {
   paint(`<div class="phead"><div><h2>Virtual machines</h2>
       <p>${vms.length} VM${vms.length === 1 ? "" : "s"} · ${running} running · ${STATE.platform?.harvester === false ? `KubeVirt on ${esc(platformName(STATE.platform))}${STATE.platform.cdi ? "" : " · no CDI"}` : "KubeVirt on Harvester"}</p></div>
       <div class="row">${layoutSwitch("vms", "viewVMs")}
-      <button class="btn" onclick="vmStore()" title="Cloud images from their publishers - Ubuntu, Debian, Fedora, Rocky and more - to start VMs from">${icon("store")}Image store</button>
-      <button class="btn" onclick="vmIsoLibrary()" title="ISO images from folders on your Network Shares, for VMs' CD-ROM drives">${icon("disk")}ISO library</button>
-      <button class="btn" data-need="operator" onclick="k3sCluster()" title="A k3s cluster made of VMs here, each with an address of its own">＋ k3s cluster</button>
+      ${moreMenu([{ label: "Image store", icon: "store", run: "vmStore()", tip: "Cloud images from their publishers - Ubuntu, Debian, Fedora, Rocky and more - to start VMs from" },
+        { label: "ISO library", icon: "disk", run: "vmIsoLibrary()", tip: "ISO images from folders on your Network Shares, for VMs' CD-ROM drives" },
+        { label: "New k3s cluster", icon: "plus", run: "k3sCluster()", need: "operator", tip: "A k3s cluster made of VMs here, each with an address of its own" }])}
       <button class="btn pri" data-need="operator" onclick="vmNew()">＋ New VM</button></div></div>
     ${!rows.length ? `<div class="empty">${q ? "Nothing matches that search." : "No virtual machines yet — create one to get started."}</div>`
       : layout === "rows" ? vmTable(rows) : `<div class="vm-grid">${rows.map(vmCard).join("")}</div>`}`);

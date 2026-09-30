@@ -16,29 +16,52 @@ function thresholdEditor(id, label, unit, help, pair) {
     </div></div>`;
 }
 
-/* One topic at a time: the page was every setting in one long column. */
-const SETTINGS_TABS = [["health", "Health"], ["updates", "Updates"], ["cluster", "Cluster"], ["fleet", "Linked clusters"], ["hardware", "Hardware"], ["access", "Access"],
-  ["apps", "Apps"], ["mqtt", "MQTT"], ["device", "This device"], ["about", "About"]];
+/* Six sections, each gathering the cards of one topic. A card names its
+   topic (data-tab); a section shows the cards of every topic it holds, and a
+   link or button can still ask for a topic by its own name - settingsTab("fleet"). */
+const SETTINGS_SECTIONS = [
+  ["general", "General", "Health, updates, this device", ["health", "updates", "device", "general"]],
+  ["cluster", "Cluster", "Hardware, add-ons", ["cluster", "hardware"]],
+  ["fleet", "Linked clusters", "Other Homesteads, moves", ["fleet"]],
+  ["access", "Access", "Accounts and roles", ["access"]],
+  ["integrations", "Integrations", "MQTT, UniFi, App Store", ["mqtt", "apps"]],
+  ["about", "About", "Version, backup, health", ["about"]],
+];
+const settingsSection = topic => (SETTINGS_SECTIONS.find(([id, , , topics]) => id === topic || topics.includes(topic)) || SETTINGS_SECTIONS[0])[0];
 
 function settingsTab(pick) {
   if (pick) {
-    try { localStorage.setItem("homestead.settings.tab", pick); } catch (e) { /* this visit only */ }
+    const section = settingsSection(pick);
+    try { localStorage.setItem("homestead.settings.tab", section); } catch (e) { /* this visit only */ }
+    // Asked for: open it, on a phone as well, where the list comes first.
+    STATE.settingsOpen = true;
+    const layout = $(".settings-layout");
+    if (layout) layout.dataset.open = "1";
     const grid = $(".settings-grid");
-    if (grid) grid.dataset.tab = pick;
-    $$(".settings-tabs button").forEach(b => { b.classList.toggle("on", b.dataset.tab === pick); b.setAttribute("aria-selected", b.dataset.tab === pick); });
-    return pick;
+    if (grid) grid.dataset.tab = section;
+    $$(".settings-nav button").forEach(b => { b.classList.toggle("on", b.dataset.tab === section); b.setAttribute("aria-selected", b.dataset.tab === section); });
+    if (typeof window !== "undefined" && window.scrollTo) window.scrollTo(0, 0);
+    return section;
   }
-  // A link can name the tab - /settings?tab=about - and it is then kept.
+  // A link can name the section or a topic in it - /settings?tab=about - and it is then kept.
   const asked = typeof location !== "undefined" ? new URLSearchParams(location.search).get("tab") : "";
-  if (asked && SETTINGS_TABS.some(([id]) => id === asked)) {
-    try { localStorage.setItem("homestead.settings.tab", asked); } catch (e) { /* this visit only */ }
-    return asked;
+  if (asked && SETTINGS_SECTIONS.some(([id, , , topics]) => id === asked || topics.includes(asked))) {
+    STATE.settingsOpen = true;
+    try { localStorage.setItem("homestead.settings.tab", settingsSection(asked)); } catch (e) { /* this visit only */ }
+    return settingsSection(asked);
   }
   let saved = "";
   try { saved = localStorage.getItem("homestead.settings.tab") || ""; } catch (e) { /* default */ }
-  return SETTINGS_TABS.some(([id]) => id === saved) ? saved : "health";
+  return settingsSection(saved || "general");
 }
 window.settingsTab = settingsTab;
+/* A phone shows the list of sections first; back returns to it. */
+window.settingsBack = () => {
+  STATE.settingsOpen = false;
+  const layout = $(".settings-layout");
+  if (layout) layout.dataset.open = "0";
+  window.scrollTo(0, 0);
+};
 
 async function viewSettings() {
   const [settings, features, overview, users] = await Promise.all([
@@ -64,12 +87,16 @@ async function viewSettings() {
     <td><span class="${roleClass(u.role)} rolechip">${esc(u.role)}</span></td><td class="dim xs mono">${esc(u.last_login || "never")}</td></tr>`).join("");
 
   const tab = settingsTab();
-  paint(`<div class="phead"><div><h2>Settings</h2><p>Cluster policy, hardware, access, and installation information</p></div>
-    <button class="btn" onclick="document.getElementById('drawer').classList.add('open')">Appearance</button></div>
-    <div class="seg settings-tabs" role="tablist">${SETTINGS_TABS.map(([id, label]) =>
-      `<button role="tab" data-tab="${id}" class="${id === tab ? "on" : ""}" aria-selected="${id === tab}" onclick="settingsTab(${jsq(id)})">${label}</button>`).join("")}</div>
-
+  paint(`<div class="phead"><div><h2>Settings</h2><p>Cluster policy, hardware, access, and installation information</p></div></div>
+    <div class="settings-layout" data-open="${STATE.settingsOpen ? 1 : 0}">
+    <nav class="settings-nav" role="tablist" aria-label="Settings sections">${SETTINGS_SECTIONS.map(([id, label, sub]) =>
+      `<button type="button" role="tab" data-tab="${id}" class="${id === tab ? "on" : ""}" aria-selected="${id === tab}" onclick="settingsTab(${jsq(id)})"><span><b>${esc(label)}</b><small>${esc(sub)}</small></span><i aria-hidden="true">›</i></button>`).join("")}</nav>
+    <div class="settings-main">
+    <button type="button" class="settings-back" onclick="settingsBack()">‹ All settings</button>
     <div class="settings-grid" data-tab="${tab}">
+      <section class="card flat settings-wide" data-tab="general"><div class="settings-card-head"><div><div class="ctitle">Appearance</div>
+        <div class="csub">Light or dark, background, blur and motion - for this browser</div></div>
+        <button class="btn" onclick="document.getElementById('drawer').classList.add('open')">Appearance</button></div></section>
       <section class="card flat settings-wide" data-tab="health">
         <div class="settings-card-head"><div><div class="ctitle">Health thresholds</div><div class="csub">Controls when utilisation bars and node cards turn yellow or red for everyone</div></div>
           ${can("admin") ? '<button class="btn pri" onclick="saveHealthSettings()">Save thresholds</button>' : '<span class="pill neutral">admin managed</span>'}</div>
@@ -200,7 +227,7 @@ async function viewSettings() {
       <section class="card flat settings-wide" data-tab="about" id="configCard">${window.configCardHtml ? configCardHtml() : ""}</section>
       <section class="card flat settings-wide" data-tab="about" id="selfHealthCard"><div class="empty small"><span class="spin2"></span> checking Homestead</div></section>
       <section class="card flat settings-wide" data-tab="about" id="replicaCard">${STATE.data.replicaHtml || ""}</section>
-    </div>`);
+    </div></div></div>`);
   pwaPaint();
   namespacesPaint();
   replicasPaint();

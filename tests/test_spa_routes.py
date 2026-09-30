@@ -47,8 +47,15 @@ class SpaRouteTests(unittest.TestCase):
 
     def test_sidebar_links_use_canonical_routes(self):
         html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+        # The sidebar and the phone's bottom bar link pages by their canonical
+        # route; a page left out of them is a tab of one that is, in router.js.
         hrefs = set(re.findall(r'<a href="([^"]+)" data-view=', html))
-        self.assertEqual(set(server.SPA_ROUTES), hrefs)
+        router = (ROOT / "web" / "js" / "router.js").read_text(encoding="utf-8")
+        routed = set(re.findall(r'path: "([^"]+)"', router))
+        self.assertLessEqual(hrefs, set(server.SPA_ROUTES))
+        self.assertEqual(set(server.SPA_ROUTES), routed)
+        tabbed = {path for path in routed - hrefs if re.search(r'path: "%s",[^\n]*parent: "' % re.escape(path), router)}
+        self.assertEqual(routed - hrefs, tabbed, "every page is in the sidebar or a tab of a page that is")
         self.assertRegex(html, r'<script src="/js/router\.js\?v=\d+\.\d+\.\d+"></script>')
 
     def test_bundled_svg_assets_are_public_without_allowing_traversal(self):

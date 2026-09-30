@@ -19,7 +19,7 @@ html[data-theme="light"] .side,html[data-theme="light"] .top,html[data-theme="li
   background:linear-gradient(158deg,rgba(255,255,255,.82),rgba(255,255,255,.55));
   box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 8px 28px rgba(0,0,0,.09)}
 html[data-theme="light"] .mark{background:linear-gradient(145deg,#1b1b20,#3a3a42);color:#fff}
-html[data-theme="light"] #nav a.on,html[data-theme="light"] .btn.pri,html[data-theme="light"] .seg button.on{
+html[data-theme="light"] #nav a.on,html[data-theme="light"] .btn.pri,html[data-theme="light"] .seg button.on,html[data-theme="light"] .seg>a.on{
   background:#16161a;color:#fff;border-color:#16161a}
 html[data-theme="light"] .spark .ln{stroke:#16161a;filter:none}
 html[data-theme="light"] .spark .fl{fill:rgba(0,0,0,.1)}
@@ -340,10 +340,10 @@ b.uptime-ok{color:var(--ok)}b.uptime-warn{color:var(--med)}b.uptime-bad{color:va
 /* segmented toggle */
 .seg{display:inline-flex;gap:3px;padding:4px;border-radius:999px;background:rgba(255,255,255,.05);
   border:1px solid var(--line)}
-.seg button{padding:8px 16px;border-radius:999px;border:0;background:transparent;color:var(--mut);
+.seg button,.seg>a{padding:8px 16px;border-radius:999px;border:0;background:transparent;color:var(--mut);
   font:inherit;font-size:12.5px;font-weight:620;cursor:pointer;transition:all .22s var(--e)}
-.seg button:hover{color:var(--tx);background:rgba(255,255,255,.06)}
-.seg button.on{background:#fff;color:#0a0a0b;box-shadow:0 3px 12px rgba(255,255,255,.18)}
+.seg button:hover,.seg>a:hover{color:var(--tx);background:rgba(255,255,255,.06)}
+.seg button.on,.seg>a.on{background:#fff;color:#0a0a0b;box-shadow:0 3px 12px rgba(255,255,255,.18)}
 
 /* ---------------- cards ---------------- */
 .card{
@@ -1580,11 +1580,17 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .settings-tabs::-webkit-scrollbar{display:none}
 .settings-tabs button{white-space:nowrap}
 .settings-grid[data-tab]>section{display:none;grid-column:1/-1}
-.settings-grid[data-tab="health"]>section[data-tab="health"],.settings-grid[data-tab="updates"]>section[data-tab="updates"],
-.settings-grid[data-tab="hardware"]>section[data-tab="hardware"],.settings-grid[data-tab="access"]>section[data-tab="access"],
-.settings-grid[data-tab="apps"]>section[data-tab="apps"],.settings-grid[data-tab="device"]>section[data-tab="device"],
-.settings-grid[data-tab="about"]>section[data-tab="about"],.settings-grid[data-tab="mqtt"]>section[data-tab="mqtt"],
-.settings-grid[data-tab="cluster"]>section[data-tab="cluster"],.settings-grid[data-tab="fleet"]>section[data-tab="fleet"]{display:block}
+.settings-grid[data-tab="general"]>section[data-tab="health"],
+.settings-grid[data-tab="general"]>section[data-tab="updates"],
+.settings-grid[data-tab="general"]>section[data-tab="device"],
+.settings-grid[data-tab="general"]>section[data-tab="general"],
+.settings-grid[data-tab="cluster"]>section[data-tab="cluster"],
+.settings-grid[data-tab="cluster"]>section[data-tab="hardware"],
+.settings-grid[data-tab="fleet"]>section[data-tab="fleet"],
+.settings-grid[data-tab="access"]>section[data-tab="access"],
+.settings-grid[data-tab="integrations"]>section[data-tab="mqtt"],
+.settings-grid[data-tab="integrations"]>section[data-tab="apps"],
+.settings-grid[data-tab="about"]>section[data-tab="about"]{display:block}
 /* A threshold is one row: its name, then warning and critical side by side. */
 .threshold-card{padding:10px 12px;gap:12px}
 .threshold-values{gap:8px}
@@ -2174,7 +2180,7 @@ html[data-theme="light"] .ui-meter .now{background:rgba(0,0,0,.35)}html[data-the
 .btn.sm{padding:4px 10px;border-radius:8px;font-size:12px;min-height:28px}
 .iconbtn{width:34px;height:34px}
 .seg{padding:3px;gap:2px}
-.seg button{padding:6px 13px;font-size:12.5px}
+.seg button,.seg>a{padding:6px 13px;font-size:12.5px}
 .pill{padding:3px 10px;font-size:11px}
 .tag{padding:2px 8px;border-radius:7px}
 label{margin:0 0 5px}
@@ -2501,3 +2507,94 @@ html[data-theme="light"] .modalbox[data-context="smb-access"]{background:var(--s
   border:1px solid var(--line2);color:var(--med)}
 .importsource .ok-t{color:var(--ok)} .importsource .med-t{color:var(--med)}
 @media (max-width:760px){.importstep-row{grid-template-columns:1fr}}
+
+/* A page header: one main button and a ⋯ beside it, on one line. */
+.phead .actionmenu{margin-left:0}
+.phead .actionmenu>summary.btn{font-size:17px;line-height:1;height:auto}
+.phead .actionmenu>summary.btn.pri{font-size:inherit;line-height:inherit}
+.actionmenu-pop{width:auto;min-width:172px;max-width:280px}
+/* The bell: what wants attention, in one place. */
+.bellmenu{margin-left:0}
+.actionmenu.bellmenu>summary.iconbtn{list-style:none;position:relative;display:grid;place-items:center;width:38px;height:38px;padding:0!important;font-size:inherit;line-height:1}
+@media(max-width:900px){.actionmenu.bellmenu>summary.iconbtn{width:34px;height:34px}}
+.bellmenu>summary::-webkit-details-marker{display:none}
+.bellmenu.has-news>summary{color:var(--tx)}
+.bellmenu>summary>span{position:absolute;right:-4px;top:-5px;min-width:18px;height:18px;padding:0 5px;border-radius:99px;display:grid;place-items:center;
+  font:700 10px "Inter Tight",sans-serif;background:var(--med);color:#1a1300;box-shadow:0 0 0 2px var(--surf)}
+.bellmenu>summary>b{position:absolute;right:-4px;bottom:-5px;min-width:16px;height:16px;padding:0 4px;border-radius:99px;display:grid;place-items:center;
+  font:700 9px "Inter Tight",sans-serif;background:var(--crit);color:#fff;box-shadow:0 0 0 2px var(--surf)}
+.bellpop{min-width:230px}
+.bell-head{font:600 10px "JetBrains Mono",monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);padding:6px 9px 4px}
+.bell-empty{padding:10px;color:var(--mut);font-size:12px}
+body.searching .bellmenu{display:none}
+
+/* Colour means state. Green, amber and red say healthy, needs attention and
+   failed; blue marks what opens something (ports, VIPs, links). Everything
+   else - hardware, groups, clusters, avatars, progress - stays neutral. */
+.tag.gpu,.tag.hw,.tag.cluster-tag{color:var(--mut);border-color:var(--line2);background:rgba(255,255,255,.04)}
+.av.n1,.av.n2,.av.n3{background:var(--surf3);color:var(--tx)}
+.g-info,.g-vio{--gc:rgba(255,255,255,.05)}
+.jobmeter span,.rollout-meter span,.livebar>span{background:var(--mut)}
+.meter.split>.seg-sys,.drivesplit .k-sys{background:var(--dim)}
+.meter.split>.seg-lh,.drivesplit .k-lh{background:var(--mut)}
+.meter.split>.seg-lhroom{background:var(--mut);opacity:.25}
+html[data-theme="light"] .tag.gpu,html[data-theme="light"] .tag.hw,html[data-theme="light"] .tag.cluster-tag{background:rgba(0,0,0,.03)}
+/* A page's summary: one line, the numbers behind it on tap. */
+.sumline{display:flex;align-items:center;flex-wrap:wrap;gap:6px 18px;padding:11px 14px;margin-bottom:14px;border:1px solid var(--line);border-radius:var(--r2);
+  background:rgba(255,255,255,.025);font-size:13px;color:var(--mut)}
+.sumline b{color:var(--tx);font-weight:700}
+.sumitem{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.sumitem .tag{padding:2px 8px}
+.sumtoggle{margin-left:auto;display:inline-flex;align-items:center;gap:5px;border:0;background:none;color:var(--low);font:600 12.5px "Inter Tight",sans-serif;cursor:pointer;padding:2px 0}
+.sumtoggle .chev{transition:transform .2s var(--e)}.sumtoggle[aria-expanded="true"] .chev{transform:rotate(180deg)}
+.sumdetail{margin:-4px 0 18px}
+.sumdetail>.statgrid,.sumdetail>.grid{margin-bottom:0}
+@media(max-width:640px){.sumline{gap:6px 12px;font-size:12.5px}.sumtoggle{margin-left:0}}
+html[data-theme="light"] .sumline{background:rgba(0,0,0,.02)}
+/* A card's or row's buttons: two, then ⋯, on one line. */
+.actionbar{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-width:0}
+.actionbar>.actionmenu{margin-left:0}
+.vip-card-actions .actionbar,.wacts .actionbar{width:100%}
+.wacts .actionbar>.actionmenu,.vip-card-actions .actionbar>.actionmenu{margin-left:auto}
+/* Tabs of a page family (Containers, Images, Schedules, Import...). */
+.pagetabs{padding:16px 26px 0}
+.pagetabs .seg{display:inline-flex;max-width:100%;overflow-x:auto;scrollbar-width:none}
+.pagetabs .seg a{white-space:nowrap;text-decoration:none}
+.pagetabs+.page{padding-top:12px}
+/* The phone's bottom bar. */
+.bottombar{position:fixed;left:0;right:0;bottom:0;z-index:40;grid-template-columns:repeat(5,1fr);
+  padding:6px 4px calc(6px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line2);
+  background:rgba(12,12,14,.92);backdrop-filter:blur(var(--blur))}
+.bottombar a{display:flex;flex-direction:column;align-items:center;gap:3px;padding:4px 0;color:var(--mut);font-size:10.5px;font-weight:600;text-decoration:none}
+.bottombar a svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.7}
+.bottombar a.on{color:var(--tx)}
+html[data-theme="light"] .bottombar{background:rgba(255,255,255,.92)}
+@media(max-width:900px){
+  .pagetabs{padding:12px 16px 0}
+  .page{padding-bottom:calc(92px + env(safe-area-inset-bottom,0px))}
+  .jobtray{bottom:calc(74px + env(safe-area-inset-bottom,0px))}
+  .appfoot{padding-bottom:calc(70px + env(safe-area-inset-bottom,0px))}
+}
+/* Settings: its sections in a column beside them; on a phone, a list first. */
+.settings-layout{display:grid;grid-template-columns:230px minmax(0,1fr);gap:18px;align-items:start}
+.settings-nav{display:flex;flex-direction:column;gap:2px;position:sticky;top:calc(var(--hdr) + 12px)}
+.settings-nav button{display:flex;align-items:center;justify-content:space-between;gap:8px;text-align:left;border:0;background:transparent;
+  color:var(--mut);padding:9px 12px;border-radius:12px;cursor:pointer;font:inherit}
+.settings-nav button b{display:block;font-size:13.5px;font-weight:650;color:var(--tx)}
+.settings-nav button small{display:block;font-size:11.5px;color:var(--dim);margin-top:1px}
+.settings-nav button:hover{background:rgba(255,255,255,.05)}
+.settings-nav button.on{background:rgba(255,255,255,.08)}
+.settings-nav button i{font-style:normal;color:var(--dim);display:none}
+.settings-back{display:none}
+html[data-theme="light"] .settings-nav button.on{background:rgba(0,0,0,.06)}
+@media(max-width:900px){
+  .settings-layout{grid-template-columns:1fr}
+  .settings-nav{position:static;border:1px solid var(--line);border-radius:var(--r2);overflow:hidden;gap:0;background:rgba(255,255,255,.025)}
+  .settings-nav button{border-radius:0;padding:13px 14px;border-top:1px solid var(--line)}
+  .settings-nav button:first-child{border-top:0}
+  .settings-nav button.on{background:transparent}
+  .settings-nav button i{display:block;font-size:18px}
+  .settings-layout[data-open="0"] .settings-main{display:none}
+  .settings-layout[data-open="1"] .settings-nav{display:none}
+  .settings-back{display:inline-flex;border:0;background:none;color:var(--low);font:600 13px "Inter Tight",sans-serif;padding:2px 0 12px;cursor:pointer}
+}

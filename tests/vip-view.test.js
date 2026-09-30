@@ -24,6 +24,9 @@ function setup() {
   ctx.window = ctx;
   vm.createContext(ctx);
   ctx.jsArg = s => JSON.stringify(String(s ?? "")); ctx.jsq = s => (ctx.esc || String)(ctx.jsArg(s));
+  ctx.icon = () => "";
+  ctx.document = { addEventListener() {} };
+  vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), ctx);
   vm.runInContext(fs.readFileSync("web/js/views-network.js", "utf8"), ctx);
   ctx.viewNetworking = async () => { ctx.refreshed = true; };
   return { ctx, elements, requests, notices };
@@ -31,8 +34,6 @@ function setup() {
 
 test("node addresses are excluded from every VIP source and stale selections", async () => {
   const { ctx } = setup();
-  ctx.document = {addEventListener() {}};
-  vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), ctx);
   vm.runInContext(fs.readFileSync("web/js/views-workloads.js", "utf8"), ctx);
   const ip = "192.0.2.109";
   const choices = await ctx.vipChoices({

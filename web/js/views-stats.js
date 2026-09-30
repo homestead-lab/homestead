@@ -1,4 +1,4 @@
-/* Stats beyond the browser: MQTT publishing (Settings > MQTT) and the
+/* Stats beyond the browser: MQTT publishing (Settings > Integrations) and the
    long-term history card on the Dashboard. */
 
 /* ---------------- MQTT ---------------- */
