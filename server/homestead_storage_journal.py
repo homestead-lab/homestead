@@ -61,7 +61,12 @@ CNI_ANNOTATIONS = frozenset({
 def pod_annotations(obj):
     """A Pod's annotations without what its network plugin reported."""
     annotations = dict(((obj.get("metadata") or {}).get("annotations")) or {})
-    if obj.get("kind") == "Pod":
+    # A Pod from a list has no kind of its own (the list endpoint drops each
+    # item's TypeMeta): with Multus writing network-status on every pod, the
+    # same pod read two ways looked changed, and the data move review refused
+    # with "This Homestead pod is not one of the reviewed Deployment's replicas".
+    kind = obj.get("kind")
+    if kind == "Pod" or (kind is None and isinstance((obj.get("spec") or {}).get("containers"), list)):
         for key in CNI_ANNOTATIONS:
             annotations.pop(key, None)
     return annotations
