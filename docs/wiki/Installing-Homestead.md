@@ -67,16 +67,20 @@ sudo sh install.sh --console
 sudo sh install.sh --no-console
 ```
 
-Administrators can also manage each host under **Settings → Cluster → Host
-consoles**. **Check** reads its installed console; **Install / update** enables
-the console bundled with the running Homestead release, and **Disable** restores
-the normal login screen. Each action has a job in Activity. Refresh the panel
-after it finishes. Harvester hosts keep their native console.
+In Homestead, the host console is an add-on for the whole cluster: **Settings →
+Cluster → Add-ons → Host console**, with one On/Off switch. While it's on, Homestead keeps
+every Ready host on the console bundled with the running Homestead:
 
-Updating Homestead through the web supplies the new console to these controls.
-Apply **Install / update** to each host afterwards; the container update does
-not automatically change the host's console. Previously checked hosts show
-**update available** when their installed console differs from the new bundle.
+- it installs the console on hosts that don't have it, including hosts that
+  join later
+- it updates hosts when Homestead carries a newer console, so updating Homestead
+  rolls the console out across the cluster
+
+Turned off, it's removed from every host. Homestead works through a couple of
+hosts every ten minutes, and the row lists each host's state. A host that fails
+is tried again an hour later. On a cluster set up before this setting existed,
+the console counts as on where the installer turned it on. Harvester hosts keep
+their native console.
 
 Changes take effect on the next boot or logout, so installation does not
 interrupt a logged-in administrator. The console needs systemd, agetty and
