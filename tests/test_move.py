@@ -149,20 +149,20 @@ class ClusterTests(unittest.TestCase):
         return body or {}
 
     def test_a_cluster_is_remembered_without_its_password(self):
-        rows = move.add_cluster("loft", "http://192.168.1.242:8088", "admin", "hunter2")
+        rows = move.add_cluster("loft", "http://192.0.2.242:8088", "admin", "hunter2")
 
         self.assertEqual({"name", "url", "user", "added"}, set(rows[0]))
         stored = json.dumps(self.objects["/api/v1/namespaces/lab/configmaps/homestead-clusters"])
         self.assertNotIn("hunter2", stored, "a password never belongs in a ConfigMap")
 
     def test_the_password_goes_to_a_secret(self):
-        move.add_cluster("loft", "http://192.168.1.242:8088", "admin", "hunter2")
+        move.add_cluster("loft", "http://192.0.2.242:8088", "admin", "hunter2")
 
         secret = self.objects["/api/v1/namespaces/lab/secrets/homestead-cluster-loft"]
         self.assertEqual("hunter2", secret["stringData"]["password"])
 
     def test_an_address_that_is_not_a_url_is_refused(self):
-        for url in ("192.168.1.242", "ftp://box", "", "not a url"):
+        for url in ("192.0.2.242", "ftp://box", "", "not a url"):
             with self.subTest(url=url):
                 with self.assertRaisesRegex(ValueError, "http"):
                     move.add_cluster("loft", url, "admin", "x")
@@ -172,7 +172,7 @@ class ClusterTests(unittest.TestCase):
             move.add_cluster("Loft Rack", "http://x:8088", "admin", "x")
 
     def test_removing_a_cluster_takes_its_credentials_with_it(self):
-        move.add_cluster("loft", "http://192.168.1.242:8088", "admin", "hunter2")
+        move.add_cluster("loft", "http://192.0.2.242:8088", "admin", "hunter2")
         self.sent.clear()
 
         rows = move.remove_cluster("loft")

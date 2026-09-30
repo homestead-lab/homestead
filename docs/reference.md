@@ -119,7 +119,7 @@ Each release publishes a chart to GitHub's registry, with the node probe
 included (switch it off with `nodeprobe.enabled=false`):
 
 ```bash
-helm install homestead oci://ghcr.io/wjcloudy/charts/homestead -n homestead --create-namespace --set service.loadBalancerIP=192.168.1.242
+helm install homestead oci://ghcr.io/wjcloudy/charts/homestead -n homestead --create-namespace --set service.loadBalancerIP=192.0.2.242
 ```
 
 On k3s with its built-in ServiceLB there is no address to choose - Homestead
@@ -1093,7 +1093,7 @@ destination.
    fate with the cluster it protects: it is for moving workloads, not for your
    only copy of anything.
 2. **Link the two.** Settings ▸ Linked clusters ▸ **Link a cluster** takes the
-   other Homestead's address (for example `http://192.168.1.242:8088`) and an
+   other Homestead's address (for example `http://192.0.2.242:8088`) and an
    admin account there, used once; the clusters then sign their requests to
    each other with a shared key (see docs/multi-cluster.md). Its card under
    **Moving workloads** shows the other Homestead's release and whether the two can

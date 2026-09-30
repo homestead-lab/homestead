@@ -72,7 +72,7 @@ class PlatformTests(unittest.TestCase):
         self.assertEqual("kube-vip.io/kube-vip-class", PLATFORM._vip_class(ds))
         self.assertEqual("", PLATFORM._vip_class({"spec": {}}))
         with mock.patch.object(PLATFORM, "detect", return_value=K3S_KUBE_VIP):
-            self.assertEqual({"loadBalancerClass": "kube-vip.io/kube-vip-class"}, PLATFORM.vip_spec("192.168.1.80"))
+            self.assertEqual({"loadBalancerClass": "kube-vip.io/kube-vip-class"}, PLATFORM.vip_spec("192.0.2.80"))
             self.assertEqual({}, PLATFORM.vip_spec(""))
 
 
@@ -81,13 +81,13 @@ class K3sVipServiceTests(unittest.TestCase):
         base = test_networking.NetworkingTests("setUp")
         base.setUp()
         self.sent, self.objects = base.sent, base.objects
-        node = "192.168.1.210"
+        node = "192.0.2.210"
         homestead = self.objects["/api/v1/services"]["items"][0]
         homestead["status"] = {"loadBalancer": {"ingress": [{"ip": node}]}}
         homestead["metadata"]["annotations"] = {}
         # Homestead's own list of VIPs to hand out on k3s.
         self.objects["/apis/loadbalancer.harvesterhci.io/v1beta1/ippools"] = {"items": [{
-            "metadata": {"name": "lab"}, "spec": {"ranges": [{"rangeStart": "192.168.1.80", "rangeEnd": "192.168.1.81"}]},
+            "metadata": {"name": "lab"}, "spec": {"ranges": [{"rangeStart": "192.0.2.80", "rangeEnd": "192.0.2.81"}]},
             "status": {"total": 2, "available": 2, "conditions": [{"type": "Ready", "status": "True"}]}}]}
         get = self.objects.get
 
@@ -106,7 +106,7 @@ class K3sVipServiceTests(unittest.TestCase):
                                    "ports": [{"port": 53, "target_port": 53, "protocol": "UDP"}]})
         body = self.sent[-1][2]
         self.assertEqual("kube-vip.io/kube-vip-class", body["spec"]["loadBalancerClass"])
-        self.assertEqual("192.168.1.80", body["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
+        self.assertEqual("192.0.2.80", body["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
 
     def test_the_nodes_addresses_stay_on_offer_and_a_vip_does_not_take_a_node_port(self):
         plan = networking.service_plan({"namespace": "lab", "name": "web", "workload": "pihole", "vip_mode": "nodes",
@@ -118,7 +118,7 @@ class K3sVipServiceTests(unittest.TestCase):
         # 8088 on a VIP of its own is fine: only the nodes' addresses have it.
         plan = networking.service_plan({"namespace": "lab", "name": "web", "workload": "pihole", "vip_mode": "automatic",
                                         "ports": [{"port": 8088, "target_port": 80, "protocol": "TCP"}]})
-        self.assertEqual("192.168.1.80", plan["vip"])
+        self.assertEqual("192.0.2.80", plan["vip"])
 
 
 if __name__ == "__main__":

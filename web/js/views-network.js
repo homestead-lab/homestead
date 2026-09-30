@@ -220,7 +220,7 @@ window.selfAddressGo = async () => {
 window.vipChange = ip => {
   modal(`Change ${ip}`, `<div class="ui-stack">
     ${UI.lead("Give this VIP a new address. Every Service on it moves with it - its ports, and Homestead's own if they are here - and it stays the default if it is. Open connections drop for a moment.")}
-    <div class="f"><label for="vc_new">New address</label><input id="vc_new" class="mono" placeholder="e.g. 192.168.1.210" autocomplete="off" data-ipam oninput="vipChangeReset()"></div>
+    <div class="f"><label for="vc_new">New address</label><input id="vc_new" class="mono" placeholder="e.g. 192.0.2.210" autocomplete="off" data-ipam oninput="vipChangeReset()"></div>
     <label class="check"><input type="checkbox" id="vc_confirm"> The new address is reserved outside DHCP and no other device uses it</label>
     <div id="vc_plan" class="small"></div>
     ${UI.actions(UI.button("Cancel", "closeModal()") + UI.button("Review the move", `vipChangeReview(${jsArg(ip)})`, { kind: "pri", id: "vc_go", attrs: 'data-need="admin"' }))}</div>`);
@@ -285,7 +285,7 @@ function networkVipCards(current, choices) {
     const label = choices.labels[ip] || choices.own.find(v => v.ip === ip)?.label || "";
     return `<label class="net-address-choice"><input type="radio" name="net_address" value="${esc(ip)}" ${current === ip ? "checked" : ""} onchange="networkAddressPicked(this.value)"><span><b class="mono">${esc(ip)}</b>${label ? `<span>${esc(label)}</span>` : ""}<small>${used ? `In use · ${used.services} service(s) · ports ${esc(used.listeners.map(p => `${p.port}/${p.protocol || "TCP"}`).slice(0, 6).join(", "))}` : "Not assigned to a Service"}</small></span>${ip === choices.shared ? '<span class="tag ok">Default</span>' : ""}</label>`;
   }).join("") || '<p class="small">No saved VIPs yet. Add reserved addresses in Networking → Workload VIPs.</p>'}</div>
-  <details class="net-custom-address" ${typed ? "open" : ""}><summary>Use another reserved address</summary><p class="small">Only use an unused LAN address reserved outside DHCP. Node and cluster-management addresses are not VIP choices.</p><label for="net_custom_ip">Reserved IPv4 address</label><input id="net_custom_ip" value="${typed ? esc(current) : ""}" placeholder="e.g. 192.168.1.230" oninput="networkAddressPicked(this.value,true)" data-ipam></details>`;
+  <details class="net-custom-address" ${typed ? "open" : ""}><summary>Use another reserved address</summary><p class="small">Only use an unused LAN address reserved outside DHCP. Node and cluster-management addresses are not VIP choices.</p><label for="net_custom_ip">Reserved IPv4 address</label><input id="net_custom_ip" value="${typed ? esc(current) : ""}" placeholder="e.g. 192.0.2.230" oninput="networkAddressPicked(this.value,true)" data-ipam></details>`;
 }
 window.networkAddressPicked = (ip, typed = false) => {
   $("#net_lb_ip").value = ip.trim();
@@ -515,8 +515,8 @@ window.vipAdd = () => {
     <p class="small">A VIP is a stable LAN address for reaching apps, such as <span class="mono">http://VIP:port</span>. Save one address for shared ports, or a range so workloads can have separate addresses.</p>
     <div class="note small"><b>Before you add an address</b><br>Choose an unused IPv4 address on the LAN your load balancer serves, outside your router's DHCP allocation range. Do not use a host, router or cluster-management address. Homestead checks known cluster conflicts, but cannot confirm that another LAN device is not using it.</div>
     <div class="f"><label for="va_kind">What would you like to add?</label><select id="va_kind" onchange="vipAddKindChanged()"><option value="single">One VIP</option><option value="range">A range of VIPs</option></select></div>
-    <div class="f2"><div class="f"><label for="va_start" id="va_start_label">VIP address</label><input id="va_start" class="mono" placeholder="e.g. 192.168.1.230" autocomplete="off" data-ipam></div>
-      <div class="f hidden" id="va_end_wrap"><label for="va_end">Last address (inclusive)</label><input id="va_end" class="mono" placeholder="e.g. 192.168.1.239" autocomplete="off" data-ipam><span class="dim xs">Up to 64 addresses per range.</span></div></div>
+    <div class="f2"><div class="f"><label for="va_start" id="va_start_label">VIP address</label><input id="va_start" class="mono" placeholder="e.g. 192.0.2.230" autocomplete="off" data-ipam></div>
+      <div class="f hidden" id="va_end_wrap"><label for="va_end">Last address (inclusive)</label><input id="va_end" class="mono" placeholder="e.g. 192.0.2.239" autocomplete="off" data-ipam><span class="dim xs">Up to 64 addresses per range.</span></div></div>
     <div class="f"><label for="va_label">Label (optional)</label><input id="va_label" maxlength="60" placeholder="e.g. Shared apps or Media"><span class="dim xs">Shown in the VIP list and workload address picker.</span></div>
     <label class="vip-check"><input id="va_default" type="checkbox" ${supported ? "" : "disabled"} ${supported && !STATE.data.network?.shared_vip?.ip ? "checked" : ""}><span><b>Make this the default workload VIP</b><span class="dim small" id="va_default_hint">New workloads can share this address on different ports. Existing services will not move.</span></span></label>
     ${supported && STATE.data.selfAddress && !STATE.data.selfAddress.on_vip ? `<label class="vip-check"><input id="va_self" type="checkbox" checked><span><b>Put Homestead itself here</b><span class="dim small">Its page (port 8088), backup storage and shares get a connection on this address too; their node addresses keep working.</span></span></label>` : ""}

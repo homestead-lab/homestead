@@ -101,7 +101,7 @@ function portalEditRows() {
       <div class="pe-icon">${portalIcon({ ...row, shown: portalPreview(row) }, "sm")}</div>
       <div class="pe-fields">
         <div class="pe-line"><input class="pe-title" value="${esc(row.title)}" placeholder="Title" maxlength="60" data-k="title">
-          <input class="pe-url mono" value="${esc(row.url)}" placeholder="http://192.168.1.1" data-k="url"></div>
+          <input class="pe-url mono" value="${esc(row.url)}" placeholder="http://192.0.2.1" data-k="url"></div>
         <div class="pe-line"><input class="pe-section" list="pe_sections" value="${esc(row.section || "")}" placeholder="Section, e.g. Network" maxlength="40" data-k="section">
           <select class="pe-iconpick" data-k="icon">${portalIconOptions(row.icon || "")}</select>
           ${row.icon === "url" ? `<input class="pe-iconurl" value="${esc(row.icon_url || "")}" placeholder="https://…/logo.png" data-k="icon_url">` : ""}</div>

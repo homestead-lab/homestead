@@ -32,10 +32,10 @@ Kubernetes 1.25 or newer, x86-64 or ARM64.
 
 ## Install with Helm
 
-Pick an address your load balancer can give out (`192.168.1.242` below):
+Pick an address your load balancer can give out (`192.0.2.242` below):
 
 ```bash
-helm install homestead oci://ghcr.io/wjcloudy/charts/homestead -n homestead --create-namespace --set service.loadBalancerIP=192.168.1.242 --set service.kubeVip=false
+helm install homestead oci://ghcr.io/wjcloudy/charts/homestead -n homestead --create-namespace --set service.loadBalancerIP=192.0.2.242 --set service.kubeVip=false
 ```
 
 `service.kubeVip=false` is for anything but Harvester and kube-vip: it stops the
@@ -73,7 +73,7 @@ curl -sfLO https://raw.githubusercontent.com/wjcloudy/homestead/main/deploy/depl
 1. `storageClassName: longhorn-r2` and the `STORAGE_CLASS` value - to a class
    `kubectl get storageclass` lists. Keep `ReadWriteMany` for a shareable
    Longhorn class; use `ReadWriteOnce` for anything else.
-2. `LB_IP` and every `192.168.1.242` - to Homestead's address.
+2. `LB_IP` and every `192.0.2.242` - to Homestead's address.
 3. The `kube-vip.io/loadbalancerIPs` annotation - delete it unless kube-vip is
    your load balancer.
 

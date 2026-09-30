@@ -22,7 +22,7 @@ class ObjectStoreTests(unittest.TestCase):
         # Homestead's shared address, as Networking would plan it.
         self.plans = []
         plan = mock.patch.object(store.NETWORK, "service_plan",
-                                 side_effect=lambda cfg, **kw: self.plans.append(cfg) or {"vip": "192.168.1.242"})
+                                 side_effect=lambda cfg, **kw: self.plans.append(cfg) or {"vip": "192.0.2.242"})
         plan.start()
         self.addCleanup(plan.stop)
 
@@ -77,7 +77,7 @@ class ObjectStoreTests(unittest.TestCase):
         self.assertFalse(state["ready"])
 
     def test_deploy_creates_a_volume_a_workload_and_an_address(self):
-        store.deploy({"size_gb": 200, "lb_ip": "192.168.1.243", "point_longhorn": False})
+        store.deploy({"size_gb": 200, "lb_ip": "192.0.2.243", "point_longhorn": False})
 
         self.assertEqual([("lab", "homestead-objectstore", 200, None, "ReadWriteOnce")],
                          self.claims)
@@ -86,14 +86,14 @@ class ObjectStoreTests(unittest.TestCase):
         self.assertIn("/api/v1/namespaces/lab/services", created)
         service = next(b for _, p, b in self.sent if p.endswith("/services"))
         self.assertEqual("LoadBalancer", service["spec"]["type"])
-        self.assertEqual("192.168.1.243",
+        self.assertEqual("192.0.2.243",
                          service["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
 
     def test_the_store_keeps_one_copy_on_a_class_of_its_own(self):
         self.objects["/apis/storage.k8s.io/v1/storageclasses/longhorn-r2"] = {
             "provisioner": "driver.longhorn.io",
             "parameters": {"numberOfReplicas": "3", "migratable": "true", "diskSelector": "ssd"}}
-        store.deploy({"size_gb": 100, "lb_ip": "192.168.1.243", "point_longhorn": False})
+        store.deploy({"size_gb": 100, "lb_ip": "192.0.2.243", "point_longhorn": False})
         made = next(b for m, p, b in self.sent if p == "/apis/storage.k8s.io/v1/storageclasses")
         self.assertEqual("homestead-single-copy", made["metadata"]["name"])
         self.assertEqual({"numberOfReplicas": "1", "migratable": "false", "diskSelector": "ssd"}, made["parameters"])
@@ -113,7 +113,7 @@ class ObjectStoreTests(unittest.TestCase):
         self.objects["/apis/storage.k8s.io/v1/storageclasses/longhorn-r2"] = {"provisioner": "driver.longhorn.io", "parameters": {}}
         self.objects["/apis/storage.k8s.io/v1/storageclasses/homestead-single-copy"] = {
             "metadata": {"name": "homestead-single-copy"}, "provisioner": "driver.longhorn.io"}
-        store.deploy({"lb_ip": "192.168.1.243", "point_longhorn": False})
+        store.deploy({"lb_ip": "192.0.2.243", "point_longhorn": False})
         self.assertEqual(None, self.claims[0][3], "the cluster's default instead")
         self.assertFalse(any(p.endswith("/storageclasses") for _, p, _ in self.sent))
 
@@ -122,7 +122,7 @@ class ObjectStoreTests(unittest.TestCase):
 
     def test_with_no_address_asked_for_it_shares_homesteads(self):
         store.deploy({"point_longhorn": False})
-        self.assertEqual("192.168.1.242", self._sent_service()["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
+        self.assertEqual("192.0.2.242", self._sent_service()["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
         # Checked as an app sharing the address would be: both its ports, on the shared address.
         self.assertEqual("shared", self.plans[0]["vip_mode"])
         self.assertEqual([9000, 9001], [p["port"] for p in self.plans[0]["ports"]])
@@ -133,7 +133,7 @@ class ObjectStoreTests(unittest.TestCase):
         self.assertEqual({}, self._sent_service()["metadata"]["annotations"])
 
     def test_a_port_taken_on_the_shared_address_says_so(self):
-        store.NETWORK.service_plan.side_effect = ValueError("192.168.1.242:9000/TCP is already used by lab/minio")
+        store.NETWORK.service_plan.side_effect = ValueError("192.0.2.242:9000/TCP is already used by lab/minio")
         with self.assertRaises(ValueError) as caught:
             store.deploy({"point_longhorn": False})
         self.assertIn("lab/minio", str(caught.exception))
@@ -145,8 +145,8 @@ class ObjectStoreTests(unittest.TestCase):
         self.assertEqual({"s3": 9100, "console": 9101}, {p["name"]: p["port"] for p in service["spec"]["ports"]})
         self.assertEqual([9100, 9101], [p["port"] for p in self.plans[0]["ports"]])
         self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"] = dict(
-            service, status={"loadBalancer": {"ingress": [{"ip": "192.168.1.242"}]}})
-        self.assertEqual("http://192.168.1.242:9100", store.endpoint())
+            service, status={"loadBalancer": {"ingress": [{"ip": "192.0.2.242"}]}})
+        self.assertEqual("http://192.0.2.242:9100", store.endpoint())
 
     def test_a_taken_port_names_a_free_one(self):
         def plan(cfg, **kw):
@@ -175,16 +175,16 @@ class ObjectStoreTests(unittest.TestCase):
         self.assertEqual("http://192.0.2.20:9060", store.endpoint())
         # On the nodes' own addresses (k3s ServiceLB) the VIP copy is the one to use.
         self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"]["metadata"]["annotations"] = {}
-        self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"]["status"]["loadBalancer"]["ingress"] = [{"ip": "192.168.1.203"}]
+        self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"]["status"]["loadBalancer"]["ingress"] = [{"ip": "192.0.2.203"}]
         self.assertEqual("http://192.0.2.10:9000", store.endpoint())
 
     def test_a_store_already_running_keeps_its_port(self):
-        self._service("192.168.1.244", "192.168.1.244")
+        self._service("192.0.2.244", "192.0.2.244")
         self.objects["/api/v1/namespaces/lab/services/homestead-objectstore"]["spec"] = {
             "ports": [{"name": "s3", "port": 9100}, {"name": "console", "port": 9101}]}
         store.deploy({"point_longhorn": False})
         self.assertEqual(9100, self._sent_service()["spec"]["ports"][0]["port"])
-        self.assertEqual("192.168.1.244", self._sent_service()["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
+        self.assertEqual("192.0.2.244", self._sent_service()["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
 
     def test_a_silly_port_is_refused(self):
         for port in (70000, -1, "x"):
@@ -192,9 +192,9 @@ class ObjectStoreTests(unittest.TestCase):
                 store.deploy({"point_longhorn": False, "port": port})
 
     def test_a_store_already_running_keeps_its_address(self):
-        self._service("192.168.1.244", "192.168.1.244")
+        self._service("192.0.2.244", "192.0.2.244")
         store.deploy({"point_longhorn": False})
-        self.assertEqual("192.168.1.244", self._sent_service()["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
+        self.assertEqual("192.0.2.244", self._sent_service()["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
         self.assertEqual([], self.plans)
 
     def test_the_requested_vip_wins_over_a_stale_node_address(self):
@@ -216,7 +216,7 @@ class ObjectStoreTests(unittest.TestCase):
     def test_a_store_can_be_moved_to_the_shared_address_on_purpose(self):
         self._service()
         store.deploy({"point_longhorn": False, "vip_mode": "shared"})
-        self.assertEqual("192.168.1.242", self._sent_service()["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
+        self.assertEqual("192.0.2.242", self._sent_service()["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
 
     def test_the_writer_replaces_rather_than_surges(self):
         """One pod, one ReadWriteOnce volume: a surge would deadlock on it."""
@@ -240,14 +240,14 @@ class ObjectStoreTests(unittest.TestCase):
     def test_longhorn_is_given_the_lan_address_not_the_cluster_one(self):
         """A backup only readable from inside this cluster cannot be restored
         onto the cluster you are moving to."""
-        self._service(ip="192.168.1.243")
+        self._service(ip="192.0.2.243")
 
         result = store.point_longhorn()
 
-        self.assertEqual("http://192.168.1.243:9000", result["endpoint"])
+        self.assertEqual("http://192.0.2.243:9000", result["endpoint"])
         secret = next(b for _, p, b in self.sent
                       if p == "/api/v1/namespaces/longhorn-system/secrets")
-        self.assertEqual("http://192.168.1.243:9000",
+        self.assertEqual("http://192.0.2.243:9000",
                          base64.b64decode(secret["data"]["AWS_ENDPOINTS"]).decode())
         self.assertEqual("s3://homestead-backups@us-east-1/", result["url"])
 
@@ -290,7 +290,7 @@ class ObjectStoreTests(unittest.TestCase):
 
     def test_longhorn_is_pointed_at_the_bucket_not_just_given_its_keys(self):
         """Before 2.8.110 only the keys were written, so a move still found no target."""
-        self._service(ip="192.168.1.243")
+        self._service(ip="192.0.2.243")
         store.point_longhorn()
         target = next(b for m, p, b in self.sent if p.endswith("/backuptargets"))
         self.assertEqual(("s3://homestead-backups@us-east-1/", "homestead-backup-credentials"),
@@ -344,10 +344,10 @@ class ObjectStoreTests(unittest.TestCase):
                             for call in s3.call_args_list))
 
     def test_a_target_already_elsewhere_is_left_alone_unless_asked(self):
-        self._service(ip="192.168.1.243")
+        self._service(ip="192.0.2.243")
         self.objects["/apis/longhorn.io/v1beta2/namespaces/longhorn-system/backuptargets"] = {"items": [
             {"metadata": {"name": "default", "resourceVersion": "3"},
-             "spec": {"backupTargetURL": "nfs://192.168.1.177:/mnt/user/backups"}, "status": {}}]}
+             "spec": {"backupTargetURL": "nfs://192.0.2.177:/mnt/user/backups"}, "status": {}}]}
         result = store.point_longhorn()
         self.assertIn("nfs://", result["kept_target"])
         self.assertFalse([p for m, p, b in self.sent if "backuptargets" in p])
@@ -406,7 +406,7 @@ class ObjectStoreTests(unittest.TestCase):
         self.assertFalse(store.transfers()["allowed"])
 
     def test_turning_moves_out_on_sets_the_store_up_the_first_time(self):
-        with mock.patch.object(store.NETWORK, "service_plan", return_value={"vip": "192.168.1.242"}),                 mock.patch.object(store, "request_target", return_value={}) as point:
+        with mock.patch.object(store.NETWORK, "service_plan", return_value={"vip": "192.0.2.242"}),                 mock.patch.object(store, "request_target", return_value={}) as point:
             store.set_transfers(True, 50)
         point.assert_called_once()
         self.assertIn("/apis/apps/v1/namespaces/lab/deployments", [p for _, p, _ in self.sent])

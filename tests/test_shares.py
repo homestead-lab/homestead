@@ -137,10 +137,10 @@ class ShareTests(unittest.TestCase):
             return copy.deepcopy(fresh)
         shares.install = install
         try:
-            shares.create_share("media", 10, "lab", "a-password", False, samba_ip="192.168.1.245")
+            shares.create_share("media", 10, "lab", "a-password", False, samba_ip="192.0.2.245")
         finally:
             shares.install = None
-        self.assertEqual(["192.168.1.245"], installed)
+        self.assertEqual(["192.0.2.245"], installed)
         args = self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-smb"]["spec"]["template"]["spec"]["containers"][0]["args"]
         self.assertIn("media;/shares/media;yes;no;no;lab", args)
 

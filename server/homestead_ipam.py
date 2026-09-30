@@ -124,7 +124,7 @@ def _clean_subnet(row):
     try:
         network = ipaddress.ip_network(str(row.get("cidr") or "").strip(), strict=False)
     except ValueError:
-        raise ValueError(f"{row.get('cidr') or '(blank)'} is not a subnet like 192.168.1.0/24")
+        raise ValueError(f"{row.get('cidr') or '(blank)'} is not a subnet like 192.0.2.0/24")
     if network.version != 4 or network.num_addresses - 2 > MAX_SUBNET_HOSTS or network.prefixlen > 30:
         raise ValueError("a subnet is an IPv4 range from /22 to /30")
     clean = {"id": re.sub(r"[^0-9./]", "", str(network)), "cidr": str(network),

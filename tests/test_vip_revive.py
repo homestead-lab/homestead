@@ -1,6 +1,6 @@
 """kube-vip stopped electing for a shared lease when one Service on it lost
 its pods for a moment, and did not start again: SMB, Homestead's VIP and the
-object store on 192.168.1.108 were all unreachable (k3s-test, 2.8.231)."""
+object store on 192.0.2.108 were all unreachable (k3s-test, 2.8.231)."""
 import sys
 import unittest
 from pathlib import Path
@@ -10,12 +10,12 @@ import homestead_vips as VIPS
 
 PLATFORM = {"load_balancer": "kube-vip", "vip_class": "kube-vip.io/kube-vip-class", "servicelb": True,
             "vip_service_election": True}
-LEASE = "homestead-vip-192-168-1-108"
+LEASE = "homestead-vip-192-0-2-108"
 
 
 def service(name):
     return {"metadata": {"namespace": "lab", "name": name,
-                         "annotations": {VIPS.LEASE_KEY: LEASE, VIPS.VIP_KEY: "192.168.1.108"}},
+                         "annotations": {VIPS.LEASE_KEY: LEASE, VIPS.VIP_KEY: "192.0.2.108"}},
             "spec": {"type": "LoadBalancer", "loadBalancerClass": "kube-vip.io/kube-vip-class"}}
 
 
@@ -70,9 +70,9 @@ if __name__ == "__main__":
 
 
 class GlobalElectionTests(unittest.TestCase):
-    """k3s-3, 2026-09-30: with one leader for every VIP (plndr-svcs-lock), no
+    """node-3, 2026-09-30: with one leader for every VIP (plndr-svcs-lock), no
     Service's own lease is held, and kube-vip was restarted every ten minutes,
-    dropping 192.168.1.200 each time."""
+    dropping 192.0.2.200 each time."""
 
     def test_under_global_election_nothing_is_stranded_or_restarted(self):
         deleted = []

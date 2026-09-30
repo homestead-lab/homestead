@@ -117,7 +117,7 @@ def handler(path="/", method="GET", headers=None, body=b""):
     h = object.__new__(server.H)
     h.path, h.command = path, method
     h.headers = {"Content-Length": str(len(body)), **(headers or {})}
-    h.client_address = ("192.168.1.50", 40000)
+    h.client_address = ("192.0.2.50", 40000)
     h.rfile = io.BytesIO(body)
     sent = []
     h._send = lambda code, payload, ctype="application/json": sent.append((code, payload))
@@ -172,14 +172,14 @@ class TunnelTests(unittest.TestCase):
             h, _ = handler(headers={"X-Forwarded-For": "1.2.3.4", **CF})
             self.assertEqual("203.0.113.9", h._client_ip())
         h, _ = handler(headers={"X-Forwarded-For": "1.2.3.4"})
-        self.assertEqual("192.168.1.50", h._client_ip(), "X-Forwarded-For is not trusted")
+        self.assertEqual("192.0.2.50", h._client_ip(), "X-Forwarded-For is not trusted")
 
     def test_without_access_cloudflares_header_is_anyones_to_send(self):
         """Without Access nothing proves a request came through Cloudflare, so
         its address header would let anyone dodge the sign-in limit."""
         with mock.patch.object(server.CFACCESS, "enabled", return_value=False):
             h, _ = handler(headers=dict(CF))
-            self.assertEqual("192.168.1.50", h._client_ip())
+            self.assertEqual("192.0.2.50", h._client_ip())
 
 
 class ThrottleTests(unittest.TestCase):

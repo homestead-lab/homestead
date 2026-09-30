@@ -75,11 +75,11 @@ class RelayTests(unittest.TestCase):
     def test_the_person_is_signed_in_here_and_their_role_goes_with_them(self):
         h = handler(headers={"Cookie": "homestead_cluster=shed1; homestead_session=tok"})
         with mock.patch.object(server.FLEET, "self_id", return_value="me"), \
-                mock.patch.object(server.AUTH, "verify_token", return_value={"user": "james", "role": "operator"}), \
+                mock.patch.object(server.AUTH, "verify_token", return_value={"user": "robin", "role": "operator"}), \
                 mock.patch.object(server.FLEET, "forward") as forward:
             h.do_GET()
         args = forward.call_args.args
-        self.assertEqual(("shed1", b"", "james", "operator"), (args[1], args[2], args[3], args[4]))
+        self.assertEqual(("shed1", b"", "robin", "operator"), (args[1], args[2], args[3], args[4]))
 
     def test_nobody_signed_in_gets_no_further_than_here(self):
         h = handler(headers={"Cookie": "homestead_cluster=shed1"})
@@ -101,7 +101,7 @@ class RelayTests(unittest.TestCase):
     def test_a_cluster_that_does_not_answer_gets_a_way_back(self):
         h = handler(path="/containers", headers={"Cookie": "homestead_cluster=shed1", "Accept": "text/html"})
         with mock.patch.object(server.FLEET, "self_id", return_value="me"), \
-                mock.patch.object(server.AUTH, "verify_token", return_value={"user": "james", "role": "admin"}), \
+                mock.patch.object(server.AUTH, "verify_token", return_value={"user": "robin", "role": "admin"}), \
                 mock.patch.object(server.FLEET, "member", return_value={"name": "Shed"}), \
                 mock.patch.object(server.FLEET, "forward", side_effect=server.FLEET.Unreachable("no answer")):
             h.do_GET()
@@ -115,12 +115,12 @@ class SignedRequestTests(unittest.TestCase):
     def test_a_signed_request_acts_as_the_person_it_carries(self):
         body = json.dumps({"ns": "lab"}).encode()
         h = handler("/api/scale", "POST", {server.FLEET.H_FROM: "loft1"}, body)
-        found = {"sender": {"id": "loft1", "name": "Loft", "handle": "loft"}, "user": "james@loft", "role": "operator"}
+        found = {"sender": {"id": "loft1", "name": "Loft", "handle": "loft"}, "user": "robin@loft", "role": "operator"}
         with mock.patch.object(server.FLEET, "verify", return_value=found) as verify:
             who = h._who()
             again = h._who()
         verify.assert_called_once_with(h.headers, "POST", "/api/scale", body)
-        self.assertEqual(("james@loft", "operator"), (who["user"], who["role"]))
+        self.assertEqual(("robin@loft", "operator"), (who["user"], who["role"]))
         self.assertIs(who, again)
         self.assertEqual({"ns": "lab"}, h._body())
 
@@ -131,13 +131,13 @@ class SignedRequestTests(unittest.TestCase):
 
     def test_a_relayed_person_is_never_asked_to_set_up(self):
         h = handler("/api/auth/state", headers={server.FLEET.H_FROM: "loft1"})
-        found = {"sender": {"id": "loft1", "name": "Loft", "handle": "loft"}, "user": "james@loft", "role": "viewer"}
+        found = {"sender": {"id": "loft1", "name": "Loft", "handle": "loft"}, "user": "robin@loft", "role": "viewer"}
         with mock.patch.object(server.FLEET, "verify", return_value=found), \
                 mock.patch.object(server.AUTH, "needs_setup", return_value=True):
             h.do_GET()
         state = h._send.call_args.args[1]
         self.assertFalse(state["setup"])
-        self.assertEqual("james@loft", state["user"])
+        self.assertEqual("robin@loft", state["user"])
         self.assertEqual("Loft", state["via"])
 
 
@@ -146,7 +146,7 @@ class SwitchTests(unittest.TestCase):
         h = handler("/api/fleet/switch", "POST", {"X-Homestead-Auth": "1", "Cookie": "homestead_session=tok"},
                     json.dumps({"id": wanted}).encode())
         with mock.patch.object(server.FLEET, "self_id", return_value="me"), \
-                mock.patch.object(server.AUTH, "verify_token", return_value={"user": "james", "role": "viewer"}), \
+                mock.patch.object(server.AUTH, "verify_token", return_value={"user": "robin", "role": "viewer"}), \
                 mock.patch.object(server.FLEET, "member", return_value={"id": "shed1", "name": "Shed"}), \
                 mock.patch.object(server.FLEET, "check", return_value={"reachable": reachable, "error": "down"}):
             h.do_POST()

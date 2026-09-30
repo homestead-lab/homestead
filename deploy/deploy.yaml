@@ -335,7 +335,7 @@ spec:
             - name: STORAGE_CLASS
               value: "longhorn-r2"
             - name: LB_IP
-              value: "192.168.1.242"
+              value: "192.0.2.242"
             # Published through a Cloudflare Tunnel behind Cloudflare Access?
             # Name the Access team and the application's AUD tag, and Homestead
             # refuses any request that came through Cloudflare without Access's
@@ -393,7 +393,7 @@ metadata:
     app: homestead
     homestead.io/managed: "true"
   annotations:
-    kube-vip.io/loadbalancerIPs: 192.168.1.242
+    kube-vip.io/loadbalancerIPs: 192.0.2.242
 spec:
   type: LoadBalancer
   selector:

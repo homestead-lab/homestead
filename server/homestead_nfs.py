@@ -58,7 +58,7 @@ def client_network(value):
     try:
         network = ipaddress.IPv4Network(str(value or "").strip(), strict=False)
     except (ipaddress.AddressValueError, ipaddress.NetmaskValueError, ValueError) as error:
-        raise ValueError("NFS clients must be an IPv4 address or CIDR such as 192.168.1.0/24") from error
+        raise ValueError("NFS clients must be an IPv4 address or CIDR such as 192.0.2.0/24") from error
     if network.prefixlen == 0 or network.is_multicast or network.is_loopback or network.is_unspecified:
         raise ValueError("NFS clients must be a specific reachable IPv4 address or network, not everyone")
     return str(network)

@@ -81,7 +81,7 @@ class PushTests(unittest.TestCase):
                          "https://web.push.apple.com/QG9", "https://wns2-par02p.notify.windows.com/w/?token=x"]:
             with self.subTest(endpoint):
                 self.assertTrue(push.endpoint_allowed(endpoint))
-        for endpoint in ["http://fcm.googleapis.com/fcm/send/x", "https://192.168.1.10/push",
+        for endpoint in ["http://fcm.googleapis.com/fcm/send/x", "https://192.0.2.10/push",
                          "https://fcm.googleapis.com.evil.example/x", "https://user@fcm.googleapis.com/x",
                          "https://fcm.googleapis.com:8443/x", "https://kubernetes.default.svc/api", ""]:
             with self.subTest(endpoint):

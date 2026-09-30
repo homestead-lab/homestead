@@ -2299,7 +2299,7 @@ def static_network(cfg, mac):
     try:
         iface = ipaddress.ip_interface(f"{address}/{int(cfg.get('prefix') or 24)}")
     except ValueError as error:
-        raise ValueError(f"{address or '(blank)'} with /{cfg.get('prefix')} is not an address like 192.168.1.51/24") from error
+        raise ValueError(f"{address or '(blank)'} with /{cfg.get('prefix')} is not an address like 192.0.2.51/24") from error
     net = iface.network
     if iface.version != 4 or iface.ip in (net.network_address, net.broadcast_address):
         raise ValueError(f"{iface.ip} cannot be a machine's address in {net}")

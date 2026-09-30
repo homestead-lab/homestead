@@ -851,7 +851,7 @@ window.lhTarget = () => {
       which it passes to Longhorn and uses for VM backups too. Harvester takes NFS or S3, and writes to the top of an S3 bucket.</div>` : ""}
     <div class="f" style="margin-top:14px"><label>Target URL</label>
       <input type="text" id="bt_url" value="${esc(t.url || "")}"
-        placeholder="nfs://192.168.1.177:/mnt/user/backups">
+        placeholder="nfs://192.0.2.177:/mnt/user/backups">
       <div class="dim xs" style="margin-top:6px">
         NFS: <span class="mono">nfs://host:/export/path</span><br>
         S3: <span class="mono">s3://bucket@region${t.harvester ? "" : "/path"}</span> - a NAS's MinIO or Garage uses any region, such as us-east-1</div></div>
@@ -861,8 +861,8 @@ window.lhTarget = () => {
           placeholder="${t.secret && !t.secret_missing ? "kept as it is" : ""}"></div>
         <div class="f"><label>Secret key</label><input type="password" id="bt_secretkey" autocomplete="new-password"
           placeholder="${t.secret && !t.secret_missing ? "kept as it is" : ""}"></div></div>
-      <div class="f"><label>Endpoint ${tip("Only for S3 that is not AWS: the NAS or service's URL, such as http://192.168.1.20:9000.")}</label>
-        <input type="text" id="bt_endpoint" placeholder="http://192.168.1.20:9000"></div>
+      <div class="f"><label>Endpoint ${tip("Only for S3 that is not AWS: the NAS or service's URL, such as http://192.0.2.20:9000.")}</label>
+        <input type="text" id="bt_endpoint" placeholder="http://192.0.2.20:9000"></div>
       <div class="dim xs" style="margin-bottom:12px">The keys are kept in a Secret in longhorn-system${t.secret ? ` (now ${esc(t.secret)})` : ""};
         leave them empty to keep the one it has.</div></div>
     <div class="f2">

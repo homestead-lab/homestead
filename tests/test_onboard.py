@@ -18,7 +18,7 @@ def node(name, ready=True, roles=(), machine=""):
     return {"metadata": {"name": name, "labels": labels, "annotations": annotations},
             "status": {"conditions": [{"type": "Ready", "status": "True" if ready else "Unknown",
                                        "lastTransitionTime": "2026-09-20T10:00:00Z"}],
-                       "addresses": [{"type": "InternalIP", "address": "192.168.1.51"}]}}
+                       "addresses": [{"type": "InternalIP", "address": "192.0.2.51"}]}}
 
 
 class Cluster:
@@ -27,7 +27,7 @@ class Cluster:
             "/api/v1/nodes": {"items": [node("node1", roles=("control-plane", "etcd"), machine="custom-1"),
                                         node("node2", roles=("control-plane", "etcd"), machine="custom-2"),
                                         node("node3", roles=("control-plane", "etcd"), machine="custom-3")]},
-            "/api/v1/namespaces/harvester-system/configmaps/vip": {"data": {"ip": "192.168.1.240"}},
+            "/api/v1/namespaces/harvester-system/configmaps/vip": {"data": {"ip": "192.0.2.240"}},
             "/apis/harvesterhci.io/v1beta1/settings/server-version": {"value": "v1.4.1"},
         }
         self.machines = [{"metadata": {"name": f"custom-{i}", "namespace": "fleet-local"},
@@ -131,11 +131,11 @@ class GuideTests(Base):
         self.assertEqual("1.4.1", g["version"])
         self.assertEqual("https://releases.rancher.com/harvester/v1.4.1/harvester-v1.4.1-amd64.iso", g["iso"])
         self.assertEqual("https://releases.rancher.com/harvester/v1.4.1/harvester-v1.4.1-amd64.sha512", g["checksums"])
-        self.assertEqual("192.168.1.240", g["vip"])
+        self.assertEqual("192.0.2.240", g["vip"])
         self.assertEqual(["0.uk.pool.ntp.org", "1.uk.pool.ntp.org"], g["ntp"])
         self.assertEqual("node4", g["hostname"])
         self.assertEqual(3, g["management_count"])
-        self.assertEqual("192.168.1.51", g["token_host"])
+        self.assertEqual("192.0.2.51", g["token_host"])
         self.assertEqual("sudo grep '^token:' /etc/rancher/rancherd/config.yaml", g["token_command"])
 
     def test_the_guide_never_reads_the_token(self):

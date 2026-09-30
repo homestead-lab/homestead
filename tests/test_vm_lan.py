@@ -34,7 +34,7 @@ class StaticAddressTests(unittest.TestCase):
 
     def test_a_bridged_vm_gets_its_address_through_cloud_init(self):
         result = self.create(network="default/vlan1",
-                             static_ip={"address": "192.168.1.60", "prefix": 24, "gateway": "192.168.1.1"})
+                             static_ip={"address": "192.0.2.60", "prefix": 24, "gateway": "192.0.2.1"})
         vm = next(b for m, p, b in self.sent if p.endswith("/virtualmachines"))
         spec = vm["spec"]["template"]["spec"]
         iface = spec["domain"]["devices"]["interfaces"][0]
@@ -44,9 +44,9 @@ class StaticAddressTests(unittest.TestCase):
         secret = next(b for m, p, b in self.sent if p.endswith("/secrets"))
         network = base64.b64decode(secret["data"]["networkdata"]).decode()
         self.assertIn('macaddress: "%s"' % result["mac"], network)
-        self.assertIn('addresses: ["192.168.1.60/24"]', network)
-        self.assertIn("via: 192.168.1.1", network)
-        self.assertEqual("192.168.1.60", result["address"])
+        self.assertIn('addresses: ["192.0.2.60/24"]', network)
+        self.assertIn("via: 192.0.2.1", network)
+        self.assertEqual("192.0.2.60", result["address"])
         # The password lives in the Secret, not the VM's own definition.
         self.assertNotIn("a-long-password", json.dumps(vm))
         cloud = next(v for v in spec["volumes"] if v["name"] == "cloudinit")["cloudInitNoCloud"]
@@ -59,12 +59,12 @@ class StaticAddressTests(unittest.TestCase):
 
     def test_the_pod_network_cannot_have_an_address_of_its_own(self):
         with self.assertRaisesRegex(ValueError, r"LAN network \(bridged\)"):
-            self.create(static_ip={"address": "192.168.1.60", "prefix": 24})
+            self.create(static_ip={"address": "192.0.2.60", "prefix": 24})
 
     def test_addresses_that_cannot_be_a_machines_are_refused(self):
-        for address, gateway, pattern in (("192.168.1.0", "", "cannot be a machine's"),
-                                          ("192.168.1.60", "10.0.0.1", "outside"),
-                                          ("192.168.1.1", "192.168.1.1", "gateway's address")):
+        for address, gateway, pattern in (("192.0.2.0", "", "cannot be a machine's"),
+                                          ("192.0.2.60", "10.0.0.1", "outside"),
+                                          ("192.0.2.1", "192.0.2.1", "gateway's address")):
             with self.subTest(address=address), self.assertRaisesRegex(ValueError, pattern):
                 self.create(network="default/vlan1", static_ip={"address": address, "prefix": 24, "gateway": gateway})
 
@@ -75,8 +75,8 @@ class StaticAddressTests(unittest.TestCase):
 
 class K3sClusterTests(unittest.TestCase):
     CFG = {"name": "k3s-demo", "servers": 1, "agents": 2, "network": "default/vlan1",
-           "addresses": ["192.168.1.60", "192.168.1.61", "192.168.1.62"], "password": "a-long-password",
-           "prefix": 24, "gateway": "192.168.1.1"}
+           "addresses": ["192.0.2.60", "192.0.2.61", "192.0.2.62"], "password": "a-long-password",
+           "prefix": 24, "gateway": "192.0.2.1"}
 
     def setUp(self):
         self.made, self.taken = [], {}
@@ -87,22 +87,22 @@ class K3sClusterTests(unittest.TestCase):
 
     def test_the_plan_gives_each_node_a_role_and_address(self):
         plan = K3S.plan(self.CFG)
-        self.assertEqual([("k3s-demo-server-1", "server", "192.168.1.60"), ("k3s-demo-agent-1", "agent", "192.168.1.61"),
-                          ("k3s-demo-agent-2", "agent", "192.168.1.62")],
+        self.assertEqual([("k3s-demo-server-1", "server", "192.0.2.60"), ("k3s-demo-agent-1", "agent", "192.0.2.61"),
+                          ("k3s-demo-agent-2", "agent", "192.0.2.62")],
                          [(n["name"], n["role"], n["address"]) for n in plan["nodes"]])
-        self.assertEqual("http://192.168.1.60:8088", plan["url"])
+        self.assertEqual("http://192.0.2.60:8088", plan["url"])
 
     def test_the_plan_refuses_what_cannot_work(self):
         for change, pattern in (({"servers": 2}, "one server, or three"),
-                                ({"addresses": ["192.168.1.60"]}, "need 3 addresses"),
-                                ({"addresses": ["192.168.1.60"] * 3}, "an address of its own"),
+                                ({"addresses": ["192.0.2.60"]}, "need 3 addresses"),
+                                ({"addresses": ["192.0.2.60"] * 3}, "an address of its own"),
                                 ({"network": "pod"}, r"LAN network \(bridged\)")):
             with self.subTest(change=change), self.assertRaisesRegex(ValueError, pattern):
                 K3S.plan(dict(self.CFG, **change))
 
     def test_nothing_is_made_when_an_address_is_taken(self):
-        self.taken["192.168.1.62"] = "192.168.1.62 is taken: printer in IP addresses"
-        with self.assertRaisesRegex(ValueError, "agent-2: 192.168.1.62 is taken"):
+        self.taken["192.0.2.62"] = "192.0.2.62 is taken: printer in IP addresses"
+        with self.assertRaisesRegex(ValueError, "agent-2: 192.0.2.62 is taken"):
             K3S.start(self.CFG, None)
         self.assertEqual([], self.made)
 
@@ -116,8 +116,8 @@ class K3sClusterTests(unittest.TestCase):
         server, agent = self.made[0]["cloud_init"], self.made[1]["cloud_init"]
         token = server.split("K3S_TOKEN=")[1].split(" ")[0]
         self.assertIn("bootstrap-k3s.sh | K3S_TOKEN=%s sh -s - server" % token, server)
-        self.assertIn("sh -s - agent https://192.168.1.60:6443 %s" % token, agent)
-        self.assertEqual({"address": "192.168.1.61", "prefix": 24, "gateway": "192.168.1.1", "dns": []},
+        self.assertIn("sh -s - agent https://192.0.2.60:6443 %s" % token, agent)
+        self.assertEqual({"address": "192.0.2.61", "prefix": 24, "gateway": "192.0.2.1", "dns": []},
                          self.made[1]["static_ip"])
         self.assertEqual({"homestead.io/k3s-cluster": "k3s-demo", "homestead.io/k3s-role": "agent"},
                          self.made[1]["labels"])
@@ -126,12 +126,12 @@ class K3sClusterTests(unittest.TestCase):
         self.assertIn('password: "a-long-password"', server)
 
     def test_a_bare_cluster_uses_k3s_own_installer(self):
-        node = {"name": "n", "role": "agent", "address": "192.168.1.61"}
-        data = K3S.user_data(node, "192.168.1.60", "tok", "pw-long-enough", "k3s")
-        self.assertIn("get.k3s.io | K3S_TOKEN=tok K3S_URL=https://192.168.1.60:6443 sh -s - agent", data)
+        node = {"name": "n", "role": "agent", "address": "192.0.2.61"}
+        data = K3S.user_data(node, "192.0.2.60", "tok", "pw-long-enough", "k3s")
+        self.assertIn("get.k3s.io | K3S_TOKEN=tok K3S_URL=https://192.0.2.60:6443 sh -s - agent", data)
 
     def test_the_job_follows_vms_then_k3s_then_homestead(self):
-        item = {"ref": {"namespace": "lab", "nodes": [{"name": "k3s-demo-server-1"}], "first": "192.168.1.60",
+        item = {"ref": {"namespace": "lab", "nodes": [{"name": "k3s-demo-server-1"}], "first": "192.0.2.60",
                         "setup": "homestead", "started": __import__("time").time()}, "progress": 0}
         running = {"phase": "Pending"}
         K3S.kget = lambda path: {"status": running}
@@ -145,7 +145,7 @@ class K3sClusterTests(unittest.TestCase):
         answers.add(8088)
         status, _, message = K3S.status(item)
         self.assertEqual("succeeded", status)
-        self.assertIn("http://192.168.1.60:8088", message)
+        self.assertIn("http://192.0.2.60:8088", message)
 
 
 if __name__ == "__main__":

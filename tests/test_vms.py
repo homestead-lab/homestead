@@ -25,8 +25,8 @@ VM = {"metadata": {"name": "win11", "namespace": "default", "uid": "u1", "resour
                       {"name": "cloudinitdisk", "cloudInitNoCloud": {"userData": "#cloud-config"}}]}}},
       "status": {"printableStatus": "Stopped"}}
 VMI = {"status": {"phase": "Running", "nodeName": "harvester-node1",
-                  "interfaces": [{"name": "default", "mac": "52:54:00:aa:bb:cc", "ipAddress": "192.168.1.50",
-                                  "ipAddresses": ["192.168.1.50", "fe80::1"]}],
+                  "interfaces": [{"name": "default", "mac": "52:54:00:aa:bb:cc", "ipAddress": "192.0.2.50",
+                                  "ipAddresses": ["192.0.2.50", "fe80::1"]}],
                   "guestOSInfo": {"prettyName": "Windows 11 Pro"},
                   "conditions": [{"type": "LiveMigratable", "status": "True"}]}}
 PVCS = {"items": [{"metadata": {"name": "win11-disk-0"}, "spec": {"storageClassName": "harvester-longhorn"},
@@ -88,7 +88,7 @@ class VmTests(unittest.TestCase):
         self.use(running=True)
         v = VMS.list_vms()[0]
         self.assertEqual(["console", "stop", "restart", "pause", "migrate"], v["actions"])
-        self.assertEqual(("192.168.1.50", "harvester-node1", "Windows 11 Pro"), (v["ip"], v["node"], v["os"]))
+        self.assertEqual(("192.0.2.50", "harvester-node1", "Windows 11 Pro"), (v["ip"], v["node"], v["os"]))
         d = VMS.detail("default", "win11")
         self.assertEqual("Started", d["events"][0]["reason"])
 

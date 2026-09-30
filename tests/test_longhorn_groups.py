@@ -196,11 +196,11 @@ class BackupTests(unittest.TestCase):
 
     def test_typed_s3_keys_become_the_targets_secret(self):
         LH.set_backup_target("s3://backups@us-east-1/", "", "5m",
-                             {"access_key": "AK", "secret_key": "SK", "endpoint": "http://192.168.1.20:9000"})
+                             {"access_key": "AK", "secret_key": "SK", "endpoint": "http://192.0.2.20:9000"})
 
         secret = self.lh.secrets[LH.TARGET_SECRET]
         self.assertEqual({"AWS_ACCESS_KEY_ID": "AK", "AWS_SECRET_ACCESS_KEY": "SK",
-                          "AWS_ENDPOINTS": "http://192.168.1.20:9000"}, secret["stringData"])
+                          "AWS_ENDPOINTS": "http://192.0.2.20:9000"}, secret["stringData"])
         target = [body for method, path, body in self.lh.sent if path.endswith("/backuptargets")][0]
         self.assertEqual(LH.TARGET_SECRET, target["spec"]["credentialSecret"])
 

@@ -120,9 +120,9 @@ class InstallerTests(unittest.TestCase):
         self.assertNotIn("bootstrap-k3s.sh server", out)
 
     def test_harvester_gets_the_manifest_with_its_address_and_class(self):
-        code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "harvester", "HS_VIP": "192.168.1.250",
+        code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "harvester", "HS_VIP": "192.0.2.250",
                                                           "HS_CLASS": "harvester-longhorn", "HS_YES": "1"})
-        self.assertIn("s/192\\.168\\.1\\.242/192.168.1.250/g", out)
+        self.assertIn("s/192\\.0\\.2\\.242/192.0.2.250/g", out)
         self.assertIn("s/longhorn-r2/harvester-longhorn/g", out)
         self.assertIn("apply -f /tmp/homestead-deploy.yaml", out)
 
@@ -367,10 +367,10 @@ case "$*" in
   'get nodes '*)
     [ "$TEST_MODE" != unreachable ] || exit 1
     if [ "$TEST_MODE" = many ]; then
-      for n in 1 2 3 4 5 6 7 8; do printf 'node%s|192.168.1.%s|True|v1.34.1+k3s1\\n' "$n" "$n"; done
+      for n in 1 2 3 4 5 6 7 8; do printf 'node%s|192.0.2.%s|True|v1.34.1+k3s1\\n' "$n" "$n"; done
       exit 0
     fi
-    printf 'node1|192.168.1.108|True|v1.34.1+k3s1\\nnode2|192.168.1.109|False|v1.33.5+k3s1\\n' ;;
+    printf 'node1|192.0.2.108|True|v1.34.1+k3s1\\nnode2|192.0.2.109|False|v1.33.5+k3s1\\n' ;;
   '-n longhorn-system get daemonset '*)
     [ "$TEST_MODE" != denied ] || exit 1
     [ "$TEST_MODE" != absent ] || exit 0
@@ -384,7 +384,7 @@ case "$*" in
   'get services '*)
     [ "$TEST_MODE" != denied ] || exit 1
     [ "$TEST_MODE" != absent ] || exit 0
-    printf 'lab/homestead|192.168.1.242 | \\nlab/nas-data||192.168.1.243 \\nlab/pending|| \\n' ;;
+    printf 'lab/homestead|192.0.2.242 | \\nlab/nas-data||192.0.2.243 \\nlab/pending|| \\n' ;;
   *) exit 99 ;;
 esac
 """, encoding="utf-8")
@@ -395,7 +395,7 @@ esac
             script += """
 have() { command -v "$1" >/dev/null 2>&1; }
 hostname() { echo node1; }
-default_ip() { echo 192.168.1.108; }
+default_ip() { echo 192.0.2.108; }
 term_rows() { echo 24; }
 os_name() { echo Ubuntu; }
 msg() { printf '%s\\n' "$2"; }
@@ -419,13 +419,13 @@ cluster_overview
     def test_main_menu_shows_live_members_versions_component_readiness_and_vips(self):
         out, calls = self.overview()
         summary, details = out.split("DETAILS", 1)
-        for expected in ("192.168.1.108", "node2", "v1.34.1+k3s1", "v1.33.5+k3s1",
+        for expected in ("192.0.2.108", "node2", "v1.34.1+k3s1", "v1.33.5+k3s1",
                          "not ready (1/2); longhorn-manager:v1.9.2", "ready (1/1); homestead:2.8.199",
-                         "192.168.1.242", "127.0.0.1:6443"):
+                         "192.0.2.242", "127.0.0.1:6443"):
             self.assertIn(expected, summary)
         self.assertTrue(all(len(line) <= 80 for line in summary.splitlines()))
-        self.assertIn("node2  192.168.1.109  NotReady", details)
-        self.assertIn("192.168.1.243 (requested; pending)", details)
+        self.assertIn("node2  192.0.2.109  NotReady", details)
+        self.assertIn("192.0.2.243 (requested; pending)", details)
         self.assertIn("lab/pending  pending address", details)
         self.assertIn("PRESENT=yes", details)
         self.assertEqual(5, len(calls.splitlines()))
@@ -436,14 +436,14 @@ cluster_overview
         summary = out.split("DETAILS", 1)[0]
         self.assertGreaterEqual(summary.count("PAGE"), 2)
         for n in range(1, 9):
-            self.assertIn(f"192.168.1.{n}", summary)
+            self.assertIn(f"192.0.2.{n}", summary)
         self.assertNotIn("...", summary)
         self.assertTrue(all(len(line) <= 80 for line in summary.splitlines()))
 
     def test_addresses_wrap_and_remain_available_in_full(self):
         out, _ = self.overview()
         summary = out.split("DETAILS", 1)[0]
-        self.assertIn("192.168.1.243", summary)
+        self.assertIn("192.0.2.243", summary)
         self.assertIn("pending address", summary)
         self.assertNotIn("...", summary)
         self.assertTrue(all(len(line) <= 80 for line in summary.splitlines()))
@@ -481,7 +481,7 @@ cluster_overview
     def test_worker_without_credentials_keeps_a_useful_menu_without_querying(self):
         out, calls = self.overview("worker")
         self.assertEqual("", calls)
-        self.assertIn("192.168.1.108", out)
+        self.assertIn("192.0.2.108", out)
         self.assertIn("require server-node credentials", out)
         self.assertIn("PRESENT=unknown", out)
 

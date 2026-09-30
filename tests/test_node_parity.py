@@ -43,13 +43,13 @@ class NodeParityTests(unittest.TestCase):
                     lambda: cluster.probes, self.data)
 
     def test_each_new_host_is_kept_off_multipathd_once(self):
-        cluster = Cluster([node("k3s-1"), node("k3s-2"), node("k3s-3", ready=False)])
+        cluster = Cluster([node("node-1"), node("node-2"), node("node-3", ready=False)])
         self.bind(cluster)
         changes = PARITY.tick()
-        self.assertEqual(["k3s-1", "k3s-2"], cluster.ran, "a node that is not Ready waits")
-        self.assertIn(("k3s-2", "multipathd kept off Longhorn's devices"), changes)
+        self.assertEqual(["node-1", "node-2"], cluster.ran, "a node that is not Ready waits")
+        self.assertIn(("node-2", "multipathd kept off Longhorn's devices"), changes)
         PARITY.tick()
-        self.assertEqual(["k3s-1", "k3s-2"], cluster.ran, "done once per node")
+        self.assertEqual(["node-1", "node-2"], cluster.ran, "done once per node")
 
     def test_a_host_that_boots_from_multipath_is_left_alone(self):
         self.assertIn('grep -q mpath; then echo "MULTIPATH root"', PARITY.HOST_SCRIPT)
@@ -58,19 +58,19 @@ class NodeParityTests(unittest.TestCase):
         self.assertEqual([], PARITY.tick())
 
     def test_a_host_that_cannot_be_reached_is_tried_again(self):
-        cluster = Cluster([node("k3s-1")], host_out="")
+        cluster = Cluster([node("node-1")], host_out="")
         self.bind(cluster)
         self.assertIn("could not check", PARITY.tick()[0][1])
         cluster.host_out = "MULTIPATH kept\nISCSI kept\nEND\n"
         PARITY.tick()
-        self.assertEqual(["k3s-1", "k3s-1"], cluster.ran)
+        self.assertEqual(["node-1", "node-1"], cluster.ran)
 
     def test_a_host_done_by_an_older_release_gets_the_journal_cap_too(self):
         import json
-        Path(self.data, "node-parity.json").write_text(json.dumps({"hosts": {"k3s-1": {"at": 1, "multipath": "set"}}}))
-        cluster = Cluster([node("k3s-1")], host_out="JOURNAL capped\nMULTIPATH kept\nISCSI kept\nEND\n")
+        Path(self.data, "node-parity.json").write_text(json.dumps({"hosts": {"node-1": {"at": 1, "multipath": "set"}}}))
+        cluster = Cluster([node("node-1")], host_out="JOURNAL capped\nMULTIPATH kept\nISCSI kept\nEND\n")
         self.bind(cluster, longhorn=False)
-        self.assertIn(("k3s-1", "journal capped at 1 GB"), PARITY.tick())
+        self.assertIn(("node-1", "journal capped at 1 GB"), PARITY.tick())
         self.assertEqual([], PARITY.tick(), "then done")
         self.assertIn("grep -qs '^SystemMaxUse='", PARITY.HOST_SCRIPT, "a cap someone set is kept")
         self.assertIn('[ "$LONGHORN" = 1 ] || { echo END; exit 0; }', PARITY.HOST_SCRIPT,
@@ -100,9 +100,9 @@ class NodeParityTests(unittest.TestCase):
                     '  lb_class_name: "kube-vip.io/kube-vip-class"\n')
 
     def kube_vip_cluster(self, values, services=(), probes=None):
-        return Cluster([node("k3s-3")], {f"{HELM}/kube-vip": {"spec": {"valuesContent": values}},
+        return Cluster([node("node-3")], {f"{HELM}/kube-vip": {"spec": {"valuesContent": values}},
                                          "/api/v1/services": {"items": list(services)}},
-                       probes=probes if probes is not None else {"k3s-3": {"default_interface": "enp2s0"}})
+                       probes=probes if probes is not None else {"node-3": {"default_interface": "enp2s0"}})
 
     def test_kube_vip_moves_to_one_leader_its_interface_and_its_capabilities(self):
         cluster = self.kube_vip_cluster(self.OLD_KUBE_VIP)
@@ -148,7 +148,7 @@ class NodeParityTests(unittest.TestCase):
                    "/api/v1/namespaces/lab/pods": {"items": []}}
         for path in missing:
             objects.pop(path)
-        cluster = Cluster([node("k3s-3")], objects)
+        cluster = Cluster([node("node-3")], objects)
         self.bind(cluster, longhorn=False)
         return cluster
 

@@ -34,7 +34,7 @@ class SmbMigrationTests(unittest.TestCase):
                 "spec": {"type": "LoadBalancer", "selector": {"app": "samba"},
                          "clusterIP": "10.43.1.2", "ports": [{"name": "smb", "port": 445,
                                                                "targetPort": 445, "nodePort": 30445}]},
-                "status": {"loadBalancer": {"ingress": [{"ip": "192.168.1.245"}]}}}}
+                "status": {"loadBalancer": {"ingress": [{"ip": "192.0.2.245"}]}}}}
         self.sent = []
 
     def get(self, path, **_kwargs):
@@ -73,7 +73,7 @@ class SmbMigrationTests(unittest.TestCase):
         self.assertEqual(server.SMB_NAME, dep["spec"]["template"]["spec"]["containers"][0]["name"])
         self.assertEqual(["/shares/media"], [m["mountPath"] for m in
                           dep["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]])
-        self.assertEqual("192.168.1.245", self.objects[self.new_svc]["metadata"]["annotations"]
+        self.assertEqual("192.0.2.245", self.objects[self.new_svc]["metadata"]["annotations"]
                          .get("kube-vip.io/loadbalancerIPs"))
         self.assertNotIn("clusterIP", self.objects[self.new_svc]["spec"])
 

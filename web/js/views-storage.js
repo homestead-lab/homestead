@@ -1080,8 +1080,8 @@ window.nfsExport = name => {
   const rwx = (share.access_modes || []).includes("ReadWriteMany");
   modal(`NFS export · ${esc(name)}`, `<p>Export this share from the optional NFSv4 container to a specific client address or network. Leave the field blank to remove its NFS export. SMB access is unchanged.</p>
     ${rwx ? "" : `<div class="note warn">This share may not be RWX. NFS requires a Bound ReadWriteMany volume so its separate container can mount the data; the server checks this before saving.</div>`}
-    <div class="f"><label>Allowed IPv4 client or CIDR ${tip("For example, 192.168.1.42 or 192.168.1.0/24. An everyone-accessible export is not allowed.")}</label>
-      <input id="nfs_clients" value="${esc(share.nfs_clients || "")}" placeholder="192.168.1.0/24" autocomplete="off"></div>
+    <div class="f"><label>Allowed IPv4 client or CIDR ${tip("For example, 192.0.2.42 or 192.0.2.0/24. An everyone-accessible export is not allowed.")}</label>
+      <input id="nfs_clients" value="${esc(share.nfs_clients || "")}" placeholder="192.0.2.0/24" autocomplete="off"></div>
     <label class="switch"><input type="checkbox" id="nfs_ro" ${share.nfs_read_only !== false ? "checked" : ""}> Read only</label>
     <div class="dim xs" style="margin-top:8px">NFSv4 clients mount ${esc(STATE.data.nfs?.address || "<server-ip>")}:/${esc(name)} on TCP port 2049. The server and its VIP are enabled in Settings → Cluster → Add-ons. Longhorn RWX re-export adds an extra NFS layer.</div>
     <div class="modalactions"><button class="btn pri" onclick="nfsExportSave(${jsq(name)},this)">Save export</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);

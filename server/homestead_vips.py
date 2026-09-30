@@ -287,7 +287,7 @@ def stranded(services, leases, slices, platform, now=None):
     last endpoint - a pod restarting - kube-vip gives the lease up and stops
     that election, and it did not start it again when the pod came back
     (kube-vip 1.2.3, on k3s-test: SMB, Homestead's VIP and the object store,
-    all on 192.168.1.108, unreachable for an hour). Returns [(namespace,
+    all on 192.0.2.108, unreachable for an hour). Returns [(namespace,
     lease, [services])].
 
     Only under per-Service election: with one leader for every VIP (global

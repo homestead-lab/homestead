@@ -8,8 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_networking as NET
 
 MAP = "/api/v1/namespaces/lab/configmaps/homestead-vips"
-NODE = "192.168.1.201"
-MGMT = "192.168.1.210"
+NODE = "192.0.2.201"
+MGMT = "192.0.2.210"
 
 
 class Cluster:
@@ -72,9 +72,9 @@ class ClusterAddressTests(unittest.TestCase):
         self.assertEqual({MGMT: "kube-system/ingress-expose"}, state["platform_addresses"])
 
     def test_harvesters_own_vip_setting_counts_whichever_service_has_it(self):
-        Cluster([], harvester_vip="192.168.1.209")
+        Cluster([], harvester_vip="192.0.2.209")
         state = NET.inventory()
-        self.assertIn("192.168.1.209", state["platform_addresses"])
+        self.assertIn("192.0.2.209", state["platform_addresses"])
 
     def test_the_shared_address_may_not_be_the_management_vip(self):
         Cluster([INGRESS], shared=MGMT)
@@ -83,39 +83,39 @@ class ClusterAddressTests(unittest.TestCase):
         self.assertIn("cluster's own address", NET.inventory()["shared_vip"]["problem"])
 
     def test_a_specific_address_may_not_be_the_management_vip(self):
-        Cluster([INGRESS], shared="192.168.1.242")
+        Cluster([INGRESS], shared="192.0.2.242")
         with self.assertRaisesRegex(ValueError, "cluster's own address"):
             plan("manual", MGMT)
 
     def test_an_address_another_program_owns_is_refused(self):
-        Cluster([service("192.168.1.230", "grafana", "monitoring", 3000)], shared="192.168.1.242")
+        Cluster([service("192.0.2.230", "grafana", "monitoring", 3000)], shared="192.0.2.242")
         with self.assertRaisesRegex(ValueError, "monitoring/grafana, which Homestead did not create"):
-            plan("manual", "192.168.1.230")
+            plan("manual", "192.0.2.230")
 
     def test_homesteads_own_services_still_share(self):
-        Cluster([service("192.168.1.242", "homestead", port=8088),
-                 service("192.168.1.242", "plex", "media", 32400,
-                         labels={"homestead.io/managed": "true"})], shared="192.168.1.242")
-        self.assertEqual("192.168.1.242", plan("shared")["vip"])
-        self.assertEqual("192.168.1.242", plan("manual", "192.168.1.242", 9000)["vip"])
+        Cluster([service("192.0.2.242", "homestead", port=8088),
+                 service("192.0.2.242", "plex", "media", 32400,
+                         labels={"homestead.io/managed": "true"})], shared="192.0.2.242")
+        self.assertEqual("192.0.2.242", plan("shared")["vip"])
+        self.assertEqual("192.0.2.242", plan("manual", "192.0.2.242", 9000)["vip"])
 
     def test_a_vip_of_your_own_on_the_management_address_is_never_handed_out(self):
-        Cluster([INGRESS], vips=[{"ip": MGMT, "label": "oops"}, {"ip": "192.168.1.231", "label": ""}],
-                shared="192.168.1.242")
+        Cluster([INGRESS], vips=[{"ip": MGMT, "label": "oops"}, {"ip": "192.0.2.231", "label": ""}],
+                shared="192.0.2.242")
         state = NET.inventory()
-        self.assertEqual("192.168.1.231", plan("automatic")["vip"])
+        self.assertEqual("192.0.2.231", plan("automatic")["vip"])
         blocked = {row["ip"]: row["blocked"] for row in state["registered_vips"]}
         self.assertIn("cluster's own address", blocked[MGMT])
-        self.assertEqual("", blocked["192.168.1.231"])
+        self.assertEqual("", blocked["192.0.2.231"])
 
     def test_the_management_vip_cannot_be_kept_as_a_vip(self):
-        Cluster([INGRESS], shared="192.168.1.242")
-        result = NET.add_vips({"start": "192.168.1.209", "end": MGMT})
-        self.assertEqual(["192.168.1.209"], result["added"])
+        Cluster([INGRESS], shared="192.0.2.242")
+        result = NET.add_vips({"start": "192.0.2.209", "end": MGMT})
+        self.assertEqual(["192.0.2.209"], result["added"])
         self.assertTrue(any("cluster's own address" in row for row in result["skipped"]))
 
     def test_apps_already_on_the_management_vip_are_named(self):
-        Cluster([INGRESS, service(MGMT, "jellyfin", port=8096)], shared="192.168.1.242")
+        Cluster([INGRESS, service(MGMT, "jellyfin", port=8096)], shared="192.0.2.242")
         self.assertEqual([{"namespace": "lab", "service": "jellyfin", "ip": MGMT,
                            "owner": "kube-system/ingress-expose"}],
                          NET.inventory()["platform_clashes"])

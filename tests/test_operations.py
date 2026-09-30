@@ -283,7 +283,7 @@ class OperationTests(unittest.TestCase):
         self.assertEqual("running", running["status"])
         self.assertIn("waiting for kube-vip", running["message"])
         self.objects[service_path]["status"]["loadBalancer"]["ingress"] = [
-            {"ip": "192.168.1.243"}]
+            {"ip": "192.0.2.243"}]
         complete = operations.list_operations()[0]
         self.assertEqual("succeeded", complete["status"])
         self.assertIn("1 ready endpoint", complete["message"])

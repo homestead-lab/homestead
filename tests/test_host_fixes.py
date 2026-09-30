@@ -48,9 +48,9 @@ class SmbTests(unittest.TestCase):
 class ManifestTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.nodes = [{"metadata": {"name": "k3s-1", "labels": {"node-role.kubernetes.io/control-plane": "true"}},
+        self.nodes = [{"metadata": {"name": "node-1", "labels": {"node-role.kubernetes.io/control-plane": "true"}},
                        "status": {"conditions": [{"type": "Ready", "status": "True"}]}},
-                      {"metadata": {"name": "k3s-2", "labels": {}}, "status": {"conditions": [{"type": "Ready", "status": "True"}]}}]
+                      {"metadata": {"name": "node-2", "labels": {}}, "status": {"conditions": [{"type": "Ready", "status": "True"}]}}]
         self.runs = []
 
         class Host:
@@ -66,8 +66,8 @@ class ManifestTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_each_server_node_is_marked_once(self):
-        self.assertEqual({"k3s-1": ["/var/lib/rancher/k3s/server/manifests/homestead.yaml"]}, MANIFESTS.tick())
-        self.assertEqual(["k3s-1"], [node for node, _ in self.runs], "servers only: agents have no auto-deploy folder")
+        self.assertEqual({"node-1": ["/var/lib/rancher/k3s/server/manifests/homestead.yaml"]}, MANIFESTS.tick())
+        self.assertEqual(["node-1"], [node for node, _ in self.runs], "servers only: agents have no auto-deploy folder")
         self.assertEqual({}, MANIFESTS.tick(), "done once")
         script = self.runs[0][1]
         for part in ("homestead.yaml", "longhorn.yaml", "kubevirt-cr.yaml", ".skip", "rke2/server/manifests"):

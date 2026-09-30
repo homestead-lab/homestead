@@ -161,7 +161,7 @@ class LonghornTests(unittest.TestCase):
 
 
 class ClusterCreatorTests(unittest.TestCase):
-    CFG = {"name": "lab", "servers": 1, "agents": 1, "network": "lan", "addresses": ["192.168.1.50", "192.168.1.51"],
+    CFG = {"name": "lab", "servers": 1, "agents": 1, "network": "lan", "addresses": ["192.0.2.50", "192.0.2.51"],
            "password": "long enough pass", "setup": "homestead"}
 
     def test_kubevirt_is_asked_of_the_first_server_only(self):

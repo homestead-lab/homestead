@@ -278,7 +278,7 @@ window.fleetMigration = async id => {
         UI.field("Address", `<select id="fm_pick" onchange="$('#fm_ip').hidden = this.value !== '__typed'">
             <option value="__shared">${shared ? `Its shared address · ${esc(shared)}` : "Its shared address"}</option>
             <option value="__typed">An address of its own…</option></select>
-          <input id="fm_ip" class="mono" placeholder="192.168.1.243" hidden data-ipam>`,
+          <input id="fm_ip" class="mono" placeholder="192.0.2.243" hidden data-ipam>`,
           { help: "Shared with its apps, on its own port. Choose an address of its own only to keep its traffic apart." }),
         UI.field("Port", '<input id="fm_port" type="number" min="1" max="65534" placeholder="9000" class="mono">',
           { help: "Where the store answers. Pick another if an app there already uses 9000; the next port up is its console." }))}
@@ -385,7 +385,7 @@ window.fleetSettingsPaint = async () => {
       Link each to manage it from here too; its password is then deleted, and moves already made keep working.</p>
       <ul class="fleet-list">${fleetLegacyHtml(legacy)}</ul>`) : ""}
     ${UI.section("Where the others reach this Homestead", UI.field("Address",
-      `<div class="fleet-address"><input id="fleetAddress" value="${esc(view?.address || view?.suggested_address || "")}" placeholder="http://192.168.1.242:8088">
+      `<div class="fleet-address"><input id="fleetAddress" value="${esc(view?.address || view?.suggested_address || "")}" placeholder="http://192.0.2.242:8088">
       ${UI.button("Save", "fleetSaveAddress()", { attrs: 'data-need="admin"' })}</div>`,
       { help: "Its LAN address and port. Linked clusters use it to relay pages and consoles to this one." }))}
     ${UI.more("How linking works", `<p>Linked Homesteads share a key that signs every request between them. Nobody's
@@ -454,7 +454,7 @@ window.fleetLink = () => {
   (open ? childModal : modal)("Link a cluster", `<div class="ui-stack">
     ${UI.lead("Links another Homestead to this one and to every cluster already linked here. It must not be linked to others yet.")}
     ${UI.fields(
-      UI.field("Its address", '<input id="fl_url" placeholder="http://192.168.1.250:8088" autocomplete="off">', { wide: true,
+      UI.field("Its address", '<input id="fl_url" placeholder="http://192.0.2.250:8088" autocomplete="off">', { wide: true,
         help: "What you open it at in a browser on your LAN, with the port." }),
       UI.field("Admin username there", '<input id="fl_user" placeholder="admin" autocomplete="off">'),
       UI.field("Password there", '<input id="fl_pass" type="password" autocomplete="new-password">'),

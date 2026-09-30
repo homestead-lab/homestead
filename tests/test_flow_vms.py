@@ -34,10 +34,10 @@ API = {
     ]},
     "/api/v1/services": {"items": [
         {"metadata": {"name": "web", "namespace": "lab"}, "spec": {"selector": {"app": "web"}, "ports": [{"port": 80}]},
-         "status": {"loadBalancer": {"ingress": [{"ip": "192.168.1.214"}]}}},
+         "status": {"loadBalancer": {"ingress": [{"ip": "192.0.2.214"}]}}},
         {"metadata": {"name": "ubuntu-ssh", "namespace": "lab"},
          "spec": {"selector": {"harvesterhci.io/vmName": "ubuntu"}, "ports": [{"port": 22, "name": "ssh"}]},
-         "status": {"loadBalancer": {"ingress": [{"ip": "192.168.1.217"}]}}},
+         "status": {"loadBalancer": {"ingress": [{"ip": "192.0.2.217"}]}}},
     ]},
     "/apis/longhorn.io/v1beta2/volumes": {"items": [
         {"metadata": {"name": f"pvc-{c}"}, "spec": {"numberOfReplicas": 2, "size": str(2**30)},
@@ -48,7 +48,7 @@ API = {
         {"metadata": {"name": "ubuntu", "namespace": "lab"},
          "spec": {"volumes": [{"name": "disk", "persistentVolumeClaim": {"claimName": "ubuntu-disk"}}]},
          "status": {"phase": "Running", "nodeName": "node2",
-                    "interfaces": [{"name": "default", "ipAddress": "192.168.1.61", "ipAddresses": ["192.168.1.61", "fe80::1"]}]}}]},
+                    "interfaces": [{"name": "default", "ipAddress": "192.0.2.61", "ipAddresses": ["192.0.2.61", "fe80::1"]}]}}]},
     "/apis/kubevirt.io/v1/virtualmachines": {"items": [vm("ubuntu", "ubuntu-disk", {"harvesterhci.io/vmName": "ubuntu"}),
                                                        vm("router", "router-disk")]},
     "/apis/apps/v1/deployments": {"items": []},
@@ -77,11 +77,11 @@ class FlowVmTests(unittest.TestCase):
     def test_a_running_vm_has_its_disk_ports_address_and_use(self):
         ubuntu = self.by["w:vm-ubuntu"]
         self.assertEqual([{"pvc": "ubuntu-disk", "vid": "v:pvc-ubuntu-disk"}], ubuntu["claims"])
-        self.assertEqual([{"port": 22, "name": "ssh", "vip": "192.168.1.217"}], ubuntu["ports"])
-        self.assertEqual(("192.168.1.61", "node2", True), (ubuntu["ip"], ubuntu["node"], ubuntu["running"]))
+        self.assertEqual([{"port": 22, "name": "ssh", "vip": "192.0.2.217"}], ubuntu["ports"])
+        self.assertEqual(("192.0.2.61", "node2", True), (ubuntu["ip"], ubuntu["node"], ubuntu["running"]))
         self.assertEqual((0.25, 1024.0), (ubuntu["cpu"], ubuntu["mem_mb"]))
-        vip = next(v for v in self.flow["vips"] if v["ip"] == "192.168.1.217")
-        self.assertEqual(("i:192.168.1.217", [{"port": 22, "app": "ubuntu"}], "vip"), (vip["id"], vip["ports"], vip["kind"]))
+        vip = next(v for v in self.flow["vips"] if v["ip"] == "192.0.2.217")
+        self.assertEqual(("i:192.0.2.217", [{"port": 22, "app": "ubuntu"}], "vip"), (vip["id"], vip["ports"], vip["kind"]))
 
     def test_a_stopped_vm_still_shows_its_disks(self):
         router = self.by["w:vm-router"]

@@ -185,8 +185,8 @@ class FrameworkTests(Store):
 
 
 class K3sClusterTests(Store):
-    NODES = [{"name": "k3s-lab-server-1", "role": "server", "address": "192.168.1.60"},
-             {"name": "k3s-lab-agent-1", "role": "agent", "address": "192.168.1.61"}]
+    NODES = [{"name": "k3s-lab-server-1", "role": "server", "address": "192.0.2.60"},
+             {"name": "k3s-lab-agent-1", "role": "agent", "address": "192.0.2.61"}]
 
     def setUp(self):
         super().setUp()
@@ -194,13 +194,13 @@ class K3sClusterTests(Store):
         for node in self.NODES:
             self.cluster.objects[f"/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/{node['name']}"] = {
                 "metadata": {"name": node["name"], "labels": {K3SC.LABEL: "k3s-lab"}}}
-        self.records = {"192.168.1.60": {"name": "k3s-lab-server-1"},
-                        "192.168.1.61": {"name": "printer"}}
+        self.records = {"192.0.2.60": {"name": "k3s-lab-server-1"},
+                        "192.0.2.61": {"name": "printer"}}
         self.deleted = []
 
     def op(self):
         return self.job("k3s-cluster", {"namespace": "lab", "name": "k3s-lab", "nodes": self.NODES,
-                                        "first": "192.168.1.60", "setup": "homestead", "started": time.time()},
+                                        "first": "192.0.2.60", "setup": "homestead", "started": time.time()},
                         "k3s cluster k3s-lab")
 
     def patches(self):
@@ -262,7 +262,7 @@ class K3sClusterTests(Store):
         self.assertEqual("test-admin", item["cancelled_by"])
         self.assertIn("Tracking stopped after failure", item["message"])
         self.assertEqual([], self.deleted)
-        self.assertIn("192.168.1.60", self.records)
+        self.assertIn("192.0.2.60", self.records)
         with self.assertRaisesRegex(ValueError, "failed already"):
             OPS.cancel(op, confirm="k3s-lab")
         self.assertTrue(OPS._public(item)["dismissible"])
@@ -346,7 +346,7 @@ class K3sClusterTests(Store):
         try:
             with self.assertRaisesRegex(ValueError, "Stopped at k3s-lab-agent-1. 1 creation receipt"):
                 K3SC.start({"name": "k3s-lab", "servers": 1, "agents": 1, "network": "default/lan",
-                            "addresses": ["192.168.1.60", "192.168.1.61"], "password": "a-long-password"}, OPS)
+                            "addresses": ["192.0.2.60", "192.0.2.61"], "password": "a-long-password"}, OPS)
         finally:
             K3SC.bind(None, None, None)
         self.assertEqual([], removed)

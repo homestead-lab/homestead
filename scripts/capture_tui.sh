@@ -22,9 +22,9 @@ stub id '[ "$1" = -u ] && echo 0 || exec /usr/bin/id "$@"'
 stub hostname 'echo node1'
 stub timedatectl 'echo yes'
 stub ip 'case "$*" in
-  "-4 route get"*) echo "1.1.1.1 via 192.168.1.1 dev eth0 src 192.168.1.50 uid 0" ;;
-  "-4 -o addr show scope global") echo "2: eth0    inet 192.168.1.50/24 brd 192.168.1.255 scope global eth0" ;;
-  "-4 addr show") echo "    inet 192.168.1.50/24 brd 192.168.1.255 scope global eth0" ;;
+  "-4 route get"*) echo "1.1.1.1 via 192.0.2.1 dev eth0 src 192.0.2.50 uid 0" ;;
+  "-4 -o addr show scope global") echo "2: eth0    inet 192.0.2.50/24 brd 192.0.2.255 scope global eth0" ;;
+  "-4 addr show") echo "    inet 192.0.2.50/24 brd 192.0.2.255 scope global eth0" ;;
 esac'
 stub df 'echo "Filesystem 1024-blocks Used Available Capacity Mounted on"
 echo "/dev/sda2 488245288 97649057 390596231 20% /"'
@@ -72,10 +72,10 @@ stub k3s '[ "$1" = kubectl ] && shift
 [ "${1:-}" = --request-timeout=3s ] && shift
 case "$*" in
   "config view "*) echo "https://127.0.0.1:6443" ;;
-  "get nodes -o jsonpath"*) printf "node1|192.168.1.50|True|v1.34.1+k3s1\nnode2|192.168.1.51|False|v1.34.1+k3s1\n" ;;
+  "get nodes -o jsonpath"*) printf "node1|192.0.2.50|True|v1.34.1+k3s1\nnode2|192.0.2.51|False|v1.34.1+k3s1\n" ;;
   "-n longhorn-system get daemonset "*) echo "longhorn-manager|longhornio/longhorn-manager:v1.9.2|1|2" ;;
   "-n lab get deployment homestead --ignore-not-found"*) echo "homestead|ghcr.io/wjcloudy/homestead:2.8.199|1|1" ;;
-  "get services "*) printf "lab/homestead|192.168.1.242 | \nlab/media|192.168.1.243 | \nlab/photos|192.168.1.244 | \nlab/backups|192.168.1.245 | \nlab/archive|192.168.1.246 | \n" ;;
+  "get services "*) printf "lab/homestead|192.0.2.242 | \nlab/media|192.0.2.243 | \nlab/photos|192.0.2.244 | \nlab/backups|192.0.2.245 | \nlab/archive|192.0.2.246 | \n" ;;
   "get --raw /readyz"|"get --raw /readyz/etcd") echo ok ;;
   "get node node1 -o jsonpath"*) echo "True true" ;;
   "get nodes --no-headers") echo "node1 Ready control-plane 1d v1.33"; echo "node2 NotReady <none> 1d v1.33" ;;
@@ -96,7 +96,7 @@ key Escape
 
 start "$BIN" 24
 shot node-menu-small "Homestead   "
-key Down; key Enter; shot node-menu-addresses "192.168.1.246"
+key Down; key Enter; shot node-menu-addresses "192.0.2.246"
 key Escape
 
 # A screen that never showed is a menu that broke: say so.

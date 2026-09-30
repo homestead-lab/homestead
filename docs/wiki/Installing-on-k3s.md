@@ -77,7 +77,7 @@ outside your router's DHCP range. Once kube-vip is running, Homestead reserves
 it, makes it the apps' default, and puts itself, its backup storage and shares
 on it. Homestead is then at `http://<VIP>:8088` as well as on each node's
 address. Leave it empty to keep the nodes' own addresses and add a VIP later
-(see [Networking](Networking#homestead-itself-on-a-vip)). `--vip 192.168.1.200`
+(see [Networking](Networking#homestead-itself-on-a-vip)). `--vip 192.0.2.200`
 does the same for `bootstrap-k3s.sh`.
 The installation summary then shows the settings and the version of each component:
 
@@ -126,7 +126,7 @@ Options go after `server`:
 | `--longhorn-version v1.9.1` | pins Longhorn instead of its newest release |
 | `--kubevirt-version v1.6.0`, `--cdi-version v1.62.0` | pin KubeVirt and CDI instead of their current releases |
 | `--homestead-version 2.8.118` | pins Homestead instead of the newest release |
-| `--node-ip 192.168.1.10` | the address k3s registers this machine by, when it has more than one |
+| `--node-ip 192.0.2.10` | the address k3s registers this machine by, when it has more than one |
 | `--longhorn-volume 200` | the size in GB of Longhorn's own LVM volume at `/var/lib/longhorn`; `auto` (the default) takes the volume group's free space less a tenth kept for the system, `none` keeps Longhorn on the root filesystem. Works for `agent` and `join` too |
 | `--no-node-probe` | leaves out the node probe (temperatures, drive health, each host's network interfaces); add it later under **Settings → Cluster → Add-ons** |
 
@@ -157,16 +157,16 @@ sudo cat /var/lib/rancher/k3s/server/node-token
 As a **worker** (runs apps, not the control plane):
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - agent https://192.168.1.10:6443 <token>
+curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - agent https://192.0.2.10:6443 <token>
 ```
 
 As another **server** (control plane and etcd as well):
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - join https://192.168.1.10:6443 <token>
+curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - join https://192.0.2.10:6443 <token>
 ```
 
-Use `192.168.1.10` as the first machine's address, and your token. **Cluster →
+Use `192.0.2.10` as the first machine's address, and your token. **Cluster →
 Add a host** in Homestead shows these lines already filled in. Give it a server
 machine's **own address**, not the VIP for Homestead and apps: that VIP carries
 apps, not the cluster, so the machine joins through a server's address on

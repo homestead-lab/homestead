@@ -11,7 +11,7 @@ import server
 from fixtures_source import source
 
 
-SOURCE = source(host="192.168.1.10")
+SOURCE = source(host="192.0.2.10")
 
 
 class ImportMappingTests(unittest.TestCase):
@@ -549,7 +549,7 @@ class ImportProgressTests(unittest.TestCase):
 
     def test_running_out_of_space_is_named_not_left_in_the_log(self):
         log = "\n".join([
-            '==> step 1/1 appdata :: 192.168.1.177:/mnt/user/appdata/HomeAsssistantCore -> /config',
+            '==> step 1/1 appdata :: 192.0.2.177:/mnt/user/appdata/HomeAsssistantCore -> /config',
             'rsync: [receiver] write failed on "/appdata/home-assistant_v2.db": No space left on device (28)',
             "rsync error: error in file IO (code 11) at receiver.c(401) [receiver=3.4.3]",
         ])

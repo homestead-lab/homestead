@@ -197,7 +197,7 @@ def clean(cfg):
     host = str(cfg.get("host") or "").strip()
     if out["enabled"] or host:
         if not re.fullmatch(r"[A-Za-z0-9.\-:\[\]]{1,253}", host):
-            raise ValueError("the broker is a host name or IP address, like 192.168.1.177")
+            raise ValueError("the broker is a host name or IP address, like 192.0.2.177")
     out["host"] = host
     port = int(cfg.get("port") or (8883 if cfg.get("tls") else 1883))
     if not 1 <= port <= 65535:

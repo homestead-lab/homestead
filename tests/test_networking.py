@@ -16,7 +16,7 @@ class NetworkingTests(unittest.TestCase):
         self.objects["/api/v1/namespaces/lab/services/homestead"] = service
         return {"namespace": "lab", "workload": "homestead", "name": "homestead",
                 "update": True, "uid": "service-uid", "resource_version": "7", "type": "LoadBalancer",
-                "vip_mode": "manual", "vip": "192.168.1.243",
+                "vip_mode": "manual", "vip": "192.0.2.243",
                 "ports": [{"port": 8088, "target_port": 8088}]}
 
     def test_vip_edit_preserves_service_identity_and_cluster_address(self):
@@ -28,18 +28,18 @@ class NetworkingTests(unittest.TestCase):
         self.assertEqual("10.43.0.20", service["spec"]["clusterIP"])
         self.assertEqual("service-uid", service["metadata"]["uid"])
         self.assertEqual("7", service["metadata"]["resourceVersion"])
-        self.assertEqual("192.168.1.243", service["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
+        self.assertEqual("192.0.2.243", service["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
         self.assertIn("updated", result["message"])
 
     def test_vip_edit_same_address_does_not_conflict_with_itself(self):
         cfg = self.edit_service_config()
         cfg.update(vip_mode="shared", vip="")
         with patch.object(networking.PLATFORM, "vip_spec", return_value={}):
-            self.assertEqual("192.168.1.242", networking.service_plan(cfg)["vip"])
+            self.assertEqual("192.0.2.242", networking.service_plan(cfg)["vip"])
 
     def test_changed_default_cannot_silently_replace_reviewed_address(self):
         cfg = self.edit_service_config()
-        cfg.update(vip_mode="shared", reviewed_vip="192.168.1.243")
+        cfg.update(vip_mode="shared", reviewed_vip="192.0.2.243")
         with self.assertRaisesRegex(ValueError, "changed since review"):
             networking.create_service(cfg)
         self.assertFalse(self.sent)
@@ -101,11 +101,11 @@ class NetworkingTests(unittest.TestCase):
         self.objects = {
             "/api/v1/services": {"items": [{
                 "metadata": {"name": "homestead", "namespace": "lab",
-                             "annotations": {"kube-vip.io/loadbalancerIPs": "192.168.1.242"}},
+                             "annotations": {"kube-vip.io/loadbalancerIPs": "192.0.2.242"}},
                 "spec": {"type": "LoadBalancer", "clusterIP": "10.43.0.20",
                          "selector": {"app": "homestead"},
                          "ports": [{"name": "web", "port": 8088, "targetPort": 8088, "protocol": "TCP"}]},
-                "status": {"loadBalancer": {"ingress": [{"ip": "192.168.1.242"}]}}
+                "status": {"loadBalancer": {"ingress": [{"ip": "192.0.2.242"}]}}
             }]},
             "/apis/discovery.k8s.io/v1/endpointslices": {"items": [{
                 "metadata": {"namespace": "lab", "labels": {"kubernetes.io/service-name": "homestead"}},
@@ -128,11 +128,11 @@ class NetworkingTests(unittest.TestCase):
                                           {"name": "dns", "containerPort": 53, "protocol": "UDP"}]}]}}}
             }]},
             "/api/v1/nodes": {"items": [{"status": {"addresses": [
-                {"type": "InternalIP", "address": "192.168.1.210"}]}}]},
+                {"type": "InternalIP", "address": "192.0.2.210"}]}}]},
             "/apis/networking.k8s.io/v1/ingresses": {"items": []},
             "/apis/loadbalancer.harvesterhci.io/v1beta1/ippools": {"items": [{
                 "metadata": {"name": "lab-pool"},
-                "spec": {"ranges": [{"rangeStart": "192.168.1.242", "rangeEnd": "192.168.1.244"}]},
+                "spec": {"ranges": [{"rangeStart": "192.0.2.242", "rangeEnd": "192.0.2.244"}]},
                 "status": {"total": 3, "available": 3, "conditions": [{"type": "Ready", "status": "True"}]}
             }]},
             "/apis/apps/v1/namespaces/harvester-system/daemonsets/kube-vip": {
@@ -151,7 +151,7 @@ class NetworkingTests(unittest.TestCase):
             self.sent.append((method, path, body))
             return body
 
-        networking.bind(get, send, {"kube-system", "harvester-system"}, "lab", "192.168.1.242")
+        networking.bind(get, send, {"kube-system", "harvester-system"}, "lab", "192.0.2.242")
 
     def test_edited_lan_port_is_published_on_the_existing_service(self):
         message = networking.sync_workload_ports("lab", "homestead", [
@@ -185,15 +185,15 @@ class NetworkingTests(unittest.TestCase):
         method, path, body = self.sent[-1]
         self.assertEqual(("POST", "/api/v1/namespaces/lab/services"), (method, path))
         self.assertEqual({"app": "pihole"}, body["spec"]["selector"])
-        self.assertIn("192.168.1.243", message)
+        self.assertIn("192.0.2.243", message)
 
     def test_a_lan_port_another_service_already_answers_is_refused(self):
         self.objects["/api/v1/services"]["items"].append({
             "metadata": {"name": "pihole", "namespace": "lab",
-                         "annotations": {"kube-vip.io/loadbalancerIPs": "192.168.1.242"}},
+                         "annotations": {"kube-vip.io/loadbalancerIPs": "192.0.2.242"}},
             "spec": {"type": "LoadBalancer", "selector": {"app": "pihole"},
                      "ports": [{"name": "dns", "port": 53, "targetPort": 53, "protocol": "UDP"}]},
-            "status": {"loadBalancer": {"ingress": [{"ip": "192.168.1.242"}]}}})
+            "status": {"loadBalancer": {"ingress": [{"ip": "192.0.2.242"}]}}})
 
         with self.assertRaisesRegex(ValueError, "already answered by"):
             networking.sync_workload_ports("lab", "homestead", [
@@ -202,10 +202,10 @@ class NetworkingTests(unittest.TestCase):
     def test_a_service_whose_workload_is_gone_is_marked_orphaned(self):
         self.objects["/api/v1/services"]["items"].append({
             "metadata": {"name": "ghost", "namespace": "lab",
-                         "annotations": {"kube-vip.io/loadbalancerIPs": "192.168.1.244"}},
+                         "annotations": {"kube-vip.io/loadbalancerIPs": "192.0.2.244"}},
             "spec": {"type": "LoadBalancer", "selector": {"app": "deleted-app"},
                      "ports": [{"name": "web", "port": 8080, "targetPort": 8080, "protocol": "TCP"}]},
-            "status": {"loadBalancer": {"ingress": [{"ip": "192.168.1.244"}]}}})
+            "status": {"loadBalancer": {"ingress": [{"ip": "192.0.2.244"}]}}})
 
         rows = {row["name"]: row for row in networking.inventory()["services"]}
         self.assertTrue(rows["ghost"]["orphaned"])
@@ -214,15 +214,15 @@ class NetworkingTests(unittest.TestCase):
     def test_an_orphaned_listener_can_be_released(self):
         self.objects["/api/v1/services"]["items"].append({
             "metadata": {"name": "ghost", "namespace": "lab",
-                         "annotations": {"kube-vip.io/loadbalancerIPs": "192.168.1.244"}},
+                         "annotations": {"kube-vip.io/loadbalancerIPs": "192.0.2.244"}},
             "spec": {"type": "LoadBalancer", "selector": {"app": "deleted-app"},
                      "ports": [{"name": "web", "port": 8080, "targetPort": 8080, "protocol": "TCP"}]},
-            "status": {"loadBalancer": {"ingress": [{"ip": "192.168.1.244"}]}}})
+            "status": {"loadBalancer": {"ingress": [{"ip": "192.0.2.244"}]}}})
 
         result = networking.delete_service("lab", "ghost")
 
         self.assertEqual(("DELETE", "/api/v1/namespaces/lab/services/ghost"), self.sent[-1][:2])
-        self.assertEqual(["192.168.1.244:8080/TCP"], result["freed"])
+        self.assertEqual(["192.0.2.244:8080/TCP"], result["freed"])
 
     def test_deleting_a_service_that_still_serves_a_workload_needs_force(self):
         with self.assertRaisesRegex(ValueError, "still serves homestead"):
@@ -238,7 +238,7 @@ class NetworkingTests(unittest.TestCase):
 
     def test_inventory_reconciles_pool_against_live_services(self):
         state = networking.inventory()
-        self.assertEqual(["192.168.1.243", "192.168.1.244"], state["available_vips"])
+        self.assertEqual(["192.0.2.243", "192.0.2.244"], state["available_vips"])
         self.assertEqual(3, state["pools"][0]["reported_available"])
         self.assertTrue(state["controller"]["healthy"])
         service = state["services"][0]
@@ -251,7 +251,7 @@ class NetworkingTests(unittest.TestCase):
             "vip_mode": "auto", "ports": [{"port": 53, "target_port": 53, "protocol": "UDP"}],
         })
         self.assertEqual("automatic", plan["vip_mode"])
-        self.assertEqual("192.168.1.243", plan["vip"])
+        self.assertEqual("192.0.2.243", plan["vip"])
 
     def test_shared_vip_rejects_listener_collision(self):
         with self.assertRaisesRegex(ValueError, "already used"):
@@ -268,7 +268,7 @@ class NetworkingTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         body = self.sent[0][2]
         self.assertEqual({"app": "pihole"}, body["spec"]["selector"])
-        self.assertEqual("192.168.1.243", body["metadata"]["annotations"][networking.VIP_ANNOTATION])
+        self.assertEqual("192.0.2.243", body["metadata"]["annotations"][networking.VIP_ANNOTATION])
 
     def test_internal_deploy_is_preflighted_as_cluster_ip(self):
         prepared = networking.prepare_deploy({
@@ -287,7 +287,7 @@ class NetworkingTests(unittest.TestCase):
                 raise urllib.error.HTTPError(path, 429, "throttled", {"Retry-After": "0"}, None)
             return {"items": []}
 
-        networking.bind(throttled, lambda *args, **kwargs: None, set(), "lab", "192.168.1.242")
+        networking.bind(throttled, lambda *args, **kwargs: None, set(), "lab", "192.0.2.242")
         self.assertEqual([], networking._items("/api/v1/services"))
         self.assertEqual(2, len(calls))
 

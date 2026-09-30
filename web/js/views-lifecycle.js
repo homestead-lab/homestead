@@ -686,12 +686,12 @@ function vmAddressFields(p, opts, count = 1) {
         <select id="${p}_subnet" onchange="vmSubnetPicked(${jsq(p)}, ${count})">${subnets.map(s => `<option value="${esc(s.cidr)}">${esc(s.cidr)}${s.name ? ` · ${esc(s.name)}` : ""} · ${s.free.length} free</option>`).join("")}
           <option value="">another - type it in</option></select></div>
       <div class="f"><label>${count > 1 ? "Addresses, one per node" : "Address"}</label>
-        <input id="${p}_ip" class="mono" placeholder="${count > 1 ? "192.168.1.60, 192.168.1.61" : "192.168.1.60"}" list="${p}_free" data-ipam="${count > 1 ? "multi" : ""}">
+        <input id="${p}_ip" class="mono" placeholder="${count > 1 ? "192.0.2.60, 192.0.2.61" : "192.0.2.60"}" list="${p}_free" data-ipam="${count > 1 ? "multi" : ""}">
         <datalist id="${p}_free"></datalist></div></div>
     <div class="f2">
       <div class="f"><label>Prefix length</label><input id="${p}_prefix" type="number" min="8" max="30" value="${first ? esc(first.cidr.split("/")[1]) : 24}"></div>
-      <div class="f"><label>Gateway</label><input id="${p}_gw" class="mono" value="${esc(first?.gateway || "")}" placeholder="192.168.1.1"></div></div>
-    <div class="f"><label>DNS servers ${tip("Comma-separated. Left empty, the gateway answers DNS.")}</label><input id="${p}_dns" class="mono" placeholder="${esc(first?.gateway || "192.168.1.1")}"></div>
+      <div class="f"><label>Gateway</label><input id="${p}_gw" class="mono" value="${esc(first?.gateway || "")}" placeholder="192.0.2.1"></div></div>
+    <div class="f"><label>DNS servers ${tip("Comma-separated. Left empty, the gateway answers DNS.")}</label><input id="${p}_dns" class="mono" placeholder="${esc(first?.gateway || "192.0.2.1")}"></div>
     ${subnets.length ? "" : '<div class="dim xs">IP addresses knows no subnet yet: add yours under Networking › IP addresses to be offered free addresses and have these recorded.</div>'}`;
 }
 window.vmSubnetPicked = (p, count = 1) => {
@@ -1881,7 +1881,7 @@ window.clusterStorage = (name, addressOnly = false, after = null) => {
           ${free.some(v => v.from !== "vips") ? `<optgroup label="An address of its own: free in ${esc(name)}'s IP pools">${free.filter(v => v.from !== "vips").map(v =>
             `<option value="${esc(v.ip)}">${esc(v.ip)}</option>`).join("")}</optgroup>` : ""}
           <option value="__typed">Type an address…</option></select>
-        <input id="cs_ip" class="mono" placeholder="192.168.1.243" hidden data-ipam>`,
+        <input id="cs_ip" class="mono" placeholder="192.0.2.243" hidden data-ipam>`,
         { help: `${shared ? `${esc(name)}'s shared address is the one its apps share; the store answers on its own port there.` : `${esc(name)} puts Services on its nodes' own addresses; the store answers on its own port there.`} Choose an address of its own only to keep its traffic apart.` }),
       addressOnly ? "" : UI.field("Port", '<input id="cs_port" type="number" min="1" max="65534" placeholder="9000" class="mono">',
         { help: "Where the store answers: 9000, or the port it already has, when left blank. Pick another if an app there already uses it; the next port up is its console." }))}
@@ -2000,7 +2000,7 @@ window.moveReview = (cluster, kind, name) => {
         <option value="shared">This cluster's shared address</option>
         <option value="automatic">Next free pool address</option>
         <option value="manual">A specific address</option></select></div>`}</div>
-  <div class="f" id="mv_ip_wrap" hidden><label>Specific address</label><input id="mv_ip" class="mono" placeholder="192.168.1.245" data-ipam></div>
+  <div class="f" id="mv_ip_wrap" hidden><label>Specific address</label><input id="mv_ip" class="mono" placeholder="192.0.2.245" data-ipam></div>
   <div class="f"><label>Destination storage class</label><select id="mv_sc" disabled><option value="">Loading destination classes…</option></select>
     <div class="dim xs">Restored volumes inherit this class's replica count, disk tags and other storage settings.</div></div>
   <div id="mv_plan"></div>

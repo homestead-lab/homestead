@@ -11,7 +11,7 @@ class DefaultsTests(unittest.TestCase):
         base = test_networking.NetworkingTests("setUp")
         base.setUp()
         self.objects, self.sent = base.objects, base.sent
-        self.ip = "192.168.1.80"
+        self.ip = "192.0.2.80"
         self.map = "/api/v1/namespaces/lab/configmaps/homestead-vips"
         self.objects[self.map] = {"data": {"vips.json": json.dumps([{"ip": self.ip, "default": True}])}}
         self.platform = {"load_balancer": "kube-vip", "servicelb": True, "vip_service_election": True,
@@ -34,18 +34,18 @@ class DefaultsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "another default"):
             NET.remove_vip(self.ip)
         with self.assertRaisesRegex(ValueError, "node address"):
-            NET.set_default_vip("192.168.1.210")
+            NET.set_default_vip("192.0.2.210")
 
     def test_default_requires_a_vip_provider_and_reserved_address(self):
         with self.assertRaisesRegex(ValueError, "Add this reserved"):
-            NET.set_default_vip("192.168.1.89")
+            NET.set_default_vip("192.0.2.89")
         self.platform["load_balancer"] = "servicelb"
         with self.assertRaisesRegex(ValueError, "Install kube-vip"):
             NET.set_default_vip(self.ip)
 
     def test_common_lease_is_per_ip_not_per_service(self):
-        self.assertEqual("homestead-vip-192-168-1-80", PLATFORM.vip_annotations(self.ip)["kube-vip.io/leaseName"])
-        self.assertNotEqual(PLATFORM.vip_annotations(self.ip), PLATFORM.vip_annotations("192.168.1.81"))
+        self.assertEqual("homestead-vip-192-0-2-80", PLATFORM.vip_annotations(self.ip)["kube-vip.io/leaseName"])
+        self.assertNotEqual(PLATFORM.vip_annotations(self.ip), PLATFORM.vip_annotations("192.0.2.81"))
 
     def test_unsafe_shared_elections_are_refused(self):
         svc = self.objects["/api/v1/services"]["items"][0]

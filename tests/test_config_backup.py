@@ -43,7 +43,7 @@ PARTS = [
      "objects": [("configmaps", "lab", "homestead-ipam"), ("secrets", "lab", "homestead-unifi")]},
     {"id": "portal", "label": "Portal", "objects": [("configmaps", "lab", "homestead-portal")]},
 ]
-SECRET = base64.b64encode(b'{"users":{"james":{"hash":"x"}}}').decode()
+SECRET = base64.b64encode(b'{"users":{"robin":{"hash":"x"}}}').decode()
 
 
 class ConfigBackupTests(unittest.TestCase):

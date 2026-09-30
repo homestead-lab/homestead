@@ -82,7 +82,7 @@ class UsageTests(unittest.TestCase):
                     u = row["usage"]
                     self.assertEqual((25.0, 1000, 100), (u["cpu_pct"], u["read_bps"], u["write_bps"]))
                     self.assertEqual(round(100 * 4 * 2**30 / VMS._bytes(row["memory"]), 1), u["mem_pct"])
-                    self.assertEqual(["192.168.1.50"], row["ips"])
+                    self.assertEqual(["192.0.2.50"], row["ips"])
 
 
 import unittest.mock  # noqa: E402

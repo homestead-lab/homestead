@@ -8,13 +8,13 @@ import homestead_console as CONSOLE
 class Cluster:
     def __init__(self, ready=True):
         self.pods, self.sent = {}, []
-        self.node = {"metadata": {"name": "k3s-1"},
+        self.node = {"metadata": {"name": "node-1"},
                      "status": {"conditions": [{"type": "Ready", "status": "True" if ready else "Unknown"}]}}
         SHELL.bind(self.get, self.send, "lab")
         SHELL._sessions.clear()
 
     def get(self, path):
-        if path == "/api/v1/nodes/k3s-1":
+        if path == "/api/v1/nodes/node-1":
             return self.node
         name = path.rsplit("/", 1)[1]
         if "/pods/" in path and name in self.pods:
@@ -32,37 +32,37 @@ class Cluster:
 
 class NodeShellTests(unittest.TestCase):
     def test_the_helper_is_a_privileged_pod_on_that_node_that_does_not_outlive_its_day(self):
-        spec = SHELL.body("k3s-1")["spec"]
-        self.assertEqual(("k3s-1", True, True, True), (spec["nodeName"], spec["hostPID"], spec["hostNetwork"],
+        spec = SHELL.body("node-1")["spec"]
+        self.assertEqual(("node-1", True, True, True), (spec["nodeName"], spec["hostPID"], spec["hostNetwork"],
                                                       spec["containers"][0]["securityContext"]["privileged"]))
         self.assertEqual([{"operator": "Exists"}], spec["tolerations"], "a cordoned or tainted node still opens")
         self.assertEqual(8 * 3600, spec["activeDeadlineSeconds"])
 
     def test_opening_starts_the_helper_and_enters_the_host(self):
         c = Cluster()
-        target = SHELL.open_shell("k3s-1", sleep=lambda s: None)
-        self.assertEqual(("lab", "homestead-shell-k3s-1", "shell"), (target["namespace"], target["pod"], target["container"]))
+        target = SHELL.open_shell("node-1", sleep=lambda s: None)
+        self.assertEqual(("lab", "homestead-shell-node-1", "shell"), (target["namespace"], target["pod"], target["container"]))
         self.assertEqual(["nsenter", "-t", "1"], target["command"][:3])
-        SHELL.open_shell("k3s-1", sleep=lambda s: None)
+        SHELL.open_shell("node-1", sleep=lambda s: None)
         self.assertEqual(1, sum(1 for m, p in c.sent if m == "POST"), "one helper serves every session")
 
     def test_a_node_that_is_not_ready_is_refused(self):
         Cluster(ready=False)
         with self.assertRaisesRegex(ValueError, "not Ready"):
-            SHELL.open_shell("k3s-1", sleep=lambda s: None)
+            SHELL.open_shell("node-1", sleep=lambda s: None)
 
     def test_the_helper_goes_when_the_last_session_closes(self):
         c = Cluster()
-        SHELL.open_shell("k3s-1", sleep=lambda s: None)
-        SHELL.session_started("k3s-1")
-        SHELL.session_started("k3s-1")
-        SHELL.session_ended("k3s-1")
-        self.assertIn("homestead-shell-k3s-1", c.pods)
-        SHELL.session_ended("k3s-1")
-        self.assertNotIn("homestead-shell-k3s-1", c.pods)
+        SHELL.open_shell("node-1", sleep=lambda s: None)
+        SHELL.session_started("node-1")
+        SHELL.session_started("node-1")
+        SHELL.session_ended("node-1")
+        self.assertIn("homestead-shell-node-1", c.pods)
+        SHELL.session_ended("node-1")
+        self.assertNotIn("homestead-shell-node-1", c.pods)
 
     def test_the_host_command_reaches_kubernetes_one_argument_at_a_time(self):
-        path = CONSOLE.exec_path("lab", "homestead-shell-k3s-1", "shell", SHELL.HOST_SHELL)
+        path = CONSOLE.exec_path("lab", "homestead-shell-node-1", "shell", SHELL.HOST_SHELL)
         query = urllib.parse.parse_qs(urllib.parse.urlparse(path).query)
         self.assertEqual(SHELL.HOST_SHELL, query["command"])
         self.assertEqual(["/bin/sh"], urllib.parse.parse_qs(

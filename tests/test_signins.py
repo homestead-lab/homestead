@@ -18,15 +18,15 @@ class HistoryTests(unittest.TestCase):
         signins.bind(self.dir.name)
 
     def test_newest_first_one_person_or_only_failures(self):
-        signins.record("signin", "james", "10.0.0.5")
-        signins.record("signin-failed", "james", "10.0.0.9", ok=False, detail="incorrect username or password")
+        signins.record("signin", "robin", "10.0.0.5")
+        signins.record("signin-failed", "robin", "10.0.0.9", ok=False, detail="incorrect username or password")
         signins.record("signin", "alex", "10.0.0.6")
-        self.assertEqual(["alex", "james", "james"], [r["user"] for r in signins.history()])
-        self.assertEqual(["signin-failed", "signin"], [r["event"] for r in signins.history("James")])
+        self.assertEqual(["alex", "robin", "robin"], [r["user"] for r in signins.history()])
+        self.assertEqual(["signin-failed", "signin"], [r["event"] for r in signins.history("Robin")])
         self.assertEqual(["10.0.0.9"], [r["ip"] for r in signins.history(failures=True)])
 
     def test_an_unknown_event_is_not_written(self):
-        signins.record("password-dump", "james")
+        signins.record("password-dump", "robin")
         self.assertEqual([], signins.history())
 
     def test_the_oldest_are_dropped_past_the_limit(self):
@@ -48,7 +48,7 @@ class HistoryTests(unittest.TestCase):
     def test_a_disk_that_cannot_be_written_does_not_stop_a_sign_in(self):
         signins.bind(str(Path(self.dir.name) / "file-not-dir" / "x"))
         (Path(self.dir.name) / "file-not-dir").write_text("")
-        signins.record("signin", "james")     # no exception
+        signins.record("signin", "robin")     # no exception
 
 
 class LoginRouteTests(unittest.TestCase):
@@ -66,7 +66,7 @@ class LoginRouteTests(unittest.TestCase):
         h.path, h.command = "/api/auth/login", "POST"
         h.headers = {"Content-Length": str(len(raw)), "User-Agent": "curl/8.4.0"}
         h.rfile, h.wfile = io.BytesIO(raw), io.BytesIO()
-        h.client_address, h.connection = ("192.168.1.50", 1), None
+        h.client_address, h.connection = ("192.0.2.50", 1), None
         h._send = mock.Mock()
         with mock.patch.object(self.server.AUTH, "login", login):
             h.do_POST()
@@ -75,9 +75,9 @@ class LoginRouteTests(unittest.TestCase):
     def test_a_failed_sign_in_records_the_name_tried_not_the_password(self):
         def refuse(*a, **k):
             raise PermissionError("incorrect username or password")
-        self.post({"username": "James", "password": "hunter2-secret"}, refuse)
+        self.post({"username": "Robin", "password": "hunter2-secret"}, refuse)
         row = self.server.SIGNINS.history()[0]
-        self.assertEqual(("signin-failed", "james", False, "192.168.1.50", "curl"),
+        self.assertEqual(("signin-failed", "robin", False, "192.0.2.50", "curl"),
                          (row["event"], row["user"], row["ok"], row["ip"], row["device"]))
         raw = (Path(self.dir.name) / "signins.jsonl").read_text()
         self.assertNotIn("hunter2", raw)
@@ -85,14 +85,14 @@ class LoginRouteTests(unittest.TestCase):
     def test_too_many_attempts_is_its_own_entry(self):
         def block(*a, **k):
             raise PermissionError("too many attempts — wait a few minutes")
-        self.post({"username": "james", "password": "x"}, block)
+        self.post({"username": "robin", "password": "x"}, block)
         self.assertEqual("signin-blocked", self.server.SIGNINS.history()[0]["event"])
 
     def test_a_sign_in_is_recorded(self):
         with mock.patch.object(self.server.AUTH, "idle_ttl", return_value=60):
-            self.post({"username": "james", "password": "right", "remember": True}, lambda *a, **k: "token")
+            self.post({"username": "robin", "password": "right", "remember": True}, lambda *a, **k: "token")
         row = self.server.SIGNINS.history()[0]
-        self.assertEqual(("signin", "james", True, "kept signed in"), (row["event"], row["user"], row["ok"], row["detail"]))
+        self.assertEqual(("signin", "robin", True, "kept signed in"), (row["event"], row["user"], row["ok"], row["detail"]))
 
 
 if __name__ == "__main__":

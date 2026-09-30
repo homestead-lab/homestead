@@ -100,7 +100,7 @@ def vip_pill(cx, y, w=230, h=38):
     return (rect(cx - w / 2, y, w, h, h / 2, BLUE, BLUE, 1.5, fo=0.14, so=0.9)
             + f'<circle cx="{cx - w / 2 + 22}" cy="{y + h / 2}" r="5" fill="{BLUE}"/>'
             + t(cx - w / 2 + 36, y + h / 2 + 5, "VIP", 13, BLUE, 700, ls=1)
-            + t(cx - w / 2 + 72, y + h / 2 + 5.5, "192.168.1.200", 16, CREAM, 600, family=MONO))
+            + t(cx - w / 2 + 72, y + h / 2 + 5.5, "192.0.2.200", 16, CREAM, 600, family=MONO))
 
 
 def join_arrow(pfx, x1, x2, y):

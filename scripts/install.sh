@@ -28,8 +28,8 @@
 # Unattended installation: set the answers in the environment.
 #   HS_ROLE=new|server|agent|addons|harvester   installation mode
 #   HS_DIST=k3s|rke2                            distribution for a new cluster
-#   HS_NODE_IP=192.168.1.50                     this node's IP address
-#   HS_SERVER=192.168.1.50  HS_TOKEN=...        the cluster to join
+#   HS_NODE_IP=192.0.2.50                     this node's IP address
+#   HS_SERVER=192.0.2.50  HS_TOKEN=...        the cluster to join
 #   HS_LONGHORN=yes|no  HS_KUBEVIRT=yes|no      components for a new cluster
 #   HS_KUBEVIP=yes|no  HS_MULTUS=yes|no         kube-vip and Multus, installed by Homestead (default yes)
 #   HS_KUBEVIP_VERSION=0.11.1  HS_MULTUS_VERSION=v4.3.102   their chart versions (default: tested)
@@ -39,7 +39,7 @@
 #   HS_K8S_VERSION=v1.33.4+k3s1                 k3s or RKE2 version
 #   HS_LONGHORN_VERSION=v1.9.1  HS_KUBEVIRT_VERSION=v1.6.0  HS_CDI_VERSION=v1.62.0
 #   HS_VERSION=2.8.184                          Homestead version
-#   HS_VIP=192.168.1.242                        the VIP for Homestead and apps (k3s/RKE2: optional)
+#   HS_VIP=192.0.2.242                        the VIP for Homestead and apps (k3s/RKE2: optional)
 #   HS_CLASS=harvester-longhorn                 Harvester: storage class
 #   HS_YES=1                                    install without the summary
 # Versions not set are the current recommended releases.
@@ -552,7 +552,7 @@ pick_vip() {
   VIP=""
   case "$(given HS_KUBEVIP)" in n*|N*|0|false) return 0 ;; esac
   if [ -z "$(given HS_VIP)" ] && ! interactive; then return 0; fi
-  VIP=$(ask HS_VIP "Homestead and Apps Address" "Enter an unused address on your LAN, outside your router's DHCP range, for Homestead and your apps (for example, 192.168.1.200). It is a VIP: it moves to another node if one goes down.
+  VIP=$(ask HS_VIP "Homestead and Apps Address" "Enter an unused address on your LAN, outside your router's DHCP range, for Homestead and your apps (for example, 192.0.2.200). It is a VIP: it moves to another node if one goes down.
 
 Homestead will be at http://VIP:8088, as well as on each node's address, and apps share the VIP on their own ports. Its backup storage and network shares go there too.
 
@@ -888,7 +888,7 @@ flow_harvester() {
   REPORT=""; FAILED=0
   reachable https://ghcr.io/v2/ && check pass "Internet access (ghcr.io)" || check fail "Cannot reach ghcr.io, which hosts the Homestead image."
   if [ "$FAILED" = 1 ] && [ "$SKIP_CHECKS" = 0 ]; then msg "System Checks Failed" "$REPORT"; fail "Installation stopped: system checks failed."; fi
-  vip=$(ask HS_VIP "Homestead IP Address" "Harvester detected. Enter an unused IP address for Homestead on your LAN, outside the DHCP range (for example, 192.168.1.242):" "")
+  vip=$(ask HS_VIP "Homestead IP Address" "Harvester detected. Enter an unused IP address for Homestead on your LAN, outside the DHCP range (for example, 192.0.2.242):" "")
   printf '%s' "$vip" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || fail "'$vip' is not a valid IPv4 address."
   if [ "$DRY" = 0 ] && ping -c 1 -W 1 "$vip" >/dev/null 2>&1; then
     yesno HS_TAKEN "Address In Use" "A device already responds at $vip. Use this address anyway?" no || fail "Installation cancelled. Choose an unused address."
@@ -907,7 +907,7 @@ flow_harvester() {
   manifest=/tmp/homestead-deploy.yaml
   ref="$REF"; [ -n "$HS_RELEASE" ] && ref="v$HS_RELEASE"
   run curl -sfL "$RAW/$ref/deploy/deploy.yaml" -o "$manifest" || fail "Could not download the Homestead manifest."
-  run sed -i -e "s/192\\.168\\.1\\.242/$vip/g" -e "s/longhorn-r2/$class/g" \
+  run sed -i -e "s/192\\.0\\.2\\.242/$vip/g" -e "s/longhorn-r2/$class/g" \
     -e "s/accessModes: \\[ReadWriteMany\\]/accessModes: [ReadWriteOnce]/" "$manifest"
   # shellcheck disable=SC2086
   run $KC apply -f "$manifest" || fail "kubectl could not apply the Homestead manifest."

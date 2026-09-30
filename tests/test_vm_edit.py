@@ -110,7 +110,7 @@ class VmEditTests(unittest.TestCase):
 
     def test_adding_disks_nics_and_changing_boot_and_host(self):
         c = Cluster({"harvester": False, "cdi": False})
-        VMS.edit("lab", "web", {"node": "k3s-1",
+        VMS.edit("lab", "web", {"node": "node-1",
                                 "disks": [{"name": "root", "boot": "2", "bus": "sata"}],
                                 "add_disks": [{"kind": "disk", "size": "30", "storage_class": "local-path", "boot": 1}],
                                 "nics": [{"name": "default", "model": "e1000", "mac": "52:54:00:AA:BB:CC"}],
@@ -123,7 +123,7 @@ class VmEditTests(unittest.TestCase):
         self.assertEqual(("web-disk-0", "30Gi", "local-path"),
                          (post["metadata"]["name"], post["spec"]["resources"]["requests"]["storage"],
                           post["spec"]["storageClassName"]))
-        self.assertEqual({"kubernetes.io/hostname": "k3s-1"}, tspec["nodeSelector"])
+        self.assertEqual({"kubernetes.io/hostname": "node-1"}, tspec["nodeSelector"])
         ifaces = tspec["domain"]["devices"]["interfaces"]
         self.assertEqual(("e1000", "52:54:00:aa:bb:cc"), (ifaces[0]["model"], ifaces[0]["macAddress"]))
         self.assertEqual({"name": "nic-0", "model": "virtio", "bridge": {}}, ifaces[1])

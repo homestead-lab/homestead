@@ -12,8 +12,8 @@ import homestead_portal as PORTAL
 
 WORKLOADS = [
     {"ns": "lab", "name": "frigate", "icon": "data:image/png;base64,AAA", "group": "Home",
-     "ports": [{"port": 5000, "ip": "192.168.1.214", "name": "http"}, {"port": 8443, "ip": "192.168.1.214"}]},
-    {"ns": "lab", "name": "web", "icon": "", "ports": [{"port": 80, "ip": "192.168.1.9"}]},
+     "ports": [{"port": 5000, "ip": "192.0.2.214", "name": "http"}, {"port": 8443, "ip": "192.0.2.214"}]},
+    {"ns": "lab", "name": "web", "icon": "", "ports": [{"port": 80, "ip": "192.0.2.9"}]},
     {"ns": "lab", "name": "quiet", "icon": "", "ports": []},
 ]
 
@@ -41,8 +41,8 @@ class PortalTests(unittest.TestCase):
 
     def test_links_are_checked_and_stored(self):
         result = PORTAL.save([
-            {"title": "  Gateway  ", "url": "https://192.168.1.1", "section": "Network", "icon": "builtin:router"},
-            {"title": "Frigate", "url": "http://192.168.1.214:5000", "icon": "workload:lab/frigate"},
+            {"title": "  Gateway  ", "url": "https://192.0.2.1", "section": "Network", "icon": "builtin:router"},
+            {"title": "Frigate", "url": "http://192.0.2.214:5000", "icon": "workload:lab/frigate"},
             {"title": "NAS", "url": "http://tower.lan", "icon": "https://example.com/logo.png", "note": "Unraid"},
         ])
         self.assertEqual("POST", self.last[0])
@@ -62,7 +62,7 @@ class PortalTests(unittest.TestCase):
     def test_bad_links_are_refused_before_anything_is_written(self):
         for row in ({"title": "", "url": "http://a"},
                     {"title": "x", "url": "ftp://a"},
-                    {"title": "x", "url": "http://admin:secret@192.168.1.1"},
+                    {"title": "x", "url": "http://admin:secret@192.0.2.1"},
                     {"title": "x", "url": "http://a", "icon": "builtin:toaster"},
                     {"title": "x", "url": "http://a", "icon": "workload:../etc"},
                     {"title": "x" * 61, "url": "http://a"}):
@@ -74,7 +74,7 @@ class PortalTests(unittest.TestCase):
 
     def test_containers_offer_each_exposed_port(self):
         rows = PORTAL.candidates()
-        self.assertEqual(["http://192.168.1.214:5000", "https://192.168.1.214:8443", "http://192.168.1.9"],
+        self.assertEqual(["http://192.0.2.214:5000", "https://192.0.2.214:8443", "http://192.0.2.9"],
                          [row["url"] for row in rows])
         self.assertEqual("workload:lab/frigate", rows[0]["icon"])
         self.assertTrue(rows[0]["has_logo"])

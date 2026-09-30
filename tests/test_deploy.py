@@ -191,8 +191,8 @@ class AppStoreTemplateTests(unittest.TestCase):
         self.assertEqual({"ServerIP": "vip"}, cfg["env_bindings"])
         dhcp = next(x for x in cfg["ports"] if x["container"] == 67)
         self.assertFalse(dhcp["expose"])
-        cfg["lb_ip"] = "192.168.1.243"
-        self.assertEqual("192.168.1.243", server.apply_deploy_bindings(cfg)["env"]["ServerIP"])
+        cfg["lb_ip"] = "192.0.2.243"
+        self.assertEqual("192.0.2.243", server.apply_deploy_bindings(cfg)["env"]["ServerIP"])
 
     def test_paths_classify_config_media_cache_and_infer_web_port(self):
         cfg = server.template_to_cfg({

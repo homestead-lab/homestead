@@ -47,7 +47,7 @@ class Cluster:
         if path == PASS.KUBEVIRTS:
             return {"items": [self.kv]}
         if path == "/api/v1/nodes":
-            return {"items": [{"metadata": {"name": "k3s-1"},
+            return {"items": [{"metadata": {"name": "node-1"},
                                "status": {"allocatable": {"homestead.io/pci-10de-1e87": "1", "cpu": "8"}}}]}
         if path in self.objects:
             return self.objects[path]
@@ -75,7 +75,7 @@ class PassthroughTests(unittest.TestCase):
                   lambda force=False: {"harvester": harvester, "distribution": "rke2" if harvester else "k3s"}, self.data)
 
     def test_a_host_is_read_with_its_iommu_groups_and_what_it_cannot_give_away(self):
-        facts = PASS.inspect("k3s-1")
+        facts = PASS.inspect("node-1")
         self.assertTrue(facts["iommu"] and facts["cmdline_iommu"])
         rows = {r["address"]: r for r in facts["pci"]}
         gpu = rows["0000:01:00.0"]
@@ -89,7 +89,7 @@ class PassthroughTests(unittest.TestCase):
                          "root hubs are left out")
 
     def test_a_gpu_goes_to_vfio_with_its_group_but_not_the_bridge_and_kubevirt_is_told(self):
-        result = PASS.give("k3s-1", "0000:01:00.0")
+        result = PASS.give("node-1", "0000:01:00.0")
         self.assertEqual(["0000:01:00.0", "0000:01:00.1"], result["moved"])
         script = self.host.scripts[-1]
         for part in ("modprobe vfio-pci", "driver_override", "drivers_probe", "homestead-vfio.service",
@@ -104,18 +104,18 @@ class PassthroughTests(unittest.TestCase):
     def test_the_hosts_network_and_system_disk_are_refused(self):
         for address, words in (("0000:03:00.0", "network"), ("0000:04:00.0", "in use")):
             with self.subTest(words=words), self.assertRaisesRegex(ValueError, words):
-                PASS.give("k3s-1", address)
+                PASS.give("node-1", address)
         self.assertFalse(any("driver_override" in s for s in self.host.scripts), "nothing was unbound")
 
     def test_nothing_is_handed_over_without_iommu(self):
         self.host.out = HOST.replace("GROUPS 18", "GROUPS 0")
         with self.assertRaisesRegex(ValueError, "IOMMU is off"):
-            PASS.give("k3s-1", "0000:01:00.0")
+            PASS.give("node-1", "0000:01:00.0")
 
     def test_iommu_goes_in_grub_for_the_next_restart(self):
         self.host.out = HOST.replace("GROUPS 18", "GROUPS 0")
         self.host.action_out = "OK intel_iommu=on iommu=pt\n"
-        result = PASS.enable_iommu("k3s-1")
+        result = PASS.enable_iommu("node-1")
         self.assertTrue(result["restart_needed"])
         script = self.host.scripts[-1]
         self.assertIn("intel_iommu=on iommu=pt", script)
@@ -123,8 +123,8 @@ class PassthroughTests(unittest.TestCase):
         self.assertIn("update-grub", script)
 
     def test_a_device_given_back_is_no_longer_offered(self):
-        PASS.give("k3s-1", "0000:01:00.0")
-        PASS.take_back("k3s-1", "0000:01:00.0")
+        PASS.give("node-1", "0000:01:00.0")
+        PASS.take_back("node-1", "0000:01:00.0")
         script = self.host.scripts[-1]
         self.assertIn('echo > "$d/driver_override"', script)
         self.assertEqual([], self.cluster.kv["spec"]["configuration"]["permittedHostDevices"]["pciHostDevices"])

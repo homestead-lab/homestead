@@ -13,14 +13,14 @@ import server
 
 class NfsExportTests(unittest.TestCase):
     def test_existing_export_handles_survive_reordering_removal_and_reinstall(self):
-        rows = [{"name": "media", "pvc": "media", "nfs_clients": "192.168.1.0/24"},
-                {"name": "photos", "pvc": "photos", "nfs_clients": "192.168.1.0/24"}]
+        rows = [{"name": "media", "pvc": "media", "nfs_clients": "192.0.2.0/24"},
+                {"name": "photos", "pvc": "photos", "nfs_clients": "192.0.2.0/24"}]
         old = {"spec": {"template": {"spec": {"containers": [{"env": [
-            {"name": "NFS_EXPORT_1", "value": "/exports/media 192.168.1.0/24(ro,fsid=1,root_squash)"},
-            {"name": "NFS_EXPORT_2", "value": "/exports/photos 192.168.1.0/24(ro,fsid=2,root_squash)"}]}]}}}}
+            {"name": "NFS_EXPORT_1", "value": "/exports/media 192.0.2.0/24(ro,fsid=1,root_squash)"},
+            {"name": "NFS_EXPORT_2", "value": "/exports/photos 192.0.2.0/24(ro,fsid=2,root_squash)"}]}]}}}}
         saved = NFS.export_ids(rows, old)
         self.assertEqual(["1", "2"], [r["nfs_fsid"] for r in saved])
-        saved = [saved[1], {"name": "archive", "pvc": "archive", "nfs_clients": "192.168.1.0/24"}]
+        saved = [saved[1], {"name": "archive", "pvc": "archive", "nfs_clients": "192.0.2.0/24"}]
         saved = NFS.export_ids(saved)
         self.assertEqual("2", saved[0]["nfs_fsid"])
         self.assertNotIn(saved[1]["nfs_fsid"], ("0", "1", "2"))
@@ -31,14 +31,14 @@ class NfsExportTests(unittest.TestCase):
         self.assertTrue(any("/exports/photos " in item["value"] and "fsid=2," in item["value"] for item in env))
 
     def test_client_network_is_explicit(self):
-        self.assertEqual("192.168.1.0/24", NFS.client_network("192.168.1.52/24"))
-        self.assertEqual("192.168.1.52/32", NFS.client_network("192.168.1.52"))
+        self.assertEqual("192.0.2.0/24", NFS.client_network("192.0.2.52/24"))
+        self.assertEqual("192.0.2.52/32", NFS.client_network("192.0.2.52"))
         for bad in ("", "*", "0.0.0.0/0", "::1", "127.0.0.1", "224.0.0.1/24"):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 NFS.client_network(bad)
 
     def test_only_explicit_bound_rwx_shares_are_exported(self):
-        rows = [{"name": "media", "pvc": "share-media", "nfs_clients": "192.168.1.0/24"},
+        rows = [{"name": "media", "pvc": "share-media", "nfs_clients": "192.0.2.0/24"},
                 {"name": "private", "pvc": "private"}]
         pvc = {"spec": {"accessModes": ["ReadWriteMany"]}, "status": {"phase": "Bound"}}
         self.assertEqual(["media"], [item["name"] for item in NFS.exports(rows, lambda _name: pvc)])
@@ -49,7 +49,7 @@ class NfsExportTests(unittest.TestCase):
     def test_container_exports_just_selected_claims_with_client_restrictions(self):
         base = {"spec": {"template": {"spec": {"containers": [{"name": NFS.NAME, "image": "old"}]}}}}
         result = NFS.configure(base, [{"name": "media", "pvc": "share-media", "sub_path": "movies",
-                                       "clients": "192.168.1.0/24", "read_only": True}])
+                                       "clients": "192.0.2.0/24", "read_only": True}])
         self.assertEqual("old", base["spec"]["template"]["spec"]["containers"][0]["image"])
         pod = result["spec"]["template"]["spec"]
         container = pod["containers"][0]
@@ -60,7 +60,7 @@ class NfsExportTests(unittest.TestCase):
         self.assertEqual("movies", container["volumeMounts"][1]["subPath"])
         self.assertTrue(container["volumeMounts"][1]["readOnly"])
         self.assertIn("root_squash", container["env"][2]["value"])
-        self.assertIn("192.168.1.0/24(ro", container["env"][2]["value"])
+        self.assertIn("192.0.2.0/24(ro", container["env"][2]["value"])
         self.assertEqual("NFS_DISABLE_VERSION_3", container["env"][0]["name"])
         self.assertEqual({"port": 2049}, container["readinessProbe"]["tcpSocket"])
         self.assertEqual("true", pod["nodeSelector"][NFS.HOST_LABEL])
@@ -121,21 +121,21 @@ class NfsLifecycleTests(unittest.TestCase):
                 server.guard_smb_object(kind, server.SMB_NAMESPACE, NFS.NAME)
 
     def test_install_manifest_is_separate_from_smb_and_preserves_client_ip(self):
-        rows = [{"name": "media", "pvc": "share-media", "nfs_clients": "192.168.1.0/24"}]
+        rows = [{"name": "media", "pvc": "share-media", "nfs_clients": "192.0.2.0/24"}]
         pvc = {"spec": {"accessModes": ["ReadWriteMany"]}, "status": {"phase": "Bound"}}
         with mock.patch.object(server.SHARES, "_pvc", return_value=pvc), \
                 mock.patch.object(server.PLATFORM, "detect", return_value={"load_balancer": "kube-vip"}), \
                 mock.patch.object(server.NETWORK, "prepare_deploy", side_effect=lambda cfg: cfg):
-            dep, svc = server._nfs_deployment(rows, "192.168.1.246")
+            dep, svc = server._nfs_deployment(rows, "192.0.2.246")
         self.assertEqual(NFS.NAME, dep["metadata"]["name"])
         self.assertEqual("Local", svc["spec"]["externalTrafficPolicy"])
         self.assertEqual("true", svc["metadata"]["annotations"]["homestead.io/exclusive-vip"])
-        self.assertEqual("192.168.1.246", svc["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
+        self.assertEqual("192.0.2.246", svc["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
         self.assertEqual([2049], [port["port"] for port in svc["spec"]["ports"]])
         self.assertEqual("share-media", dep["spec"]["template"]["spec"]["volumes"][1]["persistentVolumeClaim"]["claimName"])
 
     def test_plain_servicelb_cannot_expose_restricted_nfs(self):
-        rows = [{"name": "media", "pvc": "share-media", "nfs_clients": "192.168.1.0/24"}]
+        rows = [{"name": "media", "pvc": "share-media", "nfs_clients": "192.0.2.0/24"}]
         pvc = {"spec": {"accessModes": ["ReadWriteMany"]}, "status": {"phase": "Bound"}}
         with mock.patch.object(server.SHARES, "_pvc", return_value=pvc), \
                 mock.patch.object(server.PLATFORM, "detect", return_value={"load_balancer": "servicelb"}):

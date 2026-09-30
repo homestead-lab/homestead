@@ -12,7 +12,7 @@ OWN_VOLUME = ROOT_ONLY + [{"mountpoint": "/var/lib/longhorn", "disk": "sda"}]
 
 
 def lh_node(free_gb, allow=True, total_gb=100, path="/var/lib/longhorn/", disk_type="filesystem"):
-    return {"metadata": {"name": "k3s-1"},
+    return {"metadata": {"name": "node-1"},
             "spec": {"disks": {"default-disk": {"path": path, "allowScheduling": allow, "diskType": disk_type}}},
             "status": {"diskStatus": {"default-disk": {"storageMaximum": total_gb * GB, "storageAvailable": free_gb * GB}}}}
 
@@ -24,14 +24,14 @@ class RootGuardTests(unittest.TestCase):
         self.node, self.mounts = lh_node(50), ROOT_ONLY
         GUARD.bind(lambda path: {"items": [self.node]}, lambda *a, **k: self.sent.append(a[2]["spec"]["disks"]),
                    lambda force=False: {"distribution": "k3s", "longhorn": True},
-                   lambda: {"k3s-1": {"mounts": self.mounts}}, self.data)
+                   lambda: {"node-1": {"mounts": self.mounts}}, self.data)
 
     def test_a_disk_on_the_root_filesystem_stops_taking_copies_when_it_runs_low(self):
         self.assertEqual([], GUARD.tick())
         self.node = lh_node(12)
         self.assertIn("stopped placing copies", GUARD.tick()[0][1])
         self.assertEqual([{"default-disk": {"allowScheduling": False}}], self.sent)
-        self.assertEqual(["rootguard:k3s-1/default-disk"], [f["key"] for f in GUARD.alert_facts()])
+        self.assertEqual(["rootguard:node-1/default-disk"], [f["key"] for f in GUARD.alert_facts()])
 
     def test_it_starts_again_only_once_there_is_room_and_only_if_homestead_stopped_it(self):
         self.node = lh_node(12)

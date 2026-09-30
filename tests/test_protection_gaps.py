@@ -131,15 +131,15 @@ class HarvesterTargetTests(unittest.TestCase):
         LH.bind(get, lambda m, p, b=None, **k: self.sent.append((m, p, b)), {})
 
     def test_nfs_and_s3_are_written_to_harvesters_setting(self):
-        LH.set_backup_target("nfs://192.168.1.177:/mnt/user/backups", poll="5m")
+        LH.set_backup_target("nfs://192.0.2.177:/mnt/user/backups", poll="5m")
         method, path, body = self.sent[-1]
         self.assertEqual(("PUT", LH.HARVESTER_TARGET), (method, path))
-        self.assertEqual({"type": "nfs", "endpoint": "nfs://192.168.1.177:/mnt/user/backups",
+        self.assertEqual({"type": "nfs", "endpoint": "nfs://192.0.2.177:/mnt/user/backups",
                           "refreshIntervalInSeconds": 300}, json.loads(body["value"]))
         LH.set_backup_target("s3://homelab@us-east-1", keys={"access_key": "AK", "secret_key": "SK",
-                                                             "endpoint": "http://192.168.1.20:9000"})
+                                                             "endpoint": "http://192.0.2.20:9000"})
         value = json.loads(self.sent[-1][2]["value"])
-        self.assertEqual(("s3", "homelab", "us-east-1", "http://192.168.1.20:9000", "AK"),
+        self.assertEqual(("s3", "homelab", "us-east-1", "http://192.0.2.20:9000", "AK"),
                          (value["type"], value["bucketName"], value["bucketRegion"], value["endpoint"], value["accessKeyId"]))
         self.assertFalse(any("backuptargets" in p for _, p, _ in self.sent), "Longhorn's own is left to Harvester")
 

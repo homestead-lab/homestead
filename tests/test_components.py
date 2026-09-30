@@ -64,8 +64,8 @@ class Addons:
 
 
 NODES = {"items": [
-    {"metadata": {"name": "k3s-1"}, "status": {"nodeInfo": {"kubeletVersion": "v1.31.12+k3s1"}}},
-    {"metadata": {"name": "k3s-2"}, "status": {"nodeInfo": {"kubeletVersion": "v1.31.12+k3s1"}}}]}
+    {"metadata": {"name": "node-1"}, "status": {"nodeInfo": {"kubeletVersion": "v1.31.12+k3s1"}}},
+    {"metadata": {"name": "node-2"}, "status": {"nodeInfo": {"kubeletVersion": "v1.31.12+k3s1"}}}]}
 LH_SETTING = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/settings/current-longhorn-version"
 LH_CHART = "/apis/helm.cattle.io/v1/namespaces/kube-system/helmcharts/longhorn"
 
@@ -129,12 +129,12 @@ class K3sTests(unittest.TestCase):
     def test_a_failed_node_job_fails_the_upgrade(self):
         self.c.objects["/apis/upgrade.cattle.io/v1"] = {}
         self.c.objects["/apis/batch/v1/namespaces/system-upgrade/jobs"] = {"items": [{
-            "metadata": {"name": "apply-homestead-server-on-k3s-1", "labels": {
-                "upgrade.cattle.io/plan": "homestead-server", "upgrade.cattle.io/node": "k3s-1"}},
+            "metadata": {"name": "apply-homestead-server-on-node-1", "labels": {
+                "upgrade.cattle.io/plan": "homestead-server", "upgrade.cattle.io/node": "node-1"}},
             "status": {"failed": 1}}]}
         status, _, message = C.status({"ref": {"component": "cluster", "to": "v1.32.8+k3s1", "phase": "nodes"}})
         self.assertEqual("failed", status)
-        self.assertIn("k3s-1 failed", message)
+        self.assertIn("node-1 failed", message)
 
     def test_external_upgrade_controller_is_not_taken_over(self):
         self.c.objects["/apis/upgrade.cattle.io/v1"] = {}

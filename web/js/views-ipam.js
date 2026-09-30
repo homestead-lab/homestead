@@ -321,7 +321,7 @@ window.ipamSync = async () => {
 /* ---------------- subnets ---------------- */
 function ipamSubnetRow(s = {}) {
   return `<div class="ipam-subnet card flat">
-    <div class="f2"><div class="f"><label>Subnet</label><input class="is-cidr mono" value="${esc(s.cidr || "")}" placeholder="192.168.1.0/24"></div>
+    <div class="f2"><div class="f"><label>Subnet</label><input class="is-cidr mono" value="${esc(s.cidr || "")}" placeholder="192.0.2.0/24"></div>
       <div class="f"><label>Name</label><input class="is-name" value="${esc(s.name || "")}" placeholder="LAN" maxlength="40"></div></div>
     <div class="ipam-subnet-grid"><div class="f"><label>Gateway</label><input class="is-gw mono" value="${esc(s.gateway || "")}"></div>
       <div class="f"><label>DHCP from</label><input class="is-d1 mono" value="${esc(s.dhcp_start || "")}"></div>
@@ -353,7 +353,7 @@ window.ipamUnifi = async () => {
   if (!STATE.data.ipam) { try { STATE.data.ipam = await api("/api/ipam"); } catch (e) { STATE.data.ipam = { subnets: [], unifi: {} }; } }
   const u = (STATE.data.ipam || {}).unifi || {};
   modal("UniFi", `<p class="muted small">Brings in the clients and devices a UniFi Network controller knows - names, MACs, addresses - and its DHCP reservations. It never changes the controller. Create an API key on the console under <b>Settings → Control Plane → Integrations</b>.</p>
-    <div class="f"><label>Console address</label><input id="uf_url" value="${esc(u.url || "")}" placeholder="https://192.168.1.1"></div>
+    <div class="f"><label>Console address</label><input id="uf_url" value="${esc(u.url || "")}" placeholder="https://192.0.2.1"></div>
     <div class="f2"><div class="f"><label>API key</label><input id="uf_key" type="password" autocomplete="off" placeholder="${u.has_key ? "saved · leave blank to keep" : "paste the key"}"></div>
       <div class="f"><label>Site</label><input id="uf_site" value="${esc(u.site || "default")}"></div></div>
     <label class="switch"><input type="checkbox" id="uf_tls" ${u.verify_tls ? "checked" : ""}> Check the console's certificate ${tip("Consoles ship a self-signed certificate, so this is off unless yours has a real one.")}</label>
@@ -416,8 +416,8 @@ window.ipamExport = () => {
 /* ---------------- import ---------------- */
 const IPAM_TEMPLATE = [
   "address,name,mac,kind,category,owner,tags,note",
-  "192.168.1.10,Tower,aa:bb:cc:dd:ee:10,static,nas,,storage backup,Unraid - admin on port 80",
-  "192.168.1.2,Core switch,aa:bb:cc:dd:ee:02,infrastructure,switch,,network,Rack top",
+  "192.0.2.10,Tower,aa:bb:cc:dd:ee:10,static,nas,,storage backup,Unraid - admin on port 80",
+  "192.0.2.2,Core switch,aa:bb:cc:dd:ee:02,infrastructure,switch,,network,Rack top",
 ].join("\n") + "\n";
 function ipamDownload(name, text) {
   const link = document.createElement("a");

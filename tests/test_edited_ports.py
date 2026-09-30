@@ -13,10 +13,10 @@ DEPLOYMENT = {
 }
 SERVICE = {
     "metadata": {"name": "plex", "namespace": "lab",
-                 "annotations": {"kube-vip.io/loadbalancerIPs": "192.168.1.245"}},
+                 "annotations": {"kube-vip.io/loadbalancerIPs": "192.0.2.245"}},
     "spec": {"type": "LoadBalancer", "clusterIP": "10.43.0.30", "selector": {"app": "plex"},
              "ports": [{"name": "web", "port": 32400, "targetPort": 32400, "protocol": "TCP"}]},
-    "status": {"loadBalancer": {"ingress": [{"ip": "192.168.1.245"}]}},
+    "status": {"loadBalancer": {"ingress": [{"ip": "192.0.2.245"}]}},
 }
 
 
@@ -45,7 +45,7 @@ class EditedPortsReachTheServiceTests(unittest.TestCase):
             self.sent.append((method, path, body))
             return body
 
-        networking.bind(get, send, {"kube-system"}, "lab", "192.168.1.242")
+        networking.bind(get, send, {"kube-system"}, "lab", "192.0.2.242")
 
     def test_changing_the_lan_port_moves_the_listener(self):
         message = networking.sync_workload_ports("lab", "plex", [

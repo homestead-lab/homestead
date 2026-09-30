@@ -32,19 +32,19 @@ def lease(name, holder, ns="lab", renewed=STAMP):
 
 
 NODE = {"metadata": {"name": "k3s", "labels": {"node-role.kubernetes.io/control-plane": "true"}},
-        "status": {"addresses": [{"type": "InternalIP", "address": "192.168.1.109"}],
+        "status": {"addresses": [{"type": "InternalIP", "address": "192.0.2.109"}],
                    "conditions": [{"type": "Ready", "status": "True"}]}}
-SHARED = "homestead-vip-192-168-1-108"
+SHARED = "homestead-vip-192-0-2-108"
 
 
 def k3s_test():
     """k3s-test as it was found: three Services share .108 under one lease
     that k3s holds, and kube-vip recorded .108 on none of them; ServiceLB
     publishes Homestead on the node's own address."""
-    return [service("homestead-objectstore", [9000, 9001], "192.168.1.108", SHARED),
-            service("homestead-vip", [8088], "192.168.1.108", SHARED),
-            service("plex", [32400], "192.168.1.108", SHARED),
-            service("homestead", [8088], cls=None, status=["192.168.1.109"])]
+    return [service("homestead-objectstore", [9000, 9001], "192.0.2.108", SHARED),
+            service("homestead-vip", [8088], "192.0.2.108", SHARED),
+            service("plex", [32400], "192.0.2.108", SHARED),
+            service("homestead", [8088], cls=None, status=["192.0.2.109"])]
 
 
 class Placement(unittest.TestCase):
@@ -53,35 +53,35 @@ class Placement(unittest.TestCase):
                                 endpoints={("lab", "homestead-objectstore"): 1, ("lab", "homestead-vip"): 1,
                                            ("lab", "plex"): 0, ("lab", "homestead"): 1},
                                 targets={("lab", "plex"): ["plex"]}, now=NOW)
-        vip = next(row for row in view["addresses"] if row["ip"] == "192.168.1.108")
+        vip = next(row for row in view["addresses"] if row["ip"] == "192.0.2.108")
         self.assertEqual((vip["kind"], vip["node"], vip["state"]), ("vip", "k3s", "unrouted"))
-        self.assertIn("k3s answers for 192.168.1.108", vip["reason"])
+        self.assertIn("k3s answers for 192.0.2.108", vip["reason"])
         self.assertEqual(len(vip["unrouted"]), 3)
         self.assertEqual([l["port"] for l in vip["listeners"]], [8088, 9000, 9001, 32400])
         self.assertEqual(next(l for l in vip["listeners"] if l["port"] == 32400)["workloads"], ["plex"])
         node = view["nodes"][0]
-        self.assertEqual((node["ips"], node["vips"], node["control_plane"]), (["192.168.1.109"], ["192.168.1.108"], True))
-        own = next(row for row in view["addresses"] if row["ip"] == "192.168.1.109")
+        self.assertEqual((node["ips"], node["vips"], node["control_plane"]), (["192.0.2.109"], ["192.0.2.108"], True))
+        own = next(row for row in view["addresses"] if row["ip"] == "192.0.2.109")
         self.assertEqual((own["kind"], own["node"], own["state"], own["controller"]), ("node", "k3s", "ok", "servicelb"))
         self.assertEqual(view["problems"], 1)
 
     def test_recorded_is_ok(self):
-        services = [service("plex", [32400], "192.168.1.108", SHARED, status=["192.168.1.108"])]
+        services = [service("plex", [32400], "192.0.2.108", SHARED, status=["192.0.2.108"])]
         view = VIPS.address_map(services, [NODE], [lease(SHARED, "k3s")], K3S, endpoints={("lab", "plex"): 1}, now=NOW)
-        vip = next(row for row in view["addresses"] if row["ip"] == "192.168.1.108")
+        vip = next(row for row in view["addresses"] if row["ip"] == "192.0.2.108")
         self.assertEqual((vip["state"], vip["reason"]), ("ok", ""))
 
     def test_nothing_running_is_idle_not_broken(self):
-        services = [service("plex", [32400], "192.168.1.108", SHARED)]
+        services = [service("plex", [32400], "192.0.2.108", SHARED)]
         view = VIPS.address_map(services, [NODE], [lease(SHARED, "")], K3S, endpoints={("lab", "plex"): 0}, now=NOW)
-        vip = next(row for row in view["addresses"] if row["ip"] == "192.168.1.108")
+        vip = next(row for row in view["addresses"] if row["ip"] == "192.0.2.108")
         self.assertEqual((vip["state"], vip["node"]), ("idle", ""))
         self.assertEqual(view["problems"], 0)
 
     def test_running_but_no_node_answers_is_unannounced(self):
-        services = [service("plex", [32400], "192.168.1.108", SHARED)]
+        services = [service("plex", [32400], "192.0.2.108", SHARED)]
         view = VIPS.address_map(services, [NODE], [], K3S, endpoints={("lab", "plex"): 1}, now=NOW)
-        vip = next(row for row in view["addresses"] if row["ip"] == "192.168.1.108")
+        vip = next(row for row in view["addresses"] if row["ip"] == "192.0.2.108")
         self.assertEqual(vip["state"], "unannounced")
 
     def test_a_lease_not_renewed_does_not_count(self):
@@ -91,17 +91,17 @@ class Placement(unittest.TestCase):
 
     def test_harvester_style_per_service_lease_in_kube_system(self):
         harvester = {"load_balancer": "kube-vip", "vip_class": "", "servicelb": False, "vip_service_election": True}
-        services = [service("grafana", [3000], "192.168.1.120", cls=None, status=["192.168.1.120"])]
+        services = [service("grafana", [3000], "192.0.2.120", cls=None, status=["192.0.2.120"])]
         view = VIPS.address_map(services, [NODE], [lease("kubevip-grafana", "harvester-1", ns="kube-system")],
                                 harvester, endpoints={("lab", "grafana"): 1}, now=NOW)
-        vip = next(row for row in view["addresses"] if row["ip"] == "192.168.1.120")
+        vip = next(row for row in view["addresses"] if row["ip"] == "192.0.2.120")
         self.assertEqual((vip["node"], vip["state"]), ("harvester-1", "ok"))
 
     def test_servicelb_port_clash_is_pending_on_the_node(self):
-        services = [service("homestead", [8088], cls=None, status=["192.168.1.109"]),
+        services = [service("homestead", [8088], cls=None, status=["192.0.2.109"]),
                     service("other", [8088], cls=None)]
         view = VIPS.address_map(services, [NODE], [], K3S, now=NOW)
-        own = next(row for row in view["addresses"] if row["ip"] == "192.168.1.109")
+        own = next(row for row in view["addresses"] if row["ip"] == "192.0.2.109")
         self.assertEqual(own["state"], "pending")
         self.assertIn("other", own["reason"])
 
@@ -112,7 +112,7 @@ class Keeping(unittest.TestCase):
         self.assertEqual(sorted(f["name"] for f in fixes), ["homestead-objectstore", "homestead-vip", "plex"])
         store = next(f for f in fixes if f["name"] == "homestead-objectstore")
         self.assertEqual(store["node"], "k3s")
-        self.assertEqual(store["status"], {"loadBalancer": {"ingress": [{"ip": "192.168.1.108", "ports": [
+        self.assertEqual(store["status"], {"loadBalancer": {"ingress": [{"ip": "192.0.2.108", "ports": [
             {"port": 9000, "protocol": "TCP"}, {"port": 9001, "protocol": "TCP"}]}]}})
 
     def test_leaves_alone_what_no_node_answers_for(self):
@@ -120,7 +120,7 @@ class Keeping(unittest.TestCase):
         self.assertEqual(VIPS.repairs(k3s_test(), [], K3S, now=NOW), [])
 
     def test_leaves_alone_what_is_recorded_and_what_servicelb_serves(self):
-        services = [service("plex", [32400], "192.168.1.108", SHARED, status=["192.168.1.108"]),
+        services = [service("plex", [32400], "192.0.2.108", SHARED, status=["192.0.2.108"]),
                     service("homestead", [8088], cls=None)]
         self.assertEqual(VIPS.repairs(services, [lease(SHARED, "k3s")], K3S, now=NOW), [])
 
@@ -133,7 +133,7 @@ class Keeping(unittest.TestCase):
         method, path, body, ctype = next(s for s in sent if s[1].endswith("/plex/status"))
         self.assertEqual((method, path, ctype), ("PATCH", "/api/v1/namespaces/lab/services/plex/status",
                                                  "application/merge-patch+json"))
-        self.assertEqual(body["status"]["loadBalancer"]["ingress"][0]["ip"], "192.168.1.108")
+        self.assertEqual(body["status"]["loadBalancer"]["ingress"][0]["ip"], "192.0.2.108")
         self.assertTrue(any(k["name"] == "plex" for k in VIPS.kept()))
 
     def test_keep_does_nothing_without_kube_vip(self):

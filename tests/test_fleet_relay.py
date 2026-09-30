@@ -75,7 +75,7 @@ class RelayOverHttpTests(unittest.TestCase):
         if body is not None:
             request.add_header("Content-Type", "application/json")
             request.add_header("X-Homestead-Auth", "1")
-        with mock.patch.object(server.AUTH, "verify_token", return_value={"user": "james", "role": role}):
+        with mock.patch.object(server.AUTH, "verify_token", return_value={"user": "robin", "role": role}):
             try:
                 with urllib.request.urlopen(request, timeout=10) as response:
                     return response.status, json.loads(response.read() or b"{}"), response.headers
@@ -85,7 +85,7 @@ class RelayOverHttpTests(unittest.TestCase):
     def test_the_far_cluster_sees_the_person_signed_in_here(self):
         status, state, headers = self.ask("/api/auth/state")
         self.assertEqual(200, status)
-        self.assertEqual("james@loft", state["user"])
+        self.assertEqual("robin@loft", state["user"])
         self.assertEqual("operator", state["role"])
         self.assertEqual("Loft", state["via"])
         self.assertEqual("close", headers.get("Connection"))

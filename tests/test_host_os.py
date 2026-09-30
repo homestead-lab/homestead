@@ -87,7 +87,7 @@ class Ops:
 class StateTests(unittest.TestCase):
     def setUp(self):
         self.data = tempfile.mkdtemp()
-        self.nodes = {"items": [{"metadata": {"name": "k3s-1"}, "status": {"conditions": [{"type": "Ready", "status": "True"}]}}]}
+        self.nodes = {"items": [{"metadata": {"name": "node-1"}, "status": {"conditions": [{"type": "Ready", "status": "True"}]}}]}
 
     def bind(self, host, platform=None):
         HOST_OS.bind(lambda path: self.nodes, host, lambda force=False: platform or {"distribution": "k3s"}, self.data)
@@ -95,11 +95,11 @@ class StateTests(unittest.TestCase):
     def test_each_host_is_read_every_six_hours(self):
         host = Host(UBUNTU)
         self.bind(host)
-        self.assertEqual(["k3s-1"], HOST_OS.tick(now=10 ** 10))
+        self.assertEqual(["node-1"], HOST_OS.tick(now=10 ** 10))
         self.assertEqual([], HOST_OS.tick(now=10 ** 10 + 60))
         self.assertIn("REFRESH=0", host.scripts[0], "a scheduled read leaves the package lists alone")
         self.assertEqual("2 security updates, restart needed, 1 failed service, root 92% full",
-                         HOST_OS.report("k3s-1")["hosts"]["k3s-1"]["summary"]["text"])
+                         HOST_OS.report("node-1")["hosts"]["node-1"]["summary"]["text"])
 
     def test_harvester_hosts_are_left_to_harvester(self):
         self.bind(Host(UBUNTU), {"harvester": True, "distribution": "rke2"})
@@ -108,29 +108,29 @@ class StateTests(unittest.TestCase):
 
     def test_what_needs_someone_is_an_alert(self):
         self.bind(Host(UBUNTU))
-        HOST_OS.read("k3s-1")
+        HOST_OS.read("node-1")
         keys = {fact["key"] for fact in HOST_OS.alert_facts()}
-        self.assertEqual({"hostos:k3s-1:security", "hostos:k3s-1:reboot", "hostos:k3s-1:failed", "hostos:k3s-1:root"}, keys)
+        self.assertEqual({"hostos:node-1:security", "hostos:node-1:reboot", "hostos:node-1:failed", "hostos:node-1:root"}, keys)
 
     def test_updates_run_detached_on_the_host_and_are_followed_as_a_job(self):
         host = Host(lambda script: "STARTED\n" if "systemd-run" in script else UBUNTU)
         self.bind(host)
         ops = Ops()
-        HOST_OS.upgrade_start("k3s-1", ops)
+        HOST_OS.upgrade_start("node-1", ops)
         started = host.scripts[-1]
         self.assertIn("systemd-run --unit=homestead-os-upgrade", started)
         self.assertIn("--force-confold upgrade --with-new-pkgs", started)
         self.assertNotIn("dist-upgrade", started, "no package is ever removed")
-        self.assertEqual(("host-os", "Install 3 updates on k3s-1"), ops.started[0][:2])
+        self.assertEqual(("host-os", "Install 3 updates on node-1"), ops.started[0][:2])
 
     def test_a_finished_upgrade_says_whether_a_restart_is_needed(self):
         host = Host(lambda script: "CODE 0\n" if 'echo "CODE' in script else UBUNTU)
         self.bind(host)
-        status, _, message = HOST_OS.status({"ref": {"node": "k3s-1", "since": 0}}, now=1000)
+        status, _, message = HOST_OS.status({"ref": {"node": "node-1", "since": 0}}, now=1000)
         self.assertEqual("succeeded", status)
         self.assertIn("needs a restart", message)
         host.out = lambda script: "CODE 100\n" if 'echo "CODE' in script else UBUNTU
-        self.assertEqual("failed", HOST_OS.status({"ref": {"node": "k3s-1", "since": 0}}, now=1000)[0])
+        self.assertEqual("failed", HOST_OS.status({"ref": {"node": "node-1", "since": 0}}, now=1000)[0])
 
 
 if __name__ == "__main__":

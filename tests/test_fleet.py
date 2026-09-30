@@ -112,9 +112,9 @@ class SigningTests(unittest.TestCase):
         self.a.fleet.join(self.b.url, "admin", "secret")
 
     def test_a_signed_request_says_who_it_is_for(self):
-        headers = self.a.fleet.sign("POST", "/api/workloads/restart", b'{"name":"x"}', "james", "operator")
+        headers = self.a.fleet.sign("POST", "/api/workloads/restart", b'{"name":"x"}', "robin", "operator")
         who = self.b.fleet.verify(headers, "POST", "/api/workloads/restart", b'{"name":"x"}')
-        self.assertEqual("james@loft", who["user"])
+        self.assertEqual("robin@loft", who["user"])
         self.assertEqual("operator", who["role"])
 
     def test_homestead_itself_is_admin(self):
@@ -145,7 +145,7 @@ class SigningTests(unittest.TestCase):
             self.b.fleet.verify(headers, "GET", "/api/nodes")
 
     def test_an_unknown_role_is_refused(self):
-        headers = self.a.fleet.sign("GET", "/api/nodes", b"", "james", "root")
+        headers = self.a.fleet.sign("GET", "/api/nodes", b"", "robin", "root")
         with self.assertRaises(PermissionError):
             self.b.fleet.verify(headers, "GET", "/api/nodes")
 
@@ -279,7 +279,7 @@ class RelayTests(unittest.TestCase):
             "POST", "/api/vm/start", "10.0.0.2:8088",
             {"Cookie": "homestead_session=abc", "Cf-Ray": "1", "X-Homestead-Auth": "1",
              "Content-Type": "application/json", "Connection": "keep-alive"},
-            b"{}", self.a.fleet.sign("POST", "/api/vm/start", b"{}", "james", "operator")).decode()
+            b"{}", self.a.fleet.sign("POST", "/api/vm/start", b"{}", "robin", "operator")).decode()
         self.assertIn("POST /api/vm/start HTTP/1.1", head)
         self.assertIn("Host: 10.0.0.2:8088", head)
         self.assertNotIn("homestead_session", head)
@@ -287,7 +287,7 @@ class RelayTests(unittest.TestCase):
         self.assertIn("X-Homestead-Auth: 1", head)
         self.assertIn("Connection: close", head)
         self.assertIn("Content-Length: 2", head)
-        self.assertIn("X-Homestead-Fleet-User: james", head)
+        self.assertIn("X-Homestead-Fleet-User: robin", head)
 
     def test_a_console_keeps_its_upgrade(self):
         head = self.a.fleet.request_head("GET", "/api/console?pod=x", "h", {"Upgrade": "websocket",
@@ -337,7 +337,7 @@ class RelayTests(unittest.TestCase):
             wfile = io.BytesIO()
             close_connection = False
         handler = Handler()
-        self.a.fleet.forward(handler, "shed", b"", "james", "viewer", ["homestead_session=new; Path=/"])
+        self.a.fleet.forward(handler, "shed", b"", "robin", "viewer", ["homestead_session=new; Path=/"])
         thread.join(2)
         listener.close()
         answer = handler.wfile.getvalue().decode()
@@ -384,7 +384,7 @@ class RelayTests(unittest.TestCase):
             rfile = io.BufferedReader(io.BytesIO(b"ls -la"))
             wfile = io.BytesIO()
         handler = Handler()
-        self.a.fleet.forward(handler, "shed", b"", "james", "operator")
+        self.a.fleet.forward(handler, "shed", b"", "robin", "operator")
         thread.join(3)
         listener.close()
         answer = handler.wfile.getvalue().decode()

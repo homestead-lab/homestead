@@ -36,7 +36,7 @@ class Cluster:
 class AccountStoreTests(unittest.TestCase):
     def setUp(self):
         AUTH._store_cache.update(at=0, data=None)
-        self.cluster = Cluster(store={"users": {"james": {"salt": "s", "hash": "h", "ver": 1, "role": "admin"}},
+        self.cluster = Cluster(store={"users": {"robin": {"salt": "s", "hash": "h", "ver": 1, "role": "admin"}},
                                       "signing_key": "k" * 40})
         self.saved_io = (AUTH.kget, AUTH.ksend, AUTH.SECRET_NAME)
         AUTH.kget, AUTH.ksend = self.cluster.get, self.cluster.send
@@ -56,10 +56,10 @@ class AccountStoreTests(unittest.TestCase):
 
     def test_the_last_good_read_stands_in_while_the_cluster_is_slow(self):
         self.assertFalse(AUTH.needs_setup())
-        token = AUTH.issue_token("james")
+        token = AUTH.issue_token("robin")
         self.cluster.slow = True
         self.assertFalse(AUTH.needs_setup())
-        self.assertEqual("james", AUTH.verify_token(token)["user"])
+        self.assertEqual("robin", AUTH.verify_token(token)["user"])
         with self.assertRaises(PermissionError):
             AUTH.create_user("intruder", "a-long-password", first_only=True)
 

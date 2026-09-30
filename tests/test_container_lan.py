@@ -9,7 +9,7 @@ OWN = "/apis/k8s.cni.cncf.io/v1/namespaces/lab/network-attachment-definitions/zi
 VLAN1 = {"metadata": {"name": "vlan1"}, "spec": {"config": json.dumps(
     {"cniVersion": "0.3.1", "name": "vlan1", "type": "bridge", "bridge": "mgmt-br", "promiscMode": True,
      "vlan": 1, "ipam": {}})}}
-WANTED = {"network": "default/vlan1", "address": "192.168.1.70", "prefix": 24, "gateway": "192.168.1.1"}
+WANTED = {"network": "default/vlan1", "address": "192.0.2.70", "prefix": 24, "gateway": "192.0.2.1"}
 
 
 class Cluster:
@@ -38,13 +38,13 @@ class ContainerLanTests(unittest.TestCase):
         self.assertEqual(("POST", "/apis/k8s.cni.cncf.io/v1/namespaces/lab/network-attachment-definitions"), (method, path))
         config = json.loads(body["spec"]["config"])
         self.assertEqual(("bridge", "mgmt-br", 1, "zigbee2mqtt-lan"), (config["type"], config["bridge"], config["vlan"], config["name"]))
-        self.assertEqual({"type": "static", "addresses": [{"address": "192.168.1.70/24", "gateway": "192.168.1.1"}]},
+        self.assertEqual({"type": "static", "addresses": [{"address": "192.0.2.70/24", "gateway": "192.0.2.1"}]},
                          config["ipam"])
 
     def test_changing_the_address_updates_its_network(self):
         c = Cluster()
         c.objects[OWN] = {"metadata": {"name": "zigbee2mqtt-lan", "resourceVersion": "7"}}
-        LAN.ensure_nad("lab", "zigbee2mqtt", LAN.clean(dict(WANTED, address="192.168.1.71")))
+        LAN.ensure_nad("lab", "zigbee2mqtt", LAN.clean(dict(WANTED, address="192.0.2.71")))
         method, path, body = c.sent[0]
         self.assertEqual(("PUT", OWN, "7"), (method, path, body["metadata"]["resourceVersion"]))
 
@@ -53,7 +53,7 @@ class ContainerLanTests(unittest.TestCase):
         LAN.apply_to_template(dep, "lab", "zigbee2mqtt", LAN.clean(WANTED))
         networks = json.loads(dep["spec"]["template"]["metadata"]["annotations"][LAN.NETWORKS])
         self.assertEqual([{"name": "zigbee2mqtt-lan", "namespace": "lab", "interface": "lan0"}], networks)
-        self.assertEqual("192.168.1.70", LAN.read(dep)["address"])
+        self.assertEqual("192.0.2.70", LAN.read(dep)["address"])
         LAN.apply_to_template(dep, "lab", "zigbee2mqtt", None)
         self.assertNotIn(LAN.NETWORKS, dep["spec"]["template"]["metadata"]["annotations"])
         self.assertIsNone(LAN.read(dep))
@@ -74,7 +74,7 @@ class ContainerLanTests(unittest.TestCase):
 
     def test_a_bad_address_is_refused(self):
         with self.assertRaisesRegex(ValueError, "cannot be a machine's"):
-            LAN.clean(dict(WANTED, address="192.168.1.255"))
+            LAN.clean(dict(WANTED, address="192.0.2.255"))
         with self.assertRaisesRegex(ValueError, "outside"):
             LAN.clean(dict(WANTED, gateway="10.0.0.1"))
 

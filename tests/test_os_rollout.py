@@ -53,12 +53,12 @@ def facts(updates=(), reboot=False, auto=True):
 class RolloutTests(unittest.TestCase):
     def setUp(self):
         self.data = tempfile.mkdtemp()
-        self.nodes = {"k3s-1": node("k3s-1"), "k3s-2": node("k3s-2"), "k3s-3": node("k3s-3")}
-        self.hosts = Hosts({"k3s-1": facts(["curl", "linux-image-6.8"]), "k3s-2": facts(["curl"]), "k3s-3": facts()})
+        self.nodes = {"node-1": node("node-1"), "node-2": node("node-2"), "node-3": node("node-3")}
+        self.hosts = Hosts({"node-1": facts(["curl", "linux-image-6.8"]), "node-2": facts(["curl"]), "node-3": facts()})
         self.restarts, self.cordons, self.ops, self.refuse = [], [], {}, {}
         self.bind()
 
-    def bind(self, own="k3s-1"):
+    def bind(self, own="node-1"):
         def reboot(name, single_copy):
             if name in self.refuse:
                 raise ValueError(self.refuse[name])
@@ -85,42 +85,42 @@ class RolloutTests(unittest.TestCase):
 
     def test_hosts_are_updated_one_at_a_time_with_its_own_host_last(self):
         rollout = ROLLOUT.start(now=1000)
-        self.assertEqual(["k3s-2", "k3s-3", "k3s-1"], rollout["nodes"], "the leader's host goes last")
+        self.assertEqual(["node-2", "node-3", "node-1"], rollout["nodes"], "the leader's host goes last")
         done = self.run_until_done(on_step=self.finish_restarts)
         self.assertEqual("succeeded", done["status"])
-        self.assertEqual(["k3s-2", "k3s-1"], self.hosts.began, "an up-to-date host installs nothing")
-        self.assertEqual(["k3s-1"], self.restarts, "only a host whose update asks for it restarts")
-        self.assertIn(("k3s-1", False), self.cordons, "uncordoned once back")
+        self.assertEqual(["node-2", "node-1"], self.hosts.began, "an up-to-date host installs nothing")
+        self.assertEqual(["node-1"], self.restarts, "only a host whose update asks for it restarts")
+        self.assertIn(("node-1", False), self.cordons, "uncordoned once back")
         notes = {r["node"]: r["note"] for r in done["results"]}
         self.assertEqual(("updates installed", "up to date", "updates installed and restarted"),
-                         (notes["k3s-2"], notes["k3s-3"], notes["k3s-1"]))
+                         (notes["node-2"], notes["node-3"], notes["node-1"]))
 
     def test_a_host_the_review_will_not_restart_keeps_its_updates_and_the_rollout_goes_on(self):
-        self.refuse["k3s-1"] = "Running VMs are on this host; migrate or stop them and review again"
-        self.bind(own="k3s-3")
+        self.refuse["node-1"] = "Running VMs are on this host; migrate or stop them and review again"
+        self.bind(own="node-3")
         done = self.run_until_done() if ROLLOUT.start(now=1000) else None
         self.assertEqual("succeeded", done["status"])
-        self.assertIn("needing a restart: k3s-1", done["message"])
-        self.assertEqual({"k3s-1", "k3s-2"}, set(self.hosts.began))
+        self.assertIn("needing a restart: node-1", done["message"])
+        self.assertEqual({"node-1", "node-2"}, set(self.hosts.began))
 
     def test_a_host_cordoned_before_stays_cordoned(self):
-        self.nodes["k3s-1"] = node("k3s-1", cordoned=True)
-        self.bind(own="k3s-3")
+        self.nodes["node-1"] = node("node-1", cordoned=True)
+        self.bind(own="node-3")
         ROLLOUT.start(now=1000)
         self.run_until_done(on_step=self.finish_restarts)
-        self.assertEqual(["k3s-1"], self.restarts)
-        self.assertNotIn(("k3s-1", False), self.cordons)
+        self.assertEqual(["node-1"], self.restarts)
+        self.assertNotIn(("node-1", False), self.cordons)
 
     def test_a_failed_install_stops_before_the_next_host(self):
-        self.hosts.codes["k3s-2"] = "100"
+        self.hosts.codes["node-2"] = "100"
         ROLLOUT.start(now=1000)
         done = self.run_until_done()
         self.assertEqual("failed", done["status"])
-        self.assertEqual(["k3s-2"], self.hosts.began, "nothing after the host that failed")
+        self.assertEqual(["node-2"], self.hosts.began, "nothing after the host that failed")
         self.assertIn("code 100", done["message"])
 
     def test_a_restart_cut_off_before_power_was_sent_is_tried_once_more(self):
-        self.bind(own="k3s-3")
+        self.bind(own="node-3")
         ROLLOUT.start(now=1000)
 
         def interrupt_first():
@@ -130,7 +130,7 @@ class RolloutTests(unittest.TestCase):
             elif len(ops) == 2:
                 ops[1]["status"] = "succeeded"
         done = self.run_until_done(on_step=interrupt_first)
-        self.assertEqual(["k3s-1", "k3s-1"], self.restarts)
+        self.assertEqual(["node-1", "node-1"], self.restarts)
         self.assertEqual("succeeded", done["status"])
 
     def test_ubuntus_own_updates_are_held_off_while_it_runs_and_let_go_after(self):
@@ -138,16 +138,16 @@ class RolloutTests(unittest.TestCase):
         self.run_until_done(on_step=self.finish_restarts)
         held = {name for name, on in self.hosts.holds if on}
         released = {name for name, on in self.hosts.holds if not on}
-        self.assertEqual({"k3s-1", "k3s-2", "k3s-3"}, held)
-        self.assertEqual({"k3s-1", "k3s-2", "k3s-3"}, released)
+        self.assertEqual({"node-1", "node-2", "node-3"}, held)
+        self.assertEqual({"node-1", "node-2", "node-3"}, released)
 
     def test_when_homestead_manages_updates_the_hold_stays(self):
         ROLLOUT.save_settings({"manage": "homestead"})
         ROLLOUT.tick(now=1000)
-        self.assertEqual({("k3s-1", True), ("k3s-2", True), ("k3s-3", True)}, set(self.hosts.holds))
+        self.assertEqual({("node-1", True), ("node-2", True), ("node-3", True)}, set(self.hosts.holds))
         ROLLOUT.save_settings({"manage": "ubuntu"})
         ROLLOUT.tick(now=1000)
-        self.assertIn(("k3s-2", False), self.hosts.holds)
+        self.assertIn(("node-2", False), self.hosts.holds)
 
     def test_only_one_rollout_at_a_time_and_harvester_is_left_alone(self):
         ROLLOUT.start(now=1000)
@@ -160,11 +160,11 @@ class RolloutTests(unittest.TestCase):
 
     def test_stopping_finishes_the_host_in_hand_first(self):
         ROLLOUT.start(now=1000)
-        ROLLOUT.tick(now=1000)          # hold, then k3s-2 checked and installing
+        ROLLOUT.tick(now=1000)          # hold, then node-2 checked and installing
         ROLLOUT.stop()
         done = self.run_until_done(on_step=self.finish_restarts)
         self.assertEqual("stopped", done["status"])
-        self.assertEqual(["k3s-2"], [r["node"] for r in done["results"]])
+        self.assertEqual(["node-2"], [r["node"] for r in done["results"]])
 
 
 class ScheduleTests(unittest.TestCase):

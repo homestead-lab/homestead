@@ -71,7 +71,7 @@ const DIALOGS = [
   ["node-devices", "nodes", "nodeDetail('harvester-node1')", "nodeDevicesLook('harvester-node1')"],
   ["welcome", "dash", "welcomeCheck(true)"],
   ["self-address", "network", "selfAddressMove()"],
-  ["vip-change", "network", "vipChange('192.168.1.242')"],
+  ["vip-change", "network", "vipChange('192.0.2.242')"],
   ["os-space", "nodes", "diskOsSpace('harvester-node1')"],
   ["portal-edit", "portal", "portalEdit()"],
   ["backup-storage-setup", "protect", "objectStoreSetup()"],

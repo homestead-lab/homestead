@@ -138,11 +138,11 @@
   };
   // Which node answers for the management VIP and serves shared volumes.
   const demoDuties = {
-    "harvester-node1": { vips: ["192.168.1.210", "192.168.1.214", "192.168.1.215", "192.168.1.216"], management_vip: ["192.168.1.210"], rwx: [], control_plane_vip: false },
+    "harvester-node1": { vips: ["192.0.2.210", "192.0.2.214", "192.0.2.215", "192.0.2.216"], management_vip: ["192.0.2.210"], rwx: [], control_plane_vip: false },
     "harvester-node2": { vips: [], management_vip: [], rwx: ["share-media", "frigate-config"], control_plane_vip: false },
   };
   nodes.forEach(n => { n.duties = demoDuties[n.name] || { vips: [], management_vip: [], rwx: [], control_plane_vip: false }; });
-  const demoNodeIps = { "harvester-node1": "192.168.1.207", "harvester-node2": "192.168.1.208", "harvester-node3": "192.168.1.209" };
+  const demoNodeIps = { "harvester-node1": "192.0.2.207", "harvester-node2": "192.0.2.208", "harvester-node3": "192.0.2.209" };
   nodes.forEach(n => { n.addresses = { InternalIP: demoNodeIps[n.name], Hostname: n.name }; });
   // One drive named, as someone would from the node's detail.
   const demoDiskNames = { "harvester-node1": { sdb: "Media 2TB" } };
@@ -160,14 +160,14 @@
   const vmDisk = (claim, size, extra = {}) => ({ name: "disk-0", kind: "disk", claim, boot: 1, bus: "virtio", size, storage_class: "harvester-longhorn", ...extra });
   const demoVms = [
     { ns: "default", name: "home-assistant-os", status: "Running", run_strategy: "RerunOnFailure", running: true, node: "harvester-node1",
-      cores: 2, memory: "4Gi", ip: "192.168.1.60", ips: ["192.168.1.60"], network: "default/vlan1",
+      cores: 2, memory: "4Gi", ip: "192.0.2.60", ips: ["192.0.2.60"], network: "default/vlan1",
       usage: { cpu: 0.46, cpu_pct: 23, mem: 2.9 * 1024 ** 3, mem_pct: 72.5, read_bps: 184320, write_bps: 1.6 * 1024 ** 2 },
       os: "Home Assistant OS 13.2", description: "HAOS with the Zigbee stick passed through",
-      nics: [{ name: "default", model: "virtio", network: "default/vlan1", mac: "52:54:00:6a:11:02", ips: ["192.168.1.60"] }],
+      nics: [{ name: "default", model: "virtio", network: "default/vlan1", mac: "52:54:00:6a:11:02", ips: ["192.0.2.60"] }],
       disks: [vmDisk("haos-disk-0", "32Gi")], migratable: false, restart_required: false, problem: "", created: "2026-08-02T10:00:00Z",
       actions: ["console", "stop", "restart", "pause"] },
     // Two nodes of a k3s cluster made here: an address each, and k3s's own on the server.
-    ...[["server", "192.168.1.231", ["192.168.1.231", "10.42.0.1"]], ["agent", "192.168.1.232", ["192.168.1.232"]]].map(([role, ip, ips]) => ({
+    ...[["server", "192.0.2.231", ["192.0.2.231", "10.42.0.1"]], ["agent", "192.0.2.232", ["192.0.2.232"]]].map(([role, ip, ips]) => ({
       ns: "lab", name: `k3s-demo-${role}-1`, status: "Running", run_strategy: "RerunOnFailure", running: true, node: "harvester-node2",
       cores: 2, memory: "1Gi", ip, ips, network: "default/lan", os: "Ubuntu 26.04.1 LTS", description: "",
       cluster: "k3s-demo", cluster_role: role,
@@ -186,30 +186,30 @@
       problem: "0/3 nodes are available: 3 Insufficient memory.", created: "2026-09-23T10:00:00Z", actions: ["stop", "force-stop"] },
   ];
   let portalLinks = [
-    { id: "demo0", title: "Home Assistant", url: "http://192.168.1.215:8123", section: "Home", icon: "workload:lab/home-assistant", note: "", shown: { kind: "letter" } },
-    { id: "demo1", title: "Frigate", url: "http://192.168.1.214:5000", section: "Home", icon: "workload:lab/frigate", note: "cameras", shown: { kind: "letter" } },
-    { id: "demo2", title: "Gateway", url: "https://192.168.1.1", section: "Network", icon: "builtin:router", note: "UniFi gateway", shown: { kind: "builtin", src: "router" } },
-    { id: "demo3", title: "Core switch", url: "http://192.168.1.2", section: "Network", icon: "builtin:switch", note: "", shown: { kind: "builtin", src: "switch" } },
-    { id: "demo4", title: "Office AP", url: "http://192.168.1.3", section: "Network", icon: "builtin:wifi", note: "", shown: { kind: "builtin", src: "wifi" } },
-    { id: "demo5", title: "Tower", url: "http://192.168.1.10", section: "Storage", icon: "builtin:nas", note: "Unraid", shown: { kind: "builtin", src: "nas" } },
+    { id: "demo0", title: "Home Assistant", url: "http://192.0.2.215:8123", section: "Home", icon: "workload:lab/home-assistant", note: "", shown: { kind: "letter" } },
+    { id: "demo1", title: "Frigate", url: "http://192.0.2.214:5000", section: "Home", icon: "workload:lab/frigate", note: "cameras", shown: { kind: "letter" } },
+    { id: "demo2", title: "Gateway", url: "https://192.0.2.1", section: "Network", icon: "builtin:router", note: "UniFi gateway", shown: { kind: "builtin", src: "router" } },
+    { id: "demo3", title: "Core switch", url: "http://192.0.2.2", section: "Network", icon: "builtin:switch", note: "", shown: { kind: "builtin", src: "switch" } },
+    { id: "demo4", title: "Office AP", url: "http://192.0.2.3", section: "Network", icon: "builtin:wifi", note: "", shown: { kind: "builtin", src: "wifi" } },
+    { id: "demo5", title: "Tower", url: "http://192.0.2.10", section: "Storage", icon: "builtin:nas", note: "Unraid", shown: { kind: "builtin", src: "nas" } },
   ];
   const workloads = [
     { name: "frigate", ns: "lab", kind: "Deployment", group: "Home", failover: "wait", desired: 1, ready: 1, uptime: 472221,
       cpu: 0.84, mem_mb: 1840, nodes: ["harvester-node2"], hardware: ["igpu", "coral_usb"],
-      images: ["ghcr.io/blakeblackshear/frigate:stable"], ports: [{ port: 5000, ip: "192.168.1.214" }],
+      images: ["ghcr.io/blakeblackshear/frigate:stable"], ports: [{ port: 5000, ip: "192.0.2.214" }],
       pod_count: 1, container_count: 1, pods: [pod("frigate", "harvester-node2", "ghcr.io/blakeblackshear/frigate:stable")] },
     { name: "home-assistant", ns: "lab", kind: "Deployment", failover: "move", group: "Home", desired: 1, ready: 1, uptime: 912400,
       cpu: 0.31, mem_mb: 738, nodes: ["harvester-node1"], hardware: [],
-      images: ["ghcr.io/home-assistant/home-assistant:stable"], ports: [{ port: 8123, ip: "192.168.1.215" }],
+      images: ["ghcr.io/home-assistant/home-assistant:stable"], ports: [{ port: 8123, ip: "192.0.2.215" }],
       pod_count: 1, container_count: 1, pods: [pod("home-assistant", "harvester-node1", "ghcr.io/home-assistant/home-assistant:stable")] },
     { name: "paperless", ns: "lab", kind: "Deployment", failover: "move", desired: 1, ready: 1, uptime: 220190,
       cpu: 0.18, mem_mb: 512, nodes: ["harvester-node3"], hardware: [],
-      images: ["ghcr.io/paperless-ngx/paperless-ngx:latest"], ports: [{ port: 8000, ip: "192.168.1.216" }],
+      images: ["ghcr.io/paperless-ngx/paperless-ngx:latest"], ports: [{ port: 8000, ip: "192.0.2.216" }],
       pod_count: 1, container_count: 1, pods: [pod("paperless", "harvester-node3", "ghcr.io/paperless-ngx/paperless-ngx:latest")] },
     // A first start part-way through its image, and a pod from before still stopping.
     { name: "doublecommander", ns: "lab", kind: "Deployment", failover: "move", desired: 1, ready: 0, uptime: 0,
       cpu: 0, mem_mb: 0, nodes: ["harvester-node1"], hardware: [], images: ["lscr.io/linuxserver/doublecommander:latest"],
-      ports: [{ port: 3010, ip: "192.168.1.242" }], pod_count: 2, container_count: 2,
+      ports: [{ port: 3010, ip: "192.0.2.242" }], pod_count: 2, container_count: 2,
       pods: [
         { name: "doublecommander-796b957c77-g6sps", node: "harvester-node1", phase: "Pending", ready: false, restarts: 0,
           container_count: 1, pull: { state: "pulling", image: "lscr.io/linuxserver/doublecommander:latest", node: "harvester-node1",
@@ -224,11 +224,11 @@
     // Homestead itself: its Stop asks first, since it takes this page with it.
     { name: "homestead", ns: "lab", kind: "Deployment", group: "Homestead", self: true, platform: "Homestead", homestead: "self", desired: 1, ready: 1, uptime: 86400,
       cpu: 0.04, mem_mb: 88, nodes: ["harvester-node1"], hardware: [],
-      images: ["ghcr.io/wjcloudy/homestead:2.8.253"], ports: [{ port: 8088, ip: "192.168.1.242" }],
+      images: ["ghcr.io/wjcloudy/homestead:2.8.253"], ports: [{ port: 8088, ip: "192.0.2.242" }],
       pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/wjcloudy/homestead:2.8.253")] },
     { name: "homestead-smb", ns: "lab", kind: "Deployment", group: "Homestead", managed_smb: true, platform: "Homestead", homestead: "smb",
       desired: 1, ready: 1, uptime: 86400, cpu: 0.01, mem_mb: 40, nodes: ["harvester-node2"], hardware: [],
-      images: ["dperson/samba:latest"], ports: [{ port: 445, ip: "192.168.1.245" }],
+      images: ["dperson/samba:latest"], ports: [{ port: 445, ip: "192.0.2.245" }],
       pod_count: 1, container_count: 1, pods: [pod("homestead-smb", "harvester-node2", "dperson/samba:latest")] },
   ];
   const storage = { cap_gb: 1392, avail_gb: 906, used_gb: 486, used_pct: 34.9,
@@ -303,7 +303,7 @@
   const shares = [
     { name: "media", pvc: "share-media", path: "/shares/media", size_gb: 250,
       actual_size_gb: 250, pvc_status: "Bound", access_modes: ["ReadWriteMany"],
-      nfs_clients: "192.168.1.0/24", nfs_read_only: true, user: "lab", public: true,
+      nfs_clients: "192.0.2.0/24", nfs_read_only: true, user: "lab", public: true,
       read_only: false, has_password: false, created: "2026-09-18 22:26" },
     { name: "secure", pvc: "share-secure", path: "/shares/secure", size_gb: 20,
       actual_size_gb: 20, pvc_status: "Bound", user: "lab", public: false, owned: true,
@@ -369,16 +369,16 @@
       mode: "ARP Service controller · explicit VIP allocation" },
     summary: { services: 8, app_services: 3, load_balancers: 3, vips: 3,
       listeners: 3, unhealthy: 0, ready_endpoints: 3 },
-    available_vips: ["192.168.1.230", "192.168.1.231", "192.168.1.217", "192.168.1.218"], available_vip_count: 4,
-    registered_vips: [{ ip: "192.168.1.214", label: "Frigate", free: false, used_by: ["lab/frigate"] },
-      { ip: "192.168.1.230", label: "Shares", free: true, used_by: [] },
-      { ip: "192.168.1.231", label: "Spare", free: true, used_by: [] }],
-    vip_labels: { "192.168.1.214": "Frigate", "192.168.1.230": "Shares", "192.168.1.231": "Spare" },
-    platform_addresses: { "192.168.1.210": "kube-system/ingress-expose" }, foreign_addresses: {},
-    platform_clashes: [], shared_vip: { ip: "192.168.1.242", problem: "" },
-    node_ips: ["192.168.1.207", "192.168.1.208", "192.168.1.210"], conflicts: [],
+    available_vips: ["192.0.2.230", "192.0.2.231", "192.0.2.217", "192.0.2.218"], available_vip_count: 4,
+    registered_vips: [{ ip: "192.0.2.214", label: "Frigate", free: false, used_by: ["lab/frigate"] },
+      { ip: "192.0.2.230", label: "Shares", free: true, used_by: [] },
+      { ip: "192.0.2.231", label: "Spare", free: true, used_by: [] }],
+    vip_labels: { "192.0.2.214": "Frigate", "192.0.2.230": "Shares", "192.0.2.231": "Spare" },
+    platform_addresses: { "192.0.2.210": "kube-system/ingress-expose" }, foreign_addresses: {},
+    platform_clashes: [], shared_vip: { ip: "192.0.2.242", problem: "" },
+    node_ips: ["192.0.2.207", "192.0.2.208", "192.0.2.210"], conflicts: [],
     pools: [{ name: "lab-pool", ready: true, total: 6, reported_available: 2,
-      ranges: [{ start: "192.168.1.214", end: "192.168.1.219", candidate_count: 6 }] }],
+      ranges: [{ start: "192.0.2.214", end: "192.0.2.219", candidate_count: 6 }] }],
     workloads: workloads.map(row => ({ namespace: row.ns, name: row.name, replicas: row.desired,
       ports: row.ports.map(port => ({ name: "web", port: port.port, protocol: "TCP" })) })),
     vips: workloads.map(row => ({ ip: row.ports[0].ip, shared: false, services: 1,
@@ -395,11 +395,11 @@
         node: row.nodes[0], target_kind: "Pod", target: row.pods[0].name }], not_ready: [], ports: [] },
       ready_endpoints: 1, not_ready_endpoints: 0, health: "healthy", reason: "1 ready endpoint",
       orphaned: false })).concat([{ namespace: "lab", name: "sonarr-old", type: "LoadBalancer",
-      system: false, managed: true, cluster_ip: "10.43.0.44", external_ips: ["192.168.1.246"],
-      assigned_ips: ["192.168.1.246"], requested_ips: ["192.168.1.246"], vip_host: "harvester-node1",
+      system: false, managed: true, cluster_ip: "10.43.0.44", external_ips: ["192.0.2.246"],
+      assigned_ips: ["192.0.2.246"], requested_ips: ["192.0.2.246"], vip_host: "harvester-node1",
       selector: { app: "sonarr-old" }, targets: [], orphaned: true,
       ports: [{ name: "web", port: 8989, target_port: 8989, protocol: "TCP",
-        access: "http://192.168.1.246:8989", browser: true }],
+        access: "http://192.0.2.246:8989", browser: true }],
       endpoints: { ready: [], not_ready: [], ports: [] }, ready_endpoints: 0,
       not_ready_endpoints: 0, health: "unavailable",
       reason: "No ready endpoints match the Service selector" }]),
@@ -413,21 +413,21 @@
     services: [], unrouted: state === "unrouted" ? [{ namespace: "lab", name: "homestead-smb" }] : [], ready: 1, announced: !!node, state, reason });
   network.addresses = {
     nodes: nodes.map(n => ({ name: n.name, ips: [demoNodeIps[n.name]], ready: n.status === "Ready", control_plane: n.roles.includes("control-plane"),
-      vips: n.name === "harvester-node1" ? ["192.168.1.210", "192.168.1.214", "192.168.1.215", "192.168.1.216", "192.168.1.242", "192.168.1.245"]
-        : n.name === "harvester-node3" ? ["192.168.1.217"] : [] })),
+      vips: n.name === "harvester-node1" ? ["192.0.2.210", "192.0.2.214", "192.0.2.215", "192.0.2.216", "192.0.2.242", "192.0.2.245"]
+        : n.name === "harvester-node3" ? ["192.0.2.217"] : [] })),
     addresses: [
       ...Object.entries(demoNodeIps).map(([node, ip]) => ({ ip, kind: "node", node, controller: "", listeners: [], services: [], unrouted: [], ready: 0, announced: false, state: "ok", reason: "" })),
-      place("192.168.1.210", "harvester-node1", [listener(443, "ingress-expose", [])]),
-      place("192.168.1.214", "harvester-node1", [listener(5000, "frigate", ["frigate"])]),
-      place("192.168.1.215", "harvester-node1", [listener(8123, "home-assistant", ["home-assistant"])]),
-      place("192.168.1.216", "harvester-node1", [listener(8000, "paperless", ["paperless"])]),
-      place("192.168.1.217", "harvester-node3", [listener(22, "ubuntu-ssh", ["VirtualMachine/ubuntu"])]),
-      place("192.168.1.242", "harvester-node1", [listener(3010, "doublecommander", ["doublecommander"]), listener(8088, "homestead", ["homestead"])]),
-      place("192.168.1.245", "harvester-node1", [listener(445, "homestead-smb", ["homestead-smb"])], "unrouted",
-        "harvester-node1 answers for 192.168.1.245, but lab/homestead-smb does not carry it, so connections to its ports are refused"),
+      place("192.0.2.210", "harvester-node1", [listener(443, "ingress-expose", [])]),
+      place("192.0.2.214", "harvester-node1", [listener(5000, "frigate", ["frigate"])]),
+      place("192.0.2.215", "harvester-node1", [listener(8123, "home-assistant", ["home-assistant"])]),
+      place("192.0.2.216", "harvester-node1", [listener(8000, "paperless", ["paperless"])]),
+      place("192.0.2.217", "harvester-node3", [listener(22, "ubuntu-ssh", ["VirtualMachine/ubuntu"])]),
+      place("192.0.2.242", "harvester-node1", [listener(3010, "doublecommander", ["doublecommander"]), listener(8088, "homestead", ["homestead"])]),
+      place("192.0.2.245", "harvester-node1", [listener(445, "homestead-smb", ["homestead-smb"])], "unrouted",
+        "harvester-node1 answers for 192.0.2.245, but lab/homestead-smb does not carry it, so connections to its ports are refused"),
     ],
     problems: 1,
-    kept: [{ at: Math.floor(Date.now() / 1000) - 3600, namespace: "lab", name: "homestead-objectstore", ips: ["192.168.1.242"], node: "harvester-node1" }],
+    kept: [{ at: Math.floor(Date.now() / 1000) - 3600, namespace: "lab", name: "homestead-objectstore", ips: ["192.0.2.242"], node: "harvester-node1" }],
   };
 
   const restorePlan = url => {
@@ -529,35 +529,35 @@
       uid: "demo-probe", resource_version: "1", detail: "Placement checks are disabled (demo; no host changes)",
       capacity: {blocked:false, blockers:[], warnings:[], nodes:[], fingerprint:"demo"}},
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
-      info: { version: "2.8.253", namespace: "lab", storage_class: "longhorn-r2", vip: "192.168.1.242",
+      info: { version: "2.8.253", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
     "/api/overview": { health: "healthy", health_state: "healthy", health_summary: "All cluster services are healthy", health_issues: [],
       cpu_pct: 27.2, cpu_used: 5.4, cpu_cap: 20, mem_pct: 54.0, mem_used_gb: 25.2, mem_cap_gb: 46.8,
-      nodes_ready: 3, nodes_total: 3, workload_pods: 16, system_pods: 116, lb_ip: "192.168.1.242", nodes,
+      nodes_ready: 3, nodes_total: 3, workload_pods: 16, system_pods: 116, lb_ip: "192.0.2.242", nodes,
       top_cpu: [{ name: "frigate", ns: "lab", nodes: ["harvester-node2"], cpu: .84 }, { name: "home-assistant", ns: "lab", nodes: ["harvester-node1"], cpu: .31 }, { name: "paperless", ns: "lab", nodes: ["harvester-node3"], cpu: .18 }],
       top_mem: [{ name: "frigate", ns: "lab", nodes: ["harvester-node2"], mem_mb: 1840 }, { name: "home-assistant", ns: "lab", nodes: ["harvester-node1"], mem_mb: 738 }, { name: "paperless", ns: "lab", nodes: ["harvester-node3"], mem_mb: 512 }] },
     "/api/history": history, "/api/storage": storage, "/api/volumes": volumes,
     "/api/nodes": nodes, "/api/nodes/uptime": demoUptime, "/api/node": url => nodes.find(n => n.name === url.searchParams.get("name")) || {},
     // A host's own OS, as the leader reads it on k3s and RKE2 (host-os.js).
     // Homestead's own services, on node addresses until put on a VIP (views-network.js).
-    "/api/self/address": { on_vip: false, url: "", shared_vip: "192.168.1.242", components: [
+    "/api/self/address": { on_vip: false, url: "", shared_vip: "192.0.2.242", components: [
       { id: "web", label: "Homestead's web page", namespace: "lab", workload: "homestead", present: true, vip: "", vip_service: "",
-        node_addresses: ["192.168.1.207", "192.168.1.208"], ports: [{ name: "http", port: 8088, target_port: 8080, protocol: "TCP" }] },
-      { id: "objectstore", label: "Backup storage (S3)", namespace: "lab", workload: "homestead-objectstore", present: true, vip: "192.168.1.242", vip_service: "homestead-objectstore",
+        node_addresses: ["192.0.2.207", "192.0.2.208"], ports: [{ name: "http", port: 8088, target_port: 8080, protocol: "TCP" }] },
+      { id: "objectstore", label: "Backup storage (S3)", namespace: "lab", workload: "homestead-objectstore", present: true, vip: "192.0.2.242", vip_service: "homestead-objectstore",
         node_addresses: [], ports: [{ name: "s3", port: 9000, target_port: "s3", protocol: "TCP" }, { name: "console", port: 9001, target_port: "console", protocol: "TCP" }] },
       { id: "smb", label: "Network shares (SMB)", namespace: "lab", workload: "homestead-smb", present: true, vip: "", vip_service: "",
-        node_addresses: ["192.168.1.207"], ports: [{ name: "smb", port: 445, target_port: 445, protocol: "TCP" }] }] },
-    "/api/self/address/plan": { vip: "192.168.1.242", steps: [
-      { id: "web", label: "Homestead's web page", action: "add", detail: "8088 on 192.168.1.242, as homestead-vip" },
-      { id: "objectstore", label: "Backup storage (S3)", action: "kept", detail: "already on 192.168.1.242" },
-      { id: "smb", label: "Network shares (SMB)", action: "add", detail: "445 on 192.168.1.242, as homestead-smb-vip" }] },
-    "/api/network/vips/change": { old: "192.168.1.242", new: "192.168.1.210", default: true, label: "Main VIP",
+        node_addresses: ["192.0.2.207"], ports: [{ name: "smb", port: 445, target_port: 445, protocol: "TCP" }] }] },
+    "/api/self/address/plan": { vip: "192.0.2.242", steps: [
+      { id: "web", label: "Homestead's web page", action: "add", detail: "8088 on 192.0.2.242, as homestead-vip" },
+      { id: "objectstore", label: "Backup storage (S3)", action: "kept", detail: "already on 192.0.2.242" },
+      { id: "smb", label: "Network shares (SMB)", action: "add", detail: "445 on 192.0.2.242, as homestead-smb-vip" }] },
+    "/api/network/vips/change": { old: "192.0.2.242", new: "192.0.2.210", default: true, label: "Main VIP",
       services: [{ namespace: "lab", name: "homestead-vip", ports: ["8088/TCP"], targets: ["homestead"] },
-        { namespace: "lab", name: "frigate", ports: ["5000/TCP"], targets: ["frigate"] }], detail: "192.168.1.242 is now 192.168.1.210; 2 Services moved with it" },
+        { namespace: "lab", name: "frigate", ports: ["5000/TCP"], targets: ["frigate"] }], detail: "192.0.2.242 is now 192.0.2.210; 2 Services moved with it" },
     "/api/welcome": { show: false, done: false, harvester: false, load_balancer: "kube-vip", steps: {
-      address: { done: false, url: "", shared_vip: "192.168.1.242", vips: 2 }, probe: { done: true }, backups: { done: false },
+      address: { done: false, url: "", shared_vip: "192.0.2.242", vips: 2 }, probe: { done: true }, backups: { done: false },
       updates: { applies: true, done: false } } },
     // A host's devices for VMs (passthrough.js): a GPU handed over, a NIC the host needs.
     "/api/passthrough/inspect": { node: "harvester-node1", harvester: false, iommu: true, cmdline_iommu: true, cpu: "intel", complete: true, kubevirt: true,
@@ -701,7 +701,7 @@
     "/api/images/prepull/stop": { ok: true, message: "Pre-pull homestead-pull-frigate stopped" },
     "/api/network/vm-networks": { ok: true, name: "default/lan", detail: "VM network default/lan made, on the untagged LAN of mgmt; VMs and containers can join it now" },
     "/api/node/bridge/inspect": (url, init) => ({ node: JSON.parse(init.body).node, interface: "eth0", mac: "18:60:24:f5:e5:09",
-      address: "192.168.1.109/24", dhcp: true, gateway: "192.168.1.1", file: "/etc/netplan/00-installer-config.yaml", netplan_id: "eth0",
+      address: "192.0.2.109/24", dhcp: true, gateway: "192.0.2.1", file: "/etc/netplan/00-installer-config.yaml", netplan_id: "eth0",
       services: ["k3s"], bridge: "br0", problem: "", rollback_seconds: 240 }),
     "/api/node/bridge": (url, init) => ({ ok: true, detail: `${JSON.parse(init.body).node} is moving to br0; follow it in the job tray` }),
     "/api/images/scan": { ok: true, nodes: ["harvester-node1", "harvester-node2", "harvester-node3"], detail: "asking containerd on 3 nodes for every image" },
@@ -709,13 +709,13 @@
     // Two linked clusters (shed answers, garage is off) and barn, added for
     // moves before linking existed.
     "/api/move/clusters": [
-      { name: "shed", label: "Shed", url: "http://192.168.1.250:8088", user: "", fleet: true, id: "b2c0de" },
-      { name: "garage", label: "Garage", url: "http://192.168.1.251:8088", user: "", fleet: true, id: "c3beef" },
-      { name: "barn", url: "http://192.168.1.252:8088", user: "admin", added: "2026-05-02 18:40" }],
+      { name: "shed", label: "Shed", url: "http://192.0.2.250:8088", user: "", fleet: true, id: "b2c0de" },
+      { name: "garage", label: "Garage", url: "http://192.0.2.251:8088", user: "", fleet: true, id: "c3beef" },
+      { name: "barn", url: "http://192.0.2.252:8088", user: "admin", added: "2026-05-02 18:40" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
       if (name === "garage") return { name, version: "", protocol: null, local_version: "2.8.253", local_protocol: 1,
-        state: "unreachable", message: "could not reach garage: no answer from http://192.168.1.251:8088" };
+        state: "unreachable", message: "could not reach garage: no answer from http://192.0.2.251:8088" };
       if (name === "barn") return { name, version: "2.8.190", protocol: 1, local_version: "2.8.253",
         local_protocol: 1, state: "differs", compatible: true,
         message: "barn runs 2.8.190 and this one 2.8.253. Moves work between them; this Homestead is the newer of the two." };
@@ -728,13 +728,13 @@
       ? { version: { state: "unreachable", message: "could not reach garage" }, storage: {}, target: {}, ready: false }
       : JSON.parse(init?.body || "{}").name === "barn"
       ? { version: { compatible: true }, storage: { deployed: false }, target: { configured: false, error: "no backup target" }, ready: false,
-          shared_vip: "192.168.1.245", free_vips: [{ ip: "192.168.1.246", label: "spare", from: "vips" }, { ip: "192.168.1.230", label: "", from: "pool" }] }
+          shared_vip: "192.0.2.245", free_vips: [{ ip: "192.0.2.246", label: "spare", from: "vips" }, { ip: "192.0.2.230", label: "", from: "pool" }] }
       : { version: { compatible: true }, storage: { deployed: true, ready: true, reachable_off_cluster: true },
           target: { configured: true, reachable_off_cluster: true, answers: true, url: "s3://homestead-backups@us-east-1/",
-            endpoint: "http://192.168.1.250:9000" }, ready: true },
-    "/api/move/clusters/storage": { ok: true, detail: "backup storage is starting on barn at http://192.168.1.244:9000" },
+            endpoint: "http://192.0.2.250:9000" }, ready: true },
+    "/api/move/clusters/storage": { ok: true, detail: "backup storage is starting on barn at http://192.0.2.244:9000" },
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
-    "/api/move/remote": { cluster: "shed", url: "http://192.168.1.250:8088",
+    "/api/move/remote": { cluster: "shed", url: "http://192.0.2.250:8088",
       namespace: "lab", version: "2.8.253", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
@@ -781,7 +781,7 @@
           hardware: {}, temp_c: 36, why: ["no Intel/AMD iGPU on this host"] }] } : {
       ok: true, blockers: [], cluster: "shed", kind: "container", name: "frigate",
       storage_class: JSON.parse(init.body || "{}").storage_class || "longhorn-r2", storage_classes: ["longhorn-r2", "longhorn-r3"],
-      namespace: "lab", joined: false, will_run: true, addresses: ["frigate on 192.168.1.242"],
+      namespace: "lab", joined: false, will_run: true, addresses: ["frigate on 192.0.2.242"],
       warnings: ["this cluster's Longhorn backup target changes from (none) to s3://homestead-backups@us-east-1/; backups already written to the old one stay there"],
       claims: [{ claim: "frigate-config", size_gb: 10, access_mode: "ReadWriteOnce",
         volume_mode: "Filesystem", backing_image: "" }], total_gb: 10 },
@@ -835,12 +835,12 @@
     "/api/onboard/guide": { version: "1.4.1", arch: "amd64",
       iso: "https://releases.rancher.com/harvester/v1.4.1/harvester-v1.4.1-amd64.iso",
       checksums: "https://releases.rancher.com/harvester/v1.4.1/harvester-v1.4.1-amd64.sha512",
-      vip: "192.168.1.240", ntp: ["0.suse.pool.ntp.org"], proxy: "", hostname: "harvester-node4",
-      nodes: [{ name: "harvester-node1", ip: "192.168.1.210", ready: true, management: true },
-        { name: "harvester-node2", ip: "192.168.1.211", ready: true, management: true },
-        { name: "harvester-node3", ip: "192.168.1.212", ready: true, management: true }],
+      vip: "192.0.2.240", ntp: ["0.suse.pool.ntp.org"], proxy: "", hostname: "harvester-node4",
+      nodes: [{ name: "harvester-node1", ip: "192.0.2.210", ready: true, management: true },
+        { name: "harvester-node2", ip: "192.0.2.211", ready: true, management: true },
+        { name: "harvester-node3", ip: "192.0.2.212", ready: true, management: true }],
       management_count: 3, token_file: "/etc/rancher/rancherd/config.yaml",
-      token_command: "sudo grep '^token:' /etc/rancher/rancherd/config.yaml", token_host: "192.168.1.210" },
+      token_command: "sudo grep '^token:' /etc/rancher/rancherd/config.yaml", token_host: "192.0.2.210" },
     "/api/cluster/cleanup": {
       dead_nodes: [{ name: "harvester-node5", roles: [], since: "2026-09-21T02:14:00Z" }],
       stale_machines: [{ name: "custom-5f2c81a9e0d4", node: "harvester-node4", phase: "Deleting", stuck: true, created: "2026-08-01T10:00:00Z" }],
@@ -903,7 +903,7 @@
       { id: "d2", cluster: "shed", kind: "container", name: "grafana", source_namespace: "lab",
         namespace: "lab", status: "failed", phase: "joining", phase_index: 0, source_stopped: false,
         phases: ["joining", "quiescing", "backing-up", "syncing", "restoring", "creating", "starting", "done"],
-        progress: 1, message: "this cluster cannot reach shed's backup storage at http://192.168.1.108:9000. Give it an address this cluster can reach - shed's Migration button under Linked clusters - then retry",
+        progress: 1, message: "this cluster cannot reach shed's backup storage at http://192.0.2.108:9000. Give it an address this cluster can reach - shed's Migration button under Linked clusters - then retry",
         source_removed: false, created_at: new Date(Date.now() - 2 * 60e3).toISOString(), claims: [] },
       { id: "d1", cluster: "shed", kind: "container", name: "frigate", source_namespace: "lab",
         namespace: "lab", status: "running", phase: "restoring", phase_index: 4,
@@ -915,15 +915,15 @@
         phases: ["joining", "quiescing", "backing-up", "syncing", "restoring", "creating", "starting", "done"],
         progress: 100, message: "mosquitto is running here; still stopped on shed until you remove it there",
         source_removed: false, created_at: new Date(Date.now() - 50 * 60e3).toISOString(), claims: [] }],
-    "/api/objectstore": { deployed: true, ready: true, endpoint: "http://192.168.1.244:9000",
+    "/api/objectstore": { deployed: true, ready: true, endpoint: "http://192.0.2.244:9000",
       reachable_off_cluster: true, bucket: "homestead-backups", size_gb: 100,
       backup_url: "s3://homestead-backups@us-east-1/",
       longhorn: { pointed: true, state: "complete", detail: "Longhorn backs up to this store" },
       image: "quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z" },
-    "/api/objectstore/deploy": { ok: true, endpoint: "http://192.168.1.244:9000",
+    "/api/objectstore/deploy": { ok: true, endpoint: "http://192.0.2.244:9000",
       bucket: "homestead-backups", access_key: "homestead" },
     "/api/objectstore/longhorn": { url: "s3://homestead-backups@us-east-1/",
-      secret: "homestead-backup-credentials", endpoint: "http://192.168.1.244:9000",
+      secret: "homestead-backup-credentials", endpoint: "http://192.0.2.244:9000",
       reachable_off_cluster: true, detail: "Longhorn will back up here" },
     "/api/objectstore/remove": { ok: true, detail: "object storage removed" },
     "/api/move/clusters/target": { pending: true, detail: "Backup target switch queued; Homestead will retry when storage is ready" },
@@ -1157,17 +1157,17 @@ ssh_pwauth: true
       { name: "harvester-node3", block_disks: 0, hugepages_mb: 2048, ready: false, missing: ["a V2 (block) disk"], missing_modules: [],
         checks: { cpu: true, modules: true, hugepages: true, disk: false } }],
       distribution: "harvester", longhorn_version: "v1.8.1", longhorn_ok: true },
-    "/api/network/service/delete": { ok: true, freed: ["192.168.1.246:8989/TCP"],
-      message: "Service lab/sonarr-old deleted, releasing 192.168.1.246:8989/TCP" },
+    "/api/network/service/delete": { ok: true, freed: ["192.0.2.246:8989/TCP"],
+      message: "Service lab/sonarr-old deleted, releasing 192.0.2.246:8989/TCP" },
     "/api/shares": shares,
     "/api/shares/users": [{ user: "lab", has_password: true, shares: ["secure"] },
       { user: "backup", has_password: true, shares: [] }],
     "/api/shares/users/delete": { ok: true, message: "Unused SMB user removed" },
     "/api/shares/server": { installed: true, enabled: true, desired: 1, ready: 1,
-      name: "homestead-smb", address: "192.168.1.245", shares: 3,
+      name: "homestead-smb", address: "192.0.2.245", shares: 3,
       served_shares: ["media", "photos", "secure"], in_sync: true, image: "dperson/samba:latest" },
     "/api/shares/nfs/server": { installed: true, enabled: true, desired: 1, ready: 1,
-      name: "homestead-nfs", address: "192.168.1.246", exports: ["media"], image: "pedroetb/nfs-server:v2.4.0",
+      name: "homestead-nfs", address: "192.0.2.246", exports: ["media"], image: "pedroetb/nfs-server:v2.4.0",
       recovery: { level: "limited", detail: "Reconnect recovery prerequisites checked; lock recovery is unsupported",
         eligible_hosts: ["harvester-node1", "harvester-node2", "harvester-node3"], blockers: [],
         warnings: ["Longhorn RWX re-exports do not support NFS lock recovery. Use this gateway for ordinary files."], lock_recovery: false } },
@@ -1202,7 +1202,7 @@ ssh_pwauth: true
           ["verify", "Check the copy", "todo"], ["swap", "Swap the new volume in", "todo"], ["start", "Start everything again", "todo"]]
           .map(([id, label, state]) => ({ id, label, state })) },
       { id: "op5", kind: "k3s-cluster", title: "k3s cluster k3s-lab", status: "running", progress: 60, cancellable: true,
-        message: "VMs running; installing k3s on k3s-lab-server-1 (192.168.1.60) - a few minutes",
+        message: "VMs running; installing k3s on k3s-lab-server-1 (192.0.2.60) - a few minutes",
         started_at: new Date(Date.now() - 4e5).toISOString(), href: "/vms",
         resource: { kind: "VirtualMachine", name: "k3s-lab-server-1", namespace: "lab" } },
     ]),
@@ -1315,9 +1315,9 @@ ssh_pwauth: true
           { t: at(230), s: "running", p: 60, m: op.message }]
           : [{ t: at(120), s: "queued", p: 0, m: "Waiting for Kubernetes" }, { t: at(60), s: op.status, p: op.progress, m: op.message || op.status }],
         sources: k3s ? [
-          { title: "k3s-lab-server-1 · server · 192.168.1.60", text: "[  OK  ] Started cloud-final.service - Cloud-init: Final Stage.\n[INFO]  Finding release for channel stable\n[INFO]  Using v1.33.4+k3s1 as release\n[INFO]  Downloading hash https://github.com/k3s-io/k3s/releases/download/v1.33.4+k3s1/sha256sum-amd64.txt\n[INFO]  Downloading binary https://github.com/k3s-io/k3s/releases/download/v1.33.4+k3s1/k3s\n[INFO]  Verifying binary download\n[INFO]  Installing k3s to /usr/local/bin/k3s\n[INFO]  systemd: Starting k3s\n==> waiting for the API server\n==> installing Longhorn (this takes a few minutes)", note: "" },
-          { title: "k3s-lab-agent-1 · agent · 192.168.1.61", text: "[  OK  ] Started cloud-final.service - Cloud-init: Final Stage.\n[INFO]  Finding release for channel stable\n==> waiting for https://192.168.1.60:6443 to answer", note: "" },
-          { title: "k3s-lab-agent-2 · agent · 192.168.1.62", text: "", note: "the VM is not running yet" }]
+          { title: "k3s-lab-server-1 · server · 192.0.2.60", text: "[  OK  ] Started cloud-final.service - Cloud-init: Final Stage.\n[INFO]  Finding release for channel stable\n[INFO]  Using v1.33.4+k3s1 as release\n[INFO]  Downloading hash https://github.com/k3s-io/k3s/releases/download/v1.33.4+k3s1/sha256sum-amd64.txt\n[INFO]  Downloading binary https://github.com/k3s-io/k3s/releases/download/v1.33.4+k3s1/k3s\n[INFO]  Verifying binary download\n[INFO]  Installing k3s to /usr/local/bin/k3s\n[INFO]  systemd: Starting k3s\n==> waiting for the API server\n==> installing Longhorn (this takes a few minutes)", note: "" },
+          { title: "k3s-lab-agent-1 · agent · 192.0.2.61", text: "[  OK  ] Started cloud-final.service - Cloud-init: Final Stage.\n[INFO]  Finding release for channel stable\n==> waiting for https://192.0.2.60:6443 to answer", note: "" },
+          { title: "k3s-lab-agent-2 · agent · 192.0.2.62", text: "", note: "the VM is not running yet" }]
           : op.kind === "reclass" ? [{ title: "Copy and check", text: "==> copying 20.0 GiB\n  10,737,418,240  52%   96.40MB/s    0:01:50", note: "" }] : [] };
     },
     "/api/operations/cancel": (url, init) => {
@@ -1353,15 +1353,15 @@ ssh_pwauth: true
           { name: "moves", label: "Cluster moves", state: "failing", last_ok: now - 900, error: "could not reach shed: timed out", every: 10 }],
         probe: { installed: true, desired: 3, ready: 3, reporting: 3, smart: 2, state: "current", detail: "homestead-nodeprobe is running this release's scripts" },
         samba: { installed: true, enabled: true, desired: 1, ready: 1, name: "homestead-smb",
-          address: "192.168.1.245", shares: 3, served_shares: ["media", "photos", "secure"],
+          address: "192.0.2.245", shares: 3, served_shares: ["media", "photos", "secure"],
           in_sync: true, image: "dperson/samba:latest" },
         permissions: { state: "current", detail: "Homestead's permissions match this release" },
-        backups: { deployed: true, ready: true, endpoint: "http://192.168.1.244:9000" },
-        addresses: { lb_ip: "192.168.1.242", problem: "", clashes: [], platform: ["192.168.1.210"] },
-        mqtt: { state: "publishing", detail: "publishing to 192.168.1.177:1883 every 60s", error: "", last_publish: now - 20 } };
+        backups: { deployed: true, ready: true, endpoint: "http://192.0.2.244:9000" },
+        addresses: { lb_ip: "192.0.2.242", problem: "", clashes: [], platform: ["192.0.2.210"] },
+        mqtt: { state: "publishing", detail: "publishing to 192.0.2.177:1883 every 60s", error: "", last_publish: now - 20 } };
     },
-    "/api/network/vips/add": { ok: true, added: ["192.168.1.232"], skipped: [], detail: "1 address added" },
-    "/api/network/vips/remove": { ok: true, detail: "192.168.1.231 is no longer reserved for Homestead" },
+    "/api/network/vips/add": { ok: true, added: ["192.0.2.232"], skipped: [], detail: "1 address added" },
+    "/api/network/vips/remove": { ok: true, detail: "192.0.2.231 is no longer reserved for Homestead" },
     "/api/network/vips/label": { ok: true },
     "/api/self/samba": { ok: true, detail: "Samba is stopping; the shares, their volumes and passwords are kept" },
     "/api/self/nfs": { ok: true, detail: "NFS stopped; exports, shares and every PVC were kept" },
@@ -1499,33 +1499,33 @@ ssh_pwauth: true
       const r = (ip, extra) => ({ ip, name: "", mac: "", kind: "", category: "", note: "", owner: "", tags: [], sources: [],
         cluster: "", scan: null, unifi: null, flags: [], in_dhcp: false, pool: "", ...extra });
       const rows = [
-        r("192.168.1.1", { kind: "infrastructure", category: "router", mac: "74:ac:b9:00:00:01", gateway: true,
+        r("192.0.2.1", { kind: "infrastructure", category: "router", mac: "74:ac:b9:00:00:01", gateway: true,
           unifi: { type: "device", model: "UDM-Pro", name: "UDM Pro", hostname: "" }, scan: { up: true, ports: [22, 53, 443] } }),
-        r("192.168.1.2", { kind: "infrastructure", category: "switch", mac: "74:ac:b9:00:00:02", name: "Core switch",
+        r("192.0.2.2", { kind: "infrastructure", category: "switch", mac: "74:ac:b9:00:00:02", name: "Core switch",
           unifi: { type: "device", model: "USW-Pro-24", name: "USW Pro 24", hostname: "" } }),
-        r("192.168.1.3", { kind: "infrastructure", category: "access-point", mac: "74:ac:b9:00:00:03",
+        r("192.0.2.3", { kind: "infrastructure", category: "access-point", mac: "74:ac:b9:00:00:03",
           unifi: { type: "device", model: "U6-Lite", name: "Hallway AP", hostname: "u6-lite-hall" } }),
-        r("192.168.1.10", { kind: "static", category: "nas", name: "Tower", mac: "d0:50:99:00:00:10", tags: ["storage"], note: "Unraid server in the rack - web UI on port 80, parity check runs Sunday nights, UPS on the second shelf",
+        r("192.0.2.10", { kind: "static", category: "nas", name: "Tower", mac: "d0:50:99:00:00:10", tags: ["storage"], note: "Unraid server in the rack - web UI on port 80, parity check runs Sunday nights, UPS on the second shelf",
           scan: { up: true, ports: [22, 80, 445], rdns: "tower.lan" } }),
-        r("192.168.1.21", { cluster: "node", scan: { up: true, ports: [22, 443] } }),
-        r("192.168.1.22", { cluster: "node", scan: { up: true, ports: [22, 443] } }),
-        r("192.168.1.40", { kind: "reservation", category: "media", mac: "a4:83:e7:00:00:40",
+        r("192.0.2.21", { cluster: "node", scan: { up: true, ports: [22, 443] } }),
+        r("192.0.2.22", { cluster: "node", scan: { up: true, ports: [22, 443] } }),
+        r("192.0.2.40", { kind: "reservation", category: "media", mac: "a4:83:e7:00:00:40",
           unifi: { type: "wired", online: true, reserved: true, name: "Living room TV", hostname: "LGwebOSTV" } }),
-        r("192.168.1.41", { kind: "reservation", category: "cctv", mac: "9c:8e:cd:00:00:41",
+        r("192.0.2.41", { kind: "reservation", category: "cctv", mac: "9c:8e:cd:00:00:41",
           unifi: { type: "reservation", online: false, reserved: true, name: "Driveway camera", hostname: "" } }),
-        r("192.168.1.60", { scan: { up: true, ports: [80] }, flags: [{ level: "info", text: "answers on the network but is not documented" }] }),
-        r("192.168.1.120", { cluster: "vip", services: ["lab/plex"], in_dhcp: true,
+        r("192.0.2.60", { scan: { up: true, ports: [80] }, flags: [{ level: "info", text: "answers on the network but is not documented" }] }),
+        r("192.0.2.120", { cluster: "vip", services: ["lab/plex"], in_dhcp: true,
           flags: [{ level: "warn", text: "inside the DHCP range: the DHCP server may hand this address to something else" }] }),
-        r("192.168.1.131", { kind: "dhcp", category: "phone", mac: "f2:11:00:00:01:31", in_dhcp: true,
+        r("192.0.2.131", { kind: "dhcp", category: "phone", mac: "f2:11:00:00:01:31", in_dhcp: true,
           unifi: { type: "wireless", online: true, name: "Pixel 8", hostname: "pixel-8" } }),
-        r("192.168.1.242", { cluster: "vip", services: ["lab/homestead"], pool: "lan" }),
+        r("192.0.2.242", { cluster: "vip", services: ["lab/homestead"], pool: "lan" }),
       ];
       return { kinds: ["static", "reservation", "dhcp", "reserved", "infrastructure"], suggested: [],
-        unifi: demoUnifi ? { configured: true, url: "https://192.168.1.1", site: "default", has_key: true, last_sync: Math.floor(Date.now() / 1000) - 600, site_name: "Default" } : {},
+        unifi: demoUnifi ? { configured: true, url: "https://192.0.2.1", site: "default", has_key: true, last_sync: Math.floor(Date.now() / 1000) - 600, site_name: "Default" } : {},
         unifi_networks: [{ cidr: "192.168.20.0/24", name: "IoT", vlan: 20, gateway: "192.168.20.1", dhcp_start: "192.168.20.10", dhcp_end: "192.168.20.250" }],
-        subnets: [{ id: "192.168.1.0/24", cidr: "192.168.1.0/24", name: "LAN", vlan: null, gateway: "192.168.1.1",
-          dhcp_start: "192.168.1.100", dhcp_end: "192.168.1.199", note: "", rows, usable: 254, used: rows.length,
-          dhcp_size: 100, free_static: 118, next_free: ["192.168.1.4", "192.168.1.5", "192.168.1.6"], pool_clash: [],
+        subnets: [{ id: "192.0.2.0/24", cidr: "192.0.2.0/24", name: "LAN", vlan: null, gateway: "192.0.2.1",
+          dhcp_start: "192.0.2.100", dhcp_end: "192.0.2.199", note: "", rows, usable: 254, used: rows.length,
+          dhcp_size: 100, free_static: 118, next_free: ["192.0.2.4", "192.0.2.5", "192.0.2.6"], pool_clash: [],
           scan: { at: Math.floor(Date.now() / 1000) - 3600, state: "done", progress: 100 } }] };
     },
     "/api/ipam/unifi": (url, init) => { demoUnifi = !JSON.parse(init?.body || "{}").forget; return { ok: true }; },
@@ -1557,11 +1557,11 @@ ssh_pwauth: true
       values: "replicas: 1\npersistence:\n  enabled: false\n  size: 10Gi\nservice:\n  type: ClusterIP\n  port: 80\n", readme_url: "https://artifacthub.io/packages/helm/grafana/grafana" },
     "/api/helm/install": { ok: true, name: "grafana", detail: "grafana is being installed as grafana in lab by the Helm controller" },
     "/api/mqtt": (url, init) => init?.method === "POST" ? { ok: true } : {
-      enabled: true, host: "192.168.1.177", port: 1883, tls: false, username: "", has_password: false, base: "harvester",
+      enabled: true, host: "192.0.2.177", port: 1883, tls: false, username: "", has_password: false, base: "harvester",
       discovery: "homeassistant", interval: 60, device_name: "Harvester Cluster", model: "Harvester", hv_exporter: "lab",
       sensors: { cluster: 15, node: 9 },
-      status: { state: "publishing", detail: "publishing to 192.168.1.177:1883 every 60s", last_publish: Math.floor(Date.now() / 1000) - 20, published: 3120, error: "" } },
-    "/api/mqtt/test": { ok: true, detail: "192.168.1.177:1883 accepted the connection" },
+      status: { state: "publishing", detail: "publishing to 192.0.2.177:1883 every 60s", last_publish: Math.floor(Date.now() / 1000) - 20, published: 3120, error: "" } },
+    "/api/mqtt/test": { ok: true, detail: "192.0.2.177:1883 accepted the connection" },
     "/api/mqtt/preview": { states: [
       { topic: "harvester/cluster/state", payload: { nodes_ready: 3, nodes_total: 3, nodes_notready: 0, vol_total: 8, vol_degraded: 1, vol_faulted: 0,
         pods_system: 96, pods_workload: 12, pods_sys_bad: 0, pods_wl_bad: 0, vms_running: 1, health: "degraded", wl_summary: "lab:12", cpu_pct: 18.2, mem_pct: 41.7 } },
@@ -1583,9 +1583,9 @@ ssh_pwauth: true
     // ?platform=k3s is a bare k3s; ?platform=kubevirt is k3s with KubeVirt but no CDI.
     "/api/platform": demoPlatform === "k3s" || demoPlatform === "kubevirt"
       ? { distribution: "k3s", version: "1.31.4+k3s1", harvester: false, longhorn: false, kubevirt: demoPlatform === "kubevirt", cdi: false,
-          helm_controller: true, metrics: true, load_balancer: "servicelb", control_plane: ["192.168.1.50"], arch: ["amd64"] }
+          helm_controller: true, metrics: true, load_balancer: "servicelb", control_plane: ["192.0.2.50"], arch: ["amd64"] }
       : { distribution: "harvester", version: "1.31.4+rke2r1", harvester: true, longhorn: true, kubevirt: true, cdi: true, helm_controller: true,
-          metrics: true, load_balancer: "kube-vip", control_plane: ["192.168.1.207", "192.168.1.208"], arch: ["amd64"] },
+          metrics: true, load_balancer: "kube-vip", control_plane: ["192.0.2.207", "192.0.2.208"], arch: ["amd64"] },
     "/api/addons": demoPlatform === "harvester" ? { harvester: true }
       : { distribution: "k3s", harvester: false, helm_controller: true,
           longhorn: { installed: false, installing: false },
@@ -1611,8 +1611,8 @@ ssh_pwauth: true
             { id: "fedora", distro: "Fedora", name: "Fedora Cloud", variant: "Base", user: "fedora", min_gb: 10, kept: false, ready: false }],
           network_details: [{ name: "default/vlan1", type: "bridge", vlan: 1, bridge: "mgmt-br", kind: "L2VlanNetwork", lan: true }],
           vm_network_options: { harvester: true, cluster_networks: ["mgmt"] },
-          subnets: [{ cidr: "192.168.1.0/24", name: "LAN", gateway: "192.168.1.1", dhcp_start: "192.168.1.100", dhcp_end: "192.168.1.199",
-            free: ["192.168.1.60", "192.168.1.61", "192.168.1.62", "192.168.1.63", "192.168.1.64", "192.168.1.65"] }],
+          subnets: [{ cidr: "192.0.2.0/24", name: "LAN", gateway: "192.0.2.1", dhcp_start: "192.0.2.100", dhcp_end: "192.0.2.199",
+            free: ["192.0.2.60", "192.0.2.61", "192.0.2.62", "192.0.2.63", "192.0.2.64", "192.0.2.65"] }],
           networks: ["pod", "default/vlan1", "default/vlan20-iot"], nodes: ["harvester-node1", "harvester-node2", "harvester-node3"],
           cpu_models: ["Cascadelake-Server", "Skylake-Client-IBRS", "Skylake-Server"], kubevirt_gates: ["VMPersistentState"],
           isos: [{ name: "iso-debian-13-1-0-amd64-netinst-3f2a9c1d", file: "debian-13.1.0-amd64-netinst.iso" }],
@@ -1716,9 +1716,9 @@ ssh_pwauth: true
         { replica: "r3", volume: "pvc-demo-rebuild", claim: "lab/jellyfin-config", copies: 2, healthy_elsewhere: 1, outcome: "elsewhere",
           why: "rebuilds on harvester-node2 from its healthy copy" }] },
     "/api/disks/retire": { ok: true, operation: { id: "op-retire" } },
-    "/api/platform/join": { distribution: "k3s", server: "192.168.1.50", version: "1.31.4+k3s1", token_file: "/var/lib/rancher/k3s/server/node-token",
-      agent: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_URL=https://192.168.1.50:6443 K3S_TOKEN=<token> sh -',
-      server_join: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_TOKEN=<token> sh -s - server --server https://192.168.1.50:6443',
+    "/api/platform/join": { distribution: "k3s", server: "192.0.2.50", version: "1.31.4+k3s1", token_file: "/var/lib/rancher/k3s/server/node-token",
+      agent: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_URL=https://192.0.2.50:6443 K3S_TOKEN=<token> sh -',
+      server_join: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_TOKEN=<token> sh -s - server --server https://192.0.2.50:6443',
       longhorn: "sudo apt-get install -y open-iscsi nfs-common   # or: sudo dnf install -y iscsi-initiator-utils nfs-utils" },
     "/api/resources/kinds": [
       ["Workloads", "", "v1", "pods", "Pod", true], ["Workloads", "apps", "v1", "deployments", "Deployment", true],
@@ -1747,7 +1747,7 @@ ssh_pwauth: true
     "/api/ipam/import": { ok: true, created: 2, updated: 1, detail: "2 addresses added, 1 updated" },
     "/api/ipam/record": { ok: true },
     "/api/ipam/bulk": { ok: true, detail: "updated" },
-    "/api/ipam/scan": { ok: true, detail: "scanning 254 addresses in 192.168.1.0/24" },
+    "/api/ipam/scan": { ok: true, detail: "scanning 254 addresses in 192.0.2.0/24" },
     "/api/ipam/unifi/sync": { ok: true, detail: "11 addresses from UniFi, 2 reserved" },
     "/api/self/replicas": (url, init) => init?.method === "POST"
       ? { ok: true, desired: JSON.parse(init.body || "{}").replicas, detail: "Homestead runs as 2 copies, spread over different nodes" }
@@ -1773,9 +1773,9 @@ ssh_pwauth: true
     "/api/self/data/move": { ok: true, detail: "copying homestead-data to homestead-data-shared on longhorn; Homestead restarts onto it when done" },
     "/api/portal/status": () => Object.fromEntries(portalLinks.map((link, i) => [link.id, i === 3 ? { up: false, ms: null } : { up: true, ms: 3 + i }])),
     "/api/portal/candidates": [
-      { title: "frigate", ns: "lab", name: "frigate", url: "http://192.168.1.214:5000", port: 5000, port_name: "http", icon: "workload:lab/frigate", has_logo: false, group: "Home" },
-      { title: "home-assistant", ns: "lab", name: "home-assistant", url: "http://192.168.1.215:8123", port: 8123, port_name: "", icon: "workload:lab/home-assistant", has_logo: false, group: "Home" },
-      { title: "paperless", ns: "lab", name: "paperless", url: "http://192.168.1.216:8000", port: 8000, port_name: "", icon: "workload:lab/paperless", has_logo: false, group: "" }],
+      { title: "frigate", ns: "lab", name: "frigate", url: "http://192.0.2.214:5000", port: 5000, port_name: "http", icon: "workload:lab/frigate", has_logo: false, group: "Home" },
+      { title: "home-assistant", ns: "lab", name: "home-assistant", url: "http://192.0.2.215:8123", port: 8123, port_name: "", icon: "workload:lab/home-assistant", has_logo: false, group: "Home" },
+      { title: "paperless", ns: "lab", name: "paperless", url: "http://192.0.2.216:8000", port: 8000, port_name: "", icon: "workload:lab/paperless", has_logo: false, group: "" }],
     "/api/workloads/group": (url, init) => {
       const body = JSON.parse(init?.body || "{}"), group = String(body.group || "").trim();
       return { ok: true, group, detail: `${(body.items || []).length} moved` };
@@ -1821,7 +1821,7 @@ ssh_pwauth: true
     },
     "/api/network/plan": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
-      const vip = body.type === "ClusterIP" ? "" : body.vip_mode === "shared" ? "192.168.1.242" : body.vip || "192.168.1.217";
+      const vip = body.type === "ClusterIP" ? "" : body.vip_mode === "shared" ? "192.0.2.242" : body.vip || "192.0.2.217";
       return { ready: true, namespace: body.namespace, name: body.name, workload: body.workload,
         type: body.type, vip_mode: body.vip_mode, vip, ports: (body.ports || []).map((port, index) => ({
           name: `port-${index + 1}`, port: +port.port, targetPort: +port.target_port, protocol: port.protocol })),
@@ -1886,59 +1886,59 @@ ssh_pwauth: true
         { id: "v:ubuntu", name: "ubuntu-2404", replicas: 1, size_gb: 40, robustness: "healthy", attached: "harvester-node3" },
         { id: "v:router", name: "router-disk", replicas: 1, size_gb: 16, robustness: "unknown", attached: "" },
         { id: "v:orphan", name: "paperless-old-copy", replicas: 1, size_gb: 100, robustness: "unknown", attached: "" }],
-      workloads: [{ id: "w:frigate", name: "frigate", ns: "lab", kind: "container", node: "harvester-node2", hardware: ["igpu", "coral_usb"], uptime: 472221, cpu: .84, mem_mb: 1840, claims: [{ pvc: "frigate-config", vid: "v:frigate" }], ports: [{ name: "web", port: 5000, vip: "192.168.1.214" }] },
-        { id: "w:home", name: "home-assistant", ns: "lab", kind: "container", node: "harvester-node1", hardware: [], uptime: 912400, cpu: .31, mem_mb: 738, claims: [{ pvc: "home-assistant", vid: "v:home" }], ports: [{ name: "web", port: 8123, vip: "192.168.1.215" }] },
-        { id: "w:paperless", name: "paperless", ns: "lab", kind: "container", node: "harvester-node3", hardware: [], uptime: 220190, cpu: .18, mem_mb: 512, claims: [{ pvc: "paperless-data", vid: "v:paperless" }], ports: [{ name: "web", port: 8000, vip: "192.168.1.216" }] },
-        { id: "w:vm-ubuntu", name: "ubuntu", ns: "lab", kind: "vm", node: "harvester-node3", running: true, state: "Running", ip: "192.168.1.61", hardware: [], uptime: 86400, cpu: .22, mem_mb: 1540, claims: [{ pvc: "ubuntu-2404", vid: "v:ubuntu" }], ports: [{ name: "ssh", port: 22, vip: "192.168.1.217" }] },
+      workloads: [{ id: "w:frigate", name: "frigate", ns: "lab", kind: "container", node: "harvester-node2", hardware: ["igpu", "coral_usb"], uptime: 472221, cpu: .84, mem_mb: 1840, claims: [{ pvc: "frigate-config", vid: "v:frigate" }], ports: [{ name: "web", port: 5000, vip: "192.0.2.214" }] },
+        { id: "w:home", name: "home-assistant", ns: "lab", kind: "container", node: "harvester-node1", hardware: [], uptime: 912400, cpu: .31, mem_mb: 738, claims: [{ pvc: "home-assistant", vid: "v:home" }], ports: [{ name: "web", port: 8123, vip: "192.0.2.215" }] },
+        { id: "w:paperless", name: "paperless", ns: "lab", kind: "container", node: "harvester-node3", hardware: [], uptime: 220190, cpu: .18, mem_mb: 512, claims: [{ pvc: "paperless-data", vid: "v:paperless" }], ports: [{ name: "web", port: 8000, vip: "192.0.2.216" }] },
+        { id: "w:vm-ubuntu", name: "ubuntu", ns: "lab", kind: "vm", node: "harvester-node3", running: true, state: "Running", ip: "192.0.2.61", hardware: [], uptime: 86400, cpu: .22, mem_mb: 1540, claims: [{ pvc: "ubuntu-2404", vid: "v:ubuntu" }], ports: [{ name: "ssh", port: 22, vip: "192.0.2.217" }] },
         { id: "w:vm-router", name: "router", ns: "lab", kind: "vm", node: "", running: false, state: "Stopped", ip: "", hardware: [], uptime: 0, cpu: 0, mem_mb: 0, claims: [{ pvc: "router-disk", vid: "v:router" }], ports: [] }],
-      vips: [{ id: "i:192.168.1.214", ip: "192.168.1.214", kind: "vip", node: "harvester-node1", state: "ok", ports: [{ app: "frigate", port: 5000 }] },
-        { id: "i:192.168.1.215", ip: "192.168.1.215", kind: "vip", node: "harvester-node1", state: "ok", ports: [{ app: "home-assistant", port: 8123 }] },
-        { id: "i:192.168.1.216", ip: "192.168.1.216", kind: "vip", node: "harvester-node1", state: "ok", ports: [{ app: "paperless", port: 8000 }] },
-        { id: "i:192.168.1.217", ip: "192.168.1.217", kind: "vip", node: "harvester-node3", state: "ok", ports: [{ app: "ubuntu", port: 22 }] }],
+      vips: [{ id: "i:192.0.2.214", ip: "192.0.2.214", kind: "vip", node: "harvester-node1", state: "ok", ports: [{ app: "frigate", port: 5000 }] },
+        { id: "i:192.0.2.215", ip: "192.0.2.215", kind: "vip", node: "harvester-node1", state: "ok", ports: [{ app: "home-assistant", port: 8123 }] },
+        { id: "i:192.0.2.216", ip: "192.0.2.216", kind: "vip", node: "harvester-node1", state: "ok", ports: [{ app: "paperless", port: 8000 }] },
+        { id: "i:192.0.2.217", ip: "192.0.2.217", kind: "vip", node: "harvester-node3", state: "ok", ports: [{ app: "ubuntu", port: 22 }] }],
     },
   };
 
   const original = window.fetch.bind(window);
   /* Linked clusters: this one, a shed that answers, and a garage that is off. */
   const demoSites = [
-    { id: "a1f00d", handle: "loft-rack", name: "Loft rack", url: "http://192.168.1.242:8088", self: true, version: "2.8.200", reachable: true, compatible: true, error: "" },
-    { id: "b2c0de", handle: "shed", name: "Shed", url: "http://192.168.1.250:8088", self: false, version: "2.8.200", reachable: true, compatible: true, error: "" },
-    { id: "c3beef", handle: "garage", name: "Garage", url: "http://192.168.1.251:8088", self: false, version: "", reachable: false, compatible: true,
-      error: "no answer from http://192.168.1.251:8088" }];
+    { id: "a1f00d", handle: "loft-rack", name: "Loft rack", url: "http://192.0.2.242:8088", self: true, version: "2.8.200", reachable: true, compatible: true, error: "" },
+    { id: "b2c0de", handle: "shed", name: "Shed", url: "http://192.0.2.250:8088", self: false, version: "2.8.200", reachable: true, compatible: true, error: "" },
+    { id: "c3beef", handle: "garage", name: "Garage", url: "http://192.0.2.251:8088", self: false, version: "", reachable: false, compatible: true,
+      error: "no answer from http://192.0.2.251:8088" }];
   const siteTag = id => { const s = demoSites.find(x => x.id === id); return { id: s.id, name: s.name, handle: s.handle, self: s.self }; };
   const shedNodes = ["shed-node1", "shed-node2"];
   const shedWorkloads = [
-    { ...workloads[0], name: "jellyfin", group: "", nodes: [shedNodes[0]], icon: "", images: ["jellyfin/jellyfin:10.9.11"], cpu: 0.41, mem_mb: 1210, ports: [{ port: 8096, ip: "192.168.1.250" }] },
-    { ...workloads[0], name: "unifi", group: "", nodes: [shedNodes[1]], icon: "", images: ["jacobalberty/unifi:v8.4"], cpu: 0.06, mem_mb: 690, ports: [{ port: 8443, ip: "192.168.1.250" }] }];
+    { ...workloads[0], name: "jellyfin", group: "", nodes: [shedNodes[0]], icon: "", images: ["jellyfin/jellyfin:10.9.11"], cpu: 0.41, mem_mb: 1210, ports: [{ port: 8096, ip: "192.0.2.250" }] },
+    { ...workloads[0], name: "unifi", group: "", nodes: [shedNodes[1]], icon: "", images: ["jacobalberty/unifi:v8.4"], cpu: 0.06, mem_mb: 690, ports: [{ port: 8443, ip: "192.0.2.250" }] }];
   const mine = rows => rows.map(row => ({ ...row, site: siteTag("a1f00d") }));
   const shed = rows => rows.map(row => ({ ...row, site: siteTag("b2c0de") }));
   Object.assign(responses, {
     "/api/fleet": { self: "a1f00d", protocol: 1, linked: true, members: demoSites, via: "", via_id: "",
-      address: "http://192.168.1.242:8088", suggested_address: "http://192.168.1.242:8088" },
+      address: "http://192.0.2.242:8088", suggested_address: "http://192.0.2.242:8088" },
     "/api/fleet/switch": { ok: true }, "/api/fleet/address": { ok: true, missed: [] },
     "/api/fleet/join": { ok: true, member: { name: "Garage" }, missed: [] },
     "/api/fleet/remove": { ok: true, told: true, missed: [] },
     "/api/objectstore/transfers": (url, init) => init?.method === "POST"
       ? { allowed: JSON.parse(init.body || "{}").allow, deployed: true, detail: JSON.parse(init.body || "{}").allow ? "moves out are on" : "moves out are off: backup storage is stopped, its volume kept" }
-      : { allowed: true, deployed: true, ready: true, stopped: false, endpoint: "http://192.168.1.242:9000", reachable_off_cluster: true,
+      : { allowed: true, deployed: true, ready: true, stopped: false, endpoint: "http://192.0.2.242:9000", reachable_off_cluster: true,
           size_gb: 100, backups_here: true },
     "/api/move/clusters/transfers": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       if (body.allow !== undefined) return { allowed: body.allow, deployed: true, detail: body.allow ? "moves out are on" : "moves out are off" };
-      return body.name === "shed" ? { allowed: true, deployed: true, ready: true, stopped: false, endpoint: "http://192.168.1.250:9000",
+      return body.name === "shed" ? { allowed: true, deployed: true, ready: true, stopped: false, endpoint: "http://192.0.2.250:9000",
           reachable_off_cluster: true, size_gb: 100, backups_here: true }
         : { allowed: false, deployed: false, ready: false, stopped: false };
     },
-    "/api/fleet/legacy": [{ name: "barn", url: "http://192.168.1.252:8088", user: "admin", added: "2026-05-02 18:40", linked_as: null }],
+    "/api/fleet/legacy": [{ name: "barn", url: "http://192.0.2.252:8088", user: "admin", added: "2026-05-02 18:40", linked_as: null }],
     "/api/fleet/link-legacy": { ok: true, member: { name: "Barn" }, missed: [] }, "/api/fleet/leave": { ok: true, missed: [] },
     "/api/fleet/all/workloads": () => [...mine(workloads), ...shed(shedWorkloads)],
     "/api/fleet/all/nodes": () => [...mine(nodes), ...shed(shedNodes.map((name, i) => ({ ...nodes[i], name })))],
-    "/api/fleet/all/vms": () => [...mine(demoVms), ...shed([{ ...demoVms[0], name: "pfsense", node: shedNodes[0], ip: "192.168.1.1", ips: ["192.168.1.1"] }])],
+    "/api/fleet/all/vms": () => [...mine(demoVms), ...shed([{ ...demoVms[0], name: "pfsense", node: shedNodes[0], ip: "192.0.2.1", ips: ["192.0.2.1"] }])],
     "/api/fleet/all/volumes": () => [...mine(volumes), ...shed(volumes.slice(0, 2).map((v, i) => ({ ...v, name: `pvc-shed-${i}`, pvc_name: ["jellyfin-config", "unifi-data"][i] })))],
   });
   responses["/api/ipam/free"] = [
-    { cidr: "192.168.1.0/24", name: "Home LAN", free: ["192.168.1.231", "192.168.1.232", "192.168.1.233", "192.168.1.236",
-      "192.168.1.237", "192.168.1.238", "192.168.1.241", "192.168.1.247", "192.168.1.248", "192.168.1.249", "192.168.1.251", "192.168.1.253"] },
+    { cidr: "192.0.2.0/24", name: "Home LAN", free: ["192.0.2.231", "192.0.2.232", "192.0.2.233", "192.0.2.236",
+      "192.0.2.237", "192.0.2.238", "192.0.2.241", "192.0.2.247", "192.0.2.248", "192.0.2.249", "192.0.2.251", "192.0.2.253"] },
     { cidr: "10.20.0.0/24", name: "Lab VLAN", free: ["10.20.0.10", "10.20.0.11", "10.20.0.12", "10.20.0.13"] }];
   const demoConfigParts = [
     ["settings", "Settings", "Site name, health thresholds, update policy, App Store feed", true],
@@ -1965,12 +1965,12 @@ ssh_pwauth: true
   responses["/api/auth/users"] = [{ name: "demo", role: "admin", last_login: "2026-09-28 07:40" },
     { name: "alex", role: "operator", last_login: "2026-09-28 07:06" }, { name: "kiosk", role: "viewer", last_login: "" }];
   responses["/api/auth/history"] = [
-    { at: ago(4), event: "signin", user: "demo", ok: true, ip: "192.168.1.20", device: "Chrome on Windows", via: "", detail: "kept signed in" },
+    { at: ago(4), event: "signin", user: "demo", ok: true, ip: "192.0.2.20", device: "Chrome on Windows", via: "", detail: "kept signed in" },
     { at: ago(38), event: "signin", user: "alex", ok: true, ip: "172.70.4.18", device: "Safari on iOS", via: "Cloudflare", detail: "" },
     { at: ago(41), event: "signin-failed", user: "alex", ok: false, ip: "172.70.4.18", device: "Safari on iOS", via: "Cloudflare", detail: "incorrect username or password" },
-    { at: ago(180), event: "role", user: "alex", ok: true, ip: "192.168.1.20", device: "Chrome on Windows", via: "", detail: "now operator, by demo" },
+    { at: ago(180), event: "role", user: "alex", ok: true, ip: "192.0.2.20", device: "Chrome on Windows", via: "", detail: "now operator, by demo" },
     { at: ago(600), event: "signin-blocked", user: "admin", ok: false, ip: "203.0.113.7", device: "a script", via: "", detail: "too many attempts — wait a few minutes" },
-    { at: ago(1440), event: "password", user: "demo", ok: true, ip: "192.168.1.20", device: "Chrome on Windows", via: "", detail: "" }];
+    { at: ago(1440), event: "password", user: "demo", ok: true, ip: "192.0.2.20", device: "Chrome on Windows", via: "", detail: "" }];
   window.fetch = async function (input, init) {
     const url = new URL(typeof input === "string" ? input : input.url, location.origin);
     if (!url.pathname.startsWith("/api/")) return original(input, init);

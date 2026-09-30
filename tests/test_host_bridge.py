@@ -17,9 +17,9 @@ except ImportError:  # the rewrite runs on the host, where netplan brings it
 K3S = """IFACE enp1s0
 MAC 18:60:24:f5:e5:09
 PHYSICAL
-ADDR 192.168.1.108/32 static
-ADDR 192.168.1.109/24 dhcp
-GW 192.168.1.1
+ADDR 192.0.2.108/32 static
+ADDR 192.0.2.109/24 dhcp
+GW 192.0.2.1
 NETPLAN
 NETWORKD
 SYSTEMDRUN
@@ -44,7 +44,7 @@ class Host:
 class LookTests(unittest.TestCase):
     def test_the_hosts_own_address_is_carried_not_a_vip_beside_it(self):
         facts = BRIDGE.parse(K3S)
-        self.assertEqual(("enp1s0", "192.168.1.109/24", True, ""), (facts["interface"], facts["primary"], facts["dhcp"], BRIDGE.problem(facts)))
+        self.assertEqual(("enp1s0", "192.0.2.109/24", True, ""), (facts["interface"], facts["primary"], facts["dhcp"], BRIDGE.problem(facts)))
 
     def test_what_is_not_converted(self):
         cases = {"ISBRIDGE": "a bridge already", "BOND": "plain wired", "EXISTS": "br0 already", "NM": "systemd-networkd",
@@ -84,15 +84,15 @@ class RewriteTests(unittest.TestCase):
     lan:
       match: {macaddress: "18:60:24:f5:e5:09"}
       set-name: enp1s0
-      addresses: [192.168.1.109/24]
-      routes: [{to: default, via: 192.168.1.1}]
-      nameservers: {addresses: [192.168.1.1]}
+      addresses: [192.0.2.109/24]
+      routes: [{to: default, via: 192.0.2.1}]
+      nameservers: {addresses: [192.0.2.1]}
 """, key="lan")
         eth, br = net["ethernets"]["lan"], net["bridges"]["br0"]
         self.assertEqual(({"macaddress": "18:60:24:f5:e5:09"}, "enp1s0"), (eth["match"], eth["set-name"]), "the NIC keeps its naming")
         self.assertNotIn("addresses", eth)
-        self.assertEqual((["192.168.1.109/24"], ["lan"]), (br["addresses"], br["interfaces"]))
-        self.assertEqual([{"to": "default", "via": "192.168.1.1"}], br["routes"])
+        self.assertEqual((["192.0.2.109/24"], ["lan"]), (br["addresses"], br["interfaces"]))
+        self.assertEqual([{"to": "default", "via": "192.0.2.1"}], br["routes"])
         self.assertNotIn("dhcp-identifier", br, "a static address asks no DHCP")
 
 
@@ -112,7 +112,7 @@ class JobTests(unittest.TestCase):
     def setUp(self):
         self.deleted = []
         self.nodes = 1
-        self.item = {"ref": {"node": "k3s", "interface": "enp1s0", "address": "192.168.1.109/24", "bridge": "br0",
+        self.item = {"ref": {"node": "k3s", "interface": "enp1s0", "address": "192.0.2.109/24", "bridge": "br0",
                              "backup": "/var/lib/homestead/netplan-x", "stage": "applied", "since": 1000, "services": ["k3s"]}}
 
     def bind(self, host):

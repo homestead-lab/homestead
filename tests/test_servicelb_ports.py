@@ -17,7 +17,7 @@ class ServiceLbTests(unittest.TestCase):
         base.setUp()
         self.sent = base.sent
         # A k3s cluster: Traefik and Homestead published on the node's address.
-        node = "192.168.1.210"
+        node = "192.0.2.210"
         base.objects["/api/v1/services"]["items"][0]["status"] = {"loadBalancer": {"ingress": [{"ip": node}]}}
         base.objects["/api/v1/services"]["items"][0]["metadata"]["annotations"] = {}
         base.objects["/api/v1/services"]["items"].append({
@@ -59,7 +59,7 @@ class ServiceLbTests(unittest.TestCase):
         for mode in ("shared", "auto", "manual"):
             with self.subTest(mode=mode):
                 cfg = networking.prepare_deploy({"name": "web", "namespace": "lab", "network_mode": "loadbalancer",
-                                                 "vip_mode": mode, "lb_ip": "192.168.1.99",
+                                                 "vip_mode": mode, "lb_ip": "192.0.2.99",
                                                  "ports": [{"container": 8080, "host": 8080, "protocol": "TCP",
                                                             "expose": True}]})
                 self.assertEqual(("nodes", ""), (cfg["vip_mode"], cfg["lb_ip"]))

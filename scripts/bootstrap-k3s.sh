@@ -42,7 +42,7 @@
 #   --kube-vip-version 0.11.1    pin kube-vip's chart (default: the one
 #                                Homestead has tested)
 #   --multus-version v4.3.102    pin RKE2's Multus chart (default: likewise)
-#   --vip 192.168.1.200  an unused LAN address for Homestead and apps: once
+#   --vip 192.0.2.200  an unused LAN address for Homestead and apps: once
 #                        kube-vip is up, Homestead reserves it, makes it the
 #                        apps' default, and puts itself, its backup storage
 #                        and shares on it beside the nodes' own addresses
@@ -56,7 +56,7 @@
 #                            of that many GB (auto: the volume group's free
 #                            space, less a tenth kept for the system), so it
 #                            can never fill the system's filesystem
-#   --node-ip 192.168.1.50   the address the cluster registers this machine
+#   --node-ip 192.0.2.50   the address the cluster registers this machine
 #                            by, when it has more than one
 #
 # What "server" does:
@@ -483,7 +483,7 @@ curl -sfL "$RAW/$REF/deploy/deploy.yaml" -o "$TMP" || fail "Could not download $
 # addresses, so there is no separate VIP to choose.
 sed -e "s/longhorn-r2/$CLASS/g" \
     -e "s/accessModes: \[ReadWriteMany\]/accessModes: [$MODE_RW]/" \
-    -e "s/192\.168\.1\.242/$IP/g" \
+    -e "s/192\.0\.2\.242/$IP/g" \
     -e "/kube-vip.io\/loadbalancerIPs/d" \
     "$TMP" > "$MANIFESTS/homestead.yaml"
 rm -f "$TMP"

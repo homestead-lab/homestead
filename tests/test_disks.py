@@ -158,7 +158,7 @@ class ProbeMountTests(unittest.TestCase):
 
 
 class SystemDriveTests(unittest.TestCase):
-    """k3s-3: Longhorn's default folder /var/lib/longhorn on / on LVM showed as
+    """node-3: Longhorn's default folder /var/lib/longhorn on / on LVM showed as
     a disk of its own, "L", beside the NVMe it is on."""
 
     def setUp(self):

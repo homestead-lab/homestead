@@ -31,7 +31,7 @@ class IconCacheTests(unittest.TestCase):
 
     def test_private_and_credentialed_sources_are_rejected(self):
         with mock.patch.object(icons.socket, "getaddrinfo", return_value=[
-                (icons.socket.AF_INET, icons.socket.SOCK_STREAM, 6, "", ("192.168.1.2", 80))]):
+                (icons.socket.AF_INET, icons.socket.SOCK_STREAM, 6, "", ("192.0.2.2", 80))]):
             with self.assertRaisesRegex(ValueError, "public addresses"):
                 icons._validate_public_url("http://internal.example/icon.png")
         with self.assertRaisesRegex(ValueError, "credentials"):

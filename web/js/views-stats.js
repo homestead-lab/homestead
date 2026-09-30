@@ -20,7 +20,7 @@ async function mqttPaint() {
       ${guideCopy("kubectl delete clusterrolebinding/hv-exporter clusterrole/hv-exporter")}</div>` : ""}
     <label class="switch" style="margin-top:10px"><input type="checkbox" id="mq_on" ${m.enabled ? "checked" : ""} ${admin ? "" : "disabled"}> Publish stats to MQTT</label>
     <div class="mqtt-grid">
-      <div class="f"><label>Broker</label><input id="mq_host" class="mono" value="${esc(m.host)}" placeholder="192.168.1.177" ${admin ? "" : "disabled"}></div>
+      <div class="f"><label>Broker</label><input id="mq_host" class="mono" value="${esc(m.host)}" placeholder="192.0.2.177" ${admin ? "" : "disabled"}></div>
       <div class="f"><label>Port</label><input id="mq_port" type="number" min="1" max="65535" value="${m.port}" ${admin ? "" : "disabled"}></div>
       <div class="f"><label>Username</label><input id="mq_user" value="${esc(m.username)}" placeholder="none" autocomplete="off" ${admin ? "" : "disabled"}></div>
       <div class="f"><label>Password</label><input id="mq_pass" type="password" autocomplete="new-password" placeholder="${m.has_password ? "saved · blank keeps it" : "none"}" ${admin ? "" : "disabled"}></div>

@@ -27,7 +27,7 @@ same release (or one close to it).
 1. **Settings → Linked clusters → Link a cluster** (or **Link a cluster** in the
    switch, once one is linked).
 2. Enter the other Homestead's address - what you open it at on your LAN, with
-   the port, e.g. `http://192.168.1.250:8088` - and the admin username and
+   the port, e.g. `http://192.0.2.250:8088` - and the admin username and
    password there.
 3. Check **This Homestead's address**: how the other one reaches this one. It
    starts as this cluster's VIP on port 8088. Until Homestead is on a VIP it

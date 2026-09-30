@@ -27,20 +27,20 @@ def deployment(name, claim=None, pin=None):
 
 class K3sCluster:
     def __init__(self):
-        self.nodes = [node("k3s-1", True, ("control-plane", "etcd")), node("k3s-2", False)]
-        self.deployments = [deployment("paperless", claim="paperless-data"), deployment("zigbee2mqtt", pin="k3s-2")]
+        self.nodes = [node("node-1", True, ("control-plane", "etcd")), node("node-2", False)]
+        self.deployments = [deployment("paperless", claim="paperless-data"), deployment("zigbee2mqtt", pin="node-2")]
         self.pvs = [{"metadata": {"name": "pvc-local-1"},
                      "spec": {"storageClassName": "local-path", "capacity": {"storage": "5Gi"},
                               "claimRef": {"namespace": "lab", "name": "paperless-data"},
                               "nodeAffinity": {"required": {"nodeSelectorTerms": [{"matchExpressions": [
-                                  {"key": "kubernetes.io/hostname", "operator": "In", "values": ["k3s-2"]}]}]}}}}]
+                                  {"key": "kubernetes.io/hostname", "operator": "In", "values": ["node-2"]}]}]}}}}]
         self.claims = {"paperless-data": {"metadata": {"name": "paperless-data", "namespace": "lab",
-                                                        "annotations": {"volume.kubernetes.io/selected-node": "k3s-2",
+                                                        "annotations": {"volume.kubernetes.io/selected-node": "node-2",
                                                                         "pv.kubernetes.io/bind-completed": "yes"}},
                                            "spec": {"accessModes": ["ReadWriteOnce"], "storageClassName": "local-path",
                                                     "resources": {"requests": {"storage": "5Gi"}},
                                                     "volumeName": "pvc-local-1"}}}
-        self.secrets = {"k3s-2.node-password.k3s": {"metadata": {"name": "k3s-2.node-password.k3s"}}}
+        self.secrets = {"node-2.node-password.k3s": {"metadata": {"name": "node-2.node-password.k3s"}}}
         self.sent = []
         onboard.bind(self.get, self.send, "lab")
 
@@ -98,7 +98,7 @@ class K3sRemovalTests(unittest.TestCase):
         self.c = K3sCluster()
 
     def test_the_plan_names_what_is_lost_and_what_is_tied_to_the_host(self):
-        plan = onboard.removal_plan("k3s-2")
+        plan = onboard.removal_plan("node-2")
         self.assertTrue(plan["ok"])
         self.assertEqual("k3s", plan["distribution"])
         self.assertEqual([("lab", "paperless-data", ["paperless"])],
@@ -109,15 +109,15 @@ class K3sRemovalTests(unittest.TestCase):
 
     def test_gone_for_good_needs_the_loss_accepted(self):
         with self.assertRaisesRegex(ValueError, "made again empty; confirm"):
-            onboard.remove_node("k3s-2", gone=True)
+            onboard.remove_node("node-2", gone=True)
         self.assertEqual([], self.c.sent)
 
     @mock.patch.object(onboard.time, "sleep", lambda s: None)
     def test_gone_for_good_leaves_a_clean_cluster(self):
-        result = onboard.remove_node("k3s-2", accept_loss=True, gone=True)
+        result = onboard.remove_node("node-2", accept_loss=True, gone=True)
         log = " | ".join(result["log"])
-        self.assertIn("Deleted node k3s-2", log)
-        self.assertNotIn("k3s-2.node-password.k3s", self.c.secrets)
+        self.assertIn("Deleted node node-2", log)
+        self.assertNotIn("node-2.node-password.k3s", self.c.secrets)
         self.assertIn("zigbee2mqtt may run on any host", log)
         self.assertNotIn("nodeSelector", self.c.deployments[1]["spec"]["template"]["spec"])
         remade = self.c.claims["paperless-data"]
@@ -129,9 +129,9 @@ class K3sRemovalTests(unittest.TestCase):
                                             report["pinned_workloads"], report["attachments"]))
 
     def test_the_cleanup_card_finds_what_an_old_removal_left(self):
-        self.c.nodes = [n for n in self.c.nodes if n["metadata"]["name"] != "k3s-2"]
+        self.c.nodes = [n for n in self.c.nodes if n["metadata"]["name"] != "node-2"]
         report = onboard.cleanup_report()
-        self.assertEqual(["k3s-2.node-password.k3s"], [s["name"] for s in report["passwords"]])
+        self.assertEqual(["node-2.node-password.k3s"], [s["name"] for s in report["passwords"]])
         self.assertEqual(["lab/paperless-data"], [f"{v['namespace']}/{v['claim']}" for v in report["pinned_volumes"]])
         self.assertEqual(["zigbee2mqtt"], [w["name"] for w in report["pinned_workloads"]])
         with self.assertRaisesRegex(ValueError, "confirm making it again empty"):
@@ -139,7 +139,7 @@ class K3sRemovalTests(unittest.TestCase):
         with mock.patch.object(onboard.time, "sleep", lambda s: None):
             onboard.cleanup("pinned-volume", "lab/paperless-data", force=True)
         self.assertNotIn("volumeName", self.c.claims["paperless-data"]["spec"])
-        onboard.cleanup("password", "k3s-2.node-password.k3s")
+        onboard.cleanup("password", "node-2.node-password.k3s")
         onboard.cleanup("pin", "lab/zigbee2mqtt")
         self.assertEqual([], onboard.cleanup_report()["pinned_workloads"])
 

@@ -103,19 +103,19 @@ one). The installation summary shows the settings and the Homestead version -
 the newest release, or one chosen from the list - then it installs, waits for
 Homestead to start, and prints its address.
 
-By hand instead: pick an address from your free range - `192.168.1.242` below; use your own.
+By hand instead: pick an address from your free range - `192.0.2.242` below; use your own.
 From a host (step 4, first way), one line fetches the manifest, gives it your
 address and Harvester's storage class, and applies it:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/deploy/deploy.yaml | sed -e 's/192\.168\.1\.242/192.168.1.242/g' -e 's/longhorn-r2/harvester-longhorn/g' -e 's/accessModes: \[ReadWriteMany\]/accessModes: [ReadWriteOnce]/' | kubectl apply -f -
+curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/deploy/deploy.yaml | sed -e 's/192\.0\.2\.242/192.0.2.242/g' -e 's/longhorn-r2/harvester-longhorn/g' -e 's/accessModes: \[ReadWriteMany\]/accessModes: [ReadWriteOnce]/' | kubectl apply -f -
 ```
 
-Change the second `192.168.1.242` to your address. Or, with Helm on your own
+Change the second `192.0.2.242` to your address. Or, with Helm on your own
 computer:
 
 ```bash
-helm install homestead oci://ghcr.io/wjcloudy/charts/homestead -n homestead --create-namespace --set service.loadBalancerIP=192.168.1.242
+helm install homestead oci://ghcr.io/wjcloudy/charts/homestead -n homestead --create-namespace --set service.loadBalancerIP=192.0.2.242
 ```
 
 Either way, watch it start (the manifest installs into `lab`, the Helm chart
@@ -125,7 +125,7 @@ into `homestead`):
 kubectl -n lab rollout status deployment/homestead --timeout=5m
 ```
 
-Then open `http://192.168.1.242:8088` and create the first administrator.
+Then open `http://192.0.2.242:8088` and create the first administrator.
 [Installing Homestead](Installing-Homestead) explains every choice here and
 what to do next.
 

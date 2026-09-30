@@ -37,11 +37,11 @@ class MoveReadinessTests(unittest.TestCase):
     def test_a_ready_cluster_keeps_its_keys_to_itself(self):
         def remote(name, path, body=None):
             if path == "/api/objectstore":
-                return {"deployed": True, "ready": True, "endpoint": "http://192.168.1.244:9000", "reachable_off_cluster": True}
-            return {"url": "s3://b@us-east-1/", "reachable_off_cluster": True, "endpoint": "http://192.168.1.244:9000",
+                return {"deployed": True, "ready": True, "endpoint": "http://192.0.2.244:9000", "reachable_off_cluster": True}
+            return {"url": "s3://b@us-east-1/", "reachable_off_cluster": True, "endpoint": "http://192.0.2.244:9000",
                     "credentials": {"AWS_SECRET_ACCESS_KEY": "x"}}
         with mock.patch.object(move, "remote", remote), \
-                mock.patch.object(move, "answers", lambda endpoint, timeout=3: endpoint == "http://192.168.1.244:9000"), \
+                mock.patch.object(move, "answers", lambda endpoint, timeout=3: endpoint == "http://192.0.2.244:9000"), \
                 mock.patch.object(move, "check_cluster", lambda name: {"compatible": True}):
             r = move.readiness("oldcluster")
         self.assertTrue(r["ready"])
@@ -55,20 +55,20 @@ class MoveReadinessTests(unittest.TestCase):
             if path == "/api/move/target":
                 if not any(c[1] == "/api/lh/target" for c in calls):
                     raise ValueError("oldcluster: this cluster has no Longhorn backup target")
-                return {"endpoint": "http://192.168.1.244:9000"}
+                return {"endpoint": "http://192.0.2.244:9000"}
             if path == "/api/objectstore":
                 return {"backup_url": "s3://homestead-backups@us-east-1/"}
-            return {"endpoint": "http://192.168.1.244:9000", "longhorn": {"secret": "homestead-backup-credentials"}}
+            return {"endpoint": "http://192.0.2.244:9000", "longhorn": {"secret": "homestead-backup-credentials"}}
         with mock.patch.object(move, "remote", remote), \
                 mock.patch.object(move, "answers", lambda endpoint, timeout=3: True), \
                 mock.patch.object(move, "check_cluster", lambda name: {"version": "2.8.111"}):
-            r = move.setup_storage("oldcluster", 50, "192.168.1.244")
+            r = move.setup_storage("oldcluster", 50, "192.0.2.244")
         self.assertIn(("oldcluster", "/api/objectstore/deploy",
-                       {"size_gb": 50, "lb_ip": "192.168.1.244", "point_longhorn": True}), calls)
+                       {"size_gb": 50, "lb_ip": "192.0.2.244", "point_longhorn": True}), calls)
         # An older Homestead over there never set its target; this side does.
         self.assertIn(("oldcluster", "/api/lh/target", {"url": "s3://homestead-backups@us-east-1/",
                        "secret": "homestead-backup-credentials", "poll": "5m"}), calls)
-        self.assertIn("192.168.1.244:9000", r["detail"])
+        self.assertIn("192.0.2.244:9000", r["detail"])
 
     def test_storage_can_go_on_the_far_clusters_shared_address(self):
         calls = []
@@ -77,7 +77,7 @@ class MoveReadinessTests(unittest.TestCase):
             calls.append((name, path, body))
             if path == "/api/objectstore":
                 return {"ready": False}
-            return {"endpoint": "http://192.168.1.242:9000"}
+            return {"endpoint": "http://192.0.2.242:9000"}
         with mock.patch.object(move, "remote", remote),                 mock.patch.object(move, "answers", lambda endpoint, timeout=3: True),                 mock.patch.object(move, "check_cluster", lambda name: {"version": "2.8.210"}):
             move.setup_storage("shed", 50, "", "shared")
         self.assertIn(("shed", "/api/objectstore/deploy",
@@ -98,13 +98,13 @@ class MoveReadinessTests(unittest.TestCase):
             calls.append((name, path, body))
             if path == "/api/objectstore":
                 return {"ready": True, "backup_url": "s3://homestead-backups@us-east-1/"}
-            return {"endpoint": "http://192.168.1.243:9000"}
+            return {"endpoint": "http://192.0.2.243:9000"}
         with mock.patch.object(move, "remote", remote), \
                 mock.patch.object(move, "answers", lambda endpoint, timeout=3: True), \
                 mock.patch.object(move, "check_cluster", lambda name: {"version": "2.8.100"}):
-            move.setup_storage("oldcluster", 100, "192.168.1.243")
+            move.setup_storage("oldcluster", 100, "192.0.2.243")
         self.assertIn(("oldcluster", "/api/objectstore/deploy",
-                       {"size_gb": 100, "lb_ip": "192.168.1.243", "point_longhorn": True}), calls)
+                       {"size_gb": 100, "lb_ip": "192.0.2.243", "point_longhorn": True}), calls)
 
     def test_an_address_that_did_not_take_is_said_not_assumed(self):
         def remote(name, path, body=None):
@@ -116,18 +116,18 @@ class MoveReadinessTests(unittest.TestCase):
         with mock.patch.object(move, "remote", remote), \
                 mock.patch.object(move, "check_cluster", lambda name: {"version": "2.8.113"}):
             with self.assertRaisesRegex(ValueError, "did not take the address"):
-                move.setup_storage("oldcluster", 100, "192.168.1.243")
+                move.setup_storage("oldcluster", 100, "192.0.2.243")
 
     def test_an_address_this_cluster_cannot_reach_is_reported(self):
         def remote(name, path, body=None):
             if path == "/api/objectstore":
                 return {"ready": True}
-            return {"endpoint": "http://192.168.1.243:9000"}
+            return {"endpoint": "http://192.0.2.243:9000"}
         with mock.patch.object(move, "remote", remote), \
                 mock.patch.object(move, "answers", lambda endpoint, timeout=3: False), \
                 mock.patch.object(move.time, "sleep", lambda s: None), \
                 mock.patch.object(move, "check_cluster", lambda name: {"version": "2.8.113"}):
-            result = move.setup_storage("oldcluster", 100, "192.168.1.243")
+            result = move.setup_storage("oldcluster", 100, "192.0.2.243")
         self.assertFalse(result["answers"])
         self.assertIn("cannot reach it yet", result["detail"])
 

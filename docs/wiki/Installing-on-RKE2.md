@@ -136,12 +136,12 @@ Options go after `server`:
 | `--longhorn-version v1.9.1` | pins Longhorn instead of its newest release |
 | `--kubevirt-version v1.6.0`, `--cdi-version v1.62.0` | pin KubeVirt and CDI instead of their current releases |
 | `--homestead-version 2.8.118` | pins Homestead instead of the newest release |
-| `--node-ip 192.168.1.10` | the address RKE2 registers this machine by, when it has more than one |
+| `--node-ip 192.0.2.10` | the address RKE2 registers this machine by, when it has more than one |
 
 Unattended, the installer takes its answers ahead:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo HS_ROLE=new HS_DIST=rke2 HS_NODE_IP=192.168.1.10 HS_YES=1 sh
+curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo HS_ROLE=new HS_DIST=rke2 HS_NODE_IP=192.0.2.10 HS_YES=1 sh
 ```
 
 ## 3. More machines
@@ -166,16 +166,16 @@ sudo cat /var/lib/rancher/rke2/server/node-token
 Or, with no questions, as a **worker**:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - agent https://192.168.1.10:9345 <token> --rke2
+curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - agent https://192.0.2.10:9345 <token> --rke2
 ```
 
 As another **server**:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - join https://192.168.1.10:9345 <token> --rke2
+curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - join https://192.0.2.10:9345 <token> --rke2
 ```
 
-Use `192.168.1.10` as the first machine's address, and your token. **Cluster →
+Use `192.0.2.10` as the first machine's address, and your token. **Cluster →
 Add a host** in Homestead shows the join lines for this cluster too.
 
 **How many servers?** etcd needs more than half of its servers up. One server

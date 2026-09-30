@@ -40,7 +40,7 @@ class PlatformTests(unittest.TestCase):
     def test_harvester_keeps_kube_vip_whatever_else_is_installed(self):
         p = self.use({"harvesterhci.io", "longhorn.io", "kubevirt.io", "helm.cattle.io", "metallb.io"}, "v1.31.4+rke2r1")
         self.assertEqual(("harvester", "kube-vip", True, True), (p["distribution"], p["load_balancer"], p["longhorn"], p["kubevirt"]))
-        self.assertEqual({"kube-vip.io/loadbalancerIPs": "192.168.1.242"}, PLATFORM.vip_annotations("192.168.1.242"))
+        self.assertEqual({"kube-vip.io/loadbalancerIPs": "192.0.2.242"}, PLATFORM.vip_annotations("192.0.2.242"))
 
     def test_a_plain_k3s_cluster(self):
         p = self.use({"helm.cattle.io"}, "v1.31.4+k3s1", daemonsets=("svclb-traefik-abc",))
@@ -53,11 +53,11 @@ class PlatformTests(unittest.TestCase):
 
     def test_metallb_gets_its_own_annotations_and_pools(self):
         self.use({"metallb.io"}, "v1.30.2", extra={"/apis/metallb.io/v1beta1/ipaddresspools": {"items": [
-            {"metadata": {"name": "lan"}, "spec": {"addresses": ["192.168.1.240-192.168.1.250", "10.9.0.0/28"]}}]}})
-        self.assertEqual({"metallb.universe.tf/loadBalancerIPs": "192.168.1.241", "metallb.universe.tf/allow-shared-ip": "homestead"},
-                         PLATFORM.vip_annotations("192.168.1.241"))
+            {"metadata": {"name": "lan"}, "spec": {"addresses": ["192.0.2.240-192.0.2.250", "10.9.0.0/28"]}}]}})
+        self.assertEqual({"metallb.universe.tf/loadBalancerIPs": "192.0.2.241", "metallb.universe.tf/allow-shared-ip": "homestead"},
+                         PLATFORM.vip_annotations("192.0.2.241"))
         pools = PLATFORM.metallb_pools()
-        self.assertEqual([{"rangeStart": "192.168.1.240", "rangeEnd": "192.168.1.250"}, {"subnet": "10.9.0.0/28"}],
+        self.assertEqual([{"rangeStart": "192.0.2.240", "rangeEnd": "192.0.2.250"}, {"subnet": "10.9.0.0/28"}],
                          pools[0]["spec"]["ranges"])
         self.assertEqual({}, PLATFORM.vip_annotations(""))
 

@@ -540,7 +540,7 @@ def _set_harvester_target(setting, url, poll, keys):
     except ValueError:
         current = {}
     if keys.get("endpoint") and not re.match(r"^https?://", keys["endpoint"]):
-        raise ValueError("the endpoint is a URL, such as http://192.168.1.20:9000")
+        raise ValueError("the endpoint is a URL, such as http://192.0.2.20:9000")
     value = harvester_target_value(url, keys, poll, current)
     setting["value"] = json.dumps(value) if value else ""
     setting.get("metadata", {}).pop("managedFields", None)
@@ -606,7 +606,7 @@ def set_backup_target(url, secret="", poll="5m", keys=None):
         if not (keys.get("access_key") and keys.get("secret_key")):
             raise ValueError("an S3 target needs both the access key and the secret key")
         if keys.get("endpoint") and not re.match(r"^https?://", keys["endpoint"]):
-            raise ValueError("the endpoint is a URL, such as http://192.168.1.20:9000")
+            raise ValueError("the endpoint is a URL, such as http://192.0.2.20:9000")
         secret = secret or TARGET_SECRET
         if not _valid_k8s_name(secret):
             raise ValueError("the secret name is lowercase letters, numbers, dots and dashes")

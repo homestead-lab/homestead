@@ -43,7 +43,7 @@ def clean(lan):
     try:
         iface = ipaddress.ip_interface(f"{str(lan.get('address') or '').strip()}/{int(lan.get('prefix') or 24)}")
     except ValueError as error:
-        raise ValueError(f"{lan.get('address') or '(blank)'} is not an address like 192.168.1.70") from error
+        raise ValueError(f"{lan.get('address') or '(blank)'} is not an address like 192.0.2.70") from error
     if iface.version != 4 or iface.ip in (iface.network.network_address, iface.network.broadcast_address):
         raise ValueError(f"{iface.ip} cannot be a machine's address in {iface.network}")
     gateway = str(lan.get("gateway") or "").strip()
