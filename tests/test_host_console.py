@@ -391,6 +391,17 @@ class ConsoleFontTests(unittest.TestCase):
         self.assertEqual(8, sum(bin(b).count("1") for b in full) // 4, "eight dots of four pixels")
         self.assertIn(console.OURS, index)
 
+    def test_each_ascii_glyph_sits_at_its_own_code_so_a_cleared_cell_is_blank(self):
+        # The console clears a cell with glyph 32 directly, not through the
+        # table: packed from 1, every empty cell showed "@".
+        _, _, glyphs, table = console.read_psf(console.console_font(psf1_font()))
+        self.assertEqual(bytes(16), glyphs[0x20])
+        for char in "A@z~!":
+            self.assertEqual(bytes([ord(char)]) * 16, glyphs[ord(char)])
+            self.assertIn(char, table[ord(char)])
+        braille = [i for i, chars in enumerate(table) if any("⠁" <= c <= "⣿" for c in chars)]
+        self.assertTrue(braille and min(braille) >= 0x80, "Braille in the top half, clear of ASCII")
+
     def test_every_graph_and_bar_pattern_is_in_it(self):
         frame = console.Frame(40, 6)
         frame.graph(0, 0, 20, 3, [i * 5 for i in range(40)])
