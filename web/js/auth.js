@@ -313,7 +313,7 @@ async function afterAuth() {
   if (!route.known) {
     // A mistyped or outdated address: land on the dashboard, and say so.
     const asked = window.location.pathname;
-    window.history.replaceState({ view: "dash" }, "", "/");
+    window.history.replaceState({ view: "dash" }, "", HomesteadRouter.urlFor("dash"));
     toast(`There is no page at ${asked}, so here is the dashboard`, "warn");
     go("dash", { history: false });
   } else {

@@ -1,7 +1,9 @@
-/* Deterministic, read-only demo transport used only by release screenshot CI.
-   It never contacts a cluster and is inert unless ?demo=1 is present. */
+/* Deterministic, read-only demo transport: the release screenshots (?demo=1)
+   and the live demo on GitHub Pages (window.HOMESTEAD_DEMO, set by
+   scripts/build_demo_site.py). It never contacts a cluster. */
 (function () {
-  if (new URLSearchParams(location.search).get("demo") !== "1") return;
+  const live = window.HOMESTEAD_DEMO === true;
+  if (!live && new URLSearchParams(location.search).get("demo") !== "1") return;
 
   /* What the counters add up to, the way the server computes it. */
   const diskHealth = smart => {
@@ -1367,6 +1369,7 @@ ssh_pwauth: true
     "/api/self/nfs": { ok: true, detail: "NFS stopped; exports, shares and every PVC were kept" },
     "/api/addons/nfs/remove": { ok: true, detail: "NFS server removed. Export settings and PVCs were kept." },
     "/api/shares/nfs": { ok: true, detail: "NFS export saved" },
+    "/api/volumes/other": [],
     "/api/volumes/old-copies": [{ pv: "pvc-7f3a9c1e-2b44-4d1b-9a55-0c1f2e3d4a5b", was: "lab/mosquitto-appdata",
       storage_class: "longhorn-r2", size: "10Gi", since: "2026-09-24T12:00:00Z" }],
     "/api/volumes/old-copies/remove": { ok: true, detail: "removing the old copy" },
@@ -1522,7 +1525,7 @@ ssh_pwauth: true
       ];
       return { kinds: ["static", "reservation", "dhcp", "reserved", "infrastructure"], suggested: [],
         unifi: demoUnifi ? { configured: true, url: "https://192.0.2.1", site: "default", has_key: true, last_sync: Math.floor(Date.now() / 1000) - 600, site_name: "Default" } : {},
-        unifi_networks: [{ cidr: "192.168.20.0/24", name: "IoT", vlan: 20, gateway: "192.168.20.1", dhcp_start: "192.168.20.10", dhcp_end: "192.168.20.250" }],
+        unifi_networks: [{ cidr: "198.51.100.0/24", name: "IoT", vlan: 20, gateway: "198.51.100.1", dhcp_start: "198.51.100.10", dhcp_end: "198.51.100.250" }],
         subnets: [{ id: "192.0.2.0/24", cidr: "192.0.2.0/24", name: "LAN", vlan: null, gateway: "192.0.2.1",
           dhcp_start: "192.0.2.100", dhcp_end: "192.0.2.199", note: "", rows, usable: 254, used: rows.length,
           dhcp_size: 100, free_static: 118, next_free: ["192.0.2.4", "192.0.2.5", "192.0.2.6"], pool_clash: [],
@@ -1971,6 +1974,19 @@ ssh_pwauth: true
     { at: ago(180), event: "role", user: "alex", ok: true, ip: "192.0.2.20", device: "Chrome on Windows", via: "", detail: "now operator, by demo" },
     { at: ago(600), event: "signin-blocked", user: "admin", ok: false, ip: "203.0.113.7", device: "a script", via: "", detail: "too many attempts — wait a few minutes" },
     { at: ago(1440), event: "password", user: "demo", ok: true, ip: "192.0.2.20", device: "Chrome on Windows", via: "", detail: "" }];
+  // On the live demo, say so on every page.
+  if (live) {
+    const banner = () => {
+      if (document.getElementById("demoBanner")) return;
+      const bar = document.createElement("div");
+      bar.id = "demoBanner";
+      bar.className = "demobanner";
+      bar.innerHTML = 'Live demo: made-up data, and nothing you do here is saved. '
+        + '<a href="https://github.com/wjcloudy/homestead" target="_blank" rel="noopener">Homestead on GitHub</a>';
+      document.body.prepend(bar);
+    };
+    if (document.body) banner(); else document.addEventListener("DOMContentLoaded", banner);
+  }
   window.fetch = async function (input, init) {
     const url = new URL(typeof input === "string" ? input : input.url, location.origin);
     if (!url.pathname.startsWith("/api/")) return original(input, init);
@@ -1986,7 +2002,9 @@ ssh_pwauth: true
       return new Response(JSON.stringify(shedReport), { status: 200, headers: { "Content-Type": "application/json" } });
     }
     const configured = responses[key];
-    const value = typeof configured === "function" ? configured(url, init) : configured;
+    let value = typeof configured === "function" ? configured(url, init) : configured;
+    // The live demo: a change the demo has no answer for is taken, and kept nowhere.
+    if (value === undefined && live && (init?.method || "GET") !== "GET") value = { ok: true, detail: "Demo: nothing is saved" };
     if (value === undefined) return new Response(JSON.stringify({ error: `Demo endpoint not available: ${url.pathname}` }), { status: 404, headers: { "Content-Type": "application/json" } });
     return new Response(JSON.stringify(value), { status: 200, headers: { "Content-Type": "application/json" } });
   };

@@ -18,6 +18,7 @@
 </p>
 
 <p align="center">
+  <a href="https://wjcloudy.github.io/homestead/"><b>Live demo</b></a> &nbsp;·&nbsp;
   <a href="#quick-install"><b>Quick install</b></a> &nbsp;·&nbsp;
   <a href="#features"><b>Features</b></a> &nbsp;·&nbsp;
   <a href="https://github.com/wjcloudy/homestead/wiki"><b>Wiki</b></a> &nbsp;·&nbsp;

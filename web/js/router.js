@@ -2,11 +2,22 @@
    Kept independent of the DOM so the browser and Node tests exercise the same
    canonical route behavior. */
 (function (root, factory) {
-  const router = factory();
+  const router = factory(root);
   if (typeof module === "object" && module.exports) module.exports = router;
   root.HomesteadRouter = router;
-})(typeof globalThis !== "undefined" ? globalThis : this, function () {
+})(typeof globalThis !== "undefined" ? globalThis : this, function (root) {
   "use strict";
+
+  /* Where the app sits: "/" when Homestead serves it, "/homestead/" for the
+     demo on GitHub Pages. Paths inside the app stay the same either way. */
+  function base() {
+    const value = String((root && root.HOMESTEAD_BASE) || "/");
+    return value.endsWith("/") ? value : value + "/";
+  }
+
+  function href(path) {
+    return base().slice(0, -1) + (String(path || "/").startsWith("/") ? path : "/" + path);
+  }
 
   const ROUTES = Object.freeze({
     dash:      Object.freeze({ path: "/",                label: "Dashboard",       section: "Overview" }),
@@ -39,6 +50,8 @@
     try { path = decodeURI(path); } catch (_) { /* preserve malformed input */ }
     if (!path.startsWith("/")) path = "/" + path;
     path = path.replace(/\/{2,}/g, "/");
+    const prefix = base();
+    if (prefix !== "/" && (path + "/").startsWith(prefix)) path = "/" + path.slice(prefix.length);
     if (path.length > 1) path = path.replace(/\/+$/, "");
     return path;
   }
@@ -60,7 +73,7 @@
       else query.set(key, String(value));
     });
     const suffix = query.toString();
-    return route.path + (suffix ? "?" + suffix : "");
+    return href(route.path) + (suffix ? "?" + suffix : "");
   }
 
   function queryParams(search) {
@@ -82,10 +95,10 @@
     const route = ROUTES[view] || ROUTES.dash;
     const items = [];
     if (route.section) items.push({ label: route.section, url: "", current: false });
-    items.push({ label: route.label, url: route.path, current: !detail });
+    items.push({ label: route.label, url: href(route.path), current: !detail });
     if (detail) items.push({ label: String(detail), url: "", current: true });
     return items;
   }
 
-  return Object.freeze({ ROUTES, normalizePath, resolve, urlFor, queryParams, breadcrumbs });
+  return Object.freeze({ ROUTES, normalizePath, resolve, urlFor, queryParams, breadcrumbs, href });
 });

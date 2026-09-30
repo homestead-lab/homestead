@@ -25,6 +25,21 @@ test("unknown paths safely resolve to dashboard without becoming canonical", () 
   assert.equal(result.known, false);
 });
 
+test("under a base path - the live demo on GitHub Pages - paths keep their views", () => {
+  globalThis.HOMESTEAD_BASE = "/homestead/";
+  try {
+    assert.equal(router.resolve("/homestead/nodes").view, "nodes");
+    assert.equal(router.resolve("/homestead/").view, "dash");
+    assert.equal(router.resolve("/homestead").view, "dash");
+    assert.equal(router.urlFor("storage", { q: "x" }), "/homestead/volumes?q=x");
+    assert.equal(router.urlFor("dash"), "/homestead/");
+    assert.equal(router.breadcrumbs("nodes")[1].url, "/homestead/nodes");
+    assert.equal(router.resolve("/homesteadx/nodes").known, false, "only the base itself is taken off");
+  } finally {
+    delete globalThis.HOMESTEAD_BASE;
+  }
+});
+
 test("URL creation encodes filters and repeated values", () => {
   assert.equal(router.urlFor("storage", { q: "media files", state: ["attached", "faulted"] }),
     "/volumes?q=media+files&state=attached&state=faulted");

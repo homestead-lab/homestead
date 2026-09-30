@@ -536,7 +536,7 @@ window.moveToClusterGo = async (id, from, kind, name) => {
     await api("/api/fleet/switch", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id }) });
     try { localStorage.setItem("homestead.settings.tab", "fleet"); } catch (e) { /* the page still opens */ }
-    window.location.href = `/settings?${new URLSearchParams({ move: `${from}:${kind}:${name}` })}`;
+    window.location.href = HomesteadRouter.urlFor("settings", { move: `${from}:${kind}:${name}` });
   } catch (e) { toast(e.message, "bad"); }
 };
 
