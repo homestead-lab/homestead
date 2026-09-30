@@ -10,6 +10,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 
@@ -580,6 +581,18 @@ class ConsoleFont:
         self.tty = os.ttyname(0) if hasattr(os, "ttyname") and os.isatty(0) else ""
         self.dir = ""
 
+    def _run(self, args):
+        return subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, timeout=20).returncode == 0
+
+    def _system_font(self, setfont):
+        """The console's own font back: the one the system configures, else
+        kbd's default. For a font of ours left by a console that was stopped
+        before it could put theirs back."""
+        setupcon = shutil.which("setupcon")
+        if setupcon and self._run([setupcon, "--force", "--font-only"]):
+            return True
+        return self._run([setfont, "-C", self.tty])
+
     def load(self):
         setfont = shutil.which("setfont")
         if not setfont or not self.tty:
@@ -588,11 +601,23 @@ class ConsoleFont:
         try:
             self.dir = tempfile.mkdtemp(prefix="homestead-console-")
             saved = os.path.join(self.dir, "theirs.psf")
-            if subprocess.run([setfont, "-C", self.tty, "-O", saved], capture_output=True, timeout=10).returncode:
+            if not self._run([setfont, "-C", self.tty, "-O", saved]):
                 return False
-            ours = os.path.join(self.dir, "ours.psf")
             with open(saved, "rb") as handle:
-                font = console_font(handle.read())
+                base = handle.read()
+            try:
+                leftover = any(OURS in chars for chars in read_psf(base)[3])
+            except ValueError:
+                leftover = False
+            if leftover:
+                # Ours, from a console stopped before it restored theirs:
+                # never keep it as theirs, or its blank cells stay "@".
+                if not self._system_font(setfont) or not self._run([setfont, "-C", self.tty, "-O", saved]):
+                    return False
+                with open(saved, "rb") as handle:
+                    base = handle.read()
+            ours = os.path.join(self.dir, "ours.psf")
+            font = console_font(base)
             with open(ours, "wb") as handle:
                 handle.write(font)
             self.saved = saved
@@ -703,6 +728,14 @@ def main():
         for target in (monitor.collect_local, monitor.collect_cluster):
             threading.Thread(target=target, daemon=True).start()
     font = ConsoleFont() if os.environ.get("TERM", "") == "linux" and not args.ascii else None
+    # Stopped by a signal - a logout, a getty restart, an update of this
+    # console - it still puts their font back: exiting runs the finally below.
+    import signal
+    for number in (signal.SIGTERM, signal.SIGHUP):
+        try:
+            signal.signal(number, lambda *_: sys.exit(0))
+        except (ValueError, OSError, AttributeError):
+            pass
     try:
         console_braille = bool(font and font.load())
         import curses
