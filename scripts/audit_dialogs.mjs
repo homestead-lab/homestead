@@ -58,9 +58,9 @@ const DIALOGS = [
   ["import-recovery", "imports", "window.__demoOps=[...(window.__demoOps||[]).filter(x=>x.id!=='import-recovery'),{id:'import-recovery',kind:'import-create',mutation_recovery:true,resource:{namespace:'lab',name:'photos'}}];powerRecoveryReview('import-recovery','import')"],
   ["import-recovery-active", "imports", "window.__demoOps=[...(window.__demoOps||[]).filter(x=>x.id!=='import-active'),{id:'import-active',kind:'import-create',mutation_recovery:true,demo_dispatching:true,resource:{namespace:'lab',name:'photos'}}];powerRecoveryReview('import-active','import')"],
   ["import-job-remove", "imports", "importRemove('homestead-import-photos','done')"],
-  ["cluster-browse", "settings", "settingsTab('fleet')", "clusterBrowse('shed')"],
-  ["cluster-storage", "settings", "settingsTab('fleet')", "clusterReady('barn')", "clusterStorage('barn')"],
-  ["move-review", "settings", "settingsTab('fleet')", "moveReview('shed','container','frigate')"],
+  ["cluster-browse", "settings", "settingsTab('fleet')", "clusterBrowse('branch')"],
+  ["cluster-storage", "settings", "settingsTab('fleet')", "clusterReady('staging')", "clusterStorage('staging')"],
+  ["move-review", "settings", "settingsTab('fleet')", "moveReview('branch','container','frigate')"],
   ["vip-add", "network", "vipAdd()"],
   ["node-detail", "nodes", "nodeDetail('harvester-node1')"],
   ["smart-disk", "nodes", "smartDisk('harvester-node1','nvme0n1')"],
@@ -135,7 +135,7 @@ const DIALOGS = [
   ["fleet-migration-new", "settings", "settingsTab('fleet')", "fleetMigration('c3beef')"],
   ["config-backup", "settings", "configBackup()"],
   ["config-restore", "settings", "configRestore()"],
-  ["config-restore-parts", "settings", "configRestore()", "configRestoreParts({homestead:'2.8.209',site:'Loft rack',created:'2026-09-26T21:40:00Z',parts:[{id:'settings',label:'Settings',detail:'Site name, health thresholds',state:'same',restorable:true,default:true},{id:'users',label:'Users and roles',detail:'Every account, its role and password',caution:'Replaces every account and password with those in the backup, and signs everyone out.',state:'differs',restorable:true,default:false},{id:'ipam',label:'IP addresses',detail:'Subnets and documented addresses',state:'differs',restorable:true,default:true},{id:'vmstore',label:'VM image store',detail:'The cloud images kept',state:'empty',restorable:false,default:true}]})"],
+  ["config-restore-parts", "settings", "configRestore()", "configRestoreParts({homestead:'2.8.209',site:'Main site',created:'2026-09-26T21:40:00Z',parts:[{id:'settings',label:'Settings',detail:'Site name, health thresholds',state:'same',restorable:true,default:true},{id:'users',label:'Users and roles',detail:'Every account, its role and password',caution:'Replaces every account and password with those in the backup, and signs everyone out.',state:'differs',restorable:true,default:false},{id:'ipam',label:'IP addresses',detail:'Subnets and documented addresses',state:'differs',restorable:true,default:true},{id:'vmstore',label:'VM image store',detail:'The cloud images kept',state:'empty',restorable:false,default:true}]})"],
   ["move-to-cluster", "workloads", "moveToCluster('container','frigate')"],
 ];
 

@@ -416,7 +416,7 @@ window.ipamExport = () => {
 /* ---------------- import ---------------- */
 const IPAM_TEMPLATE = [
   "address,name,mac,kind,category,owner,tags,note",
-  "192.0.2.10,Tower,aa:bb:cc:dd:ee:10,static,nas,,storage backup,Unraid - admin on port 80",
+  "192.0.2.10,NAS-01,aa:bb:cc:dd:ee:10,static,nas,,storage backup,Unraid - admin on port 80",
   "192.0.2.2,Core switch,aa:bb:cc:dd:ee:02,infrastructure,switch,,network,Rack top",
 ].join("\n") + "\n";
 function ipamDownload(name, text) {
