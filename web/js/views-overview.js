@@ -407,7 +407,7 @@ async function nodePage(name) {
         ${n.workloads.length ? `<div class="dim xs" style="margin-top:8px">Click one to move it to another host.</div>` : ""}</div>`],
     ["storage", "Storage", `${drives} drive${drives === 1 ? "" : "s"}${unused ? ` · ${unused} unused` : ""}`, `
       <div class="card flat" id="nodeDrive" hidden></div>
-      <div id="nodeDrives" class="node-pane">
+      <div id="nodeDrives" class="node-drives">
       <div class="card flat"><div class="ctitle">Drives</div><div class="csub">Every drive on this host, and Longhorn's storage on it</div>
         <div id="nodeDisks" style="margin-top:10px"><div class="dim small"><span class="spin2"></span> reading disks</div></div></div>
       <div class="card flat"><div class="ctitle">Disk activity ${tip("Live host block-device throughput and SMART health, from the node probe")}</div>
@@ -484,7 +484,8 @@ window.nodeSectionGo = id => {
   if (!layout) return;
   layout.dataset.open = id ? "1" : "0";
   if (!id) return;
-  $$("#nodePage .node-pane").forEach(pane => { pane.hidden = pane.dataset.pane !== id; });
+  // Only the sections themselves: a section's own parts keep their state.
+  $$("#nodePage .node-pane[data-pane]").forEach(pane => { pane.hidden = pane.dataset.pane !== id; });
   $$("#nodePage .settings-nav button").forEach(b => { b.classList.toggle("on", b.dataset.tab === id); b.setAttribute("aria-selected", String(b.dataset.tab === id)); });
   window.scrollTo(0, 0);
 };

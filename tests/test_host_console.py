@@ -330,6 +330,8 @@ module.main()
                 "id": "echo 0",
                 "systemctl": 'printf "%s\\n" "$*" >> "$TEST_CALLS"',
                 "agetty": 'printf "LOGIN %s\\n" "$*"',
+                # Someone signed in on the screen unless the test says not.
+                "who": '[ -n "$TEST_TTY1_FREE" ] || echo "admin    tty1         2026-09-30 21:00"',
             }.items():
                 file = root / name
                 file.write_text("#!/bin/sh\n" + text + "\n")
@@ -355,6 +357,14 @@ module.main()
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertFalse(dropin.exists())
             self.assertTrue(other.exists())
+            # A session signed in on the screen is never ended.
             calls = (root / "calls").read_text()
             self.assertNotIn("restart", calls)
             self.assertNotIn("stop", calls)
+            # With nobody there, the change shows at once.
+            env["TEST_TTY1_FREE"] = "1"
+            result = subprocess.run(["sh", str(script), "enable", str(payload)],
+                                    env=env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn("restart getty@tty1.service", (root / "calls").read_text())
+            self.assertIn("showing on tty1 now", result.stdout)

@@ -7,10 +7,17 @@ DEST=/usr/local/lib/homestead
 case "$ACTION" in enable|disable) ;; *) echo 'Expected enable or disable' >&2; exit 2 ;; esac
 [ "$(id -u)" = 0 ] || { echo 'Run as root.' >&2; exit 1; }
 command -v systemctl >/dev/null || { echo 'Host console needs systemd.' >&2; exit 1; }
+# Someone signed in on the machine's own screen keeps their session; with
+# nobody there, the login prompt is restarted so the change shows at once.
+tty1_in_use() { who 2>/dev/null | awk '$2 == "tty1" { found = 1 } END { exit !found }'; }
+apply_now() {
+  if tty1_in_use; then echo "$2"; return 0; fi
+  systemctl restart getty@tty1.service 2>/dev/null && echo "$1" || echo "$2"
+}
 if [ "$ACTION" = disable ]; then
   rm -f "$DROPIN"
   systemctl daemon-reload
-  echo 'Status screen disabled. Normal login returns on next boot or logout.'
+  apply_now 'Status screen disabled; the normal login is back on tty1.'     'Status screen disabled. Normal login returns when the session on tty1 logs out.'
   exit 0
 fi
 [ -r "${2:-}" ] || { echo 'Pass the downloaded host-console.py path.' >&2; exit 1; }
@@ -46,4 +53,4 @@ ExecStart=-/bin/sh /usr/local/lib/homestead/console-getty
 EOF
 systemctl daemon-reload
 systemctl enable getty@tty1.service
-echo 'Status screen enabled on tty1 for the next boot or logout. Enter/Q/Esc opens login.'
+apply_now 'Status screen showing on tty1 now. Enter/Q/Esc opens login.'   'Status screen enabled on tty1; it shows when the session there logs out. Enter/Q/Esc opens login.'
