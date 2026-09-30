@@ -2654,3 +2654,42 @@ html[data-theme="light"] .savebar{background:rgba(255,255,255,.95)}
   .srow-c input[type=text],.srow-c input[type=url],.srow-c select{min-width:0;width:100%;max-width:none}
   .savebar{bottom:calc(76px + env(safe-area-inset-bottom,0px))}
 }
+/* Diagrams (diagrams.js): the README graphic's vocabulary, in the theme's colours. */
+.diagram{margin:0 0 12px;border:1px solid var(--line);border-radius:var(--r2);background:rgba(255,255,255,.02);padding:10px 12px}
+.diagram svg{display:block;width:100%;height:auto;max-height:340px}
+.diagram figcaption{color:var(--dim);font-size:11.5px;margin-top:4px}
+.dg-t{fill:var(--tx);font:500 12px "Inter Tight",sans-serif}
+.dg-s{font-size:11px}.dg-xs{font-size:10px}.dg-xxs{font-size:9px}.dg-b{font-weight:700}
+.dg-mono{font-family:"JetBrains Mono",monospace}
+.dg-dim{fill:var(--dim)}.dg-blue{fill:var(--low)}.dg-on-amber{fill:#1a1300;font-weight:800}
+.dg-line{fill:none;stroke:var(--dim);stroke-width:1.5}.dg-blue-line{stroke:var(--low)}.dg-dash-line{stroke-dasharray:4 3}
+.dg-arrowhead{fill:var(--dim)}
+.dg-faint{opacity:.45}.dg-dash{stroke-dasharray:4 3}
+.dg-node{fill:rgba(255,255,255,.02);stroke:var(--line2);stroke-width:1.3}.dg-node.dg-bad{stroke:var(--crit)}
+.dg-app{fill:color-mix(in srgb,var(--med) 16%,transparent);stroke:var(--med);stroke-width:1.2}
+.dg-vm{fill:none;stroke:var(--med);stroke-width:1.2}.dg-vm-tag{fill:var(--med)}
+.dg-vip{fill:color-mix(in srgb,var(--low) 14%,transparent);stroke:var(--low);stroke-width:1.3}.dg-vip-dot{fill:var(--low)}
+.dg-ring{fill:none;stroke:var(--low);stroke-width:1.3}
+.dg-port{fill:none;stroke:var(--low);stroke-width:1.2}
+.dg-lan,.dg-src{fill:none;stroke:var(--line2);stroke-width:1.2}
+.dg-track{fill:var(--surf3)}.dg-sys{fill:var(--dim)}.dg-vol{fill:var(--ok)}.dg-vol-room{fill:color-mix(in srgb,var(--ok) 25%,transparent)}
+.dg-vol-box{fill:color-mix(in srgb,var(--ok) 16%,transparent);stroke:var(--ok);stroke-width:1.2}
+.dg-empty{fill:none;stroke:var(--line2);stroke-width:1.2}
+/* A long form in steps. */
+.stepper-head{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 14px}
+.stepper-chip{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line2);background:transparent;color:var(--mut);border-radius:99px;padding:5px 12px 5px 5px;font:600 12.5px "Inter Tight",sans-serif;cursor:pointer}
+.stepper-chip span{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--surf3);font-size:11px}
+.stepper-chip.on{color:var(--tx);border-color:var(--tx)}.stepper-chip.on span{background:var(--tx);color:var(--bg)}
+.stepper-chip.done span{background:color-mix(in srgb,var(--ok) 30%,transparent);color:var(--tx)}
+.stepper-pane{display:flex;flex-direction:column;gap:10px}
+.stepper-pane[hidden]{display:none}
+@media(max-width:640px){.stepper-chip{padding:4px 10px 4px 4px;font-size:12px}.stepper-head{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}}
+/* The node page: its sections as Settings lays them out. */
+.node-pane{display:flex;flex-direction:column;gap:12px;min-width:0}
+.node-pane[hidden]{display:none}
+.node-picture .diagram{border:0;padding:0;margin:0;background:none;width:100%}
+.node-picture .diagram svg{max-width:560px;max-height:none}
+#nodePage .settings-back{margin-bottom:4px}
+
+.diagram svg{margin:0 auto}
+#im_volumes{margin-top:6px}

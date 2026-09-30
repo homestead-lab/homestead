@@ -224,6 +224,39 @@ function serviceRow(name, state, detail, actions) {
 }
 if (typeof window !== "undefined") { window.settingRow = settingRow; window.serviceRow = serviceRow; }
 
+/* A long form in steps: numbered chips across the top, one pane at a time,
+   Back and Next at the foot. Every pane is drawn at once and only hidden, so
+   a form's own save still reads every field. finish is the form's main
+   button: on the last step, or on every step when always is set (an edit,
+   where changing one thing should not mean walking through all of them). */
+function stepper(id, steps, finish, { always = false } = {}) {
+  return `<div class="stepper" id="${esc(id)}" data-step="0">
+    <div class="stepper-head" role="tablist">${steps.map((step, i) =>
+      `<button type="button" role="tab" class="stepper-chip${i ? "" : " on"}" data-i="${i}" aria-selected="${!i}" onclick="stepGo(${jsq(id)},${i})"><span>${i + 1}</span>${esc(step.title)}</button>`).join("")}</div>
+    ${steps.map((step, i) => `<div class="stepper-pane" data-i="${i}"${i ? " hidden" : ""}>${step.html}</div>`).join("")}
+    <div class="ui-actions stepper-foot"><div class="ui-actions-start"><button type="button" class="btn" data-back hidden onclick="stepGo(${jsq(id)},-1,true)">Back</button></div>
+      <div class="ui-actions-end">${always ? finish : `<span data-finish hidden>${finish}</span>`}
+        ${steps.length > 1 ? `<button type="button" class="btn ${always ? "" : "pri"}" data-next onclick="stepGo(${jsq(id)},1,true)">Next: ${esc(steps[1].title)}</button>` : ""}</div></div>
+  </div>`;
+}
+function stepGo(id, to, relative) {
+  const root = document.getElementById(id);
+  if (!root) return;
+  const panes = [...root.querySelectorAll(":scope > .stepper-pane")], chips = [...root.querySelectorAll(".stepper-chip")];
+  const next = Math.max(0, Math.min(panes.length - 1, relative ? +root.dataset.step + to : to));
+  root.dataset.step = next;
+  panes.forEach((pane, i) => { pane.hidden = i !== next; });
+  chips.forEach((chip, i) => { chip.classList.toggle("on", i === next); chip.classList.toggle("done", i < next); chip.setAttribute("aria-selected", String(i === next)); });
+  const last = next === panes.length - 1, nextButton = root.querySelector("[data-next]");
+  root.querySelector("[data-back]").hidden = !next;
+  if (nextButton) { nextButton.hidden = last; if (!last) nextButton.textContent = `Next: ${chips[next + 1].textContent.replace(/^\d+/, "")}`; }
+  const finish = root.querySelector("[data-finish]");
+  if (finish) finish.hidden = !last;
+  const body = root.closest("#mbody") || root.closest(".modalbox");
+  if (body) body.scrollTop = 0;
+}
+if (typeof window !== "undefined") { window.stepper = stepper; window.stepGo = stepGo; }
+
 /* A main button that opens a choice - ＋ Import and its kinds. */
 const menuButton = (label, items) => moreMenu(items, label, "btn pri");
 if (typeof window !== "undefined") { window.moreMenu = moreMenu; window.menuButton = menuButton; }

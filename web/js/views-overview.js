@@ -349,126 +349,137 @@ window.diskRename = async (node, device, current) => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
-window.nodeDetail = async (name, fromRoute = false) => {
-  if (!fromRoute && window.setModalRoute) setModalRoute({ node: name }, name);
-  modal("Node · " + name, `<div class="empty"><span class="spin2"></span>loading</div>`, true, "node-detail-modal");
-  try {
-    const n = await api("/api/node?name=" + encodeURIComponent(name));
-    const i = n.info || {};
-    const row = (l, v) => `<div class="drow"><div class="dl">${l}</div><div class="dv mono">${v}</div></div>`;
-    const disks = (n.temps && n.temps.disks) || [];
-    const given = Object.fromEntries((n.disks || []).map(x => [x.device, x.name || ""]));
-    const diskRows = disks.map(d => { const s = d.smart || null; return `<div class="diskrow ${d.health?.state === "critical" ? "smart-failed" : ""}">
-      <div class="diskidentity"><b class="mono">${given[d.name] ? `${esc(given[d.name])} <span class="dim">${esc(d.name)}</span>` : esc(d.name)} <span class="tag">${esc(d.kind || "Disk")}</span>
-        ${can("admin") ? `<button class="btn sm" data-tip="Name this drive" onclick="diskRename(${jsq(n.name)},${jsq(d.name)},${jsq(given[d.name] || "")})">${given[d.name] ? "Rename" : "Name"}</button>` : ""}</b><span>${esc(s?.model || d.model || d.name)}</span><span class="mono">${esc(s?.serial || d.serial || "serial unavailable")}</span></div>
-      <div><span class="disklabel">CAPACITY</span><b class="mono">${Number(d.size_gb || 0).toFixed(1)} GB</b></div>
-      <div><span class="disklabel">HEALTH</span><b><span class="tag ${diskHealthTone(d.health?.state)}"
-        data-tip="${esc(d.health?.summary || "no SMART data for this drive")}">${esc(diskHealthWord(d.health?.state))}</span></b>
-        ${d.health?.issues?.length ? `<span class="dim xs diskreason">${esc(d.health.summary)}</span>` : ""}</div>
-      <div><span class="disklabel">LIFE</span><b class="mono ${lifeTone(d.health?.life_pct)}"
-        data-tip="${esc(d.health?.life_basis ? "From the drive's " + d.health.life_basis : "This drive reports no measure of remaining life")}">${d.health?.life_pct == null ? "—" : esc(d.health.life_pct) + "%"}</b></div>
-      <div><span class="disklabel">TEMP</span><b class="mono ${tempCls(s?.temperature_c)}">${s?.temperature_c == null ? "—" : esc(s.temperature_c) + "°C"}</b></div>
-      <div><span class="disklabel">READ</span><b class="mono diskrate read">↓ ${Number(d.read_mbps || 0).toFixed(2)} MB/s</b></div>
-      <div><span class="disklabel">WRITE</span><b class="mono diskrate write">↑ ${Number(d.write_mbps || 0).toFixed(2)} MB/s</b></div>
-      <button class="btn sm" ${s ? "" : "disabled"} onclick="smartDisk(${jsq(n.name)},${jsq(d.name)})" title="${s ? "Drive health, history, and self-tests" : "SMART helper is not available on this host"}">Details</button>
-    </div>`; }).join("");
-    $("#mbody").innerHTML = `<div class="node-detail">
-      <div class="card flat" id="nodeUptime" style="margin-bottom:16px"><div class="ctitle">Uptime</div><div class="dim small"><span class="spin2"></span></div></div>
-      <div class="grid g2 node-summary-grid" style="margin-bottom:16px">
-        <div class="card flat"><div class="ctitle">Utilisation</div>
-          <div style="margin-top:12px">
-            <div class="between"><span class="dim xs">CPU</span><span class="mono small">${n.cpu_pct}% used · ${n.cpu_cap} cores</span></div>
-            ${meter(n.cpu_pct, 'style="margin:6px 0 14px"', "cpu")}
-            <div class="between"><span class="dim xs">MEMORY</span><span class="mono small">${n.mem_used_gb} / ${n.mem_cap_gb} GB</span></div>
-            ${meter(n.mem_pct, 'style="margin:6px 0 14px"', "memory")}
-            <div class="between"><span class="dim xs">NODE DISK</span><span class="mono small">${n.fs_used_gb} / ${n.fs_cap_gb} GB</span></div>
-            ${meter(n.fs_pct || 0, 'style="margin:6px 0 0"', "disk")}
-          </div></div>
-        <div class="card flat"><div class="ctitle">Network</div>
-          ${row("Interface", esc(n.net_iface || "—"))}
-          ${row("In", (n.rx_mbps || 0).toFixed(2) + " Mb/s")}
-          ${row("Out", (n.tx_mbps || 0).toFixed(2) + " Mb/s")}
-          ${row("Total in", (n.rx_total_gb || 0) + " GB")}
-          ${row("Total out", (n.tx_total_gb || 0) + " GB")}
-          ${row("Address", esc((n.addresses || {}).InternalIP || "—"))}
-        </div>
-      </div>
-      <div class="card flat" style="margin-bottom:16px">
-        <div class="between node-section-head"><div><div class="ctitle">Disks</div>
-          <div class="csub">Every disk on this host, and the Longhorn storage on it</div></div></div>
-        <div id="nodeDisks"><div class="dim small"><span class="spin2"></span> reading disks</div></div></div>
-      <div class="card flat node-disk-card" style="margin-bottom:16px">
-        <div class="between node-section-head"><div><div class="ctitle">Disk activity</div>
-          <div class="csub">Live host block-device throughput · read and write megabytes per second</div></div>
-          <span class="tag">${disks.length} disk${disks.length === 1 ? "" : "s"}</span></div>
-        <div class="diskactivity">${diskRows || `<div class="note"><b>No physical disk counters available.</b> The optional node probe must be running with its read-only <span class="mono">/proc</span> mount.</div>`}</div>
-      </div>
-      <div class="card flat node-system-card"><div class="ctitle">System</div>
-        ${row("Status", `<span class="pill ${n.status === "Ready" ? "ok" : "crit"}">${esc(n.status)}</span>`)}
-        ${row("Roles", n.roles.map(r => `<span class="tag">${esc(r)}</span>`).join(""))}
-        ${nodeDutyTags(n) ? row("Serves", nodeDutyTags(n)) : ""}
-        ${row("Schedulable", n.schedulable ? "yes" : `<span class="tag warn">cordoned</span>`)}
-        ${row("Hardware", hardwareTags(nodeHardwareIds(n)) || "—")}
-        ${row("Pods", `${n.pods_wl} yours · ${n.pods_sys} system`)}
-        ${row("OS", esc(n.os))}
-        ${row("Kernel", esc(n.kernel))}
-        ${row("Container runtime", esc(i.containerRuntimeVersion || "—"))}
-        ${row("Kubelet", esc(i.kubeletVersion || "—"))}
-        ${row("Image storage", (n.img_used_gb || 0) + " GB")}
-      </div>
-      <div class="card flat" id="nodeHostOs" style="margin-top:16px"><div class="ctitle">Host OS</div>
-        <div class="csub">Updates, restarts and services on the host itself</div>
-        <div class="hos-body" style="margin-top:10px"><div class="dim small"><span class="spin2"></span> reading</div></div></div>
-      <div class="card flat" id="nodeDevices" style="margin-top:16px"><div class="ctitle">Devices for VMs</div>
-        <div class="csub">PCI and USB devices this host can give to its virtual machines</div>
-        <div class="pt-body" style="margin-top:10px"></div></div>
-      <div class="card flat" style="margin-top:16px"><div class="ctitle">Conditions</div>
-        <div style="margin-top:10px">${(n.conditions || []).map(c =>
-          `<span class="tag ${c.type === "Ready" ? (c.status === "True" ? "ok" : "bad")
-            : (c.status === "True" ? "warn" : "")}">${esc(c.type)}: ${esc(c.status)}</span>`).join("")}</div>
-      </div>
-      <div class="card flat" style="margin-top:16px"><div class="ctitle">Temperatures</div>
-        ${n.temps && n.temps.sensors ? `
-          <div class="row" style="margin-top:12px;gap:26px">
-            <div><div class="bignum ${tempCls(n.temps.cpu_c)}">${n.temps.cpu_c ?? "—"}<span class="unit">°C</span></div>
-              <div class="csub">CPU package</div></div>
-            <div><div class="midnum ${tempCls(n.temps.max_c)}">${n.temps.max_c ?? "—"}<span class="unit">°C</span></div>
-              <div class="csub">hottest sensor</div></div>
-          </div>
-          <div style="margin-top:14px">${[...(n.temps.hwmon || []), ...(n.temps.thermal || [])]
-            .sort((a, b) => b.celsius - a.celsius).slice(0, 14)
-            .map(t => `<span class="tag ${tempTag(t.celsius)}">${esc(t.chip ? t.chip + " " : "")}${esc(t.name)} ${t.celsius}°</span>`).join("")}</div>`
-        : `<div class="note between" style="margin-top:12px"><span><b>No thermal data.</b> Kubernetes exposes
-           none — temperatures, drive health and per-disk throughput all come from the optional node probe.</span>
-           <button class="btn sm" data-need="admin" onclick="probeInstallConfirm()">Install node probe</button></div>`}
-      </div>
-      <div class="card flat" style="margin-top:16px">
-        <div class="between node-section-head"><div><div class="ctitle">Hardware availability</div>
-          <div class="csub">Used by placement checks before containers move or start</div></div>
-          <button class="btn sm" data-need="admin" onclick='hardwareEdit(${JSON.stringify(n).replace(/'/g, "&#39;")})'>Define hardware</button></div>
-        <div style="margin-top:12px">${hardwareTags(nodeHardwareIds(n)) || '<span class="dim xs">No hardware is currently defined.</span>'}</div>
-      </div>
-      <div class="card flat" style="margin-top:16px">
-        <div class="between node-section-head"><div><div class="ctitle">Workloads on this host</div>
-          <div class="csub">${n.pods_wl} of yours · ${n.pods_sys} system pods</div></div>
-          ${n.workloads.length ? `<button class="btn sm" data-need="admin"
-            onclick="evacuateNode(${jsq(n.name)})">Evacuate all</button>` : ""}</div>
-        <div style="margin-top:12px">${n.workloads.length
-          ? n.workloads.map(w => `<span class="tag movable"
-              onclick="moveWorkload(${jsq(w)})">${esc(w)} <span class="mv">⇄</span></span>`).join("")
+/* A node's detail is a page of its own: /nodes?node=<name>. */
+window.nodeDetail = (name, fromRoute = false) => {
+  if (fromRoute && STATE.view === "nodes") return viewNodes();
+  go("nodes", { params: { node: name } });
+};
+
+/* The node page: one line of how it is, then its sections in a column as
+   Settings has them - Overview with its picture, Workloads, Storage,
+   Hardware, Network, Host OS - one shown at a time. */
+async function nodePage(name) {
+  const [n] = await Promise.all([api("/api/node?name=" + encodeURIComponent(name)), loadHardwareFeatures()]);
+  const summary = nodePageSummary(n);
+  // A refresh keeps the page as it is - its sections read their own data -
+  // and only the summary line moves.
+  if (STATE.busy && $("#nodePage")?.dataset.node === name) { const line = $("#nodeSummary"); if (line) line.innerHTML = summary; return; }
+  const i = n.info || {};
+  const row = (l, v) => `<div class="drow"><div class="dl">${l}</div><div class="dv mono">${v}</div></div>`;
+  const disks = (n.temps && n.temps.disks) || [];
+  const given = Object.fromEntries((n.disks || []).map(x => [x.device, x.name || ""]));
+  const diskRows = disks.map(d => { const s = d.smart || null; return `<div class="diskrow ${d.health?.state === "critical" ? "smart-failed" : ""}">
+    <div class="diskidentity"><b class="mono">${given[d.name] ? `${esc(given[d.name])} <span class="dim">${esc(d.name)}</span>` : esc(d.name)} <span class="tag">${esc(d.kind || "Disk")}</span>
+      ${can("admin") ? `<button class="btn sm" data-tip="Name this drive" onclick="diskRename(${jsq(n.name)},${jsq(d.name)},${jsq(given[d.name] || "")})">${given[d.name] ? "Rename" : "Name"}</button>` : ""}</b><span>${esc(s?.model || d.model || d.name)}</span><span class="mono">${esc(s?.serial || d.serial || "serial unavailable")}</span></div>
+    <div><span class="disklabel">CAPACITY</span><b class="mono">${Number(d.size_gb || 0).toFixed(1)} GB</b></div>
+    <div><span class="disklabel">HEALTH</span><b><span class="tag ${diskHealthTone(d.health?.state)}" data-tip="${esc(d.health?.summary || "no SMART data for this drive")}">${esc(diskHealthWord(d.health?.state))}</span></b></div>
+    <div><span class="disklabel">LIFE</span><b class="mono ${lifeTone(d.health?.life_pct)}">${d.health?.life_pct == null ? "—" : esc(d.health.life_pct) + "%"}</b></div>
+    <div><span class="disklabel">TEMP</span><b class="mono ${tempCls(s?.temperature_c)}">${s?.temperature_c == null ? "—" : esc(s.temperature_c) + "°C"}</b></div>
+    <div><span class="disklabel">READ</span><b class="mono diskrate read">↓ ${Number(d.read_mbps || 0).toFixed(2)} MB/s</b></div>
+    <div><span class="disklabel">WRITE</span><b class="mono diskrate write">↑ ${Number(d.write_mbps || 0).toFixed(2)} MB/s</b></div>
+    <button class="btn sm" ${s ? "" : "disabled"} onclick="smartDisk(${jsq(n.name)},${jsq(d.name)})" title="${s ? "Drive health, history, and self-tests" : "SMART helper is not available on this host"}">Details</button>
+  </div>`; }).join("");
+  const hw = nodeHardwareIds(n);
+  const hwNames = hw.map(id => (STATE.data.hardwareFeatures || []).find(f => f.id === id)?.name || id);
+  const duties = n.duties || {};
+  const vips = [...new Set([...(duties.management_vip || []), ...(duties.vips || [])])];
+  const unused = (n.disks || []).filter(d => d.role === "unused").length;
+  const drives = (n.disks || []).length || disks.length;
+  const odd = (n.conditions || []).filter(c => c.type === "Ready" ? c.status !== "True" : c.status === "True");
+  const fact = (label, value) => `<div><span>${label}</span><b>${value}</b></div>`;
+  // Sorted by what you came to find out, as Settings is.
+  const sections = [
+    ["overview", "Overview", n.status === "Ready" ? esc(nodeUpFor(n)) : esc(n.status), `
+      <div class="card flat node-picture">${window.Diagram ? Diagram.node(n) : ""}</div>
+      <div class="card flat"><div id="nodeUptime"><div class="dim small"><span class="spin2"></span></div></div></div>
+      <div class="card flat"><div class="about-grid node-facts">
+        ${fact("Roles", esc(n.roles.join(", ") || "worker"))}
+        ${fact("Address", `<span class="mono">${esc((n.addresses || {}).InternalIP || "—")}</span>`)}
+        ${fact("Serves", nodeDutyTags(n) || "—")}
+        ${fact("Takes new work", n.schedulable ? "yes" : '<span class="tag warn">cordoned</span>')}
+      </div>${odd.length ? `<div class="note warn" style="margin-top:10px">${odd.map(c => `<b>${esc(c.type)}</b>: ${esc(c.status)}`).join(" · ")}</div>` : ""}</div>`],
+    ["workloads", "Workloads", `${n.workloads.length} app${n.workloads.length === 1 ? "" : "s"} · ${n.vms || 0} VM${n.vms === 1 ? "" : "s"}`, `
+      <div class="card flat"><div class="settings-card-head"><div><div class="ctitle">On this host</div>
+        <div class="csub">${n.pods_wl} of yours · ${n.pods_sys} system pods</div></div>
+        ${n.workloads.length ? `<button class="btn sm" data-need="admin" onclick="evacuateNode(${jsq(n.name)})">Move everything off</button>` : ""}</div>
+        <div>${n.workloads.length ? n.workloads.map(w => `<span class="tag movable" onclick="moveWorkload(${jsq(w)})">${esc(w)} <span class="mv">⇄</span></span>`).join("")
           : '<span class="dim xs">nothing of yours is scheduled here</span>'}</div>
-        ${n.workloads.length ? '<div class="dim xs" style="margin-top:10px">Click a workload to move it to another host.</div>' : ""}
+        ${n.workloads.length ? `<div class="dim xs" style="margin-top:8px">Click one to move it to another host.</div>` : ""}</div>`],
+    ["storage", "Storage", `${drives} drive${drives === 1 ? "" : "s"}${unused ? ` · ${unused} unused` : ""}`, `
+      <div class="card flat"><div class="ctitle">Drives</div><div class="csub">Every drive on this host, and Longhorn's storage on it</div>
+        <div id="nodeDisks" style="margin-top:10px"><div class="dim small"><span class="spin2"></span> reading disks</div></div></div>
+      <div class="card flat"><div class="ctitle">Disk activity ${tip("Live host block-device throughput and SMART health, from the node probe")}</div>
+        <div class="diskactivity" style="margin-top:10px">${diskRows || '<div class="dim small">No per-disk counters: the node probe provides them.</div>'}</div></div>`],
+    ["hardware", "Hardware", esc([hwNames.join(", "), n.temps?.cpu_c != null ? `CPU ${n.temps.cpu_c}°C` : ""].filter(Boolean).join(" · ") || "none defined"), `
+      <div class="card flat"><div class="settings-card-head"><div><div class="ctitle">Hardware for apps</div>
+        <div class="csub">What placement checks look for before a container moves or starts</div></div>
+        <button class="btn sm" data-need="admin" onclick="hardwareEdit(${esc(JSON.stringify(n))})">Define</button></div>
+        <div>${hardwareTags(hw) || '<span class="dim xs">No hardware is defined.</span>'}</div></div>
+      <div class="card flat" id="nodeDevices"><div class="ctitle">Devices for VMs</div><div class="csub">PCI and USB devices this host can give to its virtual machines</div>
+        <div class="pt-body" style="margin-top:10px"></div></div>
+      <div class="card flat"><div class="ctitle">Temperatures</div>
+        <div style="margin-top:10px">${n.temps && n.temps.sensors ? ([...(n.temps.hwmon || []), ...(n.temps.thermal || [])].sort((a, b) => b.celsius - a.celsius).slice(0, 14)
+          .map(t => `<span class="tag ${tempTag(t.celsius)}">${esc(t.chip ? t.chip + " " : "")}${esc(t.name)} ${t.celsius}°</span>`).join("")
+          || `<span class="small">CPU <b class="${tempCls(n.temps.cpu_c)}">${n.temps.cpu_c ?? "—"}°C</b> · hottest sensor <b class="${tempCls(n.temps.max_c)}">${n.temps.max_c ?? "—"}°C</b></span>`)
+          : `<span class="dim small">No thermal data: it comes from the node probe. <a class="linkish" data-need="admin" onclick="probeInstallConfirm()">Install it</a></span>`}</div></div>`],
+    ["network", "Network", `${(n.rx_mbps || 0).toFixed(1)} Mb/s in${vips.length ? ` · ${vips.length} VIP${vips.length === 1 ? "" : "s"}` : ""}`, `
+      <div class="card flat"><div class="about-grid node-facts">
+        ${fact("Address", `<span class="mono">${esc((n.addresses || {}).InternalIP || "—")}</span>`)}
+        ${fact("Interface", `<span class="mono">${esc(n.net_iface || "—")}</span>`)}
+        ${fact("In / out now", `<span class="mono">${(n.rx_mbps || 0).toFixed(2)} / ${(n.tx_mbps || 0).toFixed(2)} Mb/s</span>`)}
+        ${fact("In / out since boot", `<span class="mono">${n.rx_total_gb || 0} / ${n.tx_total_gb || 0} GB</span>`)}
+      </div></div>
+      <div class="card flat"><div class="ctitle">Addresses it answers for</div><div class="csub">Its own, and the VIPs that move to another host if it goes down</div>
+        <div style="margin-top:10px">${nodeAddressTags(n) || "—"}</div></div>`],
+    ["hostos", "Host OS", esc(n.os || "the host's own system"), `
+      <div class="card flat" id="nodeHostOs"><div class="ctitle">Updates and services</div><div class="csub">Updates, restarts and services on the host itself</div>
+        <div class="hos-body" style="margin-top:10px"><div class="dim small"><span class="spin2"></span> reading</div></div></div>
+      <div class="card flat"><div class="about-grid node-facts">
+        ${fact("Kernel", `<span class="mono">${esc(n.kernel || "—")}</span>`)}
+        ${fact("Container runtime", `<span class="mono">${esc(i.containerRuntimeVersion || "—")}</span>`)}
+        ${fact("Kubelet", `<span class="mono">${esc(i.kubeletVersion || "—")}</span>`)}
+        ${fact("Image storage", `<span class="mono">${n.img_used_gb || 0} GB</span>`)}
       </div>
-      <div class="row" style="margin-top:16px">
-        <button class="btn" onclick="nodeActions(${jsq(n.name)})">Host actions…</button>
-        <button class="btn" data-need="admin" onclick="nodeShell(${jsq(n.name)})" title="A root shell on the host itself, as SSH would give">${icon("console")}Terminal</button></div>
-      </div>`;
-    window.__disksModal = false;
-    nodeDisksPaint(n.name);
-    nodeUptimePaint(n);
-    if (window.nodeHostOsPaint) nodeHostOsPaint(n.name, true);
-    if (window.nodeDevicesPaint) nodeDevicesPaint(n.name);
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+      <div style="margin-top:10px">${(n.conditions || []).map(c => `<span class="tag ${c.type === "Ready" ? (c.status === "True" ? "ok" : "bad") : (c.status === "True" ? "warn" : "")}">${esc(c.type)}: ${esc(c.status)}</span>`).join("")}</div></div>`],
+  ];
+  const current = sections.some(([id]) => id === STATE.nodeSection) ? STATE.nodeSection : "overview";
+  paint(`<div class="phead"><div><h2>${esc(n.name)}</h2><p>${esc(n.roles.join(" · ") || "worker")} · <span class="mono">${esc((n.addresses || {}).InternalIP || "")}</span></p></div>
+      <div class="row"><button class="btn" data-need="admin" onclick="nodeShell(${jsq(n.name)})" title="A root shell on the host itself, as SSH would give">${icon("console")}Terminal</button>
+        <button class="btn pri" onclick="nodeActions(${jsq(n.name)})">Host actions</button></div></div>
+    <div id="nodePage" data-node="${esc(n.name)}">
+      <div class="sumline" id="nodeSummary">${summary}</div>
+      <div class="settings-layout" data-open="${STATE.nodeSectionOpen ? 1 : 0}">
+        <nav class="settings-nav" role="tablist" aria-label="${esc(n.name)} sections">${sections.map(([id, label, state]) =>
+          `<button type="button" role="tab" data-tab="${id}" class="${id === current ? "on" : ""}" aria-selected="${id === current}" onclick="nodeSectionGo(${jsq(id)})"><span><b>${label}</b><small>${state}</small></span><i aria-hidden="true">›</i></button>`).join("")}</nav>
+        <div class="settings-main"><button type="button" class="settings-back" onclick="nodeSectionGo('')">‹ ${esc(n.name)}</button>
+          ${sections.map(([id, , , body]) => `<div class="node-pane" data-pane="${id}"${id === current ? "" : " hidden"}>${body}</div>`).join("")}</div>
+      </div>
+    </div>`);
+  window.__disksModal = false;
+  nodeDisksPaint(n.name);
+  nodeUptimePaint(n);
+  if (window.nodeHostOsPaint) nodeHostOsPaint(n.name, true);
+  if (window.nodeDevicesPaint) nodeDevicesPaint(n.name);
+}
+function nodePageSummary(n) {
+  return `<span class="sumitem"><span class="pill ${n.status === "Ready" ? "ok" : "crit"}">${esc(n.status)}</span></span>
+    <span class="sumitem">CPU <b>${n.cpu_pct}%</b> of ${n.cpu_cap}</span>
+    <span class="sumitem">RAM <b>${n.mem_used_gb}/${n.mem_cap_gb} GB</b></span>
+    <span class="sumitem">Disk <b>${n.fs_used_gb}/${n.fs_cap_gb} GB</b></span>
+    ${n.temps?.cpu_c != null ? `<span class="sumitem">CPU <b class="${tempCls(n.temps.cpu_c)}">${n.temps.cpu_c}°C</b></span>` : ""}
+    ${n.schedulable ? "" : '<span class="sumitem"><span class="tag warn">cordoned</span></span>'}`;
+}
+/* One section at a time, as in Settings; on a phone the list comes first. */
+window.nodeSectionGo = id => {
+  if (id) STATE.nodeSection = id;
+  STATE.nodeSectionOpen = !!id;
+  const layout = $("#nodePage .settings-layout");
+  if (!layout) return;
+  layout.dataset.open = id ? "1" : "0";
+  if (!id) return;
+  $$("#nodePage .node-pane").forEach(pane => { pane.hidden = pane.dataset.pane !== id; });
+  $$("#nodePage .settings-nav button").forEach(b => { b.classList.toggle("on", b.dataset.tab === id); b.setAttribute("aria-selected", String(b.dataset.tab === id)); });
+  window.scrollTo(0, 0);
 };
 
 window.smartDisk = async (node, disk) => {
@@ -753,6 +764,8 @@ window.hardwareFeatureDelete = async id => {
 };
 
 async function viewNodes() {
+  const page = new URLSearchParams(location.search).get("node");
+  if (page) return nodePage(page);
   const [n, up] = await Promise.all([api("/api/nodes"), api("/api/nodes/uptime").catch(() => null), loadHardwareFeatures()]);
   STATE.data.nodes = n;
   STATE.data.uptime = up || STATE.data.uptime;

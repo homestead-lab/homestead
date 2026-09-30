@@ -45,6 +45,7 @@ const PAGES = [
   ["schedules", "schedules"],
   ["events", "events"],
   ["events-signins", "events", "STATE.eventsTab='signins';viewEvents()"],
+  ["node-page", "nodes", "nodeDetail('harvester-node1')"],
   ...["homestead", "updates", "monitoring", "hardware", "fleet", "connections", "access", "you"]
     .map((tab) => [`settings-${tab}`, "settings", `settingsTab('${tab}')`]),
 ];

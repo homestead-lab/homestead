@@ -25,6 +25,7 @@ function setup() {
   vm.createContext(ctx);
   ctx.jsArg = s => JSON.stringify(String(s ?? "")); ctx.jsq = s => (ctx.esc || String)(ctx.jsArg(s));
   ctx.icon = () => "";
+  ctx.tip = text => `<span class="tip" data-tip="${text}">?</span>`;
   ctx.document = { addEventListener() {} };
   vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), ctx);
   vm.runInContext(fs.readFileSync("web/js/views-network.js", "utf8"), ctx);

@@ -65,7 +65,6 @@ const DIALOGS = [
   ["cluster-storage", "settings", "settingsTab('fleet')", "clusterReady('staging')", "clusterStorage('staging')"],
   ["move-review", "settings", "settingsTab('fleet')", "moveReview('branch','container','frigate')"],
   ["vip-add", "network", "vipAdd()"],
-  ["node-detail", "nodes", "nodeDetail('harvester-node1')"],
   ["smart-disk", "nodes", "smartDisk('harvester-node1','nvme0n1')"],
   ["probe-install", "nodes", "probeInstallConfirm()"],
   ["vm-placement-checks", "nodes", "allocationProbeSettings()"],
