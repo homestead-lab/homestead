@@ -5365,6 +5365,7 @@ NODESHELL.bind(kget, ksend, DEFAULT_NS)
 HOSTRUN.bind(kget, ksend, lambda *a, **k: FILES._exec(*a, **k), DEFAULT_NS)
 import homestead_host_console as HOST_CONSOLE
 HOST_CONSOLE.bind(kget, HOSTRUN, OPS, HOMESTEAD_VERSION, DATA_DIR)
+HOST_CONSOLE.platform = lambda: PLATFORM.detect()
 OPS.RESOLVERS["host-console"] = HOST_CONSOLE.status
 MANIFESTS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 HOST_LIMITS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
@@ -5638,6 +5639,9 @@ def _host_fix_loop():
                         print(f"platform: {node + ': ' if node else ''}{change}", flush=True)
                     # Each host's OS - updates, restarts, failed services - every six hours.
                     HOST_OS.tick()
+                    # The host console add-on, installed, updated or removed to match.
+                    for node, change in HOST_CONSOLE.tick():
+                        print(f"platform: {node}: {change}", flush=True)
                     # Longhorn kept from filling a host's root filesystem.
                     for node, change in ROOT_GUARD.tick():
                         print(f"storage: {node}: {change}", flush=True)
@@ -8639,6 +8643,9 @@ class H(BaseHTTPRequestHandler):
                 facts = HOST_OS.read(node, refresh=True)
                 return self._send(200, {"ok": True, "facts": {**facts, "summary": HOST_OS.summary(facts)}})
             if p == "/api/host-console":
+                # The add-on on or off for every host; or one host looked at again.
+                if "enabled" in b:
+                    return self._send(200, HOST_CONSOLE.set_cluster(bool(b.get("enabled")), self.user or ""))
                 return self._send(200, {"ok": True, "operation": HOST_CONSOLE.start(
                     str(b.get("node") or ""), str(b.get("action") or "inspect"))})
             if p == "/api/node/os/upgrade":

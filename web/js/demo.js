@@ -782,7 +782,7 @@
       claims: [{ claim: "frigate-config", size_gb: 10, access_mode: "ReadWriteOnce",
         volume_mode: "Filesystem", backing_image: "" }], total_gb: 10 },
     "/api/move/start": { id: "d1", status: "running" },
-    "/api/host-console": { version: "2.8.246", nodes: [
+    "/api/host-console": { version: "2.8.246", enabled: true, hosts: 2, installed: 2, current: 1, settled: false, harvester: false, nodes: [
       { name: "node-1", ready: true, enabled: true, version: "2.8.243", current: false, detail: "Installed 2.8.243; update available" },
       { name: "node-2", ready: true, enabled: true, current: true, version: "2.8.246", detail: "Installed 2.8.246; matches this release" },
       { name: "node-3", ready: true, native: true, detail: "Native Harvester console" }] },
