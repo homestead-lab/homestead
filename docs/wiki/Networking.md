@@ -57,6 +57,21 @@ no holder for a minute while a Service on it has pods ready, Homestead
 restarts kube-vip, which elects again as it starts - at most once every ten
 minutes - and logs it.
 
+On k3s and RKE2, Homestead runs the kube-vip it installed with a single
+leader for every VIP (global election, the `plndr-svcs-lock` lease), the
+network interface named where every node's default route agrees, and the
+NET_ADMIN and NET_RAW capabilities. With per-Service election, a VIP that
+two Services asked for could stay `<pending>` after a reboot. Existing
+installs are moved to these settings in kube-vip's HelmChart, so they survive
+reboots and upgrades. A cluster with a Service using Local traffic, such as
+an NFS share, keeps per-Service election, which that Service needs for its
+VIP to follow its pod. Values you wrote yourself are left alone.
+
+A LoadBalancer Service Homestead made is removed once its workload is gone,
+so it stops asking for its VIP. This applies after ten minutes, and only when
+nothing in its namespace (Deployment, StatefulSet, DaemonSet, VM or pod)
+could still use it. A workload stopped at zero keeps its Service.
+
 Node cards (Overview, Nodes) list the same addresses, and the Architecture
 view marks each address as a VIP or a node's own, with the node answering for
 it; hovering a node lights its addresses, and an address its node.
