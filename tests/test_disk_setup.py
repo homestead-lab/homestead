@@ -408,8 +408,8 @@ class LonghornTests(unittest.TestCase):
         self.assertEqual({"allowScheduling": False}, self.patched[0]["spec"]["disks"]["disk-mnt-nvme0n1"])
         self.assertIsNone(self.patched[1]["spec"]["disks"]["disk-mnt-nvme0n1"])
         added = self.patched[2]["spec"]["disks"]["disk-mnt-nvme0n1"]
-        self.assertEqual(("/mnt/nvme0n1", "filesystem", ["ssd"]), (added["path"], added["diskType"], added["tags"]))
-        self.assertEqual(["ssd"], result["tags"])
+        self.assertEqual(("/mnt/nvme0n1", "filesystem", ["nvme", "ssd"]), (added["path"], added["diskType"], added["tags"]))
+        self.assertEqual(["nvme", "ssd"], result["tags"])
 
     def test_a_new_v2_partition_on_the_system_disk_is_added_raw_and_tagged_os(self):
         made = {"path": "/dev/disk/by-partuuid/6f1c", "device": "/dev/sda4", "size_gb": 100, "engine": "v2"}
@@ -420,11 +420,15 @@ class LonghornTests(unittest.TestCase):
         use.assert_called_once_with("k3s", "sda", 209717248, 100, "v2", "/dev/sda")
         added = self.patched[-1]["spec"]["disks"]
         disk = next(iter(added.values()))
-        self.assertEqual(("/dev/disk/by-partuuid/6f1c", "block", ["os"]), (disk["path"], disk["diskType"], disk["tags"]))
+        self.assertEqual(("/dev/disk/by-partuuid/6f1c", "block", ["os", "ssd"]), (disk["path"], disk["diskType"], disk["tags"]))
         self.assertIn("given to the V2 engine", result["detail"])
 
-    def test_the_system_disk_is_tagged_os_only(self):
-        self.assertEqual(["os"], DISKS.kind_tags({"system": True, "kind": "SSD"}))
+    def test_disks_are_tagged_by_kind_the_system_disk_os_as_well(self):
+        # A machine whose only drive is the system one still has somewhere
+        # for an SSD class; "os" lets a class leave it out.
+        self.assertEqual(["os", "nvme", "ssd"], DISKS.kind_tags({"system": True, "kind": "NVMe"}))
+        self.assertEqual(["os", "ssd"], DISKS.kind_tags({"system": True, "kind": "SSD"}))
+        self.assertEqual(["nvme", "ssd"], DISKS.kind_tags({"system": False, "kind": "NVMe"}))
         self.assertEqual(["hdd"], DISKS.kind_tags({"system": False, "kind": "HDD"}))
         self.assertEqual([], DISKS.kind_tags({"system": False, "kind": ""}))
 
@@ -438,11 +442,30 @@ class LonghornTests(unittest.TestCase):
         calls = []
         with mock.patch.object(DISKS, "inventory", return_value={"nodes": rows}), \
                 mock.patch.object(DISKS, "set_disk_tags", lambda node, disk, tags: calls.append((node, disk, tags))):
-            self.assertEqual([("k3s", "default", ["os"])], DISKS.auto_tag())
+            self.assertEqual([("k3s", "default", ["os", "ssd"])], DISKS.auto_tag())
             rows["k3s"][0]["longhorn"][0]["tags"] = []          # someone took the tag off
             self.assertEqual([], DISKS.auto_tag(), "once only")
             rows["k3s"][2]["kind"] = "SSD"                     # the probe has now said
             self.assertEqual([("k3s", "unknown", ["ssd"])], DISKS.auto_tag())
+
+    def test_disks_tagged_by_an_earlier_release_are_brought_up_to_date_once(self):
+        rows = {"k3s": [{"device": "nvme0n1", "system": True, "kind": "NVMe",
+                         "longhorn": [{"id": "default", "tags": ["os"], "ready": True}]},
+                        {"device": "nvme1n1", "system": False, "kind": "NVMe",
+                         "longhorn": [{"id": "fast", "tags": ["ssd"], "ready": True}]},
+                        {"device": "sdb", "system": False, "kind": "SSD",
+                         "longhorn": [{"id": "mine", "tags": ["os", "media"], "ready": True}]}]}
+        calls = []
+        with mock.patch.object(DISKS, "inventory", return_value={"nodes": rows}),                 mock.patch.object(DISKS, "_tagged", return_value={"k3s/default", "k3s/fast", "k3s/mine"}),                 mock.patch.object(DISKS, "_note_tagged", lambda key: calls.append(key)),                 mock.patch.object(DISKS, "set_disk_tags", lambda node, disk, tags: None):
+            self.assertEqual([("k3s", "default", ["os", "nvme", "ssd"]), ("k3s", "fast", ["nvme", "ssd"])], DISKS.auto_tag(),
+                             "tags someone chose are left alone")
+        self.assertEqual({"kinds:k3s/default", "kinds:k3s/fast"}, set(calls), "once each; the same under both rules needs nothing")
+
+    def test_a_system_disk_of_unknown_kind_waits_rather_than_taking_os_alone(self):
+        rows = {"k3s": [{"device": "sda", "system": True, "kind": "",
+                         "longhorn": [{"id": "default", "tags": [], "ready": True}]}]}
+        with mock.patch.object(DISKS, "inventory", return_value={"nodes": rows}),                 mock.patch.object(DISKS, "_tagged", return_value=set()),                 mock.patch.object(DISKS, "set_disk_tags", lambda *a: None):
+            self.assertEqual([], DISKS.auto_tag())
 
 
 if __name__ == "__main__":

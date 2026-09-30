@@ -203,3 +203,19 @@ class JournalTests(unittest.TestCase):
                 self.assertEqual("accepted", restored["ref"]["storage_writes"][0]["state"])
                 store.patch(journal.Journal(restored, store.read, store.send, checkpoint))
             self.assertEqual(1, len(store.sent))
+
+
+class ListedPodShapeTests(unittest.TestCase):
+    """A pod read alone and the same pod from a list are the same pod."""
+
+    def test_a_listed_pod_without_its_kind_still_ignores_what_the_network_plugin_wrote(self):
+        meta = {"name": "homestead-1", "uid": "u", "resourceVersion": "9", "labels": {"app": "homestead"},
+                "annotations": {"k8s.v1.cni.cncf.io/network-status": '[{"name":"cbr0"}]', "kept": "yes"}}
+        spec = {"containers": [{"name": "homestead", "image": "x"}]}
+        alone = {"kind": "Pod", "apiVersion": "v1", "metadata": meta, "spec": spec}
+        listed = {"metadata": dict(meta, annotations={"kept": "yes"}), "spec": spec}
+        self.assertEqual(journal.shape(alone), journal.shape(listed))
+        listed_with_cni = {"metadata": meta, "spec": spec}
+        self.assertEqual(journal.shape(alone), journal.shape(listed_with_cni))
+        self.assertNotEqual(journal.shape(alone), journal.shape({"metadata": dict(meta, annotations={"kept": "no"}), "spec": spec}),
+                            "other annotations still count")
