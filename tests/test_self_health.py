@@ -57,7 +57,7 @@ class HeartbeatTests(unittest.TestCase):
                 mock.patch.object(server.OBJECTS, "status", lambda: {}):
             health = server.self_health()
         states = {row["name"]: row["state"] for row in health["loops"]}
-        self.assertEqual({"sampler": "ok", "alerts": "ok", "hardware": "failing", "history": "late", "moves": "starting", "samba": "starting", "vips": "starting", "baseline": "starting", "host-fixes": "starting", "host-console": "starting", "os-updates": "starting"}, states)
+        self.assertEqual({"sampler": "ok", "alerts": "ok", "hardware": "failing", "history": "late", "moves": "starting", "samba": "starting", "vips": "starting", "baseline": "starting", "host-fixes": "starting", "host-console": "starting", "storage-pending": "starting", "os-updates": "starting"}, states)
         self.assertEqual("probe timed out", next(r for r in health["loops"] if r["name"] == "hardware")["error"])
         with mock.patch.object(server, "kget", lambda path, **k: {}), \
                 mock.patch.object(server.LEADER, "is_leader", lambda: False), \

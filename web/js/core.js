@@ -319,9 +319,15 @@ window.childModal = childModal;
 
 /* Some pages come as cards or as rows. Which is the reader's choice, kept per
    browser and per page; nothing about it is worth a round trip. */
+/* Containers and VMs are lists you scan, so they start as rows; Nodes, a
+   handful of machines, as cards. A choice made with the switch is kept. */
+const LAYOUT_DEFAULT = { containers: "rows", vms: "rows" };
 function viewLayout(page) {
-  try { return localStorage.getItem(`homestead.layout.${page}`) === "rows" ? "rows" : "cards"; }
-  catch (e) { return "cards"; }
+  const fallback = LAYOUT_DEFAULT[page] || "cards";
+  try {
+    const chosen = localStorage.getItem(`homestead.layout.${page}`);
+    return chosen === "rows" || chosen === "cards" ? chosen : fallback;
+  } catch (e) { return fallback; }
 }
 function layoutSwitch(page, redraw) {
   const layout = viewLayout(page);
