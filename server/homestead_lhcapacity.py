@@ -30,6 +30,12 @@ V2 = "v2-data-engine"
 NODE_DOWN = "node-down-pod-deletion-policy"
 NODE_DOWN_VALUES = ("do-nothing", "delete-statefulset-pod", "delete-deployment-pod",
                     "delete-both-statefulset-and-deployment-pod")
+# How many replicas one node rebuilds at once. More gets a failed node's
+# volumes whole again sooner, at the cost of disk and network while it runs.
+# Longhorn reads 0 as never rebuild, which would leave volumes a copy short
+# without a word, so it is not offered.
+REBUILD = "concurrent-replica-rebuild-per-node-limit"
+REBUILD_RANGE = (1, 10)
 WARN_PCT, CRIT_PCT = 80, 95
 GiB = 1024 ** 3
 
@@ -58,6 +64,7 @@ def settings():
     return {"over_provisioning": _int(_setting(OVER, 100), 100),
             "minimal_available": _int(_setting(MINIMAL, 25), 25),
             "node_down": _setting(NODE_DOWN, "do-nothing"),
+            "rebuild_limit": _int(_setting(REBUILD, 5), 5),
             "v2": v2_status()}
 
 
@@ -147,6 +154,13 @@ def save(cfg):
         if minimal != current["minimal_available"]:
             _patch_setting(MINIMAL, minimal)
             done.append(f"minimal available {minimal}%")
+    if "rebuild_limit" in cfg:
+        limit = _int(cfg["rebuild_limit"], -1)
+        if not REBUILD_RANGE[0] <= limit <= REBUILD_RANGE[1]:
+            raise ValueError(f"replicas rebuilt at once on a node is between {REBUILD_RANGE[0]} and {REBUILD_RANGE[1]}")
+        if limit != current["rebuild_limit"]:
+            _patch_setting(REBUILD, limit)
+            done.append(f"{limit} replica rebuild{'s' if limit != 1 else ''} at once per node")
     if cfg.get("node_down") and cfg["node_down"] != current["node_down"]:
         if cfg["node_down"] not in NODE_DOWN_VALUES:
             raise ValueError("pod deletion when a node is down is one of " + ", ".join(NODE_DOWN_VALUES))
