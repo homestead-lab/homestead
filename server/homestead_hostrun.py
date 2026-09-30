@@ -17,6 +17,10 @@ kget = ksend = None
 exec_in = None           # (namespace, pod, argv, timeout=, container=) -> (stdout bytes, stderr text)
 NS = "lab"
 IMAGE = "busybox"
+# nsenter leaves the script in this pod's cgroup, so what it runs on the host -
+# apt-get refreshing its lists, mkfs, update-initramfs - shares this limit. At
+# 64Mi the kernel killed apt-get part-way through reading a host's OS.
+MEMORY_LIMIT = "1Gi"
 TASK = "host-run"
 HOST = ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "-p", "--", "sh", "-c"]
 
@@ -51,7 +55,7 @@ def body(node, lifetime=900):
                                      "command": ["sh", "-c", f"trap 'exit 0' TERM; sleep {lifetime} & wait"],
                                      "securityContext": {"privileged": True},
                                      "resources": {"requests": {"cpu": "5m", "memory": "8Mi"},
-                                                   "limits": {"memory": "64Mi"}}}]}}
+                                                   "limits": {"memory": MEMORY_LIMIT}}}]}}
 
 
 def _delete(path):

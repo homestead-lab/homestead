@@ -492,9 +492,17 @@ def screen(window, monitor, demo=False, unhealthy=False, ascii_only=False):
     # The Linux text console's built-in fonts have no Braille, so on a
     # machine's own screen the dots would be boxes: plain characters there,
     # Braille in a real terminal. A switches either way.
-    braille = unicode_supported and not ascii_only and os.environ.get("TERM", "") != "linux"
+    text_console = os.environ.get("TERM", "") == "linux"
+    braille = unicode_supported and not ascii_only and not text_console
+    # The kernel prints its warnings straight onto a machine's own screen,
+    # behind curses' back: they stay, and scroll the dashboard out of line,
+    # until the whole screen is drawn again - so there it is, every few seconds.
+    repaint_every, repainted = 5.0, time.monotonic()
     offset = 0
     while True:
+        if text_console and time.monotonic() - repainted >= repaint_every:
+            window.clearok(True)
+            repainted = time.monotonic()
         height, width = window.getmaxyx()
         # Reserve the last terminal column: curses wraps at the bottom-right cell.
         frame = dashboard(demo_data(unhealthy) if demo else monitor.snapshot(), max(1, width - 1), height, braille)
