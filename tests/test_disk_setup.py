@@ -157,6 +157,100 @@ class SetupTests(unittest.TestCase):
             SETUP.setup("k3s", "/dev/nvme0n1", "format", "ext4", "/dev/nvme0n1")
 
 
+def old_ubuntu(root="ROOTUUID-9999-aaaa", attr="-wi-a-----", extra=(), mount=""):
+    """A drive from an earlier Ubuntu install: EFI, /boot, and ubuntu-vg on
+    partition 3 - which this host switched on at boot, as Ubuntu does."""
+    out = seen(PART=["nvme0n1|disk||", "nvme0n1p1|part|vfat|", "nvme0n1p2|part|ext4|",
+                     "nvme0n1p3|part|LVM2_member|", f"ubuntu--vg-ubuntu--lv|lvm|ext4|{mount}"],
+               HOLDER="dm-0|ubuntu--vg-ubuntu--lv|LVM-OLDVGUUID")
+    lines = ["TOOL pvs", "PV /dev/nvme0n1p3|ubuntu-vg|OLDUUID-1234-abcd", "VGPV OLDUUID-1234-abcd|/dev/nvme0n1p3",
+             f"LV OLDUUID-1234-abcd|ubuntu-vg|ubuntu-lv|{attr}",
+             # The running system has a ubuntu-vg of its own, on another drive.
+             "VGPV ROOTUUID-9999-aaaa|/dev/sda3", "LV ROOTUUID-9999-aaaa|ubuntu-vg|ubuntu-lv|-wi-ao----",
+             f"ROOTVG {root}", *extra]
+    return out.replace("\nEND", "\n" + "\n".join(lines) + "\nEND")
+
+
+class Host2:
+    """A host whose disk is blank once wiped."""
+
+    def __init__(self, before):
+        self.state, self.scripts = before, []
+
+    def run(self, node, script, timeout=60):
+        self.scripts.append(script)
+        if "echo WIPED" in script:
+            self.state = seen()
+            return "WIPED\n", ""
+        if "set -e" in script:
+            return "OK 1234 ext4 /mnt/nvme0n1\n", ""
+        return self.state, ""
+
+
+class OldDiskTests(unittest.TestCase):
+    def setUp(self):
+        no_v2(self)
+        self.addCleanup(SETUP.bind, SETUP.hostrun)
+
+    def facts(self, out):
+        return SETUP.parse("/dev/nvme0n1", out)
+
+    def test_an_old_ubuntu_lvm_disk_can_be_wiped_and_says_what_is_on_it(self):
+        facts = self.facts(old_ubuntu())
+        self.assertEqual(("lvm", ["wipe"], []), (facts["state"], SETUP.choices(facts), facts["reasons"]))
+        self.assertEqual([("ubuntu-vg", ["/dev/nvme0n1p3"], ["ubuntu-lv"], False)],
+                         [(g["vg"], g["pvs"], [l["name"] for l in g["lvs"]], g["root"]) for g in facts["lvm"]])
+
+    def test_what_makes_a_disk_unsafe_to_wipe_is_said_plainly(self):
+        cases = {
+            "running system": old_ubuntu(root="OLDUUID-1234-abcd"),
+            "also uses /dev/sdb1": old_ubuntu(extra=["VGPV OLDUUID-1234-abcd|/dev/sdb1"]),
+            "ubuntu-vg/ubuntu-lv is open": old_ubuntu(attr="-wi-ao----"),
+        }
+        for reason, out in cases.items():
+            with self.subTest(reason=reason):
+                facts = self.facts(out)
+                self.assertEqual(("held", []), (facts["state"], SETUP.choices(facts)))
+                self.assertTrue(any(reason in r for r in facts["reasons"]), facts["reasons"])
+                SETUP.bind(Host2(out))
+                with self.assertRaisesRegex(ValueError, reason):
+                    SETUP.setup("k3s", "/dev/nvme0n1", "wipe", "ext4", "/dev/nvme0n1")
+        self.assertEqual("system", self.facts(old_ubuntu(mount="/"))["state"], "its LVM root mounted is the system disk")
+        self.assertEqual("mounted", self.facts(old_ubuntu(mount="[SWAP]"))["state"])
+        self.assertIn("used as swap", SETUP.refusal(self.facts(old_ubuntu(mount="[SWAP]")), "wipe"))
+
+    def test_raid_and_encryption_are_still_refused(self):
+        facts = self.facts(seen(FS="ext4", HOLDER="md0||"))
+        self.assertEqual("held", facts["state"])
+        self.assertIn("RAID (md0) holds it", SETUP.refusal(facts, "wipe"))
+
+    def test_wiping_removes_the_old_group_by_uuid_then_formats_only_once_blank(self):
+        host = Host2(old_ubuntu())
+        SETUP.bind(host)
+        with self.assertRaisesRegex(ValueError, "type /dev/nvme0n1 to confirm"):
+            SETUP.setup("k3s", "/dev/nvme0n1", "wipe", "ext4", "")
+        result = SETUP.setup("k3s", "/dev/nvme0n1", "wipe", "ext4", "/dev/nvme0n1")
+        self.assertEqual("/mnt/nvme0n1", result["path"])
+        wipe = next(s for s in host.scripts if "echo WIPED" in s)
+        for step in ("vgchange -an --select vg_uuid=OLDUUID-1234-abcd", "vgremove -ff -y --select vg_uuid=OLDUUID-1234-abcd",
+                     'pvremove -ff -y "/dev/nvme0n1p3"', 'wipefs -a "$D"', "blockdev --rereadpt", 'lsblk -rno MOUNTPOINT "$D"'):
+            self.assertIn(step, wipe)
+        self.assertNotIn("ROOTUUID", wipe, "the running system's group is never named")
+        self.assertLess(wipe.index("vgremove"), wipe.index('wipefs -a "$D"'))
+        order = [i for i, s in enumerate(host.scripts) if "echo WIPED" in s or "mkfs.ext4 -F" in s]
+        self.assertEqual(2, len(order), "wiped, looked at again, then formatted")
+        self.assertTrue(any("echo END" in s for s in host.scripts[order[0]:order[1]]), "re-scanned between")
+
+    def test_a_disk_still_not_blank_after_the_wipe_is_not_formatted(self):
+        host = Host2(old_ubuntu())
+        host.run = (lambda original: lambda node, script, timeout=60: (
+            ("WIPED\n", "") if "echo WIPED" in script else original(node, script, timeout)))(host.run)
+        SETUP.bind(host)
+        with self.assertRaisesRegex(ValueError, "wiped but is not blank"):
+            SETUP.setup("k3s", "/dev/nvme0n1", "wipe", "ext4", "/dev/nvme0n1")
+        self.assertFalse(any("mkfs.ext4 -F" in s for s in host.scripts))
+
+
 def lvm(free_gb=135, size_gb=235, lvs=("ubuntu-lv 107374182400",), vg="ubuntu-vg"):
     g = 1024 ** 3
     lines = ["ROOT /dev/mapper/ubuntu--vg-ubuntu--lv", f"ROOTFREE {70 * g}"]

@@ -28,8 +28,20 @@ where wipefs could only say "Device or resource busy". Ubuntu runs
 multipathd, which claims every plain SCSI or SATA disk it sees as a map of
 its own; setting such a disk up releases the map and adds the disk's WWID to
 multipath.conf's blacklist, so multipathd leaves that one disk alone and
-nothing else changes. A disk in an LVM volume group, a RAID array or an
-encrypted volume is refused, naming what holds it.
+nothing else changes. A disk in a RAID array or an encrypted volume is
+refused, naming what holds it.
+
+A disk from an old install - Ubuntu's LVM, say, which the host may even have
+switched on at boot - can be wiped and prepared, typed to confirm. inspect()
+reads its LVM: each physical volume on the disk or its partitions, the group
+it belongs to (by UUID - an old Ubuntu disk and the running system both call
+theirs ubuntu-vg), the group's other disks, and its volumes. The wipe is
+refused, with each reason, when anything on the disk is mounted or swapped
+on, a volume is open, the group is the one the running system's root is in,
+or the group spans another disk, which wiping this one would break. Else the
+groups are switched off and removed, the LVM labels, filesystem signatures and
+partition table (both GPT copies) wiped, the kernel told to re-read the disk,
+and the disk looked at again: only a disk that is now blank is formatted.
 """
 import re
 import time
@@ -40,6 +52,7 @@ hostrun = None          # homestead_hostrun
 # Such a disk has no filesystem and would look blank: it is refused instead.
 longhorn_block_paths = lambda node: []
 BLOCK_PATH = re.compile(r"/dev/[A-Za-z0-9/_.:+@-]+")
+LVM_UUID = re.compile(r"[A-Za-z0-9-]{8,64}")
 DEVICE = re.compile(r"/dev/(?:[a-z]+|nvme\d+n\d+|mmcblk\d+|vd[a-z]+|xvd[a-z]+)")
 SYSTEM_POINTS = {"/", "/boot", "/boot/efi", "/usr", "/var", "/var/lib/rancher", "/var/lib/kubelet", "/home"}
 FSTYPES = ("ext4", "xfs")
@@ -105,6 +118,18 @@ if [ -n "$FS" ] && ! grep -q "^$D " /proc/mounts; then
   rmdir "$T"
 fi
 for c in mkfs.ext4 mkfs.xfs wipefs chattr findmnt; do command -v $c >/dev/null && echo "TOOL $c"; done
+# LVM on the disk or its partitions: each physical volume and its group, every
+# group's disks and volumes, and the group the running system's root is in.
+if command -v pvs >/dev/null 2>&1; then
+  echo "TOOL pvs"
+  lsblk -lnpo NAME "$D" 2>/dev/null | while read -r p; do
+    pvs --noheadings --separator '|' -o pv_name,vg_name,vg_uuid "$p" 2>/dev/null | sed 's/^ *//' | while read -r l; do echo "PV $l"; done
+  done
+  pvs --noheadings --separator '|' -o vg_uuid,pv_name 2>/dev/null | sed 's/^ *//' | while read -r l; do echo "VGPV $l"; done
+  lvs --noheadings --separator '|' -o vg_uuid,vg_name,lv_name,lv_attr 2>/dev/null | sed 's/^ *//' | while read -r l; do echo "LV $l"; done
+  R=$(findmnt -n -o SOURCE / 2>/dev/null)
+  [ -n "$R" ] && echo "ROOTVG $(lvs --noheadings -o vg_uuid "$R" 2>/dev/null | tr -d ' ')"
+fi
 """ + claimed_script(claimed) + "echo END"
 
 
@@ -112,6 +137,7 @@ def parse(device, out):
     facts = {"device": device, "size_gb": 0, "partitions": [], "mounts": [], "fstype": "", "uuid": "",
              "by_id": "", "longhorn": None, "replicas": 0, "entries": 0, "tools": [], "error": "",
              "holders": [], "longhorn_block": []}
+    pvs, vg_pvs, vg_lvs, root_vg = [], {}, {}, ""
     for line in out.splitlines():
         key, _, value = line.partition(" ")
         if key == "ERR":
@@ -140,6 +166,20 @@ def parse(device, out):
             facts["tools"].append(value)
         elif key == "LHBLOCK":
             facts["longhorn_block"].append(value)
+        elif key == "PV":
+            pv, vg, uuid = (value.split("|") + ["", "", ""])[:3]
+            if pv and not any(row["pv"] == pv for row in pvs):
+                pvs.append({"pv": pv, "vg": vg, "uuid": uuid})
+        elif key == "VGPV":
+            uuid, pv = (value.split("|") + ["", ""])[:2]
+            if uuid and pv:
+                vg_pvs.setdefault(uuid, []).append(pv)
+        elif key == "LV":
+            uuid, vg, lv, attr = (value.split("|") + ["", "", "", ""])[:4]
+            if uuid and lv:
+                vg_lvs.setdefault(uuid, []).append({"name": lv, "active": attr[4:5] == "a", "open": attr[5:6] == "o"})
+        elif key == "ROOTVG":
+            root_vg = value.strip()
         elif key == "HOLDER":
             name, dm_name, uuid = (value.split("|") + ["", "", ""])[:3]
             kind = ("multipath" if uuid.startswith("mpath-") else "LVM" if uuid.startswith("LVM-")
@@ -150,14 +190,61 @@ def parse(device, out):
     if "END" not in out.split() and not facts["error"]:
         facts["error"] = "the host did not finish looking at the disk"
     facts["system"] = any(m in SYSTEM_POINTS or m.startswith("/boot") for m in facts["mounts"])
-    held = [h for h in facts["holders"] if h["kind"] != "multipath"]
     facts["multipath"] = [h for h in facts["holders"] if h["kind"] == "multipath" and h["wwid"]]
+    facts["lvm"] = _lvm_groups(pvs, vg_pvs, vg_lvs, root_vg)
+    facts["orphan_pvs"] = [row["pv"] for row in pvs if not row["uuid"]]
+    facts["reasons"] = _wipe_reasons(facts, pvs)
     facts["state"] = ("missing" if facts["error"] else "system" if facts["system"]
                       else "longhorn-v2" if facts["longhorn_block"]
-                      else "mounted" if facts["mounts"] else "held" if held
+                      else "mounted" if facts["mounts"] else "held" if facts["reasons"]
+                      else "lvm" if facts["lvm"] or facts["orphan_pvs"]
                       else "partitioned" if facts["partitions"]
                       else "longhorn" if facts["longhorn"] else "data" if facts["fstype"] else "blank")
     return facts
+
+
+def _lvm_groups(pvs, vg_pvs, vg_lvs, root_vg):
+    """The volume groups with a physical volume on this disk: where else they
+    live, what volumes they hold, and whether the running system is on one."""
+    groups = {}
+    for row in pvs:
+        if not row["uuid"]:
+            continue
+        group = groups.setdefault(row["uuid"], {"vg": row["vg"], "uuid": row["uuid"], "pvs": [],
+                                                "lvs": vg_lvs.get(row["uuid"], []), "root": row["uuid"] == root_vg})
+        group["pvs"].append(row["pv"])
+    for group in groups.values():
+        group["elsewhere"] = [pv for pv in vg_pvs.get(group["uuid"], []) if pv not in group["pvs"]]
+    return list(groups.values())
+
+
+def _wipe_reasons(facts, pvs):
+    """Everything that would make wiping this disk unsafe, said plainly. A
+    disk with none of these holds nothing this host is using."""
+    reasons = []
+    for holder in facts["holders"]:
+        if holder["kind"] not in ("multipath", "LVM"):
+            reasons.append(f"{holder['kind']} ({holder['name']}) holds it; take it out of that on the host first")
+    for group in facts["lvm"]:
+        vg = group["vg"] or group["uuid"]
+        if group["root"]:
+            reasons.append(f"volume group {vg} is the one this host's running system is on")
+        if group["elsewhere"]:
+            reasons.append(f"volume group {vg} also uses {', '.join(group['elsewhere'])}; wiping this disk would break it there")
+        for lv in group["lvs"]:
+            if lv["open"]:
+                reasons.append(f"{vg}/{lv['name']} is open - something on this host is using it")
+    lvm_held = [h["name"] for h in facts["holders"] if h["kind"] == "LVM"]
+    if lvm_held and not facts["lvm"]:
+        reasons.append(f"LVM holds it ({', '.join(lvm_held)}), but "
+                       + ("the host's LVM tools did not say which volume group" if "pvs" in facts["tools"]
+                          else "the host has no LVM tools (pvs) to say which volume group"))
+    for group in facts["lvm"]:
+        if not LVM_UUID.fullmatch(group["uuid"]) or any(not BLOCK_PATH.fullmatch(pv) for pv in group["pvs"]):
+            reasons.append(f"volume group {group['vg']} has a name Homestead will not put in a command")
+    if any(not BLOCK_PATH.fullmatch(row["pv"]) for row in pvs):
+        reasons.append("a physical volume on it has a path Homestead will not put in a command")
+    return list(dict.fromkeys(reasons))
 
 
 def inspect(node, device):
@@ -178,6 +265,8 @@ def choices(facts):
         return []
     if state == "blank":
         return ["format"]
+    if state == "lvm":
+        return ["wipe"]
     if state == "longhorn":
         return ["import", "erase"]
     return ["erase"]
@@ -203,6 +292,56 @@ def release_script(maps):
     lines.append('B=${D##*/}; ls /sys/block/$B/holders/ 2>/dev/null | grep -q . && '
                  '{ echo "ERR multipathd still holds $D after releasing it; see multipath -ll on the host"; exit 1; }')
     return "\n".join(lines) + "\n"
+
+
+def wipe_script(device, facts):
+    """Take an unused disk back to blank: its LVM groups off and removed, the
+    LVM labels, filesystem signatures and partition table (wipefs clears both
+    GPT copies) wiped - partitions first, then the disk - and the kernel told
+    to re-read it. Checked again on the host before anything is removed."""
+    lines = ["set -e", f"D={device}"]
+    if facts.get("multipath"):
+        lines.append(release_script(facts["multipath"]).rstrip())
+    lines.append('M=$(lsblk -rno MOUNTPOINT "$D" 2>/dev/null | grep . | tr "\\n" " ")')
+    lines.append('[ -z "$M" ] || { echo "ERR something on $D is in use: $M"; exit 1; }')
+    for group in facts.get("lvm") or []:
+        uuid = group["uuid"]
+        lines.append(f'O=$(lvs --noheadings -o lv_attr --select vg_uuid={uuid} 2>/dev/null | tr -d " " | cut -c6 | grep o || true)')
+        lines.append(f'[ -z "$O" ] || {{ echo "ERR a volume in {group["vg"]} is open"; exit 1; }}')
+        lines.append(f"vgchange -an --select vg_uuid={uuid} >/dev/null")
+        lines.append(f"vgremove -ff -y --select vg_uuid={uuid} >/dev/null")
+    for pv in [pv for group in facts.get("lvm") or [] for pv in group["pvs"]] + list(facts.get("orphan_pvs") or []):
+        lines.append(f'pvremove -ff -y "{pv}" >/dev/null 2>&1 || true')
+    lines += [
+        'for p in $(lsblk -lnpo NAME,TYPE "$D" | awk \'$2=="part"{print $1}\' | sort -r); do wipefs -a "$p" >/dev/null; done',
+        'wipefs -a "$D" >/dev/null',
+        'blockdev --rereadpt "$D" 2>/dev/null || partx -d "$D" 2>/dev/null || true',
+        "udevadm settle 2>/dev/null || true",
+        'L=$(lsblk -rno NAME "$D" 2>/dev/null | sed 1d | tr "\\n" " ")',
+        '[ -z "$L" ] || { echo "ERR $D still shows $L after the wipe; restart the host and look again"; exit 1; }',
+        'S=$(blkid -p -s TYPE -o value "$D" 2>/dev/null || true)',
+        '[ -z "$S" ] || { echo "ERR $D still has a $S signature after the wipe"; exit 1; }',
+        "echo WIPED",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def wipe(node, device, facts):
+    """Wipe a disk that holds nothing this host is using, then look again.
+    Returns what the disk is now, which is blank - or says what is left."""
+    if facts["state"] not in ("lvm", "partitioned", "data", "longhorn"):
+        raise ValueError(refusal(facts, "wipe"))
+    if "wipefs" not in facts["tools"]:
+        raise ValueError(f"{node} has no wipefs; install util-linux there")
+    out, err = hostrun.run(node, wipe_script(device, facts), timeout=300)
+    if "WIPED" not in out.split():
+        problem = next((line[4:] for line in out.splitlines() if line.startswith("ERR ")), "") or (err or out)[-300:]
+        raise ValueError(f"wiping {device} on {node} stopped: {problem}")
+    after = inspect(node, device)
+    if after["state"] != "blank":
+        raise ValueError(f"{device} was wiped but is not blank yet ({after['state']}): "
+                         + (refusal(after, "format") if after["state"] != "blank" else ""))
+    return after
 
 
 def setup_script(device, mode, fstype, point, multipath=()):
@@ -239,10 +378,14 @@ def setup(node, device, mode, fstype="ext4", confirm=""):
         raise ValueError(refusal(facts, mode))
     if fstype not in FSTYPES:
         raise ValueError("format it as ext4 or XFS")
-    if mode in ("format", "erase") and confirm.strip() != device:
+    if mode in ("format", "erase", "wipe") and confirm.strip() != device:
         raise ValueError(f"type {device} to confirm: formatting erases it")
-    if mode in ("format", "erase") and f"mkfs.{fstype}" not in facts["tools"]:
+    if mode in ("format", "erase", "wipe") and f"mkfs.{fstype}" not in facts["tools"]:
         raise ValueError(f"{node} has no mkfs.{fstype}; install {'xfsprogs' if fstype == 'xfs' else 'e2fsprogs'} there, or choose the other filesystem")
+    if mode in ("erase", "wipe"):
+        # Back to blank first - old LVM, partitions and all - then formatted
+        # as a blank disk is.
+        facts, mode = wipe(node, device, facts), "format"
     point = mount_point(device)
     out, err = hostrun.run(node, setup_script(device, mode, fstype, point, facts.get("multipath") or ()), timeout=600)
     done = next((line for line in out.splitlines() if line.startswith("OK ")), "")
@@ -522,12 +665,18 @@ def refusal(facts, mode):
                 "move its replicas off and remove it from Longhorn first")
     if state == "held":
         what = ", ".join(f"{h['kind']} ({h['name']})" for h in facts["holders"] if h["kind"] != "multipath")
-        return f"{device} is in use by {what}; take it out of that on the host first"
+        reasons = "; ".join(facts.get("reasons") or []) or "take it out of that on the host first"
+        return f"{device} is in use by {what}: {reasons}" if what else f"{device} cannot be wiped: {reasons}"
     if state == "mounted":
-        return (f"{device} is mounted at {', '.join(facts['mounts'])}; unmount it first, or give Longhorn that "
-                "folder with Add a folder")
+        swap = [m for m in facts["mounts"] if m.upper() == "[SWAP]"]
+        points = [m for m in facts["mounts"] if m.upper() != "[SWAP]"]
+        return (f"{device} is in use: " + "; ".join(
+            ([f"mounted at {', '.join(points)}"] if points else []) + (["used as swap"] if swap else []))
+                + "; unmount it (swapoff for swap) first, or give Longhorn a mounted folder with Add a folder")
     if mode == "import":
         return f"{device} holds no Longhorn data to keep"
     if mode == "format":
         return f"{device} is not blank ({facts['fstype'] or 'partitioned'}); erasing it needs its own confirmation"
+    if mode == "wipe" and state == "blank":
+        return f"{device} is blank already; format it instead"
     return f"{device} cannot be set up that way"
