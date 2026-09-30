@@ -109,6 +109,24 @@ Schedules are picked as shapes - every few hours, daily, weekdays, monthly -
 and written to cron for you. Longhorn keeps time in UTC; the editor shows the
 next three runs in your own time. **Run now** starts one at once.
 
+### Weekly trim, by default
+
+Files deleted inside a volume leave their space allocated in Longhorn until
+the filesystem is trimmed. Media, databases and VM disks can hold far more
+than their files use. So Homestead sets up **homestead-weekly-trim** for every
+volume: Saturdays at 04:00 UTC, in the default group and in every group a
+volume is in, kept in step as groups come and go.
+
+- You can change its schedule, and your change is kept.
+- If you delete it, it isn't made again.
+- If you already have a trim job for the default group, Homestead doesn't add
+  a second.
+- Its **Run now** trims every volume at once.
+- A single volume's snapshot panel has **Trim now**.
+
+Longhorn trims a volume only while it's attached. A stopped app's volume is
+trimmed the next time it runs.
+
 A snapshot or backup job whose last run failed, or backup jobs with no
 backup target (or one that cannot be reached), make the cluster
 **degraded** on the Dashboard and raise an alert. Its **Review** button leads

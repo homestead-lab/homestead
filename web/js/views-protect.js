@@ -647,6 +647,7 @@ window.lhSnaps = async (vol, label) => {
       <div class="row" style="margin-bottom:16px">
         <button class="btn pri" data-need="operator" onclick="lhSnapNow(${jsq(vol)},${jsq(label)})">Take snapshot now</button>
         <button class="btn" data-need="operator" onclick="lhBackupNow(${jsq(vol)},${jsq(label)})">Back up now</button>
+        <button class="btn" data-need="operator" data-tip="Give Longhorn back the space deleted files still hold. Every volume is also trimmed weekly." onclick="lhTrimNow(${jsq(vol)})">Trim now</button>
         <button class="btn" onclick="lhSnaps(${jsq(vol)},${jsq(label)})">${icon("refresh")}Refresh</button>
       </div>
       <p class="dim small">Creation timeline, oldest first. Checkpoint ancestry can branch after rollback; this is not a dependency graph.</p>
@@ -700,6 +701,15 @@ window.lhSnapNow = async (vol, label) => {
     await api("/api/lh/snapshot", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ volume: vol }) });
     toast("snapshot taken", "ok"); lhSnaps(vol, label);
+  } catch (e) { toast(e.message, "bad"); }
+};
+/* Trim one volume now; the weekly job trims every volume. Longhorn trims
+   only a volume that is attached, and says so otherwise. */
+window.lhTrimNow = async vol => {
+  try {
+    const r = await api("/api/lh/trim", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ volume: vol }) });
+    toast(r.detail || "trim started", "ok");
   } catch (e) { toast(e.message, "bad"); }
 };
 window.lhBackupNow = async (vol, label) => {

@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.253")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.254")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -5620,6 +5620,27 @@ def _baseline_loop():
         time.sleep(60)
 
 
+def weekly_trim():
+    """Homestead's weekly trim job kept in place (homestead_longhorn), made
+    once: remembered here, so one someone deleted is not made again."""
+    path = os.path.join(DATA_DIR, "weekly-trim.json")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            state = json.load(handle)
+    except (OSError, ValueError):
+        state = {}
+    try:
+        result = LH.ensure_weekly_trim(bool(state.get("created")))
+    except Exception as error:
+        return f"weekly trim not checked: {str(error)[:160]}"
+    if result is None:
+        return ""
+    made, change = result
+    if made:
+        SHARED.write_json(path, {"created": True, "at": int(time.time())}, durable=True)
+    return change
+
+
 def _host_fix_loop():
     """On the leader, what k3s and RKE2 hosts need or undo at each start: inotify
     limits a busy node outgrows (homestead_host_limits.py), what a node that
@@ -5642,6 +5663,10 @@ def _host_fix_loop():
                     # The host console add-on, installed, updated or removed to match.
                     for node, change in HOST_CONSOLE.tick():
                         print(f"platform: {node}: {change}", flush=True)
+                    # A weekly trim for every Longhorn volume, unless someone removed it.
+                    trimmed = weekly_trim()
+                    if trimmed:
+                        print(f"storage: {trimmed}", flush=True)
                     # Longhorn kept from filling a host's root filesystem.
                     for node, change in ROOT_GUARD.tick():
                         print(f"storage: {node}: {change}", flush=True)
@@ -8906,6 +8931,8 @@ class H(BaseHTTPRequestHandler):
                     b["volumes"], b["name"], b.get("kind", "group"), b.get("enabled", True)))
             if p == "/api/lh/snapshot":
                 return self._send(200, LH.create_snapshot(b["volume"], b.get("name")))
+            if p == "/api/lh/trim":
+                return self._send(200, LH.trim_volume(b.get("volume")))
             if p == "/api/lh/snapshot/delete":
                 return self._send(200, {"ok": True, "operation": storage_volume_action(
                     b.get("volume"), lambda: SNAPSHOT_DELETE.start(b, OPS))})

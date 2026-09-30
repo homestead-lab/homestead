@@ -24,6 +24,7 @@ import re
 import secrets
 import time
 import urllib.error
+import urllib.request
 
 kget = ksend = None
 LHNS = "longhorn-system"
@@ -185,6 +186,81 @@ def delete_job(name):
     ksend("DELETE", f"{API}/namespaces/{LHNS}/recurringjobs/{name}")
     _bust("lhjobs", "lhvols")
     return {"ok": True}
+
+
+# ------------------------------------------------------------------ trimming
+# Deleted files leave their blocks allocated in a Longhorn volume until the
+# filesystem is trimmed: a volume that churns - media, databases, VM disks -
+# holds far more space than its files use. A weekly trim for every volume is
+# Homestead's default: one recurring job in the default group, and in every
+# group a volume wears, since a volume in a group of its own is outside the
+# default one.
+TRIM_JOB = "homestead-weekly-trim"
+TRIM_CRON = "0 4 * * 6"
+BACKEND = "http://longhorn-backend.longhorn-system:9500/v1"
+
+
+def ensure_weekly_trim(created_before=False):
+    """Keep Homestead's weekly trim in place, covering every group.
+
+    Made once. One someone deleted is not made again (created_before says it
+    was made), and none is made where a trim job already covers the default
+    group. Returns (made_now, what changed) - ("", "") when nothing did, and
+    None when Longhorn's jobs could not be read."""
+    try:
+        items = kget(f"{API}/namespaces/{LHNS}/recurringjobs").get("items", [])
+    except Exception:
+        return None
+    ours = next((j for j in items if j["metadata"]["name"] == TRIM_JOB), None)
+    wanted = groups()
+    if ours is None:
+        other = [j["metadata"]["name"] for j in items if (j.get("spec") or {}).get("task") == "filesystem-trim"
+                 and "default" in ((j.get("spec") or {}).get("groups") or [])]
+        if created_before or other:
+            return False, ""
+        save_job({"name": TRIM_JOB, "task": "filesystem-trim", "cron": TRIM_CRON, "retain": 0,
+                  "concurrency": 1, "groups": wanted})
+        return True, f"weekly trim set up for every volume ({', '.join(wanted)})"
+    spec = ours.get("spec") or {}
+    if sorted(spec.get("groups") or []) == wanted:
+        return False, ""
+    # Only its groups: a schedule someone changed stays theirs.
+    save_job({"name": TRIM_JOB, "task": spec.get("task") or "filesystem-trim", "cron": spec.get("cron") or TRIM_CRON,
+              "retain": 0, "concurrency": spec.get("concurrency", 1), "groups": wanted,
+              "labels": spec.get("labels") or {}})
+    return False, f"weekly trim now covers {', '.join(wanted)}"
+
+
+def _backend(method, path, body=None):
+    data = json.dumps(body or {}).encode()
+    request = urllib.request.Request(f"{BACKEND}{path}", data=data if method == "POST" else None, method=method,
+                                     headers={"Content-Type": "application/json", "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return json.loads(response.read().decode() or "{}")
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode(errors="replace")[:300]
+        raise ValueError(f"Longhorn refused the trim: {detail or error.reason}") from error
+
+
+def trim_volume(volume):
+    """Trim one volume now: its filesystem gives back the blocks its deleted
+    files held. Longhorn trims only a volume that is attached - in use."""
+    name = str(volume or "")
+    if not SAFE.match(name) and not re.fullmatch(r"pvc-[0-9a-f-]{36}", name):
+        raise ValueError("unknown volume")
+    try:
+        found = kget(f"{API}/namespaces/{LHNS}/volumes/{name}")
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            raise ValueError(f"no Longhorn volume {name}")
+        raise
+    state = (found.get("status") or {}).get("state", "")
+    if state != "attached":
+        raise ValueError(f"{name} is {state or 'not attached'}: Longhorn trims a volume only while it is in use; "
+                         "the weekly trim reaches it the next time it is")
+    _backend("POST", f"/volumes/{name}?action=trimFilesystem", {})
+    return {"ok": True, "detail": f"{name} is being trimmed: space its deleted files held goes back to Longhorn"}
 
 
 # ------------------------------------------------------------------ volumes & groups
