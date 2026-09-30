@@ -236,7 +236,12 @@ def read(node, refresh=False, now=None):
     out, err = hostrun.run(node, f"REFRESH={1 if refresh else 0}\n" + SCRIPT, timeout=240 if refresh else 90)
     facts = parse(out)
     if not facts["complete"]:
-        raise ValueError(f"could not read {node}'s operating system: {(err or out)[-200:]}")
+        # The facts are one per line, so the last one says how far it got.
+        last = next((line.split(" ", 1)[0] for line in reversed(out.splitlines()) if line.strip()), "")
+        raise ValueError(f"could not read {node}'s operating system: the check stopped part-way"
+                         + (f", after {last}" if last else "")
+                         + (f": {err.strip()[-160:]}" if (err or "").strip() else
+                            "; the host's kernel log (dmesg) says whether it ran out of memory"))
     facts["at"] = int(now or time.time())
     with _lock:
         state = _load()
