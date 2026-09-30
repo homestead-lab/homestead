@@ -1131,33 +1131,16 @@ async function viewImport() {
   STATE.data.classFacts = (await api("/api/storageclasses?facts=1").catch(() => ({}))).facts || {};
   STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
   paint(`<div class="phead"><div><h2>Import</h2>
-      <p>Bring containers, appdata and virtual-machine disks into Homestead</p></div>
-      <div class="row"><button class="btn" data-need="operator" onclick="composeImport()">＋ Docker Compose</button>
-      <button class="btn" data-need="admin" onclick="srcAdd()">＋ Container source</button>
-      <button class="btn pri" data-need="admin" onclick="vmDiskImport()">＋ VM disk</button></div></div>
+      <p>Bring apps in from an Unraid or Docker server, a Docker Compose file, or a VM disk image</p></div>
+      <div class="row"><button class="btn pri" data-need="admin" onclick="srcAdd()">＋ Unraid or Docker server</button>
+      <button class="btn" data-need="operator" onclick="composeImport()">＋ Docker Compose</button>
+      <button class="btn" data-need="admin" onclick="vmDiskImport()">＋ VM disk</button></div></div>
 
-    <div class="sec">VM disk images ${tip("CDI downloads supported QEMU disk formats, including qcow2 and vmdk, converts them into a VM-ready disk, and writes the result into a new Longhorn PVC.")}</div>
-    ${disks.length ? `<div class="card flat pad0"><div class="tblwrap"><table data-sort="vm-disks" class="tbl stack"><thead><tr>
-      <th>Disk / PVC</th><th>Capacity</th><th>Status</th><th>Progress</th><th>Attached to</th><th></th></tr></thead><tbody>
-      ${disks.map(d => { const done = d.phase === "Succeeded", failed = ["Failed","Error","Unknown"].includes(d.phase); return `<tr>
-        <td><b>${esc(d.name)}</b><div class="dim xs mono">${esc(d.namespace)} · ${esc(d.storage_class || "storage class unknown")}</div></td>
-        <td class="mono small">${esc(d.capacity || "—")}<div class="dim xs">${esc((d.access_modes || []).join(", "))}</div></td>
-        <td><span class="pill ${done ? "ok" : failed ? "crit" : "med"}">${esc(d.phase.replace(/([a-z])([A-Z])/g, "$1 $2"))}</span>${d.message ? `<div class="dim xs" style="margin-top:5px;max-width:320px">${esc(d.message)}</div>` : ""}</td>
-        <td style="min-width:130px"><div class="jobmeter"><span class="${failed ? "failed" : ""}" style="width:${Math.max(2, done ? 100 : d.progress || 0)}%"></span></div><div class="dim xs mono">${done ? "ready" : `${esc(d.progress || 0)}%`}</div></td>
-        <td class="small">${d.in_use ? esc((d.used_by || []).join(", ")) : '<span class="dim">not attached</span>'}</td>
-        <td>${done && !d.in_use ? `<button class="btn sm" onclick="vmNew(${jsq(d.name)},${jsq(d.namespace)})">Create VM</button>` : ""}</td></tr>`; }).join("")}
-      </tbody></table></div></div>` : `<div class="empty">No managed VM disk imports yet. Import an HTTP(S) qcow2, vmdk, raw, vdi, vhd or vhdx image into a new PVC.</div>`}
-
-    <div class="sec">Container sources</div>
-    <div class="grid g3">${srcs.map(s => `<div class="card flat">
-      <div class="between"><div><div class="ctitle">${esc(s.name)}</div>
-        <div class="csub">${esc(s.kind)} · ${esc(s.user)}@${esc(s.host)}</div></div>
-        <button class="btn sm danger" onclick="srcDel(${jsq(s.name)})">✕</button></div>
-      <div class="drow"><div class="dl">Base path</div><div class="dv mono small">${esc(s.base_path)}</div></div>
-      <div class="drow"><div class="dl">SSH identity</div><div class="dv">${s.ssh_trust ? 'Key pinned' : 'Verification needed'}</div></div>
-      <div class="row" style="margin-top:12px"><button class="btn" data-need="admin" onclick="srcVerify(${jsq(s.name)})">Verify source</button>
-      <button class="btn" ${s.ssh_trust ? '' : 'disabled'} onclick="srcBrowse(${jsq(s.name)})">Browse appdata</button></div>
-    </div>`).join("") || `<div class="empty">No import sources yet. Add the host you want to pull from.</div>`}</div>
+    <div class="sec">Unraid and Docker servers ${tip("Containers on another server - Unraid, or any Linux host running Docker - with their settings and appdata. Homestead reaches the server over SSH.")}</div>
+    ${srcs.length ? `<div class="grid g3">${srcs.map(importSourceCard).join("")}</div>
+    <div class="dim small" style="margin-top:10px">Each imported container gets its image, ports, variables and devices, and its
+      folders are copied into Longhorn volumes. It is created <b>stopped</b>: start it in Containers once the copy finishes.</div>`
+      : importSourceSteps()}
 
     ${jobs.length ? `<div class="sec">Transfers</div>
     <div class="card flat pad0"><div class="tblwrap"><table data-sort="imports" class="tbl stack"><thead><tr>
@@ -1171,12 +1154,53 @@ async function viewImport() {
           <button class="btn sm ${j.state === "failed" ? "danger" : ""}" data-need="admin" title="${j.state === "running" ? "Stop this copy and remove its job" : "Remove this job; it keeps referencing the volume until it is gone"}" onclick="importRemove(${jsq(j.name)},${jsq(j.state)})">${j.state === "running" ? "Cancel" : "Remove"}</button></div></td></tr>`).join("")}
     </tbody></table></div></div>` : ""}
 
-    <div class="note" style="margin-top:20px">
-      <b>Container import.</b> It creates a Longhorn volume, runs an rsync job that copies the remote
-      appdata directory into it, and creates the workload pointing at that volume — left stopped so you can
-      start it once the copy finishes. Path mappings from the source host do not carry over; the appdata
-      lands at the mount path you choose.
-    </div>`);
+    <div class="sec">VM disk images ${tip("CDI downloads supported QEMU disk formats, including qcow2 and vmdk, converts them into a VM-ready disk, and writes the result into a new Longhorn PVC.")}</div>
+    ${disks.length ? `<div class="card flat pad0"><div class="tblwrap"><table data-sort="vm-disks" class="tbl stack"><thead><tr>
+      <th>Disk / PVC</th><th>Capacity</th><th>Status</th><th>Progress</th><th>Attached to</th><th></th></tr></thead><tbody>
+      ${disks.map(d => { const done = d.phase === "Succeeded", failed = ["Failed","Error","Unknown"].includes(d.phase); return `<tr>
+        <td><b>${esc(d.name)}</b><div class="dim xs mono">${esc(d.namespace)} · ${esc(d.storage_class || "storage class unknown")}</div></td>
+        <td class="mono small">${esc(d.capacity || "—")}<div class="dim xs">${esc((d.access_modes || []).join(", "))}</div></td>
+        <td><span class="pill ${done ? "ok" : failed ? "crit" : "med"}">${esc(d.phase.replace(/([a-z])([A-Z])/g, "$1 $2"))}</span>${d.message ? `<div class="dim xs" style="margin-top:5px;max-width:320px">${esc(d.message)}</div>` : ""}</td>
+        <td style="min-width:130px"><div class="jobmeter"><span class="${failed ? "failed" : ""}" style="width:${Math.max(2, done ? 100 : d.progress || 0)}%"></span></div><div class="dim xs mono">${done ? "ready" : `${esc(d.progress || 0)}%`}</div></td>
+        <td class="small">${d.in_use ? esc((d.used_by || []).join(", ")) : '<span class="dim">not attached</span>'}</td>
+        <td>${done && !d.in_use ? `<button class="btn sm" onclick="vmNew(${jsq(d.name)},${jsq(d.namespace)})">Create VM</button>` : ""}</td></tr>`; }).join("")}
+      </tbody></table></div></div>` : `<div class="empty">No managed VM disk imports yet. Import an HTTP(S) qcow2, vmdk, raw, vdi, vhd or vhdx image into a new PVC.</div>`}
+`);
+}
+
+const SOURCE_KINDS = { unraid: "Unraid", proxmox: "Proxmox", ssh: "Docker host" };
+
+/* A server to import from: what it is, and the one thing to do next -
+   verify its SSH key, or pick its containers. */
+function importSourceCard(s) {
+  const trusted = !!s.ssh_trust;
+  return `<div class="card flat importsource">
+    <div class="between"><div><div class="ctitle">${esc(s.name)}</div>
+      <div class="csub">${esc(SOURCE_KINDS[s.kind] || s.kind)} · ${esc(s.user)}@${esc(s.host)}</div></div>
+      <button class="btn sm danger" data-need="admin" title="Remove this server" onclick="srcDel(${jsq(s.name)})">✕</button></div>
+    <div class="drow"><div class="dl">Appdata</div><div class="dv mono small">${esc(s.base_path)}</div></div>
+    <div class="drow"><div class="dl">SSH key</div><div class="dv">${trusted ? '<span class="ok-t">Verified</span>' : '<span class="med-t">Not verified yet</span>'}</div></div>
+    ${trusted ? "" : '<div class="dim xs" style="margin-top:8px">Next: verify its SSH key, so Homestead knows it is talking to this server.</div>'}
+    <div class="row" style="margin-top:12px">${trusted
+      ? `<button class="btn pri" data-need="admin" onclick="srcBrowse(${jsq(s.name)})">Import containers</button>
+         <button class="btn" data-need="admin" onclick="srcVerify(${jsq(s.name)})">Verify again</button>`
+      : `<button class="btn pri" data-need="admin" onclick="srcVerify(${jsq(s.name)})">Verify SSH key</button>`}</div>
+  </div>`;
+}
+
+/* No server yet: how importing from one goes, and where to start. */
+function importSourceSteps() {
+  const step = (n, title, text) => `<div class="importstep"><span class="importstep-n">${n}</span>
+    <div><b>${title}</b><div class="dim small">${text}</div></div></div>`;
+  return `<div class="card flat importsteps">
+    <div class="importstep-row">
+      ${step(1, "Add the server", "Your Unraid server, or any Linux host running Docker: its address, an SSH login and where appdata lives.")}
+      ${step(2, "Verify its SSH key", "Compare the fingerprint with the server's own console. No password is sent until you trust it.")}
+      ${step(3, "Pick containers", "Image, ports, variables and devices come across, and each folder is copied into a Longhorn volume.")}
+    </div>
+    <div class="row" style="margin-top:14px"><button class="btn pri" data-need="admin" onclick="srcAdd()">＋ Add an Unraid or Docker server</button>
+      <span class="dim small">Imported apps start stopped, and run once their data has been copied.</span></div>
+  </div>`;
 }
 window.importRemove = async (name, state) => {
   const running = state === "running";
@@ -1275,12 +1299,12 @@ window.doVmDiskImport = async () => {
     toast(result.message, "ok"); closeModal(); resetPaint(); viewImport();
   } catch (e) { toast(e.message, "bad"); }
 };
-window.srcAdd = () => modal("Add import source", UI.lead("Save the connection, then verify its SSH fingerprint. No login is attempted until you trust the source.") +
-  UI.fields(UI.field("Name", '<input id="sc_name" placeholder="unraid">'), UI.field("Host", '<input id="sc_host" placeholder="192.0.2.10">'),
+window.srcAdd = () => modal("Add an Unraid or Docker server", UI.lead("Homestead reaches the server over SSH, lists its Docker containers, and copies each one's appdata. Save it, then verify its SSH fingerprint: no login is attempted until you trust it.") +
+  UI.fields(UI.field("Name", '<input id="sc_name" placeholder="unraid">'), UI.field("Address", '<input id="sc_host" placeholder="192.0.2.10">'),
     UI.field("Username", '<input id="sc_user" value="root" autocomplete="off">'), UI.field("Password", '<input type="password" id="sc_pass" autocomplete="new-password">'),
     UI.field("SSH port", '<input id="sc_port" type="number" min="1" max="65535" value="22">'),
-    UI.field("Type", '<select id="sc_kind"><option value="unraid">Unraid</option><option value="proxmox">Proxmox</option><option value="ssh">Generic SSH</option></select>')) +
-  UI.field("Appdata base path", '<input id="sc_path" value="/mnt/user/appdata">') +
+    UI.field("Type", '<select id="sc_kind"><option value="unraid">Unraid</option><option value="ssh">Other Docker host</option><option value="proxmox">Proxmox</option></select>')) +
+  UI.field("Appdata folder", '<input id="sc_path" value="/mnt/user/appdata">') +
   UI.more("Credentials and source ownership", '<p>The password is stored in a Kubernetes Secret. Administrators with access to Secrets can read it. Removing a source does not revoke credentials already used by copy Jobs.</p><p>Unraid® is a registered trademark of Lime Technology, Inc. Homestead is not affiliated with or endorsed by Lime Technology, Inc.</p>') +
   UI.actions(UI.cancel() + UI.button("Save and verify", "doSrcAdd()", {kind:"pri",id:"sc_save"})), false, "operation-review");
 window.doSrcAdd = async () => {
@@ -1350,7 +1374,7 @@ window.srcDel = async name => {
     toast("removed", "ok"); resetPaint(); viewImport(); } catch (e) { toast(e.message, "bad"); }
 };
 window.srcBrowse = async name => {
-  modal("Browse · " + name, `<div class="empty"><span class="spin2"></span>connecting to host — this runs a
+  modal("Import from · " + name, `<div class="empty"><span class="spin2"></span>connecting to ${esc(name)} and listing its containers - this runs a
     one-shot pod, so it takes ~20s</div>`, true);
   try {
     const [r, dc] = await Promise.all([
@@ -1359,7 +1383,7 @@ window.srcBrowse = async name => {
     ]);
     const src = (STATE.data.srcs || []).find(s => s.name === name) || {};
     const entries = r.entries.filter(e => !e.startsWith("==") && !/^(WARNING|Permission|Warning)/i.test(e));
-    $("#mbody").innerHTML = `${dc.containers.length ? `<div class="ctitle">Docker containers found</div>
+    $("#mbody").innerHTML = `${dc.containers.length ? `<div class="ctitle">Containers on ${esc(name)}</div>
       <p class="muted small">Choose a container to carry over its image, ports, environment variables, icon and appdata mount automatically.</p>
       <div class="apps importapps" style="margin-top:14px">${dc.containers.map(c => `<div class="card flat importapp">
         <div class="between"><b>${esc(c.name)}</b><span class="pill ${c.state === "running" ? "ok" : "low"}">${esc(c.state || "unknown")}</span></div>
@@ -1373,7 +1397,9 @@ window.srcBrowse = async name => {
            <button class="btn wide sm" style="margin-top:10px"
              onclick="importSetup(${jsq(name)},${jsq(e)})">Import</button></div>`).join("")}</div>`
       : `<div class="empty">No appdata folders returned. Check the credentials and that
-         <span class="mono">${esc(src.base_path)}</span> exists on ${esc(src.host)}.</div>`);
+         <span class="mono">${esc(src.base_path)}</span> exists on ${esc(src.host)}.</div>`)
+      + (dc.containers.length ? "" : `<div class="note" style="margin-top:12px">No Docker containers were listed on ${esc(name)}, so only its
+         appdata folders are offered. Check that Docker is running there and the SSH user may use it.</div>`);
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
 
