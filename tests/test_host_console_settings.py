@@ -44,7 +44,7 @@ class ConsoleSettingsTests(unittest.TestCase):
         self.assertFalse(started["cancellable"])
         result = OPS.list_operations()[0]
         self.assertEqual("succeeded", result["status"])
-        self.assertIn("logout or reboot", result["message"])
+        self.assertIn("after a logout", result["message"])
         current = CONSOLE.inventory()["nodes"][0]
         self.assertTrue(current["current"])
         (self.payload / "host-console.py").write_text("# next release\n")
@@ -131,7 +131,7 @@ class ConsoleSettingsTests(unittest.TestCase):
         self.assertFalse(CONSOLE.wanted())
 
     @unittest.skipIf(os.name == "nt", "exercise the installer on Linux")
-    def test_real_install_and_disable_keep_other_overrides_and_never_restart_getty(self):
+    def test_real_install_and_disable_keep_other_overrides_and_never_end_a_session(self):
         dest = self.root / "lib"
         dropin = self.root / "getty" / "50-homestead-console.conf"
         dropin.parent.mkdir()
@@ -143,7 +143,9 @@ class ConsoleSettingsTests(unittest.TestCase):
         commands.mkdir()
         log = self.root / "systemctl.log"
         for name, body in {"systemctl": f"printf '%s\\n' \"$*\" >> '{log}'\n",
-                           "agetty": "exit 0\n", "id": "echo 0\n"}.items():
+                           "agetty": "exit 0\n", "id": "echo 0\n",
+                           # someone is signed in on the screen: their session stays
+                           "who": "echo 'admin    tty1         2026-09-30 21:00'\n"}.items():
             path = commands / name
             path.write_text("#!/bin/sh\n" + body)
             path.chmod(0o755)

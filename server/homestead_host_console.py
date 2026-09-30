@@ -124,7 +124,11 @@ def start(node, action):
 
 
 def script(action):
-    lines = ["set -eu", f"DEST={DEST}", f"DROPIN={DROPIN}",
+    # A step that fails prints nothing of its own under set -e; the trap says
+    # which step it was and how it ended, so the failure is never silent.
+    lines = ["set -eu", "STEP=start",
+             "trap 'rc=$?; [ \"$rc\" = 0 ] || echo \"HSCONSOLE-FAILED step=$STEP exit=$rc\"' EXIT",
+             f"DEST={DEST}", f"DROPIN={DROPIN}",
              "native=no; [ ! -f /etc/harvester-release ] || native=yes"]
     if action != "inspect":
         lines += ["[ \"$native\" = no ] || { echo 'Harvester keeps its native console'; exit 1; }"]
@@ -132,15 +136,18 @@ def script(action):
             if not re.fullmatch(r"\d+\.\d+\.\d+", VERSION):
                 raise ValueError("console installation requires a released Homestead version")
             files = {name: (PAYLOAD / name).read_bytes() for name in ("host-console.py", "install-console.sh")}
-            lines += ["TASK_DIR=$(mktemp -d)", "trap 'rm -rf -- \"$TASK_DIR\"' EXIT"]
+            lines += ["STEP=unpack", "TASK_DIR=$(mktemp -d)",
+                      "trap 'rc=$?; rm -rf -- \"$TASK_DIR\"; [ \"$rc\" = 0 ] || echo \"HSCONSOLE-FAILED step=$STEP exit=$rc\"' EXIT"]
             for name, body in files.items():
                 encoded = base64.b64encode(body).decode("ascii")
                 lines += [f"printf '%s' '{encoded}' | base64 -d > \"$TASK_DIR/{name}\""]
-            lines += ['sh "$TASK_DIR/install-console.sh" enable "$TASK_DIR/host-console.py"',
-                      f"printf '%s\\n' {shlex.quote(VERSION)} > \"$DEST/host-console.version\""]
+            lines += ["STEP=install", 'sh "$TASK_DIR/install-console.sh" enable "$TASK_DIR/host-console.py" 2>&1',
+                      "STEP=record", f"printf '%s\\n' {shlex.quote(VERSION)} > \"$DEST/host-console.version\""]
         else:
-            lines += ['rm -f -- "$DROPIN"', "systemctl daemon-reload"]
-    lines += ["enabled=no", '[ ! -f "$DROPIN" ] || enabled=yes',
+            # Nobody signed in on the screen: the normal login comes back at once.
+            lines += ["STEP=remove", 'rm -f -- "$DROPIN"', "systemctl daemon-reload",
+                      "who 2>/dev/null | awk '$2 == \"tty1\" { f = 1 } END { exit !f }' || systemctl restart getty@tty1.service || true"]
+    lines += ["STEP=report", "enabled=no", '[ ! -f "$DROPIN" ] || enabled=yes',
               "version=-; digest=-", '[ ! -f "$DEST/host-console.version" ] || version=$(head -c 64 "$DEST/host-console.version")',
               '[ ! -f "$DEST/host-console.py" ] || digest=$(sha256sum "$DEST/host-console.py" | cut -d " " -f 1)',
               'printf "HSCONSOLE enabled=%s version=%s digest=%s native=%s\\n" "$enabled" "$version" "$digest" "$native"']
@@ -154,7 +161,10 @@ def _apply(node, uid, action):
         out, err = hostrun.run(node, script(action), timeout=240)
         report = next((s for s in out.splitlines() if s.startswith("HSCONSOLE ")), "")
         if not report:
-            raise ValueError((err or out or "Host did not return console status")[-300:])
+            failed = next((s for s in out.splitlines() if s.startswith("HSCONSOLE-FAILED ")), "")
+            said = "\n".join(s for s in out.splitlines() if s and not s.startswith("HSCONSOLE"))
+            raise ValueError((failed[len("HSCONSOLE-FAILED "):] + ": " if failed else "")
+                             + ((err or said)[-280:] or "the host gave no output"))
         fields = dict(pair.split("=", 1) for pair in report.split()[1:])
         native, enabled = fields["native"] == "yes", fields["enabled"] == "yes"
         version = fields.get("version", "")
@@ -165,7 +175,7 @@ def _apply(node, uid, action):
         if action == "enable":
             if not enabled or not current:
                 raise ValueError("Installed console did not match the bundled release")
-            detail += "; appears after console logout or reboot"
+            detail += "; on its screen now, or after a logout if someone is signed in there"
         saved = {"uid": uid, "enabled": enabled, "native": native,
                  "version": version, "digest": fields.get("digest", ""), "current": current,
                  "checked_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),

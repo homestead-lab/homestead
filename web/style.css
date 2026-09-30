@@ -2726,3 +2726,5 @@ html[data-theme="light"] .savebar{background:rgba(255,255,255,.95)}
     border-radius:16px 16px 0 0;padding:10px 12px calc(14px + env(safe-area-inset-bottom,0px));max-height:75vh;overflow:auto}
   .page{padding-bottom:calc(76px + env(safe-area-inset-bottom,0px))}
 }
+.node-drives{display:flex;flex-direction:column;gap:12px;min-width:0}
+.node-drives[hidden]{display:none}

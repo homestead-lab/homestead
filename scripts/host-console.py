@@ -489,7 +489,10 @@ def screen(window, monitor, demo=False, unhealthy=False, ascii_only=False):
         unicode_supported = True
     except (UnicodeError, LookupError):
         unicode_supported = False
-    braille = unicode_supported and not ascii_only
+    # The Linux text console's built-in fonts have no Braille, so on a
+    # machine's own screen the dots would be boxes: plain characters there,
+    # Braille in a real terminal. A switches either way.
+    braille = unicode_supported and not ascii_only and os.environ.get("TERM", "") != "linux"
     offset = 0
     while True:
         height, width = window.getmaxyx()
