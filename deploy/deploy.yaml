@@ -104,6 +104,11 @@ rules:
   - apiGroups: ["storage.k8s.io"]
     resources: [volumeattachments]
     verbs: [get, list, delete]
+  # Whether Longhorn's CSI driver is registered on a node that has just
+  # joined: until it is, the node is steered clear of.
+  - apiGroups: ["storage.k8s.io"]
+    resources: [csinodes, csidrivers]
+    verbs: [get]
   # data protection: recurring jobs, snapshots, backups, and volume labels
   # (group membership is a label on the volume)
   - apiGroups: ["longhorn.io"]

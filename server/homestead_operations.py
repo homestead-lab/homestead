@@ -374,6 +374,12 @@ def _deployment(item):
     if pull.get("state") == "pulled" and ready < desired:
         took = f" in {pull['took']}" if pull.get("took") else ""
         return "running", progress, f"Image pulled{took}; starting container"
+    # "1/1 replicas ready" read as done while that ready pod was the old one
+    # and the new one could not attach its volume: say what the new one waits for.
+    waiting = next((pod for pod in state.get("pods") or [] if pod.get("blocked")), None)
+    if waiting:
+        where = f" on {waiting['node']}" if waiting.get("node") else ""
+        return "running", min(progress, 90), f"New pod waiting{where}: {waiting['blocked']}"[:400]
     return "running", progress, f"{ready}/{desired} replicas ready"
 
 

@@ -625,9 +625,13 @@ document.addEventListener("click", event => {
    its data arrives, and is then brought up to date in place; one not seen yet
    shows its shape - panels with a passing glint - rather than a spinner. */
 const PAGE_SNAPSHOT = {};
+/* Kept by address, not by page: the Nodes list and one node's page are the
+   same page, and the list opened showing the node just left - for as long
+   as the list took to load, which on a real cluster is seconds. */
+const snapshotKey = view => `${view}${window.location.search || ""}`;
 function pagePlaceholder(view) {
   const host = V();
-  const snapshot = PAGE_SNAPSHOT[view];
+  const snapshot = PAGE_SNAPSHOT[snapshotKey(view)];
   if (snapshot) {
     host.innerHTML = snapshot;
     enhanceActions(host);
@@ -687,7 +691,7 @@ function paint(html) {
   const tabs = pageTabs(STATE.view);
   if (tabs) html = html.replace(/<div class="phead">\s*<div>/, match => `${match}${tabs}`);
   html = filterBar() + html;
-  PAGE_SNAPSHOT[STATE.view] = html;
+  PAGE_SNAPSHOT[snapshotKey(STATE.view)] = html;
   host.classList.remove("refreshing");
   if (!host.dataset.painted) {
     host.innerHTML = html;
