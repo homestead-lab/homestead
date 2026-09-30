@@ -7,7 +7,7 @@
 const PWA = { registration: null, installPrompt: null, subscription: null, key: null };
 
 const pwaSecure = () => window.isSecureContext && "serviceWorker" in navigator &&
-  new URLSearchParams(location.search).get("demo") !== "1";
+  new URLSearchParams(location.search).get("demo") !== "1" && window.HOMESTEAD_DEMO !== true;
 const pwaPushable = () => pwaSecure() && "PushManager" in window && "Notification" in window;
 const pwaInstalled = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
 const pwaApple = () => /iPhone|iPad|iPod/.test(navigator.userAgent) ||
@@ -147,7 +147,7 @@ window.pwaForgetDevice = async () => {
 };
 
 function pwaWhy() {
-  if (new URLSearchParams(location.search).get("demo") === "1") {
+  if (new URLSearchParams(location.search).get("demo") === "1" || window.HOMESTEAD_DEMO === true) {
     return '<div class="note">Notifications are not part of the demo.</div>';
   }
   if (!window.isSecureContext) {

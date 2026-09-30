@@ -13,11 +13,13 @@
   <a href="https://github.com/wjcloudy/homestead/releases/latest"><img src="https://img.shields.io/github/v/release/wjcloudy/homestead?label=release&color=f59e0b" alt="Latest release"></a>
   <a href="https://github.com/wjcloudy/homestead/actions/workflows/ci.yml"><img src="https://github.com/wjcloudy/homestead/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/wjcloudy/homestead/pkgs/container/homestead"><img src="https://img.shields.io/badge/ghcr.io-homestead-2453ff?logo=docker&logoColor=white" alt="Container image"></a>
+  <a href="https://wjcloudy.github.io/homestead/"><img src="https://img.shields.io/badge/live_demo-try_it-2453ff" alt="Live demo"></a>
   <img src="https://img.shields.io/badge/status-alpha-f59e0b" alt="Status: alpha">
   <img src="https://img.shields.io/badge/license-MIT-30ba78" alt="MIT licence">
 </p>
 
 <p align="center">
+  <a href="https://wjcloudy.github.io/homestead/"><b>Live demo</b></a> &nbsp;·&nbsp;
   <a href="#quick-install"><b>Quick install</b></a> &nbsp;·&nbsp;
   <a href="#features"><b>Features</b></a> &nbsp;·&nbsp;
   <a href="https://github.com/wjcloudy/homestead/wiki"><b>Wiki</b></a> &nbsp;·&nbsp;
@@ -25,7 +27,12 @@
 </p>
 
 <p align="center">
-  <img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-hero.jpg" alt="Homestead on the desktop and on a phone: the dashboard, and virtual IPs">
+  <a href="https://wjcloudy.github.io/homestead/"><img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-hero.jpg" alt="Homestead on the desktop and on a phone: the dashboard, and virtual IPs"></a>
+</p>
+
+<p align="center">
+  <b>Try it before you install it:</b> the <a href="https://wjcloudy.github.io/homestead/">live demo</a> is the real interface on made-up data,
+  in your browser. Click around every page; nothing you do there is saved.
 </p>
 
 ## Why Homestead
@@ -202,7 +209,8 @@ notifications for outages, degraded storage, failed jobs and image updates.
 </table>
 
 Every screenshot is taken from Homestead's demo data by each release, so they
-always show the current version.
+always show the current version. The same demo runs live at
+**[wjcloudy.github.io/homestead](https://wjcloudy.github.io/homestead/)**, updated with each release.
 
 ## Where it runs
 

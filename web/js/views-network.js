@@ -212,7 +212,7 @@ window.selfAddressGo = async () => {
     const r = await api("/api/self/address", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ vip, default: $("#sa_default").checked }) });
     const added = r.steps.filter(s => s.action === "added").length, refused = r.steps.filter(s => s.action === "refused");
     toast(`${added} connection${added === 1 ? "" : "s"} on ${vip}${refused.length ? `; not moved: ${refused.map(s => s.label).join(", ")}` : ""}${r.default_error ? `; default not changed: ${r.default_error}` : ""}`, refused.length ? "warn" : "ok");
-    modalBack(); if (window.location.pathname.startsWith("/network")) viewNetworking();
+    modalBack(); if (HomesteadRouter.resolve(window.location.pathname).view === "network") viewNetworking();
   } catch (e) { toast(e.message, "bad"); go.disabled = false; go.textContent = "Put Homestead here"; }
 };
 
