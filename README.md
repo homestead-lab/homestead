@@ -150,8 +150,8 @@ node answers for each address and whether it is reachable (with kube-vip's
 missed addresses recorded for it), and IP address management with scanning
 and UniFi sync.
 
-**Imports** - from an Unraid server, a Docker Compose file, or a VM disk image
-(qcow2, VMDK).
+**Imports** - containers and VMs from an Unraid server, a Docker Compose file,
+or a VM disk image (qcow2, VMDK).
 
 </td>
 <td width="50%" valign="top">

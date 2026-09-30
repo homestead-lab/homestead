@@ -117,3 +117,30 @@ class VmDiskImportTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ImportedVmDisksTests(unittest.TestCase):
+    """A VM from Unraid: its boot disk on the bus it was installed on, and more."""
+    setUp = VmDiskImportTests.setUp
+
+    def ready(self, name):
+        self.objects[f"/apis/cdi.kubevirt.io/v1beta1/namespaces/lab/datavolumes/{name}"] = {"status": {"phase": "Succeeded"}}
+
+    def test_the_boot_bus_and_extra_disks_come_through(self):
+        self.objects["/apis/kubevirt.io/v1/virtualmachines"] = {"items": []}
+        self.ready("win-disk"); self.ready("win-disk-2")
+        prepared = imports.prepare_vm({"name": "win", "disk_import": "win-disk", "disk_bus": "sata", "start": False,
+                                       "extra_disks": [{"name": "win-disk-2", "bus": "virtio"}]}, {"cdi": True})
+        spec = prepared["vm"]["spec"]["template"]["spec"]
+        self.assertEqual([{"name": "root", "disk": {"bus": "sata"}, "bootOrder": 1},
+                          {"name": "disk2", "disk": {"bus": "virtio"}}], spec["domain"]["devices"]["disks"])
+        self.assertEqual({"name": "disk2", "dataVolume": {"name": "win-disk-2"}}, spec["volumes"][1])
+        self.assertEqual("Halted", prepared["vm"]["spec"]["runStrategy"])
+
+    def test_an_extra_disk_not_yet_arrived_is_refused(self):
+        self.objects["/apis/kubevirt.io/v1/virtualmachines"] = {"items": []}
+        self.ready("win-disk")
+        with self.assertRaises(ValueError):
+            imports.prepare_vm({"name": "win", "disk_import": "win-disk", "extra_disks": ["win-disk-2"]}, {"cdi": True})
+        with self.assertRaises(ValueError):
+            imports.prepare_vm({"name": "win", "disk_import": "win-disk", "disk_bus": "ide"}, {"cdi": True})

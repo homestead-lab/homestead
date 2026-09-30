@@ -785,3 +785,178 @@ window.k3sCreate = async () => {
     if (window.refreshOperations) refreshOperations(true);
   } finally { K3S_CREATE_BUSY = false; }
 };
+
+/* ---------------- importing from Unraid ----------------
+   Virtual machines › Import: each Unraid server's VMs as Unraid runs them,
+   one copied across with its settings mapped - the same servers, and the
+   same verified SSH login, the container import uses. Disk images from a web
+   address live here too. A VM running on Unraid is shut down first (its power
+   button), so its disk is copied as it was left. */
+const uvmSize = bytes => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(bytes >= 1e11 ? 0 : 1)} GB` : `${Math.max(1, Math.round((bytes || 0) / 1e6))} MB`;
+const uvmId = name => "uvm-" + String(name).replace(/[^a-z0-9-]/gi, "-");
+const uvmPost = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+async function viewVmImport() {
+  if (platformLacks("kubevirt", "Virtual machines")) return;
+  const [srcs, disks, namespaces, storageClasses] = await Promise.all([
+    api("/api/sources").catch(() => []), api("/api/vm-disks").catch(() => []),
+    api("/api/namespaces").catch(() => ["lab"]), api("/api/storageclasses").catch(() => ["longhorn-r2"]),
+  ]);
+  STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
+  STATE.data.uvms = STATE.data.uvms || {};
+  const servers = srcs.filter(s => s.kind !== "proxmox");
+  paint(`<div class="phead"><div><h2>Virtual machines</h2>
+      <p>Bring VMs across from an Unraid server, or a disk image from a web address</p></div>
+      <div class="row">${menuButton("＋ Import", [{ label: "Add an Unraid server", icon: "import", run: "srcAdd()", need: "admin" },
+        { label: "A disk image from a URL", icon: "disk", run: "vmDiskImport()", need: "admin" }])}</div></div>
+    ${servers.length ? servers.map(s => `<div class="sec">${esc(s.name)} ${tip(`${SOURCE_KINDS[s.kind] || s.kind} · ${s.user}@${s.host}`)}</div>
+      <div class="card flat" id="${uvmId(s.name)}">${s.ssh_trust
+        ? '<div class="empty"><span class="spin2"></span>asking it for its VMs</div>'
+        : serviceRow("SSH key not verified", "", "Homestead only logs in to a server whose key you have checked.",
+            `<button class="btn pri" data-need="admin" onclick="srcVerify(${jsq(s.name)})">Verify SSH key</button>`)}</div>`).join("")
+      : `<div class="card flat">${serviceRow("No Unraid server yet", "", "Add it once - its address and an SSH login - and its VMs and containers can both be imported.",
+          '<button class="btn pri" data-need="admin" onclick="srcAdd()">＋ Add an Unraid server</button>')}</div>`}
+    <div id="uvmCopies"></div>
+    <div class="sec">Disk images ${tip("Disks brought in from a web address or from Unraid. A finished one no VM uses yet can become a VM.")}</div>
+    ${disks.length ? `<div class="card flat">${disks.map(d => {
+      const done = d.phase === "Succeeded", failed = ["Failed", "Error", "Unknown"].includes(d.phase);
+      return serviceRow(esc(d.name), `<span class="pill ${done ? "ok" : failed ? "crit" : "med"}">${esc(done ? "ready" : String(d.phase || "").replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase())}</span>`,
+        `${esc(d.capacity || "")} · ${d.in_use ? `used by ${esc((d.used_by || []).join(", "))}` : "not attached"}${failed && d.message ? ` · ${esc(d.message)}` : ""}`,
+        done && !d.in_use ? `<button class="btn" data-need="operator" onclick="vmNew(${jsq(d.name)},${jsq(d.namespace)})">Create VM</button>` : "");
+    }).join("")}</div>` : '<div class="dim small">None yet. ＋ Import brings one from a web address: qcow2, vmdk, raw, vdi, vhd or vhdx.</div>'}`);
+  uvmCopiesPaint();
+  servers.filter(s => s.ssh_trust).forEach(s => uvmLoad(s.name));
+}
+window.viewVmImport = viewVmImport;
+
+/* Copies in progress, from the jobs the bell follows too. */
+function uvmCopiesPaint() {
+  const host = $("#uvmCopies");
+  if (!host) return;
+  const ops = (STATE.data.operations || []).filter(op => op.kind === "unraid-vm-import" && (window.operationActive ? operationActive(op) : op.status === "running"));
+  host.innerHTML = ops.length ? `<div class="sec">Copying</div><div class="card flat">${ops.map(op => serviceRow(esc(op.title), "",
+    `${esc(op.message || "")}<span class="jobmeter" style="display:block;margin-top:6px"><span style="width:${Math.max(2, Math.min(100, op.progress || 0))}%"></span></span>`,
+    `<button class="btn sm" onclick="openOperation(${jsq(op.href || "/vms/import")},${jsq(op.id)})">Details</button>`)).join("")}</div>` : "";
+}
+window.uvmCopiesPaint = uvmCopiesPaint;
+
+window.uvmLoad = async name => {
+  const host = document.getElementById(uvmId(name));
+  if (!host) return;
+  let found;
+  try {
+    found = await uvmPost("/api/sources/vms", { name });
+  } catch (e) {
+    host.innerHTML = serviceRow("Could not list its VMs", "", esc(e.message), `<button class="btn" onclick="uvmLoad(${jsq(name)})">Try again</button>`);
+    return;
+  }
+  STATE.data.uvms[name] = found;
+  if (!found.virsh) { host.innerHTML = '<div class="dim small">This server runs no VMs: its VM manager (libvirt) is not there.</div>'; return; }
+  host.innerHTML = found.vms.length ? found.vms.map(vm => {
+    const off = vm.shut_off;
+    const state = `<span class="pill ${off ? "" : "ok"}">${esc(vm.state || "unknown")}</span>`;
+    const disk = vm.disks[0];
+    const detail = [vm.os, `${vm.cores} cores`, vm.memory.replace("Gi", " GiB").replace("Mi", " MiB"), vm.firmware === "uefi" ? "UEFI" : "BIOS",
+      disk ? `${disk.path.split("/").pop()} · ${disk.size_gb} GB ${disk.format}${vm.disks.length > 1 ? ` + ${vm.disks.length - 1} more` : ""}` : ""].filter(Boolean).map(esc).join(" · ");
+    const action = !vm.ready ? `<span class="dim small">${esc(vm.problem)}</span>`
+      : off ? `<button class="btn pri" data-need="admin" onclick="uvmImport(${jsq(name)},${jsq(vm.name)})">Import</button>`
+      : `<button class="btn" data-need="admin" title="Shut it down on Unraid, so its disk is copied as it was left" onclick="uvmShutdown(${jsq(name)},${jsq(vm.name)},this)">Shut down</button>`;
+    return serviceRow(esc(vm.name), state, detail + (off || !vm.ready ? "" : '<br><span class="med-t">Shut it down on Unraid to import it</span>'), action);
+  }).join("") : '<div class="dim small">No VMs on this server.</div>';
+  if (window.applyRole) applyRole();
+};
+
+window.uvmShutdown = async (source, vm, button) => {
+  button.disabled = true; button.textContent = "Shutting down…";
+  try {
+    toast((await uvmPost("/api/sources/vms/shutdown", { source, vm })).message, "ok");
+  } catch (e) { toast(e.message, "bad"); button.disabled = false; button.textContent = "Shut down"; return; }
+  // A guest takes a while to stop; look again until it has, for two minutes.
+  for (let i = 0; i < 8 && STATE.view === "vmimport"; i++) {
+    await new Promise(r => setTimeout(r, 15000));
+    await uvmLoad(source);
+    if ((STATE.data.uvms[source]?.vms || []).find(v => v.name === vm)?.shut_off) return;
+  }
+};
+
+/* The import: three steps, with the picture of what maps across kept live. */
+window.uvmImport = async (source, name) => {
+  const vm = (STATE.data.uvms[source]?.vms || []).find(v => v.name === name);
+  if (!vm) return;
+  const opts = await api("/api/vm/create-options").catch(() => ({ cdi: true, storage_classes: [], network_details: [] }));
+  if (opts.cdi === false) return modal(`Import ${name}`, UI.lead("VM disks arrive through CDI, KubeVirt's disk importer, and this cluster does not have it. Install CDI from kubevirt.io, then import again.") + UI.actions(UI.cancel("Close")));
+  window.__uvm = { source, vm };
+  const namespaces = STATE.data.importNamespaces || ["lab"];
+  const classes = opts.storage_classes?.length ? opts.storage_classes : (STATE.data.importStorageClasses || ["longhorn-r2"]);
+  const facts = opts.storage_class_facts || {};
+  const hw = [vm.firmware === "uefi" ? "UEFI" : "BIOS", vm.secure_boot ? "Secure Boot" : "", vm.tpm ? "TPM" : "", vm.hyperv ? "Hyper-V enlightenments" : ""].filter(Boolean).join(" · ");
+  const settings = `
+    ${UI.fields(UI.field("Name", `<input id="uvm_name" value="${esc(vm.slug)}" oninput="uvmPicture()">`, { tipHtml: tip("The VM's name here: lowercase letters, numbers and dashes. Its disks are named after it.") }),
+      UI.field("Namespace", `<select id="uvm_ns">${namespaces.map(n => `<option ${n === "lab" ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>`),
+      UI.field("Cores", `<input id="uvm_cores" type="number" min="1" max="128" value="${vm.cores}" oninput="uvmPicture()">`),
+      UI.field("Memory", `<input id="uvm_mem" value="${esc(vm.memory)}" oninput="uvmPicture()">`))}
+    ${settingRow("Firmware", "As on Unraid; change it later under the VM's Hardware.", `<span class="mono small">${esc(hw)}</span>`)}`;
+  const disks = `
+    ${UI.field("Storage class", `<select id="uvm_sc">${classes.map(c => `<option value="${esc(c)}" ${facts[c]?.default ? "selected" : ""}>${esc(c)}${facts[c]?.default ? " (default)" : ""}</option>`).join("")}</select>`,
+      { tipHtml: tip("Where the disks are kept. Longhorn keeps copies on several nodes, so the VM can run on any of them.") })}
+    ${vm.disks.map((d, i) => settingRow(`${i ? `Disk ${i + 1}` : "Boot disk"} · ${esc(d.path.split("/").pop())}`,
+      `${esc(d.size_gb)} GB ${esc(d.format)}, ${esc(uvmSize(d.used))} in use · ${esc(d.bus.toUpperCase())} bus${d.unraid_bus !== d.bus ? ` (was ${esc(d.unraid_bus)})` : ""}`,
+      i ? `<label class="toggle"><input type="checkbox" class="uvm-disk" data-i="${d.index}" checked onchange="uvmPicture()"><span></span></label>` : '<span class="dim small">always</span>')).join("")}
+    <p class="ui-help">The whole disk crosses the network, empty space too: ${esc(uvmSize(vm.disks.reduce((t, d) => t + d.size, 0)))} at about 100 MB/s on gigabit.</p>`;
+  const lan = (opts.network_details || []).filter(n => n.vms !== false);
+  const network = `
+    ${UI.field("Network", `<select id="uvm_net" onchange="uvmPicture()">${lan.map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.lan ? " · LAN" : ""}</option>`).join("")}<option value="pod">Pod network - reached through a Service</option></select>`,
+      { tipHtml: tip("br0 on Unraid is the LAN: pick the LAN network here, and the VM is a machine on it like before. The pod network reaches it through a Service instead.") })}
+    ${vm.nic.mac ? settingRow("Keep its MAC address", `${esc(vm.nic.mac)} - so your router's DHCP reservation still gives it the same address.`,
+      '<label class="toggle"><input type="checkbox" id="uvm_mac" checked onchange="uvmPicture()"><span></span></label>') : ""}
+    ${UI.field("Network card", `<select id="uvm_nic" onchange="uvmPicture()">${["virtio", "e1000e", "e1000", "rtl8139"].map(m => `<option ${m === vm.nic.nic_model ? "selected" : ""}>${m}</option>`).join("")}</select>`,
+      { tipHtml: tip("As on Unraid. VirtIO needs its driver in the guest; Windows has it if it used VirtIO on Unraid.") })}`;
+  const behind = [...vm.dropped.map(d => `<p><b>${esc(d.what)}</b> ${esc(d.detail)}: ${esc(d.reason)}.</p>`), ...vm.notes.map(n => `<p>${esc(n)}.</p>`)];
+  modal(`Import ${name}`, UI.lead(`From ${source}. The VM here is made stopped once its disks have arrived; ${name} on Unraid is left as it is.`)
+    + '<div id="uvm_picture"></div>'
+    + stepper("uvm_steps", [{ title: "Settings", html: settings }, { title: "Disks", html: disks }, { title: "Network", html: network }],
+      '<button class="btn pri" data-need="admin" id="uvm_go" onclick="uvmStart()">Import</button>')
+    + (behind.length ? UI.more("What stays behind", behind.join("")) : ""), true);
+  uvmPicture();
+};
+
+window.uvmPicture = () => {
+  const host = $("#uvm_picture"), state = window.__uvm;
+  if (!host || !state || !window.Diagram) return;
+  const vm = state.vm, name = $("#uvm_name")?.value.trim() || vm.slug;
+  const kept = new Set([0, ...$$(".uvm-disk").filter(c => c.checked).map(c => +c.dataset.i)]);
+  const net = $("#uvm_net")?.value || "pod";
+  let n = 0;
+  const diskRow = d => {
+    if (!kept.has(d.index)) return { what: "Disk", from: d.path.split("/").pop(), drop: true };
+    const dv = n ? `${name}-disk-${n + 1}` : `${name}-disk`;
+    n += 1;
+    return { what: n > 1 ? `Disk ${n}` : "Disk", from: `${d.path.split("/").pop()} · ${d.size_gb} GB`, to: `${dv} · ${d.size_gb} GiB` };
+  };
+  const rows = [
+    { what: "CPU", from: `${vm.cores} vCPUs`, to: `${$("#uvm_cores")?.value || vm.cores} cores` },
+    { what: "Memory", from: vm.memory, to: $("#uvm_mem")?.value || vm.memory },
+    { what: "Firmware", from: vm.firmware === "uefi" ? `OVMF${vm.tpm ? " · TPM" : ""}` : "SeaBIOS", to: vm.firmware === "uefi" ? `EFI · q35${vm.tpm ? " · TPM" : ""}` : "BIOS · q35" },
+    ...vm.disks.map(diskRow),
+    { what: "Network", from: `${vm.nic.bridge || "—"} · ${vm.nic.model || "virtio"}`, to: `${net === "pod" ? "pod network" : net} · ${$("#uvm_nic")?.value || vm.nic.nic_model}${vm.nic.mac && $("#uvm_mac")?.checked !== false ? " · same MAC" : ""}` },
+    ...vm.dropped.map(d => ({ what: d.what.replace("GPU or PCI device", "PCI device"), from: d.detail, drop: true })),
+  ];
+  host.innerHTML = Diagram.vmImport(rows, { from: `${vm.name} on ${state.source}`, to: `${name} here` });
+};
+
+window.uvmStart = async () => {
+  const state = window.__uvm, go = $("#uvm_go");
+  if (!state || !go || go.disabled) return;
+  const body = { source: state.source, vm: state.vm.name, name: $("#uvm_name").value.trim(), namespace: $("#uvm_ns").value,
+    cores: +$("#uvm_cores").value, memory: $("#uvm_mem").value.trim(), storage_class: $("#uvm_sc").value,
+    network: $("#uvm_net").value, keep_mac: $("#uvm_mac") ? $("#uvm_mac").checked : false, nic_model: $("#uvm_nic").value,
+    skip_disks: $$(".uvm-disk").filter(c => !c.checked).map(c => +c.dataset.i) };
+  go.disabled = true; go.textContent = "Starting…";
+  try {
+    await uvmPost("/api/vms/import-unraid", body);
+    toast(`Copying ${state.vm.name}: follow it in the bell`, "ok");
+    closeModal();
+    if (window.refreshOperations) await refreshOperations(true);
+    resetPaint(); viewVmImport();
+  } catch (e) { toast(e.message, "bad"); go.disabled = false; go.textContent = "Import"; }
+};

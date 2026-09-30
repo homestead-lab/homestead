@@ -2473,8 +2473,27 @@ def prepare_vm(cfg, platform=None, default_class=""):
     if cfg.get("static_ip"):
         network_data, address = static_network(cfg["static_ip"], mac)
 
-    disks = [{"name": "root", "disk": {"bus": "virtio"}, "bootOrder": 1}]
+    # The bus the guest was installed on: Windows set up on SATA has no
+    # virtio driver to find its own boot disk with.
+    disk_bus = str(cfg.get("disk_bus") or "virtio")
+    if disk_bus not in ("virtio", "sata", "scsi"):
+        raise ValueError("the disk bus is one of virtio, sata, scsi")
+    disks = [{"name": "root", "disk": {"bus": disk_bus}, "bootOrder": 1}]
     volumes = [root]
+    # More imported disks beside the boot one - a VM from Unraid with two vdisks.
+    for index, extra in enumerate(cfg.get("extra_disks") or [], start=2):
+        extra = extra if isinstance(extra, dict) else {"name": extra}
+        extra_name = _required_name(extra.get("name"), "imported disk")
+        extra_bus = str(extra.get("bus") or "virtio")
+        if extra_bus not in ("virtio", "sata", "scsi") or extra_name == imported_dv:
+            raise ValueError(f"imported disk {extra_name} cannot be attached as asked")
+        found = _get_or_none(f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{extra_name}")
+        if not found or ((found.get("status") or {}).get("phase")) != "Succeeded":
+            raise ValueError(f"imported disk {ns}/{extra_name} is not ready")
+        if _disk_consumers().get((ns, extra_name)):
+            raise ValueError(f"imported disk {extra_name} is already attached to another VM")
+        disks.append({"name": f"disk{index}", "disk": {"bus": extra_bus}})
+        volumes.append({"name": f"disk{index}", "dataVolume": {"name": extra_name}})
     if install_iso:
         # The installer boots first, from its ISO held read-only; the blank
         # disk it installs onto boots once the ISO is ejected or empty.

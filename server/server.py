@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.265")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.266")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -5367,6 +5367,9 @@ import homestead_host_console as HOST_CONSOLE
 HOST_CONSOLE.bind(kget, HOSTRUN, OPS, HOMESTEAD_VERSION, DATA_DIR)
 HOST_CONSOLE.platform = lambda: PLATFORM.detect()
 OPS.RESOLVERS["host-console"] = HOST_CONSOLE.status
+import homestead_unraid_vms as UNRAID_VMS
+UNRAID_VMS.bind(IMP, kget, ksend, OPS, lambda: PLATFORM.detect())
+OPS.RESOLVERS[UNRAID_VMS.KIND] = UNRAID_VMS.status
 MANIFESTS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 HOST_LIMITS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 NODE_PARITY.bind(kget, ksend, HOSTRUN, PLATFORM.detect, node_temps, DATA_DIR)
@@ -6867,7 +6870,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
 SPA_ROUTES = frozenset({
     "/", "/architecture", "/nodes", "/deploy", "/containers", "/vms",
     "/app-store", "/shares", "/volumes", "/image-cache", "/data-protection", "/portal", "/helm", "/resources",
-    "/schedules", "/import", "/events", "/networking", "/system/cluster", "/settings",
+    "/schedules", "/import", "/vms/import", "/events", "/networking", "/system/cluster", "/settings",
 })
 
 
@@ -6964,6 +6967,8 @@ ADMIN_ROUTES = {
     "/api/sources", "/api/sources/delete", "/api/sources/browse",
     "/api/sources/scan", "/api/sources/trust",
     "/api/sources/containers", "/api/sources/inspect", "/api/sources/measure",
+    # A server's VMs, one shut down there, and one copied across.
+    "/api/sources/vms", "/api/sources/vms/shutdown", "/api/vms/import-unraid",
     "/api/import", "/api/import/preview", "/api/imports/delete", "/api/imports/cleanup-plan",
     "/api/vm-disks/import",
     "/api/shares", "/api/shares/edit", "/api/shares/delete", "/api/shares/options",
@@ -9010,6 +9015,12 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"entries": IMP.browse_source(b["name"], b.get("path"))})
             if p == "/api/sources/containers":
                 return self._send(200, {"containers": IMP.source_containers(b["name"])})
+            if p == "/api/sources/vms":
+                return self._send(200, UNRAID_VMS.listing(str(b.get("name") or "")))
+            if p == "/api/sources/vms/shutdown":
+                return self._send(200, UNRAID_VMS.shutdown(str(b.get("source") or ""), b.get("vm")))
+            if p == "/api/vms/import-unraid":
+                return self._send(200, {"ok": True, "operation": UNRAID_VMS.start(b, self.user or "")})
             if p == "/api/sources/inspect":
                 return self._send(200, IMP.inspect_source_container(b["name"], b["container"]))
             if p == "/api/import/preview":
