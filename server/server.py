@@ -7743,7 +7743,9 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, UPDATES.scan_progress())
             if p == "/api/image-updates":
                 force = (q.get("force") or ["0"])[0].lower() in ("1", "true", "yes")
-                report = json.loads(json.dumps(UPDATES.report(force)))
+                # Settings › Homestead checks Homestead's own parts, not every app.
+                only = (q.get("only") or [""])[0] == "homestead"
+                report = json.loads(json.dumps(UPDATES.homestead_report() if force and only else UPDATES.report(force)))
                 report["policy"] = update_policy_status()
                 return self._send(200, report)
             if p == "/api/image-updates/progress":

@@ -429,6 +429,30 @@ class ImageUpdateTests(unittest.TestCase):
         self.assertEqual([False, True], runs, "it began before the button was pressed")
         self.assertEqual("run-2", forced["checked_at"])
 
+    def test_checking_homestead_checks_only_homestead_and_keeps_every_apps_answer(self):
+        app = {"ns": "lab", "name": "photos", "homestead": "", "available": True, "images": []}
+        old_self = {"ns": "lab", "name": "homestead", "homestead": "self", "available": False, "images": []}
+        new_self = dict(old_self, available=True)
+        asked = []
+        original = updates.scan
+
+        def scan(force=False, homestead_only=False):
+            asked.append((force, homestead_only))
+            return updates._summary([new_self] if homestead_only else [app, old_self])
+
+        updates.scan = scan
+        self.addCleanup(setattr, updates, "scan", original)
+        updates.invalidate()
+        self.addCleanup(updates.invalidate)
+        self.assertTrue(updates.homestead_report()["partial"], "no full report yet: Homestead's parts alone, not kept")
+        full = updates.report()
+        merged = updates.homestead_report()
+        self.assertEqual([(True, True), (False, False), (True, True)], asked, "no app is checked again")
+        self.assertEqual([new_self, app], merged["workloads"], "sorted by namespace and name, as a full scan is")
+        self.assertEqual((1, 1), (merged["updates"], merged["homestead"]["updates"]))
+        self.assertEqual(full["checked_at"], merged["checked_at"], "the apps' answers are as old as they were")
+        self.assertIs(merged, updates.report(), "and it is everyone's now")
+
     def test_an_image_change_makes_the_next_quiet_request_look_again(self):
         runs = self._fake_scans()
         updates.report()
