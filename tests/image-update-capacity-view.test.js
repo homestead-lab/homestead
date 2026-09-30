@@ -85,3 +85,16 @@ test("batch waits for readiness, updates Homestead last and stops on any uncerta
     } else assert.match(t.fields["#imageQueue"].innerHTML,/not started/);
   }
 });
+
+test("a change outside the pod template does not stop the queue; an outside change to it does", () => {
+  const { ctx } = setup();
+  const accepted = { uid: "u", generation: 22, rollout_at: "2026-09-30T06:33:03Z", images: { homestead: "img@sha256:new" } };
+  // Homestead, started after its own update, set its rollout strategy: generation 23, same pods.
+  assert.equal(ctx.rolloutChanged(accepted, { ...accepted, generation: 23 }), false);
+  assert.equal(ctx.rolloutChanged(accepted, { ...accepted }), false);
+  assert.equal(ctx.rolloutChanged(accepted, { ...accepted, uid: "other" }), true, "replaced");
+  assert.equal(ctx.rolloutChanged(accepted, { ...accepted, generation: 23, rollout_at: "2026-09-30T06:40:00Z" }), true, "another update");
+  assert.equal(ctx.rolloutChanged(accepted, { ...accepted, generation: 23, images: { homestead: "img@sha256:other" } }), true, "image edited");
+  // An older Homestead that does not report the stamp: strict, as before.
+  assert.equal(ctx.rolloutChanged({ ...accepted, rollout_at: undefined }, { ...accepted, generation: 23 }), true);
+});

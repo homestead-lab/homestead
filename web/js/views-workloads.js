@@ -934,6 +934,15 @@ const rolloutKey = item => `${item?.cluster ? `${item.cluster}|` : ""}${updateKe
 const rolloutBody = config => { const { cluster, clusterName, part, ...rest } = config; return rest; };
 // Homestead replacing itself: its API is away for a minute, which is not a failure.
 const restartsHomestead = item => item?.part === "self" || (!item?.part && item?.name === "homestead");
+/* Whether someone else changed the workload while this rollout was watched:
+   replaced, or its pod template no longer this rollout's - stamp or images.
+   A change outside the template leaves the pods as they are: Homestead,
+   starting after its own update, sets its rollout strategy to what its data
+   volume allows, and that raised the generation and stopped the queue. */
+const rolloutChanged = (accepted, state) => state.uid !== accepted.uid || (state.generation !== accepted.generation
+  && (!accepted.rollout_at || state.rollout_at !== accepted.rollout_at
+      || JSON.stringify(state.images || {}) !== JSON.stringify(accepted.images || {})));
+window.rolloutChanged = rolloutChanged;
 
 async function reviewImageActions(items, action = "update") {
   const sequence = ++IMAGE_REVIEW_SEQUENCE;
@@ -1030,7 +1039,7 @@ window.imageReviewedApply = async () => {
           continue;
         }
         states[key] = state; paint();
-        if (state.uid !== result.uid || state.generation !== result.generation) throw new Error("Workload changed during monitoring; review remaining updates again");
+        if (rolloutChanged(result, state)) throw new Error("Workload changed during monitoring; review remaining updates again");
         if (state.phase === "failed") throw new Error("Rollout failed; remaining updates were not started");
         if (state.phase === "ready") break;
         if (Date.now() > deadline) throw new Error("Monitoring timed out; check Jobs before continuing");

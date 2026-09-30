@@ -509,5 +509,12 @@ class ImageUpdateTests(unittest.TestCase):
         self.assertEqual("ready", result["phase"])
 
 
+    def test_progress_says_which_rollout_the_pod_template_is_from(self):
+        template = self.dep["spec"]["template"]
+        template.setdefault("metadata", {}).setdefault("annotations", {})[updates.ROLLOUT_AT] = "2026-09-30T06:33:03Z"
+        self.assertEqual("2026-09-30T06:33:03Z", updates.progress("lab", "demo", self.dep)["rollout_at"])
+        template["metadata"]["annotations"].pop(updates.ROLLOUT_AT)
+        self.assertEqual("", updates.progress("lab", "demo", self.dep)["rollout_at"])
+
 if __name__ == "__main__":
     unittest.main()

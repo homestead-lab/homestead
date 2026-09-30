@@ -916,5 +916,8 @@ def progress(ns, name, dep=None):
             "observed_generation": observed, "pods": pod_rows, "problems": problems,
             "images": {c["name"]: c.get("image", "") for c in
                        spec.get("template", {}).get("spec", {}).get("containers", [])},
+            # The stamp an update writes into the pod template: which rollout
+            # the pods are from, whatever else changes on the Deployment.
+            "rollout_at": ((spec.get("template", {}).get("metadata") or {}).get("annotations") or {}).get(ROLLOUT_AT, ""),
             "can_rollback": bool(_annotation_json(dep, PREVIOUS)),
             "last_action": _annotation(dep, LAST_ACTION)}
