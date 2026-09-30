@@ -42,21 +42,34 @@ function paintBell() {
   const images = window.BELL?.images || 0, errors = window.BELL?.errors || 0;
   const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
   const row = (run, iconName, text, cls = "") => `<button class="${cls}" onclick="this.closest('details').open=false;${run}">${icon(iconName)}${esc(text)}</button>`;
+  // Background jobs: running ones at the top, with their progress; a failed
+  // one stays under Needs you until it is dismissed.
+  const operations = STATE.data.operations || [];
+  const active = operations.filter(op => window.operationActive ? operationActive(op) : !["succeeded", "failed", "cancelled"].includes(op.status));
+  const failedJobs = operations.filter(op => op.status === "failed" && op.dismissible !== false);
+  const jobRow = op => `<button class="bell-job" onclick="this.closest('details').open=false;openOperation(${jsq(op.href || "/")},${jsq(op.id || "")})">
+      <span class="bell-job-top"><b>${esc(op.title)}</b><span>${op.progress != null ? `${Math.round(op.progress)}%` : esc(op.status)}</span></span>
+      <span class="bell-job-msg">${esc(op.message || op.status || "")}</span>
+      <span class="jobmeter"><span style="width:${Math.max(2, Math.min(100, op.progress || 0))}%"></span></span></button>`;
   const rows = [
     waiting.length ? row("homesteadUpdateDialog()", "update", release ? `Homestead ${release} is available` : plural(waiting.length, "Homestead helper update")) : "",
     images ? row("imageUpdateCenter()", "box", plural(images, "container update")) : "",
     errors ? row("imageUpdateCenter()", "alert", `${plural(errors, "image check")} failed`, "danger") : "",
+    ...failedJobs.slice(0, 3).map(op => row(`openOperation(${jsq(op.href || "/")},${jsq(op.id || "")})`, "alert", `${op.title} failed`, "danger")),
   ].filter(Boolean);
-  const count = images + (waiting.length ? 1 : 0);
-  const words = [waiting.length ? (release ? `Homestead ${release}` : "Homestead helpers") : "", images ? plural(images, "container update") : "",
-    errors ? `${plural(errors, "failed check")}` : ""].filter(Boolean).join(", ") || "Nothing needs you";
+  const count = images + (waiting.length ? 1 : 0) + failedJobs.length;
+  const words = [active.length ? `${plural(active.length, "job")} running` : "", waiting.length ? (release ? `Homestead ${release}` : "Homestead helpers") : "", images ? plural(images, "container update") : "",
+    errors ? `${plural(errors, "failed check")}` : "", failedJobs.length ? plural(failedJobs.length, "failed job") : ""].filter(Boolean).join(", ") || "Nothing needs you";
   const badge = $("#bellCount"), dot = $("#bellErrors"), summary = bell.querySelector("summary");
   if (badge) { badge.textContent = count; badge.classList.toggle("hidden", !count); }
   if (dot) { dot.textContent = errors; dot.classList.toggle("hidden", !errors); }
   if (summary) { summary.title = words; summary.setAttribute("aria-label", `Notifications: ${words}`); }
   bell.classList.toggle("has-news", count > 0 || errors > 0);
+  bell.classList.toggle("running", active.length > 0);
   const pop = $("#bellPop");
-  if (pop) pop.innerHTML = rows.length ? `<div class="bell-head">Needs you</div>${rows.join("")}` : '<div class="bell-empty">Nothing needs you</div>';
+  if (pop) pop.innerHTML = (active.length ? `<div class="bell-head">Running now</div>${active.slice(0, 4).map(jobRow).join("")}` : "")
+    + (rows.length ? `<div class="bell-head">Needs you</div>${rows.join("")}` : active.length ? "" : '<div class="bell-empty">Nothing needs you</div>')
+    + (operations.length ? `<button class="bell-all" onclick="this.closest('details').open=false;jobsDialog()">All jobs · ${operations.length}</button>` : "");
 }
 window.paintBell = paintBell;
 window.paintHomesteadNotice = paintHomesteadNotice;
