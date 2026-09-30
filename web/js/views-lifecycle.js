@@ -2101,8 +2101,8 @@ function movesHtml(moves) {
         ? `<button class="btn sm" data-need="admin" onclick="moveFinish(${jsq(m.id)},${jsq(m.name)},${jsq(m.cluster)},${jsq(m.kind)})">Remove from ${esc(m.cluster)}</button>` : "",
       ["running", "failed", "succeeded"].includes(m.status) && !m.source_removed
         ? `<button class="btn sm danger" data-need="admin" onclick="moveBack(${jsq(m.id)},${jsq(m.name)},${jsq(m.cluster)},${jsq(m.status)},${m.source_stopped === false ? "false" : "true"})">${m.source_stopped === false ? "Cancel" : "Put back"}</button>` : "",
-      ["succeeded", "cancelled"].includes(m.status)
-        ? `<button class="btn sm" data-need="admin" data-tip="${m.status === "succeeded" && !m.source_removed ? `Clear it from this list. ${esc(m.cluster)} keeps its stopped copy until you remove it there.` : "Clear it from this list"}"
+      ["succeeded", "cancelled", "failed"].includes(m.status)
+        ? `<button class="btn sm" data-need="admin" data-tip="${m.status === "failed" ? `Clear it from this list, touching neither cluster` : m.status === "succeeded" && !m.source_removed ? `Clear it from this list. ${esc(m.cluster)} keeps its stopped copy until you remove it there.` : "Clear it from this list"}"
             onclick="moveDismiss(${jsq(m.id)})">Dismiss</button>` : "",
     ].join("");
     const started = Math.max(0, (Date.now() - Date.parse(m.created_at)) / 1000);
@@ -2284,8 +2284,14 @@ window.confirmImport = async () => {
 
 /* Finished moves off the list, leaving the source's stopped copy where it is. */
 window.moveDismiss = async (id = "") => {
-  const rows = (await api("/api/move/moves").catch(() => [])).filter(m => (!id || m.id === id) && m.status === "succeeded" && !m.source_removed);
-  if (rows.length && !(await ask(`Clear ${id ? "this move" : "finished moves"} from the list?` + String.fromCharCode(10, 10)
+  const all = await api("/api/move/moves").catch(() => []);
+  const failed = id ? all.find(m => m.id === id && m.status === "failed") : null;
+  const rows = all.filter(m => (!id || m.id === id) && m.status === "succeeded" && !m.source_removed);
+  if (failed && !(await ask(`Clear the failed move of ${failed.name}?` + String.fromCharCode(10, 10)
+      + "Nothing is changed on either cluster. "
+      + (failed.source_stopped !== false ? `${failed.name} stays stopped on ${failed.cluster}: start it there from its page if you still want it running. ` : "")
+      + "Anything the move made here stays too; remove it here if you do not want it. Retry and Put back are no longer offered."))) return;
+  if (!failed && rows.length && !(await ask(`Clear ${id ? "this move" : "finished moves"} from the list?` + String.fromCharCode(10, 10)
       + `${[...new Set(rows.map(m => m.cluster))].join(", ")} keeps the stopped original of ${rows.map(m => m.name).join(", ")} - `
       + "nothing is removed there, and Put back is no longer offered here."))) return;
   try {
