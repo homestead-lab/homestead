@@ -1980,8 +1980,12 @@ function clusterVolumesHtml(report) {
 /* Before anything stops: where it lands, what address it gets, and every
    reason it would fail or surprise someone - asked of both clusters. */
 let MOVE_PLAN_SEQUENCE = 0;
+/* Each volume's choice in the move being reviewed: move (the default),
+   blank or skip, and its storage class here. Kept across re-checks. */
+let MOVE_VOLUMES = {};
 window.moveReview = (cluster, kind, name) => {
   ++MOVE_PLAN_SEQUENCE;
+  MOVE_VOLUMES = {};
   childModal(`Move ${name} from ${cluster}`, `
   <p class="muted small">${kind === "volume"
     ? `Holds ${esc(name)} on ${esc(cluster)} while nothing uses it, backs it up to the shared backup storage,
@@ -2022,7 +2026,42 @@ window.moveAddressMode = value => {
 const moveBody = (cluster, kind, name) => ({
   cluster, kind, name, namespace: $("#mv_ns")?.value.trim() || "lab",
   address_mode: $("#mv_mode")?.value || "shared", address: $("#mv_ip")?.value.trim() || "",
-  storage_class: $("#mv_sc")?.value || "" });
+  storage_class: $("#mv_sc")?.value || "", volumes: MOVE_VOLUMES });
+
+/* One volume's choice changed: remembered, and the move checked again. */
+window.moveVolumeSet = (cluster, kind, name, claim, field, value) => {
+  MOVE_VOLUMES[claim] = { ...(MOVE_VOLUMES[claim] || {}), [field]: value };
+  if (field === "action") { delete MOVE_VOLUMES[claim].storage_class; delete MOVE_VOLUMES[claim].size_gb; }
+  if ($("#mv_go")) $("#mv_go").disabled = true;
+  movePlan(cluster, kind, name);
+};
+
+const MOVE_VOLUME_ACTIONS = { move: "Move its data", blank: "Create blank", skip: "Skip (use one already here)" };
+function moveVolumesTable(plan, cluster, kind, name) {
+  const volumes = plan.claims || [];
+  if (!volumes.length) return "";
+  if (kind === "volume") {
+    return `<div class="drow"><div class="dl">Volume</div><div class="dv mono xs">${volumes.map(c =>
+      `${esc(c.claim)} · ${c.size_gb} GB${c.volume_mode === "Block" ? " · disk" : ""}`).join("<br>")}<br>Storage class: ${esc(plan.storage_class || "cluster default")}</div></div>`;
+  }
+  const arg = v => esc(JSON.stringify(v));
+  const rows = volumes.map(c => {
+    const classes = c.action === "move" ? plan.storage_classes || [] : plan.all_storage_classes || [];
+    const pick = (MOVE_VOLUMES[c.claim] || {}).storage_class || c.storage_class || plan.storage_class || "";
+    return `<tr><td><b class="mono">${esc(c.claim)}</b><div class="dim xs">${c.size_gb} GB${c.volume_mode === "Block" ? " · disk" : ""}${c.source_class ? ` · ${esc(c.source_class)} on ${esc(cluster)}` : ""}</div></td>
+      <td><select id="mv_vol_${esc(c.claim)}" onchange="moveVolumeSet(${arg(cluster)},${arg(kind)},${arg(name)},${arg(c.claim)},'action',this.value)">
+        ${Object.entries(MOVE_VOLUME_ACTIONS).map(([value, label]) => `<option value="${value}" ${c.action === value ? "selected" : ""}>${label}</option>`).join("")}</select></td>
+      <td>${c.action === "skip" ? '<span class="dim xs">the one here keeps its own</span>'
+        : `<select id="mv_volsc_${esc(c.claim)}" onchange="moveVolumeSet(${arg(cluster)},${arg(kind)},${arg(name)},${arg(c.claim)},'storage_class',this.value)">
+          ${classes.map(k => `<option value="${esc(k)}" ${k === pick ? "selected" : ""}>${esc(k)}</option>`).join("")}</select>`}</td>
+      <td>${c.action === "blank"
+        ? `<input id="mv_volsize_${esc(c.claim)}" type="number" min="1" max="16384" style="width:90px" value="${esc((MOVE_VOLUMES[c.claim] || {}).size_gb || c.target_size_gb || c.size_gb)}"
+            onchange="moveVolumeSet(${arg(cluster)},${arg(kind)},${arg(name)},${arg(c.claim)},'size_gb',+this.value)"> GB`
+        : `<span class="dim xs">${c.action === "move" ? `${c.size_gb} GB, as it is` : "as it is here"}</span>`}</td></tr>`;
+  }).join("");
+  return `<div class="f"><label>Volumes ${tip("Move its data backs the volume up there and restores it here. Create blank makes an empty volume, the size you choose - for a cache, say. Skip uses a volume of the same name that is already here. A moved volume needs a Longhorn class; a blank one can use any.")}</label>
+    <div class="tblwrap"><table class="tbl dense"><thead><tr><th>Volume</th><th>Bring</th><th>Storage class here</th><th>Size here</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+}
 
 window.movePlan = async (cluster, kind, name) => {
   const host = $("#mv_plan"), go = $("#mv_go");
@@ -2034,7 +2073,9 @@ window.movePlan = async (cluster, kind, name) => {
     const plan = await api("/api/move/plan", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(moveBody(cluster, kind, name)) });
     if (sequence !== MOVE_PLAN_SEQUENCE || $("#mv_plan") !== host) return;
-    const volumes = plan.claims || [];
+    // A plan without each volume's action is from before there was a choice: every volume moves.
+    const volumes = (plan.claims || []).map(c => ({ ...c, action: c.action || "move" }));
+    plan.claims = volumes;
     const classes = $("#mv_sc");
     if (classes && plan.storage_classes) {
       const selected = classes.value || plan.storage_class;
@@ -2053,13 +2094,14 @@ window.movePlan = async (cluster, kind, name) => {
       ${plan.warnings?.length ? `<div class="note warn"><b>Worth knowing first.</b><ul>${plan.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
       ${plan.ok ? `<div class="note good"><b>Ready to move.</b>
         ${kind === "volume" ? `${esc(name)} (${plan.total_gb} GB) goes through ${plan.joined ? "the backup storage both clusters already share" : `the backup storage on ${esc(cluster)}, which this cluster will be pointed at`}.`
-          : volumes.length ? `${volumes.length === 1 ? "Its volume" : `Its ${volumes.length} volumes`} (${plan.total_gb} GB) ${volumes.length === 1 ? "goes" : "go"}
-          through ${plan.joined ? "the backup storage both clusters already share" : `the backup storage on ${esc(cluster)}, which this cluster will be pointed at`}.`
+          : volumes.some(c => c.action === "move") ? (() => { const moving = volumes.filter(c => c.action === "move");
+            return `${moving.length === 1 ? "One volume" : `${moving.length} volumes`} (${plan.total_gb} GB) ${moving.length === 1 ? "goes" : "go"}
+          through ${plan.joined ? "the backup storage both clusters already share" : `the backup storage on ${esc(cluster)}, which this cluster will be pointed at`}.`; })()
+          : volumes.length ? "No volume's data is moved, so only its definition travels."
           : "It has no volumes, so only its definition travels."}
         ${plan.addresses?.length ? `<br>Reachable here at ${plan.addresses.map(esc).join(", ")}.` : ""}
         ${plan.will_run || kind === "volume" ? "" : `<br>It is stopped on ${esc(cluster)}, and will arrive stopped.`}</div>` : ""}
-      ${volumes.length ? `<div class="drow"><div class="dl">Volumes</div><div class="dv mono xs">${volumes.map(c =>
-        `${esc(c.claim)} · ${c.size_gb} GB${c.volume_mode === "Block" ? " · disk" : ""}`).join("<br>")}<br>Storage class: ${esc(plan.storage_class || "cluster default")}</div></div>` : ""}`;
+      ${moveVolumesTable(plan, cluster, kind, name)}`;
     if (go) go.disabled = !plan.ok;
   } catch (e) {
     if (sequence !== MOVE_PLAN_SEQUENCE || $("#mv_plan") !== host) return;
@@ -2160,7 +2202,8 @@ window.moveFinish = (id, name, cluster, kind) => modal(`Remove ${name} from ${cl
   <div class="note">Its backup stays in the backup storage.</div>` : `
   <p>${esc(name)} is running here. Removing the stopped original from ${esc(cluster)} makes the move
     permanent: after this it cannot be put back.</p>
-  <label class="switch"><input type="checkbox" id="mv_vols"> Also delete its volumes on ${esc(cluster)}</label>
+  <label class="switch"><input type="checkbox" id="mv_vols"> Also delete the volumes it moved on ${esc(cluster)}</label>
+  <div class="dim xs">Volumes it skipped or made blank here stay on ${esc(cluster)}: they are the only copy of that data.</div>
   <div class="note">Leaving the volumes costs space on ${esc(cluster)} but keeps a copy of the data as it
     was at the moment of the move. Their backups stay in the backup storage either way.</div>
   <div class="row" style="margin-top:16px">

@@ -433,11 +433,11 @@ class EngineTests(unittest.TestCase):
                 return source.status(query["kind"], query["name"])
             if route == "/api/move/source":
                 if body["action"] == "backup":
-                    return source.backup(body["kind"], body["name"], body.get("retry_failed", False))
+                    return source.backup(body["kind"], body["name"], body.get("retry_failed", False), body.get("claims"))
                 action = {"quiesce": source.quiesce, "backup": source.backup,
                           "release": source.release}.get(body["action"])
                 if body["action"] == "remove":
-                    return source.remove(body["kind"], body["name"], body.get("volumes"))
+                    return source.remove(body["kind"], body["name"], body.get("volumes"), body.get("claims"))
                 return action(body["kind"], body["name"])
             raise AssertionError(route)
 
@@ -752,6 +752,65 @@ class EngineTests(unittest.TestCase):
         source_claim = self.cluster.objects["/api/v1/namespaces/lab/persistentvolumeclaims/frigate-config"]
         self.assertNotIn("homestead.io/move-origin", source_claim["metadata"].get("annotations") or {})
         self.assertEqual("cancelled", engine.moves()[0]["status"])
+
+    def test_a_volume_made_blank_here_is_empty_at_its_chosen_size_and_nothing_is_backed_up(self):
+        engine.start("shed", "container", "frigate", "moved", "automatic",
+                     volumes={"frigate-config": {"action": "blank", "size_gb": 5}})
+        move = self.run_until_settled()
+        self.assertEqual("succeeded", move["status"], move["message"])
+        self.assertEqual([], self.lh.made, "nothing backed up")
+        self.assertEqual([], self.lh.restored)
+        claim = self.cluster.objects["/api/v1/namespaces/moved/persistentvolumeclaims/frigate-config"]
+        self.assertEqual("5Gi", claim["spec"]["resources"]["requests"]["storage"])
+        self.assertEqual(move["id"], claim["metadata"]["annotations"]["homestead.io/move-id"])
+        self.assertEqual("blank", move["claims"][0]["action"])
+        engine.abandon(move["id"])
+        self.assertNotIn("/api/v1/namespaces/moved/persistentvolumeclaims/frigate-config", self.cluster.objects,
+                         "putting it back removes the blank volume this move made")
+
+    def test_a_skipped_volume_uses_the_one_already_here_and_is_never_touched(self):
+        plan = engine.plan("shed", "container", "frigate", "moved", "automatic",
+                           volumes={"frigate-config": {"action": "skip"}})
+        self.assertTrue(any("no volume of that name" in b for b in plan["blockers"]))
+        mine = {"metadata": {"name": "frigate-config"}, "spec": {"storageClassName": "local-path"}}
+        self.cluster.put("/api/v1/namespaces/moved/persistentvolumeclaims/frigate-config", mine)
+        engine.start("shed", "container", "frigate", "moved", "automatic",
+                     volumes={"frigate-config": {"action": "skip"}})
+        move = self.run_until_settled()
+        self.assertEqual("succeeded", move["status"], move["message"])
+        self.assertEqual(([], []), (self.lh.made, self.lh.restored))
+        engine.abandon(move["id"])
+        self.assertEqual(mine, self.cluster.objects["/api/v1/namespaces/moved/persistentvolumeclaims/frigate-config"])
+
+    def test_each_volume_has_its_own_storage_class_and_a_moved_one_needs_longhorn(self):
+        self.cluster.put("/apis/storage.k8s.io/v1/storageclasses/local-path",
+                         {"metadata": {"name": "local-path"}, "provisioner": "rancher.io/local-path"})
+        self.cluster.put("/apis/storage.k8s.io/v1/storageclasses/longhorn-fast",
+                         {"metadata": {"name": "longhorn-fast"}, "provisioner": "driver.longhorn.io", "parameters": {}})
+        moved = engine.plan("shed", "container", "frigate", "moved", "automatic",
+                            volumes={"frigate-config": {"storage_class": "local-path"}})
+        self.assertTrue(any("needs a Longhorn class" in b for b in moved["blockers"]), moved["blockers"])
+        blank = engine.plan("shed", "container", "frigate", "moved", "automatic",
+                            volumes={"frigate-config": {"action": "blank", "storage_class": "local-path"}})
+        self.assertTrue(blank["ok"], blank["blockers"])
+        self.assertIn("local-path", blank["all_storage_classes"])
+        engine.start("shed", "container", "frigate", "moved", "automatic",
+                     volumes={"frigate-config": {"storage_class": "longhorn-fast"}})
+        self.run_until_settled()
+        self.assertEqual("longhorn-fast", self.lh.restored[0]["storage_class"])
+
+    def test_removing_the_source_keeps_volumes_it_did_not_move(self):
+        engine.start("shed", "container", "frigate", "moved", "automatic",
+                     volumes={"frigate-config": {"action": "blank"}})
+        move = self.run_until_settled()
+        with mock.patch.object(client, "check_cluster", lambda name: {"version": "2.8.249"}):
+            with self.assertRaisesRegex(ValueError, "update it to 2.8.250"):
+                engine.finish(move["id"], volumes=True)
+        with mock.patch.object(client, "check_cluster", lambda name: {"version": "2.8.250"}):
+            engine.finish(move["id"], volumes=True)
+        self.assertNotIn("/apis/apps/v1/namespaces/lab/deployments/frigate", self.cluster.objects)
+        self.assertIn("/api/v1/namespaces/lab/persistentvolumeclaims/frigate-config", self.cluster.objects,
+                      "the only copy of its data stays")
 
     def test_the_browser_never_sees_definitions_or_keys(self):
         engine.start("shed", "container", "frigate", "moved", "automatic")
