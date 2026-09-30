@@ -5804,17 +5804,6 @@ def mqtt_snapshot():
             "nodes": nodes}
 
 
-def hv_exporter_present():
-    """hv-exporter, if it still runs: it publishes the same topics."""
-    for ns in (DEFAULT_NS, "lab"):
-        try:
-            kget(f"/apis/apps/v1/namespaces/{ns}/deployments/hv-exporter")
-            return ns
-        except Exception:
-            continue
-    return ""
-
-
 MAX_REPLICAS = 3
 
 
@@ -7674,7 +7663,7 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/platform/join":
                 return self._send(200, PLATFORM.join_guide())
             if p == "/api/mqtt":
-                return self._send(200, {**MQTT.public(), "hv_exporter": hv_exporter_present(),
+                return self._send(200, {**MQTT.public(),
                                         "sensors": {"cluster": len(MQTT.CLUSTER_SENSORS), "node": len(MQTT.NODE_SENSORS)}})
             if p == "/api/mqtt/preview":
                 snap = mqtt_snapshot()

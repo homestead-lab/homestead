@@ -579,11 +579,9 @@ deeper.
 Home Assistant discovery: nodes ready, volumes degraded or faulted, pods
 running and failing, VMs, cluster health, CPU and RAM for the cluster, and for
 each node its CPU, RAM, network in and out, pods, VMs, workloads and status.
-The topics (`harvester/cluster/state`, `harvester/node/<node>/state`), entity
-names and unique ids are the ones the standalone hv-exporter used, so Home
-Assistant keeps its entities and their history when Homestead takes over; the
-card says when hv-exporter is still running and gives the commands to remove
-it. Availability follows Homestead: the broker marks the entities unavailable
+The topics are `harvester/cluster/state` and `harvester/node/<node>/state`
+by default, and the entity names and unique ids stay the same from release to
+release, so Home Assistant keeps its entities and their history. Availability follows Homestead: the broker marks the entities unavailable
 if Homestead stops without saying goodbye. MQTT 3.1.1 is spoken directly, with
 optional username, password (kept in a Secret) and TLS, and only the leading
 replica publishes. **Test connection** checks the broker, and **What is

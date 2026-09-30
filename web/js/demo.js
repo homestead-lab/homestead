@@ -1561,7 +1561,7 @@ ssh_pwauth: true
     "/api/helm/install": { ok: true, name: "grafana", detail: "grafana is being installed as grafana in lab by the Helm controller" },
     "/api/mqtt": (url, init) => init?.method === "POST" ? { ok: true } : {
       enabled: true, host: "192.0.2.177", port: 1883, tls: false, username: "", has_password: false, base: "harvester",
-      discovery: "homeassistant", interval: 60, device_name: "Harvester Cluster", model: "Harvester", hv_exporter: "lab",
+      discovery: "homeassistant", interval: 60, device_name: "Harvester Cluster", model: "Harvester",
       sensors: { cluster: 15, node: 9 },
       status: { state: "publishing", detail: "publishing to 192.0.2.177:1883 every 60s", last_publish: Math.floor(Date.now() / 1000) - 20, published: 3120, error: "" } },
     "/api/mqtt/test": { ok: true, detail: "192.0.2.177:1883 accepted the connection" },
