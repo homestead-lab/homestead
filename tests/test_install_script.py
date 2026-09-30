@@ -367,7 +367,7 @@ case "$*" in
   'get nodes '*)
     [ "$TEST_MODE" != unreachable ] || exit 1
     if [ "$TEST_MODE" = many ]; then
-      for n in 1 2 3 4 5 6 7 8; do printf 'node%s|192.0.2.%s|True|v1.34.1+k3s1\\n' "$n" "$n"; done
+      for n in 1 2 3 4 5 6 7 8; do printf 'node%s|198.51.100.20%s|True|v1.34.1+k3s1\\n' "$n" "$n"; done
       exit 0
     fi
     printf 'node1|192.0.2.108|True|v1.34.1+k3s1\\nnode2|192.0.2.109|False|v1.33.5+k3s1\\n' ;;
@@ -436,7 +436,7 @@ cluster_overview
         summary = out.split("DETAILS", 1)[0]
         self.assertGreaterEqual(summary.count("PAGE"), 2)
         for n in range(1, 9):
-            self.assertIn(f"192.0.2.{n}", summary)
+            self.assertIn(f"198.51.100.20{n}", summary)
         self.assertNotIn("...", summary)
         self.assertTrue(all(len(line) <= 80 for line in summary.splitlines()))
 
