@@ -84,15 +84,23 @@ function checkedAgo() {
   return "checked " + (secs < 90 ? "just now" : fmtAgo(secs));
 }
 
-async function loadImageUpdates(force = false, quiet = false) {
+async function loadImageUpdates(force = false, quiet = false, only = "") {
   try {
     // A forced check outlives the page it started on: its answer is for the
-    // whole app, not just the view that asked.
-    const report = await api(`/api/image-updates${force ? "?force=1" : ""}`, force ? { keep: true } : undefined);
+    // whole app, not just the view that asked. only="homestead" checks
+    // Homestead's own parts and leaves every app's answer as it was.
+    const query = force ? `?force=1${only ? `&only=${encodeURIComponent(only)}` : ""}` : "";
+    let report = await api(`/api/image-updates${query}`, force ? { keep: true } : undefined);
     // The page's quiet refresh asks every few seconds and can land before or
     // after a forced check. Which report is newer is the server's to say, by
     // when it was checked - never by which request happened to be sent last.
     const existing = STATE.data.imageUpdates;
+    if (report.partial && existing?.workloads) {
+      // Homestead's parts alone, the server having no full report yet: laid
+      // over the apps' answers this page already has.
+      report = { ...existing, homestead: report.homestead, policy: report.policy || existing.policy,
+        workloads: [...existing.workloads.filter(w => !w.homestead), ...(report.workloads || [])] };
+    }
     if (HomesteadUpdateState.isStale(existing, report)) {
       existing.policy = report.policy || existing.policy;
       return existing;

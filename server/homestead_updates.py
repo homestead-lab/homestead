@@ -392,10 +392,11 @@ def _scan_note(**fields):
         SCAN.update(fields)
 
 
-def scan(force=False):
+def scan(force=False, homestead_only=False):
     deps = [d for d in kget("/apis/apps/v1/deployments").get("items", [])
             if d["metadata"]["namespace"] not in SYSTEM_NAMESPACES
-            and not _managed_smb(d["metadata"]["namespace"], d["metadata"]["name"])]
+            and not _managed_smb(d["metadata"]["namespace"], d["metadata"]["name"])
+            and (not homestead_only or PART(d["metadata"]["namespace"], d["metadata"]["name"]))]
     pods = kget("/api/v1/pods").get("items", [])
     _scan_note(running=True, done=0, total=len(deps), current="", updates=0,
                started_at=time.time(), finished_at=0.0)
@@ -419,12 +420,16 @@ def scan(force=False):
                            updates=sum(1 for x in workloads if x["available"] and not x.get("homestead")))
     finally:
         _scan_note(running=False, current="", finished_at=time.time())
-    workloads.sort(key=lambda x: (x["ns"], x["name"]))
     for item in workloads:
         item["homestead"] = PART(item["ns"], item["name"])
+    return _summary(workloads)
+
+
+def _summary(workloads, checked_at=None):
+    workloads = sorted(workloads, key=lambda x: (x["ns"], x["name"]))
     apps = [x for x in workloads if not x["homestead"]]
     own = [x for x in workloads if x["homestead"]]
-    return {"checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    return {"checked_at": checked_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "updates": sum(1 for x in apps if x["available"]),
             "errors": sum(1 for x in apps for image in x["images"] if image.get("error")),
             "homestead": {"updates": sum(1 for x in own if x["available"]),
@@ -448,6 +453,24 @@ def invalidate():
     """Something changed an image: the next quiet request scans again."""
     with _SCAN_LOCK:
         _LATEST.update(report=None, number=0, finished=0.0)
+
+
+def homestead_report():
+    """Homestead's own parts checked now, against their registries, and put
+    into the last report in place of what it said of them - Settings ›
+    Homestead's Check now asks about Homestead, not every app. With no report
+    yet, the answer has Homestead's parts alone, and is not kept."""
+    with _RUN_LOCK:
+        fresh = scan(True, homestead_only=True)
+        with _SCAN_LOCK:
+            latest = _LATEST["report"]
+            if not latest:
+                return dict(fresh, partial=True)
+            merged = _summary([w for w in latest["workloads"] if not w.get("homestead")] + fresh["workloads"],
+                              latest["checked_at"])
+            merged["homestead_checked_at"] = fresh["checked_at"]
+            _LATEST["report"] = merged
+            return merged
 
 
 def report(force=False):

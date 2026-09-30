@@ -112,7 +112,8 @@ async function fleetUpdatesLoad(force = false) {
   await Promise.all(members.map(async m => {
     if (!m.reachable) { FLEET_UPDATES.rows[m.id] = { member: m, error: m.error || "not answering" }; return; }
     try {
-      const report = await api(`/api/image-updates${force ? "?force=1" : ""}`, { headers: { "X-Homestead-Cluster": m.id }, keep: true });
+      // Only its Homestead parts are shown, so only they are checked afresh.
+      const report = await api(`/api/image-updates${force ? "?force=1&only=homestead" : ""}`, { headers: { "X-Homestead-Cluster": m.id }, keep: true });
       FLEET_UPDATES.rows[m.id] = { member: m, parts: remoteParts(report) };
     } catch (error) {
       FLEET_UPDATES.rows[m.id] = { member: m, error: error.message };
@@ -212,7 +213,8 @@ window.homesteadUpdateReview = () => {
 
 window.homesteadUpdateCheck = async button => {
   if (button) { button.disabled = true; button.textContent = "Checking…"; }
-  const report = await loadImageUpdates(true, true);
+  // Homestead's own parts only: checking every app's registry is Containers' job.
+  const report = await loadImageUpdates(true, true, "homestead");
   if (report) {
     const { release, waiting } = homesteadUpdates();
     toast(release ? `Homestead ${release} is available` : waiting.length ? "A Homestead helper has an update" : "Homestead is up to date", "ok");
