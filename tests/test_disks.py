@@ -70,9 +70,9 @@ class DiskTests(unittest.TestCase):
         self.assertEqual(("sdb", "unused", True, True), (spare["device"], spare["role"], spare["can_add"], spare["needs_wipe"]))
         self.assertEqual([{"device": "nvme0n1", "name": "", "size_gb": 465.8, "role": "longhorn", "system": True,
                            "model": "Samsung", "lh_paths": ["/var/lib/harvester/defaultdisk"],
-                           "lh_used_gb": 27.0, "lh_size_gb": 117.0},
+                           "lh_used_gb": 27.0, "lh_size_gb": 117.0, "lh_root_used_gb": 0},
                           {"device": "sdb", "name": "", "size_gb": 1863, "role": "unused", "system": False,
-                           "model": "IronWolf", "lh_paths": [], "lh_used_gb": 0, "lh_size_gb": 0}],
+                           "model": "IronWolf", "lh_paths": [], "lh_used_gb": 0, "lh_size_gb": 0, "lh_root_used_gb": 0}],
                          DISKS.summary()["node1"])
 
     def test_harvester_adds_a_disk_by_provisioning_its_blockdevice(self):
@@ -201,6 +201,9 @@ class SystemDriveTests(unittest.TestCase):
         self.assertTrue(nvme["system"])
         self.assertEqual(68.0, nvme["lh_size_gb"])
         self.assertEqual(["/var/lib/longhorn/"], nvme["lh_paths"])
+        self.assertEqual(476.9, nvme["size_gb"], "the drive's own size, not Longhorn's share of it")
+        self.assertEqual(24.0, nvme["lh_root_used_gb"], "on /, so inside the root filesystem's use too")
+        self.assertEqual(0, lines[1]["lh_root_used_gb"], "a drive of its own")
 
     def test_a_disk_can_be_named_by_its_serial_and_the_name_cleared(self):
         DISKS.set_disk_name("node1", "sda", "  Media   3TB ")

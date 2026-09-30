@@ -296,14 +296,31 @@ function nodeUptimeStrip(n) {
 /* A line per disk: its name, or its device; what it is - the system drive,
    Longhorn's, both, or nothing yet - and its use. A Longhorn folder on the
    system drive shows on that drive's line, not as a disk of its own. */
+/* A drive's bar in parts: the system's use, Longhorn's data, and Longhorn's
+   remaining room on it, each its own colour, the rest free. */
+function driveBar(drive, sysGb, lhUsed, lhRoom) {
+  const w = gb => drive ? Math.max(0, Math.min(100, gb / drive * 100)).toFixed(2) : 0;
+  const tip = [sysGb ? `system ${sizeText(sysGb)}` : "", lhUsed || lhRoom ? `Longhorn ${sizeText(lhUsed)} used, ${sizeText(lhRoom)} more it may use` : "",
+    `${sizeText(Math.max(0, drive - sysGb - lhUsed - lhRoom))} free`].filter(Boolean).join(" · ");
+  return `<div class="meter split" data-tip="${esc(tip)}">${sysGb ? `<span class="seg-sys" style="width:${w(sysGb)}%"></span>` : ""}${
+    lhUsed ? `<span class="seg-lh" style="width:${w(lhUsed)}%"></span>` : ""}${lhRoom ? `<span class="seg-lhroom" style="width:${w(lhRoom)}%"></span>` : ""}</div>`;
+}
+
 function nodeDiskLines(n) {
   const disks = n.disks || [];
   if (!disks.length) return `<div><div class="between"><span class="dim xs">DISK</span>
       <span class="small mono"><b>${n.fs_pct || 0}%</b> <span class="dim">${sizePair(n.fs_used_gb, n.fs_cap_gb)}</span></span></div>
     ${meter(n.fs_pct || 0, "", "disk")}</div>`;
   return disks.map(d => {
-    const lh = d.lh_size_gb > 0, pct = lh ? Math.round(d.lh_used_gb / d.lh_size_gb * 100) : d.role === "system" ? (n.fs_pct || 0) : 0;
-    const used = lh ? sizePair(d.lh_used_gb, d.lh_size_gb) : d.role === "system" ? sizePair(n.fs_used_gb, n.fs_cap_gb) : sizeText(d.size_gb);
+    const lh = d.lh_size_gb > 0, system = !!d.system || d.role === "system";
+    // Against the whole drive: the system's own use, Longhorn's data, and the
+    // rest of Longhorn's room. Longhorn's folder on / is inside the root
+    // filesystem's use too, so it is taken out of the system's share.
+    const drive = Math.max(d.size_gb || 0, d.lh_size_gb || 0, system ? (n.fs_cap_gb || 0) : 0);
+    const sysGb = system ? Math.max(0, (n.fs_used_gb || 0) - (d.lh_root_used_gb || 0)) : 0;
+    const lhUsed = lh ? d.lh_used_gb || 0 : 0, lhRoom = lh ? Math.max(0, (d.lh_size_gb || 0) - lhUsed) : 0;
+    const pct = drive ? Math.round((sysGb + lhUsed) / drive * 100) : 0;
+    const used = lh || system ? sizePair(sysGb + lhUsed, drive) : sizeText(d.size_gb);
     const folder = d.device === "longhorn";
     const label = d.name || (folder ? "Longhorn folder" : d.device.toUpperCase());
     const where = [d.name && !folder ? d.device : "", d.model, ...(d.lh_paths || [])].filter(Boolean).join(" · ");
@@ -312,7 +329,8 @@ function nodeDiskLines(n) {
       !lh && !d.system ? `<span class="tag slimtag ${d.role === "unused" ? "info" : ""}">${esc(d.role)}</span>` : ""].join("");
     return `<div><div class="between diskline-head"><span class="dim xs disklabel-row"><span title="${esc(where || d.device)}">${esc(label)}</span>${tags}</span>
       <span class="small mono">${lh || d.role === "system" ? `<b>${pct}%</b> ` : ""}<span class="dim">${esc(used)}</span></span></div>
-      ${lh || d.role === "system" ? meter(pct, "", "disk") : ""}</div>`;
+      ${lh || system ? driveBar(drive, sysGb, lhUsed, lhRoom) : ""}
+      ${lh && system ? `<div class="dim xs mono drivesplit"><i class="k-sys"></i>system ${sizeText(sysGb)} <i class="k-lh"></i>Longhorn ${sizePair(lhUsed, d.lh_size_gb)}</div>` : ""}</div>`;
   }).join("");
 }
 

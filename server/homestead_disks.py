@@ -189,6 +189,17 @@ def set_disk_name(node, device, name):
     return {"ok": True, "name": name, "detail": f"{device} on {node} is named {name}" if name else f"{device} on {node} has no name now"}
 
 
+def _mount_point(path, mounts):
+    """The mount point a folder is under: the longest that contains it."""
+    best = None
+    for m in mounts:
+        point = m["mountpoint"].rstrip("/") or "/"
+        if path == point or path.startswith(point.rstrip("/") + "/") or point == "/":
+            if not best or len(point) > len(best):
+                best = point
+    return best or ""
+
+
 def _mount_disk(path, mounts):
     """The disk under a folder: the longest mount point that contains it."""
     best = None
@@ -241,6 +252,9 @@ def inventory():
             bd = next((b for b in node_bds if b["name"] == disk["id"] or (b["mountpoint"] and b["mountpoint"] == disk["path"])), None)
             dev = (_disk_of(bd["path"]) if bd else "") or (_disk_of(disk["path"]) if disk["type"] == "block" else _mount_disk(disk["path"], mounts))
             disk["missing"] = _missing(disk, bd, harvester, dev, system_devs, bool(mounts))
+            # A folder on / (Longhorn's default /var/lib/longhorn): its data is
+            # counted in the root filesystem's use as well.
+            disk["on_root"] = disk["type"] != "block" and _mount_point(disk["path"], mounts) == "/"
             disk["failed"] = not disk["ready"]
             if dev in rows:
                 rows[dev]["longhorn"].append(disk)
@@ -337,7 +351,9 @@ def summary():
                     "role": d["role"], "system": bool(d.get("system")), "model": d.get("model", ""),
                     "lh_paths": [x.get("path", "") for x in d["longhorn"]],
                     "lh_used_gb": round(sum(x["used_gb"] for x in d["longhorn"]), 1),
-                    "lh_size_gb": round(sum(x["size_gb"] for x in d["longhorn"]), 1)} for d in disks]
+                    "lh_size_gb": round(sum(x["size_gb"] for x in d["longhorn"]), 1),
+                    "lh_root_used_gb": round(sum(x["used_gb"] for x in d["longhorn"] if x.get("on_root")), 1)}
+                   for d in disks]
             for node, disks in inv["nodes"].items()}
 
 
