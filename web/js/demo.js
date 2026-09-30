@@ -193,7 +193,7 @@
     { id: "demo2", title: "Gateway", url: "https://192.0.2.1", section: "Network", icon: "builtin:router", note: "UniFi gateway", shown: { kind: "builtin", src: "router" } },
     { id: "demo3", title: "Core switch", url: "http://192.0.2.2", section: "Network", icon: "builtin:switch", note: "", shown: { kind: "builtin", src: "switch" } },
     { id: "demo4", title: "Office AP", url: "http://192.0.2.3", section: "Network", icon: "builtin:wifi", note: "", shown: { kind: "builtin", src: "wifi" } },
-    { id: "demo5", title: "Tower", url: "http://192.0.2.10", section: "Storage", icon: "builtin:nas", note: "Unraid", shown: { kind: "builtin", src: "nas" } },
+    { id: "demo5", title: "NAS-01", url: "http://192.0.2.10", section: "Storage", icon: "builtin:nas", note: "Unraid", shown: { kind: "builtin", src: "nas" } },
   ];
   const workloads = [
     { name: "frigate", ns: "lab", kind: "Deployment", group: "Home", failover: "wait", desired: 1, ready: 1, uptime: 472221,
@@ -530,7 +530,7 @@
     "/api/node/probe/allocation": {installed: true, enabled: false, managed: false, directory: "",
       uid: "demo-probe", resource_version: "1", detail: "Placement checks are disabled (demo; no host changes)",
       capacity: {blocked:false, blockers:[], warnings:[], nodes:[], fingerprint:"demo"}},
-    "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Loft rack",
+    "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Main site",
       info: { version: "2.8.257", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
@@ -708,35 +708,35 @@
     "/api/node/bridge": (url, init) => ({ ok: true, detail: `${JSON.parse(init.body).node} is moving to br0; follow it in the job tray` }),
     "/api/images/scan": { ok: true, nodes: ["harvester-node1", "harvester-node2", "harvester-node3"], detail: "asking containerd on 3 nodes for every image" },
     "/api/images/forget-rollback": { ok: true, detail: "home-assistant no longer keeps its previous image; it can be cleaned up now" },
-    // Two linked clusters (shed answers, garage is off) and barn, added for
+    // Two linked clusters (branch answers, dr-site is off) and staging, added for
     // moves before linking existed.
     "/api/move/clusters": [
-      { name: "shed", label: "Shed", url: "http://192.0.2.250:8088", user: "", fleet: true, id: "b2c0de" },
-      { name: "garage", label: "Garage", url: "http://192.0.2.251:8088", user: "", fleet: true, id: "c3beef" },
-      { name: "barn", url: "http://192.0.2.252:8088", user: "admin", added: "2026-05-02 18:40" }],
+      { name: "branch", label: "Branch office", url: "http://192.0.2.250:8088", user: "", fleet: true, id: "b2c0de" },
+      { name: "dr-site", label: "DR site", url: "http://192.0.2.251:8088", user: "", fleet: true, id: "c3beef" },
+      { name: "staging", url: "http://192.0.2.252:8088", user: "admin", added: "2026-05-02 18:40" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "garage") return { name, version: "", protocol: null, local_version: "2.8.257", local_protocol: 1,
-        state: "unreachable", message: "could not reach garage: no answer from http://192.0.2.251:8088" };
-      if (name === "barn") return { name, version: "2.8.190", protocol: 1, local_version: "2.8.257",
+      if (name === "dr-site") return { name, version: "", protocol: null, local_version: "2.8.257", local_protocol: 1,
+        state: "unreachable", message: "could not reach dr-site: no answer from http://192.0.2.251:8088" };
+      if (name === "staging") return { name, version: "2.8.190", protocol: 1, local_version: "2.8.257",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "barn runs 2.8.190 and this one 2.8.257. Moves work between them; this Homestead is the newer of the two." };
+        message: "staging runs 2.8.190 and this one 2.8.257. Moves work between them; this Homestead is the newer of the two." };
       return { name, version: "2.8.257", protocol: 1, local_version: "2.8.257", local_protocol: 1,
         state: "same", compatible: true, message: "Both run Homestead 2.8.257." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
-    // shed is ready to move from; barn has no backup storage yet.
-    "/api/move/clusters/readiness": (url, init) => JSON.parse(init?.body || "{}").name === "garage"
-      ? { version: { state: "unreachable", message: "could not reach garage" }, storage: {}, target: {}, ready: false }
-      : JSON.parse(init?.body || "{}").name === "barn"
+    // branch is ready to move from; staging has no backup storage yet.
+    "/api/move/clusters/readiness": (url, init) => JSON.parse(init?.body || "{}").name === "dr-site"
+      ? { version: { state: "unreachable", message: "could not reach dr-site" }, storage: {}, target: {}, ready: false }
+      : JSON.parse(init?.body || "{}").name === "staging"
       ? { version: { compatible: true }, storage: { deployed: false }, target: { configured: false, error: "no backup target" }, ready: false,
           shared_vip: "192.0.2.245", free_vips: [{ ip: "192.0.2.246", label: "spare", from: "vips" }, { ip: "192.0.2.230", label: "", from: "pool" }] }
       : { version: { compatible: true }, storage: { deployed: true, ready: true, reachable_off_cluster: true },
           target: { configured: true, reachable_off_cluster: true, answers: true, url: "s3://homestead-backups@us-east-1/",
             endpoint: "http://192.0.2.250:9000" }, ready: true },
-    "/api/move/clusters/storage": { ok: true, detail: "backup storage is starting on barn at http://192.0.2.244:9000" },
+    "/api/move/clusters/storage": { ok: true, detail: "backup storage is starting on staging at http://192.0.2.244:9000" },
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
-    "/api/move/remote": { cluster: "shed", url: "http://192.0.2.250:8088",
+    "/api/move/remote": { cluster: "branch", url: "http://192.0.2.250:8088",
       namespace: "lab", version: "2.8.257", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
@@ -768,9 +768,9 @@
           warnings: ["mosquitto uses it and stays here, stopped"] }] },
     // One path, two questions: where this can move within the cluster (GET),
     // and what bringing it from another cluster involves (POST).
-    "/api/move/plan": (url, init) => (init?.method || "GET") !== "GET" && JSON.parse(init.body || "{}").cluster === "garage"
-      ? { ok: false, blockers: ["garage: this cluster has no Longhorn backup target; set up backup storage under Data protection first"],
-          warnings: [], claims: [], fixes: [{ kind: "source-storage", cluster: "garage" }] }
+    "/api/move/plan": (url, init) => (init?.method || "GET") !== "GET" && JSON.parse(init.body || "{}").cluster === "dr-site"
+      ? { ok: false, blockers: ["dr-site: this cluster has no Longhorn backup target; set up backup storage under Data protection first"],
+          warnings: [], claims: [], fixes: [{ kind: "source-storage", cluster: "dr-site" }] }
       : (init?.method || "GET") === "GET" ? {
       current: "harvester-node2", recommended: "harvester-node1",
       requirements: { devices: [{ id: "igpu", label: "Intel/AMD iGPU" }], features: ["igpu"], labels: {}, resources: {} },
@@ -781,7 +781,7 @@
           hardware: { igpu: true }, temp_c: 39, why: [] },
         { name: "harvester-node3", ok: false, current: false, pods_wl: 1, score: 0, cpu_after: 24, mem_after: 49,
           hardware: {}, temp_c: 36, why: ["no Intel/AMD iGPU on this host"] }] } : {
-      ok: true, blockers: [], cluster: "shed", kind: "container", name: "frigate",
+      ok: true, blockers: [], cluster: "branch", kind: "container", name: "frigate",
       storage_class: JSON.parse(init.body || "{}").storage_class || "longhorn-r2", storage_classes: ["longhorn-r2", "longhorn-r3"],
       namespace: "lab", joined: false, will_run: true, addresses: ["frigate on 192.0.2.242"],
       warnings: ["this cluster's Longhorn backup target changes from (none) to s3://homestead-backups@us-east-1/; backups already written to the old one stay there"],
@@ -900,22 +900,22 @@
       { obj: "home-assistant", ns: "lab", kind: "Deployment", type: "Normal", reason: "ScalingReplicaSet",
         msg: "Scaled up replica set home-assistant-6c8d9 to 1", count: 1, time: new Date(Date.now() - 20 * 60e3).toISOString() }],
     "/api/move/moves/retry": { ok: true }, "/api/move/moves/abandon": { ok: true },
-    "/api/move/moves/finish": { ok: true, message: "mosquitto lives here now; removed workload mosquitto on shed" },
+    "/api/move/moves/finish": { ok: true, message: "mosquitto lives here now; removed workload mosquitto on branch" },
     "/api/move/moves": () => [
-      { id: "d2", cluster: "shed", kind: "container", name: "grafana", source_namespace: "lab",
+      { id: "d2", cluster: "branch", kind: "container", name: "grafana", source_namespace: "lab",
         namespace: "lab", status: "failed", phase: "joining", phase_index: 0, source_stopped: false,
         phases: ["joining", "quiescing", "backing-up", "syncing", "restoring", "creating", "starting", "done"],
-        progress: 1, message: "this cluster cannot reach shed's backup storage at http://192.0.2.108:9000. Give it an address this cluster can reach - shed's Migration button under Linked clusters - then retry",
+        progress: 1, message: "this cluster cannot reach branch's backup storage at http://192.0.2.108:9000. Give it an address this cluster can reach - branch's Migration button under Linked clusters - then retry",
         source_removed: false, created_at: new Date(Date.now() - 2 * 60e3).toISOString(), claims: [] },
-      { id: "d1", cluster: "shed", kind: "container", name: "frigate", source_namespace: "lab",
+      { id: "d1", cluster: "branch", kind: "container", name: "frigate", source_namespace: "lab",
         namespace: "lab", status: "running", phase: "restoring", phase_index: 4,
         phases: ["joining", "quiescing", "backing-up", "syncing", "restoring", "creating", "starting", "done"],
         progress: 71, message: "Restoring 1 volume here: 54%", source_removed: false,
         created_at: new Date(Date.now() - 8 * 60e3).toISOString(), claims: [] },
-      { id: "d0", cluster: "shed", kind: "container", name: "mosquitto", source_namespace: "lab",
+      { id: "d0", cluster: "branch", kind: "container", name: "mosquitto", source_namespace: "lab",
         namespace: "lab", status: "succeeded", phase: "done", phase_index: 7,
         phases: ["joining", "quiescing", "backing-up", "syncing", "restoring", "creating", "starting", "done"],
-        progress: 100, message: "mosquitto is running here; still stopped on shed until you remove it there",
+        progress: 100, message: "mosquitto is running here; still stopped on branch until you remove it there",
         source_removed: false, created_at: new Date(Date.now() - 50 * 60e3).toISOString(), claims: [] }],
     "/api/objectstore": { deployed: true, ready: true, endpoint: "http://192.0.2.244:9000",
       reachable_off_cluster: true, bucket: "homestead-backups", size_gb: 100,
@@ -1103,7 +1103,7 @@ ssh_pwauth: true
     "/api/imports": [
       { name: "homestead-import-plex", app: "plex", state: "running", start: "2026-09-21T08:40:00Z",
         active: 1, succeeded: 0, failed: 0, step: 2, steps: 4, folder: "transcode",
-        detail: "tower:/mnt/user/appdata/plex/transcode -> /transcode",
+        detail: "nas-01:/mnt/user/appdata/plex/transcode -> /transcode",
         step_percent: 50, percent: 37.5, rate: "22.10MB/s" },
       { name: "homestead-import-obsidian", app: "obsidian", state: "failed", percent: 12,
         start: "2026-09-21T07:55:00Z", active: 0, succeeded: 0, failed: 1, step: 1, steps: 3,
@@ -1352,7 +1352,7 @@ ssh_pwauth: true
           { name: "alerts", label: "Alerts and notifications", state: "ok", last_ok: now - 8, error: "", every: 20 },
           { name: "history", label: "Long-term stats", state: "ok", last_ok: now - 140, error: "", every: 300 },
           { name: "hardware", label: "Hardware detection", state: "ok", last_ok: now - 20, error: "", every: 30 },
-          { name: "moves", label: "Cluster moves", state: "failing", last_ok: now - 900, error: "could not reach shed: timed out", every: 10 }],
+          { name: "moves", label: "Cluster moves", state: "failing", last_ok: now - 900, error: "could not reach branch: timed out", every: 10 }],
         probe: { installed: true, desired: 3, ready: 3, reporting: 3, smart: 2, state: "current", detail: "homestead-nodeprobe is running this release's scripts" },
         samba: { installed: true, enabled: true, desired: 1, ready: 1, name: "homestead-smb",
           address: "192.0.2.245", shares: 3, served_shares: ["media", "photos", "secure"],
@@ -1507,15 +1507,15 @@ ssh_pwauth: true
         r("192.0.2.2", { kind: "infrastructure", category: "switch", mac: "74:ac:b9:00:00:02", name: "Core switch",
           unifi: { type: "device", model: "USW-Pro-24", name: "USW Pro 24", hostname: "" } }),
         r("192.0.2.3", { kind: "infrastructure", category: "access-point", mac: "74:ac:b9:00:00:03",
-          unifi: { type: "device", model: "U6-Lite", name: "Hallway AP", hostname: "u6-lite-hall" } }),
-        r("192.0.2.10", { kind: "static", category: "nas", name: "Tower", mac: "d0:50:99:00:00:10", tags: ["storage"], note: "Unraid server in the rack - web UI on port 80, parity check runs Sunday nights, UPS on the second shelf",
-          scan: { up: true, ports: [22, 80, 445], rdns: "tower.lan" } }),
+          unifi: { type: "device", model: "U6-Lite", name: "AP floor 1", hostname: "u6-lite-f1" } }),
+        r("192.0.2.10", { kind: "static", category: "nas", name: "NAS-01", mac: "d0:50:99:00:00:10", tags: ["storage"], note: "Unraid server in the rack - web UI on port 80, parity check runs Sunday nights, UPS on the second shelf",
+          scan: { up: true, ports: [22, 80, 445], rdns: "nas-01.lan" } }),
         r("192.0.2.21", { cluster: "node", scan: { up: true, ports: [22, 443] } }),
         r("192.0.2.22", { cluster: "node", scan: { up: true, ports: [22, 443] } }),
         r("192.0.2.40", { kind: "reservation", category: "media", mac: "a4:83:e7:00:00:40",
-          unifi: { type: "wired", online: true, reserved: true, name: "Living room TV", hostname: "LGwebOSTV" } }),
+          unifi: { type: "wired", online: true, reserved: true, name: "Meeting room display", hostname: "LGwebOSTV" } }),
         r("192.0.2.41", { kind: "reservation", category: "cctv", mac: "9c:8e:cd:00:00:41",
-          unifi: { type: "reservation", online: false, reserved: true, name: "Driveway camera", hostname: "" } }),
+          unifi: { type: "reservation", online: false, reserved: true, name: "Entrance camera", hostname: "" } }),
         r("192.0.2.60", { scan: { up: true, ports: [80] }, flags: [{ level: "info", text: "answers on the network but is not documented" }] }),
         r("192.0.2.120", { cluster: "vip", services: ["lab/plex"], in_dhcp: true,
           flags: [{ level: "warn", text: "inside the DHCP range: the DHCP server may hand this address to something else" }] }),
@@ -1902,24 +1902,24 @@ ssh_pwauth: true
   };
 
   const original = window.fetch.bind(window);
-  /* Linked clusters: this one, a shed that answers, and a garage that is off. */
+  /* Linked clusters: this one, a branch office that answers, and a DR site that is off. */
   const demoSites = [
-    { id: "a1f00d", handle: "loft-rack", name: "Loft rack", url: "http://192.0.2.242:8088", self: true, version: "2.8.200", reachable: true, compatible: true, error: "" },
-    { id: "b2c0de", handle: "shed", name: "Shed", url: "http://192.0.2.250:8088", self: false, version: "2.8.200", reachable: true, compatible: true, error: "" },
-    { id: "c3beef", handle: "garage", name: "Garage", url: "http://192.0.2.251:8088", self: false, version: "", reachable: false, compatible: true,
+    { id: "a1f00d", handle: "main-site", name: "Main site", url: "http://192.0.2.242:8088", self: true, version: "2.8.200", reachable: true, compatible: true, error: "" },
+    { id: "b2c0de", handle: "branch", name: "Branch office", url: "http://192.0.2.250:8088", self: false, version: "2.8.200", reachable: true, compatible: true, error: "" },
+    { id: "c3beef", handle: "dr-site", name: "DR site", url: "http://192.0.2.251:8088", self: false, version: "", reachable: false, compatible: true,
       error: "no answer from http://192.0.2.251:8088" }];
   const siteTag = id => { const s = demoSites.find(x => x.id === id); return { id: s.id, name: s.name, handle: s.handle, self: s.self }; };
-  const shedNodes = ["shed-node1", "shed-node2"];
-  const shedWorkloads = [
-    { ...workloads[0], name: "jellyfin", group: "", nodes: [shedNodes[0]], icon: "", images: ["jellyfin/jellyfin:10.9.11"], cpu: 0.41, mem_mb: 1210, ports: [{ port: 8096, ip: "192.0.2.250" }] },
-    { ...workloads[0], name: "unifi", group: "", nodes: [shedNodes[1]], icon: "", images: ["jacobalberty/unifi:v8.4"], cpu: 0.06, mem_mb: 690, ports: [{ port: 8443, ip: "192.0.2.250" }] }];
+  const branchNodes = ["branch-node1", "branch-node2"];
+  const branchWorkloads = [
+    { ...workloads[0], name: "jellyfin", group: "", nodes: [branchNodes[0]], icon: "", images: ["jellyfin/jellyfin:10.9.11"], cpu: 0.41, mem_mb: 1210, ports: [{ port: 8096, ip: "192.0.2.250" }] },
+    { ...workloads[0], name: "unifi", group: "", nodes: [branchNodes[1]], icon: "", images: ["jacobalberty/unifi:v8.4"], cpu: 0.06, mem_mb: 690, ports: [{ port: 8443, ip: "192.0.2.250" }] }];
   const mine = rows => rows.map(row => ({ ...row, site: siteTag("a1f00d") }));
-  const shed = rows => rows.map(row => ({ ...row, site: siteTag("b2c0de") }));
+  const branch = rows => rows.map(row => ({ ...row, site: siteTag("b2c0de") }));
   Object.assign(responses, {
     "/api/fleet": { self: "a1f00d", protocol: 1, linked: true, members: demoSites, via: "", via_id: "",
       address: "http://192.0.2.242:8088", suggested_address: "http://192.0.2.242:8088" },
     "/api/fleet/switch": { ok: true }, "/api/fleet/address": { ok: true, missed: [] },
-    "/api/fleet/join": { ok: true, member: { name: "Garage" }, missed: [] },
+    "/api/fleet/join": { ok: true, member: { name: "DR site" }, missed: [] },
     "/api/fleet/remove": { ok: true, told: true, missed: [] },
     "/api/objectstore/transfers": (url, init) => init?.method === "POST"
       ? { allowed: JSON.parse(init.body || "{}").allow, deployed: true, detail: JSON.parse(init.body || "{}").allow ? "moves out are on" : "moves out are off: backup storage is stopped, its volume kept" }
@@ -1928,19 +1928,19 @@ ssh_pwauth: true
     "/api/move/clusters/transfers": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       if (body.allow !== undefined) return { allowed: body.allow, deployed: true, detail: body.allow ? "moves out are on" : "moves out are off" };
-      return body.name === "shed" ? { allowed: true, deployed: true, ready: true, stopped: false, endpoint: "http://192.0.2.250:9000",
+      return body.name === "branch" ? { allowed: true, deployed: true, ready: true, stopped: false, endpoint: "http://192.0.2.250:9000",
           reachable_off_cluster: true, size_gb: 100, backups_here: true }
         : { allowed: false, deployed: false, ready: false, stopped: false };
     },
-    "/api/fleet/legacy": [{ name: "barn", url: "http://192.0.2.252:8088", user: "admin", added: "2026-05-02 18:40", linked_as: null }],
-    "/api/fleet/link-legacy": { ok: true, member: { name: "Barn" }, missed: [] }, "/api/fleet/leave": { ok: true, missed: [] },
-    "/api/fleet/all/workloads": () => [...mine(workloads), ...shed(shedWorkloads)],
-    "/api/fleet/all/nodes": () => [...mine(nodes), ...shed(shedNodes.map((name, i) => ({ ...nodes[i], name })))],
-    "/api/fleet/all/vms": () => [...mine(demoVms), ...shed([{ ...demoVms[0], name: "pfsense", node: shedNodes[0], ip: "192.0.2.1", ips: ["192.0.2.1"] }])],
-    "/api/fleet/all/volumes": () => [...mine(volumes), ...shed(volumes.slice(0, 2).map((v, i) => ({ ...v, name: `pvc-shed-${i}`, pvc_name: ["jellyfin-config", "unifi-data"][i] })))],
+    "/api/fleet/legacy": [{ name: "staging", url: "http://192.0.2.252:8088", user: "admin", added: "2026-05-02 18:40", linked_as: null }],
+    "/api/fleet/link-legacy": { ok: true, member: { name: "Staging" }, missed: [] }, "/api/fleet/leave": { ok: true, missed: [] },
+    "/api/fleet/all/workloads": () => [...mine(workloads), ...branch(branchWorkloads)],
+    "/api/fleet/all/nodes": () => [...mine(nodes), ...branch(branchNodes.map((name, i) => ({ ...nodes[i], name })))],
+    "/api/fleet/all/vms": () => [...mine(demoVms), ...branch([{ ...demoVms[0], name: "pfsense", node: branchNodes[0], ip: "192.0.2.1", ips: ["192.0.2.1"] }])],
+    "/api/fleet/all/volumes": () => [...mine(volumes), ...branch(volumes.slice(0, 2).map((v, i) => ({ ...v, name: `pvc-branch-${i}`, pvc_name: ["jellyfin-config", "unifi-data"][i] })))],
   });
   responses["/api/ipam/free"] = [
-    { cidr: "192.0.2.0/24", name: "Home LAN", free: ["192.0.2.231", "192.0.2.232", "192.0.2.233", "192.0.2.236",
+    { cidr: "192.0.2.0/24", name: "Main LAN", free: ["192.0.2.231", "192.0.2.232", "192.0.2.233", "192.0.2.236",
       "192.0.2.237", "192.0.2.238", "192.0.2.241", "192.0.2.247", "192.0.2.248", "192.0.2.249", "192.0.2.251", "192.0.2.253"] },
     { cidr: "10.20.0.0/24", name: "Lab VLAN", free: ["10.20.0.10", "10.20.0.11", "10.20.0.12", "10.20.0.13"] }];
   const demoConfigParts = [
@@ -1957,9 +1957,9 @@ ssh_pwauth: true
   Object.assign(responses, {
     "/api/config/parts": demoConfigParts.map(([id, label, detail, dflt, caution]) => ({ id, label, detail, caution: caution || "",
       default: id !== "users", present: id !== "vmstore" })),
-    "/api/config/backup": { format: "homestead-config-backup", version: 1, homestead: "2.8.257", site: "Loft rack",
+    "/api/config/backup": { format: "homestead-config-backup", version: 1, homestead: "2.8.257", site: "Main site",
       created: new Date().toISOString(), parts: [] },
-    "/api/config/inspect": { homestead: "2.8.209", site: "Loft rack", created: "2026-09-26T21:40:00Z",
+    "/api/config/inspect": { homestead: "2.8.209", site: "Main site", created: "2026-09-26T21:40:00Z",
       parts: demoConfigParts.map(([id, label, detail, , caution], i) => ({ id, label, detail, caution: caution || "", default: id !== "users",
         state: id === "vmstore" ? "empty" : ["ipam", "vips", "portal"].includes(id) ? "differs" : "same", restorable: id !== "vmstore" })) },
     "/api/config/restore": { ok: true, restored: ["ipam", "vips", "portal"], skipped: [], detail: "restored IP addresses, VIPs, Portal" },
@@ -1991,15 +1991,15 @@ ssh_pwauth: true
     const url = new URL(typeof input === "string" ? input : input.url, location.origin);
     if (!url.pathname.startsWith("/api/")) return original(input, init);
     const key = url.pathname === "/api/image-updates" ? "/api/image-updates" : url.pathname;
-    // Asked of a linked cluster: the Shed runs an older Homestead, which does
+    // Asked of a linked cluster: the branch office runs an older Homestead, which does
     // not yet tag its own parts, with a release waiting.
     const cluster = init?.headers?.["X-Homestead-Cluster"];
     if (cluster && key === "/api/image-updates") {
-      const shedReport = { checked_at: new Date().toISOString(), updates: 0, errors: 0, workloads: [
+      const branchReport = { checked_at: new Date().toISOString(), updates: 0, errors: 0, workloads: [
         { ns: "lab", name: "homestead", available: true, can_rollback: true, images: [{ container: "homestead",
           deployed: "ghcr.io/wjcloudy/homestead:2.8.200", candidate: "ghcr.io/wjcloudy/homestead:2.9.0", candidate_tag: "2.9.0", available: true }] },
         { ns: "lab", name: "jellyfin", available: false, can_rollback: false, images: [] }] };
-      return new Response(JSON.stringify(shedReport), { status: 200, headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify(branchReport), { status: 200, headers: { "Content-Type": "application/json" } });
     }
     const configured = responses[key];
     let value = typeof configured === "function" ? configured(url, init) : configured;

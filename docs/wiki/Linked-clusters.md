@@ -1,6 +1,6 @@
 # Linked clusters
 
-Link your Homestead clusters - the loft rack, the shed, a second site - and
+Link your Homestead clusters - your main site, a branch office, a disaster-recovery site - and
 manage all of them from any one. Only one needs to be reachable from outside:
 it relays everything, consoles included, to the others.
 
