@@ -141,6 +141,11 @@ rules:
   - apiGroups: ["cdi.kubevirt.io"]
     resources: [datavolumes]
     verbs: [get, list, watch, create, delete]
+  # A VM brought from Unraid: its disks arrive through CDI's upload proxy,
+  # which takes a short-lived token for each one.
+  - apiGroups: ["upload.cdi.kubevirt.io"]
+    resources: [uploadtokenrequests]
+    verbs: [create]
   # upgrades and versions: the Cluster page shows what Harvester offers,
   # starts an upgrade to an offered version when an admin asks, and follows
   # it, as Harvester's own dashboard does.

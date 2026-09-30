@@ -85,8 +85,10 @@ column headings are the one small upper-case label.
   Settings).
 - **A page that belongs to another is its tab**, not a sidebar entry:
   Architecture of the Dashboard; Images, Schedules and Import of Containers
-  (Deploy is reached from its ＋ Deploy); Helm of the App Store; Events and
-  Resources of Cluster. `router.js` records it as the route's `parent` and
+  (Deploy is reached from its ＋ Deploy); Import of Virtual machines; Helm of
+  the App Store; Events and Resources of Cluster. A thing is imported on the
+  page it ends up on: containers under Containers › Import, VMs under
+  Virtual machines › Import, from the same Unraid servers. `router.js` records it as the route's `parent` and
   the family's `TABS`; the sidebar marks the parent, the breadcrumbs name
   it, and every page keeps its own address.
 - **A phone has a bottom bar**: Home, Apps, VMs, Storage, and More, which

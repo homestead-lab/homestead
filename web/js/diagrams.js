@@ -111,5 +111,28 @@
     return figure(svg(516, h, b, label), opts.caption || "");
   }
 
-  root.Diagram = Object.freeze({ node, vip, mapping });
+  /* A VM brought from another host: each of its settings on the left, what
+     it becomes here on the right, and what stays behind struck through.
+     rows: [{ what, from, to, drop }] */
+  function vmImport(rows, opts = {}) {
+    const list = (rows || []).slice(0, 12);
+    const h = 24 + Math.max(1, list.length) * 28;
+    let b = text(4, 12, opts.from || "on the source", "dg-xs dg-dim") + text(300, 12, opts.to || "in Homestead", "dg-xs dg-dim");
+    list.forEach((r, i) => {
+      const y = 20 + i * 28;
+      b += box(4, y, 256, 22, r.drop ? "dg-src dg-faint" : "dg-src", 5)
+        + text(11, y + 15, clip(r.what, 12), `dg-xs dg-b${r.drop ? " dg-dim" : ""}`)
+        + text(90, y + 15, clip(r.from, 27), `dg-xs dg-mono${r.drop ? " dg-dim" : ""}`);
+      if (r.drop) {
+        b += line(`M262 ${y + 11}H292`, "dg-line dg-dash-line dg-faint", false) + text(300, y + 15, "stays behind", "dg-xs dg-dim");
+        return;
+      }
+      b += line(`M262 ${y + 11}H292`) + box(296, y, 216, 22, r.what === "Disk" || /^Disk/.test(r.what) ? "dg-vol-box" : "dg-vm", 5)
+        + text(304, y + 15, clip(r.to, 33), "dg-xs dg-mono");
+    });
+    const label = list.map(r => r.drop ? `${r.what} ${r.from} stays behind` : `${r.what} ${r.from} becomes ${r.to}`).join("; ") || "Nothing to bring across";
+    return figure(svg(516, h, b, label), opts.caption || "");
+  }
+
+  root.Diagram = Object.freeze({ node, vip, mapping, vmImport });
 })(typeof window !== "undefined" ? window : globalThis);

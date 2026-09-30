@@ -31,6 +31,7 @@ const PAGES = [
   ["nodes-all", "nodes", "localStorage.setItem('homestead.fleet.mode','all');viewNodes()"],
   ["volumes-all", "storage", "localStorage.setItem('homestead.fleet.mode','all');viewStorage()"],
   ["vms", "vms"],
+  ["vm-import", "vmimport"],
   ["app-store", "store"],
   ["helm", "helm"],
   ["shares", "shares"],

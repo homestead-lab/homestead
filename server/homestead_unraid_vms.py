@@ -1,0 +1,563 @@
+"""VMs on an Unraid server, and bringing one across to KubeVirt.
+
+Unraid runs its VMs with libvirt, and `virsh dumpxml` says everything about
+one: its CPUs and memory, its firmware, its vdisk files, the bridge and MAC
+of its network card, and what is passed through to it. listing() reads that
+over the import source's pinned SSH - the same login the container import
+uses - and plan() maps it onto what a Homestead VM can be, saying what cannot
+come across and why.
+
+Importing copies each vdisk into a CDI DataVolume through CDI's upload proxy:
+a Job reads the file over SSH and streams it into an authenticated upload, and
+CDI turns raw or qcow2 into a VM disk as it arrives. An upload token lasts a
+few minutes, so every disk has its own Job, all started together. Once every
+disk has arrived the VM is made, stopped, for its owner to start.
+
+Nothing on Unraid is changed, but for one thing its owner asks for: a VM still
+running there can be shut down (virsh shutdown - its power button), because a
+disk copied while its VM writes to it may not boot.
+"""
+import base64
+import json
+import math
+import re
+import shlex
+import xml.etree.ElementTree as ET
+
+import homestead_names as NAMES
+
+IMP = kget = ksend = OPS = None
+platform = lambda: {}
+KIND = "unraid-vm-import"
+TASK = "vm-import"
+IMAGE = "alpine:3.20"
+UPLOAD_API = "/apis/upload.cdi.kubevirt.io/v1beta1"
+CDI_API = "/apis/cdi.kubevirt.io/v1beta1"
+# What Unraid's templates name a card, and what KubeVirt calls it.
+NIC_MODELS = {"virtio": "virtio", "virtio-net": "virtio", "e1000": "e1000", "e1000e": "e1000e",
+              "rtl8139": "rtl8139", "vmxnet3": "e1000e"}
+DISK_BUSES = {"virtio": "virtio", "sata": "sata", "scsi": "scsi", "ide": "sata", "usb": "sata"}
+# A VM's name on Unraid is free text; it has to be one line of something sane.
+UNRAID_NAME = re.compile(r"[^\x00-\x1f/]{1,128}")
+
+
+def bind(imports, _kget, _ksend, ops, _platform=None):
+    global IMP, kget, ksend, OPS, platform
+    IMP, kget, ksend, OPS = imports, _kget, _ksend, ops
+    if _platform:
+        platform = _platform
+
+
+# ------------------------------------------------------------ reading Unraid
+
+# One line per VM (name, state, XML, each base64 so nothing in them can break
+# the listing), then one per file disk with what qemu-img says of it.
+LIST_SCRIPT = r"""
+command -v virsh >/dev/null 2>&1 || { echo NOVIRSH; exit 0; }
+virsh list --all --name 2>/dev/null | while IFS= read -r vm; do
+  [ -n "$vm" ] || continue
+  state=$(virsh domstate --domain "$vm" 2>/dev/null | head -n 1)
+  xml=$(virsh dumpxml --domain "$vm" 2>/dev/null) || continue
+  printf 'VM %s %s %s\n' "$(printf %s "$vm" | base64 | tr -d '\n')" "$(printf %s "$state" | base64 | tr -d '\n')" "$(printf %s "$xml" | base64 | tr -d '\n')"
+  virsh domblklist --details --domain "$vm" 2>/dev/null | awk '$1 == "file" && $2 == "disk" { $1 = $2 = $3 = ""; sub(/^ +/, ""); print }' | while IFS= read -r disk; do
+    [ -f "$disk" ] || continue
+    info=$(qemu-img info -U --output=json -- "$disk" 2>/dev/null | tr -d '\n') || info=""
+    size=$(stat -c %s -- "$disk" 2>/dev/null || echo 0)
+    used=$(du -k -- "$disk" 2>/dev/null | cut -f 1)
+    printf 'DISK %s %s %s %s\n' "$(printf %s "$disk" | base64 | tr -d '\n')" "${size:-0}" "$(( ${used:-0} * 1024 ))" "$(printf %s "$info" | base64 | tr -d '\n')"
+  done
+done
+echo END
+"""
+
+
+def _b64(value):
+    try:
+        return base64.b64decode(value or "", validate=True).decode("utf-8", "replace")
+    except (ValueError, TypeError):
+        return ""
+
+
+def parse_listing(lines):
+    """[(name, state, xml)] and {path: facts} from what LIST_SCRIPT printed."""
+    domains, disks, complete, virsh = [], {}, False, True
+    for line in lines:
+        parts = line.split(" ")
+        if parts[0] == "NOVIRSH":
+            virsh = False
+        elif parts[0] == "END":
+            complete = True
+        elif parts[0] == "VM" and len(parts) == 4:
+            domains.append((_b64(parts[1]), _b64(parts[2]).strip(), _b64(parts[3])))
+        elif parts[0] == "DISK" and len(parts) == 5:
+            info = {}
+            try:
+                info = json.loads(_b64(parts[4]) or "{}")
+            except ValueError:
+                pass
+            size = int(parts[2]) if parts[2].isdigit() else 0
+            disks[_b64(parts[1])] = {
+                "format": str(info.get("format") or ""),
+                "virtual": int(info.get("virtual-size") or size or 0),
+                "size": size, "used": int(parts[3]) if parts[3].isdigit() else 0}
+    return {"virsh": virsh, "complete": complete, "domains": domains, "disks": disks}
+
+
+def _kib(element, default=0):
+    if element is None or not (element.text or "").strip().isdigit():
+        return default
+    value = int(element.text.strip())
+    unit = (element.get("unit") or "KiB").lower()
+    factor = {"b": 1 / 1024, "bytes": 1 / 1024, "k": 1, "kib": 1, "kb": 1000 / 1024, "m": 1024, "mib": 1024,
+              "mb": 1000 ** 2 / 1024, "g": 1024 ** 2, "gib": 1024 ** 2, "gb": 1000 ** 3 / 1024}.get(unit, 1)
+    return int(value * factor)
+
+
+def _template(root):
+    """Unraid's own note on the VM: <vmtemplate xmlns="unraid" os="windows11" .../>."""
+    for element in root.iter():
+        if isinstance(element.tag, str) and element.tag.endswith("}vmtemplate") or element.tag == "vmtemplate":
+            return element
+    return ET.Element("vmtemplate")
+
+
+def parse_domain(text):
+    """What libvirt's XML says about one VM, in plain fields."""
+    root = ET.fromstring(text)
+    os_el = root.find("os")
+    os_type = os_el.find("type") if os_el is not None else None
+    loader = os_el.find("loader") if os_el is not None else None
+    loader_path = (loader.text or "").strip() if loader is not None else ""
+    uefi = bool(loader is not None and ("ovmf" in loader_path.lower() or loader.get("type") == "pflash")) or (
+        os_el is not None and os_el.get("firmware") == "efi")
+    devices = root.find("devices")
+    devices = devices if devices is not None else ET.Element("devices")
+    disks, cdroms, other_disks = [], [], []
+    for disk in devices.findall("disk"):
+        device, kind = disk.get("device", "disk"), disk.get("type", "")
+        source, target, driver = disk.find("source"), disk.find("target"), disk.find("driver")
+        path = (source.get("file") or source.get("dev") or "") if source is not None else ""
+        row = {"path": path, "target": target.get("dev", "") if target is not None else "",
+               "bus": target.get("bus", "") if target is not None else "",
+               "format": driver.get("type", "") if driver is not None else "",
+               "boot": int((disk.find("boot").get("order") or 0)) if disk.find("boot") is not None and
+               str(disk.find("boot").get("order") or "").isdigit() else 0}
+        if device == "cdrom":
+            cdroms.append(row)
+        elif device == "disk" and kind == "file" and path:
+            disks.append(row)
+        elif device == "disk":
+            other_disks.append(dict(row, type=kind))
+    nics = []
+    for nic in devices.findall("interface"):
+        mac, source, model = nic.find("mac"), nic.find("source"), nic.find("model")
+        nics.append({"type": nic.get("type", ""), "mac": (mac.get("address", "") if mac is not None else "").lower(),
+                     "bridge": (source.get("bridge") or source.get("network") or source.get("dev") or "") if source is not None else "",
+                     "model": model.get("type", "") if model is not None else ""})
+    hostdevs = []
+    for dev in devices.findall("hostdev"):
+        kind, source = dev.get("type", ""), dev.find("source")
+        if kind == "pci" and source is not None and source.find("address") is not None:
+            a = source.find("address")
+            hostdevs.append({"type": "pci", "id": "{}:{}:{}.{}".format(*(str(a.get(k, "0")).replace("0x", "")
+                                                                         for k in ("domain", "bus", "slot", "function")))})
+        elif kind == "usb" and source is not None:
+            vendor, product = source.find("vendor"), source.find("product")
+            hostdevs.append({"type": "usb", "id": ":".join(x.get("id", "").replace("0x", "")
+                                                            for x in (vendor, product) if x is not None)})
+        else:
+            hostdevs.append({"type": kind or "device", "id": ""})
+    vcpu = root.find("vcpu")
+    features = root.find("features")
+    cpu = root.find("cpu")
+    return {
+        "name": (root.findtext("name") or "").strip(),
+        "uuid": (root.findtext("uuid") or "").strip(),
+        "description": (root.findtext("description") or "").strip()[:200],
+        "os": _template(root).get("os", ""),
+        "vcpus": int(vcpu.text) if vcpu is not None and (vcpu.text or "").strip().isdigit() else 1,
+        "memory_kib": _kib(root.find("currentMemory"), _kib(root.find("memory"), 1024 ** 2)),
+        "machine": os_type.get("machine", "") if os_type is not None else "",
+        "uefi": uefi, "secure_boot": loader is not None and (loader.get("secure") == "yes" or "secboot" in loader_path.lower()),
+        "tpm": devices.find("tpm") is not None,
+        "hyperv": features is not None and features.find("hyperv") is not None,
+        "cpu_mode": cpu.get("mode", "") if cpu is not None else "",
+        "pinned": root.find("cputune/vcpupin") is not None,
+        "disks": sorted(disks, key=lambda d: (d["boot"] or 99, d["target"])),
+        "other_disks": other_disks, "cdroms": cdroms, "nics": nics, "hostdevs": hostdevs,
+        "graphics": [g.get("type", "") for g in devices.findall("graphics")],
+        "sound": devices.find("sound") is not None,
+    }
+
+
+def slug(name):
+    """A Homestead name from an Unraid one: "Windows 11" -> "windows-11"."""
+    value = re.sub(r"[^a-z0-9]+", "-", str(name or "").lower()).strip("-")[:40].strip("-")
+    return value or "imported-vm"
+
+
+def plan(dom, facts):
+    """How one Unraid VM maps to a Homestead VM, and what stays behind."""
+    gib = 1024 ** 3
+    disks, dropped = [], []
+    for index, disk in enumerate(dom["disks"]):
+        seen = facts.get(disk["path"]) or {}
+        virtual = int(seen.get("virtual") or 0)
+        disks.append({"index": index, "path": disk["path"], "target": disk["target"],
+                      "unraid_bus": disk["bus"], "bus": DISK_BUSES.get(disk["bus"], "virtio"),
+                      "format": seen.get("format") or disk["format"] or "raw",
+                      "virtual": virtual, "size": int(seen.get("size") or 0), "used": int(seen.get("used") or 0),
+                      "size_gb": max(1, math.ceil(virtual / gib)) if virtual else 0,
+                      "found": bool(seen)})
+    for disk in dom["other_disks"]:
+        dropped.append({"what": "Disk " + (disk["target"] or ""), "detail": disk["path"],
+                        "reason": "a physical disk passed through, not a file: attach its data another way"})
+    for cd in dom["cdroms"]:
+        if cd["path"]:
+            dropped.append({"what": "CD-ROM", "detail": cd["path"].rsplit("/", 1)[-1],
+                            "reason": "an ISO is only needed to install; add one in Edit VM if you still need it"})
+    for dev in dom["hostdevs"]:
+        dropped.append({"what": "GPU or PCI device" if dev["type"] == "pci" else "USB device" if dev["type"] == "usb" else "Device",
+                        "detail": dev["id"], "hardware": True,
+                        "reason": "passthrough is tied to Unraid's hardware; add it from Homestead's hardware devices in Edit VM"})
+    for extra in dom["nics"][1:]:
+        dropped.append({"what": "Second network card", "detail": extra["bridge"] + " " + extra["mac"],
+                        "reason": "a Homestead VM starts with one network card"})
+    if dom["pinned"]:
+        dropped.append({"what": "CPU pinning", "detail": "vcpupin",
+                        "reason": "Unraid's own tuning for its cores; the core count comes across"})
+    machine = dom["machine"]
+    notes = []
+    if dom["tpm"]:
+        notes.append("its TPM comes across as a new one - Unraid keeps the old one's contents - so BitLocker, "
+                     "if it is on, asks once for its recovery key")
+    if machine and "q35" not in machine:
+        notes.append(f"{machine} becomes q35, the only machine type KubeVirt runs; Linux doesn't mind, "
+                     "and Windows finds its devices again on first boot")
+    nic = dom["nics"][0] if dom["nics"] else {}
+    unraid_state = dom.get("state", "")
+    return {
+        "name": dom["name"], "slug": slug(dom["name"]), "state": unraid_state,
+        "shut_off": unraid_state == "shut off", "os": dom["os"],
+        "cores": max(1, min(128, dom["vcpus"])),
+        "memory": f"{dom['memory_kib'] // 1024 ** 2}Gi" if dom["memory_kib"] >= 1024 ** 2 and not dom["memory_kib"] % 1024 ** 2
+        else f"{max(64, dom['memory_kib'] // 1024)}Mi",
+        "firmware": "uefi" if dom["uefi"] else "bios", "secure_boot": bool(dom["secure_boot"]),
+        "tpm": bool(dom["tpm"]), "hyperv": bool(dom["hyperv"]),
+        "cpu_model": "host-passthrough" if dom["cpu_mode"] == "host-passthrough" else "",
+        "machine": machine,
+        "disks": disks, "nic": {"mac": nic.get("mac", ""), "bridge": nic.get("bridge", ""),
+                                "model": nic.get("model", ""), "nic_model": NIC_MODELS.get(nic.get("model", ""), "virtio")},
+        "dropped": dropped, "notes": notes,
+        "ready": bool(disks) and all(d["found"] and d["virtual"] for d in disks),
+        "problem": ("" if disks else "it has no vdisk file to copy") or next(
+            (f"{d['path']} could not be read on Unraid" for d in disks if not d["found"] or not d["virtual"]), ""),
+    }
+
+
+def _source(name):
+    src = IMP._source(name)
+    if src.get("kind") not in ("unraid", "ssh"):
+        raise ValueError("VMs are imported from an Unraid server")
+    return src
+
+
+def listing(source):
+    """Every VM on one Unraid server, mapped."""
+    src = _source(source)
+    lines = IMP.run_probe(f"vms-{source}", IMP._ssh_script(src, LIST_SCRIPT), src, timeout=120)
+    found = parse_listing(lines)
+    if not found["virsh"]:
+        return {"source": source, "virsh": False, "vms": []}
+    if not found["complete"]:
+        raise ValueError("Unraid's VM list was cut short; try again")
+    vms = []
+    for name, state, xml in found["domains"]:
+        try:
+            dom = parse_domain(xml)
+        except ET.ParseError:
+            continue
+        dom["state"] = state
+        vms.append(plan(dom, found["disks"]))
+    return {"source": source, "virsh": True, "vms": sorted(vms, key=lambda v: v["name"].lower())}
+
+
+def _one(source, vm):
+    vm = str(vm or "")
+    if not UNRAID_NAME.fullmatch(vm) or vm.startswith("-"):
+        raise ValueError("which VM?")
+    found = next((v for v in listing(source)["vms"] if v["name"] == vm), None)
+    if not found:
+        raise ValueError(f"{source} has no VM named {vm}")
+    return found
+
+
+def shutdown(source, vm):
+    """Ask Unraid to shut a VM down cleanly - its power button, not a pull of the plug."""
+    found = _one(source, vm)
+    if found["shut_off"]:
+        return {"ok": True, "message": f"{vm} is already shut off"}
+    src = _source(source)
+    IMP.run_probe(f"vm-off-{source}", IMP._ssh_script(src, "virsh shutdown --domain " + shlex.quote(vm)), src, timeout=60)
+    return {"ok": True, "message": f"Asked {source} to shut {vm} down; it shows as shut off once the guest has stopped"}
+
+
+# ------------------------------------------------------------ importing
+
+def _upload_url():
+    """Where CDI's upload proxy answers inside the cluster."""
+    try:
+        rows = kget("/api/v1/services?fieldSelector=metadata.name%3Dcdi-uploadproxy").get("items") or []
+    except Exception:
+        rows = []
+    namespace = (rows[0].get("metadata") or {}).get("namespace", "cdi") if rows else ""
+    if not namespace:
+        raise ValueError("CDI's upload proxy was not found; the containerized data importer (CDI) is needed to import VM disks")
+    return f"https://cdi-uploadproxy.{namespace}.svc/v1beta1/upload", namespace
+
+
+def disk_names(name, count):
+    return [f"{name}-disk" if i == 0 else f"{name}-disk-{i + 1}" for i in range(count)]
+
+
+def start(body, actor=""):
+    """Check, make the empty disks, and start the job that fills them."""
+    source = str(body.get("source") or "")
+    found = _one(source, body.get("vm"))
+    if not found["shut_off"]:
+        raise ValueError(f"{found['name']} is {found['state'] or 'running'} on {source}: shut it down first, "
+                         "so its disk is copied as it was left")
+    if not found["ready"]:
+        raise ValueError(f"{found['name']} cannot be imported: {found['problem']}")
+    name = IMP._required_name(body.get("name") or found["slug"])
+    ns = IMP._required_name(body.get("namespace") or IMP.NS, "namespace")
+    if IMP._get_or_none(f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}") is not None:
+        raise ValueError(f"a VM named {name} already exists in {ns}")
+    skip = {int(i) for i in body.get("skip_disks") or [] if str(i).isdigit()}
+    disks = [d for d in found["disks"] if d["index"] == 0 or d["index"] not in skip]
+    names = disk_names(name, len(disks))
+    for dv in names:
+        plan_ = IMP.vm_disk_import_plan(ns, dv)
+        if not plan_["ready"]:
+            raise ValueError(plan_["message"])
+    cores = int(body.get("cores") or found["cores"])
+    memory = str(body.get("memory") or found["memory"])
+    if not 1 <= cores <= 128:
+        raise ValueError("between 1 and 128 cores")
+    if not re.fullmatch(r"\d+(?:\.\d+)?(?:Mi|Gi)", memory):
+        raise ValueError("memory must be like 8Gi or 512Mi")
+    storage_class = str(body.get("storage_class") or "").strip()
+    network = str(body.get("network") or "pod").strip()
+    if network != "pod":
+        # Checked now, not after an hour of copying.
+        if not re.fullmatch(r"[a-z0-9-]+/[a-z0-9.-]+", network) or IMP._get_or_none(
+                "/apis/k8s.cni.cncf.io/v1/namespaces/{}/network-attachment-definitions/{}".format(*network.split("/", 1))) is None:
+            raise ValueError(f"there is no LAN network {network}")
+    mac = found["nic"]["mac"] if body.get("keep_mac", True) and found["nic"]["mac"] else ""
+    url, _ = _upload_url()
+    hardware = {"firmware": found["firmware"], "machine": "q35", "hyperv": found["hyperv"]}
+    if found["firmware"] == "uefi":
+        hardware["secure_boot"] = found["secure_boot"]
+    if found["tpm"]:
+        # A new TPM, as the note says; "on" works on every KubeVirt, where a
+        # persistent one needs the cluster set up for VM state.
+        hardware["tpm"] = "on"
+    vm_cfg = {"name": name, "namespace": ns, "cores": cores, "memory": memory, "start": False,
+              "disk_import": names[0], "disk_bus": disks[0]["bus"],
+              "extra_disks": [{"name": dv, "bus": d["bus"]} for dv, d in zip(names[1:], disks[1:])],
+              "network": network, "nic_model": str(body.get("nic_model") or found["nic"]["nic_model"]),
+              "hardware": hardware, "labels": {NAMES.key("imported-from"): slug(source)[:63]}}
+    if mac:
+        vm_cfg["mac"] = mac
+    if found["cpu_model"]:
+        vm_cfg["cpu_model"] = found["cpu_model"]
+    created = []
+    try:
+        for dv, disk in zip(names, disks):
+            storage = {"resources": {"requests": {"storage": f"{disk['size_gb']}Gi"}}}
+            if storage_class:
+                storage["storageClassName"] = storage_class
+            ksend("POST", f"{CDI_API}/namespaces/{ns}/datavolumes", {
+                "apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "DataVolume",
+                "metadata": {"name": dv, "namespace": ns,
+                             "labels": {NAMES.key("managed"): "true", IMP.VM_DISK_LABEL: "true"},
+                             "annotations": {"homestead.io/import-source": "unraid",
+                                             "homestead.io/disk-format": disk["format"]}},
+                "spec": {"source": {"upload": {}}, "contentType": "kubevirt", "storage": storage}})
+            created.append(dv)
+    except Exception:
+        for dv in created:
+            _delete(f"{CDI_API}/namespaces/{ns}/datavolumes/{dv}")
+        raise
+    ref = {"source": source, "vm": found["name"], "namespace": ns, "name": name, "url": url, "phase": "disks",
+           "disks": [{"dv": dv, "path": d["path"], "bytes": d["size"], "job": ""} for dv, d in zip(names, disks)],
+           "vm_cfg": vm_cfg, "by": actor}
+    return OPS.start(KIND, f"Import {found['name']} from {source}", {"kind": "VirtualMachine", "name": name, "namespace": ns},
+                     "/vms/import", ref, "Making its disks")
+
+
+def _delete(path):
+    try:
+        ksend("DELETE", path, {"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Background"})
+    except Exception:
+        pass
+
+
+def copy_script(src, vm, path, size):
+    """Read one vdisk over SSH into the upload, the VM checked still off first."""
+    ssh = lambda remote: IMP._ssh_script(src, remote)
+    return "\n".join([
+        "set -eu", "set -o pipefail",
+        "apk add --no-cache openssh-client sshpass curl pv >/dev/null 2>&1 || apk add --no-cache openssh-client sshpass curl >/dev/null",
+        IMP.SOURCE_SSH.setup(src).rstrip("\n"),
+        f"state=$({ssh('virsh domstate --domain ' + shlex.quote(vm))} | head -n 1)",
+        f"[ \"$state\" = 'shut off' ] || {{ echo \"HSVM-FAILED {vm} is $state on Unraid again; its disk was not copied\"; exit 5; }}",
+        "meter() { if command -v pv >/dev/null 2>&1; then pv -n -i 10 -s " + str(int(size)) + "; else cat; fi; }",
+        f"{ssh('cat -- ' + shlex.quote(path))} | meter | curl -sS --fail-with-body --cacert /ca/ca.crt -X POST -T - "
+        "-H \"Authorization: Bearer $TOKEN\" -H 'Content-Type: application/octet-stream' \"$UPLOAD_URL\"",
+        "echo HSVM-DONE",
+    ])
+
+
+def _job(ref, disk, index, token, ca):
+    src = _source(ref["source"])
+    job = f"homestead-vmimport-{ref['name']}"[:55].rstrip("-") + f"-{index + 1}"
+    secret = job + "-upload"
+    ns = ref["namespace"]
+    ksend("POST", f"/api/v1/namespaces/{ns}/secrets", {
+        "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+        "metadata": {"name": secret, "namespace": ns, "labels": NAMES.labels(TASK)},
+        "stringData": {"token": token, "ca.crt": ca}})
+    body = {
+        "apiVersion": "batch/v1", "kind": "Job",
+        "metadata": {"name": job, "namespace": ns, "labels": NAMES.labels(TASK)},
+        "spec": {"backoffLimit": 0, "ttlSecondsAfterFinished": 3600, "template": {
+            "metadata": {"labels": NAMES.labels(TASK)},
+            "spec": {"restartPolicy": "Never", "automountServiceAccountToken": False,
+                     "containers": [{
+                         "name": "copy", "image": IMAGE,
+                         "command": ["sh", "-c", copy_script(src, ref["vm"], disk["path"], disk["bytes"])],
+                         "env": [{"name": "SSHPASS", "valueFrom": {"secretKeyRef": {"name": IMP.source_secret(src["name"], src), "key": "password"}}},
+                                 {"name": "TOKEN", "valueFrom": {"secretKeyRef": {"name": secret, "key": "token"}}},
+                                 {"name": "UPLOAD_URL", "value": ref["url"]}],
+                         "volumeMounts": [{"name": "ca", "mountPath": "/ca", "readOnly": True}],
+                         "resources": {"requests": {"cpu": "100m", "memory": "64Mi"}, "limits": {"memory": "256Mi"}}}],
+                     "volumes": [{"name": "ca", "secret": {"secretName": secret, "items": [{"key": "ca.crt", "path": "ca.crt"}]}}]}}}}
+    ksend("POST", f"/apis/batch/v1/namespaces/{ns}/jobs", body)
+    return job, secret
+
+
+def _token(ns, dv):
+    answer = ksend("POST", f"{UPLOAD_API}/namespaces/{ns}/uploadtokenrequests", {
+        "apiVersion": "upload.cdi.kubevirt.io/v1beta1", "kind": "UploadTokenRequest",
+        "metadata": {"name": dv, "namespace": ns}, "spec": {"pvcName": dv}})
+    token = ((answer or {}).get("status") or {}).get("token", "")
+    if not token:
+        raise ValueError("CDI gave no upload token")
+    return token
+
+
+def _ca(proxy_ns):
+    """CDI's upload proxy signs with its own CA, which it publishes."""
+    for name in ("cdi-uploadproxy-signer-bundle", "cdi-uploadproxy-server-cert"):
+        found = IMP._get_or_none(f"/api/v1/namespaces/{proxy_ns}/configmaps/{name}")
+        bundle = ((found or {}).get("data") or {}).get("ca-bundle.crt", "")
+        if bundle:
+            return bundle
+    raise ValueError("CDI's upload proxy CA was not found, so the copy could not check who it talks to")
+
+
+def _job_logs(ns, job):
+    try:
+        pods = kget(f"/api/v1/namespaces/{ns}/pods?labelSelector=job-name%3D{job}").get("items") or []
+        if not pods:
+            return ""
+        from homestead_shim import raw_get
+        return raw_get(f"/api/v1/namespaces/{ns}/pods/{pods[0]['metadata']['name']}/log?tailLines=40") or ""
+    except Exception:
+        return ""
+
+
+def progress(log):
+    """pv -n prints the percentage done, one line every ten seconds."""
+    numbers = [int(line) for line in log.splitlines() if line.strip().isdigit()]
+    return min(100, numbers[-1]) if numbers else 0
+
+
+def _fail(ref, message):
+    """Clear what this import made, so it can simply be run again."""
+    ns = ref["namespace"]
+    for disk in ref["disks"]:
+        if disk.get("job"):
+            _delete(f"/apis/batch/v1/namespaces/{ns}/jobs/{disk['job']}")
+            _delete(f"/api/v1/namespaces/{ns}/secrets/{disk['job']}-upload")
+        _delete(f"{CDI_API}/namespaces/{ns}/datavolumes/{disk['dv']}")
+    ref["phase"] = "failed"
+    return "failed", 100, message + "; its part-copied disks were removed, and the VM on Unraid is as it was"
+
+
+def status(item):
+    ref = item["ref"]
+    ns = ref["namespace"]
+    total = sum(max(1, d["bytes"]) for d in ref["disks"])
+    if ref["phase"] == "done":
+        return "succeeded", 100, ref.get("detail", "Imported")
+    if ref["phase"] == "failed":
+        return "failed", 100, item.get("message", "Import failed")
+    dvs = [kget(f"{CDI_API}/namespaces/{ns}/datavolumes/{d['dv']}") for d in ref["disks"]]
+    phases = [((dv.get("status") or {}).get("phase") or "Pending") for dv in dvs]
+    if any(p in ("Failed", "Error") for p in phases):
+        return _fail(ref, "CDI could not take the disk")
+    if ref["phase"] == "disks":
+        if not all(p in ("UploadReady", "Succeeded") for p in phases):
+            return "running", 2, "Waiting for CDI to be ready to receive the disks"
+        _, proxy_ns = _upload_url()
+        ca = _ca(proxy_ns)
+        for index, disk in enumerate(ref["disks"]):
+            disk["job"], _ = _job(ref, disk, index, _token(ns, disk["dv"]), ca)
+        ref["phase"] = "copy"
+        return "running", 3, "Copying from " + ref["source"]
+    if ref["phase"] == "copy":
+        done, running, failed = 0, 0, ""
+        for disk in ref["disks"]:
+            job = IMP._get_or_none(f"/apis/batch/v1/namespaces/{ns}/jobs/{disk['job']}") or {}
+            st = job.get("status") or {}
+            if any(c.get("type") == "Failed" and c.get("status") == "True" for c in st.get("conditions") or []) or (
+                    st.get("failed") and not st.get("active")):
+                log = _job_logs(ns, disk["job"])
+                said = next((l[len("HSVM-FAILED "):] for l in log.splitlines() if l.startswith("HSVM-FAILED ")), "")
+                failed = said or (log.strip().splitlines() or ["the copy stopped"])[-1][-240:]
+                break
+            if st.get("succeeded"):
+                disk["pct"] = 100
+                done += 1
+            else:
+                disk["pct"] = progress(_job_logs(ns, disk["job"]))
+                running += 1
+        if failed:
+            return _fail(ref, f"Copying {ref['vm']} failed: {failed}")
+        pct = sum(max(1, d["bytes"]) * d.get("pct", 0) for d in ref["disks"]) / total
+        if done < len(ref["disks"]):
+            gb = sum(d["bytes"] * d.get("pct", 0) / 100 for d in ref["disks"]) / 1e9
+            return "running", max(3, min(94, round(pct * 0.94))), f"Copying from {ref['source']}: {gb:.1f} of {total / 1e9:.1f} GB"
+        for disk in ref["disks"]:
+            _delete(f"/api/v1/namespaces/{ns}/secrets/{disk['job']}-upload")
+        ref["phase"] = "convert"
+        return "running", 95, "CDI is finishing the disk"
+    if ref["phase"] == "convert":
+        if not all(p == "Succeeded" for p in phases):
+            return "running", 96, "CDI is finishing the disk"
+        try:
+            prepared = IMP.prepare_vm(dict(ref["vm_cfg"]), platform() or {}, "")
+            IMP._recheck_vm_creation(prepared)
+            IMP.commit_vm(prepared, send=ksend)
+        except ValueError as error:
+            # The disks are whole: keep them, and say how to finish by hand.
+            ref["phase"] = "failed"
+            return "failed", 100, (f"The disks arrived, but the VM could not be made: {error}. They are kept as "
+                                   f"{', '.join(d['dv'] for d in ref['disks'])}; make the VM from them under Import")
+        ref["phase"] = "done"
+        ref["detail"] = (f"{ref['name']} is ready, stopped: start it in Virtual machines. "
+                         f"{ref['vm']} on {ref['source']} is untouched")
+        return "succeeded", 100, ref["detail"]
+    return "failed", 100, "Unknown import step"
