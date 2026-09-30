@@ -290,6 +290,8 @@ const selfDataPost = (path, body) => api(path, { method: "POST", headers: { "Con
 const selfDataId = () => Array.from(crypto.getRandomValues(new Uint8Array(12)), n => n.toString(16).padStart(2, "0")).join("");
 const selfDataHostOptions = (nodes, selected = "") => nodes.map(n => `<option value="${esc(n.name)}" ${n.name === selected ? "selected" : ""} ${n.ready ? "" : "disabled"}>${esc(n.name)}${n.ready ? "" : " · unavailable"}</option>`).join("");
 window.replicasMoveData = async (jobId = "") => {
+  // The class picked beside the button is the one the dialog starts with.
+  const picked = $("#rep_class")?.value || "";
   const request = {}; selfDataDialog = request;
   modal("Move Homestead data", '<div id="selfDataFlow" class="ui-stack"><p>Reading volumes and hosts…</p></div>', true);
   try {
@@ -303,11 +305,20 @@ window.replicasMoveData = async (jobId = "") => {
     $("#selfDataFlow").innerHTML = `${UI.lead(`Two steps: make the new volume (Homestead stays online), then copy to it (a short outage). <b>${esc(state.source)}</b> is kept either way.`)}
       ${jobs.length ? `<div class="ui-stack">${jobs.map((j, i) => `<div class="note"><b>${esc(j.destination)}</b><p class="small">${esc(j.message || j.status)}</p>
         <button class="btn sm" onclick="selfDataWatch(${i})">${j.prepared ? "Review move" : "View progress"}</button></div>`).join("")}</div>` : ""}
-      ${UI.fields(UI.field("Destination storage", `<select aria-label="Destination storage" id="selfDataClass" onchange="selfDataInvalidate()">${(state.classes || []).map(c =>
-        `<option value="${esc(c.name)}">${esc(c.name)} · ${c.shareable ? "shared between hosts" : "one host at a time"}</option>`).join("")}</select>`),
-        UI.field("Host", `<select aria-label="Preparation host" id="selfDataHost" onchange="selfDataInvalidate()">${selfDataHostOptions(state.nodes || [])}</select>`, { help: "Where a volume only one host can reach is made." }))}
+      ${UI.fields(UI.field("Destination storage", `<select aria-label="Destination storage" id="selfDataClass" onchange="selfDataClassChanged()">${(state.classes || []).map(c =>
+        `<option value="${esc(c.name)}" data-shareable="${c.shareable ? 1 : 0}" ${c.name === picked ? "selected" : ""}>${esc(c.name)} · ${c.shareable ? "every host can use it" : "lives on one host's disk"}</option>`).join("")}</select>`),
+        `<div id="selfDataHostField">${UI.field("Which host's disk", `<select aria-label="Host whose disk holds the volume" id="selfDataHost" onchange="selfDataInvalidate()">${selfDataHostOptions(state.nodes || [])}</select>`,
+          { help: "This storage keeps the volume on one host's own disk, so Homestead then runs only on that host." })}</div>`)}
       <div id="selfDataReview"></div><div id="selfDataActions">${UI.actions(UI.cancel("Close") + UI.button("Check", "selfDataPrepareReview()", { kind: "pri", id: "selfDataCheck", disabled: !(state.classes?.length && state.nodes?.some(n => n.ready)) }))}</div>`;
+    selfDataClassChanged();
   } catch (e) { if (selfDataDialog === request && $("#selfDataFlow")) $("#selfDataFlow").innerHTML = `<p role="alert">${esc(e.message)}</p>`; }
+};
+/* The host only matters for storage that lives on one host's disk. */
+window.selfDataClassChanged = () => {
+  const option = $("#selfDataClass")?.selectedOptions?.[0];
+  const field = $("#selfDataHostField");
+  if (field) field.hidden = option?.dataset.shareable === "1";
+  selfDataInvalidate();
 };
 window.selfDataInvalidate = () => {
   if (selfDataDialog) { selfDataDialog.review = null; selfDataDialog.request = null; }
