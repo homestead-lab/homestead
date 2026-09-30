@@ -93,6 +93,16 @@ class CapacityTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 LHCAP.save(bad)
 
+    def test_replicas_rebuilt_at_once_per_node(self):
+        c = Cluster()
+        self.assertEqual(5, LHCAP.settings()["rebuild_limit"], "Longhorn's default when unset")
+        result = LHCAP.save({"rebuild_limit": 2})
+        self.assertIn(("PATCH", f"{LHCAP.LH}/settings/{LHCAP.REBUILD}", {"value": "2"}), c.sent)
+        self.assertIn("2 replica rebuilds at once per node", result["detail"])
+        for bad in (0, 11, "x"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                LHCAP.save({"rebuild_limit": bad})
+
     def test_on_harvester_v2_goes_through_harvesters_setting(self):
         c = Cluster(harvester=True)
         LHCAP.save({"v2": True})

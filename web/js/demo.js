@@ -1693,7 +1693,7 @@ ssh_pwauth: true
     "/api/vm/store/keep": { ok: true, detail: "Fedora Cloud is downloading as a Harvester image; it keeps itself current" },
     "/api/vm/store/refresh": { ok: true, updated: ["Ubuntu 24.04 LTS"], tidied: [] },
     // The numbers from a real two-disk-heavy cluster: node1 is nearly full.
-    "/api/longhorn/capacity": { node_down: "do-nothing", over_provisioning: 100, minimal_available: 25, warn_pct: 80, crit_pct: 95,
+    "/api/longhorn/capacity": { node_down: "do-nothing", rebuild_limit: 5, over_provisioning: 100, minimal_available: 25, warn_pct: 80, crit_pct: 95,
       largest: { 1: 236.3, 2: 36.8, 3: 17.8 },
       nodes: [
         { name: "harvester-node1", size_gb: 116.8, allocated_gb: 99, limit_gb: 116.8, used_gb: 26.3, pct: 84.8, room_gb: 17.8, physical_room_gb: 61.3, level: "warn", blocked: "",
