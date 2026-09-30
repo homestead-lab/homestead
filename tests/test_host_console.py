@@ -420,3 +420,39 @@ class ConsoleFontTests(unittest.TestCase):
         with patch.object(console.shutil, "which", return_value=None):
             self.assertFalse(font.load())
         font.restore()
+
+
+class LeftoverFontTests(unittest.TestCase):
+    """A console stopped before it put their font back left ours loaded."""
+
+    def test_a_leftover_font_is_reset_to_the_systems_then_ours_built_on_that(self):
+        system = psf1_font()
+        loaded = {"font": console.console_font(system)}       # ours, left behind
+        calls = []
+
+        def run(args, **kwargs):
+            calls.append(args[0].rsplit("/", 1)[-1] if "/" in args[0] else args[0])
+            if args[0] == "setupcon":
+                loaded["font"] = system
+            elif "-O" in args:
+                Path(args[args.index("-O") + 1]).write_bytes(loaded["font"])
+            elif len(args) == 4:
+                loaded["font"] = Path(args[3]).read_bytes()
+            return subprocess.CompletedProcess(args, 0)
+
+        font = console.ConsoleFont()
+        font.tty = "/dev/tty1"
+        with patch.object(console.shutil, "which", side_effect=lambda name: name), \
+                patch.object(console.subprocess, "run", side_effect=run):
+            self.assertTrue(font.load())
+            _, _, glyphs, table = console.read_psf(loaded["font"])
+            self.assertEqual(bytes(16), glyphs[0x20], "no \"@\" in blank cells")
+            self.assertEqual(bytes([ord("A")]) * 16, glyphs[ord("A")], "built on the system's font")
+            self.assertEqual(["setfont", "setupcon", "setfont", "setfont"], calls)
+            font.restore()
+        self.assertEqual(system, loaded["font"], "the system's font goes back, never the leftover")
+
+    def test_a_stop_signal_still_puts_their_font_back(self):
+        source = (ROOT / "scripts/host-console.py").read_text()
+        self.assertIn("signal.SIGTERM, signal.SIGHUP", source)
+        self.assertIn("font.restore()", source)
