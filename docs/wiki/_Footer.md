@@ -1,1 +1,1 @@
-This wiki is published from [`docs/wiki`](https://github.com/wjcloudy/homestead/tree/main/docs/wiki) - improve a page there. Pictures come from the [latest release](https://github.com/wjcloudy/homestead/releases/latest).
+This wiki is published from [`docs/wiki`](https://github.com/wjcloudy/homestead/tree/main/docs/wiki) - improve a page there. Pictures come from the [latest release](https://github.com/wjcloudy/homestead/releases/latest), and the [live demo](https://wjcloudy.github.io/homestead/) runs the same interface on the same made-up data.

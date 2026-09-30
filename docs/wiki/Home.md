@@ -7,7 +7,11 @@ words that make sense if you came from Unraid or Docker. It runs on
 cluster with Homestead on it - on [Harvester](https://harvesterhci.io), where
 it grew up, and on RKE2 or any cluster you look after with Headlamp today.
 
-![Homestead dashboard](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-dashboard.jpg)
+[![Homestead dashboard](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-dashboard.jpg)](https://wjcloudy.github.io/homestead/)
+
+**[Try the live demo](https://wjcloudy.github.io/homestead/)**: the real interface on made-up data, in your
+browser, with nothing to install. Every page works, and nothing you do there
+is saved.
 
 *Every picture in this wiki comes from the latest release, taken from
 Homestead's demo data, so they stay current on their own.*

@@ -1,4 +1,4 @@
-**[Home](Home)**
+**[Home](Home)** · **[Live demo](https://wjcloudy.github.io/homestead/)**
 
 **Install**
 - [On Harvester](Installing-on-Harvester)
