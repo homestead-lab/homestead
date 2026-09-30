@@ -6870,7 +6870,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
 SPA_ROUTES = frozenset({
     "/", "/architecture", "/nodes", "/deploy", "/containers", "/vms",
     "/app-store", "/shares", "/volumes", "/image-cache", "/data-protection", "/portal", "/helm", "/resources",
-    "/schedules", "/import", "/events", "/networking", "/system/cluster", "/settings",
+    "/schedules", "/import", "/vms/import", "/events", "/networking", "/system/cluster", "/settings",
 })
 
 
