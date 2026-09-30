@@ -498,6 +498,16 @@ b.uptime-ok{color:var(--ok)}b.uptime-warn{color:var(--med)}b.uptime-bad{color:va
 .meter{height:5px;border-radius:99px;background:rgba(255,255,255,.08);overflow:hidden;min-width:64px}
 .meter>span{display:block;height:100%;border-radius:99px;background:#fff;transition:width .7s var(--e)}
 .meter.w>span{background:var(--med)} .meter.b>span{background:var(--crit)}
+/* A drive in parts: the system's use, Longhorn's data, Longhorn's remaining room. */
+.meter.split{display:flex}
+.meter.split>span{border-radius:0;transition:width .7s var(--e)}
+.meter.split>span:first-child{border-radius:99px 0 0 99px}
+.meter.split>.seg-sys,.drivesplit .k-sys{background:var(--mut)}
+.meter.split>.seg-lh,.drivesplit .k-lh{background:var(--ok)}
+.meter.split>.seg-lhroom{background:var(--ok);opacity:.25}
+.drivesplit{display:flex;align-items:center;gap:5px;margin-top:3px;flex-wrap:wrap}
+.drivesplit i{display:inline-block;width:8px;height:8px;border-radius:2px}
+.drivesplit .k-lh{margin-left:6px}
 
 .nodegrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:12px}
 .podgrid{display:flex;flex-wrap:wrap;gap:3px;margin-top:11px}
