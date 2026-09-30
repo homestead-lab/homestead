@@ -26,6 +26,19 @@ class TargetTests(unittest.TestCase):
         patch = mock.patch.object(server.FLEET, "self_id", return_value="me")
         patch.start()
         self.addCleanup(patch.stop)
+        linked = mock.patch.object(server.FLEET, "member",
+                                   side_effect=lambda ref: {"id": ref, "name": ref} if ref in ("shed1", "garage1") else None)
+        linked.start()
+        self.addCleanup(linked.stop)
+
+    def test_a_cluster_this_one_does_not_know_is_forgotten_not_a_502_for_every_page(self):
+        # The address once answered from another cluster's Homestead, whose
+        # choice of cluster the browser still sends.
+        h = handler(headers={"Cookie": "homestead_cluster=old-cluster-id"})
+        self.assertEqual("", h._fleet_target("/api/nodes"))
+        self.assertIn(("Set-Cookie", "homestead_cluster=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"), h._extra_headers)
+        named = handler(headers={"X-Homestead-Cluster": "old-cluster-id"})
+        self.assertEqual("old-cluster-id", named._fleet_target("/api/nodes"), "named on purpose: still an error there")
 
     def test_a_browser_switched_to_another_cluster_is_relayed(self):
         h = handler(headers={"Cookie": "homestead_cluster=shed1"})
@@ -54,6 +67,11 @@ class TargetTests(unittest.TestCase):
 
 
 class RelayTests(unittest.TestCase):
+    def setUp(self):
+        linked = mock.patch.object(server.FLEET, "member", return_value={"id": "shed1", "name": "Shed"})
+        linked.start()
+        self.addCleanup(linked.stop)
+
     def test_the_person_is_signed_in_here_and_their_role_goes_with_them(self):
         h = handler(headers={"Cookie": "homestead_cluster=shed1; homestead_session=tok"})
         with mock.patch.object(server.FLEET, "self_id", return_value="me"), \
@@ -88,7 +106,7 @@ class RelayTests(unittest.TestCase):
                 mock.patch.object(server.FLEET, "forward", side_effect=server.FLEET.Unreachable("no answer")):
             h.do_GET()
         code, page, kind = h._send.call_args.args
-        self.assertEqual(502, code)
+        self.assertEqual(503, code, "Cloudflare hides an origin's 502 page behind its own")
         self.assertIn("/api/fleet/home", page)
         self.assertIn("text/html", kind)
 
