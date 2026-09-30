@@ -175,7 +175,7 @@ jobs:
             VERSION=ci
             REVISION=${{ github.sha }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=max,ignore-error=true
       - name: Verify self-data copies in the built Linux image
         run: |
           docker run --rm --network none --read-only --tmpfs /tmp --tmpfs /data \

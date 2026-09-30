@@ -72,7 +72,7 @@ jobs:
             VERSION=${{ steps.version.outputs.version }}
             REVISION=${{ github.sha }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=max,ignore-error=true
       - name: Wait for this commit's CI
         id: checks
         env:
@@ -130,7 +130,7 @@ jobs:
             VERSION=${{ steps.version.outputs.version }}
             REVISION=${{ github.sha }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=max,ignore-error=true
           provenance: mode=max
           sbom: true
       - name: Published digest
@@ -213,3 +213,11 @@ jobs:
             gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "Homestead $GITHUB_REF_NAME"
           fi
           gh release upload "$GITHUB_REF_NAME" release-assets/*.png release-assets/*.jpg release-assets/*.tgz --clobber
+      - name: Keep the releases page short
+        # The newest 5 releases, the newest of the 3 newest feature lines and of
+        # the 2 newest majors. Only release pages go: their tags stay, and so do
+        # the images, so any version can still be installed. Never fails a release.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/prune_releases.py --apply --keep "$GITHUB_REF_NAME"
