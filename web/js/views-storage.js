@@ -1722,7 +1722,10 @@ window.diskSetup = async (node, device) => {
     system: `It is this host's system disk (${esc(f.mounts.join(", "))}).`,
     mounted: `It is mounted at ${esc(f.mounts.join(", "))}.`,
     "longhorn-v2": `Longhorn's V2 engine keeps data on it (${esc((f.longhorn_block || []).join(", "))}): move its replicas off and remove it from Longhorn before setting it up again.`,
-    held: `It is in use by ${esc((f.holders || []).filter(h => h.kind !== "multipath").map(h => `${h.kind} (${h.name})`).join(", "))}: take it out of that on the host first.`,
+    held: `It cannot be wiped:<ul class="small">${(f.reasons || []).map(r => `<li>${esc(r)}</li>`).join("")}</ul>`,
+    lvm: `It holds LVM from an earlier install that nothing on this host is using: ${esc((f.lvm || []).map(g =>
+      `volume group ${g.vg || g.uuid}${g.lvs.length ? ` (${g.lvs.map(l => l.name).join(", ")})` : ""}`).concat((f.orphan_pvs || []).map(p => `an LVM label on ${p}`)).join("; "))}${
+      f.partitions.length ? `, on ${f.partitions.length} partition${f.partitions.length === 1 ? "" : "s"}` : ""}.`,
     missing: esc(f.error || "It is not there."),
   }[f.state];
   const choice = (value, label, detail, checked) => `<label class="disk-choice"><input type="radio" name="ds_mode" value="${value}" ${checked ? "checked" : ""} onchange="diskSetupChanged()">
@@ -1735,6 +1738,7 @@ window.diskSetup = async (node, device) => {
       <div class="disk-choices" id="ds_modes">
         ${modes.includes("format") ? choice("format", "Format it", `As a filesystem mounted at <span class="mono">${esc(f.mount_point)}</span>, for Longhorn.`, true) : ""}
         ${modes.includes("import") ? choice("import", "Keep its Longhorn data", `Mounted as it is at <span class="mono">${esc(f.mount_point)}</span>. Replicas from another cluster show in Longhorn as orphaned data; volumes come back from their backups.`, true) : ""}
+        ${modes.includes("wipe") ? choice("wipe", "Wipe and prepare it", "Switches its old volume groups off and removes them, wipes the LVM labels, filesystem signatures and partition table, has the host re-read the disk, checks it is blank, then formats it. Everything on it is destroyed.", true) : ""}
         ${modes.includes("erase") ? choice("erase", "Erase it and format", "Everything on it is destroyed.", !modes.includes("import")) : ""}</div>
       <div class="f" id="ds_fs_row"><label>Filesystem</label><select id="ds_fs"><option value="ext4">ext4</option><option value="xfs">XFS</option></select></div>
       <div class="f" id="ds_confirm_row"><label>Type <span class="mono">${esc(device)}</span> to confirm - this erases it</label><input id="ds_confirm" class="mono" autocomplete="off"></div>
