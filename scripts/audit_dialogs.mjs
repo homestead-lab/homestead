@@ -35,7 +35,10 @@ const DIALOGS = [
   ["add-host", "cluster", "platformJoinGuide()"],
   ["helm-release", "helm", "click:helmRelease"],
   ["helm-install", "helm", "helmInstall()"],
-  ["ip-edit", "network", "ipamEdit()"],
+  // The addresses load only on the network page's IP tab. Each runner takes
+  // a share of this list, so this may be the first address dialog a tab
+  // opens: it loads them itself rather than rely on what ran before it.
+  ["ip-edit", "network", "api('/api/ipam').then(d => { STATE.data.ipam = d; })", "ipamEdit()"],
   ["ip-subnets", "network", "ipamSubnets()"],
   ["ip-unifi", "network", "ipamUnifi()"],
   ["ip-import", "network", "ipamImport()"],
@@ -144,7 +147,10 @@ const browser = await chromium.launch({ headless: true });
 // working through every item in turn took most of CI's time.
 const WORKERS = Number(process.env.AUDIT_WORKERS || 4);
 const WIDTHS = [["desktop", 1440, 900, false], ["mobile", 390, 844, true]];
-const todo = DIALOGS.filter(([name]) => !only || name.includes(only));
+// CI splits the list across runners: AUDIT_SHARD of AUDIT_SHARDS, each every Nth dialog.
+const SHARDS = Math.max(1, Number(process.env.AUDIT_SHARDS || 1));
+const SHARD = Number(process.env.AUDIT_SHARD || 0) % SHARDS;
+const todo = DIALOGS.filter(([name]) => !only || name.includes(only)).filter((_, j) => j % SHARDS === SHARD);
 const shares = Array.from({ length: WORKERS }, (_, i) => todo.filter((_, j) => j % WORKERS === i)).filter((share) => share.length);
 await Promise.all(WIDTHS.flatMap((width) => shares.map((share) => audit(width, share))));
 await browser.close();
