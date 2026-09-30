@@ -646,14 +646,14 @@ def set_up(cfg):
         # The V2 engine opens the raw device, which a multipath map holds as
         # surely as wipefs finds it busy: let go of it either way.
         release = setup_module.release_script(facts.get("multipath") or ()) if facts.get("multipath") else ""
-        wipe = facts["state"] != "blank"
-        if wipe and confirm.strip() != device:
-            raise ValueError(f"type {device} to confirm: it holds {facts['fstype'] or 'partitions'}, which Longhorn's V2 engine erases")
-        if wipe or release:
-            script = f"D={device}\n{release}" + ('wipefs -a "$D" && ' if wipe else "") + "echo WIPED"
-            out, err = setup_module.hostrun.run(node, script, timeout=60)
+        if facts["state"] != "blank":
+            if confirm.strip() != device:
+                raise ValueError(f"type {device} to confirm: it holds {facts['fstype'] or 'partitions or LVM'}, which Longhorn's V2 engine erases")
+            facts = setup_module.wipe(node, device, facts)
+        elif release:
+            out, err = setup_module.hostrun.run(node, f"D={device}\n{release}echo WIPED", timeout=60)
             if "WIPED" not in out:
-                raise ValueError(f"could not clear {device}: {(err or out)[:200]}")
+                raise ValueError(f"could not release {device}: {(err or out)[:200]}")
         path, kept = facts["by_id"] or device, False
     else:
         done = setup_module.setup(node, device, mode, str(cfg.get("fstype") or "ext4"), confirm)
