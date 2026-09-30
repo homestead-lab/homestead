@@ -1,4 +1,12 @@
-"""Admin-managed host consoles, installed from this container's bundled release."""
+"""Host consoles, an add-on for the whole cluster, installed from this
+container's bundled release.
+
+One setting says whether hosts have the console. tick() brings every Ready
+host to it, a couple at a time: installed where it is missing - a host that
+joined later too - updated where it differs from the console this Homestead
+carries (so updating Homestead rolls the console out), and removed where the
+setting is off. Harvester hosts keep their native console. A host that fails
+is tried again after an hour, not every pass."""
 import base64
 import hashlib
 import json
@@ -11,6 +19,10 @@ import urllib.parse
 import homestead_shared as SHARED
 
 kget = hostrun = ops = None
+platform = lambda: {}
+CLUSTER = "_cluster"            # the add-on's setting, beside each host's record
+PER_TICK = 2
+RETRY_AFTER = 3600
 VERSION = ""
 DATA_DIR = "/data"
 PAYLOAD = Path(__file__).resolve().parent / "host-console"
@@ -38,9 +50,39 @@ def _read():
         return {}
 
 
+def _expected():
+    return hashlib.sha256((PAYLOAD / "host-console.py").read_bytes()).hexdigest()
+
+
+def wanted(saved=None):
+    """Whether hosts should have the console: the setting, else what the
+    installer did (it turns the console on by default), else unknown."""
+    saved = _read() if saved is None else saved
+    setting = saved.get(CLUSTER) or {}
+    if "enabled" in setting:
+        return bool(setting["enabled"])
+    rows = [v for k, v in saved.items() if not k.startswith("_") and isinstance(v, dict) and not v.get("native")]
+    if any(r.get("enabled") for r in rows):
+        return True
+    return False if rows else None
+
+
+def set_cluster(enabled, by=""):
+    """Turn the add-on on or off for every host; tick() does the rest."""
+    with _lock:
+        state = _read()
+        state[CLUSTER] = {"enabled": bool(enabled), "by": str(by or ""),
+                          "at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())}
+        SHARED.write_json(_path(), state, durable=True)
+    return {"ok": True, "enabled": bool(enabled),
+            "detail": ("Host consoles are being installed on every host" if enabled
+                       else "Host consoles are being removed from every host")
+                      + ", a couple at a time within ten minutes each; login sessions stay open"}
+
+
 def inventory():
     saved = _read()
-    expected = hashlib.sha256((PAYLOAD / "host-console.py").read_bytes()).hexdigest()
+    expected = _expected()
     nodes = []
     for node in kget("/api/v1/nodes").get("items", []):
         meta = node["metadata"]
@@ -55,7 +97,15 @@ def inventory():
         ready = any(c.get("type") == "Ready" and c.get("status") == "True"
                     for c in (node.get("status") or {}).get("conditions", []))
         nodes.append({**current, "name": meta["name"], "ready": ready})
-    return {"version": VERSION, "nodes": nodes}
+    want = wanted(saved)
+    hosts = [n for n in nodes if not n.get("native")]
+    installed = [n for n in hosts if n.get("enabled")]
+    current = [n for n in installed if n.get("current")]
+    settled = (want is True and len(current) == len(hosts)) or (want is False and not installed)
+    return {"version": VERSION, "nodes": nodes, "enabled": want,
+            "setting": (saved.get(CLUSTER) or {}), "hosts": len(hosts),
+            "installed": len(installed), "current": len(current), "settled": bool(hosts) and settled,
+            "harvester": bool((platform() or {}).get("harvester"))}
 
 
 def start(node, action):
@@ -97,42 +147,113 @@ def script(action):
     return "\n".join(lines)
 
 
+def _apply(node, uid, action):
+    """Run one console action on one host and record what it is now. Called
+    holding _lock: host-run uses one helper per node."""
+    try:
+        out, err = hostrun.run(node, script(action), timeout=240)
+        report = next((s for s in out.splitlines() if s.startswith("HSCONSOLE ")), "")
+        if not report:
+            raise ValueError((err or out or "Host did not return console status")[-300:])
+        fields = dict(pair.split("=", 1) for pair in report.split()[1:])
+        native, enabled = fields["native"] == "yes", fields["enabled"] == "yes"
+        version = fields.get("version", "")
+        version = version if re.fullmatch(r"\d+\.\d+\.\d+", version) else "unknown"
+        current = fields.get("digest") == _expected()
+        detail = ("Native Harvester console" if native else "Disabled" if not enabled else
+                  f"Installed {version}" + ("; matches this release" if current else "; update available"))
+        if action == "enable":
+            if not enabled or not current:
+                raise ValueError("Installed console did not match the bundled release")
+            detail += "; appears after console logout or reboot"
+        saved = {"uid": uid, "enabled": enabled, "native": native,
+                 "version": version, "digest": fields.get("digest", ""), "current": current,
+                 "checked_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+                 "detail": detail}
+    except Exception as error:
+        state = _read()
+        saved = dict(state.get(node) if (state.get(node) or {}).get("uid") == uid else {"uid": uid},
+                     failed_at=time.time(), detail=f"{action} failed: {str(error)[:300]}")
+        state[node] = saved
+        SHARED.write_json(_path(), state, durable=True)
+        raise
+    state = _read()
+    state[node] = saved
+    SHARED.write_json(_path(), state, durable=True)
+    return saved
+
+
 def status(item):
     ref = item["ref"]
     if ref.get("done"):
         return "succeeded", 100, ref["detail"]
     if ref["version"] != VERSION:
-        return "failed", 0, "Homestead changed version while this console job was queued; run it again from Settings"
+        return "failed", 0, "Homestead changed version while this console job was queued; run it again from Add-ons"
     # Host-run uses one helper per node. Serialize console jobs across replicas.
     with _lock:
         node = kget("/api/v1/nodes/" + urllib.parse.quote(ref["node"], safe=""))
         if node["metadata"].get("uid") != ref["uid"]:
-            return "failed", 0, "The original host was replaced; refresh Settings"
+            return "failed", 0, "The original host was replaced; refresh Add-ons"
         try:
-            out, err = hostrun.run(ref["node"], script(ref["action"]), timeout=240)
-            report = next((s for s in out.splitlines() if s.startswith("HSCONSOLE ")), "")
-            if not report:
-                raise ValueError((err or out or "Host did not return console status")[-300:])
-            fields = dict(pair.split("=", 1) for pair in report.split()[1:])
-            native, enabled = fields["native"] == "yes", fields["enabled"] == "yes"
-            version = fields.get("version", "")
-            version = version if re.fullmatch(r"\d+\.\d+\.\d+", version) else "unknown"
-            expected = hashlib.sha256((PAYLOAD / "host-console.py").read_bytes()).hexdigest()
-            current = fields.get("digest") == expected
-            detail = ("Native Harvester console" if native else "Disabled" if not enabled else
-                      f"Installed {version}" + ("; matches this release" if current else "; update available"))
-            if ref["action"] == "enable":
-                if not enabled or not current:
-                    raise ValueError("Installed console did not match the bundled release")
-                detail += "; appears after console logout or reboot"
-            saved = {"uid": ref["uid"], "enabled": enabled, "native": native,
-                     "version": version, "digest": fields.get("digest", ""), "current": current,
-                     "checked_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-                     "detail": detail}
-            state = _read()
-            state[ref["node"]] = saved
-            SHARED.write_json(_path(), state, durable=True)
-            ref.update(done=True, detail=detail)
-            return "succeeded", 100, detail
+            saved = _apply(ref["node"], ref["uid"], ref["action"])
         except Exception as error:
             return "failed", 0, str(error)[:400]
+        ref.update(done=True, detail=saved["detail"])
+        return "succeeded", 100, saved["detail"]
+
+
+def _due(record, uid, want, expected, now):
+    """What a host needs, or "" - from its record and the setting."""
+    same = record.get("uid") == uid
+    if same and now - float(record.get("failed_at") or 0) < RETRY_AFTER:
+        return ""               # failed within the hour: not every pass
+    if not same or not record.get("checked_at"):
+        # Never looked at (or a new host under the same name).
+        return "enable" if want else "inspect"
+    if record.get("native"):
+        return ""
+    if want and (not record.get("enabled") or record.get("digest") != expected):
+        return "enable"
+    if want is False and record.get("enabled"):
+        return "disable"
+    return ""
+
+
+def tick(now=None):
+    """Bring a couple of hosts to the add-on's setting. Returns
+    [(host, what was done)] for the log."""
+    now = now or time.time()
+    p = platform() or {}
+    if p.get("harvester") or p.get("distribution") not in ("k3s", "rke2"):
+        return []
+    if not re.fullmatch(r"\d+\.\d+\.\d+", VERSION):
+        return []               # a development build carries no release to install
+    try:
+        nodes = kget("/api/v1/nodes").get("items", [])
+    except Exception:
+        return []
+    expected, done = _expected(), []
+    with _lock:
+        saved = _read()
+        want = wanted(saved)
+        for node in nodes:
+            if len(done) >= PER_TICK:
+                break
+            meta = node["metadata"]
+            ready = any(c.get("type") == "Ready" and c.get("status") == "True"
+                        for c in (node.get("status") or {}).get("conditions", []))
+            if not ready:
+                continue
+            action = _due(saved.get(meta["name"]) or {}, meta.get("uid"), want, expected, now)
+            if not action:
+                continue
+            try:
+                record = _apply(meta["name"], meta.get("uid"), action)
+                done.append((meta["name"], {"enable": "host console installed or updated",
+                                            "disable": "host console removed"}.get(action, "host console checked")
+                             + f" ({record['detail']})"))
+            except Exception as error:
+                done.append((meta["name"], f"host console {action} failed, tried again in an hour: {str(error)[:200]}"))
+            saved = _read()
+            want = wanted(saved)
+    return done

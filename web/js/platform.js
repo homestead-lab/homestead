@@ -137,9 +137,10 @@ window.nfsRecovery = (state, expanded = false) => {
 window.addonsPaint = async () => {
   const card = $("#addonsCard");
   if (!card) return;
-  let s, health, nfs, baseline;
-  try { [s, health, nfs, baseline] = await Promise.all([api("/api/addons"), api("/api/self/health").catch(() => ({})),
-    api("/api/shares/nfs/server").catch(error => ({ error: error.message })), api("/api/platform/baseline").catch(() => null)]); }
+  let s, health, nfs, baseline, consoles;
+  try { [s, health, nfs, baseline, consoles] = await Promise.all([api("/api/addons"), api("/api/self/health").catch(() => ({})),
+    api("/api/shares/nfs/server").catch(error => ({ error: error.message })), api("/api/platform/baseline").catch(() => null),
+    can("admin") ? api("/api/host-console").catch(() => null) : null]); }
   catch (e) { card.hidden = true; return; }
   card.hidden = false;
   const probe = health.probe || {}, smb = health.samba || {};
@@ -202,12 +203,44 @@ window.addonsPaint = async () => {
     <div class="row"><button class="btn sm" onclick="go('shares')">Exports</button>
       ${can("admin") && !nfs.error ? `<label class="switch"><input type="checkbox" ${nfs.enabled ? "checked" : ""} onchange="nfsToggle(this)"> ${nfs.enabled ? "On" : "Off"}</label>
         ${nfs.installed ? '<button class="btn sm danger" onclick="nfsRemove()">Remove server</button>' : ""}` : ""}</div></div>`;
-  const clusterRows = s.harvester ? "" : `${row("longhorn", s.longhorn)}${row("kubevirt", s.kubevirt)}${s.multus ? row("multus", s.multus) : ""}${s.kube_vip ? row("kube-vip", s.kube_vip) : ""}`;
+  const clusterRows = s.harvester ? "" : `${hostConsoleRow(consoles)}${row("longhorn", s.longhorn)}${row("kubevirt", s.kubevirt)}${s.multus ? row("multus", s.multus) : ""}${s.kube_vip ? row("kube-vip", s.kube_vip) : ""}`;
   card.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">Add-ons</div>
       <div class="csub">${s.harvester ? "Optional Homestead services; Harvester already provides storage, VM and network add-ons"
         : `What this ${esc(platformName(STATE.platform || { distribution: s.distribution }))} cluster can add`}</div></div></div>
     ${baselineHtml(baseline)}${probeRow}${smbRow}${nfsRow}${clusterRows}`;
   if (window.applyRole) applyRole();
+};
+
+/* The host console: each host's local status screen, on or off for the
+   whole cluster. Homestead installs it where it is missing - hosts that join
+   later too - updates it when Homestead carries a newer one, and removes it
+   when turned off, a couple of hosts every ten minutes. */
+function hostConsoleRow(c) {
+  if (!c || c.harvester) return "";
+  const hosts = c.nodes.filter(n => !n.native);
+  const pill = c.enabled === null ? '<span class="pill">not checked yet</span>'
+    : !c.enabled ? (c.installed ? `<span class="pill med">removing · ${c.installed} left</span>` : '<span class="pill">off</span>')
+    : c.settled ? '<span class="pill ok">installed</span>'
+    : `<span class="pill med">${c.current} of ${c.hosts} up to date</span>`;
+  const lines = hosts.map(n => `<div class="xs"><b>${esc(n.name)}</b> <span class="dim">${esc(n.detail || (n.ready ? "not checked yet" : "not Ready"))}</span></div>`).join("");
+  return `<div class="addon-row"><div><b>Host console</b> ${pill}
+      <div class="dim small">Each host's local screen: CPU, memory, disks, addresses and the cluster's health, before the login prompt</div>
+      <div class="dim xs" style="margin-top:4px">Bundled with Homestead v${esc(c.version)}; installed on new hosts and updated with Homestead, a couple of hosts every ten minutes.
+        Changes show after the host's console logs out or it restarts. Harvester keeps its own console.</div>
+      <details class="small" style="margin-top:6px"><summary>${hosts.length} host${hosts.length === 1 ? "" : "s"}</summary>${lines}</details></div>
+    <div class="row">${can("admin") ? `<label class="switch"><input type="checkbox" ${c.enabled ? "checked" : ""} onchange="hostConsoleSet(this)"> ${c.enabled ? "On" : "Off"}</label>` : ""}</div></div>`;
+}
+
+window.hostConsoleSet = async input => {
+  const on = input.checked;
+  if (!on && !(await ask("Remove the host console from every host? Each goes back to the plain login prompt after its console logs out or it restarts."))) {
+    input.checked = true; return;
+  }
+  try {
+    const r = await api("/api/host-console", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: on }) });
+    toast(r.detail, "ok");
+    addonsPaint();
+  } catch (e) { toast(e.message, "bad"); input.checked = !on; }
 };
 
 window.kubevirtEmulation = async enabled => {

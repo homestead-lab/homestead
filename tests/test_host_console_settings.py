@@ -77,6 +77,59 @@ class ConsoleSettingsTests(unittest.TestCase):
         self.assertEqual("failed", result["status"])
         self.assertIn("curses unavailable", result["message"])
 
+    def addon(self, platform=None):
+        CONSOLE.VERSION = "2.8.244"
+        self.enterContext(mock.patch.object(CONSOLE, "platform", lambda: platform or {"distribution": "k3s"}))
+
+    def actions(self):
+        return [call.args[1].split("sh \"$TASK_DIR/install-console.sh\" ")[-1][:6] if "install-console.sh" in call.args[1]
+                else "disable" if 'rm -f -- "$DROPIN"' in call.args[1] else "inspect" for call in self.runner.run.call_args_list]
+
+    def test_the_add_on_installs_updates_and_removes_across_hosts(self):
+        self.addon()
+        self.runner.run.return_value = self.report()
+        CONSOLE.set_cluster(True)
+        self.assertIn("installed", CONSOLE.tick()[0][1])
+        self.assertEqual(["enable"], self.actions())
+        self.assertEqual([], CONSOLE.tick(), "current: nothing to do")
+        state = CONSOLE.inventory()
+        self.assertEqual((True, 1, 1, True), (state["enabled"], state["installed"], state["current"], state["settled"]))
+        # Homestead updated with a newer console: every host is brought to it.
+        (self.payload / "host-console.py").write_text("# next release\n")
+        self.runner.run.return_value = self.report()
+        CONSOLE.tick()
+        self.assertEqual(["enable", "enable"], self.actions())
+        # Off: removed from every host.
+        CONSOLE.set_cluster(False)
+        self.runner.run.return_value = self.report(enabled="no")
+        self.assertIn("removed", CONSOLE.tick()[0][1])
+        self.assertEqual("disable", self.actions()[-1])
+        self.assertEqual([], CONSOLE.tick())
+
+    def test_a_failing_host_waits_an_hour_and_harvester_is_left_alone(self):
+        self.addon()
+        CONSOLE.set_cluster(True)
+        self.runner.run.return_value = ("", "python curses unavailable")
+        self.assertIn("tried again in an hour", CONSOLE.tick()[0][1])
+        self.assertEqual([], CONSOLE.tick(), "not every pass")
+        import time as clock
+        self.runner.run.return_value = self.report()
+        self.assertTrue(CONSOLE.tick(now=clock.time() + 3700))
+        self.runner.run.reset_mock()
+        self.addon({"distribution": "k3s", "harvester": True})
+        self.assertEqual([], CONSOLE.tick())
+        self.runner.run.assert_not_called()
+
+    def test_what_the_installer_did_counts_as_on_until_someone_chooses(self):
+        self.addon()
+        self.assertIsNone(CONSOLE.wanted())
+        self.runner.run.return_value = self.report()
+        CONSOLE.tick()
+        self.assertEqual(["inspect"], self.actions(), "unknown: only looked at")
+        self.assertTrue(CONSOLE.wanted(), "the installer turned it on")
+        CONSOLE.set_cluster(False)
+        self.assertFalse(CONSOLE.wanted())
+
     @unittest.skipIf(os.name == "nt", "exercise the installer on Linux")
     def test_real_install_and_disable_keep_other_overrides_and_never_restart_getty(self):
         dest = self.root / "lib"
