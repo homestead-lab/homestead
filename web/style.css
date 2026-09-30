@@ -2493,3 +2493,11 @@ html[data-theme="light"] .modalbox[data-context="smb-access"]{background:var(--s
 .demobanner{position:sticky;top:0;z-index:60;padding:6px 14px;text-align:center;font-size:12.5px;
   background:var(--med);color:#1a1300;font-weight:600}
 .demobanner a{color:inherit;text-decoration:underline;margin-left:6px}
+
+/* Import: the steps of bringing apps in from an Unraid or Docker server. */
+.importstep-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}
+.importstep{display:flex;gap:11px;align-items:flex-start;min-width:0}
+.importstep-n{flex:0 0 24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;
+  border:1px solid var(--line2);color:var(--med)}
+.importsource .ok-t{color:var(--ok)} .importsource .med-t{color:var(--med)}
+@media (max-width:760px){.importstep-row{grid-template-columns:1fr}}

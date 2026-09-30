@@ -12,7 +12,7 @@ clusters**.
 This imports a container's settings and appdata. Stop its writers before copying,
 or use consistent snapshot/backup paths; this is not live application migration.
 
-1. **Add the source.** **Import → ＋ Container source** takes the server's
+1. **Add the server.** **Import → ＋ Unraid or Docker server** takes the server's
    address, its type (Unraid, Proxmox or any SSH host), an SSH username and
    password, and where its appdata lives (`/mnt/user/appdata` on Unraid).
    An optional SSH port defaults to 22. **Save and verify** first reads a public
@@ -21,7 +21,9 @@ or use consistent snapshot/backup paths; this is not live application migration.
    (the dialog supplies the command for the selected key type), then explicitly
    trust it. Use a physical console or an already trusted management session.
    Homestead can then list its containers from Docker itself.
-2. **Pick a container.** Its image, ports, variables, devices and privileges
+2. **Pick a container.** **Import containers** on the server's card lists what
+   Docker runs there, with its appdata folders below for anything Docker does
+   not describe. The chosen container's image, ports, variables, devices and privileges
    become the Deploy form here.
 3. **Decide where each folder goes.** An Unraid container maps several host
    folders, and they do not all belong in one place: appdata wants a small
