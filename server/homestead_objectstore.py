@@ -28,6 +28,7 @@ import urllib.parse
 import urllib.request
 
 import homestead_names as NAMES
+from homestead_pod_resources import storage_gib
 
 kget = ksend = create_pvc = None
 NS = "lab"
@@ -238,8 +239,7 @@ def _claim_size(claim):
         return 0
     request = (((claim.get("spec", {}) or {}).get("resources", {}) or {})
                .get("requests", {}) or {}).get("storage", "")
-    digits = "".join(ch for ch in str(request) if ch.isdigit())
-    return int(digits) if digits else 0
+    return storage_gib(request)
 
 
 def backup_url():

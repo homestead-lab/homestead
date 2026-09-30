@@ -85,6 +85,23 @@ that failed. **Cancel**, offered while nothing has stopped on the source yet,
 drops the move and anything it set up here; once the source has stopped,
 the same button is **Put back**, and starts it again there.
 
+### Moving a volume on its own
+
+Below the workloads, **Volumes** lists the source's Longhorn volumes with what
+uses each one. **Move to this cluster** backs the volume up to the shared
+backup storage and restores it here, under the same name, on the storage class
+you choose. There is nothing to create or start afterwards.
+
+A volume moves only while nothing uses it. One mounted by a running app or VM
+is listed as **cannot move**, naming that app or VM. Stop it, or move the app
+or VM instead, which brings its volumes along. While the move runs, the volume
+is held on the source: an app that starts using it stops the move rather than
+copying it half-written.
+
+The original stays on the source until you remove it there (**Remove from
+&lt;cluster&gt;** in the move's row). An app on the source that still names the
+volume is left as it is.
+
 ## Afterwards
 
 The original stays on the source, **stopped**, until you remove it there - so

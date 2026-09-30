@@ -4,6 +4,9 @@ The destination drives. This side only ever does four things, each of them
 safe to ask twice: describe a workload, stop it, back up its volumes, and -
 once the destination confirms - either restart it or remove it.
 
+A volume can move on its own too. It has nothing to stop: it is held for the
+move only while nothing uses it, and refused while something does.
+
 Everything this side must remember lives on the workload itself as
 annotations, not in a file here: what it was running as before it was stopped,
 and which backups hold its data. A Homestead restart halfway through a move
@@ -16,6 +19,7 @@ import time
 import urllib.error
 
 import homestead_names as NAMES
+from homestead_pod_resources import storage_gib
 from homestead_longhorn import move_snapshot_error
 
 kget = ksend = None
@@ -56,16 +60,35 @@ def _get(path):
         raise
 
 
+KINDS = ("container", "vm", "volume")
+
+
 def _kind(kind):
-    if kind not in ("container", "vm"):
-        raise ValueError("kind must be container or vm")
+    if kind not in KINDS:
+        raise ValueError("kind must be container, vm or volume")
     return kind
 
 
 def _path(kind, name):
     if kind == "vm":
         return f"/apis/kubevirt.io/v1/namespaces/{NS}/virtualmachines/{name}"
+    if kind == "volume":
+        return f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{name}"
     return f"/apis/apps/v1/namespaces/{NS}/deployments/{name}"
+
+
+def _users(claim):
+    """The pods mounting a claim, terminating ones included: a pod on its way
+    out still holds the volume."""
+    try:
+        pods = kget(f"/api/v1/namespaces/{NS}/pods").get("items", [])
+    except Exception as error:
+        # Unknown is not "unused": a volume moved while written would arrive torn.
+        raise ValueError(f"could not tell whether {claim} is in use: {str(error)[:120]}") from error
+    return sorted(pod["metadata"]["name"] for pod in pods
+                  if (pod.get("status") or {}).get("phase") not in ("Succeeded", "Failed")
+                  and any((v.get("persistentVolumeClaim") or {}).get("claimName") == claim
+                          for v in (pod.get("spec") or {}).get("volumes") or []))
 
 
 def _object(kind, name):
@@ -103,6 +126,8 @@ def _clean_metadata(meta, namespace=None):
 
 def _claims_of(kind, obj):
     """The claims a workload mounts, in the order it mounts them."""
+    if kind == "volume":
+        return [obj["metadata"]["name"]]
     if kind == "vm":
         volumes = (((obj.get("spec", {}) or {}).get("template", {}) or {})
                    .get("spec", {}) or {}).get("volumes", []) or []
@@ -137,14 +162,14 @@ def _claim_row(claim):
     pvc, volume = _longhorn_volume(claim)
     spec = pvc.get("spec", {}) or {}
     request = ((spec.get("resources", {}) or {}).get("requests", {}) or {}).get("storage", "")
-    digits = "".join(ch for ch in str(request) if ch.isdigit())
+    size_gb = storage_gib(request)
     storage_class = spec.get("storageClassName", "")
     parameters = ((_get(f"/apis/storage.k8s.io/v1/storageclasses/{storage_class}")
                    if storage_class else None) or {}).get("parameters", {}) or {}
     lh_volume = _get(f"{LH_API}/namespaces/{LHNS}/volumes/{volume}") or {}
     return {
         "claim": claim, "volume": volume,
-        "size_gb": int(digits) if digits else 1,
+        "size_gb": size_gb or 1,
         "access_mode": (spec.get("accessModes") or ["ReadWriteOnce"])[0],
         "volume_mode": spec.get("volumeMode") or "Filesystem",
         "storage_class": storage_class,
@@ -192,6 +217,8 @@ def _origin(obj):
 def _run_state(kind, obj):
     """How the workload was running, in a form that can be put back exactly."""
     spec = obj.get("spec", {}) or {}
+    if kind == "volume":
+        return {"held": True}
     if kind == "vm":
         if "runStrategy" in spec:
             return {"runStrategy": spec.get("runStrategy")}
@@ -209,6 +236,11 @@ def definition(kind, name):
     kind = _kind(kind)
     obj = _object(kind, name)
     origin = _origin(obj) or _run_state(kind, obj)
+    if kind == "volume":
+        # The claim is rebuilt from its backup; nothing else travels.
+        return {"kind": kind, "name": name, "namespace": NS, "object": {}, "origin": origin,
+                "services": [], "secrets": [], "claims": [_claim_row(name)],
+                "node_selector": {}, "pull_secrets": [], "networks": []}
     template = ((obj.get("spec", {}) or {}).get("template", {}) or {})
     pod_labels = (template.get("metadata", {}) or {}).get("labels", {}) or {}
     body = json.loads(json.dumps(obj))
@@ -255,6 +287,8 @@ def definition(kind, name):
 # ------------------------------------------------------------------- stopping
 def _remaining(kind, obj):
     """How much of the workload is still running."""
+    if kind == "volume":
+        return len(_users(obj["metadata"]["name"]))
     if kind == "vm":
         vmi = _get(f"/apis/kubevirt.io/v1/namespaces/{NS}/virtualmachineinstances/"
                    f"{obj['metadata']['name']}")
@@ -283,7 +317,15 @@ def quiesce(kind, name):
     origin = _origin(obj)
     if not origin:
         origin = _run_state(kind, obj)
+    if kind == "volume":
+        users = _users(name)
+        if users:
+            raise ValueError(f"{name} is in use by {', '.join(users[:3])}; stop what uses it, "
+                             "or move that app or VM instead, which brings the volume with it")
     patch = {"metadata": {"annotations": {NAMES.key(ORIGIN): json.dumps(origin)}}}
+    if kind == "volume":
+        _merge(kind, name, patch)
+        return {"ok": True, "origin": origin, "detail": f"{name} is held for the move"}
     if kind == "vm":
         if "runStrategy" in (obj.get("spec", {}) or {}):
             patch["spec"] = {"runStrategy": "Halted"}
@@ -405,8 +447,11 @@ def release(kind, name):
     origin = _origin(obj)
     if not origin:
         return {"ok": True, "detail": f"{name} was not stopped for a move"}
-    patch = {"metadata": {"annotations": {NAMES.key(ORIGIN): None, NAMES.key(BACKUPS): None}},
-             "spec": dict(origin)}
+    patch = {"metadata": {"annotations": {NAMES.key(ORIGIN): None, NAMES.key(BACKUPS): None}}}
+    if kind == "volume":
+        _merge(kind, name, patch)
+        return {"ok": True, "detail": f"{name} is no longer held for a move"}
+    patch["spec"] = dict(origin)
     _merge(kind, name, patch)
     return {"ok": True, "detail": f"{name} is running here again, as it was"}
 
@@ -423,6 +468,9 @@ def remove(kind, name, volumes=False):
         raise ValueError(f"{name} was not stopped for a move, so it is not this move's to remove")
     if _remaining(kind, obj):
         raise ValueError(f"{name} is running again; it will not be removed while in use")
+    if kind == "volume":
+        ksend("DELETE", _path(kind, name))
+        return {"ok": True, "removed": [f"volume {name}"], "detail": f"removed volume {name}"}
     claims = _claims_of(kind, obj)
     removed = []
     template = ((obj.get("spec", {}) or {}).get("template", {}) or {})

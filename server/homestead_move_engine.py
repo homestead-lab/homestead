@@ -46,6 +46,9 @@ MAX_MOVES = 50
 
 PHASES = ("joining", "quiescing", "backing-up", "syncing", "restoring",
           "creating", "starting", "done")
+# A volume on its own arrives once it is restored: nothing to create or start.
+VOLUME_PHASES = ("joining", "quiescing", "backing-up", "syncing", "restoring", "done")
+KINDS = ("container", "vm", "volume")
 # Shared with any other Homestead replica on the same data volume.
 _lock = SHARED.SharedLock("moves")
 
@@ -103,9 +106,13 @@ def _public(move):
         "source_stopped": bool((move.get("flags") or {}).get("quiesced")),
         "claims": [{k: c.get(k) for k in ("claim", "size_gb", "backup", "created", "restored")}
                    for c in move.get("claims", [])],
-        "phase_index": PHASES.index(move["phase"]) if move.get("phase") in PHASES else 0,
-        "phases": list(PHASES),
+        "phase_index": _phases(move).index(move["phase"]) if move.get("phase") in _phases(move) else 0,
+        "phases": list(_phases(move)),
     }
+
+
+def _phases(move):
+    return VOLUME_PHASES if move.get("kind") == "volume" else PHASES
 
 
 def moves():
@@ -166,12 +173,16 @@ def _source_action(move, action, **extra):
 def _object_path(kind, namespace, name):
     if kind == "vm":
         return f"/apis/kubevirt.io/v1/namespaces/{namespace}/virtualmachines/{name}"
+    if kind == "volume":
+        return f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{name}"
     return f"/apis/apps/v1/namespaces/{namespace}/deployments/{name}"
 
 
 def _collection_path(kind, namespace):
     if kind == "vm":
         return f"/apis/kubevirt.io/v1/namespaces/{namespace}/virtualmachines"
+    if kind == "volume":
+        return f"/api/v1/namespaces/{namespace}/persistentvolumeclaims"
     return f"/apis/apps/v1/namespaces/{namespace}/deployments"
 
 
@@ -226,8 +237,8 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
     """
     namespace = namespace or NS
     blockers, warnings, fixes = [], [], []
-    if kind not in ("container", "vm"):
-        raise ValueError("kind must be container or vm")
+    if kind not in KINDS:
+        raise ValueError("kind must be container, vm or volume")
     if address_mode not in ("shared", "automatic", "manual"):
         raise ValueError("address must be shared, automatic or manual")
     versions = CLIENT.check_cluster(cluster)
@@ -260,7 +271,8 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
 
     if not _get(f"/api/v1/namespaces/{namespace}"):
         warnings.append(f"namespace {namespace} does not exist here and will be created")
-    if _get(_object_path(kind, namespace, name)):
+    # A volume is its own claim, checked with the claims below.
+    if kind != "volume" and _get(_object_path(kind, namespace, name)):
         blockers.append(f"{name} already exists in {namespace} on this cluster")
     for claim in definition.get("claims", []):
         if _get(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{claim['claim']}"):
@@ -313,7 +325,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
             addresses.append(f"{service['metadata']['name']} on {planned['vip']}")
 
     origin = definition.get("origin") or {}
-    will_run = (origin.get("replicas", 0) > 0 if kind == "container"
+    will_run = (False if kind == "volume" else origin.get("replicas", 0) > 0 if kind == "container"
                 else origin.get("runStrategy", "Halted") != "Halted" or origin.get("running"))
     return {
         "ok": not blockers, "blockers": blockers, "fixes": fixes,
@@ -358,7 +370,7 @@ def start(cluster, kind, name, namespace=None, address_mode="shared", address=""
 
 def _operation(move):
     item = OPS.start("move", f"Move {move['name']} from {move['cluster']}",
-                     {"kind": "VirtualMachine" if move["kind"] == "vm" else "Deployment",
+                     {"kind": {"vm": "VirtualMachine", "volume": "PersistentVolumeClaim"}.get(move["kind"], "Deployment"),
                       "name": move["name"], "namespace": move["namespace"]},
                      "/import", {"move": move["id"]}, message="Queued")
     return item["id"]
@@ -425,6 +437,8 @@ def _quiescing(move):
     status = _source_status(move)
     if status.get("running"):
         return _note(move, 6, f"Waiting for {move['name']} to stop on {move['cluster']}")
+    if move["kind"] == "volume":
+        return _advance(move, "backing-up", 10, f"{move['name']} is held on {move['cluster']}")
     return _advance(move, "backing-up", 10, f"{move['name']} stopped on {move['cluster']}")
 
 
@@ -608,6 +622,9 @@ def _restoring(move):
         claim["restored"] = finished
         states.append(100 if finished else percent)
     if all(c["restored"] for c in move["claims"]):
+        if move["kind"] == "volume":
+            return _finish(move, "succeeded", f"{move['name']} is here; the original stays on "
+                                              f"{move['cluster']} until you remove it there")
         return _advance(move, "creating", 86, "Every volume is restored here")
     average = sum(states) / max(1, len(states))
     return _note(move, 56 + 29 * average / 100,
@@ -870,7 +887,8 @@ def abandon(move_id):
     released = CLIENT.remote(move["cluster"], "/api/move/source",
                              {"action": "release", "kind": move["kind"], "name": move["name"]}) if stopped         else {"detail": f"Cancelled; nothing had stopped on {move['cluster']}"}
     namespace, removed = move["namespace"], []
-    obj = _get(_object_path(move["kind"], namespace, move["name"]))
+    # A volume is its own claim, removed with the claims below.
+    obj = None if move["kind"] == "volume" else _get(_object_path(move["kind"], namespace, move["name"]))
     if obj and _ours(obj, move_id):
         ksend("DELETE", _object_path(move["kind"], namespace, move["name"])
               + "?propagationPolicy=Background")

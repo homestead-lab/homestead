@@ -23,6 +23,16 @@ def quantity(value, resource="memory"):
     return int(number.to_integral_value(rounding=ROUND_CEILING))
 
 
+def storage_gib(request):
+    """A claim's storage request in whole GiB, rounded up, whatever the unit:
+    "10Gi", "500G", or plain bytes as Harvester writes them ("32212254720")."""
+    try:
+        size = quantity(request, "storage")
+    except ValueError:
+        return 0
+    return -(-size // 2 ** 30) if size else 0
+
+
 def request(container, resource):
     resources = container.get("resources") or {}
     requests, limits = resources.get("requests") or {}, resources.get("limits") or {}
