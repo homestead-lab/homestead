@@ -1,22 +1,29 @@
 # Settings
 
-| Tab | What is there |
+Settings has eight sections: seven that change the cluster for everyone, and
+**You**, which is yours and this browser's. The top bar's gear opens **You**.
+
+| Section | What is there |
 |---|---|
-| **Health** | when bars and node cards turn yellow or red; the drive health policy |
-| **Updates** | the image update policy: notify only, approve each, or a maintenance window |
-| **Cluster** | Add-ons - the node probe on every cluster, plus Longhorn, KubeVirt, Multus and kube-vip where the cluster lacks them; Longhorn over-provisioning, minimum free space and the V2 engine; every node's disks |
-| **Hardware** | hardware features (a Coral, an iGPU, a Zigbee stick) and **Rescan hosts** |
-| **Access** | your password, **Manage users**, sign out everywhere |
-| **Apps** | the App Store catalogue, Portal links, UniFi, namespaces |
-| **MQTT** | cluster and node stats to an MQTT broker, with Home Assistant discovery |
-| **This device** | notifications on this phone or computer, installing the app |
-| **About** | Homestead's version and updates, its own health, Samba, redundancy, permissions, and node-probe status |
+| **Homestead** | its version and site name, its own health, how many copies run and where its data lives, configuration backup |
+| **Updates** | Homestead's releases (and linked clusters' in the same update); the container image update policy and its update window |
+| **Monitoring** | when bars and node cards turn amber or red; drive health; publishing stats to MQTT and Home Assistant |
+| **Hardware and storage** | hardware features (a Coral, an iGPU, a Zigbee stick) and **Rescan**; add-ons - the node probe, SMB and NFS shares, and Longhorn, KubeVirt, Multus and kube-vip where the cluster lacks them; Longhorn over-provisioning, minimum free space and the V2 engine; namespaces |
+| **Linked clusters** | other Homesteads managed from this one, and moving workloads between them |
+| **Connections** | UniFi Network, the App Store catalogue |
+| **Users and access** | users and their roles |
+| **You** | appearance, notifications on this device, refresh rate, your password and signing out |
+
+A section saves once: change what you like and a bar at its foot offers
+**Save** and **Discard**. Leaving the section or the page with changes not
+saved asks first. Settings with many fields - MQTT, UniFi, the update window,
+the App Store catalogue - open in a dialog of their own.
 
 ![Settings - Cluster](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-settings-cluster.jpg)
 
 ## Add-ons
 
-On k3s and RKE2, **Settings → Cluster → Add-ons** installs what the cluster
+On k3s and RKE2, **Settings → Hardware and storage → Add-ons** installs what the cluster
 lacks, through the Helm controller both distributions run - so each is an
 ordinary HelmChart afterwards, on the Helm page. The node probe is offered here
 on Harvester too:
@@ -102,13 +109,13 @@ working, refreshed every 15 seconds:
 Every sign-in to Homestead, failed attempt, sign-out, password change and
 change to an account is kept, with the address and device it came from.
 Admins read it under **Events → Sign-ins**, filtered by what happened, by
-user, by time, or by any text; **Settings → Users** links each person to
+user, by time, or by any text; **Settings → Users and access** links each person to
 their own. A failed attempt records the name tried, never the password. The
 most recent 5,000 entries are kept.
 
 ## Configuration backup
 
-**Settings → About → Configuration backup** saves Homestead's own setup to a
+**Settings → Homestead → Configuration backup** saves Homestead's own setup to a
 file on your device: settings, users and roles, hardware features, VIPs, IP
 addresses, MQTT, Portal, network shares and SMB users, import sources and the
 VM image store. Pick which parts to include.

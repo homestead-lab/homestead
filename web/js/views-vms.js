@@ -182,9 +182,10 @@ const vmClusterTag = v => v.cluster ? `<span class="tag info" data-tip="A node o
 
 function vmActions(v, compact = false) {
   const main = v.actions.filter(a => ["start", "stop", "restart", "unpause"].includes(a));
-  const shown = compact ? main.slice(0, 1) : main;
-  // On a phone a card keeps its first power action; the rest join "…".
-  const later = compact ? [] : shown.slice(1);
+  // One power action beside Console, as a container card has Logs; the
+  // others are the first entries of ⋯.
+  const shown = main.slice(0, 1);
+  const later = [];
   return `${shown.map((a, i) => vmActionButton(v, a, i === 0 && a === "start", compact, i > 0 ? "sm-more" : "")).join("")}
       ${v.actions.includes("console") ? `<button class="btn sm ${compact ? "vm-iconbtn" : ""}" data-need="operator" title="Console" aria-label="Console" onclick="vmConsole(${jsq(v.ns)},${jsq(v.name)})">${icon("console")}${compact ? "" : "Console"}</button>` : ""}
       <details class="actionmenu"><summary class="btn sm" title="More actions">⋯</summary><div class="actionmenu-pop">
@@ -230,20 +231,26 @@ function vmActionButton(v, action, primary = false, iconOnly = false, extra = ""
    people come here for, and three narrow columns cut it off - and its size
    reads as one line rather than five labelled boxes. */
 function vmCard(v) {
+  // The container card's shape: name and state, one row of facts, what it
+  // is, and one action with the rest in ⋯. The rest is in its details.
+  const ips = v.ips?.length ? v.ips : v.ip ? [v.ip] : [];
+  const u = v.running ? v.usage : null;
+  const sub = [v.ns, v.os, v.cluster ? `${v.cluster}${v.cluster_role ? ` ${v.cluster_role}` : ""}` : ""].filter(Boolean).join(" · ");
   return `<div class="card flat vm-card vm-${vmTone(v.status)}"${clusterAttr(v)}>
     <div class="between vm-head">
       <a class="vm-title" onclick="vmOpen(${jsq(v.ns)},${jsq(v.name)})"><div class="av n3">${esc(v.name.slice(0, 2).toUpperCase())}</div>
-        <div class="vm-name"><b title="${esc(v.name)}">${esc(v.name)}</b><div class="dim xs" title="${esc([v.ns, v.os].filter(Boolean).join(" · "))}">${esc(v.ns)}${v.os ? ` · ${esc(v.os)}` : ""}</div></div></a>
-      <span class="pill ${vmTone(v.status)}" ${v.problem ? `data-tip="${esc(v.problem)}"` : ""}>${esc(v.status)}</span></div>
-    ${v.cluster || clusterTag(v) ? `<div class="vm-tags">${clusterTag(v)}${vmClusterTag(v)}</div>` : ""}
-    ${v.description ? `<div class="dim small vm-desc">${esc(v.description)}</div>` : ""}
+        <div class="vm-name"><b title="${esc(v.description || v.name)}">${esc(v.name)}</b><div class="dim xs" title="${esc(sub)}">${esc(sub)}</div></div></a>
+      <span class="row nowrap" style="gap:6px">${clusterTag(v)}<span class="pill ${vmTone(v.status)}" ${v.problem ? `data-tip="${esc(v.problem)}"` : ""}>${esc(v.status)}</span></span></div>
     ${v.problem ? `<div class="note bad vm-problem">${esc(v.problem)}</div>` : ""}
     ${vmFilling(v)}
     ${v.restart_required ? '<div class="dim xs vm-restart">Changes are waiting for a restart</div>' : ""}
-    <div class="vm-addr">${vmAddress(v)}</div>
-    <div class="vm-specs">${vmSpecs(v).map(x => `<span>${esc(x)}</span>`).join("")}
-      ${v.node ? `<span class="vm-host" title="The node it runs on">${esc(v.node)}</span>` : ""}</div>
-    ${vmUsage(v)}
+    <div class="wmeta vm-meta">
+      <div><div class="dim xs">ADDRESS</div><div class="mono small">${ips[0] ? `${esc(ips[0])}<button class="iconbtn vm-copy" type="button" title="Copy ${esc(ips[0])}" onclick="event.stopPropagation();ipamCopy(${jsq(ips[0])})">${icon("copy")}</button>${ips.length > 1 ? `<span class="dim" data-tip="${esc(ips.slice(1).join(", "))}">+${ips.length - 1}</span>` : ""}` : '<span class="dim">—</span>'}</div></div>
+      <div><div class="dim xs">CPU</div><div class="mono small">${u?.cpu_pct != null ? `${u.cpu_pct}%` : "—"}</div></div>
+      <div><div class="dim xs">HOST</div><div class="mono small">${esc(v.node || "—")}</div></div>
+      <div><div class="dim xs">RAM</div><div class="mono small">${u?.mem != null ? vmBytes(u.mem) : "—"}</div></div>
+    </div>
+    <div class="dim xs mono wimg">${esc(vmSpecs(v).join(" · "))}</div>
     <div class="row vm-actions">${vmActions(v)}</div></div>`;
 }
 

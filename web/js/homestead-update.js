@@ -2,7 +2,7 @@
    (the SMB and NFS servers, the object store moves use). They are not apps -
    the Containers page hides them with the platform - so they are updated
    from here: a button on the top bar that appears when one is waiting, the
-   dialog it opens, and a card under Settings › About. The update itself is
+   dialog it opens, and a card under Settings › Updates. The update itself is
    the same reviewed rollout an app gets (reviewImageActions), Homestead last. */
 const HOMESTEAD_PARTS = { self: "Homestead", smb: "SMB server", nfs: "NFS server", objectstore: "Object store" };
 const HOMESTEAD_RELEASES = "https://github.com/wjcloudy/homestead/releases";
@@ -208,7 +208,7 @@ window.homesteadUpdateCheck = async button => {
   homesteadUpdateRepaint();
 };
 
-/* Settings › About: always there, current or not. */
+/* Settings › Updates: always there, current or not. */
 function homesteadUpdateCardPaint() {
   const card = $("#homesteadUpdateCard");
   if (!card) return;
@@ -225,7 +225,7 @@ window.homesteadUpdateCardPaint = homesteadUpdateCardPaint;
 window.homesteadPartManage = part => {
   if (part === "objectstore") { settingsTab("fleet"); return go("settings"); }
   if (part === "smb" || part === "nfs") return go("shares");
-  settingsTab("about");
+  settingsTab("updates");
   go("settings");
 };
 

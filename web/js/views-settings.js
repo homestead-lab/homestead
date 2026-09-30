@@ -20,12 +20,14 @@ function thresholdEditor(id, label, unit, help, pair) {
    topic (data-tab); a section shows the cards of every topic it holds, and a
    link or button can still ask for a topic by its own name - settingsTab("fleet"). */
 const SETTINGS_SECTIONS = [
-  ["general", "General", "Health, updates, this device", ["health", "updates", "device", "general"]],
-  ["cluster", "Cluster", "Hardware, add-ons", ["cluster", "hardware"]],
-  ["fleet", "Linked clusters", "Other Homesteads, moves", ["fleet"]],
-  ["access", "Access", "Accounts and roles", ["access"]],
-  ["integrations", "Integrations", "MQTT, UniFi, App Store", ["mqtt", "apps"]],
-  ["about", "About", "Version, backup, health", ["about"]],
+  ["homestead", "Homestead", "Version, health, copies, backup", ["homestead", "about"], "Cluster"],
+  ["updates", "Updates", "Releases, container updates", ["updates"], "Cluster"],
+  ["monitoring", "Monitoring", "Thresholds, drives, MQTT", ["monitoring", "health", "mqtt"], "Cluster"],
+  ["hardware", "Hardware and storage", "Devices, add-ons, Longhorn", ["hardware", "cluster", "namespaces"], "Cluster"],
+  ["fleet", "Linked clusters", "Other Homesteads, moves", ["fleet"], "Cluster"],
+  ["connections", "Connections", "UniFi, App Store", ["connections", "apps", "integrations"], "Cluster"],
+  ["access", "Users and access", "Accounts and roles", ["access"], "Cluster"],
+  ["you", "You", "Appearance, this device, account", ["you", "device", "general"], "Just you"],
 ];
 const settingsSection = topic => (SETTINGS_SECTIONS.find(([id, , , topics]) => id === topic || topics.includes(topic)) || SETTINGS_SECTIONS[0])[0];
 
@@ -52,7 +54,7 @@ function settingsTab(pick) {
   }
   let saved = "";
   try { saved = localStorage.getItem("homestead.settings.tab") || ""; } catch (e) { /* default */ }
-  return settingsSection(saved || "general");
+  return settingsSection(saved || "homestead");
 }
 window.settingsTab = settingsTab;
 /* A phone shows the list of sections first; back returns to it. */
@@ -89,17 +91,30 @@ async function viewSettings() {
   const tab = settingsTab();
   paint(`<div class="phead"><div><h2>Settings</h2><p>Cluster policy, hardware, access, and installation information</p></div></div>
     <div class="settings-layout" data-open="${STATE.settingsOpen ? 1 : 0}">
-    <nav class="settings-nav" role="tablist" aria-label="Settings sections">${SETTINGS_SECTIONS.map(([id, label, sub]) =>
-      `<button type="button" role="tab" data-tab="${id}" class="${id === tab ? "on" : ""}" aria-selected="${id === tab}" onclick="settingsTab(${jsq(id)})"><span><b>${esc(label)}</b><small>${esc(sub)}</small></span><i aria-hidden="true">›</i></button>`).join("")}</nav>
+    <nav class="settings-nav" role="tablist" aria-label="Settings sections">${SETTINGS_SECTIONS.map(([id, label, sub, , group], i) =>
+      `${i === 0 || SETTINGS_SECTIONS[i - 1][4] !== group ? `<div class="settings-nav-group">${esc(group)}</div>` : ""}<button type="button" role="tab" data-tab="${id}" class="${id === tab ? "on" : ""}" aria-selected="${id === tab}" onclick="settingsGo(${jsq(id)})"><span><b>${esc(label)}</b><small>${esc(sub)}</small></span><i aria-hidden="true">›</i></button>`).join("")}</nav>
     <div class="settings-main">
-    <button type="button" class="settings-back" onclick="settingsBack()">‹ All settings</button>
+    <button type="button" class="settings-back" onclick="settingsGo('')">‹ All settings</button>
     <div class="settings-grid" data-tab="${tab}">
-      <section class="card flat settings-wide" data-tab="general"><div class="settings-card-head"><div><div class="ctitle">Appearance</div>
-        <div class="csub">Light or dark, background, blur and motion - for this browser</div></div>
-        <button class="btn" onclick="document.getElementById('drawer').classList.add('open')">Appearance</button></div></section>
-      <section class="card flat settings-wide" data-tab="health">
-        <div class="settings-card-head"><div><div class="ctitle">Health thresholds</div><div class="csub">Controls when utilisation bars and node cards turn yellow or red for everyone</div></div>
-          ${can("admin") ? '<button class="btn pri" onclick="saveHealthSettings()">Save thresholds</button>' : '<span class="pill neutral">admin managed</span>'}</div>
+      <section class="card flat settings-wide" data-tab="you"><div class="settings-card-head"><div><div class="ctitle">Appearance</div>
+        <div class="csub">This browser only; it changes as you choose</div></div></div>
+        <div class="srows">
+          ${settingRow("Theme", "", `<div class="seg appearance-seg" id="optTheme"><button type="button" class="opt" data-v="dark">Dark</button><button type="button" class="opt" data-v="light">Light</button><button type="button" class="opt" data-v="auto">Auto</button></div>`)}
+          ${settingRow("Background", "What the glass blurs behind it", `<div class="seg appearance-seg" id="optBg"><button type="button" class="opt" data-v="soft">Soft</button><button type="button" class="opt" data-v="gold">Gold</button><button type="button" class="opt" data-v="plain">Plain</button></div>`)}
+          ${settingRow("Glass blur", "How frosted the panels are", `<input type="range" class="rng" id="optBlur" min="0" max="60" step="2"><span class="dim small mono"><span id="blurVal"></span>px</span>`)}
+          ${settingRow("Motion", "Animated data flow along connectors", `<div class="seg appearance-seg" id="optMotion"><button type="button" class="opt" data-v="on">On</button><button type="button" class="opt" data-v="off">Reduced</button></div>`)}
+          ${settingRow("Refresh every", "Pages patch themselves in place", `<input type="range" class="rng" id="optRefresh" min="5" max="60" step="5"><span class="dim small mono"><span id="refreshVal"></span>s</span>`)}
+        </div></section>
+      <section class="card flat settings-wide" data-tab="you"><div class="settings-card-head"><div><div class="ctitle">Your account</div>
+        <div class="csub">Signed in as ${esc(ME || "—")} · ${esc(ROLE || "viewer")}</div></div></div>
+        <div class="srows">
+          ${settingRow("Password", "", '<button class="btn sm" onclick="pwChange()">Change</button>')}
+          ${settingRow("Sign out everywhere", "Every session of yours, on every device", '<button class="btn sm" onclick="signOutEverywhere()">Sign out everywhere</button>')}
+          ${settingRow("Sign out", "This browser", '<button class="btn sm danger" onclick="doLogout()">Sign out</button>')}
+        </div><div class="dim xs" style="margin-top:8px">${sessionSummary(AUTH_STATE)}</div></section>
+      <section class="card flat settings-wide" data-tab="health" data-save="app">
+        <div class="settings-card-head"><div><div class="ctitle">Health thresholds</div><div class="csub">When bars and node cards turn amber and red, for everyone</div></div>
+          ${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}</div>
         <div class="threshold-grid">
           ${thresholdEditor("cpu", "CPU utilisation", "%", "Sustained node CPU pressure", thresholds.cpu)}
           ${thresholdEditor("memory", "Memory utilisation", "%", "Allocated node RAM pressure", thresholds.memory)}
@@ -109,10 +124,10 @@ async function viewSettings() {
         <div class="note"><b>Warning</b> changes the metric and node card to yellow. <b>Critical</b> changes them to red. A node uses the most severe result across CPU, memory, disk, and temperature.</div>
       </section>
 
-      <section class="card flat settings-wide" data-tab="health">
-        <div class="settings-card-head"><div><div class="ctitle">Drive health policy</div>
+      <section class="card flat settings-wide" data-tab="health" data-save="app">
+        <div class="settings-card-head"><div><div class="ctitle">Drive health</div>
           <div class="csub">SMART warnings shown on node cards and in cluster health</div></div>
-          ${can("admin") ? '<button class="btn pri" onclick="saveHealthSettings()">Save drive policy</button>' : '<span class="pill neutral">admin managed</span>'}</div>
+          ${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}</div>
         <div class="threshold-grid">
           ${thresholdEditor("drive_temperature", "Drive temperature", "°C", "SATA, SAS, and NVMe temperature", smart.temperature)}
           <div class="threshold-card"><div><b>Media counters</b><div class="dim xs">Alert when raw drive counters reach these values</div></div>
@@ -126,29 +141,22 @@ async function viewSettings() {
         <div class="note"><b>Device differences are preserved.</b> NVMe reports media errors; ATA disks report reallocated, pending, and uncorrectable sectors. Missing counters are shown as unsupported, not zero.</div>
       </section>
 
-      <section class="card flat settings-wide" data-tab="updates">
-        <div class="settings-card-head"><div><div class="ctitle">Container image update policy</div>
-          <div class="csub">Controls registry notifications and when a reviewed rollout may start; major releases are never selected automatically</div></div>
-          ${can("admin") ? '<button class="btn pri" onclick="saveUpdateSettings()">Save update policy</button>' : '<span class="pill neutral">admin managed</span>'}</div>
-        <div class="update-policy-grid">
-          <div class="f"><label>Policy ${tip("Notify only blocks installs. Approval required permits a reviewed manual rollout. Maintenance window permits reviewed rollouts only during the configured UTC window.")}</label>
-            <select id="set_update_policy" ${can("admin") ? "" : "disabled"} onchange="updatePolicyFields()">
-              <option value="notify_only" ${updates.policy === "notify_only" ? "selected" : ""}>Notify only — block installs</option>
-              <option value="approval_required" ${updates.policy === "approval_required" ? "selected" : ""}>Approval required — manual rollout</option>
-              <option value="maintenance_window" ${updates.policy === "maintenance_window" ? "selected" : ""}>Maintenance window — manual rollout in window</option>
-            </select></div>
-          <div class="update-notify-options">
-            <label class="switch"><input id="set_notify_available" type="checkbox" ${updates.notify_available !== false ? "checked" : ""} ${can("admin") ? "" : "disabled"}> Notify when new images are available</label>
-            <label class="switch"><input id="set_notify_failures" type="checkbox" ${updates.notify_failures !== false ? "checked" : ""} ${can("admin") ? "" : "disabled"}> Notify when a registry check fails</label>
-          </div>
-          <div id="maintenanceFields" class="maintenance-fields ${updates.policy === "maintenance_window" ? "" : "muted-policy"}">
-            <div class="f"><label>Start time (UTC)</label><input id="set_update_start" type="time" value="${esc(maintenance.start || "02:00")}" ${can("admin") ? "" : "disabled"}></div>
-            <div class="f"><label>Duration (minutes)</label><input id="set_update_duration" type="number" min="15" max="1440" step="15" value="${+(maintenance.duration_minutes || 120)}" ${can("admin") ? "" : "disabled"}></div>
-            <div class="f update-days"><label>Days (UTC)</label><div>${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day, index) =>
-              `<label class="daypick"><input type="checkbox" class="set_update_day" value="${index}" ${(maintenance.days || []).includes(index) ? "checked" : ""} ${can("admin") ? "" : "disabled"}><span>${day}</span></label>`).join("")}</div></div>
-          </div>
+      <section class="card flat settings-wide" data-tab="updates" data-save="app">
+        <div class="settings-card-head"><div><div class="ctitle">Container updates</div>
+          <div class="csub">When Homestead looks for newer images, and when a reviewed rollout may start</div></div>
+          ${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}</div>
+        <div class="srows">
+          ${settingRow(`Policy ${tip("Notify only blocks installs. Approval required permits a reviewed manual rollout. Maintenance window permits reviewed rollouts only during the window. Major releases are never picked on their own, and every install is reviewed.")}`, "",
+            `<select id="set_update_policy" ${can("admin") ? "" : "disabled"}>
+              <option value="notify_only" ${updates.policy === "notify_only" ? "selected" : ""}>Notify only - block installs</option>
+              <option value="approval_required" ${updates.policy === "approval_required" ? "selected" : ""}>Approval required - manual rollout</option>
+              <option value="maintenance_window" ${updates.policy === "maintenance_window" ? "selected" : ""}>Maintenance window - manual rollout in window</option>
+            </select>`)}
+          ${settingRow("Tell me about new images", "", `<label class="toggle"><input id="set_notify_available" type="checkbox" ${updates.notify_available !== false ? "checked" : ""} ${can("admin") ? "" : "disabled"}><span></span></label>`)}
+          ${settingRow("Tell me when a registry check fails", "", `<label class="toggle"><input id="set_notify_failures" type="checkbox" ${updates.notify_failures !== false ? "checked" : ""} ${can("admin") ? "" : "disabled"}><span></span></label>`)}
+          ${settingRow("Update window", esc(updateWindowText(maintenance)) + (updates.policy === "maintenance_window" ? "" : " - used with the maintenance-window policy"),
+            can("admin") ? '<button class="btn sm" onclick="updateWindowEdit()">Change</button>' : "")}
         </div>
-        <div class="note"><b>No silent upgrades.</b> Every install still shows the exact current and candidate image and requires an operator acknowledgement. Semantic-version discovery stays within the current major release.</div>
       </section>
 
 
@@ -161,13 +169,8 @@ async function viewSettings() {
       </section>
 
       <section class="card flat" data-tab="access">
-        <div class="settings-card-head"><div><div class="ctitle">Account & access</div><div class="csub">Signed in as ${esc(ME || "—")}</div></div><span class="${roleClass(ROLE)} rolechip">${esc(ROLE || "—")}</span></div>
-        <div class="role-summary"><b>${esc(ROLE || "viewer")}</b><span>${esc(ROLE_COPY[ROLE] || ROLE_COPY.viewer)}</span></div>
-        <div class="row settings-actions"><button class="btn sm" onclick="pwChange()">Change password</button>
-          ${can("admin") ? '<button class="btn sm" onclick="manageUsers()">Manage users</button>' : ""}
-          <button class="btn sm" onclick="signOutEverywhere()">Sign out everywhere</button>
-          <button class="btn sm danger" onclick="doLogout()">Sign out</button></div>
-        <div class="dim xs">${sessionSummary(AUTH_STATE)}</div>
+        <div class="settings-card-head"><div><div class="ctitle">Users and roles</div><div class="csub">Who can sign in, and what each role may do</div></div>
+          ${can("admin") ? '<button class="btn sm pri" onclick="manageUsers()">Manage users</button>' : ""}</div>
         <div class="role-legend">
           ${Object.entries(ROLE_COPY).map(([role, copy]) => `<div><span class="${roleClass(role)} rolechip">${role}</span><span class="dim xs">${esc(copy)}</span></div>`).join("")}
         </div>
@@ -176,26 +179,22 @@ async function viewSettings() {
 
       ${pwaCard()}
 
-      ${portalSettingsCard()}
-
       ${ipamUnifiCard()}
 
       <section class="card flat settings-wide" data-tab="mqtt" id="mqttCard"></section>
       <section class="card flat settings-wide" data-tab="fleet" id="fleetCard"><div class="empty small"><span class="spin2"></span> asking each cluster</div></section>
       <section class="card flat settings-wide" data-tab="fleet" id="fleetMovesCard" hidden></section>
       <section class="card flat settings-wide" data-tab="cluster" id="addonsCard" hidden></section>
-      <section class="card flat settings-wide" data-tab="cluster" id="lhSettingsCard"><div class="empty small"><span class="spin2"></span>reading Longhorn</div></section>
+      <section class="card flat settings-wide" data-tab="cluster" id="lhSettingsCard" data-save="lh"><div class="empty small"><span class="spin2"></span>reading Longhorn</div></section>
 
-      <section class="card flat settings-wide" data-tab="apps">
+      <section class="card flat settings-wide" data-tab="connections">
         <div class="settings-card-head"><div><div class="ctitle">App Store catalogue</div>
-          <div class="csub">Any feed in the Community Applications format: the public one, a mirror, or your own list of templates</div></div>
-          ${can("admin") ? '<div class="row"><button class="btn sm" onclick="saveCatalog(true)">Use Community Applications</button><button class="btn sm pri" onclick="saveCatalog()">Save</button></div>' : '<span class="pill neutral">admin managed</span>'}</div>
-        <div class="f"><label>Catalogue feed URL ${tip("A JSON feed shaped like Community Applications' applicationFeed.json - an object with an applist, or a plain list of templates. Blank uses the public Community Applications feed. It is fetched on demand and cached for six hours.")}</label>
-          <input id="set_catalog" type="url" maxlength="500" placeholder="blank: https://raw.githubusercontent.com/Squidly271/AppFeed/master/applicationFeed.json"
-            value="${esc(STATE.data.appSettings?.catalog_url || "")}" ${can("admin") ? "" : "disabled"}></div>
+          <div class="csub">Where the App Store's listings come from: any feed in the Community Applications format</div></div></div>
+        ${serviceRow(STATE.data.appSettings?.catalog_url ? "Your own feed" : "Community Applications", '<span class="pill neutral">in use</span>',
+          esc(STATE.data.appSettings?.catalog_url || "The public feed"), can("admin") ? actionBar([{ label: "Change", run: "catalogEdit()" }]) : "")}
       </section>
 
-      <section class="card flat settings-wide" id="nsCard" data-tab="apps">
+      <section class="card flat settings-wide" id="nsCard" data-tab="namespaces">
         <div class="settings-card-head"><div><div class="ctitle">Namespaces</div>
           <div class="csub">Where apps live. Harvester, Rancher and Kubernetes keep their own, which are hidden here and in every picker.</div></div>
           ${can("admin") ? `<div class="row ns-new"><input id="nsName" placeholder="new-namespace" maxlength="63" autocomplete="off"
@@ -203,12 +202,10 @@ async function viewSettings() {
         <div class="ns-body"><div class="empty small"><span class="spin2"></span></div></div>
       </section>
 
-      <section class="card flat settings-wide" data-tab="about">
-        <div class="ctitle">About this installation</div><div class="csub">Runtime and cluster connection details</div>
-        <div class="f sitename"><label>Site name ${tip("Shown under the Homestead wordmark and at the foot of the page. Name the cluster or the house it lives in; leave it blank to show nothing.")}</label>
-          <div class="row"><input type="text" id="set_site_name" maxlength="40" placeholder="e.g. Loft rack, or nothing at all"
-            value="${esc(STATE.data.appSettings?.site_name || "")}" ${can("admin") ? "" : "disabled"}>
-            ${can("admin") ? '<button class="btn sm" onclick="saveSiteName()">Save</button>' : ""}</div></div>
+      <section class="card flat settings-wide" data-tab="about" data-save="app">
+        <div class="ctitle">About this installation</div><div class="csub">What runs here, and what it is called</div>
+        <div class="srows">${settingRow(`Site name ${tip("Shown under the Homestead wordmark and at the foot of the page; leave it blank to show nothing.")}`, "",
+          `<input type="text" id="set_site_name" maxlength="40" placeholder="e.g. Main site" value="${esc(STATE.data.appSettings?.site_name || "")}" ${can("admin") ? "" : "disabled"}>`)}</div>
         <div class="about-grid">
           <div><span>Homestead</span><b>v${esc(info.version || HOMESTEAD_VERSION)}</b></div>
           <div><span>Kubernetes</span><b>${esc(info.kubernetes || "—")}</b></div>
@@ -223,11 +220,16 @@ async function viewSettings() {
         ${can("admin") ? '<div class="row" style="margin-top:12px"><button class="btn sm" onclick="welcomeCheck(true)">Setup checklist</button></div>' : ""}
       </section>
 
-      <section class="card flat settings-wide" data-tab="about" id="homesteadUpdateCard"></section>
+      <section class="card flat settings-wide" data-tab="updates" id="homesteadUpdateCard"></section>
       <section class="card flat settings-wide" data-tab="about" id="configCard">${window.configCardHtml ? configCardHtml() : ""}</section>
       <section class="card flat settings-wide" data-tab="about" id="selfHealthCard"><div class="empty small"><span class="spin2"></span> checking Homestead</div></section>
       <section class="card flat settings-wide" data-tab="about" id="replicaCard">${STATE.data.replicaHtml || ""}</section>
-    </div></div></div>`);
+    </div>
+    <div class="savebar" id="settingsSaveBar" hidden><span id="settingsSaveMsg"></span>
+      <button class="btn" type="button" onclick="settingsDiscard()">Discard</button><button class="btn pri" type="button" onclick="settingsSave(this)">Save</button></div>
+    </div></div>`);
+  STATE.settingsDirty = new Set();
+  if (window.bindAppearance) bindAppearance();
   pwaPaint();
   namespacesPaint();
   replicasPaint();
@@ -550,6 +552,105 @@ window.saveCatalog = async reset => {
     viewSettings();
   } catch (e) { toast(e.message, "bad"); }
 };
+
+/* ---------------- the save bar ----------------
+   A section saves once, from its bar: every field on it that changed. The
+   app's own settings go in one request, so saving two cards never sends the
+   older copy of one of them. */
+function settingsDirtyPaint() {
+  const bar = $("#settingsSaveBar"), n = STATE.settingsDirty?.size || 0;
+  if (!bar) return;
+  bar.hidden = !n;
+  const msg = $("#settingsSaveMsg");
+  if (msg) msg.textContent = `${n} unsaved change${n === 1 ? "" : "s"}`;
+}
+if (typeof document !== "undefined" && document.addEventListener) {
+  const mark = event => {
+    const card = event.target?.closest?.(".settings-grid section[data-save]");
+    if (!card || !event.target.id && !event.target.className) return;
+    STATE.settingsDirty = STATE.settingsDirty || new Set();
+    STATE.settingsDirty.add(`${card.dataset.save}:${event.target.id || event.target.className}:${event.target.value}`.split(":").slice(0, 2).join(":"));
+    settingsDirtyPaint();
+  };
+  document.addEventListener("input", mark);
+  document.addEventListener("change", mark);
+  window.addEventListener?.("beforeunload", event => { if (STATE.settingsDirty?.size) { event.preventDefault(); event.returnValue = ""; } });
+}
+const settingsKinds = () => new Set([...(STATE.settingsDirty || [])].map(key => key.split(":")[0]));
+
+async function settingsAppSave() {
+  const current = { ...(STATE.data.appSettings || {}) };
+  delete current.info;
+  const body = { ...current, thresholds: current.thresholds || HEALTH_DEFAULTS.thresholds };
+  const read = id => ({ warning: +$("#set_" + id + "_warn").value, critical: +$("#set_" + id + "_crit").value });
+  if ($("#set_cpu_warn")) body.thresholds = { cpu: read("cpu"), memory: read("memory"), disk: read("disk"), temperature: read("temperature") };
+  if ($("#set_drive_temperature_warn")) body.smart = { temperature: read("drive_temperature"), reallocated_warning: +$("#set_smart_reallocated").value,
+    pending_critical: +$("#set_smart_pending").value, uncorrectable_critical: +$("#set_smart_uncorrectable").value, notify_failures: $("#set_smart_notify").checked };
+  if ($("#set_update_policy")) body.updates = { ...(current.updates || {}), policy: $("#set_update_policy").value,
+    notify_available: $("#set_notify_available").checked, notify_failures: $("#set_notify_failures").checked,
+    maintenance: $("#set_update_start") ? { start: $("#set_update_start").value, duration_minutes: +$("#set_update_duration").value,
+      days: $$(".set_update_day:checked").map(input => +input.value) } : (current.updates || {}).maintenance };
+  if ($("#set_site_name")) body.site_name = $("#set_site_name").value.trim();
+  const saved = await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  HEALTH = { thresholds: { ...HEALTH_DEFAULTS.thresholds, ...(saved.thresholds || body.thresholds || {}) } };
+  STATE.data.appSettings = null;
+  await loadHealthSettings(true);
+  if (body.updates) loadImageUpdates(false, true);
+}
+
+window.settingsSave = async button => {
+  const kinds = settingsKinds();
+  if (button) button.disabled = true;
+  try {
+    if (kinds.has("app")) await settingsAppSave();
+    if (kinds.has("lh")) await lhSettingsSave();
+    STATE.settingsDirty = new Set();
+    toast("Settings saved", "ok");
+    resetPaint(); viewSettings();
+  } catch (e) { toast(e.message, "bad"); }
+  finally { if (button?.isConnected) button.disabled = false; }
+};
+window.settingsDiscard = () => { STATE.settingsDirty = new Set(); resetPaint(); viewSettings(); };
+
+/* Changing section, or leaving Settings, with changes not saved asks first. */
+window.settingsLeave = async () => {
+  if (!STATE.settingsDirty?.size) return true;
+  if (!(await ask("Leave without saving? The changes on this section are discarded."))) return false;
+  STATE.settingsDirty = new Set();
+  return true;
+};
+window.settingsGo = async id => {
+  if (!(await settingsLeave())) return;
+  if (!id) { settingsBack(); resetPaint(); viewSettings(); return; }
+  settingsTab(id);
+  resetPaint(); viewSettings();
+};
+
+/* ---------------- dialogs for settings with many fields ---------------- */
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+function updateWindowText(m) {
+  const days = (m?.days || []).map(d => DAYS[d]).join(", ") || "no days";
+  return `${days} · ${m?.start || "02:00"} UTC · ${+(m?.duration_minutes || 120)} min`;
+}
+window.updateWindowEdit = () => {
+  const m = (STATE.data.appSettings?.updates || {}).maintenance || {};
+  modal("Update window", UI.lead("When a reviewed rollout may start, under the maintenance-window policy. Times are UTC.") +
+    UI.fields(UI.field("Start time (UTC)", `<input id="set_update_start" type="time" value="${esc(m.start || "02:00")}">`),
+      UI.field("Duration (minutes)", `<input id="set_update_duration" type="number" min="15" max="1440" step="15" value="${+(m.duration_minutes || 120)}">`)) +
+    UI.field("Days", `<div class="update-days">${DAYS.map((day, index) =>
+      `<label class="daypick"><input type="checkbox" class="set_update_day" value="${index}" ${(m.days || []).includes(index) ? "checked" : ""}><span>${day}</span></label>`).join("")}</div>`) +
+    UI.actions(UI.cancel() + UI.button("Save window", "updateWindowSave(this)", { kind: "pri" })));
+};
+window.updateWindowSave = async button => {
+  if (button) button.disabled = true;
+  try { await settingsAppSave(); closeModal(); toast("Update window saved", "ok"); STATE.settingsDirty = new Set(); resetPaint(); viewSettings(); }
+  catch (e) { toast(e.message, "bad"); if (button) button.disabled = false; }
+};
+window.catalogEdit = () => modal("App Store catalogue", UI.lead("Any feed in the Community Applications format: the public one, a mirror, or your own list of templates.") +
+  UI.field(`Feed URL ${tip("A JSON feed shaped like applicationFeed.json - an object with an applist, or a plain list of templates. Blank uses the public feed.")}`,
+    `<input id="set_catalog" type="url" maxlength="500" placeholder="blank: the public Community Applications feed" value="${esc(STATE.data.appSettings?.catalog_url || "")}">`) +
+  UI.actions(UI.button("Use Community Applications", "catalogSave(true)") + UI.cancel() + UI.button("Save", "catalogSave(false)", { kind: "pri" }), true));
+window.catalogSave = async reset => { await saveCatalog(reset); closeModal(); };
 
 window.updatePolicyFields = () => {
   const fields = $("#maintenanceFields");

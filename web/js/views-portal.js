@@ -215,14 +215,4 @@ window.portalSave = async () => {
   } catch (e) { toast(e.message, "bad"); button.disabled = false; button.textContent = "Save links"; }
 };
 
-/* The Settings card: how many links, and the way into the editor. */
-function portalSettingsCard() {
-  const count = ((STATE.data.portal || {}).links || []).length;
-  return `<section class="card flat settings-wide" data-tab="apps">
-    <div class="settings-card-head between"><div><div class="ctitle">Portal</div>
-      <div class="csub">Links on the Portal page to apps and to the devices around the cluster - router, switches, access points, NAS.</div></div>
-      <div class="row"><button class="btn" onclick="go('portal')">Open portal</button>
-      <button class="btn pri" data-need="admin" onclick="portalEdit()">Edit links${count ? ` · ${count}` : ""}</button></div></div></section>`;
-}
-window.portalSettingsCard = portalSettingsCard;
 window.viewPortal = viewPortal;

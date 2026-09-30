@@ -1580,17 +1580,23 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .settings-tabs::-webkit-scrollbar{display:none}
 .settings-tabs button{white-space:nowrap}
 .settings-grid[data-tab]>section{display:none;grid-column:1/-1}
-.settings-grid[data-tab="general"]>section[data-tab="health"],
-.settings-grid[data-tab="general"]>section[data-tab="updates"],
-.settings-grid[data-tab="general"]>section[data-tab="device"],
-.settings-grid[data-tab="general"]>section[data-tab="general"],
-.settings-grid[data-tab="cluster"]>section[data-tab="cluster"],
-.settings-grid[data-tab="cluster"]>section[data-tab="hardware"],
+.settings-grid[data-tab="homestead"]>section[data-tab="homestead"],
+.settings-grid[data-tab="homestead"]>section[data-tab="about"],
+.settings-grid[data-tab="updates"]>section[data-tab="updates"],
+.settings-grid[data-tab="monitoring"]>section[data-tab="monitoring"],
+.settings-grid[data-tab="monitoring"]>section[data-tab="health"],
+.settings-grid[data-tab="monitoring"]>section[data-tab="mqtt"],
+.settings-grid[data-tab="hardware"]>section[data-tab="hardware"],
+.settings-grid[data-tab="hardware"]>section[data-tab="cluster"],
+.settings-grid[data-tab="hardware"]>section[data-tab="namespaces"],
 .settings-grid[data-tab="fleet"]>section[data-tab="fleet"],
+.settings-grid[data-tab="connections"]>section[data-tab="connections"],
+.settings-grid[data-tab="connections"]>section[data-tab="apps"],
+.settings-grid[data-tab="connections"]>section[data-tab="integrations"],
 .settings-grid[data-tab="access"]>section[data-tab="access"],
-.settings-grid[data-tab="integrations"]>section[data-tab="mqtt"],
-.settings-grid[data-tab="integrations"]>section[data-tab="apps"],
-.settings-grid[data-tab="about"]>section[data-tab="about"]{display:block}
+.settings-grid[data-tab="you"]>section[data-tab="you"],
+.settings-grid[data-tab="you"]>section[data-tab="device"],
+.settings-grid[data-tab="you"]>section[data-tab="general"]{display:block}
 /* A threshold is one row: its name, then warning and critical side by side. */
 .threshold-card{padding:10px 12px;gap:12px}
 .threshold-values{gap:8px}
@@ -2529,16 +2535,17 @@ html[data-theme="light"] .modalbox[data-context="smb-access"]{background:var(--s
 body.searching .bellmenu{display:none}
 
 /* Colour means state. Green, amber and red say healthy, needs attention and
-   failed; blue marks what opens something (ports, VIPs, links). Everything
-   else - hardware, groups, clusters, avatars, progress - stays neutral. */
-.tag.gpu,.tag.hw,.tag.cluster-tag{color:var(--mut);border-color:var(--line2);background:rgba(255,255,255,.04)}
+   failed; blue marks what opens something (ports, VIPs, links); purple marks
+   hardware a workload uses from its host. Everything else - groups,
+   clusters, avatars, roles, progress - stays neutral. */
+.tag.cluster-tag{color:var(--mut);border-color:var(--line2);background:rgba(255,255,255,.04)}
 .av.n1,.av.n2,.av.n3{background:var(--surf3);color:var(--tx)}
 .g-info,.g-vio{--gc:rgba(255,255,255,.05)}
 .jobmeter span,.rollout-meter span,.livebar>span{background:var(--mut)}
 .meter.split>.seg-sys,.drivesplit .k-sys{background:var(--dim)}
 .meter.split>.seg-lh,.drivesplit .k-lh{background:var(--mut)}
 .meter.split>.seg-lhroom{background:var(--mut);opacity:.25}
-html[data-theme="light"] .tag.gpu,html[data-theme="light"] .tag.hw,html[data-theme="light"] .tag.cluster-tag{background:rgba(0,0,0,.03)}
+html[data-theme="light"] .tag.cluster-tag{background:rgba(0,0,0,.03)}
 /* A page's summary: one line, the numbers behind it on tap. */
 .sumline{display:flex;align-items:center;flex-wrap:wrap;gap:6px 18px;padding:11px 14px;margin-bottom:14px;border:1px solid var(--line);border-radius:var(--r2);
   background:rgba(255,255,255,.025);font-size:13px;color:var(--mut)}
@@ -2556,11 +2563,11 @@ html[data-theme="light"] .sumline{background:rgba(0,0,0,.02)}
 .actionbar>.actionmenu{margin-left:0}
 .vip-card-actions .actionbar,.wacts .actionbar{width:100%}
 .wacts .actionbar>.actionmenu,.vip-card-actions .actionbar>.actionmenu{margin-left:auto}
-/* Tabs of a page family (Containers, Images, Schedules, Import...). */
-.pagetabs{padding:16px 26px 0}
-.pagetabs .seg{display:inline-flex;max-width:100%;overflow-x:auto;scrollbar-width:none}
-.pagetabs .seg a{white-space:nowrap;text-decoration:none}
-.pagetabs+.page{padding-top:12px}
+/* Tabs of a page family (Containers, Images, Schedules, Import...), first in
+   the page header; the header's actions line up with them. */
+.phead:has(.pagetabs){align-items:flex-start}
+.pagetabs{display:inline-flex;max-width:100%;overflow-x:auto;scrollbar-width:none;margin-bottom:10px}
+.pagetabs a{white-space:nowrap;text-decoration:none}
 /* The phone's bottom bar. */
 .bottombar{position:fixed;left:0;right:0;bottom:0;z-index:40;grid-template-columns:repeat(5,1fr);
   padding:6px 4px calc(6px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line2);
@@ -2570,7 +2577,6 @@ html[data-theme="light"] .sumline{background:rgba(0,0,0,.02)}
 .bottombar a.on{color:var(--tx)}
 html[data-theme="light"] .bottombar{background:rgba(255,255,255,.92)}
 @media(max-width:900px){
-  .pagetabs{padding:12px 16px 0}
   .page{padding-bottom:calc(92px + env(safe-area-inset-bottom,0px))}
   .jobtray{bottom:calc(74px + env(safe-area-inset-bottom,0px))}
   .appfoot{padding-bottom:calc(70px + env(safe-area-inset-bottom,0px))}
@@ -2597,4 +2603,54 @@ html[data-theme="light"] .settings-nav button.on{background:rgba(0,0,0,.06)}
   .settings-layout[data-open="0"] .settings-main{display:none}
   .settings-layout[data-open="1"] .settings-nav{display:none}
   .settings-back{display:inline-flex;border:0;background:none;color:var(--low);font:600 13px "Inter Tight",sans-serif;padding:2px 0 12px;cursor:pointer}
+}
+/* Containers: the count and the group chips share the line under the tabs. */
+.phead>div:first-child:has(.wgroup-bar){display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;column-gap:16px;row-gap:8px;min-width:0}
+.phead>div:first-child:has(.wgroup-bar)>.pagetabs{grid-column:1/-1;justify-self:start;margin-bottom:2px}
+.phead .wgroup-bar{margin:0;justify-self:start;min-width:0}
+/* A header's actions stay on one line beside its title on the desktop. */
+@media(min-width:901px){.phead>.row{flex-wrap:nowrap;flex-shrink:0}}
+/* The VM card, in the container card's shape. */
+.vm-meta{grid-template-columns:minmax(0,1fr) minmax(0,1fr);margin-top:8px}
+.vm-meta .vm-copy{width:22px;height:22px;margin-left:4px;vertical-align:middle}
+.vm-meta .vm-copy svg{width:12px;height:12px}
+/* Settings: its groups, setting rows, service rows and the save bar. */
+.settings-nav-group{font:600 10px "JetBrains Mono",monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);padding:12px 12px 4px}
+.settings-nav-group:first-child{padding-top:2px}
+.srows{display:flex;flex-direction:column}
+.srow{display:flex;align-items:center;gap:14px;padding:10px 0;border-top:1px solid var(--line)}
+.srows>.srow:first-child{border-top:0;padding-top:4px}
+.srow-l{flex:1;min-width:0}
+.srow-l b{display:block;font-size:13px;font-weight:620}
+.srow-l small{display:block;color:var(--dim);font-size:11.5px;margin-top:1px}
+.srow-c{display:flex;align-items:center;gap:8px;flex:0 1 auto;min-width:0;justify-content:flex-end}
+.srow-c input[type=text],.srow-c input[type=url],.srow-c select{width:auto;min-width:220px;max-width:340px}
+.srow-c .rng{width:160px}
+.appearance-seg .opt{border:0;background:transparent;color:var(--mut);padding:6px 12px;border-radius:99px;font:inherit;font-size:12px;font-weight:620;cursor:pointer}
+.appearance-seg .opt.on{background:#fff;color:#0a0a0b}
+html[data-theme="light"] .appearance-seg .opt.on{background:#16161a;color:#fff}
+.toggle{position:relative;display:inline-block;width:38px;height:22px;flex:0 0 38px}
+.toggle input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
+.toggle span{position:absolute;inset:0;border-radius:99px;background:var(--surf3);border:1px solid var(--line2);transition:background .2s var(--e);pointer-events:none}
+.toggle span::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:var(--mut);transition:all .2s var(--e)}
+.toggle input:checked+span{background:var(--tx)}
+.toggle input:checked+span::after{left:19px;background:var(--bg)}
+.toggle input:focus-visible+span{outline:2px solid var(--low);outline-offset:2px}
+.svcrow{display:flex;align-items:center;gap:12px;padding:8px 0}
+.svcrow-l{flex:1;min-width:0}
+.svcrow-l b{font-size:13px;font-weight:650}
+.svcrow-l small{display:block;color:var(--dim);font-size:11.5px;margin-top:2px;overflow:hidden;text-overflow:ellipsis}
+.savebar{position:sticky;bottom:12px;z-index:30;display:flex;align-items:center;gap:8px;margin-top:14px;padding:10px 14px;border:1px solid var(--line2);
+  border-radius:var(--r2);background:rgba(20,20,23,.94);backdrop-filter:blur(var(--blur));box-shadow:0 12px 40px rgba(0,0,0,.45)}
+.savebar>span{margin-right:auto;color:var(--med);font-weight:650;font-size:13px}
+html[data-theme="light"] .savebar{background:rgba(255,255,255,.95)}
+.update-days{display:flex;flex-wrap:wrap;gap:6px}
+/* Homestead's own release leads Updates. */
+.settings-grid>#homesteadUpdateCard{order:-1}
+@media(max-width:900px){
+  /* A switch or a button stays beside its label; a wide control takes the next line. */
+  .srow{flex-wrap:wrap}.srow-c{flex:0 0 auto;margin-left:auto}
+  .srow:has(select) .srow-c,.srow:has(input[type=text]) .srow-c,.srow:has(input[type=url]) .srow-c,.srow:has(.rng) .srow-c,.srow:has(.appearance-seg) .srow-c{flex:1 1 100%;margin-left:0;justify-content:flex-start}
+  .srow-c input[type=text],.srow-c input[type=url],.srow-c select{min-width:0;width:100%;max-width:none}
+  .savebar{bottom:calc(76px + env(safe-area-inset-bottom,0px))}
 }

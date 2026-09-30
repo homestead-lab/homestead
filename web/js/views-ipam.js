@@ -384,16 +384,18 @@ async function ipamAfterUnifi() {
   else if (STATE.view === "network") renderIpam();
 }
 
-/* Settings > Integrations: where UniFi is connected. */
+/* Settings > Connections: where UniFi is connected. */
 function ipamUnifiCard() {
   const u = ((STATE.data.ipam || {}).unifi) || {};
-  return `<section class="card flat settings-wide" data-tab="apps" id="unifiCard">
-    <div class="settings-card-head between"><div><div class="ctitle">UniFi Network</div>
-      <div class="csub">${u.configured ? `Connected to ${esc(u.url)}${u.last_sync ? ` · last synced ${esc(fmtAgo(Date.now() / 1000 - u.last_sync))}` : " · not synced yet"}`
-        : "Optional. Connect a UniFi controller and the IP addresses page adds its clients, devices, reserved IPs, networks and the names it knows. Without it, IP addresses works from scans and what you write."}</div>
-      ${u.configured && u.last_error ? `<div class="note bad" style="margin-top:8px">${esc(u.last_error)}</div>` : ""}</div>
-      <div class="row">${u.configured ? '<button class="btn" data-need="operator" onclick="ipamSync()">Sync now</button>' : ""}
-        <button class="btn ${u.configured ? "" : "pri"}" data-need="admin" onclick="ipamUnifi()">${u.configured ? "Edit" : "Connect UniFi"}</button></div></div></section>`;
+  const state = !u.configured ? '<span class="pill neutral">not connected</span>' : u.last_error ? '<span class="pill crit">error</span>' : '<span class="pill ok">connected</span>';
+  return `<section class="card flat settings-wide" data-tab="connections" id="unifiCard">
+    <div class="settings-card-head"><div><div class="ctitle">UniFi Network</div>
+      <div class="csub">Its clients, devices, reserved addresses and networks, and the names it knows, on the IP addresses page</div></div></div>
+    ${serviceRow(u.configured ? "UniFi controller" : "No controller", state,
+      u.configured ? `${esc(u.url)}${u.last_sync ? ` · synced ${esc(fmtAgo(Date.now() / 1000 - u.last_sync))}` : " · not synced yet"}` : "Optional: without it, IP addresses works from scans and what you write",
+      actionBar([u.configured ? { label: "Sync now", run: "ipamSync()", need: "operator" } : null,
+        { label: u.configured ? "Edit" : "Connect UniFi", run: "ipamUnifi()", need: "admin", pri: !u.configured }]))}
+    ${u.configured && u.last_error ? `<div class="note bad" style="margin-top:8px">${esc(u.last_error)}</div>` : ""}</section>`;
 }
 window.ipamUnifiCard = ipamUnifiCard;
 

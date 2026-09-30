@@ -106,7 +106,7 @@ would not start). The class table shows each class's tags.
 
 Each node's card lists every disk on the host: the system disk, the disks
 Longhorn uses, and any nothing uses yet. **Disks** (on Volumes, on a node, or in
-Settings → Cluster) opens them all.
+Settings → Hardware and storage) opens them all.
 
 ![Disks](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-disks.jpg)
 
@@ -283,7 +283,7 @@ budget as well as meeting the logical allocation, tags and placement rules.
 Over-provisioning increases allocation headroom, not physical free space.
 The dashboard names a node past 80%, and a notification goes out.
 
-**Settings → Cluster** sets over-provisioning and the minimum free space, with a
+**Settings → Hardware and storage** sets over-provisioning and the minimum free space, with a
 preview of each node's new limit, and turns the V2 engine on or off.
 
 ### What the V2 engine needs

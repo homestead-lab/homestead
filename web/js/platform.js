@@ -4,9 +4,9 @@
 
 const PLATFORM_NEEDS = {
   longhorn: { name: "Longhorn", why: "volumes, snapshots and backups are Longhorn's",
-    fix: "Homestead can install it here, as it can under Settings → Cluster. Each node needs open-iscsi and an NFS client (nfs-common) first." },
+    fix: "Homestead can install it here, as it can under Settings → Hardware and storage. Each node needs open-iscsi and an NFS client (nfs-common) first." },
   kubevirt: { name: "KubeVirt", why: "virtual machines run on KubeVirt",
-    fix: "Homestead can install it with CDI, which fills VM disks from images - here or under Settings → Cluster. The machines need hardware virtualisation to run VMs at full speed." },
+    fix: "Homestead can install it with CDI, which fills VM disks from images - here or under Settings → Hardware and storage. The machines need hardware virtualisation to run VMs at full speed." },
 };
 
 async function loadPlatform(force = false) {
