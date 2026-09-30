@@ -170,7 +170,8 @@ class SystemDriveTests(unittest.TestCase):
                                            {"disk": "sda", "mountpoint": "/mnt/sda"}]}}
         lh = lh_node({"default-disk": {"path": "/var/lib/longhorn/", "allowScheduling": True},
                       "disk-mnt-sda": {"path": "/mnt/sda", "allowScheduling": True}},
-                     {"default-disk": {"storageMaximum": 68 * GiB, "storageAvailable": 44 * GiB},
+                     {"default-disk": {"storageMaximum": 68 * GiB, "storageAvailable": 44 * GiB,
+                                       "scheduledReplica": {"vol-a-r-1": 1, "vol-b-r-1": 1}},
                       "disk-mnt-sda": {"storageMaximum": 2750 * GiB, "storageAvailable": 2700 * GiB}})
         self.node = {"metadata": {"name": "node1", "annotations": {}}}
         self.sent = []
@@ -185,7 +186,10 @@ class SystemDriveTests(unittest.TestCase):
             if path == "/api/v1/nodes/node1":
                 return self.node
             if path.endswith("/replicas"):
-                return {"items": []}
+                return {"items": [{"metadata": {"name": f"vol-{v}-r-1"}, "spec": {"volumeName": f"vol-{v}"}} for v in "ab"]}
+            if path.endswith("/volumes"):
+                return {"items": [{"metadata": {"name": "vol-a"}, "status": {"actualSize": 3 * GiB}},
+                                  {"metadata": {"name": "vol-b"}, "status": {"actualSize": 2 * GiB}}]}
             raise AssertionError(path)
 
         def send(method, path, body=None, **kw):
@@ -202,7 +206,11 @@ class SystemDriveTests(unittest.TestCase):
         self.assertEqual(68.0, nvme["lh_size_gb"])
         self.assertEqual(["/var/lib/longhorn/"], nvme["lh_paths"])
         self.assertEqual(476.9, nvme["size_gb"], "the drive's own size, not Longhorn's share of it")
-        self.assertEqual(24.0, nvme["lh_root_used_gb"], "on /, so inside the root filesystem's use too")
+        # Longhorn counts all 24 GiB the root filesystem uses as its own; its
+        # replicas hold 5, and the rest is the system's.
+        self.assertEqual(5.0, nvme["lh_used_gb"], "what its replicas hold, not the whole filesystem's use")
+        self.assertEqual(5.0, nvme["lh_root_used_gb"], "on /, so inside the root filesystem's use too")
+        self.assertEqual(50.0, lines[1]["lh_used_gb"], "a drive of its own: Longhorn's own figure")
         self.assertEqual(0, lines[1]["lh_root_used_gb"], "a drive of its own")
 
     def test_a_disk_can_be_named_by_its_serial_and_the_name_cleared(self):
