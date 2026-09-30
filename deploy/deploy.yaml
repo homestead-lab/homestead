@@ -104,6 +104,11 @@ rules:
   - apiGroups: ["storage.k8s.io"]
     resources: [volumeattachments]
     verbs: [get, list, delete]
+  # Whether Longhorn's CSI driver is registered on a node that has just
+  # joined: until it is, the node is steered clear of.
+  - apiGroups: ["storage.k8s.io"]
+    resources: [csinodes, csidrivers]
+    verbs: [get]
   # data protection: recurring jobs, snapshots, backups, and volume labels
   # (group membership is a label on the volume)
   - apiGroups: ["longhorn.io"]
@@ -272,7 +277,7 @@ metadata:
   labels:
     app: homestead
   annotations:
-    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.266"}'
+    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.267"}'
 spec:
   replicas: 1
   strategy:
@@ -307,7 +312,7 @@ spec:
           tolerationSeconds: 15
       initContainers:
         - name: data-permissions
-          image: ghcr.io/wjcloudy/homestead:2.8.266
+          image: ghcr.io/wjcloudy/homestead:2.8.267
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "chown 10001:10001 /data && chmod 0770 /data"]
           securityContext:
@@ -324,7 +329,7 @@ spec:
               mountPath: /data
       containers:
         - name: homestead
-          image: ghcr.io/wjcloudy/homestead:2.8.266
+          image: ghcr.io/wjcloudy/homestead:2.8.267
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT

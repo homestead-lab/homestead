@@ -459,7 +459,154 @@ def dashboard(data, width, height, braille=True):
     return frame
 
 
-def screen(window, monitor, demo=False, unhealthy=False, ascii_only=False):
+# ---------------- Braille on a machine's own screen ----------------
+# The Linux text console draws only the glyphs its loaded font has, and no
+# stock console font has Braille. So, while the dashboard shows there, it
+# loads a font of its own on its console: the ASCII of the font already there,
+# and beside it the Braille patterns the dashboard draws - bars and graphs
+# fill each column from the bottom, 25 patterns, and the logo adds its few -
+# drawn as dots. 256 glyphs, since a 512-glyph console font costs the bright
+# colours. The font it found is put back before the login prompt appears.
+PSF1_MAGIC, PSF2_MAGIC = b"\x36\x04", b"\x72\xb5\x4a\x86"
+# A mark in our own font, so one left behind by a crash is never kept as "the
+# font that was there".
+OURS = ""
+
+
+def read_psf(data):
+    """(width, height, [glyph bytes], [[characters]]) from a PSF1 or PSF2 font."""
+    if data[:2] == PSF1_MAGIC:
+        mode, height = data[2], data[3]
+        count, width, offset = (512 if mode & 1 else 256), 8, 4
+        glyphs = [data[offset + i * height:offset + (i + 1) * height] for i in range(count)]
+        table, chars, pos = [], [], offset + count * height
+        if mode & 6:
+            while pos + 1 < len(data) and len(table) < count:
+                value = int.from_bytes(data[pos:pos + 2], "little"); pos += 2
+                if value == 0xFFFF:
+                    table.append(chars); chars = []
+                elif value == 0xFFFE:      # sequences follow: not needed here
+                    while pos + 1 < len(data) and int.from_bytes(data[pos:pos + 2], "little") != 0xFFFF:
+                        pos += 2
+                else:
+                    chars.append(chr(value))
+        return width, height, glyphs, table
+    if data[:4] != PSF2_MAGIC:
+        raise ValueError("not a PSF font")
+    header, flags, count, size, height, width = (int.from_bytes(data[i:i + 4], "little") for i in (8, 12, 16, 20, 24, 28))
+    glyphs = [data[header + i * size:header + (i + 1) * size] for i in range(count)]
+    table = []
+    if flags & 1:
+        for entry in data[header + count * size:].split(b"\xff")[:count]:
+            table.append([c for c in entry.split(b"\xfe")[0].decode("utf-8", "replace")])
+    return width, height, glyphs, table
+
+
+def braille_glyph(mask, width, height):
+    """One Braille pattern as a bitmap: two columns of four round-ish dots."""
+    row_bytes = (width + 7) // 8
+    bits = [[0] * width for _ in range(height)]
+    dot_w, dot_h = max(1, round(width / 5)), max(1, round(height / 9))
+    for dy in range(4):
+        for dx in range(2):
+            if not mask & DOT_BITS[dy][dx]:
+                continue
+            x0 = round(width * (1 + 2 * dx) / 4 - dot_w / 2)
+            y0 = round(height * (dy + .5) / 4 - dot_h / 2)
+            for y in range(max(0, y0), min(height, y0 + dot_h)):
+                for x in range(max(0, x0), min(width, x0 + dot_w)):
+                    bits[y][x] = 1
+    out = bytearray()
+    for row in bits:
+        value = 0
+        for x, bit in enumerate(row + [0] * (row_bytes * 8 - width)):
+            value = value << 1 | bit
+        out += value.to_bytes(row_bytes, "big")
+    return bytes(out)
+
+
+def dashboard_masks():
+    """Every Braille pattern the dashboard draws."""
+    masks = set()
+    bottom = lambda n, dx: sum(DOT_BITS[3 - i][dx] for i in range(n))
+    for left in range(5):
+        for right in range(5):
+            masks.add(bottom(left, 0) | bottom(right, 1))
+    for large in (False, True):
+        for row in logo_cells(large, True):
+            masks.update(ord(char) - 0x2800 for char, _ in row if "⠀" <= char <= "⣿")
+    masks.discard(0)
+    return sorted(masks)
+
+
+def console_font(base):
+    """Our 256-glyph PSF2 font from the one loaded: its ASCII, and Braille."""
+    width, height, glyphs, table = read_psf(base)
+    where = {}
+    for index, chars in enumerate(table):
+        for char in chars:
+            where.setdefault(char, index)
+    if OURS in where:
+        raise ValueError("the loaded font is already ours")
+    size = len(glyphs[0]) if glyphs else 0
+    blank = bytes(size)
+    out_glyphs, out_table = [blank], [[" ", " ", "⠀"]]
+    for code in range(0x21, 0x7f):
+        index = where.get(chr(code), code if not table else None)
+        out_glyphs.append(glyphs[index] if index is not None and index < len(glyphs) else blank)
+        out_table.append([chr(code)] + (["�"] if code == ord("?") else []))
+    for mask in dashboard_masks():
+        out_glyphs.append(braille_glyph(mask, width, height))
+        out_table.append([chr(0x2800 + mask)])
+    out_glyphs.append(blank)
+    out_table.append([OURS])
+    if len(out_glyphs) > 256:
+        raise ValueError("too many glyphs for a 256-glyph font")
+    while len(out_glyphs) < 256:
+        out_glyphs.append(blank); out_table.append([])
+    header = PSF2_MAGIC + b"".join(v.to_bytes(4, "little") for v in (0, 32, 1, 256, size, height, width))
+    unicode_table = b"".join("".join(chars).encode("utf-8") + b"\xff" for chars in out_table)
+    return header + b"".join(out_glyphs) + unicode_table
+
+
+class ConsoleFont:
+    """Our font on this console while the dashboard shows; theirs after."""
+    def __init__(self):
+        self.saved = None
+        self.tty = os.ttyname(0) if os.isatty(0) else ""
+        self.dir = ""
+
+    def load(self):
+        setfont = shutil.which("setfont")
+        if not setfont or not self.tty:
+            return False
+        import tempfile
+        try:
+            self.dir = tempfile.mkdtemp(prefix="homestead-console-")
+            saved = os.path.join(self.dir, "theirs.psf")
+            if subprocess.run([setfont, "-C", self.tty, "-O", saved], capture_output=True, timeout=10).returncode:
+                return False
+            ours = os.path.join(self.dir, "ours.psf")
+            with open(saved, "rb") as handle:
+                font = console_font(handle.read())
+            with open(ours, "wb") as handle:
+                handle.write(font)
+            self.saved = saved
+            return subprocess.run([setfont, "-C", self.tty, ours], capture_output=True, timeout=10).returncode == 0
+        except (OSError, ValueError, subprocess.SubprocessError, IndexError):
+            return False
+
+    def restore(self):
+        if self.saved:
+            try:
+                subprocess.run([shutil.which("setfont") or "setfont", "-C", self.tty, self.saved], capture_output=True, timeout=10)
+            except (OSError, subprocess.SubprocessError):
+                pass
+        if self.dir:
+            shutil.rmtree(self.dir, ignore_errors=True)
+
+
+def screen(window, monitor, demo=False, unhealthy=False, ascii_only=False, console_braille=False):
     import curses
     styles = {name: curses.A_BOLD if name in {"ok", "bad", "warn", "accent", "brand"} else
               curses.A_DIM if name == "muted" else 0
@@ -489,11 +636,10 @@ def screen(window, monitor, demo=False, unhealthy=False, ascii_only=False):
         unicode_supported = True
     except (UnicodeError, LookupError):
         unicode_supported = False
-    # The Linux text console's built-in fonts have no Braille, so on a
-    # machine's own screen the dots would be boxes: plain characters there,
-    # Braille in a real terminal. A switches either way.
+    # A machine's own screen has Braille only when our font could be loaded
+    # there; plain characters otherwise. A switches either way.
     text_console = os.environ.get("TERM", "") == "linux"
-    braille = unicode_supported and not ascii_only and not text_console
+    braille = unicode_supported and not ascii_only and (console_braille or not text_console)
     # The kernel prints its warnings straight onto a machine's own screen,
     # behind curses' back: they stay, and scroll the dashboard out of line,
     # until the whole screen is drawn again - so there it is, every few seconds.
@@ -552,13 +698,17 @@ def main():
     if not (args.demo or args.demo_unhealthy):
         for target in (monitor.collect_local, monitor.collect_cluster):
             threading.Thread(target=target, daemon=True).start()
+    font = ConsoleFont() if os.environ.get("TERM", "") == "linux" and not args.ascii else None
     try:
+        console_braille = bool(font and font.load())
         import curses
-        curses.wrapper(screen, monitor, args.demo or args.demo_unhealthy, args.demo_unhealthy, args.ascii)
+        curses.wrapper(screen, monitor, args.demo or args.demo_unhealthy, args.demo_unhealthy, args.ascii, console_braille)
     except (ImportError, OSError, KeyboardInterrupt):
         pass  # The getty wrapper always proceeds to the authenticated login.
     finally:
         monitor.stop.set()
+        if font:
+            font.restore()  # the login prompt gets the font that was there
 
 
 if __name__ == "__main__":

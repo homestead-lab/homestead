@@ -98,6 +98,7 @@ NODE_PROBE=1
 VIP=""
 LONGHORN_VOLUME=auto
 NODE_IP=""
+JOIN_TAINT=""
 RAW=https://raw.githubusercontent.com/wjcloudy/homestead
 
 say() { printf '\n==> %s\n' "$*"; }
@@ -322,6 +323,9 @@ install_rke2() { # server|agent [url token]
     [ -n "$NODE_IP" ] && echo "node-ip: $NODE_IP"
     [ -n "$url" ] && echo "server: $url"
     [ -n "$token" ] && echo "token: $token"
+    [ -n "$JOIN_TAINT" ] && printf 'node-taint:
+  - "%s"
+' "$JOIN_TAINT"
     # A server publishes LoadBalancer Services on the nodes' own addresses,
     # as k3s does - Homestead's own address among them.
     [ "$type" = server ] && echo "enable-servicelb: true"
@@ -358,12 +362,17 @@ case "$MODE" in
     done
     host_limits
     host_packages
+    # Ready minutes before Longhorn is running on it: until Homestead sees
+    # Longhorn's driver here and lifts this, pods prefer other nodes, so one
+    # with a volume does not land here and wait. Only a preference - Longhorn
+    # itself still starts here.
+    JOIN_TAINT="homestead.io/storage-pending=longhorn:PreferNoSchedule"
     if [ "$DIST" = rke2 ]; then
       if [ "$MODE" = agent ]; then install_rke2 agent "$URL" "$TOKEN"; else install_rke2 server "$URL" "$TOKEN"; fi
     else
       export K3S_URL="$URL" K3S_TOKEN="$TOKEN"
-      if [ "$MODE" = agent ]; then install_k3s agent
-      else unset K3S_URL; install_k3s server --server "$URL"; fi
+      if [ "$MODE" = agent ]; then install_k3s agent --node-taint "$JOIN_TAINT"
+      else unset K3S_URL; install_k3s server --server "$URL" --node-taint "$JOIN_TAINT"; fi
     fi
     say "Node joined the cluster. It appears on the Homestead Nodes page within a few minutes."
     exit 0 ;;
