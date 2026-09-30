@@ -674,8 +674,18 @@ window.clearSearch = () => {
   document.body.classList.remove("searching");
 };
 
+/* A page folded into another (Images into Containers, Events into Cluster)
+   shows its family's tabs, in the standard .seg, at the start of its header:
+   the header's actions sit beside them, not a row below. */
+function pageTabs(view) {
+  const tabs = window.HomesteadRouter ? HomesteadRouter.tabsFor(view) : [];
+  return tabs.length ? `<nav class="seg pagetabs" aria-label="Pages here">${tabs.map(([id, label]) =>
+    `<a href="${esc(HomesteadRouter.urlFor(id))}" class="${id === view ? "on" : ""}"${id === view ? ' aria-current="page"' : ""} onclick="event.preventDefault();go(${jsq(id)})">${esc(label)}</a>`).join("")}</nav>` : "";
+}
 function paint(html) {
   const host = V();
+  const tabs = pageTabs(STATE.view);
+  if (tabs) html = html.replace(/<div class="phead">\s*<div>/, match => `${match}${tabs}`);
   html = filterBar() + html;
   PAGE_SNAPSHOT[STATE.view] = html;
   host.classList.remove("refreshing");

@@ -2529,16 +2529,17 @@ html[data-theme="light"] .modalbox[data-context="smb-access"]{background:var(--s
 body.searching .bellmenu{display:none}
 
 /* Colour means state. Green, amber and red say healthy, needs attention and
-   failed; blue marks what opens something (ports, VIPs, links). Everything
-   else - hardware, groups, clusters, avatars, progress - stays neutral. */
-.tag.gpu,.tag.hw,.tag.cluster-tag{color:var(--mut);border-color:var(--line2);background:rgba(255,255,255,.04)}
+   failed; blue marks what opens something (ports, VIPs, links); purple marks
+   hardware a workload uses from its host. Everything else - groups,
+   clusters, avatars, roles, progress - stays neutral. */
+.tag.cluster-tag{color:var(--mut);border-color:var(--line2);background:rgba(255,255,255,.04)}
 .av.n1,.av.n2,.av.n3{background:var(--surf3);color:var(--tx)}
 .g-info,.g-vio{--gc:rgba(255,255,255,.05)}
 .jobmeter span,.rollout-meter span,.livebar>span{background:var(--mut)}
 .meter.split>.seg-sys,.drivesplit .k-sys{background:var(--dim)}
 .meter.split>.seg-lh,.drivesplit .k-lh{background:var(--mut)}
 .meter.split>.seg-lhroom{background:var(--mut);opacity:.25}
-html[data-theme="light"] .tag.gpu,html[data-theme="light"] .tag.hw,html[data-theme="light"] .tag.cluster-tag{background:rgba(0,0,0,.03)}
+html[data-theme="light"] .tag.cluster-tag{background:rgba(0,0,0,.03)}
 /* A page's summary: one line, the numbers behind it on tap. */
 .sumline{display:flex;align-items:center;flex-wrap:wrap;gap:6px 18px;padding:11px 14px;margin-bottom:14px;border:1px solid var(--line);border-radius:var(--r2);
   background:rgba(255,255,255,.025);font-size:13px;color:var(--mut)}
@@ -2556,11 +2557,11 @@ html[data-theme="light"] .sumline{background:rgba(0,0,0,.02)}
 .actionbar>.actionmenu{margin-left:0}
 .vip-card-actions .actionbar,.wacts .actionbar{width:100%}
 .wacts .actionbar>.actionmenu,.vip-card-actions .actionbar>.actionmenu{margin-left:auto}
-/* Tabs of a page family (Containers, Images, Schedules, Import...). */
-.pagetabs{padding:16px 26px 0}
-.pagetabs .seg{display:inline-flex;max-width:100%;overflow-x:auto;scrollbar-width:none}
-.pagetabs .seg a{white-space:nowrap;text-decoration:none}
-.pagetabs+.page{padding-top:12px}
+/* Tabs of a page family (Containers, Images, Schedules, Import...), first in
+   the page header; the header's actions line up with them. */
+.phead:has(.pagetabs){align-items:flex-start}
+.pagetabs{display:inline-flex;max-width:100%;overflow-x:auto;scrollbar-width:none;margin-bottom:10px}
+.pagetabs a{white-space:nowrap;text-decoration:none}
 /* The phone's bottom bar. */
 .bottombar{position:fixed;left:0;right:0;bottom:0;z-index:40;grid-template-columns:repeat(5,1fr);
   padding:6px 4px calc(6px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line2);
@@ -2570,7 +2571,6 @@ html[data-theme="light"] .sumline{background:rgba(0,0,0,.02)}
 .bottombar a.on{color:var(--tx)}
 html[data-theme="light"] .bottombar{background:rgba(255,255,255,.92)}
 @media(max-width:900px){
-  .pagetabs{padding:12px 16px 0}
   .page{padding-bottom:calc(92px + env(safe-area-inset-bottom,0px))}
   .jobtray{bottom:calc(74px + env(safe-area-inset-bottom,0px))}
   .appfoot{padding-bottom:calc(70px + env(safe-area-inset-bottom,0px))}
@@ -2598,3 +2598,13 @@ html[data-theme="light"] .settings-nav button.on{background:rgba(0,0,0,.06)}
   .settings-layout[data-open="1"] .settings-nav{display:none}
   .settings-back{display:inline-flex;border:0;background:none;color:var(--low);font:600 13px "Inter Tight",sans-serif;padding:2px 0 12px;cursor:pointer}
 }
+/* Containers: the count and the group chips share the line under the tabs. */
+.phead>div:first-child:has(.wgroup-bar){display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;column-gap:16px;row-gap:8px;min-width:0}
+.phead>div:first-child:has(.wgroup-bar)>.pagetabs{grid-column:1/-1;justify-self:start;margin-bottom:2px}
+.phead .wgroup-bar{margin:0;justify-self:start;min-width:0}
+/* A header's actions stay on one line beside its title on the desktop. */
+@media(min-width:901px){.phead>.row{flex-wrap:nowrap;flex-shrink:0}}
+/* The VM card, in the container card's shape. */
+.vm-meta{grid-template-columns:minmax(0,1fr) minmax(0,1fr);margin-top:8px}
+.vm-meta .vm-copy{width:22px;height:22px;margin-left:4px;vertical-align:middle}
+.vm-meta .vm-copy svg{width:12px;height:12px}

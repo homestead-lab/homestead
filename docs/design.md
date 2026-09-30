@@ -15,9 +15,20 @@ a set of values is a facts panel, a row of figures is stat cards, a way of
 working is a guide. Reach for the component; new markup needs a reason the
 existing ones cannot meet, and then becomes a component itself.
 
-**Colour means risk.** Amber is a warning; red is an error, or something that
-cannot be undone. A plain note or help text carries information. If
-everything is amber, nothing is.
+**Colour means state.** Green is healthy, amber needs attention, red is an
+error or something that cannot be undone. Two more colours carry meaning of
+their own: blue marks what opens something - a port, a VIP, a link - and
+purple the hardware a workload takes from its host (an iGPU, a Coral). Every
+other tag, chip, avatar, role badge and progress bar is neutral, so a healthy
+page is calm and the one red thing stands out. If everything is amber,
+nothing is.
+
+**One line of buttons.** A header, a card or a row keeps its buttons on one
+line at any width: the main one or two as buttons, the rest in a `⋯` menu
+beside them. Nothing wraps onto a second line of buttons.
+
+**Summary first, detail on tap.** A page opens with what matters - one status
+line - and keeps the tiles and breakdowns behind it, a tap away.
 
 **Say it once.** A warning appears once. A sentence that would be repeated on
 every card ("saved for use...") is said once, above the cards, and each card
@@ -43,16 +54,43 @@ column headings are the one small upper-case label.
 
 ### The shape of a page
 
-1. **Header** (`.phead`) - the title, a one-line subtitle saying what the page
-   is for, and the page's actions on the right (the main one `pri`). On a
-   phone the actions wrap under the title.
-2. **Tabs** (`.seg`), if the page has views.
-3. **Guide** (`UI.guide`) - collapsed: how this part of Homestead works, for
+1. **Header** (`.phead`) - on the left, the page family's tabs when it has
+   them (added by `paint()`), then a one-line subtitle; on the right, on the
+   same line as the tabs, the actions: the cards/rows switch if the page has
+   one, `moreMenu()` for everything secondary, and one main button (`pri`) -
+   or `menuButton()` when the main action is a choice (＋ Import). Filters
+   that belong to the list, such as Containers' group chips, share the
+   subtitle's line.
+2. **Summary** (`summaryLine()`) - one line that answers "is it well?", with
+   its tiles (`UI.stats`, `.statgrid`) behind Details.
+3. **Tabs** (`.seg`), if the page itself has views.
+4. **Guide** (`UI.guide`) - collapsed: how this part of Homestead works, for
    whoever wants to know.
-4. **One callout**, only when something needs doing now (a clash, a failure).
-5. **Stats** (`UI.stats`) - two to four figures that answer "is it well?".
+5. **One callout**, only when something needs doing now (a clash, a failure).
 6. **Content** - sections with `.sec` headings or cards (`.card` with
    `.ctitle` and `.csub`), each holding one of the collections below.
+
+### Finding a page
+
+- **The sidebar has twelve entries** in four groups: Overview (Dashboard,
+  Nodes, Portal), Apps (Containers, Virtual Machines, App Store), Storage
+  (Volumes, Network Shares, Data Protection) and System (Networking, Cluster,
+  Settings).
+- **A page that belongs to another is its tab**, not a sidebar entry:
+  Architecture of the Dashboard; Images, Schedules and Import of Containers
+  (Deploy is reached from its ＋ Deploy); Helm of the App Store; Events and
+  Resources of Cluster. `router.js` records it as the route's `parent` and
+  the family's `TABS`; the sidebar marks the parent, the breadcrumbs name
+  it, and every page keeps its own address.
+- **A phone has a bottom bar**: Home, Apps, VMs, Storage, and More, which
+  opens the sidebar.
+- **The top bar** is search, the bell (a new Homestead, container updates,
+  failed image checks - what wants attention, in one place), the gear
+  (Appearance) and the account.
+- **Settings is six sections** - General, Cluster, Linked clusters, Access,
+  Integrations, About - a column beside them on a desktop, a list to tap into
+  on a phone. A card names its topic (`data-tab`) and `settingsTab()` takes a
+  section or a topic.
 
 ### Collections
 
@@ -79,6 +117,8 @@ Pages are designed for a phone as much as a desktop:
 - **The important thing first.** State and figures before explanation;
   explanation collapsed.
 - **Actions stay reachable** - in the header, or at the foot of each card.
+- **The bottom bar is always there**, so a page never needs its own way back
+  to the main pages.
 - **Controls take two lines at most.** A page's header buttons, pills,
   filters and chips fit in two rows on a phone: shorten labels there
   (`<span class="hide-sm">`), make secondary buttons icons with an
@@ -117,13 +157,14 @@ Homestead is a working tool: show more at once, pad less.
 - **Phones are tighter still**: page padding 12px, card padding 13px, gaps
   10px, big figures 28px - but fields use 16px text there, or the phone zooms
   in while typing.
-- **Three visible actions per card at most.** Primary action, the most used
-  one, then `…` (`details.actionmenu`) for the rest. Delete always lives in
-  `…`, never as a full button in a row. On a phone, secondary buttons carry
-  `sm-more` and a copy in the menu carries `sm-only`, so the row keeps one or
-  two buttons plus `…`. An open `…` menu is lifted to the page (`ui.js`), so a
-  card's blur or overflow never clips it; items close it with
-  `this.closest('details').open=false`, which still works there.
+- **Two buttons, then `…`.** A card or row shows the action that fits its
+  state and the one most used; the rest are in `…` (`actionBar()`, or
+  `details.actionmenu` where a card builds its own). Delete always lives in
+  `…`, never as a full button in a row. Container and VM cards share one
+  shape: name and state, a row of facts, what it runs, then the buttons. An
+  open `…` menu is lifted to the page (`ui.js`), so a card's blur or overflow
+  never clips it; items close it with `this.closest('details').open=false`,
+  which still works there.
 - **A list is shorter than its cards.** A table a page offers as the
   "rows" layout is marked `compact` (`tbl stack compact`): on a phone each
   row is the name with its status beside it, then its figures inline with
@@ -193,12 +234,21 @@ tables become cards and field grids one column on their own.
 | `UI.meter({ now, after, warnAt })` | How full a host, disk or volume is, now and after a change | Progress over time |
 | `UI.more(summary, html)` | Detail in a dialog most people do not need | Anything needed to decide |
 | `UI.guide(summary, html)` | How a page works, collapsed | Something that needs doing now |
-| `UI.stats(cards)` | A page's headline figures | Long lists |
+| `UI.stats(cards)` | A page's headline figures, behind a summary line | The first thing on a page |
+| `summaryLine(id, items, detail, label)` | A page's one-line status, its tiles a tap away (open stays open across refreshes) | A list |
+| `moreMenu(items)` | A header's secondary actions, behind `⋯` | The main action |
+| `menuButton(label, items)` | A main action that is a choice - ＋ Import and its kinds | A single action |
+| `actionBar(items, { shown })` | A card's or a row's buttons: `shown` (2) as buttons, the rest in `⋯` | A dialog's buttons |
 | `UI.ack(id, sentence)` | The one checkbox a risky action needs | Settings |
 | `UI.fields(...)` / `UI.field(label, control, { help })` | Forms: two columns on a desktop, one on a phone | - |
 | `UI.chip(label, tone)` | A short status next to a name | Sentences |
 | `UI.button(label, onclick, { kind })` / `UI.cancel()` | Buttons | - |
 | `UI.actions(buttons, start)` | A dialog's buttons | Buttons that act on one row |
+
+Menu and bar items are `{ label, run, icon, need, tip, danger }`. `run` goes
+into the `onclick` attribute as it is, so values in it go through `jsq()`
+like any other handler's; `tests/handler-escaping.test.js` sends hostile
+values through them.
 
 Older markup - `.note`, `.sec`, `.row` and `.modalactions` in dialogs,
 `.grid.statgrid` on pages - still works, styled to match. New and rewritten

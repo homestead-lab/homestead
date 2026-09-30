@@ -160,7 +160,6 @@ function go(v, options = {}) {
   STATE.deepLinkToken = "";
   const home = HomesteadRouter.navView(v);
   $$("#nav a, #bottombar a[data-view]").forEach(a => a.classList.toggle("on", a.dataset.view === home));
-  paintPageTabs(v);
   closeNav();
   resetPaint();
   pagePlaceholder(v);
@@ -202,16 +201,6 @@ $$("#nav a, #bottombar a[data-view]").forEach(a => a.onclick = e => { e.preventD
 const moreLink = $("#bottombar a[data-more]");
 if (moreLink) moreLink.onclick = e => { e.preventDefault(); openNav(); };
 
-/* A page folded into another: its family's tabs, in the standard .seg. */
-function paintPageTabs(v) {
-  const host = $("#pagetabs");
-  if (!host) return;
-  const tabs = HomesteadRouter.tabsFor(v);
-  host.hidden = !tabs.length;
-  host.innerHTML = tabs.length ? `<div class="seg">${tabs.map(([view, label]) =>
-    `<a href="${esc(HomesteadRouter.urlFor(view))}" data-view="${esc(view)}" class="${view === v ? "on" : ""}"${view === v ? ' aria-current="page"' : ""}>${esc(label)}</a>`).join("")}</div>` : "";
-  host.querySelectorAll("a[data-view]").forEach(a => a.onclick = e => { e.preventDefault(); go(a.dataset.view); });
-}
 window.addEventListener("popstate", () => {
   closeModal(false);
   const route = HomesteadRouter.resolve(window.location.pathname);
