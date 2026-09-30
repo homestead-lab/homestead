@@ -41,10 +41,22 @@ class DismissTests(unittest.TestCase):
         ENGINE.dismiss()
         self.assertEqual(["birdnet", "zigbee"], self.names())
 
-    def test_a_failed_move_is_not_cleared(self):
-        with self.assertRaisesRegex(ValueError, "retry or put back"):
-            ENGINE.dismiss("birdnet")
-        self.assertIn("birdnet", self.names())
+    def test_a_failed_move_is_cleared_only_by_itself_and_says_what_stays(self):
+        rows = json.load(open(os.path.join(self.dir.name, ENGINE.STORE), encoding="utf-8"))
+        for row in rows:
+            if row["id"] == "birdnet":
+                row.update(flags={"quiesced": True, "created_at": 1}, claims=[{"claim": "birdnet-data", "created": True}])
+        json.dump(rows, open(os.path.join(self.dir.name, ENGINE.STORE), "w", encoding="utf-8"))
+        with mock.patch.object(ENGINE.CLIENT, "remote", side_effect=AssertionError("neither cluster is touched")):
+            result = ENGINE.dismiss("birdnet")
+        self.assertNotIn("birdnet", self.names())
+        self.assertIn("birdnet stays stopped on oldcluster", result["detail"])
+        self.assertIn("what it made here stays (birdnet, birdnet-data)", result["detail"])
+
+    def test_a_running_move_is_not_cleared(self):
+        with self.assertRaisesRegex(ValueError, "still running"):
+            ENGINE.dismiss("zigbee")
+        self.assertIn("zigbee", self.names())
 
 
 if __name__ == "__main__":

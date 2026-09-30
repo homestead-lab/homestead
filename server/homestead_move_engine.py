@@ -918,18 +918,31 @@ DISMISSABLE = ("succeeded", "cancelled")
 
 
 def dismiss(move_id=None):
-    """Clear finished moves from the list - one, or all of them - and nothing
-    else. The source keeps its stopped original, to be removed there when it
-    suits; a failed move stays, since its workload is still stopped there."""
+    """Clear moves from the list - one, or every finished one - and nothing
+    else: neither cluster is touched. The source keeps its stopped original,
+    to be removed there when it suits. A failed move is cleared only when
+    asked for by itself: its workload stays stopped on the source, and what it
+    made here stays, both for someone to deal with - which is why clearing
+    every finished move leaves failed ones listed."""
     with _lock:
         rows = _read()
-        gone = [m for m in rows if m.get("status") in DISMISSABLE and (move_id is None or m["id"] == move_id)]
+        allowed = DISMISSABLE + (("failed",) if move_id is not None else ())
+        gone = [m for m in rows if m.get("status") in allowed and (move_id is None or m["id"] == move_id)]
         if move_id is not None and not gone:
             match = next((m for m in rows if m["id"] == move_id), None)
             if not match:
                 raise ValueError("no such move")
-            raise ValueError("only a finished or put-back move can be cleared; retry or put back a failed one first")
+            raise ValueError("a move still running cannot be cleared; cancel it, or wait for it to finish or fail")
         _write([m for m in rows if m not in gone])
+    failed = [m for m in gone if m.get("status") == "failed"]
+    if failed:
+        m = failed[0]
+        stopped = bool((m.get("flags") or {}).get("quiesced")) and not m.get("source_removed")
+        made = [c["claim"] for c in m.get("claims") or [] if c.get("created")]
+        created = bool((m.get("flags") or {}).get("created_at"))
+        left = ([f"{m['name']} stays stopped on {m['cluster']}; start it there from its page"] if stopped else []) +                ([f"what it made here stays ({', '.join(([m['name']] if created else []) + made)})"] if made or created else [])
+        return {"ok": True, "dismissed": 1,
+                "detail": f"cleared the failed move of {m['name']}" + (f"; {'; '.join(left)}" if left else "")}
     kept = [m for m in gone if m.get("status") == "succeeded" and not m.get("source_removed")]
     return {"ok": True, "dismissed": len(gone),
             "detail": f"cleared {len(gone)} move{'s' if len(gone) != 1 else ''}"
