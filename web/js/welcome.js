@@ -23,7 +23,7 @@ window.welcomeCheck = async (force = false) => {
         address.done ? `Homestead is at <span class="mono">${esc(address.url)}</span>, and apps share that VIP on their own ports.`
           : w.harvester ? "Harvester gave Homestead its address when it was installed."
           : vipOk ? "A VIP moves to another node if one goes down; the nodes' own addresses do not. Reserve one address outside your router's DHCP range: Homestead, its backup storage and shares go on it, and new apps share it."
-          : "kube-vip is not running yet, so only the nodes' own addresses are available. Install it under Settings → Cluster → Add-ons, then come back.",
+          : "kube-vip is not running yet, so only the nodes' own addresses are available. Install it under Settings → Hardware and storage → Add-ons, then come back.",
         vipOk ? (address.vips ? UI.button("Put Homestead on a VIP", "welcomeGo('address')", { kind: "pri" }) : UI.button("Add a VIP", "welcomeGo('vip')", { kind: "pri" })) : "")}
       ${step(s.probe?.done, "Node probe", "Temperatures, drive health, each host's devices and interfaces. It runs a small privileged pod on every node.",
         UI.button("Install node probe", "welcomeGo('probe')"))}

@@ -546,8 +546,8 @@ function v2Summary(v2, rows) {
 const V2_HOW = {
   longhorn: h => h ? "Harvester brings its own Longhorn and upgrades it with itself: upgrade Harvester (System → Cluster)."
     : "V2 is Longhorn's to run from 1.8; earlier it is an experiment. Upgrade Longhorn under System → Cluster → Platform versions, one minor version at a time.",
-  engine: h => h ? "Settings → Cluster → V2 data engine switches Harvester's own longhorn-v2-data-engine-enabled setting. Harvester then reserves 2 GiB of hugepages and loads the kernel modules on every host, which restart to take them."
-    : "Settings → Cluster → V2 data engine - once the hosts have hugepages and the kernel modules, as Longhorn's V2 instance managers cannot start without them.",
+  engine: h => h ? "Settings → Hardware and storage → V2 data engine switches Harvester's own longhorn-v2-data-engine-enabled setting. Harvester then reserves 2 GiB of hugepages and loads the kernel modules on every host, which restart to take them."
+    : "Settings → Hardware and storage → V2 data engine - once the hosts have hugepages and the kernel modules, as Longhorn's V2 instance managers cannot start without them.",
   cpu: () => "An x86 CPU with SSE4.2 - any from about 2008 on - or an arm64 one. Nothing to do unless this is crossed: V2 cannot run on that host.",
   modules: h => h ? "Harvester loads vfio_pci, uio_pci_generic and nvme_tcp once longhorn-v2-data-engine-enabled is on."
     : "On the host: sudo modprobe vfio_pci uio_pci_generic nvme_tcp - and to keep them after a reboot: printf 'vfio_pci\\nuio_pci_generic\\nnvme_tcp\\n' | sudo tee /etc/modules-load.d/longhorn-v2.conf",
@@ -1056,7 +1056,7 @@ async function viewShares() {
     ${smb.recovery_warning ? `<div class="note warn">${esc(smb.recovery_warning)}</div>` : ""}
     ${Object.keys(smb.recovery_failures || {}).length ? `<div class="note bad">Automatic restore paused: ${Object.entries(smb.recovery_failures).map(([pvc, reason]) => `${esc(pvc)}: ${esc(reason)}`).join(" ")} The working subset was restored; use Repair / retry recovery after resolving the problem.</div>` : ""}
     ${Object.keys(smb.recovery_pending || {}).length ? `<div class="note warn">Checking storage stability: ${Object.entries(smb.recovery_pending).map(([pvc, p]) => `${esc(pvc)} (${p.action === "restore" ? "waiting to restore" : "waiting to exclude unavailable storage"})`).join(", ")}.</div>` : ""}
-    ${UI.more("How the SMB server is managed", `<p>Homestead manages this container, its image and its volume mounts from the share list. Enable, stop or remove the server in Settings → Cluster → Add-ons; volumes are kept. Confirmed unavailable volumes are temporarily excluded after one minute; recovered volumes return after a two-minute stability check. Either change restarts SMB. Storage recovery and a working cluster control plane are still required.</p>`)}</div>
+    ${UI.more("How the SMB server is managed", `<p>Homestead manages this container, its image and its volume mounts from the share list. Enable, stop or remove the server in Settings → Hardware and storage → Add-ons; volumes are kept. Confirmed unavailable volumes are temporarily excluded after one minute; recovered volumes return after a two-minute stability check. Either change restarts SMB. Storage recovery and a working cluster control plane are still required.</p>`)}</div>
   <div class="card" style="margin-bottom:14px"><div class="between"><div><div class="ctitle">NFSv4 server · ${esc(nfs.name || "homestead-nfs")}</div>
     <div class="dim small">${nfs.error ? `Status unavailable: ${esc(nfs.error)}` : !nfs.installed ? "Not installed" :
       `${nfs.enabled ? `${nfs.ready || 0}/${nfs.desired || 1} ready` : "Stopped"}${nfs.address ? ` · ${esc(nfs.address)}:/<share>` : " · waiting for an address"}`} · ${(nfs.exports || []).length} configured exports</div></div>
@@ -1087,7 +1087,7 @@ window.nfsExport = name => {
     <div class="f"><label>Allowed IPv4 client or CIDR ${tip("For example, 192.0.2.42 or 192.0.2.0/24. An everyone-accessible export is not allowed.")}</label>
       <input id="nfs_clients" value="${esc(share.nfs_clients || "")}" placeholder="192.0.2.0/24" autocomplete="off"></div>
     <label class="switch"><input type="checkbox" id="nfs_ro" ${share.nfs_read_only !== false ? "checked" : ""}> Read only</label>
-    <div class="dim xs" style="margin-top:8px">NFSv4 clients mount ${esc(STATE.data.nfs?.address || "<server-ip>")}:/${esc(name)} on TCP port 2049. The server and its VIP are enabled in Settings → Cluster → Add-ons. Longhorn RWX re-export adds an extra NFS layer.</div>
+    <div class="dim xs" style="margin-top:8px">NFSv4 clients mount ${esc(STATE.data.nfs?.address || "<server-ip>")}:/${esc(name)} on TCP port 2049. The server and its VIP are enabled in Settings → Hardware and storage → Add-ons. Longhorn RWX re-export adds an extra NFS layer.</div>
     <div class="modalactions"><button class="btn pri" onclick="nfsExportSave(${jsq(name)},this)">Save export</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
 };
 window.nfsExportSave = async (name, button) => {
@@ -1473,7 +1473,7 @@ function lhCapacityCard(cap, st) {
 }
 window.lhCapacityCard = lhCapacityCard;
 
-/* Settings > Cluster: over-provisioning, minimal free space, the V2 engine. */
+/* Settings > Hardware and storage: over-provisioning, minimal free space, the V2 engine. */
 async function lhSettingsPaint() {
   const host = $("#lhSettingsCard");
   if (!host) return;
@@ -1488,8 +1488,8 @@ async function lhSettingsPaint() {
   const admin = can("admin"), v2 = cap.v2 || {};
   host.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">Longhorn storage</div>
       <div class="csub">How much Longhorn may promise on each disk, and its V2 data engine</div></div>
-      <div class="row"><button class="btn" onclick="lhDisks()">Disks</button>
-      ${admin ? '<button class="btn pri" onclick="lhSettingsSave()">Save</button>' : '<span class="pill neutral">admin managed</span>'}</div></div>
+      <div class="row"><button class="btn sm" onclick="lhDisks()">Disks</button>
+      ${admin ? "" : '<span class="pill neutral">admin managed</span>'}</div></div>
     <div class="f2">
       <div class="f"><label>Over-provisioning ${tip("Longhorn books a volume's full size on a disk when it places a replica, however little it holds. At 100% a disk can be promised its own size; at 200%, twice that, betting volumes never fill up. If they do, the disk runs out and its replicas fail.")}</label>
         <div class="row" style="flex-wrap:nowrap"><input id="lh_over" type="number" min="100" max="1000" step="10" value="${cap.over_provisioning}" ${admin ? "" : "disabled"} oninput="lhPreview()"><span class="dim">%</span></div></div>
@@ -1537,7 +1537,7 @@ window.lhSettingsSave = async () => {
   try {
     const r = await api("/api/longhorn/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(r.detail, "ok"); lhSettingsPaint();
-  } catch (e) { toast(e.message, "bad"); }
+  } catch (e) { toast(e.message, "bad"); throw e; }
 };
 
 /* ---------------- node disks ----------------
@@ -1699,7 +1699,7 @@ window.diskAdd = (node, blockdevice = "", path = "", needsWipe = false) => {
     <div class="f"><label>Engine</label><select id="da_engine">
       <option value="v1">V1 — ${blockdevice ? "formatted and mounted" : "a mounted folder"}</option>
       ${v2 ? `<option value="v2">V2 (SPDK) — the raw device</option>` : ""}</select>
-      ${v2 ? "" : '<div class="dim xs">The V2 engine is off; switch it on in Settings › Cluster to add a V2 disk.</div>'}</div>
+      ${v2 ? "" : '<div class="dim xs">The V2 engine is off; switch it on in Settings › Hardware and storage to add a V2 disk.</div>'}</div>
     ${blockdevice ? `<label class="switch"><input type="checkbox" id="da_wipe" ${needsWipe ? "" : "disabled"}> Erase it first
       ${needsWipe ? '<span class="badtext xs">— it already holds a filesystem or partitions, which are destroyed</span>' : '<span class="dim xs">— it is blank</span>'}</label>` : ""}
     <div class="row" style="margin-top:14px"><button class="btn pri" onclick="diskAddGo(${jsq(node)},${jsq(blockdevice)})">Add</button>

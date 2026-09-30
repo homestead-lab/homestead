@@ -353,10 +353,10 @@ function renderWorkloads() {
   const layout = viewLayout("containers");
   paint(`<div class="phead">
       <div><h2>Containers</h2><p>${rows.length} workload${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""}${group ? ` in ${esc(group === NO_GROUP ? "no group" : group)}` : ""} · ${platform.length
-        ? `<a class="linkish" onclick="togglePlatformContainers()" data-tip="Homestead and the helpers it runs - updated under Settings › About - and KubeVirt, CDI and the like, run by their own operators and upgraded under System → Cluster">${platformShown() ? "hide" : "show"} ${platform.length} platform container${platform.length === 1 ? "" : "s"}</a>`
-        : "system pods hidden"}${unchecked ? ` · <span data-tip="Marked ? in the list: stopped since Homestead started, so not yet compared with their registries">${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? " · images current" : ""}</p></div>
+        ? `<a class="linkish" onclick="togglePlatformContainers()" data-tip="Homestead and the helpers it runs - updated under Settings › Updates - and KubeVirt, CDI and the like, run by their own operators and upgraded under System → Cluster">${platformShown() ? "hide" : "show"} ${platform.length} platform container${platform.length === 1 ? "" : "s"}</a>`
+        : "system pods hidden"}${unchecked ? ` · <span data-tip="Marked ? in the list: stopped since Homestead started, so not yet compared with their registries">${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? " · images current" : ""}</p>
+        ${all.length ? workloadGroupBar(all, group) : ""}</div>
       <div class="row"><span class="dim xs scanprogress" id="scanprogress"></span>
-      <span class="dim xs hide-sm" title="When the registries were last asked">${checkedAgo()}</span>
       ${updateCount ? `<button class="pill warn pillbtn" title="Review and stage image updates" onclick="imageUpdateCenter()">${updateCount} update${updateCount === 1 ? "" : "s"}</button>` : ""}
       ${updateErrors ? `<button class="pill crit pillbtn" data-tip="${updateErrors} image${updateErrors === 1 ? "" : "s"} could not be compared with ${updateErrors === 1 ? "its" : "their"} registry; every other image was" onclick="imageUpdateCenter()">${updateErrors} <span class="hide-sm">check${updateErrors === 1 ? "" : "s"} </span>failed</button>` : ""}
       ${layoutSwitch("containers", "renderWorkloads")}
@@ -365,7 +365,6 @@ function renderWorkloads() {
         { label: "If a node fails", icon: "node", run: "wlFailover()", tip: "What each container does when its node fails: move, or wait for the node" }])}
       <button class="btn pri" data-need="operator" onclick="go('deploy')">＋ Deploy</button></div></div>
 
-    ${all.length ? workloadGroupBar(all, group) : ""}
     ${rows.length ? workloadSections(rows, layout, group)
       : `<div class="empty">${q || group ? "Nothing matches that search." : "Nothing deployed yet."}</div>`}`);
 }
@@ -399,7 +398,7 @@ function imagePullNote(ref) {
 
 /* What a platform container belongs to, and where that is upgraded. */
 function platformTag(w) {
-  if (w.homestead) return `<span class="pill slim info" data-tip="Part of Homestead, which keeps it in step. It is updated with Homestead under Settings › About, not as an app." onclick="homesteadPartManage('self')" style="cursor:pointer">Homestead</span>`;
+  if (w.homestead) return `<span class="pill slim info" data-tip="Part of Homestead, which keeps it in step. It is updated with Homestead under Settings › Updates, not as an app." onclick="homesteadPartManage('self')" style="cursor:pointer">Homestead</span>`;
   return `<span class="pill slim info" data-tip="Part of ${esc(w.platform)}, run by its operator, which puts back anything changed here. It is upgraded with ${esc(w.platform)} under System → Cluster → Platform versions." onclick="go('cluster')" style="cursor:pointer">${esc(w.platform)}</span>`;
 }
 
@@ -417,7 +416,7 @@ function workloadActions(w, update, off, compact = false) {
     const self = w.homestead === "self";
     return `<button class="${cls}" title="View live container logs" aria-label="Logs for ${esc(w.name)}" onclick="wlLogs(${jsq(w.ns)},${jsq(w.pods[0] ? w.pods[0].name : "")},${jsq(w.name)})">${label("Logs", "log")}</button>
       <button class="${cls}" title="${self ? "Restart Homestead: this page reconnects when it is back" : "Restart: replace every pod with a fresh one"}" aria-label="Restart ${esc(w.name)}" data-need="operator" onclick="wlRestart(${jsq(w.ns)},${jsq(w.name)})">${label("Restart", "restart")}</button>
-      <button class="${cls}" title="${self ? "Version, updates, copies and data: Settings › About" : "Migration from this cluster: Settings › Linked clusters"}" aria-label="Manage ${esc(w.name)}" onclick="homesteadPartManage(${jsq(w.homestead)})">${label(self ? "Settings" : "Migration", "gear")}</button>`;
+      <button class="${cls}" title="${self ? "Version, copies and data: Settings › Homestead" : "Migration from this cluster: Settings › Linked clusters"}" aria-label="Manage ${esc(w.name)}" onclick="homesteadPartManage(${jsq(w.homestead)})">${label(self ? "Settings" : "Migration", "gear")}</button>`;
   }
   // A platform container's operator owns it: logs and a fresh start only.
   if (w.platform) {
@@ -1397,7 +1396,7 @@ async function viewDeploy(pre) {
       <div id="d_lan_box" hidden></div>
       ${nodeAddressesOnly() ? `<div class="note"><b>Docker bridge → Kubernetes Service.</b> On k3s it answers on every node's own address at its LAN port.
         Each port can be used by one Service only; a DNS server wanting port 53 needs it free there. Host network binds directly on one node and reduces failover safety.
-        For an address of its own, add <b>kube-vip</b> under Settings → Cluster → Add-ons.</div>` : `<div class="note"><b>Docker bridge → Kubernetes Service.</b> Default workload VIP shares the address configured in Networking on unique LAN ports. New automatic VIP selects another reserved address; Specific VIP lets you choose. Neither uses the control-plane address. Multus is only needed for a separate bridged LAN interface. Host network binds directly on one node and reduces failover safety.</div>`}
+        For an address of its own, add <b>kube-vip</b> under Settings → Hardware and storage → Add-ons.</div>` : `<div class="note"><b>Docker bridge → Kubernetes Service.</b> Default workload VIP shares the address configured in Networking on unique LAN ports. New automatic VIP selects another reserved address; Specific VIP lets you choose. Neither uses the control-plane address. Multus is only needed for a separate bridged LAN interface. Host network binds directly on one node and reduces failover safety.</div>`}
       <div class="sec">Ports ${tip("Container port is where the process listens. LAN port is what clients use through the Kubernetes Service. TCP and UDP on the same number are separate listeners.")}</div><div id="d_ports"></div><button class="btn sm" onclick="addPort()">＋ add port</button>
       <div class="sec">Storage ${tip("The mount path is inside the container. Choose whether its backing storage is a new Longhorn claim, an existing claim, an existing volume in a shared pod, or a path on one host.")}</div>
       <div class="note storage-guide"><b>Choose deliberately:</b> RWO is best for one workload; RWX permits multi-node sharing; an existing PVC keeps its current data; a pod volume shares the exact backing volume with a sidecar. Host paths reduce failover portability.</div>

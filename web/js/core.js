@@ -42,7 +42,7 @@ async function copyText(text) {
 async function readClipboard() {
   try { return navigator.clipboard?.readText ? await navigator.clipboard.readText() : null; } catch (_) { return null; }
 }
-const HOMESTEAD_VERSION = "2.8.261";
+const HOMESTEAD_VERSION = "2.8.262";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -674,8 +674,18 @@ window.clearSearch = () => {
   document.body.classList.remove("searching");
 };
 
+/* A page folded into another (Images into Containers, Events into Cluster)
+   shows its family's tabs, in the standard .seg, at the start of its header:
+   the header's actions sit beside them, not a row below. */
+function pageTabs(view) {
+  const tabs = window.HomesteadRouter ? HomesteadRouter.tabsFor(view) : [];
+  return tabs.length ? `<nav class="seg pagetabs" aria-label="Pages here">${tabs.map(([id, label]) =>
+    `<a href="${esc(HomesteadRouter.urlFor(id))}" class="${id === view ? "on" : ""}"${id === view ? ' aria-current="page"' : ""} onclick="event.preventDefault();go(${jsq(id)})">${esc(label)}</a>`).join("")}</nav>` : "";
+}
 function paint(html) {
   const host = V();
+  const tabs = pageTabs(STATE.view);
+  if (tabs) html = html.replace(/<div class="phead">\s*<div>/, match => `${match}${tabs}`);
   html = filterBar() + html;
   PAGE_SNAPSHOT[STATE.view] = html;
   host.classList.remove("refreshing");

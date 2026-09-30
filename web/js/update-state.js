@@ -13,7 +13,7 @@
   }
 
   // Apps' updates. Homestead's own - itself and the helpers it runs - are
-  // updated apart, from the top bar's Homestead button and Settings › About.
+  // updated apart, from the top bar's Homestead button and Settings › Updates.
   function availableWorkloads(report) {
     return (report?.workloads || []).filter(workload => workload?.available && !workload.homestead);
   }

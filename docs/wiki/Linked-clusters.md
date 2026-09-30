@@ -69,7 +69,7 @@ a way back.
 ## Updating them together
 
 The **Homestead updates** dialog (the top bar's **Homestead** button, or
-**Settings → About**) lists every linked cluster with its version and any
+**Settings → Updates**) lists every linked cluster with its version and any
 waiting update. Tick **Include** on each one to update with this one; see
 [Settings](Settings#homestead-updates). Clusters a release or more apart can
 still move workloads between them, as long as their link protocol matches.

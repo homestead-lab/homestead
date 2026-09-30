@@ -493,7 +493,7 @@ window.smartDisk = async (node, disk) => {
       ${active ? `<div class="clusteralert"><div><b>Self-test running</b><span>${esc(s.test.status || "In progress")}${s.test.remaining_percent == null ? "" : ` · ${esc(s.test.remaining_percent)}% remaining`}</span></div></div>` : ""}
       ${health.stale_probe ? `<div class="note warn"><b>The node probe predates this release.</b>
         Wear and life figures come from the probe, which has not picked up the current scripts yet.
-        Homestead updates it when it starts; if this persists, check Settings → About.</div>` : ""}
+        Homestead updates it when it starts; if this persists, check Settings → Homestead.</div>` : ""}
       <div class="smartstats">
         ${stat("Life remaining", health.life_pct == null ? null : health.life_pct + "%", lifeTone(health.life_pct))}
         ${health.spare_pct == null ? "" : stat("Spare blocks", health.spare_pct + "%", lifeTone(health.spare_pct))}

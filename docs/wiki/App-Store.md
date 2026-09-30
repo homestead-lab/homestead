@@ -42,7 +42,7 @@ appears on Containers.
 
 ## Another catalogue
 
-**Settings → Integrations → App Store catalogue** points the store at any feed in the
+**Settings → Connections → App Store catalogue** points the store at any feed in the
 Community Applications format - a mirror, or your own list of templates.
 
 The catalogue is read from its public feed at run time and is not part of
