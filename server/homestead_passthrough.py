@@ -362,18 +362,22 @@ def take_back(node, address):
     facts = inspect(node)
     row = next((r for r in facts["pci"] if r["address"] == address), None)
     group = [address] + [a for a in (row or {}).get("group_members", []) if a in listed]
+    # A card pulled from the host has no group to read: its other functions
+    # (a GPU's HDMI audio) were handed over with it, in the same slot.
+    slot = address.rsplit(".", 1)[0] + "."
+    group += [a for a in listed if a.startswith(slot) and a not in group]
     out, err = hostrun.run(node, vfio_script(group, False), timeout=120)
     if "OK" not in out.split():
         raise ValueError(f"{address} was not given back: {(err or out)[-200:]}")
-    for a in group:
-        listed.pop(a, None)
+    # The vendor:device each was handed over as, as recorded then: a device
+    # no longer on the host has no facts to read it from.
+    pairs = {listed.pop(a) for a in group if a in listed}
     _save(state)
     still = {v for rows in state.get("pci", {}).values() for v in rows.values()}
-    for a in group:
-        vd = (row or {}) if a == address else next((r for r in facts["pci"] if r["address"] == a), {})
-        pair = f"{vd.get('vendor')}:{vd.get('device')}"
-        if pair not in still:
-            _permit(pci=tuple(pair.split(":")), remove=True)
+    for pair in pairs - still:
+        vendor, _, device = str(pair).partition(":")
+        if HEX4.fullmatch(vendor) and HEX4.fullmatch(device):
+            _permit(pci=(vendor, device), remove=True)
     return {"ok": True, "detail": f"{address} on {node} is back with the host"}
 
 
