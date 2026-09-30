@@ -195,7 +195,9 @@ def inventory():
 
 
 # Homestead's own: its data, and the backup storage a move travels through.
-OWN_CLAIMS = {"homestead-data", "harvui-data", "homestead-objectstore", "harvui-objectstore"}
+# (An older install's data volume is mounted by the running Homestead, so it
+# is listed as in use, and cannot move either.)
+OWN_CLAIMS = {"homestead-data", "homestead-objectstore"}
 
 
 def _volume_rows(users):
