@@ -824,6 +824,15 @@ def _why_waiting(ns, pod):
     if latest.get("reason") == "FailedScheduling":
         found["message"] = f"cannot be placed: {explain_unplaced(message)}"
         found["stuck"] = age >= STUCK_AFTER
+    if "does not contain driver driver.longhorn.io" in message:
+        # A node Ready before Longhorn has started on it: it clears itself
+        # within minutes of a join, and never does if Longhorn fails there.
+        node = (pod.get("spec") or {}).get("nodeName") or "its node"
+        found["message"] = (f"Longhorn is not running on {node} yet, so its volume cannot attach there. A node "
+                            "that has just joined gets it within a few minutes and this clears by itself; if not, "
+                            "see why in longhorn-system on that node, or delete this pod so it starts on another")
+        # Not a failure while the node may still be joining: only after ten minutes.
+        found["stuck"] = age >= 600
     if "invalid controller count" in message:
         # Two pods on different nodes attached a volume on a migratable class,
         # and Longhorn took that for a VM live migration. Nothing clears it but

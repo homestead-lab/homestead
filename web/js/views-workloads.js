@@ -1070,8 +1070,11 @@ function batchUpdateMarkup(items, states, startFailures = [], reconnecting = fal
       const key = rolloutKey(item), state = states[key], startError = failureMap[key];
       const phase = startError ? "needs attention" : state?.phase || "starting";
       const tone = phase === "ready" ? "ok" : phase === "failed" || startError ? "crit" : "warn";
+      // The ready count can be the old pod's: what the new one waits for says more.
+      const waiting = phase !== "ready" && (state?.pods || []).find(pod => pod.blocked);
       return `<div><span><b>${esc(item.name)}</b><small>${item.clusterName ? `${esc(item.clusterName)} · ` : ""}${esc(item.ns)}${state && state.desired != null ? ` · ${state.ready || 0}/${state.desired} ready` : ""}</small></span>
-        <span class="pill ${tone}">${esc(phase)}</span>${startError ? `<div class="updateerror">${esc(startError)}</div>` : ""}</div>`;
+        <span class="pill ${tone}">${esc(phase)}</span>${startError ? `<div class="updateerror">${esc(startError)}</div>` : ""}
+        ${waiting ? `<div class="dim xs">New pod waiting${waiting.node ? ` on ${esc(waiting.node)}` : ""}: ${esc(waiting.blocked)}</div>` : ""}</div>`;
     }).join("")}</div>
     ${queueMode ? '<p class="small dim">Closing stops unstarted updates. Submitted rollouts continue and can be monitored in Jobs. A stopped queue always needs a new review.</p>' : ""}
     <div class="row" style="margin-top:18px"><button class="btn" onclick="closeModal()">${queueMode ? complete === items.length ? "Done" : "Close / stop queue" : "Monitor in background"}</button></div>

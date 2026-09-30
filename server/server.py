@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.266")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.267")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -5647,6 +5647,25 @@ def weekly_trim():
     return change
 
 
+import homestead_storage_pending as STORAGE_PENDING
+STORAGE_PENDING.bind(kget, ksend)
+
+
+def _storage_pending_loop():
+    """On the leader, a node that has just joined is steered clear of until
+    Longhorn is ready on it. Often, and cheap: the gap is a minute or two."""
+    time.sleep(20)
+    while True:
+        if LEADER.is_leader():
+            try:
+                for node, change in STORAGE_PENDING.tick():
+                    print(f"platform: {node}: {change}", flush=True)
+                beat("storage-pending", 15, leader_only=True)
+            except Exception as error:
+                beat("storage-pending", 15, error, leader_only=True)
+        time.sleep(15)
+
+
 def _host_console_loop():
     """On the leader, the host console add-on brought to its setting, a host
     or two at a time. Its own loop: each host can take minutes, and the
@@ -6133,7 +6152,7 @@ def _data_move_status(item):
 OPS.RESOLVERS["self-data-move"] = _data_move_status
 
 
-LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "host-fixes": "Host fixes", "host-console": "Host console add-on", "os-updates": "OS updates", "baseline": "Platform installs", "vips": "VIP keeper",
+LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "host-fixes": "Host fixes", "host-console": "Host console add-on", "storage-pending": "New nodes held until their storage is ready", "os-updates": "OS updates", "baseline": "Platform installs", "vips": "VIP keeper",
               "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares"}
 
 
@@ -9256,6 +9275,7 @@ def start_background_tasks():
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=_host_fix_loop, daemon=True).start()
     threading.Thread(target=_host_console_loop, daemon=True).start()
+    threading.Thread(target=_storage_pending_loop, daemon=True).start()
     threading.Thread(target=_os_updates_loop, daemon=True).start()
     threading.Thread(target=_baseline_loop, daemon=True).start()
     threading.Thread(target=_vip_loop, daemon=True).start()

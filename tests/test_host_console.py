@@ -368,3 +368,44 @@ module.main()
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertIn("restart getty@tty1.service", (root / "calls").read_text())
             self.assertIn("showing on tty1 now", result.stdout)
+
+
+def psf1_font(height=16):
+    """A stand-in 256-glyph console font: glyph i is rows of byte i, mapped to U+00i."""
+    glyphs = b"".join(bytes([i]) * height for i in range(256))
+    table = b"".join(i.to_bytes(2, "little") + b"\xff\xff" for i in range(256))
+    return b"\x36\x04" + bytes([2, height]) + glyphs + table
+
+
+class ConsoleFontTests(unittest.TestCase):
+    """Braille on a machine's own screen: a font of our own while it shows."""
+
+    def test_our_font_keeps_their_ascii_and_adds_every_pattern_the_dashboard_draws(self):
+        width, height, glyphs, table = console.read_psf(console.console_font(psf1_font()))
+        self.assertEqual((8, 16, 256), (width, height, len(glyphs)), "256 glyphs keep the bright colours")
+        index = {char: i for i, chars in enumerate(table) for char in chars}
+        self.assertEqual(bytes([ord("A")]) * 16, glyphs[index["A"]], "their own letters, unchanged")
+        for mask in console.dashboard_masks():
+            self.assertIn(chr(0x2800 + mask), index)
+        full = glyphs[index["\u28ff"]]
+        self.assertEqual(8, sum(bin(b).count("1") for b in full) // 4, "eight dots of four pixels")
+        self.assertIn(console.OURS, index)
+
+    def test_every_graph_and_bar_pattern_is_in_it(self):
+        frame = console.Frame(40, 6)
+        frame.graph(0, 0, 20, 3, [i * 5 for i in range(40)])
+        frame.bar(4, 0, 30, 67)
+        drawn = {ord(c) - 0x2800 for row in frame.rows for c, _ in row if "\u2801" <= c <= "\u28ff"}
+        self.assertTrue(drawn)
+        self.assertLessEqual(drawn, set(console.dashboard_masks()))
+
+    def test_a_font_left_behind_by_a_crash_is_never_kept_as_theirs(self):
+        with self.assertRaises(ValueError):
+            console.console_font(console.console_font(psf1_font()))
+
+    def test_without_setfont_the_screen_keeps_plain_characters(self):
+        font = console.ConsoleFont()
+        font.tty = "/dev/tty1"
+        with patch.object(console.shutil, "which", return_value=None):
+            self.assertFalse(font.load())
+        font.restore()
