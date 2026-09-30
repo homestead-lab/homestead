@@ -2533,3 +2533,20 @@ body.searching .bellmenu{display:none}
 .meter.split>.seg-lh,.drivesplit .k-lh{background:var(--mut)}
 .meter.split>.seg-lhroom{background:var(--mut);opacity:.25}
 html[data-theme="light"] .tag.gpu,html[data-theme="light"] .tag.hw,html[data-theme="light"] .tag.cluster-tag{background:rgba(0,0,0,.03)}
+/* A page's summary: one line, the numbers behind it on tap. */
+.sumline{display:flex;align-items:center;flex-wrap:wrap;gap:6px 18px;padding:11px 14px;margin-bottom:14px;border:1px solid var(--line);border-radius:var(--r2);
+  background:rgba(255,255,255,.025);font-size:13px;color:var(--mut)}
+.sumline b{color:var(--tx);font-weight:700}
+.sumitem{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.sumitem .tag{padding:2px 8px}
+.sumtoggle{margin-left:auto;display:inline-flex;align-items:center;gap:5px;border:0;background:none;color:var(--low);font:600 12.5px "Inter Tight",sans-serif;cursor:pointer;padding:2px 0}
+.sumtoggle .chev{transition:transform .2s var(--e)}.sumtoggle[aria-expanded="true"] .chev{transform:rotate(180deg)}
+.sumdetail{margin:-4px 0 18px}
+.sumdetail>.statgrid,.sumdetail>.grid{margin-bottom:0}
+@media(max-width:640px){.sumline{gap:6px 12px;font-size:12.5px}.sumtoggle{margin-left:0}}
+html[data-theme="light"] .sumline{background:rgba(0,0,0,.02)}
+/* A card's or row's buttons: two, then ⋯, on one line. */
+.actionbar{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-width:0}
+.actionbar>.actionmenu{margin-left:0}
+.vip-card-actions .actionbar,.wacts .actionbar{width:100%}
+.wacts .actionbar>.actionmenu,.vip-card-actions .actionbar>.actionmenu{margin-left:auto}

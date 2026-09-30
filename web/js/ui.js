@@ -177,6 +177,39 @@ function moreMenu(items, label = "More actions", summaryClass = "btn") {
     <div class="actionmenu-pop">${rows.map(item => `<button type="button"${item.need ? ` data-need="${esc(item.need)}"` : ""}${item.tip ? ` title="${esc(item.tip)}"` : ""}${item.danger ? ' class="danger"' : ""}
       onclick="this.closest('details').open=false;${esc(item.run)}">${item.icon ? icon(item.icon) : ""}${esc(item.label)}</button>`).join("")}</div></details>`;
 }
+/* The top of a page: one line saying how things stand, and the numbers
+   behind it a tap away. Items are HTML; the detail stays open across the
+   page's own refreshes until closed. */
+function summaryLine(id, items, detail, label = "Details") {
+  const open = !!(STATE.sumOpen || {})[id];
+  return `<div class="sumline">${(items || []).filter(Boolean).map(item => `<span class="sumitem">${item}</span>`).join("")}
+    ${detail ? `<button type="button" class="sumtoggle" aria-expanded="${open}" aria-controls="sum-${id}" onclick="summaryToggle(${jsq(id)},this)">${esc(label)}<span class="chev" aria-hidden="true">▾</span></button>` : ""}</div>
+    ${detail ? `<div class="sumdetail" id="sum-${id}"${open ? "" : " hidden"}>${detail}</div>` : ""}`;
+}
+function summaryToggle(id, button) {
+  STATE.sumOpen = STATE.sumOpen || {};
+  const open = !STATE.sumOpen[id];
+  STATE.sumOpen[id] = open;
+  const detail = document.getElementById(`sum-${id}`);
+  if (detail) detail.hidden = !open;
+  if (button) button.setAttribute("aria-expanded", String(open));
+}
+if (typeof window !== "undefined") { window.summaryLine = summaryLine; window.summaryToggle = summaryToggle; }
+
+/* A card's or a row's buttons: the first `shown` as buttons, the rest in the
+   same ⋯ menu the page headers use, so every card and row reads the same way
+   and none runs onto a second line. Items as for moreMenu, plus pri. */
+function actionBar(items, { shown = 2, label = "More actions" } = {}) {
+  const rows = (items || []).filter(Boolean);
+  const button = item => `<button type="button" class="btn sm${item.pri ? " pri" : ""}${item.danger ? " danger" : ""}"${item.need ? ` data-need="${esc(item.need)}"` : ""}${item.tip ? ` title="${esc(item.tip)}"` : ""}${item.disabled ? " disabled" : ""}
+    onclick="${esc(item.run)}">${item.icon ? icon(item.icon) : ""}${esc(item.label)}</button>`;
+  const rest = rows.slice(shown);
+  return `<div class="actionbar">${rows.slice(0, shown).map(button).join("")}${rest.length ? `<details class="actionmenu"><summary class="btn sm" aria-label="${esc(label)}">⋯</summary>
+    <div class="actionmenu-pop">${rest.map(item => `<button type="button"${item.need ? ` data-need="${esc(item.need)}"` : ""}${item.tip ? ` title="${esc(item.tip)}"` : ""}${item.danger ? ' class="danger"' : ""}${item.disabled ? " disabled" : ""}
+      onclick="this.closest('details').open=false;${esc(item.run)}">${item.icon ? icon(item.icon) : ""}${esc(item.label)}</button>`).join("")}</div></details>` : ""}</div>`;
+}
+if (typeof window !== "undefined") window.actionBar = actionBar;
+
 /* A main button that opens a choice - ＋ Import and its kinds. */
 const menuButton = (label, items) => moreMenu(items, label, "btn pri");
 if (typeof window !== "undefined") { window.moreMenu = moreMenu; window.menuButton = menuButton; }

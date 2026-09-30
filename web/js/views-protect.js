@@ -149,10 +149,15 @@ async function viewProtect() {
         <button class="btn pri" data-need="operator" onclick="lhJob()">＋ New job</button>
       </div></div>
 
-  ${objectStoreCard(objects, tgt)}
-
+  ${objects.deployed ? "" : objectStoreCard(objects, tgt)}
+  ${summaryLine("protect", [
+      `<span class="tag ${cover === 100 ? "ok" : cover ? "warn" : "bad"}">${cover}% covered</span> ${d.protected} of ${d.total} volumes`,
+      objects.deployed ? `Backup storage <span class="tag ${objects.ready ? "ok" : "warn"}">${objects.ready ? "serving" : "starting"}</span>` : "",
+      tgt.configured ? `Target <span class="tag ${tgt.available ? "ok" : "bad"}">${tgt.available ? "reachable" : "unavailable"}</span>` : '<span class="tag warn">no backup target</span>',
+      `${d.backed_up ?? 0} backed up off the cluster`],
+    `${objects.deployed ? objectStoreCard(objects, tgt) : ""}
   <div class="grid g3" style="margin-bottom:18px">
-    <div class="card glow ${cover === 100 ? "g-ok" : cover ? "g-warn" : "g-bad"}">
+    <div class="card flat">
       <div class="ctitle">Coverage</div><div class="csub">Volumes a snapshot or backup job keeps copies of</div>
       <div class="row" style="margin-top:12px;gap:18px;align-items:flex-end">
         <div class="bignum">${cover}<span class="unit">%</span></div>
@@ -193,6 +198,7 @@ async function viewProtect() {
         <span class="mono">default</span>. Give some volumes a plan of their own with a group.</div>
     </div>
   </div>
+`)}
 
   <div class="sec">Recurring jobs</div>
   ${d.jobs.length ? `<div class="cardlist">${d.jobs.map(j => `<div class="card flat wcard">
@@ -211,13 +217,11 @@ async function viewProtect() {
       <div><div class="dim xs">KEEPS</div><div class="mono small">${KEEPS(j.task) ? j.retain : "—"}</div></div>
     </div>
     <div class="dim xs">${esc(j.desc)} · ${j.groups.length ? `groups ${j.groups.map(g => `<span class="tag">${esc(g)}</span>`).join("")}` : "no groups"} · ${j.concurrency} at a time</div>
-    <div class="row wacts">
-      <button class="btn sm" data-need="operator" onclick="lhRun(${jsq(j.name)})" ${j.running ? "disabled" : ""}>${icon("play")}Run now</button>
-      <button class="btn sm" onclick='lhJob(${JSON.stringify(j).replace(/'/g, "&#39;")})' data-need="operator">Edit</button>
-      <details class="actionmenu"><summary class="btn sm" title="More actions" aria-label="More actions for ${esc(j.name)}">⋯</summary><div class="actionmenu-pop">
-        <button onclick="this.closest('details').open=false;lhCovered(${jsq(j.name)})">${icon("disk")}Volumes it covers</button>
-        <button class="danger" data-need="admin" onclick="this.closest('details').open=false;lhJobDel(${jsq(j.name)})">${icon("trash")}Delete</button>
-      </div></details>
+    <div class="row wacts">${actionBar([
+      { label: "Run now", icon: "play", run: `lhRun(${jsq(j.name)})`, need: "operator", disabled: j.running },
+      { label: "Edit", icon: "edit", run: `lhJob(${JSON.stringify(j)})`, need: "operator" },
+      { label: "Volumes it covers", icon: "disk", run: `lhCovered(${jsq(j.name)})` },
+      { label: "Delete", icon: "trash", run: `lhJobDel(${jsq(j.name)})`, need: "admin", danger: true }], { label: `More actions for ${j.name}` })}
     </div></div>`).join("")}</div>`
   : `<div class="empty">No recurring jobs yet. A plan sets up a sensible policy in one go -
      <a onclick="lhPlans()" style="cursor:pointer;text-decoration:underline">choose one</a> - or a daily snapshot of the <span class="mono">default</span>

@@ -12,13 +12,13 @@ function networkVipCard(v, data) {
     <div class="vip-card-label">${esc(v.label || "No label")}</div>
     ${isDefault ? '<div class="vip-card-default"><span class="tag ok">Default workload VIP</span><span class="dim xs">Suggested for new workloads; existing services stay where they are.</span></div>' : ""}
     ${blocked || (v.used_by || []).length ? `<div class="vip-card-usage small">${blocked ? esc(blocked) : `<span class="dim">Used by</span> ${(v.used_by || []).map(n => `<span class="mono">${esc(n)}</span>`).join("")}`}</div>` : ""}
-    <div class="vip-card-actions">
-      ${canUse ? `<button class="btn sm" data-need="operator" onclick="networkExpose('','','Deployment',${jsq(v.ip)})">Use this VIP</button>` : ""}
-      ${canUse && !isDefault ? `<button class="btn sm" data-need="admin" onclick="vipDefault(${jsq(v.ip)})">Make default</button>` : ""}
-      <button class="btn sm" data-need="admin" onclick="vipLabel(${jsq(v.ip)})">Edit label</button>
-      ${!blocked ? `<button class="btn sm" data-need="admin" onclick="vipChange(${jsq(v.ip)})" title="A new address for this VIP, with everything on it">Change address</button>` : ""}
-      ${!isDefault && (v.free || blocked) ? `<button class="btn sm" data-need="admin" onclick="vipRemove(${jsq(v.ip)})">Remove</button>` : ""}
-    </div></article>`;
+    <div class="vip-card-actions">${actionBar([
+      canUse ? { label: "Use this VIP", run: `networkExpose('','','Deployment',${jsq(v.ip)})`, need: "operator" } : null,
+      canUse && !isDefault ? { label: "Make default", run: `vipDefault(${jsq(v.ip)})`, need: "admin" } : null,
+      { label: "Edit label", icon: "edit", run: `vipLabel(${jsq(v.ip)})`, need: "admin" },
+      !blocked ? { label: "Change address", icon: "move", run: `vipChange(${jsq(v.ip)})`, need: "admin", tip: "A new address for this VIP, with everything on it" } : null,
+      !isDefault && (v.free || blocked) ? { label: "Remove", icon: "trash", run: `vipRemove(${jsq(v.ip)})`, need: "admin", danger: true } : null],
+      { label: `More actions for ${v.ip}` })}</div></article>`;
 }
 
 /* Nodes & addresses: each node with its own address and the VIPs it answers
@@ -111,7 +111,14 @@ async function viewNetworking() {
       VMs on the pod network can be exposed through a Service; bridged VMs use their own DHCP/static address, not a service VIP.</p>
       <p>VIP failover is not full-cluster HA: multiple eligible hosts, a surviving control-plane quorum, portable storage with healthy replicas, and workload restart policies are also needed.
       ${Object.keys(data.node_names || {}).length < 2 ? "This is a single-node cluster: there is no second host to take over." : "Test host failure before relying on recovery."}</p>`)}
-    ${UI.stats([
+    ${summaryLine("network", [
+      `<span class="tag ${controller.healthy ? "ok" : "bad"}">${controller.ready}/${controller.desired} load balancer</span>`,
+      `<b>${data.summary.vips}</b> VIP${data.summary.vips === 1 ? "" : "s"} · ${data.summary.listeners} listening`,
+      `<b>${data.summary.app_services}</b> app service${data.summary.app_services === 1 ? "" : "s"}`,
+      data.summary.unhealthy || data.conflicts.length || data.addresses?.problems
+        ? `<span class="tag warn">${data.addresses?.problems ? `${data.addresses.problems} address${data.addresses.problems === 1 ? "" : "es"} not reachable` : data.conflicts.length ? `${data.conflicts.length} listener conflict${data.conflicts.length === 1 ? "" : "s"}` : `${data.summary.unhealthy} need attention`}</span>`
+        : "no conflicts"],
+      UI.stats([
       { title: "Load balancer", value: controller.ready, unit: `/${controller.desired}`, tone: controller.healthy ? "ok" : "bad",
         sub: `${controller.name} agents ready · ${controller.mode}` },
       { title: "Virtual IPs", value: data.summary.vips, sub: `${data.summary.listeners} LAN listeners · ${data.available_vip_count} unused in pools` },
@@ -119,7 +126,7 @@ async function viewNetworking() {
       { title: "Attention", value: data.summary.unhealthy, tone: data.summary.unhealthy || data.conflicts.length || data.addresses?.problems ? "warn" : "",
         sub: data.addresses?.problems ? `${data.addresses.problems} address${data.addresses.problems === 1 ? "" : "es"} not reachable - see Nodes & addresses`
           : data.conflicts.length ? `${data.conflicts.length} listener conflict(s)` : "no VIP/port conflicts" },
-    ])}
+    ]))}
     ${(data.platform_clashes || []).length ? `<div class="note bad" style="margin-bottom:14px"><b>${data.platform_clashes.length === 1 ? "An app is" : `${data.platform_clashes.length} apps are`} on the cluster's own address.</b>
       ${esc(data.platform_clashes.map(c => `${c.namespace}/${c.service}`).join(", "))} ${data.platform_clashes.length === 1 ? "uses" : "use"}
       <span class="mono">${esc(data.platform_clashes[0].ip)}</span>, which ${esc(data.platform_clashes[0].owner)} holds: the dashboard answers there and new hosts join

@@ -47,12 +47,11 @@ async function viewCluster() {
     <div class="row">${moreMenu([{ label: "Remove a host", icon: "trash", run: "clusterRemovePick()", need: "admin", danger: true }])}
       <button class="btn pri" data-need="admin" onclick="clusterOnboarding()">${icon("plus")}Add a host</button></div></div>
 
-  <section class="cluster-hero ${esc(report.state)}">
-    <div><span class="cluster-kicker">PLATFORM STATUS</span><h3>${esc(report.state === "healthy" ? "Platform healthy" : report.state === "critical" ? "Platform action required" : "Platform online · review items")}</h3>
-      <p>${esc(report.summary)}</p></div>${clusterPill(report.state, report.state)}</section>
-
-  ${(report.unavailable || []).length ? `<div class="note"><b>Partial platform data.</b> ${esc(report.unavailable.map(row => row.section).join(", "))} could not be read. Other sections remain live.</div>` : ""}
-
+  ${summaryLine("cluster", [
+      clusterPill(report.state, report.state === "healthy" ? "Platform healthy" : report.state === "critical" ? "Platform action required" : "Review items"),
+      `Control plane <b>${cp.ready ?? 0}/${cp.total ?? 0}</b> ready`, `etcd: ${esc(marginCopy)}`,
+      versions.kubernetes ? `Kubernetes <b>v${esc(versions.kubernetes)}</b>` : ""],
+    `<p class="dim small" style="margin:0 0 10px">${esc(report.summary)}</p>
   <div class="cluster-facts">
     ${STATE.platform && !STATE.platform.harvester
       ? `<section><span>${esc(platformName(STATE.platform))}</span><b>${STATE.platform.version ? `v${esc(STATE.platform.version)}` : "Not reported"}</b><small>Kubernetes distribution</small></section>`
@@ -60,7 +59,11 @@ async function viewCluster() {
     <section><span>Kubernetes</span><b>${versions.kubernetes ? `v${esc(versions.kubernetes)}` : "Not reported"}</b><small>Cluster API version</small></section>
     <section><span>Control plane</span><b>${cp.ready ?? 0}/${cp.total ?? 0} ready</b><small>API and scheduling hosts</small></section>
     <section><span>etcd quorum ${tip("The number of additional ready etcd members that can be lost before the control plane loses quorum.")}</span><b>${esc(marginCopy)}</b><small>${cp.etcd_ready ?? 0}/${cp.etcd_total ?? 0} ready · ${cp.quorum_needed ?? "—"} needed</small></section>
-  </div>
+  </div>`)}
+
+  ${(report.unavailable || []).length ? `<div class="note"><b>Partial platform data.</b> ${esc(report.unavailable.map(row => row.section).join(", "))} could not be read. Other sections remain live.</div>` : ""}
+
+
 
   <div class="cluster-layout">
     <section class="card flat cluster-wide"><div class="settings-card-head"><div><div class="ctitle">Nodes and capacity pressure</div>

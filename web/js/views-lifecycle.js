@@ -1060,11 +1060,9 @@ async function viewSchedules() {
         <td class="small dim">${esc((j.last || "—").replace("T", " ").replace("Z", ""))}</td>
         <td>${j.suspend ? '<span class="pill low">paused</span>'
             : j.active ? '<span class="pill med">running</span>' : '<span class="pill ok">active</span>'}</td>
-        <td><div class="row" style="gap:6px">
-          <button class="btn sm" onclick="jobRun(${jsq(j.name)})">Run now</button>
-          <button class="btn sm" onclick='jobEdit(${JSON.stringify(j).replace(/'/g, "&#39;")})'>Edit</button>
-          <button class="btn sm danger" onclick="jobDel(${jsq(j.name)})">✕</button>
-        </div></td></tr>`).join("") || `<tr><td colspan=6 class="empty">no schedules yet</td></tr>`}
+        <td>${actionBar([{ label: "Run now", icon: "play", run: `jobRun(${jsq(j.name)})` },
+          { label: "Edit", icon: "edit", run: `jobEdit(${JSON.stringify(j)})` },
+          { label: "Delete", icon: "trash", run: `jobDel(${jsq(j.name)})`, danger: true }], { label: `More actions for ${j.name}` })}</td></tr>`).join("") || `<tr><td colspan=6 class="empty">no schedules yet</td></tr>`}
     </tbody></table></div></div>`);
 }
 window.jobEdit = (j) => {

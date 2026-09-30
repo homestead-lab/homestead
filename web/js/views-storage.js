@@ -347,8 +347,12 @@ async function viewStorage() {
       <div class="row">${moreMenu([spare.length ? { label: onlySpare ? "Show all volumes" : `Show the ${spare.length} unused`, icon: "list", run: "STATE.volSpare=!STATE.volSpare;viewStorage()",
           tip: "Volumes nothing is defined to use - no container, VM or job - and ones kept after their claim went: the ones to look at when freeing space" } : null])}
       <button class="btn pri" data-need="operator" onclick="volumeCreate()">＋ Create volume</button></div></div>
-  ${st ? `<div class="grid g4 statgrid" style="margin-bottom:18px">
-    <div class="card glow g-info"><div class="ctitle">Free space</div>
+  ${st ? summaryLine("volumes", [
+      `<b>${st.avail_gb} GB</b> free of ${st.cap_gb}`, `<b>${st.provisioned_gb} GB</b> provisioned`,
+      `<span class="tag ok">${st.healthy} healthy</span>${st.degraded ? ` <span class="tag warn">${st.degraded} degraded</span>` : ""}${st.faulted ? ` <span class="tag bad">${st.faulted} faulted</span>` : ""}`,
+      `${st.attached} of ${st.volumes} attached`],
+    `<div class="grid g4 statgrid">
+    <div class="card flat"><div class="ctitle">Free space</div>
       <div class="bignum" style="margin-top:8px">${st.avail_gb}<span class="unit">GB</span></div>
       <div class="csub">of ${st.cap_gb} GB raw</div>${meter(st.used_pct, 'style="margin-top:10px"')}</div>
     <div class="card flat"><div class="ctitle">Provisioned</div>
@@ -363,7 +367,7 @@ async function viewStorage() {
         ${(st.detached ?? st.unknown) ? `<span class="tag">${st.detached ?? st.unknown} detached</span>` : ""}</div>
       <div class="csub" style="margin-top:10px">${st.attached} attached of ${st.volumes}</div></div>
     ${lhCapacityCard(cap, st)}
-  </div>` : ""}
+  </div>`, "Per node") : ""}
   <div class="card flat pad0"><div class="tblwrap voltable"><table data-sort="volumes" class="tbl dense"><thead><tr>
    <th>Volume</th><th>Attached to</th><th>Health</th><th>Mode</th><th>Usage</th><th data-nosort>Last used</th><th></th>
    </tr></thead><tbody>${rows.map(x => `<tr data-vol="${esc(x.name)}"${clusterAttr(x)}>
