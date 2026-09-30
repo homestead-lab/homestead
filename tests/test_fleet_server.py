@@ -32,8 +32,8 @@ class TargetTests(unittest.TestCase):
         self.addCleanup(linked.stop)
 
     def test_a_cluster_this_one_does_not_know_is_forgotten_not_a_502_for_every_page(self):
-        # hs.the-warners.com once answered from another cluster's Homestead,
-        # whose choice of cluster the browser still sends.
+        # The address once answered from another cluster's Homestead, whose
+        # choice of cluster the browser still sends.
         h = handler(headers={"Cookie": "homestead_cluster=old-cluster-id"})
         self.assertEqual("", h._fleet_target("/api/nodes"))
         self.assertIn(("Set-Cookie", "homestead_cluster=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"), h._extra_headers)
