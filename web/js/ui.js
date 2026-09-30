@@ -158,11 +158,34 @@ function normaliseDialogActions(body) {
   body.appendChild(row);
 }
 window.normaliseDialogActions = normaliseDialogActions;
+
+/* One explanation box at most. A dialog's first plain note stays where it
+   is; any further ones fold into a single "How this works" at its foot.
+   Warnings, errors, good news and notes with controls in them are left
+   alone - they need to be seen, or used. */
+function foldDialogNotes(body) {
+  if (!body) return;
+  const plain = [...body.querySelectorAll(".note")].filter(note => !note.matches(".warn, .bad, .good, .crit, .dependency-danger")
+    && !note.id && !note.hidden && !note.closest(".dialog-more, .ui-more, [hidden]")
+    && !note.querySelector("button, input, select, textarea, a[onclick], .btn") && note.textContent.trim());
+  if (plain.length < 2) return;
+  let more = body.querySelector(":scope > details.dialog-more");
+  if (!more) {
+    more = document.createElement("details");
+    more.className = "ui-more dialog-more";
+    more.innerHTML = '<summary>How this works</summary><div class="ui-more-body"></div>';
+    const actions = body.querySelector(":scope > .ui-actions, :scope .stepper-foot");
+    if (actions) actions.parentNode.insertBefore(more, actions); else body.appendChild(more);
+  }
+  const into = more.querySelector(".ui-more-body");
+  plain.slice(1).forEach(note => { const p = document.createElement("p"); p.innerHTML = note.innerHTML; into.appendChild(p); note.remove(); });
+}
+window.foldDialogNotes = foldDialogNotes;
 // Dialogs that draw their body again later (a check finishing, a step
 // moving on) get the same treatment.
 if (typeof MutationObserver === "function" && typeof document.querySelector === "function") {
   const body = document.querySelector("#mbody");
-  if (body) new MutationObserver(() => normaliseDialogActions(body)).observe(body, { childList: true });
+  if (body) new MutationObserver(() => { normaliseDialogActions(body); foldDialogNotes(body); }).observe(body, { childList: true });
 }
 
 /* A page header's ⋯: the actions besides its main one. Each item is
@@ -223,6 +246,39 @@ function serviceRow(name, state, detail, actions) {
   return `<div class="svcrow"><div class="svcrow-l"><b>${name}</b>${state ? ` ${state}` : ""}${detail ? `<small>${detail}</small>` : ""}</div>${actions || ""}</div>`;
 }
 if (typeof window !== "undefined") { window.settingRow = settingRow; window.serviceRow = serviceRow; }
+
+/* A long form in steps: numbered chips across the top, one pane at a time,
+   Back and Next at the foot. Every pane is drawn at once and only hidden, so
+   a form's own save still reads every field. finish is the form's main
+   button: on the last step, or on every step when always is set (an edit,
+   where changing one thing should not mean walking through all of them). */
+function stepper(id, steps, finish, { always = false } = {}) {
+  return `<div class="stepper" id="${esc(id)}" data-step="0">
+    <div class="stepper-head" role="tablist">${steps.map((step, i) =>
+      `<button type="button" role="tab" class="stepper-chip${i ? "" : " on"}" data-i="${i}" aria-selected="${!i}" onclick="stepGo(${jsq(id)},${i})"><span>${i + 1}</span>${esc(step.title)}</button>`).join("")}</div>
+    ${steps.map((step, i) => `<div class="stepper-pane" data-i="${i}"${i ? " hidden" : ""}>${step.html}</div>`).join("")}
+    <div class="ui-actions stepper-foot"><div class="ui-actions-start"><button type="button" class="btn" data-back hidden onclick="stepGo(${jsq(id)},-1,true)">Back</button></div>
+      <div class="ui-actions-end">${always ? finish : `<span data-finish hidden>${finish}</span>`}
+        ${steps.length > 1 ? `<button type="button" class="btn ${always ? "" : "pri"}" data-next onclick="stepGo(${jsq(id)},1,true)">Next: ${esc(steps[1].title)}</button>` : ""}</div></div>
+  </div>`;
+}
+function stepGo(id, to, relative) {
+  const root = document.getElementById(id);
+  if (!root) return;
+  const panes = [...root.querySelectorAll(":scope > .stepper-pane")], chips = [...root.querySelectorAll(".stepper-chip")];
+  const next = Math.max(0, Math.min(panes.length - 1, relative ? +root.dataset.step + to : to));
+  root.dataset.step = next;
+  panes.forEach((pane, i) => { pane.hidden = i !== next; });
+  chips.forEach((chip, i) => { chip.classList.toggle("on", i === next); chip.classList.toggle("done", i < next); chip.setAttribute("aria-selected", String(i === next)); });
+  const last = next === panes.length - 1, nextButton = root.querySelector("[data-next]");
+  root.querySelector("[data-back]").hidden = !next;
+  if (nextButton) { nextButton.hidden = last; if (!last) nextButton.textContent = `Next: ${chips[next + 1].textContent.replace(/^\d+/, "")}`; }
+  const finish = root.querySelector("[data-finish]");
+  if (finish) finish.hidden = !last;
+  const body = root.closest("#mbody") || root.closest(".modalbox");
+  if (body) body.scrollTop = 0;
+}
+if (typeof window !== "undefined") { window.stepper = stepper; window.stepGo = stepGo; }
 
 /* A main button that opens a choice - ＋ Import and its kinds. */
 const menuButton = (label, items) => moreMenu(items, label, "btn pri");

@@ -74,8 +74,11 @@ async function applyDeepLink(v, params) {
   let detail = "";
   let open = null;
   if (v === "nodes" && params.node) {
-    detail = params.node;
-    open = () => nodeDetail(params.node, true);
+    // A page, not a dialog: the view drew it; the breadcrumb and title name it.
+    renderBreadcrumb(v, params.node);
+    $("#title").textContent = params.node;
+    pageTitle(params.node);
+    return;
   } else if (v === "workloads" && params.panel === "edit" && params.ns && params.workload) {
     detail = params.workload;
     open = () => wlEdit(params.ns, params.workload, true);

@@ -216,20 +216,21 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       shared_storage_classes: options.shared_storage_classes || [],
       storage_class_facts: options.storage_class_facts || {}, pod_volumes: w.pod_volumes || [],
       node: w.node || "" };
-    $("#mbody").innerHTML = `
+    const basics = `
       <div class="f"><label>Workload name ${tip("The real Kubernetes Deployment name. Renaming creates a replacement Deployment, waits for it to become ready, then removes the old one. Generated pods use this name plus a Kubernetes suffix.")}</label><input type="text" id="e_workload_name" value="${esc(w.name)}"></div>
       <div class="f"><label>Pod hostname ${tip("The hostname visible inside the pod. It does not rename the Kubernetes Pod; generated pods use the workload name plus a suffix.")}</label><input type="text" id="e_pod_name" value="${esc(w.pod_hostname || "")}" placeholder="optional"></div>
       <div class="f"><label>Container logo ${tip("Optional public HTTPS image URL. Homestead validates it and keeps a persistent local copy while retaining this source for later edits.")}</label><input type="url" id="e_icon" value="${esc(w.icon || "")}" placeholder="https://…/icon.png"></div>
-      ${placementSection(w.placement || {}, w, nodes, containers)}
       <label class="switch" id="e_autostart_wrap"><input type="checkbox" id="e_autostart" onchange="editAutostartToggle()" ${w.autostart === false ? "" : "checked"}>
         Autostart ${tip("On keeps the workload running: Kubernetes restarts it after a crash, a node reboot or a cluster restart. Off scales it to zero and remembers the instance count for when you switch it back on.")}</label>
-      <div class="dim xs" id="e_autostart_note" style="margin:-4px 0 6px">${w.autostart === false ? "Stays stopped until you switch autostart back on." : "Runs continuously and comes back after a reboot."}</div>
-      <div class="sec">Containers <span class="pill">${containers.length}</span></div>
+      <div class="dim xs" id="e_autostart_note" style="margin:-4px 0 6px">${w.autostart === false ? "Stays stopped until you switch autostart back on." : "Runs continuously and comes back after a reboot."}</div>`;
+    const running = placementSection(w.placement || {}, w, nodes, containers);
+    const inside = `
       <div id="e_containers">${containers.map(editContainerPanel).join("")}</div>
-      <div class="note" id="e_ports_note" hidden></div>
-      <div class="sec">Service VIP</div><div class="note small">A Service VIP exposes ports on the default workload address or a VIP you select. It is separate from the direct LAN interface above.
-        <p>Save container/port changes first, then configure its Service. VIP changes are applied separately and do not restart the pod.</p>
-        <button class="btn" data-need="operator" onclick="networkManage(${jsq(ns)},${jsq(name)})">Configure default / selected VIP</button></div>
+      <div class="note" id="e_ports_note" hidden></div>`;
+    const address = `
+      <div id="e_vip_picture"></div>
+      <div class="row"><button class="btn" data-need="operator" onclick="networkManage(${jsq(ns)},${jsq(name)})">Choose its address</button>
+        ${tip("The address its ports answer on: the default workload VIP or one you pick. Applied on its own, without restarting the pod - save other changes first.")}</div>
       ${seeds.length ? `<div class="sec">Startup seed config ${tip("This ConfigMap is copied into the container's persistent storage by an init container before every start. It is authoritative: editing only the mounted file will be overwritten on restart.")}</div>
         <div class="note seed-note"><b>Authoritative startup configuration.</b> Saving here updates the ConfigMap and restarts the workload so the init container copies the new value into appdata.</div>
         ${seeds.map((s, i) => `<div class="seed-editor card flat">
@@ -239,11 +240,12 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
             data-init="${esc(s.init_container)}" data-config-map="${esc(s.config_map)}" data-key="${esc(s.key)}">${esc(s.value)}</textarea>
           ${s.command ? `<div class="dim xs mono seed-command">${esc(s.command)}</div>` : ""}
         </div>`).join("")}` : ""}
-      <div class="row" style="margin-top:22px">
-        <button class="btn pri" id="e_save" onclick="editSave(${jsq(ns)},${jsq(name)})">Save &amp; restart</button>
-        <button class="btn" onclick="closeModal()">Cancel</button>
-      </div>
-      <div class="note" style="margin-top:14px">Saving rolls the pod. Renaming is a separate, reviewed action with a short outage; volumes and service addresses are kept. If it stops part-way, inspect the job before restarting either workload.</div>`;
+      ${UI.more("What saving does", "<p>Saving rolls the pod. Renaming is a separate, reviewed action with a short outage; volumes and service addresses are kept. If it stops part-way, inspect the job before restarting either workload.</p>")}`;
+    $("#mbody").innerHTML = stepper("e_steps", [
+      { title: "Basics", html: basics }, { title: containers.length > 1 ? `Containers · ${containers.length}` : "Container", html: inside },
+      { title: "Where it runs", html: running }, { title: "Address", html: address }],
+      `<button class="btn pri" id="e_save" onclick="editSave(${jsq(ns)},${jsq(name)})">Save &amp; restart</button>`, { always: true });
+    editVipPicture(w);
     containers.forEach((container, index) => renderVolumeRows(editVolumePicker(index),
       (container.volumes || []).filter(volume => !volume.managed).map(editVolumeRow)));
     window.__editHadService = !!w.has_service;
@@ -253,6 +255,15 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     if ($("#e_lan_on")?.checked) editLanToggle();
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
+/* Its address, drawn: the VIP its ports answer on, and where each leads. */
+function editVipPicture(w) {
+  const host = $("#e_vip_picture");
+  if (!host || !window.Diagram) return;
+  const ports = (w.ports || []).filter(p => p.expose !== false);
+  const ip = (STATE.data.wl || []).find(x => x.ns === w.ns && x.name === w.name)?.ports?.[0]?.ip || "";
+  host.innerHTML = Diagram.vip(ip, ports.map(p => ({ port: p.host || p.port || p.container, app: w.name, node: w.node || "" })),
+    { empty: "no port is exposed on the LAN", caption: ip ? "" : "Not on the LAN yet: choose an address to expose its ports." });
+}
 window.editAddEnv = (index, key = "", value = "") => $("#e_env_" + index).insertAdjacentHTML("beforeend", editEnvRow(index, key, value));
 window.editAddPort = (index, port = {}) => {
   $("#e_ports_" + index).insertAdjacentHTML("beforeend", editPortRow(index, port));
@@ -730,7 +741,7 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
   const facts = opts.storage_class_facts || {};
   const classLabel = c => `${c}${facts[c]?.default ? " (default)" : ""}${facts[c]?.replicas ? ` · ${facts[c].replicas} copies` : ""}`;
   window.__vmCreateOptions = opts;
-  modal("New virtual machine", `
+  const vmMachine = `
     <div class="f"><label>Name</label><input type="text" id="v_name" placeholder="ubuntu-test"></div>
     <div class="f2">
       <div class="f"><label>CPU cores</label><input type="number" id="v_cores" value="2" min="1" max="16"></div>
@@ -740,6 +751,8 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
       <div class="f"><label>Disk (GB)</label><input type="number" id="v_disk" value="20" min="5"></div>
       <div class="f"><label>Root password ${tip("Required when Homestead provisions a new disk. Optional for an imported disk that already has login access configured.")}</label><input type="password" id="v_pass" autocomplete="new-password" placeholder="Set an initial password"></div>
     </div>
+`;
+  const vmDisk = `
     <div class="f"><label>Boot disk ${tip(opts.harvester
       ? "Attach a completed import as it is, start from one of Harvester's images, or download an image while the VM is created."
       : "Attach a completed import as it is, or download an image while the VM is created.")}</label>
@@ -763,7 +776,9 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
     ${opts.hardware_base ? `<details class="ui-more" id="v_hw"><summary>Hardware - CPU model, firmware, TPM, devices, memory</summary>
       ${vmHardwareFields(opts.hardware_base, opts, false, true)}</details>` : ""}
     <div class="f" id="v_url_row" hidden><label>Image URL</label><input type="url" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img"></div>
-    <div class="note small">A <b>Service VIP</b> forwards selected ports to a VM on the pod network. A <b>direct LAN interface</b> gets its address from DHCP or guest configuration; a MAC address only identifies that interface.</div>
+`;
+  const vmNetwork = `
+
     <div class="f"><label>Network ${tip("The pod network: reached through a Service, like a container. A LAN network (bridged): a machine there like any other, with an address from DHCP or one of its own.")}</label>
       <select id="v_net" onchange="vmNetChanged()"><option value="pod">Pod network - reached through a Service</option>
         ${(opts.network_details || []).filter(n => n.vms !== false).map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.lan ? ` · LAN${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}` : ""}</option>`).join("")}</select>
@@ -778,20 +793,22 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
       <div class="f"><label>Address</label><select id="v_addr_mode" onchange="vmNetChanged();vmSubnetPicked('v')">
         <option value="dhcp">From the network's DHCP</option><option value="static">One of its own</option></select></div>
       <div id="v_static" hidden>${vmAddressFields("v", opts)}</div></div>
+`;
+  const vmStorage = `
     ${(opts.storage_classes || []).length ? `<div class="f" id="v_sc_row"><label>Storage class ${tip(opts.harvester
       ? "Where a blank or downloaded disk lives. A disk from a Harvester image always lives on that image's own class."
       : "Where the disk lives. The cluster's default class is chosen for you.")}</label>
       <select id="v_sc">${opts.storage_classes.map(c => `<option value="${esc(c)}" ${c === opts.default_class ? "selected" : ""}>${esc(classLabel(c))}</option>`).join("")}</select></div>` : ""}
-    <div class="row" style="margin-top:18px">
-      <button class="btn pri" onclick="doVmCreate()">Review VM</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>
-    <div class="note" style="margin-top:14px">${opts.harvester
+    ${UI.more("How the disk is made", `<p>${opts.harvester
       ? "New disks are made the way Harvester makes them: shared block volumes, so the VM can move between hosts. A URL is downloaded as a Harvester image, kept in its image list for the next VM."
       : opts.cdi ? `New disks are CDI DataVolumes on the class above, with the access mode that class supports.
         A VM on a disk only one host can reach stays on that host.`
       : `<b>CDI is not installed</b>, so a VM here starts from a blank disk that KubeVirt formats itself.
         To download or import disk images, install CDI (the containerized data importer) from kubevirt.io.`}
-    ${readyDisks.length ? " Imported disks are attached directly and remain visible on the Import page." : ""}</div>`, true);
+    ${readyDisks.length ? " Imported disks are attached directly and remain visible on the Import page." : ""}</p>`)}`;
+  modal("New virtual machine", stepper("v_steps", [{ title: "Machine", html: vmMachine }, { title: "Boot disk", html: vmDisk },
+    { title: "Network", html: vmNetwork }, { title: "Storage", html: vmStorage }],
+    `<button class="btn pri" onclick="doVmCreate()">Review VM</button>`), true);
   window.__vmPreset = "";
   vmBootChanged();
   vmHardwareChanged();
@@ -1569,7 +1586,19 @@ window.imAddMap = () => {
   $("#im_maps").insertAdjacentHTML("beforeend", importMappingRow({ include: true }));
   imSyncMaps();
 };
+/* The folders as a picture: each source, what happens to it, its volume
+   and where it lands - redrawn as the rows change. */
+function importMapPicture() {
+  const host = $("#im_map_picture");
+  if (!host || !window.Diagram) return;
+  const rows = $$("#im_maps .im-map").map(row => row.dataset.medium === "memory"
+    ? { how: $(".imm-on", row)?.checked === false ? "skip" : "ram", source: "RAM", volume: `${$(".imm-ram", row)?.value || 0} MiB in memory`, path: $(".imm-mount", row)?.value || "" }
+    : { how: imMode(row), source: $(".imm-remote", row)?.value || "", volume: $(".imm-pvc", row)?.value || "", path: $(".imm-mount", row)?.value || "" });
+  host.innerHTML = Diagram.mapping(rows, { from: "on the source server" });
+}
+window.importMapPicture = importMapPicture;
 window.imSyncMaps = () => {
+  setTimeout(importMapPicture, 0);
   const all = $$("#im_maps .im-map").filter(row => imMode(row) !== "skip");
   const scratch = all.filter(row => row.dataset.medium === "memory");
   const empty = all.filter(row => row.dataset.medium !== "memory" && imMode(row) === "empty");
@@ -1694,7 +1723,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
   // A container that mounts nothing needs no storage: the folders and volumes
   // stay out of the way, offered only if someone wants to add some anyway.
   const keeps = (cfg.mounts || []).some(m => m.source || m.type === "tmpfs") || !!cfg.shm_mb;
-  childModal("Import · " + dir, `
+  const appStep = `
     <div class="f"><label>Workload name</label><input type="text" id="im_name" value="${esc(name)}"></div>
     <div class="f"><label>Remote path</label>
       <input type="text" id="im_path" value="${esc(cfg.remote_path || "")}" placeholder="${esc((src.base_path || "") + "/" + dir)}"></div>
@@ -1704,14 +1733,15 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <div class="sec">Hardware requirements ${tip("Docker device mappings are pre-selected. Add or remove features before import; placement will be limited to nodes that provide every selected feature.")}</div>
     <div class="hwchoices">${hardwareChoices("im_hw", cfg.hardware || [])}</div>
     <div class="sec">Privileges ${tip("Read from Docker on the source: privileged mode, added capabilities, and the /dev/net/tun device a VPN needs.")}</div>
-    ${privilegeFields("im_pv", cfg)}
+    ${privilegeFields("im_pv", cfg)}`;
+  const storageStep = `
     ${keeps ? "" : `<div class="note good" id="im_nothing">This container keeps nothing on disk, so there is nothing to copy and no
         volume to create. Import will bring across its image, ports and environment alone.
         <div style="margin-top:8px"><button class="btn sm" onclick="imStorageAnyway()">Add storage anyway</button></div></div>`}
     <div id="im_storage" ${keeps ? "" : "hidden"}>
     ${UI.field("Source data safety", '<select id="im_consistency"><option value="">Choose before copying…</option><option value="stopped">All source writers are stopped</option><option value="snapshot">These paths are a consistent snapshot or backup</option></select>', {help: cfg.source_container_id ? "The original Docker container must stay stopped. Snapshot mode skips that check; verify the paths really point to the snapshot." : "Homestead does not stop source applications. Stop every writer or choose stable backup paths before copying."})}
-    <div class="sec">Folders to copy ${tip("Every Docker path under the source appdata directory can come across. They all live in one Longhorn volume for this app, each in its own subfolder, mounted back where the container expects it.")}</div>
-    <div class="note">Source folders → the volumes you define below → mounted back at each container path.</div>
+    <div id="im_map_picture"></div>
+    <div class="sec">Folders ${tip("Each folder the container mounts: copied into a volume, mounted empty, or left out. Several can share one volume, each in its own subfolder, mounted back where the container expects it.")}</div>
     ${keeps && cfg.guessed_path ? `<div class="note warn">Nothing this container mounts sits under <span class="mono">${esc(src.base_path || "/mnt/user/appdata")}</span>,
       so Homestead cannot tell which folder holds its configuration. Tick the ones to copy yourself.</div>` : ""}
     <div id="im_maps">${importMappingRows(cfg, src).map(importMappingRow).join("")}</div>
@@ -1727,12 +1757,11 @@ window.importSetup = async (source, dir, cfg = {}) => {
         <input type="number" id="im_uid" min="0" max="65535" placeholder="keep what the source had"></div>
         <div class="f"><label>Owner GID</label><input type="number" id="im_gid" min="0" max="65535" placeholder="same as UID"></div></div>
     </details>
-    <div class="sec">Volumes ${tip("An import can fill more than one volume: appdata on a small replicated claim, recordings on a large one. Each folder above says which volume it goes to.")}</div>
-    <div class="note">Appdata and bulk storage rarely want the same volume. Add a second one and point the
-      heavy folders at it.</div>
+    <div class="sec">Volumes ${tip("An import can fill more than one volume: appdata on a small replicated claim, recordings on a large one - they rarely want the same one. Each folder above says which volume it goes to.")}</div>
     <div id="im_volumes"></div>
     <button class="btn sm" onclick="imAddVolume()">＋ add volume</button>
-    </div>
+    </div>`;
+  const networkStep = `
     <div class="sec">Network</div><div class="f2"><div class="f"><label>Docker network → Kubernetes</label><select id="im_net"><option value="loadbalancer">LAN access (VIP)</option><option value="internal">Cluster only</option><option value="host" ${cfg.network_mode === "host" ? "selected" : ""}>Host network (advanced)</option></select></div>
       <div class="f"><label>VIP allocation ${tip("Use the default workload VIP configured in Networking, another reserved address, or a specific VIP. Shared ports must be unique.")}</label><select id="im_vip" onchange="$('#im_vip_wrap').style.display = this.value === 'manual' ? '' : 'none'">${nodeAddressesOnly() ? nodeAddressOption() : `${importVips.shared ? `<option value="shared">Default workload VIP · ${esc(importVips.shared)}</option>` : ""}${nodeAddressChoice(!importVips.shared)}<option value="auto">New automatic VIP</option><option value="manual">Specific VIP</option>`}</select></div></div>
     <div class="f" id="im_vip_wrap" style="display:none"><label>Specific VIP</label><div id="im_vip_pick"><span class="dim xs"><span class="spin2"></span></span></div></div>
@@ -1741,17 +1770,19 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <button class="btn sm" onclick="imAddPort()">＋ add port</button>
     <div class="sec">Environment variables ${tip("Copied from Docker inspect. Review secrets and host-specific paths before starting the imported app.")}</div>
     <div id="im_env">${Object.entries(cfg.env || {}).map(([k,v]) => `<div class="f2 im-env"><div class="f"><label>Variable</label><input class="iek" value="${esc(k)}"></div><div class="f"><label>Value</label><input class="iev" value="${esc(v)}"></div></div>`).join("")}</div>
-    <button class="btn sm" onclick="imAddEnv()">＋ add variable</button>
+    <button class="btn sm" onclick="imAddEnv()">＋ add variable</button>`;
+  const reviewStep = `
     <div class="sec">Memory</div>
     <div class="f2"><div class="f"><label>Memory reserved ${tip("The scheduler reserves this much RAM for the application. This is not its maximum usage.")}</label><input id="im_memory" value="${esc(cfg.memory || '256Mi')}" placeholder="256Mi"></div>
       <div class="f"><label>Memory max ${tip("Optional hard ceiling. Exceeding it can cause an OOM kill. Must be at least the reserved memory; blank means unlimited.")}</label><input id="im_memory_limit" value="${esc(cfg.memory_limit || '')}" placeholder="No limit · e.g. 1Gi"></div></div>
-    <div class="note">The application is created stopped. After copying, use Start in Containers for a fresh capacity review. The copy helper reserves 128 MiB and is limited to 512 MiB.</div>
-    <div class="row" style="margin-top:16px">
-      <button class="btn pri" onclick="doImport(${jsq(source)})">Review import</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>
-    <div class="note" style="margin-top:14px">The copy runs as a Job — you can close this and watch it
-    on the Import page, folder by folder. Large appdata directories can take a while.</div>`, true);
+    ${UI.more("How the import runs", `<p>The copy runs as a Job: you can close this and watch it on the Import page, folder by folder; large appdata directories take a while. Its helper reserves 128 MiB and is limited to 512 MiB.</p>
+      <p>The application is created stopped. Once the copy is done, Start in Containers checks capacity again before it runs.</p>`)}`;
+  childModal("Import · " + dir, stepper("im_steps", [
+    { title: "App", html: appStep }, { title: "Storage", html: storageStep },
+    { title: "Network", html: networkStep }, { title: "Memory and review", html: reviewStep }],
+    `<button class="btn pri" onclick="doImport(${jsq(source)})">Review import</button>`), true);
   if (keeps) $("#im_volumes").innerHTML = importVolumeRow({ name: `${name}-appdata`, size_gb: 10 }, 0);
+  $("#im_storage")?.addEventListener("input", importMapPicture);
   vipChoices().then(choices => { const host = $("#im_vip_pick"); if (host) host.innerHTML = vipPicker("im", "", choices); });
   imSyncVolumes();
 };

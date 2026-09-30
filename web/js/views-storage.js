@@ -1168,13 +1168,14 @@ window.newShare = async () => {
   }
   STATE.data.smbUsers = users;
   const existing = users.filter(user => user.has_password);
-  $("#mbody").innerHTML = `
+  const shareWhat = `
     <div class="f"><label>Share name ${tip("Windows sees this name after the server address, and Homestead mounts it at /shares/<name> inside Samba.")}</label>
       <input type="text" id="sh_name" placeholder="media" autocomplete="off"></div>
-    <div class="sec">Storage</div>
-    <p class="ui-help">Use a new Longhorn volume or a folder in an existing volume.</p>
+    <div class="sec">Storage ${tip("A new Longhorn volume, or a folder in an existing one.")}</div>
     <div id="sh_storage"></div>
     ${UI.more("Sharing an existing volume", "A volume can also be used by a container. ReadWriteOnce storage attaches on one node, so Samba and that workload must run on the same host.")}
+`;
+  const shareAccess = `
     ${UI.section("SMB access", `<div class="f"><label>SMB user</label><select id="sh_identity" onchange="shareAccountHint()">
       ${existing.map(user => `<option value="${esc(user.user)}">${esc(user.user)} · existing user</option>`).join("")}
       <option value="">Add a new user…</option></select><span class="ui-help">Existing users reuse their saved password. Manage passwords in SMB users.</span></div>
@@ -1186,8 +1187,9 @@ window.newShare = async () => {
     <label class="switch"><input type="checkbox" id="sh_pub" onchange="shareAccountHint()"> Allow guest access</label>
     <div id="sh_guest_note" class="hidden">${shareGuestWindowsNote()}</div>
     <label class="switch"><input type="checkbox" id="sh_ro"> Read only</label>
-    <p class="ui-help">Creating a share restarts Samba, so open SMB sessions drop briefly.</p>
-    ${UI.actions(UI.cancel() + UI.button("Create share", "mkShare(this)", { kind: "pri", id: "sh_go", attrs: 'data-need="admin"' }))}`;
+    <p class="ui-help">Creating a share restarts Samba, so open SMB sessions drop briefly.</p>`;
+  $("#mbody").innerHTML = stepper("sh_steps", [{ title: "Share and storage", html: shareWhat }, { title: "Access", html: shareAccess }],
+    UI.button("Create share", "mkShare(this)", { kind: "pri", id: "sh_go", attrs: 'data-need="admin"' }));
   const host = createVolumePicker($("#sh_storage"), {
     pvcs: () => options.pvcs || [],
     storageClasses: () => options.storage_classes || [],
