@@ -19,6 +19,8 @@ import posixpath
 import re
 import urllib.error
 
+import homestead_names as NAMES
+
 kget = ksend = None
 temps = lambda: {}
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
@@ -151,6 +153,42 @@ def _disk_of(path):
     return match.group(1) if match else name
 
 
+DISK_NAMES = "disk-names"
+NAME_MAX = 40
+
+
+def _disk_names(node_obj):
+    """{serial or device: name} a person gave a node's disks, kept on the node."""
+    raw = NAMES.read(((node_obj or {}).get("metadata") or {}).get("annotations") or {}, DISK_NAMES)
+    try:
+        names = json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+    return names if isinstance(names, dict) else {}
+
+
+def set_disk_name(node, device, name):
+    """Name a disk - "Media 3TB", "System NVMe" - so the node card says which
+    one it is. Kept by the drive's serial where it has one, so the name follows
+    the drive to another port; else by its device name. An empty name clears it."""
+    node, device = str(node or ""), str(device or "").strip()
+    name = " ".join(str(name or "").split())[:NAME_MAX]
+    row = next((d for d in (inventory()["nodes"].get(node) or []) if d["device"] == device and device), None)
+    if not row:
+        raise ValueError(f"{node} has no disk {device}")
+    key = row.get("serial") or device
+    obj = kget(f"/api/v1/nodes/{node}")
+    names = _disk_names(obj)
+    names.pop(device, None)
+    if name:
+        names[key] = name
+    else:
+        names.pop(key, None)
+    _patch(f"/api/v1/nodes/{node}", {"metadata": {"annotations": {
+        NAMES.key(DISK_NAMES): json.dumps(names, separators=(",", ":")) if names else None}}}, "naming the disk")
+    return {"ok": True, "name": name, "detail": f"{device} on {node} is named {name}" if name else f"{device} on {node} has no name now"}
+
+
 def _mount_disk(path, mounts):
     """The disk under a folder: the longest mount point that contains it."""
     best = None
@@ -188,6 +226,15 @@ def inventory():
         for m in mounts:
             if m["disk"] in rows:
                 rows[m["disk"]]["mounts"].append(m["mountpoint"])
+        # A system on LVM mounts / from dm-0, which is no drive of its own; a
+        # probe that does not follow it down says so. The drive holding /boot
+        # is then the one the system is on, where exactly one does.
+        root = next((m for m in mounts if m["mountpoint"] == "/"), None)
+        if root and root["disk"] not in rows:
+            booting = [dev for dev, row in rows.items() if any(p in ("/boot", "/boot/efi") for p in row["mounts"])]
+            if len(booting) == 1:
+                rows[booting[0]]["mounts"].append("/")
+                mounts = [dict(m, disk=booting[0]) if m["disk"] == root["disk"] else m for m in mounts]
         unplaced = []
         system_devs = {m["disk"] for m in mounts if m["mountpoint"] in SYSTEM_MOUNTS}
         for disk in _lh_disks(lh.get(name) or {}):
@@ -269,10 +316,26 @@ def tag_reach(disk_tags=(), node_tags=()):
     return sorted(reach)
 
 
+def _named(inv):
+    """Each disk row with the name a person gave it, where they did."""
+    try:
+        nodes = {n["metadata"]["name"]: n for n in kget("/api/v1/nodes").get("items", [])}
+    except Exception:
+        nodes = {}
+    for node, disks in inv["nodes"].items():
+        names = _disk_names(nodes.get(node))
+        for d in disks:
+            d["name"] = names.get(d.get("serial") or "") or names.get(d["device"]) or ""
+    return inv
+
+
 def summary():
-    """A line per disk for the node cards."""
-    inv = inventory()
-    return {node: [{"device": d["device"] or "longhorn", "size_gb": d["size_gb"], "role": d["role"],
+    """A line per disk for the node cards: its name or device, and - for a
+    Longhorn disk on the system drive - that it is both."""
+    inv = _named(inventory())
+    return {node: [{"device": d["device"] or "longhorn", "name": d.get("name", ""), "size_gb": d["size_gb"],
+                    "role": d["role"], "system": bool(d.get("system")), "model": d.get("model", ""),
+                    "lh_paths": [x.get("path", "") for x in d["longhorn"]],
                     "lh_used_gb": round(sum(x["used_gb"] for x in d["longhorn"]), 1),
                     "lh_size_gb": round(sum(x["size_gb"] for x in d["longhorn"]), 1)} for d in disks]
             for node, disks in inv["nodes"].items()}

@@ -144,7 +144,11 @@
   nodes.forEach(n => { n.duties = demoDuties[n.name] || { vips: [], management_vip: [], rwx: [], control_plane_vip: false }; });
   const demoNodeIps = { "harvester-node1": "192.168.1.207", "harvester-node2": "192.168.1.208", "harvester-node3": "192.168.1.209" };
   nodes.forEach(n => { n.addresses = { InternalIP: demoNodeIps[n.name], Hostname: n.name }; });
+  // One drive named, as someone would from the node's detail.
+  const demoDiskNames = { "harvester-node1": { sdb: "Media 2TB" } };
   nodes.forEach(n => { n.disks = demoDisks[n.name].map(d => ({ device: d.device, size_gb: d.size_gb, role: d.role,
+    name: (demoDiskNames[n.name] || {})[d.device] || "", system: !!d.system || d.role === "system", model: d.model || "",
+    lh_paths: d.longhorn.map(x => x.path || ""),
     lh_used_gb: d.longhorn.reduce((s, x) => s + x.used_gb, 0), lh_size_gb: d.longhorn.reduce((s, x) => s + x.size_gb, 0) })); });
   const pod = (name, node, image) => ({ name: `${name}-7d8f6d4c9-demo`, node, phase: "Running",
     ready: true, restarts: 0, container_count: 1,

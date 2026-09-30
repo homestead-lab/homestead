@@ -34,6 +34,18 @@ the same addresses with the ports and apps on each.
 Clicking a node opens it: its hardware, the pods and VMs on it, per-disk read
 and write speed, and each drive's health.
 
+Each disk on the card goes by its name, or by its device name if it has none.
+Its tags say what it is: **system**, **Longhorn**, both, or what else uses it.
+
+- A Longhorn folder on the system drive, such as Longhorn's default
+  `/var/lib/longhorn`, is counted on that drive's line. That includes a system
+  installed on LVM, as Ubuntu Server does, where it used to show as a separate
+  "Longhorn" disk.
+- Hovering the name shows the device, the model and the Longhorn folders on it.
+- To name a drive, open the node and choose **Name** (or **Rename**) beside it
+  in the drive list. The name is kept by the drive's serial number, so it
+  follows the drive to another port. Clearing it goes back to the device name.
+
 ### Host OS
 
 On k3s and RKE2 the hosts are ordinary Linux machines, so Homestead looks after
