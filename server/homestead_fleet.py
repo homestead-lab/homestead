@@ -385,11 +385,6 @@ def summary(via=None):
     state, _ = _load()
     if not state.get("self"):
         state, _ = _ensure()
-    try:
-        if follow_address():
-            state, _ = _load(fresh=True)
-    except Exception:
-        pass
     me = state["self"]
     rows = [m for m in state.get("members", []) if m.get("id") != me]
     checks = {}

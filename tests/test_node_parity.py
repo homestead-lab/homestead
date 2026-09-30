@@ -120,6 +120,14 @@ class NodeParityTests(unittest.TestCase):
         PARITY.tick()
         self.assertEqual([], cluster.sent, "done once")
 
+    def test_kube_vip_is_not_pinned_while_a_node_has_not_said_its_interface(self):
+        cluster = self.kube_vip_cluster(self.OLD_KUBE_VIP, probes={"node-3": {"default_interface": "enp2s0"}})
+        cluster.objects["/api/v1/nodes"]["items"].append(node("node-4"))
+        self.bind(cluster, longhorn=False)
+        PARITY.tick()
+        self.assertNotIn("vip_interface", cluster.sent[0][2]["spec"]["valuesContent"],
+                         "node-4 may use another interface; kube-vip finds its own there")
+
     def test_kube_vip_keeps_per_service_election_for_a_local_traffic_service(self):
         nfs = {"metadata": {"namespace": "lab", "name": "nfs"},
                "spec": {"type": "LoadBalancer", "externalTrafficPolicy": "Local"}}
@@ -156,6 +164,26 @@ class NodeParityTests(unittest.TestCase):
         cluster = self.stale_cluster()
         self.assertEqual(["lab/homestead-objectstore"], PARITY.stale_services())
         self.assertEqual([("DELETE", "/api/v1/namespaces/lab/services/homestead-objectstore", None)], cluster.sent)
+
+    def test_a_service_that_does_not_say_whose_it_is_is_left_alone(self):
+        cluster = self.stale_cluster()
+        cluster.objects["/api/v1/services"]["items"][0]["metadata"]["name"] = "old-vm-ssh"
+        self.bind(cluster, longhorn=False)
+        self.assertEqual([], PARITY.stale_services())
+        self.assertEqual([], cluster.sent)
+
+    def test_a_service_whose_named_workload_is_gone_goes_but_a_stopped_one_stays(self):
+        cluster = self.stale_cluster()
+        svc = cluster.objects["/api/v1/services"]["items"][0]
+        svc["metadata"]["name"] = "win11-rdp"
+        svc["metadata"]["annotations"] = {"homestead.io/workload-kind": "VirtualMachine", "homestead.io/workload": "win11"}
+        svc["spec"]["selector"] = {"vm.kubevirt.io/name": "win11"}      # on the VMI's pod, not the VM's template
+        cluster.objects["/apis/kubevirt.io/v1/namespaces/lab/virtualmachines"]["items"] = [
+            {"metadata": {"name": "win11"}, "spec": {"running": False, "template": {"metadata": {"labels": {}}}}}]
+        self.bind(cluster, longhorn=False)
+        self.assertEqual([], PARITY.stale_services(), "the VM is stopped, not gone")
+        cluster.objects["/apis/kubevirt.io/v1/namespaces/lab/virtualmachines"]["items"] = []
+        self.assertEqual(["lab/win11-rdp"], PARITY.stale_services())
 
     def test_a_service_that_could_still_be_used_is_kept(self):
         stopped = {"metadata": {"name": "homestead-objectstore"}, "spec": {"replicas": 0, "template": {

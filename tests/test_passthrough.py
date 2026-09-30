@@ -129,6 +129,13 @@ class PassthroughTests(unittest.TestCase):
         self.assertIn('echo > "$d/driver_override"', script)
         self.assertEqual([], self.cluster.kv["spec"]["configuration"]["permittedHostDevices"]["pciHostDevices"])
 
+    def test_a_device_no_longer_on_the_host_is_still_taken_off_the_offer(self):
+        PASS.give("node-1", "0000:01:00.0")
+        # The card is pulled from the host before it is given back.
+        self.host.out = "\n".join(line for line in HOST.splitlines() if "0000:01:00" not in line) + "\n"
+        PASS.take_back("node-1", "0000:01:00.0")
+        self.assertEqual([], self.cluster.kv["spec"]["configuration"]["permittedHostDevices"]["pciHostDevices"])
+
     def test_usb_is_offered_by_vendor_and_product(self):
         PASS.allow_usb("1a6e", "089a")
         usb = self.cluster.kv["spec"]["configuration"]["permittedHostDevices"]["usb"]
