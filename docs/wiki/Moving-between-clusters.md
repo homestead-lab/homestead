@@ -85,6 +85,26 @@ that failed. **Cancel**, offered while nothing has stopped on the source yet,
 drops the move and anything it set up here; once the source has stopped,
 the same button is **Put back**, and starts it again there.
 
+### Choosing what each volume brings
+
+When you review moving an app, **Volumes** lists each of its volumes. For
+each one, choose:
+
+- **Move its data**: back it up there and restore it here, the default. Choose
+  a Longhorn storage class for it here, since it's restored from a Longhorn
+  backup.
+- **Create blank**: an empty volume for data you don't need to keep, such as a
+  cache. Choose its size, which starts at the original's, and any storage
+  class here.
+- **Skip**: use a volume of the same name that's already here. Its class and
+  size stay as they are. The review refuses this until that volume exists.
+
+Only volumes being moved are backed up, so skipped and blank ones cost no time.
+When you later remove the original with its volumes, only the volumes that
+were moved are deleted. Skipped and blank ones stay on the source, because
+they're the only copy of that data. The source needs Homestead 2.8.250 or
+later for this, and an older one is refused rather than risk deleting them.
+
 ### Moving a volume on its own
 
 Below the workloads, **Volumes** lists the source's Longhorn volumes with what

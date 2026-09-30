@@ -360,8 +360,10 @@ def _backup_backing_image(image):
             raise
 
 
-def backup(kind, name, retry_failed=False):
-    """Back up every claim the workload mounts. Refuses while it still runs."""
+def backup(kind, name, retry_failed=False, claims=None):
+    """Back up the claims the workload mounts - all of them, or those named
+    (the ones a move brings; the rest are skipped or made blank there).
+    Refuses while it still runs."""
     kind = _kind(kind)
     obj = _object(kind, name)
     if not _origin(obj):
@@ -379,7 +381,7 @@ def backup(kind, name, retry_failed=False):
         updated = _merge(kind, name, patch)
         if updated:
             obj["metadata"] = updated.get("metadata", obj.get("metadata", {}))
-    for claim in _claims_of(kind, obj):
+    for claim in [c for c in _claims_of(kind, obj) if claims is None or c in claims]:
         previous = next((r for r in recorded if r.get("claim") == claim), None)
         state = states.get(claim, {})
         failed = str(state.get("state", "")).lower() in ("error", "failed", "missing") or state.get("error")
@@ -456,7 +458,7 @@ def release(kind, name):
     return {"ok": True, "detail": f"{name} is running here again, as it was"}
 
 
-def remove(kind, name, volumes=False):
+def remove(kind, name, volumes=False, claims=None):
     """Delete the source copy once the far side has it. Only after a move.
 
     Refuses a workload that was not stopped for a move: this is a clean-up
@@ -471,7 +473,7 @@ def remove(kind, name, volumes=False):
     if kind == "volume":
         ksend("DELETE", _path(kind, name))
         return {"ok": True, "removed": [f"volume {name}"], "detail": f"removed volume {name}"}
-    claims = _claims_of(kind, obj)
+    claims_of, only = _claims_of(kind, obj), claims
     removed = []
     template = ((obj.get("spec", {}) or {}).get("template", {}) or {})
     if kind == "container":
@@ -486,7 +488,9 @@ def remove(kind, name, volumes=False):
     ksend("DELETE", _path(kind, name) + "?propagationPolicy=Background")
     removed.append(f"{'VM' if kind == 'vm' else 'workload'} {name}")
     if volumes:
-        for claim in claims:
+        # Only the volumes the move brought, when it says which: a volume it
+        # skipped or made blank there is the only copy of that data.
+        for claim in [c for c in claims_of if only is None or c in only]:
             try:
                 ksend("DELETE", f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{claim}")
                 removed.append(f"volume {claim}")
