@@ -104,7 +104,8 @@ def _public(move):
         # Nothing has stopped on the source yet: undoing it is a cancel, not a
         # "put back".
         "source_stopped": bool((move.get("flags") or {}).get("quiesced")),
-        "claims": [{k: c.get(k) for k in ("claim", "size_gb", "backup", "created", "restored")}
+        "claims": [{**{k: c.get(k) for k in ("claim", "size_gb", "backup", "created", "restored")},
+                    "action": c.get("action", "move"), "storage_class": c.get("target_class") or move.get("storage_class") or ""}
                    for c in move.get("claims", [])],
         "phase_index": _phases(move).index(move["phase"]) if move.get("phase") in _phases(move) else 0,
         "phases": list(_phases(move)),
@@ -221,6 +222,45 @@ def _plan_service(service, definition, namespace, name, mode, address, chosen=No
 
 
 # -------------------------------------------------------------------- the plan
+ACTIONS = ("move", "blank", "skip")
+
+
+def _all_classes():
+    items = (kget("/apis/storage.k8s.io/v1/storageclasses") or {}).get("items", [])
+    return sorted(c["metadata"]["name"] for c in items
+                  if not any((c.get("parameters") or {}).get(k) for k in ("fromBackup", "backingImage")))
+
+
+def _choices(claims, volumes, kind):
+    """Each claim's action and storage class: move (backed up and restored,
+    the default), blank (an empty volume of the same shape) or skip (one of
+    that name already here is used)."""
+    volumes = volumes or {}
+    out = {}
+    for claim in claims:
+        pick = volumes.get(claim["claim"]) or {}
+        action = str(pick.get("action") or "move")
+        if action not in ACTIONS:
+            raise ValueError(f"volume {claim['claim']}: choose move, blank or skip")
+        if kind == "volume" and action != "move":
+            raise ValueError("a volume moved on its own is moved")
+        size = int(claim.get("size_gb") or 1)
+        if action == "blank" and pick.get("size_gb") not in (None, ""):
+            try:
+                size = int(pick["size_gb"])
+            except (TypeError, ValueError):
+                raise ValueError(f"volume {claim['claim']}: its size is a whole number of GB")
+            if not 1 <= size <= 16384:
+                raise ValueError(f"volume {claim['claim']}: a blank volume is between 1 and 16384 GB")
+        out[claim["claim"]] = {"action": action, "storage_class": str(pick.get("storage_class") or "").strip(),
+                               "size_gb": size}
+    return out
+
+
+def _moving(move):
+    return [c for c in move["claims"] if c.get("action", "move") == "move"]
+
+
 def storage_choices():
     items = kget("/apis/storage.k8s.io/v1/storageclasses").get("items", [])
     return sorted(c["metadata"]["name"] for c in items
@@ -228,7 +268,7 @@ def storage_choices():
                   and not any((c.get("parameters") or {}).get(k) for k in ("fromBackup", "backingImage")))
 
 
-def plan(cluster, kind, name, namespace=None, address_mode="shared", address="", storage_class=""):
+def plan(cluster, kind, name, namespace=None, address_mode="shared", address="", storage_class="", volumes=None):
     """Everything that would stop a move, or surprise someone, before it starts.
 
     Asks both clusters, and reports blockers and warnings separately: a blocker
@@ -274,19 +314,41 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
     # A volume is its own claim, checked with the claims below.
     if kind != "volume" and _get(_object_path(kind, namespace, name)):
         blockers.append(f"{name} already exists in {namespace} on this cluster")
+    choices = _choices(definition.get("claims", []), volumes, kind)
+    chosen_class = storage_class or LH.STORAGE_CLASS
+
+    def check_class(klass, claim, longhorn):
+        base = _get(f"/apis/storage.k8s.io/v1/storageclasses/{urllib.parse.quote(klass, safe='')}")
+        where = f"volume {claim}: " if claim else ""
+        if not base:
+            blockers.append(f"{where}storage class {klass} does not exist here")
+        elif longhorn and base.get("provisioner") != "driver.longhorn.io":
+            blockers.append(f"{where}storage class {klass} is not Longhorn; a moved volume is restored "
+                            "from a Longhorn backup, so it needs a Longhorn class (or make it blank)")
+        elif any((base.get("parameters") or {}).get(k) for k in ("fromBackup", "backingImage")):
+            blockers.append(f"{where}choose a regular storage class, not an existing restore or image class")
+
+    moving = [c for c in definition.get("claims", []) if choices[c["claim"]]["action"] == "move"]
+    if moving or not definition.get("claims"):
+        check_class(chosen_class, "", True)
     for claim in definition.get("claims", []):
-        if _get(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{claim['claim']}"):
+        pick = choices[claim["claim"]]
+        exists = _get(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{claim['claim']}")
+        if pick["action"] == "skip":
+            if not exists:
+                blockers.append(f"volume {claim['claim']} is skipped, but no volume of that name is in "
+                                f"{namespace} here; create it first, or make it blank")
+            continue
+        if exists:
             blockers.append(f"volume {claim['claim']} already exists in {namespace} here")
-        if claim.get("backing_image") and not _get(
+        if pick["storage_class"] and pick["storage_class"] != chosen_class:
+            check_class(pick["storage_class"], claim["claim"], pick["action"] == "move")
+        if pick["action"] == "move" and claim.get("backing_image") and not _get(
                 f"{LH_API}/namespaces/{LHNS}/backingimages/{claim['backing_image']}"):
             warnings.append(f"disk {claim['claim']} is built on the {claim['backing_image']} image, "
                             "which will be restored from its backup first")
-    chosen_class = storage_class or LH.STORAGE_CLASS
-    base = _get(f"/apis/storage.k8s.io/v1/storageclasses/{urllib.parse.quote(chosen_class, safe='')}")
-    if not base or base.get("provisioner") != "driver.longhorn.io":
-        blockers.append(f"storage class {chosen_class} is missing here or is not Longhorn")
-    elif any((base.get("parameters") or {}).get(k) for k in ("fromBackup", "backingImage")):
-        blockers.append("choose a regular Longhorn storage class, not an existing restore or image class")
+        if pick["action"] == "blank":
+            warnings.append(f"volume {claim['claim']} starts empty here; its data stays on {cluster}")
 
     selector = definition.get("node_selector") or {}
     if selector:
@@ -334,16 +396,20 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
         "joined": joined, "will_run": bool(will_run), "addresses": addresses,
         "versions": versions,
         "storage_class": chosen_class, "storage_classes": storage_choices(),
-        "claims": [{k: c.get(k) for k in ("claim", "size_gb", "access_mode", "volume_mode",
-                                          "backing_image")}
+        "claims": [{**{k: c.get(k) for k in ("claim", "size_gb", "access_mode", "volume_mode",
+                                             "backing_image", "storage_class")},
+                    "source_class": c.get("storage_class"), "action": choices[c["claim"]]["action"],
+                    "storage_class": choices[c["claim"]]["storage_class"] or chosen_class,
+                    "target_size_gb": choices[c["claim"]]["size_gb"]}
                    for c in definition.get("claims", [])],
-        "total_gb": sum(int(c.get("size_gb") or 0) for c in definition.get("claims", [])),
+        "all_storage_classes": _all_classes(),
+        "total_gb": sum(int(c.get("size_gb") or 0) for c in moving),
     }
 
 
-def start(cluster, kind, name, namespace=None, address_mode="shared", address="", storage_class=""):
+def start(cluster, kind, name, namespace=None, address_mode="shared", address="", storage_class="", volumes=None):
     namespace = namespace or NS
-    checked = plan(cluster, kind, name, namespace, address_mode, address, storage_class)
+    checked = plan(cluster, kind, name, namespace, address_mode, address, storage_class, volumes)
     if not checked["ok"]:
         raise ValueError(checked["blockers"][0])
     active = [m for m in _read() if m.get("status") == "running"
@@ -351,13 +417,17 @@ def start(cluster, kind, name, namespace=None, address_mode="shared", address=""
     if active:
         raise ValueError(f"{name} is already being moved")
     definition = _definition({"cluster": cluster, "kind": kind, "name": name})
+    choices = _choices(definition.get("claims", []), volumes, kind)
     move = {
         "id": secrets.token_hex(6), "cluster": cluster, "kind": kind, "name": name,
         "source_namespace": definition.get("namespace", ""), "namespace": namespace,
         "address_mode": address_mode, "address": address,
         "storage_class": storage_class,
         "status": "running", "phase": "joining", "progress": 1,
-        "message": "Queued", "claims": [dict(c, backup="", created=False, restored=False)
+        "message": "Queued", "claims": [dict(c, backup="", created=False, restored=False,
+                                             action=choices[c["claim"]]["action"],
+                                             target_class=choices[c["claim"]]["storage_class"],
+                                             target_size_gb=choices[c["claim"]]["size_gb"])
                                         for c in definition.get("claims", [])],
         "origin": definition.get("origin") or {}, "flags": {},
         "previous_target": "", "failures": 0, "source_removed": False,
@@ -446,13 +516,19 @@ def _backing_up(move):
     flags = move.setdefault("flags", {})
     # A new move may follow a dismissed/cleared attempt while the source still
     # remembers its backups. Repair failed references on the first pass too.
-    made = _source_action(move, "backup", retry_failed=bool(flags.get("retry_backups")) or not flags.get("backed_up"))
+    moving = _moving(move)
+    if not moving:
+        return _advance(move, "restoring", 55, "No volume is moved; nothing to back up")
+    names = [c["claim"] for c in moving]
+    extra = {} if len(moving) == len(move["claims"]) else {"claims": names}
+    made = _source_action(move, "backup", retry_failed=bool(flags.get("retry_backups")) or not flags.get("backed_up"),
+                          **extra)
     by_claim = {row["claim"]: row["backup"] for row in made.get("backups", [])}
-    for claim in move["claims"]:
+    for claim in moving:
         claim["backup"] = by_claim.get(claim["claim"], claim.get("backup", ""))
     flags["backed_up"] = True
     flags.pop("retry_backups", None)
-    rows = _source_status(move).get("backups", [])
+    rows = [r for r in _source_status(move).get("backups", []) if r.get("claim") in names]
     for row in rows:
         state = str(row.get("state", "")).lower()
         if state in ("error", "failed") or row.get("error"):
@@ -462,14 +538,14 @@ def _backing_up(move):
         if str(image.get("state", "")).lower() in ("error", "failed") or image.get("error"):
             raise ValueError(f"backup of the {row.get('backing_image')} image failed: "
                              f"{image.get('error') or image.get('state')}")
-    if not rows and move["claims"]:
+    if not rows:
         return _note(move, 10, "Waiting for backups to start")
     done = [r for r in rows if str(r.get("state", "")).lower() == "completed"
             and (not r.get("backing_image")
                  or str((r.get("image") or {}).get("state", "")).lower() in ("completed", "ready"))]
     average = sum(int(r.get("progress") or 0) for r in rows) / max(1, len(rows))
-    if len(done) == len(move["claims"]):
-        return _advance(move, "syncing", 50, "Every volume is backed up")
+    if len(done) == len(moving):
+        return _advance(move, "syncing", 50, "Every volume moved is backed up")
     return _note(move, 10 + 40 * average / 100,
                  f"Backing up {len(rows)} volume{'' if len(rows) == 1 else 's'} on "
                  f"{move['cluster']}: {int(average)}%")
@@ -490,10 +566,10 @@ def _request_sync(move):
 def _syncing(move):
     _request_sync(move)
     here = {row["name"]: row for row in LH.backups()}
-    waiting = [c["claim"] for c in move["claims"] if not here.get(c["backup"], {}).get("restorable")]
+    waiting = [c["claim"] for c in _moving(move) if not here.get(c["backup"], {}).get("restorable")]
     # An image a disk is built on has to be readable here too, or the disk
     # cannot be restored however visible its own backup is.
-    for image in {c["backing_image"] for c in move["claims"] if c.get("backing_image")}:
+    for image in {c["backing_image"] for c in _moving(move) if c.get("backing_image")}:
         if _get(f"{LH_API}/namespaces/{LHNS}/backingimages/{image}"):
             continue
         found = _get(f"{LH_API}/namespaces/{LHNS}/backupbackingimages/{image}")
@@ -597,6 +673,16 @@ def _restoring(move):
         if claim.get("created"):
             continue
         existing = _get(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{claim['claim']}")
+        if claim.get("action") == "skip":
+            if not existing:
+                raise ValueError(f"volume {claim['claim']} was to be skipped, using one already in {namespace} "
+                                 "here, but there is none; create it, then retry")
+            claim.update(created=True, restored=True)
+            continue
+        if claim.get("action") == "blank" and not existing:
+            _blank_claim(move, claim, namespace)
+            claim.update(created=True, restored=True)
+            continue
         if existing:
             if not _ours(existing, move["id"]):
                 raise ValueError(f"volume {claim['claim']} already exists in {namespace} "
@@ -609,8 +695,8 @@ def _restoring(move):
         LH.restore_backup({
             "backup": claim["backup"], "namespace": namespace, "name": claim["claim"],
             "size_gb": claim.get("size_gb"), "access_mode": claim.get("access_mode"),
-            "storage_class": move.get("storage_class") or "",
-            "replicas": None if move.get("storage_class") else claim.get("replicas") or 2,
+            "storage_class": claim.get("target_class") or move.get("storage_class") or "",
+            "replicas": None if (claim.get("target_class") or move.get("storage_class")) else claim.get("replicas") or 2,
             "volume_mode": claim.get("volume_mode"),
             "migratable": claim.get("migratable"), "backing_image": claim.get("backing_image"),
             "annotations": {NAMES.key(MOVE_ID): move["id"],
@@ -618,6 +704,9 @@ def _restoring(move):
         claim["created"] = True
     states = []
     for claim in move["claims"]:
+        if claim.get("action", "move") != "move":
+            claim["restored"] = True
+            continue
         finished, percent = _restore_progress(namespace, claim["claim"])
         claim["restored"] = finished
         states.append(100 if finished else percent)
@@ -629,6 +718,24 @@ def _restoring(move):
     average = sum(states) / max(1, len(states))
     return _note(move, 56 + 29 * average / 100,
                  f"Restoring {len(states)} volume{'' if len(states) == 1 else 's'} here: {int(average)}%")
+
+
+def _blank_claim(move, claim, namespace):
+    """An empty volume of the claim's shape and chosen size, on its chosen class (or the
+    cluster's default), stamped as this move's so putting it back removes it.
+    Not waited on: a class that binds on first use binds when the app starts."""
+    body = {"apiVersion": "v1", "kind": "PersistentVolumeClaim",
+            "metadata": {"name": claim["claim"], "namespace": namespace,
+                         "labels": {NAMES.key("managed"): "true"},
+                         "annotations": {NAMES.key(MOVE_ID): move["id"],
+                                         NAMES.key(MOVED_FROM): f"{move['cluster']}/{move['name']}"}},
+            "spec": {"accessModes": [claim.get("access_mode") or "ReadWriteOnce"],
+                     "volumeMode": claim.get("volume_mode") or "Filesystem",
+                     "resources": {"requests": {"storage": f"{int(claim.get('target_size_gb') or claim.get('size_gb') or 1)}Gi"}}}}
+    klass = claim.get("target_class") or move.get("storage_class") or ""
+    if klass:
+        body["spec"]["storageClassName"] = klass
+    ksend("POST", f"/api/v1/namespaces/{namespace}/persistentvolumeclaims", body)
 
 
 def _post_ours(path, collection, body, move):
@@ -960,9 +1067,22 @@ def finish(move_id, volumes=False):
         raise ValueError("only a finished move's source can be removed")
     if move.get("source_removed"):
         return _public(move)
-    done = CLIENT.remote(move["cluster"], "/api/move/source",
-                         {"action": "remove", "kind": move["kind"], "name": move["name"],
-                          "volumes": bool(volumes)})
+    body = {"action": "remove", "kind": move["kind"], "name": move["name"], "volumes": bool(volumes)}
+    moved = [c["claim"] for c in _moving(move)]
+    if volumes and len(moved) != len(move["claims"]):
+        # Skipped and blank volumes are the only copy of their data there. A
+        # source older than 2.8.250 ignores the list and would delete them.
+        there = str((CLIENT.check_cluster(move["cluster"]) or {}).get("version") or "")
+        try:
+            new_enough = tuple(int(x) for x in there.lstrip("v").split(".")[:3]) >= (2, 8, 250)
+        except ValueError:
+            new_enough = False
+        if not new_enough:
+            raise ValueError(f"{move['cluster']} runs Homestead {there or 'of an unknown release'}, which would delete every "
+                             f"volume of {move['name']}, not only the moved ones; update it to 2.8.250 or later, "
+                             "or remove the original without its volumes")
+        body["claims"] = moved
+    done = CLIENT.remote(move["cluster"], "/api/move/source", body)
     move.update(source_removed=True, updated_at=_now(),
                 message=f"{move['name']} lives here now; {done.get('detail', 'removed')} "
                         f"on {move['cluster']}")

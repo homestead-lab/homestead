@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.249")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.250")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -8496,10 +8496,12 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/move/source":
                 action, kind, name = b.get("action"), b.get("kind"), b.get("name")
                 actions = {"quiesce": lambda: MOVE_SOURCE.quiesce(kind, name),
-                           "backup": lambda: MOVE_SOURCE.backup(kind, name, bool(b.get("retry_failed"))),
+                           "backup": lambda: MOVE_SOURCE.backup(kind, name, bool(b.get("retry_failed")),
+                                                                 b.get("claims") if isinstance(b.get("claims"), list) else None),
                            "release": lambda: MOVE_SOURCE.release(kind, name),
-                           "remove": lambda: MOVE_SOURCE.remove(kind, name,
-                                                                bool(b.get("volumes")))}
+                           "remove": lambda: MOVE_SOURCE.remove(
+                               kind, name, bool(b.get("volumes")),
+                               b.get("claims") if isinstance(b.get("claims"), list) else None)}
                 if action not in actions:
                     return self._send(400, {"error": "unknown move action"})
                 return self._move(actions[action])
@@ -8510,7 +8512,8 @@ class H(BaseHTTPRequestHandler):
                 return self._move(lambda: call(
                     b.get("cluster"), b.get("kind") or "container", b.get("name"),
                     b.get("namespace") or DEFAULT_NS, b.get("address_mode") or "shared",
-                    b.get("address") or "", b.get("storage_class") or ""))
+                    b.get("address") or "", b.get("storage_class") or "",
+                    b.get("volumes") if isinstance(b.get("volumes"), dict) else None))
             if p == "/api/move/moves/retry":
                 return self._move(lambda: MOVE_ENGINE.retry(b.get("id")))
             if p == "/api/move/moves/abandon":
