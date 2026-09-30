@@ -288,7 +288,13 @@ def stranded(services, leases, slices, platform, now=None):
     that election, and it did not start it again when the pod came back
     (kube-vip 1.2.3, on k3s-test: SMB, Homestead's VIP and the object store,
     all on 192.0.2.108, unreachable for an hour). Returns [(namespace,
-    lease, [services])]."""
+    lease, [services])].
+
+    Only under per-Service election: with one leader for every VIP (global
+    election, plndr-svcs-lock) no Service's own lease is ever held, and
+    restarting kube-vip for it would drop every VIP every ten minutes."""
+    if (platform or {}).get("vip_service_election") is not True:
+        return []
     holders = live_holders(leases, now)
     ready = {(s.get("metadata") or {}).get("namespace", "") + "/" + ((s.get("metadata") or {}).get("labels") or {}).get("kubernetes.io/service-name", "")
              for s in slices
