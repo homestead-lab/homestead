@@ -91,9 +91,12 @@ column headings are the one small upper-case label.
   it, and every page keeps its own address.
 - **A phone has a bottom bar**: Home, Apps, VMs, Storage, and More, which
   opens the sidebar.
-- **The top bar** is search, the bell (a new Homestead, container updates,
-  failed image checks - what wants attention, in one place), the gear (your
-  own settings: Settings › You) and the account.
+- **The top bar** is search, the bell, the gear (your own settings:
+  Settings › You) and the account. The bell is everything in the background:
+  a ring turns round it while jobs run, and its list opens with them -
+  Running now, each with its progress - then Needs you: a new Homestead,
+  container updates, failed image checks and failed jobs. All jobs opens every
+  job with its log. Nothing floats over the page.
 
 ### Detail pages
 

@@ -20,6 +20,8 @@ function renderOperations() {
   const active = items.filter(operationActive);
   if (!items.length) {
     tray.classList.add("hidden");
+    $("#jobList").innerHTML = "";
+    if (window.paintBell) paintBell();
     return;
   }
   tray.classList.remove("hidden");
@@ -42,7 +44,7 @@ function renderOperations() {
     clear.hidden = !finished.length;
     if (finished.length) clear.textContent = `Clear ${finished.length} finished`;
   }
-  $("#jobList").innerHTML = items.slice(0, 12).map(operation => `<article class="jobitem">
+  const list = items.slice(0, 12).map(operation => `<article class="jobitem">
     <div class="jobitemtop"><div><b>${esc(operation.title)}</b>
       <span>${esc(operation.resource?.namespace ? operation.resource.namespace + " · " : "")}${esc(operation.resource?.kind || operation.kind)}</span></div>
       <span class="pill ${operationTone(operation.status)}">${esc(operation.status)}</span></div>
@@ -60,8 +62,22 @@ function renderOperations() {
       ${operationActive(operation) || operation.dismissible === false ? "" : `<button class="btn sm" data-need="operator" onclick="dismissOperation(${jsq(operation.id)})">Dismiss</button>`}
     </div>
   </article>`).join("");
+  $("#jobList").innerHTML = list;
+  const open = $("#jobsDialogList");
+  if (open) open.innerHTML = list || '<div class="empty small">No jobs.</div>';
+  if (window.paintBell) paintBell();
   if (window.applyRole) window.applyRole();
 }
+
+/* Every job, running and recent, with its log and what can be done to it. */
+window.jobsDialog = () => {
+  const items = STATE.data.operations || [];
+  const finished = items.filter(item => !operationActive(item) && item.dismissible !== false).length;
+  modal("Jobs", `${UI.lead("What Homestead is doing in the background, and what it did recently.")}
+    <div id="jobsDialogList" class="joblist">${$("#jobList")?.innerHTML || '<div class="empty small">No jobs.</div>'}</div>
+    ${UI.actions(UI.cancel("Close") + (finished ? UI.button(`Clear ${finished} finished`, "dismissFinishedOperations()", { attrs: 'data-need="operator"' }) : ""))}`);
+};
+window.operationActive = operationActive;
 
 async function refreshOperations(immediate = false) {
   clearTimeout(operationTimer);
