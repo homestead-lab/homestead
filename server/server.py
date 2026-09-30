@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.269")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.270")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -7743,7 +7743,9 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, UPDATES.scan_progress())
             if p == "/api/image-updates":
                 force = (q.get("force") or ["0"])[0].lower() in ("1", "true", "yes")
-                report = json.loads(json.dumps(UPDATES.report(force)))
+                # Settings › Homestead checks Homestead's own parts, not every app.
+                only = (q.get("only") or [""])[0] == "homestead"
+                report = json.loads(json.dumps(UPDATES.homestead_report() if force and only else UPDATES.report(force)))
                 report["policy"] = update_policy_status()
                 return self._send(200, report)
             if p == "/api/image-updates/progress":

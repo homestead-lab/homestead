@@ -470,7 +470,7 @@ def dashboard(data, width, height, braille=True):
 PSF1_MAGIC, PSF2_MAGIC = b"\x36\x04", b"\x72\xb5\x4a\x86"
 # A mark in our own font, so one left behind by a crash is never kept as "the
 # font that was there".
-OURS = ""
+OURS = "\uf8ff"
 
 
 def read_psf(data):
@@ -534,7 +534,7 @@ def dashboard_masks():
             masks.add(bottom(left, 0) | bottom(right, 1))
     for large in (False, True):
         for row in logo_cells(large, True):
-            masks.update(ord(char) - 0x2800 for char, _ in row if "⠀" <= char <= "⣿")
+            masks.update(ord(char) - 0x2800 for char, _ in row if "\u2800" <= char <= "\u28ff")
     masks.discard(0)
     return sorted(masks)
 
@@ -550,20 +550,24 @@ def console_font(base):
         raise ValueError("the loaded font is already ours")
     size = len(glyphs[0]) if glyphs else 0
     blank = bytes(size)
-    out_glyphs, out_table = [blank], [[" ", " ", "⠀"]]
-    for code in range(0x21, 0x7f):
+    # Every ASCII glyph where its own code says: the console clears a cell by
+    # writing glyph 32 itself, never through this table - with the letters
+    # packed from 1, every blank cell showed "@". Braille takes the top half.
+    out_glyphs, out_table = [blank] * 256, [[] for _ in range(256)]
+    for code in range(0x20, 0x7f):
         index = where.get(chr(code), code if not table else None)
-        out_glyphs.append(glyphs[index] if index is not None and index < len(glyphs) else blank)
-        out_table.append([chr(code)] + (["�"] if code == ord("?") else []))
-    for mask in dashboard_masks():
-        out_glyphs.append(braille_glyph(mask, width, height))
-        out_table.append([chr(0x2800 + mask)])
-    out_glyphs.append(blank)
-    out_table.append([OURS])
-    if len(out_glyphs) > 256:
-        raise ValueError("too many glyphs for a 256-glyph font")
-    while len(out_glyphs) < 256:
-        out_glyphs.append(blank); out_table.append([])
+        out_glyphs[code] = glyphs[index] if index is not None and index < len(glyphs) else blank
+        out_table[code] = [chr(code)]
+    out_glyphs[0x20] = blank
+    out_table[0x20] += ["\u00a0", "\u2800"]
+    out_table[ord("?")].append("\ufffd")
+    masks = dashboard_masks()
+    if len(masks) > 0x7f:
+        raise ValueError("too many Braille patterns for the font's top half")
+    for offset, mask in enumerate(masks):
+        out_glyphs[0x80 + offset] = braille_glyph(mask, width, height)
+        out_table[0x80 + offset] = [chr(0x2800 + mask)]
+    out_table[0xff] = [OURS]
     header = PSF2_MAGIC + b"".join(v.to_bytes(4, "little") for v in (0, 32, 1, 256, size, height, width))
     unicode_table = b"".join("".join(chars).encode("utf-8") + b"\xff" for chars in out_table)
     return header + b"".join(out_glyphs) + unicode_table
@@ -573,7 +577,7 @@ class ConsoleFont:
     """Our font on this console while the dashboard shows; theirs after."""
     def __init__(self):
         self.saved = None
-        self.tty = os.ttyname(0) if os.isatty(0) else ""
+        self.tty = os.ttyname(0) if hasattr(os, "ttyname") and os.isatty(0) else ""
         self.dir = ""
 
     def load(self):
