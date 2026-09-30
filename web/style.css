@@ -2695,3 +2695,11 @@ html[data-theme="light"] .savebar{background:rgba(255,255,255,.95)}
 #im_volumes{margin-top:6px}
 .node-drive-back{display:inline-block;margin-bottom:10px;font-size:13px}
 .dialog-more{margin-top:6px}
+/* On a phone the header's count and group chips stack, and the chips scroll
+   inside their row - wider, they would widen the page and push the bottom
+   bar off the screen. */
+@media(max-width:900px){
+  .phead>div:first-child:has(.wgroup-bar){grid-template-columns:minmax(0,1fr)}
+  .phead .wgroup-bar{max-width:100%;overflow-x:auto;scrollbar-width:none}
+  .phead>div:first-child{min-width:0;max-width:100%}
+}
