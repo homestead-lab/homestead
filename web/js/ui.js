@@ -173,7 +173,7 @@ function moreMenu(items, label = "More actions", summaryClass = "btn") {
   const rows = (items || []).filter(Boolean);
   if (!rows.length) return "";
   const dots = summaryClass === "btn";
-  return `<details class="actionmenu headmenu"><summary class="${summaryClass}"${dots ? ` title="${esc(label)}" aria-label="${esc(label)}"` : ""}>${dots ? "⋯" : esc(label)}</summary>
+  return `<details class="actionmenu headmenu"><summary class="${summaryClass}"${dots ? ` aria-label="${esc(label)}"` : ""}>${dots ? "⋯" : esc(label)}</summary>
     <div class="actionmenu-pop">${rows.map(item => `<button type="button"${item.need ? ` data-need="${esc(item.need)}"` : ""}${item.tip ? ` title="${esc(item.tip)}"` : ""}${item.danger ? ' class="danger"' : ""}
       onclick="this.closest('details').open=false;${esc(item.run)}">${item.icon ? icon(item.icon) : ""}${esc(item.label)}</button>`).join("")}</div></details>`;
 }
