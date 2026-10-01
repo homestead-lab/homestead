@@ -115,8 +115,8 @@ async function viewDash() {
     </div>
   </div>
 
-  <div class="sec">Node health <span class="dim xs" style="text-transform:none;letter-spacing:0">— click a node for detail</span></div>
-  <div class="nodegrid stagger">${o.nodes.map(nodeCard).join("")}</div>
+  <div class="sec">Node health</div>
+  ${nodeComparison(o.nodes, "dashboard")}
 
   <div class="sec">Top consumers</div>
   <div class="grid g2 consumer-grid">
@@ -245,7 +245,7 @@ function nodeCard(n) {
       <div class="row nodehead-acts" style="gap:7px">
         ${n.schedulable === false ? '<span class="pill med">cordoned</span>' : ""}
         ${n.host_os && ["warn", "bad"].includes(n.host_os.tone) ? `<span class="pill ${n.host_os.tone === "bad" ? "crit" : "med"}" data-tip="${esc(n.host_os.text)}">host OS</span>` : ""}
-        <span class="pill ${bad ? "crit" : "low"}">${n.status}</span>
+        <span class="pill ${bad ? "crit" : "ok"}">${n.status}</span>
         <button class="btn sm" onclick="event.stopPropagation();nodeActions(${jsq(n.name)})">⋯</button>
       </div>
     </div>
@@ -281,15 +281,115 @@ function nodeCard(n) {
     </div></div>`;
 }
 
+/* Dashboard and Nodes share one matrix. Wider fleets scroll inside it;
+   a single host uses the existing card instead of an empty comparison. */
+const nodeComparisons = new Map();
+const nodeComparisonKey = n => JSON.stringify([n.site?.id || "", n.name]);
+function nodeComparisonLabel(nodes, name) {
+  let prefix = nodes[0].name;
+  for (const n of nodes) while (prefix && !n.name.startsWith(prefix)) prefix = prefix.slice(0, -1);
+  const boundary = Math.max(prefix.lastIndexOf("-"), prefix.lastIndexOf("_"), prefix.lastIndexOf("."));
+  return name.slice(boundary + 1) || name;
+}
+function nodeComparison(nodes, context) {
+  if (!nodes.length) return '<div class="empty">No nodes reported.</div>';
+  if (nodes.length === 1) return `<div class="single-node-summary">${nodeCard(nodes[0])}</div>`;
+  const id = `${context}-0`;
+  nodeComparisons.set(id, { nodes });
+  return nodeComparisonMarkup(id);
+}
+/* Reuse the filesystem calculation and bar, but keep identity, tags and
+   capacity on separate lines. One table row per drive aligns their bars. */
+function comparisonDisk(n, d) {
+  if (!d) return '<span class="dim">—</span>';
+  const usage = diskUsage(n, d), lh = d.lh_size_gb > 0;
+  const label = d.name || (d.device === "longhorn" ? "Longhorn folder" : (d.device || "").toUpperCase()) || (lh ? "Longhorn filesystem" : "Unnamed drive");
+  return `<div class="comparison-disk">
+    <b class="comparison-disk-name" title="${esc([label,d.device,d.model,...(d.lh_paths || [])].filter(Boolean).join(" · "))}">${esc(label)}</b>
+    <div class="comparison-disk-tags">${d.system ? '<span class="tag">system</span>' : ""}${lh ? '<span class="tag ok">Longhorn</span>' : !d.system ? `<span class="tag">${esc(d.role || "unassigned")}</span>` : ""}</div>
+    <div class="comparison-disk-capacity mono small">${usage.capacity ? `<b>${usage.pct}%</b><span class="dim">${sizePair(usage.used,usage.capacity)}</span>` : `<span class="dim">${sizeText(d.size_gb)}</span>`}</div>
+    ${usage.capacity ? `${driveBar(usage)}<span class="dim xs">Filesystem use${usage.physical ? ` · ${sizeText(usage.physical)} disk` : ""}</span>` : '<span class="dim xs">Usage unavailable</span>'}
+    </div>`;
+}
+function nodePodDots(n) {
+  const sys = Math.max(0, Number(n.pods_sys) || 0), wl = Math.max(0, Number(n.pods_wl) || 0);
+  return `<div class="podgrid" role="img" aria-label="${wl} workload pods and ${sys} system pods" data-tip="${wl} workload pods (bright) · ${sys} system pods">
+    ${'<i></i>'.repeat(Math.min(sys,80))}${'<i class="wl"></i>'.repeat(Math.min(wl,40))}</div>`;
+}
+
+function nodeComparisonMarkup(id) {
+  const { nodes } = nodeComparisons.get(id);
+  const choices = STATE.nodeCompareSelections ||= {};
+  const selected = nodes.find(n => nodeComparisonKey(n) === choices[id]) || nodes[0];
+  choices[id] = nodeComparisonKey(selected);
+  const columns = nodes.map(n => ({ selected: n === selected, attrs: clusterAttr(n), html:
+    `<button type="button" class="comparison-select" aria-pressed="${n === selected}" aria-controls="node-comparison-detail-${id}"
+      aria-label="Select ${esc(n.name)}" onclick="nodeCompareSelect(${jsq(id)},${jsq(nodeComparisonKey(n))})">
+      <span class="comparison-full-name">${esc(n.name)}</span><span class="comparison-short-name">${esc(nodeComparisonLabel(nodes, n.name))}</span></button>${clusterTag(n)}` }));
+  const metric = (label, value, phone = true) => ({ label, values: nodes.map(value), phone });
+  const percent = (value, kind) => value == null ? '<span class="dim">—</span>' : `<b class="mono">${esc(value)}%</b>${meter(value, "", kind)}`;
+  const rows = [
+    metric("Status", n => `<span class="tag ${n.status === "Ready" ? "ok" : "bad"}">${esc(n.status)}</span>${n.schedulable === false ? '<span class="tag warn">cordoned</span>' : ""}
+      ${n.host_os && ["warn", "bad"].includes(n.host_os.tone) ? `<span class="tag ${n.host_os.tone}" data-tip="${esc(n.host_os.text)}">host OS</span>` : ""}`),
+    metric("CPU", n => percent(n.cpu_pct, "cpu")),
+    metric("Cores", n => `<span class="mono">${esc(n.cpu_cap ?? "—")}</span>`),
+    metric("Memory", n => `${percent(n.mem_pct, "memory")}<span class="comparison-note">${sizePair(n.mem_used_gb, n.mem_cap_gb)}</span>`),
+    ...Array.from({length:Math.max(1,...nodes.map(n => (n.disks || []).length))}, (_, i) =>
+      metric(`Storage ${i + 1}`, n => n.disks?.length ? comparisonDisk(n,n.disks[i]) : i ? '<span class="dim">—</span>' : comparisonDisk(n,{device:"filesystem",name:"Node filesystem",root_fs:true,system:true,size_gb:n.fs_cap_gb}), false)),
+    metric("Network", n => `<span class="mono small">${ratePair(n.rx_mbps, n.tx_mbps).join(" ")}</span>`, false),
+    metric("Temp", n => n.temps?.cpu_c == null ? '<span class="dim">—</span>' : `<span class="mono ${tempCls(n.temps.cpu_c)}">${esc(n.temps.cpu_c)}°C</span>`),
+    metric("Pods", n => `<b class="mono">${esc(n.pods ?? "—")}</b>${nodePodDots(n)}`),
+    metric("VMs", n => `<span class="mono">${esc(n.vms ?? 0)}</span>`),
+    metric("Uptime", n => `${nodeUptimeStrip(n)}<span class="comparison-note">${esc(nodeUpFor(n) || "—")}</span>`),
+    metric("Addresses", n => nodeAddressTags(n) || '<span class="dim">—</span>', false),
+    metric("Duties", n => nodeDutyTags(n) || '<span class="dim">—</span>', false),
+    metric("Hardware", n => hardwareTags(nodeHardwareIds(n)) || '<span class="dim">None defined</span>', false),
+    metric("Workloads", n => `<span class="small">${esc((n.workloads || []).join(", ") || "None")}</span>`, false),
+    metric("Details", n => actionBar([{label:"Open node",run:`nodeDetail(${jsq(n.name)})`,icon:"node"}]), false)
+  ];
+  return `<section class="card flat pad0 node-comparison" id="node-comparison-${id}">
+    ${nodes.length > 4 ? `<div class="cardhd comparison-scroll-hint"><span class="dim small">${nodes.length} nodes · scroll to compare →</span></div>` : ""}
+    ${comparisonTable(columns, rows, "Node health and capacity")}
+    <div class="node-comparison-detail" id="node-comparison-detail-${id}"${clusterAttr(selected)}>
+      <div class="node-comparison-head"><div><b>${esc(selected.name)}</b> ${clusterTag(selected)}<div class="dim small">${esc(nodeUpFor(selected) || selected.status)}</div></div>
+        ${actionBar([{label:"Open node",run:`nodeDetail(${jsq(selected.name)})`,icon:"node"}])}</div>
+      <div class="comparison-detail-disks">${nodeDiskLines(selected)}</div>
+      <div class="about-grid">
+        <div><span>Memory</span><b>${sizePair(selected.mem_used_gb, selected.mem_cap_gb)}</b></div>
+        <div><span>Network</span><b>${ratePair(selected.rx_mbps, selected.tx_mbps).join(" ")}</b></div>
+        <div><span>Addresses</span><b>${nodeAddressTags(selected) || "—"}</b></div>
+        <div><span>Duties</span><b>${nodeDutyTags(selected) || "—"}</b></div>
+        <div><span>Hardware</span><b>${hardwareTags(nodeHardwareIds(selected)) || "None defined"}</b></div>
+        <div><span>Workloads</span><b>${esc((selected.workloads || []).join(", ") || "None")}</b></div>
+      </div>
+    </div></section>`;
+}
+window.nodeCompareSelect = (id, key) => {
+  const group = nodeComparisons.get(id);
+  if (!group?.nodes.some(n => nodeComparisonKey(n) === key)) return;
+  (STATE.nodeCompareSelections ||= {})[id] = key;
+  const element = document.getElementById(`node-comparison-${id}`);
+  if (!element) return;
+  const left = element.querySelector(".comparison-scroll")?.scrollLeft || 0;
+  element.outerHTML = nodeComparisonMarkup(id);
+  const next = document.getElementById(`node-comparison-${id}`);
+  next.querySelector(".comparison-scroll").scrollLeft = left;
+  enhanceActions(next);
+  if (window.applyRole) applyRole();
+  // Replacing the matrix retains keyboard focus on the chosen host.
+  [...next.querySelectorAll('.comparison-select')].find(b => b.getAttribute('aria-pressed') === 'true')?.focus({preventScroll:true});
+};
+
 /* The last thirty days, a day a bar, as the node page draws ninety. The
    row is there on every card - saying why when there is nothing yet - so
    the cards stay the same shape. */
 const uptimeTone = v => v == null ? "none" : v >= 99.9 ? "ok" : v >= 99 ? "warn" : "bad";
 function nodeUptimeStrip(n) {
-  const u = STATE.data.uptime?.nodes?.[n.name];
+  const remote = remoteRow(n);
+  const u = remote ? null : STATE.data.uptime?.nodes?.[n.name];
   const days = (u?.days || []).slice(-30);
   const month = u?.windows?.["30d"], outs = (u?.outages || []).length;
-  const tip = u ? (outs ? `${outs} outage${outs === 1 ? "" : "s"} recorded - open the node for when` : "No outage recorded")
+  const tip = remote ? "Open this node to view its cluster’s uptime history" : u ? (outs ? `${outs} outage${outs === 1 ? "" : "s"} recorded - open the node for when` : "No outage recorded")
     : "No samples yet: Homestead records one every five minutes";
   return `<div class="node-upstrip" data-tip="${esc(tip)}">
     <span class="dim xs">UPTIME</span>
@@ -789,31 +889,16 @@ async function viewNodes() {
   const [n, up] = await Promise.all([api("/api/nodes"), api("/api/nodes/uptime").catch(() => null), loadHardwareFeatures()]);
   STATE.data.nodes = n;
   STATE.data.uptime = up || STATE.data.uptime;
-  // Cards and the table said the same things twice; now it is one or the other.
   const layout = viewLayout("nodes");
   paint(`<div class="phead"><div><h2>Nodes</h2>
-      <p>${n.length} node${n.length === 1 ? "" : "s"} · click any ${layout === "rows" ? "row" : "card"} for detail</p></div>
+      <p>${n.length} node${n.length === 1 ? "" : "s"} · ${n.length > 1 && layout === "rows" ? "compare health and capacity" : "health and capacity by host"}</p></div>
       <div class="row">${layoutSwitch("nodes", "viewNodes")}
-      ${STATE.platform && !STATE.platform.harvester ? '<button class="btn" onclick="osUpdates()">OS updates</button>' : ""}
-      <button class="btn" data-need="admin" onclick="hardwareFeatureSettings()">Hardware features</button></div></div>
-   ${layout === "cards" ? `<div class="nodegrid stagger">${n.map(nodeCard).join("")}</div>` : `
-   <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack" data-sort="nodes"><thead><tr>
-     <th>Node</th><th>CPU</th><th>Memory</th><th>Network</th><th>Temp</th><th>Disk</th><th>Pods</th><th>Hardware</th><th>Workloads</th></tr></thead><tbody>
-   ${n.map(x => `<tr class="clickable"${clusterAttr(x)} onclick="nodeDetail(${jsq(x.name)})">
-     <td class="cell-name" data-sort="${esc(x.name)}"><b title="${esc(x.name)} · kernel ${esc(x.kernel)}">${esc(x.name)}</b> ${clusterTag(x)}<div class="dim xs" title="${esc(x.roles.join(" · "))}">${esc(x.roles.join(" · "))}</div></td>
-      <td style="min-width:120px" data-sort="${+x.cpu_pct || 0}">${meter(x.cpu_pct, "", "cpu")}<div class="dim xs mono nowrap" style="margin-top:4px">${x.cpu_pct}% of ${x.cpu_cap}</div></td>
-      <td style="min-width:120px" data-sort="${+x.mem_pct || 0}">${meter(x.mem_pct, "", "memory")}<div class="dim xs mono nowrap" style="margin-top:4px">${sizePair(x.mem_used_gb, x.mem_cap_gb)}</div></td>
-     <td class="mono small nowrap" data-sort="${(+x.rx_mbps || 0) + (+x.tx_mbps || 0)}">${ratePair(x.rx_mbps, x.tx_mbps)[0]} <span class="dim xs">${ratePair(x.rx_mbps, x.tx_mbps)[1]}</span></td>
-     <td class="mono ${tempCls(x.temps && x.temps.cpu_c)}" data-sort="${x.temps && x.temps.cpu_c != null ? x.temps.cpu_c : ""}">${x.temps && x.temps.cpu_c != null ? x.temps.cpu_c + "°" : '<span class="dim">—</span>'}</td>
-      <td style="min-width:100px" data-sort="${+x.fs_pct || 0}">${meter(x.fs_pct || 0, "", "disk")}<div class="dim xs mono nowrap" style="margin-top:4px">${sizePair(x.fs_used_gb, x.fs_cap_gb)}</div></td>
-     <td class="mono nowrap" data-sort="${+x.pods_wl || 0}"><b>${x.pods_wl}</b> <span class="dim xs">+${x.pods_sys} sys</span></td>
-     <td class="cell-tags">${hardwareTags(nodeHardwareIds(x)) || '<span class="dim">—</span>'}</td>
-     <td class="cell-tags" data-sort="${x.workloads.length}" onclick="event.stopPropagation()">${x.workloads.length
-        ? x.workloads.slice(0, 2).map(w => `<span class="tag movable"
-            onclick="moveWorkload(${jsq(w)})">${esc(w)} <span class="mv">⇄</span></span>`).join("")
-          + (x.workloads.length > 2 ? `<span class="tag more" data-tip="${esc(x.workloads.slice(2).join(", "))}">+${x.workloads.length - 2}</span>` : "")
-        : '<span class="dim xs">—</span>'}</td></tr>`).join("")}
-   </tbody></table></div></div>`}`);
+      ${moreMenu([
+        {label:layout === "cards" ? "Compare nodes" : "Show as cards",run:`setViewLayout('nodes','viewNodes',${jsq(layout === "cards" ? "rows" : "cards")})`},
+        STATE.platform && !STATE.platform.harvester && {label:"OS updates",run:"osUpdates()"},
+        {label:"Hardware features",run:"hardwareFeatureSettings()",need:"admin"}
+      ])}</div></div>
+   ${layout === "cards" ? `<div class="nodegrid stagger">${n.map(nodeCard).join("")}</div>` : nodeComparison(n, "nodes")}`);
 }
 
 /* ---------------- a node's own terminal ----------------
