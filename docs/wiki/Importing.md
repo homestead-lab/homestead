@@ -217,9 +217,13 @@ asks Unraid for a clean shutdown (the power button), so the disk is copied as
 it was left. The copy checks again that it is still shut off before it starts.
 
 The disks are read over SSH and streamed into CDI's upload proxy, which turns
-raw or qcow2 into a VM disk as it arrives. The whole disk crosses the network,
-empty space too - about 15 minutes for 80 GB on gigabit. Progress shows in the
-bell and under **Copying**. When every disk has arrived the VM is made,
+raw or qcow2 into a VM disk as it arrives. SSH compression reduces network
+traffic for empty space; progress counts the original disk bytes. Progress
+shows in the bell and under **Recent imports**, where **Job details** opens
+the copy log. Each disk uses a filesystem volume on the storage class you
+choose, with CDI allowing for filesystem overhead. This avoids inheriting a
+block-device mode that the host runtime may not let CDI access.
+When every disk has arrived the VM is made,
 **stopped**, for you to start. The VM on Unraid is never changed or deleted; if
 a copy fails, its part-copied disks are removed so it can simply be run again.
 

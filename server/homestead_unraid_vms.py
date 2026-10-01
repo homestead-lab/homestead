@@ -374,7 +374,11 @@ def start(body, actor=""):
     created = []
     try:
         for dv, disk in zip(names, disks):
-            storage = {"resources": {"requests": {"storage": f"{disk['size_gb']}Gi"}}}
+            # Match the disk-image importer: CDI writes disk.img on a filesystem.
+            # An omitted mode can inherit Block from the StorageProfile, whose
+            # device requires runtime ownership support for CDI's non-root user.
+            storage = {"accessModes": ["ReadWriteOnce"], "volumeMode": "Filesystem",
+                       "resources": {"requests": {"storage": f"{disk['size_gb']}Gi"}}}
             if storage_class:
                 storage["storageClassName"] = storage_class
             ksend("POST", f"{CDI_API}/namespaces/{ns}/datavolumes", {
@@ -500,7 +504,10 @@ def failure_reason(log, fallback="the copy stopped; inspect its disk copy output
         r"timed? out|out of memory|oomkilled|unauthorized|forbidden|certificate|error|failed", line, re.I)
         and not line.startswith("HSVM-FAILED ")]
     markers = [line[len("HSVM-FAILED "):] for line in lines if line.startswith("HSVM-FAILED ")]
-    return (errors[-1] if errors else markers[-1] if markers else fallback)[-300:]
+    # curl's HTTP code follows the response body. Prefer the actionable reason
+    # (permissions, space, etc.) over that generic transport summary.
+    causes = [line for line in errors if not line.startswith("curl:")]
+    return (causes[-1] if causes else errors[-1] if errors else markers[-1] if markers else fallback)[-300:]
 
 
 def log_sources(item):
