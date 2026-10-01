@@ -422,7 +422,7 @@ window.operationLog = async id => {
       ${(d.sources || []).map(src => `<div class="ctitle" style="margin-top:14px">${esc(src.title)}</div>
         ${src.note ? `<div class="dim small">${esc(src.note)}</div>` : ""}
         ${src.kind === "disk-copy" ? operationCopyProgress(src.progress, operationActive(d)) : ""}
-        ${src.text ? `<pre class="logview oplog-pre${src.kind === "disk-copy" ? " oplog-copy" : ""}" data-source="${esc(src.pod || src.title)}">${esc(src.text)}</pre>` : ""}`).join("")}
+        ${src.text ? `<pre class="logview oplog-pre${src.kind === "disk-copy" ? " oplog-copy" : ""}" data-source="${esc(JSON.stringify([src.pod || "", src.title]))}">${esc(src.text)}</pre>` : ""}`).join("")}
       ${d.sources?.length ? "" : '<p class="dim xs" style="margin-top:12px">This kind of job runs no pod of its own; its steps above are its log.</p>'}`;
     const steps = $("#oplogBody .oplog-steps");
     if (steps) steps.scrollTop = follow ? steps.scrollHeight : stepScroll;

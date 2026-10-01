@@ -7,7 +7,7 @@ function setup(status='running') {
   const fields={'#jobSummary':{},'#modal':{classList:{contains:()=>false}},'.modalbox':{scrollTop:40}};
   let steps, pres=[], tick;
   fields['#oplogBody']={_html:'',get innerHTML(){return this._html},set innerHTML(html){this._html=html;
-    steps={scrollHeight:800,scrollTop:0};pres=frame.sources.map(s=>({dataset:{source:s.pod||s.title},scrollHeight:1000,scrollTop:0}));
+    steps={scrollHeight:800,scrollTop:0};pres=frame.sources.map(s=>({dataset:{source:JSON.stringify([s.pod||'',s.title])},scrollHeight:1000,scrollTop:0}));
     fields['.modalbox'].scrollTop=0;}};
   const ctx={console,Date,Math,Number,Map,STATE:{data:{operations:[]}},encodeURIComponent,
     esc:s=>String(s??'').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'),
@@ -38,6 +38,12 @@ test('Finished jobs do not start polling and failed copies have no live ETA',asy
   assert.doesNotMatch(t.ctx.operationCopyProgress({percent:20,eta_seconds:80},false),/ETA/);
   assert.match(t.ctx.operationCopyProgress({percent:100},true),/waiting for CDI/);
   assert.match(t.ctx.operationCopyProgress({percent:3,eta_seconds:null},true),/ETA estimating/);
+});
+test('Events and output from the same pod retain separate scroll positions',async()=>{
+  const t=setup();t.frame({...t.getFrame(),sources:[...t.getFrame().sources,{title:'Pod events',pod:'copy-pod',text:'event'}]});
+  await t.ctx.operationLog('import');t.fields['#oplogFollow'].checked=false;
+  t.pres()[0].scrollTop=30;t.pres()[1].scrollTop=80;await t.tick()();
+  assert.equal(t.pres()[0].scrollTop,30);assert.equal(t.pres()[1].scrollTop,80);
 });
 test('A late response from a previous job cannot replace the new job log',async()=>{
   const t=setup();const original=t.ctx.api;let resolve;
