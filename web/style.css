@@ -100,6 +100,17 @@ a{color:inherit;text-decoration:none}
 ::-webkit-scrollbar-thumb:hover{background:#2a2a2e}
 ::-webkit-scrollbar-track{background:transparent}
 #app{display:flex;min-height:100vh}
+/* An installed phone app owns one viewport. Content scrolls inside its
+   main pane, so edge gestures cannot move the surrounding document. */
+@media(max-width:900px){
+  html[data-display="standalone"]{height:100%;overflow:hidden;overscroll-behavior:none}
+  html[data-display="standalone"] body{height:100vh;height:100dvh;overflow:hidden;overscroll-behavior:none}
+  html[data-display="standalone"] #app{height:100%;min-height:0;overflow:hidden}
+  html[data-display="standalone"] .main{min-height:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:none}
+  html[data-display="standalone"] .side{height:100vh;height:100dvh;overscroll-behavior:contain}
+  html[data-display="standalone"] #gate{display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;overscroll-behavior:contain}
+  html[data-display="standalone"] .gatebox{width:min(400px,100%);margin-block:auto;flex:0 0 auto}
+}
 
 /* ---------------- sidebar ---------------- */
 .side{
