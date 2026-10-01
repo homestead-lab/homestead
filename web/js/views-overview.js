@@ -487,7 +487,7 @@ window.nodeSectionGo = id => {
   // Only the sections themselves: a section's own parts keep their state.
   $$("#nodePage .node-pane[data-pane]").forEach(pane => { pane.hidden = pane.dataset.pane !== id; });
   $$("#nodePage .settings-nav button").forEach(b => { b.classList.toggle("on", b.dataset.tab === id); b.setAttribute("aria-selected", String(b.dataset.tab === id)); });
-  window.scrollTo(0, 0);
+  window.scrollPageTop();
 };
 
 window.smartDisk = async (node, disk) => {

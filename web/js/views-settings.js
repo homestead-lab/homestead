@@ -42,7 +42,7 @@ function settingsTab(pick) {
     const grid = $(".settings-grid");
     if (grid) grid.dataset.tab = section;
     $$(".settings-nav button").forEach(b => { b.classList.toggle("on", b.dataset.tab === section); b.setAttribute("aria-selected", b.dataset.tab === section); });
-    if (typeof window !== "undefined" && window.scrollTo) window.scrollTo(0, 0);
+    if (typeof window !== "undefined" && window.scrollPageTop) window.scrollPageTop();
     return section;
   }
   // A link can name the section or a topic in it - /settings?tab=about - and it is then kept.
@@ -62,7 +62,7 @@ window.settingsBack = () => {
   STATE.settingsOpen = false;
   const layout = $(".settings-layout");
   if (layout) layout.dataset.open = "0";
-  window.scrollTo(0, 0);
+  window.scrollPageTop();
 };
 
 async function viewSettings() {
