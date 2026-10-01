@@ -77,7 +77,7 @@ elif systemctl is-enabled --quiet dnf-automatic-install.timer 2>/dev/null || sys
   echo "AUTO dnf-automatic 1 unknown enabled"
 fi
 [ -f __HOLD__ ] && echo "HELD"
-lsblk -P -b -o NAME,PKNAME,TYPE,SIZE,FSTYPE,MOUNTPOINT,PTTYPE,PARTLABEL,LABEL 2>/dev/null | sed 's/^/BLK /'
+lsblk -P -b -o NAME,PKNAME,TYPE,SIZE,FSTYPE,MOUNTPOINT,PTTYPE,PARTLABEL,LABEL,TRAN,VENDOR,MODEL 2>/dev/null | sed 's/^/BLK /'
 for p in /sys/class/block/*/partition; do [ -e "$p" ] || continue; d=${p%/partition}; echo "START ${d##*/} $(cat "$d/start" 2>/dev/null)"; done
 echo END
 """.replace("$STATUS", STATUS).replace("__UNIT__", UNIT).replace("__HOLD__", "/etc/apt/apt.conf.d/99-homestead-hold")
@@ -208,6 +208,9 @@ def layout(blocks, starts):
     """Each whole disk and its partitions, in the order they sit on it."""
     disks = {}
     for row in blocks:
+        if (row.get("TRAN", "").lower() == "iscsi" or row.get("VENDOR", "").strip().upper() in ("IET", "LIO-ORG")
+                or "VIRTUAL-DISK" in row.get("MODEL", "").upper()):
+            continue  # workload volume attachments, not local host disks
         if row.get("TYPE") == "disk" and not row.get("NAME", "").startswith(("loop", "zram", "ram")):
             disks[row["NAME"]] = {"name": row["NAME"], "size": int(row.get("SIZE") or 0), "table": row.get("PTTYPE", ""),
                                   "fstype": row.get("FSTYPE", ""), "mount": row.get("MOUNTPOINT", ""), "partitions": []}
