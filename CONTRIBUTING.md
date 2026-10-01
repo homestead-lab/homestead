@@ -46,6 +46,14 @@ Tests talk to small fakes of the Kubernetes API rather than a cluster. A change
 in behaviour comes with a test that says, in its name, what should happen -
 `test_a_ready_node_is_not_removed_from_here` rather than `test_remove_2`.
 
+With the local demo running and Playwright installed, the installed-phone
+checks run with `node scripts/check_mobile_pwa.mjs`. Set `HOMESTEAD_URL` to
+the demo address and `HOMESTEAD_TEST_BROWSER=webkit` to check the iPhone
+layout, Safari's installed-app signal, refresh guards and gesture fixtures.
+Chromium additionally exercises trusted touch input. Windows WebKit omits
+native overscroll CSS; that assertion remains enabled in Chromium, and every
+engine checks the viewport bounds. Emulation does not replace an iPhone test.
+
 ## Generated files
 
 Some files are produced by scripts; edit the source and re-run the script.
