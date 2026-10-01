@@ -14,7 +14,7 @@ So **a Homestead admin is a cluster admin**, and the lines that matter are:
 |---|---|
 | Nobody signed in | The sign-in page, the app's own files, cached icons |
 | viewer | Read everything that is not a secret |
-| operator | Deploy, edit, start, stop and move workloads and VMs - without giving any of them the host (below) |
+| operator | Deploy, edit, start, stop and move ordinary workloads and VMs; management, system and privileged workloads require admin |
 | admin | Everything else: users, hosts, storage, shares, imports, Helm, raw resources, linked clusters, host access |
 
 Roles are enforced on the server for every route (`needed_role`), re-read from
@@ -42,18 +42,91 @@ linked cluster, which applies its own rules to them.
   cannot reach an object other than the one it names.
 - **Host access**: privileged mode, added capabilities, the host's network,
   processes or IPC, and host folders are for admins to give
-  (`homestead_host_access.py`). An operator may use the hardware features an
-  admin defined.
+  (`homestead_host_access.py`). Editing or opening a console in an existing
+  privileged workload also requires an admin.
 - **Files**: the volume browser refuses `..` and quotes every path it passes
   to its helper pod; nothing runs through a shell with request data.
 - **The pod**: runs as a non-root user with a read-only root filesystem, no
   privilege escalation and every capability dropped.
 - **Secrets on screen**: the MQTT password, SMB passwords and the UniFi key
   never leave the server; a Secret's values are shown to admins only.
+  Helm values/notes and VM cloud-init are also admin-only. Operators editing
+  other VM hardware preserve cloud-init without receiving its contents.
 - **Linked clusters**: every request between them is HMAC-signed with a shared
   key over its sender, time, a single-use nonce, method, path, person, role
   and body. See `docs/multi-cluster.md`.
 - **Configuration backups** are sealed with a passphrase Homestead does not keep.
+
+## Session and request boundaries
+
+Sessions use the version-2 token format and bind to an account identity that is
+never inherited by a recreated username. Existing cookies from older releases
+require a new sign-in after upgrading. Password changes and revoke-all invalidate
+the current account generation. A login must still refer to the identity whose
+password was verified if the account changes concurrently.
+
+Auth mutations require `X-Homestead-Auth: 1` and `Content-Type: application/json`,
+including login and first-admin setup. Browser origins are checked. Every API
+route has an explicit declaration in `homestead_route_policy.py`; undeclared
+routes are denied. Public static assets remain accessible for installation.
+
+Password attempts are reserved atomically before hashing, with per-address and
+per-account limits persisted in the account Secret. Replicas and restarts share
+those limits. Password hashing has a separate concurrency bound. During read-only
+data-move recovery, sign-in cannot write the Secret: its atomic rate counters are
+process-local, while the hash concurrency bound still applies.
+
+Ordinary mutations and open consoles require a fresh credential-store read.
+Read-only requests may use cached authorization for at most 30 seconds from the
+last successful store read; an outage beyond that fails closed. Core HTTP handlers
+bound concurrent connections and enforce header, body and idle deadlines.
+
+Container, host and VM consoles close on local account revocation, recheck
+credentials every five seconds, and have a one-hour maximum lifetime. A linked
+console is monitored where the user signed in; the target also checks continued
+fleet membership and key validity. Closing a console does not guarantee that a
+command already started inside the guest or container has terminated.
+
+Operators cannot exec or replace code in management/system workloads, helper
+pods, nondefault service accounts or workloads with host privileges. Checks apply
+to the original identity and the proposed manifest, including sidecars. New
+ordinary deployments do not mount service-account tokens. Custom installations
+must also avoid granting powerful Kubernetes rights to the default service account.
+API control keys are limited to the same ordinary workload targets; their scopes
+never select the internal authorization bypass.
+
+Remote icons connect only to resolved public addresses, with hostname-verified
+TLS and the same policy on redirects. Downloads have size and time bounds.
+Compose/YAML inputs have depth and expanded-alias budgets. Volume saves require
+the revision that was read, use a unique staged file and per-target lock, verify
+the content, preserve mode/ownership, and commit by rename with a backup. A crash
+can leave a `.homestead-lock` directory; inspect the file and backup before an
+administrator clears that lock.
+
+The installer stages downloads in a private temporary directory and defaults
+to an immutable release ref; `--ref` remains an explicit override. Node probes
+use a separate `homestead-smart-key` Secret, derived for that helper only, rather
+than mounting user password hashes or the session-signing key. Homestead migrates
+an existing probe on reconciliation and provisions the key for manual/chart
+installations. It must be running for the SMART sidecar's credential to appear.
+
+Release publication is gated on fresh candidate-image and built-in base/helper
+image scans for amd64 and arm64;
+weekly scans and dependency update checks cover newly published advisories.
+`scripts/security_scan.sh` writes the reports without pushing images. Maintainers
+must address scan failures, rebuild affected releases, review scanner/version
+updates and keep vendored browser libraries current. A passing scan covers known
+advisories in its inventory, not every possible vulnerability.
+The browser inventory and versions are in `THIRD_PARTY_NOTICES.md`. Maintainers
+review it when updating vendored assets. Operators must separately inventory and
+scan configured image overrides, optional third-party add-ons and user workloads;
+the release gate cannot determine what a particular cluster has installed.
+
+Registry credentials are sent only over HTTPS to the registry's own auth realm,
+Docker's official auth realm, or an explicitly configured `REGISTRY_AUTH_HOSTS`
+authority. Credential-bearing auth redirects are rejected. Backups accept only
+the supported bounded scrypt parameters and cap decompressed contents; existing
+version-1 encrypted backups remain readable.
 
 ## Writing pages safely
 
@@ -85,9 +158,8 @@ Found and fixed:
 Remaining, by design or for later:
 
 - **Admin is cluster admin.** Keep admin accounts few, with strong passwords.
-- **Hardware passthrough runs privileged.** An operator who uses a hardware
-  feature an admin defined gets a privileged container of their chosen image.
-  Define hardware features only where operators are trusted that far.
+- **Hardware passthrough runs privileged.** Deploying or editing those
+  workloads requires an administrator, including features an admin defined.
 - **Plain HTTP on a LAN** carries the session cookie and linked-cluster
   traffic (signed, not encrypted; linking sends the shared key once). Use
   HTTPS - a Cloudflare Tunnel or an ingress - where the LAN is not trusted.
@@ -96,6 +168,6 @@ Remaining, by design or for later:
   Moving to delegated listeners would let the CSP drop it.
 - **Setup on a fresh install** is open to anyone on the LAN until the first
   admin is created (never through the tunnel).
-- **Linked-cluster nonces** are remembered per Homestead process: with
-  several replicas, a signed request copied off the wire could be replayed to
-  another replica within five minutes.
+- **Linked-cluster nonces** are claimed in Kubernetes with resource-version
+  conflict checks, so replicas share the replay boundary. A replay-store outage
+  denies signed requests rather than weakening that protection.

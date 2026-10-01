@@ -274,6 +274,9 @@ def _env(value, variables, report, line, emptied=()):
                 report.warn(f"{key} takes its value from the shell running Compose; give it one "
                             f"under Variables or it is left out", where)
             continue
+        if isinstance(val, (dict, list)):
+            report.error(f"Environment value for {key} must be a scalar", line)
+            continue
         env[key] = ("true" if val else "false") if isinstance(val, bool) else str(val)
     return env
 

@@ -32,6 +32,7 @@ import urllib.parse
 import urllib.request
 
 import homestead_names as NAMES
+import homestead_sessions as SESSIONS
 
 kget = ksend = None
 NS = "lab"
@@ -150,7 +151,7 @@ def _load(fresh=False):
             state, key = _read()
         except Exception:
             # The API server is briefly away: keep what was known.
-            if _cache["state"] is not None:
+            if _cache["state"] is not None and time.time() - _cache["at"] <= 30:
                 return _cache["state"], _cache["key"]
             return {}, b""
         _cache.update(at=time.time(), state=state, key=key)
@@ -253,6 +254,7 @@ def verify(headers, method, target, body=b""):
                                             hashlib.sha256).digest()).decode().rstrip("=")
     if not nonce or not hmac.compare_digest(given, mac):
         raise PermissionError("signature does not match")
+    _claim_nonce(sender, nonce)
     with _lock:
         now = time.time()
         for seen in [n for n, until in _nonces.items() if until < now]:
@@ -264,6 +266,48 @@ def verify(headers, method, target, body=b""):
         raise PermissionError("unknown role")
     return {"sender": origin, "role": role,
             "user": f"{user or 'homestead'}@{origin.get('handle', sender)}" if role else ""}
+
+
+def _claim_nonce(sender, nonce):
+    """Kubernetes resourceVersion provides a replay boundary across replicas."""
+    path = f"/api/v1/namespaces/{NS}/configmaps/{NAMES.BRAND}-fleet-replay"
+    digest = hashlib.sha256((sender + ":" + nonce).encode()).hexdigest()
+    with _lock:
+        for attempt in range(4):
+            try:
+                current = kget(path)
+            except urllib.error.HTTPError as error:
+                if error.code != 404:
+                    raise PermissionError("fleet replay store is unavailable") from error
+                current = {}
+            now = time.time()
+            records = {k: until for k, until in json.loads((current.get("data") or {}).get("nonces", "{}")).items() if until > now}
+            if digest in records:
+                raise PermissionError("signed request was already used")
+            if len(records) >= 8000:
+                raise PermissionError("fleet request limit reached; try again later")
+            records[digest] = now + 2 * SKEW
+            meta = {"name": NAMES.BRAND + "-fleet-replay", "namespace": NS}
+            if current.get("metadata", {}).get("resourceVersion"):
+                meta["resourceVersion"] = current["metadata"]["resourceVersion"]
+            body = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": meta,
+                    "data": {"nonces": json.dumps(records, separators=(",", ":"))}}
+            try:
+                ksend("PUT" if current else "POST", path if current else path.rsplit("/", 1)[0], body)
+                return
+            except urllib.error.HTTPError as error:
+                if error.code != 409:
+                    raise PermissionError("fleet replay store is unavailable") from error
+        raise PermissionError("fleet replay store is busy; try again")
+
+
+def console_authorizer(sender):
+    state, key = _load()
+    def valid():
+        fresh_state, fresh_key = _read()
+        return bool(key and fresh_key and hmac.compare_digest(key, fresh_key) and
+                    any(m.get("id") == sender for m in fresh_state.get("members", [])))
+    return valid
 
 
 # ------------------------------------------------------------------ calling
@@ -736,6 +780,10 @@ def forward(handler, ref, body, user="", role="", cookies=()):
 def _pipe_both(handler, sock):
     """A console: bytes both ways until either end hangs up."""
     done = threading.Event()
+    if hasattr(handler, "_console_authorizer"):
+        handler.connection.settimeout(None)
+        need = "admin" if urllib.parse.urlparse(handler.path).path == "/api/node/shell" else "operator"
+        SESSIONS.watch(handler.user, handler._console_authorizer(need), done, handler.connection, sock)
 
     def browser_to_member():
         try:

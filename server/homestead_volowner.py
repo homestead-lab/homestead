@@ -27,7 +27,7 @@ import urllib.request
 
 import homestead_updates as UPDATES
 
-IMAGE = "alpine:3.20"
+IMAGE = "alpine:3.24"
 INIT = "homestead-owner"
 BUDGET_SECONDS = 40
 BUDGET_BYTES = 400 * 2**20

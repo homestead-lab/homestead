@@ -15,7 +15,7 @@ class ShippedScriptTests(unittest.TestCase):
         """If this breaks, an upgrade would push a broken probe to every node."""
         scripts = probe.shipped_scripts(ROOT / "server" / "probe")
 
-        self.assertEqual({"probe.py", "smart.py"}, set(scripts))
+        self.assertEqual({"probe.py", "smart.py", "homestead_http.py"}, set(scripts))
         for name, body in scripts.items():
             with self.subTest(script=name):
                 compile(body, name, "exec")

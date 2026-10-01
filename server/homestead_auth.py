@@ -18,14 +18,17 @@ Design notes, because the choices matter more than the code:
   not a control — a viewer who crafts the request by hand still gets a 403.
 """
 import base64
+import copy
 import homestead_names as NAMES
 import hashlib
 import hmac
 import json
 import os
 import secrets
+import threading
 import time
 import urllib.error
+import homestead_sessions as SESSIONS
 
 kget = ksend = None
 NS = "lab"
@@ -72,6 +75,9 @@ MAX_ATTEMPTS = 8
 MAX_USER_ATTEMPTS = 20
 ATTEMPT_WINDOW = 300
 MAX_TRACKED = 10000
+MAX_STALE_SECONDS = 30
+_rate_lock = threading.RLock()
+_password_slots = threading.BoundedSemaphore(4)
 
 
 def bind(_kget, _ksend, _ns):
@@ -88,10 +94,11 @@ class StoreUnavailable(Exception):
     would replace every real account."""
 
 
-def _unavailable(error):
+def _unavailable(error, allow_stale=True):
     # The last good read stands in while the cluster is slow to answer; its
     # time is left alone, so the next request tries the cluster again.
-    if _store_cache["data"] is not None:
+    if (allow_stale and _store_cache["data"] is not None and
+            time.time() - _store_cache["at"] <= MAX_STALE_SECONDS):
         return _store_cache["data"]
     raise StoreUnavailable("Homestead cannot read its accounts from the cluster right now "
                            f"({str(error)[:120] or type(error).__name__}); the Kubernetes API may be slow "
@@ -102,7 +109,7 @@ class StoreConflict(ValueError):
     """The accounts changed on another replica between reading and saving."""
 
 
-def _load(force=False, max_age=10):
+def _load(force=False, max_age=10, allow_stale=True):
     if not force and _store_cache["data"] is not None and time.time() - _store_cache["at"] < max_age:
         return _store_cache["data"]
     try:
@@ -114,10 +121,10 @@ def _load(force=False, max_age=10):
         data["_rv"] = (sec.get("metadata") or {}).get("resourceVersion")
     except urllib.error.HTTPError as e:
         if e.code != 404:
-            return _unavailable(e)
+            return _unavailable(e, allow_stale)
         data = {}                       # no Secret yet: genuinely a fresh install
     except Exception as e:
-        return _unavailable(e)
+        return _unavailable(e, allow_stale)
     data.setdefault("users", {})
     data.setdefault("signing_key", "")
     _store_cache.update(at=time.time(), data=data)
@@ -132,15 +139,15 @@ def _save(data):
     if data.get("_rv"):
         body["metadata"]["resourceVersion"] = data["_rv"]
     try:
-        kget(f"/api/v1/namespaces/{NS}/secrets/{SECRET_NAME()}")
-        answer = ksend("PUT", f"/api/v1/namespaces/{NS}/secrets/{SECRET_NAME()}", body)
+        # A missing record must use create, never an unconditional replacement
+        # after another replica has completed setup in the meantime.
+        answer = ksend("PUT" if data.get("_rv") else "POST",
+                      f"/api/v1/namespaces/{NS}/secrets/{SECRET_NAME()}" if data.get("_rv") else f"/api/v1/namespaces/{NS}/secrets", body)
     except urllib.error.HTTPError as e:
         if e.code == 409:
             _store_cache.update(at=0, data=None)
             raise StoreConflict("the accounts were changed elsewhere at the same moment; try again") from None
-        if e.code != 404:
-            raise
-        answer = ksend("POST", f"/api/v1/namespaces/{NS}/secrets", body)
+        raise
     data["_rv"] = ((answer or {}).get("metadata") or {}).get("resourceVersion")
     _store_cache.update(at=time.time(), data=data)
 
@@ -156,6 +163,10 @@ def _signing_key(data=None):
 def internal_signing_key():
     """Key shared only with trusted in-cluster helpers; never returned by HTTP."""
     return _signing_key()
+
+
+def smart_signing_key():
+    return hmac.new(_signing_key(), b"homestead-smart-helper-v1", hashlib.sha256).digest()
 
 
 def review_signing_key():
@@ -202,6 +213,7 @@ def set_role(username, role, acting_as):
         raise PermissionError("cannot demote the only administrator")
     u["role"] = role
     _save(data)
+    SESSIONS.revoke(username)
     return {"ok": True, "user": username, "role": role}
 
 
@@ -230,6 +242,7 @@ def create_user(username, password, first_only=False, role="operator"):
     salt = base64.b64encode(secrets.token_bytes(16)).decode()
     data.setdefault("users", {})[username] = {
         "salt": salt, "hash": _hash(password, salt), "ver": 1, "role": role,
+        "id": secrets.token_urlsafe(24),
         "created": time.strftime("%Y-%m-%d %H:%M"), "last_login": "",
     }
     _signing_key(data)
@@ -247,6 +260,7 @@ def change_password(username, old, new):
     salt = base64.b64encode(secrets.token_bytes(16)).decode()
     u.update(salt=salt, hash=_hash(new, salt), ver=u.get("ver", 1) + 1)
     _save(data)
+    SESSIONS.revoke(username)
     return {"ok": True, "note": "other sessions signed out"}
 
 
@@ -267,26 +281,129 @@ def delete_user(username, acting_as):
     for kid in [k for k, rec in (data.get("api_keys") or {}).items() if rec.get("owner") == username]:
         data["api_keys"].pop(kid)
     _save(data)
+    SESSIONS.revoke(username)
     return {"ok": True}
 
 
 # ------------------------------------------------------------------ rate limit
 def _rate_ok(key, limit=MAX_ATTEMPTS):
-    now = time.time()
-    hits = [t for t in _attempts.get(key, []) if now - t < ATTEMPT_WINDOW]
-    if hits:
-        _attempts[key] = hits
-    else:
-        _attempts.pop(key, None)
-    return len(hits) < limit
+    with _rate_lock:
+        now = time.time()
+        hits = [t for t in _attempts.get(key, []) if now - t < ATTEMPT_WINDOW]
+        if hits:
+            _attempts[key] = hits
+        else:
+            _attempts.pop(key, None)
+        return len(hits) < limit
 
 
 def _rate_hit(key):
-    if len(_attempts) > MAX_TRACKED:
-        # Many addresses at once is an attack in itself; forget the oldest.
-        for stale in sorted(_attempts, key=lambda k: _attempts[k][-1] if _attempts[k] else 0)[:MAX_TRACKED // 2]:
-            _attempts.pop(stale, None)
-    _attempts.setdefault(key, []).append(time.time())
+    with _rate_lock:
+        if len(_attempts) >= MAX_TRACKED and key not in _attempts:
+            raise PermissionError("too many attempts — wait a few minutes")
+        _attempts.setdefault(key, []).append(time.time())
+
+
+def _reserve_attempt(username, addr, shared=True):
+    """Count in-flight attempts before any password work; never evict live limits."""
+    keys = (f"ip:{addr}", f"user:{username}")
+    with _rate_lock:
+        now = time.time()
+        for key in list(_attempts):
+            hits = [t for t in _attempts[key] if now - t < ATTEMPT_WINDOW]
+            if hits:
+                _attempts[key] = hits
+            else:
+                del _attempts[key]
+        if (not _rate_ok(keys[0]) or not _rate_ok(keys[1], MAX_USER_ATTEMPTS) or
+                len(_attempts) + sum(k not in _attempts for k in keys) > MAX_TRACKED):
+            raise PermissionError("too many attempts — wait a few minutes")
+        if shared:
+            _shared_attempt(keys, now, reserve=True)
+        for key in keys:
+            _attempts.setdefault(key, []).append(now)
+    return keys, now, shared
+
+
+def _shared_attempt(keys, stamp, reserve):
+    """Persist admission before hashing so replicas and restarts share the limit."""
+    for attempt in range(4):
+        data = copy.deepcopy(_load(force=True, allow_stale=False))
+        limits = data.setdefault("login_limits", {})
+        now = time.time()
+        for key in list(limits):
+            hits = [t for t in limits[key] if now - t < ATTEMPT_WINDOW]
+            if hits:
+                limits[key] = hits
+            else:
+                del limits[key]
+        hashed = [hashlib.sha256(key.encode()).hexdigest() for key in keys]
+        if reserve:
+            if (len(limits) + sum(k not in limits for k in hashed) > 1000 or
+                    len(limits.get(hashed[0], [])) >= MAX_ATTEMPTS or
+                    len(limits.get(hashed[1], [])) >= MAX_USER_ATTEMPTS):
+                raise PermissionError("too many attempts — wait a few minutes")
+            for key in hashed:
+                limits.setdefault(key, []).append(stamp)
+        else:
+            for key in hashed:
+                hits = limits.get(key, [])
+                if stamp in hits:
+                    hits.remove(stamp)
+                if not hits:
+                    limits.pop(key, None)
+        try:
+            _save(data)
+            return
+        except StoreConflict:
+            continue
+    raise PermissionError("too many attempts — account store is busy; try again")
+
+
+def _release_attempt(reservation):
+    keys, stamp, shared = reservation
+    with _rate_lock:
+        for key in keys:
+            hits = _attempts.get(key, [])
+            if stamp in hits:
+                hits.remove(stamp)
+            if not hits:
+                _attempts.pop(key, None)
+        try:
+            if shared:
+                _shared_attempt(keys, stamp, reserve=False)
+        except (StoreUnavailable, StoreConflict, PermissionError, urllib.error.HTTPError):
+            # Keeping a reservation is conservative; it expires in five minutes.
+            pass
+
+
+def _check_password(username, password, addr, read_only=False):
+    reservation = _reserve_attempt(username, addr, shared=not read_only)
+    if not _password_slots.acquire(blocking=False):
+        _release_attempt(reservation)
+        raise PermissionError("too many attempts — wait a few minutes")
+    try:
+        data = _load(force=True, allow_stale=False)
+        u = data.get("users", {}).get(username)
+        salt = u["salt"] if u else base64.b64encode(b"\0" * 16).decode()
+        calc = _hash(password or "", salt)
+        if not u or not hmac.compare_digest(calc, u["hash"]):
+            raise PermissionError("incorrect username or password")
+        _release_attempt(reservation)
+        return data, u
+    except StoreUnavailable:
+        _release_attempt(reservation)
+        raise
+    finally:
+        _password_slots.release()
+
+
+def _account_id(data, username, user):
+    # Existing records have a unique random password salt. Bind new-format
+    # sessions to it without writing during read-only data-move recovery.
+    return user.get("id") or hmac.new(data["signing_key"].encode(),
+        ("homestead-account-v2:" + username + ":" + user["salt"]).encode(),
+        hashlib.sha256).hexdigest()
 
 
 # ------------------------------------------------------------------ tokens
@@ -295,24 +412,27 @@ def _sign(payload_b64, key):
         hmac.new(key, payload_b64.encode(), hashlib.sha256).digest()).decode().rstrip("=")
 
 
-def issue_token(username, remember=False, started=None):
+def issue_token(username, remember=False, started=None, identity=None):
     """A signed session. `started` carries the original sign-in time forward
     through every refresh, so the absolute window cannot be extended by use."""
     data = _load()
     u = data["users"][username]
+    if identity is not None and identity != (_account_id(data, username, u), u.get("ver", 1)):
+        raise PermissionError("the account changed during sign-in; sign in again")
     now = int(time.time())
-    payload = {"u": username, "v": u.get("ver", 1), "r": u.get("role", "admin"),
+    payload = {"u": username, "v": u.get("ver", 1), "account": _account_id(data, username, u),
+               "format": 2, "r": u.get("role", "admin"),
                "iat": int(started or now), "rem": bool(remember),
                "exp": now + idle_ttl(remember)}
     raw = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
     return f"{raw}.{_sign(raw, _signing_key(data))}"
 
 
-def verify_token(token):
+def verify_token(token, force=False):
     if not token or "." not in token:
         return None
     raw, sig = token.rsplit(".", 1)
-    data = _load()
+    data = _load(force=force, allow_stale=not force)
     if not data.get("signing_key"):
         return None
     if not hmac.compare_digest(sig, _sign(raw, _signing_key(data))):
@@ -321,17 +441,22 @@ def verify_token(token):
         payload = json.loads(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
     except Exception:
         return None
+    if (not isinstance(payload, dict) or payload.get("format") != 2 or
+            not isinstance(payload.get("u"), str) or
+            not isinstance(payload.get("exp"), (int, float)) or
+            not isinstance(payload.get("iat"), (int, float))):
+        return None
     now = time.time()
     if payload.get("exp", 0) < now:
         return None          # idle too long
     remember = bool(payload.get("rem"))
     started = int(payload.get("iat") or 0)
-    # A session from before this field existed is treated as starting now: it
-    # still expires, just on the idle clock it was issued with.
+    # Format-2 tokens always carry their original issue time.
     if started and now - started > ABSOLUTE_TTL:
         return None          # alive too long, however active
     u = data.get("users", {}).get(payload.get("u"))
-    if not u or u.get("ver", 1) != payload.get("v"):
+    if (not u or u.get("ver", 1) != payload.get("v") or
+            payload.get("account") != _account_id(data, payload["u"], u)):
         return None          # password changed or user removed
     window = idle_ttl(remember)
     # role is re-read from the store, never trusted from the token, so a
@@ -344,20 +469,15 @@ def verify_token(token):
 
 def login(username, password, addr, remember=False):
     username = (username or "").strip().lower()
-    if not _rate_ok(f"ip:{addr}") or not _rate_ok(f"user:{username}", MAX_USER_ATTEMPTS):
-        raise PermissionError("too many attempts — wait a few minutes")
-    data = _load(force=True)
+    data, u = _check_password(username, password, addr)
+    identity = (_account_id(data, username, u), u.get("ver", 1))
+    data = copy.deepcopy(_load(force=True, allow_stale=False))
     u = data.get("users", {}).get(username)
-    # do the work either way so a missing user is not faster than a wrong password
-    salt = u["salt"] if u else base64.b64encode(b"\0" * 16).decode()
-    calc = _hash(password or "", salt)
-    if not u or not hmac.compare_digest(calc, u["hash"]):
-        _rate_hit(f"ip:{addr}")
-        _rate_hit(f"user:{username}")
-        raise PermissionError("incorrect username or password")
+    if not u or identity != (_account_id(data, username, u), u.get("ver", 1)):
+        raise PermissionError("the account changed during sign-in; sign in again")
     u["last_login"] = time.strftime("%Y-%m-%d %H:%M")
     _save(data)
-    return issue_token(username, remember=remember)
+    return issue_token(username, remember=remember, identity=identity)
 
 
 def login_read_only(username, password, addr, remember=False):
@@ -365,16 +485,8 @@ def login_read_only(username, password, addr, remember=False):
     must still be able to sign in to give the move up. The last sign-in time
     is not recorded; attempts are limited as always (they are kept in memory)."""
     username = (username or "").strip().lower()
-    if not _rate_ok(f"ip:{addr}") or not _rate_ok(f"user:{username}", MAX_USER_ATTEMPTS):
-        raise PermissionError("too many attempts — wait a few minutes")
-    u = _load(force=True).get("users", {}).get(username)
-    salt = u["salt"] if u else base64.b64encode(b"\0" * 16).decode()
-    calc = _hash(password or "", salt)
-    if not u or not hmac.compare_digest(calc, u["hash"]):
-        _rate_hit(f"ip:{addr}")
-        _rate_hit(f"user:{username}")
-        raise PermissionError("incorrect username or password")
-    return issue_token(username, remember=remember)
+    data, u = _check_password(username, password, addr, read_only=True)
+    return issue_token(username, remember=remember, identity=(_account_id(data, username, u), u.get("ver", 1)))
 
 
 def logout_everywhere(username):
@@ -383,4 +495,5 @@ def logout_everywhere(username):
     if u:
         u["ver"] = u.get("ver", 1) + 1
         _save(data)
+        SESSIONS.revoke(username)
     return {"ok": True}

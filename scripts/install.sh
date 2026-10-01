@@ -56,7 +56,7 @@
 set -u
 
 RAW="https://raw.githubusercontent.com/wjcloudy/homestead"
-REF="${HOMESTEAD_REF:-main}"
+REF="${HOMESTEAD_REF:-v2.8.291}"
 DRY=0
 DIST=k3s
 ROLE=""
@@ -85,6 +85,13 @@ while [ $# -gt 0 ]; do
     *) printf 'Unknown option: %s (see --help)\n' "$1" >&2; exit 2 ;;
   esac
 done
+
+# Every staged script, manifest and dialog file belongs to this invocation.
+WORK_TMP=$(mktemp -d "${TMPDIR:-/tmp}/homestead.XXXXXXXX") || exit 1
+chmod 700 "$WORK_TMP" || exit 1
+trap '[ -n "$WORK_TMP" ] && [ -d "$WORK_TMP" ] && rm -rf -- "$WORK_TMP"' 0
+trap 'exit 130' INT
+trap 'exit 143' HUP TERM
 
 # ------------------------------------------------------------------ output
 say() { printf '\n==> %s\n' "$*"; }
@@ -368,7 +375,7 @@ CDI_VERSION=$(given HS_CDI_VERSION); CDI_NOTE=""
 HS_RELEASE=$(given HS_VERSION); HS_NOTE=""
 [ -z "$HS_RELEASE" ] && [ "$REF" != main ] && HS_RELEASE="${REF#v}"
 HS_RELEASE="${HS_RELEASE#v}"
-VCACHE="${TMPDIR:-/tmp}/homestead-releases.$$"
+VCACHE="$WORK_TMP/releases"
 
 fetch() { curl -sfL --max-time 15 "$1" 2>/dev/null; }
 newest_first() { sed 's/^v//' | sort -t. -k1,1nr -k2,2nr -k3,3nr | sed 's/^/v/'; }
@@ -585,8 +592,8 @@ LOG=/var/log/homestead-install.log
 progress() { # title stages command...
   title="$1"; stages="$2"; shift 2
   if [ "$UI" = text ] || [ "$DRY" = 1 ]; then run "$@"; return; fi
-  : > "$LOG" 2>/dev/null || LOG=/tmp/homestead-install.log
-  status=/tmp/homestead-install.status
+  : > "$LOG" 2>/dev/null || LOG="$WORK_TMP/install.log"
+  status="$WORK_TMP/install.status"
   rm -f "$status"
   { "$@" > "$LOG" 2>&1; echo $? > "$status"; } &
   job=$!
@@ -605,8 +612,8 @@ progress() { # title stages command...
   wait "$job" 2>/dev/null
   code=$(cat "$status" 2>/dev/null || echo 1)
   if [ "$code" != 0 ]; then
-    tail -n 40 "$LOG" > /tmp/homestead-install.tail 2>/dev/null
-    "$BOX" --title "Installation Failed" --scrolltext --textbox /tmp/homestead-install.tail 24 100 < "$TTY" > "$TTY" 2>&1
+    tail -n 40 "$LOG" > "$WORK_TMP/install.tail" 2>/dev/null
+    "$BOX" --title "Installation Failed" --scrolltext --textbox "$WORK_TMP/install.tail" 24 100 < "$TTY" > "$TTY" 2>&1
     fail "Installation failed. The full log is in $LOG."
   fi
 }
@@ -614,8 +621,8 @@ progress() { # title stages command...
 # ------------------------------------------------------------------ bootstrap
 bootstrap() { # stages, then args for bootstrap-k3s.sh
   stages="$1"; shift
-  script=/tmp/homestead-bootstrap-k3s.sh
-  run curl -sfL "$RAW/$REF/scripts/bootstrap-k3s.sh" -o "$script" || fail "Could not download bootstrap-k3s.sh."
+  script="$WORK_TMP/bootstrap-k3s.sh"
+  run curl -sfL --connect-timeout 10 --max-time 120 "$RAW/$REF/scripts/bootstrap-k3s.sh" -o "$script" || fail "Could not download bootstrap-k3s.sh."
   progress "Installing" "$stages" sh "$script" "$@" || fail "Installation failed. See the output above."
 }
 
@@ -632,7 +639,7 @@ console_line() { [ "${CONSOLE:-yes}" = yes ] && echo "Status screen on tty1 (exi
 
 install_console() {
   # Use a private directory: the installer runs as root on multi-user hosts.
-  if [ "$DRY" = 1 ]; then console_tmp=/tmp/homestead-console-dry-run
+  if [ "$DRY" = 1 ]; then console_tmp="$WORK_TMP/console-dry-run"
   else console_tmp=$(mktemp -d) || return 1; fi
   console_action=enable
   [ "${CONSOLE:-yes}" = yes ] || console_action=disable
@@ -904,9 +911,9 @@ flow_harvester() {
   Storage class        $class
   Namespace            lab" homestead
   say "Installing Homestead"
-  manifest=/tmp/homestead-deploy.yaml
+  manifest="$WORK_TMP/deploy.yaml"
   ref="$REF"; [ -n "$HS_RELEASE" ] && ref="v$HS_RELEASE"
-  run curl -sfL "$RAW/$ref/deploy/deploy.yaml" -o "$manifest" || fail "Could not download the Homestead manifest."
+  run curl -sfL --connect-timeout 10 --max-time 120 "$RAW/$ref/deploy/deploy.yaml" -o "$manifest" || fail "Could not download the Homestead manifest."
   run sed -i -e "s/192\\.0\\.2\\.242/$vip/g" -e "s/longhorn-r2/$class/g" \
     -e "s/accessModes: \\[ReadWriteMany\\]/accessModes: [ReadWriteOnce]/" "$manifest"
   # shellcheck disable=SC2086
@@ -926,8 +933,8 @@ Next steps: reserve addresses for applications under Networking > Your VIPs, and
 # ------------------------------------------------------------------ doctor prompts
 DLOG=/var/log/homestead-doctor.log
 DMODE=menu
-FOUND=$(mktemp 2>/dev/null || echo /tmp/homestead-doctor.$$)
-trap 'rm -rf "$FOUND" "$VCACHE"' EXIT
+FOUND="$WORK_TMP/doctor"
+: > "$FOUND"
 logline() { { printf '%s %s\n' "$(date '+%F %T' 2>/dev/null)" "$*" >> "$DLOG"; } 2>/dev/null || true; }
 confirm() { # title text -> 0 for yes
   [ "$DMODE" = fix ] && return 0

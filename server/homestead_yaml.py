@@ -469,7 +469,44 @@ class _Parser:
 
 def loads(source):
     """Parse one YAML document. Raises YamlError with the line it is about."""
-    return _Parser(source or "").document()
+    if len(source or "") > 8 * 1024 * 1024:
+        raise YamlError("YAML document is too large")
+    try:
+        value = _Parser(source or "").document()
+    except RecursionError:
+        raise YamlError("YAML nesting is too deep") from None
+    bounded(value)
+    return value
+
+
+def bounded(value, max_nodes=100000, max_bytes=8 * 1024 * 1024, max_depth=64):
+    """Measure expanded aliases without expanding them; reject cycles and depth."""
+    memo, visiting = {}, set()
+    def cost(item, depth):
+        if depth > max_depth:
+            raise YamlError("YAML nesting is too deep")
+        if not isinstance(item, (dict, list)):
+            return 1, len(str(item).encode("utf-8")) + 8, 0
+        key = id(item)
+        if key in visiting:
+            raise YamlError("cyclic YAML aliases are not supported")
+        if key in memo:
+            nodes, size, height = memo[key]
+            if depth + height > max_depth:
+                raise YamlError("YAML nesting is too deep")
+            return nodes, size, height
+        visiting.add(key)
+        nodes, size, height = 1, 8, 0
+        entries = (part for pair in item.items() for part in pair) if isinstance(item, dict) else iter(item)
+        for child in entries:
+            n, b, h = cost(child, depth + 1)
+            nodes, size, height = nodes + n, size + b, max(height, h + 1)
+            if nodes > max_nodes or size > max_bytes:
+                raise YamlError("expanded YAML exceeds the size limit")
+        visiting.remove(key)
+        memo[key] = nodes, size, height
+        return memo[key]
+    cost(value, 0)
 
 
 def untab(source):
@@ -585,4 +622,5 @@ def dump(value):
     """YAML for plain data - maps, lists, strings, numbers, booleans, null - in
     the block style kubectl prints, and that loads() reads back to the same
     data."""
+    bounded(value)
     return _dump(value, 0) + "\n"

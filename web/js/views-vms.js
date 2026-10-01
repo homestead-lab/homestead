@@ -486,7 +486,7 @@ window.vmEdit = async (ns, name) => {
       <div class="note small" style="margin-top:8px"><b>Direct LAN interface</b><p>A bridge/VLAN interface gets its IP from the LAN's DHCP server or the guest OS. The MAC field only identifies the NIC: it does not set an IP. For a stable guest IP, reserve the MAC in your DHCP server or configure networking inside the guest. Cloud-init network data is for initial provisioning and may not rerun on an existing VM.</p></div></div>
     <div class="ve-pane" data-pane="devices" hidden style="margin-top:12px">${window.vmDevicesPane ? window.vmDevicesPane(v, res) : ""}</div>
     <div class="ve-pane" data-pane="cloud" hidden style="margin-top:12px">
-      ${ci.source === "unreadable" ? `<div class="note bad">This VM's cloud-init is in a secret Homestead cannot read, so it is left as it is.</div>` : `
+      ${v.sensitive_hidden ? `<div class="note">An administrator can view and edit cloud-init. It is preserved when you save other changes.</div>` : ci.source === "unreadable" ? `<div class="note bad">This VM's cloud-init is in a secret Homestead cannot read, so it is left as it is.</div>` : `
       ${ci.source === "secret" ? '<div class="dim xs" style="margin-bottom:8px">Kept in the VM\'s own secret, as Harvester does.</div>' : ""}
       <div class="f"><label>User data</label><textarea id="ve_user" class="mono helm-values" spellcheck="false" placeholder="#cloud-config">${esc(ci.user_data || "")}</textarea></div>
       <div class="f"><label>Network data</label><textarea id="ve_netdata" class="mono helm-values" spellcheck="false" style="min-height:90px" placeholder="optional">${esc(ci.network_data || "")}</textarea></div>

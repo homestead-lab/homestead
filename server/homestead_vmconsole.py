@@ -19,6 +19,7 @@ import threading
 import urllib.parse
 
 import homestead_console as WS
+import homestead_sessions as SESSIONS
 
 KINDS = {"vnc": "vnc", "serial": "console"}
 MAX_FRAME = 16 * 1024 * 1024
@@ -94,6 +95,9 @@ class VmConsole:
             return handler._send(403, {"error": "console websocket origin rejected"})
         offered = [p.strip() for p in (handler.headers.get("Sec-WebSocket-Protocol") or "").split(",") if p.strip()]
 
+        authorize = handler._console_authorizer("operator")
+        if not authorize():
+            raise PermissionError("console session is no longer authorized")
         upstream = self.proxy.connect_upstream(subresource_path(namespace, name, kind), protocol="plain.kubevirt.io")
         handler.send_response(101, "Switching Protocols")
         handler.send_header("Upgrade", "websocket")
@@ -104,11 +108,13 @@ class VmConsole:
             handler.send_header("Sec-WebSocket-Protocol", "binary")
         handler.end_headers()
         handler.close_connection = True
+        handler.connection.settimeout(None)
 
         session = secrets.token_hex(8)
         base = {"session": session, "user": user, "namespace": namespace, "vm": name, "console": kind}
         WS.audit(self.proxy.data_dir, {**base, "event": "start"})
         stopped = threading.Event()
+        SESSIONS.watch(user, authorize, stopped, handler.connection, upstream)
         browser_lock, upstream_lock = threading.Lock(), threading.Lock()
         reason = "closed"
         serial = kind == "serial"

@@ -15,6 +15,8 @@ import threading
 import time
 import urllib.parse
 import homestead_shared as SHARED
+import homestead_host_access as HOSTACCESS
+import homestead_sessions as SESSIONS
 
 
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -149,6 +151,7 @@ class ConsoleProxy:
 
     def validate_pod(self, namespace, pod, container):
         obj = self.kget(f"/api/v1/namespaces/{namespace}/pods/{pod}")
+        HOSTACCESS.require_target(obj, namespace)
         names = {x.get("name") for x in (obj.get("spec", {}).get("containers", []) or [])}
         if container not in names:
             raise ValueError("container does not exist in this pod")
@@ -199,6 +202,9 @@ class ConsoleProxy:
         if not origin or urllib.parse.urlparse(origin).netloc.lower() != host.lower():
             return handler._send(403, {"error": "console websocket origin rejected"})
 
+        authorize = handler._console_authorizer("admin" if node else "operator")
+        if not authorize():
+            raise PermissionError("console session is no longer authorized")
         upstream = self.connect_upstream(exec_path(namespace, pod, container, shell))
         handler.send_response(101, "Switching Protocols")
         handler.send_header("Upgrade", "websocket")
@@ -206,6 +212,7 @@ class ConsoleProxy:
         handler.send_header("Sec-WebSocket-Accept", accept_value(key))
         handler.end_headers()
         handler.close_connection = True
+        handler.connection.settimeout(None)
 
         session = secrets.token_hex(8)
         base = {"session": session, "user": user, "namespace": namespace,
@@ -214,6 +221,7 @@ class ConsoleProxy:
             base["node"] = node["node"]
         audit(self.data_dir, {**base, "event": "start"})
         stopped = threading.Event()
+        SESSIONS.watch(user, authorize, stopped, handler.connection, upstream)
         browser_lock = threading.Lock()
         upstream_lock = threading.Lock()
         reason = "closed"

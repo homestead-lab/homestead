@@ -32,6 +32,9 @@ FAR = textwrap.dedent("""
         {"id": "loft1", "handle": "loft", "name": "Loft", "url": "http://127.0.0.1:1"},
         {"id": "shed1", "handle": "shed", "name": "Shed", "url": "http://127.0.0.1:1"}]}
     server.FLEET._load = lambda fresh=False: (state, base64.b64decode(sys.argv[2]))
+    # Replay-store persistence is exercised separately with a fake Kubernetes
+    # store; this process tests HTTP identity/role forwarding without a cluster.
+    server.FLEET._claim_nonce = lambda sender, nonce: None
     # The one route this test posts to: it says what arrived, and from whom.
     server.FLEET.set_address = lambda url: {"ok": True, "url": url}
     # No Kubernetes here: its name and its accounts, as a cluster would say.
