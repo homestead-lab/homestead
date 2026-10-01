@@ -957,7 +957,7 @@ window.imageChangeWords = imageChangeWords;
 /* The same warning for several apps is said once, with the apps it is about. */
 function groupedConcerns(rows) {
   const byText = new Map();
-  rows.forEach(({config, preview}) => (preview.capacity.warnings || []).forEach(text => {
+  rows.forEach(({config, preview}) => (preview.capacity.blocked ? preview.capacity.warnings || [] : capacityNotes(preview.capacity).concerns).forEach(text => {
     if (!byText.has(text)) byText.set(text, []);
     byText.get(text).push(config.name);
   }));
@@ -1011,12 +1011,12 @@ async function reviewImageActions(items, action = "update") {
     const list = concerns.length ? `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : "";
     // One line per app: its name, and what its image moves from and to.
     const apps = rows.map(({config, preview}) => {
-      const flagged = preview.capacity.blocked || (preview.capacity.warnings || []).length;
+      const flagged = preview.capacity.blocked || capacityNotes(preview.capacity).concerns.length;
       const change = preview.images.map(i => `<span class="upd-change" title="${esc(i.before)} → ${esc(i.after)}">${preview.images.length > 1 ? `${esc(i.container)} ` : ""}${(([was, now]) => `<code>${esc(was)}</code> → <code>${esc(now)}</code>`)(imageChangeWords(i.before, i.after, i.before_tag, i.after_tag))}</span>`).join("");
       return `<li><span class="upd-name">${flagged ? `<span class="upd-flag ${preview.capacity.blocked ? "bad" : "warn"}" title="See the notes above">!</span>` : ""}<b>${esc(config.name)}</b> <span class="dim">${config.clusterName ? `${esc(config.clusterName)} · ` : ""}${esc(config.ns)}</span></span>${change}</li>`;
     }).join("");
     $("#mbody").innerHTML = `<div class="update-review ui-stack">
-      <p class="ui-lead">${many ? `One at a time, Homestead last. ` : ""}${many ? "Each restarts" : "It restarts"} while it changes${rollback ? `, back to the image ${many ? "each" : "it"} ran before` : ""}.</p>
+      <p class="ui-lead">${many ? "Apps update one at a time, with Homestead last. " : ""}${items.some(restartsHomestead) ? "Homestead will be briefly unavailable while it restarts. " : ""}${many ? "Each app restarts" : "The app restarts"} to ${rollback ? "return to its previous image" : "use the new image"}.</p>
       ${blocked ? UI.callout("bad", "Placement blocks this change.", `${list}<p>Resolve the placement blockers before starting.</p>`)
         : concerns.length ? UI.callout("warn", "", list) : ""}
       <ul class="upd-apps">${apps}</ul>
@@ -1599,16 +1599,34 @@ const CAPACITY_ROUTINE = [
   /^memory is not limited for vm-launcher-estimate$/, /^unrecognised\/injected helpers, admission defaults/,
   /^Image import\/provisioning may start before the guest/, /^If a later step fails, created images/,
 ];
+const CAPACITY_ROLLOUT_ROUTINE = [
+  /^updated pod estimates include every container, not only the added container$/,
+  /^post-stop capacity assumes old pods have fully terminated and released ports and volumes; termination and storage detach are not guaranteed$/,
+  /^live RAM still includes old pods; it is not subtracted from the conservative projection$/,
+  /^RollingUpdate permits \d+ extra pod\(s\) and \d+ unavailable replica\(s\); terminating pods can extend the overlap$/,
+  /^intermediate rolling-update placement and readiness are not fully simulated; a fitting first pod is not a completion guarantee$/,
+];
+function capacityNoteWords(text) {
+  if (text.startsWith("memory is not limited for ")) return `No memory limit is set for: ${text.slice("memory is not limited for ".length)}. Memory use can exceed this estimate.`;
+  if (text.startsWith("updated pod estimates include every container")) return "The estimate covers all containers in the updated pod, including initialization.";
+  if (text.startsWith("post-stop capacity assumes")) return "Capacity becomes available after old pods stop and release their ports and volumes. Storage detach may take longer.";
+  if (text.startsWith("live RAM still includes old pods")) return "Live memory usage still includes the old pods, so the estimate keeps that usage until they stop.";
+  if (text.startsWith("intermediate rolling-update placement")) return "The check covers starting the rollout. Later placement and readiness can still delay completion.";
+  const rolling = text.match(/^RollingUpdate permits (\d+) extra pod\(s\) and (\d+) unavailable replica\(s\);/);
+  if (rolling) return `The rollout allows ${rolling[1]} extra pod(s) and ${rolling[2]} unavailable replica(s). Pods still stopping can temporarily increase the total.`;
+  return text;
+}
 function capacityNotes(plan) {
   const warnings = plan?.warnings || [];
   const planned = new Set(warnings.map(w => (w.match(/^PVC (\S+) is planned, not provisioned/) || [])[1]).filter(Boolean));
   const creating = plan?.vm?.action === "create";
   const routine = w => CAPACITY_ROUTINE.some(re => re.test(w))
+    || (plan?.rollout && CAPACITY_ROLLOUT_ROUTINE.some(re => re.test(w)))
     // A claim this review makes is unbound until it is made.
     || planned.has((w.match(/^PVC (\S+) is not bound; provisioning and topology need review$/) || [])[1])
     // A new VM has no TPM or EFI state to keep.
     || (creating && /^No persisted TPM\/EFI\/CBT state was found/.test(w));
-  return { concerns: warnings.filter(w => !routine(w)), caveats: warnings.filter(routine) };
+  return { concerns: warnings.filter(w => !routine(w)).map(capacityNoteWords), caveats: warnings.filter(routine).map(capacityNoteWords) };
 }
 window.capacityNotes = capacityNotes;
 
@@ -1637,7 +1655,7 @@ function deployCapacityHtml(plan, overlap = false, imageChange = false) {
         reserved: plan.rollout ? "Reserved RAM after planned termination" : "Reserved RAM", placement: plan.placement }),
     ].join(""))}
     ${UI.more("How this is estimated", `${rollout}
-      ${caveats.length && !plan.blocked ? `<p>What it cannot check yet, as for any new ${plan.vm ? "VM" : "workload"}:</p><ul class="ui-list">${caveats.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
+      ${caveats.length && !plan.blocked ? `<p>Estimate assumptions:</p><ul class="ui-list">${caveats.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
       ${!overlap && !plan.blocked ? "<p>Capacity warnings can be overridden, including high projected RAM and missing usage metrics. Proceeding may cause memory pressure, OOM restarts or downtime; it does not change resource requests or limits.</p>" : ""}
       <p>This is a snapshot, not a reservation or an OOM guarantee. ${plan.vm ? "The server checks again before sending the VM action. Guest readiness and successful rescheduling are not guaranteed." : imageChange ? "The server checks again before changing the workload or its recovery metadata." : "The server checks again before creating anything. Planned volumes have not been provisioned."}</p>`, !!plan.blocked)}
     ${plan.rollout?.overlap ? UI.more(`Overlap while old pods remain${plan.rollout.start_blocked ? " - rollout cannot start" : ""}`, deployCapacityHtml(plan.rollout.overlap, true), !!plan.rollout.start_blocked) : ""}

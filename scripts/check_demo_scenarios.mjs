@@ -25,6 +25,22 @@ try {
     assert.equal(await page.getByRole("img", { name: /^Registry check unavailable:/ }).count(), scenario === "healthy" ? 0 : 1);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.screenshot({ path: `release-assets/scenarios/${scenario}-containers-${width}.png`, fullPage: true });
+    await page.evaluate(() => go("vms"));
+    await page.locator("#views h2").filter({ hasText: /^Virtual machines$/ }).waitFor();
+    await page.waitForFunction(() => STATE.data.vms?.length);
+    assert.equal(await page.locator("#views").getByText("ErrorUnschedulable", { exact: true }).count(), scenario === "healthy" ? 0 : 1);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.screenshot({ path: `release-assets/scenarios/${scenario}-vms-${width}.png`, fullPage: true });
+    await page.evaluate(() => vmOpen("lab", "ubuntu-test"));
+    await page.locator("#mbody .vm-facts").waitFor();
+    assert.equal(await page.locator("#mbody .note.bad").count(), scenario === "healthy" ? 0 : 1);
+    assert.equal(await page.locator("#mbody").getByText("ErrorUnschedulable", { exact: true }).count(), scenario === "healthy" ? 0 : 1);
+    if (scenario === "healthy") {
+      await page.locator("#mbody").getByText("Stopped", { exact: true }).waitFor();
+      await page.locator("#mbody .vm-facts").getByText("4Gi", { exact: true }).waitFor();
+    }
+    await page.screenshot({ path: `release-assets/scenarios/${scenario}-vm-detail-${width}.png`, fullPage: true });
+    await page.evaluate(() => closeModal());
     if (scenario === "healthy") {
       await page.evaluate(() => { go("network"); networkTab("ip"); });
       await page.locator(".ipam-table").waitFor();

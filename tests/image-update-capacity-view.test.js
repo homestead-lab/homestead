@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const updateState = require("../web/js/update-state.js");
 
-function setup({blocked = false, fail = "", missing = false} = {}) {
+function setup({blocked = false, fail = "", missing = false, capacity = null} = {}) {
   const sent = [], fields = {"#imageCapacityApprove": {checked:false}, "#imageCapacityApply": {},
     "#modal": {classList:{contains:()=>false}}};
   const ctx = {console, URLSearchParams, Map, Date, Promise, encodeURIComponent,
@@ -21,7 +21,7 @@ function setup({blocked = false, fail = "", missing = false} = {}) {
     api:async (path, options)=>{
       const body = options ? JSON.parse(options.body) : null;
       sent.push({path,body});
-      if(path.endsWith("/preview")) return {capacity: missing ? null : {blocked, warnings:["High RAM"], candidates:[]},
+      if(path.endsWith("/preview")) return {capacity: missing ? null : capacity || {blocked, warnings:["High RAM"], candidates:[]},
         capacity_token:"signed-"+body.name,images:[{container:"app",before:"old",after:"new@digest",rollback:"old@digest"}]};
       if(path.includes("/progress")) {
         if(fail==="contact") throw new Error("connection lost");
@@ -51,6 +51,30 @@ test("single update requires preview and acknowledgement; exact token is submitt
   assert.equal(applied.confirm_capacity,true);
   await t.ctx.imageReviewedApply();
   assert.equal(t.sent.filter(s=>s.path.endsWith("/apply")).length,1,"consumed review cannot be replayed");
+});
+
+test("routine rollout estimates stay in details while actual memory risks remain visible", async () => {
+  const warnings = [
+    "updated pod estimates include every container, not only the added container",
+    "post-stop capacity assumes old pods have fully terminated and released ports and volumes; termination and storage detach are not guaranteed",
+    "live RAM still includes old pods; it is not subtracted from the conservative projection",
+    "RollingUpdate permits 1 extra pod(s) and 0 unavailable replica(s); terminating pods can extend the overlap",
+    "intermediate rolling-update placement and readiness are not fully simulated; a fitting first pod is not a completion guarantee",
+  ];
+  for (const extra of [[], ["memory is not limited for data-permissions"], ["projected RAM reaches 95% (warning at 88%)"]]) {
+    const t = setup({capacity: {blocked:false, warnings:[...warnings, ...extra], candidates:[],
+      rollout:{strategy:"RollingUpdate", replicas:1, ownership_known:true, owned_pods:["old-pod"], release_request_gb:0.1, max_surge:1, max_unavailable:0}}});
+    await t.ctx.imageUpdateReview("lab", "homestead");
+    const html = t.fields["#mbody"].innerHTML;
+    const visible = html.split('<details')[0];
+    assert.doesNotMatch(visible, /post-stop capacity|updated pod estimates|live RAM still|intermediate rolling|RollingUpdate permits/);
+    assert.match(html, /Capacity becomes available after old pods stop/);
+    assert.match(html, /Homestead will be briefly unavailable/);
+    assert.equal(visible.includes("upd-flag"), !!extra.length);
+    if (extra[0]?.startsWith("memory")) assert.match(visible, /No memory limit is set for: data-permissions/);
+    if (extra[0]?.startsWith("projected")) assert.match(visible, /projected RAM reaches 95%/);
+    assert.equal(t.ctx.imageReviewReady(), false, "restart acknowledgement remains required");
+  }
 });
 test("blocked or missing plans cannot be forced through with a checkbox",async()=>{
   for(const options of [{blocked:true},{missing:true}]){
