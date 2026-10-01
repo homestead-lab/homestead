@@ -1017,6 +1017,7 @@ ssh_pwauth: true
       const policy = v.run_strategy || "Halted";
       return {capacity_token:"demo-vm-power-review", capacity:{blocked:false, requires_confirmation:true,
         additional:1, pod_request_gb:guest, pod_memory_gb:guest + 0.25, pod_cpu_request_percent:20,
+        placement:{pinned:null,preferred:null,resident:body.action === "unpause" ? v.node || "homestead-01" : null},
         vm:{action:body.action, guest_memory_gb:guest, request_is_lower_bound:body.action !== "unpause",
           policy_before:policy, policy_after:body.action === "start" && policy === "Halted" ? "Always" : policy},
         warnings:["Demo estimates only: launcher overhead, storage attachment and actual guest readiness need live checks."],
@@ -1357,7 +1358,9 @@ ssh_pwauth: true
           { title: "k3s-lab-agent-1 · agent · 192.0.2.61", text: "[  OK  ] Started cloud-final.service - Cloud-init: Final Stage.\n[INFO]  Finding release for channel stable\n==> waiting for https://192.0.2.60:6443 to answer", note: "" },
           { title: "k3s-lab-agent-2 · agent · 192.0.2.62", text: "", note: "the VM is not running yet" }]
           : op.kind === "reclass" ? [{ title: "Copy and check", text: "==> copying 20.0 GiB\n  10,737,418,240  52%   96.40MB/s    0:01:50", note: "" }]
-          : op.kind === "unraid-vm-import" ? [{ title: "Disk 1 · copy", text: "curl: (22) The requested URL returned error: 413\n0\nHSVM-FAILED Disk stream or CDI upload exited with status 22", note: "Saved before cleanup" },
+          : op.kind === "unraid-vm-import" ? [{ title: "Disk 1 · copy", kind:"disk-copy",
+            progress:{percent:0,bytes:0,total_bytes:20000000000,bytes_per_second:null,eta_seconds:null},
+            text: "curl: (22) The requested URL returned error: 413\n0.0% · 0.0 / 20.0 GB · ETA estimating\nHSVM-FAILED Disk stream or CDI upload exited with status 22", note: "Saved before cleanup" },
             { title: "Disk 1 · CDI upload", text: "Upload rejected: No space left on device", note: "Saved before cleanup" }] : [] };
     },
     "/api/operations/cancel": (url, init) => {
