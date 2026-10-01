@@ -1,7 +1,8 @@
 # Settings
 
 Settings has eight sections: seven that change the cluster for everyone, and
-**You**, which is yours and this browser's. The top bar's gear opens **You**.
+**You**, which is yours and this browser's. The desktop top bar's gear opens
+**You**; on a phone, open Settings from **More** or your account icon.
 
 | Section | What is there |
 |---|---|
@@ -20,6 +21,18 @@ saved asks first. Settings with many fields - MQTT, UniFi, the update window,
 the App Store catalogue - open in a dialog of their own.
 
 ![Settings - Cluster](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-settings-cluster.jpg)
+
+## Refresh on a phone
+
+The top bar's refresh button updates the current page without reloading the
+app. In an installed app, pull down at the top of the page until **Release to
+refresh** appears, then let go. Ordinary browser tabs keep their browser's
+pull-to-refresh. Tables with their own scrolling, editors and consoles keep
+their gestures. App refresh pauses while a dialog or form page is open, or
+settings have changes not saved.
+
+For a full reload, choose **More → Reload app**. Unsaved settings, open dialogs
+and form pages ask before reloading; a full reload disconnects open consoles.
 
 ## Setup guide
 
