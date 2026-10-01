@@ -1,5 +1,6 @@
 import base64, json, sys, unittest, urllib.error
 from pathlib import Path
+from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_imports as imports
 import homestead_k3scluster as K3S
@@ -57,6 +58,20 @@ class StaticAddressTests(unittest.TestCase):
         self.assertEqual("secret-1", owner["metadata"]["uid"])
         self.assertEqual("10", owner["metadata"]["resourceVersion"])
 
+    def test_the_default_k3s_image_is_rendered_with_uefi_on_both_platforms(self):
+        with mock.patch.object(K3S, "check", return_value=""):
+            cfg = K3S.prepare(K3sClusterTests.CFG)["configs"][0]
+        for harvester in (False, True):
+            with self.subTest(harvester=harvester):
+                built = imports.prepare_vm(cfg, {"harvester": harvester, "cdi": True})
+                domain = built["vm"]["spec"]["template"]["spec"]["domain"]
+                self.assertEqual({"efi": {"secureBoot": False}}, domain["firmware"]["bootloader"])
+                if harvester:
+                    self.assertEqual(K3S.UBUNTU, built["downloads"][0]["url"])
+                else:
+                    self.assertEqual(K3S.UBUNTU, built["vm"]["spec"]["dataVolumeTemplates"][0]["spec"]["source"]["http"]["url"])
+                self.assertEqual([], self.sent)
+
     def test_the_pod_network_cannot_have_an_address_of_its_own(self):
         with self.assertRaisesRegex(ValueError, r"LAN network \(bridged\)"):
             self.create(static_ip={"address": "192.0.2.60", "prefix": 24})
@@ -91,6 +106,29 @@ class K3sClusterTests(unittest.TestCase):
                           ("k3s-demo-agent-2", "agent", "192.0.2.62")],
                          [(n["name"], n["role"], n["address"]) for n in plan["nodes"]])
         self.assertEqual("http://192.0.2.60:8088", plan["url"])
+
+    def test_default_nodes_use_the_released_ubuntu_26_04_1_minimal_image_and_uefi(self):
+        expected = ("https://cloud-images.ubuntu.com/minimal/releases/resolute/release-20260827/"
+                    "ubuntu-26.04-minimal-cloudimg-amd64.img")
+        for setup in K3S.SETUPS:
+            for supplied in ({}, {"image_url": expected}):
+                with self.subTest(setup=setup, supplied=supplied):
+                    built = K3S.prepare(dict(self.CFG, setup=setup, **supplied))
+                    self.assertEqual(3, len(built["configs"]))
+                    for cfg in built["configs"]:
+                        self.assertEqual(expected, cfg["image_url"])
+                        self.assertEqual("", cfg["image_id"])
+                        self.assertEqual({"firmware": "uefi", "secure_boot": False}, cfg["hardware"])
+                        self.assertIn("qemu-guest-agent, curl", cfg["cloud_init"])
+
+    def test_explicit_cluster_image_choices_are_preserved(self):
+        for choice in ({"image_url": "https://example.test/custom.img"},
+                       {"image_id": "images/my-ubuntu", "image_url": K3S.UBUNTU}):
+            with self.subTest(choice=choice):
+                for cfg in K3S.prepare(dict(self.CFG, **choice))["configs"]:
+                    self.assertEqual(choice.get("image_id", ""), cfg["image_id"])
+                    self.assertEqual("" if choice.get("image_id") else choice["image_url"], cfg["image_url"])
+                    self.assertNotIn("hardware", cfg)
 
     def test_the_plan_refuses_what_cannot_work(self):
         for change, pattern in (({"servers": 2}, "one server, or three"),

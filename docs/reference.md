@@ -762,6 +762,12 @@ old approval stays consumed, and a new change requires its own review. Until
 inspection resolves tracking, another reviewed save/start/restart/resume for that
 VM is blocked; emergency stop remains available independently.
 
+New k3s clusters default to the Ubuntu 26.04.1 LTS minimal amd64 cloud image,
+using Canonical's released `20260827` build with UEFI firmware. The browser and
+API use the same default; cached images remain available for explicit selection.
+An existing Ubuntu image does not override the default merely because of its name.
+Other image URLs and Harvester image choices retain their existing boot defaults.
+
 New reviewed k3s VM batches use the same journal across all their resource writes.
 **Inspect batch outcome** lists every planned VM (including ones never sent),
 plus the image, Secret and claim targets that were attempted. Confirm the batch
