@@ -1596,32 +1596,6 @@ html[data-theme="light"] .compose-editor{background:#fff}
   .ipam-bulk select,.ipam-bulk input{flex:1 1 40%;min-width:0}
 }
 
-/* Containers as rows on a phone: the name and where it runs, then its state
-   and usage under the name, with the actions at the right edge of every row.
-   A stopped row with nothing to report is its name alone. The image and
-   ports are in the card view and the container's own dialogs. */
-@media(max-width:560px){
-  .tbl.stack.wltable tr{display:grid;grid-template-columns:28px auto auto minmax(0,1fr) auto;
-    grid-template-areas:"name name name name acts" ". status cpu ram acts";align-items:center;column-gap:10px;row-gap:4px;padding:9px 12px}
-  /* Stopped: one line - the name, any mark, the actions. */
-  .tbl.stack.wltable tr.wl-off{grid-template-columns:minmax(0,1fr) auto auto;grid-template-areas:"name status acts"}
-  .tbl.stack.wltable td{display:block;padding:0;text-align:left;min-width:0}
-  .tbl.stack.wltable td::before{content:none}
-  .tbl.stack.wltable td.wl-cpu::before,.tbl.stack.wltable td.wl-ram::before{content:attr(data-label) " ";display:inline;
-    font:600 10px "JetBrains Mono",monospace;color:var(--dim);letter-spacing:.06em}
-  .tbl.stack.wltable td.wl-image,.tbl.stack.wltable td.wl-access,.tbl.stack.wltable tr.wl-quiet td.wl-status,
-  .tbl.stack.wltable tr.wl-off td.wl-cpu,.tbl.stack.wltable tr.wl-off td.wl-ram,.tbl.stack.wltable tr.wl-off .wl-ready{display:none}
-  .tbl.stack.wltable td.wl-name{grid-area:name;max-width:none}
-  .tbl.stack.wltable td.wl-name>.row{flex-wrap:nowrap;gap:10px!important}.tbl.stack.wltable td.wl-name .wtitle{flex:1;min-width:0}
-  .tbl.stack.wltable td.wl-status{grid-area:status}
-  .tbl.stack.wltable td.wl-cpu{grid-area:cpu}.tbl.stack.wltable td.wl-ram{grid-area:ram}
-  .tbl.stack.wltable td.wl-actions{grid-area:acts;width:auto;justify-self:end}
-  .wltable .wl-actions .wacts{width:auto;gap:3px;flex-wrap:nowrap}
-  .wltable .wl-actions .wacts>.btn,.wltable .wl-actions .wacts .actionmenu>summary{flex:0 0 auto;width:30px;height:28px;min-height:28px;padding:0;justify-content:center;gap:0}
-  .wltable .wl-actions .wl-label{display:none}
-  .wltable .wl-actions .wacts>.btn svg{width:14px;height:14px}
-}
-
 /* Settings, one tab at a time, each card the full width. */
 .settings-tabs{margin:0 0 14px;max-width:100%;overflow-x:auto;scrollbar-width:none}
 .settings-tabs::-webkit-scrollbar{display:none}
@@ -2829,3 +2803,123 @@ html[data-motion="off"] .iconbtn.setupbtn.pulse svg{animation:none}
 .setup-return .row{flex-shrink:0;gap:8px}
 .setup-return .iconbtn{width:32px;height:32px}
 @media(max-width:900px){.setup-return{padding:10px 12px;gap:8px}.setup-return-copy{font-size:12px}.setup-return .btn{padding:8px 10px}}
+
+/* Collections: metric comparisons and compact lists with inline detail.
+   These use the same surfaces, meters, facts and action bars as the pages. */
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.node-comparisons{display:grid;gap:12px;min-width:0}
+.node-comparison{overflow:hidden}
+.comparison-table{table-layout:fixed;min-width:calc(116px + var(--comparison-columns)*220px)}
+.tblwrap.comparison-scroll:has(>table.stack){overflow-x:auto;overflow-y:hidden}
+.comparison-scroll{overscroll-behavior-x:contain;scrollbar-width:auto}
+.comparison-scroll:focus-visible{outline:2px solid var(--mut);outline-offset:-2px}
+.comparison-table th:first-child{position:sticky;left:0;z-index:1;background:var(--surf)}
+.single-node-summary{max-width:760px}
+.single-node-summary .nodemetrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.single-node-summary .nodemetrics>div:nth-child(n+3):not(.between){grid-column:1/-1}
+.single-node-summary .nodemetrics>.between{flex-direction:column;align-items:flex-start;gap:4px}
+.comparison-disk{display:grid;gap:6px}
+.comparison-disk-name{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.5;min-height:38px;font-size:12.5px;overflow-wrap:anywhere}
+.comparison-disk-tags{display:flex;align-items:start;gap:4px;min-height:24px}
+.comparison-disk-capacity{display:flex;gap:8px;flex-wrap:wrap}
+.comparison-table .comparison-disk .meter{margin:0}
+.comparison-table .podgrid{margin-top:6px;gap:3px}
+.comparison-table .podgrid i{width:6px;height:6px;border-radius:1.5px}
+.comparison-table .node-upstrip{margin:0}
+.comparison-table .node-upstrip>.dim:first-child{display:none}
+.comparison-table th,.comparison-table td{width:auto;text-align:left;vertical-align:top;overflow-wrap:anywhere;white-space:normal;border-bottom:1px solid var(--line)}
+.comparison-table th:first-child{width:116px}
+.comparison-table tbody th{font:500 11.5px/1.5 "Inter Tight",sans-serif;text-transform:none;letter-spacing:0;color:var(--mut)}
+.comparison-table thead th{padding:0 12px;vertical-align:middle}
+.comparison-table td{padding:10px 12px}
+.comparison-table .selected{background:var(--surf2)}
+.comparison-select{display:block;width:100%;min-height:44px;padding:10px 0;background:none;border:0;color:var(--tx);text-align:left;font:650 13px/1.4 "Inter Tight",sans-serif;cursor:pointer;overflow-wrap:anywhere}
+.comparison-select:focus-visible,.collection-disclosure:focus-visible{outline:2px solid var(--mut);outline-offset:-2px;border-radius:6px}
+.comparison-select[aria-pressed=true]{text-decoration:underline;text-underline-offset:5px;text-decoration-color:var(--mut)}
+.comparison-short-name{display:none}
+.comparison-table .tag{display:inline-flex;margin:0 4px 4px 0;white-space:normal;max-width:100%}
+.comparison-table .meter{margin-top:6px;min-width:0}
+.comparison-note{display:block;margin-top:6px;color:var(--mut);font-size:11.5px}
+.comparison-disks,.comparison-detail-disks{display:grid;gap:12px}
+.comparison-disks .diskline-head{flex-wrap:wrap;gap:3px}
+.comparison-disks .disklabel-row{flex-wrap:wrap}
+.comparison-table .actionbar{justify-content:flex-start}
+.node-comparison-detail{display:none}
+.collection-disclosure{display:flex;align-items:center;gap:9px;width:100%;min-width:0;padding:0;border:0;background:none;color:var(--tx);text-align:left;font:inherit;cursor:pointer}
+.collection-disclosure .wtitle{flex:1;min-width:0;line-height:1.4;overflow-wrap:anywhere;white-space:normal}
+.collection-chevron{flex:0 0 auto;font-size:17px;color:var(--mut);transition:transform .15s var(--e)}
+.collection-disclosure[aria-expanded=true] .collection-chevron{transform:rotate(180deg)}
+.wltable .wl-row-meta{margin:3px 0 0 37px;overflow-wrap:anywhere;white-space:normal}
+.wltable .wl-name{max-width:none;min-width:160px;width:27%}
+.wltable .wl-state-tags{gap:4px;flex-wrap:wrap}
+.wltable .wl-actions .actionbar{justify-content:flex-end;flex-wrap:nowrap}
+.wltable .wl-actions .actionbar>.btn{gap:0;min-width:30px;padding:4px 7px}
+.wltable .wl-actions .actionbar>.btn svg{width:14px;height:14px}
+.wltable tr.wl-expanded{background:var(--surf2)}
+.wltable .wl-detail-row>td{padding:0;white-space:normal}
+.wl-inline-detail{padding:12px 16px 16px;background:var(--surf2);border-bottom:1px solid var(--line)}
+.wl-inline-detail .about-grid{margin:0}
+.wl-inline-detail .workloadtree{margin:10px 0 0}
+.wl-detail-actions{display:none}
+.wl-detail-hardware{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+@media(max-width:560px){
+  /* A matrix is the deliberate exception to stacked item rows: four compact
+     host columns remain visible together; long fields move below it. */
+  .tbl.stack.comparison-table{display:table;width:100%;min-width:calc(56px + var(--comparison-columns)*clamp(56px,(100vw - 82px)/4,86px))}
+  .tbl.stack.comparison-table thead{display:table-header-group}
+  .tbl.stack.comparison-table tbody{display:table-row-group}
+  .tbl.stack.comparison-table tr{display:table-row;padding:0;width:auto}
+  .tbl.stack.comparison-table th,.tbl.stack.comparison-table td{display:table-cell;width:auto;padding:8px 4px;text-align:left;vertical-align:middle;font-size:12px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+  .tbl.stack.comparison-table th:first-child{width:56px;font-size:11.5px}
+  .tbl.stack.comparison-table td::before{content:none}
+  .tbl.stack.comparison-table tr.comparison-extra{display:none}
+  .comparison-table .meter{min-width:0;width:100%}
+  .comparison-table .podgrid{gap:1px;margin-top:4px}
+  .comparison-table .podgrid i{width:3px;height:3px;border-radius:1px}
+  .comparison-table .node-upstrip{display:grid;grid-template-columns:1fr auto;gap:3px}
+  .comparison-table .node-upstrip .mini{grid-column:1/-1;gap:1px;height:8px}
+  .comparison-table .node-upstrip b{min-width:0;text-align:left;font-size:11px}
+  .comparison-table .node-upstrip>.dim:last-child{font-size:10px}
+  .comparison-select{font-size:12px;min-height:40px;padding:4px 0;text-align:center}
+  .comparison-table .tag{padding:2px 4px;font-size:10.5px;margin:0 0 3px}
+  .comparison-full-name,.comparison-note{display:none}
+  .comparison-short-name{display:block}
+  .comparison-table .cluster-tag{font-size:10px;text-transform:none;letter-spacing:0}
+  .single-node-summary .nodemetrics>div:nth-child(-n+2) .between{flex-direction:column;align-items:flex-start;gap:4px}
+  .single-node-summary .nodemetrics>div:nth-child(-n+2) .small.mono{white-space:normal}
+  .single-node-summary .nodemetrics>div:nth-child(-n+2) .small.mono .dim{display:block}
+  .node-comparison-detail{display:block;padding:13px}
+  .node-comparison-head{display:flex;justify-content:space-between;align-items:start;gap:10px;margin-bottom:14px}
+  .node-comparison-head>div:first-child{min-width:0;overflow-wrap:anywhere}
+  .node-comparison-head .actionbar{flex-shrink:0}
+  .node-comparison-detail .about-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .node-comparison-detail .about-grid .tag{white-space:normal;max-width:100%}
+  .comparison-detail-disks .diskline-head{flex-wrap:wrap;gap:3px}
+  .comparison-detail-disks .disklabel-row{flex-wrap:wrap}
+  /* Running rows are two short lines, stopped rows one. Actions and long
+     facts appear inline on demand, without a second title or a modal. */
+  .tbl.stack.compact.wltable tr.wl-row{display:grid;grid-template-columns:24px auto minmax(0,1fr) auto;grid-template-areas:"name name name status" ". cpu ram status";align-items:center;gap:2px 9px;padding:6px 12px}
+  .tbl.stack.compact.wltable tr.wl-off{grid-template-areas:"name name name status"}
+  .tbl.stack.compact.wltable .wl-row>td{display:block;padding:0;min-width:0;width:auto;grid-column:auto;grid-row:auto;order:0;text-align:left}
+  .tbl.stack.compact.wltable .wl-row>td::before{content:none}
+  .tbl.stack.compact.wltable .wl-row>.wl-name{grid-area:name;min-width:0}
+  .tbl.stack.compact.wltable .wl-row>.wl-status{grid-area:status;text-align:right!important;align-self:start;padding-top:3px;max-width:86px}
+  .tbl.stack.compact.wltable .wl-state-tags{display:flex;justify-content:flex-end;gap:3px}
+  .tbl.stack.compact.wltable .wl-row>.wl-cpu{grid-area:cpu;font-size:11.5px;line-height:1.4}
+  .tbl.stack.compact.wltable .wl-row>.wl-ram{grid-area:ram;font-size:11.5px;line-height:1.4}
+  .tbl.stack.compact.wltable .wl-row>.wl-cpu::before,.tbl.stack.compact.wltable .wl-row>.wl-ram::before{content:attr(data-label) " ";display:inline;font-size:11.5px;color:var(--mut);margin:0}
+  .tbl.stack.compact.wltable .wl-row>.wl-image,.tbl.stack.compact.wltable .wl-row>.wl-access,.tbl.stack.compact.wltable .wl-row>.wl-actions,
+  .tbl.stack.compact.wltable tr.wl-off>.wl-cpu,.tbl.stack.compact.wltable tr.wl-off>.wl-ram,.wltable .wl-row-meta{display:none}
+  .wltable .collection-disclosure .av{width:24px;height:24px;flex:0 0 24px}
+  .wltable .collection-disclosure .wtitle{font-size:13px}
+  .wltable .collection-chevron{font-size:15px}
+  .tbl.stack.compact.wltable tr.wl-detail-row{display:block;padding:0}
+  .tbl.stack.compact.wltable tr.wl-detail-row>td{display:block;padding:0;width:100%;text-align:left}
+  .tbl.stack.compact.wltable .wl-inline-detail{display:block;padding:10px 12px 12px}
+  .wl-inline-detail .about-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .wl-inline-detail .wl-detail-image,.wl-inline-detail .wl-detail-access{grid-column:1/-1}
+  .tbl.stack.compact.wltable .wl-name .wl-row-meta{display:none}
+  .phead .seg.iconseg{display:none}
+  .wl-detail-actions{display:block;margin-top:12px}
+  .wl-detail-actions .actionbar{justify-content:flex-end}
+}
