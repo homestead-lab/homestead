@@ -109,7 +109,8 @@ for attempt in range(2):
         return view["status"] == "done"
     until("move", 300, moved)
     # Done means the copy is in use; the page reports the new source once the
-    # restarted Homestead has read its journal.
-    until("new source reported", 60, lambda: request("/api/self/data/prepare")["source"] == prepared["destination"])
+    # restarted Homestead has read its journal - until then it answers 404.
+    until("new source reported", 60, lambda: request("/api/self/data/prepare")["source"] == prepared["destination"],
+          retry_refusal=": 404:")
     log("VERIFIED new source; retained login and jobs")
 log("PASS: two complete HTTP moves with real Kubernetes and retained account state")
