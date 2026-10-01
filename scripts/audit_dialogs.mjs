@@ -51,6 +51,7 @@ const DIALOGS = [
   ["schedule-new", "schedules", "jobEdit()"],
   ["vm-disk-import", "vmimport", "vmDiskImport()"],
   ["vm-import-unraid", "vmimport", "setTimeout(() => uvmImport('unraid','win11-desk'), 1500)"],
+  ["vm-import-job-log", "vmimport", "window.__demoOps=[{id:'import-log',kind:'unraid-vm-import',title:'Import desktop',status:'failed',progress:100,message:'Upload refused'}];STATE.data.operations=window.__demoOps;uvmCopiesPaint();document.querySelector('#uvmCopies button').click()"],
   ["import-source-add", "imports", "srcAdd()"],
   ["import-source-verify", "imports", "window.__demoSourceKeyChanged=false;srcVerify('unraid')"],
   ["import-source-key-changed", "imports", "window.__demoSourceKeyChanged=true;srcVerify('unraid')"],

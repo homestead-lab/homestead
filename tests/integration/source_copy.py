@@ -19,6 +19,7 @@ from unittest import mock
 sys.path.insert(0, "/repo/server")
 import homestead_imports as imports
 import homestead_source_ssh as ssh
+from unraid_vm_copy import exercise as exercise_vm_copy
 
 
 def run(*args, **kwargs):
@@ -53,6 +54,7 @@ with tempfile.TemporaryDirectory(prefix="source-copy-") as directory:
             time.sleep(.1)
         assert ssh.candidate(scan.stdout.splitlines())["key"] == public
         run("sh", "-c", ssh.setup(src) + ssh.command(src, "printf verified"), env=env)
+        exercise_vm_copy(src, env, root)
 
         other = root / "different_key"
         run("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(other))

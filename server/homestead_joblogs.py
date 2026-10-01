@@ -169,11 +169,17 @@ def register(ops):
             ("reclass", _ref_job(key="job", title="Copy and check")),
             ("self-data-move", _ref_job(key="job", title="Copy")),
             ("vm-disk-import", disk_import),
+            ("unraid-vm-import", unraid_vm_import),
             ("image-cleanup", image_cleanup),
             ("node-power", node_power),
             ("deployment", rollout), ("image-update", rollout), ("image-rollback", rollout),
             ("k3s-cluster", k3s_cluster)):
         ops.LOGGERS[kind] = reader
+
+
+def unraid_vm_import(item):
+    import homestead_unraid_vms as unraid
+    return unraid.log_sources(item)
 
 
 def node_power(item):
