@@ -94,6 +94,15 @@ storage, VM and network add-ons built in, so its card shows only the node probe.
 
 ## Homestead updates
 
+**Release channel** chooses **Prod · stable** (the default) or **Dev · preview**
+for this cluster. Admins can change it; the choice is saved immediately and
+checks for that channel's newest release in the current major version.
+Changing channel installs nothing: review and accept the offered release
+under the normal update policy. Returning to Prod can offer an older stable
+version. Dev uses numbered prereleases such as `2.8.291-dev.1`; app and helper
+images keep their own update policies. Each linked cluster keeps its own
+channel, so set it on that cluster before including it in a fleet update.
+
 Homestead's own release, and the helpers it runs beside it - the SMB and NFS
 servers and the object store moves use - are updated apart from your apps.
 When one is waiting, a **Homestead** button with the new version appears on

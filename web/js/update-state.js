@@ -6,6 +6,7 @@
   "use strict";
 
   function isStale(existing, incoming) {
+    if (existing?.channel !== incoming?.channel) return false;
     if (!existing || !existing.checked_at || !incoming || !incoming.checked_at) return false;
     const current = Date.parse(existing.checked_at);
     const next = Date.parse(incoming.checked_at);

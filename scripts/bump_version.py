@@ -19,12 +19,12 @@ GENERATED = ("scripts/render_nodeprobe.py", "scripts/render_rbac.py", "scripts/r
 
 def current():
     source = (ROOT / "server" / "server.py").read_text(encoding="utf-8")
-    return re.search(r'os\.environ\.get\("HOMESTEAD_VERSION", "(\d+\.\d+\.\d+)"\)', source).group(1)
+    return re.search(r'os\.environ\.get\("HOMESTEAD_VERSION", "(\d+\.\d+\.\d+(?:-dev\.\d+)?)"\)', source).group(1)
 
 
 def main(new):
-    if not re.fullmatch(r"\d+\.\d+\.\d+", new):
-        sys.exit("give the new version as MAJOR.MINOR.PATCH")
+    if not re.fullmatch(r"\d+\.\d+\.\d+(?:-dev\.[1-9]\d*)?", new):
+        sys.exit("give the new version as MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-dev.N")
     old = current()
     pattern = re.compile(re.escape(old) + r"(?![\d])")
     for name in FILES:

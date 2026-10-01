@@ -675,7 +675,7 @@ window.updatePolicyFields = () => {
 window.saveUpdateSettings = async () => {
   const current = STATE.data.appSettings || {};
   const body = { thresholds: current.thresholds || HEALTH_DEFAULTS.thresholds,
-    smart: current.smart, updates: {
+    smart: current.smart, updates: { ...(current.updates || {}),
     policy: $("#set_update_policy").value,
     notify_available: $("#set_notify_available").checked,
     notify_failures: $("#set_notify_failures").checked,
