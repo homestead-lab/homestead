@@ -54,6 +54,7 @@ function renderOperations() {
     <div class="jobactions">
       <button class="btn sm" onclick="openOperation(${jsq(operation.href || "/")},${jsq(operation.id || "")})">Open</button>
       <button class="btn sm" data-tip="Every step it has taken, and the output of what does its work" onclick="operationLog(${jsq(operation.id)})">${icon("log")}Log</button>
+      ${operation.preparation_archivable ? `<button class="btn sm" data-need="admin" onclick="selfDataArchiveReview(${jsq(operation.id)})">Archive preparation</button>` : ""}
       ${operation.power_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview(${jsq(operation.id)})">Inspect outcome</button>` : ""}
       ${operation.storage_recovery ? `<button class="btn sm" data-need="admin" onclick="storageRecoveryReview(${jsq(operation.id)})">Review storage move</button>` : ""}
       ${operation.mutation_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview(${jsq(operation.id)},${operation.kind === 'import-create' ? "'import'" : 'true'})">Inspect ${operation.kind === "k3s-cluster" ? "batch" : operation.kind === "import-create" ? "import" : "save"} outcome</button>` : ""}
