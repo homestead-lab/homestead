@@ -1526,12 +1526,12 @@ html[data-theme="light"] .compose-editor{background:#fff}
   .tbl.stack.ipam-table tr.ipam-row>td{display:block;padding:0;min-width:0;width:auto;text-align:left}
   .tbl.stack.ipam-table tr.ipam-row>td::before{content:none}
   .tbl.stack.ipam-table tr.ipam-row>td:empty{display:none}
-  .ipam-table .ip-pick{grid-area:pick;align-self:start;padding-top:2px!important}
+  .tbl.stack.ipam-table .ip-pick{grid-area:pick;align-self:start;padding-top:2px!important}
   .ipam-table .ip-pick input{width:20px;height:20px}
   .ipam-table .ip-addr{grid-area:addr;font-size:14px;font-weight:650}
   .ipam-table .ip-kind{grid-area:kind;justify-self:end}
-  .ipam-table .ip-name{grid-area:name}
-  .ipam-table .ip-name .ipam-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tbl.stack.ipam-table .ip-name{grid-area:name}
+  .ipam-table .ip-name .ipam-line{white-space:normal;overflow:visible}
   .ipam-table .ip-seen{grid-area:seen;justify-self:end}
   .ipam-table .ip-mac{grid-area:mac;color:var(--mut)}
   .ipam-table .ip-notes{grid-area:notes;max-width:100%;overflow:hidden}
@@ -1826,10 +1826,17 @@ tr.clickable{cursor:pointer}
 
 /* IP rows: two short lines, one-line badges, notes that open on hover. */
 .ipam-table td{vertical-align:middle;padding-top:6px;padding-bottom:6px}
-.ipam-name .ipam-line{max-width:clamp(140px,18vw,260px)}
+.ipam-name .ipam-line{max-width:none;white-space:normal;overflow:visible;text-overflow:clip;align-items:flex-start}
 .ipam-line{display:flex;align-items:center;gap:6px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 div.ipam-line.dim{display:block}
-.ipam-line>b,.ipam-line>.ipam-unifi-name{overflow:hidden;text-overflow:ellipsis}
+.ipam-name .ipam-line>b,.ipam-name .ipam-line>.ipam-unifi-name{min-width:0;overflow-wrap:anywhere}
+.ipam-name .ipam-line.dim{overflow-wrap:anywhere}
+.ipam-name .ipam-cat{flex-shrink:0}
+@media(min-width:561px){
+  .ipam-table .ip-addr{width:1%;padding-right:8px}
+  .ipam-table .ip-addr>.dim{display:block}
+  .ipam-table .ipam-name{min-width:clamp(160px,24vw,340px)}
+}
 /* Notes take what width is left: no width of their own, all of the cell's. */
 .ipam-table td.ipam-notes{width:100%}
 .ipam-notes .ipam-line{max-width:0;min-width:100%}
