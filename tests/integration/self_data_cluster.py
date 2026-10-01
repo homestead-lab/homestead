@@ -11,6 +11,7 @@ stall fails here with that picture rather than hanging the runner.
 """
 import json
 import os
+import signal
 import subprocess
 import tempfile
 import threading
@@ -34,9 +35,20 @@ def log(*words):
 
 
 STARTED = time.monotonic()
+# The whole fixture, every docker and kubectl call together: each has its own
+# timeout, but their sum could outlast the CI job, which then dies with no
+# log. This stops it first, with the diagnostics and the cleanup.
+WATCHDOG = int(os.environ.get("FIXTURE_WATCHDOG", "720"))
+
+
+def _overdue(signum, frame):
+    raise TimeoutError(f"the fixture ran past {WATCHDOG}s")
 
 
 def main():
+    if hasattr(signal, "SIGALRM"):
+        signal.signal(signal.SIGALRM, _overdue)
+        signal.alarm(WATCHDOG)
     with tempfile.TemporaryDirectory(prefix="homestead-release-") as directory:
         archive = Path(directory, "image.tar")
         # k3s boots (a minute or so) while the image builds and is saved.
@@ -137,6 +149,8 @@ def main():
             diagnose(kube)
             raise
         finally:
+            if hasattr(signal, "SIGALRM"):
+                signal.alarm(0)         # the cleanup below must not be cut short
             stop_watch.set()
             # Only the exact container just created, including its disposable
             # anonymous storage. No host kubeconfig or user cluster is touched.
