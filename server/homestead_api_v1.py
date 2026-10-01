@@ -276,7 +276,7 @@ def handle(method, path, query, body, auth):
 ERRORS = {"400": "The request is malformed", "401": "No API key, or one that is not valid, has expired, or is used from a network it is not allowed",
           "403": "The key does not have the scope this needs", "404": "No such thing",
           "409": "Refused: it cannot be done now (not enough room, Homestead itself, needs a person)",
-          "429": "Too many wrong keys from this address"}
+          "429": "Too many refused keys from this address (a valid key is never refused this way)"}
 
 
 def openapi(version, scopes):

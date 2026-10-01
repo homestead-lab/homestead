@@ -538,7 +538,7 @@
             }
           },
           "429": {
-            "description": "Too many wrong keys from this address",
+            "description": "Too many refused keys from this address (a valid key is never refused this way)",
             "content": {
               "application/json": {
                 "schema": {
@@ -621,7 +621,7 @@
             }
           },
           "429": {
-            "description": "Too many wrong keys from this address",
+            "description": "Too many refused keys from this address (a valid key is never refused this way)",
             "content": {
               "application/json": {
                 "schema": {
@@ -711,7 +711,7 @@
             }
           },
           "429": {
-            "description": "Too many wrong keys from this address",
+            "description": "Too many refused keys from this address (a valid key is never refused this way)",
             "content": {
               "application/json": {
                 "schema": {
@@ -818,7 +818,7 @@
             }
           },
           "429": {
-            "description": "Too many wrong keys from this address",
+            "description": "Too many refused keys from this address (a valid key is never refused this way)",
             "content": {
               "application/json": {
                 "schema": {
@@ -926,7 +926,7 @@
             }
           },
           "429": {
-            "description": "Too many wrong keys from this address",
+            "description": "Too many refused keys from this address (a valid key is never refused this way)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1034,7 +1034,7 @@
             }
           },
           "429": {
-            "description": "Too many wrong keys from this address",
+            "description": "Too many refused keys from this address (a valid key is never refused this way)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1132,7 +1132,7 @@
             }
           },
           "429": {
-            "description": "Too many wrong keys from this address",
+            "description": "Too many refused keys from this address (a valid key is never refused this way)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1225,7 +1225,7 @@
             }
           },
           "429": {
-            "description": "Too many wrong keys from this address",
+            "description": "Too many refused keys from this address (a valid key is never refused this way)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1325,7 +1325,7 @@
             }
           },
           "429": {
-            "description": "Too many wrong keys from this address",
+            "description": "Too many refused keys from this address (a valid key is never refused this way)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1408,7 +1408,7 @@
             }
           },
           "429": {
-            "description": "Too many wrong keys from this address",
+            "description": "Too many refused keys from this address (a valid key is never refused this way)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1498,7 +1498,7 @@
             }
           },
           "429": {
-            "description": "Too many wrong keys from this address",
+            "description": "Too many refused keys from this address (a valid key is never refused this way)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1605,7 +1605,7 @@
             }
           },
           "429": {
-            "description": "Too many wrong keys from this address",
+            "description": "Too many refused keys from this address (a valid key is never refused this way)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1713,7 +1713,7 @@
             }
           },
           "429": {
-            "description": "Too many wrong keys from this address",
+            "description": "Too many refused keys from this address (a valid key is never refused this way)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1821,7 +1821,7 @@
             }
           },
           "429": {
-            "description": "Too many wrong keys from this address",
+            "description": "Too many refused keys from this address (a valid key is never refused this way)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1919,7 +1919,7 @@
             }
           },
           "429": {
-            "description": "Too many wrong keys from this address",
+            "description": "Too many refused keys from this address (a valid key is never refused this way)",
             "content": {
               "application/json": {
                 "schema": {

@@ -4111,6 +4111,9 @@ def api_vm_power(ns, name, action):
         result = reviewed_vm_power(body)
         _cache.pop("vms", None)
         return {"warnings": [], "job": ((result or {}).get("operation") or {}).get("id") if isinstance(result, dict) else None}
+    # As the app's route does before a review: an older VM's read-only ISO
+    # would stop KubeVirt starting it.
+    ISOS.unlock(body["ns"])
     preview = preview_vm_power(body)
     plan = preview["capacity"]
     if plan.get("blocked"):
@@ -7505,6 +7508,8 @@ class H(BaseHTTPRequestHandler):
             # key must not wash every other entry out of the history.
             addr = self._client_ip()
             if time.time() - _key_refusals.get(addr, 0) > 60:
+                if len(_key_refusals) > 1000:
+                    _key_refusals.clear()       # many addresses at once: start again
                 _key_refusals[addr] = time.time()
                 self._signin("key-refused", "", ok=False, detail=message)
             self._send(429 if limited else 401, {"error": message})

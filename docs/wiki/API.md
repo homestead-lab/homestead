@@ -29,9 +29,13 @@ an agent's tool list.
 - **Expires after** - a day to a year. There are no keys that never expire.
 - **Only from** (optional) - addresses or networks it may be used from, such as
   your Home Assistant's address. A key copied anywhere else is refused.
+  Homestead sees the address a request *arrives* from: behind the cluster's
+  load balancer that can be a node's address rather than the client's. Use the
+  key once without a limit and check "used … from" on its card before setting one.
 
 The key is shown **once**, as `hsk_<id>_<secret>`. Homestead keeps only a hash
-of it; if you lose it, revoke it and make another. Revoking stops a key at once.
+of it; if you lose it, revoke it and make another. Revoking stops a key within
+a couple of seconds on every copy of Homestead. Removing a user removes their keys.
 
 The card lists each key's scopes, when it expires, and when and from where it
 was last used. Making, revoking and refusing keys are recorded in the sign-in
@@ -104,7 +108,7 @@ Every error is JSON, `{"error": "what happened"}`:
 | 404 | No such endpoint, container, VM or job |
 | 405 | That method is not used here |
 | 409 | Refused: it cannot be done now - not enough room, Homestead itself, or it needs a person |
-| 429 | Too many wrong keys from this address; wait a few minutes |
+| 429 | Too many refused keys from this address; wait a few minutes (a valid key is never refused this way) |
 
 ## Home Assistant
 
@@ -168,9 +172,10 @@ uses - so whatever its scopes, it cannot:
 - act on a linked cluster: a key is for the Homestead that made it.
 
 A key also acts for the administrator who made it, never beyond them: if they
-are removed the key stops working, and if they are demoted it keeps only the
-scopes their role still allows. Wrong keys are counted per address, as wrong
-passwords are, and refused for a while after twenty.
+are removed their keys are removed with them, and if they are demoted a key
+keeps only the scopes their role still allows. Refused keys are counted per
+address, as wrong passwords are: past twenty, a wrong key is answered `429` for
+a while - a right one never is, so one misbehaving client cannot lock out the rest.
 
 ## Stability
 

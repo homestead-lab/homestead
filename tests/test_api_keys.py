@@ -26,9 +26,11 @@ class KeyTests(unittest.TestCase):
         keys.bind(tempfile.mkdtemp())
         keys._usage_written.clear()
 
+    rv = None
+
     def _get(self, path):
         if "/secrets/" in path:
-            return {"metadata": {"name": path.rsplit("/", 1)[-1]},
+            return {"metadata": {"name": path.rsplit("/", 1)[-1], **({"resourceVersion": self.rv} if self.rv else {})},
                     "data": {"store.json": base64.b64encode(json.dumps(self.store).encode()).decode()}}
         raise urllib.error.HTTPError(path, 404, "missing", {}, None)
 
@@ -71,8 +73,49 @@ class KeyTests(unittest.TestCase):
             except PermissionError:
                 pass
         with self.assertRaisesRegex(PermissionError, "too many"):
-            keys.verify(token, "192.0.2.9")
-        self.assertTrue(keys.verify(token, "192.0.2.10"), "only that address is held back")
+            keys.verify("hsk_000000000000_" + "c" * 43, "192.0.2.9")
+        # Many clients can share an address behind the load balancer: one
+        # misbehaving must not lock the right key out.
+        self.assertTrue(keys.verify(token, "192.0.2.9"), "a right key is never held back")
+
+    def test_every_kind_of_refusal_counts(self):
+        expired = self.make(ttl=3600, name="short")["token"]
+        for _ in range(keys.FAILURES_ALLOWED):
+            with self.assertRaises(PermissionError):
+                keys.verify(expired, "192.0.2.11", now=time.time() + 7200)
+        with self.assertRaisesRegex(PermissionError, "too many"):
+            keys.verify(expired, "192.0.2.11", now=time.time() + 7200)
+
+    def test_removing_a_user_removes_their_keys_so_a_new_namesake_gets_none(self):
+        auth.set_role("bob", "admin", "ada")
+        token = self.make()["token"]
+        auth.delete_user("ada", "bob")
+        self.assertEqual([], keys.list_keys())
+        auth.create_user("ada", "another-persons-password", role="admin")
+        with self.assertRaisesRegex(PermissionError, "not valid"):
+            keys.verify(token, "192.0.2.5")
+
+    def test_a_save_over_a_change_made_elsewhere_is_refused_not_written(self):
+        made = self.make()
+        self.rv = "7"
+        original = self._send
+
+        def send(method, path, body=None, **kw):
+            if method == "PUT" and (body or {}).get("metadata", {}).get("resourceVersion") != "8":
+                raise urllib.error.HTTPError(path, 409, "conflict", {}, None)
+            return original(method, path, body, **kw)
+        auth.bind(self._get, send, "lab")
+        auth._store_cache.update(at=0, data=None)
+        with self.assertRaises(auth.StoreConflict):
+            keys.revoke(made["key"]["id"])
+        self.assertTrue(keys.verify(made["token"], "192.0.2.5"), "nothing was written over")
+
+    def test_a_revoked_key_is_refused_within_seconds_on_another_replica(self):
+        made = self.make()
+        auth._store_cache["at"] = time.time() - keys.FRESH_FOR - 1   # this replica's copy is old
+        self.store["api_keys"] = {}                                   # revoked on another
+        with self.assertRaisesRegex(PermissionError, "not valid"):
+            keys.verify(made["token"], "192.0.2.5")
 
     def test_a_key_held_to_networks_is_refused_elsewhere(self):
         token = self.make(networks=["192.0.2.20", "198.51.100.0/24"])["token"]
@@ -90,8 +133,8 @@ class KeyTests(unittest.TestCase):
         auth.set_role("ada", "viewer", "bob")
         self.assertEqual(["read"], keys.verify(token, "192.0.2.5")["scopes"], "demoted: control is gone")
         auth.delete_user("ada", "bob")
-        with self.assertRaisesRegex(PermissionError, "no longer exists"):
-            keys.verify(token, "192.0.2.5")
+        with self.assertRaisesRegex(PermissionError, "not valid"):
+            keys.verify(token, "192.0.2.5")              # removed with her
 
     def test_only_an_administrator_makes_keys_and_scopes_are_checked(self):
         with self.assertRaises(PermissionError):

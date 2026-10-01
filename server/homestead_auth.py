@@ -98,13 +98,20 @@ def _unavailable(error):
                            "or unreachable. Try again in a moment.")
 
 
-def _load(force=False):
-    if not force and _store_cache["data"] is not None and time.time() - _store_cache["at"] < 10:
+class StoreConflict(ValueError):
+    """The accounts changed on another replica between reading and saving."""
+
+
+def _load(force=False, max_age=10):
+    if not force and _store_cache["data"] is not None and time.time() - _store_cache["at"] < max_age:
         return _store_cache["data"]
     try:
         sec = kget(f"/api/v1/namespaces/{NS}/secrets/{SECRET_NAME()}")
         raw = base64.b64decode(sec.get("data", {}).get("store.json", "") or "e30=")
         data = json.loads(raw.decode() or "{}")
+        # The version read, so a save can say what it changed - and never write
+        # over a change another replica made since (a revoked key coming back).
+        data["_rv"] = (sec.get("metadata") or {}).get("resourceVersion")
     except urllib.error.HTTPError as e:
         if e.code != 404:
             return _unavailable(e)
@@ -118,16 +125,23 @@ def _load(force=False):
 
 
 def _save(data):
+    stored = {k: v for k, v in data.items() if k != "_rv"}
     body = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
             "metadata": {"name": SECRET_NAME(), "namespace": NS},
-            "data": {"store.json": base64.b64encode(json.dumps(data).encode()).decode()}}
+            "data": {"store.json": base64.b64encode(json.dumps(stored).encode()).decode()}}
+    if data.get("_rv"):
+        body["metadata"]["resourceVersion"] = data["_rv"]
     try:
         kget(f"/api/v1/namespaces/{NS}/secrets/{SECRET_NAME()}")
-        ksend("PUT", f"/api/v1/namespaces/{NS}/secrets/{SECRET_NAME()}", body)
+        answer = ksend("PUT", f"/api/v1/namespaces/{NS}/secrets/{SECRET_NAME()}", body)
     except urllib.error.HTTPError as e:
+        if e.code == 409:
+            _store_cache.update(at=0, data=None)
+            raise StoreConflict("the accounts were changed elsewhere at the same moment; try again") from None
         if e.code != 404:
             raise
-        ksend("POST", f"/api/v1/namespaces/{NS}/secrets", body)
+        answer = ksend("POST", f"/api/v1/namespaces/{NS}/secrets", body)
+    data["_rv"] = ((answer or {}).get("metadata") or {}).get("resourceVersion")
     _store_cache.update(at=time.time(), data=data)
 
 
@@ -248,6 +262,10 @@ def delete_user(username, acting_as):
     if admins == [username]:
         raise PermissionError("cannot delete the only administrator")
     data["users"].pop(username)
+    # Their API keys go with them: a key must never pass to someone given
+    # the same name later.
+    for kid in [k for k, rec in (data.get("api_keys") or {}).items() if rec.get("owner") == username]:
+        data["api_keys"].pop(kid)
     _save(data)
     return {"ok": True}
 

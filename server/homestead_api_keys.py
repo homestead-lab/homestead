@@ -14,8 +14,8 @@ can do what its scopes say and no more:
 * The token is shown once. Only a SHA-256 hash of its secret is kept, beside
   the accounts in the same Secret - the secret is 256 random bits, so the
   hash alone is no help to anyone who reads it. Revoking deletes the record.
-* Wrong keys are counted per address, as wrong passwords are, and refused
-  for a while after twenty.
+* Refused keys are counted per address, as wrong passwords are; past twenty
+  a wrong key is answered "too many" for a while - a right one never is.
 
 When a key was last used, and from where, is kept on the data volume rather
 than in the Secret: a key in use must not rewrite the accounts, nor race a
@@ -184,33 +184,47 @@ def _allowed_from(rec, addr):
     return any(ip in ipaddress.ip_network(net, strict=False) for net in networks)
 
 
+# A key's record is read at most this old, so a key revoked on another
+# replica stops within seconds there too.
+FRESH_FOR = 2
+
+
 def verify(token, addr, now=None):
     """The key a bearer token is, as {id, name, owner, scopes, expires}.
-    Raises PermissionError with what to tell the caller."""
+    Raises PermissionError with what to tell the caller.
+
+    Every refusal counts against the address, and past FAILURES_ALLOWED a
+    wrong key is answered "too many" - but a right one is never held back:
+    behind the cluster's load balancer many clients can share one address,
+    and one misbehaving client must not lock Home Assistant out."""
     now = now or time.time()
     rate_key = f"api-key:{addr}"
-    if not AUTH._rate_ok(rate_key, FAILURES_ALLOWED):
-        raise PermissionError("too many wrong API keys from this address; wait a few minutes")
+
+    def refuse(message):
+        if not AUTH._rate_ok(rate_key, FAILURES_ALLOWED):
+            message = "too many wrong API keys from this address; wait a few minutes"
+        AUTH._rate_hit(rate_key)
+        raise PermissionError(message)
+
     match = TOKEN.fullmatch(str(token or "").strip())
     kid, secret = (match.group(1), match.group(2)) if match else ("", "")
-    rec = (AUTH._load().get("api_keys") or {}).get(kid) if kid else None
+    data = AUTH._load(max_age=FRESH_FOR)
+    rec = (data.get("api_keys") or {}).get(kid) if kid else None
     # The digest is worked out whether or not the key exists, so a wrong id
     # and a wrong secret take the same time.
     supplied = _digest(secret or "x")
     if not rec or not hmac.compare_digest(supplied, rec.get("hash", "")):
-        AUTH._rate_hit(rate_key)
-        raise PermissionError("that API key is not valid")
+        refuse("that API key is not valid")
     if rec["expires"] <= now:
-        raise PermissionError(f"the API key {rec['name']} has expired")
+        refuse(f"the API key {rec['name']} has expired")
     if not _allowed_from(rec, addr):
-        AUTH._rate_hit(rate_key)
-        raise PermissionError(f"the API key {rec['name']} cannot be used from {addr}")
-    owner_role = (AUTH._load().get("users") or {}).get(rec["owner"], {}).get("role")
-    if not owner_role:
-        raise PermissionError(f"the API key {rec['name']} belonged to an account that no longer exists")
-    scopes = [s for s in rec["scopes"] if s in SCOPES and AUTH.allows(owner_role, SCOPES[s][0])]
+        refuse(f"the API key {rec['name']} cannot be used from {addr}")
+    owner = (data.get("users") or {}).get(rec["owner"])
+    if not owner:
+        refuse(f"the API key {rec['name']} belonged to an account that no longer exists")
+    scopes = [s for s in rec["scopes"] if s in SCOPES and AUTH.allows(owner.get("role", "viewer"), SCOPES[s][0])]
     if not scopes:
-        raise PermissionError(f"the API key {rec['name']} has no scope its maker's role still allows")
+        refuse(f"the API key {rec['name']} has no scope its maker's role still allows")
     _note_use(kid, addr, now)
     return {"id": kid, "name": rec["name"], "owner": rec["owner"], "scopes": scopes, "expires": rec["expires"]}
 

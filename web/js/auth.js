@@ -341,7 +341,6 @@ window.setRole = async (name, role) => {
    /api/v1 alone; the token is shown once, when it is made. */
 const API_DOCS = "https://github.com/wjcloudy/homestead/wiki/API";
 const API_TTLS = [["1 day", 86400], ["7 days", 7 * 86400], ["30 days", 30 * 86400], ["90 days", 90 * 86400], ["1 year", 365 * 86400]];
-const keyAgo = t => t ? fmtAgo(Math.max(0, Math.round(Date.now() / 1000 - t))) : "";
 const keyUntil = t => {
   const left = t - Date.now() / 1000;
   if (left <= 0) return "expired";
@@ -359,7 +358,7 @@ window.apiKeysPaint = async () => {
   const rows = found.keys.map(k => {
     const state = k.expired ? '<span class="pill crit">expired</span>' : "";
     const scopes = k.scopes.map(s => `<span class="tag">${esc(s)}</span>`).join(" ");
-    const detail = [keyUntil(k.expires), k.last_used ? `used ${keyAgo(k.last_used)}${k.last_ip ? ` from ${k.last_ip}` : ""}` : "never used",
+    const detail = [keyUntil(k.expires), k.last_used ? `used ${agoText(k.last_used)}${k.last_ip ? ` from ${k.last_ip}` : ""}` : "never used",
       `made by ${k.owner}`, k.networks.length ? `only from ${k.networks.join(", ")}` : ""].filter(Boolean).map(esc).join(" · ");
     return serviceRow(esc(k.name), state, `${scopes}<br>${detail}`,
       `<button class="btn sm danger" onclick="apiKeyRevoke(${jsq(k.id)},${jsq(k.name)})">Revoke</button>`);
@@ -381,7 +380,7 @@ window.apiKeyNew = () => {
     + Object.entries(scopes).map(([scope, text]) => settingRow(`<span class="mono">${esc(scope)}</span>`, esc(text),
       `<label class="toggle"><input type="checkbox" class="ak-scope" value="${esc(scope)}" ${scope === "read" ? "checked" : ""}><span></span></label>`)).join("")
     + UI.fields(UI.field("Expires after", `<select id="ak_ttl">${API_TTLS.map(([label, s]) => `<option value="${s}" ${s === 90 * 86400 ? "selected" : ""}>${label}</option>`).join("")}</select>`),
-      UI.field("Only from (optional)", '<input id="ak_nets" placeholder="192.0.2.20, 198.51.100.0/24">', { help: "Addresses or networks it may be used from; anywhere if empty." }))
+      UI.field("Only from (optional)", '<input id="ak_nets" placeholder="192.0.2.20, 198.51.100.0/24">', { help: "Addresses or networks it may be used from; anywhere if empty. Homestead sees the address a request arrives from - behind the cluster's load balancer that can be a node's - so check \"used from\" on the card first." }))
     + UI.actions(UI.cancel() + UI.button("Make key", "apiKeyMake(this)", { kind: "pri" })));
 };
 
