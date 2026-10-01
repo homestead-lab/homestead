@@ -4004,7 +4004,7 @@ def setup_state(user, role):
         step("osupdates", lambda: {"done": bool((OS_ROLLOUT.settings().get("schedule") or {}).get("enabled")), "applies": kube})
         step("people", lambda: {"done": sum(1 for u in AUTH.list_users() if u["role"] == "admin") >= 2, "applies": True,
                                 "users": len(AUTH.list_users())})
-        step("unifi", lambda: {"done": bool((IPAM.load().get("unifi") or {}).get("url")), "applies": True})
+        step("unifi", lambda: {"done": bool((IPAM.load()[0].get("unifi") or {}).get("url")), "applies": True})
         step("unraid", lambda: {"done": bool(IMP.list_sources()), "applies": True})
         step("homeassistant", lambda: {"done": any(not k["expired"] for k in API_KEYS.list_keys()), "applies": True})
         step("linked", lambda: {"done": bool(FLEET.summary().get("linked")), "applies": True})

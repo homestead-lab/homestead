@@ -4,6 +4,8 @@ import json
 import sys
 import tempfile
 import unittest
+import urllib.error
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -75,6 +77,54 @@ class SetupTests(unittest.TestCase):
         SETUP.complete("ada", False)
         self.assertFalse(SETUP.completed("ada"))
 
+
+
+class UniFiSetupStateTests(unittest.TestCase):
+    def setUp(self):
+        import server
+        self.server = server
+        directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
+        # Isolate the other guide observations; exercise the real IPAM loader
+        # against a ConfigMap response, rather than mocking its tuple away.
+        observations = [(SETUP, "DATA_DIR", directory.name), (server.PLATFORM, "detect", {}),
+                        (server.LC, "quorum_report", {"total": 1, "members": [], "ready": 1, "can_lose": 0}),
+                        (server.SELF_ADDRESS, "report", {"on_vip": False, "url": ""}),
+                        (server.NETWORK, "registered", []), (server.DISKS, "inventory", {"nodes": {}}),
+                        (server, "storage_classes", []), (server.LH, "backup_target", {}),
+                        (server.OS_ROLLOUT, "settings", {}), (server.AUTH, "list_users", []),
+                        (server.IMP, "list_sources", []), (server.API_KEYS, "list_keys", []),
+                        (server.FLEET, "summary", {}), (server.HOST_CONSOLE, "inventory", {}),
+                        (server.PUSH, "devices", [])]
+        for obj, name, value in observations:
+            patch = mock.patch.object(obj, name, value) if name == "DATA_DIR" else mock.patch.object(obj, name, return_value=value)
+            patch.start(); self.addCleanup(patch.stop)
+        patch = mock.patch.object(server, "cached", side_effect=lambda key, *_: {} if key in ("ov", "network") else [])
+        patch.start(); self.addCleanup(patch.stop)
+
+    def test_unifi_observes_saved_configuration_without_a_tuple_error_or_connection_probe(self):
+        ipam = self.server.IPAM
+        for saved, expected in (({}, False), ({"unifi": {}}, False), ({"unifi": {"url": ""}}, False),
+                                ({"unifi": {"url": "https://unifi.example", "has_key": False}}, True)):
+            with self.subTest(saved=saved), mock.patch.object(ipam, "kget", return_value={"metadata": {"resourceVersion": "7"},
+                    "data": {ipam.DATA_KEY: json.dumps(saved)}}) as read, \
+                    mock.patch.object(ipam, "ksend") as write, mock.patch.object(ipam, "_unifi_get") as probe:
+                self.assertEqual({"done": expected, "applies": True}, self.server.setup_state("admin", "admin")["steps"]["unifi"])
+                read.assert_called_once_with(f"/api/v1/namespaces/{ipam.NAMESPACE}/configmaps/{ipam._map()}")
+                write.assert_not_called(); probe.assert_not_called()
+
+    def test_missing_ipam_configuration_is_an_unfinished_step_without_an_error(self):
+        with mock.patch.object(self.server.IPAM, "kget", side_effect=urllib.error.HTTPError("/configmap", 404, "Not found", None, None)):
+            self.assertEqual({"done": False, "applies": True}, self.server.setup_state("admin", "admin")["steps"]["unifi"])
+
+    def test_unreadable_ipam_configuration_keeps_a_real_error_and_cannot_complete_the_step(self):
+        for code in (403, 503):
+            with self.subTest(code=code), mock.patch.object(self.server.IPAM, "kget",
+                    side_effect=urllib.error.HTTPError("/configmap", code, "Unavailable", None, None)):
+                step = self.server.setup_state("admin", "admin")["steps"]["unifi"]
+                self.assertFalse(step["done"])
+                self.assertTrue(step["applies"])
+                self.assertIn(str(code), step["error"])
+                self.assertNotIn("tuple", step["error"])
 
 
 class DeployArgsTests(unittest.TestCase):
