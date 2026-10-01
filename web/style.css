@@ -2849,7 +2849,8 @@ html[data-motion="off"] .iconbtn.setupbtn.pulse svg{animation:none}
 .node-comparison-detail{display:none}
 .collection-disclosure{display:flex;align-items:center;gap:9px;width:100%;min-width:0;padding:0;border:0;background:none;color:var(--tx);text-align:left;font:inherit;cursor:pointer}
 .collection-disclosure .wtitle{flex:1;min-width:0;line-height:1.4;overflow-wrap:anywhere;white-space:normal}
-.collection-chevron{flex:0 0 auto;font-size:17px;color:var(--mut);transition:transform .15s var(--e)}
+.collection-chevron{display:grid;place-items:center;flex:0 0 20px;width:20px;height:20px;color:var(--mut);transition:transform .15s var(--e)}
+.collection-chevron .btnicon{width:16px;height:16px}
 .collection-disclosure[aria-expanded=true] .collection-chevron{transform:rotate(180deg)}
 .wltable .wl-row-meta{margin:3px 0 0 37px;overflow-wrap:anywhere;white-space:normal}
 .wltable .wl-name{max-width:none;min-width:160px;width:27%}
@@ -2864,7 +2865,39 @@ html[data-motion="off"] .iconbtn.setupbtn.pulse svg{animation:none}
 .wl-inline-detail .workloadtree{margin:10px 0 0}
 .wl-detail-actions{display:none}
 .wl-detail-hardware{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.wl-mobile-head{display:none}
+html[data-theme="light"] .wl-mobile-summary .pillbtn.warn{color:#8a5200}
+html[data-theme="light"] .wl-mobile-summary .pillbtn.crit{color:#a1242a}
+/* Mobile collection controls use the existing portalled action menu. */
+.list-options>summary.btn{min-height:44px;height:auto;padding:8px 12px!important;font-size:13px;line-height:1.4;gap:6px}
+.list-options-pop{top:calc(100% + 6px);bottom:auto;min-width:min(310px,calc(100vw - 16px));max-width:calc(100vw - 16px);padding:8px 12px;background:var(--surf);color:var(--tx)}
+.list-options-pop .list-option-setting,.list-options-pop .sortbar label{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:48px;margin:0;font-size:13px;color:var(--tx)}
+.list-options-pop .list-option-setting,.list-options-pop .sortbar{border-bottom:1px solid var(--line)}
+.list-options-pop select{width:136px;margin:0;font-size:16px;min-height:38px}
+.list-options-pop .list-option-setting input{width:18px;height:18px;flex:0 0 auto;accent-color:var(--tx)}
+.list-options-pop .sortbar{display:flex;flex-direction:column;align-items:stretch;gap:0;margin:0;padding-bottom:2px}
+.list-options-pop .sortbar:empty{display:none}
+.list-options-pop .sortbar select{margin:0;font-size:16px;min-height:38px}
+.list-options-pop .sortbar [data-sort-flip]{align-self:flex-end;margin-bottom:6px}
+.list-options-pop>button{min-height:44px;padding-inline:0;font-size:13px}
 @media(max-width:560px){
+  /* Tabs, one toolbar, one status line. Rows keep their existing layout. */
+  .containers-page>.phead{display:block;margin-bottom:8px}
+  .containers-page>.phead>div:first-child{width:100%;min-width:0}
+  .containers-page>.phead>div:first-child>p,.containers-page>.phead .wgroup-bar,.containers-page>.phead>.row{display:none}
+  .containers-page .pagetabs{display:flex;width:100%;margin:0}
+  .containers-page .pagetabs>a{flex:1;min-width:0;min-height:40px;display:flex;align-items:center;justify-content:center;padding:6px 8px}
+  .wl-mobile-head{display:block;margin-bottom:12px}
+  .wl-mobile-toolbar{position:relative;display:flex;align-items:center;flex-wrap:nowrap;gap:7px}
+  .wl-group-select,.wl-mobile-scope{flex:1;min-width:0}
+  .wl-group-select{width:0;min-height:44px;padding:7px 10px;font-size:13px;font-weight:600;text-overflow:ellipsis}
+  .wl-mobile-scope{font-size:13px;color:var(--mut)}
+  .wl-mobile-toolbar>.btn{min-height:44px}
+  .wl-mobile-toolbar .list-options{position:static;margin:0;flex:0 0 auto}
+  .wl-mobile-summary{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:7px;min-height:26px;font-size:12.5px;color:var(--mut)}
+  .wl-mobile-summary .pillbtn{padding:3px 0;border:0;border-radius:0;background:transparent;box-shadow:none;font-size:12.5px}
+  .wl-mobile-summary .pillbtn.warn{color:var(--med)}
+  .wl-mobile-summary .pillbtn.crit{color:var(--crit)}
   /* A matrix is the deliberate exception to stacked item rows: four compact
      host columns remain visible together; long fields move below it. */
   .tbl.stack.comparison-table{display:table;width:100%;min-width:calc(56px + var(--comparison-columns)*clamp(56px,(100vw - 82px)/4,86px))}
@@ -2914,7 +2947,6 @@ html[data-motion="off"] .iconbtn.setupbtn.pulse svg{animation:none}
   .tbl.stack.compact.wltable tr.wl-off>.wl-cpu,.tbl.stack.compact.wltable tr.wl-off>.wl-ram,.wltable .wl-row-meta{display:none}
   .wltable .collection-disclosure .av{width:24px;height:24px;flex:0 0 24px}
   .wltable .collection-disclosure .wtitle{font-size:13px}
-  .wltable .collection-chevron{font-size:15px}
   .tbl.stack.compact.wltable tr.wl-detail-row{display:block;padding:0}
   .tbl.stack.compact.wltable tr.wl-detail-row>td{display:block;padding:0;width:100%;text-align:left}
   .tbl.stack.compact.wltable .wl-inline-detail{display:block;padding:10px 12px 12px}
@@ -2924,4 +2956,8 @@ html[data-motion="off"] .iconbtn.setupbtn.pulse svg{animation:none}
   .phead .seg.iconseg{display:none}
   .wl-detail-actions{display:block;margin-top:12px}
   .wl-detail-actions .actionbar{justify-content:flex-end}
+}
+@media(max-width:350px){
+  .wl-mobile-toolbar .list-options-label{display:none}
+  .wl-mobile-toolbar .list-options>summary.btn{width:44px;justify-content:center;padding:8px!important}
 }

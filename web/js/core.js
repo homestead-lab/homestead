@@ -341,9 +341,9 @@ function layoutSwitch(page, redraw) {
     onclick="setViewLayout(${jsq(page)},${jsq(redraw)},${jsq(value)})">${icon(iconName)}</button>`;
   return `<div class="seg iconseg" role="group" aria-label="Layout">${option("cards", "Cards", "dash")}${option("rows", page === "nodes" ? "Comparison" : "Rows", "list")}</div>`;
 }
-window.setViewLayout = (page, redraw, layout) => {
+window.setViewLayout = (page, redraw, layout, {preservePaint = false} = {}) => {
   try { localStorage.setItem(`homestead.layout.${page}`, layout); } catch (e) { /* this visit only */ }
-  resetPaint();
+  if (!preservePaint) resetPaint();
   if (typeof window[redraw] === "function") window[redraw]();
 };
 window.modalBack = modalBack;
@@ -585,7 +585,14 @@ function sortBody(body, heads, state) {
 function sortBar(table, heads, state) {
   if (!table.classList.contains("stack")) return;
   const wrap = table.closest(".card") || table.parentElement;
-  let bar = wrap.previousElementSibling;
+  const collection = table.closest("[data-collection]");
+  const target = table.dataset.sortControls;
+  const selector = target ? `[data-sort-controls="${CSS.escape(target)}"].sortbar` : "";
+  // A collection can put the standard sort controls inside its Options
+  // menu. An open menu is portalled out of the collection into the page.
+  let bar = target && (collection?.querySelector(selector) ||
+    (collection?.isConnected && document.querySelector(`.actionmenu-portal ${selector}`)));
+  bar ||= wrap.previousElementSibling;
   if (!bar || !bar.classList.contains("sortbar")) {
     bar = document.createElement("div");
     bar.className = "sortbar";
