@@ -22,6 +22,7 @@ const theme = process.env.HOMESTEAD_AUDIT_THEME === "light" ? "light" : "dark";
 // (the first button in the dialog with that label).
 const DIALOGS = [
   ["self-data-prepare", "settings", "window.__demoDataPrepared=false;replicasMoveData()", "selfDataPrepareReview()"],
+  ["self-data-archive-review", "settings", "window.__demoDataPrepared=true;replicasMoveData()", "selfDataArchiveReview('demo-data-prepare')"],
   ["self-data-final-review", "settings", "window.__demoDataPrepared=true;replicasMoveData('demo-data-prepare')", "selfDataFinalReview()"],
   ["change-password", "dash", "pwChange()"],
   ["storage-recovery-ready", "storage", "window.__demoStorageState='ready';storageRecoveryReview('op4')"],

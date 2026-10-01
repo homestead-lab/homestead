@@ -266,6 +266,9 @@ def _public(item):
         out["cancellable"] = False  # Longhorn merging cannot be undone or safely interrupted.
     if item.get("kind") in ("self-data-prepare", "host-console"):
         out["cancellable"] = out["cleanable"] = False
+    if item.get("kind") == "self-data-prepare":
+        from homestead_self_data_prepare import can_archive
+        out["preparation_archivable"] = can_archive(item)
     if item.get("kind") == "workload-rename":
         out["tracking_only"] = True
         out["rename_recovery"] = True
@@ -672,13 +675,19 @@ def _refresh(item):
                        f"Status temporarily unavailable: {error}")
 
 
+def _archived_preparation(item):
+    ref = item.get("ref") or {}
+    return (item.get("kind") == "self-data-prepare" and item.get("status") == "succeeded" and
+            ref.get("preparation_archived") is True and bool(ref.get("prepared")) and ref.get("retain_resources") is False)
+
+
 def snapshot():
     """Inspect atomic saved files without creating locks or advancing jobs.
 
     This is a display snapshot, not a mutation authorization. The two journals
     are not a transaction; inconsistent/unavailable reads remain an error.
     """
-    return [_public(item) for item in _read()]
+    return [_public(item) for item in _read() if not _archived_preparation(item)]
 
 
 def list_operations():
@@ -694,7 +703,7 @@ def list_operations():
         if changed:
             _write(items)
         items.sort(key=lambda item: item.get("started_at", ""), reverse=True)
-        return [_public(item) for item in items]
+        return [_public(item) for item in items if not _archived_preparation(item)]
 
 
 def dismiss_finished():
@@ -709,11 +718,12 @@ def dismiss_finished():
         removed = len(items) - len(keep)
         if removed:
             _write(keep)
-        protected = sum(item.get("status") in TERMINAL for item in keep)
-    return {"ok": True, "dismissed": removed, "remaining": len(keep),
+        visible = [item for item in keep if not _archived_preparation(item)]
+        protected = sum(item.get("status") in TERMINAL for item in visible)
+    return {"ok": True, "dismissed": removed, "remaining": len(visible),
             "detail": (f"cleared {removed} finished job" + ("" if removed == 1 else "s")
                        if removed else "nothing finished to clear")
-                      + (f"; {len(keep) - protected} still running" if len(keep) > protected else "")
+                      + (f"; {len(visible) - protected} still running" if len(visible) > protected else "")
                       + (f"; {protected} recovery/approval record(s) retained" if protected else "")}
 
 

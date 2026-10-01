@@ -13,14 +13,16 @@ import homestead_self_data_anchor as A
 import homestead_self_data_bootstrap as B
 import homestead_self_data_setup as P
 import homestead_self_data_worker as W
+import homestead_self_data_prepare as PREPARE
 from homestead_storage_journal import Held, identity, shape
 
 KIND = "self-data-handoff"
 
 
 def idle(ops, own_id=None):
-    if any(i["id"] != own_id and (i.get("status") not in ops.TERMINAL or i.get("ref", {}).get("retain_resources")) for i in ops._read()):
-        raise Held("Finish running jobs and review retained recovery jobs before moving Homestead's data")
+    jobs = PREPARE.blocking_jobs(ops, own_id)
+    if jobs:
+        raise Held(PREPARE.blocked_message("Finish running jobs and review retained recovery jobs before moving Homestead's data", jobs))
     return True
 
 

@@ -6226,15 +6226,21 @@ def self_data_preparation_state():
         jobs = []
         for item in OPS._read():
             ref = item.get("ref", {})
-            if item.get("kind") != SELF_DATA_PREPARE.KIND or ref.get("namespace") != SELF.NS:
+            if (item.get("kind") != SELF_DATA_PREPARE.KIND or ref.get("namespace") != SELF.NS
+                    or OPS._archived_preparation(item)):
                 continue
+            reusable = (item["status"] == "succeeded" and bool(ref.get("prepared")) and
+                        ref["source"]["name"] == info.get("pvc") and ref["destination"] != info.get("pvc"))
+            message = item.get("message", "")
+            if item["status"] == "succeeded" and ref.get("prepared") and not reusable:
+                message = ("Homestead currently uses this volume. The preparation is complete." if ref["destination"] == info.get("pvc")
+                           else "Prepared for an earlier source volume. It cannot move Homestead's current data; the volume is retained.")
             jobs.append({"id": item["id"], "operation": ref["operation"], "destination": ref["destination"],
                 "source": ref["source"]["name"], "storage_class": ref["storage_class"], "node": ref["node"],
-                "status": item["status"], "progress": item.get("progress", 0), "message": item.get("message", ""),
-                "prepared": item["status"] == "succeeded" and bool(ref.get("prepared"))
-                    and ref["source"]["name"] == info.get("pvc")})
+                "status": item["status"], "progress": item.get("progress", 0), "message": message, "prepared": reusable,
+                "archivable": SELF_DATA_PREPARE.can_archive(item)})
         return {"source": info.get("pvc"), "classes": info.get("classes", []), "preparations": jobs,
-            "execution_ready": True,
+            "execution_ready": True, "blocking_jobs": SELF_DATA_PREPARE.blocking_jobs(OPS),
             "nodes": [{"name": n["metadata"]["name"], "ready": not n["metadata"].get("deletionTimestamp")
                 and not n.get("spec", {}).get("unschedulable") and any(c.get("type") == "Ready" and c.get("status") == "True"
                     for c in n.get("status", {}).get("conditions", []))} for n in nodes]}
@@ -6255,9 +6261,9 @@ def preview_self_data_move(body, actor):
     try:
         # Read the saved job snapshot, not list_operations(): polling resolvers
         # can change workloads or write job history during an alleged preview.
-        jobs = OPS._read()
-        if any(item.get("status") not in OPS.TERMINAL or item.get("ref", {}).get("retain_resources") for item in jobs):
-            raise SELF_DATA_FENCE.Held("Finish running jobs and review retained recovery jobs before moving Homestead's data")
+        blockers = SELF_DATA_PREPARE.blocking_jobs(OPS)
+        if blockers:
+            raise SELF_DATA_FENCE.Held(SELF_DATA_PREPARE.blocked_message("Finish running jobs and review retained recovery jobs before moving Homestead's data", blockers))
         ns = SELF.NS
         cache = {}
         def read(path):
@@ -7263,7 +7269,7 @@ def needed_role(path, method):
         return "admin"
     if path == "/api/storage/classes" and method != "GET":
         return "admin"
-    if path in ("/api/portal", "/api/self/replicas", "/api/self/data/move", "/api/self/data/abandon", "/api/self/data/move/preview", "/api/self/data/prepare", "/api/self/data/prepare/preview", "/api/ipam/unifi", "/api/mqtt", "/api/mqtt/test") and method != "GET":
+    if path in ("/api/portal", "/api/self/replicas", "/api/self/data/move", "/api/self/data/abandon", "/api/self/data/move/preview", "/api/self/data/prepare", "/api/self/data/prepare/preview", "/api/self/data/prepare/archive", "/api/self/data/prepare/archive/preview", "/api/ipam/unifi", "/api/mqtt", "/api/mqtt/test") and method != "GET":
         return "admin"
     # A chart can make anything anywhere in the cluster, and so can raw YAML;
     # a secret's values are for admins only.
@@ -8466,6 +8472,12 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/self/data/move/preview":
                 try:
                     return self._send(200, preview_self_data_move(b, self.user))
+                except SELF_DATA_FENCE.Held as error:
+                    return self._send(409, {"error": str(error), "review_required": True})
+            if p in ("/api/self/data/prepare/archive", "/api/self/data/prepare/archive/preview"):
+                try:
+                    return self._send(200, SELF_DATA_PREPARE.archive(b, self.user, SELF.NS, NAMES.BRAND, OPS,
+                        start=p == "/api/self/data/prepare/archive"))
                 except SELF_DATA_FENCE.Held as error:
                     return self._send(409, {"error": str(error), "review_required": True})
             if p in ("/api/self/data/prepare", "/api/self/data/prepare/preview"):
