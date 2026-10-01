@@ -5,7 +5,7 @@ name: Live demo
 # and checks it without publishing.
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*", "!v*-dev.*"]
   pull_request:
     paths:
       - "web/**"

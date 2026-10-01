@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, dev]
 
 permissions:
   contents: read
@@ -56,7 +56,7 @@ jobs:
           git rev-parse -q --verify "$BASE^{commit}" >/dev/null || everything "cannot read $BASE"
           touches() {
             git diff -U0 "$BASE" HEAD -- "$@" | grep -E '^[+-]' | grep -Ev '^(\+\+\+|---) ' \
-              | sed -E 's/[0-9]+\.[0-9]+\.[0-9]+/X/g' > /tmp/lines || true
+              | sed -E 's/[0-9]+\.[0-9]+\.[0-9]+(-dev\.[0-9]+)?/X/g' > /tmp/lines || true
             [ "$(grep '^+' /tmp/lines | cut -c2- | sort)" != "$(grep '^-' /tmp/lines | cut -c2- | sort)" ] && echo true || echo false
           }
           # A change to this file runs a job only when that job's own steps
@@ -170,6 +170,7 @@ jobs:
             node scripts/check_launch_import_logs.mjs
             node scripts/check_mobile_pwa.mjs
             node scripts/check_dashboard_storage.mjs
+            node scripts/check_update_channels.mjs
           fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()

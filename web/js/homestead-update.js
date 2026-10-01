@@ -6,6 +6,32 @@
    the same reviewed rollout an app gets (reviewImageActions), Homestead last. */
 const HOMESTEAD_PARTS = { self: "Homestead", smb: "SMB server", nfs: "NFS server", objectstore: "Object store" };
 const HOMESTEAD_RELEASES = "https://github.com/wjcloudy/homestead/releases";
+let HOMESTEAD_CHANNEL_SAVING = false;
+
+function homesteadChannelPicker() {
+  const channel = STATE.data.appSettings?.updates?.channel || STATE.data.imageUpdates?.channel || "prod";
+  return `<div class="srows"><div class="srow"><div class="srow-l"><b>Release channel</b>
+      <div class="dim xs">Prod has stable releases. Dev has preview releases. Changing channel checks for a release; installation still needs your review.</div></div>
+    <div class="srow-c"><select aria-label="Homestead release channel" data-need="admin" onchange="homesteadChannelSave(this.value)" ${HOMESTEAD_CHANNEL_SAVING || !can("admin") ? "disabled" : ""}>
+      <option value="prod" ${channel === "prod" ? "selected" : ""}>Prod · stable</option>
+      <option value="dev" ${channel === "dev" ? "selected" : ""}>Dev · preview</option></select></div></div></div>`;
+}
+
+window.homesteadChannelSave = async channel => {
+  if (HOMESTEAD_CHANNEL_SAVING) return;
+  HOMESTEAD_CHANNEL_SAVING = true;
+  homesteadUpdateRepaint();
+  try {
+    STATE.data.appSettings = await api("/api/image-updates/channel", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ channel }) });
+    STATE.data.imageUpdates = null;
+    STATE.data.imageUpdateMap = {};
+    homesteadUpdateRepaint();
+    await loadImageUpdates(true, true, "homestead");
+    toast(`${channel === "dev" ? "Dev" : "Prod"} channel saved`, "ok");
+  } catch (error) { toast(error.message, "bad"); }
+  finally { HOMESTEAD_CHANNEL_SAVING = false; homesteadUpdateRepaint(); }
+};
 
 function homesteadUpdates() {
   const report = STATE.data.imageUpdates;
@@ -114,7 +140,7 @@ async function fleetUpdatesLoad(force = false) {
     try {
       // Only its Homestead parts are shown, so only they are checked afresh.
       const report = await api(`/api/image-updates${force ? "?force=1&only=homestead" : ""}`, { headers: { "X-Homestead-Cluster": m.id }, keep: true });
-      FLEET_UPDATES.rows[m.id] = { member: m, parts: remoteParts(report) };
+      FLEET_UPDATES.rows[m.id] = { member: m, parts: remoteParts(report), channel: report.channel || "prod" };
     } catch (error) {
       FLEET_UPDATES.rows[m.id] = { member: m, error: error.message };
     }
@@ -139,7 +165,7 @@ function fleetUpdateRows() {
       : '<span class="pill ok">current</span>';
     const pick = waiting.length ? `<label class="hs-pick" title="Update ${esc(m.name)} too"><input type="checkbox" ${FLEET_UPDATES.picked.has(m.id) ? "checked" : ""}
         onchange="fleetUpdatePick(${jsq(m.id)}, this.checked)"><span>Include</span></label>` : "";
-    return `<div class="hs-part"><div><b>${esc(m.name)}</b><span class="dim xs mono">${m.version ? `v${esc(m.version)}` : "version unknown"}${m.url ? ` · ${esc(m.url)}` : ""}</span></div>
+    return `<div class="hs-part"><div><b>${esc(m.name)}</b><span class="dim xs mono">${m.version ? `v${esc(m.version)}` : "version unknown"}${row?.channel ? ` · ${row.channel === "dev" ? "Dev" : "Prod"}` : ""}${m.url ? ` · ${esc(m.url)}` : ""}</span></div>
       <div class="row hs-part-end">${state}${pick}</div></div>`;
   }).join("");
   return `<div class="hs-fleet"><div class="between"><span class="dim xs">LINKED CLUSTERS</span>
@@ -170,25 +196,26 @@ function homesteadUpdateRepaint() {
 
 function homesteadUpdateBody(inCard = false) {
   const { report, parts, release, waiting, failed } = homesteadUpdates();
-  if (!report) return '<div class="empty small"><span class="spin2"></span> Asking the registries…</div>';
+  const picker = homesteadChannelPicker();
+  if (!report) return picker + '<div class="empty small"><span class="spin2"></span> Asking the registries…</div>';
   const checked = checkedAgo();
   const head = release
     ? `<div class="hs-release"><span class="dim xs">NEW RELEASE</span><b>Homestead ${esc(release)}</b>
         <span class="dim small">You run v${esc(HOMESTEAD_VERSION)} · <a href="${safeHref(`${HOMESTEAD_RELEASES}/tag/v${release}`)}" target="_blank" rel="noopener">what's new ${icon("ext")}</a></span></div>`
     : `<div class="hs-release current"><span class="dim xs">RELEASE</span><b>Homestead v${esc(HOMESTEAD_VERSION)}</b>
-        <span class="dim small">${waiting.length ? "Current; a helper has an update" : "Up to date"}${checked ? ` · ${esc(checked)}` : ""} · <a href="${safeHref(HOMESTEAD_RELEASES)}" target="_blank" rel="noopener">releases ${icon("ext")}</a></span></div>`;
+        <span class="dim small">${failed.length ? "Release check needs attention" : waiting.length ? "Current; a helper has an update" : "Up to date"}${checked ? ` · ${esc(checked)}` : ""} · <a href="${safeHref(HOMESTEAD_RELEASES)}" target="_blank" rel="noopener">releases ${icon("ext")}</a></span></div>`;
   const others = [...FLEET_UPDATES.picked].filter(id => FLEET_UPDATES.rows[id]);
   const label = waiting.length
     ? (release ? `Update to ${release}` : `Update ${waiting.length === 1 ? "helper" : "helpers"}`)
       + (others.length ? ` and ${others.length} linked cluster${others.length === 1 ? "" : "s"}` : "")
     : others.length ? `Update ${others.length} linked cluster${others.length === 1 ? "" : "s"}` : "";
-  return `${head}
+  return `${picker}${head}
     ${parts.length ? `<div class="hs-parts">${homesteadPartRows(parts)}</div>` : ""}
     ${failed.length ? '<p class="dim small">A part whose check failed is compared with its registry again on the next check.</p>' : ""}
     ${fleetUpdateRows()}
     ${label ? `<p class="dim small">${inCard ? "" : "Each part restarts while it changes, this Homestead last; this page reconnects when it is back. "}Nothing changes until you review and accept it.</p>` : ""}
-    <div class="row hs-actions">${label ? `<button class="btn pri" data-need="operator" onclick="homesteadUpdateReview()">${esc(label)}</button>` : ""}
-      <button class="btn" onclick="homesteadUpdateCheck(this)">↻ Check now</button></div>`;
+    <div class="row hs-actions">${label ? `<button class="btn pri" data-need="operator" onclick="homesteadUpdateReview()" ${HOMESTEAD_CHANNEL_SAVING ? "disabled" : ""}>${esc(label)}</button>` : ""}
+      <button class="btn" onclick="homesteadUpdateCheck(this)" ${HOMESTEAD_CHANNEL_SAVING ? "disabled" : ""}>↻ Check now</button></div>`;
 }
 
 window.homesteadUpdateDialog = async () => {

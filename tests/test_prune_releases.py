@@ -34,6 +34,14 @@ class PruneTests(unittest.TestCase):
                           features=0, majors=0)
         self.assertEqual({"v2.8.100", "v2.8.99"}, kept)
 
+    def test_dev_releases_are_kept_separately_from_prod(self):
+        stable = [f"v2.8.{n}" for n in range(1, 8)]
+        dev = [(f"v2.8.8-dev.{n}", {"isPrerelease": True}) for n in range(1, 12)]
+        kept = PRUNE.keep(rows(*stable, latest="v2.8.7", other=dev))
+        self.assertTrue(set(stable[-5:]) <= kept)
+        self.assertTrue({f"v2.8.8-dev.{n}" for n in range(7, 12)} <= kept)
+        self.assertNotIn("v2.8.8-dev.6", kept)
+
 
 if __name__ == "__main__":
     unittest.main()

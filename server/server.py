@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.289")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.290")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -67,6 +67,7 @@ DEFAULT_APP_SETTINGS = {
         "temperature": {"warning": 70, "critical": 85},
     },
     "updates": {
+        "channel": "prod",
         "policy": "approval_required",
         "notify_available": True,
         "notify_failures": True,
@@ -384,6 +385,10 @@ def validate_app_settings(value):
         raise ValueError("SMART notify_failures must be true or false")
     out["smart"]["notify_failures"] = notify
     update_in = (value or {}).get("updates") or {}
+    channel = update_in.get("channel", out["updates"]["channel"])
+    if channel not in ("prod", "dev"):
+        raise ValueError("update channel must be prod or dev")
+    out["updates"]["channel"] = channel
     policy = str(update_in.get("policy", out["updates"]["policy"]))
     if policy not in ("notify_only", "approval_required", "maintenance_window"):
         raise ValueError("update policy must be notify_only, approval_required, or maintenance_window")
@@ -495,6 +500,7 @@ def save_app_settings(value):
             raise
         ksend("POST", f"/api/v1/namespaces/{DEFAULT_NS}/configmaps", body)
     _cache.pop("settings", None)
+    UPDATES.invalidate()
     # A different catalogue source is a different catalogue.
     for key in [k for k in _cache if k.startswith("appstore")]:
         _cache.pop(key, None)
@@ -5331,8 +5337,10 @@ CAPACITY_REVIEW.bind(AUTH.review_signing_key)
 LH.bind(kget, ksend, _cache, STORAGE_CLASS)
 PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.features)
 POWER.bind(kget, PLACE.impact, LC.quorum_report, lambda: LC.NODE_POWER_ENABLED)
-UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE)
+UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE,
+             channel=lambda: cached("settings", 15, get_app_settings)["updates"]["channel"])
 UPDATES.PART = homestead_part
+UPDATES.VERSION = lambda: HOMESTEAD_VERSION
 SMART.bind(kget, DEFAULT_NS, AUTH.internal_signing_key)
 OPS.bind(kget, DATA_DIR, UPDATES.progress, SMART.progress)
 RESTRUCTURE.bind(kget, ksend, raw_get)
@@ -7251,7 +7259,7 @@ def needed_role(path, method):
         return "viewer"
     if path == "/api/hardware/features" and method != "GET":
         return "admin"
-    if path == "/api/settings" and method != "GET":
+    if path in ("/api/settings", "/api/image-updates/channel") and method != "GET":
         return "admin"
     if path == "/api/storage/classes" and method != "GET":
         return "admin"
@@ -8586,6 +8594,10 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if p == "/api/restart":
                 return self._send(200, restart_workload(b["ns"], b["name"]))
+            if p == "/api/image-updates/channel":
+                settings = get_app_settings()
+                settings["updates"]["channel"] = b.get("channel")
+                return self._send(200, save_app_settings(settings))
             if p == "/api/image-updates/preview":
                 return self._send(200, preview_image_update(b))
             if p == "/api/image-updates/apply":

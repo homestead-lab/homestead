@@ -3,8 +3,8 @@
 
 Kept: the newest 5 releases (patches), the newest release of each of the 3
 newest minor lines (features), and the newest of each of the 2 newest major
-lines - plus the one just published and the one marked Latest. Drafts,
-pre-releases and anything not named vX.Y.Z are left alone.
+lines - plus the one just published and the one marked Latest. Keep the
+newest 5 dev prereleases separately. Drafts and other tag formats stay.
 
 Only the release pages go. Their git tags stay: an installed Homestead
 fetches its permissions file (deploy/rbac.yaml) by its own version's tag, and
@@ -21,6 +21,7 @@ import sys
 
 PATCHES, FEATURES, MAJORS = 5, 3, 2
 TAG = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
+DEV_TAG = re.compile(r"v(\d+)\.(\d+)\.(\d+)-dev\.(\d+)")
 
 
 def keep(releases, patches=PATCHES, features=FEATURES, majors=MAJORS, also=()):
@@ -42,8 +43,11 @@ def keep(releases, patches=PATCHES, features=FEATURES, majors=MAJORS, also=()):
                     kept.add(tag)
     kept |= {row["tagName"] for row in releases if row.get("isLatest")}
     kept |= set(also)
-    # Anything not a plain vX.Y.Z release is not this script's to remove.
-    kept |= {row["tagName"] for row in releases if row["tagName"] not in versions}
+    dev = {row["tagName"]: tuple(int(x) for x in DEV_TAG.fullmatch(row["tagName"]).groups())
+           for row in releases if DEV_TAG.fullmatch(row.get("tagName") or "")
+           and row.get("isPrerelease") and not row.get("isDraft")}
+    kept |= set(sorted(dev, key=dev.get, reverse=True)[:patches])
+    kept |= {row["tagName"] for row in releases if row["tagName"] not in versions and row["tagName"] not in dev}
     return kept
 
 
@@ -57,7 +61,7 @@ def main():
         check=True, capture_output=True, text=True).stdout)
     kept = keep(rows, also=args.keep)
     gone = sorted((r["tagName"] for r in rows if r["tagName"] not in kept),
-                  key=lambda t: tuple(int(x) for x in TAG.fullmatch(t).groups()))
+                  key=lambda t: tuple(int(x) for x in (TAG.fullmatch(t) or DEV_TAG.fullmatch(t)).groups()))
     print(f"keeping {len(kept)}: {', '.join(sorted(kept, key=lambda t: (TAG.fullmatch(t) is None, t)))}")
     print(f"{'removing' if args.apply else 'would remove'} {len(gone)} release page(s), keeping their tags"
           + (f": {', '.join(gone)}" if gone else ""))

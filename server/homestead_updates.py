@@ -46,17 +46,20 @@ _CACHE = {}
 _CACHE_LOCK = threading.Lock()
 
 
-def bind(_kget, _ksend, default_ns="lab", data_dir="/data", system_namespaces=None, smb_namespace="lab"):
-    global kget, ksend, DEFAULT_NS, DATA_DIR, SYSTEM_NAMESPACES, SMB_NAMESPACE
+def bind(_kget, _ksend, default_ns="lab", data_dir="/data", system_namespaces=None, smb_namespace="lab", channel=None):
+    global kget, ksend, DEFAULT_NS, DATA_DIR, SYSTEM_NAMESPACES, SMB_NAMESPACE, CHANNEL
     kget, ksend, DEFAULT_NS, DATA_DIR = _kget, _ksend, default_ns, data_dir
     SYSTEM_NAMESPACES = set(system_namespaces or ())
     SMB_NAMESPACE = smb_namespace
+    CHANNEL = channel or (lambda: "prod")
 
 
 # Which part of Homestead a Deployment is ("self", "nfs", ...), or "" for an
 # app: set by the server. Homestead's own updates are counted apart from
 # apps' - they have their own place on the top bar and under Settings › About.
 PART = lambda ns, name: ""
+CHANNEL = lambda: "prod"
+VERSION = lambda: ""
 
 
 def _managed_smb(ns, name):
@@ -273,6 +276,30 @@ def newer_semver(current, tags):
     return max(valid, default=(None, None))[1]
 
 
+def channel_release(current, tags, channel):
+    """Newest release in this channel, including a return to an older prod.
+
+    Only Homestead uses channels; apps keep their existing tag policy. The
+    major stays fixed so choosing a channel cannot cross a major upgrade.
+    """
+    pattern = r"v?(\d+)\.(\d+)\.(\d+)(?:-dev\.(\d+))?"
+    installed = re.fullmatch(pattern, current or "")
+    if not installed:
+        raise ValueError("No release version is known for Homestead; redeploy it from a numbered release tag")
+    major = int(installed[1])
+    releases = []
+    for tag in tags:
+        match = re.fullmatch(pattern, tag)
+        if not match or (channel == "dev") != (match[4] is not None):
+            continue
+        version = tuple(int(match[i]) for i in (1, 2, 3))
+        if version[0] == major:
+            releases.append((version + (int(match[4] or 0),), tag))
+    if not releases:
+        raise ValueError(f"No {channel} release is published for this Homestead major version")
+    return max(releases)[1]
+
+
 def _pod_digest(pods, container):
     for pod in pods:
         for status in pod.get("status", {}).get("containerStatuses", []) or []:
@@ -292,7 +319,7 @@ def _matching_pods(dep, pods):
             all(p["metadata"].get("labels", {}).get(k) == v for k, v in labels.items())]
 
 
-def _check_deployment(dep, pods, force=False, persist=True):
+def _check_deployment(dep, pods, force=False, persist=True, channel=None):
     ns, name = dep["metadata"]["namespace"], dep["metadata"]["name"]
     tracked = _annotation_json(dep, TRACKED)
     ran = _annotation_json(dep, RAN)
@@ -302,6 +329,8 @@ def _check_deployment(dep, pods, force=False, persist=True):
     # A stopped workload has no running digest to compare, which is expected
     # rather than a failed check: imports land scaled to zero on purpose.
     running = bool(mine) and int(dep["spec"].get("replicas", 1) or 0) > 0
+    own = PART(ns, name) == "self"
+    channel = channel or (CHANNEL() if own else "prod")
     images = []
     for container in dep["spec"]["template"]["spec"].get("containers", []):
         deployed = container.get("image", "")
@@ -317,10 +346,14 @@ def _check_deployment(dep, pods, force=False, persist=True):
             current = (parse_image(deployed).get("digest") or running_digest
                        or ran.get(container["name"], ""))
             candidate_tag = None
-            try:
-                candidate_tag = newer_semver(parsed["tag"], registry_tags(source, auths, force))
-            except Exception:
-                candidate_tag = None
+            if own:
+                version = parsed["tag"] if re.fullmatch(r"v?\d+\.\d+\.\d+(?:-dev\.\d+)?", parsed["tag"]) else VERSION()
+                candidate_tag = channel_release(version, registry_tags(source, auths, force), channel)
+            else:
+                try:
+                    candidate_tag = newer_semver(parsed["tag"], registry_tags(source, auths, force))
+                except Exception:
+                    candidate_tag = None
             if candidate_tag:
                 candidate = parsed["base"] + ":" + candidate_tag
             else:
@@ -334,17 +367,17 @@ def _check_deployment(dep, pods, force=False, persist=True):
                          # points at is not the one already running. Offering
                          # the version you are on reads as a broken checker.
                          "available": bool(remote) and not matches_remote
-                                      and bool(current or candidate_tag)})
+                                      and bool(current or (candidate_tag and candidate != source))})
             if not current and running:
                 # Pulling or starting: nothing has run yet to compare with the
                 # registry. That is a check still to come, not a failed one.
                 item["unchecked"] = True
                 item["starting"] = True
-            elif not current and not candidate_tag:
+            elif not current and candidate == source:
                 # Stopped, and never seen running here: nothing to compare the
                 # registry with. It is not "current" - it is unchecked.
                 item["unchecked"] = True
-            elif not semver(parsed["tag"]) and parsed["digest"]:
+            elif not own and not semver(parsed["tag"]) and parsed["digest"]:
                 # Pinned to a digest with no release recorded to follow. Saying
                 # nothing here reads as "up to date", which is not what it means.
                 item["error"] = ("no release tag recorded for this image, so newer "
@@ -393,6 +426,7 @@ def _scan_note(**fields):
 
 
 def scan(force=False, homestead_only=False):
+    channel = CHANNEL()
     deps = [d for d in kget("/apis/apps/v1/deployments").get("items", [])
             if d["metadata"]["namespace"] not in SYSTEM_NAMESPACES
             and not _managed_smb(d["metadata"]["namespace"], d["metadata"]["name"])
@@ -403,7 +437,7 @@ def scan(force=False, homestead_only=False):
     workloads = []
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, max(1, len(deps)))) as pool:
-            pending = {pool.submit(_check_deployment, dep, pods, force): dep for dep in deps}
+            pending = {pool.submit(_check_deployment, dep, pods, force, channel=channel): dep for dep in deps}
             for future in concurrent.futures.as_completed(pending):
                 dep = pending[future]
                 try:
@@ -422,14 +456,15 @@ def scan(force=False, homestead_only=False):
         _scan_note(running=False, current="", finished_at=time.time())
     for item in workloads:
         item["homestead"] = PART(item["ns"], item["name"])
-    return _summary(workloads)
+    return _summary(workloads, channel=channel)
 
 
-def _summary(workloads, checked_at=None):
+def _summary(workloads, checked_at=None, channel=None):
     workloads = sorted(workloads, key=lambda x: (x["ns"], x["name"]))
     apps = [x for x in workloads if not x["homestead"]]
     own = [x for x in workloads if x["homestead"]]
-    return {"checked_at": checked_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    return {"channel": channel or CHANNEL(),
+            "checked_at": checked_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "updates": sum(1 for x in apps if x["available"]),
             "errors": sum(1 for x in apps for image in x["images"] if image.get("error")),
             "homestead": {"updates": sum(1 for x in own if x["available"]),
@@ -467,7 +502,7 @@ def homestead_report():
             if not latest:
                 return dict(fresh, partial=True)
             merged = _summary([w for w in latest["workloads"] if not w.get("homestead")] + fresh["workloads"],
-                              latest["checked_at"])
+                              latest["checked_at"], channel=fresh["channel"])
             merged["homestead_checked_at"] = fresh["checked_at"]
             _LATEST["report"] = merged
             return merged
@@ -483,12 +518,12 @@ def report(force=False):
     """
     with _SCAN_LOCK:
         latest, begun = dict(_LATEST), _STARTED[0]
-    if not force and latest["report"] and time.time() - latest["finished"] < FRESH_FOR:
+    if not force and latest["report"] and latest["report"].get("channel", "prod") == CHANNEL() and time.time() - latest["finished"] < FRESH_FOR:
         return latest["report"]
     with _RUN_LOCK:
         with _SCAN_LOCK:
             latest = dict(_LATEST)
-        if latest["report"]:
+        if latest["report"] and latest["report"].get("channel", "prod") == CHANNEL():
             if force and latest["number"] > begun:
                 return latest["report"]
             if not force and time.time() - latest["finished"] < FRESH_FOR:
@@ -499,7 +534,7 @@ def report(force=False):
         try:
             found = scan(force)
         except Exception:
-            if latest["report"] and not force:
+            if latest["report"] and not force and latest["report"].get("channel", "prod") == CHANNEL():
                 return latest["report"]
             raise
         with _SCAN_LOCK:

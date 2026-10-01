@@ -55,6 +55,14 @@ class AppSettingsTests(unittest.TestCase):
             server.validate_app_settings({"updates": {
                 "maintenance": {"start": "2am"}}})
 
+    def test_release_channel_defaults_to_prod_and_only_admins_can_change_it(self):
+        self.assertEqual("prod", server.validate_app_settings({})["updates"]["channel"])
+        self.assertEqual("dev", server.validate_app_settings({"updates": {"channel": "dev"}})["updates"]["channel"])
+        self.assertEqual("admin", server.needed_role("/api/image-updates/channel", "POST"))
+        for channel in ("edge", "", None):
+            with self.assertRaisesRegex(ValueError, "update channel"):
+                server.validate_app_settings({"updates": {"channel": channel}})
+
     def test_maintenance_window_handles_midnight_and_approval(self):
         settings = server.validate_app_settings({"updates": {
             "policy": "maintenance_window",
