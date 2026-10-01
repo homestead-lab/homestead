@@ -54,7 +54,7 @@ def request(path, body=None):
         raise Refused(f"{path}: {error.code}: {raw[:2000]}") from None
 
 
-def until(what, seconds, attempt, retry_refusal=None):
+def until(what, seconds, attempt, retry_refusal=()):
     """Call attempt() until it returns something truthy: through Homestead
     restarting, and through a refusal retry_refusal names as temporary."""
     deadline = min(time.monotonic() + seconds, started + BUDGET)
@@ -67,7 +67,7 @@ def until(what, seconds, attempt, retry_refusal=None):
         except TRANSIENT as error:
             last = f"{type(error).__name__}: {error}"
         except Refused as error:
-            if not retry_refusal or retry_refusal not in str(error):
+            if not any(phrase in str(error) for phrase in ([retry_refusal] if isinstance(retry_refusal, str) else retry_refusal)):
                 raise
             last = str(error)[:200]
         if time.monotonic() >= deadline:
@@ -81,8 +81,9 @@ request("/api/auth/setup", {"username": "release-test", "password": secrets.toke
 for attempt in range(2):
     operation = secrets.token_hex(12)
     cfg = {"operation": operation, "storage_class": "fixture-target" if attempt == 0 else "local-path", "node": "release-test"}
+    # After a move Homestead finishes its handoff read-only for a moment.
     preview = until("preparation review", 120, lambda: request("/api/self/data/prepare/preview", cfg),
-                    retry_refusal=None if attempt == 0 else "earlier data move record exists")
+                    retry_refusal=() if attempt == 0 else ("earlier data move record exists", "only reports progress"))
     prepared = request("/api/self/data/prepare", {**cfg, "capacity_token": preview["capacity_token"], "confirm_capacity": True})
     log("PREPARATION", attempt + 1, prepared["destination"])
 
@@ -112,5 +113,7 @@ for attempt in range(2):
     # restarted Homestead has read its journal - until then it answers 404.
     until("new source reported", 60, lambda: request("/api/self/data/prepare")["source"] == prepared["destination"],
           retry_refusal=": 404:")
-    log("VERIFIED new source; retained login and jobs")
+    # Out of the handoff: writable again, as a person would next use it.
+    until("handoff finished", 120, lambda: not request("/healthz").get("data_handoff"))
+    log("VERIFIED new source; retained login and jobs; handoff finished")
 log("PASS: two complete HTTP moves with real Kubernetes and retained account state")
