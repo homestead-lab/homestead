@@ -32,6 +32,9 @@ const PAGES = [
   ["volumes-all", "storage", "localStorage.setItem('homestead.fleet.mode','all');viewStorage()"],
   ["vms", "vms"],
   ["vm-import", "vmimport"],
+  // The setup guide is a page now (it was the Welcome dialog).
+  ["setup", "setup"],
+  ["setup-phone", "setup", "setupOpen('phone')"],
   ["app-store", "store"],
   ["helm", "helm"],
   ["shares", "shares"],
