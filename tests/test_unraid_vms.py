@@ -239,13 +239,31 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(50, source["progress"]["eta_seconds"])
         self.assertIn("HTTP 500", UVMS.failure_reason(log))
 
-    def test_old_percentage_logs_get_labels_and_eta_from_real_timestamps(self):
+    def test_old_percentage_logs_do_not_invent_speed_or_eta_from_rounded_bytes(self):
         source = UVMS.copy_output({"text": "2026-01-01T12:00:10Z 10\n2026-01-01T12:00:20Z 20\n"}, {"bytes": 1000000000})
-        self.assertIn("12:00:20 · 20.0% · 0.2 / 1.0 GB · 10.0 MB/s · ETA 0h 1m 20s", source["text"])
-        self.assertEqual(80, source["progress"]["eta_seconds"])
+        self.assertIn("12:00:20 · ~20.0% · ~0.2 / 1.0 GB · Speed / ETA unavailable (1% progress)", source["text"])
+        self.assertIsNone(source["progress"]["bytes_per_second"])
+        self.assertIsNone(source["progress"]["eta_seconds"])
+        self.assertTrue(source["progress"]["coarse"])
         unstamped = UVMS.copy_output({"text": "10\n20\n"}, {"bytes": 1000000000})
-        self.assertIn("20.0% · 0.2 / 1.0 GB · ETA estimating", unstamped["text"])
+        self.assertIn("~20.0% · ~0.2 / 1.0 GB · Speed / ETA unavailable", unstamped["text"])
         self.assertIsNone(unstamped["progress"]["eta_seconds"], "missing timing cannot invent an ETA")
+
+    def test_repeated_whole_percentages_are_not_a_measured_stall(self):
+        log = "\n".join(f"2026-01-01T12:{i:02}:00Z 36" for i in range(8))
+        source = UVMS.copy_output({"text": log, "note": "Running"}, {"bytes": 80000000000})
+        self.assertNotIn("MB/s", source["text"])
+        self.assertIsNone(source["progress"]["bytes_per_second"])
+        self.assertIsNone(source["progress"]["eta_seconds"])
+        self.assertIn("Repeated values do not confirm a stalled copy", source["note"])
+        self.assertTrue(source["note"].startswith("Running"))
+
+    def test_byte_samples_measure_sub_percent_progress_even_after_legacy_samples(self):
+        source = UVMS.copy_output({"text": "2026-01-01T12:00:00Z 36\n10.0 360000000\n20.0 364000000\n"}, {"bytes": 1000000000})
+        self.assertEqual(400000, source["progress"]["bytes_per_second"])
+        self.assertFalse(source["progress"]["coarse"])
+        self.assertIn("36.4%", source["text"])
+        self.assertIn("0.4 MB/s", source["text"])
 
     def test_stalled_copy_has_no_countdown_and_full_stream_still_waits_for_cdi(self):
         source = UVMS.copy_output({"text": "10.0 100\n20.0 100\n"}, {"bytes": 1000})
@@ -333,7 +351,7 @@ class ImportTests(unittest.TestCase):
         pod["status"]["containerStatuses"][0]["state"] = {"running": {"startedAt": "2026-01-01T12:00:00Z"}}
         with mock.patch.object(logs, "_pod_source", return_value={"title": "Copy", "text": "4\n4\n", "note": ""}), \
                 mock.patch.object(logs, "_events", return_value=""):
-            self.assertEqual("", UVMS.log_sources({"ref": ref})[0]["note"], "a running copy must not be labelled exited")
+            self.assertNotIn("exited", UVMS.log_sources({"ref": ref})[0]["note"], "a running copy must not be labelled exited")
 
     def test_an_old_failed_import_never_reads_output_from_a_retry(self):
         ref = {"namespace": "lab", "phase": "failed", "disks": [{"dv": "desktop-disk", "job": "copy"}]}
