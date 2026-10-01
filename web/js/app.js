@@ -29,6 +29,7 @@ const FILTERABLE_VIEWS = new Set(["workloads", "storage", "images", "events", "s
 
 function routeParamsForView(v, extra = {}) {
   const params = FILTERABLE_VIEWS.has(v) && STATE.q ? { q: STATE.q } : {};
+  if (new URLSearchParams(location.search).get("demo") === "1") params.demo = "1";
   return Object.assign(params, extra);
 }
 
@@ -128,6 +129,7 @@ function go(v, options = {}) {
     return;
   }
   if (!VIEWS[v]) return;
+  if (window.setupNavigation) setupNavigation(v);
   if (!$("#modal").classList.contains("hidden")) closeModal(false);
   // Anything still loading belongs to the page being left behind.
   window.NAV_TOKEN++;
@@ -161,7 +163,7 @@ function go(v, options = {}) {
   renderBreadcrumb(v);
   pageTitle(t);
   if (options.history !== false) {
-    const url = HomesteadRouter.urlFor(v, options.params || routeParamsForView(v));
+    const url = HomesteadRouter.urlFor(v, routeParamsForView(v, options.params));
     const current = window.location.pathname + window.location.search;
     if (url !== current) window.history[options.replace ? "replaceState" : "pushState"]({ view: v }, "", url);
   }

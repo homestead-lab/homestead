@@ -1,0 +1,69 @@
+// Exercise the setup journey through real browser clicks, not just markup.
+// Start server/server.py on port 4173, then: node scripts/check_setup_guide.mjs
+import assert from "node:assert/strict";
+import { chromium } from "playwright";
+import { mkdir } from "node:fs/promises";
+
+const base = process.env.HOMESTEAD_URL || "http://127.0.0.1:4173";
+await mkdir("release-assets/setup", { recursive: true });
+const browser = await chromium.launch({ headless: true });
+try {
+  for (const width of [1440, 390]) {
+    const context = await browser.newContext({ viewport: { width, height: 900 } });
+    const page = await context.newPage();
+    const errors = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.goto(`${base}/?demo=1`, { waitUntil: "networkidle" });
+    await page.locator("#views .phead").waitFor();
+    await page.getByRole("button", { name: "Open the setup guide", exact: true }).click();
+    await page.locator('[data-step="intro"].setup-card').waitFor();
+    assert.equal(await page.locator("#setupStep").evaluate(el => el.getBoundingClientRect().top < innerHeight), true, "intro is visible without scrolling past the step list");
+    await page.getByRole("button", { name: /^Begin:/ }).click();
+    await page.locator('.setup-card[data-step="health"]').waitFor();
+    await page.getByRole("button", { name: "Next: Nodes and quorum", exact: true }).click();
+    await page.locator('.setup-card[data-step="quorum"]').waitFor();
+    assert.equal(await page.evaluate(() => STATE.data.setup.steps.health.done), false, "Next must not complete a failing check");
+    // Use the mobile picker or the desktop navigation to reach disk setup.
+    if (width < 900) await page.locator("#setupSelect").selectOption("disks");
+    else await page.locator('button.setup-step[data-step="disks"]').click();
+    await page.getByRole("button", { name: "Set up", exact: true }).click();
+    await page.getByRole("button", { name: "Return to setup", exact: true }).waitFor();
+    await page.locator("#nodePage").waitFor();
+    await page.reload({ waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "Return to setup", exact: true }).waitFor();
+    assert.match(await page.locator("#setupReturn").innerText(), /Disks for Longhorn/);
+    assert.equal(await page.locator("#setupReturn").evaluate(el => el.getBoundingClientRect().right <= innerWidth), true);
+    await page.screenshot({ path: `release-assets/setup/disk-return-${width}.png`, fullPage: true });
+    await page.getByRole("button", { name: "Return to setup", exact: true }).click();
+    await page.locator('.setup-card[data-step="disks"]').waitFor();
+    assert.equal(await page.locator("#setupReturn").isVisible(), false);
+    await page.evaluate(() => setupOpen("appearance"));
+    await page.getByRole("button", { name: "Mark as done on this device", exact: true }).click();
+    await page.getByText("Confirmed by you", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Undo my confirmation", exact: true }).click();
+    await page.getByRole("button", { name: "Mark as done on this device", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Skip this step", exact: true }).click();
+    await page.getByText("Skipped by choice", { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => STATE.data.setup.steps.appearance.done), false);
+    await page.getByRole("button", { name: "Undo skip", exact: true }).click();
+    await page.getByRole("button", { name: "Skip this step", exact: true }).waitFor();
+    await page.evaluate(() => setupOpen("intro"));
+    await page.getByRole("button", { name: "Hide setup progress from Dashboard", exact: true }).click();
+    await page.getByRole("button", { name: "Show setup progress on Dashboard", exact: true }).waitFor();
+    await page.evaluate(() => go("dash"));
+    await page.locator("#views .phead").waitFor();
+    assert.equal(await page.getByText(/^Setup progress:/).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Open the setup guide", exact: true }).isVisible(), true);
+    await page.getByRole("button", { name: "Open the setup guide", exact: true }).click();
+    await page.locator('.setup-card[data-step="intro"]').waitFor();
+    await page.evaluate(() => { setupLocal("offered", "0"); setupOffer(); });
+    assert.equal(await page.locator("#setupbtn").evaluate(el => getComputedStyle(el, "::after").content), "none", "offer has no ring outside the icon");
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    assert.equal(await page.locator("#setupbtn svg").evaluate(el => getComputedStyle(el).animationName), "none");
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.screenshot({ path: `release-assets/setup/intro-${width}.png`, fullPage: true });
+    assert.deepEqual(errors, []);
+    console.log(`Setup journey passed at ${width}px`);
+    await context.close();
+  }
+} finally { await browser.close(); }
