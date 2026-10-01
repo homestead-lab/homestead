@@ -199,9 +199,9 @@ blocks safely until the permission is available; see [updating](Installing-Homes
 
 Kubernetes knows nothing of temperatures, USB devices, which physical disk is
 which, or drive health. The node probe - a small DaemonSet, one pod per host -
-reads them. The Helm chart installs it; otherwise **Settings → Hardware and storage →
-Add-ons → Install node probe**, or **Install node probe** on a node with no
-temperature. **Settings → Homestead** reports its health after it is installed.
+reads them. Homestead installs it automatically, including on existing clusters,
+unless installation was explicitly declined. **Settings → Homestead** reports
+its health. Administrators can retry from **Settings → Hardware and storage → Add-ons**.
 
 It has two parts:
 

@@ -13,7 +13,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 
 const output = "release-assets/dialogs";
 await mkdir(output, { recursive: true });
-const base = (process.env.HOMESTEAD_URL || "http://127.0.0.1:4173") + "/?demo=1";
+const base = (process.env.HOMESTEAD_URL || "http://127.0.0.1:4173") + "/?demo=1&demo-scenario=incidents";
 const only = process.argv[2] || "";
 const theme = process.env.HOMESTEAD_AUDIT_THEME === "light" ? "light" : "dark";
 

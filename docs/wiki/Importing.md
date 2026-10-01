@@ -220,8 +220,10 @@ The disks are read over SSH and streamed into CDI's upload proxy, which turns
 raw or qcow2 into a VM disk as it arrives. SSH compression reduces network
 traffic for empty space; progress counts the original disk bytes. Progress
 shows in the bell and under **Recent imports**, where **Job details** opens
-the copy log. Each disk uses a filesystem volume on the storage class you
-choose, with CDI allowing for filesystem overhead. This avoids inheriting a
+the copy log. **Dismiss** removes a finished import from job history; it keeps
+the VM and disk data. Running imports cannot be dismissed. Each disk uses a
+filesystem volume on the storage class you choose, with CDI allowing for
+filesystem overhead. This avoids inheriting a
 block-device mode that the host runtime may not let CDI access.
 When every disk has arrived the VM is made,
 **stopped**, for you to start. The VM on Unraid is never changed or deleted; if

@@ -148,7 +148,7 @@ def installed():
 
 
 def install(version="dev"):
-    """Create the probe. Only ever called because somebody asked for it."""
+    """Create the probe for automatic installation or an administrator's retry."""
     if installed():
         raise ValueError("the node probe is already installed")
     if not shipped_scripts():

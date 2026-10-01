@@ -14,7 +14,7 @@ sign-in, and looking after Homestead afterwards.
 | Claim `homestead-data`, 2 GiB | settings, job history, long-term stats, the audit log |
 | Secret `homestead-auth` | user accounts (salted PBKDF2 password hashes), kept apart from the data volume |
 | ServiceAccount, ClusterRole `homestead` | what Homestead may do in the cluster |
-| DaemonSet `homestead-nodeprobe` | optional, one per host: temperatures, host devices, every disk, drive health |
+| DaemonSet `homestead-nodeprobe` | installed automatically, one per host: temperatures, host devices, every disk, drive health |
 
 Everything Homestead creates is named `homestead-*` or carries `homestead.io/*`
 labels and annotations, so it is easy to find with kubectl. There is one
@@ -148,9 +148,9 @@ The setup guide walks through all of these; in short:
 
 1. **Settings → Homestead** - check Homestead's own health: every background task,
    the node probe, Samba, backup storage. See [Settings](Settings).
-2. **Install the node probe**, if the Helm chart did not: **Settings → Hardware and storage
-   → Add-ons → Install node probe**. It adds temperatures, host devices (a Coral, a Zigbee
-   stick, an iGPU), every disk and SMART drive health.
+2. **Check node telemetry.** Homestead installs the node probe automatically,
+   unless explicitly declined in the installer. It adds temperatures, host
+   devices, disks and SMART drive health. Review its status in **Settings → Homestead**.
 3. **Networking → Your VIPs** - keep a few addresses for apps (Harvester, or
    MetalLB). See [Networking](Networking).
 4. **Data protection → Plans** - snapshots and backups in one go. See

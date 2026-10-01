@@ -53,7 +53,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.282")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.283")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -3925,7 +3925,6 @@ def setup_state(user, role):
             return {"done": servers != 2, "applies": True, "servers": servers, "members": q["members"],
                     "ready": q["ready"], "can_lose": q["can_lose"], "nodes": nodes}
         step("quorum", quorum)
-        step("probe", lambda: {"done": bool(PROBE.installed()), "applies": True})
 
         def clocks():
             known = {n["name"]: (HOST_OS.stored(n["name"]) or {}).get("ntp") for n in cached("nodes", 5, get_nodes)}
@@ -3979,7 +3978,7 @@ def setup_state(user, role):
         step("starter", lambda: {"done": any(not w.get("homestead") for w in cached("wl", 5, get_workloads)), "applies": True})
         step("console", lambda: {"done": bool(HOST_CONSOLE.inventory().get("enabled")), "applies": kube})
     step("notifications", lambda: {"done": bool(PUSH.devices(user)), "applies": True})
-    return {"steps": steps, "skips": SETUP.skips(user), "hidden": SETUP.hidden(user),
+    return {"steps": steps, "skips": SETUP.skips(user), "hidden": SETUP.hidden(user), "completed": SETUP.completed(user),
             "opened": SETUP.opened(), "admin": role == "admin", "personal": list(SETUP.PERSONAL)}
 
 
@@ -7287,7 +7286,7 @@ def needed_role(path, method):
         return "operator"
     # The setup guide: anyone may skip their own steps or hide it for
     # themselves; the handler keeps cluster steps for admins.
-    if path in ("/api/setup/skip", "/api/setup/hide"):
+    if path in ("/api/setup/skip", "/api/setup/hide", "/api/setup/complete"):
         return "viewer"
     if path in ADMIN_ROUTES:
         return "admin"
@@ -8307,6 +8306,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, SETUP.skip(str(b.get("step") or ""), bool(b.get("skip", True)), self.user, self.role == "admin"))
             if p == "/api/setup/hide":
                 return self._send(200, SETUP.hide(self.user, b.get("hidden", True)))
+            if p == "/api/setup/complete":
+                return self._send(200, SETUP.complete(self.user, b.get("completed", True)))
             if p == "/api/setup/opened":
                 return self._send(200, SETUP.mark_opened())
             if p == "/api/setup/https-check":
