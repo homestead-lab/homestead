@@ -3946,6 +3946,7 @@ def setup_state(user, role):
             return {"done": bool(store.get("https_url")), "applies": True, "url": store.get("https_url", ""), "tunnels": tunnels}
         step("https", https)
         step("hostname", lambda: {"done": False, "applies": True})       # the browser can tell; see the page
+        step("lan", lambda: SETUP.lan_state(vm_network_details()))
 
         def disks():
             unused = [{"node": node, "device": r["device"], "size_gb": r.get("size_gb"), "kind": r.get("kind", "")}

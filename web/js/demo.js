@@ -2032,6 +2032,7 @@ ssh_pwauth: true
     clocks: { done: true, applies: false },
     address: { done: true, applies: true, url: "http://192.0.2.245:8088", service_url: "http://homestead.lab.svc:8088", vips: 3, load_balancer: "kube-vip", harvester: true },
     https: { done: false, applies: true, url: "", tunnels: [] }, hostname: { done: false, applies: true },
+    lan: { done: true, applies: true, vms: ["default/vlan1"], containers: ["default/vlan1"] },
     disks: { done: false, applies: true, unused: [{ node: "harvester-node2", device: "sdb", size_gb: 4000, kind: "HDD" }] },
     storage: { done: true, applies: true, default: "harvester-longhorn", copies: 3, provisioner: "driver.longhorn.io", nodes: 3, target: 3, candidates: [] },
     backups: { done: true, applies: true }, config: { done: false, applies: true, at: null }, osupdates: { done: false, applies: false },
