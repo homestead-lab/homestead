@@ -2520,7 +2520,7 @@ html[data-theme="light"] .modalbox[data-context="smb-access"]{background:var(--s
 
 /* The live demo on GitHub Pages says what it is - at the top of every page,
    scrolling away with it: stuck there, it covered the app's own top bar. */
-.demobanner{position:relative;z-index:60;padding:6px 14px;text-align:center;font-size:12.5px;
+.demobanner{flex:0 0 auto;position:relative;z-index:1;padding:6px 14px;text-align:center;font-size:12.5px;
   background:var(--med);color:#1a1300;font-weight:600}
 .demobanner a{color:inherit;text-decoration:underline;margin-left:6px}
 
