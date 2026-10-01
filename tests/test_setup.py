@@ -55,7 +55,7 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(["https://homestead.example.com/healthz"], asked)
         self.assertEqual("https://homestead.example.com", result["url"])
         self.assertEqual("https://homestead.example.com", SETUP.load()["https_url"])
-        with self.assertRaisesRegex(ValueError, "not as Homestead"):
+        with self.assertRaisesRegex(ValueError, "Homestead health response"):
             SETUP.https_check("https://other.example.com", fetch=lambda target: io.BytesIO(b"<html>"))
 
     def test_the_guide_never_stores_whether_a_step_is_done(self):

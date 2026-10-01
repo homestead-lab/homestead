@@ -59,3 +59,23 @@ test("confirmation on this device can be undone without manufacturing cluster he
   assert.equal(facts.appearance.done, false);
   assert.equal(facts.health.done, false);
 });
+
+test("configured integrations and saved HTTPS addresses do not claim a passed health check", () => {
+  const { ctx } = fixture();
+  for (const id of ["backups", "osupdates", "unifi", "unraid", "homeassistant", "linked", "starter", "console"]) {
+    assert.equal(ctx.setupStatusLabel(id, "done"), "Configuration found");
+  }
+  assert.equal(ctx.setupStatusLabel("https", "done", { here: false }), "Previously checked");
+  assert.equal(ctx.setupStatusLabel("health", "done"), "Check passed");
+});
+
+test("Cloudflare guide stores only its position, keeps demo separate and rejects invalid positions", () => {
+  const { ctx, saved } = fixture(true);
+  ctx.setupCloudflareStage(2);
+  assert.deepEqual([...saved.entries()], [["homestead.setup.cloudflare.demo", "2"]]);
+  assert.equal(ctx.setupCloudflareStage(), 2);
+  saved.set("homestead.setup.cloudflare.demo", "99");
+  assert.equal(ctx.setupCloudflareStage(), null);
+  ctx.setupCloudflareStage(null);
+  assert.equal(saved.size, 0);
+});

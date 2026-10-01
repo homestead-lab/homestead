@@ -60,7 +60,19 @@ def report(state=None):
                      "ports": [{"name": p.get("name") or "", "port": p.get("port"), "target_port": p.get("target_port"),
                                 "protocol": p.get("protocol") or "TCP"} for p in ports]})
     web = next(r for r in rows if r["id"] == "web")
+    # A connector in the cluster should use Service DNS and the Service port,
+    # independent of the browser address or load-balancer availability.
+    web_services = sorted((s for s in state.get("services") or [] if s["namespace"] == WEB_NS
+                           and WEB in (s.get("targets") or [])), key=lambda s: (s["name"] != WEB, s["name"]))
+    service_url = ""
+    for service in web_services:
+        http = next((p for p in service.get("ports") or [] if p.get("name") == "http"
+                     and p.get("protocol", "TCP") == "TCP" and p.get("port")), None)
+        if http:
+            service_url = f"http://{service['name']}.{WEB_NS}.svc:{http['port']}"
+            break
     return {"components": rows, "shared_vip": (state.get("shared_vip") or {}).get("ip", ""),
+            "service_url": service_url,
             "url": f"http://{web['vip']}:{WEB_PORT}" if web["vip"] else "",
             "on_vip": all(r["vip"] for r in rows if r["present"])}
 

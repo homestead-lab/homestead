@@ -21,6 +21,30 @@ the App Store catalogue - open in a dialog of their own.
 
 ![Settings - Cluster](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-settings-cluster.jpg)
 
+## Setup guide
+
+Open the guide from the book icon in the top bar or **Settings → Homestead**,
+including after setup is complete. Each step explains its check. **Configuration
+found** means settings or resources exist; it does not confirm successful
+backups, imports or connection health. Appearance requires your confirmation.
+**Next** moves through the guide without completing a step. When you visit a
+configuration page, **Return to setup** brings you back to the current step.
+
+**Access → HTTPS and remote access → Set up a Cloudflare Tunnel** opens six
+steps: account and domain, tunnel token, connector deployment, access policy,
+hostname route and browser testing. A Cloudflare account and a domain on
+Cloudflare are required. The Free plan is sufficient; domain registration and
+renewal are separate costs. The guide links to Cloudflare's
+[domain setup](https://developers.cloudflare.com/dns/zone-setups/full-setup/setup/),
+[tunnel instructions](https://developers.cloudflare.com/tunnel/get-started/)
+and [Access instructions](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/self-hosted-public-app/).
+
+The connector's route uses Homestead's cluster Service DNS name and Service
+port. Configure Access for specific users before publishing the hostname.
+Open the HTTPS address and sign in to test an Access-protected route; the
+server's address check cannot sign in through Cloudflare Access. Only the
+guide position is remembered in the browser tab, not account details or tokens.
+
 ## Add-ons
 
 On k3s and RKE2, **Settings → Hardware and storage → Add-ons** installs what the cluster

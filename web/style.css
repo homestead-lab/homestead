@@ -2738,6 +2738,8 @@ html[data-theme="light"] .savebar{background:rgba(255,255,255,.95)}
 .setup-mark.attention{border-color:var(--med);color:var(--med)}
 .setup-mark.skipped{border-style:dashed;opacity:.6}
 .setup-card .ui-lead{max-width:72ch}
+.setup-layout .settings-main,.setup-card{min-width:0}
+.setup-card .stepper-chip{flex-shrink:0;white-space:nowrap}
 .setup-picker{display:none}
 #setupStep{scroll-margin-top:calc(var(--hdr) + 12px)}
 .setup-body{margin:12px 0 4px;overflow-x:auto}
@@ -2748,7 +2750,7 @@ html[data-theme="light"] .setup-meter{background:rgba(0,0,0,.08)}
 @media(max-width:900px){
   .setup-nav{max-height:none}
   .setup-layout .setup-nav{display:none}
-  .setup-picker{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--mut)}
+  .setup-picker{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--mut);min-width:0}
   .setup-picker select{width:100%;min-height:44px}
   .settings-nav button.setup-step{padding:11px 14px}
 }
